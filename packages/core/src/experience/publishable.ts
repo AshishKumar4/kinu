@@ -6,8 +6,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
-import { craftScores, effectiveScore, type CraftScoreRow } from '../craft/ema';
-import { DEFAULT_CONFIG } from '../config';
+import { craftPreference, craftPreferences, type CraftPreferenceRow } from '../craft/preference';
 import { isoDate, nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { getLesson, listLessons } from '../evolution/lessons';
@@ -39,27 +38,19 @@ function titleOf(text: string, maxChars = 90): string {
 function craftCandidate(
   src: PublishSources,
   name: string,
-  scores: Map<string, CraftScoreRow>,
-  now: number,
+  rows: Map<string, CraftPreferenceRow>,
 ): PublishableCandidate | PublishRefusal {
   const tool = src.craftStore.get(name);
 
   if (!tool) return { refused: `no crafted tool named "${name}" in this workspace` };
-  const score = scores.get(name);
+  const row = rows.get(name);
 
-  if (!score || score.uses < 1) {
-    return { refused: `crafted tool "${name}" has never been used here, so nothing has proven it yet` };
+  if (!row || row.chosen < 1) {
+    return { refused: `crafted tool "${name}" has never been chosen here, so nothing has proven it yet` };
   }
 
-  const effective = effectiveScore(score.score, score.last_used_at, now);
-  const bar = DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection;
-
-  if (effective < bar) {
-    return {
-      refused: `crafted tool "${name}" scores ${effective.toFixed(2)} here, below the ${bar} bar `
-        + 'this workspace itself uses to keep offering a tool',
-    };
-  }
+  if (row.broken !== null) return { refused: `crafted tool "${name}" raised on its last call here: ${row.broken}` };
+  const preference = craftPreference(row);
 
   return {
     key: name,
@@ -69,9 +60,9 @@ function craftCandidate(
       name: tool.name,
       description: tool.description,
       code: tool.code,
-      score: effective,
+      score: preference,
     },
-    evidence: `effective score ${effective.toFixed(2)} after ${score.uses} real use${score.uses === 1 ? '' : 's'}`,
+    evidence: `preference ${preference.toFixed(2)}: chosen in ${String(row.chosen)} of ${String(row.offered)} turns that offered it`,
   };
 }
 
@@ -230,7 +221,7 @@ export async function findPublishable(
   now = nowMs(),
 ): Promise<PublishableCandidate | PublishRefusal> {
   switch (kind) {
-    case 'craft': return craftCandidate(src, key, craftScores(src.sql), now);
+    case 'craft': return craftCandidate(src, key, craftPreferences(src.sql));
     case 'lesson': return lessonCandidate(src, key);
     case 'fact': return factCandidate(src, key);
     case 'scaffold': return await scaffoldCandidate(src, key, now);
@@ -243,10 +234,10 @@ export async function listPublishable(
 ): Promise<PublishableCandidate[]> {
   const limit = Math.max(1, options.limit ?? 20);
   const now = options.now ?? nowMs();
-  const scores = craftScores(src.sql);
+  const rows = craftPreferences(src.sql);
 
   const crafts = src.craftStore.list()
-    .map((tool) => craftCandidate(src, tool.name, scores, now))
+    .map((tool) => craftCandidate(src, tool.name, rows))
     .filter((c): c is PublishableCandidate => !isRefusal(c));
 
   const lessons = listLessons(src.sql, src.actor, { status: 'corroborated', limit })

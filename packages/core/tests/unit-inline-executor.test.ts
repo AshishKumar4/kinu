@@ -7,7 +7,8 @@ import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createTestRuntime, fileNamespaceFor, fileNamespaceOver, fileToolOver } from './helpers';
 import { createInlineExecutor, type InlineExecutorDeps } from '../src/tools/inline-executor';
 import { DefaultExecutionRouter } from '../src/execution/router';
-import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode';
+import { craftPreference, craftPreferences } from '../src/craft/preference';
+
 import { type FileDeps } from '../src/tools/file-operations';
 import { FILE_READ_LINE_CHARS } from '../src/types/file-edits';
 
@@ -25,10 +26,14 @@ import { namespaceDeclaration, nestedMembers } from '../src/tools/operation-surf
 import { describeProgramSource, programDeclarations } from '../src/tools/registry';
 import { KINU_NODE_MODULE_SOURCE } from '../src/execution/codemode-node-shim';
 
+/** A tool nothing has offered yet: chosen once in two offers, rated 3 of 5, by the smoothing. */
+const UNMEASURED = craftPreference({ offered: 0, chosen: 0, rated: 0, rating_sum: 0 });
+
 const ToolSummarySchema = v.object({
   name: v.string(),
   description: v.string(),
-  qualityScore: v.number(),
+  preference: v.number(),
+  broken: v.nullable(v.string()),
 });
 
 const ToolCreatedSchema = v.object({ ok: v.boolean(), name: v.string(), action: v.string() });
@@ -132,7 +137,7 @@ describe('workspace provider (InlineExecutor)', () => {
     });
 
     expect(v.parse(v.array(ToolSummarySchema), await exec.tools.listTools.execute())).toEqual([
-      { name: 'ghost', description: 'no row yet', qualityScore: CRAFT_NEUTRAL_PRIOR },
+      { name: 'ghost', description: 'no row yet', preference: UNMEASURED, broken: null },
     ]);
   });
 
@@ -326,7 +331,7 @@ describe('workspace.fs.write over the workspace filesystem — what both backend
     // Callers branch on `reason`, and the declared codemode type promises it.
     expect(await exec.tools["fs.write"].execute('victim.txt', 'destroyed blind')).toEqual({
       success: false,
-      error: expect.stringContaining('has not been read here yet'),
+      error: expect.stringContaining('has no read that still counts'),
       reason: 'unread',
     });
     expect(await readText(vfs, 'victim.txt')).toBe('keep me');
@@ -458,7 +463,7 @@ describe('workspace.* and file.* share the read-before-write gate', () => {
     const fileTool = fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<FileToolInput, JsonValue>(fileTool);
     await expect(execute({ op: 'edit', path: 'unshared.md', edits: [{ old_text: 'content', new_text: 'changed' }] }))
-      .rejects.toThrow('has not been read here yet');
+      .rejects.toThrow('has no read that still counts');
   });
 });
 
@@ -533,35 +538,35 @@ describe('workspace.* VFS errors carry how paths are read here', () => {
   });
 });
 
-describe('workspace.createTool — the tool is born scorable', () => {
-  test('a created tool gets a neutral prior, so the floor can ever see it', async () => {
+describe('workspace.createTool — the tool is born unmeasured', () => {
+  test('a created tool has been offered nowhere and has not raised', async () => {
     const { rt } = createTestRuntime();
     const exec = buildExec(rt);
 
     await exec.tools.createTool.execute('summarize', 'summarizes', 'async (x) => x');
 
-    const row = rt.storage.sql<{ score: number; uses: number }>`
-      SELECT score, uses FROM crafted_tools WHERE name = 'summarize'`[0];
-
-    if (!row) throw new Error('created tool did not receive a score row');
-    expect(row.score).toBe(CRAFT_NEUTRAL_PRIOR);
-    expect(row.uses).toBe(0);
+    expect(craftPreferences(rt.storage.sql).get('summarize')).toMatchObject({ offered: 0, chosen: 0, rated: 0, broken: null });
   });
 
-  test('re-crafting an existing tool never wipes what it earned', async () => {
+  test('re-crafting an existing tool keeps what it earned and clears its broken flag', async () => {
     const { rt } = createTestRuntime();
     const exec = buildExec(rt);
 
     await exec.tools.createTool.execute('summarize', 'v1', 'async (x) => x');
-    void rt.storage.sql`UPDATE crafted_tools SET score = 0.88, uses = 7 WHERE name = 'summarize'`;
+    void rt.storage.sql`UPDATE crafted_tools SET offered = 9, chosen = 4, broken = 'TypeError: x is undefined' WHERE name = 'summarize'`;
     await exec.tools.createTool.execute('summarize', 'v2', 'async (x) => x + 1');
 
-    const row = rt.storage.sql<{ score: number; uses: number }>`
-      SELECT score, uses FROM crafted_tools WHERE name = 'summarize'`[0];
+    expect(craftPreferences(rt.storage.sql).get('summarize')).toMatchObject({ offered: 9, chosen: 4, broken: null });
+  });
 
-    if (!row) throw new Error('recrafted tool lost its score row');
-    expect(row.score).toBe(0.88);
-    expect(row.uses).toBe(7);
+  test('retireTool deletes the tool; a name nothing holds is refused', async () => {
+    const { rt } = createTestRuntime();
+    const exec = buildExec(rt);
+
+    await exec.tools.createTool.execute('summarize', 'summarizes', 'async (x) => x');
+    expect(await exec.tools.retireTool.execute('summarize')).toEqual({ name: 'summarize', action: 'retired' });
+    expect(rt.craftStore.get('summarize')).toBeUndefined();
+    await expect(exec.tools.retireTool.execute('summarize')).rejects.toMatchObject({ code: 'missing' });
   });
 
   test('a vetoed tool is neither stored nor scored', async () => {
@@ -588,14 +593,16 @@ describe('workspace.slates', () => {
   });
 
   // The slates skill calls `workspace.slates.$list()`; on staging 5c522f12d describe() answered no `$` member at all.
-  test("describe declares the `$` members the skill documents, and a member's name points at the declaration holding it", () => {
+  test("describe declares the `$` members the skill documents, and answers a member's name with the declaration holding it", () => {
     const { rt } = createTestRuntime();
     const exec = createInlineExecutor({ filesOwner: 'agent', vfs: rt.storage.vfs, craftStore: rt.craftStore, shell: present(rt.shell, 'workspace shell'), slate: async () => ({ ok: true, value: null }) });
     const declared = v.parse(v.function(), new Function(`${describeProgramSource(programDeclarations([fileNamespaceFor(rt, exec)]))}\nreturn describe;`)());
     const slates = v.parse(v.string(), declared('workspace.slates'));
 
     for (const member of ['$list()', '$fork(version)', '$preview()', '$restore(version)', '$share(options)']) expect(slates).toContain(member);
-    expect(() => declared('workspace.slates.$list')).toThrow('describe: nothing is named "workspace.slates.$list"; describe(\'workspace.slates\') declares what it holds');
+    // rc22 dashboards: describe('workspace.slates.$list') answers the declaration that declares it.
+    expect(declared('workspace.slates.$list')).toBe(slates);
+    expect(() => declared('workspace.slates.$nothing')).toThrow('describe: nothing is named "workspace.slates.$nothing"; describe(\'workspace.slates\') declares what it holds');
   });
 
   test('invalid operation fields are refused before the available host is called', async () => {

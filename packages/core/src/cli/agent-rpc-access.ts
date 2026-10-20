@@ -15,8 +15,6 @@ export const AGENT_RPC_ACCESS = {
   awaitSend: 'workspace.read',
   getChatHistoryPage: 'workspace.read',
   getExecutors: 'workspace.read',
-  getGepaRun: 'workspace.read',
-  getGepaRuns: 'workspace.read',
   getForkRun: 'workspace.read',
   getExplorationCanvas: 'workspace.read',
   getHeadRun: 'workspace.read',
@@ -56,7 +54,6 @@ export const AGENT_RPC_ACCESS = {
   recoverStrandedTurn: 'workspace.exec',
   executeInExecutor: 'workspace.exec',
 
-  applyScaffoldDecision: 'interactive',
   branchTurn: 'interactive',
   cancelBackgroundJob: 'interactive',
   stopSwarmWorker: 'interactive',
@@ -88,8 +85,6 @@ export const AGENT_RPC_ACCESS = {
   createTimerTrigger: 'interactive',
   // The call is the approval: a scoped token would bypass the gate.
   decideDeferredApprovals: 'interactive',
-  // The owner's approval of a workspace the agent proposed: the call creates it.
-  decideWorkspaceProposal: 'interactive',
   // Authored code acts through the agent's bindings, behind the ordinary side-effect gates.
   slate: 'interactive',
   previewSlate: 'interactive',
@@ -102,9 +97,6 @@ export const AGENT_RPC_ACCESS = {
   // Spends child-agent inference and writes user preferences into memory: the owner's call.
   requestRefinement: 'interactive',
   listRefinements: 'interactive',
-  // Grants staged bytes system placement, like `approveInstruction`.
-  decideRefinement: 'interactive',
-  showRefinement: 'interactive',
   createSubordinateAgent: 'interactive',
   renameSubordinateAgent: 'interactive',
   renameMainChat: 'interactive',
@@ -169,7 +161,6 @@ export const AGENT_RPC_ACCESS = {
   revertChangelogEntry: 'interactive',
   regenerateWorkspaceLogo: 'interactive',
   revokeShellApprovalGrants: 'interactive',
-  runOptimization: 'interactive',
   setAlwaysActiveSkills: 'interactive',
   setCurriculumTaskStatus: 'interactive',
   setDisplayName: 'interactive',

@@ -51,7 +51,7 @@ interface TierWords {
 const TIER_WORDS: ReadonlyMap<TierId, TierWords> = new Map([
   ['default', { name: 'Main', use: 'Every chat and every new workspace' }],
   ['deep', { name: 'Deep', use: 'Planning, reviews and judging work' }],
-  ['fast', { name: 'Quick', use: 'Summaries, titles, reflection and research' }],
+  ['fast', { name: 'Quick', use: 'Summaries, titles, reviews and research' }],
 ]);
 
 function tierWords(id: TierId): TierWords {

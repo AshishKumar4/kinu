@@ -16,7 +16,7 @@ type DesktopButton = 'left' | 'right' | 'middle';
 
 /**
  * One action the box performs on the screen. `text` holds no line break or tab and at most {@link TYPED_CHUNK}
- * characters; `keys` and `hold` are spelt as {@link desktopChord} spells them.
+ * characters; `keys` and a click's `hold` (its modifiers, sent as `keys`) are spelt as {@link desktopChord} spells them.
  */
 export type DesktopAction =
   | { readonly kind: 'screenshot' }
@@ -53,24 +53,52 @@ type DesktopMember = (typeof DESKTOP_MEMBERS)[number];
 
 const Coordinate = v.pipe(v.number(), v.integer(), v.minValue(0));
 
+const XY = v.object({ x: v.number(), y: v.number() });
+
+const AtPoint = v.object({ at: v.array(v.number()) });
+
+/** A point sent as `{ x, y }`, or as an options object holding `at` (the minecraft trials, 2026-10-19), is refused with
+ *  the array to send instead. */
+function pointIsAnArray(issue: v.TupleIssue): string {
+  const xy = v.safeParse(XY, issue.input);
+  const at = v.safeParse(AtPoint, issue.input);
+
+  if (xy.success) return `a point is one array [x, y]: send [${String(xy.output.x)}, ${String(xy.output.y)}]`;
+
+  return at.success
+    ? `the point comes first, alone, and any options after it: send [${at.output.at.join(', ')}]`
+    : 'a point is one array [x, y]: pixels from the top left';
+}
+
 /** A point of the screen; its size is the box's to check. */
-const DesktopPointSchema = v.tuple([Coordinate, Coordinate]);
+const DesktopPointSchema = v.tuple([Coordinate, Coordinate], pointIsAnArray);
 
 /** Wheel clicks: the largest scroll is one call of about 2 s at the box's 20 ms a click. */
 const WheelClicksSchema = v.pipe(v.number(), v.integer(), v.minValue(-50), v.maxValue(50));
 
-/** A chord sent as its keys in order, which models do (`["ctrl", "s"]`: the minecraft trials, 2026-10-19), is refused
- *  with the one string to send instead. */
-function chordIsOneString(issue: v.StringIssue): string {
-  const keys = v.safeParse(v.array(v.pipe(v.string(), v.nonEmpty())), issue.input);
+/** What a chord is, said where a call sends something else. */
+const CHORDS_ARE = 'a chord is its keys as an array, pressed together, like ["ctrl", "s"]';
 
-  return keys.success && keys.output.length > 0
-    ? `a chord is one string joined by "+": send "${keys.output.join('+')}"`
-    : 'a chord is one string joined by "+", like "ctrl+s"';
+/** The keys of a chord: an array, its documented form, and a string joined by "+", which agents still send and which is
+ *  read silently (owner, 2026-10-19). The model reads the array (`executors.ts`). {@link chordKeys} reads either. */
+const KeysSchema = v.union([
+  v.pipe(v.array(v.pipe(v.string(), v.nonEmpty(CHORDS_ARE))), v.minLength(1, CHORDS_ARE), v.maxLength(8)),
+  v.pipe(v.string(), v.nonEmpty(CHORDS_ARE), v.maxLength(64)),
+], CHORDS_ARE);
+
+/** A chord's keys, however they were sent. */
+function chordKeys(keys: string | readonly string[]): readonly string[] {
+  return typeof keys === 'string' ? keys.split('+') : keys;
 }
 
-/** A chord as a program writes it; {@link desktopChord} reads it. */
-const KeysSchema = v.pipe(v.string(chordIsOneString), v.nonEmpty(), v.maxLength(64));
+/** What a click's `keys` are, said where a click gets them wrong: a model sent a duration, as `key`'s hold takes. */
+const MODIFIER_KEYS_ARE = 'the modifiers held while it clicks, as an array like ["shift"] or ["ctrl", "shift"]; a click is not held for a time';
+
+/** The modifiers a click holds, sent as a chord's keys are; {@link desktopChord} reads them. */
+const ClickKeysSchema = v.union([
+  v.pipe(v.array(v.pipe(v.string(), v.nonEmpty(MODIFIER_KEYS_ARE))), v.minLength(1, MODIFIER_KEYS_ARE), v.maxLength(4)),
+  v.pipe(v.string(), v.nonEmpty(MODIFIER_KEYS_ARE), v.maxLength(64)),
+], MODIFIER_KEYS_ARE);
 
 const ButtonSchema = v.picklist(['left', 'right', 'middle']);
 
@@ -147,14 +175,14 @@ const MARKS = new Map(Object.entries({
   '&': 'ampersand', '*': 'asterisk', '(': 'parenleft', ')': 'parenright', '-': 'minus', _: 'underscore', '=': 'equal',
   '[': 'bracketleft', ']': 'bracketright', '{': 'braceleft', '}': 'braceright', '\\': 'backslash', '|': 'bar',
   ';': 'semicolon', ':': 'colon', "'": 'apostrophe', '"': 'quotedbl', ',': 'comma', '.': 'period', '<': 'less', '>': 'greater',
-  '/': 'slash', '?': 'question',
+  '/': 'slash', '?': 'question', '+': 'plus',
 }));
 
-/** The marks' names, and `plus`, which `+` cannot be in a chord. */
-const MARK_NAMES = new Set([...MARKS.values(), 'plus']);
+/** The marks' names. */
+const MARK_NAMES = new Set(MARKS.values());
 
-const KEYS_ARE = 'a key is Return, Tab, Escape, BackSpace, Delete, Insert, Home, End, Page_Up, Page_Down, Up, Down, Left, Right, '
-  + 'space, F1-F12, a letter, a digit or a punctuation mark (`plus` for +), after ctrl, shift, alt or super, joined by "+"';
+const KEYS_ARE = 'a chord is its keys as an array, pressed together: Return, Tab, Escape, BackSpace, Delete, Insert, Home, End, Page_Up, '
+  + 'Page_Down, Up, Down, Left, Right, space, F1-F12, a letter, a digit or a punctuation mark, and ctrl, shift, alt or super';
 
 /** One key as X spells it, or null. */
 function keyName(token: string): string | null {
@@ -166,29 +194,28 @@ function keyName(token: string): string | null {
 }
 
 /**
- * A chord as xdotool spells it: modifiers, then one key, which may itself be a modifier pressed alone. `modifiers`
- * reads modifiers only, as a click holds them. Checked here because xdotool skips a name it does not know and still
- * answers success.
+ * A chord as xdotool spells it: the keys pressed together, modifiers among them, as a game reads ["w", "space"] (forward
+ * and jump at once; the box presses each down in order and lets each up). `modifiers` reads modifiers only, as a click
+ * holds them. Checked here because xdotool skips a name it does not know and still answers success.
  */
-function desktopChord(keys: string, modifiers = false): readonly string[] | KinuError {
-  const tokens = keys.split('+');
+function desktopChord(keys: readonly string[], modifiers = false): readonly string[] | KinuError {
   const spelt: string[] = [];
 
-  for (const [at, token] of tokens.entries()) {
+  for (const token of keys) {
     const modifier = MODIFIERS.get(token.toLowerCase());
-    const key = modifiers || at < tokens.length - 1 ? undefined : keyName(token) ?? undefined;
+    const key = modifiers ? undefined : keyName(token) ?? undefined;
 
-    if (token === '') return new KinuError('bad_input', `"${keys}" is not a chord: ${KEYS_ARE}.`);
+    if (token === '') return new KinuError('bad_input', `${JSON.stringify(keys)} is not a chord: ${KEYS_ARE}.`);
 
     const named = SENT_AS.get(token);
 
     if (named !== undefined && !modifiers) {
-      return new KinuError('bad_input', `"${token}" is written "${named}": send "${tokens.map((each) => SENT_AS.get(each) ?? each).join('+')}".`);
+      return new KinuError('bad_input', `"${token}" is written "${named}": send ${JSON.stringify(keys.map((each) => SENT_AS.get(each) ?? each))}.`);
     }
 
     if (modifier === undefined && key === undefined) {
-      return new KinuError('bad_input', modifiers || at < tokens.length - 1
-        ? `"${token}" is not a modifier: modifiers are ctrl, shift, alt and super, before the key, joined by "+".`
+      return new KinuError('bad_input', modifiers
+        ? `"${token}" is not a modifier: modifiers are "ctrl", "shift", "alt" and "super".`
         : `no key "${token}": ${KEYS_ARE}.`);
     }
 
@@ -228,7 +255,7 @@ function typedActions(text: string): DesktopAction[] {
 export const DESKTOP_INPUTS = {
   screenshot: {},
   watch: { seconds: WatchSecondsSchema, fps: v.optional(WatchFpsSchema) },
-  click: { at: DesktopPointSchema, button: v.optional(ButtonSchema), count: v.optional(ClickCountSchema), hold: v.optional(KeysSchema) },
+  click: { at: DesktopPointSchema, button: v.optional(ButtonSchema), count: v.optional(ClickCountSchema), keys: v.optional(ClickKeysSchema) },
   type: { text: TypedTextSchema },
   key: { keys: KeysSchema, hold: v.optional(KeyHoldSchema) },
   scroll: { at: DesktopPointSchema, dy: WheelClicksSchema, dx: v.optional(WheelClicksSchema) },
@@ -355,18 +382,18 @@ export function desktopTools(deps: DesktopDeps): Record<string, ExecutorTool> {
     watch: member('watch', 'The desktop over a few seconds, as one PNG data URL of its frames.', v.strictObject(DESKTOP_INPUTS.watch), ({ seconds, fps }) => [{
       kind: 'watch', seconds, frames: fps === undefined ? Math.min(WATCH_DEFAULT_FRAMES, deps.frames) : Math.max(1, Math.min(deps.frames, Math.round(seconds * fps))),
     }]),
-    click: member('click', 'Click at a point of the screen.', v.strictObject(DESKTOP_INPUTS.click), ({ at, button = 'left', count = 1, hold }) => {
-      const held = hold === undefined ? [] : desktopChord(hold, true);
+    click: member('click', 'Click at a point of the screen.', v.strictObject(DESKTOP_INPUTS.click), ({ at, button = 'left', count = 1, keys }) => {
+      const held = keys === undefined ? [] : desktopChord(chordKeys(keys), true);
 
       return held instanceof KinuError ? held : [{ kind: 'click', at, button, count, hold: held }];
     }),
     type: member('type', 'Type text at the keyboard focus.', v.strictObject(DESKTOP_INPUTS.type), ({ text }) => typedActions(text)),
     key: member('key', 'Press a key or a chord, or hold it down.', v.strictObject(DESKTOP_INPUTS.key), ({ keys, hold }) => {
-      const chord = desktopChord(keys);
+      const pressed = desktopChord(chordKeys(keys));
 
-      if (chord instanceof KinuError) return chord;
+      if (pressed instanceof KinuError) return pressed;
 
-      return [{ kind: 'key', keys: chord.join('+'), ...(hold !== undefined && { holdMs: hold }) }];
+      return [{ kind: 'key', keys: pressed.join('+'), ...(hold !== undefined && { holdMs: hold }) }];
     }),
     scroll: member('scroll', 'Turn the mouse wheel over a point.', v.strictObject(DESKTOP_INPUTS.scroll), ({ at, dy, dx = 0 }) => (
       dy === 0 && dx === 0 ? new KinuError('bad_input', 'nothing to scroll: dy and dx are both 0.') : [{ kind: 'scroll', at, dy, dx }]

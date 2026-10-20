@@ -803,7 +803,7 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'a.txt': 'original' });
     const { call } = toolFor(vfs);
     const refused = call({ op: 'write', path: 'a.txt', content: 'replacement' });
-    await expect(refused).rejects.toThrow('has not been read here yet');
+    await expect(refused).rejects.toThrow('has no read that still counts');
     expect(vfs.files.get('a.txt')).toBe('original');
     await call({ op: 'read', path: 'a.txt' });
     expect(await call({ op: 'write', path: 'a.txt', content: 'replacement' }))
@@ -1016,7 +1016,7 @@ describe('a `file` read never makes the file resident', () => {
     const { call } = toolFor(vfs);
     await expect(call({ op: 'read', path: 'f.txt' })).rejects.toThrow('changed while it was being read');
     await expect(call({ op: 'edit', path: 'f.txt', edits: [{ old_text: 'second', new_text: 'third' }] }))
-      .rejects.toThrow('has not been read here yet');
+      .rejects.toThrow('has no read that still counts');
   });
 
   test('a stable revision across the scan is not mistaken for a change', async () => {

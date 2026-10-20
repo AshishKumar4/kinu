@@ -19,6 +19,8 @@ export type ChatModelConfig =
       headers: Record<string, string>;
       modelId: string;
       fetch?: typeof fetch;
+      /** The endpoint takes a `json_schema` response format (`WireModelInput.structuredOutputs`). */
+      structuredOutputs?: boolean;
     }
   | {
       kind: 'anthropic';
@@ -42,6 +44,7 @@ export function createChatModel(config: ChatModelConfig): LanguageModel {
   return createWireModel({
     name: config.name ?? 'openai-compat', modelId: config.modelId, baseURL: config.baseURL, headers: config.headers,
     protocol: 'chat-completions', reasoning: false, ...(config.fetch !== undefined && { fetch: config.fetch }),
+    ...(config.structuredOutputs === true && { structuredOutputs: true }),
   });
 }
 

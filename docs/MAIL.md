@@ -329,12 +329,15 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
 1. **Every agent's inbox is in its context.**
    - A dynamic-context section reads, for example: "Mail: 3 unread in your box (2 from verified senders), oldest 2h. From: …, subjects: …". It shows counts, verified flags and escaped subjects; no bodies.
    - It changes only when the box changes, like the other volatile sections.
+   - Built: "Your unread mail", read once per turn beside the account's facts (`mailInContext`, `TurnAssemblySources.mail`). Each of the newest five unread threads is a line: its time in UTC, the last sender, "(not verified)" when DMARC did not pass, and the subject, each quoted. A line counts the rest. A time replaces "oldest 2h", which would change the bytes every step. A failed read shows nothing and logs `mail.context_read_failed`.
 2. **The personal assistant triages the person's mail.**
    - It reads `ashish@`, the address it holds, and wakes on new mail in batches.
    - It picks what is Important and writes the reason. It drafts replies for the owner to send as themselves.
    - It sends nothing as the person.
 3. **Drafts in the reading pane.** A thread with the assistant's draft offers "Open Personal assistant's draft" beside Reply. The person reads it, edits it and sends it.
 4. **Mail into work.** "Send to a workspace…" on a thread hands it to a chosen workspace as a task, with the owner's authority, because the owner clicked it in the app.
+   - `POST /api/workspaces/<name>/mail {thread}`, behind the workspace gate, reads the thread from the person's Mailbox and hands its main agent a turn of its own (`mail_handed`, a Mail card).
+   - The click is the authority, so the turn runs in the workspace's mode, not Plan. The thread's words stay untrusted input: the turn carries them as `mail.read` renders them, and a thread longer than a brief is saved to the workspace and named by its path.
 5. **Provenance everywhere.**
    - Sent mail shows who wrote it ("written by scout, approved by you").
    - An agent's send is its approval card: the exact message, with Approve and send, Edit or Deny. The approval spends once.

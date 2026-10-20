@@ -65,6 +65,9 @@ export interface WireModelInput {
   readonly reasoning: boolean;
   readonly fetch?: typeof fetch;
   readonly headers?: Record<string, string>;
+  /** The chat endpoint takes a `json_schema` response format (Workers AI does); elsewhere a structured call is sent
+   *  `json_object` and its answer read through the schema. */
+  readonly structuredOutputs?: boolean;
 }
 
 /** The global fetch as it is when called: a caller may replace it after the model is built. */
@@ -88,7 +91,9 @@ export function createWireModel(input: WireModelInput): LanguageModelV4 {
       model: lazyModel(`${name}.responses`, modelId, async () => (await import('@ai-sdk/openai')).createOpenAI({ name, baseURL, apiKey: 'placeholder', headers, ...fetched }).responses(modelId)),
       middleware: statelessResponses(input.reasoning),
     })
-    : lazyModel(`${name}.chat`, modelId, async () => (await import('@ai-sdk/openai-compatible')).createOpenAICompatible({ name, baseURL, headers, ...fetched }).chatModel(modelId));
+    : lazyModel(`${name}.chat`, modelId, async () => (await import('@ai-sdk/openai-compatible')).createOpenAICompatible({
+      name, baseURL, headers, ...fetched, ...(input.structuredOutputs === true && { supportsStructuredOutputs: true }),
+    }).chatModel(modelId));
 }
 
 /** The one stack every model is called through, applied where it is resolved (`registry.resolve`). */

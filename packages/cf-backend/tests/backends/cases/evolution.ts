@@ -1,10 +1,13 @@
 /** How the agent changes itself, as the owner sees and overrules it. */
-import { expect } from 'bun:test';
+import { expect, setSystemTime } from 'bun:test';
 import * as v from 'valibot';
+import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import {
-  CHAT_SESSION_ID, PlanReviewStore, bundledArtifact, recordBranchTakeSet, sectionArtifact, startTrial, writeCandidate,
+  CHAT_SESSION_ID, PlanReviewStore, createRefinementStore, instructionDigest, recordBranchTakeSet, refinementStagingPath,
+  sectionArtifact, stageArtifact, workspaceSkillPath,
 } from '@kinu.run/core';
 import type { SharedBackend } from '../backend';
+import { PROMPT_SECTIONS } from '../../../../core/src/prompting/section-templates';
 import type { SharedCase } from '../cases';
 
 /** A scaffold proposal waiting for the owner, as the proposer leaves one. */
@@ -31,41 +34,159 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     },
   },
   {
-    title: 'a live trial\'s turn reads its arm from its cache segment by the one seeded rule, and records it',
-    async run({ surface, sql, actor }) {
-      const artifactId = sectionArtifact('guidance/operating');
-      const body = `${bundledArtifact(artifactId)?.trimEnd() ?? ''} Be brief.`;
-      writeCandidate(sql, actor, { artifactId, body, rationale: 'r', evidence: { turns: ['t'], reason: 'verbose_or_slow' } });
-      const trial = startTrial(sql, actor);
+    title: 'the agent\'s crafting setting: off, a turn is told of no crafted tool; back on, the next is',
+    async run({ surface, actor, requests }) {
+      const told = (text: string): boolean => {
+        const request = requests().find((asked) => JSON.stringify(asked.prompt.at(-1)?.content).includes(`"${text}"`));
 
-      if (trial === null) throw new Error('the waiting candidate did not start a trial');
-      expect((await surface.getEvolutionStatus()).trial).toMatchObject({ trialId: trial.trialId, artifactId, version: 1 });
+        if (request === undefined) throw new Error(`no request answered '${text}'`);
 
-      const rows = () => sql<{ turn_id: string; segment_id: string }>`SELECT turn_id, segment_id FROM trial_turns
-        WHERE actor_id = ${actor.actorId} AND trial_id = ${trial.trialId} ORDER BY at`;
+        return JSON.stringify(request.prompt).includes('## Crafted tools available through eval');
+      };
 
+      actor.config.setCrafting(false);
       await surface.send('first');
-      // The turn is recorded under its segment, whose draw is its arm.
-      expect(rows()).toMatchObject([{ segment_id: expect.stringMatching(/^seg-/) }]);
+      actor.config.setCrafting(true);
+      await surface.send('second');
+
+      expect({ off: told('first'), on: told('second') }).toEqual({ off: false, on: true });
     },
   },
   {
-    title: 'a proposed scaffold waits for the owner, who can roll it back',
+    title: 'an edit staged meanwhile moves the prompt prefix only at a turn whose cache is cold; the owner\'s revert, at once',
+    async run({ surface, sql, actor, requests }) {
+      const artifactId = sectionArtifact('guidance/operating');
+      const edited = `${PROMPT_SECTIONS.find((section) => section.id === 'guidance/operating')?.source.trimEnd() ?? ''} Be brief.`;
+
+      // What the provider caches: the system prompt and the tools, by the turn whose words close the request.
+      const prefixOf = (text: string): string => {
+        const request = requests().find((asked) => JSON.stringify(asked.prompt.at(-1)?.content).includes(`"${text}"`));
+
+        if (request === undefined) throw new Error(`no request answered '${text}'`);
+
+        return JSON.stringify({ system: request.prompt.filter((message) => message.role === 'system'), tools: request.tools });
+      };
+
+      // Past every cache lifetime and any warming: the next turn opens cold.
+      const pause = () => { setSystemTime(new Date(Date.now() + 3 * 60 * 60_000)); };
+
+      // Read before the fifth turn closes the window, which lets its turns go.
+      const recordedTurns = () => Object.fromEntries(sql<{ turn: string }>`SELECT turn FROM completed_turns WHERE actor_id = ${actor.actorId}`
+        .map((row) => v.parse(v.object({ userMessage: v.string(), artifacts: v.optional(v.array(v.string())) }), JSON.parse(row.turn)))
+        .map((turn) => [turn.userMessage, turn.artifacts]));
+
+      let ranWith: Record<string, string[] | undefined> = {};
+
+      // A turn is recorded only while the agent learns.
+      actor.config.setLearning(true);
+
+      try {
+        await surface.send('first');
+        stageArtifact(sql, actor, { artifactId, body: edited, rationale: 'r', evidence: { turns: ['t'], reason: 'verbose_or_slow' } });
+        await surface.send('second');
+        pause();
+        await surface.send('third');
+        await surface.send('fourth');
+        ranWith = recordedTurns();
+        const changelog = await surface.getEvolutionChangelog(10);
+        const current = changelog.entries.find((entry) => entry.kind === 'artifact' && entry.revert !== undefined);
+
+        if (current === undefined) throw new Error('the activated edit has no revertable changelog entry');
+        expect(await surface.revertChangelogEntry(current.id)).toMatchObject({ ok: true });
+        await surface.send('fifth');
+      } finally {
+        setSystemTime();
+      }
+
+      // A warm turn's prefix is its segment's, byte for byte, whatever was staged; the cold one takes the edit.
+      expect(prefixOf('second')).toBe(prefixOf('first'));
+      expect(prefixOf('third')).not.toBe(prefixOf('first'));
+      expect(prefixOf('third')).toContain('Be brief.');
+      expect(prefixOf('fourth')).toBe(prefixOf('third'));
+      // The owner's revert is the one move that does not wait.
+      expect(prefixOf('fifth')).toBe(prefixOf('first'));
+
+      // Each turn reaches the workspace's window carrying the versions it ran with, which its rating keeps.
+      expect(ranWith).toEqual({ first: [], second: [], third: [`${artifactId}@1`], fourth: [`${artifactId}@1`] });
+    },
+  },
+  {
+    title: 'a dream\'s skill joins the skills index only at a turn whose cache is cold; the owner\'s revert removes it at once',
+    async run({ surface, sql, actor, files, requests }) {
+      const skill = '---\nname: terse-replies\ndescription: Answer in one short line when the owner asks a yes-or-no question.\n---\nOne line.\n';
+      const target = workspaceSkillPath('terse-replies');
+      const store = createRefinementStore(sql, actor);
+
+      const prefixOf = (text: string): string => {
+        const request = requests().find((asked) => JSON.stringify(asked.prompt.at(-1)?.content).includes(`"${text}"`));
+
+        if (request === undefined) throw new Error(`no request answered '${text}'`);
+
+        return JSON.stringify(request.prompt.filter((message) => message.role === 'system'));
+      };
+
+      const pause = () => { setSystemTime(new Date(Date.now() + 3 * 60 * 60_000)); };
+
+      try {
+        await surface.send('first');
+        // A dream's accepted skill, as its route leaves it: staged where no prompt reads it.
+        const { request } = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: ['turn-dreamt'] });
+        await writeText(files, refinementStagingPath(request.id, 'terse-replies'), skill);
+        store.advance(request.id, 'requested', 'evaluating', {
+          routes: [{ kind: 'skill', owner: 'instruction_approvals', target, disposition: 'staged', digest: instructionDigest(skill), reason: 'r' }],
+        });
+        await surface.send('second');
+        pause();
+        await surface.send('third');
+        await surface.send('fourth');
+        expect(await surface.revertChangelogEntry(`refinement:${request.id}:0`)).toEqual({ ok: true, detail: `removed ${target} and revoked its trust` });
+        await surface.send('fifth');
+      } finally {
+        setSystemTime();
+      }
+
+      expect(prefixOf('second')).toBe(prefixOf('first'));
+      expect(prefixOf('second')).not.toContain('**terse-replies**');
+      // Trusted, its index line states when it applies.
+      expect(prefixOf('third')).toContain('**terse-replies**');
+      expect(prefixOf('third')).toContain('Answer in one short line when the owner asks a yes-or-no question.');
+      expect(prefixOf('fourth')).toBe(prefixOf('third'));
+      expect(prefixOf('fifth')).not.toContain('**terse-replies**');
+      expect(await exists(files, target)).toBe(false);
+    },
+  },
+  {
+    title: 'the turns a scaffold is replayed against are the answered ones, each with what it was asked and what it said',
+    async run({ surface }) {
+      await surface.send('first question');
+      await surface.send('second question');
+
+      const turns = await surface.recordedTurns(1);
+      expect(turns.map((turn) => turn.task)).toEqual(['second question']);
+
+      const both = await surface.recordedTurns();
+      expect(both.map((turn) => turn.task)).toEqual(['first question', 'second question']);
+      // What the second was asked in holds the first exchange; what it said is its own answer.
+      expect(both[1]?.input.map((message) => message.role).filter((role) => role !== 'system')).toContain('assistant');
+      expect(both[1]?.output.at(-1)?.role).toBe('assistant');
+    },
+  },
+  {
+    title: 'a proposed scaffold can be discarded before it runs',
     async run(backend) {
       const { surface } = backend;
       pendingScaffold(backend, 'answer in the owner language');
 
       expect(await surface.getEvolutionStatus()).toMatchObject({
-        pendingScaffold: { version: 1, rationale: 'answer in the owner language' }, trial: null, waiting: [],
+        pendingScaffold: { version: 1, rationale: 'answer in the owner language' }, waiting: [],
       });
-      expect(await surface.applyScaffoldDecision('rollback')).toEqual({ action: 'rollback', fromVersion: 1, newCurrentVersion: 0 });
+      expect(await surface.revertChangelogEntry('scaffold:v1:pending')).toMatchObject({ ok: true });
 
       // cf writes v0 as a precondition of its first turn, the CLI at session start: the candidate is the case's.
       const status = await surface.getEvolutionStatus();
 
       expect(status.pendingScaffold).toBeNull();
       expect(status.versions.find((row) => row.version === 1)?.status).toBe('rolled_back');
-      await expect(surface.applyScaffoldDecision('rollback')).rejects.toThrow('no pending scaffold');
     },
   },
   {
@@ -171,10 +292,10 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     },
   },
   {
-    title: 'a refinement with no rated turns is refused on the record, and an unknown one decides nothing',
+    title: 'a refinement with no rated turns is refused on the record',
     async run({ surface }) {
       expect(await surface.listRefinements(5)).toMatchObject({
-        requests: [], debt: { owed: false, summary: 'no unresolved low-rated turns: nothing is owed a refinement' },
+        requests: [], debt: { owed: false, summary: 'no new rated turns since the last dream' },
       });
 
       const request = await surface.requestRefinement({ turnIds: ['turn-1'] });
@@ -184,11 +305,6 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       });
       expect((await surface.listRefinements(5)).requests.map((listed) => [listed.id, listed.stage]))
         .toEqual([[request.id, 'refused']]);
-
-      expect(await surface.showRefinement('refine-nope', 0)).toEqual({ ok: false, error: 'no refinement refine-nope' });
-      expect(await surface.decideRefinement({
-        requestId: 'refine-nope', routeIndex: 0, expectedDigest: 'digest-nobody-showed', decision: 'reject',
-      })).toEqual({ ok: false, error: 'no refinement refine-nope' });
     },
   },
 ];

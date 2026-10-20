@@ -14,6 +14,7 @@ import { BUILTIN_SKILLS } from './builtins';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
 import { compareCodeUnits } from '../utils/text';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import type { InstructionTrustResolver } from '../types/instruction-trust';
 import {
   SKILL_FOLDER_FILE, WORKSPACE_SKILLS_DIR, workspaceSkillIndexLine,
   type DiscoveredSkill, type ParsedSkill, type SkillBodyRef,
@@ -36,6 +37,8 @@ export interface SkillsDiscovery {
 export interface DiscoverOpts {
   /** The turn's skills allocation in tokens; a larger file is never opened. */
   admissionTokens: number;
+  /** Over the bytes read: a skill trusted for exactly them states its description in the index. */
+  trust: InstructionTrustResolver;
 }
 
 /** The file a skill name loads from; `folder` is set for a `<name>/SKILL.md` folder. */
@@ -55,7 +58,7 @@ const SKILL_ROOTS = [
 
 /** Built-in headers; also the fallback when the VFS walk fails. */
 export const BUILTIN_SKILL_HEADERS: ReadonlyArray<DiscoveredSkill> = Object.freeze(
-  BUILTIN_SKILLS.map((skill) => discovered(skill, { kind: 'builtin', text: skill.body })),
+  BUILTIN_SKILLS.map((skill) => discovered(skill, { kind: 'builtin', text: skill.body }, false)),
 );
 
 /** Reserved names: no agent-writable file may claim one (KINU-N028). */
@@ -191,7 +194,7 @@ export function discoverSkills(
 
           if (parsed.success.name !== name) return { error: `"${path}" does not match front-matter name "${parsed.success.name}"` };
 
-          return { skill: discovered(parsed.success, { kind: 'file', path, chars: parsed.success.body.length }) };
+          return { skill: discovered(parsed.success, { kind: 'file', path, chars: parsed.success.body.length }, opts.trust(path, text) === 'approved') };
         },
         catch: (cause) => ({ cause }),
       }));
@@ -264,10 +267,10 @@ export function workspaceSkillPath(name: string): string {
 }
 
 /** Admission derives every active policy field from its own raw snapshot. */
-function discovered(skill: ParsedSkill, bodyRef: SkillBodyRef): DiscoveredSkill {
+function discovered(skill: ParsedSkill, bodyRef: SkillBodyRef, trusted: boolean): DiscoveredSkill {
   const { body: _body, ...header } = skill;
 
-  return { ...header, bodyRef };
+  return { ...header, bodyRef, ...(trusted && { trusted }) };
 }
 
 async function readTextFile(vfs: VFS, path: string, ceiling: number): Promise<string> {

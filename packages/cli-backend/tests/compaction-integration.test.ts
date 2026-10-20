@@ -17,7 +17,9 @@ import {
   type CompactionTrigger,
   type ChatOptions,
 } from '@kinu.run/core';
+import { TurnFileLedger } from '../../core/src/vfs/file-ledger';
 import {
+  createActorCompaction,
   createCompactionExtension,
   createCompactionStateStore,
   createVfsTranscriptStore,
@@ -335,6 +337,45 @@ describe('default compaction over the real storage plane', () => {
     await driveForced(grown);
     expect(state.archive.list(SESSION)).toEqual(ranges);
     expect(JSON.stringify(prompts.at(-1))).toBe(foldedJson);
+  });
+
+  // rc22 review (7 trials): a read stopped counting at every new turn, so a wake's edit was refused though the read was
+  // still in view. It counts until a compaction rewrites what the model sees.
+  test("an actor's compaction ends its reads' authority to edit; a replay keeps it", async () => {
+    const db = workspaceDatabase(scratchPath('compaction-reads', 'agent.db'), { create: true });
+    const rt = createCLIRuntime(db, { cwd: scratchDir('compaction-reads-folder'), llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' } });
+
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+    const reads = new TurnFileLedger();
+    const ledger = new DynamicContextLedger();
+    const { model } = capturingModel();
+
+    const extension = createActorCompaction({
+      files: () => rt, state: createCompactionStateStore(rt.storage.sql, rt.actor), ledger, logger: silentLogger,
+      summarizer: () => model, spend: { report: () => {} }, reads,
+    });
+
+    const drive = async (messages: ModelMessage[]) => {
+      const options: ChatOptions = {
+        modelSpec: 'fake/fake-model', model, modelContext: { id: 'fake/fake-model', contextWindow: 10_000 }, system: 'system prompt',
+        history: messages, dynamicContext: { ledger, snapshot: () => ({}) }, tools: {}, stopWhen: isStepCount(1),
+        extensions: new ExtensionHost().register(extension), conversationKey: SESSION,
+      };
+
+      for await (const _ of runChat(options)) { /* drain */ }
+    };
+
+    reads.observeWhole('/home/main/server.ts', 'export const port = 4100;\n');
+    const overflowing = history(15, 3_000);
+
+    await drive(history(2, 100));
+    expect(reads.seenState('/home/main/server.ts', 'export const port = 4100;\n', 'part').state).toBe('seen');
+    await drive(overflowing);
+    expect(reads.seenState('/home/main/server.ts', 'export const port = 4100;\n', 'part').state).toBe('never');
+
+    reads.observeWhole('/home/main/server.ts', 'export const port = 4100;\n');
+    await drive(overflowing);
+    expect(reads.seenState('/home/main/server.ts', 'export const port = 4100;\n', 'part').state).toBe('seen');
   });
 
   test('an owner\'s /compact folds all but the last exchanges; overflow recovery keeps down to the ladder target', async () => {

@@ -26,6 +26,8 @@ export function useLayoutDrawer(): (() => void) | null {
 export interface WorkspaceArea {
   readonly main: HTMLElement | null;
   readonly fill: (filling: boolean) => void;
+  /** A workspace shown where its route is not (Home, the assistant's): it draws the phone's bar itself. */
+  readonly ownBar: (own: boolean) => void;
 }
 
 const WorkspaceAreaContext = createContext<WorkspaceArea | null>(null);
@@ -45,11 +47,12 @@ function Shell() {
   const { entries } = useAgentsNav();
   const [main, setMain] = useState<HTMLElement | null>(null);
   const [filling, setFilling] = useState(false);
-  const area = useMemo(() => ({ main, fill: setFilling }), [main]);
+  const [drawsBar, setDrawsBar] = useState(false);
+  const area = useMemo(() => ({ main, fill: setFilling, ownBar: setDrawsBar }), [main]);
 
   useEffect(() => { setDrawerOpen(false); }, [location]);
   // A workspace's bar carries the menu button itself: one bar on a phone, not two.
-  const ownBar = useMatch({ path: "/workspace/:agentId", end: false }) !== null;
+  const ownBar = useMatch({ path: "/workspace/:agentId", end: false }) !== null || drawsBar;
   useEffect(() => { if (entries > 0 && !window.matchMedia(DESKTOP_QUERY).matches) setDrawerOpen(true); }, [entries]);
 
   // Dismissed as a dialog is: an Escape a field inside it took for itself stays the field's.

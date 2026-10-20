@@ -16,12 +16,10 @@ import { initEventsHubTables, EventLog } from '../src/events/hub/index';
 import { initCompletedTurnTable } from '../src/evolution/session-window';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { listRecoveryFindings } from '../src/evolution/recovery';
-import { sectionArtifact, writeCandidate } from '../src/evolution/artifacts';
-import { runningTrial } from '../src/evolution/trials';
-import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import type { AgentRuntime, Identity, SqlExecutor } from '../src/index';
+import type { DecisionPort } from '../src/providers/decision-model';
 import { actorReferenceOf, type ActorReference } from '../src/identity/actor-handle';
 import type { ActorProgramIdentity, ActorTurnClaim } from '../src/orchestrator/actor-claims';
 import type { ContextSelection } from '../src/session/context';
@@ -47,6 +45,8 @@ interface Fixture {
   /** A new host over the same database, as a root eviction leaves. */
   rebuild(): Fixture;
   readonly released: string[];
+  /** The actors whose dream lane a cadence pass drained, in order. */
+  readonly dreamed: string[];
 }
 
 /** A real per-actor scaffold identity, since the host seeds every actor's loop pointer and bytes. */
@@ -67,7 +67,8 @@ function scaffoldIdentity(record: WorkspaceActor, vfs: VFS, sql: SqlExecutor, ac
   };
 }
 
-function build(donor?: Database, unreadableActor?: string, automatic = false, installedBuild: string | null = 'test-build'): Fixture {
+function build(donor?: Database, unreadableActor?: string, automatic = false, options: { readonly installedBuild?: string | null; readonly decide?: DecisionPort } = {}): Fixture {
+  const { installedBuild = 'test-build', decide } = options;
   const db = donor ?? new Database(':memory:');
   const sql = wrapDatabase(db).sql;
   const execRaw = (ddl: string): void => { db.exec(ddl); };
@@ -86,6 +87,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
   const template = createTestRuntime().rt;
   const planes = new Map<string, VFS>();
   const released: string[] = [];
+  const dreamed: string[] = [];
 
   const orchestrationFor = (bound: BoundActor & { runtime: AgentRuntime }): AgentOrchestratorDeps => {
     if (bound.record.name === 'unorchestrated') throw new Error('orchestration failed');
@@ -104,6 +106,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
     },
     engine: new EvolutionEngine(bound.runtime, historyTurnPairs(bound.stores.history), { enabled: automatic }),
     eventLog: new EventLog(exec, bound.handle),
+    refinementLane: async () => { dreamed.push(bound.record.name); },
   }));
 
   // Memoized per actor so the session store and runtime address the same bytes.
@@ -138,6 +141,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
 
       return {
         ...template,
+        ...(decide !== undefined && { decide }),
         actor: bound.handle,
         storage: { vfs: plane, home: WORKSPACE_ROOT, sql, execRaw, transactionSync: (write) => db.transaction(write)() },
         agentStateVfs: plane,
@@ -152,7 +156,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
   });
 
   return {
-    db, sql, host, directory, released,
+    db, sql, host, directory, released, dreamed,
     main: { actorId: mainHandle.actorId, workspaceId: mainHandle.workspaceId, parentActorId: null },
     child: (name, creationId, origin) => {
       const handle = directory.create({
@@ -162,7 +166,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, in
 
       return { actorId: handle.actorId, workspaceId: handle.workspaceId, parentActorId: handle.parentActorId };
     },
-    rebuild: () => build(db, unreadableActor, automatic, installedBuild),
+    rebuild: () => build(db, unreadableActor, automatic, { installedBuild, ...(decide !== undefined && { decide }) }),
   };
 }
 
@@ -187,27 +191,20 @@ function claimOf({ actorId, turnId, epoch, runId, context }: ClaimSeed): ActorTu
 
 describe('one workspace database, many logical actors', () => {
   test('learning switched off between turns stops the independent background pass', async () => {
-    const fx = build(undefined, undefined, true);
+    const fx = build(undefined, undefined, true, { decide: async () => null });
     const actor = await fx.host.acquire(fx.main, { kind: 'actor' });
 
     try {
       const lease = actor.session.beginTurn({ runId: 'run', turnId: 'turn' }, 'build', 0);
       actor.session.reserveClaim(lease);
       actor.session.finishTurn(lease);
-      actor.handle.config.setLiveTrials(true);
-      const section = PROMPT_SECTIONS[0];
 
-      if (section === undefined) throw new Error('the prompt-section registry is empty');
-      writeCandidate(fx.sql, actor.handle, {
-        artifactId: sectionArtifact(section.id), body: `${section.source.trimEnd()} Keep it short.`,
-        rationale: 'test candidate', evidence: { turns: ['turn'], reason: 'incorrect' },
-      });
       actor.handle.config.setLearning(false);
       await actor.session.orchestrator.runDueSessionEvolution();
-      expect(runningTrial(fx.sql, actor.handle)).toBeNull();
+      expect(fx.dreamed).toEqual([]);
       actor.handle.config.setLearning(true);
       await actor.session.orchestrator.runDueSessionEvolution();
-      expect(runningTrial(fx.sql, actor.handle)).not.toBeNull();
+      expect(fx.dreamed).toEqual(['hosted']);
     } finally {
       fx.host.releaseAll();
       fx.db.close();
@@ -591,7 +588,7 @@ describe('one workspace database, many logical actors', () => {
   /** A turn whose program verifies, and one run of it: admitted again on `installedBuild`, its model called at each
    *  of `steps`, and left open there, as a run a memory or wall reset of its activation ended. */
   async function interruptedRuns(hostBuild?: string | null): Promise<{ actor: BoundActor; run: (steps: readonly number[], installedBuild?: string | null, cut?: 'provider' | 'work', messages?: ModelMessage[]) => Promise<void>; fx: Fixture; source: string }> {
-    const fx = build(undefined, undefined, false, hostBuild);
+    const fx = build(undefined, undefined, false, { installedBuild: hostBuild });
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
     const source = 'export default async function main() { return "retained"; }';
     await writeText(actor.runtime.storage.vfs, `${actor.runtime.identity.scaffold.path}.v1`, source);

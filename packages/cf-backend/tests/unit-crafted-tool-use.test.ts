@@ -1,9 +1,9 @@
 /**
- * Main's chat runs in its own isolate while its tools, its crafted tools among them, run in the workspace: a crafted
- * tool its turn calls is scored where it ran, and the turn it hands back records the use.
+ * Main's chat runs in its own isolate while its tools, its crafted tools among them, run in the workspace: the turn it
+ * hands back records which crafted tools it was offered and which it chose, counted where they live as it is recorded.
  */
 import { expect, test } from 'bun:test';
-import { catalogTurn, gatewayWorkspace } from './helpers/actor-harness';
+import { catalogTurn, driveUntil, gatewayWorkspace } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 const ASK = 'Make a tool that doubles a number, then double 21 with it.';
@@ -29,16 +29,18 @@ function crafting() {
   }));
 }
 
-test("a crafted tool main's turn calls is counted in the Tools pane, and the turn it hands back records the use", async () => {
-  const { agent, db } = crafting();
+test("a crafted tool main's turn chose is counted in the Tools pane as the turn is recorded", async () => {
+  const workspace = crafting();
+  const { agent, db } = workspace;
+  const counted = () => db.query<{ offered: number; chosen: number }, []>("SELECT offered, chosen FROM crafted_tools WHERE name = 'double'").all();
 
   await catalogTurn(agent, ASK);
+  await driveUntil(workspace, 'the crafting turn was never recorded', () => counted()[0]?.offered === 1);
 
   const { crafted } = await agent.getToolDescriptions();
   const double = crafted.find((tool) => tool.name === 'double');
 
-  // One clean call of a tool that existed before it ran: one use, scored up from the neutral prior.
+  // Offered from the step after it was made, and called there: chosen in its one offer.
   expect(double?.usageCount).toBe(1);
-  expect(double?.qualityScore).toBeGreaterThan(0.5);
-  expect(db.query<{ tool_names: string }, []>('SELECT tool_names FROM turn_craft_usage').all()).toEqual([{ tool_names: '["double"]' }]);
+  expect(counted()).toEqual([{ offered: 1, chosen: 1 }]);
 });

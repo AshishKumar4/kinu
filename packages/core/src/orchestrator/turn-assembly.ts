@@ -7,6 +7,8 @@ import { Effect } from 'effect';
 import type { ModelWindow } from '../context-window';
 import type { KinuExtension } from '../extension';
 import type { Fact } from '../memory/facts';
+import type { MailInContext } from '../prompting/volatile-context';
+import type { ActiveRoster } from '../types/dynamic-context';
 import type { SpendGate } from '../mission-budget';
 import { buildSystemPromptParts, renderUnverifiedInstructions, systemPromptText, type SystemPromptOptions } from '../prompt';
 import type { AgentsMdSources } from '../prompting/agents-md';
@@ -50,6 +52,14 @@ export interface TurnModelSources {
 }
 
 /** Asked per turn, never captured. */
+/** What a turn reads once, so every step's block is the same bytes. */
+export interface TurnReads {
+  readonly memoryTail: string | undefined;
+  readonly activeSkills: ActiveSkillSet | null;
+  readonly accountFacts?: readonly Fact[];
+  readonly mail?: ActiveRoster<MailInContext>;
+}
+
 export interface TurnAssemblySources {
   readonly rt: AgentRuntime;
   readonly backend: PromptBackend;
@@ -73,7 +83,8 @@ export interface TurnAssemblySources {
   soul(): Promise<string | undefined>;
   agentsMd(window: ModelWindow): Promise<AgentsMdSources>;
   identity(): Promise<PromptIdentity>;
-  artifacts(): { readonly sections: Readonly<Record<string, string>>; readonly tools: ToolTextOverrides };
+  /** `versions`: the promoted versions the bodies are, which the turn's admission records. */
+  artifacts(): { readonly sections: Readonly<Record<string, string>>; readonly tools: ToolTextOverrides; readonly versions: readonly string[] };
   executors(): ReturnType<NonNullable<AgentRuntime['executionRouter']>['listExecutors']>;
   taskPlan(): TaskPlanContext | null;
   /** The conversation extensions keep their state under (`conversationKey`). */
@@ -86,10 +97,12 @@ export interface TurnAssemblySources {
   readonly observeStream?: ActorExecutionInput['chat']['observeStream'];
   readonly paceStep?: ActorExecutionInput['chat']['paceStep'];
   extensions(): readonly KinuExtension[];
-  dynamic(turn: { readonly memoryTail: string | undefined; readonly activeSkills: ActiveSkillSet | null; readonly accountFacts?: readonly Fact[] }): ActorExecutionInput['dynamic'];
+  dynamic(turn: TurnReads): ActorExecutionInput['dynamic'];
   /** The account's facts, read once per turn so every step renders the same block; absent where no account is wired.
    *  A read that fails answers none, and the turn goes on. */
   accountFacts?(): Promise<readonly Fact[]>;
+  /** The agent's unread mail, read once per turn as the facts are; absent where it has no box, and a failed read none. */
+  mail?(): Promise<ActiveRoster<MailInContext> | undefined>;
   /** MEMORY.md's tail, read once per turn so every step renders the same block. */
   memoryTail(): Promise<string | undefined>;
   operation(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): OperationProfile;
@@ -236,9 +249,9 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const externalTools = allowed.has('eval') ? pick(external, allowed) : {};
   const { pinned, invoked } = splitTurnSkills(activeSkills);
 
-  const [window, agentsMd, soul, identity, memoryTail, accountFacts] = await Promise.all([
+  const [window, agentsMd, soul, identity, memoryTail, accountFacts, mail] = await Promise.all([
     models.catalog.windowFor(spec), sources.agentsMd(limits), sources.soul(), sources.identity(), sources.memoryTail(),
-    sources.accountFacts?.(),
+    sources.accountFacts?.(), sources.mail?.(),
     models.catalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model)),
   ]);
 
@@ -288,12 +301,15 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
       loopVersion: await sources.rt.identity.scaffold.version(),
       chat,
       extensions: sources.extensions(),
-      dynamic: sources.dynamic({ memoryTail, activeSkills: activeSkills ?? null, ...(accountFacts !== undefined && { accountFacts }) }),
+      dynamic: sources.dynamic({
+        memoryTail, activeSkills: activeSkills ?? null, ...(accountFacts !== undefined && { accountFacts }), ...(mail !== undefined && { mail }),
+      }),
       // Out of the cached prefix.
       instructions: renderUnverifiedInstructions({ agentsMd, activeSkills: pinned }),
       activated: invoked ? activatedSkillsBlock(invoked) : null,
       scaffoldSpend: sources.scaffoldSpend,
       stores: offered.stores,
+      artifactVersions: artifacts.versions,
     },
     profile, profileInputs, operation, externalTools, activeSkills: activeSkills ?? null, window,
   };

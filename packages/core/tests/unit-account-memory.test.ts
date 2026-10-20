@@ -295,7 +295,7 @@ describe("the background pass's proposals reach the account, once each", () => {
     const lane = new SleepTimeLane({
       sql: rt.storage.sql, actor: rt.actor, config: stores.config, facts: stores.facts,
       transcript: () => ({ newestFirst: async () => TURNS }),
-      llm: () => ({ stream: () => { throw new Error('not streamed'); }, complete: async () => PROPOSING }),
+      llm: () => ({ stream: () => { throw new Error('not streamed'); }, complete: async () => PROPOSING, object: async (_prompt, schema) => v.parse(schema, JSON.parse(PROPOSING)) }),
       transactionSync: (write) => write(),
       armWake: () => {},
       workspace: 'research',

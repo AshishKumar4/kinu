@@ -1,7 +1,7 @@
 /**
  * The roster's summary of one workspace, folded by the workspace from its own stores and pushed to its
- * owner's object when it changes. Only what waits on the owner is a decision; unseen changes and
- * auto-promoted trials are updates.
+ * owner's object when it changes. Only what waits on the owner is a decision; unseen changes, its own
+ * included, are updates.
  */
 import * as v from 'valibot';
 import type { PendingAction } from './pending-actions';
@@ -39,6 +39,9 @@ export const WorkspaceOverviewSchema = v.object({
   shares: v.array(SlateShareCardSchema),
   /** The current settings notification obligation; working workspaces remain conservative. */
   awaitsSettings: v.boolean(),
+  /** The workspace's active plan as far as it has come: what a workspace pursuing a goal shows of its progress. Absent on
+   *  a tile stored before plans were counted. */
+  plan: v.optional(v.nullable(v.object({ title: v.string(), done: v.number(), total: v.number() }))),
 });
 
 export type WorkspaceOverview = v.InferOutput<typeof WorkspaceOverviewSchema>;
@@ -71,7 +74,7 @@ function activityOf(working: boolean, unfinished: boolean): WorkspaceOverview['a
 }
 
 export function buildWorkspaceOverview(inputs: WorkspaceOverviewInputs): WorkspaceOverview {
-  // Every row the queue holds is a decision: what the agent did by itself never reaches it (`awaitingTheOwner`).
+  // Every row the queue holds is a decision: what the agent did by itself never reaches it.
   const decisionsWaiting = inputs.pendingConsents.length + (inputs.activePlan?.status === 'pending' ? 1 : 0) + inputs.openQuestions
     + inputs.pendingActions.length;
 

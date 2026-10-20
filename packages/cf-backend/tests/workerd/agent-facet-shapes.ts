@@ -58,7 +58,7 @@ export interface SwarmFacetObservation {
   readonly chat: readonly { readonly role: string; readonly text: string }[];
 }
 
-/** A swarm node's `eval` over a tool main crafted, before and after main's store retires it by score. */
+/** A swarm node's `eval` over a tool main crafted, before and after main's store retires it. */
 export interface NodeJobObservation {
   readonly actorId: string;
   readonly status: string;

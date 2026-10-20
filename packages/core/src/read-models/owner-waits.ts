@@ -7,7 +7,6 @@
 import type { DeferredApproval } from '../safety/deferred-approval';
 import { approvalKindOf, type ApprovalKind } from '../safety/approval-kind';
 import type { PendingConsent } from '../protocol';
-import type { WorkspaceProposal } from '../safety/workspace-proposals';
 import type { AskingAgent } from '../plans/owner-questions';
 import { planTitle } from '../plans/review';
 import { cardWords } from './event-summary';
@@ -30,7 +29,6 @@ export interface OwnerWaitSources {
   /** Still queued (deferred-approval.ts `list`): parked commands and writes. */
   readonly deferred: readonly DeferredApproval[];
   readonly plans: ReadonlyArray<{ readonly actor: string; readonly id: string; readonly revision: number; readonly content: string; readonly updatedAt: number }>;
-  readonly proposals: readonly WorkspaceProposal[];
   readonly consents: readonly PendingConsent[];
   readonly questions: readonly AskingAgent[];
   /** An agent's name by its actor id, as it asks under it. */
@@ -53,10 +51,6 @@ export function ownerWaits(sources: OwnerWaitSources): ScopedOwnerWait[] {
     wait: { key: `plan:${plan.actor}:${plan.id}:${String(plan.revision)}`, kind: 'plan', what: planTitle(plan.content), since: plan.updatedAt, askedBy: sources.nameOf(plan.actor) },
   }));
 
-  const proposals = sources.proposals.map((proposal): ScopedOwnerWait => ({
-    raisedBy: null, wait: { key: `action:${proposal.id}`, kind: 'workspace', what: proposal.name, since: proposal.requestedAt, askedBy: null },
-  }));
-
   const consents = sources.consents.map((consent): ScopedOwnerWait => ({
     raisedBy: null,
     wait: { key: `consent:${consent.consentId}`, kind: 'consent', what: `${consent.method} on ${consent.deviceLabel}: ${consent.command}`, since: consent.createdAt, askedBy: null },
@@ -70,7 +64,7 @@ export function ownerWaits(sources: OwnerWaitSources): ScopedOwnerWait[] {
     },
   }));
 
-  return [...commands, ...plans, ...proposals, ...consents, ...questions].sort((a, b) => b.wait.since - a.wait.since || a.wait.key.localeCompare(b.wait.key));
+  return [...commands, ...plans, ...consents, ...questions].sort((a, b) => b.wait.since - a.wait.since || a.wait.key.localeCompare(b.wait.key));
 }
 
 /** What `actorId` reads of them: the workspace's own agent every row; a hire only the rows it asked itself. */

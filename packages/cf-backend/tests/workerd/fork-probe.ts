@@ -195,8 +195,8 @@ export class ForkSourceProbeDO extends ForkProbeDO {
       VALUES (${'probe_tool'}, ${'Counts what a fork carried.'},
               ${'export default () => 1;'}, ${1_760_000_000_001}, ${1_760_000_000_002})`;
     // What the parent learned: the lesson taught after the cut stays behind; the fact and the table cross as they stand.
-    recordLesson(this.sql, actor, { turnIds: ['t-before'], text: 'Read before writing.', source: 'turn_reflection', status: 'corroborated', now: PROBE_CUT_RECORDED_AT - 1 });
-    recordLesson(this.sql, actor, { turnIds: ['t-after'], text: 'Taught after the cut.', source: 'turn_reflection', status: 'provisional', now: PROBE_CUT_RECORDED_AT + 1 });
+    recordLesson(this.sql, actor, { turnIds: ['t-before'], text: 'Read before writing.', source: 'import', status: 'corroborated', now: PROBE_CUT_RECORDED_AT - 1 });
+    recordLesson(this.sql, actor, { turnIds: ['t-after'], text: 'Taught after the cut.', source: 'execution_recovery', status: 'provisional', now: PROBE_CUT_RECORDED_AT + 1 });
     createFactsStore(this.sql, actor).upsert('editor', 'helix', { source: 'user' });
     const ledger = this.appData(actor);
     ledger.createTable({ name: 'ledger', scope: 'actor', columns: [{ name: 'key', type: 'text', primaryKey: true }, { name: 'amount', type: 'integer' }] });

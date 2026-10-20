@@ -68,7 +68,6 @@ kinu <command> [options]
 | [`kinu swarm <name> [nodeId]`](#kinu-swarm-name-nodeid) | Show a workspace's swarm search history |
 | [`kinu heads <name>`](#kinu-heads-name) | Show parallel reasoning branch runs |
 | [`kinu debug <name>`](#kinu-debug-name) | Save everything about a workspace to one file: identity, messages, runs and their events, heads, swarm searches, background jobs, evolution state, memory and facts |
-| [`kinu gepa <name> [runId]`](#kinu-gepa-name-runid) | Show GEPA searches, or run one over the scaffold with --run |
 | [`kinu quality <name>`](#kinu-quality-name) | Show satisfaction per day: the mean rating of the turns users answered, with 95% intervals |
 
 ### This PC
@@ -287,7 +286,7 @@ Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovi
 
 | Option | What it does |
 | --- | --- |
-| `--no-auto-evolve` | Turn this agent's learning setting off: no ratings, lessons, proposals or trials |
+| `--no-auto-evolve` | Turn this agent's learning setting off: no ratings, lessons or proposals |
 | `--transcript-dir <dir>` | Where to store transcripts |
 | `--model <id>` | Model ID (env: KINU_MODEL) |
 | `--base-url <url>` | Base URL of your own model endpoint (env: KINU_BASE_URL) |
@@ -305,7 +304,7 @@ Run one task without the TUI and exit, for CI and scripts.
 | --- | --- |
 | `-w, --workspace <name>` | Workspace to run (default: the only one configured) |
 | `--json` | Emit line-delimited JSON events |
-| `--no-auto-evolve` | Turn this agent's learning setting off: no ratings, lessons, proposals or trials |
+| `--no-auto-evolve` | Turn this agent's learning setting off: no ratings, lessons or proposals |
 | `--transcript-dir <dir>` | Where to store transcripts |
 | `--no-transcript` | Do not record a transcript for this run |
 | `--model <id>` | Model ID (env: KINU_MODEL) |
@@ -545,20 +544,6 @@ Save everything about a workspace to one file: identity, messages, runs and thei
 
 ```bash
 kinu debug jarvis -o jarvis.debug.jsonl
-```
-
-### kinu gepa <name> [runId]
-
-Show GEPA searches, or run one over the scaffold with --run.
-
-| Option | What it does |
-| --- | --- |
-| `--run` | Run one proposer search over the scaffold, judged on recent turns without running it |
-| `--limit <n>` | Run limit |
-| `--json` | Print raw JSON |
-
-```bash
-kinu gepa jarvis --run
 ```
 
 ### kinu quality <name>

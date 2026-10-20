@@ -22,6 +22,7 @@ import { nowMs } from '../utils/date';
 import { ToolOutcomeSchema } from '../tools/outcome';
 import { StruggleSchema } from './struggles';
 import type { CompletedTurn } from './types';
+import { turnPicks, type TurnPicks } from './picks';
 
 /** A completed turn, as stored and read; `CompletedTurn` (`types.ts`) is its type, so the two cannot drift. */
 export const CompletedTurnSchema = v.object({
@@ -43,6 +44,8 @@ export const CompletedTurnSchema = v.object({
   /** Crafted tools this turn called, per the craft clock. Not derivable from `toolCalls`:
    *  crafted tools are codemode-only. Empty = observed none; absent = not observed. */
   craftedToolsUsed: v.optional(v.pipe(v.array(v.string()), v.readonly())),
+  /** Crafted tools its declarations offered; a choice is a call of one of these. Absent on turns recorded before. */
+  craftedOffered: v.optional(v.pipe(v.array(v.string()), v.readonly())),
   steps: v.number(),
   durationMs: v.number(),
   /** Null at completion; set later by EvolutionEngine.reviewTurn. */
@@ -61,10 +64,12 @@ export const CompletedTurnSchema = v.object({
   struggles: v.optional(v.pipe(v.array(StruggleSchema), v.readonly())),
   /** The tool lessons its steps listed, at the revision each saw; only these does the turn score. */
   shownLessons: v.optional(v.pipe(v.array(v.pipe(v.object({ id: v.string(), revision: v.number() }), v.readonly())), v.readonly())),
-  /** The live trial's arm the turn ran; its errors and steps are the trial's guardrails. */
-  trial: v.optional(v.object({ trialId: v.string(), segmentId: v.string(), arm: v.picklist(['candidate', 'incumbent']) })),
   /** The turn ended on a question to its owner: its call waits for the answer, so no tool result records it. */
   askedOwner: v.optional(v.boolean()),
+  /** `<artifactId>@<version>` of each promoted text the turn ran with; its rating keeps them. Absent on turns before. */
+  artifacts: v.optional(v.pipe(v.array(v.string()), v.readonly())),
+  /** The scaffold version its program ran (0: the built-in loop), and the program's own throw if it threw. */
+  scaffold: v.optional(v.object({ version: v.number(), threw: v.optional(v.string()) })),
 });
 
 const APPEND_SCOPE = 'turn_append';
@@ -169,6 +174,9 @@ interface AppendTurnOpts {
    *  `turn_append` tombstone, since `sweepSettled` may already have deleted the
    *  row. Omit when the recording cannot be replayed. */
   id?: string;
+  /** What the turn's record owes besides its row, run once with the insert in its synchronous pass: never for a
+   *  keyed replay. */
+  recorded?: () => void;
   /** Epoch ms; defaults to now. */
   now?: number;
 }
@@ -216,6 +224,30 @@ interface TurnRow { id: string; turn: string; followup: string | null; created_a
 
 /** Bound to one actor: ids can collide across actors, and window size, queue
  *  depth and stale-claim sweeps are counts. */
+/** What a turn ran with: its promoted text versions, the scaffold version its program ran, and what it picked. */
+export interface RanWith {
+  readonly artifacts: readonly string[] | null;
+  readonly scaffoldVersion: number | null;
+  readonly picks: TurnPicks | null;
+}
+
+/**
+ * What a turn ran with while its record is still in the window: a thumb or a pick lands on a turn whose review has not
+ * run, which is the one rating that reads it from the turn itself. Nulls once the window let it go.
+ */
+export function completedTurnRanWith(sql: SqlExecutor, actor: ActorHandle, turnId: string): RanWith {
+  actor.assertCurrent();
+
+  const row = sql<{ turn: string }>`SELECT turn FROM completed_turns
+    WHERE actor_id = ${actor.actorId} AND json_extract(turn, '$.turnId') = ${turnId} ORDER BY created_at DESC LIMIT 1`[0];
+
+  const turn = row === undefined ? null : v.safeParse(CompletedTurnSchema, parseJsonValue(row.turn));
+
+  if (turn?.success !== true) return { artifacts: null, scaffoldVersion: null, picks: null };
+
+  return { artifacts: turn.output.artifacts ?? null, scaffoldVersion: turn.output.scaffold?.version ?? null, picks: turnPicks(turn.output) };
+}
+
 export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): CompletedTurnStore {
   const actorId = actor.actorId;
   const authorize = actor.assertCurrent;
@@ -275,6 +307,8 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
       void sql`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at)
           VALUES (${actorId}, ${id}, ${encoded}, ${null}, 1, ${review}, ${now})
           ON CONFLICT(actor_id, id) DO NOTHING`;
+
+      opts.recorded?.();
 
       // Same synchronous pass, so nothing observes the row without its tombstone.
       if (opts.id !== undefined) recordEffectDone(sql, actor, { scope: APPEND_SCOPE, key: opts.id });

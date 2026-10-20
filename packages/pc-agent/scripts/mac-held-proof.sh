@@ -12,7 +12,13 @@
 #      frames run), listings, stats, and writes that name the bytes they replace;
 #   3. what macOS's own Screen Sharing listens on (1014-t, the PC desktop): every socket on TCP 5900 and the address
 #      it is bound to, and the firewall's state. It reads and changes nothing; run it with Screen Sharing turned on
-#      (System Settings › General › Sharing) for the measurement to say anything, and turn it back off after.
+#      (System Settings › General › Sharing) for the measurement to say anything, and turn it back off after;
+#   4. the daemon's screen helper (1014-t), through the daemon's own Mac source (mac-screen.js): it builds the Swift
+#      helper with swiftc, asks for Screen Recording and Accessibility in macOS's own prompts, then serves the main
+#      display for a few seconds: its first frame's size and bytes; where macOS puts the pointer after 20 moves, read
+#      back from AppKit and compared with where they aimed (so input reaches the Mac); and how long a second open took. The first run usually stops at the prompts, as macOS applies a new
+#      grant only to a helper started after it: allow the terminal app this runs in under System Settings › Privacy &
+#      Security, in Screen Recording and in Accessibility, and run the script again. Skip it with KINU_SKIP_SCREEN=1.
 #
 # Usage, from the repository root on a Mac, after `bun install`:
 #
@@ -83,6 +89,61 @@ echo "$owned"
 firewall="$(/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null) $(/usr/libexec/ApplicationFirewall/socketfilterfw --getstealthmode 2>/dev/null)"
 echo "$firewall"
 
+screen="skipped (KINU_SKIP_SCREEN=1)"
+screen_ok=yes
+
+if [ "${KINU_SKIP_SCREEN:-}" != 1 ]; then
+  echo "== the screen helper, through the daemon's Mac source =="
+  screen="$(cd "$REPO" && KINU_SCREEN_HOME="$SCRATCH/kinu" bun -e '
+    const fs = require("node:fs");
+    const { createMacSource } = require("./packages/pc-agent/src/daemon/mac-screen.js");
+    const home = process.env.KINU_SCREEN_HOME;
+    fs.mkdirSync(home, { recursive: true });
+    const said = [];
+    // Proven here, by this run: what a Mac reports before it passes is none.
+    const source = createMacSource({ home, log: (...words) => said.push(words.join(" ")), proven: true });
+    const result = { probe: await source.probe() };
+    const started = performance.now();
+    result.share = await source.share();
+    result.shareMs = Math.round(performance.now() - started);
+    result.desktop = source.desktop();
+    if (result.share.ok) {
+      const frames = [];
+      const first = Promise.withResolvers();
+      const opened = performance.now();
+      const screen = await source.open({ onFrame: (frame) => { frames.push(frame); first.resolve(frame); }, onEnd: (why) => said.push(`ended ${why}`) });
+      const frame = await Promise.race([first.promise, Bun.sleep(10000).then(() => null)]);
+      result.firstFrameMs = Math.round(performance.now() - opened);
+      result.frame = frame === null ? null : { width: frame.width, height: frame.height, bytes: frame.jpeg.byteLength, jpeg: frame.jpeg[0] === 0xff && frame.jpeg[1] === 0xd8 };
+      for (let move = 0; move < 20; move += 1) {
+        screen.pointer(0, 200 + 30 * move, 200 + 20 * move, { x: 0, y: 0 });
+        await Bun.sleep(100);
+      }
+      await Bun.sleep(300);
+      result.framesAfterMoves = frames.length - 1;
+      // Where the pointer is now, in points from the top left of the main screen, against where the last move aimed.
+      const where = Bun.spawnSync(["osascript", "-l", "JavaScript", "-e",
+        "ObjC.import(\"AppKit\"); var p = $.NSEvent.mouseLocation; var f = $.NSScreen.mainScreen.frame;"
+        + " JSON.stringify({ x: p.x, y: f.size.height - p.y, width: f.size.width, height: f.size.height })"]);
+      const pointer = JSON.parse(where.stdout.toString() || "null");
+      if (pointer !== null && frame !== null) {
+        const aimed = { x: (200 + 30 * 19) * pointer.width / frame.width, y: (200 + 20 * 19) * pointer.height / frame.height };
+        result.pointer = { at: { x: Math.round(pointer.x), y: Math.round(pointer.y) }, aimed: { x: Math.round(aimed.x), y: Math.round(aimed.y) } };
+        result.pointerReached = Math.abs(pointer.x - aimed.x) <= 2 && Math.abs(pointer.y - aimed.y) <= 2;
+      }
+      screen.close();
+      const again = performance.now();
+      const reopened = await source.open({ onFrame: () => {}, onEnd: () => {} });
+      result.reopenMs = Math.round(performance.now() - again);
+      reopened.close();
+    }
+    result.said = said;
+    console.log(JSON.stringify(result));
+    process.exit(result.share.ok && result.frame?.jpeg && result.pointerReached === true ? 0 : 1);
+  ' 2>&1)" || screen_ok=no
+  echo "$screen"
+fi
+
 echo
 echo "===== paste from here ====="
 echo "mac-held-proof $(git -C "$REPO" rev-parse --short HEAD) on $(sw_vers -productVersion 2>/dev/null) $(uname -m), bun $(bun --version)"
@@ -95,6 +156,9 @@ echo "tcp 5900 listeners:"
 echo "$listeners" | grep LISTEN || echo "  none (Screen Sharing off?)"
 echo "$owned" | tail -n +1 | head -5
 echo "firewall: $firewall"
+echo "screen helper: $screen_ok"
+echo "$screen" | tail -1 | head -c 1500
+echo
 echo "===== to here ====="
 
-[ "$direct_ok" = yes ] && [ "$failed" = 0 ] && [ "$passed" -gt 0 ]
+[ "$direct_ok" = yes ] && [ "$failed" = 0 ] && [ "$passed" -gt 0 ] && [ "$screen_ok" = yes ]

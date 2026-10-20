@@ -367,15 +367,13 @@ describe('the daemon\'s own sign-in', () => {
 
   const read = (home) => JSON.parse(fs.readFileSync(path.join(home, chatgpt.DEVICE_RECORD_FILE), 'utf8'));
 
-  /** Resolves once the record holds `accessToken`; each write renames a file into `home`, which the watch sees. */
+  /**
+   * Resolves once the record holds `accessToken`, read again on each turn of the event loop: a write renames the whole
+   * record into place, so each read sees one record or the next. Never a file-change event, which Bun's fs.watch can
+   * drop under load (2026-10-20, linux-screen.test.js), hanging the wait.
+   */
   async function recordHolds(home, accessToken) {
-    const watcher = fs.watch(home);
-
-    try {
-      while (read(home).accessToken !== accessToken) await once(watcher, 'change');
-    } finally {
-      watcher.close();
-    }
+    while (read(home).accessToken !== accessToken) await new Promise((resolve) => { setImmediate(resolve); });
   }
 
   test('callers that meet an expiring token share one rotation, and the replacement lands owner-only', async () => {

@@ -1,38 +1,29 @@
-import { readFileSync, watch } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { toKinuError, tolerate } from '@kinu.run/core/obs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tolerate } from '@kinu.run/core/obs';
 import { AwaitedList } from '@kinu.run/test-utils';
 
-function observeFile<T>(file: string, read: (text: string) => T | undefined, exited?: Promise<unknown>): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    let closed = false;
+/**
+ * What `read` finds in `file`, read again on each turn of the event loop: never a file-change event, which Bun's
+ * fs.watch dropped 90 times in 300 under load (2026-10-20), hanging the wait. Ends when the content is there, or, once
+ * `exited` settles, with one last read after every write the process made.
+ */
+async function observeFile<T>(file: string, read: (text: string) => T | undefined, exited?: Promise<unknown>): Promise<T> {
+  let ended = false;
+  const end = (): void => { ended = true; };
 
-    const failed = (cause: Error): void => {
-      if (closed) return;
-      closed = true;
-      watcher.close();
-      reject(cause);
-    };
+  exited?.then(end, end);
 
-    const changed = (): void => {
-      if (closed) return;
+  for (;;) {
+    const wasEnded = ended;
+    const found = read(tolerate(() => readFileSync(file, 'utf8'), 'enoent') ?? '');
 
-      try {
-        const text = tolerate(() => readFileSync(file, 'utf8'), 'enoent');
-        const found = read(text ?? '');
+    if (found !== undefined) return found;
 
-        if (found === undefined) return;
-        closed = true;
-        watcher.close();
-        resolve(found);
-      } catch (cause) { failed(toKinuError({ doing: 'reading the observed file', cause, otherwise: 'io' })); }
-    };
+    if (wasEnded) throw new Error(`the process exited before the expected content reached ${file}`);
 
-    const watcher = watch(dirname(file), changed);
-    watcher.once('error', failed);
-    changed();
-    exited?.then(() => { changed(); failed(new Error('the process exited before the expected content reached ' + file)); }, failed);
-  });
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+  }
 }
 
 export function waitForDaemonPid(home: string): Promise<number> {

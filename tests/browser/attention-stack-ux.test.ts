@@ -174,9 +174,8 @@ test('only what waits on the owner is stacked, newest first; an older card can b
     await opened(page, origin, '&asks=mixed&consent=waiting');
     await page.waitForSelector('[data-attention-stack]');
 
-    // The version under trial waits on nobody: it stays in Work. The workspace's pane stacks its agents' asks too; the
-    // three parked commands share the newest one's card.
-    expect(await page.$eval('[data-attention-stack]', (stack) => stack.getAttribute('data-attention-count'))).toBe('7');
+    // The workspace's pane stacks its agents' asks too; the three parked commands share the newest one's card.
+    expect(await page.$eval('[data-attention-stack]', (stack) => stack.getAttribute('data-attention-count'))).toBe('6');
     expect((await stacked(page))[0]).toBe('action:park-publish');
     expect(await page.$$eval('[data-attention-card] [data-parked-command]', (rows) => rows.map((row) => row.getAttribute('data-parked-command'))))
       .toEqual(['park-publish', 'park-push', 'park-write']);
@@ -347,7 +346,7 @@ test("a card that arrives while the owner is on the open one waits behind it, so
     await page.waitForSelector('[data-attention-stack]');
     expect(await stacked(page)).toEqual(['action:park-publish']);
 
-    // A proposal newer than both commands would take the front of a stack nobody is on; the pointer is on this one.
+    // A plan newer than both commands would take the front of a stack nobody is on; the pointer is on this one.
     await page.hover('[data-attention-card] button');
     await page.evaluate(() => { window.dispatchEvent(new Event('gallery:arrive-ask')); });
     await page.waitForFunction(() => document.querySelector('[data-attention-stack]')?.getAttribute('data-attention-count') === '3');
@@ -355,7 +354,7 @@ test("a card that arrives while the owner is on the open one waits behind it, so
 
     // The commands decided, the next opens: the newest that waits.
     await press(page, 'Approve all');
-    await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:proposal-late');
+    await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:plan-late');
     await page.close();
   });
 });
@@ -368,7 +367,7 @@ test("the flow's untick and answer land on its own batch card after another card
     await opened(page, origin, '&asks=two');
     await page.waitForSelector('[data-attention-stack]');
     await page.evaluate(() => { window.dispatchEvent(new Event('gallery:arrive-ask')); });
-    await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:proposal-late');
+    await page.waitForFunction(() => document.querySelector('[data-attention-card]')?.getAttribute('data-attention-card') === 'action:plan-late');
 
     await untickOwnRow(page, 'action:park-publish', 'park-push');
     await answerStackCard(page, 'action:park-publish', 'Approve 1');

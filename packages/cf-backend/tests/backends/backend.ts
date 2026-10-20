@@ -9,7 +9,7 @@ import { copyFileSync, cpSync } from 'node:fs';
 import type { LanguageModel } from 'ai';
 import { type ActorHandle, type SleepTimeUpdate, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor, type WorkMode } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { scratchDir, scratchPath, scriptedTurnModel, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
+import { answeredAs, scratchDir, scratchPath, scriptedTurnModel, type ScriptedTurnOptions, type ScriptedTurnResult, workspaceDatabase } from '@kinu.run/test-utils';
 import {
   actorOverWorkspace, agentHistory, mainDatabase, orchestratorHarness, scriptedSleepTime, sentTurn, workspaceFiles, workspaceMainActor,
 } from '../helpers/actor-harness';
@@ -51,12 +51,12 @@ type SameCall =
   | 'listBackgroundJobs' | 'jobResult' | 'cancelBackgroundJob'
   | 'createTimerTrigger' | 'cancelTrigger'
   | 'listRuns' | 'getRunEvents'
-  | 'markChangelogSeen' | 'revertChangelogEntry' | 'getEvolutionStatus' | 'applyScaffoldDecision'
+  | 'markChangelogSeen' | 'revertChangelogEntry' | 'getEvolutionStatus'
   | 'latestAlternateTakes' | 'pickAlternateTake'
   | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview' | 'dismissPlanReview'
   | 'checkpointStatus' | 'listFileCheckpoints' | 'planFileRestore' | 'restoreFileCheckpoint'
-  | 'listRefinements' | 'showRefinement' | 'decideRefinement'
-  | 'revertConversation' | 'clearConversation' | 'runOptimization' | 'branchTurn' | 'sendState' | 'awaitSend';
+  | 'listRefinements' | 'recordedTurns'
+  | 'revertConversation' | 'clearConversation' | 'branchTurn' | 'sendState' | 'awaitSend';
 
 /** The cf signature, answered asynchronously: the CLI's synchronous answers are awaited the same way. */
 type Answer<K extends SameCall> = OrchestratorAgent[K] extends (...args: infer A) => infer R
@@ -99,6 +99,8 @@ export interface SharedBackend {
   /** Opens a turn of `mode` on the main actor and holds it at its model call until released, so a case
    *  acts while a turn runs. */
   readonly holdTurn: (text: string, mode: WorkMode) => Promise<HeldTurn>;
+  /** Each call the main actor's model was asked, in order, as the provider is sent it. */
+  readonly requests: () => readonly ScriptedTurnOptions[];
   /** Ends what opening the backend started, so no work it tracks outlives the case. */
   readonly end?: () => Promise<void>;
 }
@@ -120,7 +122,10 @@ const DONE_ANSWER = {
 function turnGate() {
   let held: { readonly arrived: ReturnType<typeof Promise.withResolvers<void>>; readonly released: ReturnType<typeof Promise.withResolvers<void>> } | null = null;
 
-  const model = scriptedTurnModel({ doGenerate: async () => {
+  const requests: ScriptedTurnOptions[] = [];
+
+  const model = scriptedTurnModel({ doGenerate: async (options) => {
+    requests.push(options);
     const hold = held;
 
     if (hold !== null) {
@@ -134,6 +139,7 @@ function turnGate() {
 
   return {
     model,
+    requests: () => requests,
     /** Starts `open`, a turn that resolves once it has ended, and resolves once that turn reaches the model. */
     async hold(open: () => Promise<void>): Promise<HeldTurn> {
       const hold = { arrived: Promise.withResolvers<void>(), released: Promise.withResolvers<void>() };
@@ -178,6 +184,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
     history: main.history,
     chat: { sql: wrapDatabase(mainDatabase(harness)).sql, actor: main.actor },
     snapshot: (dir, turn) => daemon.snapshot({ agent: WORKSPACE, dir, ...turn }),
+    requests: gate.requests,
     holdTurn: (text, mode) => gate.hold(() => sentTurn(agent, text, crypto.randomUUID(), { mode })),
     sleepTime: (answer, enabled) => {
       const prompts = scriptedSleepTime(agent, answer);
@@ -217,7 +224,6 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
       markChangelogSeen: () => agent.markChangelogSeen(),
       revertChangelogEntry: (id) => agent.revertChangelogEntry(id),
       getEvolutionStatus: () => agent.getEvolutionStatus(),
-      applyScaffoldDecision: (mode) => agent.applyScaffoldDecision(mode),
       latestAlternateTakes: () => agent.latestAlternateTakes(),
       pickAlternateTake: (takeId, nodeId) => agent.pickAlternateTake(takeId, nodeId),
       getActivePlanReview: () => agent.getActivePlanReview(),
@@ -229,12 +235,10 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
       planFileRestore: (dir, id) => agent.planFileRestore(dir, id),
       restoreFileCheckpoint: (dir, id) => agent.restoreFileCheckpoint(dir, id),
       listRefinements: (limit) => agent.listRefinements(limit),
-      showRefinement: (requestId, routeIndex) => agent.showRefinement(requestId, routeIndex),
+      recordedTurns: (limit) => agent.recordedTurns(limit),
       requestRefinement: (opts) => agent.requestRefinement(opts),
-      decideRefinement: (input) => agent.decideRefinement(input),
       revertConversation: (entryId) => agent.revertConversation(entryId),
       clearConversation: () => agent.clearConversation(),
-      runOptimization: (target) => agent.runOptimization(target),
       send: (text, id) => sentTurn(agent, text, id ?? crypto.randomUUID()),
       sendState: (id) => agent.sendState(id),
       awaitSend: (id) => agent.awaitSend(id),
@@ -319,6 +323,7 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
       checkpoints.beginTurn(turn);
       await checkpoints.ensureCheckpoint(dir);
     },
+    requests: gate.requests,
     holdTurn: (text, mode) => gate.hold(async () => { await session.send(text, { id: crypto.randomUUID(), mode }); }),
     sleepTime: (answer, enabled) => {
       const prompts: string[] = [];
@@ -329,6 +334,12 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
           prompts.push(prompt);
 
           return JSON.stringify(answer);
+        },
+        // Sleep-time asks for its update's schema; the answer is read through it, as the fast lane reads one.
+        object: async (prompt, schema) => {
+          prompts.push(prompt);
+
+          return answeredAs(schema, JSON.stringify(answer));
         },
       };
       rt.actor.config.setSleepTimeComputeEnabled(enabled);
@@ -367,7 +378,6 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
       markChangelogSeen: async () => session.markChangelogSeen(),
       revertChangelogEntry: (id) => session.revertChangelogEntry(id),
       getEvolutionStatus: async () => session.getEvolutionStatus(),
-      applyScaffoldDecision: (mode) => session.applyScaffoldDecision(mode),
       latestAlternateTakes: async () => session.latestAlternateTakes(),
       pickAlternateTake: (takeId, nodeId) => session.pickAlternateTake(takeId, nodeId),
       getActivePlanReview: () => session.getActivePlanReview(),
@@ -379,13 +389,11 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
       planFileRestore: (dir, id) => session.planFileRestore(dir, id),
       restoreFileCheckpoint: (dir, id) => session.restoreFileCheckpoint(dir, id),
       listRefinements: async (limit) => session.listRefinements(limit),
-      showRefinement: (requestId, routeIndex) => session.showRefinement(requestId, routeIndex),
+      recordedTurns: (limit) => session.recordedTurns(limit),
       requestRefinement: (opts) => session.requestRefinement(opts),
-      decideRefinement: (input) => session.decideRefinement(input),
       revertConversation: (entryId) => session.revertConversation(entryId),
       // The clear's answer is the emptied request's measure, which cf records instead of returning.
       clearConversation: async () => { await session.clearConversation(); },
-      runOptimization: (target) => session.runOptimization(target),
       send: async (text, id) => { await session.send(text, { id: id ?? crypto.randomUUID() }); },
       sendState: async (id) => session.sendState(id),
       awaitSend: (id) => session.awaitSend(id),

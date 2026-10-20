@@ -8,7 +8,6 @@ import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
-import { listLessons } from '../src/evolution/lessons';
 import { listTurnRatings, type TurnRating } from '../src/evolution/ratings';
 import type { DecisionPort } from '../src/providers/decision-model';
 import { MAX_TURN_REVIEWS_PER_OPEN } from '../src/evolution/session-window';
@@ -68,9 +67,6 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     expect(deferredRows.map(comparable)).toEqual(inlineRows.map(comparable));
     expect(deferredRows[0].source).toBe('model');
     expect(deferredRows[0].followup).toBe(followup);
-    // The downstream evolution ran too: the correction corroborates the one lesson it teaches.
-    expect(listLessons(inline.rt.storage.sql, inline.rt.actor, { status: 'corroborated' })).toHaveLength(1);
-    expect(listLessons(deferred.rt.storage.sql, deferred.rt.actor, { status: 'corroborated' })).toHaveLength(1);
     // The row is retired only once its review has run.
     expect(deferred.engine.sessionWindow.countQueuedReviews()).toBe(0);
   });

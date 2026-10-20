@@ -19,7 +19,7 @@ import {
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
 } from '@kinu.run/core';
-import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
+import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, ProgrammaticTurn, RecordedTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { AccountMemory, Fact } from '@kinu.run/core';
 import type { SubordinateView } from '@kinu.run/core/protocol';
@@ -112,7 +112,7 @@ import {
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
-  type ActiveSkillSet,
+  type ActiveSkillSet, type TurnReads,
   type PlanDecisionOutcome,
   type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type AskingAgent, type OwnerAnswer,
@@ -369,12 +369,13 @@ async function slateMember(
   return null;
 }
 
-/** What one turn read once for every step's dynamic context: MEMORY.md's tail, its skills, and the account's facts. */
+/** What one turn read once for every step's dynamic context: MEMORY.md's tail, its skills, the account's facts, its mail. */
 interface TurnMemoryReads {
   readonly memoryTail: string | undefined;
   /** Absent: the actor's own active skills for the turn. */
   readonly activeSkills?: ActiveSkillSet | null;
   readonly accountFacts?: readonly Fact[];
+  readonly mail?: TurnReads['mail'];
 }
 
 /**
@@ -529,6 +530,8 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Actor kind for the operational dataset's `agentKind` dimension. Abstract because a
    * bundler may rewrite `constructor.name`. */
   protected abstract actorKind(): AgentKind;
+  /** The workspace agent's newest answered turns, which a pending scaffold is replayed against. */
+  abstract recordedTurns(limit?: number): Promise<RecordedTurn[]>;
 
   /** The workspace whose exec planes this actor rides; a facet actor overrides with its parent's. */
   protected workspaceName(): string { return this.name; }
@@ -1348,7 +1351,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get lanes(): EvolutionLanes {
     this._lanes ??= new EvolutionLanes({
       engine: this.engine, budget: this.budget,
-      // Runs on the single off-turn cadence pass, beside the promotion gate's trials.
+      // Runs on the single off-turn cadence pass, after the session chain.
       refinementLane: async () => { await refinementPass(this.refinementDeps); },
     });
 
@@ -1626,13 +1629,15 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  /** On the substrate like `scaffoldControl`: facets accrue evolution debt too. */
+  /** On the substrate like `scaffoldControl`. Only the workspace agent dreams: a facet's engine is built disabled. */
   protected get refinementDeps(): RefinementDeps {
     return {
       control: this.scaffoldControl,
       facts: this.facts,
       refiner: this.temporaryAgentPort(),
       approvals: this.instructionApprovals(),
+      skillsVfs: this.rt.storage.vfs,
+      recordedTurns: () => this.recordedTurns(),
     };
   }
 
@@ -3620,7 +3625,7 @@ export abstract class ActorAgent extends Agent<Env> {
     readonly reads: TurnMemoryReads;
     readonly surface: TurnSurface | null;
   }): DynamicContext {
-    const { memoryTail, accountFacts, activeSkills } = step.reads;
+    const { memoryTail, accountFacts, activeSkills, mail } = step.reads;
     const held = this.heldDynamicOf(actor.reference);
     const extras = reach.kind === 'workspace' ? this.extraDynamicContext() : {};
     // The workspace's own agent is told why its turn runs and what its model holds; a hire, its model's name.
@@ -3647,6 +3652,7 @@ export abstract class ActorAgent extends Agent<Env> {
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: held.delegates,
       approvals: extras.approvals,
+      ...(mail !== undefined && { mail }),
       ...(extras.failingSlates !== undefined && { failingSlates: extras.failingSlates }),
     });
   }

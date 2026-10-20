@@ -242,7 +242,6 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
         name: row.payload.name,
         description: row.payload.description,
         code: row.payload.code,
-        score: row.payload.score,
       });
 
       return accepted.accepted;

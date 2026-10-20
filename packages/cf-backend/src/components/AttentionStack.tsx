@@ -6,7 +6,7 @@
 import { Cause, Effect } from "effect";
 import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
 import { Button } from "@cloudflare/kumo";
-import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, SparkleIcon, XIcon, type Icon } from "@phosphor-icons/react";
+import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import { revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwedIntent, type OwedOwnerIntent, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -45,9 +45,8 @@ type AskKind = PendingActionKind | "consent" | "memory" | "question";
 
 /** Only the kinds that hold the owner are stacked; the others are named so the map is whole. */
 const KIND_ICON = {
-  deferred_action: ShieldWarningIcon, workspace_proposal: SparkleIcon, plan_review: NotePencilIcon, consent: DesktopTowerIcon, memory: BrainIcon,
+  deferred_action: ShieldWarningIcon, plan_review: NotePencilIcon, consent: DesktopTowerIcon, memory: BrainIcon,
   question: ChatCircleTextIcon,
-  scaffold_version: ShieldWarningIcon, change_approval: ShieldWarningIcon,
 } satisfies Record<AskKind, Icon>;
 
 function kindOf(ask: OwnerAsk): AskKind {
@@ -100,8 +99,6 @@ function AnswerButton({ answer, busy, onAnswer }: { answer: Answer; busy: boolea
 }
 
 function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc }) {
-  const [soul, setSoul] = useState(false);
-
   // An agent's message, drawn as it would leave (docs/MAIL.md §3).
   if (action.kind === "deferred_action" && action.mail !== undefined) {
     const { mail } = action;
@@ -129,24 +126,6 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
           {action.write ? "Approving writes exactly these bytes." : action.title.replace(/^Approve: /u, "")} · asked {timeAgo(action.at)}
         </div>
         {action.effect !== undefined && <div className="mt-1"><AlwaysLine action={action} /></div>}
-      </>
-    );
-  }
-
-  if (action.kind === "workspace_proposal") {
-    return (
-      <>
-        <div className="p-row-text p-text">{action.title}</div>
-        {action.detail && <div className="mt-0.5 break-words p-meta p-text-2">{action.detail}</div>}
-        {action.proposal !== undefined && (
-          <div className="mt-1.5">
-            <button type="button" className="p-meta p-accent-fg hover:underline" onClick={() => setSoul((was) => !was)} aria-expanded={soul}>
-              {soul ? "Hide its soul" : "Show its soul"}
-            </button>
-            {soul && <pre className="mt-1 max-h-40 overflow-auto p-t-code p-text whitespace-pre-wrap break-words" data-workspace-proposal-soul>{action.proposal.soul}</pre>}
-          </div>
-        )}
-        <div className="mt-1 p-meta p-text-3">The agent asked {timeAgo(action.at)}. Nothing is created until you approve it.</div>
       </>
     );
   }
@@ -229,13 +208,6 @@ function answersOf(ask: OwnerAsk, props: AttentionStackProps): readonly Answer[]
       { label: "Approve", icon: CheckIcon, weight: "primary", run: deferred("approved") },
       { label: alwaysLabel([action], ""), weight: "secondary", ...always, run: deferred("always") },
       { label: "Deny", icon: XIcon, weight: "quiet", run: deferred("denied") },
-    ];
-  }
-
-  if (action.kind === "workspace_proposal") {
-    return [
-      { label: "Create workspace", icon: CheckIcon, weight: "primary", run: async () => { await props.rpc("decideWorkspaceProposal", [action.id, "approve"]); } },
-      { label: "Decline", icon: XIcon, weight: "quiet", run: async () => { await props.rpc("decideWorkspaceProposal", [action.id, "decline"]); } },
     ];
   }
 
@@ -370,7 +342,6 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
       })}
       <div key={front.key} className="p-attention-card animate-fade-in" data-attention-card={front.key} data-attention-kind={kindOf(front)}
         {...(front.kind === "consent" ? { "data-device-bind": front.consent.consentId } : {})}
-        {...(front.kind === "action" && front.action.kind === "workspace_proposal" ? { "data-workspace-proposal": front.action.id } : {})}
         aria-live="polite">
         <div className="mb-1 flex items-center gap-1.5 p-meta p-text-3">
           <FrontIcon size={12} className="shrink-0 p-warning" weight="fill" aria-hidden />

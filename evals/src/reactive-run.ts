@@ -2,7 +2,7 @@
 import type { EvalAccount, RunEvent } from '@kinu.run/core';
 import { Seeded } from '../tasks/seeded';
 import { runTurn } from './harness';
-import { LAST_SEGMENTS, reactiveReply, THUMB_RATE, type ArmRun, type SegmentResult } from './reactive';
+import { LAST_SEGMENTS, REACTIVE_ARMS, reactiveReply, THUMB_RATE, type ArmRun, type ReactiveArm, type SegmentResult } from './reactive';
 import type { KinuPublicSession } from './session';
 import { ARMS, openWorkspace } from './target';
 import { prepareTrialAccount } from './slot';
@@ -79,7 +79,7 @@ export async function runArm(input: {
   readonly target: EvalTarget;
   readonly account: EvalAccount;
   readonly model: string;
-  readonly arm: 'learning-on' | 'learning-off';
+  readonly arm: ReactiveArm;
   readonly seed: number;
   readonly plan: readonly string[];
   readonly tasks: ReadonlyMap<string, EvalTask>;
@@ -88,7 +88,7 @@ export async function runArm(input: {
   const target = { ...input.target, identity: { ...input.target.identity, account: input.account } };
   await prepareTrialAccount(target, Date.now());
   const session = await openWorkspace(target, { subject: `reactive-${input.arm}-${String(input.seed)}`, mission: 'Help with each task as it comes.', model: input.model });
-  const rng = new Seeded(input.seed * 7919 + (input.arm === 'learning-on' ? 1 : 2));
+  const rng = new Seeded(input.seed * 7919 + REACTIVE_ARMS.indexOf(input.arm) + 1);
   const segments: SegmentResult[] = [];
   let mid = { sum: 0, n: 0 };
 

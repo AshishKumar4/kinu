@@ -361,7 +361,6 @@ describe('kinu debug — cloud backend', () => {
           case 'listBackgroundJobs': return respond([]);
           case 'getEvolutionChangelog': return respond({ entries: [], unseenCount: 0, seenAt: 0 });
           case 'listScaffoldVersions': return respond([]);
-          case 'getGepaRuns': return respond([]);
           case 'listTriggers': return respond({ triggers: [] });
           case 'getToolDescriptions': return respond({ builtIn: [], crafted: [], executors: [] });
           case 'getFacts': return respond([]);

@@ -657,9 +657,9 @@ describe('sandboxEnv', () => {
 
 describe('createAttemptSandbox', () => {
   const { patches } = loadBenchCorpus(REPO_ROOT);
-  const patch = present(patches.get('ema-alpha-weights'), 'the ema-alpha-weights patch');
+  const patch = present(patches.get('consolidation-can-empty-the-toolbox'), 'the consolidation-can-empty-the-toolbox patch');
   const prepare = (dir: string) => applyPatch(dir, patch, { reverse: false });
-  const target = 'packages/core/src/craft/ema.ts';
+  const target = 'packages/core/src/craft/consolidation.ts';
 
   /** A small repository with the shape every property below is stated over:
    *  the real defect target at its real path so the corpus patch applies, a

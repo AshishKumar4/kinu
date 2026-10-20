@@ -242,6 +242,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const seen: string[] = [];
     rt.setModelForRoute?.(route => ({
       async *stream() { yield ''; },
+      object: async () => { throw new Error('no schema is asked of this lane'); },
       complete: async () => {
         seen.push(route.model);
 
@@ -1498,6 +1499,7 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
 
         return 'verify the cluster name before rotating keys';
       },
+      object: async (): Promise<never> => { throw new Error('no schema is asked of the review'); },
     };
 
     rt.decide = async ({ state }) => {
@@ -1552,10 +1554,6 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
 
     if (!firstAssistant) throw new Error('first assistant entry is missing');
     expect(row.turn_id).toBe(firstAssistant.id);
-
-    expect(db.query<{ c: number }, []>(
-      `SELECT count(*) AS c FROM lessons WHERE corroborated_at IS NOT NULL`,
-    ).get()?.c).toBe(1);
   });
 
   test('trivial turns (greetings) skip the rating entirely', async () => {

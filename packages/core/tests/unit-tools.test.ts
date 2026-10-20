@@ -4,6 +4,9 @@ import { createFileCodemodeProvider } from '../src/tools/file-operations';
 import { buildToolSurface, type CodemodeSurface } from '../src/tools/builtins';
 import { serveMemory } from '../src/tools/memory-operations';
 import { describe, test, expect } from 'bun:test';
+import { createSandboxExecutor } from '../src/execution/sandbox';
+import { DefaultExecutionRouter } from '../src/execution/router';
+import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import { toolExecute, createRecordingLogger, present } from '@kinu.run/test-utils';
 import { asSchema, jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
@@ -411,6 +414,31 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(escalations.snapshot().escalations).toEqual(before);
   });
 
+  // rc22 release evals (coding): a computer command's cwd written as the workspace names the computer's files.
+  test("a computer command's cwd written as the workspace names it is refused with the computer's own path, before it runs", async () => {
+    const { rt } = createTestRuntime();
+    const ran: string[] = [];
+    const unreachable = async (): Promise<never> => { throw new Error('the command alone reaches the computer'); };
+
+    const router = new DefaultExecutionRouter();
+
+    router.register(createSandboxExecutor({
+      ...sandboxHandleLifecycle,
+      readFile: unreachable, writeFile: unreachable, listFiles: unreachable, deleteFile: unreachable,
+      exposePort: unreachable, unexposePort: unreachable, getExposedPorts: unreachable,
+      exec: async (command) => {
+        ran.push(command);
+
+        return { stdout: 'ran', stderr: '', exitCode: 0 };
+      },
+    }));
+    const shellTool = { execute: toolExecute<{ command: string; runtime?: string; cwd?: string }, string>(tools({ ...rt, executionRouter: router }).shell) };
+
+    await expect(shellTool.execute({ command: 'npm test', runtime: 'computer', cwd: '/computer/workspace/true-myth' })).rejects
+      .toThrow('cwd "/computer/workspace/true-myth" is the workspace\'s name for computer\'s /workspace/true-myth; on computer it is "/workspace/true-myth"');
+    expect(ran).toEqual([]);
+  });
+
   test('gated run commands return an error the MODEL can act on', async () => {
     // The gate lives at the execution seam (execution/approval.ts), so this needs a real gated shell.
     // The message must not name setShellApprovalMode, an RPC the model cannot reach.
@@ -455,18 +483,17 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(result.result).toBe(42);
   });
 
-  test('low-scoring crafted tools filtered out of the tools namespace', async () => {
+  test('past the 20 crafted tools a turn is offered, the least preferred is not in the tools namespace', async () => {
     const { rt } = createTestRuntime();
-    rt.craftStore.create({
-      name: 'weak', description: 'low quality',
-      code: 'async () => "should never run"',
-    });
-    void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'weak'`;
+
+    for (let i = 0; i < 20; i++) rt.craftStore.create({ name: `t${String(i)}`, description: 'kept', code: 'async () => 1' });
+    rt.craftStore.create({ name: 'weak', description: 'offered often, never chosen', code: 'async () => "should never run"' });
+    void rt.storage.sql`UPDATE crafted_tools SET offered = 40 WHERE name = 'weak'`;
 
     const t = tools(rt);
     const evalTool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.eval) };
-    const result = await evalTool.execute({ code: 'return typeof tools.weak;' });
-    expect(result.result).toBe('undefined');
+    const result = await evalTool.execute({ code: 'return [typeof tools.weak, typeof tools.t0];' });
+    expect(result.result).toEqual(['undefined', 'function']);
   });
 
   test('a crafted tool shadowing a builtin or MCP name never reaches tools.*', async () => {

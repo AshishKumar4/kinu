@@ -52,6 +52,7 @@ describe('provider model catalogs', () => {
               id: 'gpt-5.5',
               name: 'GPT-5.5',
               tool_call: true,
+              structured_output: true,
               reasoning: true,
               reasoning_options: [{ type: 'effort', values: ['none', 'low', 'medium', 'high', 'xhigh'] }],
               modalities: { input: ['text', 'image'] },
@@ -82,7 +83,7 @@ describe('provider model catalogs', () => {
     expect(models).toEqual([{
       id: 'gpt-5.5',
       label: 'GPT-5.5',
-      capabilities: ['streaming', 'tools', 'reasoning', 'vision'],
+      capabilities: ['streaming', 'tools', 'structured-outputs', 'reasoning', 'vision'],
       contextWindow: 1_050_000,
       inputModalities: ['text', 'image'],
       reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh'],

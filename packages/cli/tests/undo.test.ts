@@ -32,8 +32,6 @@ function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
     describeTools: async () => ({ builtIn: [], crafted: [] }),
     changelog: async () => ({ entries: [], unseenCount: 0 }),
     refinements: async () => ({ requests: [], debt: { turnIds: [], owed: false, key: '', summary: 'no unresolved corrections — nothing is owed a refinement' } }),
-    decideRefinement: async () => ({ ok: false as const, error: 'not in this fixture' }),
-    showRefinement: async () => ({ ok: false as const, error: 'not in this fixture' }),
     requestRefinement: async () => ({ id: 'refine-test', trigger: 'explicit' as const, scope: 'workspace' as const, stage: 'refused' as const, turnIds: [], routes: [], detail: 'no outcome-labeled turns yet', createdAt: 0 }),
     revertChangelogEntry: async () => ({ ok: false }), readMemory: async () => '',
     searchNodes: async () => [], listJobs: async () => [], cancelJob: async () => ({ ok: false }), latestTakes: async () => null,
@@ -323,7 +321,7 @@ describe('/advisor command surface', () => {
   function advisorClient(): AgentClient {
     const config: EvolutionConfigView = {
       learning: true,
-      liveTrials: false,
+      crafting: true,
       advisorEnabled: false,
       advisorMinSeverity: DEFAULT_ADVISOR_MIN_SEVERITY,
     };

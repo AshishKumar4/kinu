@@ -88,9 +88,7 @@ test('its card is the message as it would leave, from the agent that asked', () 
 
   queue.mailSend('mail-1', REPLY, main);
 
-  const [card] = buildPendingActions({
-    scaffoldVersions: [], deferredActions: queue.list(), changeApprovals: { count: 0, latestAt: 0 }, workspaceProposals: [], pendingPlans: [],
-  });
+  const [card] = buildPendingActions({ deferredActions: queue.list(), pendingPlans: [] });
 
   expect(card).toMatchObject({
     kind: 'deferred_action', raisedBy: main, title: `Send mail to dana@northwind.io: ${REPLY.subject}`,

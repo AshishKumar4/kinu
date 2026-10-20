@@ -46,14 +46,14 @@ function workspace() {
 
       return inner(p);
     } },
-    // The reply reads as a correction, so the review also reflects.
+    // The reply reads as a correction; the rating is the review's one model call, and it counts its tokens.
     decide: async () => {
       completions++;
 
       return { answers: {
         satisfaction: { type: 'score', score: 0.4 }, corrected: { type: 'noul', noul: 0.95 },
         wrong: { type: 'choice', choice: 'misunderstood' },
-      }, usage: { input: 0, output: 0 } };
+      }, usage: { input: 120, output: 8 } };
     },
   };
 

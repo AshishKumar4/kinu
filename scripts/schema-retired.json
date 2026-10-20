@@ -1,7 +1,13 @@
 [
   "actor_program_state",
+  "artifact_trials",
   "device_consent_requests",
+  "gepa_candidates",
+  "gepa_runs",
+  "trial_turns",
+  "turn_craft_usage",
   "user_egress_secrets",
   "user_peer_grants",
-  "user_schema_meta"
+  "user_schema_meta",
+  "workspace_proposals"
 ]

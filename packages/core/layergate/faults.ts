@@ -210,13 +210,11 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   {
     id: 'evolution-gate/acceptance-weakens',
     layer: 'evolution-gate',
-    patches: ['checkMisevolution', 'trialDecision'],
-    models: 'the network-egress criterion stops matching and the live trial ignores a risen guardrail',
+    patches: ['checkMisevolution'],
+    models: 'the network-egress criterion stops matching',
     inject: (s) => ({
       ...s,
       checkMisevolution: (source) => s.checkMisevolution(source.replace(/\bfetch\s*\(/g, 'noop(')),
-      trialDecision: (candidate, incumbent, trial, now) =>
-        s.trialDecision({ ...candidate, errors: incumbent.errors, steps: incumbent.steps }, incumbent, trial, now),
     }),
   },
   {

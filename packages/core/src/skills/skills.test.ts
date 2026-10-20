@@ -562,7 +562,7 @@ async function discoverReporting(vfs: VFS): Promise<{ found: Awaited<ReturnType<
   const restore = setDiagnosticsSink(log);
 
   try {
-    const found = await discoverSkills(vfs, { admissionTokens: ROOMY_TOKENS });
+    const found = await discoverSkills(vfs, { admissionTokens: ROOMY_TOKENS, trust: () => 'unverified' });
 
     return { found, errors: log.emitted.filter((line) => line.event === 'skills.parse_failed').map((line) => line.cause ?? '') };
   } finally {
@@ -626,15 +626,30 @@ describe('discoverSkills', () => {
       return await listed(p);
     };
 
-    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
+    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS, trust: () => 'unverified' });
 
     expect(found.skills.map(s => s.name)).toContain('own');
     expect(found.skills.filter(s => s.source === 'shared')).toEqual([]);
   });
 
+  test('a trusted workspace skill states its description in the index; an untrusted one says only what it is', async () => {
+    const v = memoryVfs({
+      [`${WORKSPACE_SKILLS_DIR}/kept.md`]: skillFile('kept', 'K'),
+      [`${WORKSPACE_SKILLS_DIR}/unseen.md`]: skillFile('unseen', 'U'),
+    });
+
+    const trust: InstructionTrustResolver = (path) => (path.endsWith('/kept.md') ? 'approved' : 'unverified');
+    const index = admitSkillsIndex(await discoverSkills(v, { admissionTokens: ROOMY_TOKENS, trust }), ROOMY_TOKENS);
+    const line = (name: string) => index.lines.find((entry) => entry.startsWith(`- **${name}**`));
+
+    expect(line('kept')).toBe(`- **kept** \`${skillReference('kept')}\`: desc kept`);
+    expect(line('unseen')).toBe(workspaceSkillIndexLine('unseen'));
+    expect(line('unseen')).toContain('reference material until the owner approves it');
+  });
+
   test('returns built-ins when VFS is empty', async () => {
     const v = memoryVfs();
-    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
+    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS, trust: () => 'unverified' });
     const names = found.skills.map(s => s.name);
     expect(names).toContain('audit-implementation');
 
@@ -688,7 +703,7 @@ describe('discoverSkills', () => {
     ];
 
     const orders = await Promise.all(views.map(async (v) => {
-      const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
+      const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS, trust: () => 'unverified' });
 
       return {
         names: found.skills.map(s => s.name),
@@ -710,7 +725,7 @@ describe('discoverSkills', () => {
       [`${WORKSPACE_SKILLS_DIR}/two.md`]: skillFile('two', 'BODY-TWO'),
     });
 
-    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
+    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS, trust: () => 'unverified' });
 
     for (const skill of found.skills) expect('body' in skill).toBe(false);
     expect(v.calls.readFile.sort()).toEqual([`${WORKSPACE_SKILLS_DIR}/one.md`, `${WORKSPACE_SKILLS_DIR}/two.md`]);
@@ -726,7 +741,7 @@ describe('discoverSkills', () => {
       { sizes: { [path]: 40_000_000 } },
     );
 
-    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
+    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS, trust: () => 'unverified' });
     expect(found.unread).toEqual([{ name: 'whale', path, bytes: 40_000_000 }]);
     expect(found.skills.map(s => s.name)).not.toContain('whale');
     expect(v.calls.stat).toContain(path);
@@ -744,7 +759,7 @@ describe('discoverSkills', () => {
       [`${WORKSPACE_SKILLS_DIR}/two/SKILL.md`]: skillFile('two', 'TWO'),
     });
 
-    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
+    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS, trust: () => 'unverified' });
 
     expect(found.skills.filter((s) => s.source !== 'builtin').map((s) => s.name).sort()).toEqual(['one', 'two']);
     expect(v.calls.readdir.sort()).toEqual([SHARED_SKILLS_DIR, WORKSPACE_SKILLS_DIR].sort());
@@ -763,7 +778,7 @@ describe('discoverSkills', () => {
     }
 
     const v = memoryVfs(files);
-    const found = await discoverSkills(v, { admissionTokens });
+    const found = await discoverSkills(v, { admissionTokens, trust: () => 'unverified' });
 
     const workspace = found.skills.filter((s) => s.source !== 'builtin').map((s) => s.name);
     expect(workspace).toHaveLength(bound);
@@ -906,7 +921,7 @@ describe('skills admission', () => {
 
     const vfs = memoryVfs(files, { sizes: { [whale]: 90_000_000 } });
     const admissionTokens = stepContextLimit({ contextWindow: 3_000, modelOutputLimit: 400 });
-    const discovery = await discoverSkills(vfs, { admissionTokens });
+    const discovery = await discoverSkills(vfs, { admissionTokens, trust: () => 'unverified' });
     const index = admitSkillsIndex(discovery, admissionTokens);
 
     const activated = resolveActiveSkills({

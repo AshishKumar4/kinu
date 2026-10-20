@@ -5,15 +5,17 @@
  *
  * A person claims their address once: the deployment's operators always, anyone else once `MAIL_ACCOUNTS` is
  * `everyone`. The person reads, sends from any of their boxes and keeps drafts; Important is the assistant's pick, set
- * through its `mail.update`, so the person cannot set it here.
+ * through its `mail.update`, so the person cannot set it here. A thread they send to one of their workspaces goes there
+ * behind the workspace gate, which proves they own it.
  */
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import {
-  err, isMailLabel, json, mailAddressOf, objectNamed, safeJson,
+  err, isMailLabel, json, mailAddressOf, mailThreadText, objectNamed, safeJson,
   type MailListQuery, type MailView, type ObjectNamespace,
 } from '@kinu.run/core';
 import type { FamilyEnv } from '../api/context';
+import type { WorkspaceVariables } from '../api/workspace';
 import type { MailboxDO } from './mailbox-do';
 import type { MailNameDO } from './mailname-do';
 
@@ -46,6 +48,8 @@ const Outgoing = v.object({
 const Claim = v.object({ username: v.string() });
 
 const Change = v.strictObject({ read: v.optional(v.boolean()), trashed: v.optional(v.boolean()) });
+
+const Handed = v.object({ thread: v.pipe(v.string(), v.nonEmpty(), v.maxLength(64)) });
 
 const Wake = v.object({
   path: v.pipe(v.string(), v.maxLength(41)),
@@ -164,4 +168,21 @@ mailRoutes.put('/api/user/mail/boxes/wake', async (c) => {
   if (body === null) return err(400, 'wake is one of owner, allowlist, verified, never.');
 
   return json({ body: await mailbox(c).setWake(body.path, body.wake, body.allow) });
+});
+
+/** "Send to a workspace…" (docs/MAIL.md §8): the person's thread, as its agent reads it, to a workspace they own. */
+export const mailHandRoutes = new Hono<FamilyEnv<MailRoutesEnv, WorkspaceVariables>>();
+
+mailHandRoutes.post('/api/workspaces/:name/mail', async (c) => {
+  const body = await safeJson(c.req.raw, Handed);
+
+  if (body === null) return err(400, 'thread is required.');
+
+  const read = await objectNamed(c.env.MAILBOX, c.get('identity').userId).thread(body.thread);
+
+  if (read === null) return err(404, 'No such thread.');
+  const { subject } = read.thread;
+  const messages = read.messages.filter((message) => message.sendState !== 'draft');
+
+  return json({ body: await c.get('workspace').agent.mailHanded({ subject, text: mailThreadText({ subject, messages }) }) });
 });

@@ -1,20 +1,21 @@
-import { Effect, Cause } from 'effect';
+import { Effect } from 'effect';
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { Button, Loader, type ButtonProps } from "@cloudflare/kumo";
 import {
   GitBranchIcon, BrainIcon,
-  SparkleIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
-  NotePencilIcon, ArrowsClockwiseIcon,
+  ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
+  NotePencilIcon, ArrowsClockwiseIcon, SquaresFourIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
+import { Link } from "react-router-dom";
 import type { ChangelogEntry, ChangelogEntryKind } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { showing, detach } from "@kinu.run/core/obs";
-import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
+import { type AsyncResource, lastValue, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
 import { ScaffoldVersionDiff } from "./ScaffoldLineage";
-import { CodeBlock, changelogFactKey } from "./shared";
-import { timeAgo, type StagedSkillView } from "@kinu.run/core";
+import { changelogFactKey } from "./shared";
+import { timeAgo } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
@@ -22,10 +23,10 @@ interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt
 const KIND_ICON = {
   scaffold: GitBranchIcon,
   fact: BrainIcon,
-  gepa: SparkleIcon,
   ratings: ChecksIcon,
   artifact: NotePencilIcon,
   refinement: ArrowsClockwiseIcon,
+  workspace: SquaresFourIcon,
 } satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;
 
 /** Showing the digest marks it seen, so what is new to the owner is lit once. */
@@ -89,11 +90,8 @@ function EntryFacts({ entry }: { entry: ChangelogEntry }) {
 
   if (entry.kind === 'fact') {
     const key = changelogFactKey(entry);
-    // Forgotten facts are gone from the digest, so a present `revert` reads applied; a staged decision reads proposed.
-    let status: string | null = null;
-
-    if (entry.decision) status = 'proposed';
-    else if (entry.revert) status = 'applied';
+    // Forgotten facts are gone from the digest, so a present `revert` reads applied.
+    const status = entry.revert ? 'applied' : null;
 
     return (
       <div className="space-y-1">
@@ -141,7 +139,7 @@ function entryHasDetails(entry: ChangelogEntry): boolean {
 function EntryScaffoldDiff({ rpc, version, shown }: { rpc: WorkspaceRpc; version: number | null | undefined; shown: boolean }) {
   if (!shown || version == null) return null;
 
-  return <div className="mt-2"><ScaffoldVersionDiff rpc={rpc} version={version} readAgain={0} /></div>;
+  return <div className="mt-2"><ScaffoldVersionDiff rpc={rpc} version={version} /></div>;
 }
 
 interface ChangelogEntryCardProps {
@@ -150,6 +148,28 @@ interface ChangelogEntryCardProps {
   seenAt: number;
   rpc: WorkspaceRpc;
   onReverted: () => void;
+}
+
+/** An entry's details, hidden until it is expanded: its facts or its evidence, the workspace it made, its child rows. */
+function EntryDetails({ entry, id, expanded, rpc, onReverted }: {
+  entry: ChangelogEntry; id: string; expanded: boolean; rpc: WorkspaceRpc; onReverted: () => void;
+}) {
+  const evidence = entry.evidence !== '' && entry.kind !== 'fact';
+
+  return (
+    <div id={id} role="region" aria-label={`Details for ${entry.summary}`} hidden={!expanded} className="mt-2 ml-6 border-t p-border pt-2">
+      {entry.kind === 'fact' && <div className="mb-2"><EntryFacts entry={entry} /></div>}
+      {evidence && <div className="p-annotation p-text-3 whitespace-pre-wrap break-words">{entry.evidence}</div>}
+      {entry.workspace !== undefined && (
+        <Link to={`/workspace/${encodeURIComponent(entry.workspace)}`} className="mt-1.5 inline-block p-meta p-accent hover:underline" data-changelog-workspace={entry.workspace}>
+          Open the workspace
+        </Link>
+      )}
+      {entry.items && entry.items.length > 0 && (
+        <SubEntryList items={entry.items} className={`${evidence ? "mt-2" : ""} space-y-1.5`} rpc={rpc} onReverted={onReverted} />
+      )}
+    </div>
+  );
 }
 
 export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReverted }: ChangelogEntryCardProps) {
@@ -219,131 +239,9 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
         <div className={`mt-1.5 p-t-status ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
       )}
 
-      {hasDetails && (
-        <div id={detailsId} role="region" aria-label={`Details for ${entry.summary}`} hidden={!expanded}
-          className="mt-2 ml-6 border-t p-border pt-2">
-          {entry.kind === 'fact' && (
-            <div className="mb-2"><EntryFacts entry={entry} /></div>
-          )}
-          {entry.evidence && entry.kind !== 'fact' && (
-            <div className="p-annotation p-text-3 whitespace-pre-wrap break-words">
-              {entry.evidence}
-            </div>
-          )}
-          {entry.items && entry.items.length > 0 && (
-            <SubEntryList
-              items={entry.items}
-              className={`${entry.evidence && entry.kind !== 'fact' ? "mt-2" : ""} space-y-1.5`}
-              rpc={rpc}
-              onReverted={onReverted}
-            />
-          )}
-        </div>
-      )}
+      {hasDetails && <EntryDetails entry={entry} id={detailsId} expanded={expanded} rpc={rpc} onReverted={onReverted} />}
 
       <EntryScaffoldDiff rpc={rpc} version={entry.scaffoldVersion} shown={diffShown} />
-    </div>
-  );
-}
-
-/**
- * Opens the whole file, never an excerpt, and sends back the digest it displayed; the backend
- * refuses any other digest, so a proposal changed after reading cannot be approved.
- */
-function StagedSkillDecision(
-  { decision, rpc, onDecided }: {
-    decision: { requestId: string; routeIndex: number };
-    rpc: WorkspaceRpc;
-    onDecided: () => void;
-  },
-) {
-  const [staged, setStaged] = useState<AsyncResource<StagedSkillView> | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
-
-  const open = useCallback(() => detach(Effect.gen(function* () {
-    if (staged !== null) {
-      setStaged(null);
-
-      return;
-    }
-
-    setStaged({ status: "loading" });
-
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      const result = yield* Effect.promise(async () => rpc("showRefinement", [decision.requestId, decision.routeIndex]));
-      setStaged((previous) => result.ok
-        ? loadSucceeded(result.view)
-        : loadFailed(previous ?? { status: "loading" }, { cause: new Error(result.error) }));
-    }), (failed) => Effect.sync(() => {
-      const cause = Cause.squash(failed);
-      setStaged((previous) => loadFailed(previous ?? { status: "loading" }, { cause }));
-    }));
-  })), [rpc, decision.requestId, decision.routeIndex, staged]);
-
-  const decide = useCallback((verdict: "approve" | "reject", digest: string) => detach(Effect.gen(function* () {
-    setBusy(true);
-    setNotice(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const result = yield* Effect.promise(async () => rpc(
-        "decideRefinement",
-        [{
-          requestId: decision.requestId,
-          routeIndex: decision.routeIndex,
-          expectedDigest: digest,
-          decision: verdict,
-        }],
-      ));
-
-      setNotice({ text: result.ok ? (result.detail ?? "done") : (result.error ?? "failed"), ok: result.ok });
-
-      if (result.ok) onDecided();
-    }), showing((chain) => {
-      setNotice({ text: chain, ok: false });
-    })), Effect.sync(() => {
-      setBusy(false);
-    }));
-  })), [rpc, decision.requestId, decision.routeIndex, onDecided]);
-
-  return (
-    <div className="mt-1.5">
-      <Button size="sm" variant="ghost" onClick={open}>
-        {staged === null ? "Read the proposed skill" : "Hide"}
-      </Button>
-      {staged?.status === "error" && (
-        <div className="mt-1.5 p-t-status p-danger">{staged.message}</div>
-      )}
-      {staged?.status === "loading" && (
-        <div className="flex justify-center py-3"><Loader size="sm" /></div>
-      )}
-      {staged?.status === "ready" && (
-        <div className="mt-1.5 rounded-md border p-border overflow-hidden">
-          <div className="px-3 py-1.5 border-b p-border p-annotation p-text-3 break-all">
-            {staged.value.target} · {staged.value.digest}
-          </div>
-          {!staged.value.intact && (
-            <div className="px-3 py-1.5 border-b p-border p-t-status p-danger">
-              These bytes differ from the refinement's record. Re-run the refinement before approving.
-            </div>
-          )}
-          <div className="max-h-96 overflow-auto px-3"><CodeBlock className={`language-${staged.value.target.split('.').at(-1) ?? ''}`}>{staged.value.source}</CodeBlock></div>
-          <div className="flex items-center gap-2 px-3 py-2 border-t p-border">
-            <Button size="sm" disabled={busy || !staged.value.intact}
-              onClick={() => decide("approve", staged.value.digest)}>
-              Approve these bytes
-            </Button>
-            <Button size="sm" variant="ghost" disabled={busy}
-              onClick={() => decide("reject", staged.value.digest)}>
-              Reject
-            </Button>
-            {busy && <Loader size="sm" />}
-          </div>
-        </div>
-      )}
-      {notice && (
-        <div className={`mt-1.5 p-t-status ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
-      )}
     </div>
   );
 }
@@ -366,9 +264,6 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Work
           )}
           {notice && (
             <div className={`mt-1.5 p-t-status ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
-          )}
-          {entry.decision && (
-            <StagedSkillDecision decision={entry.decision} rpc={rpc} onDecided={onReverted} />
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">

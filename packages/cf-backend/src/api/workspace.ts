@@ -1,7 +1,7 @@
 /** Ownership of `:name` is proven before any workspace route runs, and only then indexed. */
 import type { MiddlewareHandler } from 'hono';
 import { Result } from 'effect';
-import { err, type Activation } from '@kinu.run/core';
+import { err, type Activation, type HandedMail } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { observeWorkspaceUse } from '../control-plane/index-feed';
 import { appendIdentityHeaders } from '../cli/rpc-gate';
@@ -14,6 +14,7 @@ type ClaimedWorkspace = Env['OrchestratorAgent'] extends DurableObjectNamespace<
 export interface WorkspaceAgent {
   evalAbortActivation(): Promise<void>;
   activations(): Promise<readonly Activation[]>;
+  mailHanded(handed: HandedMail): Promise<{ status: 'queued' | 'skipped' }>;
 }
 
 interface OwnedWorkspace {

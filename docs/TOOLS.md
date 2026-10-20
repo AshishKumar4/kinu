@@ -156,7 +156,7 @@ checkout, and the run has no recorded date.
 |---|---|
 | Exact match | `old_text` must occur in the file exactly once. Absent: fail. Repeated: fail, with the occurrence count and an instruction to widen the anchor. Occurrences are counted at every position, overlapping ones included, so `aa` in `aaa` is ambiguous, not a silent first match. Nothing is written on failure. |
 | Atomic batches | Every edit in a call matches the file as it was read, never a sibling edit's result; offsets are applied back to front. One bad anchor applies none of them. Overlapping edits are refused by name. |
-| Read before write | `edit`, and `write` over an existing file, are refused unless the file has been read, and refused again (`stale`) if it changed after that read. The refusal names the exact call to make next. Authorization is keyed on the content digest, so a different spelling of the same path is not refused, and a write authorizes the edits that follow it. |
+| Read before write | `edit`, and `write` over an existing file, are refused unless the file has been read since the conversation was last compacted (a read lasts across turns, and a compaction forgets every read), and refused again (`stale`) if it changed after that read. The refusal names the exact call to make next. Authorization is keyed on the content digest, so a different spelling of the same path is not refused, and a write authorizes the edits that follow it. |
 | Seen depth | How much was read matters. A capped or paged read authorizes an `edit`, where the anchor must still be present exactly once, but not a `write` that would discard lines the model never saw. Coverage is the contiguous prefix the turn has paged through, which is the shape the read's own `offset=N` hint produces, so paging to the end earns the overwrite. A line a read cuts at 2,000 characters was not seen: the prefix stops before it and no later read passes it. `file.text` inside `eval` hands the program the whole file and earns the overwrite, and the refusal names it. An edit moves the covered prefix with its replacements: authored text counts as seen, but deleting read lines does not cover unseen lines that move up, and joining a read line to an unread one leaves the joined line unread. |
 | Asks before replacing the user's files | A change on `/pc` or `/shared`, or outside a CLI workspace's directory, goes through `approveFileAccess` (`core/src/safety/approval-gate.ts`) under the shell's approval mode and grants; a new file on `/pc` or `/shared` is free. With nobody to answer, a hosted overwrite parks bound to its bytes (`file write <path> sha256:<new> over sha256:<old>`): approving writes those bytes unless the file changed meanwhile, `reviewParkedWrite` shows the diff, and the bytes are deleted once the row is decided. The CLI asks and never parks. A read asks only when it looks like a secret, as `cat` would. |
 | No silent truncation | A truncated `read` names the offset that continues it, and no read returns a bare empty string. An empty file says so, an offset past the end says so, and a single line too large to show hands over the `file.text`-inside-`eval` recipe. A trailing newline ends the last line instead of creating a phantom one, so the offsets it returns always resolve. Reads count against the same per-turn budget as every other tool result (`context-budget.ts`). |
@@ -339,7 +339,7 @@ full TypeScript declarations, `describe('db.select')` one member's, and
 | Caller | Reaches |
 |---|---|
 | An actor's own program: main's, a hire's, a head's or a swarm node's | what its own native tools reach and no more: `file`, `memory` (the account's scope where it is wired), `tasks`, `db` with its `private` tables, and each machine it has; `agent` where its lifecycle or owner-wait host is wired, `web`'s browser sessions where they are wired, `agents` where its native `agents` is wired, and `report` where its native `report` is. A head or swarm node holds only `eval shell file web` (and a node `report`), so its programs reach no `memory`, `tasks` or `agents` (`narrowAdmittedSurface`) |
-| A slate's call, or a crafted tool a slate runs | the members `slateReaches` admits (`slates/surface.ts`): no `agents`, `agent`, `report`, `createTool` or slate lifecycle, no member its operation keeps from slates (`switchRole`, the desktop), no account memory and no `private` tables; a share's viewer drives no browser |
+| A slate's call, or a crafted tool a slate runs | the members `slateReaches` admits (`slates/surface.ts`): no `agents`, `agent`, `report`, `createTool`, `retireTool` or slate lifecycle, no member its operation keeps from slates (`switchRole`, the desktop), no account memory and no `private` tables; a share's viewer drives no browser |
 | The owner's own slate | a slate's reach, plus `agents` |
 
 ### Machines
@@ -363,10 +363,10 @@ every machine:
 Every `device` member also takes `{ device? }`. A variable a process needs goes
 at the head of its command (`PORT=4100 node server.js`).
 
-- The hosted workspace has all of them, plus `createTool`, `listTools` and
-  `slates`.
-- The CLI workspace has `exec` and `fs`, plus `createTool`, `listTools` and
-  `slates`; it declares no `process_long` or `net_inbound`.
+- The hosted workspace has all of them, plus `createTool`, `listTools`,
+  `retireTool` and `slates`.
+- The CLI workspace has `exec` and `fs`, plus `createTool`, `listTools`,
+  `retireTool` and `slates`; it declares no `process_long` or `net_inbound`.
 - The computer has all of them, plus `resize(size)` where it has sizes,
   `rest(answer)`, and the eight desktop members (`screenshot`, `watch`,
   `click`, `type`, `key`, `scroll`, `move`, `drag`) where it has a screen.
@@ -397,8 +397,9 @@ namespace (a `private` `db` table), `agents.hire`'s `mission` (`message`), and
 
 | Member | What it does |
 |-----|-------------|
-| `workspace.listTools()` | Crafted tools with their EMA scores |
-| `workspace.createTool(name, description, code)` | Create or update a crafted tool; answers `{ name, action }`. Callable as `tools.<name>(args)` from the next `eval` call, because the sandbox that created it is already built |
+| `workspace.listTools()` | Crafted tools, best first, each with its preference and, if its last call raised, the error |
+| `workspace.createTool(name, description, code)` | Create or update a crafted tool; answers `{ name, action }`. Callable as `tools.<name>(args)` from the next `eval` call, because the sandbox that created it is already built. A rewrite clears its broken flag |
+| `workspace.retireTool(name)` | Delete a crafted tool; answers `{ name, action: 'retired' }` |
 | `workspace.slates` | `.<id>.<method>(...args)`, `.<id>.$preview()`, `.$list()`, ...; present when slates are wired, see below |
 
 In an `eval` program, `process.cwd()` is the workspace root, and
@@ -470,9 +471,9 @@ a bare `ReferenceError`: `explainSandboxError` names
 [CRAFT-ARCHITECTURE.md](./CRAFT-ARCHITECTURE.md).
 
 `codemodeSurface` (`packages/core/src/tools/builtins.ts`) is the one reader of
-the injectable crafted tools (`selectInjectableCraftedTools`, effective score at
-least 0.2); both backends' `eval` read its `craftedTools()` on every call. The
-preamble uses the same filter.
+the crafted tools a turn is offered (`selectInjectableCraftedTools`, at most 20 by
+preference); both backends' `eval` read its `craftedTools()` on every call. The
+preamble uses the same set.
 
 ### agents.*
 
@@ -525,8 +526,8 @@ file { op: "stat",   path }                  → { path, size, mtimeMs, isDir }
 file { op: "search", path, query }           → { path, matches: [{ line, text }], truncated?: { shown, total } }
 file { op: "edit",   path, edits: [{ old_text, new_text }] }
                                              → { path, reference, checked, applied: [{ line, removedLines, addedLines }], undo?, build? }
-file { op: "write",  path, content }         → { path, reference, checked, bytes, action: "created" | "replaced", undo?, build? }
-file.text(path)                              → the whole file as a string (programs only)
+file { op: "write",  path, content, encoding? } → { path, reference, checked, bytes, action: "created" | "replaced", undo?, build? }
+file.text(path, { encoding? })               → the whole file as a string (programs only); base64: its bytes exactly
 ```
 
 A failure is a classified refusal naming exactly what was wrong. `search` finds
@@ -609,11 +610,13 @@ waiting on an unrated or neutral one. Imported scaffolds enter `modifyScaffold` 
 
 ## CraftStore lifecycle
 
-`EvolutionEngine.extractPattern()` extracts patterns. `updateCraftScores()`
-applies an EMA with α=0.3. Injection needs an effective score of 0.2.
-Consolidation retires tools below 0.1 after at least 2 uses, and skips the pass
-if it would retire every tool. Surviving tools are called as
-`tools.<name>(args)`.
+`EvolutionEngine.extractPattern()` extracts patterns. A turn is offered at most
+20 crafted tools by preference: how often each was chosen when offered,
+weighted by the ratings of the turns that chose it (`craft/preference.ts`). A
+raise marks a tool broken, which its declaration says, until a clean return or
+a rewrite. Consolidation retires a tool offered 50 turns that no turn chose in
+30 days, and skips the pass if it would retire every tool. Offered tools are
+called as `tools.<name>(args)`.
 
 ## Why eight tools
 

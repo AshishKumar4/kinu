@@ -135,7 +135,7 @@ describe("createAgentSelfProvider — shape", () => {
     expect(p.positionalArgs).toBe(true);
     expect(declared(p)).toContain("schedule(");
 
-    for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "proposeWorkspace", "scaffoldVersions", "schedule", "cancelSchedule", "compactNow"]) {
+    for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "createWorkspace", "scaffoldVersions", "schedule", "cancelSchedule", "compactNow"]) {
       const descriptor = p.tools[name];
 
       if (!descriptor) throw new Error(`missing agent.${name}`);
@@ -186,23 +186,23 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     expect(host.calls).toEqual([]);
   });
 
-  test("proposeWorkspace parks the proposal with the host, and a host with no owner account refuses it", async () => {
+  test("createWorkspace creates through the host and answers its link; a host with no owner account refuses it", async () => {
     const asked: unknown[] = [];
 
     const host = fakeHost({
-      proposeWorkspace: (proposal) => Effect.sync(() => {
-        asked.push(proposal);
+      createWorkspace: (input) => Effect.sync(() => {
+        asked.push(input);
 
-        return { status: "pending" as const, proposal: "wsp-1", note: "waits for the owner" };
+        return { workspace: "research-desk-1a2b", url: "https://kinu.run/workspace/research-desk-1a2b" };
       }),
     });
 
-    const propose = called(createAgentSelfProvider(host), "proposeWorkspace");
+    const create = called(createAgentSelfProvider(host), "createWorkspace");
 
-    expect(await propose("Research", "Track pricing.", "Terse.")).toMatchObject({ status: "pending", proposal: "wsp-1" });
-    expect(asked).toEqual([{ name: "Research", brief: "Track pricing.", soul: "Terse." }]);
-    expect(await propose("Research", "", "Terse.")).toEqual(refused('"brief"'));
-    expect(await called(createAgentSelfProvider(fakeHost()), "proposeWorkspace")("Research", "Track pricing.", ""))
+    expect(await create("Research desk", "Read the sources and write the report.", "Terse.")).toEqual({ workspace: "research-desk-1a2b", url: "https://kinu.run/workspace/research-desk-1a2b" });
+    expect(asked).toEqual([{ name: "Research desk", brief: "Read the sources and write the report.", soul: "Terse." }]);
+    expect(await create("Research desk", "", "Terse.")).toEqual(refused('"brief"'));
+    expect(await called(createAgentSelfProvider(fakeHost()), "createWorkspace")("Research desk", "Read the sources.", ""))
       .toMatchObject({ success: false, reason: "unsupported" });
   });
 

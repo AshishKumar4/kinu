@@ -58,6 +58,17 @@ describe('listInstructionApprovals — metadata only', () => {
     expect(page.items[0]?.decision).toBe('approved');
   });
 
+  test('an approval a dream granted says so, and the owner\'s revocation of it reads as theirs', () => {
+    const { approvals } = store();
+    approvals.approve(AGENTS, instructionDigest(DOCTRINE), 'dream');
+    expect(listInstructionApprovals({ sources: [meta()], decisions: approvals.list() }).items[0]).toMatchObject({ decision: 'approved', byDream: true });
+
+    approvals.revoke(AGENTS);
+    expect(listInstructionApprovals({ sources: [meta()], decisions: approvals.list() }).items[0]).toEqual({
+      path: AGENTS, kind: 'agents_md', bytes: DOCTRINE.length, decision: 'revoked',
+    });
+  });
+
   test('a refusal stays visible', () => {
     const { approvals } = store();
     approvals.revoke(AGENTS);

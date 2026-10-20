@@ -1,8 +1,6 @@
-import { markStoreChanged } from '@kinu.run/agent-utils';
 // CraftStore conflict detection and upsert; see docs/EVOLUTION.md "CraftStore Lifecycle".
 
 import type { AgentRuntime } from '../types/agent-runtime';
-import { nowMs } from '../utils/date';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
 import { DEFAULT_CONFIG } from '../config';
 import { isReservedCraftToolName } from './in-episode';
@@ -12,7 +10,6 @@ interface CraftCandidate {
   name: string;
   description: string;
   code: string;
-  score: number;
 }
 
 export function checkConflictsBeforeAdding(
@@ -50,7 +47,8 @@ async function compilesToCallable(rt: AgentRuntime, code: string): Promise<strin
 
 /**
  * Rejects a reserved name, source that is not one expression, a misevolution veto or non-callable code before any
- * write, as `workspace.createTool` admits a tool; replaces a conflict only on a better score.
+ * write, as `workspace.createTool` admits a tool; replaces a conflicting tool only while it is broken, which the
+ * rewrite clears.
  */
 export async function upsertCraftedTool(
   rt: AgentRuntime,
@@ -83,25 +81,15 @@ export async function upsertCraftedTool(
   const { conflicting } = checkConflictsBeforeAdding(rt, candidate);
 
   if (conflicting.length > 0) {
-    // One statement so body and score never diverge.
-    const existingScore = rt.storage.sql<{ score: number }>`
-      SELECT score FROM crafted_tools WHERE name = ${conflicting[0]}
-    `[0]?.score ?? 0;
+    const [existing] = conflicting;
+    // A working tool is the agent's own; a pattern that keeps working replaces one that raises.
+    const broken = rt.storage.sql<{ broken: string | null }>`SELECT broken FROM crafted_tools WHERE name = ${existing}`[0]?.broken ?? null;
 
-    if (candidate.score > existingScore + 0.1) {
-      void rt.storage.sql`
-        UPDATE crafted_tools
-        SET code = ${candidate.code}, description = ${candidate.description},
-            updated_at = ${nowMs()}, score = ${candidate.score}, last_used_at = ${nowMs()}
-        WHERE name = ${conflicting[0]}
-      `;
-      markStoreChanged(rt.storage.sql);
-    }
+    if (existing !== undefined && broken !== null) rt.craftStore.update(existing, { code: candidate.code, description: candidate.description });
 
     return { accepted: true };
   }
 
-  // Column defaults seed the neutral prior; the extraction score lands with the first real observation.
   rt.craftStore.create({
     name: candidate.name,
     description: candidate.description,

@@ -206,6 +206,18 @@ describe('threads, views and search', () => {
     expect(store.list({ view: 'important' }).unread).toBe(0);
   });
 
+  test('unread is asked of every thread, before the newest few are taken', async () => {
+    open('ashish@kinu.run');
+    const older = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: toPerson });
+
+    clock += 60_000;
+    const newer = await delivered({ raw: raw('second-local-part-pass'), envelopeFrom: 'b@x', recipient: toPerson });
+
+    store.update(newer.threadId, { read: true });
+    expect(store.list({ view: 'all', unread: true, limit: 1 })).toMatchObject({ unread: 1, threads: [{ id: older.threadId }] });
+    expect(store.list({ view: 'all', limit: 1 })).toMatchObject({ unread: 1, threads: [{ id: newer.threadId }] });
+  });
+
   test('search finds words in subject, sender and body, and quoted words are not syntax', async () => {
     open('ashish@kinu.run');
     await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: toPerson });

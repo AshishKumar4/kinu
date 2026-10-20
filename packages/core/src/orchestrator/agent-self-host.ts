@@ -22,7 +22,7 @@ export interface AgentSelfPorts {
   readonly cancelTrigger: AgentSelfHost['cancelTrigger'];
   readonly armCompactNow: () => Promise<void>;
   /** The cloud's owner-approved workspace creation; a local session has none. */
-  readonly proposeWorkspace?: AgentSelfHost['proposeWorkspace'];
+  readonly createWorkspace?: AgentSelfHost['createWorkspace'];
   /** What waits on the owner, as the workspace's own agent reads it (read-models/owner-waits.ts `ownerWaitsHost`). */
   readonly ownerWaits: AgentSelfHost['ownerWaits'];
 }
@@ -51,5 +51,5 @@ export function agentSelfHost(ports: AgentSelfPorts): AgentSelfHost {
     ownerWaits: ports.ownerWaits,
   };
 
-  return ports.proposeWorkspace === undefined ? host : { ...host, proposeWorkspace: ports.proposeWorkspace };
+  return ports.createWorkspace === undefined ? host : { ...host, createWorkspace: ports.createWorkspace };
 }

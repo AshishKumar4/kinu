@@ -20,11 +20,14 @@ const RETIRED_MEMBERS = {
   'device.exists': 'device.fs.stat(path), which refuses a path that is not there',
   'parent.readdir': 'file.list(path): the folder you share with your parent is among your own files',
   'parent.exists': 'file.stat(path), which refuses a path that is not there',
+  'agent.proposeWorkspace': 'agent.createWorkspace(name, brief, soul), which creates it at once and answers its link',
 } as const satisfies Readonly<Record<string, string>>;
 
 /** `namespace.operation` → each retired field and what to use instead. */
 const RETIRED_FIELDS = {
   'agents.hire': { mission: '"message"' },
+  // `hold` is only ever a duration (key's); a click's held modifiers had the same name, and models sent a click 500.
+  'computer.click': { hold: '"keys", the modifiers held during the click, as ["shift"] or ["ctrl", "shift"]; a click is not held for a time' },
   'workspace.startProcess': {
     env: 'the variables at the head of the command, as `PORT=4100 node server.js`',
     timeoutMs: 'stopProcess(processId) when the work is done',

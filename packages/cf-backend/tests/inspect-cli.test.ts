@@ -30,7 +30,6 @@ function answer(agent: HarnessOrchestratorAgent, method: string, args: readonly 
     case 'listRecentEvents': return agent.listRecentEvents(v.parse(FilterSchema, args[0]));
     case 'getRunTimeline': return agent.getRunTimeline(v.parse(FilterSchema, args[0]));
     case 'getHeadRuns': return agent.getHeadRuns(v.parse(LimitSchema, args[0]));
-    case 'getGepaRuns': return agent.getGepaRuns(v.parse(LimitSchema, args[0]));
     case 'getExecutors': return agent.getExecutors();
     default: return Promise.reject(new Error(`the fixture route serves no ${method}`));
   }
@@ -132,7 +131,7 @@ function kinu(...args: string[]) {
 
 describe('kinu inspecting a populated cloud workspace', () => {
   test('every list command prints the rows the orchestrator answers', async () => {
-    for (const command of ['events', 'timeline', 'heads', 'gepa', 'executors']) {
+    for (const command of ['events', 'timeline', 'heads', 'executors']) {
       const run = await kinu(command, 'cloudtest');
 
       expect([command, run.exitCode, run.stderr]).toEqual([command, 0, '']);

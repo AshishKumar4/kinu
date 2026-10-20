@@ -350,8 +350,10 @@ const ORCHESTRATOR_METHODS = [
   'withdrawSlatePreapproval',
   'galleryNeeds',
   'liveShareUrl',
-  // Worker-only: the mail router hands a filed arrival to the workspace it woke (mail/handler.ts).
+  // Worker-only: the mail router hands a filed arrival to the workspace it woke (mail/handler.ts), and the owner's
+  // route a thread they sent it (mail/routes.ts).
   'mailArrived',
+  'mailHanded',
   'viewerEntryUrl',
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.
   'requestOverviewPush',

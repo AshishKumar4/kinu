@@ -17,7 +17,6 @@ function sources(over: Partial<OwnerWaitSources> = {}): OwnerWaitSources {
   return {
     deferred: [parked('c1', 'main-id', 'rm -rf build', 10), parked('c2', 'hire-id', 'git push', 20), { ...parked('c3', 'main-id', 'ls', 5), status: 'approved' }],
     plans: [{ actor: 'hire-id', id: 'p1', revision: 2, content: '# Migrate the billing tables\n\nSteps…', updatedAt: 30 }],
-    proposals: [{ id: 'w1', name: 'Research desk', brief: 'Reads papers', soul: '', status: 'pending', requestedAt: 40, decidedAt: null }],
     consents: [{ consentId: 'd1', deviceLabel: 'laptop', method: 'exec', command: 'brew install jq', createdAt: 50 }],
     questions: [
       { agent: 'scout', actor: 'hire-id', asked: { id: 'q1', actor: 'hire-id', callId: 'c', turnId: 't', mode: 'build', questions: [{ id: 'db', question: 'Which database?', options: [{ label: 'Postgres' }, { label: 'SQLite' }] }], status: 'open', answers: null, askedAt: 60, closedAt: null } },
@@ -34,7 +33,6 @@ test('every row that holds the owner, newest first, each named by its own fields
   expect(rows.map((row) => row.wait)).toEqual([
     { key: 'question:q1', kind: 'question', what: 'Which database?', since: 60, askedBy: 'scout' },
     { key: 'consent:d1', kind: 'consent', what: 'exec on laptop: brew install jq', since: 50, askedBy: null },
-    { key: 'action:w1', kind: 'workspace', what: 'Research desk', since: 40, askedBy: null },
     { key: 'plan:hire-id:p1:2', kind: 'plan', what: 'Migrate the billing tables', since: 30, askedBy: 'scout' },
     { key: 'action:c2', kind: 'command', what: 'git push', since: 20, askedBy: 'scout' },
     { key: 'action:c1', kind: 'command', what: 'rm -rf build', since: 10, askedBy: 'main' },

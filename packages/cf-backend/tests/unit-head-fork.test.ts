@@ -5,7 +5,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 
 import { describe, expect, test } from "bun:test";
-import { CRAFT_NEUTRAL_PRIOR, actorHomeName, agentHome, agentTmpRoot, type AgentRuntime } from '@kinu.run/core';
+import { actorHomeName, agentHome, agentTmpRoot, craftPreference, type AgentRuntime } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { unreachableObjects } from "./helpers/bindings";
 import type { KinuDevbox } from "../src/kinu-devbox";
@@ -173,7 +173,7 @@ describe('a head forks its parent workspace', () => {
       .toEqual(new TextEncoder().encode('one\ntwo\n'));
   });
 
-  /** `listTools` reads quality columns on `crafted_tools`, so a head without that table fails its first call. */
+  /** `listTools` reads preference columns on `crafted_tools`, so a head without that table fails its first call. */
   test("the head's own workspace plane scores the tools it crafts", async () => {
     const { rt } = await hostedHead();
     const plane = workspacePlane(rt);
@@ -183,7 +183,7 @@ describe('a head forks its parent workspace', () => {
       'echo_back', 'Return its argument.', 'async (args) => args',
     )).toEqual({ ok: true, name: 'echo_back', action: 'created' });
     expect(await plane.tools.listTools.execute()).toEqual([
-      { name: 'echo_back', description: 'Return its argument.', qualityScore: CRAFT_NEUTRAL_PRIOR },
+      { name: 'echo_back', description: 'Return its argument.', preference: craftPreference({ offered: 0, chosen: 0, rated: 0, rating_sum: 0 }), broken: null },
     ]);
   });
 });

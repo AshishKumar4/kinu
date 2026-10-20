@@ -12,14 +12,11 @@ import type { ScaffoldVersionView } from '../types/scaffold';
 import type { ActorHandle } from '../identity/actor-handle';
 import { listScaffoldArchive } from '../scaffold/archive';
 import {
-  applyPromotionDecision, getPendingScaffold, readScaffoldVersion, type PendingScaffold, type ScaffoldDecisionEvents,
+  getPendingScaffold, readScaffoldVersion, type PendingScaffold, type ScaffoldDecisionEvents,
 } from '../scaffold/versions';
 import { listArtifactVersions, type ArtifactVersion } from './artifacts';
-import { runningTrial } from './trials';
-import type { LiveTrial } from './trial-rules';
-import { runProposer, SCAFFOLD_ARTIFACT, type ProposerOutcome } from './proposer';
 import { nanoid } from '../utils/nanoid';
-import { KinuError, settle } from '../obs/index';
+import { settle } from '../obs/index';
 import { Effect } from 'effect';
 
 export type { ScaffoldVersionView } from '../types/scaffold';
@@ -147,10 +144,9 @@ export function listScaffoldVersions(
   }));
 }
 
-/** What evolution has in flight: the scaffold proposal awaiting the owner, the live trial, and the edits waiting for one. */
+/** What evolution has in flight: the scaffold proposal awaiting the owner, and the edits staged for the next cold turn. */
 export interface EvolutionStatus {
   readonly pendingScaffold: PendingScaffold | null;
-  readonly trial: LiveTrial | null;
   readonly waiting: readonly ArtifactVersion[];
   readonly versions: readonly ScaffoldVersionView[];
 }
@@ -158,30 +154,7 @@ export interface EvolutionStatus {
 export function getEvolutionStatus(sql: SqlExecutor, actor: ActorHandle): EvolutionStatus {
   return {
     pendingScaffold: getPendingScaffold(sql, actor),
-    trial: runningTrial(sql, actor),
-    waiting: listArtifactVersions(sql, actor).filter((version) => version.status === 'candidate'),
+    waiting: listArtifactVersions(sql, actor).filter((version) => version.status === 'staged'),
     versions: listScaffoldVersions(sql, actor, 10),
   };
-}
-
-export type ScaffoldDecisionResult = Awaited<ReturnType<typeof applyPromotionDecision>>;
-
-/** The owner's decision on the pending scaffold. The misevolution recheck can still turn a promote into a rollback, so the result reports the action applied. */
-export async function applyScaffoldDecision(control: ScaffoldControl, mode: 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
-  const pending = getPendingScaffold(control.sql, control.rt.actor);
-
-  if (pending === null) return settle(Effect.fail(new KinuError('missing', 'no pending scaffold')));
-
-  return await applyPromotionDecision(control.rt, pending, mode, control.events);
-}
-
-/**
- * The manual optimisation RPCs: one search of the proposer on the named artifact (`scaffold`, or an
- * `artifact_versions` id), its bad set the recent low-rated turns. The edit waits like any other.
- */
-export async function runOptimization(control: ScaffoldControl, target: string = SCAFFOLD_ARTIFACT): Promise<ProposerOutcome> {
-  // Asked only once there are turns to judge: with none the search is idle and needs no model.
-  const decide = control.rt.decide ?? (() => settle(Effect.fail(new KinuError('unavailable', 'no decision model is wired, so no edit can be judged'))));
-
-  return runProposer({ rt: control.rt, decide, reflect: control.rt.judgeModel ?? control.rt.llm, now: Date.now() }, target);
 }

@@ -99,7 +99,8 @@ export type ChatEvent = (
     modelId?: string;
   }
   /** A failure the turn survived. `runChat` never yields this; the scaffold seam (scaffold/chat-transform.ts) does. */
-  | { type: 'error'; message: string }
+  /** `thrown`: the turn's scaffold program itself threw (`runScaffold`), not a call it made that failed. */
+  | { type: 'error'; message: string; thrown?: true }
   | { type: 'model-fallback'; from: string; to: string; reason: string }
   | { type: 'context-admitted'; tokens: number; contextWindow: number | null }
   /** `text`: the answer, else what streamed, else a tool-result synthesis. `answer`: only the final step's text
