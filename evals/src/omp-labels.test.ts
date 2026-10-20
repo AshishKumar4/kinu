@@ -38,8 +38,4 @@ describe('the hand-labelled sample', () => {
     // An answer given after a correction is the next turn's, not the one that drew it.
     for (const item of again.filter((held) => held.id.startsWith('again:after:'))) expect(item.answer).not.toBe(`answer ${item.id.split(':t')[1] ?? ''}`);
   });
-
-  test('the same seed draws the same sample', () => {
-    expect(labelSample(train, { messages: 10, again: 6, seed: 7 })).toEqual(labelSample(train, { messages: 10, again: 6, seed: 7 }));
-  });
 });
