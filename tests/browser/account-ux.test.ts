@@ -901,8 +901,8 @@ describe('account panels', () => {
               const links = await home.$$eval('nav[aria-label="Primary"] a', (anchors) =>
                 anchors.map((a) => ({ href: a.getAttribute('href'), current: a.getAttribute('aria-current') })));
 
-              // Settings and Devices are the sidebar footer's: the account menu,
-              // and the icon beside it. The nav carries no row for them.
+              // Settings, Mail and Devices are the sidebar footer's: the account
+              // menu, and the icons beside it. The nav carries no row for them.
               expect(links.map((link) => link.href).sort((left, right) => String(left).localeCompare(String(right)))).toEqual(['/', '/drive', '/explore', '/plugins', '/workspaces']);
               expect(links[0]?.current).toBe('page');
               expect(await activeNavRow(home)).toBe('Home');
