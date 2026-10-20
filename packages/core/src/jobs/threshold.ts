@@ -25,11 +25,14 @@ export function invocationBackgroundPolicy(
   return base.wakesAfterTurn === wakesAfterTurn ? base : { ...base, wakesAfterTurn };
 }
 
-export interface BackgroundHandle {
-  readonly background: true;
-  readonly jobId: string;
-  readonly kind: string;
-  readonly message: string;
+/** What a call moved to the background answers in place of its result: the job that holds it now, and why it moved. */
+export const BackgroundHandleSchema = v.object({ background: v.literal(true), jobId: v.string(), kind: v.string(), message: v.string() });
+
+export type BackgroundHandle = v.InferOutput<typeof BackgroundHandleSchema>;
+
+/** Why a call moved to the background: its foreground window ran out, or the person wrote while it ran. */
+export function backgroundedBy(handle: BackgroundHandle): 'window' | 'person' {
+  return handle.message === RELEASED_FOR_PERSON ? 'person' : 'window';
 }
 
 /** Same discriminator over the serialized result, the only form the tool-result extension seam carries. */

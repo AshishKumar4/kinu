@@ -7,6 +7,7 @@ import { platformByTask, type PlatformReport, type TaskPlatform } from './platfo
 import { renderRunReport } from './run-report';
 import {
   parseResults, steadyCacheP5, steadyCacheShare, trials, type Assertion, type EvalFile, type HarnessRun, type PlanUsage, type ToolFailure,
+  type TrialWaits, type WaitedCall,
 } from './results';
 import { MEASURE_NAMES, shifts, type Measure, type Shift, type Spread } from './shifts';
 import { graded, HARNESS_ERRORS } from './task';
@@ -48,7 +49,30 @@ export type EvalStats = {
   /** Waits on the model provider across every trial (429 backoff, retry-after, cooldown): infrastructure. */
   providerWaits: number;
   providerWaitMs: number;
+  /** Where the agent waited across every trial (`measureWaits`), each call named by its trial. */
+  waits: SideWaits;
 };
+
+/** One side's waits: every call that became a job, the slowest calls, and each trial's time past the 30 s window. */
+export type SideWaits = {
+  backgrounded: (TrialWaits['backgrounded'][number] & { trial: string })[];
+  slowest: (WaitedCall & { trial: string })[];
+  pastInteractive: { trial: string; ms: number }[];
+};
+
+/** The slowest calls a side keeps. */
+const SLOWEST_PER_SIDE = 10;
+
+/** A side's waits, from each trial's (`measureWaits`), named `<task> t<trial>`. */
+function sideWaits(runs: readonly HarnessRun[]): SideWaits {
+  const named = runs.map((run) => ({ trial: `${run.session.metadata.taskId} t${String(run.session.metadata.trial)}`, waits: run.output.waits }));
+
+  return {
+    backgrounded: named.flatMap(({ trial, waits }) => waits.backgrounded.map((call) => ({ ...call, trial }))),
+    slowest: named.flatMap(({ trial, waits }) => waits.slowest.map((call) => ({ ...call, trial }))).sort((a, b) => b.wallMs - a.wallMs).slice(0, SLOWEST_PER_SIDE),
+    pastInteractive: named.filter(({ waits }) => waits.pastInteractiveMs > 0).map(({ trial, waits }) => ({ trial, ms: waits.pastInteractiveMs })),
+  };
+}
 
 type Cohort = { taskId: string; model: string; arm: string; taskVersion: string; assertions: Assertion[] };
 
@@ -415,6 +439,7 @@ function stats({ assertions }: Pick<Cohort, 'assertions'>): EvalStats {
     infrastructureErrors: infrastructureErrors.map(({ item, count }) => ({ message: item, trials: count })),
     providerWaits: metrics.reduce((sum, value) => sum + value.providerWaits, 0),
     providerWaitMs: metrics.reduce((sum, value) => sum + value.providerWaitMs, 0),
+    waits: sideWaits(runs),
   };
 }
 

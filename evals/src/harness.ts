@@ -6,7 +6,7 @@ import { platformFact, type EvalAccount, type RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { DeploymentAnswer, evalNameSlug, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import { gatherEvidence, writeEvidence, type EvidenceReads, type WorkspaceEvidence } from './evidence';
-import { HarnessRunSchema, measurePlanUsage, measurePromptUsage, type ActorLedger } from './results';
+import { HarnessRunSchema, measurePlanUsage, measurePromptUsage, measureWaits, type ActorLedger } from './results';
 import type { KinuPublicSession } from './session';
 import { prepareTrialAccount } from './slot';
 import { ARMS, buildChanged, deployedBuild, openWorkspace, type EvalArm, type Served } from './target';
@@ -475,7 +475,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       const result = {
         output: {
           success, turns,
-          metrics, toolFailures: toolFailures(events),
+          metrics, toolFailures: toolFailures(events), waits: measureWaits(ledgers),
         },
         events: transcript,
         usage: {
