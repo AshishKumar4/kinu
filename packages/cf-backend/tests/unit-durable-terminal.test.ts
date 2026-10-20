@@ -211,7 +211,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     harness.db.exec('DROP TRIGGER probe_block_sleep_tombstone');
     laterBy(1);
     // The answer the replay reads, as a first attempt persisted it.
-    harness.db.prepare('DELETE FROM sleep_time_updates WHERE effect_key = ?').run(settled.messageId);
+    harness.db.prepare("DELETE FROM prepared_outputs WHERE scope = 'sleep_time' AND key = ?").run(settled.messageId);
     const restarted = await reactivateOrchestratorHarness(harness.db, undefined, { sleepTimeAnswer: [settled.messageId, decayOne] });
     await restarted.agent.terminalRetryPass();
     await joinHarnessFibers();

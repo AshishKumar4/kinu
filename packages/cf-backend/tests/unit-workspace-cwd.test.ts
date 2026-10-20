@@ -17,7 +17,7 @@ import { clearPortCapability } from '@nimbus-sh/worker/port-capability';
 import { inlineWorkspaceStorage, wrapDatabase } from '@kinu.run/core/identity';
 import { Effect } from 'effect';
 import {
-  createShellSession, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, nimbusSessionShell,
+  createShellSession, DeferredApprovalQueue, DeferredApprovalStore, initOwnerRequestsTable, nimbusSessionShell,
   withApprovalGatedShell, type NimbusSandboxHandle,
 } from '@kinu.run/core';
 import { createTestActors } from '@kinu.run/test-utils';
@@ -293,7 +293,7 @@ describe('an approval in a hosted named session', () => {
     const sql = wrapDatabase(db).sql;
     const execRaw = (query: string) => { db.exec(query); };
 
-    initDeferredApprovalsTable(execRaw);
+    initOwnerRequestsTable(execRaw);
     let seq = 0;
 
     const queue = new DeferredApprovalQueue({

@@ -37,7 +37,7 @@ export interface FeedbackAccepted {
 
 /** Authoritative column list for the control-plane table. `bytes` is null for a note-only report; a screenshot's PNG
  *  lives in R2 under its reporter and report (`feedback/<userId>/<id>.png`), where only its submission reaches it. */
-export const FeedbackRecordSchema = v.object({
+const FeedbackRecordSchema = v.object({
   id: v.string(),
   createdAt: v.number(),
   userId: v.string(),
@@ -50,3 +50,12 @@ export const FeedbackRecordSchema = v.object({
 });
 
 export type FeedbackRecord = v.InferOutput<typeof FeedbackRecordSchema>;
+
+/** What one feedback row is: a person's report through the feedback form, or their report of a Gallery listing, whose
+ *  route is the listing's page and which reporting the same listing again replaces. */
+export const FEEDBACK_KINDS = ['feedback', 'gallery_report'] as const;
+
+/** A row of the operators' feedback list. */
+export const ControlFeedbackRowSchema = v.object({ ...FeedbackRecordSchema.entries, kind: v.picklist(FEEDBACK_KINDS) });
+
+export type ControlFeedbackRow = v.InferOutput<typeof ControlFeedbackRowSchema>;

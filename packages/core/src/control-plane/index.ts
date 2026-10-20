@@ -66,7 +66,7 @@ export {
   type AnalyticsSqlEnv,
 } from './analytics-sql';
 
-export { FeedbackRecordSchema } from '../feedback/contract';
+export { ControlFeedbackRowSchema } from '../feedback/contract';
 
 export {
   ControlMetricsSchema,

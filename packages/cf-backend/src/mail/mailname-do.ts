@@ -11,7 +11,6 @@ import { durableStamps, initMailNameTables, mailUsernameRefusal, readStamp, repa
 
 const ClaimRow = v.object({
   label: v.string(), user_id: v.string(), kind: v.picklist(['username', 'alias']), target_path: v.nullable(v.string()),
-  state: v.picklist(['active', 'former', 'retired']),
 });
 
 export type MailNameClaim = v.InferOutput<typeof ClaimRow>;
@@ -38,7 +37,7 @@ export class MailNameDO extends DurableObject<Env> {
   /** Who holds the label, and how; null while nobody does. */
   lookup(): Promise<MailNameClaim | null> {
     if (this.storageRefusal !== undefined) return settleSync(Effect.fail(this.storageRefusal));
-    const [row] = this.ctx.storage.sql.exec('SELECT label, user_id, kind, target_path, state FROM mail_name').toArray();
+    const [row] = this.ctx.storage.sql.exec('SELECT label, user_id, kind, target_path FROM mail_name').toArray();
 
     return Promise.resolve(row === undefined ? null : v.parse(ClaimRow, row));
   }
@@ -49,14 +48,14 @@ export class MailNameDO extends DurableObject<Env> {
     const held = await this.lookup();
 
     if (held !== null) {
-      if (held.user_id !== userId || held.state === 'retired') return settleSync(Effect.fail(new KinuError('denied', `"${label}" is taken.`)));
+      if (held.user_id !== userId) return settleSync(Effect.fail(new KinuError('denied', `"${label}" is taken.`)));
 
       return held;
     }
 
-    this.ctx.storage.sql.exec('INSERT INTO mail_name (label, user_id, kind, target_path, claimed_at) VALUES (?, ?, ?, ?, ?)',
-      label, userId, kind, kind === 'alias' ? targetPath : null, Date.now());
+    this.ctx.storage.sql.exec('INSERT INTO mail_name (label, user_id, kind, target_path) VALUES (?, ?, ?, ?)',
+      label, userId, kind, kind === 'alias' ? targetPath : null);
 
-    return { label, user_id: userId, kind, target_path: kind === 'alias' ? targetPath : null, state: 'active' };
+    return { label, user_id: userId, kind, target_path: kind === 'alias' ? targetPath : null };
   }
 }

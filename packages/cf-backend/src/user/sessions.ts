@@ -87,11 +87,11 @@ export interface UserSessionsHost extends Pick<UserObjectHost, 'ctx' | 'env' | '
 /** The account's sign-ins, sessions, tokens and connect tickets. */
 export class UserSessions {
   /** Single-use socket tickets a CLI bearer trades for one agent socket: the CLI's websocket to one workspace, the only
-   *  thing a ticket opens, so a row holds whose, which workspace, and the bearer that asked. */
-  private readonly connectTickets: SingleUseTickets<{ user_id: string; agent_name: string; cli_token_hash: string }>;
+   *  thing a ticket opens, so a row holds which workspace and the bearer that asked; whose, the ticket's text says. */
+  private readonly connectTickets: SingleUseTickets<{ workspace: string; cli_token_hash: string }>;
 
   constructor(private readonly host: UserSessionsHost) {
-    this.connectTickets = new SingleUseTickets(host.sqlx.bind(host), 'cli_agent_connect_tickets', ['user_id', 'agent_name', 'cli_token_hash']);
+    this.connectTickets = new SingleUseTickets(host.sqlx.bind(host), 'cli_agent_connect', ['workspace', 'cli_token_hash']);
   }
 
   /** Called before the cookie is issued. An existing hash throws; the caller compensates. */
@@ -106,7 +106,7 @@ export class UserSessions {
       `INSERT INTO user_browser_sessions
          (token_hash, expires_at, email, display_name, provider, provider_sub, auth_time)
        SELECT ?, ?, ?, ?, ?, ?, ?
-        WHERE ? >= COALESCE((SELECT generation FROM user_credential_floor WHERE id = 1), 0)`,
+        WHERE ? >= COALESCE((SELECT credential_floor FROM account_epochs WHERE id = 1), 0)`,
       tokenHash, expiresAt,
       identity.email, identity.displayName, identity.provider, identity.sub, identity.authTime, identity.credentialGeneration ?? 0,
     );
@@ -397,8 +397,8 @@ export class UserSessions {
     await this.host.requireTier(caller, 'auth_tokens.revoke');
 
     const sessions = this.host.ctx.storage.transactionSync(() => {
-      this.host.sqlx(`INSERT INTO user_credential_floor (id, generation) VALUES (1, ?)
-        ON CONFLICT (id) DO UPDATE SET generation = MAX(generation, excluded.generation)`, generation);
+      this.host.sqlx(`INSERT INTO account_epochs (id, credential_floor) VALUES (1, ?)
+        ON CONFLICT (id) DO UPDATE SET credential_floor = MAX(COALESCE(credential_floor, excluded.credential_floor), excluded.credential_floor)`, generation);
 
       const ended = this.host.sqlx<{ token_hash: string }>(`SELECT token_hash FROM user_browser_sessions`).map((row) => row.token_hash);
 
@@ -432,7 +432,7 @@ export class UserSessions {
    * admitted under, so revocation reaches listening-only sockets that send no frames.
    */
   private authGeneration(): number {
-    return singletonValue(this.host.sqlx, 'SELECT generation AS value FROM user_auth_generation WHERE id = 1', v.number()) ?? 0;
+    return singletonValue(this.host.sqlx, 'SELECT COALESCE(auth_generation, 0) AS value FROM account_epochs WHERE id = 1', v.number()) ?? 0;
   }
 
   /**
@@ -441,8 +441,8 @@ export class UserSessions {
    */
   private async retireCliAuthority(): Promise<void> {
     this.host.sqlx(
-      `INSERT INTO user_auth_generation (id, generation) VALUES (1, 1)
-       ON CONFLICT(id) DO UPDATE SET generation = generation + 1`,
+      `INSERT INTO account_epochs (id, auth_generation) VALUES (1, 1)
+       ON CONFLICT(id) DO UPDATE SET auth_generation = COALESCE(auth_generation, 0) + 1`,
     );
     const generation = this.authGeneration();
 
@@ -533,11 +533,7 @@ export class UserSessions {
 
     const ticket = `pat_${input.userId}_${randomToken(32)}`;
 
-    const expiresAt = this.connectTickets.mint(ticket, {
-      user_id: input.userId,
-      agent_name: input.agentName,
-      cli_token_hash: input.cliTokenHash,
-    }, now);
+    const expiresAt = this.connectTickets.mint(ticket, { workspace: input.agentName, cli_token_hash: input.cliTokenHash }, now);
 
     return { ok: true, ticket, expiresAt };
   }
@@ -559,11 +555,10 @@ export class UserSessions {
     // Spent on presentation, a match or not: a ticket shown to the wrong agent is burnt, never left live.
     const row = this.connectTickets.spend(ticket, now);
 
+    // Its hash binds the user its text names, which matched above.
     if (!row) return { ok: false, error: 'invalid ticket' };
 
-    if (row.user_id !== expected.userId) return { ok: false, error: 'wrong user' };
-
-    if (row.agent_name !== expected.agentName) return { ok: false, error: 'wrong agent' };
+    if (row.workspace !== expected.agentName) return { ok: false, error: 'wrong agent' };
 
     if (!this.host.workspaceRegistered(expected.agentName)) return { ok: false, error: 'agent not found' };
     const bearerScopes = this.cliBearerScopes(row.cli_token_hash, now);

@@ -8,7 +8,7 @@ import {
   type AgentSignal, type DeviceConsentNotice, type DeviceConsentRequest,
 } from '../src/index';
 import { KinuError } from '../src/obs/index';
-import { initDeviceConsentAsksTable } from '../src/safety/device-consent';
+import { initOwnerRequestsTable } from '../src/safety/owner-requests';
 import { createTestActors } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql } from './helpers';
 
@@ -23,7 +23,7 @@ const LABEL = "ashish's device";
 function registry(failWakes = false) {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
-  initDeviceConsentAsksTable(execRaw);
+  initOwnerRequestsTable(execRaw);
   const actors = createTestActors(makeSql(db), execRaw);
   const root = actors.main.actorId;
   const hire = actors.sibling('courier').actorId;
@@ -307,5 +307,44 @@ describe("a device call's consent, as the binding rule decides it", () => {
   test('an ask that could not be raised is unanswered, never a refusal', async () => {
     expect((await outcome(null, new KinuError('unavailable', 'the workspace is gone'))).answer)
       .toMatchObject({ allowed: false, code: 'unavailable', reason: expect.stringContaining('nobody decided') });
+  });
+});
+
+/** `row` into `table`, by its columns. */
+function insertRow(db: Database, table: string, row: Record<string, string | number | null>): void {
+  const columns = Object.keys(row);
+
+  db.query(`INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`).run(...Object.values(row));
+}
+
+describe('owner_requests holds each kind whole, and nothing of the other', () => {
+  const action = { kind: 'action', id: 'a', actor_id: 'main', command: 'rm -rf build', status: 'queued', requested_at: 1, executor: '', context: '{}',
+    reason: 'deletes files', spend_seq: 0, rule_hits: '[]' };
+
+  const device = { kind: 'device', id: 'd', actor_id: null, command: 'bun test', status: 'queued', requested_at: 1, device_id: 'dev-1',
+    device_label: 'laptop', method: 'exec', epoch: 0 };
+
+  test('an action and a device ask, each whole, are kept', () => {
+    const db = new Database(':memory:');
+    initOwnerRequestsTable(makeExecRaw(db));
+    insertRow(db, 'owner_requests', action);
+    insertRow(db, 'owner_requests', device);
+    expect(db.query('SELECT kind FROM owner_requests ORDER BY kind').all()).toEqual([{ kind: 'action' }, { kind: 'device' }]);
+  });
+
+  test('a row carrying the other kind\'s fields, or missing its own, is refused', () => {
+    const db = new Database(':memory:');
+    initOwnerRequestsTable(makeExecRaw(db));
+    const { rule_hits: _hits, ...unhit } = action;
+
+    for (const mixed of [
+      { ...device, executor: '', context: '{}', reason: 'deletes files', spend_seq: 0 },
+      { ...action, device_id: 'dev-1' },
+      { ...action, epoch: 0 },
+      unhit,
+      { ...device, status: 'approved' },
+    ]) {
+      expect(() => { insertRow(db, 'owner_requests', mixed); }).toThrow('CHECK constraint failed');
+    }
   });
 });

@@ -323,7 +323,7 @@ export const FORK_CONVERSATION_DECLARATIONS: ForkConversationDeclarations = {
     rows: ForkOwnerQuestionRowSchema,
     select: ({ sql }) => actorRows(sql, (actorId, after) => {
       const found = sql<ForkOwnerQuestionRow & { rowid: number }>`
-        SELECT rowid, id, call_id, turn_id, mode, tier, reason_json, digest, questions_json, status, answers_json, asked_at, closed_at
+        SELECT rowid, id, call_id, turn_id, mode, tier, reason_json, digest, questions_json, status, answers_json, asked_at
         FROM owner_questions WHERE actor_id = ${actorId} AND status != 'open' AND rowid > ${after} ORDER BY rowid LIMIT 1
       `[0];
 
@@ -335,9 +335,9 @@ export const FORK_CONVERSATION_DECLARATIONS: ForkConversationDeclarations = {
       for (const row of rows) {
         void sql`
           INSERT INTO owner_questions (actor_id, id, call_id, turn_id, mode, tier, reason_json, digest, questions_json, status, answers_json,
-            asked_at, closed_at, resumed_at)
+            asked_at, resumed_at)
           VALUES (${actorId}, ${row.id}, ${row.call_id}, ${row.turn_id}, ${row.mode}, ${row.tier}, ${row.reason_json}, ${row.digest},
-            ${row.questions_json}, ${row.status}, ${row.answers_json}, ${row.asked_at}, ${row.closed_at}, ${row.closed_at ?? row.asked_at})
+            ${row.questions_json}, ${row.status}, ${row.answers_json}, ${row.asked_at}, ${row.asked_at})
         `;
       }
 

@@ -36,6 +36,61 @@ test('a workspace the index forgets takes its Gallery listings with it', async (
   expect(await index.galleryListed(caller, 'shop', 'board')).toBeNull();
 });
 
+const A = { email: 'a@x.dev', userId: 'u-a' };
+
+const B = { email: 'b@x.dev', userId: 'u-b' };
+
+/** The operators' feedback list, as `kind email: note @ route`. */
+async function feedbackOf(index: ControlPlaneDO): Promise<string[]> {
+  return (await index.listFeedback(await adminControlToken(env))).items.map((row) => `${row.kind} ${row.email}: ${row.note} @ ${row.route}`);
+}
+
+test('a report of a listing is feedback the operators read: one per person, its latest reason, someone else\'s their own', async () => {
+  const { index, caller } = await plane();
+  const report = (reason: string) => ({ kind: 'report', workspace: 'shop', slate: 'board', reason }) as const;
+
+  expect(await index.galleryMark(caller, A, report('spam'))).toBe(true);
+  expect(await index.galleryMark(caller, A, report('spam, again'))).toBe(true);
+  expect(await index.galleryMark(caller, B, report('spam'))).toBe(true);
+  expect(await index.galleryMark(caller, A, { kind: 'report', workspace: 'shop', slate: 'missing', reason: 'spam' })).toBe(false);
+
+  expect((await feedbackOf(index)).sort()).toEqual([
+    'gallery_report a@x.dev: spam, again @ /gallery/shop/board', 'gallery_report b@x.dev: spam @ /gallery/shop/board',
+  ]);
+});
+
+// The route is clamped for display at 512 characters, and these two slates' pages share their first 512.
+test('two listings whose pages share a long prefix are two reports, not one replacing the other', async () => {
+  const { index, caller } = await plane();
+  const slates = ['界'.repeat(56) + 'a', '界'.repeat(56) + 'b'];
+
+  for (const slate of slates) {
+    await index.gallerySync(caller, {
+      share: `share-${slate}`, workspace: 'shop', slate, handle: '0123456789', listed: true, url: `https://app.test/shared/live/shop/${slate}`,
+      card: { title: 'Board', line: 'A long board', category: 'work', ownerName: 'Sam', picture: null, viewers: 0 },
+    });
+  }
+
+  for (const [at, slate] of slates.entries()) {
+    expect(await index.galleryMark(caller, A, { kind: 'report', workspace: 'shop', slate, reason: `report ${String(at)}` })).toBe(true);
+  }
+
+  const reports = (await index.listFeedback(await adminControlToken(env))).items.filter((row) => row.kind === 'gallery_report');
+
+  expect(reports.map((row) => row.note).sort()).toEqual(['report 0', 'report 1']);
+});
+
+test("a deleted account's reports go with it; others' reports and its own feedback stay", async () => {
+  const { index, caller } = await plane();
+
+  await index.galleryMark(caller, A, { kind: 'report', workspace: 'shop', slate: 'board', reason: 'spam' });
+  await index.galleryMark(caller, B, { kind: 'report', workspace: 'shop', slate: 'board', reason: 'spam' });
+  await index.recordFeedback(caller, { id: 'f-1', createdAt: 1, userId: A.userId, email: A.email, note: 'slow', route: '/', workspace: null, bytes: null });
+  await index.galleryForget(caller, A);
+
+  expect((await feedbackOf(index)).sort()).toEqual(['feedback a@x.dev: slow @ /', 'gallery_report b@x.dev: spam @ /gallery/shop/board']);
+});
+
 test("an account's reconcile that finds a workspace gone forgets its listings, and keeps a live one's", async () => {
   const { index, listed } = await plane();
 

@@ -1,8 +1,7 @@
 /**
  * Struggles: where a turn fought its tools (docs/EVOLUTION-REDESIGN.md §2). The turn's steering detector owns what
- * counts as one; a struggle never decides satisfaction. A turn that struggled records its struggles, tool errors and
- * steps (`turn_struggles`) and teaches one lesson about the tool it fought (`tool_lessons`), an
- * itemized bullet as in ACE's evolving playbooks (Zhang et al., arXiv:2510.04618): edited in place as a new revision,
+ * counts as one; a struggle never decides satisfaction. A turn that struggled teaches one lesson about the tool it
+ * fought (`tool_lessons`), an itemized bullet as in ACE's evolving playbooks (Zhang et al., arXiv:2510.04618): edited in place as a new revision,
  * scored by the later turns that were shown it and used its tool, retired when it hurts more than it helps.
  */
 
@@ -46,16 +45,6 @@ const REFLECTOR_CALLS = 8;
 const LESSON_MAX_CHARS = 300;
 
 export function initStruggleTables(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS turn_struggles (
-    actor_id   TEXT NOT NULL,
-    turn_id    TEXT NOT NULL,
-    errors     INTEGER NOT NULL,
-    steps      INTEGER NOT NULL,
-    struggles  TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    PRIMARY KEY (actor_id, turn_id)
-  )`);
-  execRaw('CREATE INDEX IF NOT EXISTS idx_turn_struggles_actor ON turn_struggles(actor_id, created_at)');
   execRaw(`CREATE TABLE IF NOT EXISTS tool_lessons (
     actor_id   TEXT NOT NULL,
     id         TEXT NOT NULL,
@@ -79,18 +68,6 @@ type ReviewedTurn = CompletedTurn & { readonly turnId: string };
  *  none records nothing and owes no effect. */
 export function owesTurnLessons(turn: Pick<CompletedTurn, 'struggles' | 'shownLessons' | 'toolCalls'>): boolean {
   return (turn.struggles ?? []).length > 0 || ((turn.shownLessons ?? []).length > 0 && turn.toolCalls.length > 0);
-}
-
-/** One row per struggling turn. */
-export function recordTurnStruggles(sql: SqlExecutor, actor: ActorHandle, turn: ReviewedTurn, now = nowMs()): void {
-  actor.assertCurrent();
-
-  if ((turn.struggles ?? []).length === 0) return;
-  const errors = turn.toolCalls.filter((call) => call.outcome?.success === false).length;
-
-  void sql`INSERT INTO turn_struggles (actor_id, turn_id, errors, steps, struggles, created_at)
-    VALUES (${actor.actorId}, ${turn.turnId}, ${errors}, ${turn.steps}, ${JSON.stringify(turn.struggles ?? [])}, ${now})
-    ON CONFLICT(actor_id, turn_id) DO NOTHING`;
 }
 
 /** One lesson at one revision; a rewrite is a new revision with no evidence yet. */

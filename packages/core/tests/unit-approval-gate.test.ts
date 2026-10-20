@@ -10,7 +10,7 @@ import { createTestActors } from '@kinu.run/test-utils';
 import {
   DeferredApprovalQueue,
   DeferredApprovalStore,
-  initDeferredApprovalsTable,
+  initOwnerRequestsTable,
   reviewCommand,
   gateExec,
   gatedGrants,
@@ -411,7 +411,7 @@ describe('gateExec — standing grants', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
-    initDeferredApprovalsTable(execRaw);
+    initOwnerRequestsTable(execRaw);
     let seq = 0;
 
     const queue = new DeferredApprovalQueue({

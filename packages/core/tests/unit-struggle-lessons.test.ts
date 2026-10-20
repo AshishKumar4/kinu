@@ -59,14 +59,11 @@ function engine(first: Answer) {
 }
 
 describe('a struggling turn teaches one lesson about its tool', () => {
-  test('a turn nobody rates records its struggles, and the fast tier writes the lesson', async () => {
-    const { rt, lessons, learn } = engine({ update: null, text: LESSON });
+  test('a turn nobody rates has the fast tier write the lesson its struggle teaches', async () => {
+    const { lessons, learn } = engine({ update: null, text: LESSON });
 
     await learn(turn('t-1', [REFUSED]));
 
-    expect(rt.storage.sql<{ turn_id: string; errors: number; steps: number; struggles: string }>`
-      SELECT turn_id, errors, steps, struggles FROM turn_struggles`)
-      .toEqual([{ turn_id: 't-1', errors: 1, steps: 3, struggles: JSON.stringify([REFUSED]) }]);
     expect(lessons()).toEqual([{ id: 'tl-t-1', revision: 1, text: LESSON, helpful: 0, harmful: 0, status: 'active' }]);
   });
 
@@ -76,13 +73,11 @@ describe('a struggling turn teaches one lesson about its tool', () => {
     rt.actor.config.setLearning(false);
     expect(evolution.recordsTurns).toBe(false);
     await learn(turn('t-off', [REFUSED]));
-    expect(rt.storage.sql<{ turn_id: string }>`SELECT turn_id FROM turn_struggles`).toEqual([]);
-    expect(prompts).toEqual([]);
+    expect({ lessons: lessons(), asked: prompts.length }).toEqual({ lessons: [], asked: 0 });
 
     rt.actor.config.setLearning(true);
     await learn(turn('t-on', [REFUSED]));
-    expect(rt.storage.sql<{ turn_id: string }>`SELECT turn_id FROM turn_struggles`).toEqual([{ turn_id: 't-on' }]);
-    expect(lessons()).toHaveLength(1);
+    expect(lessons().map((lesson) => lesson.id)).toEqual(['tl-t-on']);
   });
 
   test('a detached turn tail keeps its own learning gate after the turn closes', async () => {
@@ -99,8 +94,7 @@ describe('a struggling turn teaches one lesson about its tool', () => {
     expect(lessons()).toEqual([]);
     continueTail.resolve();
     await tail;
-    expect(lessons()).toHaveLength(1);
-    expect(rt.storage.sql<{ turn_id: string }>`SELECT turn_id FROM turn_struggles`).toEqual([{ turn_id: 'tail' }]);
+    expect(lessons().map((lesson) => lesson.id)).toEqual(['tl-tail']);
   });
 
   test('learning twice from one turn records, scores and asks once', async () => {
@@ -113,11 +107,10 @@ describe('a struggling turn teaches one lesson about its tool', () => {
   });
 
   test('a turn without a struggle or a shown lesson records nothing and asks no model', async () => {
-    const { rt, lessons, prompts, learn } = engine({ update: null, text: LESSON });
+    const { lessons, prompts, learn } = engine({ update: null, text: LESSON });
 
     await learn(turn('t-1', []));
 
-    expect(rt.storage.sql<{ turn_id: string }>`SELECT turn_id FROM turn_struggles`).toEqual([]);
     expect({ lessons: lessons(), asked: prompts.length }).toEqual({ lessons: [], asked: 0 });
   });
 
