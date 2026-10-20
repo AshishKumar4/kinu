@@ -98,7 +98,6 @@ import {
   ownerAnswersWait, type ActorSurface, type HostedActorSeams, type SourcesTurn, type SurfaceTurn, type ToolScope,
 } from "./hosted-actors";
 import { createCodemodeToolFactory } from "./codemode-tool";
-import { BROWSER_PRELUDE } from './browser-prelude';
 import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
 import { publishSubordinateReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
@@ -240,7 +239,7 @@ import {
   recordJobSettled, recordSandboxRecovery, type AgentKind,
 } from "@kinu.run/core/analytics";
 import {
-  agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type MailDeps, type MailThreadSummary, type OwnerWaitsHost,
+  agentSelfHost, actorNamespaces, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type MailDeps, type MailThreadSummary, type OwnerWaitsHost,
   ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, type OwnerWaitReader, type ScopedOwnerWait,
   AgentWorkspaceStore, createAgentWorkspace, type AgentWorkspaceDeps,
   DeviceConsentRegistry, DeviceConsentStore,
@@ -1590,13 +1589,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     actor: SeatedActor, runtime: CFRuntime,
     held: { readonly search: WebSearchProvider; readonly stores: ServedStores; readonly agents?: () => AgentsToolDeps },
   ): SurfaceActor {
-    return hostedSurfaceActor(actor, {
-      ...held.agents !== undefined && { agents: held.agents },
-      ownerWaits: this.hireOwnerWaits(actor),
-      mail: this.mailFor(actor.handle.actorId, actor.record.name),
-      web: { search: held.search, files: runtime.storage, browser: { sessions: this.browserSessionsFor(runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
-      stores: held.stores,
-    });
+    return this.hostedSurface({ ...actor, runtime }, { ...held, ownerWaits: this.hireOwnerWaits(actor), mail: this.mailFor(actor.handle.actorId, actor.record.name) });
   }
 
   /**
@@ -1794,6 +1787,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   protected override ownStoreInputs(ledgers: TurnLedgers): BuiltinStoreInputs {
     return this.asRoot((seat, reach, operation) => this.storeInputs(seat, reach, ledgers, operation));
+  }
+
+  protected override hostedStoreInputs(actor: CFSeat, ledgers: Pick<TurnLedgers, 'files' | 'context'>, account: boolean): BuiltinStoreInputs {
+    const { account: owned, ...inputs } = this.storeInputs(actor, actorReach(actorPolicy(actor.record)), ledgers, () => null);
+
+    return account && owned !== undefined ? { ...inputs, account: owned } : inputs;
   }
 
   protected actorTools(actor: CFSeat, reach: SurfaceReach, mode: WorkMode, scope: ToolScope): ActorToolsets {

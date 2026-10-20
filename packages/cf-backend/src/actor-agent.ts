@@ -21,7 +21,7 @@ import {
 } from '@kinu.run/core';
 import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, ProgrammaticTurn, RecordedTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
-import type { AccountMemory, Fact } from '@kinu.run/core';
+import type { Fact } from '@kinu.run/core';
 import type { SubordinateView } from '@kinu.run/core/protocol';
 import { MessageType } from "agents/chat";
 import {
@@ -77,7 +77,7 @@ import {
   // (see turn-failure.ts).
   type AgentOrchestrator, type AgentOrchestratorDeps, actorTerminalEffects, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
   EvolutionLanes, drainPendingEvents, ActorAdvisor, standingFileLedger, turnLedgers, type TurnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
-  builtinStoreDeps, serveStores, type BuiltinStoreInputs, type BuiltinToolDeps, type ServedStores,
+  builtinStoreDeps, serveStores, type BuiltinStoreInputs, type ServedStores,
   type ComposedRequest,
   type AgentsToolDeps,
   type AgentsSwarmDeps,
@@ -377,44 +377,6 @@ interface TurnMemoryReads {
   readonly activeSkills?: ActiveSkillSet | null;
   readonly accountFacts?: readonly Fact[];
   readonly mail?: TurnReads['mail'];
-}
-
-/**
- * A slate calling as a hosted actor reaches only that actor's own files, tables, tasks and facts, never the
- * workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
- */
-function hostedActorSurface(
-  actor: SeatedActor, web: { readonly search: WebSearchProvider; readonly sessions: BrowserSessions }, conversations: ConversationRecall,
-  reach: { readonly account?: AccountMemory | undefined; readonly ownerWaits: OwnerWaitsHost | null; readonly mail?: MailDeps | null },
-) {
-  const { account } = reach;
-  const webSearch = web.search;
-  // A slate's call is no turn of the actor's: it accounts into ledgers of its own, but for its files, whose reads stand
-  // across its calls as the actor's own programs' do.
-  const scoped = scopedTurnSurface()?.ledgers;
-  const ledgers = scoped ?? turnLedgers();
-  // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
-  const runtime = actor.runtime;
-
-  if (!isCFRuntime(runtime)) {
-    throw new KinuError('unsupported', 'a hosted actor on this backend must run on the cf runtime');
-  }
-
-  const deps: BuiltinToolDeps = {
-    rt: runtime, vectorStore: runtime.vectorStore, facts: actor.stores.facts, webSearch,
-    conversations, ...(account !== undefined && { account }),
-    fileLedger: scoped?.files ?? standingFileLedger(runtime), contextBudget: ledgers.context,
-  };
-
-  // Served once: the slate's `tools.*` and its named namespaces run the same operations.
-  const stores = serveStores(builtinStoreDeps(deps));
-
-  const surface = hostedSurfaceActor(actor, {
-    web: { search: webSearch, files: runtime.storage, browser: { sessions: web.sessions, prelude: BROWSER_PRELUDE } },
-    stores, ownerWaits: reach.ownerWaits, mail: reach.mail ?? null,
-  });
-
-  return { actor: surface, native: buildBuiltinTools(deps, stores) };
 }
 
 /** What a slate binding call runs with: the mode its actor's role leaves it, and that role's tool reach. */
@@ -2448,9 +2410,7 @@ export abstract class ActorAgent extends Agent<Env> {
         }
 
         // A slate's call reaches no `agent.*`.
-        const surface = hostedActorSurface(actor, {
-          search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(actor.handle.actorId),
-        }, this.agentStores(actor.handle.actorId).conversations(), { ownerWaits: null });
+        const surface = this.hostedActorSurface(actor, { account: false, ownerWaits: null });
 
         const reached = actorNamespaces(surface.actor, SURFACE_POLICY.slate);
         const providers = context.viewer === true ? providersWithoutOwnerSecrets(reached) : reached;
@@ -2753,10 +2713,8 @@ export abstract class ActorAgent extends Agent<Env> {
     if (scope === null || scope.kind === 'confined') {
       return await this.withHostedActor(actor, async (hosted) => {
         // An operation call is the agent's own, so it reaches the account as the agent's programs do; a slate's never does.
-        const surface = hostedActorSurface(hosted, {
-          search: this.ownedModelServices.getWebSearchProvider(), sessions: this.browserSessionsFor(hosted.handle.actorId),
-        }, this.agentStores(hosted.handle.actorId).conversations(), {
-          account: this.account.ownedMemory({ by: 'agent', agent: hosted.record.name }),
+        const surface = this.hostedActorSurface(hosted, {
+          account: true,
           // Its own turn's programs and an outside caller reach what waits on its owner from its work, as it does in eval.
           ownerWaits: this.hireOwnerWaits(hosted),
           mail: this.mailFor(hosted.handle.actorId, hosted.record.name),
@@ -3310,6 +3268,49 @@ export abstract class ActorAgent extends Agent<Env> {
   /** What this agent's builtins read its stores from, as its own tools do, on `ledgers`: for a caller holding none of
    *  them (a slate, a scaffold's run). */
   protected abstract ownStoreInputs(ledgers: TurnLedgers): BuiltinStoreInputs;
+
+  /** What a hosted actor's builtins read its stores from, as its own turn's do; without `account`, the account's
+   *  memory stays out of reach (a slate's call never reaches it). */
+  protected abstract hostedStoreInputs(actor: CFSeat, ledgers: Pick<TurnLedgers, 'files' | 'context'>, account: boolean): BuiltinStoreInputs;
+
+  /**
+   * A hosted actor as a caller outside its turn reaches it: its own files, tables, tasks and facts over the stores its
+   * own turn runs, never the workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
+   */
+  protected hostedActorSurface(
+    actor: SeatedActor, reach: { readonly account: boolean; readonly ownerWaits: OwnerWaitsHost | null; readonly mail?: MailDeps | null },
+  ) {
+    // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
+    const { runtime } = actor;
+
+    if (!isCFRuntime(runtime)) {
+      throw new KinuError('unsupported', 'a hosted actor on this backend must run on the cf runtime');
+    }
+
+    // A slate's call is no turn of the actor's: it accounts into ledgers of its own, but for its files, whose reads stand
+    // across its calls as the actor's own programs' do.
+    const scoped = scopedTurnSurface()?.ledgers;
+    const inputs = this.hostedStoreInputs({ ...actor, runtime }, { files: scoped?.files ?? standingFileLedger(runtime), context: (scoped ?? turnLedgers()).context }, reach.account);
+    const webSearch = this.ownedModelServices.getWebSearchProvider();
+    // Served once: the slate's `tools.*` and its named namespaces run the same operations.
+    const stores = serveStores(builtinStoreDeps(inputs));
+    const surface = this.hostedSurface({ ...actor, runtime }, { search: webSearch, stores, ownerWaits: reach.ownerWaits, mail: reach.mail ?? null });
+
+    return { actor: surface, native: buildBuiltinTools({ ...inputs, webSearch }, stores) };
+  }
+
+  /** A hosted actor's program surface over `held.stores`, with this workspace's browser for it. */
+  protected hostedSurface(
+    actor: CFSeat,
+    held: { readonly search: WebSearchProvider; readonly stores: ServedStores; readonly ownerWaits: OwnerWaitsHost | null; readonly mail: MailDeps | null; readonly agents?: () => AgentsToolDeps },
+  ): SurfaceActor {
+    const { search, ...reached } = held;
+
+    return hostedSurfaceActor(actor, {
+      ...reached,
+      web: { search, files: actor.runtime.storage, browser: { sessions: this.browserSessionsFor(actor.runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
+    });
+  }
 
   /**
    * The ledgers this agent's own tools account into: its turn's, else, outside any turn, a budget of the call's own
