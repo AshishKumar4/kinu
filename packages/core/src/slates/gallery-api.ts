@@ -103,8 +103,6 @@ export const ExploreNeedSchema = v.strictObject({
   why: v.string(),
 });
 
-export type ExploreNeed = v.InferOutput<typeof ExploreNeedSchema>;
-
 /** A workspace blueprint as Explore lists it. `maker.kinu`: one Kinu keeps. */
 const WorkspaceCardSchema = v.object({
   id: v.string(),

@@ -23,7 +23,7 @@ export interface SecretDraft {
 }
 
 /** Where a new secret goes unless the owner says otherwise: the Authorization header, as most APIs read a key. */
-export const AUTHORIZATION: SecretPosition = { kind: "authorization" };
+const AUTHORIZATION: SecretPosition = { kind: "authorization" };
 
 export const BLANK: SecretDraft = { name: "", value: "", hosts: "", position: AUTHORIZATION };
 
@@ -85,7 +85,7 @@ export function takeDotenvLines(rows: readonly SecretDraft[], text: string, done
 }
 
 /** A value whose shape names its provider fills a blank name, and blank hosts with that provider's own and its position. */
-export function withProvider(row: SecretDraft): SecretDraft {
+function withProvider(row: SecretDraft): SecretDraft {
   const provider = secretProvider(row.value.trim());
 
   if (provider === null) return row;
