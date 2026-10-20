@@ -39,7 +39,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders' | 'getAuth'
   | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'
-  | 'getConfig' | 'setConfig'
+  | 'getConfig' | 'setConfig' | 'claimConfig'
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove'
   | 'userMcp_handleOAuthCallback'

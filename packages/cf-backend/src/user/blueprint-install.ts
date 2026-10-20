@@ -1,7 +1,8 @@
 /**
  * Installing a workspace blueprint: a new workspace of the owner's, born with the blueprint's soul, layout, main agent
- * and schedules before its first turn. The Personal assistant is the owner's one: installing it again opens the one
- * they have, and it may become their Home (`ASSISTANT_CONFIG_KEY`).
+ * and schedules before its first turn. The Personal assistant installed as Home is the owner's one (`ASSISTANT_CONFIG_KEY`):
+ * its name is claimed in the account before it is made, so installs at once, or one retried after a failed make, end in
+ * the same workspace. One installed without Home is a workspace like any other.
  */
 import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
@@ -30,7 +31,7 @@ const InstallBodySchema = v.strictObject({
 export type InstallBody = v.InferOutput<typeof InstallBodySchema>;
 
 /** The account reads and writes an install makes. */
-export type InstallAuthority = CloudWorkspaceRegistry & Pick<UserDO, 'getConfig' | 'setConfig' | 'listActiveWorkspaces' | 'getProfile'>;
+export type InstallAuthority = CloudWorkspaceRegistry & Pick<UserDO, 'getConfig' | 'claimConfig' | 'listActiveWorkspaces' | 'getProfile'>;
 
 /** The owner's assistant workspace while it is still theirs; a removed one is no Home. */
 export async function installedAssistant(userDO: Pick<InstallAuthority, 'getConfig' | 'listActiveWorkspaces'>, caller: UserCaller): Promise<string | null> {
@@ -57,28 +58,25 @@ function installBlueprint<Id>(request: InstallRequest<Id>): Effect.Effect<Worksp
     const blueprint = kinuBlueprint(id);
 
     if (blueprint === undefined) return yield* Effect.fail(new KinuError('missing', `No workspace blueprint "${id}".`));
-    const assistant = id === PERSONAL_ASSISTANT_ID;
+    const proposed = fallbackWorkspaceIdentity(blueprint.line, crypto.randomUUID()).name;
 
-    if (assistant) {
-      const held = yield* Effect.promise(async () => installedAssistant(userDO, owner));
+    // Home's name is the account's before the workspace is listed, so the roster's first word of it already says Home;
+    // a name already claimed is the assistant another install made, or is making, or failed to make.
+    const home = id === PERSONAL_ASSISTANT_ID && body.home !== false;
+    const name = home ? yield* Effect.promise(async () => userDO.claimConfig(owner, ASSISTANT_CONFIG_KEY, proposed)) : proposed;
 
-      if (held !== null) return { name: held };
-    }
+    if (name !== proposed && (yield* Effect.promise(async () => installedAssistant(userDO, owner))) === name) return { name };
 
     const profile = yield* Effect.promise(async () => userDO.getProfile(owner));
     // The owner as the soul names them: their name, else their address's first part.
-    const ownerName = [profile?.displayName?.trim(), profile?.email.split('@')[0]].find((name) => name !== undefined && name !== '') ?? 'you';
+    const ownerName = [profile?.displayName?.trim(), profile?.email.split('@')[0]].find((called) => called !== undefined && called !== '') ?? 'you';
 
     const { soul, seed } = blueprintSeed(blueprint, {
       timeZone: body.timeZone, owner: ownerName,
       ...(body.agent !== undefined && { agent: body.agent }), ...(body.brief !== undefined && { brief: body.brief }),
     });
 
-    // Home is named before the workspace is listed, so the roster's first word of it already says Home.
-    const name = fallbackWorkspaceIdentity(blueprint.line, crypto.randomUUID()).name;
-
-    if (assistant && body.home !== false) yield* Effect.promise(async () => userDO.setConfig(owner, ASSISTANT_CONFIG_KEY, name));
-
+    // A claimed name not yet listed is made here; an install making it meanwhile answers it as it is (`registerWorkspace`).
     const entry = yield* Effect.promise(async () => createCloudWorkspaceForUser({
       env, userId, userDO, caller: owner, input: { name, displayName: body.displayName ?? blueprint.title, purpose: blueprint.line }, soul, seed,
     }));

@@ -162,12 +162,17 @@ export class UserProfileStore {
     return this.experienceLibrary().get(id);
   }
 
-  async getConfig(caller: UserCaller, key: string): Promise<string | null> {
+  /** A key of the account's plain config: the owner's, and never the profile catalog, which has its typed CAS route. */
+  private async configKey(caller: UserCaller, key: string): Promise<void> {
     await this.host.requireTier(caller, 'config');
 
     if (key === PROFILE_CATALOG_CONFIG_KEY) {
       throw new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
     }
+  }
+
+  async getConfig(caller: UserCaller, key: string): Promise<string | null> {
+    await this.configKey(caller, key);
 
     const row = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0];
 
@@ -175,16 +180,25 @@ export class UserProfileStore {
   }
 
   async setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
-    await this.host.requireTier(caller, 'config');
-
-    if (key === PROFILE_CATALOG_CONFIG_KEY) {
-      throw new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
-    }
+    await this.configKey(caller, key);
 
     this.host.sqlx(
       `INSERT INTO user_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       key, value,
     );
+  }
+
+  /** The value `key` holds, or `proposed` written as its value when it holds none: read and written in one turn, so of
+   *  two claims at once one writes and both answer what it wrote. */
+  async claimConfig(caller: UserCaller, key: string, proposed: string): Promise<string> {
+    await this.configKey(caller, key);
+
+    const held = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0]?.value;
+
+    if (held !== undefined) return held;
+    this.host.sqlx(`INSERT INTO user_config (key, value) VALUES (?, ?)`, key, proposed);
+
+    return proposed;
   }
 
   /**

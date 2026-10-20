@@ -28,6 +28,8 @@ function account() {
   const config = new Map<string, string>();
   const active: string[] = [];
   const counted: string[] = [];
+  // A make that fails at its seed, once, as an orchestrator that did not answer fails.
+  const failing = { seed: false };
   // `homeWhenListed`: the workspace Home named as this one was listed on the roster.
   const births: { name: string; steps: string[]; soul: string; seed: WorkspaceSeed | null; homeWhenListed: string | null }[] = [];
 
@@ -37,15 +39,28 @@ function account() {
     async listCredentials(_caller: UserCaller) { return []; },
     async ensureWorkspaceCapability() {},
     async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
+      // As the account answers a name it already lists: as it is, not made again.
+      if (active.includes(name)) return { entry: { name, displayName: displayName ?? name, createdAt: 7, lastVisited: 7 }, status: 'active' as const };
       active.push(name);
       births.push({ name, steps: [], soul: '', seed: null, homeWhenListed: config.get('assistant') ?? null });
 
       return { entry: { name, displayName: displayName ?? name, createdAt: 7, lastVisited: 7 }, status: 'created' as const };
     },
     async releaseWorkspaceReservation() { return true; },
-    async removeWorkspace() {},
+    // As the account removes one (`workspaces.ts`): off the roster, and no longer the assistant if it was.
+    async removeWorkspace(_caller: UserCaller, name: string) {
+      active.splice(active.indexOf(name), 1);
+
+      if (config.get('assistant') === name) config.delete('assistant');
+    },
     async getConfig(_caller: UserCaller, key: string) { return config.get(key) ?? null; },
-    async setConfig(_caller: UserCaller, key: string, value: string) { config.set(key, value); },
+    async claimConfig(_caller: UserCaller, key: string, proposed: string) {
+      const held = config.get(key) ?? proposed;
+
+      config.set(key, held);
+
+      return held;
+    },
     async listActiveWorkspaces(_caller: UserCaller) { return active.map((name) => ({ name, displayName: name, createdAt: 7 })); },
     async getProfile(_caller: UserCaller) {
       return { email: 'ashish@cloudflare.com', displayName: 'Ashish', createdAt: 1, lastSeenAt: 1, onboardedAt: null, workspaceCount: active.length };
@@ -75,6 +90,12 @@ function account() {
     },
     async seedBlueprint(seed: WorkspaceSeed) {
       step('seed');
+
+      if (failing.seed) {
+        failing.seed = false;
+        throw new Error('the workspace did not answer');
+      }
+
       born().seed = seed;
     },
     async resetWorkspaceBaseline() {
@@ -97,6 +118,10 @@ function account() {
 
   const authority: InstallAuthority = userDO;
 
+  // One provider stand-in while any install runs, so installs at once share it.
+  let installing = 0;
+  const originalFetch = globalThis.fetch;
+
   const install = async (id: string, body: Partial<InstallBody>) => {
     const owner = await testOwner();
 
@@ -109,10 +134,8 @@ function account() {
         },
       }));
 
-    const originalFetch = globalThis.fetch;
-
     // No reachable provider: the menu falls back to the native Workers AI default, as production creates do.
-    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    if (installing++ === 0) globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
 
     try {
       const response = present(await serveFamily(family)(new Request(`https://kinu.run/api/user/blueprints/${id}/install`, {
@@ -121,11 +144,13 @@ function account() {
 
       return { status: response.status, body: await response.json() };
     } finally {
-      globalThis.fetch = originalFetch;
+      if (--installing === 0) globalThis.fetch = originalFetch;
     }
   };
 
-  return { install, births, config, active, counted, home: async () => installedAssistant(authority, await testOwner()) };
+  const removal = async (name: string) => { await userDO.removeWorkspace(await testOwner(), name, USER_ID); };
+
+  return { install, births, config, active, counted, failing, removal, home: async () => installedAssistant(authority, await testOwner()) };
 }
 
 const InstalledSchema = v.object({ workspace: v.string() });
@@ -162,10 +187,36 @@ describe('installing a workspace blueprint', () => {
     expect(v.parse(InstalledSchema, (await owner.install('personal-assistant', { timeZone: 'UTC' })).body).workspace).toBe(first);
     expect(owner.births).toHaveLength(1);
 
-    owner.active.splice(0);
+    await present(owner.removal, 'removal')(first);
     expect(await owner.home()).toBeNull();
-    await owner.install('personal-assistant', { timeZone: 'UTC' });
+    expect(v.parse(InstalledSchema, (await owner.install('personal-assistant', { timeZone: 'UTC' })).body).workspace).not.toBe(first);
     expect(owner.births).toHaveLength(2);
+  });
+
+  // The rc27 review: each install read "no assistant yet" and made its own, so two tabs, or a retried request, made two.
+  test('installs at once make one assistant and both answer it', async () => {
+    const owner = account();
+    const answers = await Promise.all([1, 2].map(async () => owner.install('personal-assistant', { timeZone: 'UTC' })));
+    const named = answers.map((answer) => v.parse(InstalledSchema, answer.body).workspace);
+
+    expect(named[0]).toBe(named[1]);
+    expect(owner.births).toHaveLength(1);
+    expect(owner.active).toEqual([named[0]]);
+    expect(await owner.home()).toBe(named[0]);
+  });
+
+  test('a make that failed leaves no assistant behind, and the next install makes the one', async () => {
+    const owner = account();
+
+    owner.failing.seed = true;
+    expect((await owner.install('personal-assistant', { timeZone: 'UTC' })).status).toBe(500);
+    expect(owner.active).toEqual([]);
+    expect(owner.config.get('assistant')).toBeUndefined();
+
+    const made = v.parse(InstalledSchema, (await owner.install('personal-assistant', { timeZone: 'UTC' })).body).workspace;
+
+    expect(owner.active).toEqual([made]);
+    expect(await owner.home()).toBe(made);
   });
 
   test("another blueprint keeps its own layout and the owner's title, Home stays as it was, and a count Explore missed undoes nothing", async () => {

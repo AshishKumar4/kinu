@@ -110,6 +110,7 @@ const USER_DO_METHODS = [
   'getAuthHeaders',
   'getCodexStatus',
   'getConfig',
+  'claimConfig',
   'getCredentialEndpoint',
   'getDeviceFileView',
   'getWorkspaceTitle',

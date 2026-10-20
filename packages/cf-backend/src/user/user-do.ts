@@ -239,6 +239,10 @@ export class UserDO extends Agent<Env> {
     return this.profile.setConfig(caller, key, value);
   }
 
+  claimConfig(caller: UserCaller, key: string, proposed: string): Promise<string> {
+    return this.profile.claimConfig(caller, key, proposed);
+  }
+
   getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
     return this.profile.getProfileCatalog(caller);
   }
