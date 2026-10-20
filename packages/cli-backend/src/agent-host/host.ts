@@ -1385,7 +1385,7 @@ export class LocalAgentHost {
     const log = new EventLog(makeSqlExec(tree.db), tree.host.bindStores(actorReferenceOf(actor)).handle);
     const deliveries = new AgentDeliveries(makeSql(tree.db));
 
-    tree.db.transaction(() => {
+    writeTransaction(tree.db, () => {
       for (const delivery of deliveries.cancel(actor.actorId)) {
         const drained = deliveryMetadata(delivery)?.drainTurnId;
 
@@ -1393,7 +1393,7 @@ export class LocalAgentHost {
 
         for (const event of log.query({ turn_id: drained })) log.dismiss(event.id, 'stopped by the owner', 'system');
       }
-    })();
+    });
   }
 
   /** A stopped task agent retired as a dismissal that keeps its history: its hires, then it. */
