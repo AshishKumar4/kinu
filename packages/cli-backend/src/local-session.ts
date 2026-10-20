@@ -81,7 +81,7 @@ import { ActorSession, type ActorTurnLease,
   type DynamicContext,
   type RuntimeFacts,
   initWorkspaceSchema, initPendingSendTables, PendingSendStore,
-  InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
+  InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision, type InstructionApproval,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
   getEvolutionStatus, recordedTurns, type RecordedTurn,
@@ -2223,6 +2223,11 @@ export class LocalAgentSession {
   /** The newest answered turns as recorded, which a pending scaffold is replayed against (`scaffold/replay.ts`). */
   recordedTurns(limit?: number): Promise<RecordedTurn[]> {
     return recordedTurns(this.stores, limit);
+  }
+
+  /** The standing trust decision for an instruction path: the engine's reading of whether a dream's skill is in effect. */
+  instructionApproval(path: string): InstructionApproval | null {
+    return this.instructionApprovals.get(path);
   }
 
   getEvolutionStatus(): EvolutionStatus {

@@ -13,6 +13,7 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 // user's own sentence in the reviewed turns.
 
 import { renderWatch } from './watch';
+import { changeStanding, type ChangeOwners } from './change-standing';
 import { confusedPicks, renderConfusedPicks } from './picks';
 import { discoverSkills } from '../skills/discover';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
@@ -20,7 +21,7 @@ import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 
 import { scoreAuthoredEdit } from './judge';
-import { artifactBody, bundledArtifact, listArtifactVersions, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence, type ArtifactVersion } from './artifacts';
+import { artifactBody, bundledArtifact, listArtifactVersions, sectionArtifact, stageArtifact, toolArtifact, type ArtifactEvidence } from './artifacts';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../tools/registry';
 import { listTurnRatings, renderRating, type TurnRating } from './ratings';
 import type { DecisionQuestion } from '../providers/decision-model';
@@ -484,6 +485,11 @@ function parseProposal(scope: RefinementScope) {
   };
 }
 
+/** The stores a dream's changes live in, as this lane holds them. */
+function changeOwners(deps: RefinementDeps): ChangeOwners {
+  return { sql: deps.control.sql, actor: deps.control.rt.actor, ...(deps.approvals !== undefined && { approvals: deps.approvals }) };
+}
+
 /** The owner's order for where a lesson goes, which the dreamer drafts by and the reviewer holds it to. */
 const EDIT_PRIORITY = 'Put a lesson in the first place that can carry it: a prompt section or a tool description, then a '
   + 'memory fact, and a skill last. A skill is for a multi-step procedure that no prompt section or tool description '
@@ -672,7 +678,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     DREAM_BRIEF_HEADINGS.watch,
     '',
-    renderWatch(sql, actor) || '  (no earlier dream changed anything)',
+    renderWatch(changeOwners(deps)) || '  (no earlier dream changed anything)',
     '',
     DREAM_BRIEF_HEADINGS.picks,
     '',
@@ -779,7 +785,7 @@ async function renderReviewerBrief(
       '',
       DREAM_BRIEF_HEADINGS.watch,
       '',
-      renderWatch(sql, rt.actor) || '  (no earlier dream changed anything)',
+      renderWatch(changeOwners(deps)) || '  (no earlier dream changed anything)',
       '',
       DREAM_BRIEF_HEADINGS.picks,
       '',
@@ -1042,19 +1048,27 @@ function settledStage(landed: number, undone: number): RefinementStage {
  * the guarded transition finds the row already moved.
  */
 /** A section edit is pending until a cold turn makes it current, or the owner discards it. */
-function sectionRouteState(versions: readonly ArtifactVersion[], target: string): 'pending' | 'rolled_back' | 'promoted' {
-  const row = versions.find((candidate) => `${candidate.artifactId}@${String(candidate.version)}` === target);
+/** A staged text or skill edit's state, as its owner holds it; null for any other route. */
+async function stagedRouteState(
+  deps: RefinementDeps, owners: ChangeOwners, request: RefinementRequest, route: RefinementRoute,
+): Promise<Awaited<ReturnType<typeof settleDreamSkill>> | null> {
+  if (route.disposition !== 'staged') return null;
 
-  if (row === undefined || row.decidedAt === null) return 'pending';
+  if (route.kind === 'skill') return await settleDreamSkill(deps, request, route);
 
-  return row.status === 'rolled_back' ? 'rolled_back' : 'promoted';
+  if (route.owner !== 'artifact_versions') return null;
+  const standing = changeStanding(owners, deps.facts, { request, route })?.standing;
+
+  if (standing === 'reverted') return { state: 'rolled_back' };
+
+  return { state: standing === 'in_effect' || standing === 'replaced' ? 'applied' : 'pending' };
 }
 
 async function settleRoutes(
   deps: RefinementDeps,
   request: RefinementRequest,
 ): Promise<RefinementRequestView | null> {
-  const versions = listArtifactVersions(deps.control.sql, deps.control.rt.actor);
+  const owners = changeOwners(deps);
   let promoted = 0;
   let rolledBack = 0;
   let rejected = 0;
@@ -1066,26 +1080,17 @@ async function settleRoutes(
   rejected = request.routes.filter((route) => route.disposition === 'rejected').length;
 
   for (const route of request.routes) {
-    if (route.disposition === 'staged' && route.owner === 'artifact_versions') {
-      const state = sectionRouteState(versions, route.target);
+    const settled = await stagedRouteState(deps, owners, request, route);
 
-      if (state === 'pending') pending += 1;
-      else if (state === 'rolled_back') rolledBack += 1;
-      else promoted += 1;
-      continue;
-    }
+    if (settled === null) continue;
 
-    if (route.disposition === 'staged' && route.kind === 'skill') {
-      const settled = await settleDreamSkill(deps, request, route);
+    if (settled.state === 'pending') {
+      pending += 1;
 
-      if (settled.state === 'pending') {
-        pending += 1;
-
-        // A promotion that cannot complete stays pending with its reason shown.
-        if (settled.reason !== undefined) blocked.push(settled.reason);
-      } else if (settled.state === 'rolled_back') rolledBack += 1;
-      else promoted += 1;
-    }
+      // A promotion that cannot complete stays pending with its reason shown.
+      if (settled.reason !== undefined) blocked.push(settled.reason);
+    } else if (settled.state === 'rolled_back') rolledBack += 1;
+    else promoted += 1;
   }
 
   const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);

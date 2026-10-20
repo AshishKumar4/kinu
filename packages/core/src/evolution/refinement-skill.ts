@@ -15,6 +15,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 
 import { vfsDirname } from '../utils/vfs-helpers';
 import { writeConditionally } from '../vfs/conditional-write';
+import { changeStanding } from './change-standing';
 import { Effect, Result } from 'effect';
 import { diagnostics, renderThrownChain, settle } from '../obs/index';
 import {
@@ -254,17 +255,18 @@ export function settleDreamSkill(
   route: RefinementRoute,
 ): Promise<{ readonly state: 'applied' | 'rolled_back' | 'pending'; readonly reason?: string }> {
   return settle(Effect.gen(function* () {
-    const standing = deps.approvals?.get(route.target);
+    const owners = { sql: deps.control.sql, actor: deps.control.rt.actor, ...(deps.approvals !== undefined && { approvals: deps.approvals }) };
+    const standing = changeStanding(owners, deps.facts, { request, route })?.standing;
     const vfs = deps.skillsVfs;
 
-    if (standing === null || standing === undefined) return { state: 'pending' as const };
+    if (standing === 'waiting') return { state: 'pending' as const };
 
-    if (standing.decision === 'revoked' || standing.digest !== route.digest) {
+    if (standing === 'reverted') {
       yield* Effect.promise(() => discardSkillStaging(vfs, request, route));
 
       return {
         state: 'rolled_back' as const,
-        reason: standing.decision === 'revoked'
+        reason: deps.approvals?.get(route.target)?.decision === 'revoked'
           ? 'you revoked trust for these bytes'
           : 'the trust row moved to different bytes, so these are not in effect',
       };

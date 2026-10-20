@@ -2727,6 +2727,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         transaction: (body) => { this.ctx.storage.transactionSync(body); },
         // The turn review's model calls debit the reviewed turn's mission; unbudgeted turns never reach it.
         governor: this.budget,
+        // Whether a dream's skill is in effect, for the rater's list of changes the turn ran with.
+        ...(this.refinementDeps.approvals !== undefined && { approvals: this.refinementDeps.approvals }),
       });
       this._engine.onEvent((event) => {
         if (event.type !== 'changelog_digest') return;

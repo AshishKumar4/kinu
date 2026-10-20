@@ -1603,13 +1603,13 @@ describe('the watch: a reply that rejects a dream\'s change', () => {
 
   test('a turn lists the dream changes it ran with, each as what it is', async () => {
     const { fx, text, fact } = await dreamt();
-    const changes = dreamChangesFor(fx.rt.storage.sql, fx.rt.actor, [text]);
+    const changes = dreamChangesFor({ sql: fx.rt.storage.sql, actor: fx.rt.actor, approvals: fx.approvals }, [text]);
 
     expect(changes.map((change) => change.id).sort()).toEqual([fact, text].sort());
     expect(changes.find((change) => change.id === text)?.describe).toStartWith(`the ${TARGET_ID} prompt section was reworded; it now reads: "${CANDIDATE.slice(0, 40)}`);
     expect(changes.find((change) => change.id === fact)?.describe).toBe(`the agent remembers ${FACT_EDIT.key}: "one line"`);
     // A turn that ran without the section's new version is not held to it.
-    expect(dreamChangesFor(fx.rt.storage.sql, fx.rt.actor, []).map((change) => change.id)).toEqual([fact]);
+    expect(dreamChangesFor({ sql: fx.rt.storage.sql, actor: fx.rt.actor, approvals: fx.approvals }, []).map((change) => change.id)).toEqual([fact]);
   });
 
   test('the rater is asked about the listed changes only when there are any, and names the one rejected', async () => {
@@ -1642,7 +1642,7 @@ describe('the watch: a reply that rejects a dream\'s change', () => {
     rate(fx, since + 2_000, { score: 5, corrected: 0, artifacts: [text] });
     rate(fx, since + 3_000, { score: 1, corrected: 0.6, artifacts: [text], rejects: fact });
 
-    const lines = renderWatch(fx.rt.storage.sql, fx.rt.actor).split('\n');
+    const lines = renderWatch({ sql: fx.rt.storage.sql, actor: fx.rt.actor, approvals: fx.approvals }).split('\n');
     const line = (id: string) => present(lines.find((entry) => entry.includes(`(${id})`)) ?? null, id);
 
     expect(line(text)).toStartWith(`  - the ${TARGET_ID} prompt section, reworded (${text}), in effect: 3 rated turns ran with it, mean 3.3 with 1 corrected; the 3 rated before it, mean `);
@@ -1655,6 +1655,28 @@ describe('the watch: a reply that rejects a dream\'s change', () => {
     await requestRefinement(fx.deps(port), { trigger: 'explicit', scope: 'workspace' });
     await advanceRefinementLane(fx.deps(port));
     expect(requests[0]?.task).toContain(`## What changed since, and how the turns went\n\n${lines.join('\n')}`);
+  });
+
+  test('a skill a cold turn made trusted is a change in effect: the rater is asked about it, and an explicit stop reverts it', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const deps = fx.deps(scriptedRefiner(proposalText(skillProposal(BREVITY_SKILL))).port);
+    const owners = { sql: fx.rt.storage.sql, actor: fx.rt.actor, approvals: fx.approvals };
+    const skill = `skill:${BREVITY_PATH}`;
+    await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    expect(renderWatch(owners)).toContain(`(${skill}), waiting for a cold turn`);
+
+    await activateDreamSkills(deps);
+    await advanceRefinementLane(deps);
+    expect(dreamChangesFor(owners, []).map((change) => change.id)).toContain(skill);
+    expect(renderWatch(owners)).toContain(`(${skill}), in effect`);
+
+    rate(fx, Date.now() + 60_000, { score: 1, corrected: 0.95, artifacts: [], rejects: skill });
+    await refinementPass(deps);
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBeNull();
+    expect(fx.approvals.get(BREVITY_PATH)?.decision).toBe('revoked');
+    expect(renderWatch(owners)).toContain(`(${skill}), reverted`);
   });
 
   test('an explicit stop reverts the change it names before the next dream; a mild or an earlier rejection does not', async () => {
@@ -2827,6 +2849,8 @@ describe('a refiner answer returns to the lane, never to the root', () => {
     const resumed = rail.port();
     await rail.deliver(resumed, proposalText(FACT_PROPOSAL));
     const stuck = store.open({ trigger: 'explicit', scope: 'workspace', turnIds: [], now: 1 }).request;
+    // A staged text edit, whose standing its settle reads from the versions' table.
+    store.record(stuck.id, 'requested', { routes: [{ kind: 'prompt_section', owner: 'artifact_versions', target: `${ARTIFACT}@1`, disposition: 'staged' }] });
     void fx.rt.storage.sql`UPDATE refinement_requests SET stage = 'gated' WHERE id = ${stuck.id}`;
     void fx.rt.storage.sql`ALTER TABLE artifact_versions RENAME TO artifact_versions_away`;
     expect(owed()).not.toBeNull();
