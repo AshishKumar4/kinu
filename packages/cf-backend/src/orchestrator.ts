@@ -4320,8 +4320,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._deferrals;
   }
 
+  /** The root's channel records its live turn's surface on an ask it parks, so an answer resumes the call there, as a
+   *  device consent's does; a hosted actor's turn is not the root's, so its asks record none. */
   protected override deferralChannel(actorId?: string): DeferredApprovalChannel {
-    return actorId === undefined ? this.deferrals.channel : this.deferrals.channelFor(actorId);
+    return actorId === undefined ? this.deferrals.channelFor(this.actorHandle().actorId, () => this.turnSurface()) : this.deferrals.channelFor(actorId);
   }
 
   private announceDeferral(notice: DeferredApprovalNotice): void {

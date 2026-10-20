@@ -7,6 +7,7 @@ import { Database } from 'bun:sqlite';
 import { createMemoryVfs, fakeCommandMember, fakeMossaic, toolExecute, createRecordingLogger } from '@kinu.run/test-utils';
 import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ExecutionContext, type ParkedWrites, type ShellApprovalPolicy, type ShellApprovalOutcome, type ShellApprovalRequest, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
 import type { BoundFileWrite } from '../src/safety/bound-write';
+import { RESUMED_SURFACE, type InvocationSurface } from '../src/types/jobs';
 import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { buildPendingActions } from '../src/read-models/pending-actions';
@@ -50,6 +51,8 @@ function setup(opts: {
   filesOwner?: FilesOwner;
   /** Where parked writes' bytes live; none by default. */
   writes?: ParkedWrites;
+  /** The surface of the turn each call is made in, as the root agent's channel reads it; none by default. */
+  surface?: () => InvocationSurface;
 } = {}) {
   const filesOwner = opts.filesOwner ?? 'agent';
   const { sql, actor } = approvalsDb();
@@ -98,7 +101,7 @@ function setup(opts: {
 
   if (opts.approve) policy.requestApproval = opts.approve;
 
-  if (!opts.noQueue) policy.deferrals = queue.channel;
+  if (!opts.noQueue) policy.deferrals = opts.surface === undefined ? queue.channel : queue.channelFor(store.actorId, opts.surface);
   const shell = withApprovalGatedShell(rawShell, { ...AGENTS_OWN, filesOwner }, policy);
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
@@ -387,6 +390,48 @@ describe('the standing modes still decide first', () => {
     const { shellTool, executed } = setup({ noQueue: true });
     await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('needs owner approval, nobody to ask') });
     expect(executed).toEqual([]);
+  });
+});
+
+// A device consent's answer resumed its parked call on the surface the call was made on; a parked action's wake carried
+// none, so an interactive shell call approved after its turn had ended ran in a one-shot turn: inline, never detached.
+describe('the re-issue a decision wakes for runs under the surface its call was parked from', () => {
+  test("the wake opens its turn on the surface the call was made on, which the queue's list does not show", async () => {
+    let surface: InvocationSurface = 'interactive';
+    const { shellTool, queue, delivered } = setup({ surface: () => surface });
+
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    expect(queue.list()[0]).not.toHaveProperty('surface');
+    await queue.decide(['defer-1'], 'approved');
+    surface = 'one-shot';
+    await expect(shellTool.execute({ command: 'npm publish a' })).rejects.toBeInstanceOf(KinuError);
+    await queue.decide(['defer-2'], 'approved');
+
+    expect(delivered.map((signal) => signal.metadata?.[RESUMED_SURFACE])).toEqual(['interactive', 'one-shot']);
+  });
+
+  test('calls parked from both surfaces are re-issued as interactive; a denial names none', async () => {
+    let surface: InvocationSurface = 'one-shot';
+    const { shellTool, queue, delivered } = setup({ surface: () => surface });
+
+    await expect(shellTool.execute({ command: 'npm publish a' })).rejects.toBeInstanceOf(KinuError);
+    surface = 'interactive';
+    await expect(shellTool.execute({ command: 'npm publish b' })).rejects.toBeInstanceOf(KinuError);
+    await queue.decide(['defer-1', 'defer-2'], 'approved');
+    await expect(shellTool.execute({ command: 'npm publish c' })).rejects.toBeInstanceOf(KinuError);
+    await queue.decide(['defer-3'], 'denied');
+
+    expect(delivered.map((signal) => [signal.metadata?.ids, signal.metadata?.[RESUMED_SURFACE] ?? null]))
+      .toEqual([[['defer-1', 'defer-2'], 'interactive'], [['defer-3'], null]]);
+  });
+
+  test('a call made in no turn names none', async () => {
+    const { shellTool, queue, delivered } = setup();
+
+    await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
+    await queue.decide(['defer-1'], 'approved');
+
+    expect(delivered[0]?.metadata).not.toHaveProperty(RESUMED_SURFACE);
   });
 });
 
