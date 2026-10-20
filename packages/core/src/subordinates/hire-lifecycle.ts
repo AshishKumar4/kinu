@@ -17,7 +17,7 @@ import type { AgentConfigStore } from '../config/store';
 import type { ActorRetirement } from '../state/actor-host';
 import type { JobRetirement } from '../jobs/runner';
 import { assignmentDelivery, type OwedAdmission } from './deliveries';
-import { delegationBudgetOf, delegationExhausted } from './depth';
+import { delegationBudgetOf, delegationDepthRefusal, delegationExhausted } from './depth';
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateSeed } from './birth';
 import { admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, type SubordinateRuntime } from './support';
@@ -145,8 +145,9 @@ export function hireLifecycle<Seat extends SeatedHire>(ports: HireLifecyclePorts
 
   return {
     spawn: (input) => settle(Effect.gen(function* () {
-      yield* refusal(delegationExhausted(delegationBudgetOf(ports.describe, ports.parent().record)),
-        () => new KinuError('denied', 'This actor cannot create a subordinate below its delegation depth.'));
+      const budget = delegationBudgetOf(ports.describe, ports.parent().record);
+
+      yield* refusal(delegationExhausted(budget), () => new KinuError('denied', delegationDepthRefusal(budget).error));
       const reference = inDirectory('register', input);
 
       // The child's own config rows only; the parent's roster row is core's (`createTeamToolDeps`), one writer per fact.
