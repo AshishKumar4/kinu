@@ -87,7 +87,7 @@
     },
     {
       "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
-      "complexity": 32
+      "complexity": 29
     },
     {
       "key": "scripts/coverage-lcov.ts#parseLcov",

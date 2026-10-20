@@ -10,6 +10,7 @@ import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilI
 import { revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwedIntent, type OwedOwnerIntent, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
+import { MailSendBody } from "@/components/mail/MailSendBody";
 import { AlwaysLine, alwaysLabel, ParkedCommands, ParkedDecisionFlow, ParkedWriteChange } from "@/components/ParkedCommands";
 import { QuestionCard } from "@/components/QuestionCard";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
@@ -32,8 +33,9 @@ export interface AttentionStackProps {
   readonly focus?: { readonly chosen: string | null; readonly choose: (key: string | null) => void };
 }
 
+/** A parked command, write or shared slate's change: they batch into one card. An agent's message is a card of its own. */
 function isParked(ask: OwnerAsk): ask is OwnerAsk & { kind: "action" } {
-  return ask.kind === "action" && ask.action.kind === "deferred_action";
+  return ask.kind === "action" && ask.action.kind === "deferred_action" && ask.action.mail === undefined;
 }
 
 /** Collapsed cards drawn behind the open one; the rest are counted on the last. */
@@ -97,6 +99,18 @@ function AnswerButton({ answer, busy, onAnswer }: { answer: Answer; busy: boolea
 }
 
 function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc }) {
+  // An agent's message, drawn as it would leave (docs/MAIL.md §3).
+  if (action.kind === "deferred_action" && action.mail !== undefined) {
+    const { mail } = action;
+
+    return (
+      <>
+        <MailSendBody send={{ agent: mail.by, from: mail.from, to: mail.to, subject: mail.subject }} text={mail.text} />
+        <div className="mt-1 p-meta p-text-3">Approving sends exactly this, once · asked {timeAgo(action.at)}</div>
+      </>
+    );
+  }
+
   if (action.kind === "deferred_action") {
     let asks = action.effect === undefined ? "Run this command?" : "Make this change with your access?";
 
@@ -175,6 +189,14 @@ function answersOf(ask: OwnerAsk, props: AttentionStackProps): readonly Answer[]
 
   const { action } = ask;
   const deferred = (decision: "approved" | "always" | "denied") => async () => { await props.rpc("decideDeferredApprovals", [[action.id], decision]); };
+
+  // Every agent message asks (the owner, 2026-10-19): no "always" to give.
+  if (action.kind === "deferred_action" && action.mail !== undefined) {
+    return [
+      { label: "Approve and send", icon: CheckIcon, weight: "primary", run: deferred("approved") },
+      { label: "Deny", icon: XIcon, weight: "quiet", run: deferred("denied") },
+    ];
+  }
 
   if (action.kind === "deferred_action") {
     // A shared slate's change is always allowed on that slate's shares, as its card says; a command's checks, here.

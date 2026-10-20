@@ -241,9 +241,9 @@ export const SYSTEM_ROLE_DEFINITIONS = {
     spawns: [],
     plan: true,
   },
-  dream_reviewer: {
+  'dream-reviewer': {
     description: 'Judges the edits a dream drafted for quality, effectiveness and size.',
-    instructions: definePromptSection('role/dream_reviewer', '', dreamReviewer.trimEnd()).render({}),
+    instructions: definePromptSection('role/dream-reviewer', '', dreamReviewer.trimEnd()).render({}),
     tier: 'fast',
     preset: 'audit',
     allowedTools: [],

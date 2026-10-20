@@ -287,7 +287,6 @@ const ORCHESTRATOR_METHODS = [
   'blueprintBundle',
   'readBlueprint',
   'shareBlueprintWith',
-  'acceptEmailDelivery',
   'acceptSandboxLifecycleIncident',
   'sandboxStopped',
   'sandboxRestore',
@@ -295,7 +294,6 @@ const ORCHESTRATOR_METHODS = [
   'accountSpend',
   'announceDeviceAvailable',
   'announceDeviceUnavailable',
-  'authorizeEmailSender',
   'askDeviceConsent',
   'beginGenesisTurn',
   'claimOwner',
@@ -321,7 +319,6 @@ const ORCHESTRATOR_METHODS = [
   'runTaskFromMcp',
   'saveNoteFromMcp',
   'sendPeerFromMcp',
-  'setEmailAllowlist',
   'setEmailNotifications',
   'setInitialDisplayName',
   'startExecutorFileDownload',
@@ -362,6 +359,14 @@ const ORCHESTRATOR_METHODS = [
   'withdrawSlatePreapproval',
   'galleryNeeds',
   'liveShareUrl',
+  // Worker-only: the mail router hands a filed arrival to the workspace it woke (mail/handler.ts), and the owner's
+  // route a thread they sent it (mail/routes.ts).
+  'mailArrived',
+  'mailHanded',
+  // Worker-only: the assistant's install and the owner's claim of an address (user/blueprint-install.ts, mail/routes.ts).
+  'readOwnerMail',
+  // Worker-only: the mail router's word that new mail waits for the assistant's triage (mail/handler.ts).
+  'triageOwnerMail',
   'viewerEntryUrl',
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.
   'requestOverviewPush',

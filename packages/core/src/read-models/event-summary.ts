@@ -6,6 +6,7 @@
 
 import * as v from 'valibot';
 import { CHAT_REWOUND_EVENT } from '../orchestrator/rewind-notice';
+import { MAIL_HANDED_EVENT } from '../mail/handed';
 
 export interface EventSummary {
   /** What happened, short: "Task reminder". */
@@ -124,6 +125,8 @@ const SUMMARIES = new Map<string, (fields: SummaryFields) => EventSummary>([
   ]))],
   ['owner_waits_cleared', (fields) => withLine('Waits cleared', fields.what ?? undefined)],
   [CHAT_REWOUND_EVENT, rewound],
+  // A thread the owner sent from Mail: the same card as an arrival's.
+  [MAIL_HANDED_EVENT, (fields) => withLine('Mail', fields.said)],
 ]);
 
 /** The other events a turn can open on, each the same every time: they carry no fields. */

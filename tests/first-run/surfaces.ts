@@ -28,6 +28,7 @@ export const PAGE_ROWS = {
   workspaces: ['workspace-title'],
   plugins: ['blueprint-fork'],
   devices: ['device-link', 'two-machines'],
+  mail: { unreachable: 'mail defaults to deployment operators only (MAIL_ACCOUNTS); the eval-service account cannot claim an address' },
   userSettings: ['account-settings'],
   userMcp: ['blueprint-fork', 'mcp-reconnect', 'mcp-expiry'],
   workspace: ['snapshot-after-turn', 'approve-clears', 'enter-sends'],

@@ -5,7 +5,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore,
-  AgentOrchestrator, EvolutionEngine, acceptInboundEmail, deliveredSignal, historyTurnPairs, pendingEventsDelivery,
+  AgentOrchestrator, EvolutionEngine, admitMailArrival, deliveredSignal, historyTurnPairs, pendingEventsDelivery,
   type BackendHost,
   type SqlExec,
 } from '@kinu.run/core';
@@ -13,7 +13,7 @@ import { createMemoryVfs, createTestActorsOver, createTestRuntime, present, with
 import {
   createEmailThreadDispatcher,
   sendInboundEmailReceipt, sendOwnerEmail,
-} from '../src/email/outbound';
+} from '@kinu.run/core';
 import { dispatchEmailRepliesForTurn } from '@kinu.run/core';
 import { EmailOutbox } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';
@@ -83,21 +83,21 @@ describe('the reply channel at its edges', () => {
   }
 
   async function admitOwnerEmail(log: EventLog, replies: ReplyChannelStore) {
-    const result = await acceptInboundEmail({
+    const result = await admitMailArrival({
       log, replies,
       owner_email: 'owner@example.com',
-      allowlist: [],
       tryConsumeRateLimit: () => true,
       vfs: createMemoryVfs().vfs,
     }, {
+      woke: 'owner',
       from: 'owner@example.com',
-      to: 'scout-a1b2c3@agents.example.com',
+      to: 'scout.api-worker.owner@agents.example.com',
       subject: 'Check the deploy',
-      body_text: 'Is staging green?',
+      instruction: 'Is staging green?',
       message_id: '<abc@mail.example.com>',
-      in_reply_to: null,
       references: '<root@mail.example.com>',
       attachments: [],
+      mail: { box: 'scout.api-worker', thread: 't-1', message: 'm-1' },
       now: 1_000,
     });
 
@@ -168,7 +168,7 @@ describe('the reply channel at its edges', () => {
 });
 
 describe('sendOwnerEmail — changelog digests + job completions', () => {
-  test('sends from the agent address to the owner with a tagged subject', async () => {
+  test('sends from the deployment\'s noreply address, a note and not a thread, to the owner with a tagged subject', async () => {
     const { binding, sent } = fakeSendBinding();
 
     const ok = await sendOwnerEmail({
@@ -179,7 +179,7 @@ describe('sendOwnerEmail — changelog digests + job completions', () => {
 
     expect(ok).toBe(true);
     expect(sent[0]).toMatchObject({
-      from: { email: 'scout-a1b2c3@agents.example.com', name: 'Scout' },
+      from: { email: 'noreply@agents.example.com', name: 'Scout' },
       to: 'owner@example.com',
       subject: '[Scout] Evolution changelog digest',
       text: 'Self-change digest: 3 entries…',

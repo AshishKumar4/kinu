@@ -15,6 +15,7 @@ import type { SubordinateReportOrigin } from './support';
 import { SUBORDINATE_STATUSES, type SubordinateRosterEntry, type SubordinateStatus } from '../delegation/agents-tool';
 import { SUBORDINATE_LIFETIMES, TEMPORARY_LIFETIME, temporaryRunSettles, type TaskTurnEnding } from './temporary';
 import { ActorReferenceSchema, sameActorReference, type ActorReference } from '../identity/actor-handle';
+import { SUBORDINATE_ORIGINS } from '../identity/workspace-actors';
 import { SubordinateBirthSchema } from './birth';
 import { parseJsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
@@ -49,7 +50,7 @@ export const SubordinateRosterEntrySchema = v.object({
   actorReference: v.nullable(ActorReferenceSchema),
   birth: v.nullable(SubordinateBirthSchema),
   deleteRequested: v.boolean(),
-  origin: v.picklist(['user', 'agent', 'evolution']),
+  origin: v.picklist(SUBORDINATE_ORIGINS),
   status: v.picklist(SUBORDINATE_STATUSES),
   currentTask: v.nullable(v.string()),
   createdAt: v.number(),
@@ -63,7 +64,18 @@ const StoredRosterEntrySchema = v.object({
   deleteRequested: v.pipe(v.union([v.literal(0), v.literal(1)]), v.transform((value) => value === 1)),
 });
 
+/** Where a row fails its schema, and how: `birth.seed.role: Invalid role id`. */
+function firstIssue(issues: readonly v.BaseIssue<unknown>[]): string {
+  const [issue] = issues;
+  const path = issue?.path?.map((step) => String(step.key)).join('.') ?? '';
+
+  return `${path === '' ? 'the row' : path}: ${issue?.message ?? 'unreadable'}`;
+}
+
+/** A stored row, its origin and lifetime read from its actor; one that fails says which row and which field. */
 function parseStoredRosterRow(row: SqlExecRow): Effect.Effect<SubordinateRosterEntry, KinuError> {
+  const named = typeof row.name === 'string' ? row.name : '(unnamed)';
+
   return Effect.catchCause(Effect.sync(() => {
     const stored = v.parse(StoredRosterEntrySchema, row);
 
@@ -71,8 +83,16 @@ function parseStoredRosterRow(row: SqlExecRow): Effect.Effect<SubordinateRosterE
       ...stored, actorReference: stored.actorReference === null ? null : parseJsonValue(stored.actorReference),
       birth: stored.birth === null ? null : parseJsonValue(stored.birth),
     });
-  }), (failed) => Effect.fail(new KinuError('io', 'Stored subordinate roster data is malformed.', { cause: Cause.squash(failed) })));
+  }), (failed) => {
+    const cause = Cause.squash(failed);
+    const where = v.isValiError(cause) ? firstIssue(cause.issues) : String(cause);
+
+    return Effect.fail(new KinuError('io', `Stored subordinate roster data is malformed: row "${named}", ${where}.`, { cause }));
+  });
 }
+
+/** What a write stores is what a read accepts: a row the roster could not read back is never written. */
+const WrittenRosterRowSchema = v.omit(SubordinateRosterEntrySchema, ['origin', 'lifetime']);
 
 /** What a roster write stores; `origin` and `lifetime` are read from the actor, never written here. */
 type RosterRow = Omit<SubordinateRosterEntry, 'origin' | 'lifetime'>;
@@ -142,29 +162,36 @@ export class SubordinateRosterStore {
   }
 
   /** `onConflict` is empty for a first insert and the upsert clause for a compensating restore. */
-  private writeRow(entry: RosterRow, onConflict: string): void {
-    this.actor.assertCurrent();
-    this.sql.exec(
-      `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)${onConflict}`,
-      this.actorId,
-      entry.name,
-      entry.status,
-      entry.currentTask,
-      entry.createdAt,
-      entry.dismissedAt,
-      entry.taskEventId,
-      entry.actorReference === null ? null : JSON.stringify(entry.actorReference),
-      entry.birth === null ? null : JSON.stringify(entry.birth), entry.deleteRequested ? 1 : 0,
-    );
+  private writeRow(entry: RosterRow, onConflict: string): Effect.Effect<void, KinuError> {
+    return Effect.suspend(() => {
+      this.actor.assertCurrent();
+      const checked = v.safeParse(WrittenRosterRowSchema, entry);
+
+      if (!checked.success) return new KinuError('bad_input', `The hire "${entry.name}" cannot be recorded: ${firstIssue(checked.issues)}.`);
+      this.sql.exec(
+        `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)${onConflict}`,
+        this.actorId,
+        entry.name,
+        entry.status,
+        entry.currentTask,
+        entry.createdAt,
+        entry.dismissedAt,
+        entry.taskEventId,
+        entry.actorReference === null ? null : JSON.stringify(entry.actorReference),
+        entry.birth === null ? null : JSON.stringify(entry.birth), entry.deleteRequested ? 1 : 0,
+      );
+
+      return Effect.void;
+    });
   }
 
   create(entry: RosterRow): void {
-    this.writeRow(entry, '');
+    return settleSync(this.writeRow(entry, ''));
   }
 
   /** Exact upsert used only for compensating a failed facet operation. */
   restore(entry: RosterRow): void {
-    this.writeRow(entry, ROSTER_RESTORE_CONFLICT);
+    return settleSync(this.writeRow(entry, ROSTER_RESTORE_CONFLICT));
   }
 
   attachActor(name: string, creationId: string, reference: ActorReference): void {

@@ -612,6 +612,7 @@ const R2_PURPOSE = {
   FEEDBACK_BUCKET: 'screenshots attached to in-product feedback reports',
   RELEASES_BUCKET: 'the worker release artifact each self-hosted deployment installs and updates from',
   SLATE_PICTURES: 'the picture of each slate a workspace tile draws, taken by Browser Rendering after the slate renders',
+  MAIL_BUCKET: 'each account\'s mail: raw messages, long text and HTML parts, and attachments (docs/MAIL.md §2)',
 } satisfies Record<string, string>;
 
 const R2_HOLDS = {
@@ -626,6 +627,8 @@ const R2_HOLDS = {
     + 'until the next deploy republishes one.',
   SLATE_PICTURES: 'one WebP per slate, named by its digest. Deleting it leaves each tile naming a picture '
     + 'that answers 404, so the tile draws its lettered cover until the slate next renders.',
+  MAIL_BUCKET: 'every mail message\'s bytes. The Mailbox rows survive it, so deleting it leaves every thread '
+    + 'listed with its bodies, HTML and attachments gone, and nothing can bring them back.',
 } satisfies Record<string, string>;
 
 /** Read one of the two closed tables above by a binding name the config supplied.

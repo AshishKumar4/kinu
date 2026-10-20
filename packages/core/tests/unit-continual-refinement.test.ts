@@ -141,11 +141,11 @@ function withReviewer(port: TemporaryAgentPort | null | undefined, reviewer: Rev
   return {
     ...port,
     start: async (request) => {
-      if (request.role !== 'dream_reviewer') return port.start(request);
+      if (request.role !== 'dream-reviewer') return port.start(request);
       const edits = request.task.match(/^### Edit \d+:/gmu)?.length ?? 0;
       reviews.set(request.lane?.requestId ?? '', JSON.stringify({ verdicts: reviewer(request.task, edits) }));
 
-      return { status: 'working', agent: 'reviewer-1', lifetime: 'task', role: 'dream_reviewer', answer: 'working', transcript: 'kept' };
+      return { status: 'working', agent: 'reviewer-1', lifetime: 'task', role: 'dream-reviewer', answer: 'working', transcript: 'kept' };
     },
     reclaim: (lane) => {
       const answer = reviews.get(lane.requestId);
@@ -2080,7 +2080,7 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
 
     expect(requests.map((request) => [request.role, request.mode, request.lane?.requestId])).toEqual([['dreamer', 'plan', opened.id]]);
     expect(SYSTEM_ROLE_DEFINITIONS.dreamer.tier).toBe('deep');
-    expect(SYSTEM_ROLE_DEFINITIONS.dream_reviewer).toMatchObject({ tier: 'fast', allowedTools: [] });
+    expect(SYSTEM_ROLE_DEFINITIONS['dream-reviewer']).toMatchObject({ tier: 'fast', allowedTools: [] });
     expect(started.map((request) => request.role)).toEqual(['dreamer']);
   });
 });

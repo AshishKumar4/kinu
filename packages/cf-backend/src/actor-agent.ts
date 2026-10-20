@@ -19,7 +19,7 @@ import {
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
 } from '@kinu.run/core';
-import type { EnqueueTurnResult, OwnerWaitsHost, ProgrammaticTurn, RecordedTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
+import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, ProgrammaticTurn, RecordedTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { AccountMemory, Fact } from '@kinu.run/core';
 import type { SubordinateView } from '@kinu.run/core/protocol';
@@ -112,7 +112,7 @@ import {
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
-  type ActiveSkillSet,
+  type ActiveSkillSet, type TurnReads,
   type PlanDecisionOutcome,
   type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type AskingAgent, type OwnerAnswer,
@@ -369,12 +369,13 @@ async function slateMember(
   return null;
 }
 
-/** What one turn read once for every step's dynamic context: MEMORY.md's tail, its skills, and the account's facts. */
+/** What one turn read once for every step's dynamic context: MEMORY.md's tail, its skills, the account's facts, its mail. */
 interface TurnMemoryReads {
   readonly memoryTail: string | undefined;
   /** Absent: the actor's own active skills for the turn. */
   readonly activeSkills?: ActiveSkillSet | null;
   readonly accountFacts?: readonly Fact[];
+  readonly mail?: TurnReads['mail'];
 }
 
 /**
@@ -383,7 +384,7 @@ interface TurnMemoryReads {
  */
 function hostedActorSurface(
   actor: SeatedActor, web: { readonly search: WebSearchProvider; readonly sessions: BrowserSessions }, conversations: ConversationRecall,
-  reach: { readonly account?: AccountMemory | undefined; readonly ownerWaits: OwnerWaitsHost | null },
+  reach: { readonly account?: AccountMemory | undefined; readonly ownerWaits: OwnerWaitsHost | null; readonly mail?: MailDeps | null },
 ) {
   const { account } = reach;
   const webSearch = web.search;
@@ -409,7 +410,7 @@ function hostedActorSurface(
 
   const surface = hostedSurfaceActor(actor, {
     web: { search: webSearch, files: runtime.storage, browser: { sessions: web.sessions, prelude: BROWSER_PRELUDE } },
-    stores, ownerWaits: reach.ownerWaits,
+    stores, ownerWaits: reach.ownerWaits, mail: reach.mail ?? null,
   });
 
   return { actor: surface, native: buildBuiltinTools(deps, stores) };
@@ -2749,6 +2750,7 @@ export abstract class ActorAgent extends Agent<Env> {
           account: this.account.ownedMemory({ by: 'agent', agent: hosted.record.name }),
           // Its own turn's programs and an outside caller reach what waits on its owner from its work, as it does in eval.
           ownerWaits: this.hireOwnerWaits(hosted),
+          mail: this.mailFor(hosted.handle.actorId, hosted.record.name),
         });
 
         const providers = actorNamespaces(surface.actor, SURFACE_POLICY.operations);
@@ -2826,7 +2828,13 @@ export abstract class ActorAgent extends Agent<Env> {
       self: this.agentSelf(),
       // The workspace's agent reads what waits on its owner through its own `agent.*`.
       ownerWaits: null,
+      mail: this.mailFor(this.rt.actor.actorId, 'main'),
     };
+  }
+
+  /** `mail.*` for one of this workspace's agents over its owner's Mailbox (docs/MAIL.md §3); null where there is no mail. */
+  protected mailFor(_actorId: string, _name: string): MailDeps | null {
+    return null;
   }
 
   /** The workspace agent's eval programs: crafted tools saved mid-turn still work because craftStore is re-read per call. */
@@ -3623,7 +3631,7 @@ export abstract class ActorAgent extends Agent<Env> {
     readonly reads: TurnMemoryReads;
     readonly surface: TurnSurface | null;
   }): DynamicContext {
-    const { memoryTail, accountFacts, activeSkills } = step.reads;
+    const { memoryTail, accountFacts, activeSkills, mail } = step.reads;
     const held = this.heldDynamicOf(actor.reference);
     const extras = reach.kind === 'workspace' ? this.extraDynamicContext() : {};
     // The workspace's own agent is told why its turn runs and what its model holds; a hire, its model's name.
@@ -3650,6 +3658,7 @@ export abstract class ActorAgent extends Agent<Env> {
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
       subordinateDelegates: held.delegates,
       approvals: extras.approvals,
+      ...(mail !== undefined && { mail }),
       ...(extras.failingSlates !== undefined && { failingSlates: extras.failingSlates }),
     });
   }

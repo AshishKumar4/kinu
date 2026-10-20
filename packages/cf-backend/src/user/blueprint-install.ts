@@ -8,7 +8,7 @@ import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { attempt, authoredRefusal, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import {
-  blueprintSeed, err, fallbackWorkspaceIdentity, json, kinuBlueprint, knownTimeZone, PERSONAL_ASSISTANT_ID, safeJson,
+  blueprintSeed, err, fallbackWorkspaceIdentity, json, kinuBlueprint, knownTimeZone, objectNamed, PERSONAL_ASSISTANT_ID, safeJson,
   type UserCaller, type WorkspaceEntry,
 } from '@kinu.run/core';
 import type { UserDO } from './user-do';
@@ -81,6 +81,13 @@ function installBlueprint<Id>(request: InstallRequest<Id>): Effect.Effect<Worksp
     const entry = yield* Effect.promise(async () => createCloudWorkspaceForUser({
       env, userId, userDO, caller: owner, input: { name, displayName: body.displayName ?? blueprint.title, purpose: blueprint.line }, soul, seed,
     }));
+
+    // Home reads the owner's own mail (docs/MAIL.md §7), once they have an address; a failed hand-over is said, not the install undone.
+    if (home) {
+      yield* attempt({ doing: 'giving the assistant the owner\'s mail', otherwise: 'unavailable' }, async () => objectNamed(env.OrchestratorAgent, entry.name).readOwnerMail()).pipe(
+        Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('mail.assistant_unlinked', failure, { workspace: entry.name }); })),
+      );
+    }
 
     // The workspace is the person's either way: a count Explore missed is said, not their install undone.
     yield* attempt({ doing: `counting an install of ${id} on Explore`, otherwise: 'unavailable' }, async () => request.counted(id)).pipe(

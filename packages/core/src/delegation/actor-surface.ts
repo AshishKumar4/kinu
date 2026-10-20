@@ -18,6 +18,7 @@ import { createMemoryCodemodeProvider } from '../tools/memory-operations';
 import { createReportCodemodeProvider, type ReportDeps } from '../tools/report-operations';
 import { createTasksCodemodeProvider } from '../tools/tasks-operations';
 import { createWebCodemodeProvider } from '../tools/web-operations';
+import { createMailCodemodeProvider, type MailDeps } from '../tools/mail-codemode';
 import { createAgentsCodemodeProvider } from './agents-operations';
 import type { AgentsToolDeps } from './agents-tool';
 
@@ -43,6 +44,8 @@ export interface SurfaceActor {
   readonly self: AgentSelfHost | null;
   /** A hire's `agent.*`: what waits on its owner from its own work, and its wake; null for an actor with neither. */
   readonly ownerWaits: OwnerWaitsHost | null;
+  /** Its `mail.*` over the account's Mailbox (docs/MAIL.md §3); null where the deployment has no mail. */
+  readonly mail: MailDeps | null;
 }
 
 /** How a caller's namespaces differ from the actor's own programs'. */
@@ -122,6 +125,8 @@ export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call
     createDbCodemodeProvider(actor.db, { private: policy.private }),
     ...agentNamespace(self, actor.ownerWaits),
     ...(call.report === undefined ? [] : [createReportCodemodeProvider(call.report)]),
+    // The agent's own mail, never a slate's or a share's viewer's.
+    ...(policy.private && actor.mail !== null ? [createMailCodemodeProvider(actor.mail)] : []),
     webFor(actor.web, policy),
     // Every machine's `fs` is the actor's own `file` operations, on that machine's root in its plane.
     ...actor.executors().map((provider) => executorNamespace(executor(provider), stores.file)),
@@ -139,6 +144,7 @@ export function hostedSurfaceActor(
     readonly ownerWaits: OwnerWaitsHost | null;
     /** What its native `agents` delegates through, where it delegates; its programs delegate through the same. */
     readonly agents?: () => AgentsToolDeps;
+    readonly mail: MailDeps | null;
   },
 ): SurfaceActor {
   const { runtime, stores } = actor;
@@ -151,5 +157,6 @@ export function hostedSurfaceActor(
     agents: inputs.agents ?? null,
     self: null,
     ownerWaits: inputs.ownerWaits,
+    mail: inputs.mail,
   };
 }

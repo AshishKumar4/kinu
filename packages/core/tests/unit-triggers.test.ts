@@ -28,7 +28,7 @@ class RecordingAlarm implements AlarmScheduler {
 
 const NOW = 1_700_000_000_000;
 
-const TRIGGER_KINDS: TriggerKind[] = ['webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron', 'email_route'];
+const TRIGGER_KINDS: TriggerKind[] = ['webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron'];
 
 function timerPayload(event: KinuEvent): TimerPayload {
   if (event.variant !== 'timer') throw new Error('expected timer event');
@@ -92,7 +92,7 @@ describe('TriggerRegistry.register', () => {
 
   test('schedules an alarm only when the trigger has a fire time', async () => {
     const { registry, alarm } = setup();
-    await registry.register(spec({ kind: 'email_route' }), NOW);
+    await registry.register(spec({ kind: 'webhook_durable' }), NOW);
     expect(alarm.requested).toEqual([]);
 
     await registry.register(spec({ next_fire_at: NOW + 60_000 }), NOW);
@@ -115,14 +115,14 @@ describe('TriggerRegistry.get / list', () => {
   test('list filters by kind and by state independently and together', async () => {
     const { registry } = setup();
     const cron = await registry.register(spec({ kind: 'timer_cron' }), NOW);
-    const route = await registry.register(spec({ kind: 'email_route' }), NOW);
+    const route = await registry.register(spec({ kind: 'webhook_durable' }), NOW);
     registry.pause(route, NOW + 1);
 
     expect(registry.list().map(t => t.id).sort()).toEqual([cron, route].sort());
-    expect(registry.list({ kind: 'email_route' }).map(t => t.id)).toEqual([route]);
+    expect(registry.list({ kind: 'webhook_durable' }).map(t => t.id)).toEqual([route]);
     expect(registry.list({ state: 'active' }).map(t => t.id)).toEqual([cron]);
-    expect(registry.list({ kind: 'email_route', state: 'active' })).toEqual([]);
-    expect(registry.list({ kind: 'email_route', state: 'paused' }).map(t => t.id)).toEqual([route]);
+    expect(registry.list({ kind: 'webhook_durable', state: 'active' })).toEqual([]);
+    expect(registry.list({ kind: 'webhook_durable', state: 'paused' }).map(t => t.id)).toEqual([route]);
   });
 
   test('list returns newest first', async () => {
@@ -218,7 +218,7 @@ describe('TriggerRegistry pauseAll / resumeAll', () => {
     await registry.register(spec({ next_fire_at: NOW + 90_000 }), NOW);
     await registry.register(spec({ next_fire_at: NOW + 30_000 }), NOW);
     await registry.register(spec({ next_fire_at: NOW - 5 }), NOW);
-    await registry.register(spec({ kind: 'email_route' }), NOW);
+    await registry.register(spec({ kind: 'webhook_durable' }), NOW);
     registry.pauseAll(NOW + 1);
     alarm.requested.length = 0;
 
@@ -228,7 +228,7 @@ describe('TriggerRegistry pauseAll / resumeAll', () => {
 
   test('resumeAll with nothing pending asks for no alarm', async () => {
     const { registry, alarm } = setup();
-    await registry.register(spec({ kind: 'email_route' }), NOW);
+    await registry.register(spec({ kind: 'webhook_durable' }), NOW);
     registry.pauseAll(NOW);
     alarm.requested.length = 0;
 
@@ -300,7 +300,7 @@ describe('TriggerRegistry alarm wakeup path', () => {
 
   test('due ignores triggers with no fire time', async () => {
     const { registry } = setup();
-    await registry.register(spec({ kind: 'email_route' }), NOW);
+    await registry.register(spec({ kind: 'webhook_durable' }), NOW);
     expect(registry.due(NOW + 10_000)).toEqual([]);
   });
 
@@ -383,7 +383,7 @@ describe('TriggerRegistry.forkPlan', () => {
   test('only active triggers are inherited — paused and revoked ones are not', async () => {
     const { registry } = setup();
     const paused = await registry.register(spec({ kind: 'timer_cron' }), NOW);
-    const revoked = await registry.register(spec({ kind: 'email_route' }), NOW);
+    const revoked = await registry.register(spec({ kind: 'webhook_durable' }), NOW);
     const live = await registry.register(spec({ kind: 'timer_cron' }), NOW);
     registry.pause(paused, NOW);
     registry.revoke(revoked, NOW);

@@ -175,10 +175,12 @@ refuses a URL assembled by hand. If you lose it, `kinu triggers <workspace>`
 prints the current URL of every webhook. Cancel the trigger and the URL stops
 working.
 
-Once the mail domain is set up, each workspace also gets an email address,
-`<workspace>@kinu.run` (see [docs/EMAIL-INGRESS.md](EMAIL-INGRESS.md)). Mail
-from your verified address starts a turn, and the reply comes back on the
-same thread.
+Once the mail domain is set up and you have claimed your address, each
+workspace also gets one under it, `<workspace>.<you>@kinu.run`, and each of its
+agents one under that (see [docs/MAIL.md](MAIL.md)). Your own mail, verified,
+starts a turn that plans: anything it would send, create or change waits for you
+to approve it in the app, and its answer comes back on the same thread. Anyone
+else's mail is kept in Mail, and is never taken as an instruction.
 
 A background signal that arrives mid-turn joins the turn's next step.
 Delegated Plan or Build work keeps its own mode and queues right away for its

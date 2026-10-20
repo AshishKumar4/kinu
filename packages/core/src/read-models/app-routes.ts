@@ -9,6 +9,7 @@ export const APP_ROUTES = {
   workspaces: '/workspaces',
   plugins: '/plugins',
   devices: '/devices',
+  mail: '/mail',
   userMcp: '/user/settings/mcp',
   workspace: '/workspace/:agentId',
   workspaceAgent: '/workspace/:agentId/agents/:subName',

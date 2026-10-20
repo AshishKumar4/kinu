@@ -21,7 +21,6 @@ function hubWorkspace() {
     cancelTrigger: unreached('cancelTrigger'),
     listRecentEvents: unreached('listRecentEvents'),
     getEmailIngress: unreached('getEmailIngress'),
-    setEmailAllowlist: unreached('setEmailAllowlist'),
     setEmailNotifications: unreached('setEmailNotifications'),
     async createDurableWebhook(opts) {
       calls.push(`webhook:${JSON.stringify(opts)}`);

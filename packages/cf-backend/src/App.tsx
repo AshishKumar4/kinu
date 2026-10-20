@@ -44,6 +44,8 @@ const PluginsPage = lazyRoute(() => import("./pages/PluginsPage"));
 
 const DevicesPage = lazyRoute(() => import("./pages/DevicesPage"));
 
+const MailPage = lazyRoute(() => import("./pages/MailPage"));
+
 const BlueprintPage = lazyRoute(() => import("./pages/BlueprintPage"));
 
 // Awaited imports, which `gate:wired` reads as each page's one reference.
@@ -128,6 +130,7 @@ export default function App() {
             <Route path={APP_ROUTES.workspaces} element={<Page label="workspaces"><WorkspacesPage /></Page>} />
             <Route path={APP_ROUTES.plugins} element={<Page label="plugins"><PluginsPage /></Page>} />
             <Route path={APP_ROUTES.devices} element={<Page label="devices"><DevicesPage /></Page>} />
+            <Route path={`${APP_ROUTES.mail}/*`} element={<Page label="mail"><MailPage /></Page>} />
             <Route path={APP_ROUTES.workspace} element={<Page label="workspace"><KeyedWorkspace /></Page>} />
             <Route path={APP_ROUTES.workspaceAgent} element={<Page label="workspace-agent"><KeyedWorkspace /></Page>} />
             <Route path={APP_ROUTES.workspaceAgentPath} element={<Page label="workspace-agent"><KeyedWorkspace /></Page>} />

@@ -960,6 +960,98 @@
     "corroborated_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "mail_addresses@packages/core/src/state/mail-schema.ts": [
+    "path TEXT PRIMARY KEY CHECK (length(path) <= 41)",
+    "kind TEXT NOT NULL CHECK (kind IN ('person', 'workspace', 'agent'))",
+    "workspace TEXT",
+    "actor_id TEXT",
+    "wake TEXT NOT NULL DEFAULT 'owner' CHECK (wake IN ('owner', 'allowlist', 'verified', 'never'))",
+    "state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'retired'))",
+    "created_at INTEGER NOT NULL",
+    "retired_at INTEGER",
+    "CHECK ((kind = 'person') = (path = ''))",
+    "CHECK ((workspace IS NULL) = (actor_id IS NULL))",
+    "CHECK (kind = 'person' OR workspace IS NOT NULL)",
+    "CHECK ((state = 'retired') = (retired_at IS NOT NULL))"
+  ],
+  "mail_allow@packages/core/src/state/mail-schema.ts": [
+    "path TEXT NOT NULL REFERENCES mail_addresses (path)",
+    "sender TEXT NOT NULL",
+    "added_at INTEGER NOT NULL",
+    "PRIMARY KEY (path, sender)"
+  ],
+  "mail_attachments@packages/core/src/state/mail-schema.ts": [
+    "id TEXT PRIMARY KEY",
+    "message_id TEXT NOT NULL REFERENCES mail_messages (id)",
+    "filename TEXT NOT NULL",
+    "content_type TEXT NOT NULL",
+    "size INTEGER NOT NULL",
+    "digest TEXT NOT NULL",
+    "inline_cid TEXT"
+  ],
+  "mail_box@packages/core/src/state/mail-schema.ts": [
+    "id INTEGER PRIMARY KEY CHECK (id = 1)",
+    "user_id TEXT NOT NULL",
+    "email TEXT NOT NULL",
+    "username TEXT NOT NULL",
+    "created_at INTEGER NOT NULL"
+  ],
+  "mail_messages@packages/core/src/state/mail-schema.ts": [
+    "id TEXT PRIMARY KEY",
+    "thread_id TEXT NOT NULL REFERENCES mail_threads (id)",
+    "direction TEXT NOT NULL CHECK (direction IN ('in', 'out'))",
+    "header_id TEXT",
+    "in_reply_to TEXT",
+    "refs TEXT NOT NULL DEFAULT '[]'",
+    "from_addr TEXT NOT NULL",
+    "from_name TEXT",
+    "to_json TEXT NOT NULL DEFAULT '[]'",
+    "cc_json TEXT NOT NULL DEFAULT '[]'",
+    "delivered_to TEXT",
+    "subject TEXT NOT NULL",
+    "at INTEGER NOT NULL",
+    "verdict TEXT NOT NULL CHECK (verdict IN ('verified', 'unverified', 'ours'))",
+    "auth TEXT",
+    "woke TEXT CHECK (woke IS NULL OR woke IN ('owner', 'input'))",
+    "snippet TEXT NOT NULL DEFAULT ''",
+    "text_body TEXT",
+    "text_key TEXT",
+    "html_key TEXT",
+    "raw_key TEXT",
+    "size INTEGER NOT NULL",
+    "read INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0, 1))",
+    "written_by TEXT",
+    "send_state TEXT CHECK (send_state IS NULL OR send_state IN ('draft', 'queued', 'sent', 'delivered', 'bounced', 'failed', 'complained'))",
+    "CHECK ((direction = 'in') = (send_state IS NULL))",
+    "CHECK (direction = 'out' OR (raw_key IS NOT NULL AND written_by IS NULL))",
+    "CHECK (text_body IS NULL OR text_key IS NULL)",
+    "CHECK (woke IS NULL OR (direction = 'in' AND verdict = 'verified'))",
+    "UNIQUE (thread_id, header_id)"
+  ],
+  "mail_name@packages/core/src/state/mail-schema.ts": [
+    "label TEXT PRIMARY KEY CHECK (length(label) BETWEEN 1 AND 20)",
+    "user_id TEXT NOT NULL",
+    "kind TEXT NOT NULL CHECK (kind IN ('username', 'alias'))",
+    "target_path TEXT",
+    "state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'former', 'retired'))",
+    "claimed_at INTEGER NOT NULL",
+    "ended_at INTEGER",
+    "CHECK ((kind = 'alias') = (target_path IS NOT NULL))",
+    "CHECK ((state = 'active') = (ended_at IS NULL))"
+  ],
+  "mail_threads@packages/core/src/state/mail-schema.ts": [
+    "id TEXT PRIMARY KEY",
+    "path TEXT NOT NULL REFERENCES mail_addresses (path)",
+    "subject TEXT NOT NULL",
+    "important TEXT CHECK (important IS NULL OR length(important) BETWEEN 1 AND 280)",
+    "trashed_at INTEGER",
+    "created_at INTEGER NOT NULL",
+    "CHECK (important IS NULL OR path = '')"
+  ],
+  "mail_untriaged@packages/core/src/state/mail-schema.ts": [
+    "thread_id TEXT PRIMARY KEY REFERENCES mail_threads (id)",
+    "since INTEGER NOT NULL"
+  ],
   "mcts_search_runs@packages/core/src/mcts/search-store.ts": [
     "actor_id TEXT NOT NULL",
     "root_id TEXT NOT NULL",
@@ -1002,7 +1094,7 @@
     "exhausted_at INTEGER",
     "PRIMARY KEY (actor_id, label)"
   ],
-  "monitor_incidents@packages/cf-backend/src/monitor/incidents.ts": [
+  "monitor_incidents@packages/core/src/monitor/incidents.ts": [
     "probe TEXT PRIMARY KEY",
     "detail TEXT NOT NULL",
     "opened_at INTEGER NOT NULL",

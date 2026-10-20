@@ -1,17 +1,13 @@
 /**
- * Mission Inbox, outbound side, over the Workers `send_email` binding (Cloudflare Email Sending):
- * receipts, `email_thread` turn replies, and owner notifications share one send path.
+ * Mail a workspace sends on its own, over the Workers `send_email` binding (Cloudflare Email Sending): the receipt the
+ * owner's instruction gets, `email_thread` turn replies, and owner notifications share one send path.
  */
 
-import {
-  boundedMessageId, boundedReferences,
-  JsonValueSchema,
-  type EmailThreadAddr, type JsonValue,
-} from '@kinu.run/core';
-import { agentEmailAddress } from './inbound';
-import type { EmailOutbox, OutboundEmailMessage } from '@kinu.run/core';
+import { boundedMessageId, boundedReferences, type EmailThreadAddr } from '../events/ingress/email';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
+import type { EmailOutbox, EmailSender, OutboundEmailMessage } from '../events/email-outbox';
 import { Cause, Effect } from 'effect';
-import { diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain, settle } from '../obs/index';
 import * as v from 'valibot';
 
 const EmailThreadAddrSchema = v.object({
@@ -31,7 +27,7 @@ interface EmailThreadingHeaders {
 
 /** Resolved per dispatch so binding and display-name changes never go stale on a long-lived DO. */
 export interface EmailSendContext {
-  email: SendEmail | undefined;
+  email: EmailSender | undefined;
   agentDisplayName: string;
   /** Write-ahead + idempotency for the send (SPEC §7.4). */
   outbox: EmailOutbox;
@@ -149,7 +145,7 @@ export function createEmailThreadDispatcher(
 }
 
 export interface OwnerEmailDeps {
-  email: SendEmail | undefined;
+  email: EmailSender | undefined;
   emailDomain: string | undefined;
   agentName: string;
   agentDisplayName: string;
@@ -158,8 +154,11 @@ export interface OwnerEmailDeps {
   outbox: EmailOutbox;
 }
 
+/** A machine's own address on the deployment's domain: it is sent from and receives nothing (mail/mailname-do.ts reserves it). */
+const NOREPLY_LOCAL_PART = 'noreply';
+
 /** Returns false when email is not configured (a capability, never a requirement). `key` is a stable
- *  idempotency key: a re-fire never double-sends. */
+ *  idempotency key: a re-fire never double-sends. Sent from `noreply@`: a note, not a thread to answer. */
 export async function sendOwnerEmail(
   deps: OwnerEmailDeps,
   note: { subject: string; text: string; key: string },
@@ -168,7 +167,7 @@ export async function sendOwnerEmail(
 
   const result = await deps.outbox.send(deps.email, `owner:${note.key}`, {
     from: {
-      email: agentEmailAddress(deps.agentName, deps.emailDomain),
+      email: `${NOREPLY_LOCAL_PART}@${deps.emailDomain.trim().toLowerCase()}`,
       name: deps.agentDisplayName,
     },
     to: deps.ownerEmail,

@@ -21,6 +21,10 @@ export interface DrainBatch {
 export type InternalEventTest = (event: KinuEvent) => boolean;
 
 function delegatedEventMode(event: KinuEvent): WorkMode | null {
+  // A turn mail wakes plans: it reads and drafts, and any effect waits for the owner's approval in the app, even the
+  // owner's own mail's, since mail is a weaker channel than the signed-in app (docs/MAIL.md §3).
+  if (event.variant === 'email') return 'plan';
+
   if (event.variant !== 'peer_agent' && event.variant !== 'subordinate_report') return null;
 
   if (event.payload_visibility === 'full' || event.payload_visibility === 'redact') {

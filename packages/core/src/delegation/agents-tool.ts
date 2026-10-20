@@ -17,6 +17,7 @@ import {
 } from '../types/peers';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { ActorReference } from '../identity/actor-handle';
+import type { SubordinateOrigin } from '../identity/workspace-actors';
 import type { SubordinateBirth } from '../subordinates/birth';
 import type { SerializedMessage } from '../types/heads';
 import { freezeInheritedContext } from '../orchestrator/heads-support';
@@ -94,7 +95,7 @@ export interface SubordinateRosterEntry {
   birth: SubordinateBirth | null;
   deleteRequested: boolean;
   /** Its actor's origin; `evolution` is an evolution lane's helper. */
-  origin: 'user' | 'agent' | 'evolution';
+  origin: SubordinateOrigin;
   status: SubordinateStatus;
   currentTask: string | null;
   createdAt: number;

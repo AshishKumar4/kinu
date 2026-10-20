@@ -3,11 +3,12 @@
  * Delivery is `sendOwnerEmail` over `EmailOutbox`, which owns retries.
  */
 
-import { argumentDigest, type SqlExec } from '@kinu.run/core';
-import { sendOwnerEmail } from '../email/outbound';
-import { FLEET_PROBE_PREFIX } from '@kinu.run/core/control-plane';
-import type { EmailOutbox } from '@kinu.run/core';
-import type { ProbeOutcome } from '@kinu.run/core';
+import { argumentDigest } from '../safety/argument-digest';
+import type { SqlExec } from '../types/primitives';
+import { sendOwnerEmail } from '../mail/outbound';
+import { FLEET_PROBE_PREFIX } from '../control-plane/fleet-alerts';
+import type { EmailOutbox, EmailSender } from '../events/email-outbox';
+import type { ProbeOutcome } from '../http/synthetic-probes';
 import * as v from 'valibot';
 
 /** A dot is illegal in a workspace name, so this sender never collides with a mission inbox. */
@@ -46,7 +47,7 @@ export interface MonitorRunResult {
 export interface MonitorDeps {
   sql: SqlExec;
   outbox: EmailOutbox;
-  email: SendEmail | undefined;
+  email: EmailSender | undefined;
   emailDomain: string | undefined;
   /** Unset leaves the monitor observing but silent. */
   alertEmail: string | null;
