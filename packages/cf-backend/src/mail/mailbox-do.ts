@@ -168,7 +168,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   }
 
   /** Files it (`file`) and hands it to the outbox, within the account's daily cap (none for operators). */
-  private sendOut(file: () => Promise<{ view: MailMessageView; from: string; inReplyTo: string | null; outgoing: MailOutgoing }>): Effect.Effect<MailMessageView, KinuError> {
+  private sendOut(file: () => Promise<{ view: MailMessageView; from: string; inReplyTo: string | null; references: string | null; outgoing: MailOutgoing }>): Effect.Effect<MailMessageView, KinuError> {
     const { env, store, outbox, refusal } = this;
     const sender = this.identity()?.email ?? '';
     const arm = async (): Promise<void> => this.arm();
@@ -184,10 +184,10 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
       if (binding === undefined) return yield* Effect.fail(new KinuError('unavailable', 'This deployment cannot send mail yet: it has no Email Sending binding.'));
 
-      const { view, from, inReplyTo, outgoing } = yield* Effect.promise(file);
+      const { view, from, inReplyTo, references, outgoing } = yield* Effect.promise(file);
 
       const sent = yield* Effect.promise(async () => outbox.send(binding, `${MAIL_SEND_KEY}${view.id}`, mailboxEmail({
-        from, to: outgoing.to, cc: outgoing.cc ?? [], subject: outgoing.subject, text: outgoing.text, inReplyTo,
+        from, to: outgoing.to, cc: outgoing.cc ?? [], subject: outgoing.subject, text: outgoing.text, inReplyTo, references,
       }), Date.now()));
 
       // Not yet sent is still queued: the outbox retries on this object's alarm, and the view reads its state from it.
