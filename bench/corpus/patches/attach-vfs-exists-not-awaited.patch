@@ -1,11 +1,10 @@
-diff --git a/packages/core/src/prompting/attachment-sanitizer.ts b/packages/core/src/prompting/attachment-sanitizer.ts
-index 6fb149657..70675e133 100644
---- a/packages/core/src/prompting/attachment-sanitizer.ts
-+++ b/packages/core/src/prompting/attachment-sanitizer.ts
-@@ -289,7 +289,7 @@ async function storeContentAddressed(
+diff --git a/packages/core/src/utils/vfs-helpers.ts b/packages/core/src/utils/vfs-helpers.ts
+--- a/packages/core/src/utils/vfs-helpers.ts
++++ b/packages/core/src/utils/vfs-helpers.ts
+@@ -29,7 +29,7 @@
  
- /** Absent is the ordinary first spill; mismatched bytes are rewritten. */
- async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<boolean> {
+ /** Whether `path` holds exactly `bytes`; absent holds nothing. */
+ export async function fileHolds(vfs: Pick<VFS, 'stat' | 'readFile'>, path: string, bytes: Uint8Array): Promise<boolean> {
 -  if (!(await exists(vfs, path))) return false;
 +  if (!exists(vfs, path)) return false;
    const stored = await vfs.readFile(path);

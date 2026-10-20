@@ -10,7 +10,7 @@ import type { AgentSignal } from '../types/signals';
 import type { RecoveryFinding } from '../evolution/recovery';
 import type { Struggle } from '../evolution/struggles';
 import { fnv1a64 } from '../utils/fnv1a';
-import { callPreimage, stableStringify } from '../safety/argument-digest';
+import { stableStringify } from '../safety/argument-digest';
 import { detached } from '../utils/text';
 import type { JsonObject } from '../utils/json';
 
@@ -63,9 +63,10 @@ function callSignature(toolName: string, args: JsonObject): string {
   return signatureOf(toolName, stableStringify(args));
 }
 
-/** Key-order-independent (`stableStringify`), so `{a,b}` and `{b,a}` are one call. */
+/** Key-order-independent (`stableStringify`), so `{a,b}` and `{b,a}` are one call; named by its tool first, as a run's
+ *  recoveries record it (`failedSignature`). */
 function signatureOf(toolName: string, rendered: string): string {
-  return fnv1a64(callPreimage(toolName, rendered));
+  return `${toolName}${fnv1a64(rendered)}`;
 }
 
 /** Kept for the turn, so a copy of its own: a slice of a long program pinned all of it, every distinct call's (#103). */

@@ -56,13 +56,14 @@ export function publishContent(
   { directory, path, bytes, otherBytes }: { readonly directory: string; readonly path: string; readonly bytes: Uint8Array; readonly otherBytes: OtherBytes },
 ): Promise<void> {
   return settle(Effect.gen(function* () {
-    const present = yield* Effect.promise(() => exists(vfs, path));
+    if (yield* Effect.promise(() => fileHolds(vfs, path, bytes))) return;
 
-    if (present && (yield* Effect.promise(() => fileHolds(vfs, path, bytes)))) return;
+    // Absent is the ordinary first publication; present, it holds other bytes.
+    if (otherBytes === 'refuse' && (yield* Effect.promise(() => exists(vfs, path)))) {
+      return yield* new KinuError('io', `${path} holds other bytes than the content it is named for.`);
+    }
 
-    if (present && otherBytes === 'refuse') return yield* new KinuError('io', `${path} holds other bytes than the content it is named for.`);
-
-    if (!present) yield* Effect.promise(() => ensureDir(vfs, directory));
+    yield* Effect.promise(() => ensureDir(vfs, directory));
     yield* Effect.tryPromise({ try: async () => { await vfs.writeFile(path, bytes); }, catch: (cause) => toKinuError({ doing: `writing ${path}`, cause, otherwise: 'io' }) });
   }));
 }
