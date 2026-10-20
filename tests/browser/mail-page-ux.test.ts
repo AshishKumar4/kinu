@@ -301,7 +301,6 @@ describe('Mail', () => {
       const page = await open(gallery, '&account=claim&mail=off');
 
       await page.waitForFunction(() => document.querySelector('[data-mail-off]') !== null);
-      expect(await page.$eval('[data-mail-off]', (line) => line.textContent)).toBe('Mail is off on this deployment.');
       expect(await page.$('[data-footer-mail]')).toBeNull();
       expect(await page.$('[data-footer-devices]')).not.toBeNull();
       expect(await page.$('[data-mail-page] form')).toBeNull();

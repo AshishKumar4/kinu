@@ -144,6 +144,30 @@ class FakeCloudflare implements CloudflareTransport {
   /** Paths under a zone the token may not touch: Email Routing, Sending or DNS. */
   readonly forbiddenUnder: string[] = [];
 
+  /** Email Sending as the API answers it: a sending subdomain is named by its `tag`, and making one twice is refused. */
+  private sendingCall(id: string, rest: string, call: CloudflareCall): CloudflareHttpResponse | null {
+    const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
+    const name = this.routing.sending.get(id);
+
+    if (rest === 'email/sending/subdomains' && call.method === 'GET') return ok(name === undefined ? [] : [{ tag: `tag-${name}`, name, enabled: true }]);
+
+    if (rest === 'email/sending/subdomains') {
+      const asked = bodyText(call.body ?? {}, 'name');
+
+      if (name !== undefined) return { status: 409, body: { success: false, errors: [{ code: 1000, message: 'Sending subdomain already exists' }], result: null } };
+      this.routing.sending.set(id, asked);
+
+      return ok({ tag: `tag-${asked}`, name: asked, enabled: true });
+    }
+
+    if (rest !== `email/sending/subdomains/tag-${name ?? ''}/dns`) return null;
+
+    return ok([
+      { type: 'MX', name: `cf-bounce.${name ?? ''}`, content: 'route1.mx.cloudflare.net', priority: 47 },
+      { type: 'TXT', name: `cf-bounce._domainkey.${name ?? ''}`, content: 'v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN' },
+    ]);
+  }
+
   private zoneCall(call: CloudflareCall): CloudflareHttpResponse | null {
     const zone = /^\/zones\/([^/?]+)\/(.+)$/u.exec(call.path);
     const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
@@ -171,30 +195,7 @@ class FakeCloudflare implements CloudflareTransport {
 
  return ok({ enabled: true }); }
 
-    // As the API answers it: a sending subdomain is named by its `tag`, and creating one that exists is refused.
-    if (rest === 'email/sending/subdomains' && call.method === 'GET') {
-      const name = this.routing.sending.get(id);
-
-      return ok(name === undefined ? [] : [{ tag: `tag-${name}`, name, enabled: true }]);
-    }
-
-    if (rest === 'email/sending/subdomains') {
-      const name = bodyText(call.body ?? {}, 'name');
-
-      if (this.routing.sending.has(id)) return { status: 409, body: { success: false, errors: [{ code: 1000, message: 'Sending subdomain already exists' }], result: null } };
-      this.routing.sending.set(id, name);
-
-      return ok({ tag: `tag-${name}`, name, enabled: true });
-    }
-
-    if (/^email\/sending\/subdomains\/tag-[^/]+\/dns$/u.test(rest)) {
-      const name = this.routing.sending.get(id) ?? '';
-
-      return ok([
-        { type: 'MX', name: `cf-bounce.${name}`, content: 'route1.mx.cloudflare.net', priority: 47 },
-        { type: 'TXT', name: `cf-bounce._domainkey.${name}`, content: 'v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN' },
-      ]);
-    }
+    if (rest.startsWith('email/sending/subdomains')) return this.sendingCall(id, rest, call);
 
     if (rest.startsWith('dns_records?')) {
       const type = /type=([^&]+)/u.exec(rest)?.[1];
