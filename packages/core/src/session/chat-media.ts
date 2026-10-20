@@ -55,17 +55,18 @@ export function walkImages(value: JsonValue, visit: Visit): JsonValue {
     if (Array.isArray(node)) return node.map(walk);
 
     if (node === null || !isJsonObject(node)) return node;
-    const carrier = v.safeParse(CarrierSchema, node);
+    // Each shape is asked only of a node that names itself one: a failed parse formats an issue for every node it refuses.
+    const carrier = node.type === 'kinu/images' ? v.safeParse(CarrierSchema, node) : null;
 
-    if (carrier.success) {
+    if (carrier?.success === true) {
       const output = walk(node.output ?? null);
 
       return { ...node, output, images: carrier.output.images.map((image) => ({ mediaType: image.mediaType, url: take(image) })) };
     }
 
-    const file = v.safeParse(ModelFileSchema, node);
+    const file = node.type === 'file' ? v.safeParse(ModelFileSchema, node) : null;
 
-    if (file.success) return { type: 'file', mediaType: file.output.mediaType, url: take({ mediaType: file.output.mediaType, data: file.output.data.data }) };
+    if (file?.success === true) return { type: 'file', mediaType: file.output.mediaType, url: take({ mediaType: file.output.mediaType, data: file.output.data.data }) };
 
     return Object.fromEntries(Object.entries(node).map(([key, member]) => [key, walk(member)]));
   };
