@@ -53,6 +53,30 @@ test("a runtime owns its standing ledger: a read through another runtime's lets 
   expect(await standingFiles(other).tools.write?.execute('/home/main/plan.md', 'blind\n')).toMatchObject({ success: false, reason: 'unread' });
 });
 
+// rc22 review (7 trials): a background job's wake started a new turn, and the edit after it was refused "has not been
+// read here yet", though the read was in the turn before and still in view.
+test("a read lets the next turn's edit through; once the conversation is compacted, the edit is refused naming why", async () => {
+  const { rt } = createTestRuntime();
+  const acc = new TurnAccumulator();
+
+  const file = fileNamespaceOver(() => ({
+    vfs: rt.toolFiles, home: rt.storage.home, planes: rt.planes, memory: rt.memory, ledger: acc.ledgers.files, budget: acc.ledgers.context,
+  }));
+
+  const edit = (from: string, to: string) => file.tools.edit?.execute('/home/main/server.ts', [{ old_text: from, new_text: to }]);
+
+  await rt.toolFiles.writeFile('/home/main/server.ts', new TextEncoder().encode('const port = 4100;\n'));
+  acc.reset(1);
+  await file.tools.text?.execute('/home/main/server.ts');
+  acc.reset(2);
+  expect(await edit('4100', '4200')).toMatchObject({ applied: [{ line: 1 }] });
+
+  acc.ledgers.files.forgetReads();
+  expect(await edit('4200', '4300')).toMatchObject({
+    success: false, reason: 'unread', error: expect.stringContaining('a read counts until the conversation is compacted'),
+  });
+});
+
 describe('a file ledger keeps what each path last showed', () => {
   test('a newer read of a path retires the content it showed before', () => {
     const ledger = new TurnFileLedger();

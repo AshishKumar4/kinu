@@ -119,6 +119,8 @@ const { createMacSource } = require('./daemon/mac-screen.js');
 
 const { createTerminalRecords } = require('./daemon/terminals.js');
 
+const { sessionFacts } = require('./daemon/session-facts.js');
+
 const { runToExit } = update;
 
 /** This daemon's own file, as Bun started it. Not `__filename`: a release bundles this file, and the bundler writes the
@@ -1099,13 +1101,27 @@ async function openTerminalSession(msg, ws, ctx) {
   return { session: record.id, pid: opened.pid, cols: opened.cols, rows: opened.rows, resumed: false };
 }
 
-/** A workspace's sessions on this machine, and whether each has a shell now and what it runs. */
-function listTerminals(msg, ctx) {
+/**
+ * A workspace's sessions on this machine, each as the computer's row says it (1019-aa): whether a shell runs in it
+ * now, its folder, what it runs, the ports under it, its folder's branch, whether a program waits for an answer. A
+ * folder found is kept, so a restart brings the session back where it was, not where it opened.
+ */
+async function listTerminals(msg, ctx) {
   const { sessions, terminals } = terminalsOf(ctx);
+  const records = terminals.list(msg.workspace);
+  const live = records.filter((record) => sessions.has(record.id)).map((record) => ({ id: record.id, pid: sessions.pid(record.id) }));
+  const facts = await sessionFacts(live);
 
-  return terminals.list(msg.workspace).map((record) => ({
-    id: record.id, name: record.name, cwd: record.cwd ?? '', open: sessions.has(record.id), running: sessions.running(record.id),
-  }));
+  return records.map((record) => {
+    const found = facts.get(record.id);
+
+    if (typeof found?.cwd === 'string' && found.cwd !== record.cwd) terminals.settle(msg.workspace, record.id, found.cwd);
+
+    return {
+      id: record.id, name: record.name, cwd: found?.cwd ?? record.cwd ?? '', open: sessions.has(record.id), running: found?.running ?? null,
+      ports: found?.ports ?? [], branch: found?.branch ?? null, needsInput: found?.needsInput ?? false,
+    };
+  });
 }
 
 /** Ends a session's shell, if one runs, and forgets it. */
@@ -1424,7 +1440,7 @@ function answerLaterMethod(msg, ws, ctx) {
 
   if (method === RELAY_METHOD) rpcWhenSettled(ws, id, relayCall(ws, id, params[0]));
   else if (method === METHODS.screenOpen) rpc(ws, id, screensOf(ctx).open(params[0], ws));
-  else if (method === METHODS.ptyList) rpc(ws, id, listTerminals(msg, ctx));
+  else if (method === METHODS.ptyList) rpcWhenSettled(ws, id, listTerminals(msg, ctx));
   else if (method === METHODS.ptyCreate) rpc(ws, id, terminalsOf(ctx).terminals.create(msg.workspace, params[0]));
   else if (method === METHODS.ptyRename) rpc(ws, id, terminalsOf(ctx).terminals.rename(msg.workspace, params[0], params[1]));
   else if (method === METHODS.ptyClose) rpcWhenSettled(ws, id, closeTerminal(msg, ctx));

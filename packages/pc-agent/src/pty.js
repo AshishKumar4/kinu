@@ -69,10 +69,6 @@ const MAX_AXIS = require('./device-protocol.json').ptyMaxAxis;
  *  what it is shown arrives whole. */
 const RETAINED_BYTES = 64 * 1024;
 
-/** What holds a terminal's foreground while nothing the person started runs: the shell at its prompt, or the
- *  sandbox's launcher before it. */
-const IDLE_FOREGROUND = new Set(['bash', 'zsh', 'sh', 'dash', 'fish', 'ksh', 'bwrap', 'sandbox-exec']);
-
 /** A session name is a map key and a word in this daemon's log lines. Bounded
  *  for both reasons; it never becomes a path. */
 const SESSION_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
@@ -367,16 +363,9 @@ function createSessions(options = {}) {
     return { pid: record.pid, plan: record.plan, retained: Buffer.concat(record.retained) };
   }
 
-  /** The program in the session's foreground, by its name, where /proc says: null while the shell waits at its
-   *  prompt, and off Linux. */
-  function running(name) {
-    const record = sessions.get(name);
-
-    if (!record || process.platform !== 'linux') return null;
-    const group = procStat(record.pid)?.foreground ?? 0;
-    const comm = group > 0 ? procStat(group)?.comm : undefined;
-
-    return comm === undefined || IDLE_FOREGROUND.has(comm) ? null : comm;
+  /** The process a session's terminal runs, its shell or the sandbox's launcher of it; null when none runs. */
+  function pid(name) {
+    return sessions.get(name)?.pid ?? null;
   }
 
   /** The pane went away: the session keeps running and keeps its output for the next one. */
@@ -463,7 +452,7 @@ function createSessions(options = {}) {
     attach,
     detach,
     detachAll,
-    running,
+    pid,
     write,
     resize,
     close,

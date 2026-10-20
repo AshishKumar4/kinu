@@ -105,15 +105,21 @@ Where the daemon's screen comes from depends on the system:
 - The daemon keeps named sessions per workspace (`packages/pc-agent/src/daemon/terminals.js`), in `terminals.json`
   beside `device.json`: each one's id, name and the folder its shell opened in. Device protocol 4 also adds `ptyList`,
   `ptyCreate`, `ptyRename` and `ptyClose`, which mirror the computer's session calls. The hub turns them into the same
-  `TerminalSession` rows the strip reads (`listDeviceSessions` and its siblings on the workspace). The daemon reports
-  `open` (a shell runs now) and, on Linux, `running` (the foreground program, from `/proc`). It reads no last command,
-  port or branch.
+  `TerminalSession` rows the strip reads (`listDeviceSessions` and its siblings on the workspace).
+- Each row says what the computer's does (1019-aa), read from the system
+  (`packages/pc-agent/src/daemon/session-facts.js`): `open` (a shell runs now), the folder its shell or foreground
+  program is in, the program in its foreground, the ports a process under it listens on, that folder's branch, and on
+  Linux whether a program waits for an answer (from `/proc`, the computer's test). A Mac reads them with `ps` and
+  `lsof`, and can't tell a waiting program. The last command's exit is never shown: it needs shell integration in the
+  owner's own rc files, which Kinu doesn't edit. A chosen PC with a waiting program reads "Needs input", as the
+  computer does.
 - `ptyOpen` names the session. A pane's upgrade carries a fresh single-use token, never the session's id, so the id
   being known doesn't let anyone attach. One pane at a time: a second pane on an attached session is refused.
 - A pane closing sends `PTY_DETACH`, and the shell keeps running. Its newest 64 KiB of output is kept and shown first
   to the next pane, and its window is set to that pane's. A tunnel drop detaches every session the same way. A daemon
   restart or update ends the shells; each comes back as a fresh shell under its name, in the folder it last opened in,
-  as the computer's do after a restart (D90). The daemon doesn't follow a `cd` after the shell opens.
+  as the computer's do after a restart (D90). The folder a listing finds is kept, so a restart brings the session back
+  where it was last seen, not where it opened.
 - A shell opened under a confinement other than the open's own (the owner flipped the Sandbox switch since) is ended
   and opened again under the new one, never handed back.
 - Keying by the proven workspace, which the hub puts on every frame, keeps a workspace from naming, listing or

@@ -258,6 +258,7 @@ export const BUILTIN_TOOL_SPECS = {
       'Write it like a Node script: top-level statements, `await` anywhere, and `return` (or a trailing expression) hands back the result. Type annotations do not parse.',
       '`tools.<name>(input)` calls a native tool with the input its schema declares; a tool saved with `workspace.createTool` joins `tools` from the next program, declared in dynamic_context.',
       '`require()` loads Node builtins, plus `fs`, `fs/promises` and `child_process` over your workspace files and shell; `process.cwd()` is the workspace root. Only promise forms work: `execSync`, `spawn` and `fs.*Sync` throw.',
+      '`fs` keeps bytes as they are: `readFile` without an encoding returns the file\'s bytes as a `Uint8Array`, and `writeFile` writes a `Uint8Array` exactly.',
       '`console.log` output comes back with the result. Variables do not survive between programs; a `private` `db` table keeps data.',
       'A refused call, in any namespace, resolves to a `Refusal` instead of throwing: check for one before reading a result\'s fields. Returning it fails the call with that reason.',
       'Run independent calls together with `await Promise.all([...])`, and `return` the values you need rather than logging them.',
@@ -415,9 +416,9 @@ export function programDeclarations(providers: readonly DescribedProvider[]): Re
 }
 
 /**
- * `describe` as a program's own function over `declarations`: a name it does not have throws, naming the deepest
- * declared name holding it (`workspace.slates` for `workspace.slates.$list`), else the namespaces it has. Source text,
- * so each backend defines it in the program's scope.
+ * `describe` as a program's own function over `declarations`: a member a declaration declares within it answers that
+ * declaration (`workspace.slates.$list`, from `workspace.slates`'s); a name it does not have throws, naming the deepest
+ * declared name holding it, else the namespaces it has. Source text, so each backend defines it in the program's scope.
  */
 export function describeProgramSource(declarations: Readonly<Record<string, string>>): string {
   return `const describe = ((declared) => (name) => {
@@ -426,6 +427,7 @@ export function describeProgramSource(declarations: Readonly<Record<string, stri
   if (Object.hasOwn(declared, String(name))) return declared[String(name)];
   const parts = String(name).split('.');
   const holder = parts.slice(1).map((_, cut) => parts.slice(0, parts.length - 1 - cut).join('.')).find((prefix) => Object.hasOwn(declared, prefix));
+  if (holder !== undefined && declared[holder].includes(\`\${parts.at(-1)}(\`)) return declared[holder];
   if (holder !== undefined) throw new Error(\`describe: nothing is named "\${String(name)}"; describe('\${holder}') declares what it holds\`);
   throw new Error(\`describe: nothing is named "\${String(name)}"; namespaces: \${namespaces.join(', ')}\`);
 })(${JSON.stringify(declarations)});`;
