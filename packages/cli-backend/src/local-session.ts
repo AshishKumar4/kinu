@@ -819,11 +819,11 @@ export class LocalAgentSession {
       const log = new EventLog(makeSqlExec(this.db), this.actorHost.bindStores(actorReferenceOf(record)).handle);
       const from = this.rt.actor.name;
 
-      this.db.transaction(() => {
+      writeTransaction(this.db, () => {
         const admitted = admitSubordinateTask(log, { fromWorkspace: from, kind: 'message', body: signal.text, mode: 'build', now: Date.now() });
 
         if (admitted.admitted) new AgentDeliveries(this.rt.storage.sql).add(actorId, assignmentDelivery(log, { id: admitted.id, body: signal.text.trim(), mode: 'build', from }));
-      })();
+      });
     });
   }
 
