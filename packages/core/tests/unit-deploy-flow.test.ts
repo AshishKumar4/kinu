@@ -136,7 +136,8 @@ class FakeCloudflare implements CloudflareTransport {
   readonly zones = new Map<string, string>();
 
   /** Each zone's DNS records, as Cloudflare lists them. */
-  readonly dns: { zone: string; type: string; name: string; content: string; priority?: number }[] = [];
+  /** `locked`: a record Cloudflare manages, which a write to its name is refused for, as Email Routing refuses an MX. */
+  readonly dns: { zone: string; type: string; name: string; content: string; priority?: number; locked?: true }[] = [];
 
   /** What the zone's Email Routing and Sending hold. */
   readonly routing = { enabled: new Set<string>(), catchAll: new Map<string, unknown>(), sending: new Map<string, string>() };
@@ -144,7 +145,11 @@ class FakeCloudflare implements CloudflareTransport {
   /** Paths under a zone the token may not touch: Email Routing, Sending or DNS. */
   readonly forbiddenUnder: string[] = [];
 
-  /** Email Sending as the API answers it: a sending subdomain is named by its `tag`, and making one twice is refused. */
+  /**
+   * Email Sending as the API answered it on staging.kinu.run, 2026-10-20: a sending subdomain is named by its `tag`, and
+   * making one twice is refused. Making one writes its bounce records itself, locked; its record list spells an MX host
+   * with a trailing dot and a TXT in quotes, and suggests a `_dmarc` of its own.
+   */
   private sendingCall(id: string, rest: string, call: CloudflareCall): CloudflareHttpResponse | null {
     const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
     const name = this.routing.sending.get(id);
@@ -156,6 +161,10 @@ class FakeCloudflare implements CloudflareTransport {
 
       if (name !== undefined) return { status: 409, body: { success: false, errors: [{ code: 1000, message: 'Sending subdomain already exists' }], result: null } };
       this.routing.sending.set(id, asked);
+      this.dns.push(
+        { zone: id, type: 'MX', name: `cf-bounce.${asked}`, content: 'route1.mx.cloudflare.net', priority: 32, locked: true },
+        { zone: id, type: 'TXT', name: `cf-bounce._domainkey.${asked}`, content: '"v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN"', locked: true },
+      );
 
       return ok({ tag: `tag-${asked}`, name: asked, enabled: true });
     }
@@ -163,8 +172,9 @@ class FakeCloudflare implements CloudflareTransport {
     if (rest !== `email/sending/subdomains/tag-${name ?? ''}/dns`) return null;
 
     return ok([
-      { type: 'MX', name: `cf-bounce.${name ?? ''}`, content: 'route1.mx.cloudflare.net', priority: 47 },
-      { type: 'TXT', name: `cf-bounce._domainkey.${name ?? ''}`, content: 'v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN' },
+      { type: 'MX', name: `cf-bounce.${name ?? ''}`, content: 'route1.mx.cloudflare.net.', priority: 32 },
+      { type: 'TXT', name: `cf-bounce._domainkey.${name ?? ''}`, content: '"v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN"' },
+      { type: 'TXT', name: `_dmarc.${name ?? ''}`, content: '"v=DMARC1; p=reject;"' },
     ]);
   }
 
@@ -201,11 +211,15 @@ class FakeCloudflare implements CloudflareTransport {
       const type = /type=([^&]+)/u.exec(rest)?.[1];
       const name = decodeURIComponent(/name=([^&]+)/u.exec(rest)?.[1] ?? '');
 
-      return ok(this.dns.filter((record) => record.zone === id && record.type === type && record.name === name).map(({ zone: _held, ...record }) => record));
+      return ok(this.dns.filter((record) => record.zone === id && record.type === type && record.name === name).map(({ zone: _held, locked: _locked, ...record }) => record));
     }
 
     if (rest === 'dns_records' && call.method === 'POST') {
       const body = call.body ?? {};
+
+      if (this.dns.some((record) => record.zone === id && record.locked === true && record.name === bodyText(body, 'name'))) {
+        return { status: 400, body: { success: false, errors: [{ code: 890190, message: 'This zone is managed by Email Routing. Disable Email Routing to add/modify MX records.' }], result: null } };
+      }
 
       this.dns.push({ zone: id, type: bodyText(body, 'type'), name: bodyText(body, 'name'), content: bodyText(body, 'content') });
 
@@ -718,9 +732,10 @@ describe('a guided run', () => {
     expect(rows.find((row) => row.id === 'mail')).toMatchObject({ state: 'done' });
     expect([...cloudflare.routing.enabled]).toEqual(['zone-raman']);
     expect(cloudflare.routing.catchAll.get('zone-raman')).toMatchObject({ matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: ['kinu'] }] });
+    // Sending wrote its bounce records itself; the step adds only its own DMARC, report-only, never Sending's.
     expect(cloudflare.dns.map((record) => `${record.type} ${record.name} ${record.content}`)).toEqual([
       'MX cf-bounce.raman.dev route1.mx.cloudflare.net',
-      'TXT cf-bounce._domainkey.raman.dev v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN',
+      'TXT cf-bounce._domainkey.raman.dev "v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN"',
       'TXT _dmarc.raman.dev v=DMARC1; p=none; rua=mailto:dmarc@raman.dev',
     ]);
   });
@@ -728,6 +743,10 @@ describe('a guided run', () => {
   test('a domain already sending is onboarded again without a second sending domain, its records read by its tag', async () => {
     cloudflare.zones.set('raman.dev', 'zone-raman');
     cloudflare.routing.sending.set('zone-raman', 'raman.dev');
+    cloudflare.dns.push(
+      { zone: 'zone-raman', type: 'MX', name: 'cf-bounce.raman.dev', content: 'route1.mx.cloudflare.net', priority: 32, locked: true },
+      { zone: 'zone-raman', type: 'TXT', name: 'cf-bounce._domainkey.raman.dev', content: '"v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN"', locked: true },
+    );
     const rows = await run({ ...INPUTS, mailDomain: 'raman.dev' });
 
     expect(rows.find((row) => row.id === 'mail')).toMatchObject({ state: 'done', detail: expect.stringContaining('Mail onboarded on raman.dev') });
@@ -743,7 +762,7 @@ describe('a guided run', () => {
     await run({ ...INPUTS, mailDomain: 'raman.dev' });
 
     expect(cloudflare.dns.map((record) => record.content)).toEqual([
-      'v=DMARC1; p=quarantine', 'route1.mx.cloudflare.net', 'v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN',
+      'v=DMARC1; p=quarantine', 'route1.mx.cloudflare.net', 'route1.mx.cloudflare.net', '"v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN"',
     ]);
   });
 

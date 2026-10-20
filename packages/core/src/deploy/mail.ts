@@ -46,6 +46,18 @@ async function zoneOf(context: DeployContext, domain: string): Promise<string | 
   return zones?.find((zone) => zone.name === domain)?.id ?? null;
 }
 
+/**
+ * A record's value as DNS means it: Email Sending lists an MX host with its root dot and a TXT in quotes, the zone holds
+ * them without (measured on staging.kinu.run, 2026-10-20).
+ */
+function recordValue(record: Pick<DnsRecord, 'type' | 'content'>): string {
+  const value = record.content.trim();
+
+  if (record.type === 'MX') return value.replace(/\.$/u, '').toLowerCase();
+
+  return record.type === 'TXT' ? value.replace(/^"(.*)"$/su, '$1') : value;
+}
+
 /** Adds each record the zone does not hold yet; the records the token may not write are returned to ask for. */
 async function ensureRecords(context: DeployContext, zone: string, records: readonly DnsRecord[]): Promise<DnsRecord[]> {
   const asked: DnsRecord[] = [];
@@ -55,7 +67,7 @@ async function ensureRecords(context: DeployContext, zone: string, records: read
       method: 'GET', path: `/zones/${zone}/dns_records?type=${record.type}&name=${encodeURIComponent(record.name)}&per_page=100`,
     }, DnsRecordsSchema);
 
-    if (held?.some((each) => each.content === record.content) === true) continue;
+    if (held?.some((each) => recordValue(each) === recordValue(record)) === true) continue;
 
     const body: JsonObject = { type: record.type, name: record.name, content: record.content, ttl: 1 };
 
@@ -120,7 +132,9 @@ export function mailStep(inputs: DeployInputs) {
         }
 
         const dmarc = await allowed(context, { method: 'GET', path: `/zones/${zone}/dns_records?type=TXT&name=${encodeURIComponent(`_dmarc.${domain}`)}&per_page=100` }, DnsRecordsSchema);
-        const wanted = [...records ?? [], ...dmarc?.some((record) => record.content.includes('v=DMARC1')) === true ? [] : [{ type: 'TXT', name: `_dmarc.${domain}`, content: dmarcRecord(domain) }]];
+        // DMARC is this step's own decision, report-only to start (docs/MAIL.md §5), not the p=reject Sending suggests.
+        const own = (records ?? []).filter((record) => record.name !== `_dmarc.${domain}`);
+        const wanted = [...own, ...dmarc?.some((record) => record.content.includes('v=DMARC1')) === true ? [] : [{ type: 'TXT', name: `_dmarc.${domain}`, content: dmarcRecord(domain) }]];
         const unwritten = await ensureRecords(context, zone, wanted);
 
         if (unwritten.length > 0) asks.push(`Add these DNS records to ${domain}: ${unwritten.map(recordLine).join('; ')}.`);
