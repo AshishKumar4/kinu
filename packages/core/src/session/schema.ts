@@ -71,20 +71,19 @@ export function initSessionContextTables(exec: RawSqlExec): void {
     FOREIGN KEY(actor_id,proposal_id) REFERENCES context_proposals(actor_id,proposal_id),
     FOREIGN KEY(actor_id,expected_message_id) REFERENCES session_messages(actor_id,message_id),
     FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id))`);
+  // `context_id`/`context_revision` are what a request was offered. A step's `rendered_*` are the list it sent, a revision
+  // of the actor's unselected `requests` context; an admission sends none.
   exec(`CREATE TABLE IF NOT EXISTS actor_requests (
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), request_id TEXT NOT NULL, turn_id TEXT NOT NULL, run_id TEXT NOT NULL,
     epoch INTEGER NOT NULL, step_index INTEGER, revision INTEGER NOT NULL,
     context_id TEXT NOT NULL, context_revision INTEGER NOT NULL,
+    rendered_context_id TEXT, rendered_revision INTEGER,
     metadata_json TEXT, metadata_path TEXT, recorded_at INTEGER NOT NULL,
     PRIMARY KEY(actor_id,request_id), UNIQUE(actor_id,turn_id,epoch,revision),
     FOREIGN KEY(actor_id,context_id,context_revision) REFERENCES context_revisions(actor_id,context_id,revision),
+    FOREIGN KEY(actor_id,rendered_context_id,rendered_revision) REFERENCES context_revisions(actor_id,context_id,revision),
+    CHECK((rendered_context_id IS NULL) = (rendered_revision IS NULL)),
     CHECK((metadata_json IS NULL) <> (metadata_path IS NULL)))`);
   // `lastStep` names the literal `step_index IS NOT NULL`.
   exec(`CREATE INDEX IF NOT EXISTS actor_step_requests ON actor_requests(actor_id,recorded_at) WHERE step_index IS NOT NULL`);
-  // A step's list is a revision of the actor's unselected `requests` context.
-  exec(`CREATE TABLE IF NOT EXISTS request_renders (
-    actor_id TEXT NOT NULL, request_id TEXT NOT NULL, context_id TEXT NOT NULL, revision INTEGER NOT NULL,
-    PRIMARY KEY(actor_id,request_id),
-    FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id),
-    FOREIGN KEY(actor_id,context_id,revision) REFERENCES context_revisions(actor_id,context_id,revision))`);
 }

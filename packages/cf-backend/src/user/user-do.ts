@@ -41,7 +41,7 @@ import {
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
 import { UserDevices, type DeviceCancellationOutcome } from './devices';
-import { DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
+import { ACCOUNT_EPOCH_FIELDS, DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
 import { UserTerminals } from './terminals';
 import { UserScreens } from './screens';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
@@ -1116,12 +1116,10 @@ export class UserDO extends Agent<Env> {
         try {
           // Deleted since the queue was read: never woken.
           if (!this.workspaces.workspaceRegistered(name)) continue;
-          const [marker] = this.sqlx<{ attempts: number }>(`SELECT attempts FROM workspace_overview_nudges WHERE name = ?`, name);
-          const attempts = (marker?.attempts ?? 0) + 1;
+          const [marker] = this.sqlx<{ nudge_attempts: number }>(`SELECT nudge_attempts FROM user_workspaces WHERE name = ?`, name);
+          const attempts = (marker?.nudge_attempts ?? 0) + 1;
 
-          this.sqlx(`INSERT INTO workspace_overview_nudges (name, attempts, next_at) VALUES (?, ?, ?)
-            ON CONFLICT (name) DO UPDATE SET attempts = excluded.attempts, next_at = excluded.next_at`,
-          name, attempts, Date.now() + recoveryBackoffMs(attempts));
+          this.sqlx(`UPDATE user_workspaces SET nudge_attempts = ?, nudge_next_at = ? WHERE name = ?`, attempts, Date.now() + recoveryBackoffMs(attempts), name);
           await objectNamed(this.env.OrchestratorAgent, name).requestOverviewPush();
         } catch (cause) {
           diagnostics.failure('roster.overview_nudge_failed', toKinuError({
@@ -1218,7 +1216,7 @@ export class UserDO extends Agent<Env> {
       const hello = v.safeParse(DeviceHelloSchema, announced);
 
       if (admitted !== 'serve' || !hello.success) {
-        this.sqlx(`INSERT OR IGNORE INTO user_device_protocol_refusals (device_id) VALUES (?)`, deviceId);
+        this.sqlx(`UPDATE user_devices SET protocol_refused = 1 WHERE id = ?`, deviceId);
         // The protocol before this one is pushed the build that brings it here, and nothing else.
         const previous = v.safeParse(DeviceUpdateHelloSchema, announced);
         // Decided and sent in the turn the HELLO arrived, on its socket: nothing is awaited before the send.
@@ -1335,6 +1333,17 @@ export class UserDO extends Agent<Env> {
     for (const { name } of tables) {
       if (indexes.some((index) => name === index || name.startsWith(`${index}_`))) continue;
 
+      // One row of independent fences: each is held once it is set, and only that one.
+      if (name === 'account_epochs') {
+        for (const field of ACCOUNT_EPOCH_FIELDS) {
+          const set = this.sqlx<{ n: number }>(`SELECT COUNT(${field}) AS n FROM account_epochs`)[0]?.n ?? 0;
+
+          if (set > 0) held[`account_epochs.${field}`] = set;
+        }
+
+        continue;
+      }
+
       const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM "${name.replaceAll('"', '""')}"`)[0]?.n ?? 0;
 
       if (rows > 0) held[name] = rows;
@@ -1366,7 +1375,8 @@ export class UserDO extends Agent<Env> {
 
     await forgetSharesReceived(this.env, person, caller, cards.map((card) => ({ ownerUserId: card.owner_user_id, workspace: card.workspace })));
 
-    const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`);
+    // By name: the first teardown refused stops the sweep, so which went first must not be the query planner's choice.
+    const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces ORDER BY name`);
 
     for (const { name } of workspaces) {
       await this.workspaces.tearDownWorkspace(name, ownerUserId);

@@ -2,11 +2,19 @@
 // created adapter-side by `initAccessTokenTable`. Every column the code touches is in its CREATE.
 
 import type { SqlExec } from '../types/primitives';
+import { sqlCheckList } from '../identity/schema';
 import { initExperienceLibraryTables } from '../experience/library';
 import { initDeviceInflightTable } from '../execution/device-inflight';
 import { initEgressVaultTables } from '../safety/egress-vault';
 import { initAccountMemoryTables } from '../memory/account';
-import { initWorkspaceCapabilityTables } from '../safety/workspace-capability';
+
+/** `account_epochs`' fences: a trial is held to each one's being set, not to the row's. */
+export const ACCOUNT_EPOCH_FIELDS = ['auth_generation', 'credentials_revision', 'credential_floor'] as const;
+
+/** What a connection ticket opens: each purpose mints and spends only its own (`connection_tickets`). */
+const CONNECTION_TICKET_PURPOSES = ['device_connect', 'device_join', 'cli_agent_connect'] as const;
+
+export type ConnectionTicketPurpose = (typeof CONNECTION_TICKET_PURPOSES)[number];
 
 /** The sole account profile-catalog row in user_config. */
 export const PROFILE_CATALOG_CONFIG_KEY = 'profile_catalog';
@@ -14,15 +22,12 @@ export const PROFILE_CATALOG_CONFIG_KEY = 'profile_catalog';
 export const WORKSPACE_KEYED_ROWS = [
   { table: 'device_consent', column: 'agent_name', removal: 'before-destroy' },
   { table: 'user_secret_grants', column: 'workspace', removal: 'before-destroy' },
-  { table: 'cli_agent_connect_tickets', column: 'agent_name', removal: 'before-destroy' },
-  { table: 'device_joins', column: 'workspace', removal: 'before-destroy' },
+  { table: 'connection_tickets', column: 'workspace', removal: 'before-destroy' },
   { table: 'user_workspaces', column: 'name', removal: 'after-destroy' },
   { table: 'workspace_overviews', column: 'name', removal: 'after-destroy' },
   { table: 'workspace_logos', column: 'name', removal: 'after-destroy' },
-  { table: 'workspace_overview_nudges', column: 'name', removal: 'after-destroy' },
   { table: 'device_status_watchers', column: 'agent_name', removal: 'after-destroy' },
   { table: 'device_notice_pending', column: 'agent_name', removal: 'after-destroy' },
-  { table: 'workspace_capability_tokens', column: 'workspace_name', removal: 'capability' },
   { table: 'device_inflight_requests', column: 'workspace', removal: { kept: 'the device protocol removes a row once the daemon acknowledges its end' } },
   { table: 'experience_library', column: 'source_workspace', removal: { kept: "provenance: the owner's library outlives the workspace it came from" } },
   { table: 'user_share_cards', column: 'workspace', removal: { kept: "another owner's workspace" } },
@@ -32,7 +37,7 @@ export const WORKSPACE_KEYED_ROWS = [
 export interface WorkspaceKeyedRows {
   readonly table: string;
   readonly column: string;
-  readonly removal: 'before-destroy' | 'after-destroy' | 'capability' | { readonly kept: string };
+  readonly removal: 'before-destroy' | 'after-destroy' | { readonly kept: string };
 }
 
 export function initUserTables(sql: SqlExec): void {
@@ -78,12 +83,19 @@ export function initUserTables(sql: SqlExec): void {
       -- holding it: without this a mid-transfer eviction wedged a name that no
       -- roster read could see and no retry could take back. NULL once the row
       -- is a published workspace: nothing is streaming into it any more.
-      fork_lease_expires_at INTEGER
+      fork_lease_expires_at INTEGER,
+      -- The account's asks for a first overview of a workspace that has pushed
+      -- none, and when it may ask again (user/roster.ts unreportedWorkspaces).
+      nudge_attempts INTEGER NOT NULL DEFAULT 0,
+      nudge_next_at  INTEGER NOT NULL DEFAULT 0,
+      -- The workspace's identity proof: the hash of the capability token that
+      -- only that workspace's object holds (safety/workspace-capability.ts).
+      -- NULL before one is minted and from the teardown's start, which revokes
+      -- it before the object is destroyed.
+      token_hash TEXT UNIQUE
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_workspaces_roster ON user_workspaces (last_visited DESC, name)`);
-
-  initWorkspaceCapabilityTables(sql);
 
   // Value is a JSON-encoded Credential union.
   sql.exec(`
@@ -102,20 +114,20 @@ export function initUserTables(sql: SqlExec): void {
       revision   INTEGER NOT NULL
     )
   `);
-  // Bumped by every CLI/access-token revocation; sockets record the generation they were admitted under.
+  // The account's three fences, independent of each other, each written only by its own column's upsert and NULL until
+  // it is first set (a trial account may hold the first two: cloud-wire.ts TRIAL_ACCOUNT_KEEPS):
+  // - `auth_generation`: bumped by every CLI/access-token revocation; sockets record the generation they were admitted
+  //   under.
+  // - `credentials_revision`: bumped by every credential mutation; cached provider state compares against it, so a lost
+  //   fan-out notification is still noticed. The fan-out is an optimization, not the mechanism.
+  // - `credential_floor`: the oldest built-in password or passkey generation a browser sign-in is admitted under, raised
+  //   by a credential reset (user/sessions.ts raiseCredentialFloor).
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_auth_generation (
-      id         INTEGER PRIMARY KEY CHECK (id = 1),
-      generation INTEGER NOT NULL
-    )
-  `);
-
-  // Bumped by every credential mutation; cached provider state compares against it, so a lost
-  // fan-out notification is still noticed. The fan-out is an optimization, not the mechanism.
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_credentials_revision (
-      id        INTEGER PRIMARY KEY CHECK (id = 1),
-      revision  INTEGER NOT NULL
+    CREATE TABLE IF NOT EXISTS account_epochs (
+      id                   INTEGER PRIMARY KEY CHECK (id = 1),
+      auth_generation      INTEGER,
+      credentials_revision INTEGER,
+      credential_floor     INTEGER
     )
   `);
 
@@ -199,28 +211,20 @@ export function initUserTables(sql: SqlExec): void {
       -- Revocation found a command it could not confirm stopped. This owner-
       -- visible fact survives removal of its active in-flight row; reconnection
       -- cannot clear it because a revoked device never reconnects.
-      unstopped_at    INTEGER
+      unstopped_at    INTEGER,
+      -- The last update the daemon refused: the build, the runtime it ran on
+      -- then, and why. A HELLO on another runtime clears it.
+      update_refused_version TEXT,
+      update_refused_runtime TEXT,
+      update_refusal_reason  TEXT,
+      -- Whether the hub refused the last HELLO for its protocol: the daemon
+      -- must be updated by hand. An accepted HELLO clears it.
+      protocol_refused INTEGER NOT NULL DEFAULT 0 CHECK (protocol_refused IN (0, 1)),
+      CHECK ((update_refused_version IS NULL) = (update_refused_runtime IS NULL)
+        AND (update_refused_version IS NULL) = (update_refusal_reason IS NULL))
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token_hash ON user_devices (token_hash)`);
-
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_device_update_refusals (
-      device_id  TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE,
-      -- The build the daemon refused, the runtime it ran on then, and why.
-      version    TEXT NOT NULL,
-      runtime    TEXT NOT NULL,
-      reason     TEXT NOT NULL,
-      refused_at INTEGER NOT NULL
-    )
-  `);
-
-  // A device whose last HELLO the hub refused for its protocol: its daemon must be updated by hand.
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_device_protocol_refusals (
-      device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE
-    )
-  `);
 
   // Superseded device secrets, kept for the token lifetime: one presented again revokes the device.
   sql.exec(`
@@ -255,12 +259,6 @@ export function initUserTables(sql: SqlExec): void {
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_browser_sessions_exp
             ON user_browser_sessions (expires_at)`);
 
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS user_credential_floor (
-      id         INTEGER PRIMARY KEY CHECK (id = 1),
-      generation INTEGER NOT NULL
-    )
-  `);
 
   // Only SHA-256 hashes are stored. The UNIQUE `authorization_hash` makes one mint per device-flow
   // approval unrepresentable twice (KV has no CAS); NULLs never collide.
@@ -303,46 +301,35 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
-  // Single-use tickets keep long-lived device tokens out of URLs and edge logs; spending one deletes its row.
+  // Single-use tickets keep long-lived tokens out of URLs and edge logs; spending one deletes its row, so a ticket is
+  // live or gone. Each purpose spends only its own (cf-backend user/single-use-tickets.ts):
+  // - `device_connect`: a daemon's socket, traded for its long-lived token. `token_was_current` says whether that token
+  //   was the device's CURRENT secret rather than the one-shot grace. The accept reads it to decide whether its rotation
+  //   may leave a grace behind: a machine recovering ON the grace shares that secret with whoever else holds a copy of
+  //   device.json, so re-granting one there is what let two claimants alternate forever.
+  // - `device_join`: a device the browser asked to connect, issued before the machine registers. The machine claims
+  //   `device_id`, so the page that asked watches the one row it will become; `workspace` is the one whose Environment
+  //   issued it, granted on registering, or null for none. Thirty minutes, one per device.
+  // - `cli_agent_connect`: a CLI bearer's socket to `workspace`; `cli_token_hash` is the bearer that asked, revalidated
+  //   when it is spent. Whose it is, the ticket's own text says (`pat_<userId>_...`).
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS device_connect_tickets (
+    CREATE TABLE IF NOT EXISTS connection_tickets ( /* refilled by the next ticket a machine or CLI asks for: each row lives one to thirty minutes */
       ticket_hash       TEXT PRIMARY KEY,
-      device_id         TEXT NOT NULL,
+      purpose           TEXT NOT NULL CHECK (purpose IN (${sqlCheckList(CONNECTION_TICKET_PURPOSES)})),
       expires_at        INTEGER NOT NULL,
-      -- Whether the token exchanged for this ticket was the device's CURRENT
-      -- secret rather than the one-shot grace. The accept reads it to decide
-      -- whether its rotation may leave a grace behind: a machine recovering ON
-      -- the grace shares that secret with whoever else holds a copy of
-      -- device.json, so re-granting one there is what let two claimants
-      -- alternate forever.
-      token_was_current INTEGER
+      device_id         TEXT,
+      token_was_current INTEGER,
+      workspace         TEXT,
+      cli_token_hash    TEXT,
+      CHECK ((purpose = 'device_connect' AND device_id IS NOT NULL AND token_was_current IS NOT NULL AND workspace IS NULL
+          AND cli_token_hash IS NULL)
+        OR (purpose = 'device_join' AND device_id IS NOT NULL AND token_was_current IS NULL AND cli_token_hash IS NULL)
+        OR (purpose = 'cli_agent_connect' AND device_id IS NULL AND token_was_current IS NULL AND workspace IS NOT NULL
+          AND cli_token_hash IS NOT NULL))
     )
   `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_device_connect_tickets_exp ON device_connect_tickets (expires_at)`);
-
-  // A device the browser asked to connect, issued before the machine registers: the machine claims this id, so the
-  // page that asked watches the one row it will become. Unclaimed past `expires_at`, it claims nothing. The command
-  // carries `ticket_hash`'s ticket, which claims it on a machine with no session; `workspace` is the one whose
-  // Environment issued it, which the device is granted on registering.
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS device_joins ( /* refilled by the device's next join: each row a ticket of 30 minutes */
-      device_id   TEXT PRIMARY KEY,
-      ticket_hash TEXT NOT NULL UNIQUE,
-      workspace   TEXT,
-      expires_at  INTEGER NOT NULL
-    )
-  `);
-
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS cli_agent_connect_tickets (
-      ticket_hash    TEXT PRIMARY KEY,
-      user_id        TEXT NOT NULL,
-      agent_name     TEXT NOT NULL,
-      cli_token_hash TEXT NOT NULL,
-      expires_at     INTEGER NOT NULL
-    )
-  `);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_cli_agent_connect_tickets_exp ON cli_agent_connect_tickets (expires_at)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_connection_tickets_exp ON connection_tickets (expires_at)`);
+  sql.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_connection_tickets_join ON connection_tickets (device_id) WHERE purpose = 'device_join'`);
 
   initExperienceLibraryTables(sql);
 
@@ -363,14 +350,6 @@ export function initUserTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS workspace_logos (
       name     TEXT PRIMARY KEY,
       svg      TEXT NOT NULL
-    )
-  `);
-
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS workspace_overview_nudges (
-      name     TEXT PRIMARY KEY,
-      attempts INTEGER NOT NULL,
-      next_at  INTEGER NOT NULL
     )
   `);
 

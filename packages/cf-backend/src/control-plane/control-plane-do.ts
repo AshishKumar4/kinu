@@ -177,7 +177,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
   async exploreInstalled(caller: PresentedCaller, install: { readonly kind: ExploreKind; readonly workspace: string; readonly item: string; readonly userId: string }): Promise<boolean> {
     await this.gate(caller, 'gallery.mark');
 
-    return this.gallery.installed(install, Date.now());
+    return this.gallery.installed(install);
   }
 
   /** The listings `email` starred. */
@@ -187,18 +187,24 @@ export class ControlPlaneDO extends DurableObject<Env> {
     return this.gallery.starred(email, Date.now());
   }
 
-  /** A signed-in person's star, its withdrawal, or their report; false when the slate is not listed. */
-  async galleryMark(caller: PresentedCaller, email: string, mark: GalleryMark): Promise<boolean> {
+  /** A signed-in person's star, its withdrawal, or their report, which the operators read as feedback; false when the
+   *  slate is not listed. */
+  async galleryMark(caller: PresentedCaller, person: { readonly email: string; readonly userId: string }, mark: GalleryMark): Promise<boolean> {
     await this.gate(caller, 'gallery.mark');
-    const at = { email, workspace: mark.workspace, slate: mark.slate };
 
-    return mark.kind === 'star' ? this.gallery.star({ ...at, on: mark.on, kind: mark.listing ?? 'app' }, Date.now()) : this.gallery.report({ ...at, reason: mark.reason }, Date.now());
+    if (mark.kind === 'star') return this.gallery.star({ email: person.email, workspace: mark.workspace, slate: mark.slate, on: mark.on, kind: mark.listing ?? 'app' }, Date.now());
+
+    if (this.gallery.listed(mark.workspace, mark.slate) === null) return false;
+    cpStore.recordGalleryReport(this.store, { ...person, workspace: mark.workspace, slate: mark.slate, reason: mark.reason }, Date.now());
+
+    return true;
   }
 
   /** A deleted account's stars, reports and installs. */
   async galleryForget(caller: PresentedCaller, person: { readonly email: string; readonly userId: string }): Promise<void> {
     await this.gate(caller, 'gallery.forget');
     this.gallery.forget(person);
+    cpStore.forgetGalleryReports(this.store, person.email);
   }
 
   /**

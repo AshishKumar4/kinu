@@ -12,9 +12,12 @@ import { boundedInt } from '../utils/bounds';
 import { initGalleryTables } from '../slates/gallery';
 import type { ControlPlaneSql, ControlPlaneSqlValue } from './sql';
 import {
-  FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS,
+  type ControlFeedbackRow, FEEDBACK_KINDS, FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS,
   type FeedbackRecord,
 } from '../feedback/contract';
+import { sqlCheckList } from '../identity/schema';
+import { sha256Hex } from '../safety/argument-digest';
+import { galleryPagePath } from '../slates/gallery-api';
 
 export type { ControlPlaneSql } from './sql';
 
@@ -48,6 +51,7 @@ const DDL = [
      ON cp_workspaces (last_seen_at DESC, user_id, name)`,
   `CREATE TABLE IF NOT EXISTS cp_feedback (
      id            TEXT PRIMARY KEY,
+     kind          TEXT    NOT NULL CHECK (kind IN (${sqlCheckList(FEEDBACK_KINDS)})),
      created_at    INTEGER NOT NULL,
      user_id       TEXT    NOT NULL,
      email         TEXT    NOT NULL,
@@ -641,10 +645,11 @@ function projectAudit(row: AuditSqlRow): ControlAuditRow {
   };
 }
 
-export type ControlFeedbackRow = FeedbackRecord;
+export type { ControlFeedbackRow };
 
 const FeedbackSqlRowSchema = v.object({
   id: v.string(),
+  kind: v.picklist(FEEDBACK_KINDS),
   created_at: v.number(),
   user_id: v.string(),
   email: v.string(),
@@ -661,8 +666,8 @@ export interface FeedbackWritten { id: string }
 /** Screenshot bytes live elsewhere; the row carries only their size. */
 export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): FeedbackWritten {
   sql.exec(`INSERT INTO cp_feedback
-       (id, created_at, user_id, email, note, route, workspace, bytes)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       (id, kind, created_at, user_id, email, note, route, workspace, bytes)
+     VALUES (?, 'feedback', ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO NOTHING`,
     row.id, row.createdAt, row.userId, row.email,
     clampText(row.note, FEEDBACK_MAX_NOTE_CHARS),
@@ -672,10 +677,35 @@ export function recordFeedback(sql: ControlPlaneSql, row: FeedbackRecord): Feedb
   return { id: row.id };
 }
 
+/** A person's report of a listed Gallery slate, filed against the slate's page: reporting it again replaces the
+ *  reason and its time, and it is kept past an unlist, for the operators. Its id is the person and the listing whole,
+ *  never the route, which is clamped for display, so two listings sharing a long prefix are two reports. No workspace
+ *  of theirs is attributed. */
+export function recordGalleryReport(
+  sql: ControlPlaneSql,
+  report: { readonly userId: string; readonly email: string; readonly workspace: string; readonly slate: string; readonly reason: string },
+  now: number,
+): void {
+  const id = `gallery-report:${sha256Hex(JSON.stringify([report.email, report.workspace, report.slate]))}`;
+
+  // A feedback row that took this id is left as it is: only a report is replaced.
+  sql.exec(`INSERT INTO cp_feedback
+       (id, kind, created_at, user_id, email, note, route, workspace, bytes)
+     VALUES (?, 'gallery_report', ?, ?, ?, ?, ?, NULL, NULL)
+     ON CONFLICT(id) DO UPDATE SET note = excluded.note, created_at = excluded.created_at WHERE kind = 'gallery_report'`,
+    id, now, report.userId, report.email,
+    clampText(report.reason, FEEDBACK_MAX_NOTE_CHARS), clampText(galleryPagePath(report.workspace, report.slate), FEEDBACK_MAX_ROUTE_CHARS));
+}
+
+/** A deleted account's Gallery reports; the feedback it filed stays, as it always has. */
+export function forgetGalleryReports(sql: ControlPlaneSql, email: string): void {
+  sql.exec(`DELETE FROM cp_feedback WHERE kind = 'gallery_report' AND email = ?`, email);
+}
+
 export function listFeedback(sql: ControlPlaneSql, request: PageRequest = {}): Page<ControlFeedbackRow> {
   return settleSync(seekNewest(sql, request, {
     schema: FeedbackSqlRowSchema,
-    columns: 'id, created_at, user_id, email, note, route, workspace, bytes',
+    columns: 'id, kind, created_at, user_id, email, note, route, workspace, bytes',
     from: 'cp_feedback',
     at: 'created_at',
     id: 'id',
@@ -687,6 +717,7 @@ export function listFeedback(sql: ControlPlaneSql, request: PageRequest = {}): P
 function projectFeedback(row: FeedbackSqlRow): ControlFeedbackRow {
   return {
     id: row.id,
+    kind: row.kind,
     createdAt: row.created_at,
     userId: row.user_id,
     email: row.email,

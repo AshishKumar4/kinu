@@ -71,9 +71,9 @@ describe("deleting an account on real workerd, every store's census", () => {
       mailbox: { mail_box: 1, mail_messages: 1, mail_attachments: 1 },
       mailName: { state: 'active', user_id: priya.userId },
       preview: true,
-      controlPlane: { cp_users: 1, cp_workspaces: 1, cp_feedback: 1, cp_audit_naming: 1, gallery_stars: 1, gallery_reports: 1, gallery_installs: 1, feedback_objects: 1 },
+      controlPlane: { cp_users: 1, cp_workspaces: 1, cp_feedback: 2, cp_audit_naming: 1, gallery_stars: 1, gallery_installs: 1, feedback_objects: 1 },
       signIn: 1,
-      danaWorkspace: { slate_share_users: 1, slate_live_share_users: 1, slate_viewer_requests: 1, slate_edit_marks: 1 },
+      danaWorkspace: { slate_share_users: 2, slate_share_users_revoked: 0, slate_viewer_requests: 0, slate_edit_marks: 1 },
       danaAccount: { cards: 1, overviews: 1 },
     });
     expect(before.mailbox['r2_objects']).toBeGreaterThan(0);
@@ -108,10 +108,10 @@ describe("deleting an account on real workerd, every store's census", () => {
       driveShards: 0,
       preview: false,
       controlPlane: {
-        cp_users: 0, cp_workspaces: 0, cp_feedback: 0, cp_audit_naming: 0, cp_audit_rows: 1, gallery_stars: 0, gallery_reports: 0, gallery_installs: 0, feedback_objects: 0,
+        cp_users: 0, cp_workspaces: 0, cp_feedback: 0, cp_audit_naming: 0, cp_audit_rows: 1, gallery_stars: 0, gallery_installs: 0, feedback_objects: 0,
       },
       signIn: 0,
-      danaWorkspace: { slate_share_users: 0, slate_live_share_users: 0, slate_viewer_requests: 0, slate_edit_marks: 0, slate_share_views: 0 },
+      danaWorkspace: { slate_share_users: 0, slate_share_users_revoked: 0, slate_viewer_requests: 0, slate_edit_marks: 0, slate_share_views: 0 },
       danaAccount: { cards: 0, overviews: 0 },
     });
   });

@@ -77,13 +77,14 @@ export const EVAL_WORKSPACE_LEASE_MS = 10 * EVAL_WORKSPACE_BEAT_MS;
 /**
  * The tables a trial account may hold rows in when its trial opens: its provider keys and what keeps them (the
  * revision counters), and the account's own bookkeeping (its profile,
- * schema version, token generation, and the agents SDK's state row, which the account never writes). A device-status
+ * schema version, token generation, and the agents SDK's state row, which the account never writes). `account_epochs`
+ * is held field by field: a credential floor, once set, is another trial's sign-in history, at any value. A device-status
  * watcher names the workspace that registered it, which the account keeps after the workspace is deleted until a
  * device moves: no later trial opens a workspace of that name.
  */
 const TRIAL_ACCOUNT_KEEPS: ReadonlySet<string> = new Set([
-  'user_credentials', 'user_credential_revisions', 'user_credentials_revision',
-  'user_profile', 'user_auth_generation', 'cf_agents_state', 'device_status_watchers',
+  'user_credentials', 'user_credential_revisions', 'account_epochs.credentials_revision',
+  'user_profile', 'account_epochs.auth_generation', 'cf_agents_state', 'device_status_watchers',
 ]);
 
 /**

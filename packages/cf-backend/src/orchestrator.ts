@@ -2506,9 +2506,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Parked commands, held: DeferredApprovalStore's create, decide, spend and settle run over `sql`, which drops them. */
-  private readonly queuedApprovals = this.held.hold(['deferred_approvals'], () => this.deferrals.approvals());
+  private readonly queuedApprovals = this.held.hold(['owner_requests'], () => this.deferrals.approvals());
 
-  private readonly consentApprovals = this.held.hold(['device_consent_asks'], () => this.consents.approvals());
+  private readonly consentApprovals = this.held.hold(['owner_requests'], () => this.consents.approvals());
 
   /** Approvals combine device consent asks and parked commands; a parked command's effect has not happened. */
   protected override extraDynamicContext(): ActorDynamicContextExtras {

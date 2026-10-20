@@ -26,7 +26,7 @@ import type { ChatWireTransport } from '../../src/chat-transport';
 import type { AgentTurns } from '../../src/agent-turns';
 import type { PictureBucket } from '../../src/slates/pictures';
 import { isWorkMode, turnTags, type UserProfile } from '@kinu.run/core';
-import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
+import { ActorClaimStore, agentArtifactDirectory, prepareOutput, agentHome, CHAT_SESSION_ID, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
 import { answeredAs, present, admitTestClaim } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
@@ -1988,14 +1988,13 @@ export async function reactivateOrchestratorHarness(
   },
 ): Promise<StartedHarness> {
   // Durable state the prior activation left, written through the stores before `onStart` runs the recovery.
-  const config = workspaceMainActor(db).config;
+  const main = workspaceMainActor(db);
+  const config = main.config;
 
   if (opts?.sleepTimeAnswer) {
     const [key, update] = opts.sleepTimeAnswer;
     config.setSleepTimeComputeEnabled(true);
-    db.prepare(
-      'INSERT INTO sleep_time_updates (effect_key, update_json) VALUES (?, ?) ON CONFLICT(effect_key) DO NOTHING',
-    ).run(key, JSON.stringify(update));
+    prepareOutput(wrapDatabase(db).sql, main, { scope: 'sleep_time', key }, JSON.stringify(update));
   } else {
     config.setSleepTimeComputeEnabled(false);
   }

@@ -47,8 +47,15 @@ async function gallery(env: Env): Promise<{ readonly plane: DurableObjectStub<Co
   return { plane: controlPlaneStub(env), caller: await internalCaller(env) };
 }
 
+/** The signed-in person, by the email the Gallery keys them by and their account. */
+async function personOf(c: Context<FamilyEnv<Env, object>>): Promise<{ readonly email: string; readonly userId: string } | null> {
+  const identity = await requestIdentity(c.req.raw, c.env);
+
+  return identity === null ? null : { email: identity.email.trim().toLowerCase(), userId: identity.userId };
+}
+
 async function viewerOf(c: Context<FamilyEnv<Env, object>>): Promise<string | null> {
-  return (await requestIdentity(c.req.raw, c.env))?.email.trim().toLowerCase() ?? null;
+  return (await personOf(c))?.email ?? null;
 }
 
 galleryRoutes.get('/api/explore', async (c) => {
@@ -79,7 +86,7 @@ galleryRoutes.get('/api/explore/workspaces/:id', async (c) => {
 
 /** A signed-in person's mark on a listing: 204, or 404 when the slate is not listed. */
 async function marked(c: Context<FamilyEnv<Env, object>>, mark: (body: v.InferOutput<typeof MarkBody>) => GalleryMark | null): Promise<Response> {
-  const viewer = await viewerOf(c);
+  const viewer = await personOf(c);
 
   if (viewer === null) return err(401, 'Sign in to star or report a slate');
   const body = await safeJson(c.req.raw, MarkBody);
@@ -96,7 +103,7 @@ galleryRoutes.post('/api/gallery/star', async (c) => marked(c, (body) => (body.o
 
 /** A signed-in person's star on one of Kinu's workspace blueprints: 204, or 404 when it is not listed. */
 galleryRoutes.post('/api/explore/workspaces/:id/star', async (c) => {
-  const viewer = await viewerOf(c);
+  const viewer = await personOf(c);
 
   if (viewer === null) return err(401, 'Sign in to star a workspace');
   const body = await safeJson(c.req.raw, v.object({ on: v.boolean() }));

@@ -8,7 +8,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 
 import type { DynamicApproval } from '../types/dynamic-context';
 import { InvocationSurfaceSchema, resumedSurfaceMetadata, type InvocationSurface } from '../types/jobs';
-import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { SqlExecutor } from '../types/primitives';
 import type { AgentSignal } from '../types/signals';
 import { diagnostics, renderThrownChain, settle, type ErrorCode, type KinuError } from '../obs/index';
 import { DENIAL_STANDING_MS } from './deferred-approval';
@@ -151,32 +151,16 @@ export interface DeviceConsentAsk extends PendingDeviceConsent {
   readonly decidedAt: number | null;
 }
 
-export function initDeviceConsentAsksTable(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS device_consent_asks (
-    consent_id      TEXT PRIMARY KEY,
-    actor_id        TEXT,
-    device_id       TEXT NOT NULL,
-    device_label    TEXT NOT NULL,
-    method          TEXT NOT NULL,
-    command         TEXT NOT NULL,
-    workspace_name  TEXT,
-    created_at      INTEGER NOT NULL,
-    epoch           INTEGER NOT NULL,
-    status          TEXT NOT NULL DEFAULT 'queued',
-    decided_at      INTEGER,
-    surface         TEXT
-  )`);
-}
-
+/** A `device` row of `owner_requests` (safety/owner-requests.ts). */
 interface AskRow {
-  consent_id: string;
+  id: string;
   actor_id: string | null;
   device_id: string;
   device_label: string;
   method: string;
   command: string;
   workspace_name: string | null;
-  created_at: number;
+  requested_at: number;
   epoch: number;
   status: string;
   decided_at: number | null;
@@ -187,12 +171,12 @@ const StatusSchema = v.picklist(['queued', 'once', 'always', 'deny']);
 
 function toAsk(r: AskRow): DeviceConsentAsk {
   return {
-    consentId: r.consent_id,
+    consentId: r.id,
     deviceId: r.device_id,
     deviceLabel: r.device_label,
     method: r.method,
     command: r.command,
-    createdAt: r.created_at,
+    createdAt: r.requested_at,
     epoch: r.epoch,
     status: v.parse(StatusSchema, r.status),
     decidedAt: r.decided_at,
@@ -209,8 +193,8 @@ function pendingOf(ask: DeviceConsentAsk): PendingDeviceConsent {
   return pending;
 }
 
-/** Rows in `device_consent_asks`: one per ask, kept until the call it answers spends it, or a denial has stood its
- *  {@link DENIAL_STANDING_MS}. */
+/** The `device` rows of `owner_requests`: one per ask, kept until the call it answers spends it, or a denial has stood
+ *  its {@link DENIAL_STANDING_MS}. */
 export class DeviceConsentStore {
   constructor(private readonly sql: SqlExecutor) {}
 
@@ -218,28 +202,29 @@ export class DeviceConsentStore {
    *  would answer nobody: it can neither be told nor re-issue; the owner's own stand. */
   queued(): DeviceConsentAsk[] {
     return this.sql<AskRow>`
-      SELECT c.* FROM device_consent_asks c LEFT JOIN workspace_actors a ON a.actor_id = c.actor_id
-      WHERE c.status = 'queued' AND (c.actor_id IS NULL OR (a.retiring_at IS NULL AND a.deleted_at IS NULL AND a.actor_id IS NOT NULL))
-      ORDER BY c.created_at ASC, c.rowid ASC`.map(toAsk);
+      SELECT c.* FROM owner_requests c LEFT JOIN workspace_actors a ON a.actor_id = c.actor_id
+      WHERE c.kind = 'device' AND c.status = 'queued'
+        AND (c.actor_id IS NULL OR (a.retiring_at IS NULL AND a.deleted_at IS NULL AND a.actor_id IS NOT NULL))
+      ORDER BY c.requested_at ASC, c.rowid ASC`.map(toAsk);
   }
 
   /** The newest ask of exactly this request, an approval only from its own epoch; a changed device label is
    *  presentation metadata, not a new question. */
   standing(req: DeviceConsentRequest): DeviceConsentAsk | null {
     const [row] = this.sql<AskRow>`
-      SELECT * FROM device_consent_asks
-      WHERE device_id = ${req.deviceId} AND workspace_name IS ${req.workspaceName ?? null} AND actor_id IS ${req.actorId ?? null}
+      SELECT * FROM owner_requests
+      WHERE kind = 'device' AND device_id = ${req.deviceId} AND workspace_name IS ${req.workspaceName ?? null} AND actor_id IS ${req.actorId ?? null}
         AND method = ${req.method} AND command = ${req.command}
         AND (status IN ('queued', 'deny') OR epoch = ${req.epoch})
-      ORDER BY created_at DESC, rowid DESC LIMIT 1`;
+      ORDER BY requested_at DESC, rowid DESC LIMIT 1`;
 
     return row === undefined ? null : toAsk(row);
   }
 
   insert(ask: DeviceConsentAsk): void {
-    void this.sql`INSERT INTO device_consent_asks
-      (consent_id, actor_id, device_id, device_label, method, command, workspace_name, created_at, epoch, status, decided_at, surface)
-      VALUES (${ask.consentId}, ${ask.actorId ?? null}, ${ask.deviceId}, ${ask.deviceLabel}, ${ask.method},
+    void this.sql`INSERT INTO owner_requests
+      (kind, id, actor_id, device_id, device_label, method, command, workspace_name, requested_at, epoch, status, decided_at, surface)
+      VALUES ('device', ${ask.consentId}, ${ask.actorId ?? null}, ${ask.deviceId}, ${ask.deviceLabel}, ${ask.method},
         ${ask.command}, ${ask.workspaceName ?? null}, ${ask.createdAt}, ${ask.epoch}, ${ask.status}, ${ask.decidedAt}, ${ask.surface ?? null})`;
     markStoreChanged(this.sql);
   }
@@ -247,8 +232,8 @@ export class DeviceConsentStore {
   /** The owner's answer on a waiting ask; null when nothing by that id waits. One row means one answer. */
   decide(consentId: string, answer: DeviceConsentAnswer, now: number): DeviceConsentAsk | null {
     const [row] = this.sql<AskRow>`
-      UPDATE device_consent_asks SET status = ${answer}, decided_at = ${now}
-      WHERE consent_id = ${consentId} AND status = 'queued' RETURNING *`;
+      UPDATE owner_requests SET status = ${answer}, decided_at = ${now}
+      WHERE kind = 'device' AND id = ${consentId} AND status = 'queued' RETURNING *`;
 
     if (row !== undefined) markStoreChanged(this.sql);
 
@@ -257,9 +242,9 @@ export class DeviceConsentStore {
 
   /** The call an approval answers spends it, under the epoch it was given in: whether this call won the row. */
   spend(consentId: string, epoch: number): boolean {
-    const spent = this.sql<{ consent_id: string }>`
-      DELETE FROM device_consent_asks WHERE consent_id = ${consentId} AND status IN ('once', 'always') AND epoch = ${epoch}
-      RETURNING consent_id`;
+    const spent = this.sql<{ id: string }>`
+      DELETE FROM owner_requests WHERE kind = 'device' AND id = ${consentId} AND status IN ('once', 'always') AND epoch = ${epoch}
+      RETURNING id`;
 
     if (spent.length > 0) markStoreChanged(this.sql);
 
@@ -268,8 +253,8 @@ export class DeviceConsentStore {
 
   /** Denials that have stood their time, and approvals a revocation since made void; nothing else sweeps them. */
   sweep(now: number, epoch: number): void {
-    void this.sql`DELETE FROM device_consent_asks
-      WHERE (status = 'deny' AND decided_at <= ${now - DENIAL_STANDING_MS}) OR (status IN ('once', 'always') AND epoch < ${epoch})`;
+    void this.sql`DELETE FROM owner_requests WHERE kind = 'device'
+      AND ((status = 'deny' AND decided_at <= ${now - DENIAL_STANDING_MS}) OR (status IN ('once', 'always') AND epoch < ${epoch}))`;
   }
 }
 

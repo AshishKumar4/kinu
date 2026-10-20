@@ -29,7 +29,7 @@ import {
   type SqlValue,
 } from '@kinu.run/core';
 import { makeExecRaw, makeSql } from '../../../core/tests/helpers';
-import { initDeviceConsentAsksTable } from '../../../core/src/safety/device-consent';
+import { initOwnerRequestsTable } from '../../../core/src/safety/owner-requests';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { PictureBucket } from '../../src/slates/pictures';
@@ -522,7 +522,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     const storage = new Database(':memory:');
     // The workspace's own actors, which an ask's live-agent read joins: the harness's asks name none of them.
     initWorkspaceActorTable(makeExecRaw(storage));
-    initDeviceConsentAsksTable(makeExecRaw(storage));
+    initOwnerRequestsTable(makeExecRaw(storage));
     const store = new DeviceConsentStore(makeSql(storage));
     consentStores.set(name, store);
 

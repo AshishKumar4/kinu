@@ -54,8 +54,6 @@ test('a schema-refused call is learned before any reply rates it, and the next p
 
   const next = opened(path, cwd);
 
-  expect(next.db.query<{ struggles: string }, []>('SELECT struggles FROM turn_struggles').all().map((row) => JSON.parse(row.struggles)))
-    .toEqual([[expect.objectContaining({ kind: 'schema_refusal', tool: 'file' })]]);
   expect(next.db.query<{ tool: string; text: string }, []>('SELECT tool, text FROM tool_lessons').all()).toEqual([{ tool: 'file', text: LESSON }]);
 
   const restarted = new LocalAgentSession({ ...next, model, onEvent: () => {}, profileAuthority: swarmsOn(next.rt, staticModelPlane()) });

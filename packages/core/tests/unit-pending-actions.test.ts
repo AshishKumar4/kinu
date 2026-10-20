@@ -129,7 +129,7 @@ describe('what the inspector opens for on its own', () => {
     const asked = (status: 'open' | 'answered') => ({
       agent: 'courier', actor: 'actor-courier',
       asked: {
-        id: 'ask-1', actor: 'actor-courier', callId: 'c-1', turnId: 't-1', mode: 'build' as const, status, answers: null, askedAt: 1, closedAt: null,
+        id: 'ask-1', actor: 'actor-courier', callId: 'c-1', turnId: 't-1', mode: 'build' as const, status, answers: null, askedAt: 1,
         questions: [{ id: 'units', question: 'Which unit?', options: [{ label: 'Cents' }, { label: 'Dollars' }] }],
       },
     });

@@ -166,7 +166,7 @@ export class CensusWorkspace extends ProductionOrchestrator {
     sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, ...WORKSPACE_METHODS]);
   }
 
-  /** Dana's board shared with Priya: a blueprint share naming her, a live share she edits and opened, her requests. */
+  /** Dana's board shared with Priya: a blueprint share naming her, a live share she edits and opened, and one revoked. */
   async seedShareWith(person: Person): Promise<void> {
     const sql = this.ctx.storage.sql;
     const execRaw = (query: string): void => { sql.exec(query); };
@@ -174,13 +174,16 @@ export class CensusWorkspace extends ProductionOrchestrator {
     initSlateShareTables(execRaw);
     initSlateLiveShareTables(execRaw);
     const shares = new SlateShareStore(sql);
-    shares.add({ id: 'share-board', slate: 'board', publication: 'pub-1', included: [] });
+    shares.add({ id: 'share-board', slate: 'board', publication: 'pub-1' });
     shares.addUsers('share-board', [{ userId: person.userId, email: person.email }]);
     const live = new SlateLiveShareStore(sql);
     live.add({ id: 'live-board', slate: 'board', visibility: 'users', handle: 'board-handle', grant: { slates: ['board'], members: [] } });
-    sql.exec(`INSERT INTO slate_live_share_users (share_id, user_id, email, created_at, role) VALUES ('live-board', ?, ?, 1, 'edit')`, person.userId, person.email);
-    sql.exec(`INSERT INTO slate_viewer_requests (share_id, viewer, path, calls, outcome, created_at) VALUES ('live-board', ?, '/', '[]', 'ok', 1)`, `user:${person.userId}`);
-    sql.exec(`INSERT INTO slate_edit_marks (slate_id, editor, revision_before) VALUES ('board', ?, NULL)`, person.email);
+    live.addUsers('live-board', [{ userId: person.userId, email: person.email, role: 'edit' }]);
+    live.markEdit('board', person.email);
+    // A share Dana revoked once Priya was on it: it keeps no member.
+    live.add({ id: 'live-old', slate: 'board', visibility: 'users', handle: 'old-handle', grant: { slates: ['board'], members: [] } });
+    live.addUsers('live-old', [{ userId: person.userId, email: person.email }]);
+    live.revoke('live-old');
     const view = await shareViewerKey(this.env, 'live-board', person.userId);
 
     if (view !== null) sql.exec(`INSERT INTO slate_share_views (share, viewer, opens) VALUES ('live-board', ?, 1)`, view);
@@ -194,8 +197,8 @@ export class CensusWorkspace extends ProductionOrchestrator {
 
     return {
       slate_share_users: count('SELECT COUNT(*) AS n FROM slate_share_users WHERE user_id = ? OR lower(email) = ?', person.userId, person.email),
-      slate_live_share_users: count('SELECT COUNT(*) AS n FROM slate_live_share_users WHERE user_id = ? OR lower(email) = ?', person.userId, person.email),
-      slate_viewer_requests: count('SELECT COUNT(*) AS n FROM slate_viewer_requests WHERE viewer = ?', `user:${person.userId}`),
+      slate_share_users_revoked: count(`SELECT COUNT(*) AS n FROM slate_share_users WHERE share_id = 'live-old'`),
+      slate_viewer_requests: count('SELECT COUNT(*) AS n FROM slate_viewer_requests WHERE instr(viewer, ?) > 0', person.userId),
       slate_edit_marks: count('SELECT COUNT(*) AS n FROM slate_edit_marks WHERE lower(editor) = ?', person.email),
       slate_share_views: view === null ? 0 : count('SELECT COUNT(*) AS n FROM slate_share_views WHERE viewer = ?', view),
     };
@@ -240,8 +243,8 @@ export class CensusControlPlaneDO extends ControlPlaneDO {
       listed: true, share: 'live-board', workspace: 'northwind-api', slate: 'board', handle: 'board-handle', url: 'https://kinu.run/s/board-handle',
       card: { title: 'Webhook board', line: 'Northwind webhook deliveries', category: 'developer', ownerName: 'Dana Whitfield', picture: null, viewers: 1 },
     });
-    await this.galleryMark(caller, person.email, { kind: 'star', workspace: 'northwind-api', slate: 'board', on: true });
-    await this.galleryMark(caller, person.email, { kind: 'report', workspace: 'northwind-api', slate: 'board', reason: 'spam' });
+    await this.galleryMark(caller, person, { kind: 'star', workspace: 'northwind-api', slate: 'board', on: true });
+    await this.galleryMark(caller, person, { kind: 'report', workspace: 'northwind-api', slate: 'board', reason: 'spam' });
     await this.exploreInstalled(caller, { kind: 'app', workspace: 'northwind-api', item: 'board', userId: person.userId });
   }
 
@@ -260,7 +263,6 @@ export class CensusControlPlaneDO extends ControlPlaneDO {
       cp_audit_naming: audit.filter((row) => AUDIT_COLUMNS.some((column) => names(row[column]))).length,
       cp_audit_rows: audit.length,
       gallery_stars: count('SELECT COUNT(*) AS n FROM gallery_stars WHERE email = ?', person.email),
-      gallery_reports: count('SELECT COUNT(*) AS n FROM gallery_reports WHERE email = ?', person.email),
       gallery_installs: count('SELECT COUNT(*) AS n FROM gallery_installs WHERE user_id = ?', person.userId),
       feedback_objects: listed?.objects.length ?? 0,
     };

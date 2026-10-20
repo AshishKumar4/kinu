@@ -480,7 +480,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     return settle(answer(`changing slate ${slate}'s files`, Effect.gen({ self: this }, function* () {
       const session = yield* Effect.promise(async () => this.ports.session());
       const root = `${SLATES_ROOT}/${slate}`;
-      const batch = writeSlateBatch({ session, root, files, slate, editor, marks: this.live, revision: slateRevision(this.builds, slate) });
+      const batch = writeSlateBatch({ session, root, files, slate, editor, marks: this.live });
 
       for (const share of this.live.list().filter((row) => row.slate === slate && row.revokedAt === null && row.mode === 'owner')) this.ports.ownerEffects?.retire(share.slate);
       this.filesChanged(batch.paths.map((path) => `${root}/${path}`));
@@ -687,7 +687,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
         if (input.mode === 'owner' && mark !== null) {
           // A different last-good revision can belong to an older in-flight build. The reviewed tree must itself be
-          // the one the current root image compiled, not merely newer than revisionBefore. Capture joins this VFS/SQL
+          // the one the current root image compiled, not merely newer than the revision before the edit. Capture joins this VFS/SQL
           // transaction directly, without an await or a nested files.transaction().
           const content = this.content ?? new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL));
           const files = new SlateFiles(session.vfs.as(CRED_SESSION_USER), content, this.ports.sql, (body) => session.vfs.withTransaction(body));
