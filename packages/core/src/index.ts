@@ -908,7 +908,6 @@ export {
   extractJsonObject,
   jsonArrayOnlyInstruction,
   jsonObjectOnlyInstruction,
-  stripMarkdownFences,
 } from './providers/structured';
 
 export { EVIDENCE_BUDGETS, evidenceWindow, renderToolResult } from './utils/evidence-window';

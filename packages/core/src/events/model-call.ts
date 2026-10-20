@@ -56,7 +56,7 @@ export const SPEND_SOURCE_DETAIL = {
   compaction: 'folding history when the context window fills',
   judge: 'grading this agent\'s own work: branch scores, merge narrative',
   fast: 'the mechanical tier: extraction, titles, summaries',
-  reflection: 'the evolution engine\'s own reasoning, and GEPA',
+  reflection: 'the evolution engine\'s own reasoning',
   head: 'exploration heads, one loop per fork',
   swarm: 'the expansion candidates of a configured search, and the measurements that '
     + 'score them by the objective\'s verifier',

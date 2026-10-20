@@ -320,7 +320,7 @@ export function headsCommand(name: string, opts: InspectOpts = {}): Promise<void
       local: () => decodeJsonValue({ value: listLocalHeads(target.localName, limit) }),
     }));
 
-    yield* printRows(data, opts, (item) => formatRunRow(item, HEAD_RUN_ROW));
+    yield* printRows(data, opts, (item) => formatRunRow(item));
   }));
 }
 
@@ -484,18 +484,10 @@ function formatTimelineRow(item: JsonValue): string {
   return `${formatDate(row.ts)} ${ACCENT(row.kind)} ${DIM(row.label.slice(0, 120))}`;
 }
 
-/** Head runs and GEPA runs render the same row under different field names. */
-interface RunRowFields {
-  readonly id: string;
-  readonly purpose: readonly [string, string];
-}
-
-const HEAD_RUN_ROW: RunRowFields = { id: 'rootId', purpose: ['task', 'rationale'] };
-
-function formatRunRow(item: JsonValue, fields: RunRowFields): string {
+function formatRunRow(item: JsonValue): string {
   const row = asRecord({ value: item }, 'value');
-  const id = v.parse(v.pipe(v.string(), v.nonEmpty()), row[fields.id]);
-  const purpose = stringField(row, fields.purpose[0]) ?? stringField(row, fields.purpose[1]) ?? '';
+  const id = v.parse(v.pipe(v.string(), v.nonEmpty()), row.rootId);
+  const purpose = stringField(row, 'task') ?? stringField(row, 'rationale') ?? '';
 
   return `${ACCENT(id)} ${stringField(row, 'status') ?? ''} ${DIM(purpose.slice(0, 100))}`;
 }
