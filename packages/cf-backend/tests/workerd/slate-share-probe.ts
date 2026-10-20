@@ -1074,6 +1074,50 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     }
   }
 
+  /**
+   * Mail's search as docs/MAIL.md §11 declares it, in this object's own SQLite: the FTS5 table made, `rows` indexed by
+   * rowid, each of `queries` matched (best first), then `deleted` removed and every query matched again. What each
+   * found or how it failed. (`sqlite_version()` is not a function a Durable Object may call.)
+   */
+  mailSearch(rows: readonly { rowid: number; subject: string; sender: string; body: string }[], queries: readonly string[], deleted: readonly number[]) {
+    const sql = this.ctx.storage.sql;
+
+    const outcome = (fn: () => number[]): { found: number[] } | { failed: string } => {
+      try {
+        return { found: fn() };
+      } catch (cause) {
+        return { failed: cause instanceof Error ? cause.message : String(cause) };
+      }
+    };
+
+    const made = outcome(() => {
+      sql.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS mail_fts USING fts5 (
+        subject, sender, body, content = '', contentless_delete = 1, tokenize = 'unicode61 remove_diacritics 2'
+      )`);
+
+      return [];
+    });
+
+    const indexed = outcome(() => rows.map((row) => {
+      sql.exec('INSERT INTO mail_fts (rowid, subject, sender, body) VALUES (?, ?, ?, ?)', row.rowid, row.subject, row.sender, row.body);
+
+      return row.rowid;
+    }));
+
+    const matched = () => queries.map((query) => outcome(() => sql.exec('SELECT rowid FROM mail_fts WHERE mail_fts MATCH ? ORDER BY bm25(mail_fts)', query)
+      .toArray().map((row) => Number(row.rowid))));
+
+    const before = matched();
+
+    const removed = outcome(() => deleted.map((rowid) => {
+      sql.exec('DELETE FROM mail_fts WHERE rowid = ?', rowid);
+
+      return rowid;
+    }));
+
+    return { made, indexed, before, removed, after: matched() };
+  }
+
   /** A share's numbers in this object's own SQLite, as its workspace keeps them, after `opens` (a viewer's key each). */
   shareViews(opens: readonly string[]): { viewers: number; opens: number; signedOutOpens: number } {
     initSlateLiveShareTables((ddl) => { this.ctx.storage.sql.exec(ddl); });

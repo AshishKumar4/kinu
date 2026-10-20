@@ -13,6 +13,7 @@ import {
   type ExecutorProviderSurface, type RoleSwitch, type SurfaceActor, type SurfacePolicy,
 } from '../src/index';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
+import type { MailDeps } from '../src/tools/mail-codemode';
 import { conversationsFor, createTestRuntime } from './helpers';
 import { inWorkMode } from '../src/execution/work-mode';
 
@@ -65,6 +66,7 @@ function actorWith(input: { executors?: ExecutorProviderSurface[]; roleSwitch?: 
     agents: () => ({ mode: 'build', swarms: false }),
     self: null,
     ownerWaits: null,
+    mail: null,
   };
 }
 
@@ -72,6 +74,13 @@ const named = (actor: SurfaceActor, policy: SurfacePolicy): string[] => actorNam
 
 const call = (actor: SurfaceActor, policy: SurfacePolicy, id: string, input: Record<string, string>) =>
   callOperation(actorNamespaces(actor, policy), id, input, { callId: crypto.randomUUID(), signal: undefined });
+
+/** Mail over a Mailbox nothing here calls: only which callers reach the namespace is measured. */
+const MAIL_DEPS: MailDeps = {
+  caller: () => ({ workspace: 'api-worker', title: 'API Worker', mainActorId: 'actor-main', actorId: 'actor-main', name: 'main' }),
+  mailbox: () => { throw new Error('not called'); },
+  approvals: { ask: () => ({ outcome: 'approved' }), take: () => null, settle: () => Promise.resolve(false) },
+};
 
 test("each caller reaches the actor's own namespaces, less what its policy declares", () => {
   const actor = actorWith({ executors: [WORKSPACE] });
@@ -88,6 +97,24 @@ test("each caller reaches the actor's own namespaces, less what its policy decla
     slate: ['memory', 'file', 'tasks', 'db', 'web', 'workspace'],
     slateTool: ['memory', 'file', 'tasks', 'db', 'web', 'workspace'],
     noInbox: ['memory', 'file', 'tasks', 'db', 'web', 'workspace'],
+  });
+});
+
+test("an agent's own programs reach its mail; a slate's call never does", () => {
+  const mailed = { ...actorWith({ executors: [WORKSPACE] }), mail: MAIL_DEPS };
+
+  expect({
+    program: named(mailed, SURFACE_POLICY.program),
+    operations: named(mailed, SURFACE_POLICY.operations),
+    slate: named(mailed, SURFACE_POLICY.slate),
+    ownerSlate: named(mailed, SURFACE_POLICY.ownerSlate),
+    slateTool: named(mailed, SURFACE_POLICY.slateTool),
+  }).toEqual({
+    program: ['agents', 'memory', 'file', 'tasks', 'db', 'mail', 'web', 'workspace'],
+    operations: ['agents', 'memory', 'file', 'tasks', 'db', 'mail', 'web', 'workspace'],
+    slate: ['memory', 'file', 'tasks', 'db', 'web', 'workspace'],
+    ownerSlate: ['agents', 'memory', 'file', 'tasks', 'db', 'web', 'workspace'],
+    slateTool: ['memory', 'file', 'tasks', 'db', 'web', 'workspace'],
   });
 });
 

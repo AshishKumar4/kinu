@@ -26,7 +26,9 @@ import {
   type ShellApprovalRequest,
 } from './approval-gate';
 import type { ApprovalContent, BoundFileWrite } from './bound-write';
-import { approvalKindOf, slateEffectExecutor, slateEffectText, type ApprovalKind, type SlateEffect } from './approval-kind';
+import {
+  approvalKindOf, mailSendExecutor, mailSendText, slateEffectExecutor, slateEffectText, type ApprovalKind, type MailSend, type SlateEffect,
+} from './approval-kind';
 import { canonicalRoot } from '../slates/share-policy';
 import type { SharePreapproval } from '../slates/sharing';
 import { nanoid } from '../utils/nanoid';
@@ -740,6 +742,7 @@ export class DeferredApprovalQueue {
       // Kept as the rows are decided, before any ask runs on them: one that runs settles its row and its hits.
       // Not re-reviewed: that would lose the call's member and cwd. A shared slate's effect is no rule of the
       // environment's: it stands for that slate alone.
+      // An agent's message has no rule hits, so "always" keeps nothing for it: that message is sent once, the next asks.
       this.deps.remember(kinds.flatMap(({ action, kind }) => (kind.kind === 'slate-effect' ? [] : gatedGrants(this.storeOf(action.actor).hits(action.id), action.executor))));
 
       // A shared slate's effect stands pre-approved for its slate now, the call it was asked on included: the one-shot
@@ -836,8 +839,15 @@ export class DeferredApprovalQueue {
    * it ran gives the approval back and one after it never runs it twice.
    */
   slateEffect(id: string, effect: SlateEffect): SlateEffectVerdict {
+    return this.exact(this.deps.store, id, {
+      command: slateEffectText(effect), executor: slateEffectExecutor(effect.slate),
+      reason: `A shared slate's server, running with your access for ${effect.viewer}, asked to call ${effect.tool} on ${effect.server}`,
+    });
+  }
+
+  /** One exact action named by `id`: approved, asked of the owner (once), or refused while their decline stands. */
+  private exact(store: DeferredApprovalStore, id: string, ask: { command: string; executor: string; reason: string }): SlateEffectVerdict {
     const now = this.now();
-    const store = this.deps.store;
     const held = store.get(id);
 
     if (held?.status === 'approved') return { outcome: 'approved' };
@@ -847,10 +857,7 @@ export class DeferredApprovalQueue {
     if (held?.status === 'denied' && held.decidedAt !== null && held.decidedAt > now - DENIAL_STANDING_MS) return { outcome: 'denied', action: held };
     store.sweepDenials(now);
 
-    const action = store.create({
-      id, command: slateEffectText(effect), executor: slateEffectExecutor(effect.slate), context: {}, requestedAt: now,
-      reason: `A shared slate's server, running with your access for ${effect.viewer}, asked to call ${effect.tool} on ${effect.server}`,
-    }, []);
+    const action = store.create({ id, ...ask, context: {}, requestedAt: now }, []);
 
     this.notify({ kind: 'queued', action });
 
@@ -880,6 +887,22 @@ export class DeferredApprovalQueue {
     };
 
     return this.deps.store.retireOpen(slateEffectExecutor(slate), takenBack);
+  }
+
+  /**
+   * A message an agent asked to send (approval-kind.ts `mail-send`), named by `id`, its exact bytes: approved, its next
+   * send takes the approval ({@link takeMailSend}) and leaves once; else asked of the owner, or refused while their
+   * decline stands. The asking agent is woken when they decide, as for a command.
+   */
+  mailSend(id: string, send: MailSend, actorId: string): SlateEffectVerdict {
+    return this.exact(this.storeOf(actorId), id, {
+      command: mailSendText(send), executor: mailSendExecutor(send.from), reason: `wants to send mail from ${send.from} to ${send.to.join(', ')}`,
+    });
+  }
+
+  /** The owner's approval of this exact message taken as it is sent; null where it is no longer approved. */
+  takeMailSend(id: string, actorId: string): ApprovalSpend | null {
+    return this.storeOf(actorId).spend(id)?.spend ?? null;
   }
 
   /** A queued write's change, whoever parked it. */

@@ -55,6 +55,8 @@ const MANIFEST: ReleaseManifest = {
     { name: 'SANDBOX_TRANSPORT', policy: 'carried', value: 'rpc' },
     { name: 'CLI_PUBLIC_ORIGIN', policy: 'derived' },
     { name: 'SIGN_IN_PROVIDERS', policy: 'derived' },
+    { name: 'EMAIL_DOMAIN', policy: 'derived' },
+    { name: 'MAIL_ACCOUNTS', policy: 'derived' },
     { name: 'DEV_USER_EMAIL', policy: 'ours' },
   ],
   files: [
@@ -130,6 +132,79 @@ class FakeCloudflare implements CloudflareTransport {
 
   readonly objects: string[] = [];
 
+  /** The zones the token can read, by name; a mail domain must be one. */
+  readonly zones = new Map<string, string>();
+
+  /** Each zone's DNS records, as Cloudflare lists them. */
+  readonly dns: { zone: string; type: string; name: string; content: string; priority?: number }[] = [];
+
+  /** What the zone's Email Routing and Sending hold. */
+  readonly routing = { enabled: new Set<string>(), catchAll: new Map<string, unknown>(), sending: new Map<string, string>() };
+
+  /** Paths under a zone the token may not touch: Email Routing, Sending or DNS. */
+  readonly forbiddenUnder: string[] = [];
+
+  private zoneCall(call: CloudflareCall): CloudflareHttpResponse | null {
+    const zone = /^\/zones\/([^/?]+)\/(.+)$/u.exec(call.path);
+    const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
+
+    if (call.path.startsWith('/zones?name=')) {
+      const name = decodeURIComponent(/name=([^&]+)/u.exec(call.path)?.[1] ?? '');
+      const id = this.zones.get(name);
+
+      return ok(id === undefined ? [] : [{ id, name }]);
+    }
+
+    if (zone === null) return null;
+    const [, id = '', rest = ''] = zone;
+
+    if (this.forbiddenUnder.some((prefix) => rest.startsWith(prefix))) {
+      return { status: 403, body: { success: false, errors: [{ code: 10000, message: 'Authentication error' }], result: null } };
+    }
+
+    if (rest === 'email/routing/enable') { this.routing.enabled.add(id);
+
+ return ok({ enabled: true }); }
+
+    if (rest === 'email/routing/rules/catch_all') { this.routing.catchAll.set(id, call.body ?? null);
+
+ return ok({ enabled: true }); }
+
+    if (rest === 'email/sending/subdomains') {
+      const name = bodyText(call.body ?? {}, 'name');
+
+      this.routing.sending.set(id, name);
+
+      return ok({ id: `sending-${name}`, name });
+    }
+
+    if (/^email\/sending\/subdomains\/[^/]+\/dns$/u.test(rest)) {
+      const name = this.routing.sending.get(id) ?? '';
+
+      return ok([
+        { type: 'MX', name: `cf-bounce.${name}`, content: 'route1.mx.cloudflare.net', priority: 47 },
+        { type: 'TXT', name: `cf-bounce._domainkey.${name}`, content: 'v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN' },
+      ]);
+    }
+
+    if (rest.startsWith('dns_records?')) {
+      const type = /type=([^&]+)/u.exec(rest)?.[1];
+      const name = decodeURIComponent(/name=([^&]+)/u.exec(rest)?.[1] ?? '');
+
+      return ok(this.dns.filter((record) => record.zone === id && record.type === type && record.name === name).map(({ zone: _held, ...record }) => record));
+    }
+
+    if (rest === 'dns_records' && call.method === 'POST') {
+      const body = call.body ?? {};
+
+      this.dns.push({ zone: id, type: bodyText(body, 'type'), name: bodyText(body, 'name'), content: bodyText(body, 'content') });
+
+      return ok({ id: `record-${String(this.dns.length)}` });
+    }
+
+    return null;
+  }
+
   readonly secrets = new Map<string, string>();
 
   scriptExists = false;
@@ -197,6 +272,10 @@ class FakeCloudflare implements CloudflareTransport {
     }
 
     if (call.path.endsWith('/deployments')) return this.deploymentsCall(call);
+
+    const zoned = this.zoneCall(call);
+
+    if (zoned !== null) return zoned;
 
     return { status: 200, body: { success: true, errors: [], result: this.answer(call) } };
   }
@@ -500,10 +579,10 @@ const healthFetch: HttpGet = async (url, headers) => {
   });
 };
 
-async function contextFor(): Promise<DeployContext> {
+async function contextFor(inputs: DeployInputs = INPUTS): Promise<DeployContext> {
   return {
     manifest: MANIFEST,
-    inputs: INPUTS,
+    inputs,
     transport: cloudflare,
     artifact: artifactFor(MANIFEST),
     vault,
@@ -514,10 +593,10 @@ async function contextFor(): Promise<DeployContext> {
   };
 }
 
-async function run(): Promise<DeployStepRow[]> {
+async function run(inputs: DeployInputs = INPUTS): Promise<DeployStepRow[]> {
   const outcome = await runDeployPlan(
-    deployPlan(MANIFEST, INPUTS),
-    await contextFor(),
+    deployPlan(MANIFEST, inputs),
+    await contextFor(inputs),
     ledger,
     (event) => progress.push(event),
   );
@@ -612,6 +691,68 @@ describe('a guided run', () => {
     expect(plain.map((binding) => binding.name)).not.toContain('DEV_USER_EMAIL');
     expect(bindings.filter((binding) => binding.type === 'secret_text').map((binding) => binding.name).sort())
       .toEqual([...MINTED_SECRETS].sort());
+  });
+
+  /** The mail vars the run uploaded: EMAIL_DOMAIN, then MAIL_ACCOUNTS. */
+  const mailVars = async (inputs: DeployInputs): Promise<(string | undefined)[]> => {
+    await run(inputs);
+    const plain = uploadedBindings(cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'))).filter((binding) => binding.type === 'plain_text');
+
+    return ['EMAIL_DOMAIN', 'MAIL_ACCOUNTS'].map((name) => plain.find((binding) => binding.name === name)?.text);
+  };
+
+  test('the mail domain is onboarded: routing to the Worker, sending with its records, and DMARC where there was none', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    const rows = await run({ ...INPUTS, mailDomain: 'raman.dev' });
+
+    expect(rows.find((row) => row.id === 'mail')).toMatchObject({ state: 'done' });
+    expect([...cloudflare.routing.enabled]).toEqual(['zone-raman']);
+    expect(cloudflare.routing.catchAll.get('zone-raman')).toMatchObject({ matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: ['kinu'] }] });
+    expect(cloudflare.dns.map((record) => `${record.type} ${record.name} ${record.content}`)).toEqual([
+      'MX cf-bounce.raman.dev route1.mx.cloudflare.net',
+      'TXT cf-bounce._domainkey.raman.dev v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN',
+      'TXT _dmarc.raman.dev v=DMARC1; p=none; rua=mailto:dmarc@raman.dev',
+    ]);
+  });
+
+  test('a domain\'s own DMARC and the records it already holds are kept, not written again', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.dns.push(
+      { zone: 'zone-raman', type: 'TXT', name: '_dmarc.raman.dev', content: 'v=DMARC1; p=quarantine' },
+      { zone: 'zone-raman', type: 'MX', name: 'cf-bounce.raman.dev', content: 'route1.mx.cloudflare.net' },
+    );
+    await run({ ...INPUTS, mailDomain: 'raman.dev' });
+
+    expect(cloudflare.dns.map((record) => record.content)).toEqual([
+      'v=DMARC1; p=quarantine', 'route1.mx.cloudflare.net', 'v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN',
+    ]);
+  });
+
+  test('what the token may not do is asked of the owner by name, and the deployment goes on', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.forbiddenUnder.push('email/routing', 'dns_records');
+    const rows = await run({ ...INPUTS, mailDomain: 'raman.dev' });
+    const asked = progress.flatMap((event) => (event.kind === 'step-note' && event.id === 'mail' ? [event.note] : []));
+
+    expect(rows.find((row) => row.id === 'mail')).toMatchObject({ state: 'done', detail: expect.stringContaining('needs 2 things from you') });
+    expect(rows.find((row) => row.id === 'smoke')?.state).toBe('done');
+    expect(asked.some((note) => note.includes('catch-all to "Send to a Worker: kinu"'))).toBe(true);
+    expect(asked.some((note) => note.includes('TXT _dmarc.raman.dev v=DMARC1; p=none; rua=mailto:dmarc@raman.dev'))).toBe(true);
+  });
+
+  test('a mail domain that is not a zone of the account is named, and mail stays off', async () => {
+    const rows = await run({ ...INPUTS, mailDomain: 'raman.dev' });
+
+    expect(rows.find((row) => row.id === 'mail')?.detail).toBe('Mail is off: raman.dev is not a zone this token can read.');
+    expect(cloudflare.routing.enabled.size).toBe(0);
+  });
+
+  test('a deployment whose owner gave no mail answers has no mail domain, and only its operators may claim', async () => {
+    expect(await mailVars(INPUTS)).toEqual(['', 'operators']);
+  });
+
+  test('the owner\'s mail domain, and opening addresses to everyone, are sent as the deploy\'s answers', async () => {
+    expect(await mailVars({ ...INPUTS, mailDomain: 'raman.dev', mailAccounts: 'everyone' })).toEqual(['raman.dev', 'everyone']);
   });
 
   test('uploads the assets with the session token, not the account token', async () => {

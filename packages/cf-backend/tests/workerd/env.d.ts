@@ -391,6 +391,10 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   craftedAcrossRevoke(share: string): Promise<string[]>;
   gallerySearch(line: string, q: string): Promise<{ found: string[] } | { failed: string }>;
   rosterSearch(title: string, q: string): Promise<{ found: string[] } | { failed: string }>;
+  mailSearch(rows: readonly { rowid: number; subject: string; sender: string; body: string }[], queries: readonly string[], deleted: readonly number[]): Promise<{
+    made: { found: number[] } | { failed: string }; indexed: { found: number[] } | { failed: string };
+    before: ({ found: number[] } | { failed: string })[]; removed: { found: number[] } | { failed: string }; after: ({ found: number[] } | { failed: string })[];
+  }>;
   shareViews(opens: readonly string[]): Promise<{ viewers: number; opens: number; signedOutOpens: number }>;
   inheritedLaunchAcrossRevoke(share: string): Promise<{ answered: string; started: string; inheriting: number; leftRunning: number }>;
   ownersHeldWrite(): Promise<{ answered: string; written: boolean }>;

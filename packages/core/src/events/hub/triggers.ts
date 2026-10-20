@@ -19,7 +19,6 @@ const DEFAULT_FORK_POLICY = {
   webhook_ephemeral: 'sever',
   timer_oneshot:     'sever',
   timer_cron:        'copy',
-  email_route:       'sever',  // a fork has its own address; re-grant deliberately
 } satisfies Record<TriggerKind, ForkPolicy>;
 
 export interface RegisterSpec {
@@ -34,7 +33,7 @@ export interface RegisterSpec {
 const TriggerRowSchema = v.object({
   id: v.string(),
   kind: v.picklist([
-    'webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron', 'email_route',
+    'webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron',
   ]),
   spec: v.string(),
   creator_trust: v.picklist(['external', 'authenticated', 'owner', 'self']),

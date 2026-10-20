@@ -193,6 +193,28 @@ export function WorkspaceAdder({ held, onAdd, placeholder }: {
   );
 }
 
+/** One workspace, searched by name and kept as chosen. */
+export function WorkspacePicker({ chosen, onChange, placeholder }: {
+  chosen: ChosenWorkspace | null;
+  onChange: (workspace: ChosenWorkspace | null) => void;
+  placeholder: string;
+}) {
+  const [query, setQuery] = useState("");
+  const found = useWorkspaceSearch(query);
+  const items = chosen === null || found.some((entry) => entry.workspace === chosen.workspace) ? found : [chosen, ...found];
+
+  return (
+    <Combobox items={items} value={chosen} onValueChange={(next: ChosenWorkspace | null) => onChange(next)}
+      onInputValueChange={(typed: string) => setQuery(typed)}
+      itemToStringLabel={(item: ChosenWorkspace) => item.title}
+      itemToStringValue={(item: ChosenWorkspace) => item.workspace}
+      isItemEqualToValue={(item: ChosenWorkspace, value: ChosenWorkspace) => item.workspace === value.workspace}>
+      <Combobox.TriggerInput placeholder={placeholder} />
+      <WorkspaceOptions />
+    </Combobox>
+  );
+}
+
 function WorkspaceOptions() {
   return (
     <Combobox.Content>

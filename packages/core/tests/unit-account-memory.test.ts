@@ -170,6 +170,7 @@ function actorWith(account: AccountMemory | undefined): SurfaceActor {
     agents: () => ({ mode: 'build', swarms: false }),
     self: null,
     ownerWaits: null,
+    mail: null,
   };
 }
 

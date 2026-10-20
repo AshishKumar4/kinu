@@ -1,11 +1,11 @@
 /** A turn the person did not type, drawn as quiet event rows: one line each, open on a click, repeats folded. */
 import { useState, type ReactNode } from "react";
 import {
-  CaretUpIcon, CheckCircleIcon, CheckIcon, ClockIcon, EyeIcon, GearSixIcon, LightningIcon, ProhibitIcon, WarningCircleIcon,
+  CaretUpIcon, CheckCircleIcon, CheckIcon, ClockIcon, EnvelopeSimpleIcon, EyeIcon, GearSixIcon, LightningIcon, ProhibitIcon, WarningCircleIcon,
   type Icon,
 } from "@phosphor-icons/react";
 import {
-  ADVISOR_SEVERITY_LABEL, eventSourceLabel, eventVariantLabel, keptAdvisorNote, MAIN_AGENT, parseDrainedEvents,
+  ADVISOR_SEVERITY_LABEL, eventSourceLabel, eventVariantLabel, keptAdvisorNote, MAIL_HANDED_EVENT, MAIN_AGENT, parseDrainedEvents,
   type AdvisorSeverity, type ClassifiedProgrammaticTurn, type DrainedEvent, type SignalCard,
 } from "@kinu.run/core";
 
@@ -141,7 +141,7 @@ function DrainedEvents({ text, state, count }: { text: string; state: CardState;
   return foldRepeats(events, drainedKey).map(({ item: event, count: repeats }, index) => (
     <EventRow
       key={index}
-      icon={LightningIcon}
+      icon={event.variant === "email" ? EnvelopeSimpleIcon : LightningIcon}
       tone={DELIVERY[state].tone}
       label={eventVariantLabel(event.variant)}
       source={eventSourceLabel(event.source)}
@@ -235,7 +235,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
 
     return (
       <EventRow
-        icon={GearSixIcon}
+        icon={turn.event === MAIL_HANDED_EVENT ? EnvelopeSimpleIcon : GearSixIcon}
         tone="p-accent"
         label={label}
         source={about}

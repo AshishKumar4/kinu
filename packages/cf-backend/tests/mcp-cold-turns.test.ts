@@ -9,6 +9,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import {
   chatSessionTurns, fireSoonestWake, improvementLanesRan, mainDatabase, nextTurn, orchestratorHarness, tapDiagnostics, until, workspaceFiles, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
+import { ownerMail } from './helpers/owner-mail';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 
 const KEY = mcpToolKey('tracker', 'find_issue');
@@ -72,10 +73,7 @@ test('an email and a timer turn reach the owner\'s MCP tool once a settled turn 
   const settled = () => mainDatabase({ agent, db }).query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM terminal_effects WHERE status != 'completed'`).get()?.n === 0;
 
   const email = async (n: number) => {
-    await agent.acceptEmailDelivery({
-      from: 'owner@example.com', to: 'workspace@kinu.run', subject: `issue ${String(n)}`, body_text: 'find the login issue',
-      message_id: `<m-${String(n)}@example.com>`, in_reply_to: null, references: null, attachments: [], now: Date.now(),
-    });
+    await agent.mailArrived(ownerMail(n, 'find the login issue'));
     await fireSoonestWake(agent, db);
     await until(() => offered.length >= n && settled(), `turn ${String(n)} settled`);
   };

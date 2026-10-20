@@ -4,7 +4,7 @@ import {
 } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
 
-/** Settings and Devices are the sidebar footer's: the account menu, and the icon beside it. `also` lights the row on more routes. */
+/** Settings, Mail and Devices are the sidebar footer's: the account menu, and the icons beside it. `also` lights the row on more routes. */
 export const PRIMARY_NAV: readonly {
   readonly to: string;
   readonly label: string;

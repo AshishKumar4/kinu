@@ -67,11 +67,14 @@ export const VAR_POLICY = {
   // '' names the datasets a deployment binds in its own account; only kinu.run's staging, sharing an account, differs.
   ANALYTICS_DATASET_SUFFIX: 'carried',
   CONTROL_PLANE_ADMINS: 'derived',
+  // A deploy answer kept in the deployment record, so an update sends it again (docs/MAIL.md §11).
+  MAIL_ACCOUNTS: 'derived',
   DEV_USER_EMAIL: 'ours',
   // kinu.run's inference on its own account; a self-host routes each user's Workers AI through that user's credential.
   WORKERS_AI_VIA_BINDING: 'ours',
   OPS_ALERT_EMAIL: 'ours',
-  EMAIL_DOMAIN: 'ours',
+  // The domain a self-host's owner onboarded for mail, or '' for none: a deploy answer, like MAIL_ACCOUNTS.
+  EMAIL_DOMAIN: 'derived',
   CONTROL_PLANE_ACCESS_TEAM_DOMAIN: 'ours',
   CONTROL_PLANE_ACCESS_AUD: 'ours',
   // The digest of the runtime catalog a release's NIMBUS_RUNTIME_CACHE holds: every deployment of it reads the same one.

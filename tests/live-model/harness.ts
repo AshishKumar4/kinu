@@ -167,6 +167,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     agents: () => agents,
     self: null,
     ownerWaits: null,
+    mail: null,
   });
 
   // No session takes a wake here, so its calls run inline: the raw surface, over a runner nothing detaches into.

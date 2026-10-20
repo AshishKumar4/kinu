@@ -125,6 +125,9 @@ function answers(door: DeployDoor, prompts: readonly string[]): Effect.Effect<De
     const hostname = zones.length === 0 ? '' : yield* Effect.promise(() => ask('Hostname (blank for a workers.dev address)', ''));
     // A label boundary, not a suffix: `kinu.notexample.com` ends with `example.com`.
     const zone = zones.find((held) => hostname === held.name || hostname.endsWith(`.${held.name}`));
+    // Mail sits on a zone of the account: its apex carries Email Routing's catch-all (docs/MAIL.md §1, §5).
+    const mailDomain = zones.length === 0 ? '' : yield* Effect.promise(() => ask(`Mail domain (one of ${zones.map((held) => held.name).join(', ')}; blank for no mail)`, ''));
+    const mailEveryone = mailDomain !== '' && (yield* Effect.promise(() => ask('Every account may claim an address, not only yours (y/N)', 'n'))).toLowerCase().startsWith('y');
     const keyNames: string[] = [];
 
     for (const name of prompts) {
@@ -145,6 +148,8 @@ function answers(door: DeployDoor, prompts: readonly string[]): Effect.Effect<De
       accessEmails: [ownerEmail],
       providerKeyNames: keyNames,
       sandbox: false,
+      mailDomain: zones.some((held) => held.name === mailDomain) ? mailDomain : '',
+      mailAccounts: mailEveryone ? 'everyone' : 'operators',
     };
   });
 }

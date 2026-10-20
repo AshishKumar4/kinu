@@ -1,11 +1,13 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
-/** Inbound mail gate: the owner's verified address or an active email_route allowlist entry is
- *  admitted; anyone else is dropped with no event row. */
+/**
+ * A workspace's side of an arrival (docs/MAIL.md §3-§4). The account's Mailbox has filed the message and decided, from
+ * Cloudflare's DMARC verdict and the box's policy, that it wakes this workspace's agent, and on whose word: the
+ * verified owner's (an instruction, its words in the event, a reply thread to their registered address) or anyone
+ * else's (untrusted input: sender and subject only; the agent reads the body with `mail.read`, never as an order).
+ */
 
-import * as v from 'valibot';
 import type { EventLog } from '../hub/log';
 import type { ReplyChannelStore } from '../hub/reply-channel';
-import type { TriggerRegistry } from '../hub/triggers';
 import type { EmailAttachmentMeta, EmailPayload, EventId } from '../hub/types';
 import { spillEventContent } from '../hub/content-spill';
 import type { SqlExec } from '../../types/primitives';
@@ -18,11 +20,9 @@ import { diagnostics, settleSync, toKinuError } from '../../obs/index';
 /** All senders combined. Drops are announced so the agent is not silently deaf. */
 export const EMAIL_INBOUND_RATE_PER_MIN = 30;
 
-const EmailAllowlistSchema = v.object({ allow: v.optional(v.array(v.string())) });
-
 const EMAIL_INBOUND_RATE_KEY = 'email:inbound';
 
-export function normalizeEmailAddress(raw: string): string {
+function normalizeEmailAddress(raw: string): string {
   const angled = raw.match(/<([^<>]+)>\s*$/);
 
   return (angled ? angled[1] : raw).trim().toLowerCase();
@@ -87,162 +87,96 @@ export interface EmailThreadAddr {
   references: string | null;
 }
 
-/** One builder for reply channel, event payload and receipt, so the bounds cannot drift. */
-function emailThreadAddr(msg: IncomingEmail): EmailThreadAddr {
-  return {
-    to: msg.from,
-    from: msg.to,
-    subject: msg.subject,
-    message_id: boundedMessageId(msg.message_id),
-    references: boundedReferences(msg.references, null),
-  };
+/** What the Mailbox hands the workspace whose agent an arrival woke. */
+export interface MailArrival {
+  /** On whose word it woke the agent: the verified owner's, or untrusted input. */
+  woke: 'owner' | 'input';
+  /** The From address Cloudflare's verdict passed. */
+  from: string;
+  /** The box address it reached. */
+  to: string;
+  subject: string;
+  /** The owner's own words, quoted history set aside; null for input. */
+  instruction: string | null;
+  message_id: string | null;
+  references: string | null;
+  attachments: EmailAttachmentMeta[];
+  /** Where it is filed: `mail.read(thread)` reads it. */
+  mail: { box: string; thread: string; message: string };
+  now: number;
 }
 
-export interface EmailIngressDeps {
+export type MailAdmission =
+  | { admitted: true; event_id: EventId; duplicate: boolean; woke: 'owner' | 'input'; thread: EmailThreadAddr | null }
+  | { admitted: false; reason: string };
+
+export interface MailAdmissionDeps {
   log: EventLog;
-  replies: ReplyChannelStore;
+  /** Where the owner's reply thread is kept; null where the woken agent answers in the app only. */
+  replies: ReplyChannelStore | null;
+  /** The workspace owner's sign-in email, asked again here: an address changed since the box was opened is not theirs. */
   owner_email: string | null;
-  allowlist: ReadonlyArray<string>;
   tryConsumeRateLimit(now: number): boolean;
   vfs: VFS;
 }
 
-export interface IncomingEmail {
-  from: string;
-  to: string;
-  subject: string;
-  body_text: string;
-  message_id: string | null;
-  in_reply_to: string | null;
-  references: string | null;
-  attachments: EmailAttachmentMeta[];
-  now: number;
-}
+/** Publishes the arrival to the event hub, and for the owner's mail opens the thread their reply goes back on. */
+export async function admitMailArrival(deps: MailAdmissionDeps, arrival: MailArrival): Promise<MailAdmission> {
+  const owner = deps.owner_email !== null && normalizeEmailAddress(deps.owner_email) === normalizeEmailAddress(arrival.from);
+  const woke = arrival.woke === 'owner' && owner ? 'owner' : 'input';
 
-export type EmailIngressResult =
-  | {
-      admitted: true;
-      event_id: EventId;
-      duplicate: boolean;
-      sender_class: 'owner' | 'allowlisted';
-      thread: EmailThreadAddr;
-    }
-  | { admitted: false; reason: string };
+  if (!deps.tryConsumeRateLimit(arrival.now)) return { admitted: false, reason: 'inbound email rate limit exceeded' };
 
-/** Shared by the transport's pre-parse check and admission so they cannot drift. */
-function classifyEmailSender(
-  from: string,
-  ownerEmail: string | null,
-  allowlist: ReadonlyArray<string>,
-): 'owner' | 'allowlisted' | null {
-  // The mail edge enforces SPF/DKIM/DMARC upstream; hence the owner caps at `authenticated`.
-  const sender = normalizeEmailAddress(from);
-  const owner = ownerEmail ? normalizeEmailAddress(ownerEmail) : null;
-
-  if (owner && sender === owner) return 'owner';
-
-  return allowlist.some((a) => normalizeEmailAddress(a) === sender) ? 'allowlisted' : null;
-}
-
-export async function acceptInboundEmail(
-  deps: EmailIngressDeps,
-  msg: IncomingEmail,
-): Promise<EmailIngressResult> {
-  const sender_class = classifyEmailSender(msg.from, deps.owner_email, deps.allowlist);
-
-  if (!sender_class) {
-    return { admitted: false, reason: 'sender not authorized for this agent' };
-  }
-
-  if (!deps.tryConsumeRateLimit(msg.now)) {
-    return { admitted: false, reason: 'inbound email rate limit exceeded' };
-  }
-
-  // Spilled after the gate so an unauthorized sender never writes a file.
-  const spilled = await spillEventContent(deps.vfs, msg.body_text);
-
-  const thread = emailThreadAddr(msg);
+  const words = woke === 'owner' ? arrival.instruction ?? '' : '';
+  // Spilled only for the owner: input's body stays in the Mailbox, read with `mail.read` and marked untrusted.
+  const spilled = words === '' ? null : await spillEventContent(deps.vfs, words);
+  const message_id = boundedMessageId(arrival.message_id);
+  const references = boundedReferences(arrival.references, null);
 
   const payload: EmailPayload = {
-    from: msg.from,
-    to: msg.to,
-    subject: msg.subject,
-    body_text: msg.body_text,
-    // Bounded identity, not raw sender headers, which are stored and replayed on every reply.
-    message_id: thread.message_id,
-    in_reply_to: boundedMessageId(msg.in_reply_to, 'In-Reply-To'),
-    references: thread.references,
-    attachments: msg.attachments,
+    from: arrival.from,
+    to: arrival.to,
+    subject: arrival.subject,
+    body_text: words,
+    message_id,
+    in_reply_to: null,
+    references,
+    attachments: arrival.attachments,
     body_path: spilled?.path,
     body_unsaved: spilled?.unsaved,
+    mail: arrival.mail,
   };
 
-  const reply_channel_id = deps.replies.open({
-    event_id: 'pending',
-    kind: 'email_thread',
-    holder_addr: JSON.stringify(thread),
-  }, msg.now);
+  // Only the owner's mail opens a reply thread, and it answers their registered address.
+  const thread: EmailThreadAddr | null = woke === 'owner' && deps.replies !== null
+    ? { to: arrival.from, from: arrival.to, subject: arrival.subject, message_id, references }
+    : null;
+
+  const reply_channel_id = thread === null ? null : deps.replies?.open({ event_id: 'pending', kind: 'email_thread', holder_addr: JSON.stringify(thread) }, arrival.now) ?? null;
 
   const { id, admitted } = deps.log.publish({
-    descriptor: { ingress: 'email_inbound', variant: 'email', payload, sender_class },
-    now: msg.now,
+    descriptor: { ingress: 'email_inbound', variant: 'email', payload, sender_class: woke },
+    now: arrival.now,
   });
 
   if (reply_channel_id) {
-    if (admitted) {
-      deps.replies.bindEvent(reply_channel_id, id);
-    } else {
-      deps.replies.abort(reply_channel_id);
-    }
+    if (admitted) deps.replies?.bindEvent(reply_channel_id, id);
+    else deps.replies?.abort(reply_channel_id);
   }
 
-  return { admitted: true, event_id: id, duplicate: !admitted, sender_class, thread };
-}
-
-export function readEmailAllowlist(registry: TriggerRegistry): string[] {
-  return registry.list({ kind: 'email_route', state: 'active' })
-    .flatMap((t) => {
-      const spec = v.safeParse(EmailAllowlistSchema, t.spec);
-
-      return spec.success ? (spec.output.allow ?? []) : [];
-    });
-}
-
-/** The owner's address is always allowed; an empty list revokes the email_route trigger. */
-export async function setEmailAllowlist(
-  registry: TriggerRegistry, allow: string[], now: number,
-) {
-  const cleaned = [...new Set(
-    allow.map(normalizeEmailAddress).filter((a) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a)),
-  )];
-
-  for (const t of registry.list({ kind: 'email_route' })) {
-    if (t.state !== 'revoked') registry.revoke(t.id, now);
-  }
-
-  if (cleaned.length > 0) {
-    await registry.register({ kind: 'email_route', spec: { allow: cleaned }, creator_trust: 'owner' }, now);
-  }
-
-  return { allowlist: cleaned };
+  return { admitted: true, event_id: id, duplicate: !admitted, woke, thread };
 }
 
 export interface EmailInboxDeps {
-  log: EventLog;
+  /** The woken agent's own event log: each agent of a workspace drains its own. */
+  log(actorId: string): EventLog;
+  /** The workspace's reply threads, its main agent's: only an arrival that woke it is answered by mail. */
   replies: ReplyChannelStore;
-  triggers: TriggerRegistry;
+  mainActorId(): string;
   vfs(): VFS;
   sql: SqlExec;
   ownerEmail(): Promise<string | null>;
   onAdmitted(): void;
-}
-
-export interface EmailAdmission {
-  admitted: boolean;
-  duplicate?: boolean;
-  event_id?: string;
-  reason?: string;
-  thread?: EmailThreadAddr;
 }
 
 /** One drop announcement per rate window, held in memory: a re-announce after eviction is
@@ -253,17 +187,13 @@ export class EmailInbox {
 
   constructor(private readonly deps: EmailInboxDeps) {}
 
-  async accept(msg: IncomingEmail): Promise<EmailAdmission> {
-    const ownerEmail = await this.deps.ownerEmail();
-
-    if (!ownerEmail) return { admitted: false, reason: 'agent owner email unknown' };
+  async accept(arrival: MailArrival, actorId: string): Promise<MailAdmission> {
     let rateDrop: { limit: number; resetAt: number } | null = null;
 
-    const result = await acceptInboundEmail({
-      log: this.deps.log,
-      replies: this.deps.replies,
-      owner_email: ownerEmail,
-      allowlist: readEmailAllowlist(this.deps.triggers),
+    const result = await admitMailArrival({
+      log: this.deps.log(actorId),
+      replies: actorId === this.deps.mainActorId() ? this.deps.replies : null,
+      owner_email: await this.deps.ownerEmail(),
       vfs: this.deps.vfs(),
       tryConsumeRateLimit: (now) => {
         const decision = tryConsumeWebhookRateLimit(
@@ -274,33 +204,17 @@ export class EmailInbox {
 
         return decision.allowed;
       },
-    }, msg);
+    }, arrival);
 
     if (!result.admitted) {
-      const refused: EmailAdmission = { admitted: false, reason: result.reason };
+      if (!rateDrop) return result;
 
-      if (!rateDrop) return refused;
-
-      return settleSync(Effect.as(this.noteRateDrop(rateDrop, msg.now), refused));
+      return settleSync(Effect.as(this.noteRateDrop(rateDrop, arrival.now), result));
     }
 
     if (!result.duplicate) this.deps.onAdmitted();
 
-    return {
-      admitted: true, duplicate: result.duplicate, event_id: result.event_id, thread: result.thread,
-    };
-  }
-
-  /** Pre-parse check with the same rule as `accept`, which asks again before anything durable. */
-  async authorizes(from: string): Promise<{ authorized: boolean; reason?: string }> {
-    const ownerEmail = await this.deps.ownerEmail();
-
-    if (!ownerEmail) return { authorized: false, reason: 'agent owner email unknown' };
-    const sender_class = classifyEmailSender(from, ownerEmail, readEmailAllowlist(this.deps.triggers));
-
-    return sender_class
-      ? { authorized: true }
-      : { authorized: false, reason: 'sender not authorized for this agent' };
+    return result;
   }
 
   dropNotice(now: number): MissingCapability | null {
@@ -319,7 +233,7 @@ export class EmailInbox {
 
     return Effect.try({
       try: () => {
-      this.deps.log.publish({
+      this.deps.log(this.deps.mainActorId()).publish({
         descriptor: {
           ingress: 'self_emit',
           variant: 'internal',

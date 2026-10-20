@@ -211,6 +211,8 @@ export interface EmailPayload {
   attachments: EmailAttachmentMeta[];
   body_path?: string;
   body_unsaved?: string;
+  /** Where the Mailbox filed it: `mail.read(thread)` reads it. Input's body is not in the event, only here. */
+  mail?: { box: string; thread: string; message: string };
 }
 
 export interface InternalPayload {
@@ -343,7 +345,8 @@ export type IngressDescriptor =
       ingress: 'email_inbound';
       variant: 'email';
       payload: EmailPayload;
-      sender_class: 'owner' | 'allowlisted';
+      /** The verified owner's instruction, or untrusted input (docs/MAIL.md §3). */
+      sender_class: 'owner' | 'input';
     }
   | {
       ingress: 'self_emit';
@@ -368,8 +371,7 @@ export type TriggerKind =
   | 'webhook_durable'
   | 'webhook_ephemeral'
   | 'timer_oneshot'
-  | 'timer_cron'
-  | 'email_route';   // per-agent inbound-email allowlist (owner is always allowed)
+  | 'timer_cron';
 
 export interface TriggerRow {
   id: TriggerId;

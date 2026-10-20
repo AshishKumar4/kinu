@@ -21,6 +21,7 @@ import type { ArtifactMember, HeldBytes } from './artifact';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { bytesToBase64 } from '../utils/base64';
 import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
+import { mailStep } from './mail';
 
 export interface DeployStep {
   readonly id: string;
@@ -79,6 +80,8 @@ export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): rea
     secretsStep(manifest),
     uploadStep(manifest),
     addressStep(inputs),
+    // After the address: the catch-all names the Worker the upload made, and a failure here leaves it answering.
+    mailStep(inputs),
     smokeStep(),
     promoteStep(),
     handoverStep(manifest),
@@ -1041,6 +1044,10 @@ function derivedVar(context: DeployContext, name: string): string | null {
       return context.facts.get(FACT_GATEWAY_URL) ?? null;
     case 'CONTROL_PLANE_ADMINS':
       return context.inputs.ownerEmail;
+    case 'EMAIL_DOMAIN':
+      return context.inputs.mailDomain ?? '';
+    case 'MAIL_ACCOUNTS':
+      return context.inputs.mailAccounts ?? 'operators';
     case 'PREVIEW_HOST_SUFFIX':
     case 'SIGN_IN_PROVIDERS':
       return '';
