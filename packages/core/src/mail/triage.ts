@@ -98,7 +98,22 @@ function triageOne(deps: MailTriageDeps, view: MailThreadView, system: string): 
   });
 }
 
-/** One pass over the person's mail waiting for triage; a thread that fails stays waiting, said, and the rest go on. */
+/**
+ * A thread whose triage failed, said. One the model answered in no shape is settled as not Important, so mail written to
+ * confuse it cannot cost a call at every later arrival; one it could not answer at all stays waiting for the next pass.
+ */
+function triageFailed(deps: MailTriageDeps, view: MailThreadView, failure: KinuError): Effect.Effect<void> {
+  diagnostics.failure('mail.triage_failed', failure, { thread: view.thread.id });
+
+  if (failure.code !== 'bad_input') return Effect.void;
+
+  return Effect.catch(
+    Effect.asVoid(attempt({ doing: 'settling an unreadable triage', otherwise: 'io' }, async () => deps.mailbox.updateFor(deps.caller, view.thread.id, { important: null }))),
+    (unsettled) => Effect.sync(() => { diagnostics.failure('mail.triage_failed', unsettled, { thread: view.thread.id }); }),
+  );
+}
+
+/** One pass over the person's mail waiting for triage; a thread that fails is said, and the rest go on. */
 export function triageMail(deps: MailTriageDeps): Promise<MailTriageRun> {
   return settle(Effect.gen(function* () {
     const system = triageSystem(deps.about, deps.owner);
@@ -114,12 +129,9 @@ export function triageMail(deps: MailTriageDeps): Promise<MailTriageRun> {
       if (waiting.length === 0) break;
 
       for (const view of waiting) {
-        const outcome = yield* Effect.catch(triageOne(deps, view, system), (failure) => Effect.sync(() => {
-          diagnostics.failure('mail.triage_failed', failure, { thread: view.thread.id });
-          failed.add(view.thread.id);
+        const outcome = yield* Effect.catch(triageOne(deps, view, system), (failure) => Effect.as(triageFailed(deps, view, failure), null));
 
-          return null;
-        }));
+        if (outcome === null) failed.add(view.thread.id);
 
         if (outcome === null) continue;
 

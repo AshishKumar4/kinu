@@ -136,17 +136,18 @@ describe('the assistant triages each new thread in the person\'s box', () => {
     expect((await store.thread(dana.threadId))?.messages.find((message) => message.sendState === 'draft')).toMatchObject({ text: 'Looking now.', writtenBy: null });
   });
 
-  test('a thread the model fails on or answers in no shape stays waiting, said, while the rest are triaged, and is tried again', async () => {
+  test('a thread the model cannot answer stays waiting and is tried again; one it answers in no shape is settled, not Important', async () => {
     answers.set(BILLING, 'It is not important.');
     await arrive(mail('Dana Whitfield <dana@northwind.io>', DANA, 'Since Tuesday every delivery gets a 500.', { id: 'hooks-v2@northwind.io' }));
     await arrive(mail('Cloudflare Billing <billing@cloudflare.com>', BILLING, 'Total $23.42.', { id: 'invoice-10@cloudflare.com' }));
     await arrive(mail('Cloudflare Registrar <registrar@cloudflare.com>', 'kinu.run renews on 26 October', 'Update your payment method.', { id: 'renew@cloudflare.com' }));
 
     expect(await triageMail(deps())).toEqual({ important: 1, ordinary: 0, drafted: 1, failed: 2 });
-    expect((await store.untriagedFor(KINU, 10)).map((view) => view.thread.subject)).toEqual(['kinu.run renews on 26 October', BILLING]);
+    expect((await store.untriagedFor(KINU, 10)).map((view) => view.thread.subject)).toEqual(['kinu.run renews on 26 October']);
+    expect(store.list({ view: 'important' }).threads.map((thread) => thread.subject)).toEqual([DANA]);
 
-    answers.set(BILLING, '{"important":false,"reason":"","reply":null}');
-    expect(await triageMail(deps())).toMatchObject({ ordinary: 1, failed: 1 });
+    answers.set('kinu.run renews on 26 October', '{"important":true,"reason":"The registrar needs a new card by 26 October.","reply":null}');
+    expect(await triageMail(deps())).toEqual({ important: 1, ordinary: 0, drafted: 0, failed: 0 });
   });
 
   test('new mail in a triaged thread waits again; the owner\'s own instruction and other boxes are not triaged; only the reader sees what waits', async () => {
