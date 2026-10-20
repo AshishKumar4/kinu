@@ -101,11 +101,17 @@ describe('a pending scaffold replayed against recorded turns', () => {
   const failing = [
     { name: 'a throw', source: "async function run() { throw new Error('the loop broke'); }", failed: 'it threw: ' },
     {
+      // The recorded turn's own answer, with none of the work it was built on.
+      name: 'a canned answer and no work',
+      source: "async function run() { await host.emit({ type: 'text_delta', text: 'two' }); }",
+      failed: 'it skipped eval, which the recorded turn made',
+    },
+    {
       name: 'a call outside the recording',
       source: "async function run() { await host.callTool('eval', { code: 'return 3' }); await host.emit({ type: 'text_delta', text: 'x' }); }",
       failed: 'it called eval, which the recording does not hold',
     },
-    { name: 'no answer', source: 'async function run() {}', failed: 'it gave no answer' },
+    { name: 'no answer', source: "async function run() { await host.callTool('eval', { code: 'return 1 + 1' }); }", failed: 'it gave no answer' },
     {
       name: 'a loop past its bound',
       source: "async function run() { for (let i = 0; i < 40; i++) await host.llmStream({ system: 's', messages: [{ role: 'user', content: 'again' }] }); await host.emit({ type: 'text_delta', text: 'x' }); }",
@@ -140,7 +146,8 @@ describe('a pending scaffold replayed against recorded turns', () => {
       await host.emit({ type: 'text_delta', text: await host.readMemory('memory/MEMORY.md') });
     }`;
 
-    expect(await replayScaffold(rt, source, turns)).toBeNull();
+    // The turn that made no call: one that did would fail this version for skipping it.
+    expect(await replayScaffold(rt, source, turns.slice(1))).toBeNull();
     expect(await rt.memory.read('memory/MEMORY.md')).toBe(before);
   });
 });

@@ -156,6 +156,8 @@ interface ReplayWatch {
   /** Tool calls made that the recording holds no answer for. */
   readonly outside: string[];
   hostCalls: number;
+  /** Twice its recorded steps, plus a spare: past it the run is stopped. */
+  readonly bound: number;
   overBound: boolean;
   /** Ends the run once it passes its bound: a host call after that throws (`assertScaffoldActive`). */
   readonly stop: AbortController;
@@ -188,7 +190,7 @@ class ReplayHost {
   private served = 0;
   readonly history: ScaffoldHistoryReader;
 
-  constructor(private readonly turn: RecordedTurn, private readonly watch: ReplayWatch, private readonly bound: number) {
+  constructor(private readonly turn: RecordedTurn, private readonly watch: ReplayWatch) {
     this.steps = stepsOf(turn.output);
     this.history = createScaffoldHistory(async () => turn.input);
 
@@ -204,7 +206,7 @@ class ReplayHost {
   private counted(): boolean {
     this.watch.hostCalls += 1;
 
-    if (this.watch.hostCalls <= this.bound) return true;
+    if (this.watch.hostCalls <= this.watch.bound) return true;
     this.watch.overBound = true;
     this.watch.stop.abort();
 
@@ -221,7 +223,7 @@ class ReplayHost {
 
   callTool(name: string, args: JsonObject): Promise<JsonValue> {
     return settle(Effect.gen({ self: this }, function* () {
-      if (!this.counted()) return yield* new KinuError('budget', `the replay passed its bound of ${String(this.bound)} model and tool calls`);
+      if (!this.counted()) return yield* new KinuError('budget', `the replay passed its bound of ${String(this.watch.bound)} model and tool calls`);
       const answer = this.answers.get(callKey(name, args))?.shift();
 
       if (answer === undefined) {
@@ -239,9 +241,17 @@ class ReplayHost {
 
     for (const [stepIndex, step] of this.steps.entries()) {
       for (const event of recordedStep(step, stepIndex)) yield { event };
+
+      // Made once its results were handed on; a run that stops reading before then made none of them.
+      for (const call of step.calls) this.answers.get(callKey(call.toolName, call.input))?.shift();
     }
 
     yield { event: { type: 'done', text: this.steps.at(-1)?.text ?? '', responseMessages: [...this.turn.output] } };
+  }
+
+  /** The recorded calls this run never made, by name: the work the recorded turn did that it skipped. */
+  skipped(): string[] {
+    return [...this.answers.entries()].flatMap(([key, left]) => left.map(() => key.slice(0, key.indexOf('\u0000'))));
   }
 }
 
@@ -287,14 +297,14 @@ export interface ReplayVerdict {
 
 /** One recorded turn under `source`. */
 async function replayTurn(rt: AgentRuntime, source: string, turn: RecordedTurn): Promise<ReplayVerdict> {
-  const watch: ReplayWatch = { outside: [], hostCalls: 0, overBound: false, stop: new AbortController() };
   const bound = stepsOf(turn.output).length * 2 + SPARE_HOST_CALLS;
+  const watch: ReplayWatch = { outside: [], hostCalls: 0, bound, overBound: false, stop: new AbortController() };
   const signal = AbortSignal.any([watch.stop.signal, AbortSignal.timeout(REPLAY_DEADLINE_MS)]);
   const events: ScaffoldEvent[] = [];
   // No machine is reachable and memory writes stay here: nothing a replay does reaches the agent.
   const isolated: AgentRuntime = { ...rt, memory: replayMemory(rt.memory), executionRouter: undefined };
 
-  const host = new ReplayHost(turn, watch, bound);
+  const host = new ReplayHost(turn, watch);
 
   const result = await runScaffold({
     rt: isolated, task: turn.task, emit: (event) => { events.push(event); }, stores: null, scaffoldCodeOverride: source, signal,
@@ -302,17 +312,21 @@ async function replayTurn(rt: AgentRuntime, source: string, turn: RecordedTurn):
     defaultInference: () => host.defaultInference(),
   });
 
-  return { turnId: turn.turnId, failed: failure(watch, bound, signal, result) };
+  return { turnId: turn.turnId, failed: failure(watch, signal, result, host.skipped()) };
 }
 
-function failure(watch: ReplayWatch, bound: number, signal: AbortSignal, result: ScaffoldRunResult): string | null {
-  if (watch.overBound) return `it passed its bound of ${String(bound)} model and tool calls`;
+function failure(watch: ReplayWatch, signal: AbortSignal, result: ScaffoldRunResult, skipped: readonly string[]): string | null {
+  if (watch.overBound) return `it passed its bound of ${String(watch.bound)} model and tool calls`;
 
   if (signal.aborted) return `it did not finish within ${String(REPLAY_DEADLINE_MS / 1000)} s`;
 
   if (!result.ok) return `it threw: ${result.error ?? 'without a message'}`;
 
   if (watch.outside.length > 0) return `it called ${watch.outside.join(', ')}, which the recording does not hold`;
+
+  // Each recorded call is a file the turn wrote or a result its answer was built on; the recording cannot tell which
+  // one a version could drop, so it may drop none.
+  if (skipped.length > 0) return `it skipped ${[...new Set(skipped)].join(', ')}, which the recorded turn made`;
 
   return answerOf(result.events, result.finalResult).trim() === '' ? 'it gave no answer' : null;
 }
