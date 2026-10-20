@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { asFetchFunction } from '@kinu.run/core';
 import * as v from 'valibot';
+import type { KinuConfig } from '../src/config';
 
 describe('a cloud create names the workspace only when the owner did', () => {
   test('the home screen\'s unnamed create leaves the name to the server; `kinu create jarvis` sends jarvis', async () => {
@@ -34,6 +35,29 @@ describe('a cloud create names the workspace only when the owner did', () => {
       { url: 'https://kinu.test/api/cli/workspaces', body: { purpose: 'Build a benchmark for Rust web frameworks', model: 'openai/gpt-5-mini' } },
       { url: 'https://kinu.test/api/cli/workspaces', body: { purpose: 'Manage my calendar', name: 'jarvis', displayName: 'jarvis' } },
     ]);
+  });
+});
+
+describe('signed in is decided by the one session rule', () => {
+  test('KINU_TOKEN with no stored session is signed in; an expired stored session is not', async () => {
+    const home = scratchDir('signed-in-home');
+
+    const ask = async (env: Record<string, string>, config: Pick<KinuConfig, 'accessToken' | 'tokenExpiresAt'> | null) => {
+      const result = await runToExit(['bun', '-e', `
+        import { mkdirSync, writeFileSync } from 'node:fs';
+        const config = ${JSON.stringify(config)};
+        if (config !== null) { mkdirSync(process.env.KINU_HOME, { recursive: true }); writeFileSync(process.env.KINU_HOME + '/config.json', JSON.stringify(config)); }
+        const { defaultCreateMode } = await import('./packages/cli/src/agent-create.ts');
+        console.log(defaultCreateMode());
+      `], { cwd: join(import.meta.dir, '../../..'), env: { ...process.env, HOME: home, KINU_HOME: join(home, String(Math.random())), KINU_TOKEN: '', ...env } });
+
+      expect(result.exitCode, result.stderr).toBe(0);
+
+      return result.stdout.trim();
+    };
+
+    expect(await ask({ KINU_TOKEN: 'ptc_test_fixture_token_not_real' }, null)).toBe('cloud');
+    expect(await ask({}, { accessToken: 'stale', tokenExpiresAt: '2020-01-01T00:00:00.000Z' })).toBe('local');
   });
 });
 
