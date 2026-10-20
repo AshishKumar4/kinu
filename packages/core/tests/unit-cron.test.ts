@@ -106,7 +106,7 @@ describe('nextCronFire in a time zone', () => {
   test('a half-hour zone, an old alias a browser reports, and UTC read alike', () => {
     expect(iso(nextCronFire('30 9 * * *', Date.UTC(2026, 0, 1), 'Asia/Kolkata'))).toBe('2026-01-01T04:00:00.000Z');
     expect(iso(nextCronFire('30 9 * * *', Date.UTC(2026, 0, 1), 'Asia/Calcutta'))).toBe('2026-01-01T04:00:00.000Z');
-    expect(nextCronFire('0 8 * * *', Date.UTC(2026, 0, 1), 'UTC')).toBe(nextCronFire('0 8 * * *', Date.UTC(2026, 0, 1)));
+    expect(iso(nextCronFire('0 8 * * *', Date.UTC(2026, 0, 1), 'UTC'))).toBe('2026-01-01T08:00:00.000Z');
     expect(nextCronFire('0 8 * * *', Date.UTC(2026, 0, 1), 'Mars/Olympus_Mons')).toBeNull();
   });
 
