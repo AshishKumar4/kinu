@@ -608,9 +608,12 @@ Each table has exactly one owning module. A second definition of
 second `scaffold_versions` is how `status` and `parent_version` did.
 
 A table's `CREATE TABLE IF NOT EXISTS` is its genesis. No module carries a
-column reconcile, a `CHECK`-widening rebuild, or a row backfill. This tree
-deploys as a reset (docs/DEPLOYMENT.md, the migrations paragraph), so every
-row it writes is under the DDL in the tree. `scripts/schema-drift.ts` holds
+column reconcile, a `CHECK`-widening rebuild, or a row backfill, so every row
+a build writes is under the DDL in its tree. `scripts/schema-drift.ts` holds
 that DDL to `scripts/schema-genesis.lock.json` in both directions. A shipped
 table whose shape must change has two fixes: a new table of its own for the
-new columns, or another reset with a re-lock.
+new columns, which keeps the old rows, or a re-lock deployed with
+`--reset-tables`, which drops exactly the tables the lock diff names, with the
+tables that refer to them, and makes them anew empty at each object's first
+contact (docs/DEPLOYMENT.md; ARCHITECTURE-DECISIONS L28). No row is carried
+over.

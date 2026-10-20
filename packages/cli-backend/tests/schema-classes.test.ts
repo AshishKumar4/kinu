@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
-import { initWorkspaceSchema, type LLMProviderConfig } from '@kinu.run/core';
+import { ensureIndexTables, initMissionBudgetTable, initWorkspaceSchema, type LLMProviderConfig } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { createCLIRuntime, makeWorkspaceSchemaSql, workspaceHome } from '../src/runtime';
 
@@ -25,6 +25,9 @@ test('a local workspace makes the tables scripts/schema-classes.json names for i
   await createWorkspace(db, { name: 'schema-classes', purpose: 'measuring its tables', home: workspaceHome(db) });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   createCLIRuntime(db, { cwd: scratchDir('schema-classes-folder'), llm: LLM });
+  // Made on first use: the conversation index (a search), a ledger (a session).
+  ensureIndexTables(makeWorkspaceSchemaSql(db).sql);
+  initMissionBudgetTable(makeWorkspaceSchemaSql(db).execRaw);
 
   const product = new Set(Object.keys(v.parse(v.record(v.string(), v.unknown()), JSON.parse(readFileSync(LOCK, 'utf8')))).map((key) => key.slice(0, key.indexOf('@'))));
   const local = db.query("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((row) => v.parse(NameSchema, row).name).filter((table) => product.has(table));

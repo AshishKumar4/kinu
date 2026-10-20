@@ -1,10 +1,11 @@
 // A tables release as the deploy sees it. Before the upload, the plan: which tables changed (from the two genesis
-// locks, never a list), what each class's repair does to each, and what refuses. After it, the walk: every account the
+// locks, never a list), what each class's reset does to each (drop and make anew empty, with what refers to it), and
+// what refuses. After it, the walk: every account the
 // roots and the builtin directory name, each one's workspaces and every object Cloudflare lists, each asked once under
 // a pass this run wrote and then deleted, waiting out an edge still serving the build before; and what it found.
 import { expect, test } from 'bun:test';
 import { sha256Hex, type Repair, type TablesAnswer } from '@kinu.run/core';
-import { censusLines, changedTables, confirmation, planLines, regenerableIn, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
+import { censusLines, changedTables, confirmation, derivedIn, planLines, referrersOf, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
 
 const FROM = {
   'device_joins@packages/core/src/state/user-schema.ts': ['device_id TEXT PRIMARY KEY', 'expires_at INTEGER NOT NULL'],
@@ -19,7 +20,17 @@ const FROM = {
   'cp_audit@packages/core/src/control-plane/store.ts': ['id TEXT PRIMARY KEY'],
   'tails@packages/core/src/heads.ts': ['id TEXT PRIMARY KEY'],
   'head_scores@packages/core/src/heads.ts': ['SELECT * FROM heads'],
+  'head_marks@packages/core/src/heads.ts': ['id TEXT PRIMARY KEY', 'head TEXT NOT NULL REFERENCES heads(id) ON DELETE CASCADE'],
+  'mark_notes@packages/core/src/heads.ts': ['id TEXT PRIMARY KEY', 'mark TEXT REFERENCES head_marks(id)'],
+  'head_folds@packages/core/src/heads.ts': ['actor_id TEXT PRIMARY KEY', 'through INTEGER NOT NULL'],
 };
+
+/** heads.ts as the candidate declares it: the fold over the heads' rowids says so beside its DDL. */
+const HEADS_SOURCE = `
+  execRaw(\`CREATE TABLE IF NOT EXISTS head_folds ( /* derived from tails: through is a rowid of its */
+    actor_id TEXT PRIMARY KEY,
+    through  INTEGER NOT NULL
+  )\`);`;
 
 const TO = {
   ...FROM,
@@ -40,7 +51,7 @@ const { 'device_consent_requests@packages/core/src/safety/device-consent.ts': _r
 
 const CLASSES = {
   account: ['device_joins', 'device_connect_tickets', 'user_profile', 'workspace_overviews'],
-  agent: ['heads', 'tails', 'head_scores'],
+  agent: ['heads', 'tails', 'head_scores', 'head_marks'],
   local: ['driver_lease'],
 };
 
@@ -54,90 +65,86 @@ test('the changed tables come from the two locks: removed, reshaped, and added',
   expect(added).toEqual(['device_consent_asks']);
 });
 
-const OVERVIEWS_SOURCE = `
-  sql.exec(\`
-    CREATE TABLE IF NOT EXISTS workspace_overviews ( /* regenerable cache, refilled by each workspace's overview push */
-      name TEXT PRIMARY KEY,
-      overview TEXT NOT NULL
-    )\`);`;
-
-test('the plan says what each repair does: rebuild, refill a cache, retire, leave as it is, or refuse, and why', () => {
+test('the plan says what each reset does: drop and make anew, with what refers to it, retire, leave as it is, or refuse', () => {
   const { changed, added } = changedTables(FROM, CANDIDATE);
-
-  const verdicts = changed.map((table) => verdictOf(table, {
-    from: FROM, to: CANDIDATE, classes: CLASSES, regenerable: regenerableIn(table.table === 'workspace_overviews' ? OVERVIEWS_SOURCE : '', table.table),
-  }));
+  const direct = changed.map((table) => verdictOf(table, { to: CANDIDATE, classes: CLASSES }));
+  const verdicts = [...direct, ...referrersOf(direct, { to: CANDIDATE, classes: CLASSES, derived: derivedIn(HEADS_SOURCE) })];
 
   expect(planLines(verdicts, added)).toEqual([
     'REFUSED (the deploy stops here):',
-    '  cp_audit [no class]: no class\'s init makes it, so no repair reaches it, and as the build before left it it lacks this build\'s new column(s) note',
-    '  heads [agent]: its new column(s) seq have no default, so its rows cannot be kept, and its DDL does not declare it a regenerable cache',
-    '  tails [agent]: its new column(s) seq have no default, so its rows cannot be kept, and its DDL does not declare it a regenerable cache',
-    '  webhook_secrets [no class]: no class\'s init makes it, so no repair reaches it, and as the build before left it its old column(s) created_at refuse this build\'s rows',
-    'LOSES DATA, a regenerable cache made anew empty where its rows cannot be copied, then refilled by:',
-    '  workspace_overviews [account]: each workspace\'s overview push',
-    'LOSES DATA, dropped where held (no build reads it):',
-    '  device_consent_requests [no class]',
-    'rebuilt where held, every row kept:',
+    '  cp_audit [no class]: no class in scripts/schema-classes.json makes it, so no object resets it',
+    '  cp_feedback [no class]: no class in scripts/schema-classes.json makes it, so no object resets it',
+    '  webhook_secrets [no class]: no class in scripts/schema-classes.json makes it, so no object resets it',
+    'LOSES DATA, dropped where held and made anew empty by its init:',
     '  device_connect_tickets [account]',
     '  device_joins [account]',
     '  head_scores [agent]: a view, made again by its init',
-    'left as the build before made it, which takes this build\'s writes (no class makes it):',
-    '  cp_feedback [no class]',
+    '  heads [agent]',
+    '  tails [agent]',
+    '  workspace_overviews [account]',
+    '  head_folds [no class]: dropped with tails, which it is derived from',
+    '  head_marks [agent]: dropped with heads, which it refers to',
+    '  mark_notes [no class]: dropped with head_marks, which it refers to',
+    'LOSES DATA, dropped where held (no build reads it):',
+    '  device_consent_requests [no class]',
     'CLI-local, outside this deploy:',
     '  driver_lease [local]',
     'added, made by each database\'s init: device_consent_asks',
   ]);
-  expect(confirmation(verdicts)).toBe('repair tables refill workspace_overviews retire device_consent_requests');
-  expect(confirmation(verdicts.filter((verdict) => verdict.does === 'rebuild'))).toBeNull();
+  // Production confirms every table it drops, by name, the referrers with the tables they refer to.
+  expect(confirmation(verdicts)).toBe('drop tables device_connect_tickets,device_joins,head_folds,head_marks,head_scores,heads,mark_notes,tails,workspace_overviews retire device_consent_requests');
+  // Undeclared, the fold would be left over rowids that are gone: the declaration is what closes the plan over it.
+  expect(referrersOf(direct, { to: CANDIDATE, classes: CLASSES, derived: new Map() }).map(({ table }) => table)).not.toContain('head_folds');
+  expect(confirmation(verdicts.filter((verdict) => verdict.does === 'local'))).toBeNull();
 });
 
 const REPAIR: Repair = {
-  schema: 'account', rebuilt: ['device_joins'], refilled: [], retired: ['user_peer_grants'], unchecked: [],
-  tables: [{ table: 'device_joins', before: 2, after: 2 }, { table: 'user_peer_grants', before: 1, after: null }], refused: null,
+  schema: 'account', dropped: ['device_joins'], retired: ['user_peer_grants'], unchecked: [],
+  tables: [{ table: 'device_joins', before: 2, after: 0 }, { table: 'user_peer_grants', before: 1, after: null }], refused: null,
 };
 
 const answer = (over: Partial<TablesAnswer>): TablesAnswer => ({ name: null, census: [], repair: null, refused: null, workspaces: [], accounts: [], agents: [], ...over });
 
-const ACCOUNT: Reached = { className: 'UserDO', id: 'a'.repeat(64), name: 'u1', answer: answer({ census: [{ table: 'user_profile', rows: 1 }, { table: 'device_joins', rows: 2 }], repair: REPAIR }) };
+const ACCOUNT: Reached = {
+  className: 'UserDO', id: 'a'.repeat(64), name: 'u1',
+  answer: answer({ census: [{ table: 'user_profile', rows: 1, digest: 'd1' }, { table: 'device_joins', rows: 0, digest: 'd2' }], repair: REPAIR }),
+};
 
 const WORKSPACE: Reached = {
   className: 'OrchestratorAgent', id: 'b'.repeat(64),
   answer: answer({
-    name: 'jarvis', census: [{ table: 'trial_turns', rows: 3 }], refused: 'trial_turns: NOT NULL constraint failed: trial_turns.segment_id',
-    agents: [{ name: 'main', census: [{ table: 'session_messages', rows: 9 }], repair: null, refused: null }],
+    name: 'jarvis', census: [{ table: 'trial_turns', rows: 3, digest: 'd3' }], refused: 'trial_turns: no such column: segment',
+    agents: [{ name: 'main', census: [{ table: 'session_messages', rows: 9, digest: 'd4' }], repair: null, refused: null }],
   }),
 };
 
 const LOST: Reached = { className: 'OrchestratorAgent', id: 'c'.repeat(64), name: 'gone', error: 'the object failed to start' };
 
-test('a census is one sorted line per database and table, an unreachable object one line of its own', () => {
+test('a census is one sorted line per database and table with its digest, an unreachable object one line of its own', () => {
   expect(censusLines([WORKSPACE, LOST, ACCOUNT])).toEqual([
     'OrchestratorAgent\tgone\t!unreachable\tthe object failed to start',
-    'OrchestratorAgent\tjarvis\ttrial_turns\t3',
-    'UserDO\tu1\tdevice_joins\t2',
-    'UserDO\tu1\tuser_profile\t1',
-    'agent\tjarvis/main\tsession_messages\t9',
+    'OrchestratorAgent\tjarvis\ttrial_turns\t3\td3',
+    'UserDO\tu1\tdevice_joins\t0\td2',
+    'UserDO\tu1\tuser_profile\t1\td1',
+    'agent\tjarvis/main\tsession_messages\t9\td4',
   ]);
 });
 
-test('the walk names what each repair did, fails on a refused or a row-moving database, and names a gap in its census', () => {
+test('the walk names what each reset did and every table it dropped, fails on a refused database, and names a gap in its census', () => {
   const { lines, failed } = walkLines({ reached: [ACCOUNT, WORKSPACE, LOST], unnamed: ['d'.repeat(64)] });
 
   expect(lines).toEqual([
     '3 database(s) in 3 object(s) opened by name; 1 repaired by this walk (the rest were already at this build, or repaired by a request first)',
-    '  UserDO u1: rebuilt device_joins; retired user_peer_grants',
+    '  UserDO u1: dropped device_joins; retired user_peer_grants',
     'REFUSED (kept as they are, refusing every call with why):',
-    '  OrchestratorAgent jarvis: trial_turns: NOT NULL constraint failed: trial_turns.segment_id',
+    '  OrchestratorAgent jarvis: trial_turns: no such column: segment',
+    'DROPPED and made anew (rows before → after, as each init seeds):',
+    '  UserDO u1: device_joins 2 → 0',
     'UNREACHED, a gap in this census (each repairs at its first request on this build):',
     '  OrchestratorAgent gone: the object failed to start',
     `1 object(s) Cloudflare lists that no root names, not opened (each repairs at its first request): ${'d'.repeat(64)}`,
   ]);
-  expect(failed).toEqual(['OrchestratorAgent jarvis: trial_turns: NOT NULL constraint failed: trial_turns.segment_id']);
-
-  const moved: Reached = { ...ACCOUNT, answer: answer({ repair: { ...REPAIR, tables: [{ table: 'device_joins', before: 2, after: 1 }] } }) };
-
-  expect(walkLines({ reached: [moved], unnamed: [] }).failed).toEqual(['UserDO u1: device_joins 2 → 1']);
+  expect(failed).toEqual(['OrchestratorAgent jarvis: trial_turns: no such column: segment']);
 });
 
 /** What the walk is led to from `name`: the directory names a builtin account, an account its workspace. */

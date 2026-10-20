@@ -160,7 +160,7 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_command
     ON deferred_approvals(actor_id, command, executor, context, requested_at DESC)`);
   // The tripped rules as data: `reason` is display text.
-  execRaw(`CREATE TABLE IF NOT EXISTS deferred_approval_hits (
+  execRaw(`CREATE TABLE IF NOT EXISTS deferred_approval_hits ( /* derived from deferred_approvals: each hit names one */
     actor_id    TEXT NOT NULL,
     approval_id TEXT NOT NULL,
     rule        TEXT NOT NULL,

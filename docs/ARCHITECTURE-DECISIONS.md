@@ -1808,6 +1808,31 @@ interleaved, 06:56 to 07:13Z:
 
 The MCP cut's refusal came in round 11, where the slate-host build read 303 ms.
 
+L28. `--reset-tables` drops exactly the tables the genesis-lock diff names and makes them anew empty; no row is carried
+over (the owner's decision, 2026-10-20: "Drop changed tables"). It replaces the row-preserving repair of 5e999c1e7
+(2026-10-15), which rebuilt each stale table, copied the rows both shapes held back with their rowids, refilled a table
+its DDL called a regenerable cache, and refused where rows could not be copied. That repair, its cache marking, its
+copy-back and its foreign-key group rebuild are gone; the owner's rule had been that a schema change resets only its
+tables, with no migrations and no compatibility code.
+- Kept: each object applies the reset to its own database the first time the new build opens it, before any event reads
+  it (Cloudflare's list of objects misses classes, which is why a fleet walk alone failed); the genesis stamps, and
+  refusing a deploy that moves one without `--reset-tables`; `scripts/reset.ts tables-plan` naming every table it will
+  drop, and production's typed confirmation naming them; the drop of a table no build declares any longer.
+- Foreign keys: a table that refers to a dropped one is dropped with it, transitively, and the plan names it ("dropped
+  with <parent>, which it refers to") and the confirmation lists it. Rows left in a kept table would name rows that are
+  gone, which the foreign-key check refuses, so both kept or both dropped are the only consistent states. Refusing
+  instead would leave no way to reset a referenced table short of a meaningless DDL edit to each table that refers to it,
+  which ends in the same drop with less said.
+- Every table belongs to a class (`gate:schema-drift` refuses one no class lists), so a reshape reaches every database
+  that holds it. A table made on first use is listed too, and its class's repair makes it in the trial (`later`), so its
+  shape is read; a reset drops it and leaves it to that first use. The monitor and a deploy run became classes of their
+  own for this (`monitor`, `deploy`). A table whose rows are only valid against another's with no foreign key (a fold
+  over its rowids) says so beside its DDL (`/* derived from <table> */`) and is dropped with it, named in the plan.
+- A reset refuses only where the init cannot run over what the database holds; it reads no row, so no data a deployment
+  holds can make it refuse.
+- Proof: each database's census carries a digest of every table's rows (`/ops/tables`), so a census before the upload and
+  one after show exactly the tables the reset dropped and every other table byte for byte.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing
