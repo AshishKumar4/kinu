@@ -10,7 +10,7 @@ import { initMailboxTables } from '@kinu.run/core';
 import { KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { scriptedTurnModel, createRecordingLogger } from '@kinu.run/test-utils';
 import { handleInboundMail } from '../src/mail/handler';
-import { MailStore } from '../src/mail/store';
+import { MailStore } from '@kinu.run/core';
 import { parseMail } from '../src/mail/parse';
 import { makeSqlExec } from '../../core/tests/helpers';
 import { fireSoonestWake, orchestratorHarness, until, type RecordedUserPlaneCalls } from './helpers/actor-harness';
@@ -102,7 +102,8 @@ test('an email opens a turn whose answer threads back to the sender; a refused s
     warnings: [],
   }) });
 
-  const mailbox = mailboxFor(agent.name, agent.harnessMainActorId());
+  // The workspace's own box is read by its main agent, whatever id the Mailbox recorded for it.
+  const mailbox = mailboxFor(agent.name, 'actor-main');
   const address = mailbox.address;
 
   const env = Object.assign(Object.create(null), {

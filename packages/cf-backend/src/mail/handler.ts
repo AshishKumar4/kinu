@@ -20,7 +20,7 @@ export async function handleInboundMail(message: ForwardableEmailMessage, env: E
         woke: arrival.woke ?? 'input', from: arrival.from.address, to: message.to, subject: arrival.subject, instruction: arrival.instruction,
         message_id: arrival.headerId === null ? null : `<${arrival.headerId}>`, references: arrival.references,
         attachments: [...arrival.attachments], mail: { box: arrival.box, thread: arrival.threadId, message: arrival.messageId }, now: Date.now(),
-      }, arrival.wake.actorId);
+      }, arrival.wake.main ? undefined : arrival.wake.actorId);
     },
   })).pipe(
     Effect.tapError((failure) => Effect.sync(() => { diagnostics.failure('email.delivery_failed', failure); })),

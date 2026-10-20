@@ -39,6 +39,7 @@ import {
   actorEnded, actorStanding, isSubordinateOrigin,
   whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
+  createEmailThreadDispatcher,
 } from "@kinu.run/core";
 import { censusOf, requireOps, type OpsCaller, type TablesAnswer } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
@@ -261,7 +262,6 @@ import { attempt, authoredRefusal, classify, CODE_IS_REFUSAL, diagnostics, fligh
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
-import { createEmailThreadDispatcher } from "./email/outbound";
 import { WorkspaceEmail } from "./workspace-email";
 import { EmailOutbox } from "@kinu.run/core";
 import {
@@ -7354,11 +7354,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * An arrival the account's Mailbox filed and decided wakes `actorId`, on the owner's word or as input (docs/MAIL.md
-   * §3). Worker-only: the mail router holds the stub, never a browser. Publish and reply thread run here atomically.
+   * An arrival the account's Mailbox filed and decided wakes `actorId` (the workspace's main agent when it names none),
+   * on the owner's word or as input (docs/MAIL.md §3). Worker-only: the mail router holds the stub, never a browser.
+   * Publish and reply thread run here atomically.
    */
-  async mailArrived(arrival: MailArrival, actorId: string): Promise<MailAdmission> {
-    return await this.email.accept(arrival, actorId);
+  async mailArrived(arrival: MailArrival, actorId?: string): Promise<MailAdmission> {
+    return await this.email.accept(arrival, actorId ?? this.actorHandle().actorId);
   }
 
   async getEmailIngress(): Promise<{ notifications: boolean }> {

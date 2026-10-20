@@ -10,10 +10,10 @@ import {
   durableStamps, EmailOutbox, initMailboxTables, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
   type MailBox, type MailboxCalls, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
   type MailRecipient, type MailThreadSummary, type MailThreadView, type MailWake,
+  MailStore, type MailBlobs,
 } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
-import { KinuError } from '@kinu.run/core/obs';
-import { MailStore, type MailBlobs } from './store';
+import { diagnostics, KinuError } from '@kinu.run/core/obs';
 import { parseMail } from './parse';
 
 /** Sends a day for an account that is not one of the deployment's operators (the owner, 2026-10-19). */
@@ -111,7 +111,10 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls {
     this.ready();
 
     if (this.env.EMAIL !== undefined) await this.outbox.reconcile(this.env.EMAIL, Date.now());
-    await this.store.purge();
+
+    const emptied = await this.store.purge();
+
+    if (emptied > 0) diagnostics.event('mail.trash_emptied', { threads: emptied });
     await this.arm();
   }
 

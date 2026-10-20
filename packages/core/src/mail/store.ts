@@ -4,11 +4,13 @@
  * attachments) live in R2, content-addressed, and go when the last row naming them goes.
  */
 import * as v from 'valibot';
-import { KinuError } from '@kinu.run/core/obs';
-import {
-  mailAddressOf, mailLabelOf, mailVerdict, type MailBox, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
-  type MailParty, type MailRecipient, type MailThreadSummary, type MailThreadView, type MailWake, type MailWoke, type SqlExec,
-} from '@kinu.run/core';
+import { KinuError } from '../obs/index';
+import { mailAddressOf, mailLabelOf, type MailRecipient } from './address';
+import { mailVerdict } from './verdict';
+import type {
+  MailBox, MailDelivery, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailParty, MailThreadSummary, MailThreadView, MailWake, MailWoke,
+} from './mailbox-api';
+import type { SqlExec } from '../types/primitives';
 
 /** Trash empties itself 30 days after a thread went in (the owner, 2026-10-19). */
 const TRASH_DAYS = 30;
@@ -252,7 +254,7 @@ export class MailStore {
       box: box.path, messageId, threadId, headerId, duplicate: false, verified: verdict.verified, from, subject: parsed.subject, woke,
       references: parsed.references.length === 0 ? null : parsed.references.join(' '),
       attachments: parsed.attachments.map((file) => ({ filename: file.filename, content_type: file.contentType, size: file.content.byteLength })),
-      wake: woke === null || box.workspace === null || box.actorId === null ? null : { workspace: box.workspace, actorId: box.actorId },
+      wake: woke === null || box.workspace === null || box.actorId === null ? null : { workspace: box.workspace, actorId: box.actorId, main: box.kind !== 'agent' },
       instruction: woke === 'owner' ? parsed.ownWords : null,
     };
   }

@@ -1,16 +1,13 @@
 /**
- * Mission Inbox, outbound side, over the Workers `send_email` binding (Cloudflare Email Sending):
- * receipts, `email_thread` turn replies, and owner notifications share one send path.
+ * Mail a workspace sends on its own, over the Workers `send_email` binding (Cloudflare Email Sending): the receipt the
+ * owner's instruction gets, `email_thread` turn replies, and owner notifications share one send path.
  */
 
-import {
-  boundedMessageId, boundedReferences,
-  JsonValueSchema,
-  type EmailThreadAddr, type JsonValue,
-} from '@kinu.run/core';
-import type { EmailOutbox, OutboundEmailMessage } from '@kinu.run/core';
+import { boundedMessageId, boundedReferences, type EmailThreadAddr } from '../events/ingress/email';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
+import type { EmailOutbox, EmailSender, OutboundEmailMessage } from '../events/email-outbox';
 import { Cause, Effect } from 'effect';
-import { diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain, settle } from '../obs/index';
 import * as v from 'valibot';
 
 const EmailThreadAddrSchema = v.object({
@@ -30,7 +27,7 @@ interface EmailThreadingHeaders {
 
 /** Resolved per dispatch so binding and display-name changes never go stale on a long-lived DO. */
 export interface EmailSendContext {
-  email: SendEmail | undefined;
+  email: EmailSender | undefined;
   agentDisplayName: string;
   /** Write-ahead + idempotency for the send (SPEC §7.4). */
   outbox: EmailOutbox;
@@ -148,7 +145,7 @@ export function createEmailThreadDispatcher(
 }
 
 export interface OwnerEmailDeps {
-  email: SendEmail | undefined;
+  email: EmailSender | undefined;
   emailDomain: string | undefined;
   agentName: string;
   agentDisplayName: string;

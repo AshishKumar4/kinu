@@ -1,8 +1,7 @@
 /** A raw message as the Mailbox files it: postal-mime's reading, with quoted history set aside from the words. */
 import type { Address, Email } from 'postal-mime';
 import type { MailParty } from '@kinu.run/core';
-import { inboundBody, stripQuotedReply } from '../email/inbound';
-import type { ParsedMail } from './store';
+import { inboundBody, stripQuotedReply, type ParsedMail } from '@kinu.run/core';
 
 /** Each address an address field names, a group's members included. */
 function parties(field: readonly Address[] | Address | undefined): MailParty[] {

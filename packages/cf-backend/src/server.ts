@@ -32,7 +32,6 @@ import { landingRoutes } from "./landing-route";
 import { pcRoutes } from "./pc-routes";
 import { opsRoutes } from "./ops-routes";
 import { handleInboundMail } from "./mail/handler";
-import { mailHostRedirect } from "./mail/host";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do";
 import { handleSlateShareHostRequest } from "./slate-share-route";
 import { handleNimbusPreviewHostRequest, previewEntry } from "./nimbus-route";
@@ -40,7 +39,7 @@ import {
   crossSiteRejection, sessionGate,
   type AuthIdentity,
 } from "./auth/session";
-import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
+import { APP_FONTS_PATH, appFontFile, containPreviewResponse, hostOf, isPreviewHostRequest, mailHostRedirect, serveApp, SLATE_FONTS_PATH } from "@kinu.run/core";
 import { parseCliAgentConnectTicketUserId } from "./user/sessions";
 import { accountTheme, DEFAULT_THEME, ownerCaller, THEME_CONFIG_KEY, type ThemeName } from "@kinu.run/core";
 import { claimOwnedWorkspace } from "./user/workspace-ownership";

@@ -5,7 +5,7 @@ import * as v from 'valibot';
 import { initMailboxTables, type JsonValue } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { makeSqlExec } from '../../core/tests/helpers';
-import { MailStore } from '../src/mail/store';
+import { MailStore } from '@kinu.run/core';
 import { parseMail } from '../src/mail/parse';
 import { Hono } from 'hono';
 import { mailRoutes, type MailRoutesEnv } from '../src/mail/routes';

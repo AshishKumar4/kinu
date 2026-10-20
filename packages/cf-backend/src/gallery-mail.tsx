@@ -6,7 +6,7 @@
  *   are pills in the chat; an agent's outgoing mail is an approval card on the composer.
  * The sidebar's footer is the shell's own (`SidebarFooter`); its Mail badge reads this frame's Important mail.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
 import { Badge, Button } from "@cloudflare/kumo";
@@ -32,6 +32,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Segmented } from "@/components/ui/Segmented";
 import { Choice, inputCls } from "@/components/ui/form";
 import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import { ImportantMailRow, mailRowCls, mailTime } from "@/components/mail/ImportantMailRow";
 import { MailSendBody, type MailSend } from "@/components/mail/MailSendBody";
 import type { ImportantMail } from "@/lib/mail-api";
@@ -631,7 +632,7 @@ function MailPage() {
   const shown = scoped.filter((thread) => inView(thread, view)).sort((a, b) => latest(b) - latest(a));
   const waiting = view === "important" && ASSISTANT === null;
   const chosen = threads.find((each) => each.id === open) ?? null;
-  const roomy = useMediaWidth(1024);
+  const roomy = useMediaQuery("(min-width: 1024px)");
   // The reading card is never empty on a desktop: with nothing chosen, it reads the newest of the view.
   const reading = chosen ?? (roomy && !waiting ? shown[0] ?? null : null);
   const thread = chosen;
@@ -860,28 +861,11 @@ function ChatPane({ agent, threads, onOpenMail, answered, onAnswer }: {
   );
 }
 
-/** Whether the window is at least `px` wide, kept as it resizes. */
-function useMediaWidth(px: number): boolean {
-  const query = `(min-width: ${String(px)}px)`;
-  const [wide, setWide] = useState(() => window.matchMedia(query).matches);
-
-  useEffect(() => {
-    const media = window.matchMedia(query);
-    const sync = (): void => setWide(media.matches);
-
-    media.addEventListener("change", sync);
-
-    return () => media.removeEventListener("change", sync);
-  }, [query]);
-
-  return wide;
-}
-
 function WorkspaceScene() {
   const { subName } = useParams();
   const agent = subName === "scout" ? "scout" : "main";
   const params = new URLSearchParams(useLocation().search);
-  const wide = useMediaWidth(768);
+  const wide = useMediaQuery("(min-width: 768px)");
   const { threads, change, read } = useThreads(params.get("thread"));
   const [open, setOpen] = useState<string | null>(params.get("thread"));
   const [pane, setPane] = useState<"chat" | "workspace">(params.get("pane") === "workspace" ? "workspace" : "chat");

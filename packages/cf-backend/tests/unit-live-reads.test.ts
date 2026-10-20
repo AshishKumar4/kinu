@@ -13,6 +13,7 @@ import {
   chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, reactivateOrchestratorHarness,
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
+import { ownerMail } from './helpers/owner-mail';
 import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding } from './helpers/platform-gateway';
 
@@ -265,7 +266,7 @@ test('an email delivered to Main reads working until its drain takes it, and the
   endTick(agent);
   named();
 
-  const admission = await agent.harnessOwnerMail(1, 'how is the deploy?');
+  const admission = await agent.mailArrived(ownerMail(1, 'how is the deploy?'));
 
   endTick(agent);
 

@@ -99,6 +99,16 @@ export { isMailLabel, mailAddressOf, mailLabelOf, parseMailRecipient, type MailR
 
 export type * from './mail/mailbox-api';
 
+export { MailStore, type MailBlobs, type MailStoreDeps, type ParsedMail } from './mail/store';
+
+export { mailHostRedirect } from './mail/host';
+
+export { inboundBody, isAutoReplyEmail, stripQuotedReply } from './mail/words';
+
+export { createEmailThreadDispatcher, sendInboundEmailReceipt, sendOwnerEmail } from './mail/outbound';
+
+export { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorDeps, type MonitorRunResult } from './monitor/incidents';
+
 export {
   DEFAULT_SOUL_MD,
   SOUL_FILE,

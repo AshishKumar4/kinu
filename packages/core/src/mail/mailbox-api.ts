@@ -120,8 +120,8 @@ export interface MailDelivery {
   readonly from: MailParty;
   readonly subject: string;
   readonly woke: MailWoke | null;
-  /** The box's reader to wake; null when nothing wakes. */
-  readonly wake: { readonly workspace: string; readonly actorId: string } | null;
+  /** The box's reader to wake; null when nothing wakes. `main`: the workspace's own box, read by its main agent. */
+  readonly wake: { readonly workspace: string; readonly actorId: string; readonly main: boolean } | null;
   /** The owner's verified instruction's own words, the only body an arrival hands an agent unasked (§3). */
   readonly instruction: string | null;
 }

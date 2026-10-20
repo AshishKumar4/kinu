@@ -3,7 +3,7 @@
  * `__Host-` and host-only by design, so Mail lives on the app's own origin, with one session, one CSRF boundary and
  * one CSP. A link to `mail.<domain>/<thread>` keeps its path and lands on the same thread.
  */
-import { hostOf } from '@kinu.run/core';
+import { hostOf } from '../preview/preview-origin';
 
 export function mailHostRedirect(url: URL, env: { readonly CLI_PUBLIC_ORIGIN?: string }): Response | null {
   const app = hostOf(env.CLI_PUBLIC_ORIGIN);

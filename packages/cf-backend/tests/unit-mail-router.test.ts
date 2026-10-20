@@ -46,7 +46,7 @@ function delivery(woke: MailDelivery['woke'], extra: Partial<MailDelivery> = {})
   return {
     box: 'scout.api-worker', messageId: 'm-1', threadId: 't-1', headerId: 'hooks-v2-500@northwind.io', references: null, attachments: [], duplicate: false, verified: woke !== null, from: { name: 'Dana Whitfield', address: 'dana@northwind.io' },
     subject: 'Webhook deliveries to /hooks/v2 failing with 500', woke, instruction: woke === 'owner' ? 'Ship the fix.' : null,
-    wake: woke === null ? null : { workspace: 'api-worker', actorId: 'actor-scout' }, ...extra,
+    wake: woke === null ? null : { workspace: 'api-worker', actorId: 'actor-scout', main: false }, ...extra,
   };
 }
 

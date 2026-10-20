@@ -97,7 +97,7 @@ export function mailStep(inputs: DeployInputs) {
         }, v.unknown());
 
         if (routed === null || catchAll === null) {
-          asks.push(`In the dashboard, ${domain} → Email → Email Routing: enable it, then set the catch-all to "Send to a Worker: ${inputs.instanceName}". `
+          asks.push(`In the dashboard, open ${domain}, then Email, then Email Routing: enable it, and set the catch-all to "Send to a Worker: ${inputs.instanceName}". `
             + 'Or give the deploy token the zone\'s "Email Routing Rules: Edit" and "Zone Settings: Edit".');
         }
 
@@ -105,7 +105,7 @@ export function mailStep(inputs: DeployInputs) {
         const records = sending === null ? null : await allowed(context, { method: 'GET', path: `/zones/${zone}/email/sending/subdomains/${sending.id}/dns` }, DnsRecordsSchema);
 
         if (sending === null || records === null) {
-          asks.push(`In the dashboard, ${domain} → Email → Email Sending: enable it for ${domain} and add the records it lists. Sending needs Workers Paid.`);
+          asks.push(`In the dashboard, open ${domain}, then Email, then Email Sending: enable it for ${domain} and add the records it lists. Sending needs Workers Paid.`);
         }
 
         const dmarc = await allowed(context, { method: 'GET', path: `/zones/${zone}/dns_records?type=TXT&name=${encodeURIComponent(`_dmarc.${domain}`)}&per_page=100` }, DnsRecordsSchema);

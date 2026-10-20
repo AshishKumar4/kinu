@@ -9,7 +9,7 @@ import { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
 import { hmacSha256Hex, initMailboxTables } from '@kinu.run/core';
-import { MailStore } from '../src/mail/store';
+import { MailStore } from '@kinu.run/core';
 import { parseMail } from '../src/mail/parse';
 import { makeSqlExec } from '../../core/tests/helpers';
 import {
@@ -84,7 +84,7 @@ function workspace(): Workspace {
   });
 
   mailbox.open({ userId: 'u-owner', email: OWNER_EMAIL, username: 'owner', assistant: null });
-  mailbox.boxFor({ kind: 'workspace', workspace: WORKSPACE, name: WORKSPACE, actorId: harness.agent.harnessMainActorId() });
+  mailbox.boxFor({ kind: 'workspace', workspace: WORKSPACE, name: WORKSPACE, actorId: 'actor-main' });
   const view: Partial<Env> = {};
   Object.assign(view, {
     AUTH_KV: makeKv(),

@@ -13,7 +13,7 @@ import { createMemoryVfs, createTestActorsOver, createTestRuntime, present, with
 import {
   createEmailThreadDispatcher,
   sendInboundEmailReceipt, sendOwnerEmail,
-} from '../src/email/outbound';
+} from '@kinu.run/core';
 import { dispatchEmailRepliesForTurn } from '@kinu.run/core';
 import { EmailOutbox } from '@kinu.run/core';
 import { sqlExec } from './helpers/user-do';

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { isPreviewHostRequest } from '@kinu.run/core';
-import { mailHostRedirect } from '../src/mail/host';
+import { mailHostRedirect } from '@kinu.run/core';
 
 // mail.<domain> is a permanent redirect into the app (docs/MAIL.md §7): the session cookie is host-only by design, so
 // Mail is served from the app's own origin, and `mail` is never a preview host.

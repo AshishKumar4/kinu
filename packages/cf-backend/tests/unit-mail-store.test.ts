@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { initMailboxTables, type SqlExec } from '@kinu.run/core';
 import { makeSqlExec } from '../../core/tests/helpers';
 import type { MailDelivery } from '@kinu.run/core';
-import { MailStore, type MailBlobs } from '../src/mail/store';
+import { MailStore, type MailBlobs } from '@kinu.run/core';
 import { parseMail } from '../src/mail/parse';
 
 // The Mailbox's store over SQLite, with the three real deliveries Cloudflare's MX made on 2026-10-19 (docs/MAIL.md §4)
@@ -90,7 +90,7 @@ describe('an arrival is filed, and wakes by the verdict and the box\'s policy', 
     open('probe@ashishkumarsingh.com');
     const delivery = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'bounce@cf-bounce.ashishkumarsingh.com', recipient: toPerson });
 
-    expect(delivery).toMatchObject({ verified: true, woke: 'owner', duplicate: false, wake: { workspace: 'personal-assistant', actorId: 'actor-kinu' } });
+    expect(delivery).toMatchObject({ verified: true, woke: 'owner', duplicate: false, wake: { workspace: 'personal-assistant', actorId: 'actor-kinu', main: true } });
     expect(delivery.instruction).toContain('control message');
   });
 

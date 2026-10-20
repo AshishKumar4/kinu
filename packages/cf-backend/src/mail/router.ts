@@ -8,10 +8,9 @@
  * list and machine mail included (a GitHub notification is mail the person reads); only a machine's message never
  * wakes anyone, since an answer to an auto-reply would loop.
  */
-import { parseMailRecipient, readBounded, type MailDelivery, type MailRecipient } from '@kinu.run/core';
+import { isAutoReplyEmail, parseMailRecipient, readBounded, type MailDelivery, type MailRecipient } from '@kinu.run/core';
 import { KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
-import { isAutoReplyEmail } from '../email/inbound';
 import type { MailboxDO } from './mailbox-do';
 import type { MailNameDO } from './mailname-do';
 

@@ -6926,11 +6926,14 @@ const DRAIN_BATCHES = {
   ],
   idle: [
     { ...DRAINED_EVENT, id: "ev-timer", ingress: "timer_alarm", variant: "timer", payload: { label: "background-job-wake:job-7", trigger_id: "x", scheduled_fire_at: 0 } },
+  ],
+  // Mail drains in a turn of its own, in Plan (docs/MAIL.md §3); a stranger's carries no words, only how to read it.
+  mail: [
     {
       ...DRAINED_EVENT, id: "ev-mail", ingress: "email_inbound", variant: "email",
       payload: {
-        from: "ops@example.com", to: "agent@example.com", subject: "Deploy failed", body_text: "exit 1",
-        message_id: null, in_reply_to: null, references: null, attachments: [],
+        from: "ops@example.com", to: "api-worker.ashish@kinu.run", subject: "Deploy failed", body_text: "",
+        message_id: null, in_reply_to: null, references: null, attachments: [], mail: { box: "api-worker", thread: "t-deploy", message: "m-deploy" },
       },
     },
   ],

@@ -6,10 +6,10 @@
 import {
   EmailInbox, planOwnerNotification,
   type EmailInboxDeps, type EmailOutbox, type MailAdmission, type MailArrival,
+  sendInboundEmailReceipt, sendOwnerEmail,
 } from '@kinu.run/core';
 import type { Effect } from 'effect';
 import { logged } from '@kinu.run/core/obs';
-import { sendInboundEmailReceipt, sendOwnerEmail } from './email/outbound';
 import type { UserHubClient } from './account-reads';
 import type { UserCaller } from '@kinu.run/core';
 
