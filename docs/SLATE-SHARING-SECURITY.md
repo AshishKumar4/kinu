@@ -181,8 +181,9 @@ shared with others). What it may do is decided once, by `egressAuthority`:
 | opens the workspace's own previews with its pass | yes | no; it reaches them as no one |
 | has its GitHub work recorded as the owner's | yes, for the agent it names | no |
 
-One forwarding policy applies it (`packages/cf-backend/src/egress/policy.ts`): own previews served by this Worker, then
-the destination check, then the vault and GitHub recording. An egress adds only what its runtime has: this Worker's own
+One forwarding policy applies it (`packages/cf-backend/src/egress/policy.ts`): a placeholder named by a principal with
+no vault refused before it goes anywhere, then own previews served by this Worker, then the destination check, then the
+vault and GitHub recording. An egress adds only what its runtime has: this Worker's own
 fetch, and `CodemodeEgress`'s browser gate. Two behaviours changed by unifying them: a container or Nimbus process of the
 owner's now opens the workspace's own previews with its pass, as the owner's programs already did; and an owner's
 codemode program or own slate now has its GitHub work recorded, as the owner's processes already did.

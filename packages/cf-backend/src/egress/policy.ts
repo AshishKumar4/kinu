@@ -13,7 +13,7 @@ import {
 } from '@kinu.run/core';
 import { diagnostics, KinuError, logged, settle, type Refusal } from '@kinu.run/core/obs';
 import { selfPreviewPass, verifiedPreview } from '../viewer-pass';
-import { EGRESS_FAILURE_HEADER, refusal, sendOut, type ContainerEgressEnv } from './send-out';
+import { EGRESS_FAILURE_HEADER, refusal, sendOut, unspendable, type ContainerEgressEnv } from './send-out';
 
 export type EgressPolicyEnv = PreviewSuffixEnv & LabelSignerEnv & ContainerEgressEnv<unknown>;
 
@@ -86,6 +86,10 @@ export function forwardEgress(request: Request, env: EgressPolicyEnv, principal:
     const url = new URL(request.url);
     const authority = egressAuthority(principal);
     const { self } = seams;
+    // Before anything is reached, the workspace's own preview included: a program with no vault names no placeholder.
+    const refused = unspendable(request, authority.vault);
+
+    if (refused !== null) return refused;
     // Judged first: a local preview host is loopback, which the destination check refuses.
     const ownPreview = self !== undefined && (yield* Effect.promise(async () => verifiedPreview(env, url.hostname)))?.workspace === principal.workspace;
 

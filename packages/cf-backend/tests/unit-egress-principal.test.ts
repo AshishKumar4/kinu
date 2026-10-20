@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { asFetchFunction, sandboxPreviewExposures, type EgressPrincipal, type EgressRequestFacts, type GitHubFact, type UserCaller } from '@kinu.run/core';
 import { exports as workersExports } from 'cloudflare:workers';
 import { CodemodeEgress } from '../src/codemode-egress';
+import { EGRESS_FAILURE_HEADER } from '../src/egress/send-out';
 import type { PreviewVisit } from '../src/nimbus-route';
 import { PREVIEW_SELF } from '../src/viewer-pass';
 import { workerContext } from './helpers/bindings';
@@ -126,6 +127,15 @@ describe.each(CASES)('the %s egress, for the %s', (egress, as, principal) => {
 
     expect(answer.status).toBe(as === 'owner' ? 200 : 403);
     expect(sent.map((request) => request.headers.get('authorization'))).toEqual(as === 'owner' ? [`Bearer ${SECRET}`] : []);
+  });
+
+  test(as === 'owner' ? 'may name a placeholder to its own preview, which is not a secret\'s host' : 'naming a placeholder is refused even to its own preview', async () => {
+    const { env, placeholder } = await workspaceEnv();
+    const answer = await EGRESSES[egress](principal, env, workerContext()).fetch(new Request('https://8080-kinu-hello-p8080_ab12cd34.previews.example/status', { headers: { authorization: `Bearer ${placeholder}` } }));
+
+    // Refused by the egress itself, which marks its refusals, before the preview could refuse it as no one's.
+    expect([answer.status, answer.headers.get(EGRESS_FAILURE_HEADER)]).toEqual(as === 'owner' ? [200, null] : [403, '1']);
+    expect(sent).toEqual([]);
   });
 
   test(as === 'owner' ? 'has its GitHub work recorded as the owner\'s, for its agent' : 'has none of its GitHub work recorded as the owner\'s', async () => {

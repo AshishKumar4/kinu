@@ -469,8 +469,8 @@ describe('native egress constraints — red in every governed direction', () => 
   const base = 'packages/devbox/src/devbox.ts';
   const kinu = 'packages/cf-backend/src/kinu-devbox.ts';
   const router = 'packages/devbox/src/gateway.ts';
-  const vault = 'packages/cf-backend/src/egress/outbound.ts';
   const sender = 'packages/cf-backend/src/egress/send-out.ts';
+  const policy = 'packages/cf-backend/src/egress/policy.ts';
   const worker = 'packages/cf-backend/src/server.ts';
   const bench = 'packages/devbox/bench/worker.ts';
   const generic = ['Devbox', 'BenchBox', 'SnapshotChainBox', 'ExampleBox'];
@@ -530,9 +530,9 @@ describe('native egress constraints — red in every governed direction', () => 
     [kinu, 'this.#nativeExports.KinuEgress({ props: params })', 'this.#nativeExports.KinuEvents({ props: params })', 'does not bind the vault'],
     [base, 'await this.outboundPolicy()', '{ routes: {} }', 'does not bind the vault'],
     [router, 'this.#fallback = policy.fallback', 'this.#fallback = undefined', 'does not bind the vault'],
-    [worker, "return handleContainerEgress(request, this.env, params, params === undefined || 'principal' in params ? undefined : new GitHubEgressRecorder(this.env, this.ctx, params));", 'return fetch(request);', 'does not enter credential injection'],
+    [worker, "return forwardEgress(request, this.env, parseEgressPrincipal(this.ctx), { self: exports.default, github: githubRecorder(this.env.OrchestratorAgent, this.ctx), seam: 'container' });", 'return fetch(request);', 'does not enter credential injection'],
     [sender, 'owner.resolveEgressInjection(', 'owner.unrelatedInjection(', 'does not consult the owner vault'],
-    [vault, "return yield* sendOut(request, env, 'principal' in params ? null : params, github);", 'return yield* Effect.promise(() => fetch(request));', 'does not leave through sendOut'],
+    [policy, 'return yield* sendOut(request, env, authority.vault, github);', 'return yield* Effect.promise(() => fetch(request));', 'does not leave through sendOut'],
     [router, '?? outbound.fallback', '', 'owned routes do not precede'],
     [router, 'outbound.internet ?', 'true ?', 'public forwarding is not conditional'],
     [router, ": routeEgress(request, props.outbound)", ": serveStore(request, props.store, (name) => this.env[name])", 'does not route egress through its router'],

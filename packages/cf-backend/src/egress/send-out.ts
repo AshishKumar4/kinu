@@ -57,6 +57,21 @@ export function revealedForJob<Id>(
   }));
 }
 
+/** The request as the vault reads it: where it goes, and every header that may name a placeholder. */
+function requestFacts(request: Request): EgressRequestFacts {
+  return { host: new URL(request.url).hostname, url: request.url, headers: [...request.headers] };
+}
+
+/**
+ * A request naming a placeholder, from a program that holds none of the owner's secrets (`vault` null): refused before it
+ * goes anywhere, to a host or to the workspace's own preview. Null: it may go on.
+ */
+export function unspendable(request: Request, vault: SecretVault | null): Response | null {
+  if (vault !== null || egressPlaceholdersIn(requestFacts(request)).size === 0) return null;
+
+  return refusal(403, 'This runs for someone other than the workspace\'s owner (a share\'s viewer, or a slate shared with others) and holds none of the owner\'s secrets, so a request naming a secret placeholder is not sent.');
+}
+
 export function sendOut<Id>(
   request: Request,
   env: ContainerEgressEnv<Id>,
@@ -65,11 +80,13 @@ export function sendOut<Id>(
 ): Effect.Effect<Response> {
   return Effect.gen(function* () {
     const url = new URL(request.url);
-    const facts: EgressRequestFacts = { host: url.hostname, url: request.url, headers: [...request.headers] };
+    const facts = requestFacts(request);
+    const refused = unspendable(request, vault);
 
-    if (egressPlaceholdersIn(facts).size === 0) return yield* forwarded(request, url, [], github);
+    if (refused !== null) return refused;
 
-    if (vault === null) return refusal(403, 'This runs for someone other than the workspace\'s owner (a share\'s viewer, or a slate shared with others) and holds none of the owner\'s secrets, so a request naming a secret placeholder is not sent.');
+    // With no vault, nothing it names is a placeholder (refused above): it goes as it is, asking no one.
+    if (vault === null || egressPlaceholdersIn(facts).size === 0) return yield* forwarded(request, url, [], github);
 
     // Use the stub, never copy it: `Object.assign` of a JSRPC stub yields `{}` (methods live behind a Proxy).
     const owner: EgressVaultClient = objectNamed(env.UserDO, vault.ownerUserId);
