@@ -39,7 +39,7 @@ function mailbox(): MailboxAgentCalls {
     readableBy: (caller) => Promise.resolve(store.readableBy(caller)),
     findFor: (caller, query) => Promise.resolve(store.findFor(caller, query)),
     readFor: async (caller, thread) => store.readFor(caller, thread),
-    untriagedFor: async (caller, limit) => store.untriagedFor(caller, limit),
+    untriagedFor: async (caller, limit, skip) => store.untriagedFor(caller, limit, skip),
     draftFor: async (caller, message) => store.draftFor(caller, message),
     sendFor: async (caller, message) => {
       sent.push(message);

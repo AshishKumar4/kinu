@@ -189,11 +189,13 @@ export class MailStore {
   }
 
   /** The person's threads the assistant has not triaged since their newest mail, newest first; none unless it reads the box. */
-  async untriagedFor(caller: MailCaller, limit: number): Promise<MailThreadView[]> {
+  async untriagedFor(caller: MailCaller, limit: number, skip: readonly string[] = []): Promise<MailThreadView[]> {
     if (this.readablePath(caller, '') === null) return [];
 
+    // `skip` is a pass's own failures, so it is as long as they are; json_each keeps it one bound parameter.
     const ids = rows(v.object({ id: v.string() }), this.deps.sql.exec(
-      'SELECT t.id FROM mail_untriaged u JOIN mail_threads t ON t.id = u.thread_id WHERE t.trashed_at IS NULL ORDER BY u.since DESC, t.id LIMIT ?', limit,
+      `SELECT t.id FROM mail_untriaged u JOIN mail_threads t ON t.id = u.thread_id
+       WHERE t.trashed_at IS NULL AND t.id NOT IN (SELECT value FROM json_each(?)) ORDER BY u.since DESC, t.id LIMIT ?`, JSON.stringify(skip), limit,
     ));
 
     const views = await Promise.all(ids.map(async (row) => this.thread(row.id)));

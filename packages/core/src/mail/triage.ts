@@ -13,10 +13,8 @@ import { oneLineClip } from '../utils/text';
 import type { MailboxAgentCalls, MailCaller, MailThreadView } from './mailbox-api';
 import { mailThreadText } from './words';
 
-/** Threads read per round, and rounds per pass: a burst is taken newest first, and what is left waits for the next mail. */
+/** Threads read at a time: a pass reads batch after batch, newest first, until none waits but those it could not answer. */
 const BATCH = 10;
-
-const ROUNDS = 4;
 
 const REASON_MAX = 280;
 
@@ -113,7 +111,7 @@ function triageFailed(deps: MailTriageDeps, view: MailThreadView, failure: KinuE
   );
 }
 
-/** One pass over the person's mail waiting for triage; a thread that fails is said, and the rest go on. */
+/** One pass empties the person's queue; a thread that fails is said, skipped for the rest of the pass, and the rest go on. */
 export function triageMail(deps: MailTriageDeps): Promise<MailTriageRun> {
   return settle(Effect.gen(function* () {
     const system = triageSystem(deps.about, deps.owner);
@@ -122,9 +120,8 @@ export function triageMail(deps: MailTriageDeps): Promise<MailTriageRun> {
     let ordinary = 0;
     let drafted = 0;
 
-    for (let round = 0; round < ROUNDS; round += 1) {
-      const read = yield* attempt({ doing: 'reading the mail waiting for triage', otherwise: 'unavailable' }, async () => deps.mailbox.untriagedFor(deps.caller, BATCH));
-      const waiting = read.filter((view) => !failed.has(view.thread.id));
+    for (;;) {
+      const waiting = yield* attempt({ doing: 'reading the mail waiting for triage', otherwise: 'unavailable' }, async () => deps.mailbox.untriagedFor(deps.caller, BATCH, [...failed]));
 
       if (waiting.length === 0) break;
 

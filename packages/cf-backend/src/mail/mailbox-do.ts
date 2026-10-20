@@ -137,8 +137,8 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     return settle(this.served(() => this.store.readBy(reader)));
   }
 
-  untriagedFor(caller: MailCaller, limit: number): Promise<readonly MailThreadView[]> {
-    return settle(this.served(() => this.store.untriagedFor(caller, limit)));
+  untriagedFor(caller: MailCaller, limit: number, skip?: readonly string[]): Promise<readonly MailThreadView[]> {
+    return settle(this.served(() => this.store.untriagedFor(caller, limit, skip)));
   }
 
   boxes(): Promise<readonly MailBox[]> {

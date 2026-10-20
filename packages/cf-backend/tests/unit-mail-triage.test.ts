@@ -50,7 +50,7 @@ async function arrive(raw: Uint8Array, recipient: MailRecipient = toPerson) {
 function deps(): MailTriageDeps {
   return {
     mailbox: {
-      untriagedFor: async (caller, limit) => store.untriagedFor(caller, limit),
+      untriagedFor: async (caller, limit, skip) => store.untriagedFor(caller, limit, skip),
       updateFor: (caller, thread, change) => Promise.resolve(store.updateFor(caller, thread, change)),
       draftFor: async (caller, message) => store.draftFor(caller, message),
     },
@@ -148,6 +148,17 @@ describe('the assistant triages each new thread in the person\'s box', () => {
 
     answers.set('kinu.run renews on 26 October', '{"important":true,"reason":"The registrar needs a new card by 26 October.","reply":null}');
     expect(await triageMail(deps())).toEqual({ important: 1, ordinary: 0, drafted: 0, failed: 0 });
+  });
+
+  test('one pass empties the queue, however long, in batches; threads the tier cannot answer do not hold back older ones', async () => {
+    answers.set('Backlog', '{"important":false,"reason":"","reply":null}');
+
+    for (let n = 1; n <= 45; n += 1) await arrive(mail('Northwind Status <status@northwind.io>', `Backlog ${String(n)}`, 'All systems normal.', { id: `backlog-${String(n)}@northwind.io` }));
+
+    for (let n = 1; n <= 12; n += 1) await arrive(mail('Dana Whitfield <dana@northwind.io>', `Unanswered ${String(n)}`, 'Still failing.', { id: `unanswered-${String(n)}@northwind.io` }));
+
+    expect(await triageMail(deps())).toEqual({ important: 0, ordinary: 45, drafted: 0, failed: 12 });
+    expect((await store.untriagedFor(KINU, 100)).map((view) => view.thread.subject)).toHaveLength(12);
   });
 
   test('new mail in a triaged thread waits again; the owner\'s own instruction and other boxes are not triaged; only the reader sees what waits', async () => {

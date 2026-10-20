@@ -171,8 +171,8 @@ export interface MailboxAgentCalls {
   readableBy(caller: MailCaller): Promise<readonly MailBox[]>;
   findFor(caller: MailCaller, query: Omit<MailListQuery, 'path'> & { readonly box?: string; readonly unread?: boolean }): Promise<MailListing>;
   readFor(caller: MailCaller, thread: string): Promise<MailThreadView | null>;
-  /** The person's threads waiting for the assistant's triage, newest first; none for an agent that does not read their box. */
-  untriagedFor(caller: MailCaller, limit: number): Promise<readonly MailThreadView[]>;
+  /** The person's threads waiting for the assistant's triage, newest first, but `skip`; none for an agent that does not read their box. */
+  untriagedFor(caller: MailCaller, limit: number, skip?: readonly string[]): Promise<readonly MailThreadView[]>;
   draftFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView>;
   /** Sends it now: the workspace calls this only with the owner's approval of these exact bytes in hand. */
   sendFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView>;
