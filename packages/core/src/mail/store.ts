@@ -159,6 +159,9 @@ export class MailStore {
    * agent a box names as its reader (the Personal assistant's main agent, the person's) that one too.
    */
   readableBy(caller: MailCaller): MailBox[] {
+    // No box is made before the person has an address of their own: every box sits under it.
+    if (this.identity() === null) return [];
+
     // The workspace's box first, so an agent's address sits under the workspace's label whoever asked first.
     const home = this.boxFor({ kind: 'workspace', workspace: caller.workspace, name: caller.title, actorId: caller.mainActorId });
     const own = caller.actorId === caller.mainActorId ? home : this.boxFor({ kind: 'agent', workspace: caller.workspace, name: caller.name, actorId: caller.actorId });
@@ -192,7 +195,7 @@ export class MailStore {
   }
 
   /** Files an agent's message to send: the Mailbox calls this only with the owner's approval of it in hand. */
-  async queueFor(caller: MailCaller, message: MailAgentMessage): Promise<{ view: MailMessageView; headerId: string; from: string; outgoing: MailOutgoing }> {
+  async queueFor(caller: MailCaller, message: MailAgentMessage): Promise<{ view: MailMessageView; headerId: string; from: string; inReplyTo: string | null; outgoing: MailOutgoing }> {
     const outgoing = this.outgoingFor(caller, message);
 
     if (outgoing instanceof KinuError) return settle(Effect.fail(outgoing));
@@ -223,7 +226,7 @@ export class MailStore {
 
     return {
       path, to: message.to, cc: message.cc ?? [], subject: message.subject, text: message.text, writtenBy: caller.name,
-      ...message.thread !== undefined && { threadId: message.thread, inReplyTo: this.newestHeader(message.thread) },
+      ...message.thread !== undefined && { threadId: message.thread },
     };
   }
 
@@ -526,7 +529,17 @@ export class MailStore {
     return { id, headerId, threadId };
   }
 
-  async draft(outgoing: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
+  /** A reply that names its thread but not what it answers answers the thread's newest message. */
+  private answering(outgoing: MailOutgoing & { threadId?: string }): MailOutgoing & { threadId?: string } {
+    if (outgoing.threadId === undefined || outgoing.inReplyTo != null) return outgoing;
+
+    const newest = this.newestHeader(outgoing.threadId);
+
+    return newest === null ? outgoing : { ...outgoing, inReplyTo: `<${newest}>` };
+  }
+
+  async draft(asked: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
+    const outgoing = this.answering(asked);
     const box = this.box(outgoing.path);
 
     if (box === null) return settleSync(Effect.fail(new KinuError('missing', `No box at "${outgoing.path}".`)));
@@ -558,7 +571,8 @@ export class MailStore {
   }
 
   /** Files a message to send, the person's word already given; the Mailbox then hands it to its outbox. */
-  async queue(outgoing: MailOutgoing & { threadId?: string }): Promise<{ view: MailMessageView; headerId: string; from: string }> {
+  async queue(asked: MailOutgoing & { threadId?: string }): Promise<{ view: MailMessageView; headerId: string; from: string; inReplyTo: string | null }> {
+    const outgoing = this.answering(asked);
     const box = this.box(outgoing.path);
 
     if (box === null) return settleSync(Effect.fail(new KinuError('missing', `No box at "${outgoing.path}".`)));
@@ -570,7 +584,7 @@ export class MailStore {
 
     if (view === null) return settleSync(Effect.fail(new KinuError('missing', `No message "${id}".`)));
 
-    return { view, headerId, from: view.from.address };
+    return { view, headerId, from: view.from.address, inReplyTo: outgoing.inReplyTo ?? null };
   }
 
   markSent(messageId: string, state: 'sent' | 'failed'): void {

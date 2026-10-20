@@ -193,7 +193,7 @@ export default {
     installAnalyticsDiagnostics(env);
     const url = new URL(request.url);
     // First: mail.<domain> answers nothing of its own, and its host would otherwise read as a preview's.
-    const mail = mailHostRedirect(url, env);
+    const mail = mailHostRedirect(url, hostOf(env.CLI_PUBLIC_ORIGIN));
 
     if (mail) return mail;
     const upgrade = httpsUpgrade(url, env);

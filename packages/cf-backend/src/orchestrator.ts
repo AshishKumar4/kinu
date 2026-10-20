@@ -243,7 +243,7 @@ import {
   recordJobSettled, recordSandboxRecovery, type AgentKind,
 } from "@kinu.run/core/analytics";
 import {
-  agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type MailDeps, type OwnerWaitsHost,
+  agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type MailDeps, type MailThreadSummary, type OwnerWaitsHost,
   ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, type OwnerWaitReader, type ScopedOwnerWait,
   WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
   DeviceConsentRegistry, DeviceConsentStore,
@@ -7382,6 +7382,33 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   async mailArrived(arrival: MailArrival, actorId?: string): Promise<MailAdmission> {
     return await this.email.accept(arrival, actorId ?? this.actorHandle().actorId);
+  }
+
+  /**
+   * The Agent tab's mail (docs/MAIL.md §7): the address the shown agent reads as its own, its unread count and its
+   * newest threads. `actorId` names one of this workspace's agents; absent, its main agent, whose box is the
+   * workspace's. Null where the deployment has no mail or the owner has no address yet.
+   */
+  @callable()
+  async agentMail(actorId?: string): Promise<{ address: string; unread: number; threads: MailThreadSummary[] } | null> {
+    const main = this.actorHandle().actorId;
+    const record = actorId === undefined || actorId === main ? null : this.actorHost().describe(actorId);
+
+    if (actorId !== undefined && actorId !== main && record === null) return null;
+
+    const mail = this.mailFor(actorId ?? main, record?.name ?? 'main');
+
+    if (mail === null) return null;
+
+    const caller = mail.caller();
+    const mailbox = mail.mailbox();
+    const [own] = await mailbox.readableBy(caller);
+
+    if (own === undefined) return null;
+
+    const listing = await mailbox.findFor(caller, { view: 'all', box: own.path, limit: 20 });
+
+    return { address: own.address, unread: listing.unread, threads: [...listing.threads] };
   }
 
   async getEmailIngress(): Promise<{ notifications: boolean }> {
