@@ -118,7 +118,8 @@ queue and no new persisted format.
 ## The inert boundary
 
 A measured session (the OMP measurement, `evals/omp/`) runs its turns behind `toolsBehindBoundary`
-(`execution/work-mode.ts`), set through `LocalAgentSessionOpts.boundary` and by nothing else. The turn stays Build, so
+(`execution/work-mode.ts`), set through the workspace's open config (`CLIOpenConfig.boundary`) and by nothing else; every
+agent the workspace hires inherits it with the rest of its parent's open config. The turn stays Build, so
 its authored scaffold and its evolution accounting run as they would. Each tool call runs as Plan would run it: what
 Plan permits runs (reads, research, the agent's own memory), and a call in which Plan refused an operation never runs.
 It is recorded as intended (`ToolBoundary.intended`) and answered from a record of the same call where the measurement

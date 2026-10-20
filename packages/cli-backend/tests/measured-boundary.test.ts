@@ -5,8 +5,11 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { scratchDir, scratchPath, scriptedTurnModel, workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, type JsonObject, type LLMProviderConfig, type ToolBoundary } from '@kinu.run/core';
-import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
+import { createCLIRuntime, makeWorkspaceSchemaSql, workspaceHome } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
+import { LocalAgentHost } from '../src/agent-host/host';
+import { openWorkspaceCLI } from '../src/open';
+import { createWorkspace } from '@kinu.run/core/workspace-birth';
 
 const DUMMY_LLM: LLMProviderConfig = { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' };
 
@@ -72,6 +75,43 @@ describe('a measured session', () => {
     } finally {
       await agent.end();
       db.close();
+    }
+  });
+
+  test('a workspace opened for a measured run hosts its agent behind the boundary', async () => {
+    const space = scratchDir('measured-host-space');
+    const folder = scratchDir('measured-host-folder');
+    const dbPath = join(space, 'agent.db');
+    const seed = workspaceDatabase(dbPath);
+    const intended: string[] = [];
+
+    try {
+      await createWorkspace(seed, { name: 'root', purpose: 'Measure.', home: workspaceHome(seed) });
+    } finally {
+      seed.close();
+    }
+
+    const { model } = scripted([{ name: 'file', input: { op: 'write', path: 'notes.md', content: 'written' } }]);
+
+    const host = new LocalAgentHost({
+      roster: () => [{ name: 'root', cwd: folder, workspaceId: 'measured' }],
+      dbPath: () => dbPath,
+      open: async (_ref, db, path) => {
+        const openConfig = { llm: DUMMY_LLM, cwd: folder, boundary: { intended: (call: { readonly name: string }) => { intended.push(call.name); } } };
+        const { rt } = await openWorkspaceCLI(db, path, openConfig);
+        rt.actor.config.setLearning(false);
+
+        return { rt, openConfig, staticModel: model };
+      },
+    });
+
+    try {
+      await (await host.acquire('root')).send('take notes', { id: crypto.randomUUID() });
+
+      expect(existsSync(join(folder, 'notes.md'))).toBe(false);
+      expect(intended).toEqual(['file']);
+    } finally {
+      await host.close();
     }
   });
 });
