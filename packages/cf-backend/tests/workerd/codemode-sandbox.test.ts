@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
-import { admitCraftedSource, cloudPlanes, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, JsonValueSchema, WORKSPACE_ROOT, type ToolOutcome, type JsonValue } from '@kinu.run/core';
+import { admitCraftedSource, cloudPlanes, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, JsonValueSchema, WORKSPACE_ROOT, workspacePath, type ToolOutcome, type JsonValue } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createCodeTool } from '@cloudflare/codemode/ai';
 import { generateText, isStepCount, tool, jsonSchema } from 'ai';
@@ -17,6 +17,9 @@ const files = new Map<string, string>([[`${WORKSPACE_ROOT}/notes.md`, 'hello fro
 
 /** Arguments arrive positionally over the sandbox RPC, as every production provider parses them. */
 const text = (args: unknown[], at: number): string => v.parse(v.string(), args[at]);
+
+/** A path argument as a file plane with no links resolves it: '.' and '..' walked, so the map's keys are where. */
+const pathArg = (args: unknown[]): string => workspacePath(text(args, 0), WORKSPACE_ROOT);
 
 /** Immediate children of `dir` by name, as the workspace VFS lists them; a directory with nothing under it is absent. */
 function children(dir: string): string[] {
@@ -42,21 +45,20 @@ const workspace = {
   fns: {
     // As the file plane serves them: `encoding: 'base64'` reads and writes the file's bytes, here its UTF-8.
     'fs.text': async (...args: unknown[]) => {
-      const path = text(args, 0);
-      const stored = files.get(path);
+      const stored = files.get(pathArg(args));
 
-      if (stored === undefined) throw new Error(`ENOENT: no such file: ${path}`);
+      if (stored === undefined) throw new Error(`ENOENT: no such file: ${text(args, 0)}`);
 
       return isBase64(args, 1) ? Buffer.from(stored, 'utf8').toString('base64') : stored;
     },
     'fs.write': async (...args: unknown[]) => {
-      files.set(text(args, 0), isBase64(args, 2) ? Buffer.from(text(args, 1), 'base64').toString('utf8') : text(args, 1));
+      files.set(pathArg(args), isBase64(args, 2) ? Buffer.from(text(args, 1), 'base64').toString('utf8') : text(args, 1));
 
       return 'ok';
     },
-    'fs.list': async (...args: unknown[]) => ({ path: text(args, 0), entries: children(text(args, 0)) }),
+    'fs.list': async (...args: unknown[]) => ({ path: pathArg(args), entries: children(pathArg(args)) }),
     'fs.stat': async (...args: unknown[]) => {
-      const path = text(args, 0);
+      const path = pathArg(args);
       const stored = files.get(path);
       const isDir = [...files.keys()].some((name) => name.startsWith(`${path.replace(/\/+$/, '')}/`));
 
