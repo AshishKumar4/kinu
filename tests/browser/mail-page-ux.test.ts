@@ -198,14 +198,22 @@ describe('Mail', () => {
       const page = await open(gallery, '&account=new');
       const field = '[data-mail-create] [aria-label="Username"]';
 
+      // Typed over what is there, as a person selects all and types.
+      const retype = async (text: string) => {
+        await page.click(field);
+        await page.keyboard.down('Control');
+        await page.keyboard.press('KeyA');
+        await page.keyboard.up('Control');
+        await page.keyboard.press('Backspace');
+        await page.type(field, text);
+      };
+
       await page.waitForSelector('[data-mail-create] [data-mail-address-state="available"]');
       expect(await page.$eval(field, (input) => input instanceof HTMLInputElement ? input.value : '')).toBe('ashish');
-      await page.click(field, { clickCount: 3 });
-      await page.type(field, 'priya');
+      await retype('priya');
       await page.waitForSelector('[data-mail-create] [data-mail-address-state="taken"]');
       expect(await page.$eval('[data-mail-create] button[type="submit"]', (button) => button instanceof HTMLButtonElement && button.disabled)).toBe(true);
-      await page.click(field, { clickCount: 3 });
-      await page.type(field, 'ashish');
+      await retype('ashish');
       await page.waitForSelector('[data-mail-create] [data-mail-address-state="available"]');
       await page.click('[data-mail-create] button[type="submit"]');
       await page.waitForSelector('[data-mail-list]');

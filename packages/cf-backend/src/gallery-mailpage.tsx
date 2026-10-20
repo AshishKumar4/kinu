@@ -141,6 +141,14 @@ function installFixture(): void {
     })) };
   };
 
+  /** The person's address, created with its box. */
+  const addressMade = (username: string): Promise<Response> => {
+    address = `${username}@kinu.run`;
+    boxes[0] = { ...boxes[0], address };
+
+    return answer({ address });
+  };
+
   /** A call to Mail's API, or to "Send to a workspace…", recorded and answered as the server would. */
   const mailAnswer = (request: Request, url: URL, init: RequestInit | undefined): Promise<Response> => {
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : null;
@@ -158,14 +166,7 @@ function installFixture(): void {
 
     if (url.pathname.endsWith("/boxes")) return answer(accountAnswer());
 
-    if (url.pathname.endsWith("/address") && request.method === "GET") return answer(galleryUsername(url.searchParams.get("username") ?? ""));
-
-    if (url.pathname.endsWith("/address")) {
-      address = `${v.parse(v.object({ username: v.string() }), body).username}@kinu.run`;
-      boxes[0] = { ...boxes[0], address };
-
-      return answer({ address });
-    }
+    if (url.pathname.endsWith("/address")) return request.method === "GET" ? answer(galleryUsername(url.searchParams.get("username") ?? "")) : addressMade(v.parse(v.object({ username: v.string() }), body).username);
 
     if (url.pathname.endsWith("/threads")) return answer(list(url));
 

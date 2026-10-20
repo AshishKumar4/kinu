@@ -734,8 +734,8 @@ describe('account panels', () => {
 
   test('the address step can be passed by unmade, and a deployment with no mail never offers it', async () => {
     await withGallery(async (gallery) => {
+      // One page at a time: a page behind another runs no animation frames, which its waits poll on.
       const skipped = await freshPage(gallery, `welcome&step=${String(ONBOARDING_STEP_IDS.indexOf('mail'))}`, 'dark', 'mobile');
-      const off = await freshPage(gallery, 'welcome&mail=off', 'dark', 'mobile');
 
       try {
         await skipped.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="available"]');
@@ -743,12 +743,17 @@ describe('account panels', () => {
         await clickByText(skipped, 'button', 'Next');
         await skipped.waitForFunction(() => document.querySelector('[data-welcome-step="providers"]')?.getAttribute('aria-hidden') !== 'true');
         expect(await skipped.evaluate(() => document.documentElement.dataset.galleryMailCreated ?? null)).toBeNull();
+      } finally {
+        await skipped.close();
+      }
 
+      const off = await freshPage(gallery, 'welcome&mail=off', 'dark', 'mobile');
+
+      try {
         await off.waitForSelector('[data-welcome-step="profile"]');
         await off.waitForFunction((count) => document.querySelectorAll('[aria-label="Setup steps"] li').length === count, {}, ONBOARDING_STEP_IDS.length - 1);
         expect(await off.$('[data-welcome-step="mail"]')).toBeNull();
       } finally {
-        await skipped.close();
         await off.close();
       }
     });
@@ -763,6 +768,9 @@ describe('account panels', () => {
           await page.waitForFunction((want) => document.querySelector(`[data-welcome-step="${want}"]`)?.getAttribute('aria-hidden') !== 'true', {}, id);
 
           if (id === 'tools') await page.waitForSelector('[data-welcome-step="tools"] [data-plugin-source]');
+
+          // The address it offers is checked first: Next creates it once it reads available.
+          if (id === 'mail') await page.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="available"]');
 
           // Web search opens on the default already chosen, so Next passes it with nothing to pick.
           if (id === 'search') await page.waitForSelector('[data-welcome-step="search"] [data-web-search-tile="cloudflare"] input:checked');

@@ -3,7 +3,9 @@
  * in setup and where Mail would show their mailbox. The username starts as the one they are offered.
  */
 import { useEffect, useState } from "react";
-import { MAIL_LABEL_PATTERN, mailUsernameRefusal } from "@kinu.run/core";
+import { Effect } from "effect";
+import { attempt, detach, diagnostics } from "@kinu.run/core/obs";
+import { mailUsernameRefusal } from "@kinu.run/core";
 import { inputCls } from "@/components/ui/form";
 import { Status, type StatusTone } from "@/components/ui/Status";
 import { checkMailUsername } from "@/lib/mail-api";
@@ -40,12 +42,14 @@ export function useMailUsername(suggested: string | null) {
 
     let current = true;
 
-    const timer = setTimeout(() => {
-      checkMailUsername(username).then(
-        (checked) => { if (current) setState(checked.available ? "available" : checked.refusal ?? "unchecked"); },
-        () => { if (current) setState("unchecked"); },
-      );
-    }, 250);
+    const timer = setTimeout(() => detach(Effect.catch(
+      Effect.map(attempt({ doing: 'checking a mail username', otherwise: 'unavailable' }, () => checkMailUsername(username)), (checked): MailUsernameState => (checked.available ? "available" : checked.refusal ?? "unchecked")),
+      (failure) => Effect.sync((): MailUsernameState => {
+        diagnostics.failure('mail.username_unchecked', failure);
+
+        return "unchecked";
+      }),
+    ).pipe(Effect.map((checked) => { if (current) setState(checked); }))), 250);
 
     return () => {
       current = false;
@@ -69,7 +73,7 @@ export function MailAddressField({ domain, username, state, onChange, disabled }
     <div data-mail-address className="space-y-1.5">
       <div className="flex items-center gap-1.5">
         <input value={username} onChange={(event) => onChange(event.target.value.trim().toLowerCase())} aria-label="Username"
-          autoComplete="off" autoCapitalize="none" spellCheck={false} pattern={MAIL_LABEL_PATTERN} maxLength={20} disabled={disabled}
+          autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={20} disabled={disabled}
           className={`${inputCls} min-w-0 flex-1 font-mono`} />
         <span className="shrink-0 font-mono p-row-text p-text-2">@{domain}</span>
       </div>

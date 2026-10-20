@@ -10,10 +10,8 @@
  * part without the username: `''`, `<workspace>`, `<agent>.<workspace>`.
  */
 
-/** One label: lowercase letters, digits and inner hyphens, at most 20 long, as a username is; an input's `pattern`. */
-export const MAIL_LABEL_PATTERN = '[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?';
-
-const LABEL = new RegExp(`^${MAIL_LABEL_PATTERN}$`, 'u');
+/** One label: lowercase letters, digits and inner hyphens, at most 20 long, as a username is. */
+const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$/u;
 
 const TAG = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 
@@ -58,11 +56,6 @@ export function mailLabelOf(name: string): string | null {
   const label = name.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+/u, '').slice(0, 20).replace(/-+$/u, '');
 
   return LABEL.test(label) ? label : null;
-}
-
-/** Whether `label` can be a username, a workspace's or an agent's part of an address. */
-export function isMailLabel(label: string): boolean {
-  return LABEL.test(label);
 }
 
 /** Usernames no account may have: the mailbox names mail systems and people expect to reach a deployment's operator. */
