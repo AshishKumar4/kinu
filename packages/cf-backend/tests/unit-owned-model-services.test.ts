@@ -732,13 +732,13 @@ describe('OwnedModelServices — the listing kept at the account', () => {
   });
 
   // An unset fast tier on a cold turn picks from the kept list, so the account keeps it whole.
-  test("the account keeps a listing whole, its fast tier's candidates and efforts with it, under the keys it was swept at", async () => {
+  test("the account keeps a listing whole, its fast tier's candidates, efforts and windows with it, under the keys it was swept at", async () => {
     const { user } = await account();
     const caller = await testOwner();
 
     const listing = {
       models: ['openai/gpt-x', 'groq/llama-y'], failures: [], reasoningEfforts: { 'openai/gpt-x': ['low', 'high'] as const },
-      fast: [{ model: 'groq/llama-y', contextWindow: 131_072 }, { model: 'openai/gpt-x' }],
+      fast: [{ model: 'groq/llama-y' }, { model: 'openai/gpt-x' }], contextWindows: { 'groq/llama-y': 131_072 },
     };
 
     const revision = await user.userDO.getCredentialsRevision(caller);
