@@ -1,10 +1,10 @@
-import { useCallback, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Effect } from 'effect';
-import { settle } from '@kinu.run/core/obs';
-import { WorkspacePlanReferenceSchema, JsonValueSchema, type JsonValue, type PlanReview, type SlateSummary } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
+import { JsonValueSchema, WorkspacePlanReferenceSchema, type ChangeNote, type ExecutorDiffResult, type FileDiff, type JsonValue, type PlanReview, type SlateSummary, type WorkspaceWorkOwner } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { ExecutorInfo } from '@kinu.run/core';
-import { workspaceRpc, type SocketCall } from '@/lib/workspace-rpc';
+import { answeringRpc, type WorkspaceAnswer, type WorkspaceAnswers } from '@/lib/workspace-rpc';
 import { INSPECTOR_DEFAULT_PX } from '@kinu.run/core/web/inspector-layout';
 import { useKinu } from '@/hooks/use-kinu';
 import { WorkspacePlanUpdatedFrameSchema } from '@kinu.run/core';
@@ -44,18 +44,16 @@ const DEVICE_URL = 'https://3000-device-aaaaaaaaaaaaaaaa.preview.example.test/';
 
 const NOTHING = () => {};
 
-type ReplyValue = JsonValue | PlanReview | readonly ReplyValue[] | { readonly [key: string]: ReplyValue };
-
 /** A connected machine, raised by `data-add-machine`; its git diff is one added line. */
 const MACHINE: ExecutorInfo = { name: 'device', kind: 'device', capabilities: [], available: true, configured: true, active: true, status: 'active' };
 
 /** A sandbox that could run but is asleep, raised by `data-add-idle-sandbox`: reading it would wake it. */
 const IDLE_COMPUTER: ExecutorInfo = { name: 'computer', kind: 'computer', capabilities: [], available: true, configured: true, active: false, status: 'idle' };
 
-const MACHINE_DIFF = { mode: 'git', files: [{ path: 'src/device.ts', status: 'added', added: 1, removed: 0,
+const MACHINE_DIFF: ExecutorDiffResult = { mode: 'git', files: [{ path: 'src/device.ts', status: 'added', added: 1, removed: 0,
   lines: [{ kind: 'hunk', text: '@@ -0,0 +1 @@' }, { kind: 'add', text: 'export const onDevice = true;' }] }] };
 
-const EDITED = [
+const EDITED: FileDiff[] = [
   { path: 'src/app.ts', status: 'changed', added: 1, removed: 0, lines: [{ kind: 'add', text: 'export const ready = true;' }] },
   {
     path: 'src/ready.ts', status: 'added', added: 2, removed: 0,
@@ -63,7 +61,36 @@ const EDITED = [
   },
 ];
 
-const EDITED_AGAIN = [{ ...EDITED[0], lines: [{ kind: 'add', text: 'export const ready = isReady();' }] }, EDITED[1]];
+const EDITED_AGAIN: FileDiff[] = EDITED.map((file, at) => (at === 0 ? { ...file, lines: [{ kind: 'add', text: 'export const ready = isReady();' }] } : file));
+
+/** An actor as the Work tab names it; the root has no path to inspect it by. */
+const ownerOf = (name: string, retired = false): WorkspaceWorkOwner => ({ actorId: `actor-${name}`, name, title: name, retired, path: name === 'main' ? null : [name] });
+
+/** Every actor's plans the Work tab lists: the root's (and its superseded revision), the courier's, a worker's, a nested
+ *  delivery and an archived one. */
+function workspaceWork(plan: PlanReview | null, workerPlan: PlanReview): WorkspaceAnswer<'listWorkspaceWork'> {
+  const rootPlans = plan ? [
+    { owner: ownerOf('main'), plan, tasks: [] },
+    { owner: ownerOf('main'), plan: { ...ROOT_PLAN, revision: 1, status: 'superseded' as const, content: '# Earlier dashboard plan' }, tasks: [] },
+  ] : [];
+
+  return {
+    plans: [
+      ...rootPlans,
+      { owner: ownerOf('courier'), plan: ARRIVAL_PLAN, tasks: [] },
+      {
+        owner: ownerOf('worker'), plan: workerPlan,
+        tasks: [{ id: 't1', parentId: null, title: 'Deliver worker', status: 'active', updatedAt: 1, note: null, subtasks: [] }],
+      },
+      {
+        owner: ownerOf('nested'), plan: { ...ROOT_PLAN, revision: 1, content: '# Nested delivery', status: 'approved' as const, handoffAccepted: true },
+        tasks: [{ id: 't2', parentId: null, title: 'Deliver nested', status: 'done', updatedAt: 1, note: null, subtasks: [] }],
+      },
+      { owner: ownerOf('archive', true), plan: { ...ROOT_PLAN, revision: 1, content: '# Archived delivery', status: 'approved' as const, handoffAccepted: true }, tasks: [] },
+    ],
+    tasks: [{ owner: ownerOf('main'), plan: null, tasks: [] }],
+  };
+}
 
 /** Push a server frame through the stubbed `agents/react` socket so `useKinu` parses, gates and de-duplicates it. */
 function notify(reference: JsonValue): void {
@@ -79,98 +106,78 @@ export function PreviewTabsGallery() {
   const [planFocus, setPlanFocus] = useState<string | null>(null);
   const [plan, setPlan] = useState<PlanReview | null>(null);
   const [reload, setReload] = useState(0);
-  const [edited, setEdited] = useState<typeof EDITED | null>(null);
+  const [edited, setEdited] = useState<FileDiff[] | null>(null);
   const [broken, setBroken] = useState(false);
   const [machine, setMachine] = useState(false);
   const [idleSandbox, setIdleSandbox] = useState(false);
   const [starting, setStarting] = useState(false);
   const [narrow, setNarrow] = useState(false);
-  const keptNotes = useRef<JsonValue[]>([]);
+  const keptNotes = useRef<readonly ChangeNote[]>([]);
   const [failHistory, setFailHistory] = useState(false);
   const [workerPlan, setWorkerPlan] = useState<PlanReview>({ ...ROOT_PLAN, revision: 1, content: "# Worker plan", status: "approved", handoffAccepted: true, createdAt: 10 });
   const [owner, setOwner] = useState("main");
   // Real root connection, for the arrival hint only.
   const { workspacePlanArrival } = useKinu('preview-tabs');
 
-  const rpc: SocketCall = useCallback(<T,>(method: string, args?: unknown[]): Promise<T> => settle(Effect.gen(function* () {
-    const reply = (value: ReplyValue): Effect.Effect<T> => Effect.promise(() => new Response(JSON.stringify(value)).json<T>());
+  const answers = useMemo((): WorkspaceAnswers => ({
+    previewSlate: () => ({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } }),
+    getExecutorDiff: (executor) => {
+      document.documentElement.dataset.galleryDiffReads = `${document.documentElement.dataset.galleryDiffReads ?? ''} ${executor}`.trim();
 
-    if (method === 'previewSlate') return yield* reply({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } });
+      if (broken) return { mode: 'vfs-baseline', files: [], error: 'the change-set read failed' };
 
-    if (method === 'getExecutorDiff') document.documentElement.dataset.galleryDiffReads = `${document.documentElement.dataset.galleryDiffReads ?? ''} ${String(args?.[0])}`.trim();
+      return executor === MACHINE.name ? MACHINE_DIFF : { mode: 'vfs-baseline', trackedSince: Date.now() - 36e5, files: edited ?? [] };
+    },
+    getChangeNotes: () => [...keptNotes.current],
+    saveChangeNotes: (_executor, notes) => {
+      keptNotes.current = notes;
 
-    if (method === 'getExecutorDiff' && broken) return yield* reply({ mode: 'vfs-baseline', files: [], error: 'the change-set read failed' });
-    else if (method === 'getExecutorDiff' && args?.[0] === MACHINE.name) return yield* reply(MACHINE_DIFF);
-    else if (method === 'getExecutorDiff') return yield* reply({ mode: 'vfs-baseline', trackedSince: Date.now() - 36e5, files: edited ?? [] });
-    else if (method === 'getChangeNotes') return yield* reply(keptNotes.current);
-    else if (method === 'saveChangeNotes') {
-      keptNotes.current = v.parse(v.array(JsonValueSchema), args?.[1]);
-
-      return yield* reply({ ok: true, notes: keptNotes.current });
-    }
-    else if (method === 'sendChangeNotes') {
+      return { ok: true, notes };
+    },
+    sendChangeNotes: () => {
       keptNotes.current = [];
 
-      return yield* reply({ ok: true, notes: [] });
-    }
-    else if (method === 'resetWorkspaceBaseline' || method === 'restoreWorkspaceBaseline') {
-      setEdited(method === 'restoreWorkspaceBaseline' ? EDITED : null);
+      return { ok: true, notes: [] };
+    },
+    resetWorkspaceBaseline: () => {
+      setEdited(null);
 
-      return yield* reply({ ok: true, files: 0, capturedAt: 0 });
-    }
-    else if (method === 'listWorkspaceWork') {
-      // The courier plan is already listed, so the arrival hint is the auto-open trigger, not a discovery read.
-      if (failHistory) return yield* Effect.die(new Error('Plan history temporarily unavailable'));
+      return { ok: true, capturedAt: 0, cleanupFailures: [] };
+    },
+    restoreWorkspaceBaseline: () => {
+      setEdited(EDITED);
 
-      const ownerOf = (name: string, retired = false) => ({ actorId: `actor-${name}`, name, retired });
+      return { ok: true, capturedAt: 0 };
+    },
+    // The courier plan is already listed, so the arrival hint is the auto-open trigger, not a discovery read.
+    listWorkspaceWork: () => (failHistory
+      ? Effect.fail(new KinuError('unavailable', 'Plan history temporarily unavailable'))
+      : Effect.succeed(workspaceWork(plan, workerPlan))),
+    decidePlanReview: () => {
+      const next: PlanReview = { ...ROOT_PLAN, status: 'approved', handoffAccepted: true, updatedAt: 3 };
 
-      const rootPlans = plan ? [
-        { owner: ownerOf('main'), plan, tasks: [] },
-        { owner: ownerOf('main'), plan: { ...ROOT_PLAN, revision: 1, status: 'superseded' as const, content: '# Earlier dashboard plan' }, tasks: [] },
-      ] : [];
-
-      return yield* reply({
-        plans: [
-          ...rootPlans,
-          { owner: ownerOf('courier'), plan: ARRIVAL_PLAN, tasks: [] },
-          {
-            owner: ownerOf('worker'), plan: workerPlan,
-            tasks: [{ id: 't1', parentId: null, title: 'Deliver worker', status: 'active', updatedAt: 1, note: null, subtasks: [] }],
-          },
-          {
-            owner: ownerOf('nested'), plan: { ...ROOT_PLAN, revision: 1, content: '# Nested delivery', status: 'approved' as const, handoffAccepted: true },
-            tasks: [{ id: 't2', parentId: null, title: 'Deliver nested', status: 'done', updatedAt: 1, note: null, subtasks: [] }],
-          },
-          { owner: ownerOf('archive', true), plan: { ...ROOT_PLAN, revision: 1, content: '# Archived delivery', status: 'approved' as const, handoffAccepted: true }, tasks: [] },
-        ],
-        tasks: [{ owner: ownerOf('main'), plan: null, tasks: [] }],
-      });
-    }
-    else if (method === 'decidePlanReview') {
-      const next = { ...ROOT_PLAN, status: 'approved' as const, handoffAccepted: true, updatedAt: 3 };
       setPlan(next);
 
-      return yield* reply({ ok: true, plan: next, queued: true });
-    }
-    else if (method === 'savePlanReviewAnnotations') return yield* reply({ ok: true, plan });
-    else if (method === 'getEvolutionChangelog') return yield* reply({ entries: [], unseenCount: 0, seenAt: 0 });
-    else if (method === 'markChangelogSeen') return yield* reply({ seenAt: 0 });
+      return { ok: true, plan: next, queued: true };
+    },
+    savePlanReviewAnnotations: () => (plan === null ? { ok: false, error: 'No plan to annotate', plan: null } : { ok: true, plan }),
+    getEvolutionChangelog: () => ({ entries: [], unseenCount: 0, seenAt: 0 }),
+    markChangelogSeen: () => ({ ok: true, seenAt: 0 }),
+  }), [plan, edited, broken, failHistory, workerPlan]);
 
-    return yield* Effect.die(new Error('Unexpected preview gallery RPC: ' + method));
-  })), [plan, edited, broken, failHistory, workerPlan]);
+  const rpc = useMemo(() => answeringRpc(answers), [answers]);
 
-  const workerRpc: SocketCall = useCallback(async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === 'decidePlanReview') {
+  const workerRpc = useMemo(() => answeringRpc({
+    ...answers,
+    decidePlanReview: () => {
       const next: PlanReview = { ...workerPlan, status: 'approved', handoffAccepted: true };
+
       setWorkerPlan(next);
 
-      return new Response(JSON.stringify({ ok: true, plan: next, queued: true })).json<T>();
-    }
-
-    if (method === 'savePlanReviewAnnotations') return new Response(JSON.stringify({ ok: true, plan: workerPlan })).json<T>();
-
-    return rpc<T>(method, args);
-  }, [rpc, workerPlan]);
+      return { ok: true, plan: next, queued: true };
+    },
+    savePlanReviewAnnotations: () => ({ ok: true, plan: workerPlan }),
+  }), [answers, workerPlan]);
 
   return <div className="h-screen p-bg flex flex-col">
     <div className="flex gap-2 p-2 text-xs shrink-0 flex-wrap" data-plan-owner={owner}>
@@ -193,14 +200,14 @@ export function PreviewTabsGallery() {
       <button data-notify-malformed onClick={() => notify(MALFORMED_REFERENCE)}>Notify malformed plan</button>
     </div>
     <div data-preview-surface className="flex-1 min-h-0" style={narrow ? { width: INSPECTOR_DEFAULT_PX } : undefined}>
-      <WorkSurface planRpc={workspaceRpc(owner === "main" ? rpc : workerRpc)} planOwner={owner} onReviewActor={setOwner} surface={surface} onSurface={setSurface} previewFocus={focus} planFocus={planFocus}
+      <WorkSurface planRpc={owner === "main" ? rpc : workerRpc} planOwner={owner} onReviewActor={setOwner} surface={surface} onSurface={setSurface} previewFocus={focus} planFocus={planFocus}
         workspacePlanArrival={workspacePlanArrival}
         pinnedPorts={[{ executor: 'workspace', port: 8789, url: SLATE_GALLERY_URL, name: 'Duplicate dashboard port' }, { executor: 'computer', port: 8080, url: SANDBOX_URL, name: 'Sandbox app' }, { executor: 'device', port: 3000, url: DEVICE_URL, name: 'Device app' }]}
         slates={slates} slateReloads={new Map(slates.map(item => [item.id, reload]))}
         previewError={null} previewStarting={starting ? ['computer'] : []} onRefreshPorts={NOTHING} plan={owner === "main" ? plan : workerPlan} snapshot={{ status: 'loading' }} onRetryLoad={NOTHING}
         memory={[]} memoryContent="" onSearchMemory={NOTHING} mctsTrees={new Map()} headActivity={new Map()} isStreaming={false}
         executors={[...machine ? [MACHINE] : [], ...idleSandbox ? [IDLE_COMPUTER] : []]} executorOutputs={new Map()} onExecute={async () => ({})} backgroundJobs={[]} inspectedWork={[]} onRefreshJobs={NOTHING} pendingActions={[]}
-        tabPresence={{ explorations: false, work: true }} rpc={workspaceRpc(rpc)} />
+        tabPresence={{ explorations: false, work: true }} rpc={rpc} />
     </div>
   </div>;
 }

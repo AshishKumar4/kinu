@@ -20,7 +20,7 @@ const IDLE_TURN: TurnLiveness = { kind: "idle" };
 
 const LIVE_TURN: TurnLiveness = { kind: "live", turnId: null };
 
-import { diagnostics, renderThrownChain, toKinuError, tolerate, settle } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
@@ -120,7 +120,7 @@ import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-asy
 import type { ExecutorInfo } from "@kinu.run/core";
 import type { DeploySnapshot } from "@kinu.run/core/deploy";
 import type {
-  ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
+  ChatHistoryEntry, ChatHistoryPage, ContextComposition, DirEntry, ExplorationCanvasRun,
   FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
   ForkRunSummary, HeadRunView, EnvironmentInfo, NodeTranscriptView, Page, PageRequest,
   AccountSpend, ChangelogEntry, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
@@ -1775,11 +1775,8 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
 
       if (agent !== undefined) return agent;
 
-      // Column C's injected `Rpc` and this socket must resolve the same fixture stores.
-      if (EXPLORATION_READS.has(method)) return v.parse(JsonValueSchema, explorationRead(method, request.args ?? []));
-
-      // Everything else as the gallery answers it, typed; a method it does not answer is refused.
-      return v.parse(JsonValueSchema, await stubRpc<JsonValue>(method, request.args ?? []) ?? null);
+      // Everything else as the gallery answers it, typed, with Column C's exploration stores; a method it does not answer is refused.
+      return v.parse(JsonValueSchema, await wireOf(FORK_ANSWERS)<JsonValue>(method, request.args ?? []) ?? null);
     };
 
     // As the Agents SDK frames a call's outcome: its result, or its failure for the client to reject with.
@@ -3558,9 +3555,7 @@ async function agentPageFallback<T>(method: string, args: unknown[] | undefined)
 
   if (agent !== undefined) return rpcResult(agent).json<T>();
 
-  if (EXPLORATION_READS.has(method)) return rpcResult(v.parse(JsonValueSchema, explorationRead(method, args ?? []))).json<T>();
-
-  return stubRpc<T>(method, args);
+  return wireOf(FORK_ANSWERS)<T>(method, args);
 }
 
 /** A named-preset search. `prove` because its resolved axes are the least guessable from its name. */
@@ -4304,64 +4299,39 @@ function asSearchNode(row: MctsRow, rootId: string): SearchTreeRow {
 }
 
 /** Pages through the real `seekPage`. The anchor is the bare fork id, not the server's composite: `after` is opaque, so any resolvable format is valid. */
-function canvasPage(rows: readonly ExplorationCanvasRun[], args: unknown[] | undefined): Page<ExplorationCanvasRun> {
-  const request = v.parse(GalleryPageRequestSchema, args?.[0] ?? {});
-  const limit = request.limit ?? 30;
-  const after = request.cursor?.after;
+function canvasPage(rows: readonly ExplorationCanvasRun[], request: PageRequest | undefined): Page<ExplorationCanvasRun> {
+  const limit = request?.limit ?? 30;
+  const after = request?.cursor?.after;
   const start = after === undefined ? 0 : rows.findIndex((entry) => entry.run.id === after) + 1;
 
   return seekPage(rows.slice(start, start + limit + 1), limit, (entry) => entry.run.id);
 }
 
-const GalleryPageRequestSchema: v.GenericSchema<PageRequest> = v.object({
-  cursor: v.optional(v.object({ after: v.string() })),
-  limit: v.optional(v.number()),
-});
+/**
+ * The exploration reads over `rows`, each as its read model answers it, for both transports (Column C's `Rpc` and the
+ * explorer's socket); the blanket `[]` broke them.
+ */
+function explorationAnswers(rows: readonly ExplorationCanvasRun[] = CANVAS_ROWS): WorkspaceAnswers {
+  return {
+    getExplorationCanvas: (request) => canvasPage(rows, request),
+    listForkRuns: (request) => {
+      const page = canvasPage(rows, request);
 
-/** The non-array exploration reads, answered here for both transports (Column C's `Rpc` and the explorer's socket); the blanket `[]` breaks them. */
-const EXPLORATION_READS = new Set([
-  "getExplorationCanvas", "listForkRuns", "getForkRun", "getSearchTree", "getHeadRun",
-  "getMctsNodeDetail", "getNodeTranscript",
-]);
+      return { ...page, items: page.items.map((entry) => entry.run) };
+    },
+    // The composed row `orchestrator.getForkRun` answers; the client reads `entry.run` off it.
+    getForkRun: (id) => rows.find((entry) => entry.run.id === id) ?? null,
+    // As the search_nodes read answers it: rows, not the tree's own nodes.
+    getSearchTree: (rootId) => (SEARCH_ROWS_BY_ROOT.get(rootId) ?? []).map((row) => asSearchNode(row, rootId)),
+    getHeadRun: (rootId) => JOURNAL_BY_ROOT.get(rootId) ?? null,
+    // Both answer null; the panel must not render either as "recorded nothing".
+    getMctsNodeDetail: () => null,
+    getNodeTranscript: (_rootId, nodeId, request) => {
+      const transcript = TRANSCRIPT_BY_NODE.get(nodeId) ?? null;
 
-/** Named, not `unknown`: a stub must not serve a value the real read models cannot produce. */
-type ExplorationAnswer =
-  | Page<ExplorationCanvasRun>
-  | Page<ForkRunSummary>
-  | ExplorationCanvasRun
-  | readonly MctsRow[]
-  | HeadRunView
-  | NodeTranscriptView
-  | null;
-
-function explorationRead(
-  method: string, args: readonly unknown[], rows: readonly ExplorationCanvasRun[] = CANVAS_ROWS,
-): ExplorationAnswer {
-  const mutable = [...args];
-
-  if (method === "getExplorationCanvas") return canvasPage(rows, mutable);
-
-  if (method === "listForkRuns") {
-    const page = canvasPage(rows, mutable);
-
-    return { ...page, items: page.items.map((entry) => entry.run) };
-  }
-
-  // The composed row `orchestrator.getForkRun` answers; the client reads `entry.run` off it.
-  if (method === "getForkRun") return rows.find((entry) => entry.run.id === args[0]) ?? null;
-
-  if (method === "getSearchTree") return SEARCH_ROWS_BY_ROOT.get(String(args[0])) ?? [];
-
-  if (method === "getHeadRun") return JOURNAL_BY_ROOT.get(String(args[0])) ?? null;
-
-  // Both answer null; the panel must not render either as "recorded nothing".
-  if (method === "getMctsNodeDetail") return null;
-  const transcript = TRANSCRIPT_BY_NODE.get(String(args[1])) ?? null;
-
-  if (new URLSearchParams(location.search).get("olderSteps") === null) return transcript;
-  const request = v.parse(v.optional(v.object({ cursor: v.optional(v.object({ after: v.string() })) })), args[2]);
-
-  return stepAtATime(transcript, request?.cursor?.after);
+      return new URLSearchParams(location.search).get("olderSteps") === null ? transcript : stepAtATime(transcript, request?.cursor?.after);
+    },
+  };
 }
 
 /** `&olderSteps=1`: a node's journal a step a page, newest first, as a long one is read: each older page by its cursor. */
@@ -4374,45 +4344,36 @@ function stepAtATime(transcript: NodeTranscriptView | null, before: string | und
   return { ...transcript, steps: at > 0 ? { status: "more", items: step, next: { after: String(at) } } : { status: "end", items: step } };
 }
 
-const forkRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (EXPLORATION_READS.has(method)) return rpcResult(v.parse(JsonValueSchema, explorationRead(method, args ?? []))).json<T>();
+const FORK_ANSWERS: WorkspaceAnswers = { ...GALLERY_ANSWERS, ...explorationAnswers() };
 
-  return stubRpc<T>(method, args);
-};
+const forkRpc = answeringRpc(FORK_ANSWERS);
 
 /** The surface focuses `runs[0]`, so each frame puts its subject first, selected by root id rather than index. */
-function forkRpcOver(rows: readonly ExplorationCanvasRun[]): SocketCall {
-  return async <T,>(method: string, args?: unknown[]): Promise<T> =>
-    EXPLORATION_READS.has(method)
-      ? rpcResult(v.parse(JsonValueSchema, explorationRead(method, args ?? [], rows))).json<T>()
-      : stubRpc<T>(method, args);
-}
-
-function focusRun(rootId: string, rows: readonly ExplorationCanvasRun[] = CANVAS_ROWS): SocketCall {
+function focusRun(rootId: string, rows: readonly ExplorationCanvasRun[] = CANVAS_ROWS): WorkspaceAnswers {
   const wanted = rows.filter((entry) => entry.run.id === rootId);
 
-  return forkRpcOver([...wanted, ...rows.filter((entry) => entry.run.id !== rootId)]);
+  return { ...GALLERY_ANSWERS, ...explorationAnswers([...wanted, ...rows.filter((entry) => entry.run.id !== rootId)]) };
 }
 
 /** No search tree: a journalled run is a tree at depth 1, and every score encoding must be absent. */
-const mergeFirstRpc = focusRun(
+const mergeFirstRpc = answeringRpc(focusRun(
   MERGED_RUN.rootId,
   CANVAS_ROWS.filter((entry) => entry.tree.length === 0),
-);
+));
 
 /** `settle` is derived from two of the resolved axes, not chosen. */
-const provePresetRpc = focusRun("pv000");
+const provePresetRpc = answeringRpc(focusRun("pv000"));
 
 /** No named preset resolves to `expand:'aggregate'`, so this is a composition and its axes are not recoverable. */
-const swarmFanInRpc = focusRun("sw000");
+const swarmFanInRpc = answeringRpc(focusRun("sw000"));
 
-const refusedRunRpc = focusRun("rf000");
+const refusedRunRpc = answeringRpc(focusRun("rf000"));
 
 /** Focused; the settled runs stay listed beneath for comparison. */
-const runningSwarmRpc = focusRun("lv000");
+const runningSwarmRpc = answeringRpc(focusRun("lv000"));
 
 /** Must read *stopped*, never `running`; the word comes from `read-models/fork-runs.ts`. */
-const stoppedRunRpc = focusRun("root-merge-0");
+const stoppedRunRpc = answeringRpc(focusRun("root-merge-0"));
 
 /** `head_activity` counters for the live run's working nodes; settled nodes announce nothing. */
 const RUNNING_ACTIVITY: ReadonlyMap<string, number> = new Map(
@@ -4470,15 +4431,11 @@ function liveActivity(stage: number): ReadonlyMap<string, number> {
 }
 
 /** Stable: `useAsyncResource` keys its load on the `rpc` identity, so the stage is read from a ref at call time. */
-function liveRpcOver(stageRef: { readonly current: number }): SocketCall {
-  return async <T,>(method: string, args?: unknown[]): Promise<T> => {
+function liveRpcOver(stageRef: { readonly current: number }): WorkspaceRpc {
+  return (method, args) => {
     const rows = liveCanvasRows(stageRef.current);
 
-    if (method === "getSearchTree") return rpcResult(v.parse(JsonValueSchema, rows[0]?.tree ?? [])).json<T>();
-
-    return EXPLORATION_READS.has(method)
-      ? rpcResult(v.parse(JsonValueSchema, explorationRead(method, args ?? [], rows))).json<T>()
-      : stubRpc<T>(method, args);
+    return answeringRpc({ ...GALLERY_ANSWERS, ...explorationAnswers(rows), getSearchTree: () => [...rows[0]?.tree ?? []] })(method, args);
   };
 }
 
@@ -5002,8 +4959,8 @@ function ChatHistoryFrame() {
   const requests = useRef(0);
   const [calls, setCalls] = useState<string[]>([]);
 
-  const rpc: SocketCall = useCallback(<T,>(_method: string, args?: unknown[]): Promise<T> => settle(Effect.gen(function* () {
-    const [{ cursor }] = v.parse(v.tuple([v.object({ cursor: v.optional(PositionCursorSchema) })]), args);
+  const rpc = useMemo(() => answeringRpc({ getChatHistoryPage: (asked) => Effect.gen(function* () {
+    const cursor = asked?.cursor;
     const request = ++requests.current;
     setCalls((prev) => [...prev, cursor === undefined ? "newest" : String(cursor.before)]);
     const settled = Promise.withResolvers<void>();
@@ -5013,19 +4970,21 @@ function ChatHistoryFrame() {
     if (request === requests.current && failed.current) {
       failed.current = false;
 
-      return yield* Effect.die(new Error("stub failure"));
+      return yield* new KinuError("unavailable", "stub failure");
     }
 
     const end = Math.min(cursor?.before ?? STORED_HISTORY.length, STORED_HISTORY.length);
     const start = Math.max(0, end - HISTORY_PAGE);
     const items = STORED_HISTORY.slice(start, end);
 
-    return yield* Effect.promise(() => rpcResult(start === 0 ? { status: "end", items } : { status: "more", items, next: { before: start } }).json<T>());
-  })), []);
+    const page: ChatHistoryPage = start === 0 ? { status: "end", items } : { status: "more", items, next: { before: start } };
+
+    return page;
+  }) }), []);
 
   // The live rows follow the stored ones, as the room's window says of its own.
   const seedEdge = useMemo(() => (live[0] === undefined ? null : { from: live[0].id, older: { before: STORED_HISTORY.length } }), [live]);
-  const { history, transcript } = useChatThread({ rpc: workspaceRpc(rpc), live, seeded: true, seedEdge });
+  const { history, transcript } = useChatThread({ rpc, live, seeded: true, seedEdge });
 
   const messagesRef = useGrowingScroll({
     grows: "up", content: transcript, fetched: history.entries, loading: history.loading,
@@ -5091,7 +5050,7 @@ function HistoryAuthorityFrame() {
   const failFirst = useRef(true);
   const requests = useRef(0);
 
-  const rpc: SocketCall = useCallback(<T,>(): Promise<T> => settle(Effect.gen(function* () {
+  const rpc = useMemo(() => answeringRpc({ getChatHistoryPage: () => Effect.gen(function* () {
     const request = ++requests.current;
     yield* Effect.promise(async () => hold.promise);
 
@@ -5099,13 +5058,15 @@ function HistoryAuthorityFrame() {
     if (request === requests.current && failFirst.current) {
       failFirst.current = false;
 
-      return yield* Effect.die(new Error("fixture could not read the first history page"));
+      return yield* new KinuError("unavailable", "fixture could not read the first history page");
     }
 
-    return yield* Effect.promise(() => rpcResult({ status: "end", items: [] }).json<T>());
-  })), [hold]);
+    const page: ChatHistoryPage = { status: "end", items: [] };
 
-  const { history } = useChatThread({ rpc: workspaceRpc(rpc), live: NO_HISTORY_LIVE, seeded: true });
+    return page;
+  }) }), [hold]);
+
+  const { history } = useChatThread({ rpc, live: NO_HISTORY_LIVE, seeded: true });
 
   const loadMore = history.loadMore;
   useEffect(() => { loadMore(); }, [loadMore]);
@@ -5247,22 +5208,15 @@ function QualityRetryFrame() {
     return () => window.removeEventListener("gallery:quality-heal", heal);
   }, []);
 
-  const rpc = useMemo<SocketCall>(() => async <T,>(method: string): Promise<T> => {
-    if (method === "getQuality") {
-      if (!healthy.current) throw new Error("quality fixture failed");
-
-      return rpcResult(QUALITY_DAYS).json<T>();
-    }
-
-    if (method === "getQualityWindow") return rpcResult(QUALITY_WINDOW).json<T>();
-
-    return stubRpc<T>(method);
-  }, []);
+  const rpc = useMemo(() => galleryRpc({
+    getQuality: () => (healthy.current ? Effect.succeed(QUALITY_DAYS) : Effect.fail(new KinuError("unavailable", "quality fixture failed"))),
+    getQualityWindow: () => QUALITY_WINDOW,
+  }), []);
 
   return (
     <div data-quality-retry className="p-bg p-text min-h-screen p-6">
       <div className="mx-auto max-w-[760px]">
-        <QualityView rpc={workspaceRpc(rpc)} moved={0} />
+        <QualityView rpc={rpc} moved={0} />
       </div>
     </div>
   );
@@ -7145,7 +7099,7 @@ function TranscriptFrame() {
           <div className="h-[34rem] w-[44rem] flex flex-col">
             <NodeTranscript
               selection={{ runId: nodeId.startsWith("n") ? "n000" : "root-merge-1", nodeId }}
-              trees={MCTS_TREES} rpc={workspaceRpc(forkRpc)} headActivity={NO_HEAD_ACTIVITY}
+              trees={MCTS_TREES} rpc={forkRpc} headActivity={NO_HEAD_ACTIVITY}
               onSelect={() => {}} />
           </div>
         </div>
@@ -7162,7 +7116,7 @@ function TranscriptFrame() {
               task: "Actually, check staging first — I don't think the rename deployed there.",
               takeSetId: undefined, turnId: undefined, message: undefined,
             }}
-            rpc={workspaceRpc(forkRpc)} headActivity={NO_HEAD_ACTIVITY}
+            rpc={forkRpc} headActivity={NO_HEAD_ACTIVITY}
             // Unreachable here: picking needs a hydrated take set.
             onPick={() => Promise.reject(new Error("no take set in this frame"))}
             onDismiss={() => {}} />
@@ -7672,7 +7626,7 @@ function driveFrame(frameName: "environment" | "files"): MountedFrame {
 /** The only dynamic import in this dispatch: the page pulls d3 and the tree renderer. It reads through `useKinu`, resolved to `gallery-agent-stub` here. */
 async function mctsExplorerFrame(run: string | null): Promise<MountedFrame> {
   const { default: SwarmExplorer } = await import("@/pages/SwarmExplorer");
-  serveGalleryRpc(run === null ? forkRpc : focusRun(run));
+  serveGalleryRpc(wireOf(run === null ? FORK_ANSWERS : focusRun(run)));
 
   return routedPage(run === null ? "/swarm/api-worker" : `/swarm/api-worker?run=${run}`, "/swarm/:agentId", <SwarmExplorer />);
 }
@@ -7956,19 +7910,17 @@ let qualityLiveRatings = 0;
 function QualityLiveFrame() {
   const state = useKinu(WORKSPACE_PAGE_NAME);
 
-  const rpc = useMemo<SocketCall>(() => async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === "getQualityWindow") {
-      return rpcResult({ ...QUALITY_WINDOW, rated: QUALITY_WINDOW.rated + qualityLiveRatings, turns: QUALITY_WINDOW.turns + qualityLiveRatings }).json<T>();
-    }
+  const rpc = useMemo(() => answeringRpc({
+    getQualityWindow: () => ({ ...QUALITY_WINDOW, rated: QUALITY_WINDOW.rated + qualityLiveRatings, turns: QUALITY_WINDOW.turns + qualityLiveRatings }),
+    getQuality: () => {
+      const today = QUALITY_DAYS.at(-1);
 
-    if (method !== "getQuality") return workspacePageRpc<T>(method, args);
-    const today = QUALITY_DAYS.at(-1);
-
-    return rpcResult(today === undefined ? QUALITY_DAYS : [
-      ...QUALITY_DAYS.slice(0, -1),
-      { ...today, rated: today.rated + qualityLiveRatings, turns: today.turns + qualityLiveRatings },
-    ]).json<T>();
-  }, []);
+      return today === undefined ? QUALITY_DAYS : [
+        ...QUALITY_DAYS.slice(0, -1),
+        { ...today, rated: today.rated + qualityLiveRatings, turns: today.turns + qualityLiveRatings },
+      ];
+    },
+  }), []);
 
   return (
     <div data-quality-live className="p-bg p-text min-h-screen p-6">
@@ -7976,7 +7928,7 @@ function QualityLiveFrame() {
         qualityLiveRatings += 1;
         galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["getQuality"] }));
       }}>Rate a turn</button>
-      <div className="mx-auto max-w-[760px]"><QualityView rpc={workspaceRpc(rpc)} moved={state.readMoves.getQuality ?? 0} /></div>
+      <div className="mx-auto max-w-[760px]"><QualityView rpc={rpc} moved={state.readMoves.getQuality ?? 0} /></div>
     </div>
   );
 }

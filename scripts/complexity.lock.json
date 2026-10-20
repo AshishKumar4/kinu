@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-20",
-  "files": 3614,
-  "functions": 95149,
+  "files": 3630,
+  "functions": 95728,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -271,10 +271,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/FilesSurface.tsx#FilesSurface",
-      "complexity": 26
-    },
-    {
-      "key": "packages/cf-backend/src/gallery-preview-tabs.tsx#PreviewTabsGallery>useCallback>gen",
       "complexity": 26
     },
     {
