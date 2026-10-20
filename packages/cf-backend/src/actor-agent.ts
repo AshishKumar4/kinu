@@ -19,7 +19,7 @@ import {
   type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
   isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
 } from '@kinu.run/core';
-import type { EnqueueTurnResult, OwnerWaitsHost, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
+import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, ProgrammaticTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
 import type { AccountMemory, Fact } from '@kinu.run/core';
 import type { SubordinateView } from '@kinu.run/core/protocol';
@@ -383,7 +383,7 @@ interface TurnMemoryReads {
  */
 function hostedActorSurface(
   actor: SeatedActor, web: { readonly search: WebSearchProvider; readonly sessions: BrowserSessions }, conversations: ConversationRecall,
-  reach: { readonly account?: AccountMemory | undefined; readonly ownerWaits: OwnerWaitsHost | null },
+  reach: { readonly account?: AccountMemory | undefined; readonly ownerWaits: OwnerWaitsHost | null; readonly mail?: MailDeps | null },
 ) {
   const { account } = reach;
   const webSearch = web.search;
@@ -409,7 +409,7 @@ function hostedActorSurface(
 
   const surface = hostedSurfaceActor(actor, {
     web: { search: webSearch, files: runtime.storage, browser: { sessions: web.sessions, prelude: BROWSER_PRELUDE } },
-    stores, ownerWaits: reach.ownerWaits,
+    stores, ownerWaits: reach.ownerWaits, mail: reach.mail ?? null,
   });
 
   return { actor: surface, native: buildBuiltinTools(deps, stores) };
@@ -2739,6 +2739,7 @@ export abstract class ActorAgent extends Agent<Env> {
           account: this.account.ownedMemory({ by: 'agent', agent: hosted.record.name }),
           // Its own turn's programs and an outside caller reach what waits on its owner from its work, as it does in eval.
           ownerWaits: this.hireOwnerWaits(hosted),
+          mail: this.mailFor(hosted.handle.actorId, hosted.record.name),
         });
 
         const providers = actorNamespaces(surface.actor, SURFACE_POLICY.operations);
@@ -2816,7 +2817,13 @@ export abstract class ActorAgent extends Agent<Env> {
       self: this.agentSelf(),
       // The workspace's agent reads what waits on its owner through its own `agent.*`.
       ownerWaits: null,
+      mail: this.mailFor(this.rt.actor.actorId, 'main'),
     };
+  }
+
+  /** `mail.*` for one of this workspace's agents over its owner's Mailbox (docs/MAIL.md §3); null where there is no mail. */
+  protected mailFor(_actorId: string, _name: string): MailDeps | null {
+    return null;
   }
 
   /** The workspace agent's eval programs: crafted tools saved mid-turn still work because craftStore is re-read per call. */

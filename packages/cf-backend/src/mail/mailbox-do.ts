@@ -8,7 +8,7 @@ import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import {
   durableStamps, EmailOutbox, initMailboxTables, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
-  type MailBox, type MailboxCalls, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
+  type MailAgentMessage, type MailBox, type MailboxAgentCalls, type MailboxCalls, type MailCaller, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
   type MailRecipient, type MailThreadSummary, type MailThreadView, type MailWake,
   MailStore, type MailBlobs,
 } from '@kinu.run/core';
@@ -40,7 +40,7 @@ function replyHeaders(headerId: string, inReplyTo: string | null): Record<string
   return inReplyTo === null ? own : { ...own, 'In-Reply-To': inReplyTo, References: inReplyTo };
 }
 
-export class MailboxDO extends DurableObject<Env> implements MailboxCalls {
+export class MailboxDO extends DurableObject<Env> implements MailboxCalls, MailboxAgentCalls {
   private readonly store: MailStore;
 
   private readonly outbox: EmailOutbox;
@@ -162,26 +162,65 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls {
     return settle(this.served(() => this.store.draft(outgoing)));
   }
 
-  async send(outgoing: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
-    if (this.refusal !== undefined) return settleSync(Effect.fail(this.refusal));
+  send(outgoing: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
+    return settle(this.sendOut(async () => ({ ...await this.store.queue(outgoing), outgoing })));
+  }
 
-    if (!isMailOperator(this.env, this.identity()?.email ?? '') && this.store.sentToday() >= DAILY_SEND_CAP) {
-      return settleSync(Effect.fail(new KinuError('budget', `This account has sent ${String(DAILY_SEND_CAP)} messages in the last day; mail goes again as the day's first ones age out.`)));
-    }
+  /** Files it (`file`) and hands it to the outbox, within the account's daily cap (none for operators). */
+  private sendOut(file: () => Promise<{ view: MailMessageView; headerId: string; from: string; outgoing: MailOutgoing }>): Effect.Effect<MailMessageView, KinuError> {
+    const { env, store, outbox, refusal } = this;
+    const sender = this.identity()?.email ?? '';
+    const arm = async (): Promise<void> => this.arm();
 
-    if (this.env.EMAIL === undefined) return settleSync(Effect.fail(new KinuError('unavailable', 'This deployment cannot send mail yet: it has no Email Sending binding.')));
+    return Effect.gen(function* () {
+      if (refusal !== undefined) return yield* Effect.fail(refusal);
 
-    const { view, headerId, from } = await this.store.queue(outgoing);
+      if (!isMailOperator(env, sender) && store.sentToday() >= DAILY_SEND_CAP) {
+        return yield* Effect.fail(new KinuError('budget', `This account has sent ${String(DAILY_SEND_CAP)} messages in the last day; mail goes again as the day's first ones age out.`));
+      }
 
-    const sent = await this.outbox.send(this.env.EMAIL, `mail:${view.id}`, {
-      from, to: [...outgoing.to], subject: outgoing.subject, text: outgoing.text, headers: replyHeaders(headerId, outgoing.inReplyTo ?? null),
-    }, Date.now());
+      const binding = env.EMAIL;
 
-    // Not yet sent is still queued: the outbox retries on this object's alarm.
-    if (sent.status !== 'failed') this.store.markSent(view.id, 'sent');
-    else await this.arm();
+      if (binding === undefined) return yield* Effect.fail(new KinuError('unavailable', 'This deployment cannot send mail yet: it has no Email Sending binding.'));
 
-    return { ...view, sendState: sent.status === 'failed' ? 'queued' : 'sent' };
+      const { view, headerId, from, outgoing } = yield* Effect.promise(file);
+
+      const sent = yield* Effect.promise(async () => outbox.send(binding, `mail:${view.id}`, {
+        from, to: [...outgoing.to], subject: outgoing.subject, text: outgoing.text, headers: replyHeaders(headerId, outgoing.inReplyTo ?? null),
+      }, Date.now()));
+
+      // Not yet sent is still queued: the outbox retries on this object's alarm.
+      if (sent.status !== 'failed') store.markSent(view.id, 'sent');
+      else yield* Effect.promise(arm);
+
+      return { ...view, sendState: sent.status === 'failed' ? 'queued' : 'sent' };
+    });
+  }
+
+  /* ——— An agent's calls (docs/MAIL.md §3): only the boxes it reads ——— */
+
+  readableBy(caller: MailCaller): Promise<readonly MailBox[]> {
+    return settle(this.served(() => this.store.readableBy(caller)));
+  }
+
+  findFor(caller: MailCaller, query: Omit<MailListQuery, 'path'> & { box?: string; unread?: boolean }): Promise<MailListing> {
+    return settle(this.served(() => this.store.findFor(caller, query)));
+  }
+
+  readFor(caller: MailCaller, thread: string): Promise<MailThreadView | null> {
+    return settle(this.served(() => this.store.readFor(caller, thread)));
+  }
+
+  draftFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView> {
+    return settle(this.served(() => this.store.draftFor(caller, message)));
+  }
+
+  sendFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView> {
+    return settle(this.sendOut(() => this.store.queueFor(caller, message)));
+  }
+
+  updateFor(caller: MailCaller, thread: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): Promise<MailThreadSummary> {
+    return settle(this.served(() => this.store.updateFor(caller, thread, change)));
   }
 
   setWake(path: string, wake: MailWake, allow?: readonly string[]): Promise<MailBox> {

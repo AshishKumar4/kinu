@@ -2556,6 +2556,7 @@ export class LocalAgentSession {
       // A hire's: what waits on its owner from its own work. A head or a swarm node, whose run ends with it, holds none.
       ownerWaits: isSubordinateOrigin(this.seat.record.origin) ? this.ownerWaitsHost() : null,
       agents: () => this.agentsToolDeps(mode),
+      mail: null,
     }), SURFACE_POLICY.program, reported);
   }
 
@@ -2581,6 +2582,8 @@ export class LocalAgentSession {
       }),
       // The workspace's agent reads what waits on its owner through its own `agent.*`.
       ownerWaits: null,
+      // Mail is the cloud account's (docs/MAIL.md §3); a local session has none.
+      mail: null,
     };
   }
 

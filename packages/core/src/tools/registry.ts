@@ -39,6 +39,8 @@ export const TOOL_REACH = {
   // A replayed insert is a second row.
   db: { native: false, codemode: 'db', replay: 'claimed' },
   slate: { native: false, codemode: 'workspace', replay: 'claimed' },
+  // A send asks the owner, and a draft is a second draft when replayed.
+  mail: { native: false, codemode: 'mail', replay: 'claimed' },
 } as const satisfies Record<string, ToolReach>;
 
 /** Replay policy by provider tool name; undeclared names (MCP, adapters) resolve to `claimed`. */

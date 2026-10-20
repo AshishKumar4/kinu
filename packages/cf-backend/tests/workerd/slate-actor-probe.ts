@@ -60,7 +60,7 @@ function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: Act
       tasks: () => ({ list: stores.taskList, config: stores.config, roleSwitch: null }),
     }),
     db: stores.appData,
-    agents: null, self: null, ownerWaits: null,
+    agents: null, self: null, ownerWaits: null, mail: null,
   };
 }
 

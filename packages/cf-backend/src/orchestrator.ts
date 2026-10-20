@@ -243,7 +243,7 @@ import {
   recordJobSettled, recordSandboxRecovery, type AgentKind,
 } from "@kinu.run/core/analytics";
 import {
-  agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type OwnerWaitsHost,
+  agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type MailDeps, type OwnerWaitsHost,
   ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, type OwnerWaitReader, type ScopedOwnerWait,
   WorkspaceProposals, WorkspaceProposalStore, type WorkspaceProposalAnswer,
   DeviceConsentRegistry, DeviceConsentStore,
@@ -1596,6 +1596,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return hostedSurfaceActor(actor, {
       ...held.agents !== undefined && { agents: held.agents },
       ownerWaits: this.hireOwnerWaits(actor),
+      mail: this.mailFor(actor.handle.actorId, actor.record.name),
       web: { search: held.search, files: runtime.storage, browser: { sessions: this.browserSessionsFor(runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
       stores: held.stores,
     });
@@ -2599,6 +2600,27 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     return this._replyChannels;
+  }
+
+  protected override mailFor(actorId: string, name: string): MailDeps | null {
+    const owner = this.getOwnerUserId();
+
+    if ((this.env.EMAIL_DOMAIN ?? '') === '' || owner === null) return null;
+
+    return {
+      caller: () => ({ workspace: this.name, title: this.safeDisplayName(), mainActorId: this.actorHandle().actorId, actorId, name }),
+      mailbox: () => objectNamed(this.env.MAILBOX, owner),
+      // An agent's message waits in this workspace's one queue, as every parked action does; its agent is woken by the answer.
+      approvals: {
+        ask: (id, send) => {
+          const verdict = this.deferrals.mailSend(id, send, actorId);
+
+          return verdict.outcome === 'approved' ? verdict : { outcome: verdict.outcome, approval: verdict.action.id };
+        },
+        take: (id) => this.deferrals.takeMailSend(id, actorId),
+        settle: async (spend, outcome) => this.deferrals.settle(spend, outcome, actorId),
+      },
+    };
   }
 
   /** Never throws pre-schema; an untitled workspace sends as the product, not its slug. */

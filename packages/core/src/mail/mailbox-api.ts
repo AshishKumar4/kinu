@@ -64,6 +64,7 @@ export interface MailAttachmentView {
 
 export interface MailMessageView {
   readonly id: string;
+  readonly threadId: string;
   readonly direction: 'in' | 'out';
   readonly from: MailParty;
   readonly to: readonly MailParty[];
@@ -135,6 +136,41 @@ export interface MailOutgoing {
   readonly inReplyTo?: string | null;
   /** The agent that wrote it; absent when the person writes it in the app. */
   readonly writtenBy?: string;
+}
+
+/** An agent of a workspace, as its workspace names it to the Mailbox; only the Worker and workspaces hold the binding. */
+export interface MailCaller {
+  /** The workspace, by its Durable Object's name. */
+  readonly workspace: string;
+  /** The workspace's own name, for its box's label. */
+  readonly title: string;
+  /** The workspace's main agent: it reads the workspace's box as its own. */
+  readonly mainActorId: string;
+  readonly actorId: string;
+  /** The agent's name, for its box's label. */
+  readonly name: string;
+}
+
+/** A message an agent writes, from one of the boxes it reads (its own by default). */
+export interface MailAgentMessage {
+  readonly box?: string;
+  readonly to: readonly string[];
+  readonly cc?: readonly string[];
+  readonly subject: string;
+  readonly text: string;
+  /** The thread it answers. */
+  readonly thread?: string;
+}
+
+/** The Mailbox's calls for an agent (docs/MAIL.md §3): only the boxes it reads, its own first. */
+export interface MailboxAgentCalls {
+  readableBy(caller: MailCaller): Promise<readonly MailBox[]>;
+  findFor(caller: MailCaller, query: Omit<MailListQuery, 'path'> & { readonly box?: string; readonly unread?: boolean }): Promise<MailListing>;
+  readFor(caller: MailCaller, thread: string): Promise<MailThreadView | null>;
+  draftFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView>;
+  /** Sends it now: the workspace calls this only with the owner's approval of these exact bytes in hand. */
+  sendFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView>;
+  updateFor(caller: MailCaller, thread: string, change: { readonly read?: boolean; readonly trashed?: boolean; readonly important?: string | null }): Promise<MailThreadSummary>;
 }
 
 /** The Mailbox Durable Object's calls (`env.MAILBOX`, `idFromName(user_id)`). */

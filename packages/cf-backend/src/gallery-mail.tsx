@@ -145,7 +145,7 @@ const SCOUT_EARLIER = "Hi Dana,\n\nNothing changes on your side: /hooks/v2 check
 const DANA_NOW = `Hi again,\n\nSince Tuesday afternoon every delivery to /hooks/v2 gets a 500 back. Our retries have given up on about 2,300 events (order.created and order.refunded). The response body is just "Internal Server Error".\n\nIs something down on your side? We can replay from our dashboard once it's fixed.\n\nDana\n\nOn ${quotedDay(NOW - 4 * DAY)}, scout <scout.api-worker.ashish@kinu.run> wrote:\n${SCOUT_EARLIER.split("\n").map((line) => `> ${line}`).join("\n")}`;
 
 /** The reply scout drafted for Dana: what the approval card holds. */
-const SCOUT_REPLY: MailSend = {
+const SCOUT_REPLY: MailSend & { readonly text: string } = {
   agent: "scout",
   from: "scout.api-worker.ashish@kinu.run",
   to: ["dana@northwind.io"],
@@ -794,7 +794,7 @@ function SendCard({ onAnswer }: { onAnswer: (answer: "sent" | "denied", text: st
         <div className="mb-1 flex items-center gap-1.5 p-meta p-text-3">
           <PaperPlaneTiltIcon size={12} className="shrink-0 p-warning" weight="fill" aria-hidden /><span>Waiting on you</span>
         </div>
-        <MailSendBody send={SCOUT_REPLY} text={text} editing={editing} onText={setText} />
+        <MailSendBody send={SCOUT_REPLY} text={text} {...editing && { onText: setText }} />
         <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
           <Button size="sm" variant="ghost" onClick={() => onAnswer("denied", text)}><XIcon size={12} weight="bold" aria-hidden />Deny</Button>
           <Button size="sm" variant="secondary" onClick={() => setEditing(!editing)}><PencilSimpleIcon size={12} weight="bold" aria-hidden />{editing ? "Done" : "Edit"}</Button>

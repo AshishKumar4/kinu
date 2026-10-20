@@ -5,11 +5,11 @@
  */
 import * as v from 'valibot';
 import { Effect } from 'effect';
-import { KinuError, settleSync } from '../obs/index';
+import { KinuError, settle, settleSync } from '../obs/index';
 import { mailAddressOf, mailLabelOf, type MailRecipient } from './address';
 import { mailVerdict } from './verdict';
 import type {
-  MailBox, MailDelivery, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailParty, MailThreadSummary, MailThreadView, MailWake, MailWoke,
+  MailAgentMessage, MailBox, MailCaller, MailDelivery, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailParty, MailThreadSummary, MailThreadView, MailWake, MailWoke,
 } from './mailbox-api';
 import type { SqlExec } from '../types/primitives';
 
@@ -131,7 +131,10 @@ export class MailStore {
 
   /** The box a workspace's main agent or one of its other agents reads; made on first ask. */
   boxFor(owner: { kind: 'workspace' | 'agent'; workspace: string; name: string; actorId: string }): MailBox {
-    const [held] = rows(BoxRow, this.deps.sql.exec("SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND state = 'active'", owner.workspace, owner.actorId));
+    // By kind too: the Personal assistant's main agent reads the person's box and its workspace's.
+    const [held] = rows(BoxRow, this.deps.sql.exec(
+      "SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND kind = ? AND state = 'active'", owner.workspace, owner.actorId, owner.kind,
+    ));
 
     if (held !== undefined) return this.boxOf(held);
 
@@ -149,6 +152,98 @@ export class MailStore {
     this.deps.sql.exec('INSERT INTO mail_addresses (path, kind, workspace, actor_id, created_at) VALUES (?, ?, ?, ?, ?)', path, owner.kind, owner.workspace, owner.actorId, this.deps.now());
 
     return this.box(path) ?? this.boxOf({ path, kind: owner.kind, workspace: owner.workspace, actor_id: owner.actorId, wake: 'owner' });
+  }
+
+  /**
+   * The boxes an agent reads (docs/MAIL.md §3), its own first, made on first ask: its own, its workspace's, and for the
+   * agent a box names as its reader (the Personal assistant's main agent, the person's) that one too.
+   */
+  readableBy(caller: MailCaller): MailBox[] {
+    // The workspace's box first, so an agent's address sits under the workspace's label whoever asked first.
+    const home = this.boxFor({ kind: 'workspace', workspace: caller.workspace, name: caller.title, actorId: caller.mainActorId });
+    const own = caller.actorId === caller.mainActorId ? home : this.boxFor({ kind: 'agent', workspace: caller.workspace, name: caller.name, actorId: caller.actorId });
+    const others = this.boxes().filter((box) => box.path !== own.path && box.workspace === caller.workspace && (box.kind === 'workspace' || box.actorId === caller.actorId));
+
+    return [own, ...others];
+  }
+
+  /* ——— An agent's calls (docs/MAIL.md §3): only the boxes it reads ——— */
+
+  findFor(caller: MailCaller, query: Omit<MailListQuery, 'path'> & { box?: string; unread?: boolean }): MailListing {
+    const paths = query.box === undefined
+      ? this.readableBy(caller).map((box) => box.path)
+      : [this.readablePath(caller, query.box)].filter((path) => path !== null);
+
+    const listing = this.list(query, paths);
+
+    return query.unread === true ? { ...listing, threads: listing.threads.filter((thread) => thread.unread) } : listing;
+  }
+
+  async readFor(caller: MailCaller, thread: string): Promise<MailThreadView | null> {
+    return this.reads(caller, thread) ? this.thread(thread) : null;
+  }
+
+  async draftFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView> {
+    const outgoing = this.outgoingFor(caller, message);
+
+    if (outgoing instanceof KinuError) return settle(Effect.fail(outgoing));
+
+    return this.draft(outgoing);
+  }
+
+  /** Files an agent's message to send: the Mailbox calls this only with the owner's approval of it in hand. */
+  async queueFor(caller: MailCaller, message: MailAgentMessage): Promise<{ view: MailMessageView; headerId: string; from: string; outgoing: MailOutgoing }> {
+    const outgoing = this.outgoingFor(caller, message);
+
+    if (outgoing instanceof KinuError) return settle(Effect.fail(outgoing));
+
+    return { ...await this.queue(outgoing), outgoing };
+  }
+
+  updateFor(caller: MailCaller, thread: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): MailThreadSummary {
+    if (!this.reads(caller, thread)) return settleSync(Effect.fail(new KinuError('missing', `No thread "${thread}" in a box you read.`)));
+
+    return this.update(thread, change);
+  }
+
+  /** Whether the agent reads the thread's box. */
+  private reads(caller: MailCaller, thread: string): boolean {
+    const path = this.pathOf(thread);
+
+    return path !== null && this.readablePath(caller, path) !== null;
+  }
+
+  /** The agent's message as it is filed: from a box it reads, answering a thread it reads, signed as its writer. */
+  private outgoingFor(caller: MailCaller, message: MailAgentMessage): (MailOutgoing & { threadId?: string }) | KinuError {
+    const path = this.readablePath(caller, message.box);
+
+    if (path === null) return new KinuError('denied', `You do not read the box "${message.box ?? ''}".`);
+
+    if (message.thread !== undefined && !this.reads(caller, message.thread)) return new KinuError('missing', `No thread "${message.thread}" in a box you read.`);
+
+    return {
+      path, to: message.to, cc: message.cc ?? [], subject: message.subject, text: message.text, writtenBy: caller.name,
+      ...message.thread !== undefined && { threadId: message.thread, inReplyTo: this.newestHeader(message.thread) },
+    };
+  }
+
+  /** A thread's box, if it has one; null for no such thread. */
+  pathOf(threadId: string): string | null {
+    return rows(v.object({ path: v.string() }), this.deps.sql.exec('SELECT path FROM mail_threads WHERE id = ?', threadId))[0]?.path ?? null;
+  }
+
+  /** The Message-ID a reply in this thread answers: its newest message's. */
+  newestHeader(threadId: string): string | null {
+    return rows(v.object({ header_id: v.nullable(v.string()) }), this.deps.sql.exec(
+      "SELECT header_id FROM mail_messages WHERE thread_id = ? AND send_state IS NOT 'draft' ORDER BY at DESC, rowid DESC LIMIT 1", threadId,
+    ))[0]?.header_id ?? null;
+  }
+
+  /** The box path `asked` names, if the agent reads it; its own when none is named. */
+  readablePath(caller: MailCaller, asked: string | undefined): string | null {
+    const readable = this.readableBy(caller);
+
+    return asked === undefined ? readable[0]?.path ?? null : readable.find((box) => box.path === asked)?.path ?? null;
   }
 
   boxes(): MailBox[] {
@@ -293,7 +388,8 @@ export class MailStore {
     if (row !== undefined) this.deps.sql.exec('INSERT INTO mail_fts (rowid, subject, sender, body) VALUES (?, ?, ?, ?)', row.rowid, subject, sender, body);
   }
 
-  list(query: MailListQuery): MailListing {
+  /** `only`: just these boxes, an agent's (the ones it reads). */
+  list(query: MailListQuery, only?: readonly string[]): MailListing {
     const where: string[] = [];
     const bindings: (string | number)[] = [];
 
@@ -309,6 +405,11 @@ export class MailStore {
     if (query.path !== undefined) {
       where.push('t.path = ?');
       bindings.push(query.path);
+    }
+
+    if (only !== undefined) {
+      where.push(`t.path IN (${only.map(() => '?').join(', ') || 'NULL'})`);
+      bindings.push(...only);
     }
 
     if (query.query !== undefined && query.query.trim() !== '') {
@@ -360,7 +461,7 @@ export class MailStore {
     const attachments = rows(AttachmentRow, this.deps.sql.exec('SELECT a.* FROM mail_attachments a JOIN mail_messages m ON m.id = a.message_id WHERE m.thread_id = ?', id));
 
     const messages = await Promise.all(this.messages(id).map(async (message): Promise<MailMessageView> => ({
-      id: message.id, direction: message.direction, from: { name: message.from_name, address: message.from_addr },
+      id: message.id, threadId: id, direction: message.direction, from: { name: message.from_name, address: message.from_addr },
       to: v.parse(PartiesJson, message.to_json), cc: v.parse(PartiesJson, message.cc_json), deliveredTo: message.delivered_to,
       subject: message.subject, at: message.at, verified: message.verdict !== 'unverified', auth: message.auth, woke: message.woke,
       text: message.text_body ?? (message.text_key === null ? '' : await this.deps.blobs.text(message.text_key) ?? ''),

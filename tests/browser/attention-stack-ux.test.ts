@@ -109,6 +109,30 @@ function alwaysSaid(page: Page): Promise<(string | null)[][]> {
   return page.$$eval('[data-attention-card] [data-parked-always]', (rows) => rows.map((row) => [row.getAttribute('data-parked-always'), row.textContent]));
 }
 
+test("an agent's message is its own card: the message as it would leave, sent once on approval, never always", async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    await opened(page, origin, '&asks=mail');
+    await page.waitForSelector('[data-attention-card="action:mail-dana"] [data-mail-send-body]');
+    const card = await page.$eval('[data-attention-card="action:mail-dana"]', (open) => open.textContent ?? '');
+
+    expect(card).toContain('scout wants to send this mail');
+    expect(card).toContain('dana@northwind.io');
+    expect(card).toContain('the binding the webhook route reads');
+    expect(card).not.toContain('Always');
+    await answer(page, 'Approve and send');
+    await page.waitForFunction(() => document.querySelector('[data-attention-stack]') === null);
+    expect(await decisions(page)).toEqual([['mail-dana', 'approved']]);
+
+    // Beside parked commands it stays a card of its own, never one of their batch.
+    await opened(page, origin, '&asks=mail-mixed');
+    await page.waitForSelector('[data-attention-stack]');
+    expect(await page.$$eval('[data-attention-card] [data-parked-command="mail-dana"]', (rows) => rows.length)).toBe(0);
+    await page.close();
+  });
+});
+
 test("a shared slate's change is always allowed for that slate, named on its card before it is pressed", async () => {
   await withGallery(async ({ newPage, origin }) => {
     const page = await newPage();

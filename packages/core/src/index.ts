@@ -101,6 +101,10 @@ export type * from './mail/mailbox-api';
 
 export { MailStore, type MailBlobs, type MailStoreDeps, type ParsedMail } from './mail/store';
 
+export { createMailCodemodeProvider, type MailDeps, type MailSendApprovals } from './tools/mail-codemode';
+
+export { MAIL } from './operations/mail';
+
 export { mailHostRedirect } from './mail/host';
 
 export { inboundBody, isAutoReplyEmail, stripQuotedReply } from './mail/words';
@@ -1574,7 +1578,7 @@ export {
   performBoundWrite, type ApprovalContent, type BoundFileWrite, type WriteSubject,
 } from './safety/bound-write';
 
-export { approvalKindOf, slateEffectExecutor, slateEffectText, type ApprovalKind, type SlateEffect } from './safety/approval-kind';
+export { approvalKindOf, mailSendExecutor, mailSendText, slateEffectExecutor, slateEffectText, type ApprovalKind, type MailSend, type SlateEffect } from './safety/approval-kind';
 
 export {
   ParkedWriteFiles,

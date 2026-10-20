@@ -3118,8 +3118,19 @@ const EFFECTS_ASKS: PendingAction[] = [
   effectAsk({ id: "effect-notes", tool: "fs.write", server: "workspace", root: {}, payload: { path: "notes/triage.md" }, at: NOW - 50_000 }),
 ];
 
+/** `&asks=mail`: scout's reply to Dana, waiting to leave; `&asks=mail-mixed`, beside a parked command. */
+const MAIL_ASKS: PendingAction[] = [{
+  id: "mail-dana", kind: "deferred_action", at: NOW - 30_000, raisedBy: galleryActorId("scout"),
+  title: "Send mail to dana@northwind.io: Re: Webhook deliveries to /hooks/v2 failing with 500", detail: null,
+  mail: {
+    by: "scout", from: "scout.api-worker.ashish@kinu.run", to: ["dana@northwind.io"], cc: [],
+    subject: "Re: Webhook deliveries to /hooks/v2 failing with 500",
+    text: "Hi Dana,\n\nThe 500s were ours: Tuesday's release renamed the binding the webhook route reads. The fix is on staging and reaches production within the hour; replay the failed deliveries after 16:00 UTC.\n\nscout, for Ashish Kumar Singh",
+  },
+}];
+
 const ASK_SETS = new Map([
-  ["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS],
+  ["two", PARKED_ASKS], ["mixed", MIXED_ASKS], ["plan", PLAN_ASKS], ["mail", MAIL_ASKS], ["mail-mixed", [...MAIL_ASKS, ...PARKED_ASKS]],
   ["effect", EFFECT_ASKS], ["effects", EFFECTS_ASKS], ["effect-mixed", [...EFFECT_ASKS, ...PARKED_ASKS.slice(0, 1)]],
 ]);
 
