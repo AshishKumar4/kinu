@@ -71,7 +71,7 @@ afterEach(async () => {
 
   // After a handover only the pidfile names the owning daemon.
   for (const home of homes.splice(0)) {
-    const daemon = recordedIn(join(home, 'pc-agent.pid'));
+    const daemon = recordedIn(join(home, 'pc-agent.pid'), home);
 
     if (daemon !== null) await killAndAwaitExit(daemon);
   }

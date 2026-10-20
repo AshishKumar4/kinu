@@ -50,7 +50,7 @@ const strangers: Bun.Subprocess[] = [];
 
 afterEach(async () => {
   for (const instance of started.splice(0)) {
-    const workerd = recordedIn(join(instance.home, 'local/workerd.pid'));
+    const workerd = recordedIn(join(instance.home, 'local/workerd.pid'), instance.home);
 
     if (workerd !== null) await killAndAwaitExit(workerd);
   }

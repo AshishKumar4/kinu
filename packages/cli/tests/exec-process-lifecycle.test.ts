@@ -30,7 +30,7 @@ const HEARTBEAT_PID = 'heartbeat.pid';
 afterEach(async () => {
   for (const home of homes.splice(0)) {
     for (const pidfile of ['daemon.pid', HEARTBEAT_PID]) {
-      const recorded = recordedIn(join(home, pidfile));
+      const recorded = recordedIn(join(home, pidfile), home);
 
       if (recorded !== null) await killAndAwaitExit(recorded);
     }
