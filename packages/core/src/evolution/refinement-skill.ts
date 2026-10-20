@@ -13,6 +13,7 @@ import { parseSkillFile, skillNameProblem } from '../skills/parse';
 import type { AgentRuntime } from '../types/agent-runtime';
 
 import { vfsDirname } from '../utils/vfs-helpers';
+import { writeConditionally } from '../vfs/conditional-write';
 import { Effect, Result } from 'effect';
 import { diagnostics, renderThrownChain, settle } from '../obs/index';
 import {
@@ -197,13 +198,14 @@ function promoteStagedSkill(
           + 'something nobody reviewed');
       }
 
-      // Staging is untouched, so the next cold turn retries.
+      // Created only where no file is, in one call on the plane's side: bytes the owner wrote since the read above are
+      // refused, never overwritten. Staging is untouched, so the next cold turn retries.
       yield* Effect.tryPromise({
         try: async () => {
           await vfs.mkdir(vfsDirname(route.target), { recursive: true });
-          await writeText(vfs, route.target, source);
+          await writeConditionally(vfs, route.target, new TextEncoder().encode(source), { kind: 'absent' });
         },
-        catch: (cause) => `could not write ${route.target}: ${renderThrownChain({ cause })}`,
+        catch: (cause) => `could not create ${route.target}: ${renderThrownChain({ cause })}. The skill is still staged at ${staged}`,
       });
 
       // Read back: a torn or transformed write would be trusted but unreviewed.

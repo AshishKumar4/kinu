@@ -1,4 +1,4 @@
-import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, readText, writeText, type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Continual refinement end to end over the real owners. Asserts: an LLM proposal
  * never moves live behaviour by itself; writes land only in existing stores; a crash
@@ -2412,25 +2412,54 @@ describe('a hard kill at `gated` is still settled', () => {
 });
 
 describe('promotion never half-lands — the read-back is what allows the unlink', () => {
-  /** A file plane whose write of one path misbehaves. */
+  /** A file plane whose create of one path misbehaves. */
   function saboteur(
     rt: AgentRuntime,
     path: string,
     mode: 'throw' | 'tear',
   ): () => void {
     const vfs = rt.agentStateVfs;
-    const real = vfs.writeFile.bind(vfs);
-    vfs.writeFile = async (written: string, data: Uint8Array) => {
-      if (written !== path) return real(written, data);
+    const real = present(vfs.writeFileIfRevision?.bind(vfs), 'a revisioned plane');
+    vfs.writeFileIfRevision = async (written: string, data: Uint8Array, expected: VfsRevision) => {
+      if (written !== path) return real(written, data, expected);
 
       if (mode === 'throw') throw new Error('disk full');
 
       // A torn write.
-      return real(written, new TextEncoder().encode('\ntruncated'));
+      return real(written, new TextEncoder().encode('\ntruncated'), expected);
     };
 
-    return () => { vfs.writeFile = real; };
+    return () => { vfs.writeFileIfRevision = real; };
   }
+
+  test('an owner\'s file written after the publisher found none is kept, and the skill stays staged', async () => {
+    const { fx, deps, store, id, path } = await staged();
+    const owners = `${BREVITY_SKILL}\nthe owner's own.`;
+    const vfs = fx.rt.agentStateVfs;
+    const real = vfs.stat.bind(vfs);
+    let landed = false;
+
+    // The owner's write lands between the publisher's look at the target, which finds nothing, and its write.
+    vfs.stat = async (looked: string, options?: Parameters<VFS['stat']>[1]) => {
+      const found = await real(looked, options);
+
+      if (looked === BREVITY_PATH && found === null && !landed) {
+        landed = true;
+        await writeSkill(fx.rt, BREVITY_PATH, owners);
+      }
+
+      return found;
+    };
+
+    await activateDreamSkills(deps);
+    vfs.stat = real;
+
+    expect(landed).toBe(true);
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(owners);
+    expect(await readSkill(fx.rt, path)).toBe(BREVITY_SKILL);
+    await advanceRefinementLane(deps);
+    expect(store.get(id)?.stage).toBe('evaluating');
+  });
 
   async function staged() {
     const fx = fixture();
