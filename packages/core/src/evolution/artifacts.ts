@@ -166,7 +166,7 @@ function activateStaged(sql: SqlExecutor, actor: ActorHandle, now: number): void
       WHERE actor_id = ${actor.actorId} AND artifact_id = ${artifactId} AND status = 'current'`;
     void sql`UPDATE artifact_versions SET status = 'current', parent = ${replaced?.version ?? null}, decided_at = ${now}
       WHERE actor_id = ${actor.actorId} AND artifact_id = ${artifactId} AND version = ${version}`;
-    diagnostics.event('evolution.artifact_activated', { artifactId, version, replaced: replaced?.version ?? 0 });
+    diagnostics.event('dream.applied', { change: `${artifactId}@${String(version)}`, replaced: replaced?.version ?? 0 });
   }
 
   if (staged.length > 0) markStoreChanged(sql);

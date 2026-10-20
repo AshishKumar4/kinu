@@ -58,7 +58,7 @@ import type { EvolutionHelperAnswer, EvolutionLaneRequest } from '../src/identit
 import { activateDreamSkills } from '../src/evolution/refinement-skill';
 import { idleDream, refinementPass } from '../src/evolution/refinement-host';
 import { createMemoryVfs, createTestSql, present } from '@kinu.run/test-utils';
-import { renderThrownChain } from '../src/obs/index';
+import { createLineLogger, renderThrownChain, setDiagnosticsSink } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
 import { Database } from 'bun:sqlite';
 import {
@@ -1486,6 +1486,46 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(claim.held()).toBe(false);
     expect(claim.record({ detail: 'a pass that lost the row writes nothing' })).toBe(false);
     expect(store.get(request.id)?.detail).toBe('');
+  });
+});
+
+describe('a dream says what it did', () => {
+  test('completed with its counts as it ends, applied per change at its cold turn, reverted per owner revert', async () => {
+    const lines: string[] = [];
+    const restore = setDiagnosticsSink(createLineLogger((line) => { lines.push(line); }));
+    let id = '';
+
+    try {
+      const fx = fixture();
+      seedGradedTurns(fx.rt, 4);
+
+      const { port } = scriptedRefiner(proposalText({
+        scope: 'workspace', summary: 'tighten the persistence section',
+        edits: [{ kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE, rationale: 'four corrected turns all asked for a shorter answer than the section invites' }],
+      }));
+
+      const deps = fx.deps(port);
+      id = (await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' })).id;
+      await advanceRefinementLane(deps);
+      turnArtifacts(fx.rt.storage.sql, fx.rt.actor, true);
+      await advanceRefinementLane(deps);
+
+      await executeChangelogRevert(
+        { rt: fx.rt, facts: fx.facts, events: new RunEventRecorder(fx.rt.storage.sql, fx.rt.actor) },
+        { type: 'artifact_revert', target: `${ARTIFACT}@1` },
+      );
+    } finally {
+      restore();
+    }
+
+    const said = lines.map((line) => v.parse(v.object({ event: v.string(), fields: v.record(v.string(), v.unknown()) }), JSON.parse(line)))
+      .filter((line) => line.event.startsWith('dream.'));
+
+    expect(said).toEqual([
+      { event: 'dream.applied', fields: { change: `${ARTIFACT}@1`, replaced: 0 } },
+      { event: 'dream.completed', fields: { dream: id, trigger: 'explicit', stage: 'applied', turns: 6, edits: 1, staged: 1, applied: 0, refused: 0 } },
+      { event: 'dream.reverted', fields: { change: `${ARTIFACT}@1` } },
+    ]);
   });
 });
 

@@ -19,12 +19,12 @@ import { revertDreamSkill } from './refinement-skill';
 import { listTurnRatings, RATING_SOURCES, satisfactionInterval, type RatingSource, type TurnRating } from './ratings';
 import {
   createRefinementStore,
-  type RefinementDeps, type RefinementDisposition, type RefinementStage, type RefinementTrigger,
+  type RefinementDeps, type RefinementDisposition, type RefinementRoute, type RefinementStage, type RefinementTrigger,
 } from './refinement';
 import { describePathology } from './pathology';
 import { formatScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
-import { KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 
 const ScaffoldRunEventSchema = v.object({
   fromVersion: v.number(),
@@ -245,11 +245,32 @@ function factAggregate(
 }
 
 const ARTIFACT_SUMMARY: Record<ArtifactStatus, string> = {
-  current: 'I reworded my own',
-  staged: 'After the next pause, I will reword my own',
-  rolled_back: 'I reverted new wording for my',
-  historical: 'I replaced earlier wording for my',
+  current: 'I reworded',
+  staged: 'After the next pause, I will reword',
+  rolled_back: 'I reverted new wording for',
+  historical: 'I replaced earlier wording for',
 };
+
+/** What an artifact id names, as the owner reads it. */
+function artifactLabel(artifactId: string): string {
+  const tool = /^tool:([a-z_]+)\.(description|schema)$/u.exec(artifactId);
+
+  if (tool?.[1] !== undefined) return `the ${tool[1]} tool's ${tool[2] === 'schema' ? 'field descriptions' : 'description'}`;
+  const section = /^section:(.+)$/u.exec(artifactId)?.[1];
+
+  return section === undefined ? artifactId : `the ${section} prompt section`;
+}
+
+/** What one routed edit changes, as the owner reads it. */
+function routeLabel(route: RefinementRoute): string {
+  switch (route.kind) {
+    case 'fact': return `Remember ${route.target}`;
+    case 'prompt_section':
+    case 'tool_description': return `Reword ${artifactLabel(route.target.replace(/@\d+$/u, ''))}`;
+    case 'skill': return `The ${route.target.split('/').at(-2) ?? route.target} skill`;
+    case 'subagent_spec': return `A spec for ${route.target || 'a subagent'}`;
+  }
+}
 
 /** One entry per version: its turns and judge numbers. */
 function artifactEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
@@ -261,7 +282,7 @@ function artifactEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): C
       id: `artifact:${key}:${row.status}`,
       kind: 'artifact',
       at: row.decidedAt ?? row.writtenAt,
-      summary: `${ARTIFACT_SUMMARY[row.status]} ${row.artifactId}`,
+      summary: `${ARTIFACT_SUMMARY[row.status]} ${artifactLabel(row.artifactId)}`,
       evidence: `v${String(row.version)}: ${row.rationale}${judged}`,
     };
 
@@ -275,13 +296,13 @@ function artifactEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): C
 const SOURCE_PREVIEW_CHARS = 1_200;
 
 const REFINEMENT_STAGE_PROSE = {
-  requested: 'I have a review of my own recent failures queued',
-  planning: 'I am reviewing my own recent failures',
-  gated: 'I recorded what you told me from my own recent failures',
-  evaluating: 'A change I proposed to myself is waiting to take effect',
-  applied: 'I changed how I work',
-  rolled_back: 'I changed how I work, and that change was undone',
-  refused: 'I reviewed my own recent failures and changed nothing',
+  requested: 'A dream is queued',
+  planning: 'I am dreaming over my recent turns',
+  gated: 'A dream is routing what it drafted',
+  evaluating: 'A dream\'s changes take effect after the next pause',
+  applied: 'I dreamt and changed how I work',
+  rolled_back: 'I dreamt, and the change was undone',
+  refused: 'I dreamt and changed nothing',
 } satisfies Record<RefinementStage, string>;
 
 /** The three non-refusals are distinct kinds of "not live yet". */
@@ -320,8 +341,7 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
         id: `refinement:${request.id}:${String(index)}`,
         kind: 'refinement',
         at: request.updatedAt,
-        summary: `${route.kind} -> ${route.target || '(no target)'}: `
-          + REFINEMENT_DISPOSITION_PROSE[route.disposition],
+        summary: `${routeLabel(route)}: ${REFINEMENT_DISPOSITION_PROSE[route.disposition]}`,
         evidence: `${route.owner === '' ? 'no owning authority' : `owner ${route.owner}`}`
           + (route.reason === undefined ? '' : ` · ${route.reason}`)
           + (source === undefined
@@ -540,6 +560,7 @@ function revertArtifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId:
 
   revertArtifact(sql, actor, artifactId, version);
   markStoreChanged(sql);
+  diagnostics.event('dream.reverted', { change: `${artifactId}@${String(version)}` });
 
   return { ok: true, detail: row.status === 'current' && row.parent === null ? `${artifactId} is back on its built-in wording` : `reverted ${artifactId} v${String(version)}` };
 }

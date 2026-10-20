@@ -34,7 +34,7 @@ import { routeSkill, settleDreamSkill, skillRefusal } from './refinement-skill';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
 import { renderIssues } from '../utils/json';
-import { attempt, renderThrownChain, settle, toKinuError, tolerate, type ErrorCode, type KinuError } from '../obs/index';
+import { attempt, diagnostics, renderThrownChain, settle, toKinuError, tolerate, type ErrorCode, type KinuError } from '../obs/index';
 import type { TemporaryRunRequest } from '../subordinates/temporary';
 import type { EvolutionLaneRequest } from '../identity/evolution-helpers';
 import type { SqlExecutor } from '../types/primitives';
@@ -922,6 +922,8 @@ function routeFact(
   }
 
   const outcome = deps.facts.upsert(edit.key, edit.value, { source: `refinement:${request.id}`, origin: { by: 'background' } });
+
+  if (outcome !== 'unchanged') diagnostics.event('dream.applied', { change: `fact:${edit.key}`, dream: request.id });
 
   return {
     kind: 'fact',

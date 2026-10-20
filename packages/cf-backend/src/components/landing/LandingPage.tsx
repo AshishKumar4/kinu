@@ -164,7 +164,7 @@ function EvolutionSection(): ReactElement {
       evidence: 'A repeated pattern with recorded outcomes',
       change: 'Propose and validate a new agent loop',
       persists: 'A reversible scaffold version',
-      detail: 'A proposal must pass validation and shadow evaluation before promotion. A rejected proposal does not replace the live scaffold, and a promoted version keeps a rollback path. More experience does not guarantee improvement.',
+      detail: 'A proposal must pass validation before you promote it. A rejected proposal does not replace the live scaffold, and a promoted version keeps a rollback path. More experience does not guarantee improvement.',
     },
   ] as const;
 

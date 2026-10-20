@@ -116,7 +116,7 @@ import type {
   ChatHistoryEntry, ContextComposition, DirEntry, ExplorationCanvasRun,
   FileCheckpointEntry, FileCheckpointListing, ForkRunParams,
   ForkRunSummary, HeadRunView, EnvironmentInfo, NodeTranscriptView, Page, PageRequest,
-  AccountSpend, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
+  AccountSpend, ChangelogEntry, PendingAction, ProducerSpend, SearchTreeRow, Usage, WorkspaceSpend,
 } from "@kinu.run/core";
 import type { ModelTestResult, UserDevice } from "@/lib/user-api";
 import { ROSTER_SOCKET_ROUTE } from "@/lib/user-api";
@@ -3049,7 +3049,7 @@ const PLAN_ASKS: PendingAction[] = [{
   planRef: { owner: WORKSPACE_PAGE_NAME, id: galleryAgentPlan.id, revision: galleryAgentPlan.revision }, raisedBy: galleryActorId(WORKSPACE_PAGE_NAME),
 }];
 
-/** `&asks=mixed`: one of each kind that waits on the owner, and a version under trial that waits on nobody. */
+/** `&asks=mixed`: one of each kind that waits on the owner, and a scaffold version that waits on nobody. */
 const MIXED_ASKS: PendingAction[] = [
   ...PARKED_ASKS,
   { id: "park-write", kind: "deferred_action", title: "Replace src/routes/webhooks.ts", detail: null, at: NOW - 150_000, write: { path: "src/routes/webhooks.ts" } },
@@ -3058,7 +3058,7 @@ const MIXED_ASKS: PendingAction[] = [
   ...PLAN_ASKS,
   { id: "plan:binding-auditor:pa-1:1", kind: "plan_review", title: "Approve the plan · Audit the binding of every route", detail: "Submitted by binding-auditor", at: NOW - 200_000,
     planRef: { owner: "binding-auditor", id: "pa-1", revision: 1 }, raisedBy: galleryActorId("binding-auditor") },
-  { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is under trial", detail: "shorter tool preamble", at: NOW - 10_000 },
+  { id: "scaffold-v8", kind: "scaffold_version", title: "Scaffold v8 is waiting to be promoted or rolled back", detail: "shorter tool preamble", at: NOW - 10_000 },
 ];
 
 /** A change a share of issue-triage made on the owner's access, for Sam, as the queue lists it. */
@@ -5606,28 +5606,50 @@ const BACKGROUND_JOBS: BackgroundJob[] = [
   },
 ];
 
+/** The Agent tab's journal: a dream that changed how the agent works, one that changed nothing, and a fact it kept. */
 const CHANGELOG = {
   seenAt: NOW - 30e5,
   unseenCount: 2,
   entries: [
     {
-      id: "cl_1", kind: "scaffold", at: NOW - 10e5, scaffoldVersion: 8, revert: true,
-      summary: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
-      evidence: "shadow eval: 7 trials · 5 pending wins · 1 regression · 1 tie",
+      id: "refinement:refine-a1:applied", kind: "refinement", at: NOW - 10e5,
+      summary: "I dreamt and changed how I work",
+      evidence: "applied · workspace scope · five new turns since the last dream · reviewed 5 rated turns",
+      items: [
+        {
+          id: "refinement:refine-a1:0", kind: "refinement", at: NOW - 10e5,
+          summary: "Reword the shell tool's description: takes effect after the next pause",
+          evidence: "owner artifact_versions · accepted by the dream's reviewer",
+          revert: { type: "artifact_revert", target: "tool:shell.description@1" },
+        },
+        {
+          id: "refinement:refine-a1:1", kind: "refinement", at: NOW - 10e5,
+          summary: "The release-notes skill: takes effect after the next pause",
+          evidence: "owner instruction_approvals · staged where no prompt reads it",
+          revert: { type: "skill_revert", target: "refine-a1#1" },
+        },
+        {
+          id: "refinement:refine-a1:2", kind: "refinement", at: NOW - 10e5,
+          summary: "Remember user.answer_length: in effect now",
+          evidence: "owner agent_facts · the user's own words: \"keep answers to one line unless I ask\"",
+          revert: { type: "fact_forget", target: "user.answer_length" },
+        },
+      ],
     },
     {
-      id: "cl_3", kind: "fact", at: NOW - 50e5, scaffoldVersion: null, revert: true,
+      id: "fact:computer.staging_db", kind: "fact", at: NOW - 50e5,
       summary: "Remembered: staging still binds the sessions database as DB",
-      evidence: null,
+      evidence: "",
+      revert: { type: "fact_forget", target: "computer.staging_db" },
     },
     {
-      id: "cl_4", kind: "refinement", at: NOW - 6e5, scaffoldVersion: null,
-      summary: "Reviewed my own recent failures and changed nothing",
-      evidence: "refused · workspace scope · reviewed 3 turns",
+      id: "refinement:refine-a0:refused", kind: "refinement", at: NOW - 60e5,
+      summary: "I dreamt and changed nothing",
+      evidence: "refused · workspace scope · the agent was idle · reviewed 3 rated turns",
       noChange: true,
     },
   ],
-};
+} satisfies { seenAt: number; unseenCount: number; entries: ChangelogEntry[] };
 
 /** Without it a waiting decision lights nothing while a running job carries a digit. */
 const PENDING_ACTIONS: PendingAction[] = [

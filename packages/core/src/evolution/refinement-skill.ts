@@ -14,7 +14,7 @@ import type { AgentRuntime } from '../types/agent-runtime';
 
 import { vfsDirname } from '../utils/vfs-helpers';
 import { Effect, Result } from 'effect';
-import { renderThrownChain, settle } from '../obs/index';
+import { diagnostics, renderThrownChain, settle } from '../obs/index';
 import {
   createRefinementStore, refinementStagingPath,
   type RefinementDeps, type RefinementEdit, type RefinementRequest, type RefinementRoute,
@@ -151,7 +151,9 @@ export function activateDreamSkills(deps: RefinementDeps): Promise<void> {
 
         // Trust first; see the module header. A failed promotion stays staged for the next cold turn.
         if (standing === null) approvals.approve(route.target, route.digest, 'dream');
-        yield* Effect.result(promoteStagedSkill(planeOf(deps), request, route));
+        const promoted = yield* Effect.result(promoteStagedSkill(planeOf(deps), request, route));
+
+        if (Result.isSuccess(promoted) && promoted.success) diagnostics.event('dream.applied', { change: route.target, dream: request.id });
       }
     }
   }));
@@ -305,6 +307,7 @@ export async function revertDreamSkill(
     : existing);
 
   if (!store.record(request.id, request.stage, { routes })) return { ok: false, error: `dream ${request.id} moved while you were reverting` };
+  diagnostics.event('dream.reverted', { change: route.target, dream: request.id });
 
   return { ok: true, detail: removed ? `removed ${route.target} and revoked its trust` : `revoked trust for ${route.target}` };
 }

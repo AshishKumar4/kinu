@@ -474,6 +474,20 @@ function toRequest(row: Row): RefinementRequest {
 const liveClaims = new Set<string>();
 
 /** Row, debt key and claim are per actor, so one actor's pass cannot claim a sibling's refinement. */
+/** The stages a dream ends in. */
+const DREAM_ENDS: ReadonlySet<RefinementStage> = new Set(['applied', 'rolled_back', 'refused']);
+
+/** What one dream did, as it ends: its turns and how each drafted edit was routed. */
+function dreamCompleted(request: RefinementRequest | null): void {
+  if (request === null) return;
+  const routed = (disposition: RefinementDisposition): number => request.routes.filter((route) => route.disposition === disposition).length;
+
+  diagnostics.event('dream.completed', {
+    dream: request.id, trigger: request.trigger, stage: request.stage, turns: request.turnIds.length,
+    edits: request.routes.length, staged: routed('staged'), applied: routed('applied'), refused: routed('refused'),
+  });
+}
+
 export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): RefinementStore {
   const actorId = actor.actorId;
   const authorize = actor.assertCurrent;
@@ -523,6 +537,8 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       WHERE actor_id = ${actorId} AND id = ${id}
         AND stage = ${guard.stage} AND claim IS ${guard.claim}`;
     markStoreChanged(sql);
+
+    if (to !== null && DREAM_ENDS.has(to)) dreamCompleted(one(id));
 
     return true;
   };
