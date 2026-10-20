@@ -133,7 +133,7 @@ import {
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   applyScaffoldDecision, getEvolutionStatus, listScaffoldVersions,
   previewScaffoldLive,
-  activateDreamSkills, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement,
+  activateDreamSkills, evolutionAnswerWake, idleDream, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement,
   type RefinementListing,
   type RefinementRequestView, type RefinementScope,
   runScaffoldOnce, scaffoldRunReport, type ScaffoldRunReport,
@@ -3632,6 +3632,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       llm: () => this.rt.fastLlm ?? this.rt.llm,
       transactionSync: (write) => this.ctx.storage.transactionSync(write),
       armWake: () => { this.armDurableWake(); }, workspace: this.name,
+      idle: () => idleDream(this.refinementDeps, this.engine.recordsTurns),
       // Reads the account and proposes to it; the owner accepts what is kept.
       account: () => this.account.ownedMemory({ by: 'background' }),
     });

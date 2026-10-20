@@ -2,10 +2,11 @@ import { describe, test, expect } from 'bun:test';
 import {
   runSleepTimeCompute, applySleepTimeUpdate,
   SLEEP_TIME_CADENCE,
+  initEffectTombstoneTable, initFactsTable, initSleepTimeUpdatesTable, SleepTimeLane,
   sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type ConversationProjection,
 } from '../src/index';
-import { createTestFactsStore, createJSONLLM, createScriptedLLM, present } from '@kinu.run/test-utils';
+import { createTestFactsStore, createJSONLLM, createScriptedLLM, createTestRuntime, present } from '@kinu.run/test-utils';
 
 const ONE_TURN = [{ task: 't', output: 'o', toolCalls: [], ownerWords: 't' }];
 
@@ -248,5 +249,58 @@ describe('Sleep-time compute', () => {
     await expect(runSleepTimeCompute(judge, { turns: ONE_TURN, currentFacts: [] }))
       .rejects.toMatchObject({ code: 'bad_input' });
     expect(facts.recall('ok.1')).toBeNull();
+  });
+});
+
+describe('an idle wake dreams first', () => {
+  /** Answered turns, newest first, as the transcript reads them. */
+  const turns = (count: number): ConversationProjection[] => Array.from({ length: count }, (_, index) => count - index).flatMap((turn) => [
+    { id: `a${String(turn)}`, position: 0, role: 'assistant' as const, turnId: null, runId: null, content: 'done', toolCalls: [], recordedAt: 0 },
+    { id: `u${String(turn)}`, position: 0, role: 'user' as const, turnId: null, runId: null, content: `step ${String(turn)}`, toolCalls: [], recordedAt: 0 },
+  ]);
+
+  function lane(count: number) {
+    const { rt, stores, testSql } = createTestRuntime();
+    initFactsTable(testSql.execRaw);
+    initSleepTimeUpdatesTable(testSql.execRaw);
+    initEffectTombstoneTable(testSql.execRaw);
+    stores.config.setSleepTimeComputeEnabled(true);
+    const order: string[] = [];
+
+    const built = new SleepTimeLane({
+      sql: rt.storage.sql, actor: rt.actor, config: stores.config, facts: stores.facts,
+      transcript: () => ({ newestFirst: async () => turns(count) }),
+      llm: () => ({ stream: () => { throw new Error('not streamed'); }, complete: async () => {
+        order.push('facts');
+
+        return JSON.stringify({ upserts: [], decay: [] });
+      } }),
+      transactionSync: (write) => write(),
+      armWake: () => {},
+      workspace: 'research',
+      idle: async () => { order.push('dream'); },
+    });
+
+    return { lane: built, order };
+  }
+
+  test('a due idle wake runs the dream before it compresses facts, and an early one runs neither', async () => {
+    const { lane: idle, order } = lane(2);
+
+    // Two turns are not the cadence: the pass arms the idle wake instead.
+    await idle.runTerminal();
+    const settledAt = Date.now();
+    expect(await idle.runIfDue(settledAt + SLEEP_TIME_CADENCE.idleMs - 1_000)).toBe(false);
+    expect(order).toEqual([]);
+
+    expect(await idle.runIfDue(settledAt + SLEEP_TIME_CADENCE.idleMs + 1_000)).toBe(true);
+    expect(order).toEqual(['dream', 'facts']);
+  });
+
+  test('the third turn compresses facts at once, with no dream: the agent is not idle', async () => {
+    const { lane: busy, order } = lane(3);
+
+    await busy.runTerminal();
+    expect(order).toEqual(['facts']);
   });
 });

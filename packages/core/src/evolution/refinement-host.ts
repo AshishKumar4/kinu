@@ -11,7 +11,7 @@ import {
   type RefinementScope,
 } from './refinement';
 import { Effect } from 'effect';
-import { attempt, settle, type KinuError } from '../obs/index';
+import { attempt, settle, settleLogged, type KinuError } from '../obs/index';
 
 /** Explicit request; defaults to the unresolved outcomes at workspace scope. */
 export function requestOwnerRefinement(
@@ -42,17 +42,26 @@ export function listRefinements(deps: RefinementDeps, limit = 20): RefinementLis
   };
 }
 
-export async function refinementPass(deps: RefinementDeps): Promise<RefinementLaneStep> {
+export async function refinementPass(deps: RefinementDeps, trigger: 'cadence' | 'idle' = 'cadence'): Promise<RefinementLaneStep> {
   const { sql, rt } = deps.control;
   releaseRefinementLane(sql, rt.actor.actorId);
 
   return settle(attempt({ doing: 'running the refinement lane', otherwise: 'unavailable' }, async () => {
-    await dreamRequest(deps, 'cadence');
+    await dreamRequest(deps, trigger);
 
     return advanceRefinementLane(deps);
   }).pipe(Effect.tapError(() => Effect.sync(() => {
     holdRefinementLane(sql, rt.actor.actorId);
   }))));
+}
+
+/** An idle agent's dream, over any new rated turn: the sleep-time wake's first work. Never while learning is off; never rejects. */
+export function idleDream(deps: RefinementDeps, learns: boolean): Promise<void> {
+  if (!learns) return Promise.resolve();
+
+  return settleLogged('evolution.idle_dream_failed', { doing: 'dreaming while the agent is idle', otherwise: 'unavailable' }, async () => {
+    await refinementPass(deps, 'idle');
+  });
 }
 
 /** Both hosts' stored-answer wake; failures go to `failed`. */

@@ -56,7 +56,7 @@ import {
 } from '../src/evolution/refinement-lane';
 import type { EvolutionHelperAnswer, EvolutionLaneRequest } from '../src/identity/evolution-helpers';
 import { activateDreamSkills } from '../src/evolution/refinement-skill';
-import { refinementPass } from '../src/evolution/refinement-host';
+import { idleDream, refinementPass } from '../src/evolution/refinement-host';
 import { createMemoryVfs, createTestSql, present } from '@kinu.run/test-utils';
 import { renderThrownChain } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
@@ -1633,6 +1633,19 @@ describe('a dream — every five new turns, or when the agent is idle, triaged f
     expect(idle?.trigger).toBe('idle');
     expect(idle?.turnIds).toHaveLength(1);
     expect(await dreamRequest(fx.deps(port), 'idle')).toBeNull();
+  });
+
+  test('the idle wake dreams over a new rated turn, and never while learning is off', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 1, 0);
+    const deps = fx.deps(scriptedRefiner('{}').port);
+    const store = createRefinementStore(fx.rt.storage.sql, fx.rt.actor);
+
+    await idleDream(deps, false);
+    expect(store.list()).toEqual([]);
+
+    await idleDream(deps, true);
+    expect(store.list().map((request) => request.trigger)).toEqual(['idle']);
   });
 
   test('turns a dream already covers stop counting, and new turns accrue under a new key', async () => {

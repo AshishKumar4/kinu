@@ -88,7 +88,7 @@ import { ActorSession, type ActorTurnLease,
   type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
   type EvolutionStatus,
-  activateDreamSkills, evolutionAnswerWake, listRefinements, refinementPass, requestOwnerRefinement,
+  activateDreamSkills, evolutionAnswerWake, idleDream, listRefinements, refinementPass, requestOwnerRefinement,
   type RefinementLaneStep,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
   revertChangelogEntryById, type ChangelogRevertResult,
@@ -2021,6 +2021,7 @@ export class LocalAgentSession {
       transcript: () => this.stores.history.transcript(CHAT_SESSION_ID), llm: () => this.rt.fastLlm ?? this.rt.llm,
       transactionSync: (write) => this.rt.storage.transactionSync(write),
       armWake: () => { this.scheduleSleepTimeWake(); }, workspace: this.rt.actor.actorId,
+      idle: () => idleDream(this.refinementDeps, this.engine.recordsTurns),
     });
   }
 
