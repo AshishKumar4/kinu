@@ -111,6 +111,7 @@ import {
   type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type PositionPageRequest, type RunEvent, type SendState,
   type SubordinateInspectionRequest, type WorkMode, type WorkspaceSpend,
   QualityDaySchema, type QualityDay, betaSwarms,
+  ChangelogEntrySchema, RefinementListingSchema, type ChangelogEntry, type RefinementListing,
 } from '../../packages/core/src/index';
 import { renderThrownChain, detach } from '../../packages/core/src/obs/index';
 import {
@@ -1251,6 +1252,18 @@ export class KinuPublicSession {
   /** A thumb on one answer, as the web pane gives it (`setTurnFeedback`). */
   async rate(messageId: string, feedback: 'positive' | 'negative'): Promise<void> {
     await this.boundary(`setTurnFeedback on ${this.input.origin}/${this.workspace}`, () => this.rpc('setTurnFeedback', [messageId, feedback]));
+  }
+
+  /** What the agent's dreams did, as `/refine` lists them (`listRefinements`), and what changed, as the Agent tab's
+   *  changelog reads it (`getEvolutionChangelog`). */
+  async evolution(): Promise<{ readonly refinements: RefinementListing; readonly changelog: readonly ChangelogEntry[] }> {
+    const refinements = v.parse(RefinementListingSchema, await this.boundary(
+      `listRefinements on ${this.input.origin}/${this.workspace}`, () => this.rpc('listRefinements', [200])));
+
+    const changelog = v.parse(v.object({ entries: v.array(ChangelogEntrySchema) }), await this.boundary(
+      `getEvolutionChangelog on ${this.input.origin}/${this.workspace}`, () => this.rpc('getEvolutionChangelog', [{ limit: 200 }])));
+
+    return { refinements, changelog: changelog.entries };
   }
 
   /** Satisfaction per day as the Quality tab reads it (`getQuality`): rated turns, by thumbs or the decision model. */

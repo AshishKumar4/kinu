@@ -30,7 +30,7 @@ import { rawPath, rethrow } from '../api/context';
 import { tenantDrive } from '../drive/tenant';
 
 import { installAnalyticsDiagnostics, openAnalyticsWindow } from '@kinu.run/core/analytics';
-import type { McpPresetAvailability, McpServerSummary } from '@kinu.run/core';
+import type { McpPresetAvailability, McpServerSummary, ProviderListing } from '@kinu.run/core';
 import {
   acceptRosterSocket, isRosterSocket, rosterForeground, rosterGone, rosterSockets, sendForeground, unreportedWorkspaces, ROSTER_SOCKET_PATH, type RosterQuery,
 } from './roster';
@@ -489,6 +489,14 @@ export class UserDO extends Agent<Env> {
 
   getCredentialsRevision(caller: UserCaller): Promise<number> {
     return this.credentials.getCredentialsRevision(caller);
+  }
+
+  storedProviderListing(caller: UserCaller, accounts: string): Promise<ProviderListing | null> {
+    return this.credentials.storedProviderListing(caller, accounts);
+  }
+
+  keepProviderListing(caller: UserCaller, revision: number, accounts: string, listing: ProviderListing): Promise<void> {
+    return this.credentials.keepProviderListing(caller, revision, accounts, listing);
   }
 
   /**

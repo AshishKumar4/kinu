@@ -911,8 +911,14 @@ export abstract class ActorAgent extends Agent<Env> {
     getCredentialsRevision: () => this.account.credentialsRevision(),
     onProviderWait: (info) => { this.noteProviderWait(info); },
     onModelAttempt: (info) => { this.noteModelAttempt(info); },
-    accountFor: (provider) => this.config.getProviderAccounts()[provider]
-      ?? currentOperationProfile(this.actorHandle())?.inputs?.envelope.catalog.accounts?.[provider],
+    // The catalog's choice of each provider's account, under this workspace's own.
+    accounts: () => ({ ...currentOperationProfile(this.actorHandle())?.inputs?.envelope.catalog.accounts, ...this.config.getProviderAccounts() }),
+    // A cold workspace serves the account's last listing swept under the same keys, and sweeps behind its turn.
+    storedListing: {
+      read: (accounts) => this.account.storedProviderListing(accounts),
+      keep: (revision, accounts, listing) => this.account.keepProviderListing(revision, accounts, listing),
+      detach: (work) => { this.detachOwned(work); },
+    },
     reportModelCall: (report) => { this.reportModelCall(report); },
     webSearchChain: async () => webSearchChainOf((await this.profileCatalog()).catalog),
     currentTurn: (reference) => this.currentTurnOf(reference),

@@ -3,6 +3,7 @@
  * is decided by the task's checks, so satisfaction follows what the agent did. `reactive-run.ts` drives the deployment.
  */
 import { Seeded } from '../tasks/seeded';
+import type { ChangelogEntry, RefinementListing } from '../../packages/core/src/index';
 
 /** The window §8 judges on, and the only segments the held-out family appears in. */
 export const LAST_SEGMENTS = 50;
@@ -51,6 +52,40 @@ export interface ArmRun {
   /** Mean rated satisfaction over the last segments; null when none was rated. */
   readonly lastSatisfaction: number | null;
   readonly spend: unknown;
+  /** What its dreams did, read before its workspace was deleted. */
+  readonly evolution?: ArmEvolution;
+}
+
+export interface ArmEvolution {
+  /** Dreams by stage: `evaluating` waits for a cold turn, `applied` landed. */
+  readonly dreams: Readonly<Record<string, number>>;
+  /** Routed edits, `<kind> <disposition>`. */
+  readonly edits: Readonly<Record<string, number>>;
+  /**
+   * Changes a turn ran with: dream wording made current (now or before), a scaffold version past the built-in one made
+   * current, and a staged skill of a dream that landed.
+   */
+  readonly activations: number;
+}
+
+function tally(keys: readonly string[]): Readonly<Record<string, number>> {
+  return Object.fromEntries([...new Set(keys)].map((key) => [key, keys.filter((other) => other === key).length]));
+}
+
+const RAN = /^(?:artifact:.+|scaffold:v[1-9]\d*):(?:current|historical)$/u;
+
+/** An arm's dreams and changelog as `KinuPublicSession.evolution` reads them, counted. */
+export function armEvolution(read: { readonly refinements: RefinementListing; readonly changelog: readonly ChangelogEntry[] }): ArmEvolution {
+  const { requests } = read.refinements;
+
+  const skills = requests.filter((request) => request.stage === 'applied')
+    .flatMap((request) => request.routes).filter((route) => route.kind === 'skill' && route.disposition === 'staged').length;
+
+  return {
+    dreams: tally(requests.map((request) => request.stage)),
+    edits: tally(requests.flatMap((request) => request.routes.map((route) => `${route.kind} ${route.disposition}`))),
+    activations: read.changelog.filter((entry) => RAN.test(entry.id)).length + skills,
+  };
 }
 
 export interface Interval { readonly mean: number; readonly lo: number; readonly hi: number }
