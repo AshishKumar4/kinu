@@ -184,6 +184,15 @@ echo "$socks" | while read -r inode port; do
 done
 `;
 
+/** `stamped-processes STAMP VALUE`: the pid of every process whose environment holds `STAMP=VALUE`, one a line; /proc, as
+ *  `portListeners` reads it. A process that has exited and not been reaped holds no environment, so it is not one. */
+const STAMPED = `
+want="$1=$2"
+for d in /proc/[0-9]*; do
+  tr '\\000' '\\n' 2>/dev/null < "$d/environ" | grep -qxF -- "$want" && echo "\${d#/proc/}"
+done
+`;
+
 export interface PortListener {
   readonly port: number;
   readonly pid: number;
@@ -2160,6 +2169,20 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const read = await (await container.exec(['sh', '-c', PORT_LISTENERS, 'port-listeners', stamp, ...(ports ?? []).map(String)])).output();
 
       return parsePortListeners(new TextDecoder().decode(read.stdout));
+    }));
+  }
+
+  /** The processes still running under `stamp=value` (a job's id), whatever started them: null while the box is down,
+   *  which this read never starts. */
+  stampedProcesses(stamp: string, value: string): Promise<readonly number[] | null> {
+    return settle(attempt('io', async () => {
+      await this.#adopted();
+      const container = this.#readyContainer();
+
+      if (container === undefined) return null;
+      const read = await (await container.exec(['sh', '-c', STAMPED, 'stamped-processes', stamp, value])).output();
+
+      return new TextDecoder().decode(read.stdout).split('\n').filter((line) => /^\d+$/.test(line)).map(Number);
     }));
   }
 

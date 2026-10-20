@@ -1,24 +1,26 @@
 /**
- * What a first-run search case reads off durable state, the ledger's `tool_call_end` and `model_call` rows and the
- * stored reply, never the model's own account of what it did: the search answered, it returned URLs, the reply names
- * one of them, and the provider the account chose answered it, billed to whom the account's chain says. web-search
- * runs it on a chosen provider, web-search-keyless on the deployment's own gateway, web-search-own-gateway on the
- * account's.
+ * What a first-run search case reads off durable state, never the model's own account of what it did: the run's
+ * `tool_call_end` row and the stored reply (the search answered, it returned URLs, the reply names one of them, the
+ * provider the account chose answered it), and the spend the person reads (who it billed). web-search runs it on a
+ * chosen provider, web-search-keyless on the deployment's own gateway, web-search-own-gateway on the account's.
+ *
+ * Who paid is read where the product files it. The `web` tool runs in the workspace's own object, so a search's
+ * `model_call` row is in the workspace's ledger, not the run's in main's isolate (staging rc23, 2026-10-20: the run's
+ * events held none, while Activity counted the search and Usage named its account): the workspace's Activity says the
+ * search was filed, and the account's Usage says whose account it went on.
  */
 import * as v from 'valibot';
 import type { EvalSubgoal } from '@kinu.run/test-utils';
 import { WEB_SEARCH_PROVIDERS, type JsonValue, type RunEvent, type WebSearchProviderId } from '../../packages/core/src/index';
-import type { KinuPublicSession } from '../../evals/src/session';
+import type { KinuPublicSession, PublicSessionPlan } from '../../evals/src/session';
+import { webHeaders } from '../../evals/src/workspace-roster';
+import { AccountUsageSchema } from '../../packages/core/src/read-models/account-usage';
 import { SEARCH_ASK as ASK } from './asks';
 
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
 
 function isToolCallEnd(event: RunEvent): event is ToolCallEnd {
   return event.type === 'tool_call_end';
-}
-
-function isModelCall(event: RunEvent): event is Extract<RunEvent, { type: 'model_call' }> {
-  return event.type === 'model_call';
 }
 
 const SearchArgsSchema = v.looseObject({ op: v.literal('search'), query: v.pipe(v.string(), v.minLength(1)) });
@@ -44,9 +46,26 @@ function resultUrls(text: string): string[] {
 /** Who pays for a search: the deployment's own gateway, or the account's (its `model_call` row's account). */
 export type SearchPayer = 'deployment' | 'account';
 
+/** The account a search on the person's own AI Gateway is filed under (`MY_GATEWAY_PROVIDER_ID`, `MAIN_ACCOUNT`). */
+const OWN_GATEWAY = 'my-gateway@main';
+
+/** The deployment's: a row naming no account of the person's. */
+const NO_ACCOUNT = 'no account';
+
+/** Each account's calls as Settings › Usage reads them (`GET /api/user/usage`), across the account's live workspaces. */
+async function usageCalls(plan: PublicSessionPlan): Promise<ReadonlyMap<string, number>> {
+  const answer = await fetch(`${plan.origin}/api/user/usage`, { headers: webHeaders(plan.identity) });
+
+  if (!answer.ok) throw new Error(`GET /api/user/usage answered ${String(answer.status)}: ${(await answer.text()).slice(0, 200)}`);
+  const { accounts } = v.parse(AccountUsageSchema, await answer.json());
+
+  return new Map(accounts.map((row) => [row.provider === null ? NO_ACCOUNT : `${row.provider}@${row.account ?? ''}`, row.calls]));
+}
+
 /** Ask for one search and read what came of it: answered by `provider`, paid for by `payer`. */
-export async function searchSubgoals(session: KinuPublicSession, expected: { readonly provider: WebSearchProviderId; readonly payer: SearchPayer }): Promise<EvalSubgoal[]> {
+export async function searchSubgoals(session: KinuPublicSession, plan: PublicSessionPlan, expected: { readonly provider: WebSearchProviderId; readonly payer: SearchPayer }): Promise<EvalSubgoal[]> {
   const subgoals: EvalSubgoal[] = [];
+  const before = await usageCalls(plan);
 
   await session.prompt(ASK);
 
@@ -87,18 +106,19 @@ export async function searchSubgoals(session: KinuPublicSession, expected: { rea
       : `the search did not come from ${label}: ${textOf(answeredSearch?.result).slice(-120)}`,
   });
 
-  const paidBy = events.filter(isModelCall)
-    .filter((event) => event.source === 'search' && event.modelId === `websearch/${expected.provider}`)
-    .map((event) => (event.account === undefined ? 'deployment' : `${event.account.provider}@${event.account.name}`));
-
-  const wanted = expected.payer === 'deployment' ? 'deployment' : 'my-gateway@main';
+  const filed = (await session.spend()).producers.find((producer) => producer.source === 'search')?.calls ?? 0;
+  const after = await usageCalls(plan);
+  const grew = (account: string) => (after.get(account) ?? 0) - (before.get(account) ?? 0);
+  const ownGateway = grew(OWN_GATEWAY);
+  // The account's model is the scripted one, never its gateway: only a search goes on `my-gateway`.
+  const billed = filed > 0 && (expected.payer === 'account' ? ownGateway >= filed : ownGateway === 0 && grew(NO_ACCOUNT) >= filed);
+  const moved = [...after.keys()].filter((account) => grew(account) !== 0).map((account) => `${account} +${String(grew(account))}`);
 
   subgoals.push({
     what: 'billed',
-    reached: paidBy.includes(wanted),
-    detail: paidBy.length > 0
-      ? `the search's spend row names ${paidBy.join(', ')}; this account's search bills ${wanted}`
-      : `no search spend row for websearch/${expected.provider} in the run's ledger`,
+    reached: billed,
+    detail: `Activity counts ${String(filed)} web search(es); across the search, Usage moved ${moved.join(', ') || 'nothing'}; `
+      + `this account's search bills ${expected.payer === 'account' ? OWN_GATEWAY : `${NO_ACCOUNT} (the deployment's gateway), and ${OWN_GATEWAY} stays as it was`}`,
   });
 
   const reply = (await session.history()).filter((row) => row.role === 'assistant').at(-1)?.text ?? '';

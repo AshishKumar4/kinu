@@ -194,7 +194,7 @@ import { gatedClientHandlers } from "./client-socket-gate";
 import { isWorkspaceTerminal } from "@kinu.run/core";
 import type { HostedBox, HostedWorkspace, WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
-import { sha256Hex, webSearchChainOf } from '@kinu.run/core';
+import { JOB_STAMP_ENV, sha256Hex, webSearchChainOf } from '@kinu.run/core';
 import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
@@ -2057,6 +2057,13 @@ export abstract class ActorAgent extends Agent<Env> {
       // A refused device cancel leaves the job running and retryable.
       onCancelled: (jobId) => this.cancelBackgroundDeviceRequests(jobId),
       onSettled: () => { this.detachOwned(Effect.promise(() => this.servingMoved())); },
+      // A command on the computer runs in the box's container, which a restart of this object leaves running: its
+      // processes carry its job's id (`sandbox.ts`), and the box is asked for them without being started.
+      stillRunning: async (job) => {
+        const box = this.rt.sandboxHandle;
+
+        return job.kind === 'shell' && box !== null && ((await box.stampedProcesses(JOB_STAMP_ENV, job.id))?.length ?? 0) > 0;
+      },
     };
   }
 

@@ -334,18 +334,22 @@ export const LONG_TURN = { steps: 150, stepBytes: 3000 } as const;
 
 /**
  * The long computer-use turn the flatness bounds are about: `steps` model calls, each reading one of `distinct` seeded
- * screenshots of `imageBytes` through the file tool, as a desktop turn takes one a step; per `window` steps the agent's
- * isolate's live heap and CPU are read, and the chat seed a pane opens on is read meanwhile, as an eval harness reads it.
- * Production and staging computer-use turns died every step past a few hundred, each re-driven by the minute's backstop
- * (#103: production bc78a94bd, eval-seed-probe-c87o3p, 114 re-drives in 2 h; staging 667f96316, eval-minecraft-1-idumki,
- * 30 between steps 411 and 484, the isolate out of memory and of CPU time before them).
+ * screenshots of `imageBytes` through the file tool, as a desktop turn takes one a step, every one of them distinct as
+ * a live desktop's are (40 shared ones hid what a turn held of each step: rc22's Minecraft trial died out of memory at
+ * step 833, 2026-10-19); per `window` steps the agent's isolate's live heap and CPU are read, and the chat seed a pane
+ * opens on is read meanwhile, as an eval harness reads it. Production and staging computer-use turns died every step
+ * past a few hundred, each re-driven by the minute's backstop (#103: production bc78a94bd, eval-seed-probe-c87o3p, 114
+ * re-drives in 2 h; staging 667f96316, eval-minecraft-1-idumki, 30 between steps 411 and 484, the isolate out of
+ * memory and of CPU time before them).
  */
-export const SCREENSHOT_TURN = { steps: 450, imageBytes: 200_000, distinct: 40, window: 50 } as const;
+export const SCREENSHOT_TURN = { steps: 450, imageBytes: 200_000, distinct: 450, window: 50 } as const;
 
 /** Measured 2026-10-19 at {@link SCREENSHOT_TURN} (armada, one run each): on 814a4ca80 main's isolate held 46.7 MB live
  *  at step 50 and 170.4 MB at 450, every screenshot the turn took, and its CPU per window went 4.2 to 8.3 s; once a turn's
  *  room holds its running step, the codec tells its own handles by shape, and a moved screenshot is retired from the turn's
- *  context (5df419bdd), 35.4 to 45.8 MB and 3.0 to 3.1 s. The bound catches one screenshot in fifty held again. */
+ *  context (5df419bdd), 35.4 to 45.8 MB and 3.0 to 3.1 s. With every screenshot distinct, 7fdee617e held 35.0 to 98.3 MB:
+ *  the SDK's record of the turn's one call, and the call's own response, kept each step's screenshot; once both let it go,
+ *  23.3 to 30.2 MB. The bound catches one screenshot in fifty held again. */
 export const SCREENSHOT_LIVE_GROWTH_BOUND_BYTES = 20_000_000;
 
 /** The CPU of main's isolate in the last three windows over that in the first three, each the middle of its three: one

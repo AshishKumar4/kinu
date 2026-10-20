@@ -430,6 +430,9 @@ export async function agentProposesAWorkspace(target: FlowTarget): Promise<Works
 
     await sendAndSettle(page, WORKSPACE_PROPOSAL_ASK);
     await openInspector(page);
+    // Work shows once the workspace's presence says it holds work, read again after the proposal's write
+    // (`reads_changed`); pressed the moment the turn closed, a slow read found no tab (staging rc23, 2026-10-19).
+    await until(page, 'Work in the inspector strip', `document.querySelector('#inspector button[aria-label="Work"]') !== null`);
     await page.evaluate(stripTab('Work'));
     await until(page, 'the proposal in Work → Needs you', `document.querySelector('#inspector [data-section="work-needs-you"] [data-pending-action]') !== null`);
     await page.click('#inspector [data-section="work-needs-you"] [data-pending-action]');

@@ -75,7 +75,7 @@ kinu <command> [options]
 | Command | What it does |
 | --- | --- |
 | [`kinu connect`](#kinu-connect) | Connect this PC so your agents can run commands on it |
-| [`kinu desktop [action]`](#kinu-desktop-action) | Connect this PC, or show its connection status and daemon logs |
+| [`kinu desktop [action]`](#kinu-desktop-action) | Connect this PC, show its status and daemon logs, or share its screen (share, unshare) |
 | [`kinu daemon [action] [workspace]`](#kinu-daemon-action-workspace) | Start, stop or check the local scheduler daemon, or run one pass by hand with tick |
 | [`kinu deploy [target] [action]`](#kinu-deploy-target-action) | Run your own Kinu: `deploy cloudflare` in your Cloudflare account, `deploy local [start\|stop\|status]` on this PC |
 | [`kinu doctor`](#kinu-doctor) | Check the installed Kinu CLI: paths, origin and version |
@@ -576,7 +576,7 @@ kinu connect --label studio
 
 ### kinu desktop [action]
 
-Connect this PC, or show its connection status and daemon logs.
+Connect this PC, show its status and daemon logs, or share its screen (share, unshare).
 
 | Option | What it does |
 | --- | --- |

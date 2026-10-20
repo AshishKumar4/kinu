@@ -45,7 +45,8 @@
     "ptyOutput": "PTY_OUT",
     "ptyExit": "PTY_EXIT",
     "ptyDetach": "PTY_DETACH",
-    "screenClose": "SCREEN_CLOSE"
+    "screenClose": "SCREEN_CLOSE",
+    "desktop": "DESKTOP"
   },
   "screenData": { "kind": 1, "headerBytes": 5, "maxBytes": 65536 },
   "errors": {

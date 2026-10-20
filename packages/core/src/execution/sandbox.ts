@@ -111,6 +111,8 @@ export interface SandboxHandle {
   probePort(port: number): Promise<boolean>;
   /** `stamp` read up holders' ancestry; null while down (never starts it). */
   portListeners(stamp: string, ports?: readonly number[]): Promise<readonly SandboxPortListener[] | null>;
+  /** The pids running under `stamp=value`; null while down (never starts it). */
+  stampedProcesses(stamp: string, value: string): Promise<readonly number[] | null>;
   /** Records the size; a container running at another size restarts at it, and one not running stays so. */
   resize(size: string): Promise<SandboxResize>;
   answerRest(answer: 'now' | 'keep'): Promise<SandboxRestAnswer>;
