@@ -56,7 +56,10 @@ import {
   advanceRefinementLane as advanceLane, dreamRequest, requestRefinement, type RefinementLaneStep,
 } from '../src/evolution/refinement-lane';
 import type { EvolutionHelperAnswer, EvolutionLaneRequest } from '../src/identity/evolution-helpers';
-import { activateDreamSkills } from '../src/evolution/refinement-skill';
+import { activateDreamSkills, dreamSkillsHidden } from '../src/evolution/refinement-skill';
+import { createAgentConfigStore, type AgentConfigStore } from '../src/config/store';
+import { resolveTurnSkills } from '../src/orchestrator/turn-surface';
+import { renderSkillsIndexSection } from '../src/skills/render';
 import { idleDream, refinementPass } from '../src/evolution/refinement-host';
 import { createMemoryVfs, createTestSql, present } from '@kinu.run/test-utils';
 import { createLineLogger, renderThrownChain, setDiagnosticsSink } from '../src/obs/index';
@@ -2304,6 +2307,32 @@ describe('a cold turn is what makes a dream\'s skill live', () => {
 
     return { fx, deps, store, id: opened.id, staged: refinementStagingPath(opened.id, 'brevity') };
   }
+
+  test('a dream skill one agent\'s cold turn publishes moves no warm sibling\'s skills index; its own next cold turn takes it in', async () => {
+    const { fx, deps } = await stagedFixture();
+    const hired = createAgentConfigStore(fx.rt.storage.sql, 'actor-hired', () => {});
+    const main = fx.rt.actor.config;
+
+    // The skills index a turn of `config`'s agent renders into its prompt prefix, over the one shared skills root.
+    const indexOf = async (config: AgentConfigStore, cold: boolean) => renderSkillsIndexSection((await resolveTurnSkills({
+      vfs: fx.rt.agentStateVfs, config, userText: 'the next request', limits: { contextWindow: null, modelOutputLimit: null },
+      trust: (path, content) => fx.approvals.trustOf(path, content), hides: dreamSkillsHidden(fx.approvals.list(), config, cold),
+    })).available);
+
+    // The hired agent's segment opened before the dream's skill landed.
+    const before = await indexOf(hired, true);
+    expect(before).not.toContain('brevity');
+
+    // The main agent's cold turn puts the skill in the shared root, and its own index takes it in.
+    await activateDreamSkills(deps);
+    expect(await readSkill(fx.rt, BREVITY_PATH)).toBe(BREVITY_SKILL);
+    expect(await indexOf(main, true)).toContain('brevity');
+
+    // The hired agent's warm turns read the bytes they read before; its next cold turn takes the skill in.
+    expect(await indexOf(hired, false)).toBe(before);
+    expect(await indexOf(hired, true)).toContain('brevity');
+    expect(await indexOf(hired, false)).toContain('brevity');
+  });
 
   test('a crash between the trust row and the file is repaired at the next cold turn, never by the lane', async () => {
     const { fx, deps, store, id, staged } = await stagedFixture();

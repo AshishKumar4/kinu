@@ -1897,7 +1897,7 @@ export {
   listRefinements, evolutionAnswerWake, idleDream, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
 } from './evolution/refinement-host';
 
-export { activateDreamSkills } from './evolution/refinement-skill';
+export { activateDreamSkills, dreamSkillsHidden } from './evolution/refinement-skill';
 
 export type { PromptSectionOverrides } from './prompting/section-templates';
 

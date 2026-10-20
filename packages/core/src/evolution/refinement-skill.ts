@@ -6,9 +6,10 @@ import { exists, readText as nimbusReadText, type VFS, writeText } from '@nimbus
 // a section does. Trust is written before the file: a trust row without a file is inert; a file without a trust row
 // is in the prompt as reference material.
 
-import { instructionDigest } from '../safety/instruction-trust';
+import { instructionDigest, type InstructionApproval } from '../safety/instruction-trust';
+import type { AgentConfigStore } from '../config/store';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
-import { BUILTIN_SKILL_NAMES, workspaceSkillPath } from '../skills/discover';
+import { BUILTIN_SKILL_NAMES, workspaceSkillName, workspaceSkillPath, type DiscoverOpts } from '../skills/discover';
 import { parseSkillFile, skillNameProblem } from '../skills/parse';
 import type { AgentRuntime } from '../types/agent-runtime';
 
@@ -153,6 +154,22 @@ export function activateDreamSkills(deps: RefinementDeps): Promise<void> {
       }
     }
   }));
+}
+
+/**
+ * Which dream skills a reader's turns index: at its own cold turn, every dream skill trusted now, kept as its pin; at a
+ * warm turn, its pin. Discovery passes over the rest, so a skill one agent's cold turn put in the shared skills root
+ * moves no warm agent's prompt prefix. A skill the owner trusts, or revokes, is the owner's: it moves every reader at once.
+ */
+export function dreamSkillsHidden(
+  approvals: readonly InstructionApproval[], config: Pick<AgentConfigStore, 'getDreamSkills' | 'setDreamSkills'>, cold: boolean,
+): NonNullable<DiscoverOpts['hides']> {
+  const dream = new Set(approvals.filter((row) => row.origin === 'dream' && row.decision === 'approved').map((row) => row.path));
+
+  if (cold) config.setDreamSkills([...dream].flatMap((path) => workspaceSkillName(path) ?? []));
+  const pinned = new Set(config.getDreamSkills().map(workspaceSkillPath));
+
+  return (file) => dream.has(file.path) && !pinned.has(file.path);
 }
 
 /**

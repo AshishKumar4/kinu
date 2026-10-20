@@ -5,7 +5,7 @@ import type { ToolSet } from 'ai';
 import {
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
 } from '../skills/loader';
-import { discoverSkills, BUILTIN_SKILL_HEADERS } from '../skills/discover';
+import { discoverSkills, BUILTIN_SKILL_HEADERS, type DiscoverOpts } from '../skills/discover';
 import { unionAllowedTools, toolAllowedBySkills, trustedActiveSkills, renderActiveSkillsSection } from '../skills/render';
 import { renderUnverifiedInstructions } from '../prompt';
 import type { ActiveSkillSet, SkillsIndex } from '../skills/types';
@@ -38,6 +38,7 @@ export function resolveTurnSkills(opts: {
   /** Required, so no caller can obtain unclassified skills. */
   trust: InstructionTrustResolver;
   roleSkills?: readonly string[];
+  hides?: DiscoverOpts['hides'];
 }): Promise<TurnSkillSurface> {
   const admissionTokens = stepContextLimit(opts.limits);
 
@@ -99,16 +100,10 @@ function skillsBlock(heading: string, set: ActiveSkillSet): string | null {
 }
 
 async function admitTurnSkills(
-  opts: {
-    vfs: VFS;
-    config: TurnSkillsConfig;
-    userText: string;
-    trust: InstructionTrustResolver;
-    roleSkills?: readonly string[];
-  },
+  opts: Omit<Parameters<typeof resolveTurnSkills>[0], 'limits'>,
   admissionTokens: number,
 ): Promise<TurnSkillSurface> {
-  const discovery = await discoverSkills(opts.vfs, { admissionTokens, trust: opts.trust });
+  const discovery = await discoverSkills(opts.vfs, { admissionTokens, trust: opts.trust, ...(opts.hides !== undefined && { hides: opts.hides }) });
   const available = admitSkillsIndex(discovery, admissionTokens);
 
   const activated = resolveActiveSkills({
