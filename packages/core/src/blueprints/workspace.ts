@@ -4,11 +4,11 @@
  * owner's own; a later version never changes it. Kinu keeps its own here, in code (docs/HOME-EXPLORE.md §4).
  */
 import * as v from 'valibot';
-import { GALLERY_CATEGORIES, type BlueprintPage, type WorkspaceCard } from '../slates/gallery-api';
+import { ExploreNeedSchema, GALLERY_CATEGORIES, type BlueprintPage, type WorkspaceCard } from '../slates/gallery-api';
 import { WORKSPACE_LAYOUTS, type WorkspaceLayout } from '../config/workspace-layout';
 
-/** `HH:MM`, 24-hour. */
-const ClockSchema = v.pipe(v.string(), v.regex(/^([01]\d|2[0-3]):[0-5]\d$/));
+/** `HH:MM`, 24-hour: a daily schedule's time, and the brief time an install chooses. */
+export const ClockSchema = v.pipe(v.string(), v.regex(/^([01]\d|2[0-3]):[0-5]\d$/));
 
 /** When a schedule runs, in the owner's own time: each day at a time, or every so many minutes. */
 const WhenSchema = v.variant('kind', [
@@ -29,16 +29,6 @@ const AutomationSchema = v.strictObject({
   brief: v.optional(v.boolean()),
 });
 
-/** What it reaches of its owner's: a connection (an MCP preset id) or a secret by name, read or written, and why. */
-const BlueprintNeedSchema = v.strictObject({
-  connection: v.nullable(v.string()),
-  secret: v.nullable(v.string()),
-  access: v.picklist(['read', 'write']),
-  why: v.string(),
-});
-
-export type BlueprintNeed = v.InferOutput<typeof BlueprintNeedSchema>;
-
 export const WorkspaceBlueprintSchema = v.strictObject({
   id: v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9-]{0,62}$/)),
   version: v.string(),
@@ -51,7 +41,7 @@ export const WorkspaceBlueprintSchema = v.strictObject({
   agent: v.pipe(v.string(), v.nonEmpty()),
   layout: v.picklist(WORKSPACE_LAYOUTS),
   automations: v.array(AutomationSchema),
-  needs: v.array(BlueprintNeedSchema),
+  needs: v.array(ExploreNeedSchema),
   /** What it stops and asks before doing, as its page lists it. */
   asks: v.array(v.string()),
   /** What it does, as its page says it. */

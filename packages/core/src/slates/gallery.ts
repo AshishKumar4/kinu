@@ -11,7 +11,7 @@ import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
 import { textContains } from '../utils/text-match';
 import {
-  EXPLORE_KINDS, GALLERY_CATEGORIES, GALLERY_PAGE_SIZE,
+  EXPLORE_KINDS, ExploreNeedSchema, GALLERY_CATEGORIES, GALLERY_PAGE_SIZE,
   type ExploreItem, type ExploreKind, type ExplorePage, type GalleryCategory, type GalleryListing, type GalleryPage, type GallerySlate,
   type GallerySort, type WorkspaceCard,
 } from './gallery-api';
@@ -30,7 +30,7 @@ export function initGalleryTables(execRaw: RawSqlExec): void {
     maker TEXT NOT NULL DEFAULT 'person' CHECK (maker IN ('person', 'kinu')),
     url TEXT NOT NULL,
     picture TEXT,
-    needs TEXT, /* JSON: what an install asks of the person (BlueprintNeed[]) */
+    needs TEXT, /* JSON: what an install asks of the person (ExploreNeed[]) */
     listed_at INTEGER NOT NULL,
     viewers INTEGER NOT NULL DEFAULT 0, /* a projection: the owner workspace's distinct signed-in viewers of the share (slate_share_views), as its last listing sync carried them */
     PRIMARY KEY (kind, workspace, item)
@@ -82,9 +82,7 @@ export interface KinuListing {
   readonly needs: WorkspaceCard['needs'];
 }
 
-const NeedsSchema = v.pipe(v.string(), v.parseJson(), v.array(v.object({
-  connection: v.nullable(v.string()), secret: v.nullable(v.string()), access: v.picklist(['read', 'write']), why: v.string(),
-})));
+const NeedsSchema = v.pipe(v.string(), v.parseJson(), v.array(ExploreNeedSchema));
 
 /** The window stars count toward trending, and toward this week's featured two. */
 const TRENDING_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;

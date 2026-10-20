@@ -2061,11 +2061,13 @@ export { agentStatusFacts, chatSeed, getAgentStatus, getChatHistoryPage, getTool
 export { WORKSPACE_LAYOUTS, WorkspaceLayoutSchema, type WorkspaceLayout } from './config/workspace-layout';
 
 export {
-  WorkspaceBlueprintSchema, blueprintPage, blueprintSeed,
-  type BlueprintInstall, type BlueprintNeed, type BlueprintWhen, type WorkspaceBlueprint, type WorkspaceSeed,
+  blueprintPage, blueprintSeed,
+  type BlueprintInstall, type BlueprintWhen, type WorkspaceBlueprint, type WorkspaceSeed,
 } from './blueprints/workspace';
 
 export { PERSONAL_ASSISTANT_ID, kinuBlueprint, kinuListings } from './blueprints/kinu';
+
+export { ClockSchema } from './blueprints/workspace';
 
 export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 

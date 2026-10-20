@@ -110,14 +110,16 @@ export const EXPLORE_KINDS = ['app', 'workspace'] as const;
 
 export type ExploreKind = (typeof EXPLORE_KINDS)[number];
 
-/** What an install asks of the person: a connection (an MCP preset id) at a level of access, or a secret by name; and
- *  why (blueprints/workspace.ts `BlueprintNeed`). */
-const ExploreNeedSchema = v.object({
+/** What an install reaches of the person's: a connection (an MCP preset id) or a secret by name, read or written, and
+ *  why. A workspace blueprint declares it, its listing keeps it, and its card shows it. */
+export const ExploreNeedSchema = v.strictObject({
   connection: v.nullable(v.string()),
   secret: v.nullable(v.string()),
   access: v.picklist(['read', 'write']),
   why: v.string(),
 });
+
+export type ExploreNeed = v.InferOutput<typeof ExploreNeedSchema>;
 
 /** A workspace blueprint as Explore lists it. `maker.kinu`: one Kinu keeps. */
 const WorkspaceCardSchema = v.object({

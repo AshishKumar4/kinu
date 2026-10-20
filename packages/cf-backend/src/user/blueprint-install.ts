@@ -7,7 +7,7 @@ import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { attempt, authoredRefusal, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import {
-  blueprintSeed, err, fallbackWorkspaceIdentity, json, kinuBlueprint, objectNamed, PERSONAL_ASSISTANT_ID, safeJson,
+  blueprintSeed, ClockSchema, err, fallbackWorkspaceIdentity, json, kinuBlueprint, objectNamed, PERSONAL_ASSISTANT_ID, safeJson,
   type UserCaller, type WorkspaceEntry,
 } from '@kinu.run/core';
 import type { UserDO } from './user-do';
@@ -20,7 +20,7 @@ const InstallBodySchema = v.strictObject({
   /** The main agent's name; absent, the blueprint's. */
   agent: v.optional(v.pipe(v.string(), v.maxLength(60))),
   /** The daily brief's time, `HH:MM`, in the owner's day. */
-  brief: v.optional(v.pipe(v.string(), v.regex(/^([01]\d|2[0-3]):[0-5]\d$/))),
+  brief: v.optional(ClockSchema),
   utcOffsetMinutes: v.pipe(v.number(), v.integer(), v.minValue(-14 * 60), v.maxValue(14 * 60)),
   /** The assistant only: Home opens on its chat. */
   home: v.optional(v.boolean()),
