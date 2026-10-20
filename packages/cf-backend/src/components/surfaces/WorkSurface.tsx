@@ -52,6 +52,11 @@ const ExplorationSurface = lazyRoute<ExplorationSurfaceProps>(async () => {
   return { default: surface };
 });
 
+/** The shown agent's actor id, for the Agent tab; absent, the workspace's main agent. */
+function shownActorId(agents: WorkSurfaceProps["agents"]): string | undefined {
+  return agents?.list.find((agent) => agent.key === agents.shown)?.actorId;
+}
+
 const AgentSurface = lazyRoute<AgentSurfaceProps>(async () => {
   const { AgentSurface: surface } = await import("./AgentSurface");
 
@@ -337,7 +342,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 memory={props.memory} memoryContent={props.memoryContent}
                 onSearchMemory={props.onSearchMemory} onRetryLoad={props.onRetryLoad}
                 rpc={props.rpc} readMoves={props.readMoves} workspace={props.workspace}
-                actorId={props.agents?.list.find((agent) => agent.key === props.agents?.shown)?.actorId}
+                actorId={shownActorId(props.agents)}
               />
             )}
             {surface === "Environment" && (
