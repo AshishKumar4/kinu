@@ -45,7 +45,7 @@ export function createScriptedLLM(responses: string[]): ScriptedLLM {
  * it refused as wrong (`bad_input`).
  */
 export function answeredAs<S extends v.GenericSchema>(schema: S, text: string): v.InferOutput<S> {
-  const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), schema), text);
+  const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), schema), text, { abortEarly: true });
 
   return settleSync(parsed.success
     ? Effect.succeed(parsed.output)
