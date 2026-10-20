@@ -6,6 +6,7 @@
  */
 import * as v from 'valibot';
 import { RoomServiceSchema } from './room-api';
+import { WorkspaceLayoutSchema } from '../config/workspace-layout';
 
 export const GALLERY_CATEGORIES = ['work', 'money', 'home', 'developer', 'fun'] as const;
 
@@ -170,7 +171,7 @@ export const BlueprintPageSchema = v.object({
     /** Its schedules: when each runs and what it does. */
     automations: v.array(v.object({ label: v.string(), when: v.string(), does: v.string() })),
     slates: v.array(v.object({ title: v.string(), about: v.string() })),
-    layout: v.picklist(['workbench', 'focus']),
+    layout: WorkspaceLayoutSchema,
     soul: v.string(),
   }),
   /** What it stops and asks before doing. */

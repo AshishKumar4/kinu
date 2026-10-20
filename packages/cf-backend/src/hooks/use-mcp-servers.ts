@@ -2,7 +2,7 @@
 import type { McpPresetAvailability, McpServerSummary } from "@kinu.run/core";
 import { listMcpPresets, listMcpServers } from "@/lib/user-api";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useAsyncResource, type AsyncResourceControl } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource, type AsyncResourceControl } from "@/hooks/use-async-resource";
 
 export interface McpServers {
   readonly servers: AsyncResourceControl<McpServerSummary[]>;
@@ -50,4 +50,11 @@ export function useMcpWatch(mcp: McpServers): void {
   const { watch } = mcp;
 
   useEffect(() => watch(), [watch]);
+}
+
+/** Whether the account holds a server from a preset that is signed in and serving: a blueprint's need reads it. */
+export function useConnectedPreset(): (preset: string) => boolean {
+  const servers = lastValue(useMcpServers().servers.resource) ?? [];
+
+  return (preset) => servers.some((server) => server.presetId === preset && (server.status === "ready" || server.status === "connected"));
 }
