@@ -1,6 +1,6 @@
 /** Release signature (SECURITY-devices C1): canonical text over (version, checksums), under the one pinned key. */
 import { expect, test } from 'bun:test';
-import { RELEASE_SIGNING_PUBLIC_KEY, verifyRelease } from '../src/http/release-message';
+import { RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, artifactRefusal, releasePublicKey, verifyRelease } from '../src/http/release-message';
 import { generateReleaseSigningKey, signRelease } from '../src/http/release-signing';
 
 const CHECKSUMS = { '/downloads/kinu-cli-linux-x64.tar.gz': 'a'.repeat(64), '/downloads/kinu-runtime-cpython.tar.gz': 'b'.repeat(64) };
@@ -49,4 +49,23 @@ test('the pinned public key is a real Ed25519 key', async () => {
   const signature = `${'A'.repeat(86)}==`;
 
   await expect(verifyRelease({ version: '1.0.0', checksums: CHECKSUMS, signature }, RELEASE_SIGNING_PUBLIC_KEY)).resolves.toBe(false);
+});
+
+// The CLI verified against an empty pin and refused; the daemon and the installer read empty as no pin. One decision now.
+test('an empty pin in the environment names no key: every updater falls back to the built-in one', () => {
+  const ours = 'ab'.repeat(32);
+
+  expect([{}, { [RELEASE_SIGNING_PUBLIC_KEY_ENV]: '' }, { [RELEASE_SIGNING_PUBLIC_KEY_ENV]: '  ' }, { [RELEASE_SIGNING_PUBLIC_KEY_ENV]: ours }].map(releasePublicKey))
+    .toEqual([RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY, ours]);
+});
+
+test('an artifact is admitted by the signed checksum alone: a path it names, and the bytes it names', async () => {
+  const bytes = new TextEncoder().encode('the archive');
+  const signed = { '/downloads/a.tar.gz': [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((byte) => byte.toString(16).padStart(2, '0')).join('') };
+
+  expect(await Promise.all([
+    artifactRefusal(signed, '/downloads/a.tar.gz', bytes),
+    artifactRefusal(signed, '/downloads/a.tar.gz', new TextEncoder().encode('other bytes')),
+    artifactRefusal(signed, '/downloads/b.tar.gz', bytes),
+  ])).toEqual([null, 'checksum mismatch for /downloads/a.tar.gz', 'the signed release names no /downloads/b.tar.gz']);
 });
