@@ -1,5 +1,5 @@
-import { useCallback, useState, type FormEvent } from "react";
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { EnvelopeSimpleIcon, MagnifyingGlassIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
@@ -99,12 +99,17 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   const location = useLocation();
   const navigate = useNavigate();
   const route = useParams();
-  const { view, path, query, before, opened } = mailLocation(params, account.boxes, route["*"]);
+  const { view, path, query: routedQuery, before, opened } = mailLocation(params, account.boxes, route["*"]);
+  const navigationType = useNavigationType();
+  const [query, setQuery] = useState(routedQuery);
   const [composing, setComposing] = useState(false);
   const [installing, setInstalling] = useState(false);
   const navigation = useLabelledStep(() => undefined);
   const roomy = useMediaQuery("(min-width: 1024px)");
   const waiting = view === "important" && account.boxes.find((box) => box.kind === "person")?.workspace === null;
+
+  // Router navigations transition; a controlled text input cannot wait for them.
+  useEffect(() => { if (navigationType !== "REPLACE") setQuery(routedQuery); }, [navigationType, routedQuery]);
 
   const load = useCallback(async (): Promise<Inbox> => {
     const scope = { path, query };
@@ -180,7 +185,7 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
         <div className={`items-center gap-2 lg:justify-end ${controls}`}>
           <label className="relative min-w-0 flex-1 lg:max-w-72">
             <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 p-text-3" aria-hidden />
-            <input value={query} onChange={(event) => at({ q: event.target.value || null })} placeholder="Search mail" aria-label="Search mail" data-mail-search className={`${inputCls} h-[34px] py-0 pl-8`} />
+            <input value={query} onChange={(event) => { setQuery(event.target.value); at({ q: event.target.value || null }); }} placeholder="Search mail" aria-label="Search mail" data-mail-search className={`${inputCls} h-[34px] py-0 pl-8`} />
           </label>
           <div className="w-40 shrink-0" data-mail-address><Choice label="Address" value={path ?? "all"} onChange={(next) => at({ path: next === "all" ? null : next, address: null })}
             options={[{ value: "all", label: "All addresses" }, ...account.boxes.map((box) => ({ value: box.path, label: mailBoxLabel(box) }))]} /></div>
