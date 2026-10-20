@@ -20,11 +20,13 @@ export class MossaicUserDO extends MossaicUser {
     const sql = this.ctx.storage.sql;
     const top = (column: string, table: string): number => v.parse(TopSchema, sql.exec(`SELECT MAX(${column}) AS top FROM "${table}"`).one()).top ?? -1;
 
-    // Every table that names a shard, and the pool's size: a tenant whose tables were never made spans none.
-    const named = sql.exec<{ name: string; column: string }>(`SELECT m.name AS name, p.name AS column FROM sqlite_master m, pragma_table_info(m.name) p
-      WHERE m.type = 'table' AND (p.name = 'shard_index' OR (m.name = 'quota' AND p.name = 'pool_size'))`).toArray();
+    // Every table that names a shard, by its own definition (workerd refuses `pragma_table_info`), and the pool's size: a
+    // tenant whose tables were never made spans none.
+    const tables = sql.exec<{ name: string; ddl: string }>(`SELECT name, sql AS ddl FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL`).toArray();
+    const named = tables.filter(({ ddl }) => /\bshard_index\b/u.test(ddl)).map(({ name }) => top('shard_index', name) + 1);
+    const pool = tables.some(({ name }) => name === 'quota') ? top('pool_size', 'quota') : 0;
 
-    return Math.max(0, ...named.map(({ name, column }) => (column === 'pool_size' ? top(column, name) : top(column, name) + 1)));
+    return Math.max(0, pool, ...named);
   }
 
   /** Every file, version and record this tenant has, deleted; its shards are first (`destroyDriveTenant`). */

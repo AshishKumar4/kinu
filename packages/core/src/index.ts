@@ -2630,7 +2630,7 @@ export {
 } from './http/health-route';
 
 export {
-  adaptMemory,
+  adaptMemory, forgetMemoryVectors,
   backfillMemoryVectors,
 } from './memory/vector-sync';
 

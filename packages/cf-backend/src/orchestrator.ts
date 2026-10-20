@@ -5435,8 +5435,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       await forgetSandboxPreviews(this.env.AUTH_KV, sandboxIdForWorkspace(this.name));
     }
 
-    // Its agents' browsers on Browser Run hold their pages until they sit idle out: closed now.
+    // Its agents' browsers on Browser Run hold their pages until they sit idle out: closed now. Its memory's vectors live
+    // in a shared index, outside its storage: deleted now, while its chunks still name them.
     await closeWorkspaceBrowserSessions(this.ctx.storage.sql, this.env.BROWSER);
+    await this.rt.forgetMemoryVectors();
 
     const sb = this.computerBox();
 

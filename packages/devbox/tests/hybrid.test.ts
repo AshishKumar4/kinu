@@ -220,6 +220,21 @@ test('discarding the workspace deletes its whole lineage', async () => {
     .toEqual({ deleted: ['snapshot-1', 'snapshot-2'], snapshot: false, pending: [] });
 });
 
+// Deleting an account deletes everything it has: a workspace's teardown discards the box's state, then destroys the box,
+// which keeps nothing of the workspace but the snapshots it still owes a deletion, for a sweep to pay.
+test('a destroyed box keeps nothing of its workspace but the snapshots still owed a deletion', async () => {
+  const { box, rows } = await rested();
+  await box.devboxStartup();
+  await box.quiesce();
+  registry.refuse = 'deleting rootfs-snapshot-ab answered 403: forbidden';
+  await box.discardState();
+  const owed = rows.get('devbox:dead-snapshots');
+  await box.destroy();
+
+  expect({ kept: [...rows.keys()], owed: rows.get('devbox:dead-snapshots') }).toEqual({ kept: ['devbox:dead-snapshots'], owed });
+  expect(owed).toHaveLength(1);
+});
+
 // Review finding 11: a rest's snapshot that finished after a discard was published as the next wake.
 test('a discard while a rest takes its snapshot leaves nothing to wake from: the late snapshot is owed and deleted', async () => {
   asked.length = 0;

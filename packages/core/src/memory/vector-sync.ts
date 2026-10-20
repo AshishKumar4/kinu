@@ -15,6 +15,9 @@ import { diagnostics, settle, toKinuError } from "../obs/index";
 
 const mirrorLanes = new WeakMap<MemoryStore, ReturnType<typeof serialQueue>>();
 
+/** Ids one Vectorize delete takes. */
+const VECTOR_DELETE_BATCH = 1000;
+
 /** One owned mirror lane acknowledges durable index revisions, never a user configuration update. */
 async function flushPendingVectors(store: MemoryStore, vectors: VectorStore, cap = Number.MAX_SAFE_INTEGER): Promise<void> {
   let serial = mirrorLanes.get(store);
@@ -176,4 +179,15 @@ const MEMORY_VECTOR_BACKFILL_CAP = 512;
 export async function backfillMemoryVectors(store: MemoryStore, vectorStore: VectorStore, cap = MEMORY_VECTOR_BACKFILL_CAP): Promise<void> {
   if (!vectorStore.available) return;
   await flushPendingVectors(store, vectorStore, cap);
+}
+
+/**
+ * The memory's semantic projection deleted, every chunk's, as its workspace is: nothing derived from its notes outlives
+ * them. In batches a delete call takes; one that fails throws, so the workspace's deletion is tried again. Not a member
+ * of `Memory`, which every agent holds: only the workspace's own teardown reaches it.
+ */
+export async function forgetMemoryVectors(store: MemoryStore, vectors: MemoryVectors): Promise<void> {
+  const ids = store.projectedIds();
+
+  for (let at = 0; at < ids.length; at += VECTOR_DELETE_BATCH) await vectors.store.deleteChunks(ids.slice(at, at + VECTOR_DELETE_BATCH));
 }

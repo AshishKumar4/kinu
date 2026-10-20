@@ -5,7 +5,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createWorkspaceBundle, createMemoryMemory, createTestRuntime } from './helpers';
 import { MemoryStore, type IndexedChunk } from '@kinu.run/agent-utils/memory';
-import { adaptMemory, backfillMemoryVectors } from '../src/memory/vector-sync';
+import { adaptMemory, backfillMemoryVectors, forgetMemoryVectors } from '../src/memory/vector-sync';
 import { hybridSearch, memorySnippetRehydrator } from '../src/memory/hybrid-search';
 import type { VectorStore } from '../src/memory/vector-store';
 import { appendMemoryNote, memoryIndexPath, parseMemoryNotes, readMemoryTail } from '../src/memory/note';
@@ -64,6 +64,43 @@ describe('the semantic mirror survives an unavailable or failed backend', () => 
       const current = await hybridSearch('replacement canonical', async () => [], vectors, { rehydrate: memorySnippetRehydrator(memory) });
 
       expect(current.map((hit) => hit.snippet)).toEqual(failure === 'unavailable' ? ['replacement canonical words'] : []);
+    } finally { db.close(); }
+  });
+});
+
+// A deleted workspace's memory leaves nothing in the shared index: every chunk's vector goes, those indexed now and
+// those whose projection is still owed (the privacy policy: deleting an account deletes everything it has).
+describe("a workspace's deletion takes its memory's vectors", () => {
+  test('every projected chunk, current or owed, is deleted from the index', async () => {
+    const { rt, db, workspace } = createTestRuntime();
+    const chunks = new Map<string, IndexedChunk>();
+    let available = true;
+
+    const vectors: VectorStore = {
+      get available() { return available; },
+      upsertChunks: async (fresh) => { for (const chunk of fresh) chunks.set(chunk.id, chunk); },
+      deleteChunks: async (ids) => { for (const id of ids) chunks.delete(id); },
+      search: async () => [],
+    };
+
+    const indexed = new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync);
+    indexed.ensureSchema();
+    const memory = adaptMemory(indexed, workspace.vfs, { store: vectors });
+
+    try {
+      await memory.write('memory/northwind.md', 'Dana at Northwind rotates the webhook secret on Fridays.');
+      await memory.index('memory/northwind.md');
+      // A second note indexed while the backend is away: its vector is owed, not yet written.
+      available = false;
+      await memory.write('memory/registrar.md', 'The registrar renews kinu.run in March.');
+      await memory.index('memory/registrar.md');
+      available = true;
+      await backfillMemoryVectors(new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync), vectors);
+      expect(chunks.size).toBe(2);
+
+      await forgetMemoryVectors(indexed, { store: vectors });
+
+      expect(chunks.size).toBe(0);
     } finally { db.close(); }
   });
 });

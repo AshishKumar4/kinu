@@ -285,6 +285,13 @@ export function fakeStorage(): FakeStorage {
     setAlarm: async (at: number | Date) => { alarm.at = Number(at); },
     getAlarm: async () => alarm.at,
     deleteAlarm: async () => { alarm.at = null; },
+    // As the platform's: every key goes, each a new version; the alarm is the caller's to delete.
+    deleteAll: async () => {
+      for (const key of rows.keys()) {
+        rows.delete(key);
+        keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
+      }
+    },
     sql: {
       exec: (query: string) => unreached("sql: " + query),
       get databaseSize() { return unreached("sql.databaseSize"); },
@@ -298,7 +305,6 @@ export function fakeStorage(): FakeStorage {
 
       return Promise.resolve(new Map([...rows].filter(([key]) => key.startsWith(options.prefix))));
     },
-    deleteAll: () => unreached('storage.deleteAll'),
     sync: () => unreached('storage.sync'),
     transactionSync: <T>(run: () => T): T => {
       const before = new Map(rows);
