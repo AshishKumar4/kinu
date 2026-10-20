@@ -2281,6 +2281,7 @@ export abstract class ActorAgent extends Agent<Env> {
         currentTurn: (reference) => this.currentTurnOf(reference),
         accounts: () => this.providerAccounts(),
         refusals: this.tierRefusals,
+        jobs: () => this.jobRunner,
         contextPlane: {
           actorId: this.actorHandle().actorId,
           // Main's context is its own isolate's, as every agent's is.

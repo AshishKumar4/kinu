@@ -551,6 +551,7 @@ function workspaceBox(deps: {
       list: async () => await jsonResultOrVoid((await runtime()).listProcesses()),
       kill: async (pid) => await jsonResultOrVoid((await runtime()).killProcess(pid)),
       logs: async (pid, options) => await jsonResultOrVoid((await runtime()).processLogs(pid, options)),
+      whenEnded: async (pid) => await (await runtime()).workspace.processes.whenEnded(pid),
     },
     ports: {
       expose: async (port) => {

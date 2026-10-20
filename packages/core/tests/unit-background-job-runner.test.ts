@@ -4,9 +4,10 @@ import { describe, test, expect, setSystemTime } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, newJobId,
+  BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS,
   type JobHarvester, type JobHolder, type JobResumer,
 } from '../src/jobs/runner';
+import { newJobId } from '../src/types/jobs';
 import {
   BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY, DeviceRequestOwnership, withBackgroundThreshold,
   type BackgroundPolicy, type BackgroundJob, type InvocationSurface,

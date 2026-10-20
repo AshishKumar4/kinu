@@ -362,7 +362,7 @@ every machine:
 | Member | Answers | Admitted by |
 |---|---|---|
 | `exec(command, { cwd?, name?, parts? })` | the output as text, or `{ stdout, stderr, exitCode }` with `parts` | `shell` |
-| `startProcess(command, { cwd? })` | `{ processId }` | `process_long` |
+| `startProcess(command, { cwd? })` | `{ processId, jobId? }` | `process_long` |
 | `stopProcess(processId)` | `{ stopped }` | `process_long` |
 | `listProcesses()` | `[{ processId, pid?, status, restartable?, command, session?, waiting? }]` | `process_long` |
 | `logs(processId, { lines?, bytes? })` | text | `process_long` |
@@ -375,7 +375,11 @@ Every `device` member also takes `{ device? }`. A variable a process needs goes
 at the head of its command (`PORT=4100 node server.js`).
 
 - The hosted workspace has all of them, plus `createTool`, `listTools`,
-  `retireTool` and `slates`.
+  `retireTool` and `slates`. A process its `startProcess` starts is a
+  background job of the agent's from its start (`jobId`): the job holds the
+  workspace awake while the process runs, and its end, or a restart that lost
+  it, wakes the agent. One past the job cap is stopped and refused. A retry of
+  its job starts the command again as a job of its own.
 - The CLI workspace has `exec` and `fs`, plus `createTool`, `listTools`,
   `retireTool` and `slates`; it declares no `process_long` or `net_inbound`.
 - The computer has all of them, plus `resize(size)` where it has sizes,

@@ -7,11 +7,11 @@ import { tolerate } from '../obs/index';
 import { DeviceRequestOwnership, type DeviceRequestChannel } from './device-ownership';
 import { REAL_CLOCK, type Clock } from '../types/clock';
 import {
-  BACKGROUND_POLICY, type BackgroundPolicy, type InvocationSurface,
+  BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
 } from '../types/jobs';
 
 export {
-  BACKGROUND_POLICY, type BackgroundPolicy, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
+  BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
 } from '../types/jobs';
 
 /** The surface owns the foreground half (`detachAfterMs`, `settleGraceMs`); session durability owns
@@ -48,10 +48,6 @@ export function isBackgroundOutcomeText(result: string): boolean {
 
   return true;
 }
-
-export type DetachOutcome =
-  | { readonly detached: true; readonly jobId: string }
-  | { readonly detached: false; readonly reason: string };
 
 export interface ThresholdDeps {
   thresholdMs?: number;

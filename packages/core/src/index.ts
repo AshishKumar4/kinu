@@ -1172,6 +1172,8 @@ export {
   type InlineExecutorDeps,
 } from './tools/inline-executor';
 
+export { processRetryTool } from './tools/process-retry';
+
 export { explainSandboxError } from './tools/sandbox-errors';
 
 export { stoppedProgram } from './execution/program-stop';
@@ -1687,7 +1689,7 @@ export {
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
-  type BackgroundPolicy, type DetachOutcome, type InvocationSurface, InvocationSurfaceSchema,
+  type BackgroundPolicy, type DetachOutcome, type InvocationSurface, InvocationSurfaceSchema, type AdoptsJobs, type JobAdoption,
   type BackgroundJobRunnerDeps, type JobHolder, initJobHoldersTable, processJobHolder, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
   WorkspaceJobAuthorities, endedStepLoopJobs, inlineResultInbox, type JobAuthority, type JobAuthorityKind, type JobRetirement, type StepLoopJobSeat,
   JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput, lastOutputLines, jobName, shortJobId, type JobName,

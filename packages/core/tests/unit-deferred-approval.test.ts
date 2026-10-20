@@ -4,8 +4,9 @@ import { readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { Effect } from 'effect';
 import { Database } from 'bun:sqlite';
-import { createMemoryVfs, fakeCommandMember, fakeMossaic, toolExecute, createRecordingLogger } from '@kinu.run/test-utils';
-import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ExecutionContext, type ParkedWrites, type ShellApprovalPolicy, type ShellApprovalOutcome, type ShellApprovalRequest, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
+import { createMemoryVfs, fakeCommandMember, fakeMossaic, toolExecute, createRecordingLogger, NO_JOBS } from '@kinu.run/test-utils';
+import { sessionFilesOver, type SessionBox } from '@kinu.run/test-utils/vfs';
+import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ExecutionContext, type ParkedWrites, type ShellApprovalPolicy, type ShellApprovalOutcome, type ShellApprovalRequest, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT, createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell } from '../src/index';
 import type { BoundFileWrite } from '../src/safety/bound-write';
 import { RESUMED_SURFACE, type InvocationSurface } from '../src/types/jobs';
 import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
@@ -1090,6 +1091,62 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     await expect(exec(GATED)).rejects.toThrow('socket died');
 
     expect(store.standing({ command: GATED, executor: 'device', context: { member: 'exec' } }, 1_010)).toBeNull();
+  });
+
+  // A workspace process starts before its job is asked for; one no job took was stopped, but it ran (review of
+  // fix/process-job, 2026-10-20: refused `unavailable`, it returned the grant, and the same call ran again unasked).
+  test('a process that started and was stopped because no job took it spends the grant', async () => {
+    const { sql, actor } = approvalsDb();
+    const store = new DeferredApprovalStore(sql, actor);
+    let seq = 0;
+
+    const queue = new DeferredApprovalQueue({
+      writes: null, store, wake: () => Effect.void, remember: () => { throw new Error('not an always answer'); },
+      newId: () => `defer-${++seq}`, now: () => 1_000 + seq, audit: () => {},
+    });
+
+    const started: string[] = [];
+    const killed: number[] = [];
+
+    const box: SessionBox = {
+      ready: async () => {},
+      exec: async (command: string) => ({ command, success: true, stdout: '', stderr: '', exitCode: 0, duration: 0, timestamp: 0 }),
+      startProcess: async (command) => {
+        started.push(command);
+
+        return {
+          command, pid: 7, ports: [], startedAt: 1,
+          process: { pid: 7, command, argv: [command], cwd: WORKSPACE_ROOT, state: 'running', exitCode: null, startTime: 1, endTime: null, longRunning: true, attachedTty: false },
+        };
+      },
+      processes: {
+        kill: async (pid) => {
+          killed.push(pid);
+
+          return { ok: true, pid };
+        },
+        whenEnded: () => new Promise<number>(() => undefined),
+      },
+      files: sessionFilesOver(),
+    };
+
+    const { rt } = createTestRuntime();
+
+    const workspace = gateProviderExec(createNimbusWorkspaceExecutor({
+      box, jobs: NO_JOBS,
+      inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
+    }), { mode: () => 'strict', deferrals: queue.channel });
+
+    const start = () => workspace.tools.startProcess?.execute(GATED);
+
+    expect(await start()).toMatchObject({ error: expect.stringContaining('defer-1') });
+    await queue.decide(['defer-1'], 'approved');
+
+    expect(await start()).toMatchObject({ reason: 'cancelled', error: expect.stringContaining('so the process was stopped') });
+    expect({ started, killed }).toEqual({ started: [GATED], killed: [7] });
+    expect(store.get('defer-1')).toBeNull();
+    expect(await start()).toMatchObject({ error: expect.stringContaining('defer-2') });
+    expect(started).toEqual([GATED]);
   });
 
   test('two refunds of one spend change nothing', async () => {

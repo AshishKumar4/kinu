@@ -8,7 +8,7 @@
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import * as v from 'valibot';
 import { actorReferenceOf, isSubordinateOrigin, ownerCaller, WORKSPACE_ROOT, type ArchiveCursor, type Clock } from '@kinu.run/core';
-import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { handClock } from '@kinu.run/test-utils/hand-clock';
 import { createCompositeLogger, createConsoleLogger, diagnostics, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { createRecordingLogger } from '@kinu.run/test-utils/recording';
@@ -16,7 +16,7 @@ import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
-import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_GATE, REPORT_MARK, type ActorRow, type JobRow, type JobWatchState, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
+import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_GATE, PROCESS_LOG, REPORT_MARK, type ActorRow, type JobRow, type JobWatchState, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 
 export * from '../../src/server';
@@ -51,7 +51,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'jobWatchState', 'jobRows', 'pendingAlarm', 'watchRelays', 'relayLost', 'runStatuses'];
+    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'jobWatchState', 'jobRows', 'pendingAlarm', 'watchRelays', 'relayLost', 'runStatuses', 'processTicks'];
 
     for (const name of reads) Reflect.deleteProperty(this, name);
 
@@ -106,6 +106,13 @@ export class HireOrchestrator extends ProductionOrchestrator {
   /** The job's command ends: the file it waits on now exists in the workspace's home. */
   async openJobGate(): Promise<void> {
     await writeText(this.workspaceBox(this.shellId()).store({ home: WORKSPACE_ROOT }), JOB_GATE, 'open');
+  }
+
+  /** The lines the `process` script's process wrote. */
+  async processTicks(): Promise<string[]> {
+    const text = await readText(this.workspaceBox(this.shellId()).store({ home: WORKSPACE_ROOT }), PROCESS_LOG);
+
+    return text.split('\n').filter((line) => line !== '');
   }
 
   /** What a restart does for a job whose lane row outlived its settle: re-deliver its wake. */
@@ -350,7 +357,7 @@ type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setS
   & Pick<HireOrchestrator,
     'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled' | 'archiveSections'
     | 'jobWindowArmed' | 'outrunJobWindow' | 'openJobGate' | 'redeliverJobWake' | 'jobWatchState' | 'jobRows' | 'pendingAlarm'
-    | 'watchRelays' | 'relayLost' | 'runStatuses'>;
+    | 'watchRelays' | 'relayLost' | 'runStatuses' | 'processTicks'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
@@ -506,6 +513,10 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
   async jobRows(workspace: string): Promise<JobRow[]> {
     return await (await this.target(workspace)).jobRows();
+  }
+
+  async processTicks(workspace: string): Promise<string[]> {
+    return await (await this.target(workspace)).processTicks();
   }
 
   async watchRelays(workspace: string): Promise<void> {
