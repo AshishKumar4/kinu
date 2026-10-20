@@ -13,9 +13,16 @@ const fs = require('node:fs');
 
 const path = require('node:path');
 
-/** What holds a terminal's foreground while nothing the person started runs: the shell at its prompt, or the
- *  sandbox's launcher before it. */
-const IDLE_FOREGROUND = new Set(['bash', 'zsh', 'sh', 'dash', 'fish', 'ksh', 'bwrap', 'sandbox-exec', '-bash', '-zsh']);
+// The computer's shell rule, bundled into the daemon (packages/cli/src/daemon-build.ts).
+const { isShell } = require('../../../devbox/src/sessions.ts');
+
+/** The sandbox's launchers, which hold a PC terminal's foreground before its shell does. */
+const LAUNCHERS = new Set(['bwrap', 'sandbox-exec']);
+
+/** What holds a terminal's foreground while nothing the person started runs: the shell at its prompt, or a launcher. */
+function idle(command) {
+  return isShell(command) || LAUNCHERS.has(command);
+}
 
 /** A TCP socket's state in /proc/net/tcp, LISTEN. */
 const TCP_LISTEN = '0A';
@@ -145,7 +152,7 @@ function linuxFacts(sessions) {
 
     facts.set(id, {
       cwd,
-      running: leader === undefined || IDLE_FOREGROUND.has(leader.comm) || !tree.has(shell.foreground) ? null : leader.comm,
+      running: leader === undefined || idle(leader.comm) || !tree.has(shell.foreground) ? null : leader.comm,
       ports: [...ports].sort((a, b) => a - b),
       branch: cwd === null ? null : branchOf(cwd),
       needsInput: waiting,
@@ -205,7 +212,7 @@ async function macFacts(sessions, spawn) {
 
     facts.set(id, {
       cwd,
-      running: leader === undefined || IDLE_FOREGROUND.has(leader.comm) || !tree.has(shell.foreground) ? null : leader.comm,
+      running: leader === undefined || idle(leader.comm) || !tree.has(shell.foreground) ? null : leader.comm,
       ports: [...new Set([...tree].flatMap((member) => portsByPid.get(member) ?? []))].sort((a, b) => a - b),
       branch: cwd === null ? null : branchOf(cwd),
       needsInput: false,
@@ -224,4 +231,4 @@ async function sessionFacts(sessions, { platform = process.platform, spawn = Bun
   return platform === 'darwin' ? await macFacts(sessions, spawn) : new Map();
 }
 
-module.exports = { sessionFacts, branchOf };
+module.exports = { sessionFacts };

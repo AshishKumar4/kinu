@@ -16,14 +16,9 @@ const fs = require('node:fs');
 
 const path = require('node:path');
 
-/** A session's name, as the strip shows it: the computer's rule (packages/devbox/src/sessions.ts). */
-const NAME_MAX = 40;
-
-/** The sessions one workspace may keep on one machine. */
-const MAX_SESSIONS_PER_WORKSPACE = 16;
-
-/** The session a workspace has before it opens another, and again when every other is closed. */
-const FIRST_NAME = 'shell';
+// The computer's own session rules, bundled into the daemon (packages/cli/src/daemon-build.ts): one name rule, one
+// first session, one sequence for the next.
+const { FIRST_SESSION, SESSION_NAME_RULE, newSessionName, sessionName } = require('../../../devbox/src/sessions.ts');
 
 const WORKSPACE_MAX = 128;
 
@@ -35,10 +30,11 @@ function parseWorkspace(value) {
   return value;
 }
 
+/** A session's name from a frame, or the computer's rule as the refusal. */
 function parseName(value) {
-  const name = typeof value === 'string' ? value.trim() : '';
+  const name = typeof value === 'string' ? sessionName(value) : null;
 
-  if (name.length === 0 || name.length > NAME_MAX) throw new Error(`a session's name is 1 to ${NAME_MAX} characters`);
+  if (name === null) throw new Error(SESSION_NAME_RULE);
 
   return name;
 }
@@ -91,7 +87,7 @@ function createTerminalRecords({ file, log = () => {}, mint = () => `pty-${crypt
     let dirty = false;
 
     if (held.length === 0) {
-      held = [{ id: mint(), name: FIRST_NAME, cwd: null }];
+      held = [{ id: mint(), name: FIRST_SESSION.name, cwd: null }];
       records.set(named, held);
       dirty = true;
     }
@@ -114,15 +110,7 @@ function createTerminalRecords({ file, log = () => {}, mint = () => `pty-${crypt
 
   function create(workspace, name) {
     return over(workspace, (held, changed) => {
-      if (held.length >= MAX_SESSIONS_PER_WORKSPACE) {
-        throw new Error(`this workspace keeps ${MAX_SESSIONS_PER_WORKSPACE} sessions on this machine already; close one first`);
-      }
-
-      const taken = new Set(held.map((record) => record.name));
-      let next = 2;
-
-      while (taken.has(`${FIRST_NAME} ${next}`)) next += 1;
-      const record = { id: mint(), name: name === undefined || name === null ? `${FIRST_NAME} ${next}` : parseName(name), cwd: null };
+      const record = { id: mint(), name: parseName(name ?? newSessionName(held)), cwd: null };
 
       held.push(record);
       changed();

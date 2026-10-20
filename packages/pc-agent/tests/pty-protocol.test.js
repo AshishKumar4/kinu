@@ -367,6 +367,21 @@ describe("a workspace's named sessions", () => {
       .toEqual({ resumed: true, pid: true, first: true, detachedSent: false });
   });
 
+  // The computer names a new session by the same sequence (packages/devbox/src/sessions.ts): a PC's took `shell 2`
+  // even with no `shell` left, and refused a seventeenth session by a cap nothing measured.
+  test('a new session takes the first free name in the computer\'s sequence, with no cap on how many', async () => {
+    const { ctx } = context();
+    const ws = fakeWs();
+    const [first] = await call(ws, ctx, { id: 'rpc-seq-list', method: 'ptyList', workspace: WORKSPACE, params: [] });
+
+    await call(ws, ctx, { id: 'rpc-seq-rename', method: 'ptyRename', workspace: WORKSPACE, params: [first.id, 'build'] });
+    const names = [];
+
+    for (let n = 0; n < 17; n += 1) names.push((await call(ws, ctx, { id: `rpc-seq-create-${String(n)}`, method: 'ptyCreate', workspace: WORKSPACE, params: [] })).name);
+
+    expect({ first: names[0], second: names[1], count: names.length, last: names.at(-1) }).toEqual({ first: 'shell', second: 'shell 2', count: 17, last: 'shell 17' });
+  });
+
   test('a socket gone detaches every session, and a workspace lists, names and closes only its own', async () => {
     const { ctx, sessions } = context();
     const ws = fakeWs();
