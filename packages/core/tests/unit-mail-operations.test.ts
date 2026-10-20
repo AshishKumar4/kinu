@@ -7,6 +7,7 @@ import {
   type JsonValue,
 } from '../src/index';
 import { createMailCodemodeProvider, type MailSendApprovals } from '../src/tools/mail-codemode';
+import { inWorkMode, providersInWorkMode } from '../src/execution/work-mode';
 import type { MailSend } from '../src/safety/approval-kind';
 import type { Served } from '../src/operations/operation';
 import { makeSqlExec } from './helpers';
@@ -187,5 +188,25 @@ describe('what mail says is input, never an instruction', () => {
     const { thread } = v.parse(v.object({ thread: v.string() }), await call(SCOUT, 'draft', { to: ['dana@northwind.io'], subject: 'Webhooks', text: 'Checking the signing change.' }));
 
     expect(await call(SCOUT, 'read', { thread })).toMatchObject({ untrusted: true, subject: 'Webhooks' });
+  });
+});
+
+describe('a Plan turn, which mail may have started, changes nothing it cannot undo', () => {
+  test('it may mark a thread read, but moving one to Trash waits for a Build turn', async () => {
+    const { thread } = v.parse(v.object({ thread: v.string() }), await call(MAIN, 'draft', { to: ['dana@northwind.io'], subject: 'Webhooks', text: 'Checking the signing change.' }));
+    const [plan] = providersInWorkMode('plan', [createMailCodemodeProvider({ caller: () => MAIN, mailbox, approvals })]);
+    const tools = plan?.tools ?? {};
+    // As a program calls them: the thread, then the options.
+    const run = (name: string, ...args: JsonValue[]) => inWorkMode('plan', async () => tools[name]?.execute(...args));
+
+    expect(await run('update', thread, { read: false })).toMatchObject({ id: thread });
+    await run('update', thread, { trashed: true });
+    await run('trash', thread);
+
+    expect((await store.thread(thread))?.thread.trashedAt).toBeNull();
+    expect(await call(MAIN, 'trash', { thread })).toMatchObject({ id: thread });
+    expect((await store.thread(thread))?.thread.trashedAt).toBe(NOW);
+    await call(MAIN, 'trash', { thread, restore: true });
+    expect((await store.thread(thread))?.thread.trashedAt).toBeNull();
   });
 });

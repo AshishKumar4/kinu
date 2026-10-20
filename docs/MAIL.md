@@ -133,7 +133,8 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 | `mail.read(threadOrMessageId)` | observe | messages with text bodies and attachment metadata, marked untrusted (§4) |
 | `mail.draft({ to, cc?, subject, text, replyTo?, attach? })` | effect, no approval | a draft in the box, shown to the owner in Mail |
 | `mail.send(draftIdOrMessage)` | effect, approval | sends as the actor's own address (rules below) |
-| `mail.update(id, { read?, important?, trashed? })` | effect, own box only | `important` is the reason; only the Personal assistant sets it, on the person's box |
+| `mail.update(id, { read?, important? })` | effect, own box only; a Plan turn may | `important` is the reason; only the Personal assistant sets it, on the person's box |
+| `mail.trash(id, { restore? })` | effect, own box only; never in a Plan turn | a Plan turn may follow what mail asked, and Trash empties itself after 30 days |
 
 **What an agent can read:**
 
