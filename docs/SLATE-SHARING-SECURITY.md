@@ -167,6 +167,28 @@ what its usage graph names (`slate_usage`), without prompts while the owner is i
 lend or a personal need in the share sheet. One execution path, not one for private slates and another for shared
 ones. This is an architecture change the owner did not ask for, so it is decision 1 in §1.
 
+### 2.8 One egress principal (built, audit SelfishJaguar #6, 2026-10-20)
+
+A program's HTTP request leaves Kinu by one of two egresses: `KinuEgress` (the sandbox container's, a Nimbus
+workspace's processes) and `CodemodeEgress` (an agent's `eval` program, a slate). Both now read one principal,
+`EgressPrincipal` in `packages/core/src/safety/egress-principal.ts`: the workspace's owner's (an agent's program, the
+owner's own process or unshared slate) or a share's viewer's (a process they started, a program run for them, a slate
+shared with others). What it may do is decided once, by `egressAuthority`:
+
+| | owner | viewer |
+|---|---|---|
+| spends the owner's secrets for its workspace | yes, where the workspace has an owner | no; a request naming a placeholder is refused |
+| opens the workspace's own previews with its pass | yes | no; it reaches them as no one |
+| has its GitHub work recorded as the owner's | yes, for the agent it names | no |
+
+One forwarding policy applies it (`packages/cf-backend/src/egress/policy.ts`): own previews served by this Worker, then
+the destination check, then the vault and GitHub recording. An egress adds only what its runtime has: this Worker's own
+fetch, and `CodemodeEgress`'s browser gate. Two behaviours changed by unifying them: a container or Nimbus process of the
+owner's now opens the workspace's own previews with its pass, as the owner's programs already did; and an owner's
+codemode program or own slate now has its GitHub work recorded, as the owner's processes already did.
+`KinuEgress`'s props keep the shape a devbox stores them in and are read into the principal at the boundary.
+`unit-egress-principal.test.ts` proves each cell of the table through both egresses.
+
 ## 3. The retired model
 
 The room transition system and its DIFC labels, reader checks, generation-bound grants and attack traces were removed

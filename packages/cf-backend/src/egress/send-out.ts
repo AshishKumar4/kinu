@@ -57,11 +57,6 @@ export function revealedForJob<Id>(
   }));
 }
 
-/** {@link sendOut} as a promise, for an egress whose own entry awaits it (`codemode-egress.ts`). */
-export function sendOutRequest<Id>(request: Request, env: ContainerEgressEnv<Id>, vault: SecretVault | null): Promise<Response> {
-  return settle(sendOut(request, env, vault, undefined));
-}
-
 export function sendOut<Id>(
   request: Request,
   env: ContainerEgressEnv<Id>,

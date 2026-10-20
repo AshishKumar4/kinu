@@ -1548,6 +1548,8 @@ export {
   type ScrubReplacement,
 } from './safety/egress-gate';
 
+export { egressAuthority, type EgressAuthority, type EgressPrincipal } from './safety/egress-principal';
+
 export {
   DeferredApprovalQueue, decideDeferredApprovals, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, DeferredApprovalSchema, type DeferredApproval,

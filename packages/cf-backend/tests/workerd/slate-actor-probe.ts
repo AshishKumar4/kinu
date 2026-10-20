@@ -69,7 +69,7 @@ function probeActor(storage: DurableObjectStorage, sql: SqlExecutor, handle: Act
 
 /** A probe's programs, as its own owner's: online, they reach the network as the probe's agent, holding no secret. */
 function probeLaunch(name: string): (online: boolean) => ProgramLaunch {
-  return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: name, actor: name, asOwner: true, ownerUserId: null } : null }, async () => ({}));
+  return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { principal: { as: 'owner', workspace: name, actorId: name, ownerUserId: null } } : null }, async () => ({}));
 }
 
 export class CodemodeEgress extends ProductionEgress {

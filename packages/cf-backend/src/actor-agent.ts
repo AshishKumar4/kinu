@@ -2598,7 +2598,10 @@ export abstract class ActorAgent extends Agent<Env> {
     const owner = as === 'owner';
 
     return (online) => codemodeLauncher(
-      { kinuNode: true, egress: online ? { workspace, actor, asOwner: owner, ownerUserId: owner ? this.getOwnerUserId() : null } : null },
+      {
+        kinuNode: true,
+        egress: online ? { principal: owner ? { as: 'owner', workspace, actorId: actor, ownerUserId: this.getOwnerUserId() } : { as: 'viewer', workspace, actorId: actor } } : null,
+      },
       () => this.account.commandEnvironment('run', owner ? 'owner' : 'viewer'),
     );
   }

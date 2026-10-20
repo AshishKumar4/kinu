@@ -4,45 +4,36 @@
  * the one door from sandbox code to a Browser Run session: a WebSocket upgrade
  * to {@link BROWSER_GATE_HOST} reaches a session the calling actor opened, or a
  * new Kitesurf browser, and no credential enters the sandbox.
- * Applies `refusedHostname` like `egress/outbound.ts` and `web/url-safety.ts`, then sends through the one door every
- * program's request leaves by (`egress/send-out.ts`), where its workspace's secrets are spent. Unmeasured residual:
- * public names resolving to private addresses are not caught here.
+ * Every other request meets the one forwarding policy every program's request does (`egress/policy.ts`), for the
+ * principal the program runs for. Unmeasured residual: public names resolving to private addresses are not caught here.
  */
 
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
-import { objectNamed, KITESURF_SESSION_ID, refusedHostname, type LabelSignerEnv, type PreviewSuffixEnv } from '@kinu.run/core';
-import { selfPreviewPass, verifiedPreview } from './viewer-pass';
+import { objectNamed, KITESURF_SESSION_ID, type EgressPrincipal } from '@kinu.run/core';
 import { diagnostics, KinuError } from '@kinu.run/core/obs';
-import { EGRESS_FAILURE_HEADER, sendOutRequest, type ContainerEgressEnv } from './egress/send-out';
+import { EGRESS_FAILURE_HEADER } from './egress/send-out';
+import { forwardEgress, githubRecorder, type EgressPolicyEnv, type GitHubWorkspace } from './egress/policy';
 
 export interface CodemodeEgressProps {
-  readonly workspace: string | null;
-  /** The actor whose program this is; null for slate code, which reaches only a new Kitesurf browser. */
-  readonly actor: string | null;
   /**
-   * The program acts with its workspace owner's authority (the agent's programs, the owner's own slates), so it opens
-   * the workspace's own previews. Never a share's viewer's: a preview's slate runs as the owner, unbounded by the grant.
+   * Whom the program runs for. Its `actorId` is whose browser sessions it reaches; null for slate code, which reaches only
+   * a new Kitesurf browser. A preview's slate runs as the owner, unbounded by a share's grant; a shared one, as a viewer.
    */
-  readonly asOwner: boolean;
-  /** The account whose secrets the program may spend for `workspace`; null for a share's viewer's program, which spends none. */
-  readonly ownerUserId: string | null;
+  readonly principal: EgressPrincipal;
 }
 
 /** The host `connectBrowser` dials; the path's last segment is a session id or `kitesurf`. */
 export const BROWSER_GATE_HOST = 'browser.kinu.invalid';
-
-/** What the gate asks of the workspace object and of Browser Run, and nothing more. */
-interface BrowserOwners {
-  idFromName(name: string): DurableObjectId;
-  get(id: DurableObjectId): { ownsBrowserSession(actorId: string, sessionId: string): Promise<boolean> };
-}
 
 interface BrowserSockets {
   fetch(input: string, init: RequestInit): Promise<Response>;
   connectSession(sessionId: string): Promise<{ webSocket: { fetch(input: string, init: RequestInit): Promise<Response> } }>;
 }
 
-type EgressEnv = PreviewSuffixEnv & LabelSignerEnv & ContainerEgressEnv<unknown> & { readonly BROWSER: BrowserSockets; readonly OrchestratorAgent: BrowserOwners };
+/** The workspace object, as far as this egress needs it: whether an agent opened a browser session, and the owner's GitHub work. */
+type WorkspaceObject = GitHubWorkspace & { ownsBrowserSession(actorId: string, sessionId: string): Promise<boolean> };
+
+type EgressEnv = EgressPolicyEnv & { readonly BROWSER: BrowserSockets; readonly OrchestratorAgent: DurableObjectNamespace<WorkspaceObject> };
 
 /** The path puppeteer asks for a Kitesurf browser, which Browser Run creates on connect. */
 const KITESURF_CONNECT = 'https://browser-run.invalid/v1/devtools/browser?browser=kitesurf';
@@ -57,8 +48,8 @@ async function browserGate(request: Request, env: EgressEnv, props: CodemodeEgre
 
   if (id === KITESURF_SESSION_ID) return await env.BROWSER.fetch(KITESURF_CONNECT, upgrade);
 
-  const owned = props.workspace !== null && props.actor !== null
-    && await objectNamed(env.OrchestratorAgent, props.workspace).ownsBrowserSession(props.actor, id);
+  const { workspace, actorId } = props.principal;
+  const owned = actorId !== null && await objectNamed(env.OrchestratorAgent, workspace).ownsBrowserSession(actorId, id);
 
   if (!owned) {
     diagnostics.failure('egress.browser_refused', new KinuError('denied', 'a browser session the caller did not open'), { seam: 'codemode' });
@@ -69,59 +60,11 @@ async function browserGate(request: Request, env: EgressEnv, props: CodemodeEgre
   return await (await env.BROWSER.connectSession(id)).webSocket.fetch('https://browser-run.invalid/', upgrade);
 }
 
-/** One of `workspace`'s own previews, of its box or its computer. */
-async function ownPreviewHost(url: URL, env: PreviewSuffixEnv & LabelSignerEnv, workspace: string): Promise<boolean> {
-  return (await verifiedPreview(env, url.hostname))?.workspace === workspace;
-}
-
-/**
- * The workspace's own program fetching one of its previews: the preview opens only for its owner, and this is the owner's
- * workspace asking (`nimbus-route.ts`). The pass goes first, so a cookie of the program's own by its name never shadows it.
- */
-async function withSelfPass(request: Request, env: EgressEnv, workspace: string, url: URL): Promise<Request> {
-  const pass = await selfPreviewPass(env, workspace, url);
-
-  if (pass === null) return request;
-  const headers = new Headers(request.headers);
-  headers.set('cookie', [`${pass.name}=${pass.value}`, request.headers.get('cookie')].filter((part) => part !== null && part !== '').join('; '));
-
-  return new Request(request, { headers });
-}
-
-async function forwardCodemodeEgress(request: Request, env: EgressEnv, props: CodemodeEgressProps): Promise<Response> {
-  const url = new URL(request.url);
-  const self = exports.default;
-  const { workspace } = props;
-
-  if (url.hostname === BROWSER_GATE_HOST) return await browserGate(request, env, props);
-
-  if (self !== undefined && workspace !== null && await ownPreviewHost(url, env, workspace)) {
-    return await self.fetch(props.asOwner ? await withSelfPass(request, env, workspace, url) : request);
-  }
-
-  const refusal = refusedHostname(url.hostname);
-
-  if (refusal !== null) {
-    diagnostics.failure(
-      'egress.private_destination',
-      new KinuError('denied', refusal.error),
-      { host: url.hostname, seam: 'codemode' },
-    );
-
-    return Response.json(refusal, {
-      status: 403,
-      headers: { [EGRESS_FAILURE_HEADER]: '1' },
-    });
-  }
-
-  const vault = workspace !== null && props.ownerUserId !== null ? { workspaceName: workspace, ownerUserId: props.ownerUserId } : null;
-
-  return await sendOutRequest(request, env, vault);
-}
-
 export class CodemodeEgress extends WorkerEntrypoint<EgressEnv, CodemodeEgressProps> {
   override async fetch(request: Request): Promise<Response> {
-    return await forwardCodemodeEgress(request, this.env, this.ctx.props);
+    if (new URL(request.url).hostname === BROWSER_GATE_HOST) return await browserGate(request, this.env, this.ctx.props);
+
+    return await forwardEgress(request, this.env, this.ctx.props.principal, { self: exports.default, github: githubRecorder(this.env.OrchestratorAgent, this.ctx), seam: 'codemode' });
   }
 }
 
