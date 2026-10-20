@@ -115,6 +115,8 @@ const screen = require('./daemon/screen.js');
 
 const { createLinuxSource } = require('./daemon/linux-screen.js');
 
+const { createMacSource } = require('./daemon/mac-screen.js');
+
 const { createTerminalRecords } = require('./daemon/terminals.js');
 
 const { runToExit } = update;
@@ -2050,11 +2052,12 @@ async function main() {
   // nobody to draw for.
   const sessions = pty.createSessions({ log });
   // This machine's screen, served only on a stream the hub opens (1014-t):
-  // Linux's comes from the desktop portal once `kinu desktop share` was
-  // allowed; macOS has none yet. Each change to what it reports goes to the
-  // hub as a DESKTOP frame on the live socket: a second HELLO would read as a
-  // new connection, and end the panes this one carries.
-  const screenSource = os.platform() === 'linux' ? createLinuxSource({ home: DEVICE_HOME, log, onChange: () => sendDesktop() }) : null;
+  // Linux's comes from the desktop portal and a Mac's from ScreenCaptureKit,
+  // once `kinu desktop share` was allowed there. Each change to what it
+  // reports goes to the hub as a DESKTOP frame on the live socket: a second
+  // HELLO would read as a new connection, and end the panes this one carries.
+  const SOURCES = { linux: createLinuxSource, darwin: createMacSource };
+  const screenSource = SOURCES[os.platform()]?.({ home: DEVICE_HOME, log, onChange: () => sendDesktop() }) ?? null;
   const screens = screen.createScreens({ source: screenSource, log });
   let liveSocket = null;
 

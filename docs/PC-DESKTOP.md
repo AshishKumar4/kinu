@@ -64,11 +64,17 @@ Where the daemon's screen comes from depends on the system:
 
 - **macOS: a small screen helper the daemon runs, speaking to it over stdio.** It captures with ScreenCaptureKit and
   drives input with `CGEventPost`, and the daemon turns that into RFB as it does on Linux.
-  - It ships as Swift source in the release. `kinu desktop share` compiles it with `swiftc` into
-    `~/.kinu/desktop/kinu-screen`, a path that stays put across daemon updates, so macOS keeps the permissions it gave.
-  - **setup** means there is no `swiftc` (the Command Line Tools: `xcode-select --install`).
-  - **permission** is macOS's own Screen Recording and Accessibility prompts. They attach to the helper, and a rebuilt
-    helper asks again.
+  - It ships as Swift source inside the daemon file (`packages/pc-agent/src/daemon/mac-screen.js`), speaking the Linux
+    helper's protocol (`screen-helper.js`). `kinu desktop share` has the daemon compile it with `xcrun swiftc` into
+    `~/.kinu/desktop/kinu-screen`, a path that stays put across daemon updates, and again only when its source changes.
+  - The daemon maps the viewer's X keysyms to macOS key codes (the ANSI layout), and the helper posts them, with the
+    pointer, button and wheel, as CGEvents. Frames are ScreenCaptureKit's main display at 15 fps, JPEG at 0.7.
+  - **none**: macOS older than ScreenCaptureKit (12.3). **setup**: no `swiftc` (the Command Line Tools:
+    `xcode-select --install`), or never shared. **permission**: macOS's own Screen Recording and Accessibility
+    prompts. macOS applies a grant only to a helper started after it, so the first share usually ends asking for
+    both in System Settings, and the second succeeds.
+  - Which process macOS's prompts name, the helper or the daemon that starts it, is unmeasured: macOS attributes a
+    child's access to its responsible process.
   - Rejected: relaying the system's Screen Sharing. It would make Kinu hold a VNC password for the Mac, and it leaves a
     VNC server listening on TCP 5900. The Mac proof (`packages/pc-agent/scripts/mac-held-proof.sh`) measures what that
     server binds to.
@@ -137,7 +143,9 @@ Each has a recommendation, which is the default unless the owner says otherwise.
    vendored client in Chrome. No system's source ships in it, so every PC reports none.
 2. Named PC sessions in the daemon, and the strip reading them (device protocol 4, with the screen: one step from 3).
 3. Linux portal source in the daemon, and `kinu desktop share` (no protocol change).
-4. The macOS helper, and its build and a measured run in the Mac proof.
+4. The macOS helper, and its build and a measured run in the Mac proof. Written and parsed (Swift 6.1's parser, on
+   Linux), never compiled or run: no Mac runs here. Until the Mac proof's screen section passes on a Mac, a Mac
+   reports no screen (`MAC_SCREEN_PROVEN` in `mac-screen.js`).
 
 Each ships in a daemon release, which the hub pushes to every connected PC whose owner left updates on.
 
@@ -156,5 +164,5 @@ Each ships in a daemon release, which the hub pushes to every connected PC whose
 - Not measured:
   - A share on a person's own logged-in desktop, where the daemon runs as a user service.
   - Frame rate and input latency over the tunnel.
-  - All of macOS: the helper's build, its permissions, and what Screen Sharing's listener binds to. Armada has no Mac;
-    the Mac proof measures them on the owner's.
+  - All of macOS: the helper's build, its permissions and which process they name, a served frame, input, and what
+    Screen Sharing's listener binds to. Armada has no Mac; the Mac proof measures them on the owner's.
