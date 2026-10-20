@@ -188,6 +188,19 @@ export class MailStore {
     return this.list(query, paths);
   }
 
+  /** The person's threads the assistant has not triaged since their newest mail, newest first; none unless it reads the box. */
+  async untriagedFor(caller: MailCaller, limit: number): Promise<MailThreadView[]> {
+    if (this.readablePath(caller, '') === null) return [];
+
+    const ids = rows(v.object({ id: v.string() }), this.deps.sql.exec(
+      'SELECT t.id FROM mail_untriaged u JOIN mail_threads t ON t.id = u.thread_id WHERE t.trashed_at IS NULL ORDER BY u.since DESC, t.id LIMIT ?', limit,
+    ));
+
+    const views = await Promise.all(ids.map(async (row) => this.thread(row.id)));
+
+    return views.filter((view): view is MailThreadView => view !== null);
+  }
+
   async readFor(caller: MailCaller, thread: string): Promise<MailThreadView | null> {
     return this.reads(caller, thread) ? this.thread(thread) : null;
   }
@@ -329,7 +342,7 @@ export class MailStore {
     if (seen !== undefined) {
       return {
         box: box.path, messageId: seen.id, threadId: seen.thread_id, headerId, references: null, attachments: [], duplicate: true,
-        verified: seen.verdict === 'verified', from, subject: parsed.subject, woke: null, wake: null, instruction: null,
+        verified: seen.verdict === 'verified', from, subject: parsed.subject, woke: null, wake: null, triage: null, instruction: null,
       };
     }
 
@@ -354,14 +367,27 @@ export class MailStore {
     this.index(messageId, parsed.subject, `${from.name ?? ''} ${from.address}`, parsed.text);
     // A thread that comes back to life leaves the Trash.
     this.deps.sql.exec('UPDATE mail_threads SET trashed_at = NULL WHERE id = ?', threadId);
+    const triage = this.awaitTriage(box, woke, threadId, at);
 
     return {
       box: box.path, messageId, threadId, headerId, duplicate: false, verified: verdict.verified, from, subject: parsed.subject, woke,
       references: parsed.references.length === 0 ? null : parsed.references.join(' '),
       attachments: parsed.attachments.map((file) => ({ filename: file.filename, content_type: file.contentType, size: file.content.byteLength })),
       wake: woke === null || box.workspace === null || box.actorId === null ? null : { workspace: box.workspace, actorId: box.actorId, main: box.kind !== 'agent' },
+      triage,
       instruction: woke === 'owner' ? parsed.ownWords : null,
     };
+  }
+
+  /**
+   * New mail in the person's own box waits for their assistant's triage, unless it is their verified instruction, which a
+   * turn answers; the assistant to tell, if the box has one.
+   */
+  private awaitTriage(box: MailBox, woke: MailWoke | null, threadId: string, at: number): MailDelivery['triage'] {
+    if (box.path !== '' || woke === 'owner') return null;
+    this.deps.sql.exec('INSERT INTO mail_untriaged (thread_id, since) VALUES (?, ?) ON CONFLICT (thread_id) DO UPDATE SET since = excluded.since', threadId, at);
+
+    return box.workspace === null || box.actorId === null ? null : { workspace: box.workspace, actorId: box.actorId };
   }
 
   /** Its bytes in R2: the raw message, a text part too long for the row, and its HTML. */
@@ -496,9 +522,10 @@ export class MailStore {
     if (change.trashed !== undefined) this.deps.sql.exec('UPDATE mail_threads SET trashed_at = ? WHERE id = ?', change.trashed ? this.deps.now() : null, id);
 
     if (change.important !== undefined) {
-      // The assistant picks from the box it reads: the person's own.
+      // The assistant picks from the box it reads: the person's own. A pick, either way, is its triage of the thread.
       if (thread.path !== '') return settleSync(Effect.fail(new KinuError('denied', 'Only mail to the person\'s own address can be marked Important.')));
       this.deps.sql.exec('UPDATE mail_threads SET important = ? WHERE id = ?', change.important === null ? null : change.important.slice(0, 280), id);
+      this.deps.sql.exec('DELETE FROM mail_untriaged WHERE thread_id = ?', id);
     }
 
     const summary = this.summary(id);
@@ -620,6 +647,7 @@ export class MailStore {
       }
 
       this.deps.sql.exec('DELETE FROM mail_messages WHERE thread_id = ?', id);
+      this.deps.sql.exec('DELETE FROM mail_untriaged WHERE thread_id = ?', id);
       this.deps.sql.exec('DELETE FROM mail_threads WHERE id = ?', id);
     }
 

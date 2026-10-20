@@ -22,6 +22,11 @@ export async function handleInboundMail(message: ForwardableEmailMessage, env: E
         attachments: [...arrival.attachments], mail: { box: arrival.box, thread: arrival.threadId, message: arrival.messageId }, now: Date.now(),
       }, arrival.wake.main ? undefined : arrival.wake.actorId);
     },
+    triage: async (reader) => settle(Effect.catch(attempt({ doing: 'telling the owner\'s assistant of new mail', otherwise: 'unavailable' }, async () => {
+      const assistant = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, reader.workspace);
+
+      await assistant.triageOwnerMail();
+    }), (failure) => Effect.sync(() => { diagnostics.failure('mail.triage_unreached', failure, { workspace: reader.workspace }); }))),
   })).pipe(
     Effect.tapError((failure) => Effect.sync(() => { diagnostics.failure('email.delivery_failed', failure); })),
     Effect.map((routed) => {

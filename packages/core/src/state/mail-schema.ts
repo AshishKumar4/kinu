@@ -73,6 +73,13 @@ export function initMailboxTables(sql: SqlExec): void {
   sql.exec('CREATE INDEX IF NOT EXISTS mail_threads_box ON mail_threads (path, created_at)');
   sql.exec('CREATE INDEX IF NOT EXISTS mail_threads_important ON mail_threads (created_at) WHERE important IS NOT NULL AND trashed_at IS NULL');
   sql.exec('CREATE INDEX IF NOT EXISTS mail_threads_trashed ON mail_threads (trashed_at) WHERE trashed_at IS NOT NULL');
+  // The person's threads with mail the assistant has not yet picked Important or not on (docs/MAIL.md §8).
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS mail_untriaged (
+      thread_id   TEXT    PRIMARY KEY REFERENCES mail_threads (id),
+      since       INTEGER NOT NULL
+    )
+  `);
   sql.exec(`
     CREATE TABLE IF NOT EXISTS mail_messages (
       id           TEXT    PRIMARY KEY,

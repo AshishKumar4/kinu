@@ -335,6 +335,11 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
    - It reads `ashish@`, the address it holds, and wakes on new mail in batches.
    - It picks what is Important and writes the reason. It drafts replies for the owner to send as themselves.
    - It sends nothing as the person.
+   - Built (`core/src/mail/triage.ts`): new mail in the person's box that is not their own verified instruction waits for triage: its thread is queued in `mail_untriaged`. The router tells the box's reader, the assistant, and the assistant's workspace runs a pass outside any turn (`triageOwnerMail`). Nudges that arrive during a pass owe one more pass, not one each. The assistant's install also starts a pass, for mail that came before it.
+   - A pass takes the waiting threads newest first, ten a round, at most four rounds. Each thread is one fast-tier call (`oneShotOn('fast')`). The model gets the assistant's soul, the owner's sign-in address, and the thread as `mailThreadText` renders it, sealed. It answers `{important, reason, reply}`.
+   - The pick is recorded through `updateFor`, and a pick either way takes the thread off the queue. The reason is one line, at most 280 characters. A reply, when one is due, is left through `draftFor`, signed with the assistant's name. It goes to the newest inbound sender, with the thread's own subject, whatever the answer says. A thread the person already drafted in, or whose newest mail came from the owner's own address, gets no draft. Nothing is sent: the person sends a draft from Drafts.
+   - A thread the model fails on, or answers in no shape, stays waiting; it is logged as `mail.triage_failed` and tried at the next pass. New mail in a triaged thread makes it wait again.
+   - The Important view and the footer's badge read `important`, so they show the picks as soon as a pass records them.
 3. **Drafts in the reading pane.** A thread with the assistant's draft offers "Open Personal assistant's draft" beside Reply. The person reads it, edits it and sends it.
 4. **Mail into work.** "Send to a workspace…" on a thread hands it to a chosen workspace as a task, with the owner's authority, because the owner clicked it in the app.
    - `POST /api/workspaces/<name>/mail {thread}`, behind the workspace gate, reads the thread from the person's Mailbox and hands its main agent a turn of its own (`mail_handed`, a Mail card).
@@ -487,6 +492,12 @@ CREATE TABLE IF NOT EXISTS mail_threads (
 CREATE INDEX IF NOT EXISTS mail_threads_box ON mail_threads (path, created_at);
 CREATE INDEX IF NOT EXISTS mail_threads_important ON mail_threads (created_at) WHERE important IS NOT NULL AND trashed_at IS NULL;
 CREATE INDEX IF NOT EXISTS mail_threads_trashed ON mail_threads (trashed_at) WHERE trashed_at IS NOT NULL;
+
+-- The person's threads with mail their assistant has not yet picked Important or not on (§8).
+CREATE TABLE IF NOT EXISTS mail_untriaged (
+  thread_id   TEXT    PRIMARY KEY REFERENCES mail_threads (id),
+  since       INTEGER NOT NULL                -- its newest such mail
+);
 
 -- One message, as received or written. Large parts and the raw message live in R2 under the account.
 CREATE TABLE IF NOT EXISTS mail_messages (

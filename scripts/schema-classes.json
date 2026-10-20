@@ -412,6 +412,7 @@
     "mail_attachments",
     "mail_box",
     "mail_messages",
-    "mail_threads"
+    "mail_threads",
+    "mail_untriaged"
   ]
 }

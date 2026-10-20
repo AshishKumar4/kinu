@@ -357,6 +357,8 @@ const ORCHESTRATOR_METHODS = [
   'mailHanded',
   // Worker-only: the assistant's install and the owner's claim of an address (user/blueprint-install.ts, mail/routes.ts).
   'readOwnerMail',
+  // Worker-only: the mail router's word that new mail waits for the assistant's triage (mail/handler.ts).
+  'triageOwnerMail',
   'viewerEntryUrl',
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.
   'requestOverviewPush',
