@@ -49,6 +49,24 @@ describe('whether a model calls tools is its catalog row\'s answer', () => {
 });
 
 // Pricing is null until the catalog lands, so the budget ledger blends and says so.
+// The SufficientKoala audit: the provider was the spec's first slash segment, so a model on a named account read as
+// provider `anthropic@work`, outside the PDF-capable transports, and its turns sent a reference in place of the PDF.
+describe("a model on a named account takes its provider's attachments", () => {
+  test('a PDF reaches Claude on the work account as on main', async () => {
+    const row: ModelInfo = { id: 'claude-opus-4-7', inputModalities: ['text', 'image', 'pdf'] };
+
+    const accepted = await Promise.all(['anthropic/claude-opus-4-7', 'anthropic@work/claude-opus-4-7'].map(async (spec) => {
+      const session = new ModelCatalogSession({ effectiveSpec: () => spec, lookup: async () => row, measured: () => null });
+
+      await session.resolved();
+
+      return [...session.acceptedMedia()].sort();
+    }));
+
+    expect(accepted).toEqual([['image', 'pdf'], ['image', 'pdf']]);
+  });
+});
+
 describe('ModelCatalogSession.pricing', () => {
   test('null until the lookup lands, then the catalog rates', async () => {
     let resolveLookup: (info: ModelInfo | null) => void = () => {};
