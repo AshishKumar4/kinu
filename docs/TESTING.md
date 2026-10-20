@@ -217,6 +217,7 @@ KINU_EVAL_ORIGIN=https://staging.kinu.run bun run evals   # one leg, on staging
 KINU_EVAL_TRIALS=3 bun run evals               # a pilot
 bun run evals:ui <out>/evals/candidate/results.json  # a native-artifact report in the vitest-evals UI
 KINU_EVAL_MODELS=<spec> bun run evals:reactive   # learning on vs off and vs crafting off, the reactive user (docs/EVOLUTION-REDESIGN.md §8)
+KINU_REACTIVE_FAMILIES=chat-app,chess,office KINU_REACTIVE_SEGMENTS=12 KINU_REACTIVE_SEEDS=1 KINU_EVAL_MODELS=<spec> bun run evals:reactive   # a pilot over three tasks
 bun evals/scripts/compare.ts --candidate <results.json> [--baseline <results.json>] --out /tmp/cmp   # two legs' reports
 bun evals/scripts/timing.ts bench-artifacts/evals-<task>-<time> [--steps]   # where each trial's time went
 ```

@@ -1,6 +1,7 @@
 /**
  * §8 of docs/EVOLUTION-REDESIGN.md, run against the eval deployment: `bun run evals:reactive`. KINU_REACTIVE_SEGMENTS
- * (200), KINU_REACTIVE_SEEDS (3) and KINU_REACTIVE_HELD_OUT (the last family) shape it; KINU_EVAL_MODELS names the model.
+ * (200), KINU_REACTIVE_SEEDS (3), KINU_REACTIVE_FAMILIES (every task) and KINU_REACTIVE_HELD_OUT (the last family) shape
+ * it; KINU_EVAL_MODELS names the model.
  * Learning on is held against learning off (dreaming), and against crafting off (crafted tools).
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -22,7 +23,10 @@ test('learning on beats learning off', async () => {
   const [model] = matrix.models;
   const target = resolveEvalTarget(env);
   const tasks = new Map((await collectEvalTasks()).map((task) => [task.id, task]));
-  const families = [...tasks.keys()].sort();
+  const families = (env.KINU_REACTIVE_FAMILIES?.split(',') ?? [...tasks.keys()]).sort();
+  const unknown = families.filter((family) => !tasks.has(family));
+
+  if (unknown.length > 0) throw new Error(`KINU_REACTIVE_FAMILIES names ${unknown.join(', ')}; the tasks are ${[...tasks.keys()].join(', ')}`);
   const heldOut = env.KINU_REACTIVE_HELD_OUT ?? families.at(-1);
 
   if (model === undefined || heldOut === undefined) throw new Error('KINU_EVAL_MODELS names no model, or no task is declared');
