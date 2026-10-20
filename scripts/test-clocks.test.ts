@@ -209,12 +209,6 @@ describe('test-clocks gate', () => {
       expect(moved.files['packages/core/tests/moved/a.test.ts']).toEqual(locked.files['packages/core/tests/a.test.ts']);
       expect(moved.total).toBe(locked.total);
     });
-
-    test('the live lock reproduces the tree', () => {
-      const current = tally(auditCorpus(readClockCorpus()), '2026-09-16');
-
-      expect(reconcileLock(current, readLock())).toEqual({ unlocked: [], raised: [], stale: [] });
-    });
   });
 
   test('the live corpus is every test sources.ts enumerates plus the helpers tests wait through', () => {

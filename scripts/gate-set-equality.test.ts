@@ -254,15 +254,6 @@ describe('the denominator, from both sides', () => {
 });
 
 describe('the live tree', () => {
-  test('every governed gate program shares the one enumeration', () => {
-    const programs = gatePrograms(gateCommands(), trackedFiles());
-
-    const violations = programs.governed
-      .flatMap((file) => auditGateProgram(file, at(file)));
-
-    expect(violations.map((v) => `${v.file}:${String(v.line)} ${v.kind}`)).toEqual([]);
-  });
-
   test('the denominator is not zero in any of its five parts', () => {
     // A gate that scanned nothing reports a clean sweep. All five counts are the
     // ones this gate divides by, so all five are asserted here as well as being

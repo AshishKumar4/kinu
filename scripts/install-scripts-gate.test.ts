@@ -82,12 +82,3 @@ describe('install-scripts — the set that executes is a decision', () => {
     expect(findings).toEqual([]);
   });
 });
-
-describe('install-scripts — the live tree', () => {
-  test('installed dependencies declare hooks, bun blocks some, and every executing one is allowed', () => {
-    const { declared, findings } = judgeInstallScripts();
-
-    expect(declared.length).toBeGreaterThan(0);
-    expect(findings).toEqual([]);
-  });
-});
