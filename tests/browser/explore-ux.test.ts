@@ -71,7 +71,7 @@ describe('Explore', () => {
         await page.close();
       }
     });
-  }, 120_000);
+  });
 
   test("a blueprint's Install sends what its dialog chose; the assistant becomes Home", async () => {
     await withGallery(async (gallery) => {
@@ -98,5 +98,5 @@ describe('Explore', () => {
       await release.click('[data-install-confirm]');
       expect(await installed(release)).toEqual({ id: 'release-manager', body: { displayName: 'API Worker v2 release', utcOffsetMinutes: expect.any(Number) } });
     });
-  }, 120_000);
+  });
 });

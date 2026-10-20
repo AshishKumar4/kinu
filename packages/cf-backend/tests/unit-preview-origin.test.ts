@@ -1209,6 +1209,7 @@ const PUBLIC_API = [
   LIVE_SHARE_OPEN_PATH, // a public share opens signed out; a named one reads its session itself, the cross-site rule with it
   '/api/workspaces/:name/webhook/', // a signed delivery URL
   '/api/gallery', // read by anyone; a star or report reads its session itself
+  '/api/explore', // read by anyone, as the Gallery is
 ];
 
 describe('worker wiring', () => {
