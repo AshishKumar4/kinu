@@ -68,7 +68,7 @@ test('Plan blocks slate source restoration and authored calls without converting
   expect(await readText(files, path)).toBe('first');
 });
 
-test('a planner role records Plan authority for deferred work even when the message requested Build', async () => {
+test('a planner role runs a Plan turn even when the message requested Build', async () => {
   const { agent } = orchestratorHarness();
   await agent.setRole('planner');
   agent.harnessDrivingUserMessage('Inspect the project.', { kinuMode: 'build' });
@@ -79,13 +79,8 @@ test('a planner role records Plan authority for deferred work even when the mess
     messageId: 'role-plan-answer', text: 'Plan ready.', requestId: 'role-plan-answer',
     calls: [{ name: 'submit_plan', input: { edits: [{ start: 1, content: '# Plan\nInspect the source before implementation.' }] } }],
   });
+  // Only a Plan turn is offered submit_plan, and only its call opens a review.
   expect(await agent.getActivePlanReview()).toMatchObject({ status: 'pending' });
-  const runs = await agent.listRuns();
-  const run = runs.items[0];
-
-  if (run === undefined) throw new Error('The real turn produced no run record');
-  const events = await agent.getRunEvents(run.runId);
-  expect(events.find((event) => event.type === 'turn_end')).toMatchObject({ workMode: 'plan' });
 });
 
 test("outside any turn, the agent's own file tool and a slate's call read and write through one ledger", async () => {

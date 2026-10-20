@@ -180,8 +180,6 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   turnIndex: number;
   /** Absent when no step reported usage, so `turn_end` carries no zeros. */
   usage?: Usage | undefined;
-  /** The turn's work mode; absent rather than invented. */
-  workMode?: WorkMode | undefined;
   /** From {@link classifyRunEnd}, never hand-picked. */
   reason: RunEndReason;
   error?: string | undefined;
@@ -220,8 +218,6 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
       type: 'turn_end',
       turnIndex: opts.turnIndex,
     };
-
-    if (opts.workMode) turnEnd.workMode = opts.workMode;
 
     if (opts.usage !== undefined && usageReported(opts.usage)) turnEnd.usage = opts.usage;
     recorder.emit(runId, turnEnd);

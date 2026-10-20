@@ -45,8 +45,8 @@ test('a planner a Build turn hires cannot write files through the workspace', as
 
   await driveUntil(workspace, "the planner's run never ended", () => agentSql(workspace, hired)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${hired} AND type = 'run_end'`[0]?.n === 1);
-  expect(agentSql(workspace, hired)<{ payload: string }>`
-    SELECT payload FROM run_events WHERE actor_id = ${hired} AND type = 'turn_end'`[0]?.payload).toContain('"workMode":"plan"');
+  expect(agentSql(workspace, hired)<{ mode: string }>`
+    SELECT work_mode AS mode FROM actor_turn_claims WHERE actor_id = ${hired}`.map((row) => row.mode)).toEqual(['plan']);
 });
 
 test("a turn an agent's isolate loses to its own reset runs again, the workspace staying up", async () => {

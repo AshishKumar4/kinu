@@ -52,7 +52,6 @@ export async function driveDeliveredRun(actor: HostedActor, task: AgentTurnTask,
     closeTurnRun(recorder, runId, {
       turnIndex: actor.session.orchestrator.sessionTurnIndex,
       usage: report.usage,
-      workMode: actor.session.workMode,
       ...classifyRunEnd({ completed: report.status === 'completed', interrupted: report.status === 'aborted', errorText: report.errorMessage }),
     });
     transcript.appendUser(brief);
