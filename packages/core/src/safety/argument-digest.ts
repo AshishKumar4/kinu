@@ -25,6 +25,12 @@ export function stableStringify(value: JsonValue): string {
   return out + '}';
 }
 
+/** What every "this tool, these arguments" identity hashes: a steering repeat's and a retained record's alike. Its digest
+ *  is its purpose's: SHA-256 where a collision is a threat, as for an approval, and FNV where it is not. */
+export function callPreimage(toolName: string, renderedArgs: string): string {
+  return `${toolName}:${renderedArgs}`;
+}
+
 /** Hex SHA-256; `hexChars` truncates (omit for the full collision-resistant digest). */
 export function sha256Hex(data: string | Uint8Array, hexChars?: number): string {
   const hex = createHash('sha256').update(data).digest('hex');

@@ -2,7 +2,7 @@ import * as v from 'valibot';
 import type { ToolCallRecord } from './types';
 import type { ToolOutcome } from '../tools/outcome';
 import { codemodeProgramOf } from '../tools/codemode-reach';
-import { stableStringify } from '../safety/argument-digest';
+import { callPreimage, stableStringify } from '../safety/argument-digest';
 import { evidenceWindow, EVIDENCE_BUDGETS } from '../utils/evidence-window';
 import { decodeJsonValue, isJsonObject, type JsonObject, type JsonValue, isJsonString } from '../utils/json';
 import { fnv1a64 } from '../utils/fnv1a';
@@ -125,7 +125,7 @@ export function compactToolCall(call: ToolCallInput): ToolCallRecord {
     argsWindow: window(call.args, serialized),
     target: actionTarget(call.args),
     op,
-    argsDigest: Object.keys(call.args).length === 0 ? null : fnv1a64(`${call.name}:${serialized}`),
+    argsDigest: Object.keys(call.args).length === 0 ? null : fnv1a64(callPreimage(call.name, serialized)),
     // Found in the arguments as written, then kept as every other projection is: through the secret policy.
     writtenPaths: [...written].map((path) => detached(redactSecrets(path))),
     revisitedPaths: [...revisited].map((path) => detached(redactSecrets(path))),
