@@ -23,6 +23,8 @@ export * from './merge-policy';
 
 export * from './network';
 
+export * from './chat-completions';
+
 export * from './models-dev';
 
 export * from './runtime';
