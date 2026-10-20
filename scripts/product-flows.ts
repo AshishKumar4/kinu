@@ -1545,8 +1545,8 @@ async function relisted(page: Page, act: () => Promise<void>, loadsDocument = fa
 const MY_STUFF_PLACE = `[...document.querySelectorAll('[data-drive-place="mine"], [data-drive-tab="mine"]')].find((place) => place.getClientRects().length > 0)`;
 
 /**
- * Opens My stuff, where New is: a first visit to the Drive lands on Slates when the account has a slate, as the
- * approved design does. With My stuff the only place there is no column or switch, and the page is already there.
+ * Opens My stuff, where New is: a first visit to the Drive lands there unless My stuff holds nothing, as the approved
+ * design does (owner, 2026-10-19). Below `lg` the switch names it; from `lg` the column does.
  */
 async function openMyStuff(page: Page): Promise<void> {
   await until(page, 'My stuff or its place', `document.querySelector('[data-drive-new]') !== null || ${MY_STUFF_PLACE} !== undefined`);
@@ -1739,8 +1739,8 @@ function slateTile(workspace: string): string {
 async function driveWithSlate(target: FlowTarget, workspace: string): Promise<Page> {
   const page = await signedInPage(target.browser, target);
 
-  // A first visit to the Drive lands on Slates when the owner has one.
-  await page.goto(`${target.origin}/drive`, { waitUntil: 'load' });
+  // Slates is its own place; a first visit to the Drive lands on My stuff when it holds anything.
+  await page.goto(`${target.origin}/slates`, { waitUntil: 'load' });
   await until(page, 'the slate\'s tile in Slates', `document.querySelector(${JSON.stringify(slateTile(workspace))}) !== null`);
   await painted(page);
 

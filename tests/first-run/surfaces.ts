@@ -34,7 +34,10 @@ export const PAGE_ROWS = {
   workspaceAgent: ['agent-tab', 'agent-chats-persist', 'agent-dismissed-chat'],
   workspaceAgentPath: ['agent-nested-chat'],
   workspaceView: ['workspace-settings', 'workspace-panes'],
-  explore: ['exploration'],
+  swarm: ['exploration'],
+  // Explore opens the Gallery's listing until the Explore page lands on its own route.
+  explore: ['gallery-listing'],
+  exploreWorkspace: { unreachable: 'routed only once the Explore page lands (feat/explore); until then no link reaches it' },
   control: { unreachable: 'the operator console answers only an operator the admin gate admits (control-plane/admin-caller.ts), and the eval identity is not one' },
   drive: ['drive'],
   driveFolder: ['drive'],

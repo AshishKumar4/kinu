@@ -54,7 +54,7 @@ export function SettingsRail({ active }: { active: SettingsSection }) {
 
   return (
     <nav ref={nav} aria-label="Settings sections"
-      className="p-tabstrip -mx-5 flex border-b p-border px-5 sm:-mx-6 sm:px-6 lg:mx-0 lg:w-48 lg:shrink-0 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:border-0 lg:px-0 lg:sticky lg:top-8 lg:self-start">
+      className="p-tabstrip -mx-5 flex border-b p-border px-5 sm:-mx-8 sm:px-8 lg:mx-0 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:border-0 lg:px-0">
       {Object.entries(SETTINGS_SECTIONS).map(([id, { label, Icon }]) => {
         const current = id === active;
 

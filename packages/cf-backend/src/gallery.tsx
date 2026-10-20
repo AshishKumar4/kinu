@@ -1245,6 +1245,11 @@ function userFixture(path: string, method: string, body: BodyInit | null | undef
   return memory === null ? null : Promise.resolve(memory);
 }
 
+/** The stub for a read; one with a query (`?limit=3`) is answered as its path is. */
+function stubbed(path: string): JsonValue | undefined {
+  return STUB.get(path) ?? STUB.get(path.split("?")[0] ?? path);
+}
+
 const galleryRequests: string[] = [];
 
 Object.assign(window, { galleryRequests });
@@ -1278,7 +1283,7 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     return rosterRead(roster.searchParams);
   }
 
-  const response = STUB.get(path);
+  const response = stubbed(path);
 
   if (response !== undefined && (!init?.method || init.method === "GET")) {
     return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));

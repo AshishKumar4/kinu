@@ -22,17 +22,17 @@ export function Card({ title, icon: Icon, description, actions, children }: {
   actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  // Its name is a plain label above it, as the Agent tab's sections are, not a strip inside it (docs/APP-CONSISTENCY.md).
   return (
-    <section className="p-card overflow-hidden">
-      <header className="flex items-start gap-3 border-b p-border px-5 py-4">
-        <Icon size={16} className="mt-0.5 shrink-0 p-text-3" />
+    <section className="space-y-2">
+      <header className="flex items-end gap-3 px-1">
         <div className="min-w-0 flex-1">
-          <h2 className="p-title p-text">{title}</h2>
+          <h2 className="flex items-center gap-2 p-label"><Icon size={14} className="shrink-0 p-text-3" />{title}</h2>
           {description && <p className="mt-0.5 p-meta p-text-3">{description}</p>}
         </div>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </header>
-      <div className="space-y-5 px-5 py-5">{children}</div>
+      <div className="p-card space-y-5 px-5 py-5">{children}</div>
     </section>
   );
 }
