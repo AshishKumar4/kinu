@@ -139,57 +139,69 @@ beforeEach(() => {
   readers = [];
 });
 
-describe('an address is claimed once, by whom the deployment allows', () => {
-  test('before a claim there is no address, and it says whether one may be claimed', async () => {
-    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes' })).toEqual({ status: 200, body: { enabled: true, address: null, canClaim: true, boxes: [] } });
-    expect((await call(PRIYA, { method: 'GET', path: '/api/user/mail/boxes' })).body).toEqual({ enabled: true, address: null, canClaim: false, boxes: [] });
+describe('a person creates their address once, as the deployment allows', () => {
+  test('before they create one there is no address, and it says whether they may', async () => {
+    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes' })).toEqual({ status: 200, body: { enabled: true, domain: 'kinu.run', address: null, canCreate: true, boxes: [] } });
+    expect((await call(PRIYA, { method: 'GET', path: '/api/user/mail/boxes' })).body).toEqual({ enabled: true, domain: 'kinu.run', address: null, canCreate: false, boxes: [] });
   });
 
-  test('an operator claims a username, and the person\'s own box is opened at it', async () => {
-    expect(await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } })).toMatchObject({ status: 200, body: { address: 'ashish@kinu.run' } });
+  test('an operator creates their address, and the person\'s own box is opened at it', async () => {
+    expect(await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' } })).toMatchObject({ status: 200, body: { address: 'ashish@kinu.run' } });
     expect((await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes' })).body).toMatchObject({ address: 'ashish@kinu.run', boxes: [{ path: '', address: 'ashish@kinu.run' }] });
   });
 
-  test('while addresses are the operators\' only, another account is refused; opened to everyone, it may claim', async () => {
-    expect((await call(PRIYA, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'priya' } })).status).toBe(403);
-    expect(await call(PRIYA, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'priya' }, accounts: 'everyone' })).toMatchObject({ status: 200, body: { address: 'priya@kinu.run' } });
+  test('while addresses are the operators\' only, another account is refused; opened to everyone, it may create one', async () => {
+    expect((await call(PRIYA, { method: 'POST', path: '/api/user/mail/address', body: { username: 'priya' } })).status).toBe(403);
+    expect(await call(PRIYA, { method: 'POST', path: '/api/user/mail/address', body: { username: 'priya' }, accounts: 'everyone' })).toMatchObject({ status: 200, body: { address: 'priya@kinu.run' } });
   });
 
   test('a taken, reserved or malformed username is refused with why', async () => {
-    await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } });
-    expect(await call(PRIYA, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' }, accounts: 'everyone' })).toMatchObject({ status: 403, body: { error: '"ashish" is taken.' } });
-    expect((await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'Ashish K' } })).status).toBe(400);
+    await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' } });
+    expect(await call(PRIYA, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' }, accounts: 'everyone' })).toMatchObject({ status: 403, body: { error: 'That name is taken.' } });
+    expect((await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'Ashish K' } })).status).toBe(400);
   });
 
-  test('their Personal assistant reads the address they claim; with none installed, nothing is asked', async () => {
+  test('their Personal assistant reads the address they create; with none installed, nothing is asked', async () => {
     assistants.set(ASHISH.userId, 'personal-assistant-7f3a');
-    await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } });
-    await call(PRIYA, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'priya' }, accounts: 'everyone' });
+    await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' } });
+    await call(PRIYA, { method: 'POST', path: '/api/user/mail/address', body: { username: 'priya' }, accounts: 'everyone' });
 
     expect(readers).toEqual(['personal-assistant-7f3a']);
   });
 
-  test('a second claim by the same account keeps its first address', async () => {
-    await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } });
-    expect((await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashishks' } })).body).toMatchObject({ address: 'ashish@kinu.run' });
+  test('as they type, a name reads available, taken, reserved or not a name, and checking holds nothing', async () => {
+    const check = async (who: { userId: string; email: string }, username: string) => (await call(who, { method: 'GET', path: `/api/user/mail/address?username=${encodeURIComponent(username)}`, accounts: 'everyone' })).body;
+
+    expect(await check(PRIYA, 'priya')).toEqual({ username: 'priya', available: true, refusal: null });
+    expect(claims.size).toBe(0);
+    await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' } });
+    expect(await check(PRIYA, 'ashish')).toEqual({ username: 'ashish', available: false, refusal: 'taken' });
+    expect(await check(ASHISH, 'ashish')).toEqual({ username: 'ashish', available: true, refusal: null });
+    expect(await check(PRIYA, 'postmaster')).toEqual({ username: 'postmaster', available: false, refusal: 'reserved' });
+    expect(await check(PRIYA, 'Priya R')).toEqual({ username: 'Priya R', available: false, refusal: 'invalid' });
+  });
+
+  test('creating again keeps the account\'s first address', async () => {
+    await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' } });
+    expect((await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashishks' } })).body).toMatchObject({ address: 'ashish@kinu.run' });
   });
 });
 
 describe('a deployment with no mail domain has no Mail', () => {
-  test('it says so, offers no claim and refuses one, and the footer\'s read says it too', async () => {
+  test('it says so, offers no address and refuses to create one, and the footer\'s read says it too', async () => {
     const off = { domain: '' } as const;
 
-    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes', ...off })).toEqual({ status: 200, body: { enabled: false, address: null, canClaim: false, boxes: [] } });
-    expect((await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' }, ...off })).status).toBe(503);
+    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes', ...off })).toEqual({ status: 200, body: { enabled: false, domain: null, address: null, canCreate: false, boxes: [] } });
+    expect((await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' }, ...off })).status).toBe(503);
     expect(claims.size).toBe(0);
     expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/important?limit=3', ...off })).toEqual({ status: 200, body: { enabled: false, unread: 0, items: [] } });
-    expect((await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes' })).body).toMatchObject({ enabled: true, canClaim: true });
+    expect((await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes' })).body).toMatchObject({ enabled: true, canCreate: true });
   });
 });
 
 describe('the person reads and sends their own mail, and only their own', () => {
   beforeEach(async () => {
-    await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } });
+    await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' } });
   });
 
   test('sending from their own address files it in Sent; another account sees none of it', async () => {
@@ -273,7 +285,7 @@ describe('the person sends a thread to one of their workspaces', () => {
 
   beforeEach(async () => {
     handed = [];
-    await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } });
+    await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' } });
     await storeOf(ASHISH.userId).deliver({
       raw: new TextEncoder().encode([
         'From: Dana Whitfield <dana@northwind.io>', 'To: ashish@kinu.run', 'Subject: Webhook deliveries to /hooks/v2 failing with 500',

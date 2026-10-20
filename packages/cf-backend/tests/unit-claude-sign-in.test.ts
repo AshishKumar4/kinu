@@ -182,7 +182,7 @@ describe('Claude sign-in on the web', () => {
     }
   });
 
-  test('a sign-in Claude answers without a refresh token stores nothing and says why', async () => {
+  test('a sign-in Claude answers without a refresh token is kept until it expires', async () => {
     const harness = createTestUserDO();
     const web = routes(harness);
     claudeTokenEndpoint(() => Response.json({ access_token: 'at', expires_in: 3600 }));
@@ -191,9 +191,7 @@ describe('Claude sign-in on the web', () => {
       const state = (await web.start()).searchParams.get('state') ?? '';
       const status = v.parse(FinishedSchema, await (await web.call('/claude/finish', { code: `the-code#${state}` })).json());
 
-      expect(status.connected).toBe(false);
-      expect(status.error).toContain('refresh token');
-      expect(await storedKeys(harness)).toEqual([]);
+      expect({ connected: status.connected, stored: await storedKeys(harness) }).toEqual({ connected: true, stored: ['claude.oauth'] });
     } finally {
       harness.close();
     }

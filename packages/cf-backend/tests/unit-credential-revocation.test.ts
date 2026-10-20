@@ -7,6 +7,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { accountCredentialKey, asFetchFunction, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, requestUrl } from '@kinu.run/core';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
+import { workerdFetch } from '@kinu.run/test-utils';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -75,6 +76,19 @@ describe('disconnecting a provider, and revoking its grant there when asked', ()
       [OPENAI_REVOKE, 'access-1', 'access_token', true],
     ]);
     expect(sent.every((request) => !request.storedDuringRevoke)).toBe(true);
+    harness.close();
+  });
+
+  // Production walkthrough, rc28: workerd's own fetch, called as a method of the revocation's input, threw.
+  test('a revoke goes out through the deployment\'s own fetch', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+    await harness.userDO.setCredential(owner, CODEX_CRED_KEY, { kind: 'oauth', accessToken: 'access-1', refreshToken: 'refresh-1' });
+    const sent = provider(harness, revoked);
+
+    globalThis.fetch = workerdFetch(globalThis.fetch);
+
+    expect({ outcome: await harness.userDO.disconnectCodex(owner, true), sent: sent.length }).toEqual({ outcome: { unrevoked: null }, sent: 2 });
     harness.close();
   });
 

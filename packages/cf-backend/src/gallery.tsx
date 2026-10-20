@@ -48,6 +48,7 @@ import { BranchRunChip } from "@/components/AlternateTakes";
 import { PreviewTabsGallery, CompactPreviewGallery } from "./gallery-preview-tabs";
 import { galleryCloudflareAccounts, galleryWebSearchChain, galleryWebSearchTest } from "./gallery-web-search";
 import { ASSISTANT_ROSTER, assistantHomeFrame, focusWorkspaceFrame } from "./gallery-assistant";
+import { galleryUsername } from "./gallery-mail-address";
 import { exploreFrame } from "./gallery-explore";
 import { ACTIVITY_SURFACE, type SurfaceKind, type TabPresence } from "@kinu.run/core";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
@@ -852,6 +853,32 @@ function accountMemoryFixture(path: string, method: string): Response | null {
   return fixtureJson({ ...memory, facts: [...memory.facts, ...galleryKeptFacts], pending: galleryMemoryPending });
 }
 
+/** `&mail=off`: setup on a deployment with no mail domain, which offers no address. */
+const WELCOME_MAIL_OFF = new URLSearchParams(location.search).get("mail") === "off";
+
+/** The address setup's Mail step creates; none until it does. */
+let welcomeAddress: string | null = null;
+
+/** Setup's Mail step: the account has no address and may create one, checked and created through the address route. */
+function welcomeMailFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  if (frame !== "welcome" || !path.startsWith("/api/user/mail/")) return null;
+
+  if (path === "/api/user/mail/boxes") {
+    return fixtureJson({ enabled: !WELCOME_MAIL_OFF, domain: WELCOME_MAIL_OFF ? null : "kinu.run", address: welcomeAddress, canCreate: !WELCOME_MAIL_OFF && welcomeAddress === null, boxes: [] });
+  }
+
+  if (path.startsWith("/api/user/mail/address?")) return fixtureJson(galleryUsername(new URLSearchParams(path.split("?")[1]).get("username") ?? ""));
+
+  if (path === "/api/user/mail/address" && method === "POST") {
+    welcomeAddress = `${v.parse(v.object({ username: v.string() }), JSON.parse(v.parse(v.string(), body))).username}@kinu.run`;
+    document.documentElement.dataset.galleryMailCreated = welcomeAddress;
+
+    return fixtureJson({ address: welcomeAddress });
+  }
+
+  return null;
+}
+
 /** Built-in sign-in off, as on an account with an OAuth app: the invite card stays away. */
 function builtinAuthFixture(path: string): Response | null {
   return path === "/api/user/builtin-auth" ? fixtureJson({ enabled: false, owner: false }) : null;
@@ -861,6 +888,7 @@ const SETTINGS_SLICES: readonly SettingsSlice[] = [
   secretsFixture,
   galleryWebSearchTest,
   builtinAuthFixture,
+  welcomeMailFixture,
   accountMemoryFixture,
   accountProfileFixture,
   settingsSectionsFixture,

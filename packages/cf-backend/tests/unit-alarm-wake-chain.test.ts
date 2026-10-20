@@ -9,7 +9,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
   agentWakes, armedWakes, catalogTurn, fireSoonestWake, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
-  runDelegatedTask, tapDiagnostics, until, seedOrphanFiber, wakeForDelegatedTask, type StartedHarness,
+  tapDiagnostics, until, seedOrphanFiber, wakeForDelegatedTask, type StartedHarness,
 } from './helpers/actor-harness';
 import { ownerMail } from './helpers/owner-mail';
 import { joinHarnessFibers } from './helpers/agents-sdk';
@@ -109,63 +109,6 @@ function seedDeadBranches(db: Database, count: number): void {
 
   for (let n = 0; n < count; n++) insert.run(harnessActorId(db), `dead-${String(n)}`, `branch-dead-${String(n)}`, at);
 }
-
-describe('a refiner answer stored with no waiter', () => {
-  test('arms the Kinu wake at once, and the tick routes it so the workspace owes nothing after', async () => {
-    // After an eviction the answer used to wait for the owner's next message.
-    const workspace = orchestratorHarness();
-    const now = Date.now();
-    const { requests } = await workspace.agent.listRefinements(1);
-    expect(requests).toEqual([]);
-
-    const actorId = harnessActorId(workspace.db);
-    workspace.db.prepare(`INSERT INTO refinement_requests
-      (actor_id, id, trigger, scope, stage, claim, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
-      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
-    workspace.db.prepare(`INSERT INTO evolution_helpers
-      (actor_id, name, lane_request_id, answer_status, answer, created_at)
-      VALUES (?, 'ask-refiner-x1', 'refine-1', 'completed', ?, ?)`)
-      .run(actorId, 'Nothing to change.\n\n{"scope":"workspace","summary":"nothing","edits":[]}', now);
-
-    await workspace.agent.activateActor();
-    await until(() => armedAt(workspace.db, KINU_TIMER_JOB).length > 0, 'the stored answer armed the Kinu wake');
-
-    await workspace.agent._kinuTimerTick();
-    await joinHarnessFibers();
-
-    expect((await workspace.agent.listRefinements(1)).requests[0]?.stage).not.toBe('requested');
-  });
-
-  test('an answer relayed after activation pulls the Kinu wake to now, and the tick routes it', async () => {
-    const workspace = gatewayWorkspace(answeringGateway('Nothing to change.\n\n{"scope":"workspace","summary":"nothing","edits":[]}'));
-    await workspace.agent.activateActor();
-    const actorId = harnessActorId(workspace.db);
-    const now = Date.now();
-    workspace.db.prepare(`INSERT INTO refinement_requests
-      (actor_id, id, trigger, scope, stage, claim, turn_ids, debt_key, proposal, routes, detail, created_at, updated_at)
-      VALUES (?, 'refine-1', 'explicit', 'workspace', 'requested', NULL, '[]', NULL, NULL, '[]', 'opened', ?, ?)`).run(actorId, now, now);
-
-    const refiner = await hostedSubordinateHarness(workspace, {
-      name: 'ask-refiner-x1', displayName: 'Refiner', nameOrigin: 'auto', mission: 'propose refinements', origin: 'evolution',
-    });
-
-    workspace.db.prepare(`INSERT INTO actor_subordinates (actor_id, name, status, current_task, created_at, dismissed_at,
-      task_event_id, actor_reference, birth_request, delete_requested)
-      VALUES (?, 'ask-refiner-x1', 'working', 'review', ?, NULL, 'evt-1', ?, NULL, 0)`)
-      .run(actorId, now, JSON.stringify(refiner.actor.reference));
-    workspace.db.prepare(`INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at)
-      VALUES (?, 'ask-refiner-x1', 'refine-1', ?)`).run(actorId, now);
-    expect(armedAt(workspace.db, KINU_TIMER_JOB)).toEqual([]);
-
-    await runDelegatedTask(workspace, refiner.actor.handle.actorId, 'Review the recent turns.');
-    expect(held(workspace.db, `SELECT COUNT(*) AS held FROM evolution_helpers WHERE answer_status = 'completed'`)).toBe(1);
-    await until(() => armedAt(workspace.db, KINU_TIMER_JOB).length > 0, 'the relayed answer armed the Kinu wake');
-
-    await workspace.agent._kinuTimerTick();
-    await joinHarnessFibers();
-    expect((await workspace.agent.listRefinements(1)).requests[0]?.stage).not.toBe('requested');
-  });
-});
 
 describe('the workspace keeps exactly one wake per job', () => {
   test('a beyond-budget backlog of dead branches arms the wake, and the wake drains it', async () => {

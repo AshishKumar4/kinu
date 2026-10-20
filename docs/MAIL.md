@@ -74,7 +74,8 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 
 - **Labels contain no dots,** so an address is read right to left: the last label is the person, then the workspace, then the agent. There are at most 3 labels.
 - **Each label is at most 20 characters.** The whole local part fits RFC 5321's 64 octets.
-- **Username:** `[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?`. It is claimed once, globally, and reserved words cannot be claimed (postmaster, abuse, admin, noreply, mail, ops, dmarc, security, support, root…).
+- **Username:** `[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?`. It is held once, globally, and reserved words cannot be anyone's (postmaster, abuse, admin, noreply, mail, ops, dmarc, security, support, root…; `mailUsernameRefusal` in core, which the route and MailName both read).
+- **Creating it (the owner, 2026-10-20: no "claim" step anywhere).** Setup has one Mail step, "Your email address", after the name: one field, `<username>@<domain>`, prefilled with the person's first name as it reads in an address (accents dropped), else their sign-in email's local part (`suggestedMailUsername`). It is checked as they type (`GET /api/user/mail/address?username=`, which holds nothing), and Next creates the address and its mailbox at once (`POST /api/user/mail/address`). "Not now" passes it by. Anyone who reaches Mail with no address sees the same field, with Create, where the mailbox would be. A deployment with no mail domain offers neither. Renaming is for Settings, later.
 - **Workspace label:** the workspace's name lowercased, with `.` and `_` turned into `-`, then cut to 20 characters. It is unique per person; a clash gets `-2`.
 - **Agent label:** the agent's name. It is bound to the agent's id, never to its name: a released name is never given to a new agent, because the old address stays retired.
 
@@ -239,7 +240,7 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 
 **Sending limits:**
 
-- **Daily cap per account (the owner, 2026-10-19):** none for the deployment owner's account; 100 a day for any other account, once `MAIL_ACCOUNTS` lets it claim an address. Agents' sends count toward their account's cap.
+- **Daily cap per account (the owner, 2026-10-19):** none for the deployment owner's account; 100 a day for any other account, once `MAIL_ACCOUNTS` lets it have an address. Agents' sends count toward their account's cap.
 - **Per message:** at most 50 recipients and 5 MiB, the platform's limits.
 - **Delivery status:** a Queues subscription feeds bounced, complained and rejected events into each message's status.
 - **Automatic pause:** an account whose complaint rate passes 0.1% stops sending until the owner looks.
@@ -266,7 +267,7 @@ There is one mail domain per deployment, `EMAIL_DOMAIN`, and every address sits 
 
 **A message's fields (built).** The person's sends and drafts and an agent's `mail.send` and `mail.draft` read one definition (`core/src/mail/message.ts`): the address, To (1 to 50), Cc (up to 50) and the subject (998 characters, RFC 5322's line). The text's limit is the one difference, by name (`mailText`): the person's is 1,000,000 characters, an agent's 50,000, what one approval card shows whole. Recipients are lowercased once, where the Mailbox files them (`filedRecipients`); an agent's card shows them that way, so what is approved is what leaves.
 
-**With no mail domain (built).** A deployment whose EMAIL_DOMAIN is empty has no Mail: the address routes answer `enabled: false`, claims are refused (503), the footer shows no Mail icon, and /mail says "Mail is off on this deployment." Agents get no mail tools. A domain set but not onboarded (no MX, no Email Sending) cannot be told apart from the Worker, so production keeps its domain off until onboarding is done.
+**With no mail domain (built).** A deployment whose EMAIL_DOMAIN is empty has no Mail: the address routes answer `enabled: false`, creating an address is refused (503), setup offers no Mail step, the footer shows no Mail icon, and /mail says "Mail is off on this deployment." Agents get no mail tools. A domain set but not onboarded (no MX, no Email Sending) cannot be told apart from the Worker, so production keeps its domain off until onboarding is done.
 
 **Onboarding (built, `core/src/deploy/mail.ts`).** It runs in the self-host deploy flow (the deploy page and `kinu deploy`), not in Kinu's own promote (`scripts/deploy.sh`). Its calls and the token permissions each needs: the zone (Zone Read); Email Routing through its DNS, `POST /zones/{z}/email/routing/dns` (Zone Settings Write); the catch-all to the Worker (Email Routing Rules Write); the sending subdomain, looked up by name and else created, then its records read by its `tag` (Email Sending write); the records and `_dmarc` (DNS Read and Write). A catch-all exists only at a zone's apex: a subdomain such as staging.kinu.run gets literal rules for the addresses it needs. Measured onboarding staging.kinu.run (2026-10-20): making the sending subdomain writes its bounce MX, SPF and DKIM itself, locked; its record list spells an MX host with the root dot and a TXT in quotes, so the step compares values as DNS means them. On kinu.run (2026-10-20): routing for the apex takes no `name` (the apex's own is refused, 422); a DKIM key is held as two strings, which the step joins to compare; and making the sending subdomain writes `_dmarc p=reject` itself where none was held, which the step reads before and replaces with its own report-only record. kinu.run was onboarded with this step: routing ready, the catch-all to the Worker `kinu`, Email Sending enabled, `_dmarc p=none`.
 
@@ -286,7 +287,7 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
 **The personal assistant holds the person's own address.**
 
 - `ashish@kinu.run` belongs to the owner's Personal assistant: a workspace installed from the `personal-assistant` blueprint at onboarding, with its main agent "Kinu". The Home lane designs the blueprint and its Home strip.
-- Built: the box is handed to the assistant's main agent (`readOwnerMail`, `MailStore.readBy`) when the assistant that becomes Home is installed and when the owner claims an address, whichever comes second. A new assistant replaces an old one as the reader. A failed hand-over leaves the install and the claim standing and logs `mail.assistant_unlinked`; the next claim tries again.
+- Built: the box is handed to the assistant's main agent (`readOwnerMail`, `MailStore.readBy`) when the assistant that becomes Home is installed and when the owner creates their address, whichever comes second. A new assistant replaces an old one as the reader. A failed hand-over leaves the install and the address standing and logs `mail.assistant_unlinked`.
 - Its main mail view is **Important**: the assistant's picks, each with a one-line reason. Home's "Today" strip shows the top three with the same row (`components/mail/ImportantMailRow.tsx`).
 - **The assistant is called by its own name** everywhere: "Kinu", or what the owner renamed it to ("Kinu picked these", "Kinu's draft"), never "Personal assistant's".
 - **With no assistant installed,** each place that needs one offers it: Important shows a card that opens a modal to install the blueprint.
@@ -443,10 +444,10 @@ CREATE TABLE IF NOT EXISTS mail_name (
 - **`former`:** a username the account renamed away from. It still routes to the same account, and is never claimable by anyone else.
 - **`retired`:** nothing routes there, and the label is never reissued.
 
-**Who may claim:**
+**Who may have an address:**
 
-- The deployment's operator (`CONTROL_PLANE_ADMINS`) may always claim.
-- Any other account may claim only while the deployment's `MAIL_ACCOUNTS` var is `everyone`. It is `operators` by default.
+- The deployment's operator (`CONTROL_PLANE_ADMINS`) always.
+- Any other account only while the deployment's `MAIL_ACCOUNTS` var is `everyone`. It is `operators` by default.
 
 ### `Mailbox`: one per account (`idFromName(user_id)`)
 
@@ -584,8 +585,8 @@ Deployment-level settings already live in the Worker's `vars`, for example `SIGN
 **The setting joins them:**
 
 - **`MAIL_ACCOUNTS`:** `operators` or `everyone`.
-  - `operators`: only the deployment's operators (`CONTROL_PLANE_ADMINS`) may claim an address.
-  - `everyone`: any account may claim one, at 100 sends a day.
+  - `operators`: only the deployment's operators (`CONTROL_PLANE_ADMINS`) may have an address.
+  - `everyone`: any account may have one, at 100 sends a day.
 - **Policy `derived`:**
   - kinu.run and staging: `"operators"` in `wrangler.jsonc`. The owner turns it on with a config change and a release.
   - A self-host: a deploy answer, `mailAccounts` in `DeployInputs`, `operators` by default. It is kept in the deployment record and sent again by every update.

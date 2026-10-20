@@ -4,6 +4,7 @@
   "device_consent_requests",
   "gepa_candidates",
   "gepa_runs",
+  "refinement_lane_holds",
   "trial_turns",
   "turn_craft_usage",
   "user_egress_secrets",

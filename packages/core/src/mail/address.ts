@@ -10,10 +10,8 @@
  * part without the username: `''`, `<workspace>`, `<agent>.<workspace>`.
  */
 
-/** One label: lowercase letters, digits and inner hyphens, at most 20 long, as a username is; an input's `pattern`. */
-export const MAIL_LABEL_PATTERN = '[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?';
-
-const LABEL = new RegExp(`^${MAIL_LABEL_PATTERN}$`, 'u');
+/** One label: lowercase letters, digits and inner hyphens, at most 20 long, as a username is. */
+const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$/u;
 
 const TAG = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 
@@ -60,7 +58,27 @@ export function mailLabelOf(name: string): string | null {
   return LABEL.test(label) ? label : null;
 }
 
-/** Whether `label` can be a username, a workspace's or an agent's part of an address. */
-export function isMailLabel(label: string): boolean {
-  return LABEL.test(label);
+/** Usernames no account may have: the mailbox names mail systems and people expect to reach a deployment's operator. */
+const RESERVED_USERNAMES: ReadonlySet<string> = new Set([
+  'postmaster', 'abuse', 'admin', 'administrator', 'noreply', 'no-reply', 'mail', 'mailer-daemon', 'ops', 'dmarc', 'security',
+  'support', 'root', 'www', 'hostmaster', 'webmaster', 'info', 'help', 'billing',
+]);
+
+/** Why `username` cannot be anyone's: not a label (`invalid`), or one mail systems need (`reserved`); null when it can. */
+export function mailUsernameRefusal(username: string): 'invalid' | 'reserved' | null {
+  if (!LABEL.test(username)) return 'invalid';
+
+  return RESERVED_USERNAMES.has(username) ? 'reserved' : null;
+}
+
+/**
+ * The username a person is offered: their first name as it reads in an address (accents dropped), else their sign-in
+ * email's local part; null when neither makes one they may have.
+ */
+export function suggestedMailUsername(person: { readonly displayName: string | null; readonly email: string }): string | null {
+  const plain = (text: string): string => text.normalize('NFD').replace(/\p{M}+/gu, '');
+  const firstName = plain(person.displayName?.trim().split(/\s+/u)[0] ?? '');
+  const local = plain(person.email.slice(0, Math.max(0, person.email.lastIndexOf('@'))));
+
+  return [mailLabelOf(firstName), mailLabelOf(local)].find((label): label is string => label !== null && mailUsernameRefusal(label) === null) ?? null;
 }

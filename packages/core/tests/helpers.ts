@@ -9,7 +9,8 @@ import { type Awaitable, type VFS, type VfsRevision, writeText } from '@nimbus-s
 
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import type { SqlExecutor, SqlExec, RawSqlExec, Memory, Executor, LLM, Schedule, Identity, FiberCtx, ExecuteResult, ResolvedProvider } from '../src/types/primitives';
+import type { SqlExecutor, SqlExec, RawSqlExec, Memory, Executor, RoutedLLM, Schedule, Identity, FiberCtx, ExecuteResult, ResolvedProvider } from '../src/types/primitives';
+import { extractJsonObject } from '../src/providers/structured';
 import type { AgentRuntime, CraftStore } from '../src/types/agent-runtime';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { HeadStep } from '../src/heads/types';
@@ -152,13 +153,13 @@ export function createMemoryMemory(db: Database, vfs: VFS & Required<Pick<VFS, '
   return adaptMemory(store, vfs);
 }
 
-export function createMockLLM(responses: Record<string, string> = {}): LLM {
-  return {
-    async complete(prompt) {
-      const key = Object.keys(responses).find(k => prompt.includes(k));
+export function createMockLLM(responses: Record<string, string> = {}): RoutedLLM {
+  const answer = (prompt: string) => responses[Object.keys(responses).find(k => prompt.includes(k)) ?? ''] ?? '{"score": 0.5, "rationale": "mock"}';
 
-      return responses[key ?? ''] ?? '{"score": 0.5, "rationale": "mock"}';
-    },
+  return {
+    complete: async (prompt) => answer(prompt),
+    // The scripted text held to the schema asked for, as a provider's structured output holds it.
+    object: async (prompt, schema) => v.parse(schema, extractJsonObject(answer(prompt))),
   };
 }
 

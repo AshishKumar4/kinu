@@ -6,6 +6,7 @@ import { baseCredentialKey, accountOf } from '../credentials/accounts';
 import { fmtSpan, fmtUsd } from '../utils/format';
 import { OPENROUTER_BASE_URL } from './openrouter';
 import { providerName } from './model-test';
+import { plainFetch } from './fetch-shim';
 
 export interface LimitWindow {
   readonly name: string;
@@ -202,7 +203,7 @@ export class LimitCache {
 
       if (reader === undefined || headers === null) return yield* new KinuError('missing', `${source.key} is not connected`);
       const account = accountOf(source.key);
-      const windows = yield* reader.read({ account, headers, fetch: source.fetch ?? opts.fetch ?? fetch }, this.now());
+      const windows = yield* reader.read({ account, headers, fetch: plainFetch(source.fetch ?? opts.fetch ?? fetch) }, this.now());
       const report: LimitReport = { provider: reader.provider, account, at: this.now(), windows, ...(reader.undocumented && { undocumented: true }) };
       this.#reports.set(source.key, report);
 
