@@ -212,6 +212,8 @@ const USER_DO_METHODS = [
   'watchDeviceStatus',
   'revokeAllCliTokens',
   'getCredentialsRevision',
+  'storedProviderListing',
+  'keepProviderListing',
   'getSettingsRevision',
   'shareCards_put',
   'shareCards_remove',

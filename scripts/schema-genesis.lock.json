@@ -1609,6 +1609,12 @@
     "last_seen_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "onboarded_at INTEGER"
   ],
+  "user_provider_listing@packages/core/src/state/user-schema.ts": [
+    "id INTEGER PRIMARY KEY CHECK (id = 1)",
+    "credentials_revision INTEGER NOT NULL",
+    "accounts TEXT NOT NULL",
+    "listing TEXT NOT NULL"
+  ],
   "user_secret_grants@packages/core/src/safety/egress-vault.ts": [
     "workspace TEXT NOT NULL",
     "name TEXT NOT NULL",

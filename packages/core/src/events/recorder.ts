@@ -137,7 +137,7 @@ export const RunEventSchema = v.variant('type', [
     trigger: v.picklist(['repeated_call', 'repeated_failure', 'no_progress']),
     step: v.number(), tool: v.optional(v.string()), converted: v.boolean() }),
   v.object({ ...BaseFields, type: v.literal('profile_resolution'),
-    durationMs: v.number(), providerCache: v.picklist(['hit', 'joined', 'miss']),
+    durationMs: v.number(), providerCache: v.picklist(['hit', 'joined', 'miss', 'stored']),
     providerRevision: v.string(), unavailableProviders: v.number(),
     catalogVersion: v.number(), authority: v.picklist(['local', 'account']) }),
   v.object({ ...BaseFields, type: v.literal('completion_gate'), converted: v.boolean() }),
