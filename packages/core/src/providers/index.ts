@@ -89,8 +89,6 @@ export {
 
 export * from './decision-model';
 
-export { createStructuredDecider, type StructuredDecider } from './structured-decision';
-
 export * from './workers-ai-catalog';
 
 export * from './ai-gateway';

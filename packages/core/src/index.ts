@@ -200,6 +200,8 @@ export { WORKSPACE_TITLE_MAX, workspaceDisplayTitle, workspaceTitleDraft, worksp
 
 export { EvolutionEngine } from './evolution/engine';
 
+export { createStructuredDecider } from './evolution/structured-decision';
+
 export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,

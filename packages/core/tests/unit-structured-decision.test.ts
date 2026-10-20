@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
 import { APICallError } from 'ai';
-import { answerStructured, createStructuredDecider } from '../src/providers/structured-decision';
+import { answerStructured, createStructuredDecider } from '../src/evolution/structured-decision';
 import { decisionPortOf, type DecisionPort, type DecisionQuestion, type DecisionResult } from '../src/providers/decision-model';
 import type { ModelRouteResolution } from '../src/profiles/model-route';
 import { routedLlm, type ModelLaneComponents } from '../src/profiles/model-lane';
@@ -110,7 +110,7 @@ describe('a chat model answering decisions', () => {
 
   // An unmeasured model's answers were never compared with Clef's: none of them is used.
   test('the fast tier answers nothing where no model it walks was measured', async () => {
-    const decide = present(createStructuredDecider(ACTOR, lane({ 'openai/never-measured': scripted('{"corrected":"yes","satisfaction":"2","wrong":"nothing"}') }, [], 'openai/never-measured')), 'decider');
+    const decide = createStructuredDecider(ACTOR, lane({ 'openai/never-measured': scripted('{"corrected":"yes","satisfaction":"2","wrong":"nothing"}') }, [], 'openai/never-measured'));
 
     expect(await decide({ state: 's', questions: QUESTIONS })).toBeUndefined();
   });
@@ -120,10 +120,10 @@ describe('a chat model answering decisions', () => {
     const asked: string[] = [];
     const muse = 'opencode-go/muse-spark-1.3-contributor';
 
-    const decide = present(createStructuredDecider(ACTOR, lane({
+    const decide = createStructuredDecider(ACTOR, lane({
       'openai/never-measured': scripted('{"worth":"no"}', { prompts: asked, formats: [] }),
       [muse]: scripted('{"worth":"yes"}'),
-    }, [], 'openai/never-measured', [muse])), 'decider');
+    }, [], 'openai/never-measured', [muse]));
 
     expect(await decide({ state: 's', questions: { worth: { type: 'noul', instructions: 'Worth a look?' } } })).toMatchObject({ answers: { worth: { type: 'noul', noul: 0.9 } } });
     expect(await decide({ state: 's', questions: QUESTIONS })).toBeUndefined();
@@ -135,42 +135,32 @@ describe('the one decision port a host serves', () => {
   const answered = (by: string): DecisionResult => ({ answers: { worth: { type: 'choice', choice: by } }, usage: { input: 0, output: 0 } });
   const request = { state: 's', questions: { worth: { type: 'noul', instructions: 'Worth a look?' } } } as const;
 
-  const clef = (reachable: boolean, asked: string[]) => ({
-    port: (async () => {
-      asked.push('clef');
+  /** Clef answering, or refusing as an account without Workers AI does: said to the owner, then null. */
+  const clef = (reaches: boolean, asked: string[]): DecisionPort => async () => {
+    asked.push(reaches ? 'clef' : 'clef refused, said');
 
-      return reachable ? answered('clef') : null;
-    }) satisfies DecisionPort,
-    reachable: async () => reachable,
-  });
+    return reaches ? answered('clef') : null;
+  };
 
-  test('Clef where the account reaches Workers AI, the fast tier never asked', async () => {
+  const fast = (asked: string[], trusted: boolean) => async () => {
+    asked.push('fast');
+
+    return trusted ? answered('fast') : undefined;
+  };
+
+  test('Clef answers where it can, and the fast tier is never asked', async () => {
     const asked: string[] = [];
 
-    const decide = decisionPortOf({
-      clef: clef(true, asked),
-      structured: async () => {
-        asked.push('fast');
-
-        return answered('fast');
-      },
-    });
-
-    expect(await decide?.(request)).toEqual(answered('clef'));
+    expect(await decisionPortOf(clef(true, asked), fast(asked, true))(request)).toEqual(answered('clef'));
     expect(asked).toEqual(['clef']);
   });
 
-  test('without Workers AI the trusted fast tier answers; untrusted, Clef says what to connect', async () => {
+  // Every null a consumer reads was said to the owner: Clef's refusal says what to connect.
+  test('where Clef refused, the trusted fast tier answers; untrusted, Clef\'s refusal stands', async () => {
     const asked: string[] = [];
 
-    expect(await decisionPortOf({ clef: clef(false, asked), structured: async () => answered('fast') })?.(request)).toEqual(answered('fast'));
-    expect(asked).toEqual([]);
-    expect(await decisionPortOf({ clef: clef(false, asked), structured: async () => undefined })?.(request)).toBeNull();
-    expect(asked).toEqual(['clef']);
-  });
-
-  test('a host with no Clef answers nothing the fast tier is not trusted with, and a host with neither has no port', async () => {
-    expect(await decisionPortOf({ clef: null, structured: async () => undefined })?.(request)).toBeNull();
-    expect(decisionPortOf({ clef: null, structured: null })).toBeUndefined();
+    expect(await decisionPortOf(clef(false, asked), fast(asked, true))(request)).toEqual(answered('fast'));
+    expect(await decisionPortOf(clef(false, asked), fast(asked, false))(request)).toBeNull();
+    expect(asked).toEqual(['clef refused, said', 'fast', 'clef refused, said', 'fast']);
   });
 });

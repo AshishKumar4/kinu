@@ -35,7 +35,7 @@ import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from "./computer-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox } from "./sandbox-exec-lane"
 import { previewHostSuffix } from "@kinu.run/core";
-import { accountDeps, createDecisionPort, createStructuredDecider, decisionPortOf, WORKERS_AI_PROVIDER_ID } from "@kinu.run/core";
+import { createDecisionPort, createStructuredDecider, decisionPortOf } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
@@ -569,22 +569,13 @@ export function createCFRuntime(
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() { return profileLane('judge'); },
     get fastLlm() { return profileLane('fast'); },
-    decide: decisionPortOf({
-      clef: resolveTurnProfile === undefined ? null : {
-        port: createDecisionPort({
-          run: decisionRunOf({ env, userDO: userCredentialSourceFor(env, actor) }),
-          model: async () => (await resolveTurnProfile()).decisionModel,
-          report: hooks.reportModelCall,
-          refusals: hooks.refusals,
-        }),
-        // Clef's transport (`decisionRunOf`) is the Workers AI provider's: the binding, else the owner's Cloudflare login.
-        reachable: async () => {
-          const providers = actorProviderRegistry({ env, actor, currentTurn: hooks.currentTurn }, 'Kinu (rating)');
-
-          return await providers.registry.get(WORKERS_AI_PROVIDER_ID)?.isAvailable(accountDeps(providers.deps, WORKERS_AI_PROVIDER_ID)) ?? false;
-        },
-      },
-      structured: fastLane === undefined ? null : createStructuredDecider(actor.actor, fastLane),
+    ...(resolveTurnProfile !== undefined && fastLane !== undefined && {
+      decide: decisionPortOf(createDecisionPort({
+        run: decisionRunOf({ env, userDO: userCredentialSourceFor(env, actor) }),
+        model: async () => (await resolveTurnProfile()).decisionModel,
+        report: hooks.reportModelCall,
+        refusals: hooks.refusals,
+      }), createStructuredDecider(actor.actor, fastLane)),
     }),
     executionRouter,
     shell,

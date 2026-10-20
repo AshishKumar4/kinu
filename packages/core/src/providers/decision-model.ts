@@ -14,7 +14,6 @@ import type { AuthResolver, WorkersAIRunBinding } from './types';
 import { KinuError, settle, tolerate, toKinuError } from '../obs/index';
 import { readJsonObjectText, type JsonObject } from '../utils/json';
 import type { ModelCallSink } from '../events/model-call';
-import type { StructuredDecider } from './structured-decision';
 import type { Usage } from '../usage';
 import type { TierRefusals } from '../types/refusals';
 import { OWNER_FIXABLE_REFUSALS, providerRefusalCode } from './util';
@@ -121,26 +120,22 @@ export function createDecisionPort(opts: {
 }
 
 
+/** A decision answered by the fast tier's trusted models (`evolution/structured-decision.ts`); undefined where none it
+ *  walks is trusted for every question asked. */
+export type StructuredDecider = (request: DecisionRequest) => Promise<DecisionResult | null | undefined>;
+
 /**
- * The one decision port a host serves. Clef where the account reaches Workers AI; otherwise the fast tier's chat model
- * answering categories (`structured-decision.ts`), where the agreement it measured trusts it for every question asked;
- * otherwise Clef again, which says once what the owner must connect, or nothing on a host Clef cannot serve.
+ * The one decision port a host serves: Clef, and where Clef refused for its owner to fix (no Workers AI, a spent
+ * allowance), already saying so, the fast tier's chat model answering categories, for the questions its measured
+ * agreement with Clef trusts it with. Any other request answers Clef's null.
  */
-export function decisionPortOf(opts: {
-  readonly clef: { readonly port: DecisionPort; readonly reachable: () => Promise<boolean> } | null;
-  readonly structured: StructuredDecider | null;
-}): DecisionPort | undefined {
-  const { clef, structured } = opts;
-
-  if (clef === null && structured === null) return undefined;
-
+export function decisionPortOf(clef: DecisionPort, structured: StructuredDecider): DecisionPort {
   return async (request) => {
-    if (clef !== null && await clef.reachable()) return await clef.port(request);
-    const answered = structured === null ? undefined : await structured(request);
+    const answered = await clef(request);
 
-    if (answered !== undefined) return answered;
+    if (answered !== null) return answered;
 
-    return clef === null ? null : await clef.port(request);
+    return (await structured(request)) ?? null;
   };
 }
 

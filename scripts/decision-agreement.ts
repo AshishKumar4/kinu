@@ -1,6 +1,6 @@
 /**
  * The agreement table a chat model must clear before the fast tier answers decisions for an account Clef does not
- * serve (`core/src/providers/structured-decision.ts`, `AGREEMENT`): the same recorded turns rated by Clef and by the
+ * serve (`core/src/evolution/structured-decision.ts`, `AGREEMENT`): the same recorded turns rated by Clef and by the
  * chat model answering categories, through the one production rater (`rateTurn`), and the same batches of them
  * triaged (`TRIAGE`, five turns as a cadence dream takes them), compared question by question as the consumer reads
  * each answer. Each share is printed beside the share a constant answer would get (Clef's most common answer).
@@ -9,9 +9,9 @@
  *   … bun scripts/decision-agreement.ts --db workspace.sqlite [--limit 40] --model <spec>
  *
  * `--turns` reads one `{request, actions, answer, followup}` object a line; `--db` reads the rated turns a workspace's
- * `turn_ratings` holds, one per turn. Clef runs on Workers AI with the account's token. `--model` is a fast-tier spec:
- * `workers-ai/@cf/…` on the same account, or `opencode-go/<id>` with the eval key (`eval-provider-keys.json`), each
- * built as the product builds it; or `workers-ai/@cf/cloudflare/clef-flash`, the decision model an owner may pick instead
+ * `turn_ratings` holds, one per turn. Clef runs on Workers AI with the account's token. `--model` is a fast-tier spec,
+ * resolved as a CLI resolves it: `workers-ai/@cf/…` on the same account, any other provider on the eval keys
+ * (`eval-provider-keys.json`); or `workers-ai/@cf/cloudflare/clef-flash`, the decision model an owner may pick instead
  * of Clef, whose agreement is the bar (`TRUST_BAR`).
  */
 import { readFileSync } from 'node:fs';
@@ -24,9 +24,9 @@ import { TRIAGE } from '../packages/core/src/evolution/refinement-lane';
 import {
   createDecisionPort, DECISION_MODELS, DEFAULT_DECISION_MODEL, type DecisionModel, type DecisionPort, type DecisionRun,
 } from '../packages/core/src/providers/decision-model';
-import { answerStructured } from '../packages/core/src/providers/structured-decision';
-import { createWorkersAIProvider } from '../packages/core/src/providers/workers-ai-provider';
-import { createWireModel, sdkWire, withModelStack, type WireProtocol } from '../packages/core/src/providers/wire-model';
+import { answerStructured } from '../packages/core/src/evolution/structured-decision';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../packages/core/src/providers/workers-ai';
+import { createLocalModelResolver } from '../packages/cli-backend/src/model-resolver';
 import { parseModelSpec } from '../packages/core/src/providers/types';
 import { routedLlm } from '../packages/core/src/profiles/model-lane';
 import type { ModelRouteResolution } from '../packages/core/src/profiles/model-route';
@@ -132,51 +132,21 @@ function clefRun(account: string, token: string): DecisionRun {
   };
 }
 
-/** OpenCode Go's endpoint and the API each of its models speaks, as models.dev lists them. */
-const OPENCODE_GO = 'https://opencode.ai/inference/go/openai/v1';
-
-async function opencodeGoWire(modelId: string): Promise<WireProtocol> {
-  const listed = v.parse(
-    v.object({ 'opencode-go': v.object({ models: v.record(v.string(), v.object({ provider: v.optional(v.object({ npm: v.optional(v.string()) })) })) }) }),
-    await (await fetch('https://models.dev/api.json')).json(),
-  );
-
-  return sdkWire(listed['opencode-go'].models[modelId]?.provider?.npm ?? '@ai-sdk/openai-compatible');
-}
-
-function opencodeGoKey(): string {
+/** `spec` as a CLI resolves it (`createLocalModelResolver`, the one model stack): Workers AI through the account's
+ *  endpoint, every other provider on the eval keys (`eval-provider-keys.json`). */
+function chatModel(spec: string, cloudflare: { readonly account: string; readonly token: string }): LanguageModel {
   const file = keysIn(EVAL_PROVIDER_KEYS);
-  const key = 'why' in file ? undefined : file.keys['opencode-go.bearer'];
 
-  if (key === undefined) throw new Error(`no opencode-go key in ${EVAL_PROVIDER_KEYS}`);
-
-  return key;
-}
-
-/** `spec`'s client as the product builds it: Workers AI on the account, OpenCode Go on the eval key. */
-async function builtModel(spec: string, cloudflare: { readonly account: string; readonly token: string }): Promise<LanguageModel> {
-  const { provider, modelId } = parseModelSpec(spec);
-
-  if (provider === 'workers-ai') {
-    return createWorkersAIProvider().createModel(modelId, {
-      env: {}, sessionAffinity: 'kinu-agreement', workspaceAffinity: 'kinu-agreement', hasCredential: async () => true,
-      getAuth: async () => ({ baseURL: `https://api.cloudflare.com/client/v4/accounts/${cloudflare.account}/ai/v1`, headers: { authorization: `Bearer ${cloudflare.token}` } }),
-    });
-  }
-
-  if (provider !== 'opencode-go') throw new Error(`no route to ${spec}: name a workers-ai/ or opencode-go/ model`);
-
-  return createWireModel({
-    name: 'opencode-go', modelId, baseURL: OPENCODE_GO, protocol: await opencodeGoWire(modelId), reasoning: true,
-    headers: { authorization: `Bearer ${opencodeGoKey()}`, 'x-opencode-session': 'kinu-agreement' },
+  const resolver = createLocalModelResolver({
+    llm: {
+      name: 'workers-ai', baseURL: `https://api.cloudflare.com/client/v4/accounts/${cloudflare.account}/ai/v1`,
+      headers: { Authorization: `Bearer ${cloudflare.token}` }, model: DEFAULT_WORKERS_AI_MODEL_SPEC.slice('workers-ai/'.length),
+    },
+    defaultSpec: spec,
+    credentials: () => ({ apiKeyAccounts: 'why' in file ? {} : file.keys }),
   });
-}
 
-/** `spec` under the one model stack (retries on a rate limit or an outage), as the registry resolves a model. */
-async function chatModel(spec: string, cloudflare: { readonly account: string; readonly token: string }): Promise<LanguageModel> {
-  const { provider, modelId } = parseModelSpec(spec);
-
-  return withModelStack(await builtModel(spec, cloudflare), { provider, modelId, lane: provider });
+  return resolver.resolveModel(spec, { sessionAffinity: 'kinu-agreement', workspaceAffinity: 'kinu-agreement' });
 }
 
 /** The chat model answering categories, alone on its route, as the fast tier's decider asks it. */
@@ -250,7 +220,7 @@ if (import.meta.main) {
 
   const structured = isDecisionModel(measured)
     ? createDecisionPort({ run: clefRun(account, token), model: async () => measured, report: () => {}, refusals: { changes: () => 0, refused: () => {}, answered: () => {} } })
-    : structuredPort(measured, await chatModel(measured, { account, token }));
+    : structuredPort(measured, chatModel(measured, { account, token }));
 
   const ratings = await inFours(turns, async (turn) => ({ clef: await rated(clef, turn), structured: await rated(structured, turn) }));
   const triages = await inFours(triageStates(turns), async (state): Promise<ReadPair> => [await triaged(clef, state), await triaged(structured, state)]);

@@ -1,5 +1,5 @@
 /**
- * Decisions for an account Clef does not serve (no Workers AI): the fast tier answers each question with one category
+ * Decisions Clef refused (an account without Workers AI): the fast tier answers each question with one category
  * through the model's structured output, and each category stands for a fixed answer of its own (`STRUCTURED_NOUL`),
  * not Clef's probabilities. A model answers only the questions its measured agreement with Clef clears
  * (`AGREEMENT`, measured by `scripts/decision-agreement.ts`); a model or question never measured is not trusted.
@@ -7,9 +7,9 @@
 
 import * as v from 'valibot';
 import { Effect } from 'effect';
-import type { DecisionAnswer, DecisionQuestion, DecisionRequest, DecisionResult } from './decision-model';
-import { parseModelSpec } from './types';
-import { OWNER_FIXABLE_REFUSALS, providerRefusalCode } from './util';
+import type { DecisionAnswer, DecisionQuestion, DecisionRequest, DecisionResult, StructuredDecider } from '../providers/decision-model';
+import { parseModelSpec } from '../providers/types';
+import { OWNER_FIXABLE_REFUSALS, providerRefusalCode } from '../providers/util';
 import type { ActorReference } from '../identity/actor-handle';
 import { objectOnRoute, onProfileRoute, type ModelLaneComponents, type RouteCallComponents } from '../profiles/model-lane';
 import type { ModelRouteResolution } from '../profiles/model-route';
@@ -140,18 +140,8 @@ function trustedRoute(route: ModelRouteResolution, request: DecisionRequest): Mo
   return first === undefined ? null : { ...route, model: first.model, reasoningEffort: first.reasoningEffort, fallbacks: rest };
 }
 
-/** A decision answered by the fast tier's trusted models; undefined where none it walks is trusted for every question. */
-export type StructuredDecider = (request: DecisionRequest) => Promise<DecisionResult | null | undefined>;
-
-/**
- * The fast tier's route is read per call, so a changed setting applies to the next decision. Null while the table
- * trusts no model for any question: no decision could be answered, and a host without Clef keeps no decision port.
- */
-export function createStructuredDecider(actor: ActorReference, lane: ModelLaneComponents): StructuredDecider | null {
-  const trustsAny = [...AGREEMENT.values()].some((measured) => Object.entries(measured).some(([id, agreement]) => agreement >= (TRUST_BAR.get(id) ?? Infinity)));
-
-  if (!trustsAny) return null;
-
+/** The fast tier's route is read per call, so a changed setting applies to the next decision. */
+export function createStructuredDecider(actor: ActorReference, lane: ModelLaneComponents): StructuredDecider {
   return (request) => onProfileRoute(actor, 'fast', lane, async (fast) => {
     const route = trustedRoute(fast, request);
 
