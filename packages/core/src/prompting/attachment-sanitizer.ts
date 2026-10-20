@@ -10,13 +10,15 @@ import type { AssistantModelMessage, DataContent, FilePart, ImagePart, ModelMess
 import { untagged } from '../utils/file-data';
 
 import type { ModelInputModality } from '../providers/types';
+import { servingRoute } from '../providers/serving-route';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
-import { classify, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, settle } from '../obs/index';
 import { Effect } from 'effect';
 import { UPLOADS_ROOT } from '../vfs/workspace-path';
 import { resolvePath, vfsReference, type PathPlanes } from '../vfs/resolve';
 import * as v from 'valibot';
 import { sha256Hex } from '../safety/argument-digest';
+import { ensureDir, fileHolds, publishContent } from '../utils/vfs-helpers';
 
 /** Every model accepts text. */
 export type MediaModality = Exclude<ModelInputModality, 'text'>;
@@ -33,12 +35,12 @@ export interface AttachmentPolicy {
 /** Other providers use the OpenAI-compatible schema, where a `type:"file"` part is a guaranteed 400. */
 const PDF_CAPABLE_PROVIDERS: ReadonlySet<string> = new Set(['anthropic', 'claude', 'openai', 'codex', 'chatgpt']);
 
-/** Transport ceiling ∩ catalog input modalities; the ceiling alone when the catalog has no entry. */
+/** The serving API's ceiling (`servingRoute`) ∩ catalog input modalities; the ceiling alone when the catalog has no entry. */
 export function acceptedMediaForModel(opts: {
-  provider?: string;
+  spec?: string;
   catalogInputModalities?: readonly ModelInputModality[];
 }): ReadonlySet<MediaModality> {
-  const ceiling: ReadonlySet<MediaModality> = PDF_CAPABLE_PROVIDERS.has(opts.provider ?? '')
+  const ceiling: ReadonlySet<MediaModality> = PDF_CAPABLE_PROVIDERS.has(servingRoute(opts.spec ?? '')?.provider ?? '')
     ? new Set<MediaModality>(['image', 'pdf'])
     : new Set<MediaModality>(['image']);
 
@@ -386,25 +388,17 @@ function saveUpload({ vfs, planes }: Pick<AttachmentPolicy, 'vfs' | 'planes'>, n
       const here = onThisMachine(path, planes);
 
       if (!(yield* Effect.promise(() => exists(vfs, here)))) {
-        yield* Effect.promise(() => madeDirectory(vfs, onThisMachine(UPLOADS_ROOT, planes), 'creating the uploads directory'));
+        yield* Effect.promise(() => ensureDir(vfs, onThisMachine(UPLOADS_ROOT, planes)));
         yield* Effect.promise(async () => vfs.writeFile(here, bytes));
 
         return path;
       }
 
-      if (yield* Effect.promise(() => holdsBytes(vfs, here, bytes))) return path;
+      if (yield* Effect.promise(() => fileHolds(vfs, here, bytes))) return path;
     }
 
     return yield* new KinuError('bad_input', `${String(UPLOAD_COPIES)} uploads are named ${name} already: rename the file to upload it`);
   });
-}
-
-async function madeDirectory(vfs: VFS, directory: string, doing: string): Promise<void> {
-  try {
-    await vfs.mkdir(directory, { recursive: true });
-  } catch (err) {
-    if (classify({ cause: err }) !== 'eexist') throw toKinuError({ doing, cause: err, otherwise: 'io' });
-  }
 }
 
 /**
@@ -415,27 +409,10 @@ async function madeDirectory(vfs: VFS, directory: string, doing: string): Promis
 export async function storeAttachment(vfs: VFS, directory: string, bytes: Uint8Array, mediaType: string): Promise<string> {
   const path = `${directory}/${sha256Hex(bytes)}.${extensionFor(mediaType)}`;
 
-  if (await holdsBytes(vfs, path, bytes)) return path;
-  await madeDirectory(vfs, directory, 'creating the offloaded spill directory');
-  await vfs.writeFile(path, bytes);
+  // Mismatched bytes are the spill's own to repair: rewritten.
+  await publishContent(vfs, { directory, path, bytes, otherBytes: 'rewrite' });
 
   return path;
-}
-
-/** Absent is the ordinary first spill; mismatched bytes are rewritten. */
-async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<boolean> {
-  if (!(await exists(vfs, path))) return false;
-  const stored = await vfs.readFile(path);
-  // Narrowed by class, as prompting/agents-md.ts does for the same VFS return.
-  const existing = stored instanceof Uint8Array ? stored : new TextEncoder().encode(stored);
-
-  if (existing.length !== bytes.length) return false;
-
-  for (let i = 0; i < bytes.length; i++) {
-    if (existing[i] !== bytes[i]) return false;
-  }
-
-  return true;
 }
 
 /** Remote URLs are referenced directly (equally byte-stable). */

@@ -2,7 +2,9 @@
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 import type { ModelProvider, ModelInfo } from './types';
-import { authCacheKey, createAuthedFetch } from './util';
+import { createAuthedFetch } from './util';
+import { catalogBody, credentialCatalog } from './credential-catalog';
+import { Effect } from 'effect';
 import { knownReasoningEfforts } from './reasoning-effort';
 import { heardFetch } from './middleware/attempt';
 import { lazyModel } from './wire-model';
@@ -33,9 +35,7 @@ const OpenRouterCatalogSchema = v.object({
 export const OPENROUTER_DEFAULT_MODEL = `openai/${OPENAI_DEFAULT_MODEL}`;
 
 export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelProvider {
-  const ttl = 5 * 60_000;
-  // Keyed by credential so a key change invalidates the catalog.
-  let catalogCache: { at: number; authKey: string; models: ModelInfo[] } | null = null;
+  const catalog = credentialCatalog('OpenRouter', 5 * 60_000);
 
   return {
     id: 'openrouter',
@@ -46,43 +46,20 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
     unavailableReason() { return 'No OpenRouter API key (cred key: `openrouter.bearer`).'; },
 
     async listModels(deps) {
-      const auth = await deps.getAuth(OPENROUTER_CRED_KEY);
+      return catalog(await deps.getAuth(OPENROUTER_CRED_KEY), (auth) => Effect.gen(function* () {
+        const body = yield* catalogBody('openrouter.ai', OpenRouterCatalogSchema, () => (deps.fetch ?? fetch)(`${OPENROUTER_BASE_URL}/models`, { headers: auth.headers }));
 
-      if (!auth) {
-        catalogCache = null;
-
-        return [];
-      }
-
-      const authKey = authCacheKey(auth);
-
-      if (catalogCache && catalogCache.authKey === authKey && Date.now() - catalogCache.at < ttl) {
-        return catalogCache.models;
-      }
-
-      const fetchFn = deps.fetch ?? fetch;
-      // No catch: an unreachable OpenRouter is not an OpenRouter with no models.
-      const res = await fetchFn(`${OPENROUTER_BASE_URL}/models`, { headers: auth.headers });
-
-      if (!res.ok) return [];
-      const body = v.safeParse(OpenRouterCatalogSchema, await res.json());
-
-      if (!body.success) return [];
-
-      const models: ModelInfo[] = (body.output.data ?? []).map(m => ({
-        id: m.id,
-        label: m.name ?? m.id,
-        contextWindow: m.context_length,
-        capabilities: m.architecture?.modality?.includes('image')
-          ? ['tools', 'streaming', 'vision']
-          : ['tools', 'streaming'],
-        // A row without a `reasoning` block is a non-reasoning model: no levels.
-        reasoningEfforts: knownReasoningEfforts(m.reasoning?.supported_efforts ?? []),
+        return (body.data ?? []).map((m): ModelInfo => ({
+          id: m.id,
+          label: m.name ?? m.id,
+          contextWindow: m.context_length,
+          capabilities: m.architecture?.modality?.includes('image')
+            ? ['tools', 'streaming', 'vision']
+            : ['tools', 'streaming'],
+          // A row without a `reasoning` block is a non-reasoning model: no levels.
+          reasoningEfforts: knownReasoningEfforts(m.reasoning?.supported_efforts ?? []),
+        }));
       }));
-
-      catalogCache = { at: Date.now(), authKey, models };
-
-      return models;
     },
 
     createModel(modelId, deps): LanguageModel {

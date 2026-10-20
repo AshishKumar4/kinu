@@ -241,7 +241,6 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     tierModel = 'local/b';
     const seen: string[] = [];
     rt.setModelForRoute?.(route => ({
-      async *stream() { yield ''; },
       object: async () => { throw new Error('no schema is asked of this lane'); },
       complete: async () => {
         seen.push(route.model);
@@ -307,6 +306,36 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       .map((event) => event.type === 'turn-end' ? event.turn.assistantResponse : '');
 
     expect(answers).toEqual(['from a', 'from a', 'from b']);
+  });
+
+  // The InternalFish audit: an account switch changed no providers' revision, so the listing the profile read stayed the
+  // old account's until the session reopened; a named endpoint's account lists its own models and windows.
+  test("a provider account switched mid-session is listed for the next turn, with no restart", async () => {
+    let sweeps = 0;
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => namedSpec(spec) ?? 'local/a',
+      resolveModel: () => fakeModel('answered'),
+      listProviders: async () => [],
+      listModels: async () => {
+        sweeps += 1;
+
+        return { models: [{ provider: 'local', id: 'a', label: 'a', capabilities: ['streaming' as const] }], failures: [] };
+      },
+      modelInfo: async () => null,
+      ...resolverRest,
+    };
+
+    const { session } = setupWithResolver(resolver, { profileAuthority: tierAuthority(() => 'local/a') });
+
+    await session.send('first', { id: crypto.randomUUID() });
+    await session.send('second', { id: crypto.randomUUID() });
+    expect(sweeps).toBe(1);
+
+    session.setProviderAccount('local', 'work');
+    await session.send('third', { id: crypto.randomUUID() });
+    expect(sweeps).toBe(2);
+    await session.end();
   });
 
   test('the account default tier drives the next turn model', async () => {
@@ -1493,7 +1522,6 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
     const completions: string[] = [];
 
     const reviewLlm = {
-      stream: rt.llm.stream.bind(rt.llm),
       complete: async (prompt: string) => {
         completions.push(prompt);
 

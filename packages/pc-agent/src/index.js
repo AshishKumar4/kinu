@@ -258,9 +258,9 @@ const TERMINAL_REPLAY_BYTES = 16 * 1024;
  * owner's web session. One call is one correlated RPC that answers when the
  * body ends; the head and each body chunk go back as uncorrelated frames
  * naming the call, so an answer streams as the provider sends it. The names
- * and the allow-list mirror core's DEVICE_RELAY (execution/device-relay.ts),
- * codexEgressAllowed (providers/codex.ts) and chatgptEgressAllowed
- * (providers/chatgpt.ts); cf-backend's pc-agent test holds them equal.
+ * mirror core's DEVICE_RELAY (execution/device-relay.ts), and the allow-list is
+ * core's own (providers/relay-policy.ts); cf-backend's pc-agent test holds the
+ * names equal.
  *
  * Two hosts. chatgpt.com refuses Kinu's cloud network, so a Codex call comes
  * with the owner's access token in its headers; it lives in this request's
@@ -276,10 +276,8 @@ const RELAY_BODY_FRAME = FRAMES.relayBody;
 
 const CHATGPT_HOST = 'api.openai.com';
 
-const RELAY_ROUTES = Object.freeze({
-  'chatgpt.com': Object.freeze(['GET /backend-api/codex/models', 'POST /backend-api/codex/responses', 'GET /backend-api/wham/usage']),
-  [CHATGPT_HOST]: Object.freeze(['GET /v1/models', 'POST /v1/responses']),
-});
+/** What the relay carries, the hub's own policy (core providers/relay-policy.ts): each end checks the same rule. */
+const { relayRefusal } = require('../../core/src/providers/relay-policy.ts');
 
 /** The hub's calls on this machine's ChatGPT sign-in, core's DEVICE_CHATGPT. */
 const CHATGPT_METHODS = Object.freeze({ status: METHODS.chatgptStatus, signIn: METHODS.chatgptSignIn, signOut: METHODS.chatgptSignOut });
@@ -950,9 +948,12 @@ function listPage(listed, offset, limit, show) {
  * What a session's shell reads in place of ~/.bashrc: that rc, then the session's own history file. A session's
  * commands are its own (the owner's call, 2026-10-20): with the owner's HOME they went to ~/.bash_history, and an rc
  * naming its own HISTFILE took them there just the same, so the file is set after the rc, and bash reads it after its
- * startup files. Sandboxed, `~` is the agent's home.
+ * startup files. Each command is appended as the next prompt is drawn (`history -a`, before any PROMPT_COMMAND the rc
+ * set): a shell saves its history only as it exits, and the daemon's close kills it right after the hangup. Sandboxed,
+ * `~` is the agent's home.
  */
-const SESSION_RC = '[ -f ~/.bashrc ] && . ~/.bashrc\nHISTFILE=$KINU_SESSION_HISTORY\nunset KINU_SESSION_HISTORY\nshopt -s histappend\n';
+const SESSION_RC = '[ -f ~/.bashrc ] && . ~/.bashrc\nHISTFILE=$KINU_SESSION_HISTORY\nunset KINU_SESSION_HISTORY\nshopt -s histappend\n'
+  + 'PROMPT_COMMAND="history -a${PROMPT_COMMAND:+; $PROMPT_COMMAND}"\n';
 
 /** Where a session's history and the rc that names it are kept: Kinu's directory, or under a sandbox the agent's home
  *  (`agentHome`), where Kinu's own directory is masked. */
@@ -1379,19 +1380,6 @@ function execCommand(msg, ws, ctx) {
 }
 
 /** Why `method url` is not relayed, or null when it is. */
-function relayRefusal(method, url) {
-  const target = URL.parse(String(url ?? ''));
-
-  if (target === null || !Object.hasOwn(RELAY_ROUTES, target.hostname)) return `the provider relay does not reach ${String(url)}`;
-  const routes = RELAY_ROUTES[target.hostname];
-
-  if (target.protocol !== 'https:' || target.port !== '' || target.username !== '' || target.password !== '') {
-    return `the provider relay does not reach ${String(url)}`;
-  }
-
-  return routes.includes(`${method} ${target.pathname}`) ? null : `the provider relay does not carry ${method} ${target.pathname}`;
-}
-
 function relayHeaders(pairs) {
   const headers = new Headers();
 
@@ -2519,7 +2507,6 @@ module.exports = {
   RELAY_METHOD,
   RELAY_HEAD_FRAME,
   RELAY_BODY_FRAME,
-  RELAY_ROUTES,
   relayRefusal,
   CHATGPT_METHODS,
   CHATGPT_SIGNED_OUT,

@@ -3,7 +3,7 @@
 import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import { BUILTIN_PROFILE_CATALOG, type ProfileCatalogEnvelope, type ReasoningEffort, type TierAssignment } from '@kinu.run/core';
-import { firstOpenAiCompatModel, resolveModelDefaults } from './config';
+import { firstOpenAiCompatModel, usableModelDefaults } from './config';
 import { createConfiguredLocalModelResolver } from './local-model-resolver';
 import {
   loadLocalProfileAuthority, readAccountProfile, readDefaultTier, resolveProfileAuthority, writeAccountProfile,
@@ -28,7 +28,7 @@ export function loadActiveProfile(): Promise<ProfileCatalogEnvelope> {
     const existing = loadLocalProfileAuthority();
 
     if (existing) return existing;
-    const model = resolveModelDefaults().spec ?? (yield* Effect.promise(async () => firstOpenAiCompatModel()));
+    const model = usableModelDefaults().spec ?? (yield* Effect.promise(async () => firstOpenAiCompatModel()));
 
     if (!model) return yield* Effect.die(new Error('No model is set up: run kinu setup, or kinu provider connect <provider>.'));
 

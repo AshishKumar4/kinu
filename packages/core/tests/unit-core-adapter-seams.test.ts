@@ -9,12 +9,12 @@ import * as v from 'valibot';
 import { setDiagnosticsSink } from '../src/obs/index';
 import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries, createRecordingLogger } from '@kinu.run/test-utils';
 import {
-  buildModelCallEvent, type ModelCallReport,
+  pricedModelCallEvent, type ModelCallReport,
   classifyRunEnd,
   TOOL_CALLS_PENDING, TURN_ENDED_MID_WORK,
   declareTerminalRoster,
   AgentOrchestrator, recordedTurn, type AgentOrchestratorDeps,
-  providerSnapshotOf, ProviderListingCache, type ProviderListing,
+  providerListingKey, providerSnapshotOf, ProviderListingCache, type ProviderListing,
   defaultSpecFor, DEFAULT_WORKERS_AI_MODEL_SPEC, workersAiSpec,
   DEFAULT_ROLE_ID, SUBMIT_PLAN_TOOL, BUILTIN_TOOLS,
   craftedToolDescription, type CraftedTool,
@@ -33,7 +33,7 @@ describe('EVENT_VARIANTS — the array and the type cannot disagree', () => {
 
 });
 
-describe('buildModelCallEvent — usage is always present, pricing is guarded', () => {
+describe('a model call row — usage is always present, pricing is guarded', () => {
   // Per-1M-token rates: 1M input + 1M output tokens cost 1 + 2 = $3.
   const pricing: ModelPricing = { input: 1, output: 2 };
 
@@ -41,50 +41,47 @@ describe('buildModelCallEvent — usage is always present, pricing is guarded', 
     source: 'judge', usage: { input: 1_000_000, output: 1_000_000 }, spec: 'openai/gpt-x', ...over,
   });
 
+  /** A catalog that rates only `priced`; `null` before its lookup lands. */
+  const catalog = (priced: string | null) => ({ pricing: (spec?: string) => (priced !== null && spec === priced ? pricing : null) });
+
   // Both backends must shape usage for an unreported call identically, or a spend reader cannot
   // tell unmeasured from not recorded.
   test('a provider that reported nothing still carries usage, as {}', () => {
-    const event = buildModelCallEvent(report({ usage: {} }), { effectiveSpec: 'openai/gpt-x', pricing });
+    const event = pricedModelCallEvent(report({ usage: {} }), catalog('openai/gpt-x'));
     expect(event.usage).toEqual({});
     expect('usage' in event).toBe(true);
   });
 
   test('a measured call carries what the provider said', () => {
-    const event = buildModelCallEvent(report(), { effectiveSpec: 'openai/gpt-x', pricing });
+    const event = pricedModelCallEvent(report(), catalog('openai/gpt-x'));
     expect(event.usage).toEqual({ input: 1_000_000, output: 1_000_000 });
   });
 
-  test('priced when the rate belongs to the model that served the call', () => {
-    const event = buildModelCallEvent(report(), { effectiveSpec: 'openai/gpt-x', pricing });
+  test('priced at the rate of the model that served the call', () => {
+    const event = pricedModelCallEvent(report(), catalog('openai/gpt-x'));
     expect(event.usd).toBeCloseTo(3, 10);
   });
 
-  // A judge runs on a different model; pricing it at the actor's rate would invent a number.
-  test('NOT priced when the call ran on a different model than the rate', () => {
-    const event = buildModelCallEvent(report(), { effectiveSpec: 'anthropic/claude-x', pricing });
+  // A judge runs on a different model; pricing it at another model's rate would invent a number.
+  test('NOT priced when the catalog has no rate for the model the call ran on', () => {
+    const event = pricedModelCallEvent(report(), catalog('anthropic/claude-x'));
     expect(event.usd).toBeUndefined();
     expect(event.usage).toEqual({ input: 1_000_000, output: 1_000_000 });
   });
 
   test('NOT priced when the report carries no spec at all', () => {
-    const bare = buildModelCallEvent(report({ spec: undefined }), { effectiveSpec: 'openai/gpt-x', pricing });
+    const bare = pricedModelCallEvent(report({ spec: undefined }), catalog('openai/gpt-x'));
     expect(bare.usd).toBeUndefined();
     expect('spec' in bare).toBe(false);
   });
 
-  // Guards the `undefined === null` accident: an absent spec must not match an absent effective spec.
-  test('an absent spec does not match an absent effective spec', () => {
-    const event = buildModelCallEvent(report({ spec: undefined }), { effectiveSpec: null, pricing });
-    expect(event.usd).toBeUndefined();
-  });
-
   test('NOT priced before the catalog lookup lands', () => {
-    const event = buildModelCallEvent(report(), { effectiveSpec: 'openai/gpt-x', pricing: null });
+    const event = pricedModelCallEvent(report(), catalog(null));
     expect(event.usd).toBeUndefined();
   });
 
   test('modelId rides when the provider named what served the call', () => {
-    const event = buildModelCallEvent(report({ modelId: 'gpt-x-2026-01' }), { effectiveSpec: null, pricing: null });
+    const event = pricedModelCallEvent(report({ modelId: 'gpt-x-2026-01' }), catalog(null));
     expect(event.modelId).toBe('gpt-x-2026-01');
   });
 });
@@ -477,8 +474,37 @@ describe('providerSnapshotOf — one formula, deterministic', () => {
   });
 });
 
+/** One listing's key, for the reads that never change it. */
+const KEY = providerListingKey(1, {});
+
 describe('ProviderListingCache — complete listings only, guarded by generation', () => {
   const clean: ProviderListing = { models: ['a/1'], failures: [] };
+
+  // The InternalFish audit: a local account switch changed no providers' revision, so the cached listing stayed the old
+  // account's until the session reopened. A listing is keyed on the revision and the accounts both.
+  test("a read under another revision or another provider's account is a new listing; the same key is a hit", async () => {
+    let sweeps = 0;
+
+    const cache = new ProviderListingCache(async () => {
+      sweeps += 1;
+
+      return clean;
+    });
+
+    const outcomes: string[] = [];
+
+    // The second read names the same accounts in another order.
+    const reads: Array<[number, Record<string, string>]> = [
+      [1, { openai: 'main', anthropic: 'main' }], [1, { anthropic: 'main', openai: 'main' }], [1, { openai: 'work', anthropic: 'main' }], [2, { openai: 'work', anthropic: 'main' }],
+    ];
+
+    for (const [revision, accounts] of reads) {
+      outcomes.push((await cache.read(providerListingKey(revision, accounts))).cache);
+    }
+
+    expect(outcomes).toEqual(['miss', 'hit', 'miss', 'miss']);
+    expect(sweeps).toBe(3);
+  });
 
   test('a complete listing is memoized; the second read is a hit', async () => {
     let sweeps = 0;
@@ -489,8 +515,8 @@ describe('ProviderListingCache — complete listings only, guarded by generation
       return clean;
     });
 
-    expect((await cache.read()).cache).toBe('miss');
-    expect((await cache.read()).cache).toBe('hit');
+    expect((await cache.read(KEY)).cache).toBe('miss');
+    expect((await cache.read(KEY)).cache).toBe('hit');
     expect(sweeps).toBe(1);
   });
 
@@ -505,8 +531,8 @@ describe('ProviderListingCache — complete listings only, guarded by generation
       return { models: ['a/1'], failures: [{ provider: 'b', reason: '503' }] };
     });
 
-    expect((await cache.read()).cache).toBe('miss');
-    expect((await cache.read()).cache).toBe('miss');
+    expect((await cache.read(KEY)).cache).toBe('miss');
+    expect((await cache.read(KEY)).cache).toBe('miss');
     expect(sweeps).toBe(2);
   });
 
@@ -521,8 +547,8 @@ describe('ProviderListingCache — complete listings only, guarded by generation
       return clean;
     });
 
-    const first = cache.read();
-    const second = cache.read();
+    const first = cache.read(KEY);
+    const second = cache.read(KEY);
     gate.resolve();
     const [a, b] = await Promise.all([first, second]);
     expect(sweeps).toBe(1);
@@ -542,11 +568,11 @@ describe('ProviderListingCache — complete listings only, guarded by generation
       return clean;
     });
 
-    const inFlight = cache.read();
+    const inFlight = cache.read(KEY);
     cache.invalidate();
     gate.resolve();
     expect((await inFlight).listing).toEqual(clean);
-    expect((await cache.read()).cache).toBe('miss');
+    expect((await cache.read(KEY)).cache).toBe('miss');
     expect(sweeps).toBe(2);
   });
 
@@ -559,10 +585,10 @@ describe('ProviderListingCache — complete listings only, guarded by generation
       return clean;
     });
 
-    await cache.read();
-    expect((await cache.read()).cache).toBe('hit');
+    await cache.read(KEY);
+    expect((await cache.read(KEY)).cache).toBe('hit');
     cache.invalidate();
-    expect((await cache.read()).cache).toBe('miss');
+    expect((await cache.read(KEY)).cache).toBe('miss');
     expect(sweeps).toBe(2);
   });
 
@@ -576,7 +602,7 @@ describe('ProviderListingCache — complete listings only, guarded by generation
       return clean;
     });
 
-    for (let i = 0; i < 5; i++) await cache.read();
+    for (let i = 0; i < 5; i++) await cache.read(KEY);
     expect(sweeps).toBe(1);
   });
 });
@@ -611,12 +637,12 @@ describe('ProviderListingCache — a store it serves from, and sweeps behind', (
       return fresh;
     }, kept1.port);
 
-    const served = await cache.read();
+    const served = await cache.read(KEY);
 
     answer.resolve();
     await kept1.settled();
 
-    expect({ served, after: await cache.read(), keeps: kept1.keeps })
+    expect({ served, after: await cache.read(KEY), keeps: kept1.keeps })
       .toEqual({ served: { listing: kept, cache: 'stored' }, after: { listing: fresh, cache: 'hit' }, keeps: [fresh] });
   });
 
@@ -626,12 +652,12 @@ describe('ProviderListingCache — a store it serves from, and sweeps behind', (
     let next = fresh;
     const cache = new ProviderListingCache(async () => next, empty.port);
 
-    const first = await cache.read();
+    const first = await cache.read(KEY);
 
     await empty.settled();
     cache.invalidate();
     next = degraded;
-    const second = await cache.read();
+    const second = await cache.read(KEY);
 
     await empty.settled();
     expect({ first: first.cache, second: second.cache, keeps: empty.keeps }).toEqual({ first: 'miss', second: 'miss', keeps: [fresh] });
@@ -647,7 +673,7 @@ describe('ProviderListingCache — a store it serves from, and sweeps behind', (
       return fresh;
     }, kept1.port);
 
-    await cache.read();
+    await cache.read(KEY);
     cache.invalidate();
     answer.resolve();
     await kept1.settled();

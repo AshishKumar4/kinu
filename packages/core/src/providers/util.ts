@@ -96,10 +96,6 @@ function withoutItemIds(message: LanguageModelV4Message): LanguageModelV4Message
   };
 }
 
-export function authCacheKey(auth: AuthResolution): string {
-  return JSON.stringify([auth.headers, auth.baseURL ?? null]);
-}
-
 /** An unreadable live model list: the built-in list stands in, and the registry reports why. */
 export class StaleModelList extends KinuError {
   readonly reason: string;

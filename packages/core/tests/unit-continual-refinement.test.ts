@@ -120,10 +120,9 @@ type Reviewer = (brief: string, edits: number) => readonly { readonly edit: numb
 
 const acceptEvery = (_brief: string, edits: number) => Array.from({ length: edits }, (_, edit) => ({ edit, verdict: 'accept' as const, note: 'it fits the turns' }));
 
-/** `refiner` and `reviewer` as one of `rt`'s tiers answers a structured call. */
-function helperRoute(rt: AgentRuntime, tier: HelperAsk['tier'], refiner: ScriptedRefiner, reviewer: Reviewer): RoutedLLM {
+/** `refiner` and `reviewer` as one tier answers a structured call. */
+function helperRoute(tier: HelperAsk['tier'], refiner: ScriptedRefiner, reviewer: Reviewer): RoutedLLM {
   return {
-    stream: (opts) => rt.llm.stream(opts),
     complete: async () => { throw new Error('a dream asks for structured answers only'); },
     object: async (prompt, schema) => {
       const role = Object.is(schema, DreamVerdictsSchema) ? 'dream_reviewer' : 'dreamer';
@@ -224,8 +223,8 @@ function fixture(): Fixture {
         return { answers: { fixes: { type: 'noul', noul: better ? 0.9 : 0.1 }, harms: { type: 'noul', noul: better ? 0.1 : 0.9 } }, usage: { input: 1, output: 1 } };
       };
 
-      rt.fastLlm = helperRoute(rt, 'fast', refiner, reviewer);
-      rt.judgeModel = helperRoute(rt, 'deep', refiner, reviewer);
+      rt.fastLlm = helperRoute('fast', refiner, reviewer);
+      rt.judgeModel = helperRoute('deep', refiner, reviewer);
 
       return { control: scriptedControl(rt), facts, approvals, skillsVfs: rt.agentStateVfs, recordedTurns: async () => [] };
     },

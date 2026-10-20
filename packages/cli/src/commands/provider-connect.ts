@@ -230,8 +230,9 @@ export function readProviderConnections(): Promise<ProviderConnections> {
       const hint = `kinu provider connect ${descriptor.id}`;
 
       switch (descriptor.id) {
+        // Connected as the credential fetch above is: by the one session rule, `KINU_TOKEN` included.
         case 'cloudflare':
-          return config.accessToken === undefined
+          return 'signedOut' in account
             ? { descriptor, connected: false, detail: hint }
             : { descriptor, connected: true, detail: config.user?.email ?? 'your account' };
         case 'claude':

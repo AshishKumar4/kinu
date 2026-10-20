@@ -49,7 +49,7 @@ const VERSION_STAMP = 'pc-agent.version';
  * (SECURITY-devices C1: an unsigned frame gave a hostile hub persistent code
  * execution on every machine).
  */
-const { RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, verifyRelease } = require('../../core/src/http/release-message.ts');
+const { artifactRefusal, releasePublicKey, verifyRelease } = require('../../core/src/http/release-message.ts');
 
 
 /** Present from the moment a successor is started until a daemon connects:
@@ -123,12 +123,12 @@ function parseUpdateFrame(msg) {
 
   if (version === '') return { error: 'no version' };
   const urls = Object(msg.urls) === msg.urls ? msg.urls : {};
+  // The `.sha256` a hub names beside it is no authority (`downloadVerified`), so it is not read.
   const tarball = stringOrNull(urls.tarball);
-  const checksum = stringOrNull(urls.checksum);
 
-  if (tarball === null || checksum === null) return { error: 'no urls' };
+  if (tarball === null) return { error: 'no urls' };
 
-  if (!tarball.startsWith('/') || !checksum.startsWith('/')) return { error: 'urls must be same-origin paths' };
+  if (!tarball.startsWith('/')) return { error: 'urls must be same-origin paths' };
   const sha256 = stringOrNull(msg.sha256);
 
   if (sha256 === null || !/^[0-9a-f]{64}$/i.test(sha256)) return { error: 'no sha256' };
@@ -148,21 +148,13 @@ function parseUpdateFrame(msg) {
 
   if (checksums[tarball] !== sha256.toLowerCase()) return { error: 'the checksum named is not the signed one' };
 
-  return { version, tarball, checksum, sha256: sha256.toLowerCase(), checksums, signature };
-}
-
-/** The key this machine verifies a release against: the environment's when it
- *  names one, else the key pinned in this source. */
-function pinnedPublicKey() {
-  const fromEnv = process.env[RELEASE_SIGNING_PUBLIC_KEY_ENV] ?? '';
-
-  return fromEnv === '' ? RELEASE_SIGNING_PUBLIC_KEY : fromEnv;
+  return { version, tarball, sha256: sha256.toLowerCase(), checksums, signature };
 }
 
 /** Whether the frame's signature verifies against the pinned key, as core verifies every release
  *  (`verifyRelease`): a malformed key or signature does not; WebCrypto's own refusal of the material it is
  *  handed is a failure of THIS machine's pin and propagates to the caller's `device.update_failed` line. */
-function releaseSignatureHolds(frame, publicKeyHex = pinnedPublicKey()) {
+function releaseSignatureHolds(frame, publicKeyHex = releasePublicKey(process.env)) {
   return verifyRelease(frame, publicKeyHex);
 }
 
@@ -175,18 +167,14 @@ async function fetchBytes(fetchFn, url) {
 }
 
 /**
- * The archive, whole: its bytes hash to the published checksum, and that
- * checksum is the one the frame named — a frame from an earlier deploy than
- * the archive now served is refused rather than installed by surprise.
+ * The archive, whole: its bytes are the ones the signed checksums name, as the CLI's are (release-message.ts). The
+ * `.sha256` beside it is no authority: a frame from an earlier deploy than the archive now served fails that check.
  */
 async function downloadVerified(fetchFn, origin, frame) {
   const bytes = await fetchBytes(fetchFn, origin + frame.tarball);
-  const published = new TextDecoder().decode(await fetchBytes(fetchFn, origin + frame.checksum)).trim().split(/\s+/)[0] || '';
+  const refusal = await artifactRefusal(frame.checksums, frame.tarball, bytes);
 
-  if (published.toLowerCase() !== frame.sha256) throw new Error('the published checksum is not the one the UPDATE frame named');
-  const actual = crypto.createHash('sha256').update(bytes).digest('hex');
-
-  if (actual !== published.toLowerCase()) throw new Error(`checksum mismatch for ${frame.tarball}`);
+  if (refusal !== null) throw new Error(refusal);
 
   return bytes;
 }

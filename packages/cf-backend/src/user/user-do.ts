@@ -186,6 +186,7 @@ export class UserDO extends Agent<Env> {
   private readonly workspaces = new UserWorkspaces({
     ...this.host, mcpServers: this.mcpServers, shareCards: this.shareCards, evalLeases: this.evalLeases, deletions: this.workspaceDeletions,
     nudgeUnreported: () => { this.nudgeUnreported(); },
+    ownerId: () => this.name,
   });
 
   private readonly profile = new UserProfileStore({ ...this.host, workspaces: this.workspaces });

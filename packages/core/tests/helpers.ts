@@ -157,10 +157,6 @@ export function createMockLLM(responses: Record<string, string> = {}): RoutedLLM
   const answer = (prompt: string) => responses[Object.keys(responses).find(k => prompt.includes(k)) ?? ''] ?? '{"score": 0.5, "rationale": "mock"}';
 
   return {
-    async *stream(opts) {
-      const key = Object.keys(responses).find(k => opts.system.includes(k) || opts.messages.some(m => m.content.includes(k)));
-      yield responses[key ?? ''] ?? 'mock response';
-    },
     complete: async (prompt) => answer(prompt),
     // The scripted text held to the schema asked for, as a provider's structured output holds it.
     object: async (prompt, schema) => v.parse(schema, extractJsonObject(answer(prompt))),

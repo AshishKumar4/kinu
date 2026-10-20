@@ -118,10 +118,14 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
       let store: ReturnType<typeof createInlineWorkspace> | null = null;
       const opened = () => (store ??= createInlineWorkspace(db));
 
+      // One transaction for the whole restore: each row committed alone (an fsync each, about 9 ms) made a two-file
+      // workspace of 900 rows take 10 s to import. The database is private until the rename below, so nothing waits.
+      db.exec('BEGIN IMMEDIATE');
       const result = await restoreWorkspaceArchive(sqlStorageOver(db), readLines(file), { store: () => workspaceArchiveTarget(opened()) });
 
       restored = { rows: result.rows, tables: result.tables };
       stampSchemaGenesis((ddl) => db.exec(ddl));
+      db.exec('COMMIT');
 
       // Locally every file is a real one, from either backend's archive.
       await publishStoreFiles(opened(), staging);

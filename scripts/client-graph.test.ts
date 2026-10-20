@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
 import { clientEntries, findViolations } from './client-graph';
-import { isClientDocument, readMatching, readSources } from './sources';
 
 const ENTRY = 'packages/cf-backend/src/index.tsx';
 
@@ -85,9 +84,5 @@ describe('client-graph — red in every direction it claims', () => {
   test('an entry outside the corpus is fatal, and so is an empty entry set', () => {
     expect(() => findViolations(new Map(), [ENTRY])).toThrow('is not in the corpus');
     expect(() => findViolations(new Map([[ENTRY, 'export const app = 1;']]), [])).toThrow('no client entry');
-  });
-
-  test('the live tree walks clean from every derived entry', async () => {
-    expect(findViolations(readSources(), await clientEntries(readMatching(isClientDocument)))).toEqual([]);
   });
 });

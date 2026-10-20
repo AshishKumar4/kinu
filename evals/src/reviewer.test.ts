@@ -1,8 +1,7 @@
 import { afterAll, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { asFetchFunction, BUILTIN_PROFILE_CATALOG, createChatGptProvider, createProviderRegistry, JsonValueSchema, profileCatalogDigest,
-  resolveModelRoute, resolveTurnProfile, routedCallOptions, type JsonValue, type ModelCallDeps, type ReasoningEffort, type RunEvent } from '@kinu.run/core';
-import { generateText } from 'ai';
+  resolveModelRoute, resolveTurnProfile, routedLlm, bindRoute, type JsonValue, type ModelCallDeps, type ReasoningEffort, type RunEvent } from '@kinu.run/core';
 import { REVIEW_LOGIN } from './config';
 import { reviewerCatalog, REVIEWER_ROLE_ID } from './reviewer';
 import { askOnce, reviewerModel } from './target';
@@ -75,7 +74,9 @@ test.each(['max', 'xhigh'])('a reviewer request uses the highest effort its Sol 
   registry.register(createChatGptProvider());
   const route = resolveModelRoute('agent', profile);
 
-  await generateText({ model: registry.resolve(model, deps), prompt: 'Review the supplied evidence.', ...routedCallOptions(route, model) });
+  const bound = { normalize: (spec: string) => spec, resolve: (spec: string) => registry.resolve(spec, deps) };
+
+  await routedLlm((serving) => bindRoute(bound, serving), route, { report: () => {} }).complete('Review the supplied evidence.');
   expect(sent).toEqual([highest]);
 });
 

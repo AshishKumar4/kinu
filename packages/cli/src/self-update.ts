@@ -3,7 +3,6 @@
  * staged and verified before two renames swap it in. Never touches `bin/kinu`, which belongs to `kinu update`.
  */
 import { Cause, Effect } from 'effect';
-import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
@@ -11,7 +10,7 @@ import { isolatedBunArgs } from '@kinu.run/core';
 import { spawnKinuScript } from './self-spawn';
 import {
   CLI_RUNTIME_PATH, CLI_VERSION_PATH, cliArtifactPath, isSameBuild,
-  RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema, verifyRelease, type SignedRelease,
+  artifactRefusal, releasePublicKey, SignedReleaseSchema, verifyRelease, type SignedRelease,
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { KinuError, toKinuError, settleSync, settle } from '@kinu.run/core/obs';
@@ -64,9 +63,8 @@ function signedRelease(origin: string, served: string, fetchImpl: FetchLike): Ef
     if (!parsed.success) return yield* new KinuError('denied', 'the release manifest carries no signature; nothing is downloaded');
 
     if (!isSameBuild(parsed.output.version, served)) return yield* new KinuError('io', `the release manifest names ${parsed.output.version}, not the served ${served}`);
-    const publicKey = process.env[RELEASE_SIGNING_PUBLIC_KEY_ENV] ?? RELEASE_SIGNING_PUBLIC_KEY;
 
-    if (!(yield* Effect.promise(async () => verifyRelease(parsed.output, publicKey)))) return yield* new KinuError('denied', 'the release signature does not verify against the pinned key; nothing is downloaded');
+    if (!(yield* Effect.promise(async () => verifyRelease(parsed.output, releasePublicKey(process.env))))) return yield* new KinuError('denied', 'the release signature does not verify against the pinned key; nothing is downloaded');
 
     return parsed.output;
   });
@@ -83,16 +81,14 @@ interface VerifiedDownload {
 
 function fetchVerified({ origin, pathname, into, release, fetchImpl }: VerifiedDownload): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
-    const expected = release.checksums[pathname];
-
-    if (expected === undefined) return yield* new KinuError('denied', `the signed release names no ${pathname}; nothing is downloaded`);
+    if (release.checksums[pathname] === undefined) return yield* new KinuError('denied', `the signed release names no ${pathname}; nothing is downloaded`);
     const res = yield* Effect.promise(async () => fetchImpl(`${origin}${pathname}`, { cache: 'no-store' }));
 
     if (!res.ok) return yield* new KinuError('unavailable', `could not download ${pathname}: HTTP ${res.status}`);
     const bytes = new Uint8Array(yield* Effect.promise(async () => res.arrayBuffer()));
-    const actual = createHash('sha256').update(bytes).digest('hex');
+    const refusal = yield* Effect.promise(async () => artifactRefusal(release.checksums, pathname, bytes));
 
-    if (actual !== expected.toLowerCase()) return yield* new KinuError('io', `checksum mismatch for ${pathname}`);
+    if (refusal !== null) return yield* new KinuError('io', refusal);
     writeFileSync(into, bytes);
   });
 }

@@ -7,6 +7,7 @@ import { joinHarnessFibers, mockAgentsSdk, rememberMcpManager, inheritedMcpManag
 import { sha256Hex, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, deviceIdFromSocket, type WorkspaceEntry } from '@kinu.run/core';
 import { isJsonObject } from '../../../core/src/utils/json';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';
+import type { IndexFeedSink } from '../../src/control-plane/index-feed';
 import type { WorkspaceRegistration } from '../../src/user/workspaces';
 import {
   DeviceConsentRegistry,
@@ -220,6 +221,13 @@ export interface TestUserDOOptions {
   slatePictures?: PictureBucket;
   /** The deployment's eval identity, whose accounts lease their `eval-` workspaces; absent, no account is an eval's. */
   devUserEmail?: string;
+  /** The control plane the account's index feed reaches; absent, the deployment has none and the registry feeds nothing. */
+  controlPlane?: IndexFeedSink;
+}
+
+/** The control plane's namespace, binding `sink` for every name; none when there is no sink. */
+function controlPlaneNamespace(sink: IndexFeedSink | undefined): TestUserEnvironment['ControlPlaneDO'] {
+  return sink === undefined ? undefined : { idFromName: (name: string) => name, get: () => sink };
 }
 
 export interface FakeDaemon {
@@ -287,6 +295,7 @@ function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']):
 
 interface TestUserEnvironment {
   UserDO?: { idFromName(name: string): string; get(id: string): ShareCardRecipient };
+  ControlPlaneDO?: { idFromName(name: string): string; get(id: string): IndexFeedSink };
   CREDENTIAL_ENCRYPTION_KEY: string;
   DEV_USER_EMAIL?: string;
   SLATE_PICTURES?: PictureBucket;
@@ -611,6 +620,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     ...(options.accounts !== undefined && { UserDO: { idFromName: (name: string) => name, get: options.accounts } }),
     ASSETS: { fetch: async (input: Request) => servedAsset(new URL(input.url).pathname, options.servedBuild) },
     SLATE_PICTURES: options.slatePictures,
+    ControlPlaneDO: controlPlaneNamespace(options.controlPlane),
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (name: string) => ({

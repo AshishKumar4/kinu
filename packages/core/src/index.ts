@@ -578,7 +578,7 @@ export {
 export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, codemodeInputSchema,
-  renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
+  renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, programProviders, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
   slateToolReach, callCodemodeMember, requireCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   shownConsoleValue, createToolArguments, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
@@ -612,6 +612,8 @@ export { SubordinateInheritedContextSchema, type SubordinateInheritedContext } f
 
 export { subordinateForkContext, subordinateTurnContext } from './subordinates/support';
 
+export { admitHireWork, hireLifecycle, retireHireSubtree, type HireLifecyclePorts, type SeatedHire } from './subordinates/hire-lifecycle';
+
 export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { driveDeliveredRun } from './heads/delivered-run';
@@ -621,7 +623,7 @@ export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendant
 export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
 
 export {
-  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
+  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
 } from './state/local-actors';
 
 // open-38: one physical workspace SQLite for every logical actor.
@@ -1287,6 +1289,8 @@ export {
   type LexicalSearchFn,
 } from './memory/hybrid-search';
 
+export { searchMemoryHits, type MemorySearchScope } from './memory/memory-search';
+
 // Memory writes
 export { memoryBytes } from './memory/note';
 
@@ -1359,7 +1363,7 @@ export {
   MODEL_OPERATION_PHASES,
   MODEL_OPERATION_OUTCOMES,
   beginModelOperation,
-  buildModelCallEvent, pricedModelCallEvent,
+  pricedModelCallEvent,
   type ModelCallReport,
   type ModelCallSpend,
   type ModelCallSink,
@@ -1570,13 +1574,13 @@ export {
 } from './safety/argument-digest';
 
 export {
-  InstructionApprovalStore, initInstructionApprovalsTable, instructionDigest, trustOfInstructionApprovals,
+  InstructionApprovalStore, initInstructionApprovalsTable, instructionDigest,
   admitInstructionDecision, type InstructionTrust, type InstructionDecision, type InstructionApproval,
   type InstructionTrustResolver, type VerifiedInstructionTrust, type AdmittedInstructionDecision,
 } from './safety/instruction-trust';
 
 export {
-  DeviceConsentRegistry, DeviceConsentStore, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome, RESUMED_SURFACE,
+  DeviceConsentRegistry, DeviceConsentStore, deviceConsentMoved, deviceConsentOutcome, type DeviceConsentOutcome,
   DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected, summarizeDeviceAction,
   type DeviceConsentAnswer, type DeviceConsentRequest, type DeviceConsentVerdict, type DeviceBinding,
   type PendingDeviceConsent, type DeviceConsentNotice, PendingDeviceConsentSchema, ResolvedDeviceConsentSchema,
@@ -1677,7 +1681,7 @@ export {
   backgroundJobNotice,
   SPAWN_STARTED_OPTION, readSpawnStarted,
   DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership, execCallArgs, execContext,
-  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders, type ServingScope,
+  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, RESUMED_SURFACE, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders, type ServingScope,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
@@ -1805,7 +1809,7 @@ export { activeOperationProfile, captureOperationProfile, currentOperationProfil
   withOperationProfile, operationProfileStream, type OperationProfile } from './profiles/operation';
 
 export {
-  bindRoute, completeOnRoute, createRoutedModelLane, routedCallOptions, routedLlm, type ModelLaneComponents, type RouteModelBinder,
+  bindRoute, completeOnRoute, createRoutedModelLane, routedLlm, type ModelLaneComponents, type RouteModelBinder,
   type RouteModelBinding,
 } from './profiles/model-lane';
 
@@ -2191,7 +2195,7 @@ export {
   type ModelRoutePolicy, type ProfileRoutedSource, type ModelRouteResolution,
   type FixedTierSource,
   DEFAULT_ROLE_ID,
-  KeptProviderListingSchema, providerListingOf, providerSnapshotOf, ProviderListingCache,
+  KeptProviderListingSchema, providerListingKey, providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead, type StoredProviderListing,
   fastAssignment, fastCandidatesOf,
   agentRoleSwitch, changeRoleAsOwner,
@@ -2281,7 +2285,7 @@ export {
   releaseArtifact, releaseArtifactHead,
 } from './http/release-artifact';
 
-export { RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, verifyRelease } from './http/release-message';
+export { RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, artifactRefusal, releasePublicKey, verifyRelease } from './http/release-message';
 
 export {
   SignedReleaseSchema, signRelease, generateReleaseSigningKey, type ReleaseChecksums, type SignedRelease,
@@ -2413,8 +2417,11 @@ export { callRetries } from './providers/middleware/retry';
 export {
   type AnyToolPart,
   type RunStep,
+  type PartBlock,
   type ToolRunSummary,
   groupMessageParts,
+  phaseCalls,
+  rollUpTurn,
   toolRunSummary,
   parseProvisionError,
   partOutput,
@@ -2422,6 +2429,12 @@ export {
   partEffect,
   callFailed,
 } from './read-models/tool-call-grouping';
+
+export {
+  PHASE_TITLES_METADATA_KEY, TURN_TITLE_METADATA_KEY, phaseTitle, writtenTitles,
+} from './read-models/tool-phase-title';
+
+export { writePhaseLines, type PhaseLinePorts } from './orchestrator/phase-lines';
 
 export {
   type PlanPageRef,

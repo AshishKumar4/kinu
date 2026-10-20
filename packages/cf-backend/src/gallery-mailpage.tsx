@@ -120,6 +120,25 @@ function installFixture(): void {
     return answer(message);
   };
 
+  // `&mail=off`: a deployment with no mail domain.
+  const enabled = params.get("mail") !== "off";
+
+  /** The person's account and boxes, as /boxes answers them. */
+  const accountAnswer = () => (enabled
+    ? { enabled, address, canClaim: address === null && params.get("account") === "claim", boxes: address === null ? [] : boxes }
+    : { enabled, address: null, canClaim: false, boxes: [] });
+
+  /** The newest few Important threads, as the footer and Home read them. */
+  const importantAnswer = (limit: number) => {
+    if (!enabled) return { enabled, unread: 0, items: [] };
+    const listing = list(new URL("/api/user/mail/threads?view=important", location.href));
+
+    return { enabled, unread: listing.unread, items: listing.threads.slice(0, limit).map((thread) => ({
+      thread: thread.id, from: { name: thread.from[0]?.name ?? thread.from[0]?.address ?? "", address: thread.from[0]?.address ?? "" }, to: boxes.find((box) => box.path === thread.path)?.address ?? "", subject: thread.subject,
+      reason: thread.important ?? "", at: thread.at, unread: thread.unread,
+    })) };
+  };
+
   /** A call to Mail's API, or to "Send to a workspace…", recorded and answered as the server would. */
   const mailAnswer = (request: Request, url: URL, init: RequestInit | undefined): Promise<Response> => {
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : null;
@@ -135,7 +154,7 @@ function installFixture(): void {
       return Promise.resolve(Response.json({ error: "The mail server refused this request." }, { status: 503 }));
     }
 
-    if (url.pathname.endsWith("/boxes")) return answer({ address, canClaim: address === null && params.get("account") === "claim", boxes: address === null ? [] : boxes });
+    if (url.pathname.endsWith("/boxes")) return answer(accountAnswer());
 
     if (url.pathname.endsWith("/claim")) {
       address = `${v.parse(v.object({ username: v.string() }), body).username}@kinu.run`;
@@ -146,14 +165,7 @@ function installFixture(): void {
 
     if (url.pathname.endsWith("/threads")) return answer(list(url));
 
-    if (url.pathname.endsWith("/important")) {
-      const listing = list(new URL("/api/user/mail/threads?view=important", location.href));
-
-      return answer({ unread: listing.unread, items: listing.threads.slice(0, Number(url.searchParams.get("limit") ?? 3)).map((thread) => ({
-        thread: thread.id, from: { name: thread.from[0]?.name ?? thread.from[0]?.address ?? "", address: thread.from[0]?.address ?? "" }, to: boxes.find((box) => box.path === thread.path)?.address ?? "", subject: thread.subject,
-        reason: thread.important ?? "", at: thread.at, unread: thread.unread,
-      })) });
-    }
+    if (url.pathname.endsWith("/important")) return answer(importantAnswer(Number(url.searchParams.get("limit") ?? 3)));
 
     if (url.pathname.endsWith("/send") || url.pathname.endsWith("/drafts")) {
       return write(v.parse(OutgoingSchema, body), url.pathname.endsWith("/drafts"));

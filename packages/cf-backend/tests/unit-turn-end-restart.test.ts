@@ -247,8 +247,8 @@ test("a node whose isolate dies after its run's end committed, before it was tol
 
   // Whatever the node tells its workspace of the run is held on the way: its end, and any charge it relays on its own.
   const told = delayNextRunEnd();
+  const charging = delayNextModelReport((key) => key !== mainKey(workspace));
 
-  delayNextModelReport((key) => key !== mainKey(workspace));
   const id = crypto.randomUUID();
 
   await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', SEARCH));
@@ -263,6 +263,7 @@ test("a node whose isolate dies after its run's end committed, before it was tol
   // still arrives, as an unanswered call can, and the next start of the isolate tells it again.
   workspace.agent.harnessResetAgentIsolate(node?.storage_key ?? '');
   told.release();
+  charging.release();
   setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
   await driveUntil(workspace, 'the search never settled', () => searchSettled(workspace));
 

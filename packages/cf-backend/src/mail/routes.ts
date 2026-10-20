@@ -80,6 +80,9 @@ function handToAssistant(c: MailContext): Effect.Effect<void> {
   }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('mail.assistant_unlinked', failure, {}); })));
 }
 
+/** Whether this deployment has mail: a mail domain its deploy gave it. Without one there is no address to claim or read. */
+const mailOn = (c: MailContext): boolean => (c.env.EMAIL_DOMAIN ?? '') !== '';
+
 /** The person's address, from the boxes their Mailbox holds; null before they claimed one. */
 async function addressOf(c: MailContext): Promise<string | null> {
   return (await mailbox(c).boxes()).find((box) => box.path === '')?.address ?? null;
@@ -88,14 +91,17 @@ async function addressOf(c: MailContext): Promise<string | null> {
 export const mailRoutes = new Hono<FamilyEnv<MailRoutesEnv>>();
 
 mailRoutes.get('/api/user/mail/boxes', async (c) => {
+  if (!mailOn(c)) return json({ body: { enabled: false, address: null, canClaim: false, boxes: [] } });
+
   const address = await addressOf(c);
   const canClaim = address === null && mayClaim(c.env, c.get('identity').email);
 
-  return json({ body: { address, canClaim, boxes: address === null ? [] : await mailbox(c).boxes() } });
+  return json({ body: { enabled: true, address, canClaim, boxes: address === null ? [] : await mailbox(c).boxes() } });
 });
 
 /** The address the person holds once this returns: claimed now, or the one they had; a refusal is its answer. */
 async function claimAddress(c: MailContext): Promise<{ address: string } | Response> {
+  if (!mailOn(c)) return err(503, 'Mail is off on this deployment: it has no mail domain.');
   const identity = c.get('identity');
   const body = await safeJson(c.req.raw, Claim);
 
@@ -131,12 +137,12 @@ mailRoutes.post('/api/user/mail/claim', async (c) => {
 mailRoutes.get('/api/user/mail/important', async (c) => {
   const limit = Math.min(20, Math.max(1, Number(c.req.query('limit') ?? '3') || 3));
 
-  if (await addressOf(c) === null) return json({ body: { unread: 0, items: [] } });
+  if (!mailOn(c) || await addressOf(c) === null) return json({ body: { enabled: mailOn(c), unread: 0, items: [] } });
 
   const listing = await mailbox(c).list({ view: 'important', limit });
 
   return json({ body: {
-    unread: listing.unread,
+    enabled: true, unread: listing.unread,
     items: listing.threads.map((thread) => ({
       thread: thread.id, from: { name: thread.from[0]?.name ?? thread.from[0]?.address ?? '', address: thread.from[0]?.address ?? '' },
       to: mailAddressOf('', thread.path, c.env.EMAIL_DOMAIN ?? ''), subject: thread.subject, reason: thread.important ?? '', at: thread.at, unread: thread.unread,

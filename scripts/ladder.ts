@@ -3817,6 +3817,13 @@ export function armadaPhaseRun(phase: string, rows: readonly Gate[], sha: string
   ];
 }
 
+/** The command that runs a row's job again from the repository: the job's own argv, its secrets with it, without the
+ *  machine-readable output and the label, which a reader neither needs nor can paste unquoted. A line that kept only the
+ *  plan's arguments ran without the row's secrets and was refused ("409 no secret"). */
+export function armadaReproduce(argv: readonly string[]): string {
+  return ['node_modules/.bin/armada', ...argv.slice(1).filter((arg) => arg !== '--json' && !arg.startsWith('--label='))].join(' ');
+}
+
 /** `argv` run here: what it answered on stdout, and its progress, which `--json` puts on stderr and which
  *  is printed as it comes. */
 async function echoed(argv: readonly string[]): Promise<{ readonly answered: string; readonly said: string }> {
@@ -3924,7 +3931,7 @@ async function armadaPhaseJob(phases: readonly DeployPhase[], rows: readonly Gat
   const { answered, said } = await echoed(argv);
   const returned = Date.now();
   const graded = armadaReport(answered);
-  const reproduce = `node_modules/.bin/armada run ${sha} -- ${argv.slice(argv.indexOf('--') + 1).join(' ')}`;
+  const reproduce = armadaReproduce(argv);
 
   if (report !== '' && graded !== undefined) recordNotice(report, { phase: phases[0] ?? 'source', what: `armada job ${graded.job}`, notice: `the ${phase} rows armada ran, at ${sha}: their logs and outputs are in that job` });
 

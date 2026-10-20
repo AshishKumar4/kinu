@@ -581,6 +581,7 @@
     "requested_at INTEGER NOT NULL",
     "decided_at INTEGER",
     "spend_seq INTEGER NOT NULL DEFAULT 0",
+    "surface TEXT",
     "PRIMARY KEY (actor_id, id)"
   ],
   "deploy_step@packages/cf-backend/src/deploy/deploy-do.ts": [

@@ -28,7 +28,7 @@ describe('reasoning_effort plumbing', () => {
       }),
     });
 
-    const result = streamText({ model, prompt: 'probe', maxRetries: 0, providerOptions: reasoningEffortOptions('medium', 'workers-ai') });
+    const result = streamText({ model, prompt: 'probe', maxRetries: 0, providerOptions: reasoningEffortOptions('medium', 'workers-ai/@cf/zai-org/glm-5.3') });
     await result.text;
     expect(requests[0]?.reasoning_effort).toBe('medium');
     expect(requests[0]?.reasoningEffort).toBeUndefined();
@@ -37,36 +37,43 @@ describe('reasoning_effort plumbing', () => {
   });
 
   test('maps user effort to each provider family exactly', () => {
-    for (const provider of ['openai', 'codex', 'openai-compat', 'openai-compat:groq'] as const) {
-      expect(reasoningEffortOptions('medium', provider)).toEqual({
+    for (const spec of ['openai/gpt-6.1', 'codex/gpt-6.1', 'openai-compat/local-model', 'openai-compat:groq/llama'] as const) {
+      expect(reasoningEffortOptions('medium', spec)).toEqual({
         openai: { reasoningEffort: 'medium' },
       });
     }
 
-    expect(reasoningEffortOptions('low', 'openrouter')).toEqual({
+    expect(reasoningEffortOptions('low', 'openrouter/openai/gpt-6.1')).toEqual({
       openrouter: { reasoningEffort: 'low' },
     });
-    expect(reasoningEffortOptions('high', 'anthropic')).toEqual({
+    expect(reasoningEffortOptions('high', 'anthropic/claude-opus-4-7')).toEqual({
       anthropic: { effort: 'high' },
     });
   });
 
+  // The SufficientKoala audit: a gateway route sent no effort though its serving adapter is the author's own.
+  test("a gateway's Claude or GPT route sends effort as the author's own API takes it; its chat route sends none", () => {
+    expect(['my-gateway/anthropic/claude-opus-4.7', 'my-gateway/openai/gpt-6.1', 'my-gateway/workers-ai/@cf/zai-org/glm-5.3']
+      .map((spec) => reasoningEffortOptions('high', spec) ?? null))
+      .toEqual([{ anthropic: { effort: 'high' } }, { openai: { reasoningEffort: 'high' } }, null]);
+  });
+
   test('Anthropic takes its documented effort levels and nothing outside them', () => {
     // `max` and `xhigh` exist only as the effort parameter; `none` is not an Anthropic level and sends nothing.
-    expect(reasoningEffortOptions('max', 'anthropic')).toEqual({ anthropic: { effort: 'max' } });
-    expect(reasoningEffortOptions('low', 'anthropic')).toEqual({ anthropic: { effort: 'low' } });
-    expect(reasoningEffortOptions('none', 'anthropic')).toBeUndefined();
+    expect(reasoningEffortOptions('max', 'anthropic/claude-opus-4-7')).toEqual({ anthropic: { effort: 'max' } });
+    expect(reasoningEffortOptions('low', 'anthropic/claude-opus-4-7')).toEqual({ anthropic: { effort: 'low' } });
+    expect(reasoningEffortOptions('none', 'anthropic/claude-opus-4-7')).toBeUndefined();
   });
 
   test('returns no options for an unsupported provider or missing effort', () => {
-    expect(reasoningEffortOptions(undefined, 'openai')).toBeUndefined();
-    expect(reasoningEffortOptions('high', 'unknown')).toBeUndefined();
+    expect(reasoningEffortOptions(undefined, 'openai/gpt-6.1')).toBeUndefined();
+    expect(reasoningEffortOptions('high', 'unknown/model')).toBeUndefined();
   });
 
   test('merges effort into an existing provider namespace without clobbering it', () => {
     expect(mergeProviderOptions(
       { openai: { promptCacheKey: 'session-1' } },
-      reasoningEffortOptions('high', 'openai'),
+      reasoningEffortOptions('high', 'openai/gpt-6.1'),
     )).toEqual({
       openai: { promptCacheKey: 'session-1', reasoningEffort: 'high' },
     });
@@ -79,7 +86,7 @@ describe('provider options layer per namespace', () => {
     // A shared and a unique key together: a wholesale override would lose the cache key.
     expect(mergeProviderOptions(
       { openai: { promptCacheKey: 'session-1', reasoningEffort: 'low' } },
-      reasoningEffortOptions('high', 'openai'),
+      reasoningEffortOptions('high', 'openai/gpt-6.1'),
     )).toEqual({
       openai: { promptCacheKey: 'session-1', reasoningEffort: 'high' },
     });
@@ -87,7 +94,7 @@ describe('provider options layer per namespace', () => {
     // The merge is per-namespace, not whole-object.
     expect(mergeProviderOptions(
       { anthropic: { cacheControl: { type: 'ephemeral' } }, openai: { reasoningEffort: 'low' } },
-      reasoningEffortOptions('high', 'openai'),
+      reasoningEffortOptions('high', 'openai/gpt-6.1'),
     )).toEqual({
       anthropic: { cacheControl: { type: 'ephemeral' } },
       openai: { reasoningEffort: 'high' },

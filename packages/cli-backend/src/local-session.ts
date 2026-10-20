@@ -107,12 +107,14 @@ import { ActorSession, type ActorTurnLease,
   resolveModelRoute, completeOnRoute,
   resolveRoutingProfile, currentOperationProfile, captureOperationProfile, ancestorPins,
   type PinnedProfile,
-  buildModelCallEvent,
+  pricedModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
   type WorkspaceTitleState,
   type PromptIdentity,
   narrowToolSurface, codemodeCapabilitiesFor,
   type ResolvedTurnProfile,
+  type TurnReads,
+  approvedTaskPlan,
   decodeJsonValue, projectJsonValue,
   agentSelfHost, ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, isSubordinateOrigin, type OwnerWaitsHost, type ScopedOwnerWait,
   cancelBackgroundJob, listBackgroundJobs,
@@ -183,7 +185,7 @@ function seatOf(hosted: LocalHostedSession | undefined, rt: CLIRuntime, stores: 
   return { reference: actorReferenceOf(record), record, handle: rt.actor, stores, runtime: rt };
 }
 
-type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata'>;
+type TurnAsked = Pick<ChatTurnInput, 'kind' | 'text' | 'metadata' | 'idempotencyKey'>;
 
 const NEXT_OWNER_TURN: TurnAsked = { kind: 'user', text: '' };
 
@@ -322,13 +324,10 @@ export class LocalAgentSession {
   private readonly eventRecorder: RunEventRecorder;
   /** Label-scoped spend governor; public for the `agent.*` namespace. */
   readonly budget: MissionGovernor;
-  /** Cost sink for every non-turn model call (judge, fast tier, reflection, merge synthesis),
-   *  which `step_finish` never sees. */
+  /** Cost sink for every non-turn model call (judge, fast tier, reflection, merge synthesis), which `step_finish` never
+   *  sees: priced at the rate of the model it called, as cloud prices one (`pricedModelCallEvent`). */
   private readonly modelCallSink: ModelCallSink = (report) => {
-    const event = buildModelCallEvent(report, {
-      effectiveSpec: this.effectiveModelSpec(),
-      pricing: this.modelCatalog.pricing(),
-    });
+    const event = pricedModelCallEvent(report, this.modelCatalog);
 
     // Calls between runs are filed under the reserved workspace run rather than dropped.
     this.recordRunEvent(event, currentOperationProfile(this.rt.actor)?.runId ?? this.chat.currentRunId ?? WORKSPACE_RUN_ID);
@@ -823,11 +822,11 @@ export class LocalAgentSession {
       const log = new EventLog(makeSqlExec(this.db), this.actorHost.bindStores(actorReferenceOf(record)).handle);
       const from = this.rt.actor.name;
 
-      this.db.transaction(() => {
+      writeTransaction(this.db, () => {
         const admitted = admitSubordinateTask(log, { fromWorkspace: from, kind: 'message', body: signal.text, mode: 'build', now: Date.now() });
 
         if (admitted.admitted) new AgentDeliveries(this.rt.storage.sql).add(actorId, assignmentDelivery(log, { id: admitted.id, body: signal.text.trim(), mode: 'build', from }));
-      })();
+      });
     });
   }
 
@@ -1799,7 +1798,13 @@ export class LocalAgentSession {
       identity: async () => this.promptIdentity(),
       memoryTail: () => readMemoryTail(this.rt.memory),
       artifacts: () => this.currentTurnArtifacts(),
-      taskPlan: () => null,
+      // A turn the owner's approval started implements that revision: the tasks it makes are the plan's, written through the
+      // store the builtins open over this runtime's own SQL (core withTaskPlan).
+      taskPlan: () => {
+        const plan = approvedTaskPlan(item, this.stores.planReviews);
+
+        return plan === null ? null : { sql: [this.rt.storage.sql], plan };
+      },
       conversationKey: () => this.compactionKey(),
       budget: this.budget,
       operations: this.modelOperations,
@@ -2681,10 +2686,7 @@ export class LocalAgentSession {
     const operations = recordModelOperations(actor.stores.eventRecorder, () => currentOperationProfile(actor.handle)?.runId ?? runId);
 
     const report: ModelCallSink = (call) => {
-      const spec = normalize(actor.session.profile?.tier.model ?? actor.stores.config.getModel());
-
-      actor.stores.eventRecorder.emit(currentOperationProfile(actor.handle)?.runId ?? runId,
-        buildModelCallEvent(call, { effectiveSpec: spec, pricing: catalog.pricing(spec) }));
+      actor.stores.eventRecorder.emit(currentOperationProfile(actor.handle)?.runId ?? runId, pricedModelCallEvent(call, catalog));
     };
 
     const compaction = hostedActorCompaction(actor, {
@@ -2749,20 +2751,22 @@ export class LocalAgentSession {
       scaffoldSpend: { source: 'scaffold', report: compaction.report, operations: compaction.operations },
       attachmentBudget: actor.session.orchestrator.acc.ledgers.context,
       extensions: () => [compaction.extension],
-      dynamic: () => (profile, tools) => this.actorDynamicContext(actor, profile, tools),
+      // The turn's own reads, read once by core (turn-assembly), as the chat's and the cloud's actors take them.
+      dynamic: ({ memoryTail, activeSkills }) => (profile, tools) => this.actorDynamicContext(actor, profile, tools, { memoryTail, activeSkills }),
       operation: (profile, inputs) => captureOperationProfile({ actor: actor.handle, profile, inputs, runId, turnId: null }),
     };
   }
 
-  /** Per-step context from the hosted actor's own stores, never this session's. */
-  private actorDynamicContext(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext {
+  /** Per-step context from the hosted actor's own stores, never this session's, with the reads its turn made. */
+  private actorDynamicContext(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet, reads: Pick<TurnReads, 'memoryTail' | 'activeSkills'>): DynamicContext {
     return collectDynamicContext({
       rt: actor.runtime,
       stores: actor.stores,
       profile,
       tools,
       runtime: this.runtimeFacts(profile),
-      memoryTail: undefined,
+      ...(reads.activeSkills !== null && { activeSkills: reads.activeSkills }),
+      memoryTail: reads.memoryTail,
       missingCapabilities: [],
       subordinateDelegates: () => [],
       approvals: () => ({ items: [], total: 0 }),
@@ -2836,17 +2840,10 @@ export class LocalAgentSession {
       escalations: this.actorSession.orchestrator.acc.ledgers.escalations,
       craft: this.actorSession.orchestrator.acc.ledgers.craft,
       ...(this.actorReach.kind === 'workspace' && { external: () => this.turnExternalTools }),
-      codemode: (surface) => {
-        // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
-        const narrowing = narrowToolSurface(this.actorSession.profile?.allowedTools);
-        const native: ToolSet = {};
-
-        for (const [name, entry] of Object.entries(surface.native)) {
-          if (narrowing.allowsTool(name)) native[name] = entry;
-        }
-
-        return createNodeCodemodeToolFactory({ namespaces: this.codemodeProviders(mode, surface.stores), reach: narrowing })({ ...surface, native });
-      },
+      // Narrowed by the same set as the native surface, so the sandbox cannot restore a dropped tool.
+      codemode: (surface) => createNodeCodemodeToolFactory({
+        namespaces: this.codemodeProviders(mode, surface.stores), reach: narrowToolSurface(this.actorSession.profile?.allowedTools),
+      })(surface),
       agents: this.agentsToolDeps(mode),
       webSearch: this.getWebSearchProvider(),
       jobs: { jobRunner: this.jobRunner, backgroundable: BACKGROUNDABLE_TOOLS, mode: () => this.actorSession.workMode },

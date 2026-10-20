@@ -1,4 +1,4 @@
-import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createMemoryVfs, createTestActorsOver, filesIn, present } from '@kinu.run/test-utils';
@@ -231,6 +231,19 @@ describe('renderForLLM', () => {
       expect(r.brief).toContain('seam found in the auth module;');
       expect(r.brief.endsWith(`: full report: ${content_path}`)).toBe(true);
       expect(await readText(vfs, content_path)).toBe(longReport);
+    });
+
+    // Content-addressed is not proof of content: an interrupted write or an agent's edit can leave other bytes at the path
+    // the brief promises holds the whole body.
+    test('a spill whose path already holds other bytes writes the body there again', async () => {
+      const { vfs } = createMemoryVfs();
+      const path = eventContentPath(longReport);
+
+      await vfs.mkdir(path.slice(0, path.lastIndexOf('/')), { recursive: true });
+      await writeText(vfs, path, longReport.slice(0, 40));
+
+      expect(await spillEventContent(vfs, longReport)).toEqual({ path });
+      expect(await readText(vfs, path)).toBe(longReport);
     });
 
     test('a report within the brief budget spills nothing and renders unreferenced', async () => {

@@ -29,9 +29,9 @@ import { AttachmentChip } from "@/components/AttachmentChip";
 import { AnswerPicturesContext, PartPictures, useAnswerPictures } from "@/components/ChatImages";
 import { extractPreviewUrl } from "@kinu.run/core";
 import {
-  groupMessageParts,
+  groupMessageParts, phaseCalls, phaseTitle, rollUpTurn, writtenTitles,
   partOutput, partInput, partEffect, callFailed, parseProvisionError,
-  type AnyToolPart,
+  type AnyToolPart, type PartBlock,
 } from "@kinu.run/core";
 import { drawnText, toolCallRunning, type LiveTail } from "@kinu.run/core";
 import { redactPayload, redactSecrets, segmentBySteers, splicesSeenOn, type SignalCard } from "@kinu.run/core";
@@ -39,7 +39,7 @@ import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, systemEventTu
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
 import { StatusDot } from "@/components/ui/Status";
-import { ChatDisclosure, ToolRun, useSeenRunning, WorkLabel } from "@/components/ChatDisclosure";
+import { ChatDisclosure, ToolRun, TurnRollup, usePhaseLinesOnSeen, useSeenRunning, WorkLabel } from "@/components/ChatDisclosure";
 import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
 
 const MessageCreatedAtSchema = v.looseObject({
@@ -639,6 +639,41 @@ export const MessageView = memo(function MessageView({
       expanded={callExpanded(part)} onToggleExpand={() => toggleCall(part.toolCallId)} />
   );
 
+  // A model's lines for this turn's phases, by each phase's first call, and for the whole turn.
+  const written = writtenTitles({ metadata: message.metadata });
+  // A settled answer's line without a model's line asks, once it is on screen, that its phases be named.
+  const asksOnSeen = usePhaseLinesOnSeen(message.id, isLive);
+
+  const renderBlock = (block: PartBlock, i: number, live: boolean) => {
+    if (block.kind === "run") {
+      const [first] = phaseCalls(block.steps);
+
+      const line = first === undefined ? undefined : written.phases.get(first.toolCallId);
+
+      return (
+        <div key={first?.toolCallId ?? i} className={BLOCK_GAP.section}>
+          <ToolRun steps={block.steps} live={live} written={line} onSeen={line === undefined && !live ? asksOnSeen : undefined}>
+            {block.steps.map((step, j) => (step.kind === "tool"
+              ? <div key={step.part.toolCallId} className={BLOCK_GAP.row}>{renderToolRow(step.part)}</div>
+              : <div key={`thought-${String(j)}`} className={BLOCK_GAP.row}>{renderThought(step.parts)}</div>))}
+          </ToolRun>
+        </div>
+      );
+    }
+
+    if (block.kind === "reasoning") return <div key={i} className={BLOCK_GAP.section}>{renderThought(block.parts)}</div>;
+
+    const part = block.part;
+
+    if (isToolUIPart(part)) {
+      return <div key={part.toolCallId} className={BLOCK_GAP.row}>{renderToolRow(part)}</div>;
+    }
+
+    const content = renderContentPart(part, i);
+
+    return content === null ? null : <div key={i} className={BLOCK_GAP.section}>{content}</div>;
+  };
+
   return (
     <AnswerPicturesContext.Provider value={answerPictures}>
     <div className="group/msg space-y-1 animate-fade-in">
@@ -658,34 +693,37 @@ export const MessageView = memo(function MessageView({
                   <GitBranchIcon size={12} />
                 </button>
               )}
-              {groupMessageParts(segment.parts).map((block, i, blocks) => {
-                if (block.kind === "run") {
-                  // Live while it is the newest thing the turn draws: words after it are the answer starting.
-                  const live = isLive && s === segments.length - 1 && i === blocks.length - 1;
-                  const first = block.steps.find((step) => step.kind === "tool");
+              {rollUpTurn(groupMessageParts(segment.parts), isLive && s === segments.length - 1).map((block, i, blocks) => {
+                if (block.kind !== "turn") {
+                  // Live while the turn runs and nothing but thinking follows it: words after it are the answer starting.
+                  const live = isLive && s === segments.length - 1 && blocks.slice(i + 1).every((after) => after.kind === "reasoning");
 
-                  return (
-                    <div key={first?.kind === "tool" ? first.part.toolCallId : i} className={BLOCK_GAP.section}>
-                      <ToolRun steps={block.steps} live={live}>
-                        {block.steps.map((step, j) => (step.kind === "tool"
-                          ? <div key={step.part.toolCallId} className={BLOCK_GAP.row}>{renderToolRow(step.part)}</div>
-                          : <div key={`thought-${String(j)}`} className={BLOCK_GAP.row}>{renderThought(step.parts)}</div>))}
-                      </ToolRun>
-                    </div>
-                  );
+                  return renderBlock(block, i, live);
                 }
 
-                if (block.kind === "reasoning") return <div key={i} className={BLOCK_GAP.section}>{renderThought(block.parts)}</div>;
+                const calls = block.blocks.flatMap((rolled) => {
+                  if (rolled.kind === "run") return phaseCalls(rolled.steps);
 
-                const part = block.part;
+                  return rolled.kind === "part" && isToolUIPart(rolled.part) ? [rolled.part] : [];
+                });
 
-                if (isToolUIPart(part)) {
-                  return <div key={part.toolCallId} className={BLOCK_GAP.row}>{renderToolRow(part)}</div>;
-                }
+                const done = !isLive || s < segments.length - 1;
 
-                const content = renderContentPart(part, i);
+                // Until the turn's own line lands, the model's line for the newest phase rolled up says where it got to.
+                const newestWritten = block.blocks.reduce<string | null>((found, rolled) => {
+                  const [first] = rolled.kind === "run" ? phaseCalls(rolled.steps) : [];
 
-                return content === null ? null : <div key={i} className={BLOCK_GAP.section}>{content}</div>;
+                  return (first === undefined ? undefined : written.phases.get(first.toolCallId)) ?? found;
+                }, null);
+
+                return (
+                  <div key={`turn-${String(i)}`} className={BLOCK_GAP.section}>
+                    <TurnRollup line={phaseTitle(calls)} phases={block.blocks.filter((rolled) => rolled.kind === "run").length}
+                      written={(done ? written.turn : null) ?? newestWritten} onSeen={done && written.turn === null ? asksOnSeen : undefined}>
+                      {block.blocks.map((rolled, j) => renderBlock(rolled, j, false))}
+                    </TurnRollup>
+                  </div>
+                );
               })}
             </div>
           )}

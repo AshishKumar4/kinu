@@ -7,7 +7,7 @@ import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync, symlinkSync, utimesSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, writeFileSync, symlinkSync, utimesSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
 import {
@@ -167,7 +167,9 @@ describe('kinu export / import', () => {
     const outside = join(scratch('kinu-export-outside-'), 'outside.txt');
     writeFileSync(outside, 'not part of this workspace');
     symlinkSync(outside, join(project, 'link'));
-    writeFileSync(join(project, 'run.sh'), 'echo ran\n', { mode: 0o750 });
+    writeFileSync(join(project, 'run.sh'), 'echo ran\n');
+    // A mode set by chmod, which the umask of whoever runs the suite never masks (077 under an agent's shell).
+    chmodSync(join(project, 'run.sh'), 0o750);
     utimesSync(join(project, 'run.sh'), 1_000, 2_000);
     const archive = join(scratch('kinu-export-link-out-'), 'scout.kinu.jsonl');
     const exported = await runCli(home, ['export', 'scout', '-o', archive]);

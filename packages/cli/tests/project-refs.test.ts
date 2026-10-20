@@ -8,6 +8,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createCliAgent, renameLocalAgent, type CreatedCliAgent } from '../src/agent-create';
 import { resolveAgentTarget } from '../src/agent-target';
+import { WORKSPACE_TITLE_MAX, workspaceTitleProblem } from '@kinu.run/core';
 import {
   AGENT_HOME,
   agentDbPath,
@@ -197,6 +198,15 @@ describe('the same label in two projects is two workspaces', () => {
 });
 
 describe('renaming changes no identity and moves no database', () => {
+  test("a title the cloud's rename refuses is refused here too, and the old one stays", async () => {
+    const created = await create('long-title', project(), 'bound');
+    const before = readWorkspaceDisplayName(createdDbPath(created));
+
+    expect(() => renameLocalAgent('long-title', 'x'.repeat(WORKSPACE_TITLE_MAX + 1))).toThrow(workspaceTitleProblem('x'.repeat(WORKSPACE_TITLE_MAX + 1)) ?? '');
+    expect(() => renameLocalAgent('long-title', '   ')).toThrow(workspaceTitleProblem('   ') ?? '');
+    expect(readWorkspaceDisplayName(createdDbPath(created))).toBe(before);
+  });
+
   test('a new display name leaves the database, the placement and the identity alone', async () => {
     const cwd = project();
     const created = await create('renamed-label', cwd, 'bound');

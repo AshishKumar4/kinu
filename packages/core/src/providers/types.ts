@@ -1,5 +1,6 @@
 // Provider abstraction: providers get ready-to-attach headers from a resolver, never raw
 // secrets; createModel is sync, with auth resolved inside customFetch.
+import * as v from 'valibot';
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import type { LanguageModel } from 'ai';
@@ -15,12 +16,15 @@ export interface ModelSpec { provider: string; modelId: string; account?: string
 
 /** USD per 1M tokens, the models.dev `cost` block verbatim. It publishes one cache-write
  *  rate per model, so a 1h-retention write prices at that rate and `priceCall` is a floor. */
-export interface ModelPricing {
-  input: number;
-  output: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-}
+/** USD per million tokens, as a catalog prices a model; read off the wire through this one schema. */
+export const ModelPricingSchema = v.object({
+  input: v.number(),
+  output: v.number(),
+  cacheRead: v.optional(v.number()),
+  cacheWrite: v.optional(v.number()),
+});
+
+export type ModelPricing = v.InferOutput<typeof ModelPricingSchema>;
 
 /**
  * How long a provider should keep the prefix a request writes.
@@ -234,7 +238,8 @@ export interface ModelProvider {
 
 /** Split on the FIRST slash so slashful ids such as `@cf/deepseek-ai/deepseek-v4-pro-0813` survive
  *  intact. A leading `@` is a bare Workers AI id, not an account. */
-function splitSpec(spec: string): { provider: string; account: string | null; modelId: string } | null {
+/** A spec's provider, account and model, or null for one with no provider; nothing about the account is checked. */
+export function splitSpec(spec: string): { provider: string; account: string | null; modelId: string } | null {
   const i = spec.indexOf('/');
 
   if (i < 1) return null;

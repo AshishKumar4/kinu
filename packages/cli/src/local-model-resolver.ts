@@ -3,7 +3,7 @@ import { parseModelSpec } from '@kinu.run/core';
 import {
   createOAuthStore,
   resolveCloudSession,
-  resolveModelDefaults,
+  usableModelDefaults,
   type LocalModelDefaults,
   resolveProviderCredentials,
 } from './config';
@@ -55,7 +55,7 @@ export function findUnusableModel(opts: LocalModelResolverOptions = {}): Promise
 
 export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptions = {}): ConfiguredLocalModelResolver {
   // A null spec only removes the bare-id default.
-  const defaults = resolveModelDefaults({ ...opts, defaultModel: readDefaultTier()?.model });
+  const defaults = usableModelDefaults({ ...opts, defaultModel: readDefaultTier()?.model });
   const cloud = resolveCloudSession();
 
   const resolver = createLocalModelResolver({

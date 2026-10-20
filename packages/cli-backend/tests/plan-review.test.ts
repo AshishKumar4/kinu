@@ -3,6 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import { scratchPath, scriptedTurnModel, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { CHAT_SESSION_ID, initWorkspaceSchema, type JsonObject, type LLMProviderConfig } from '@kinu.run/core';
+import { readPlanTasks } from '../../core/src/tools/task-store';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
@@ -188,6 +189,31 @@ describe('LocalAgentSession — plan review', () => {
    * note on the whole plan, then sends it back: the agent's next turn reads all three, answers one in its thread, and
    * revises. The reply tool is offered only on that turn, and the thread carries into the revision.
    */
+  // The approval's handoff turn implements that revision: the tasks it writes down are the plan's, as the cloud's are.
+  test("the tasks an approved plan's handoff turn writes down are that revision's", async () => {
+    const { db, rt, agent } = session([
+      { call: 'submit_plan', input: { edits: [{ start: 1, content: PLAN_BODY }] } },
+      { answer: 'Plan submitted for review.' },
+      { call: 'tasks', input: { op: 'add', titles: ['Move the ledger to integer cents'] } },
+      { answer: 'Started on the plan.' },
+    ]);
+
+    try {
+      await agent.send('Draft the ledger migration.', { id: crypto.randomUUID(), mode: 'plan' });
+      const plan = await agent.getActivePlanReview();
+
+      if (!plan) throw new Error('the submitted plan was not stored');
+      expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({ ok: true, queued: true });
+      await agent.settleBackgroundWork();
+
+      expect(readPlanTasks(rt.storage.sql, rt.actor, { id: plan.id, revision: 1, sessionId: CHAT_SESSION_ID }).map((task) => task.title))
+        .toEqual(['Move the ledger to integer cents']);
+    } finally {
+      await agent.end();
+      db.close();
+    }
+  });
+
   test('in Auto a plan goes to review; its three kinds of comment reach the agent, which answers in a thread', async () => {
     const { db, agent, requests } = session([
       { call: 'submit_plan', input: { edits: [{ start: 1, content: '# Ledger migration\n\nMove the ledger to integer cents.\nDrop the float column.' }] } },

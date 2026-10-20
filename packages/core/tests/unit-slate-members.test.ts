@@ -18,6 +18,9 @@ test('the impact table is what the grant, the graph and the audit row read', () 
 
   for (const [namespace, member, expected] of rows) expect([namespace, member, impact(namespace, member)]).toEqual([namespace, member, expected]);
 
+  // A member a host serves over its own tables is the catalog's too: `computer.resize` was declared for slates and
+  // refused them (the SufficientKoala audit).
+  expect(impact('computer', 'resize')).toBe('administer');
   // A member the catalog never declares fails closed: it is off a slate's surface.
   expect(impact('workspace', 'reformatHardDrive')).toBeNull();
   // A member the agent keeps from slates is not on the surface at all: switching its own role is one.

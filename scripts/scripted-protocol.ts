@@ -16,6 +16,7 @@ import {
   DYNAMIC_CONTEXT_OPEN_TAG, MID_TURN_DELIVERY_OPENING, STEER_SKILLS_HEADING, SYSTEM_REMINDER_TAG, TOOL_IMAGES_OPENING, WORKSPACE_INSTRUCTIONS_TAG,
 } from '../packages/core/src/utils/prompt-sections';
 import { SCRIPTED_MODEL_ID } from '../packages/test-utils/src/scripted-model-spec';
+import { chatCompletionBody, chatCompletionFrame, chatCompletionStream, type ChatAnswer } from '../packages/test-utils/src/chat-completions';
 
 /** What an unscripted request gets. One string, so a row that waits for the
  *  answer waits for the words this server actually sends. */
@@ -234,21 +235,11 @@ export function readScriptedRequest(body: string): { readonly request: ScriptedR
   };
 }
 
-const CHUNK = { id: 'chatcmpl-scripted', object: 'chat.completion.chunk', created: 1, model: SCRIPTED_MODEL_ID };
+/** The scripted model's answers carry this envelope. */
+const SCRIPTED = { model: SCRIPTED_MODEL_ID, id: 'chatcmpl-scripted' } as const;
 
 /** The `/models` answer: the one model this endpoint serves. */
 export const SCRIPTED_MODELS_BODY = JSON.stringify({ object: 'list', data: [{ id: SCRIPTED_MODEL_ID, name: 'Fake Live' }] });
-
-/** One streamed frame carrying `delta` alone: what a paced answer writes before its silences. */
-function streamFrame(delta: Readonly<Record<string, string>>): string {
-  return `data: ${JSON.stringify({ ...CHUNK, choices: [{ index: 0, delta, finish_reason: null }] })}\n\n`;
-}
-
-/** The answer's tool call as the wire carries it, with its own id per `step`: the calls the request already holds, so
- *  each call a turn makes has its own id, as a provider gives it. */
-function wireCall(call: NonNullable<ScriptedAnswer['toolCall']>, step: number) {
-  return { id: `call-${call.name}-${String(step)}`, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.arguments) } };
-}
 
 /** The scripted model's own token count, one per whitespace-separated word. */
 function wordsIn(texts: readonly string[]): number {
@@ -264,50 +255,21 @@ function usageOf(answer: ScriptedAnswer, request: ScriptedRequest) {
   return { prompt_tokens: read, completion_tokens: wrote, total_tokens: read + wrote };
 }
 
-/** The answer to a request that asked for no stream, as one completion: a workspace's title is asked this way. */
-function completionOf(answer: ScriptedAnswer, request: ScriptedRequest): string {
+/** The answer as the wire carries it, its usage the scripted model's own count; each tool call has its own id per
+ *  step (the calls the request already holds), so each call a turn makes has its own id, as a provider gives it. */
+function wireAnswer(answer: ScriptedAnswer, request: ScriptedRequest): ChatAnswer {
   const call = answer.toolCall;
-  const content = answer.text ?? null;
 
-  const message = call === undefined
-    ? { role: 'assistant', content }
-    : { role: 'assistant', content, tool_calls: [wireCall(call, request.calls.length)] };
-
-  return JSON.stringify({
-    ...CHUNK,
-    object: 'chat.completion',
-    choices: [{ index: 0, message, finish_reason: call === undefined ? 'stop' : 'tool_calls' }],
-    usage: usageOf(answer, request),
-  });
+  return {
+    ...SCRIPTED, usage: usageOf(answer, request),
+    ...answer.text !== undefined && { text: answer.text },
+    ...call !== undefined && { toolCall: { id: `call-${call.name}-${String(request.calls.length)}`, name: call.name, arguments: JSON.stringify(call.arguments) } },
+  };
 }
 
 /** The answer as a stream, its usage on the finishing chunk. */
 export function streamOf(answer: ScriptedAnswer, request: ScriptedRequest): string {
-  const events: unknown[] = [];
-  const call = answer.toolCall;
-  const step = request.calls.length;
-
-  if (answer.text !== undefined) {
-    events.push({ ...CHUNK, choices: [{ index: 0, delta: { role: 'assistant', content: answer.text }, finish_reason: null }] });
-  }
-
-  if (call !== undefined) {
-    events.push({
-      ...CHUNK,
-      choices: [{
-        index: 0,
-        delta: {
-          role: 'assistant',
-          tool_calls: [{ index: 0, ...wireCall(call, step) }],
-        },
-        finish_reason: null,
-      }],
-    });
-  }
-
-  events.push({ ...CHUNK, choices: [{ index: 0, delta: {}, finish_reason: call === undefined ? 'stop' : 'tool_calls' }], usage: usageOf(answer, request) });
-
-  return `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`;
+  return chatCompletionStream(wireAnswer(answer, request));
 }
 
 /**
@@ -318,16 +280,16 @@ export function streamOf(answer: ScriptedAnswer, request: ScriptedRequest): stri
 export async function* pacedStream(
   answer: ScriptedAnswer, pace: ScriptedPace, request: ScriptedRequest, wait: (ms: number) => Promise<void>,
 ): AsyncGenerator<string> {
-  yield streamFrame({ role: 'assistant' });
+  yield chatCompletionFrame(SCRIPTED, { role: 'assistant' });
   await pace.hold;
 
   for (let word = 0; word < (pace.reasoning?.deltas ?? 0); word += 1) {
-    yield streamFrame({ reasoning_content: `thought${String(word)} ` });
+    yield chatCompletionFrame(SCRIPTED, { reasoning_content: `thought${String(word)} ` });
     await wait(pace.reasoning?.everyMs ?? 0);
   }
 
   await wait(pace.firstTokenMs);
-  yield streamFrame({ content: pace.lead });
+  yield chatCompletionFrame(SCRIPTED, { content: pace.lead });
   await pace.rest;
   await wait(pace.leadMs);
   yield streamOf(answer, request);
@@ -337,5 +299,5 @@ export async function* pacedStream(
 export function scriptedBody(answer: ScriptedAnswer, request: ScriptedRequest): { readonly contentType: string; readonly body: string } {
   return request.streamed
     ? { contentType: 'text/event-stream', body: streamOf(answer, request) }
-    : { contentType: 'application/json', body: completionOf(answer, request) };
+    : { contentType: 'application/json', body: chatCompletionBody(wireAnswer(answer, request)) };
 }

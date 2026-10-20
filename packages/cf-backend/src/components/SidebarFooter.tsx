@@ -31,17 +31,17 @@ function CountBadge({ count, label }: { count: number; label: string }) {
 /** Mail, with what the assistant marked Important and you have not read, and the machines you connected. */
 export function FooterIcons({ vertical = false }: { vertical?: boolean }) {
   const { pathname } = useLocation();
-  const unread = useImportantMail().unread;
+  const { enabled, unread } = useImportantMail();
   const cls = (open: boolean) => `relative flex size-8 items-center justify-center rounded-lg transition-colors ${open ? "bg-[var(--c-accent-subtle)] p-accent" : `p-text-3 ${NAV_HOVER}`}`;
   const at = (root: string) => pathname === root || pathname.startsWith(`${root}/`);
   const mailWords = unread > 0 ? `Mail, ${String(unread)} important unread` : "Mail";
 
   return (
     <div className={`flex items-center gap-0.5 ${vertical ? "flex-col" : ""}`}>
-      <Link to={MAIL_ROUTE} aria-label={mailWords} title={mailWords} aria-current={at(MAIL_ROUTE) ? "page" : undefined} data-footer-mail className={cls(at(MAIL_ROUTE))}>
+      {enabled && <Link to={MAIL_ROUTE} aria-label={mailWords} title={mailWords} aria-current={at(MAIL_ROUTE) ? "page" : undefined} data-footer-mail className={cls(at(MAIL_ROUTE))}>
         <EnvelopeSimpleIcon size={17} />
         <CountBadge count={unread} label={`${String(unread)} important unread`} />
-      </Link>
+      </Link>}
       <Link to={APP_ROUTES.devices} aria-label="Devices" title="Devices" aria-current={at(APP_ROUTES.devices) ? "page" : undefined} data-footer-devices
         className={cls(at(APP_ROUTES.devices))}>
         <DesktopTowerIcon size={17} />

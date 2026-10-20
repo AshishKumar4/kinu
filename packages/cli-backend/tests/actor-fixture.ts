@@ -65,13 +65,13 @@ export function fixtureRunSources(
     scaffoldSpend: { source: 'scaffold', report: () => {} },
     attachmentBudget: actor.session.orchestrator.acc.ledgers.context,
     extensions: () => [],
-    dynamic: () => (profile, tools) => collectDynamicContext({
+    dynamic: ({ memoryTail }) => (profile, tools) => collectDynamicContext({
       rt: actor.runtime,
       stores: actor.stores,
       profile,
       tools,
       runtime: { backend: 'cli-local', model: { id: profile.tier.model }, date: '2026-01-01' },
-      memoryTail: undefined,
+      memoryTail,
       missingCapabilities: [],
       subordinateDelegates: () => [],
       approvals: () => ({ items: [], total: 0 }),

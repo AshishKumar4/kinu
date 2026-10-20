@@ -10,10 +10,7 @@ import {
   specModelInfo,
   createProviderProxyFetch,
   listModelsDevProviderModels,
-  generateObjectReported,
-  generateReported,
   mapModelList,
-  streamTextReported,
   parseModelSpec,
   workersAiSpec,
   sessionAffinityOf,
@@ -24,7 +21,6 @@ import {
   providerProxyCredentialsURL,
   providerProxyForwardURL,
   proxyAuthResolution,
-  routedCallOptions,
   type AuthRequest,
   type AuthResolution,
   type AuthResolver,
@@ -40,16 +36,11 @@ import {
   type ModelProvider,
   type ProviderDeps,
   type ProviderInfo,
-  type ModelCallSpend,
-  type ModelRouteResolution,
-  type GenerateRequest,
-  type StreamRequest,
   countRequestInputTokens,
   type CountableRequest,
   type InputTokenCount,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
-import type { RoutedLLM } from '@kinu.run/core';
 import { createOpenCodeProvider } from './opencode-provider';
 import { isOAuthLoginKey, type LocalOAuthStore } from './oauth-store';
 import * as v from 'valibot';
@@ -134,58 +125,6 @@ export interface LocalModelResolverConfig {
    *  when absent they list as unavailable, signed out. */
   cloud?: LocalCloudSession;
   fetch?: typeof fetch;
-}
-
-/**
- * The workspace LLM seam over the local registry. `route` is the turn profile's
- * model and effort; omitted = configured chat model at its own effort.
- * Only completed calls report spend: a thrown call yields no usage.
- */
-export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
-  route?: Pick<ModelRouteResolution, 'model' | 'reasoningEffort' | 'retries'>;
-  affinity: ModelAffinity;
-  /** Sink and producer label together: only the consumer knows which producer
-   *  a call belongs to. */
-  spend: ModelCallSpend;
-}): RoutedLLM {
-  const resolver = createLocalModelResolver(opts);
-  // Normalized per call: an unresolvable id fails at the call, not at construction.
-  const spec = () => resolver.normalizeSpecSync(opts.route?.model ?? null);
-  const model = (resolved: string) => resolver.resolveModel(resolved, opts.affinity);
-  const spend = opts.spend;
-  const { route } = opts;
-  const callOptions = (resolved: string) => (route === undefined ? undefined : routedCallOptions(route, resolved));
-
-  return {
-    stream(input) {
-      const resolved = spec();
-
-      const streamed: StreamRequest = {
-        model: model(resolved),
-        instructions: input.system,
-        messages: input.messages.map(m => ({
-          role: m.role,
-          content: m.content,
-        })),
-        ...callOptions(resolved),
-      };
-
-      // Usage exists only once the stream drains; an abandoned stream files no row.
-      return streamTextReported(streamed, { spend, spec: resolved });
-    },
-    async complete(prompt) {
-      const resolved = spec();
-
-      const generated: GenerateRequest = { model: model(resolved), prompt, ...callOptions(resolved) };
-
-      return (await generateReported(generated, { spend, spec: resolved })).text.trim();
-    },
-    async object(prompt, schema) {
-      const resolved = spec();
-
-      return await generateObjectReported({ model: model(resolved), prompt, ...callOptions(resolved) }, schema, { spend, spec: resolved });
-    },
-  };
 }
 
 /**
@@ -542,6 +481,7 @@ class CloudProxyProvider implements ModelProvider {
           capabilities: entry.capabilities ? [...entry.capabilities] : undefined,
           contextWindow: entry.contextWindow,
           reasoningEfforts: entry.reasoningEfforts,
+          cost: entry.cost,
         }));
   }
 

@@ -72,7 +72,8 @@ function firstIssue(issues: readonly v.BaseIssue<unknown>[]): string {
   return `${path === '' ? 'the row' : path}: ${issue?.message ?? 'unreadable'}`;
 }
 
-/** A stored row, its origin and lifetime read from its actor; one that fails says which row and which field. */
+/** A stored row, its origin and lifetime read from its actor; one that fails says which row and which field, as
+ *  `bad_input`: no retry reads the same row differently, so nothing waiting on it retries on a clock. */
 function parseStoredRosterRow(row: SqlExecRow): Effect.Effect<SubordinateRosterEntry, KinuError> {
   const named = typeof row.name === 'string' ? row.name : '(unnamed)';
 
@@ -87,7 +88,7 @@ function parseStoredRosterRow(row: SqlExecRow): Effect.Effect<SubordinateRosterE
     const cause = Cause.squash(failed);
     const where = v.isValiError(cause) ? firstIssue(cause.issues) : String(cause);
 
-    return Effect.fail(new KinuError('io', `Stored subordinate roster data is malformed: row "${named}", ${where}.`, { cause }));
+    return Effect.fail(new KinuError('bad_input', `Stored subordinate roster data is malformed: row "${named}", ${where}.`, { cause }));
   });
 }
 

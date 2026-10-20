@@ -27,7 +27,7 @@ import {
   withApprovalGatedShell, withApprovalGatedFiles, createShellSession, createBashShell, holdsGrant, createInheritedApprovalPolicy,
   initFiberTable, initDriverLeaseTable, initJobHoldersTable, initWorkspaceActorTable, bearWorkspaceIdentity, stampSchemaGenesis, initActorStateSchema, initAgentConfigTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
-  resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
+  resolveRoutingProfile, createRoutedModelLane, routedLlm, bindRoute, tierRefusals, type TierRefusals,
   type AgentStores, type ChildContextResolver,
   type ModelCallSink, type ModelOperationSink,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, nanoid, SPILL_DIRS, unsandboxedCommandEnvironment,
@@ -47,7 +47,7 @@ import { createSqlFiber, detectOrphanedFibers, localPlanes, SOUL_PATH } from '@k
 import { createDecisionPort, createStructuredDecider, decisionPortOf, restDecisionRun } from '@kinu.run/core';
 import { readLaunchDotenv } from './dotenv-provenance';
 import {
-  createLocalModelResolver, createLocalProviderLLM, workersAiRoute,
+  createLocalModelResolver, workersAiRoute,
   type LocalCloudSession, type LocalModelResolver, type ProviderCredentialSource,
 } from './model-resolver';
 import {
@@ -162,7 +162,7 @@ function notesMemory(notes: ReturnType<typeof agentHomeFiles>, sql: SqlExecutor,
 
 /** The memory of the workspace whose database `db` is, as its memory tool reads and searches it. */
 export function workspaceMemory(db: Database): Memory {
-  return notesMemory(workspaceHome(db), makeSql(db), write => db.transaction(write)()).memory;
+  return notesMemory(workspaceHome(db), makeSql(db), (write) => writeTransaction(db, write)).memory;
 }
 
 /** Session payload reads for inspection, over the workspace's folder and own space. */
@@ -265,7 +265,7 @@ function buildCLIRuntime(
   initAgentConfigTable(execRaw);
   initScaffoldTables(execRaw);
   const agentConfig = actor.config;
-  // Same endpoint and credentials as the routed-lane factory, so a tier's model is spelled one way.
+  // The one registry the routed lanes call and spell a tier's model by.
   let specResolver: LocalModelResolver | null = null;
 
   const localResolver = (): LocalModelResolver => {
@@ -300,15 +300,17 @@ function buildCLIRuntime(
     },
   });
 
-  let modelRouteFactory = (resolution: ModelRouteResolution): RoutedLLM => createLocalProviderLLM({
-    llm: config.llm,
-    defaultSpec: config.defaultSpec,
-    affinity: actorAffinity(actor),
-    credentials: config.providerCredentials,
-    oauthStore: config.oauthStore,
-    route: resolution,
-    spend: { source: resolution.source, report, operations },
-  });
+  // Core's one routed invocation over the local registry; a spec is spelled as the registry spells it, so spend is too.
+  const localRegistry = {
+    normalize: (spec: string) => localResolver().normalizeSpecSync(spec),
+    resolve: (spec: string) => localResolver().resolveModel(spec, actorAffinity(actor)),
+  };
+
+  let modelRouteFactory = (resolution: ModelRouteResolution): RoutedLLM => routedLlm(
+    (route) => bindRoute(localRegistry, route),
+    { ...resolution, model: localRegistry.normalize(resolution.model) },
+    { report, operations },
+  );
 
   const modelForRoute = (resolution: ModelRouteResolution): RoutedLLM =>
     modelRouteFactory(resolution);
@@ -378,7 +380,7 @@ function buildCLIRuntime(
 
   const { planes, home: ownHome } = runtimePlanes(cwd, space, config.facet, views);
 
-  const { store: memoryStore, memory } = notesMemory(agentStateVfs, sql, write => db.transaction(write)());
+  const { store: memoryStore, memory } = notesMemory(agentStateVfs, sql, (write) => writeTransaction(db, write));
 
   const craftStore = new CraftStore(sql);
   craftStore.ensureSchema();

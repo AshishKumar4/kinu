@@ -15,7 +15,7 @@ import { describeProviderError, OWNER_FIXABLE_REFUSALS, providerRefusalCode, toP
 import type { RoutedLLM } from '../types/primitives';
 import type { ResolvedTurnProfile } from './resolve';
 import { resolveModelRoute, type ModelRouteResolution, type ProfileRoutedSource } from './model-route';
-import { currentOperationProfile, operationProfileStream, resolveOperationProfile, runOperationProfile } from './operation';
+import { resolveOperationProfile, runOperationProfile } from './operation';
 import type { TierRefusal, TierRefusals } from '../types/refusals';
 
 /** What a route walk reads besides the route: which credential pays a spec, and where owner-fixable refusals are said. */
@@ -36,14 +36,14 @@ export interface RouteModelBinding {
 
 export type RouteModelBinder = (route: ModelRouteResolution) => RouteModelBinding;
 
-/** A registry's binding: the effort options are the provider's the spec names once normalised. */
+/** A registry's binding: the effort options are those of the API serving the spec once normalised. */
 export function bindRoute(
   registry: { normalize(spec: string): string; resolve(spec: string): LanguageModel },
   route: Pick<ModelRouteResolution, 'model' | 'reasoningEffort'>,
 ): RouteModelBinding {
   const spec = registry.normalize(route.model);
   const model = registry.resolve(spec);
-  const providerOptions = reasoningEffortOptions(route.reasoningEffort, parseModelSpec(spec).provider);
+  const providerOptions = reasoningEffortOptions(route.reasoningEffort, spec);
 
   return providerOptions === undefined ? { model } : { model, providerOptions };
 }
@@ -74,12 +74,6 @@ export function routeRetryOptions(call: Pick<ModelRouteResolution, 'retries'>) {
   return { maxRetries: 0, providerOptions: callRetries(call.retries) };
 }
 
-export function routedCallOptions(call: Pick<ModelRouteResolution, 'reasoningEffort' | 'retries'>, spec: string) {
-  const effort = reasoningEffortOptions(call.reasoningEffort, parseModelSpec(spec).provider);
-
-  return { maxRetries: 0, providerOptions: { ...effort, ...callRetries(call.retries) } };
-}
-
 /** One routed call as an {@link RoutedLLM}, billed under the route's source once it completes. */
 export function routedLlm(bind: RouteModelBinder, route: ModelRouteResolution, spend: Omit<ModelCallSpend, 'source'>, system?: string): RoutedLLM {
   const sent = (prompt: string) => {
@@ -94,7 +88,6 @@ export function routedLlm(bind: RouteModelBinder, route: ModelRouteResolution, s
   };
 
   return {
-    async *stream() { yield ''; },
     async complete(prompt) {
       const { request, call } = sent(prompt);
 
@@ -187,15 +180,5 @@ export function createRoutedModelLane(actor: ActorReference, source: ProfileRout
   return {
     complete: (prompt) => onProfileRoute(actor, source, binding, (route) => completeOnRoute(route, binding, prompt)),
     object: (prompt, schema) => onProfileRoute(actor, source, binding, (route) => objectOnRoute(route, binding, prompt, schema)),
-    stream(options) {
-      // Capture the caller's scope now; a generator body first runs in the consumer's next().
-      const issued = currentOperationProfile(actor);
-
-      return operationProfileStream((async function* () {
-        const context = await resolveOperationProfile({ actor, resolve: () => binding.resolveProfile() });
-        const events = runOperationProfile(context, () => binding.llm(resolveModelRoute(source, context.profile)).stream(options));
-        yield* operationProfileStream(events, context);
-      })(), issued);
-    },
   };
 }

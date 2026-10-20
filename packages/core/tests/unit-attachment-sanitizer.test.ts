@@ -480,23 +480,31 @@ describe('the spill-directory mkdir failure is classified, not substring-matched
 
 describe('acceptedMediaForModel', () => {
   test('workers-ai (openai-compatible wire) is capped to image even if the catalog claims pdf', () => {
-    expect([...acceptedMediaForModel({ provider: 'workers-ai', catalogInputModalities: ['text', 'image', 'pdf'] })])
+    expect([...acceptedMediaForModel({ spec: 'workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct', catalogInputModalities: ['text', 'image', 'pdf'] })])
       .toEqual(['image']);
   });
 
   test('a text-only catalog model accepts no media at all (the glm-5.2 case)', () => {
-    expect(acceptedMediaForModel({ provider: 'workers-ai', catalogInputModalities: ['text'] }).size).toBe(0);
+    expect(acceptedMediaForModel({ spec: 'workers-ai/@cf/zai-org/glm-5.2', catalogInputModalities: ['text'] }).size).toBe(0);
   });
 
   test('anthropic/openai models that genuinely accept PDFs pass them', () => {
-    const anthropic = acceptedMediaForModel({ provider: 'anthropic', catalogInputModalities: ['text', 'image', 'pdf'] });
+    const anthropic = acceptedMediaForModel({ spec: 'anthropic/claude-opus-4-7', catalogInputModalities: ['text', 'image', 'pdf'] });
     expect(anthropic.has('pdf')).toBe(true);
     expect(anthropic.has('image')).toBe(true);
-    expect(acceptedMediaForModel({ provider: 'anthropic' }).has('pdf')).toBe(true);
+    expect(acceptedMediaForModel({ spec: 'anthropic/claude-opus-4-7' }).has('pdf')).toBe(true);
+  });
+
+  // The SufficientKoala audit: the gateway serves an author's model over the author's own API, and its PDFs were refused.
+  test("a gateway's Claude or GPT route accepts what the author's own API does; its chat route only images", () => {
+    const pdf = (spec: string) => acceptedMediaForModel({ spec, catalogInputModalities: ['text', 'image', 'pdf'] }).has('pdf');
+
+    expect(['my-gateway/anthropic/claude-opus-4.7', 'my-gateway/openai/gpt-6.1', 'my-gateway/workers-ai/@cf/zai-org/glm-5.3'].map(pdf))
+      .toEqual([true, true, false]);
   });
 
   test('unknown providers/models fall back to the conservative text+image default', () => {
-    expect([...acceptedMediaForModel({ provider: 'some-catalog-provider' })]).toEqual(['image']);
+    expect([...acceptedMediaForModel({ spec: 'some-catalog-provider/model' })]).toEqual(['image']);
     expect([...acceptedMediaForModel({})]).toEqual(['image']);
   });
 });

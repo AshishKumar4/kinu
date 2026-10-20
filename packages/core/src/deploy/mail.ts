@@ -2,7 +2,8 @@
 // on the zone with a catch-all to this Worker, Email Sending for the domain and its DNS records, and `_dmarc` where
 // the domain has none. Each call is made only when the deploy's token may; what it may not do is asked of the owner,
 // named exactly, and the deployment goes on without mail rather than failing. Paths are those wrangler 4.x calls
-// (`src/email-routing/*`), read 2026-10-20.
+// (`src/email-routing/*`) and the API reference names, read 2026-10-20: routing is enabled through its DNS (`/enable` is
+// deprecated; the apex with no name, as kinu.run's was refused one), and a sending subdomain is named by its `tag`.
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { KinuError } from '../obs/index';
@@ -18,10 +19,10 @@ function dmarcRecord(domain: string): string {
 
 const ZonesSchema = v.array(v.object({ id: v.string(), name: v.string() }));
 
-const SendingDomainSchema = v.object({ id: v.string(), name: v.string() });
+const SendingDomainSchema = v.object({ tag: v.string(), name: v.string() });
 
 const DnsRecordsSchema = v.array(v.object({
-  type: v.string(), name: v.string(), content: v.string(), priority: v.optional(v.number()), ttl: v.optional(v.number()),
+  id: v.optional(v.string()), type: v.string(), name: v.string(), content: v.string(), priority: v.optional(v.number()), ttl: v.optional(v.number()),
 }));
 
 type DnsRecord = v.InferOutput<typeof DnsRecordsSchema>[number];
@@ -45,6 +46,21 @@ async function zoneOf(context: DeployContext, domain: string): Promise<string | 
   return zones?.find((zone) => zone.name === domain)?.id ?? null;
 }
 
+/**
+ * A record's value as DNS means it. Email Sending lists an MX host with its root dot and a TXT in one quoted string; the
+ * zone holds the MX without the dot and a TXT longer than 255 characters as several strings (measured on staging.kinu.run
+ * and kinu.run, 2026-10-20).
+ */
+function recordValue(record: Pick<DnsRecord, 'type' | 'content'>): string {
+  const value = record.content.trim();
+
+  if (record.type === 'MX') return value.replace(/\.$/u, '').toLowerCase();
+
+  if (record.type !== 'TXT' || !value.startsWith('"')) return value;
+
+  return [...value.matchAll(/"((?:[^"\\]|\\.)*)"/gu)].map((part) => part[1] ?? '').join('');
+}
+
 /** Adds each record the zone does not hold yet; the records the token may not write are returned to ask for. */
 async function ensureRecords(context: DeployContext, zone: string, records: readonly DnsRecord[]): Promise<DnsRecord[]> {
   const asked: DnsRecord[] = [];
@@ -54,7 +70,7 @@ async function ensureRecords(context: DeployContext, zone: string, records: read
       method: 'GET', path: `/zones/${zone}/dns_records?type=${record.type}&name=${encodeURIComponent(record.name)}&per_page=100`,
     }, DnsRecordsSchema);
 
-    if (held?.some((each) => each.content === record.content) === true) continue;
+    if (held?.some((each) => recordValue(each) === recordValue(record)) === true) continue;
 
     const body: JsonObject = { type: record.type, name: record.name, content: record.content, ttl: 1 };
 
@@ -66,6 +82,37 @@ async function ensureRecords(context: DeployContext, zone: string, records: read
   }
 
   return asked;
+}
+
+/**
+ * DMARC is this step's decision where the domain had none, report-only to start (docs/MAIL.md §5): it replaces the
+ * p=reject Sending writes with it. A domain's own DMARC, held before, is kept. Returns the record if the token may not.
+ */
+async function ownDmarc(context: DeployContext, zone: string, domain: string, before: readonly DnsRecord[] | null): Promise<DnsRecord[]> {
+  const wanted = { type: 'TXT', name: `_dmarc.${domain}`, content: dmarcRecord(domain) };
+
+  if (before === null) return [wanted];
+
+  if (before.some((record) => recordValue(record).startsWith('v=DMARC1'))) return [];
+  const now = await allowed(context, { method: 'GET', path: `/zones/${zone}/dns_records?type=TXT&name=${encodeURIComponent(wanted.name)}&per_page=100` }, DnsRecordsSchema);
+  const sendings = (now ?? []).find((record) => recordValue(record).startsWith('v=DMARC1') && record.id !== undefined);
+
+  if (sendings === undefined) return ensureRecords(context, zone, [wanted]);
+
+  if (recordValue(sendings) === wanted.content) return [];
+  const patched = await allowed(context, { method: 'PATCH', path: `/zones/${zone}/dns_records/${sendings.id ?? ''}`, body: { content: wanted.content } }, v.object({ id: v.string() }));
+
+  return patched === null ? [wanted] : [];
+}
+
+/** The domain's sending subdomain: the one it has, else made now; null where the token may not. */
+async function sendingDomain(context: DeployContext, zone: string, domain: string): Promise<v.InferOutput<typeof SendingDomainSchema> | null> {
+  const held = await allowed(context, { method: 'GET', path: `/zones/${zone}/email/sending/subdomains` }, v.array(SendingDomainSchema));
+
+  if (held === null) return null;
+
+  return held.find((each) => each.name === domain)
+    ?? await allowed(context, { method: 'POST', path: `/zones/${zone}/email/sending/subdomains`, body: { name: domain } }, SendingDomainSchema);
 }
 
 const recordLine = (record: DnsRecord): string => `${record.type} ${record.name} ${record.priority === undefined ? '' : `${String(record.priority)} `}${record.content}`;
@@ -89,7 +136,8 @@ export function mailStep(inputs: DeployInputs) {
         }
 
         const asks: string[] = [];
-        const routed = await allowed(context, { method: 'POST', path: `/zones/${zone}/email/routing/enable`, body: {} }, v.unknown());
+        // The domain is its zone's apex, which routing takes with no name: `name` is for a subdomain, and the apex's is refused.
+        const routed = await allowed(context, { method: 'POST', path: `/zones/${zone}/email/routing/dns`, body: {} }, v.unknown());
 
         const catchAll = routed === null ? null : await allowed(context, {
           method: 'PUT', path: `/zones/${zone}/email/routing/rules/catch_all`,
@@ -101,16 +149,18 @@ export function mailStep(inputs: DeployInputs) {
             + 'Or give the deploy token the zone\'s "Email Routing Rules: Edit" and "Zone Settings: Edit".');
         }
 
-        const sending = await allowed(context, { method: 'POST', path: `/zones/${zone}/email/sending/subdomains`, body: { name: domain } }, SendingDomainSchema);
-        const records = sending === null ? null : await allowed(context, { method: 'GET', path: `/zones/${zone}/email/sending/subdomains/${sending.id}/dns` }, DnsRecordsSchema);
+        const dmarcPath = `/zones/${zone}/dns_records?type=TXT&name=${encodeURIComponent(`_dmarc.${domain}`)}&per_page=100`;
+        // Read before Sending is made: making it writes a DMARC of its own where the domain had none.
+        const dmarcBefore = await allowed(context, { method: 'GET', path: dmarcPath }, DnsRecordsSchema);
+        const sending = await sendingDomain(context, zone, domain);
+        const records = sending === null ? null : await allowed(context, { method: 'GET', path: `/zones/${zone}/email/sending/subdomains/${sending.tag}/dns` }, DnsRecordsSchema);
 
         if (sending === null || records === null) {
           asks.push(`In the dashboard, open ${domain}, then Email, then Email Sending: enable it for ${domain} and add the records it lists. Sending needs Workers Paid.`);
         }
 
-        const dmarc = await allowed(context, { method: 'GET', path: `/zones/${zone}/dns_records?type=TXT&name=${encodeURIComponent(`_dmarc.${domain}`)}&per_page=100` }, DnsRecordsSchema);
-        const wanted = [...records ?? [], ...dmarc?.some((record) => record.content.includes('v=DMARC1')) === true ? [] : [{ type: 'TXT', name: `_dmarc.${domain}`, content: dmarcRecord(domain) }]];
-        const unwritten = await ensureRecords(context, zone, wanted);
+        const own = (records ?? []).filter((record) => record.name !== `_dmarc.${domain}`);
+        const unwritten = [...await ensureRecords(context, zone, own), ...await ownDmarc(context, zone, domain, dmarcBefore)];
 
         if (unwritten.length > 0) asks.push(`Add these DNS records to ${domain}: ${unwritten.map(recordLine).join('; ')}.`);
 

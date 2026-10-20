@@ -50,7 +50,7 @@ import {
 import { makeExecRaw, makeSql, makeSqlExec, makeWorkspaceSchemaSql, type CLIRuntime, workspaceHome } from '../src/runtime';
 import { AwaitedList, createMemoryVfs, gatedTools, present, readTranscriptRows, spawnTest, TURN_REACH, workspaceDatabase, admitTestClaim, servedStoresOf } from '@kinu.run/test-utils';
 import { openWorkspaceCLI } from '../src/open';
-import type { ProviderDeps, SessionEvent } from '@kinu.run/core';
+import type { ModelInfo, ProviderDeps, SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -211,6 +211,20 @@ function heldSearchModel() {
  * Starts a task hire, which returns at once; its answer is the settling report its hirer's rail announces, taken once
  * the hirer's turn on it has ended.
  */
+/** A resolver serving `model` for every spec, listed as OpenAI's `gpt-x` with `listed`'s traits. */
+function fixedModelResolver(model: LanguageModel, listed: Pick<ModelInfo, 'reasoningEfforts'> = {}): LocalModelResolver {
+  return {
+    normalizeSpecSync: (spec) => spec?.trim() ?? 'openai/gpt-x',
+    resolveModel: () => model,
+    listProviders: async () => [],
+    listModels: async () => ({ models: [{ provider: 'openai', id: 'gpt-x', ...listed }], failures: [] }),
+    modelInfo: async () => null,
+    getAuth: async () => null,
+    attemptFor: async () => null,
+    countInputTokens: async () => ({ kind: 'unsupported', provider: 'fake', reason: 'no endpoint behind the fake' }),
+  };
+}
+
 async function taskHire(
   host: LocalAgentHost, team: TeamToolDeps, request: TemporaryRunRequest,
 ): Promise<{ readonly agent: string; readonly report: { readonly status: string; readonly text: string } }> {
@@ -291,6 +305,72 @@ function treeModel(script: { readonly park: string; readonly hire?: { readonly b
   });
 
   return { model, parked: parked.promise, aborted: aborted.promise };
+}
+
+/** A turn's stream that holds until the turn is aborted. */
+function parkedStream(signal: AbortSignal | undefined): ReadableStream<LanguageModelV2StreamPart> {
+  return new ReadableStream<LanguageModelV2StreamPart>({
+    start(controller) {
+      controller.enqueue({ type: 'stream-start', warnings: [] });
+      signal?.addEventListener('abort', () => { controller.error(signal.reason); }, { once: true });
+    },
+  });
+}
+
+/** A root's brief that hires a child, whose mission hires the grandchild; `NESTED.work` is the grandchild's own. */
+const NESTED = { brief: 'Split the migration two levels down.', child: 'Hire one helper for the ledger part.', work: 'Move the ledger to integer cents.' } as const;
+
+/**
+ * Hires at two levels: the root's brief hires a child with `NESTED.child`, and that mission hires a grandchild with
+ * `NESTED.work`. With `park`, the grandchild's turn holds until it is aborted, so its host closes with that work left.
+ */
+function nestedHireModel(park: boolean) {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  const parked = Promise.withResolvers<void>();
+  const hired = new Set<string>();
+
+  const hire = (id: string, message: string) => ({
+    stream: new ReadableStream<LanguageModelV2StreamPart>({
+      start(controller) {
+        controller.enqueue({ type: 'stream-start', warnings: [] });
+        controller.enqueue({ type: 'tool-call', toolCallId: id, toolName: 'agents', input: JSON.stringify({ op: 'hire', role: 'task', message }) });
+        controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+        controller.close();
+      },
+    }),
+  });
+
+  const model = new TestLanguageModelV2({
+    provider: 'fake',
+    modelId: 'fake-model',
+    doGenerate: async () => textAnswer('acknowledged', usage),
+    doStream: async (options) => {
+      const prompt = JSON.stringify(options.prompt);
+      const answered = prompt.includes('"tool-result"');
+
+      if (prompt.includes(NESTED.work) && park) {
+        parked.resolve();
+
+        return { stream: parkedStream(options.abortSignal) };
+      }
+
+      if (!answered && prompt.includes(NESTED.child) && !prompt.includes(NESTED.work) && !hired.has('child')) {
+        hired.add('child');
+
+        return hire('call_grandchild', NESTED.work);
+      }
+
+      if (!answered && prompt.includes(NESTED.brief) && !hired.has('root')) {
+        hired.add('root');
+
+        return hire('call_child', NESTED.child);
+      }
+
+      return { stream: textStream('ok', usage) };
+    },
+  });
+
+  return { model, parked: parked.promise };
 }
 
 function reportingChildModel(content: string, status: 'completed' | 'failed' = 'completed') {
@@ -509,6 +589,8 @@ interface TestHostExtras {
   deferLiveReads?: (flush: () => void) => void;
   /** "Beta: swarms" on for every workspace the host opens, as the session suites run it. */
   swarms?: boolean;
+  /** The workspace is signed in to its providers, so its open config names no endpoint (cli/config.ts). */
+  signedIn?: boolean;
 }
 
 function makeHost(
@@ -523,7 +605,7 @@ function makeHost(
     roster: () => refs,
     dbPath: (name) => join(state, name, 'agent.db'),
     open: async (ref, db, dbPath) => {
-      const openConfig = { llm: DUMMY_LLM, cwd: ref.cwd };
+      const openConfig = { llm: extras.signedIn === true ? null : DUMMY_LLM, cwd: ref.cwd };
       const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
 
       if (extras.advisor === true) rt.actor.config.setAdvisorEnabled(true);
@@ -892,6 +974,41 @@ describe('LocalAgentHost', () => {
       // Its search waits for its model until stopped: closing would otherwise wait out the settle grace.
       await (await host.acquire('root/helper')).cancelBackgroundJob('bgjob-held');
       await host.close();
+    }
+  });
+
+  // The tree a pass walks is the roster's, not the process's: after a restart, a hire's own hire is reached and its work
+  // runs, though nothing opened its address.
+  test("after a restart, a hire's own hire is reached by the root's passes and runs the work it was left", async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const refs = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
+    const first = nestedHireModel(true);
+    const { host } = makeHost(state, first.model, refs);
+
+    try {
+      const session = await host.acquire('root');
+      await session.send(`${NESTED.brief} Begin.`, { id: crypto.randomUUID() });
+      await first.parked;
+    } finally {
+      await host.close();
+    }
+
+    const second = nestedHireModel(false);
+    const { host: restarted } = makeHost(state, second.model, refs);
+    const deep = Promise.withResolvers<string>();
+
+    const off = restarted.subscribe((who, event) => {
+      if (event.type === 'turn-end' && who.split('/').length === 3) deep.resolve(who);
+    });
+
+    try {
+      await restarted.acquire('root');
+      await restarted.tick('root');
+      expect((await deep.promise).startsWith('root/')).toBe(true);
+    } finally {
+      off();
+      await restarted.close();
     }
   });
 
@@ -1334,19 +1451,7 @@ describe('LocalAgentHost', () => {
     });
 
     // Every spec is an OpenAI model that takes any level, so a request carries the effort its turn resolved.
-    const modelResolver: LocalModelResolver = {
-      normalizeSpecSync: (spec) => spec?.trim() ?? 'openai/gpt-x',
-      resolveModel: () => model,
-      listProviders: async () => [],
-      listModels: async () => ({
-        models: [{ provider: 'openai', id: 'gpt-x', reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] }],
-        failures: [],
-      }),
-      modelInfo: async () => null,
-      getAuth: async () => null,
-      attemptFor: async () => null,
-      countInputTokens: async () => ({ kind: 'unsupported', provider: 'fake', reason: 'no endpoint behind the fake' }),
-    };
+    const modelResolver = fixedModelResolver(model, { reasoningEfforts: ['low', 'medium', 'high', 'xhigh'] });
 
     const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }], { modelResolver });
 
@@ -1364,6 +1469,23 @@ describe('LocalAgentHost', () => {
     }
   });
 
+  // The InternalFish audit: a hire was refused unless the open config named an endpoint, which a workspace signed in to
+  // its providers never does (cli/config.ts), so local chats that worked could not hire.
+  test('a workspace signed in to its providers hires, and its hire answers', async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const { host } = makeHost(state, reportingChildModel('done').model, [{ name: 'root', cwd: project, workspaceId: 'proj' }], { signedIn: true });
+
+    try {
+      const team = await host.team('root');
+      const agent = await taskHire(host, team, { role: 'task', roleLabel: 'task', task: 'Say done.', mode: 'build' });
+
+      expect(agent.report.status).toBe('completed');
+    } finally {
+      await host.close();
+    }
+  });
+
   // The InternalFish audit: a local hire read its own account choice, then the catalog's, so one that chose none fell to
   // the default account where its workspace had chosen `work`. Cloud hires inherit the workspace's (`providerAccounts`).
   test("a hire that chose no provider account calls on its workspace's", async () => {
@@ -1372,15 +1494,10 @@ describe('LocalAgentHost', () => {
     const model = new TestLanguageModelV2({ provider: 'fake', modelId: 'fake-model', doStream: async () => ({ stream: textStream('done', { inputTokens: 1, outputTokens: 1, totalTokens: 2 }) }) });
     const scopes: Pick<ProviderDeps, 'accountFor'>[] = [];
 
+    const fixed = fixedModelResolver(model);
+
     const modelResolver: LocalModelResolver = {
-      normalizeSpecSync: (spec) => spec?.trim() ?? 'openai/gpt-x',
-      resolveModel: () => model,
-      listProviders: async () => [],
-      listModels: async () => ({ models: [{ provider: 'openai', id: 'gpt-x' }], failures: [] }),
-      modelInfo: async () => null,
-      getAuth: async () => null,
-      attemptFor: async () => null,
-      countInputTokens: async () => ({ kind: 'unsupported', provider: 'fake', reason: 'no endpoint behind the fake' }),
+      ...fixed,
       withCallScope: (scope) => {
         scopes.push(scope);
 
@@ -1973,6 +2090,41 @@ describe('LocalAgentHost', () => {
 
       expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Auditor');
       expect(childConfigValue(dbPath, 'helper', 'name_origin')).toBe('user');
+    } finally {
+      await host.close();
+    }
+  });
+
+  // One lifecycle (core hireLifecycle): the first work a hire is given titles it as it is admitted, before its turn runs, on
+  // this machine as in the cloud; a later message never does.
+  test('the first brief a hire is given titles it as it is admitted, before its turn runs', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
+    const parked = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doGenerate: async () => textAnswer('acknowledged', usage),
+      // Every turn holds until it is aborted, so only the admission can have titled the hire.
+      doStream: async (options) => ({ stream: parkedStream(options.abortSignal) }),
+    });
+
+    const { host } = makeHost(state, parked, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+
+    try {
+      const team = await host.team('root');
+
+      await team.create({ name: 'helper' });
+
+      const before = childConfigValue(dbPath, 'helper', 'display_name');
+
+      await team.message({ name: 'helper', content: 'Audit the coupon checkout', mode: 'build' });
+      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Audit the coupon checkout');
+      expect(before).not.toBe('Audit the coupon checkout');
+
+      await team.message({ name: 'helper', content: 'Rename yourself to something else', mode: 'build' });
+      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Audit the coupon checkout');
     } finally {
       await host.close();
     }

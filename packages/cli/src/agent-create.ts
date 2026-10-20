@@ -7,6 +7,7 @@ import {
   initWorkspaceSchema,
   missionOf,
   workspaceSlug,
+  workspaceTitleProblem,
   type ReasoningEffort,
 } from '@kinu.run/core';
 import { ensureDefaultTier, loadActiveProfile } from './default-model';
@@ -20,6 +21,7 @@ import {
   defaultVirtualWorkspaceId,
   ensureAgentHome,
   loadConfigFile,
+  resolveCloudSession,
   localWorkspaceMembers,
   placeLocalWorkspace,
   requireAuthConfig,
@@ -85,21 +87,17 @@ function cloudCreateInput(input: CreateCliAgentInput, purpose: string): CreateCl
   return cloudInput;
 }
 
+/** Signed in as `resolveCloudSession` decides: `KINU_TOKEN` counts, an expired stored session does not. */
 export function isCloudAuthConfigured(): boolean {
-  return Boolean(loadConfigFile().accessToken);
+  return resolveCloudSession() !== null;
 }
 
-/** An unparseable config.json propagates rather than reading as a fresh install. */
+/** An incomplete setup is not set up yet; an unparseable config.json propagates rather than reading as a fresh install. */
 export function isLocalModelConfigured(): boolean {
-  try {
-    // An OpenAI-compatible endpoint counts before it names a model.
-    return resolveModelDefaults({ defaultModel: readDefaultTier()?.model }).spec !== null
-      || loadConfigFile().providers?.openaiCompat?.default !== undefined;
-  } catch (error) {
-    // Only the half-set-override diagnostic means "not usable yet".
-    if (error instanceof Error && error.message.startsWith('No LLM auth configured')) return false;
-    throw error;
-  }
+  const defaults = resolveModelDefaults({ defaultModel: readDefaultTier()?.model });
+
+  // An OpenAI-compatible endpoint counts before it names a model.
+  return defaults.missing === null && (defaults.spec !== null || loadConfigFile().providers?.openaiCompat?.default !== undefined);
 }
 
 export function defaultCreateMode(): AgentMode {
@@ -267,9 +265,11 @@ export interface RenamedLocalAgent {
 
 /** Marks the title the owner's, which permanently stops the `auto_title` effect replacing it. */
 export function renameLocalAgent(name: string, displayName: string): RenamedLocalAgent {
-  const title = displayName.trim();
+  // The one title rule the cloud's rename and every editor run, so a title kept here is one the cloud keeps.
+  const problem = workspaceTitleProblem(displayName);
 
-  if (!title) throw new Error('A name is required.');
+  if (problem !== null) throw new Error(problem);
+  const title = displayName.trim();
   const dbPath = agentDbPath(name);
 
   if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found.`);

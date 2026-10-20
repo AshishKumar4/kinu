@@ -613,9 +613,9 @@ describe('mutations', () => {
     h.close();
   });
 
-  test('a confirmed removal proxies to the registry and tombstones the index', async () => {
+  // The registry's own teardown tombstones the index (unit-registry-index-feed), as it does for every removal.
+  test('a confirmed removal proxies to the registry', async () => {
     const h = harness({ rosters: { [OTHER_ID]: roster('alpha') }, owners: { alpha: OTHER_ID } });
-    store.observeWorkspace(h.sql, { userId: OTHER_ID, name: 'alpha', displayName: 'Alpha', at: 1_000 });
 
     const answer = await control(
       post('/actions', {
@@ -626,8 +626,6 @@ describe('mutations', () => {
 
     expect(answer?.status).toBe(200);
     expect(h.removed).toEqual([{ userId: OTHER_ID, workspace: 'alpha' }]);
-    expect(store.listWorkspaces(h.sql).items).toEqual([]);
-    expect(store.listWorkspaces(h.sql, {}, { includeRemoved: true }).items[0]?.removedAt).not.toBe(null);
     expect(store.listAudit(h.sql).items[0]?.outcome).toBe('ok');
     h.close();
   });

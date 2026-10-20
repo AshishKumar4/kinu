@@ -53,15 +53,6 @@ const FRAMES = require('./device-protocol.json').frames;
  *  nobody has. */
 const TERMINAL_NAME = 'xterm-256color';
 
-/**
- * How many terminals one machine holds at once.
- *
- * A terminal is something a person watches, and nobody watches eight. The cap
- * is not a demand model: it bounds what repeated `open` frames can do to the
- * machine, because each one is a shell.
- */
-const MAX_SESSIONS = 8;
-
 /** The window, bounded per axis: the protocol's `ptyMaxAxis`, the hub's bound too. */
 const MAX_AXIS = require('./device-protocol.json').ptyMaxAxis;
 
@@ -237,7 +228,6 @@ function createSessions(options = {}) {
   const {
     spawn = (argv, spawnOptions) => Bun.spawn(argv, spawnOptions),
     log = () => {},
-    maxSessions = MAX_SESSIONS,
   } = options;
 
   const sessions = new Map();
@@ -253,11 +243,9 @@ function createSessions(options = {}) {
   function open(request) {
     const name = parseSessionName(request.session);
 
+    // No count of its own: a machine holds the terminals its person opens, and refuses one only where its system does
+    // (a pty it cannot allocate), in that system's words below.
     if (sessions.has(name)) throw new Error(`terminal ${name} is already open on this machine`);
-
-    if (sessions.size >= maxSessions) {
-      throw new Error(`this machine holds ${maxSessions} terminals already; close one before opening another`);
-    }
 
     const cols = parseAxis(request.cols, 'width');
     const rows = parseAxis(request.rows, 'height');
@@ -309,7 +297,7 @@ function createSessions(options = {}) {
         stderr: 'ignore',
       });
     } catch (err) {
-      throw new Error('could not open a terminal on this machine', { cause: err });
+      throw new Error(`could not open a terminal on this machine: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
     }
 
     const terminal = child.terminal;
@@ -465,7 +453,6 @@ function createSessions(options = {}) {
 
 module.exports = {
   createSessions,
-  MAX_SESSIONS,
   TERMINAL_NAME,
   parseSessionName,
   parseAxis,

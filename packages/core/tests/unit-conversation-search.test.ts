@@ -191,6 +191,16 @@ describe('ConversationSearchStore.scroll', () => {
     expect(capped.messages[0].content).not.toBe(full.messages[0].content);
     expect(full.messages[0].content).toBe('x'.repeat(5000));
   });
+
+  // The window the memory tool accepts is the window it gets: a small one is never widened to the default.
+  test('a small max_chars the tool accepts is honoured, not widened to the default', async () => {
+    const { store, record } = setup();
+    const id = await record('chat', 'assistant', 'x'.repeat(5000));
+    const small = present(await store.scroll(id, 5, 20), 'the small window');
+
+    expect(small.messages[0].content.startsWith('x'.repeat(20))).toBe(true);
+    expect(small.messages[0].content).not.toContain('x'.repeat(21));
+  });
 });
 
 describe('ConversationSearchStore.browse', () => {

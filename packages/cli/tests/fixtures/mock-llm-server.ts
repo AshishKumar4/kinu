@@ -8,6 +8,7 @@
  */
 import { appendFileSync } from 'node:fs';
 import * as v from 'valibot';
+import { chatCompletionBody, chatCompletionStream } from '@kinu.run/test-utils';
 
 const answer = Bun.env.MOCK_LLM_ANSWER ?? 'ok';
 
@@ -20,18 +21,6 @@ const blackholeLog = Bun.env.MOCK_LLM_BLACKHOLE_LOG;
 const refused = new Set((Bun.env.MOCK_LLM_REFUSE ?? '').split(',').filter(Boolean));
 
 const CompletionRequestSchema = v.object({ stream: v.optional(v.boolean()), model: v.optional(v.string()) });
-
-interface CompletionChunk {
-  id: string;
-  object: 'chat.completion.chunk';
-  created: number;
-  model: string;
-  choices: {
-    index: number;
-    delta: { role?: string; content?: string };
-    finish_reason: string | null;
-  }[];
-}
 
 // A child that bypasses the proxy still fails the test via `attempted`.
 let networkAttempted = false;
@@ -87,46 +76,12 @@ const server = Bun.serve({
       return Response.json({ error: { message: `insufficient credits for ${body.model}` } }, { status: 402 });
     }
 
-    if (!body.stream) {
-      return Response.json({
-        id: 'chatcmpl-mock',
-        object: 'chat.completion',
-        created: 1,
-        model: 'mock-model',
-        choices: [
-          { index: 0, message: { role: 'assistant', content: answer }, finish_reason: 'stop' },
-        ],
-      });
-    }
+    // Unmetered, and named as the one model it is, whichever was asked for.
+    const reply = { model: 'mock-model', text: answer };
 
-    const chunk = (data: CompletionChunk) => `data: ${JSON.stringify(data)}\n\n`;
-
-    return new Response(
-      [
-        chunk({
-          id: 'chatcmpl-mock',
-          object: 'chat.completion.chunk',
-          created: 1,
-          model: 'mock-model',
-          choices: [
-            {
-              index: 0,
-              delta: { role: 'assistant', content: answer },
-              finish_reason: null,
-            },
-          ],
-        }),
-        chunk({
-          id: 'chatcmpl-mock',
-          object: 'chat.completion.chunk',
-          created: 1,
-          model: 'mock-model',
-          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-        }),
-        'data: [DONE]\n\n',
-      ].join(''),
-      { headers: { 'content-type': 'text/event-stream' } },
-    );
+    return body.stream === true
+      ? new Response(chatCompletionStream(reply), { headers: { 'content-type': 'text/event-stream' } })
+      : new Response(chatCompletionBody(reply), { headers: { 'content-type': 'application/json' } });
   },
 });
 

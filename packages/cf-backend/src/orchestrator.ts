@@ -98,7 +98,6 @@ import {
   ownerAnswersWait, type ActorSurface, type HostedActorSeams, type SourcesTurn, type SurfaceTurn, type ToolScope,
 } from "./hosted-actors";
 import { createCodemodeToolFactory } from "./codemode-tool";
-import { BROWSER_PRELUDE } from './browser-prelude';
 import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
 import { publishSubordinateReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
@@ -145,7 +144,7 @@ import {
   type RunEvent, type RunEventQuery, type StoredRunEvent,
 
   listProposedTasks, updateProposedTaskStatus,
-  hybridSearch, memorySnippetRehydrator, type HybridHit,
+  searchMemoryHits, type HybridHit,
   type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore, dispatchEmailRepliesForTurn,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
@@ -192,8 +191,8 @@ import {
   type Page, type PageRequest,
   getRunTimeline, RUN_TIMELINE_MAX, boundedInt, type TimelineSpan,
   getRunEvents, getRunEventText, type RunListEntry, type RunSummary,
-  turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
-  decodeRecordedTurns, recordedTurns, type RecordedTurn,
+  type TurnRequestIndex, type TurnRequestPage,
+  decodeRecordedTurns, type RecordedTurn,
   LiveReadsNotice, readsMovedByFiles, readsOfTables, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
@@ -240,7 +239,7 @@ import {
   recordJobSettled, recordSandboxRecovery, type AgentKind,
 } from "@kinu.run/core/analytics";
 import {
-  agentSelfHost, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type MailDeps, type MailThreadSummary, type OwnerWaitsHost,
+  agentSelfHost, actorNamespaces, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type MailDeps, type MailThreadSummary, type OwnerWaitsHost,
   ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, type OwnerWaitReader, type ScopedOwnerWait,
   AgentWorkspaceStore, createAgentWorkspace, type AgentWorkspaceDeps,
   DeviceConsentRegistry, DeviceConsentStore,
@@ -1590,13 +1589,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     actor: SeatedActor, runtime: CFRuntime,
     held: { readonly search: WebSearchProvider; readonly stores: ServedStores; readonly agents?: () => AgentsToolDeps },
   ): SurfaceActor {
-    return hostedSurfaceActor(actor, {
-      ...held.agents !== undefined && { agents: held.agents },
-      ownerWaits: this.hireOwnerWaits(actor),
-      mail: this.mailFor(actor.handle.actorId, actor.record.name),
-      web: { search: held.search, files: runtime.storage, browser: { sessions: this.browserSessionsFor(runtime.actor.actorId), prelude: BROWSER_PRELUDE } },
-      stores: held.stores,
-    });
+    return this.hostedSurface({ ...actor, runtime }, { ...held, ownerWaits: this.hireOwnerWaits(actor), mail: this.mailFor(actor.handle.actorId, actor.record.name) });
   }
 
   /**
@@ -1794,6 +1787,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   protected override ownStoreInputs(ledgers: TurnLedgers): BuiltinStoreInputs {
     return this.asRoot((seat, reach, operation) => this.storeInputs(seat, reach, ledgers, operation));
+  }
+
+  protected override hostedStoreInputs(actor: CFSeat, ledgers: Pick<TurnLedgers, 'files' | 'context'>, account: boolean): BuiltinStoreInputs {
+    const { account: owned, ...inputs } = this.storeInputs(actor, actorReach(actorPolicy(actor.record)), ledgers, () => null);
+
+    return account && owned !== undefined ? { ...inputs, account: owned } : inputs;
   }
 
   protected actorTools(actor: CFSeat, reach: SurfaceReach, mode: WorkMode, scope: ToolScope): ActorToolsets {
@@ -4324,8 +4323,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._deferrals;
   }
 
+  /** The root's channel records its live turn's surface on an ask it parks, so an answer resumes the call there, as a
+   *  device consent's does; a hosted actor's turn is not the root's, so its asks record none. */
   protected override deferralChannel(actorId?: string): DeferredApprovalChannel {
-    return actorId === undefined ? this.deferrals.channel : this.deferrals.channelFor(actorId);
+    return actorId === undefined ? this.deferrals.channelFor(this.actorHandle().actorId, () => this.turnSurface()) : this.deferrals.channelFor(actorId);
   }
 
   private announceDeferral(notice: DeferredApprovalNotice): void {
@@ -5511,11 +5512,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   getTurnRequests(turnId: string, actor?: string): Promise<TurnRequestIndex> {
     return settle(Effect.gen({ self: this }, function* () {
-      const agent = actor ?? this.actorHandle().actorId;
+      const agent = yield* this.requestHolder(actor);
 
-      if (this.isAgent(agent)) return yield* Effect.promise(() => this.agentCall(agent, (isolate, snapshot) => isolate.turnRequests(snapshot, turnId)));
-
-      return turnRequestIndex(yield* this.turnRequestSources(actor), turnId);
+      return yield* Effect.promise(() => this.agentCall(agent, (isolate, snapshot) => isolate.turnRequests(snapshot, turnId)));
     }));
   }
 
@@ -5524,30 +5523,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   ): Promise<TurnRequestPage> {
     return settle(Effect.gen({ self: this }, function* () {
       const read = { turnId, epoch: at.epoch, revision: at.revision, ...(at.from !== undefined && { from: at.from }) };
-      const actor = at.actor;
-      const agent = actor ?? this.actorHandle().actorId;
+      const agent = yield* this.requestHolder(at.actor);
 
-      if (this.isAgent(agent)) return yield* Effect.promise(() => this.agentCall(agent, (isolate, snapshot) => isolate.turnRequest(snapshot, read)));
-
-      const sources = yield* this.turnRequestSources(actor);
-
-      return yield* Effect.promise(() => turnRequestPage(sources, read));
+      return yield* Effect.promise(() => this.agentCall(agent, (isolate, snapshot) => isolate.turnRequest(snapshot, read)));
     }));
   }
 
-  /** The workspace agent's newest answered turns, from its isolate where it runs there: what a scaffold is replayed against. */
-  recordedTurns(limit?: number): Promise<RecordedTurn[]> {
-    return settle(Effect.gen({ self: this }, function* () {
-      const agent = this.actorHandle().actorId;
-
-      if (this.isAgent(agent)) {
-        return decodeRecordedTurns(yield* Effect.promise(() => this.agentCall(agent, (isolate, snapshot) => isolate.recordedTurns(snapshot, limit))));
-      }
-
-      const sources = yield* this.turnRequestSources(undefined);
-
-      return yield* Effect.promise(() => recordedTurns(sources, limit));
-    }));
+  /** The workspace agent's newest answered turns, from its isolate: what a scaffold is replayed against. */
+  async recordedTurns(limit?: number): Promise<RecordedTurn[]> {
+    return decodeRecordedTurns(await this.agentCall(this.actorHandle().actorId, (isolate, snapshot) => isolate.recordedTurns(snapshot, limit)));
   }
 
   /** Not @callable: the audited `workspace.turn_read`. */
@@ -5564,16 +5548,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       : await this.getTurnRequest(read.turnId, { ...read.at, ...(read.actor !== undefined && { actor: read.actor }) });
   }
 
-  private turnRequestSources(actorId: string | undefined): Effect.Effect<AgentStores, KinuError> {
-    return Effect.gen({ self: this }, function* () {
-      if (actorId === undefined) return this.stores;
-      const host = this.actorHost();
-      const record = host.describe(actorId);
+  /** Whose isolate holds `actor`'s requests, main's by default: every agent's are its isolate's (D9), so an id that names
+   *  none is the one refusal. */
+  private requestHolder(actor: string | undefined): Effect.Effect<string, KinuError> {
+    const agent = actor ?? this.actorHandle().actorId;
 
-      if (record === null) return yield* new KinuError('missing', 'The actor is not registered in this workspace.');
-
-      return host.bindStores({ actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId }).stores;
-    });
+    return this.isAgent(agent) ? Effect.succeed(agent) : Effect.fail(new KinuError('missing', 'The actor is not registered in this workspace.'));
   }
 
   /** For resume, pass the last seen `since` index; returns events strictly after it. A turn's run is main's, in its own
@@ -5817,23 +5797,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * The single memory-search surface for all remote callers (browser rpc, CLI /rpc, MCP).
    */
   @callable() async searchMemoryHybrid(query: string, limit = 10): Promise<HybridHit[]> {
-    const lexicalSearchFn = async (q: string, k: number) => {
-      const results = await this.rt.memory.search(q, k);
-
-      return results.map((r) => ({
-        // Must match the vector store's chunk id (`path:start-end`) so RRF fuses lexical and semantic hits.
-        id: `${r.path}:${r.startLine}-${r.endLine}`,
-        path: r.path,
-        startLine: r.startLine,
-        endLine: r.endLine,
-        score: r.score,
-        snippet: r.snippet,
-      }));
-    };
-
-    return hybridSearch(query, lexicalSearchFn, this.rt.vectorStore, {
-      finalK: limit, rehydrate: memorySnippetRehydrator(this.rt.memory),
-    });
+    // The workspace's notes alone: a remote caller has never been shown its facts or the account's.
+    return (await searchMemoryHits(this.rt.memory, this.rt.vectorStore, query, { limit })).hits;
   }
 
   @callable() async getMemoryContent() {

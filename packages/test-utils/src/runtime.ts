@@ -10,7 +10,7 @@ import type {
 } from '@kinu.run/core';
 import { tool } from 'ai';
 import {
-  buildModelCallEvent, builtinStoreDeps, codemodeInputSchema, serveStores, turnLedgers, WORKSPACE_ROOT, WORKSPACE_RUN_ID, cloudPlanes,
+  pricedModelCallEvent, builtinStoreDeps, codemodeInputSchema, serveStores, turnLedgers, WORKSPACE_ROOT, WORKSPACE_RUN_ID, cloudPlanes,
   type ConversationRecall, type ServedStores, type TurnLedgers,
 } from '@kinu.run/core';
 import { createTestSql, type TestSql } from './sql';
@@ -51,9 +51,12 @@ const refuse = (capability: string, option: string): never => {
 /** A spend sink for a suite that observes no spend: each report is dropped. */
 export const unobservedSpend: ModelCallSink = () => undefined;
 
+/** A model catalog that prices nothing. */
+const UNPRICED = { pricing: () => null };
+
 /** A spend sink filing each report into `events`' workspace ledger, unpriced, as a session's sink files it. */
 export function unpricedLedger(events: Pick<RunEventRecorder, 'emit'>): ModelCallSink {
-  return (report) => { events.emit(WORKSPACE_RUN_ID, buildModelCallEvent(report, { effectiveSpec: null, pricing: null })); };
+  return (report) => { events.emit(WORKSPACE_RUN_ID, pricedModelCallEvent(report, UNPRICED)); };
 }
 
 /**
@@ -79,7 +82,6 @@ export function unobservedSearchSeams(): Pick<AgentsSwarmDeps, 'reportModelCall'
 
 function unscriptedLLM(): LLM {
   return {
-    stream: () => refuse('a model call (stream)', 'opts.llm'),
     complete: async () => refuse('a model call (complete)', 'opts.llm'),
   };
 }

@@ -11,6 +11,7 @@ import { SLATES_CHANGED_EVENT } from '../slates/rpc';
 import { WorkspacePlanReferenceSchema } from '../subordinates/inspection';
 import { LIVE_READS, READS_CHANGED_EVENT } from './live-reads';
 import { TurnClaimFrameSchema } from './turn-liveness';
+import { UsageSchema } from '../usage';
 import { CHANGES_MOVED_EVENT } from './workspace-diff';
 
 /** A turn waiting on its provider (a 429/529 sleep, backoff, a sibling's cooldown), not thinking: told only to the
@@ -44,16 +45,6 @@ const MctsRowSchema = v.object({
   created_at: v.optional(v.number()),
 });
 
-const MctsProgressUsageSchema = v.object({
-  input: v.optional(v.number()),
-  output: v.optional(v.number()),
-  cacheRead: v.optional(v.number()),
-  cacheWrite: v.optional(v.number()),
-  cacheWrite1h: v.optional(v.number()),
-  reasoning: v.optional(v.number()),
-  neurons: v.optional(v.number()),
-});
-
 const MctsProgressHeadSchema = v.object({
   rootId: v.string(),
   task: v.string(),
@@ -69,7 +60,7 @@ const MctsProgressHeadSchema = v.object({
     status: v.string(),
     summary: v.nullable(v.string()),
     errorMessage: v.nullable(v.string()),
-    usage: MctsProgressUsageSchema,
+    usage: UsageSchema,
     wallClockMs: v.number(),
     spawnedAt: v.number(),
     lastStepAt: v.nullable(v.number()),

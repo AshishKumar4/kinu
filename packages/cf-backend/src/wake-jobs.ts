@@ -7,7 +7,7 @@ import {
   LifecycleCapability, type DurableObjectCapability, type LifecycleJob, type LifecycleJobContext, type LifecycleJobOutcome,
 } from 'agents/lifecycle';
 import { RECOVERY_BACKOFF_CEILING_MS } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { CODE_IS_REFUSAL, diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 /** Triggers, outboxes, pending reactions: every source `nextWakeAt` folds. */
 export const KINU_TIMER_JOB = 'kinu-timer';
@@ -101,9 +101,24 @@ export class WakeJobs extends LifecycleCapability {
     return undefined;
   }
 
-  /** A pass that failed every retry comes back later rather than ending the chain. */
-  readonly onJobError: NonNullable<DurableObjectCapability['onJobError']> = ({ job }, cause) => {
-    diagnostics.failure('schedule.wake_failed', toKinuError({ doing: `running the ${job.fn} wake`, cause, otherwise: 'io' }), { job: job.fn });
+  /**
+   * A pass that failed every retry comes back later rather than ending the chain, unless the retry wake's failure is
+   * definitive: one no retry can mend (a refusal's class) parks, with the next lap its pass armed first, until an
+   * activation (new code, new work) arms it again (AGENTS.md Waste, 2026-10-20). The timer wake keeps its clock: its
+   * instants are its triggers', and nothing else would wake a workspace whose only visitor is its own trigger.
+   */
+  readonly onJobError: NonNullable<DurableObjectCapability['onJobError']> = async ({ job }, cause) => {
+    const failure = toKinuError({ doing: `running the ${job.fn} wake`, cause, otherwise: 'io' });
+
+    if (job.fn === TERMINAL_RETRY_JOB && CODE_IS_REFUSAL[failure.code]) {
+      diagnostics.failure('schedule.wake_parked', failure, { job: job.fn });
+      // The row by its id, whichever it is now: the pass's own next lap replaced the one that ran.
+      await this.lifecycle.jobs.cancel(job.id);
+
+      return undefined;
+    }
+
+    diagnostics.failure('schedule.wake_failed', failure, { job: job.fn });
 
     return { rescheduleAt: Date.now() + RECOVERY_BACKOFF_CEILING_MS };
   };

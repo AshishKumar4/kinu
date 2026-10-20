@@ -6,7 +6,7 @@ import { tool, type ModelMessage, type UIMessageChunk } from 'ai';
 import { z } from 'zod';
 import * as v from 'valibot';
 import {
-  runChat, createAnthropicProvider, createOpenAIProvider, ProviderPacer, decodeModelMessageValues, drawnStep, encodeModelMessageValues, TurnAccumulator,
+  runChat, createAnthropicProvider, createMyGatewayProvider, createOpenAIProvider, ProviderPacer, decodeModelMessageValues, drawnStep, encodeModelMessageValues, TurnAccumulator,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, parseJsonObject,
   type ChatEvent, type ChatOptions, type JsonObject, type ModelCallDeps,
 } from '../src/index';
@@ -50,19 +50,27 @@ interface Turn {
   readonly shown: UIMessageChunk[];
 }
 
-async function turn(modelId: string, history: ModelMessage[], extra: Partial<ChatOptions> = {}): Promise<Turn> {
-  const mock = createMockFetch([{ match: 'api.anthropic.com', respond: () => ({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: COMPACTED }) }]);
+/** The user's own AI Gateway, which serves Claude over Anthropic's Messages API. */
+const gatewayDeps = (fetchFn: typeof fetch): ModelCallDeps => ({
+  env: {}, sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test', fetch: fetchFn, hasCredential: async () => true,
+  getAuth: async () => ({ baseURL: 'https://api.cloudflare.com/client/v4/accounts/A/ai/v1', headers: { Authorization: 'Bearer t', 'cf-aig-gateway-id': 'default' } }),
+});
+
+/** A Claude turn, on Anthropic's own route or through the user's AI Gateway. */
+async function turn(modelId: string, history: ModelMessage[], extra: Partial<ChatOptions> = {}, via: 'anthropic' | 'my-gateway' = 'anthropic'): Promise<Turn> {
+  const mock = createMockFetch([{ match: via === 'anthropic' ? 'api.anthropic.com' : 'gateway.ai.cloudflare.com', respond: () => ({ status: 200, headers: { 'content-type': 'text/event-stream' }, body: COMPACTED }) }]);
   const events: ChatEvent[] = [];
   const shown: UIMessageChunk[] = [];
+  const served = via === 'anthropic' ? modelId : `anthropic/${modelId.replaceAll('-4-', '-4.')}`;
 
   for await (const event of runChat({
-    model: createAnthropicProvider().createModel(modelId, deps(mock.fetch)),
-    modelSpec: `anthropic/${modelId}`,
-    modelContext: { id: `anthropic/${modelId}`, contextWindow: 200_000 },
+    model: via === 'anthropic' ? createAnthropicProvider().createModel(modelId, deps(mock.fetch)) : createMyGatewayProvider().createModel(served, gatewayDeps(mock.fetch)),
+    modelSpec: `${via}/${served}`,
+    modelContext: { id: `${via}/${served}`, contextWindow: 200_000 },
     system: 'You are Kinu.',
     history,
     tools: {},
-    cache: { providerId: 'anthropic', modelId },
+    cache: { providerId: via, modelId: served },
     observeStream: async (stream) => {
       for await (const chunk of stream) shown.push(chunk);
     },
@@ -86,6 +94,14 @@ describe('Anthropic server-side compaction', () => {
     expect(body(opus.mock).context_management).toEqual({ edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: 170_000 } }] });
     expect(opus.mock.requests[0]?.headers['anthropic-beta']).toContain('compact-2026-01-12');
     expect(body(haiku.mock).context_management).toBeUndefined();
+  });
+
+  // The SufficientKoala audit: the gateway serves Claude over Anthropic's own Messages API, and was never asked to compact.
+  test('a Claude model through the user\'s AI Gateway is asked to compact as on Anthropic\'s own route', async () => {
+    const opus = await turn('claude-opus-4-7', [{ role: 'user', content: 'rename the parser' }], {}, 'my-gateway');
+
+    expect(body(opus.mock).context_management).toEqual({ edits: [{ type: 'compact_20260112', trigger: { type: 'input_tokens', value: 170_000 } }] });
+    expect(opus.mock.requests[0]?.headers['anthropic-beta']).toContain('compact-2026-01-12');
   });
 
   // `/compact` and an overflow's recovery arm the next request: it triggers just under its own input, so it compacts.

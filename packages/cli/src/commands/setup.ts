@@ -3,6 +3,7 @@ import { settle } from '@kinu.run/core/obs';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
 import { stripProvider } from '@kinu.run/cli-backend';
 import { loadConfigFile } from '../config';
+import { isCloudAuthConfigured } from '../agent-create';
 import { adoptDefaultModel } from '../default-model';
 import { ACCENT, DIM, OK, WARN } from '../display';
 import { ask, askSecret, canPrompt, confirm, skippableOnEnter } from '../prompt';
@@ -124,20 +125,20 @@ export function setupCommand(opts: {
     console.log('');
 
     const config = loadConfigFile();
-    let cloudReady = Boolean(config.accessToken);
+    let cloudReady = isCloudAuthConfigured();
 
     if (cloudReady) {
       console.log(`${OK('✓')} Signed in${config.user?.email ? ` as ${ACCENT(config.user.email)}` : ''}`);
       console.log(DIM('While you are signed in, new local workspaces run on Workers AI in your Cloudflare account, with no API key on this machine.'));
     }
 
-    if (!opts.skipCloud && !config.accessToken) {
+    if (!opts.skipCloud && !cloudReady) {
       // Without a terminal, readline would hang on a pipe (the `curl | bash` installer).
       const shouldLogin = opts.yes === true || (canPrompt() && (yield* Effect.promise(async () => confirm('Sign in now and grant Workers AI permissions?', true))));
 
       if (shouldLogin) {
         yield* Effect.promise(async () => authCommand({ origin: opts.origin }));
-        cloudReady = Boolean(loadConfigFile().accessToken);
+        cloudReady = isCloudAuthConfigured();
       }
     }
 

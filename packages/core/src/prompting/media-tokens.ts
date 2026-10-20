@@ -8,6 +8,7 @@ import * as v from 'valibot';
 import { rasterImage, type RasterImage } from '../utils/raster-image';
 import { estimateTokens } from '../token-estimate';
 import { attachmentBytes } from './attachment-sanitizer';
+import { specProvider } from '../providers/types';
 import { resolvePromptModelProfile } from './model-profile';
 
 /** An image or file part carried inline, and the part it was read from: what its size and pages are remembered by. */
@@ -37,7 +38,7 @@ export function mediaImage(media: MediaPart): RasterImage | null {
 
 /** What `spec` is charged to be shown `media`, or undefined where no rule is known. */
 export function mediaTokens(spec: string, media: MediaPart): number | undefined {
-  const provider = spec.split('/')[0];
+  const provider = specProvider(spec) ?? undefined;
   const id = spec.split('/').at(-1)?.toLowerCase() ?? '';
   const { family } = resolvePromptModelProfile({ provider, id });
 

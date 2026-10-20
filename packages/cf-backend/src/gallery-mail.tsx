@@ -881,7 +881,7 @@ function installMailFixture(): void {
     const limit = Number(url.searchParams.get("limit") ?? picked.length);
 
     return Promise.resolve(Response.json({
-      unread: picked.filter((each) => each.unread && each.id !== opened).length,
+      enabled: true, unread: picked.filter((each) => each.unread && each.id !== opened).length,
       items: picked.slice(0, limit).map(importantOf),
     }));
   }, { preconnect: next.preconnect });

@@ -132,9 +132,11 @@ export function delayNextSlateStamp(of: (storageKey: string) => boolean): HeldCa
   const reached = Promise.withResolvers<void>();
   const released = Promise.withResolvers<void>();
 
-  delayedSlateStamp = { of, reached: reached.resolve, released: released.promise };
+  const held = { of, reached: reached.resolve, released: released.promise };
 
-  return { reached: reached.promise, release: released.resolve };
+  delayedSlateStamp = held;
+
+  return disarmedOnRelease(held, { armed: () => delayedSlateStamp, disarm: () => { delayedSlateStamp = null; } }, { reached: reached.promise, release: released.resolve });
 }
 
 const delayedHandoffs = new Map<string, { readonly reached: () => void; readonly released: Promise<void> }>();
@@ -165,6 +167,24 @@ export function delayNextCacheWarm(storageKey: string): HeldCall {
 
 let delayedRunEnd: { readonly reached: () => void; readonly released: Promise<void> } | null = null;
 
+/**
+ * A hold any isolate may take is the process's, not its test's: one never taken would hold the next test's call, in the
+ * next file, forever. Released, it is disarmed if still waiting, then lets what it holds go.
+ */
+function disarmedOnRelease<Held, Reached>(
+  held: Held,
+  slot: { readonly armed: () => Held | null; readonly disarm: () => void },
+  waits: { readonly reached: Promise<Reached>; readonly release: () => void },
+) {
+  return {
+    reached: waits.reached,
+    release: () => {
+      if (slot.armed() === held) slot.disarm();
+      waits.release();
+    },
+  };
+}
+
 /** The next report any isolate sends that carries a delivered run's end waits on the way until released; released
  *  before any such report is sent, it holds none. */
 export function delayNextRunEnd(): HeldCall {
@@ -174,13 +194,7 @@ export function delayNextRunEnd(): HeldCall {
 
   delayedRunEnd = held;
 
-  return {
-    reached: reached.promise,
-    release: () => {
-      if (delayedRunEnd === held) delayedRunEnd = null;
-      released.resolve();
-    },
-  };
+  return disarmedOnRelease(held, { armed: () => delayedRunEnd, disarm: () => { delayedRunEnd = null; } }, { reached: reached.promise, release: released.resolve });
 }
 
 let delayedTurnReport: { readonly reached: (storageKey: string) => void; readonly released: Promise<void> } | null = null;
@@ -222,9 +236,11 @@ export function delayNextRunReview(): HeldIsolateCall {
   const reached = Promise.withResolvers<string>();
   const released = Promise.withResolvers<void>();
 
-  delayedRunReview = { reached: reached.resolve, released: released.promise };
+  const held = { reached: reached.resolve, released: released.promise };
 
-  return { reached: reached.promise, release: released.resolve };
+  delayedRunReview = held;
+
+  return disarmedOnRelease(held, { armed: () => delayedRunReview, disarm: () => { delayedRunReview = null; } }, { reached: reached.promise, release: released.resolve });
 }
 
 let delayedModelReport: { readonly from: (storageKey: string) => boolean; readonly reached: (storageKey: string) => void; readonly released: Promise<void> } | null = null;
@@ -234,9 +250,11 @@ export function delayNextModelReport(from: (storageKey: string) => boolean): Hel
   const reached = Promise.withResolvers<string>();
   const released = Promise.withResolvers<void>();
 
-  delayedModelReport = { from, reached: reached.resolve, released: released.promise };
+  const held = { from, reached: reached.resolve, released: released.promise };
 
-  return { reached: reached.promise, release: released.resolve };
+  delayedModelReport = held;
+
+  return disarmedOnRelease(held, { armed: () => delayedModelReport, disarm: () => { delayedModelReport = null; } }, { reached: reached.promise, release: released.resolve });
 }
 
 let delayedOpenWork: { readonly reached: (storageKey: string) => void; readonly released: Promise<void> } | null = null;
@@ -250,13 +268,7 @@ export function delayNextOpenWork(): HeldIsolateCall {
 
   delayedOpenWork = held;
 
-  return {
-    reached: reached.promise,
-    release: () => {
-      if (delayedOpenWork === held) delayedOpenWork = null;
-      released.resolve();
-    },
-  };
+  return disarmedOnRelease(held, { armed: () => delayedOpenWork, disarm: () => { delayedOpenWork = null; } }, { reached: reached.promise, release: released.resolve });
 }
 
 /** The next report any hire's settled turn owes its hirer waits on the way to the workspace until released. */
@@ -264,9 +276,11 @@ export function delayNextTurnReport(): HeldIsolateCall {
   const reached = Promise.withResolvers<string>();
   const released = Promise.withResolvers<void>();
 
-  delayedTurnReport = { reached: reached.resolve, released: released.promise };
+  const held = { reached: reached.resolve, released: released.promise };
 
-  return { reached: reached.promise, release: released.resolve };
+  delayedTurnReport = held;
+
+  return disarmedOnRelease(held, { armed: () => delayedTurnReport, disarm: () => { delayedTurnReport = null; } }, { reached: reached.promise, release: released.resolve });
 }
 
 export type TurnOpeningRequest = Parameters<AgentWorkspaceHost['prepareChat']>[0];
@@ -936,6 +950,7 @@ export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: (
     answerTexts: (...args) => settle(through(() => isolate.answerTexts(...args))),
     answer: (...args) => settle(through(() => isolate.answer(...args))),
     newestFirst: (...args) => settle(through(() => isolate.newestFirst(...args))),
+    namePhases: (...args) => settle(through(() => isolate.namePhases(...args))),
     armCompaction: (...args) => settle(through(() => isolate.armCompaction(...args))),
     forkHas: (...args) => settle(through(() => isolate.forkHas(...args))),
     forkPlan: (...args) => settle(through(() => isolate.forkPlan(...args))),

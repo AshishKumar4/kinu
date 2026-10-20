@@ -15,6 +15,7 @@ import type { UserObjectHost } from './user-host';
 import type { ShareCardJobs } from './share-cards';
 import type { EvalLeaseJobs } from './eval-leases';
 import type { WorkspaceDeletionJobs } from './workspace-deletions';
+import { indexWorkspace, unindexWorkspace } from '../control-plane/index-feed';
 
 /** Renewed as each fork frame lands, so this bounds the gap between frames, not the transfer. */
 const FORK_RESERVATION_LEASE_MS = 5 * 60 * 1000;
@@ -48,6 +49,8 @@ export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   /** Brings a workspace's share recipients to the shares its overview names. */
   readonly shareCards: Pick<ShareCardJobs, 'reconcile'>;
   nudgeUnreported(): void;
+  /** The account this registry is, whose rows the control plane's index keys on. */
+  ownerId(): string;
 }
 
 /** The account's workspaces. */
@@ -419,6 +422,8 @@ export class UserWorkspaces {
     if (!row || row.created_at !== createdAt) return false;
     this.host.sqlx(`DELETE FROM user_workspaces WHERE name = ? AND created_at = ?`, name, createdAt);
     revokeWorkspaceCapability(this.host.ctx.storage.sql, name);
+    // A row the use feed saw while it was reserved goes with it.
+    await unindexWorkspace(this.host.env, { userId: this.host.ownerId(), name });
 
     return true;
   }
@@ -523,6 +528,8 @@ export class UserWorkspaces {
     this.deleteWorkspaceRows(name, 'after-destroy');
     await this.host.evalLeases.ended(name);
     await this.host.deletions.ended(name);
+    // Every deletion's, whichever entrance asked for it: only once the registry row is gone.
+    await unindexWorkspace(this.host.env, { userId: this.host.ownerId(), name });
     // Re-run for a resumed row whose identity a pre-fence delete could have left registered.
     revokeWorkspaceCapability(this.host.ctx.storage.sql, name);
   }
@@ -590,8 +597,8 @@ export class UserWorkspaces {
         return yield* Effect.fail(new KinuError('denied', `Workspace "${resolved.workspace}" may only rename itself.`));
       }
 
-      const current = this.host.sqlx<{ name_origin: string }>(
-        `SELECT name_origin FROM user_workspaces
+      const current = this.host.sqlx<{ name_origin: string; created_at: number }>(
+        `SELECT name_origin, created_at FROM user_workspaces
          WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
       )[0];
 
@@ -606,6 +613,8 @@ export class UserWorkspaces {
         displayName.trim(), origin, name,
       );
       this.rosterChanged(name);
+      // The operator's list shows the title the registry holds.
+      yield* Effect.promise(() => indexWorkspace(this.host.env, { userId: this.host.ownerId(), name, displayName: displayName.trim(), createdAt: current.created_at }));
 
       return { applied: true };
     }));

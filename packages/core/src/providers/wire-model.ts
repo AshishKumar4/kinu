@@ -15,46 +15,11 @@ import { asFetchFunction } from './fetch-shim';
  *  models; `chat-completions` is any compatible endpoint's. */
 export type WireProtocol = 'responses' | 'messages' | 'chat-completions' | 'openai-chat';
 
-const OPENAI_AUTHOR = 'openai/';
-
-const ANTHROPIC_AUTHOR = 'anthropic/';
-
-const WORKERS_AI_AUTHOR = 'workers-ai/';
-
-/** The API a gateway model is spoken to in, and the id its SDK is built with. */
-export interface GatewayWire {
-  readonly protocol: WireProtocol;
-  readonly modelId: string;
-}
-
-/** Each author's own API where the gateway serves one (`/responses`, `/messages`), else its unified chat API. */
-export function gatewayWire(modelId: string): GatewayWire {
-  // The Anthropic SDK reads Claude's limits by Anthropic's own id.
-  if (modelId.startsWith(ANTHROPIC_AUTHOR)) return { protocol: 'messages', modelId: modelId.slice(ANTHROPIC_AUTHOR.length).replaceAll('.', '-') };
-
-  if (modelId.startsWith(OPENAI_AUTHOR)) return { protocol: 'responses', modelId: modelId.slice(OPENAI_AUTHOR.length) };
-
-  return { protocol: 'chat-completions', modelId: workersAiModelId(modelId) };
-}
-
-/** A Workers AI model by its own `@cf/` id: no endpoint takes the `workers-ai/` author a gateway spec names it under
- *  (`No such model workers-ai/@cf/zai-org/glm-5.3`, code 5007, production 2026-10-05 and staging 2026-10-08). */
-export function workersAiModelId(modelId: string): string {
-  return modelId.startsWith(WORKERS_AI_AUTHOR) ? modelId.slice(WORKERS_AI_AUTHOR.length) : modelId;
-}
-
 /** The API an AI SDK package speaks (models.dev and OpenCode name a model's by its npm package); reasoning never picks it. */
 export function sdkWire(npm: string | undefined): WireProtocol {
   if (npm === '@ai-sdk/openai') return 'responses';
 
   return npm === '@ai-sdk/anthropic' ? 'messages' : 'chat-completions';
-}
-
-/** The API a route's provider fixes for its model, null where the catalog decides per model. */
-export function routeProtocol(providerId: string | undefined, modelId: string | undefined): WireProtocol | null {
-  if (providerId === 'anthropic' || providerId === 'claude') return 'messages';
-
-  return providerId === 'my-gateway' && modelId !== undefined ? gatewayWire(modelId).protocol : null;
 }
 
 export interface WireModelInput {

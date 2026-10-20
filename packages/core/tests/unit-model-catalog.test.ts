@@ -4,10 +4,12 @@ import {
   CODEX_CRED_KEY,
   DEFAULT_PROVIDER_RETRIES,
   OPENAI_CRED_KEY,
+  OPENROUTER_CRED_KEY,
   catalogModelInfo,
-  codexEgressAllowed,
+  relayRefusal,
   createCodexProvider,
   createOpenAIProvider,
+  createOpenRouterProvider,
   createProviderRegistry,
   createWorkersAIProvider,
   toProviderError,
@@ -229,6 +231,25 @@ describe('provider model catalogs', () => {
     expect(menu.models.filter((model) => model.provider === 'codex')).toEqual([]);
   });
 
+  // The SufficientKoala audit: OpenRouter answered every refusal as a catalog with no models, so a 429 dropped its
+  // choices unexplained and could disqualify the configured model.
+  test.each([
+    ['a 429', () => new Response('rate limited', { status: 429 }), 'HTTP 429'],
+    ['an unreadable catalog', () => Response.json({ data: 'not rows' }), 'cannot read'],
+  ])('%s from OpenRouter is a named failure, not a catalog with no models', async (_case, answer, reason) => {
+    const registry = createProviderRegistry();
+    registry.register(createOpenRouterProvider());
+
+    const menu = await registry.listAllModels(deps({ [OPENROUTER_CRED_KEY]: { headers: { Authorization: 'Bearer or-test' } } }, fetchStub(async (input) => (
+      requestedUrl(input).startsWith('https://openrouter.ai/') ? answer() : new Response('upstream down', { status: 503 })
+    ))));
+
+    const failed = menu.failures.find((failure) => failure.provider === 'openrouter');
+
+    expect(failed?.reason).toContain(reason);
+    expect(menu.models.filter((model) => model.provider === 'openrouter')).toEqual([]);
+  });
+
   test('an unreadable models.dev list is a named failure with no guessed models', async () => {
     const registry = createProviderRegistry();
     registry.register(createOpenAIProvider());
@@ -268,7 +289,7 @@ describe('provider model catalogs', () => {
 
   });
 
-  test('the machine relay carries the Codex API and the plan usage /stats reads, nothing else', () => {
+  test('the machine relay carries the Codex API, the plan usage /stats reads and the ChatGPT plan API, nothing else', () => {
     const carried = [
       ['GET', 'https://chatgpt.com/backend-api/codex/models?client_version=1.0.0'],
       ['POST', 'https://chatgpt.com/backend-api/codex/responses'],
@@ -281,12 +302,18 @@ describe('provider model catalogs', () => {
       ['POST', 'https://chatgpt.com.example.com/backend-api/codex/responses'],
       ['POST', 'https://example.com/backend-api/codex/responses'],
       ['POST', 'https://chatgpt.com/backend-api/codex/responses/../../conversation'],
-    ].map(([method, url]) => [method, url, codexEgressAllowed({ method: method ?? '', url: url ?? '' })]);
+      ['POST', 'https://user:pass@chatgpt.com/backend-api/codex/responses'],
+      ['GET', 'https://api.openai.com/v1/models'],
+      ['POST', 'https://api.openai.com/v1/responses'],
+      ['POST', 'https://api.openai.com/v1/chat/completions'],
+    ].map(([method, url]) => [method, url, relayRefusal(method ?? '', url ?? '') === null]);
 
     expect(carried.filter(([, , allowed]) => allowed).map(([method, url]) => `${String(method)} ${String(url)}`)).toEqual([
       'GET https://chatgpt.com/backend-api/codex/models?client_version=1.0.0',
       'POST https://chatgpt.com/backend-api/codex/responses',
       'GET https://chatgpt.com/backend-api/wham/usage',
+      'GET https://api.openai.com/v1/models',
+      'POST https://api.openai.com/v1/responses',
     ]);
   });
 });

@@ -6,7 +6,7 @@ import * as v from 'valibot';
 import { ReasoningEffortSchema, type ReasoningEffort } from '../providers/reasoning-effort';
 import type { ProviderCatalogSnapshot, ProviderCacheOutcome } from './resolve';
 import { Effect } from 'effect';
-import { logged } from '../obs/index';
+import { diagnostics, logged } from '../obs/index';
 import { contextWindowsOf, fastCandidatesOf, type FastCandidate } from './fast-tier';
 
 /** One credential sweep; `models` are `<provider>/<modelId>` specs. */
@@ -101,9 +101,18 @@ export interface StoredProviderListing {
 }
 
 /**
- * One in-flight sweep; a complete listing is cached unless invalidated mid-sweep, and never expires by clock. With a
- * store, a read with nothing cached serves the stored listing at once and sweeps behind it, once per generation, the
- * fresh listing replacing it here and in the store; only a read the store has nothing for waits on a sweep.
+ * The key a listing is cached under: the credentials' revision and the account chosen for each provider. A listing is
+ * of what those credentials reach, as those accounts, so a change to either is a new listing (`ProviderListingCache`).
+ */
+export function providerListingKey(revision: number | null, accounts: Readonly<Record<string, string>>): string {
+  return JSON.stringify([revision, Object.fromEntries(Object.keys(accounts).sort().map((provider) => [provider, accounts[provider]]))]);
+}
+
+/**
+ * One in-flight sweep; a complete listing is cached unless invalidated mid-sweep, and never expires by clock. A read
+ * under another key ({@link providerListingKey}) than the cached listing's is a new generation. With a store, a read
+ * with nothing cached serves the stored listing at once and sweeps behind it, once per generation, the fresh listing
+ * replacing it here and in the store; only a read the store has nothing for waits on a sweep.
  */
 export class ProviderListingCache {
   private readonly sweep: () => Promise<ProviderListing>;
@@ -112,12 +121,20 @@ export class ProviderListingCache {
   /** The store's read for this generation, one at a time; it is asked once a generation. */
   private storedRead: Promise<ProviderListing | null> | null = null;
   private generation = 0;
+  private key: string | null = null;
 
   constructor(sweep: () => Promise<ProviderListing>, private readonly stored?: StoredProviderListing) {
     this.sweep = sweep;
   }
 
-  async read(): Promise<{ listing: ProviderListing; cache: ProviderCacheOutcome }> {
+  async read(key: string): Promise<{ listing: ProviderListing; cache: ProviderCacheOutcome }> {
+    if (this.key !== null && key !== this.key) {
+      diagnostics.event('provider.listing_invalidated', { from: this.key, to: key });
+      this.invalidate();
+    }
+
+    this.key = key;
+
     if (this.cached) return { listing: this.cached, cache: 'hit' };
 
     if (this.inFlight) return { listing: await this.inFlight, cache: 'joined' };

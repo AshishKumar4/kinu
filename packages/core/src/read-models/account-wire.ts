@@ -6,6 +6,7 @@ import * as v from 'valibot';
 import { AccountMemoryProposalSchema } from '../memory/account';
 import { REASONING_EFFORTS } from '../providers/effort';
 import { ProviderFailureSchema } from '../providers/registry';
+import { ModelPricingSchema } from '../providers/types';
 import { WorkspaceOverviewSchema } from './workspace-overview';
 
 export const UserProfileSchema = v.object({
@@ -109,6 +110,8 @@ const ModelMenuEntrySchema = v.object({
   /** The settings control renders exactly these after "model default". Absent when the catalog could not say; empty
    *  when the model takes none. */
   reasoningEfforts: v.optional(v.pipe(v.array(v.picklist(REASONING_EFFORTS)), v.readonly())),
+  /** The account's rate, so a signed-in machine's fast pick orders by the same prices (`fastCandidatesOf`). */
+  cost: v.optional(ModelPricingSchema),
 });
 
 export type ModelMenuEntry = v.InferOutput<typeof ModelMenuEntrySchema>;
@@ -119,7 +122,7 @@ export const ModelMenuResponseSchema = v.object({
   failures: v.array(ProviderFailureSchema),
   accounts: v.optional(v.pipe(v.record(v.string(), v.pipe(v.array(v.string()), v.readonly())), v.readonly())),
   /** What an unset fast tier may run on, cheapest first (`fastCandidatesOf`), so settings name the pick. */
-  fast: v.optional(v.array(v.object({ model: v.string(), contextWindow: v.optional(v.number()) }))),
+  fast: v.optional(v.array(v.object({ model: v.string() }))),
 });
 
 export type ModelMenuResponse = v.InferOutput<typeof ModelMenuResponseSchema>;

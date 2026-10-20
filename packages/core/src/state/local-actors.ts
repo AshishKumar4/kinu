@@ -186,16 +186,6 @@ export async function retireLocalActor(parent: ActorHandle, name: string, refere
   await retireLocalCreation({ scope, caller: parent, parentPath: scope.path, name, reference, cleanup });
 }
 
-/**
- * Cancel a failed birth via `cancelCreation`, never register-then-destroy: `register` accepts
- * mismatched name/kind/lifetime and its row passes through `active`, visible to concurrent reads.
- */
-export function cancelLocalCreation(parent: ActorHandle, input: LocalActorCreation): ActorReference {
-  const scope = scopeFor(parent);
-
-  return scope.directory.apply(parent, scope.path, { action: 'cancelCreation', ...input }).reference;
-}
-
 /** `cleanup` is given the retiring actor's storage path and its reference: a key is not an actor's id. */
 export async function recoverLocalActorRetirements(
   root: ActorHandle, cleanup: (storagePath: readonly string[], reference: ActorReference) => Promise<void>,

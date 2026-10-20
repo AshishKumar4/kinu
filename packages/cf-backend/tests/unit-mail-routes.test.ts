@@ -115,9 +115,8 @@ function env(accounts: 'operators' | 'everyone' = 'operators'): MailRoutesEnv {
 }
 
 /** A request as the signed-in person, through the routes as the API mounts them. */
-async function call(who: { userId: string; email: string }, request: { method: string; path: string; body?: JsonValue; accounts?: 'operators' | 'everyone' }) {
-  const { method, path, body, accounts = 'operators' } = request;
-
+async function call(who: { userId: string; email: string }, request: { method: string; path: string; body?: JsonValue; accounts?: 'operators' | 'everyone'; domain?: string }) {
+  const { method, path, body, accounts = 'operators', domain = 'kinu.run' } = request;
 
   // As the API mounts it: behind the session gate, which names the signed-in identity.
   const app = new Hono<FamilyEnv<MailRoutesEnv>>()
@@ -127,7 +126,7 @@ async function call(who: { userId: string; email: string }, request: { method: s
 
   const response = await app.fetch(new Request(`${ORIGIN}${path}`, {
     method, headers: { 'content-type': 'application/json' }, body: body === undefined ? null : JSON.stringify(body),
-  }), env(accounts));
+  }), { ...env(accounts), EMAIL_DOMAIN: domain });
 
   return { status: response.status, body: v.parse(v.unknown(), await response.json()) };
 }
@@ -142,8 +141,8 @@ beforeEach(() => {
 
 describe('an address is claimed once, by whom the deployment allows', () => {
   test('before a claim there is no address, and it says whether one may be claimed', async () => {
-    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes' })).toEqual({ status: 200, body: { address: null, canClaim: true, boxes: [] } });
-    expect((await call(PRIYA, { method: 'GET', path: '/api/user/mail/boxes' })).body).toEqual({ address: null, canClaim: false, boxes: [] });
+    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes' })).toEqual({ status: 200, body: { enabled: true, address: null, canClaim: true, boxes: [] } });
+    expect((await call(PRIYA, { method: 'GET', path: '/api/user/mail/boxes' })).body).toEqual({ enabled: true, address: null, canClaim: false, boxes: [] });
   });
 
   test('an operator claims a username, and the person\'s own box is opened at it', async () => {
@@ -176,6 +175,18 @@ describe('an address is claimed once, by whom the deployment allows', () => {
   });
 });
 
+describe('a deployment with no mail domain has no Mail', () => {
+  test('it says so, offers no claim and refuses one, and the footer\'s read says it too', async () => {
+    const off = { domain: '' } as const;
+
+    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes', ...off })).toEqual({ status: 200, body: { enabled: false, address: null, canClaim: false, boxes: [] } });
+    expect((await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' }, ...off })).status).toBe(503);
+    expect(claims.size).toBe(0);
+    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/important?limit=3', ...off })).toEqual({ status: 200, body: { enabled: false, unread: 0, items: [] } });
+    expect((await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes' })).body).toMatchObject({ enabled: true, canClaim: true });
+  });
+});
+
 describe('the person reads and sends their own mail, and only their own', () => {
   beforeEach(async () => {
     await call(ASHISH, { method: 'POST', path: '/api/user/mail/claim', body: { username: 'ashish' } });
@@ -202,7 +213,7 @@ describe('the person reads and sends their own mail, and only their own', () => 
   });
 
   test('Important answers the footer\'s read: its unread count and the newest few', async () => {
-    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/important?limit=3' })).toEqual({ status: 200, body: { unread: 0, items: [] } });
+    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/important?limit=3' })).toEqual({ status: 200, body: { enabled: true, unread: 0, items: [] } });
   });
 
   test('the footer\'s read and the Important view show the assistant\'s pick with its reason', async () => {

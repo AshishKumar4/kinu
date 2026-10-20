@@ -1767,10 +1767,6 @@ describe("a judged run's winner is the highest median, not the lowest", () => {
     // Answers per candidate, bounded by the prompt's section header, since siblings' text is in the prompt too.
     const judgeModel: RoutedLLM = {
       object: async () => { throw new Error('an ensemble asks for no schema'); },
-      // eslint-disable-next-line require-yield -- an ensemble only ever calls `complete`.
-      async *stream(): AsyncIterable<string> {
-        throw new Error('the judge was streamed, which no ensemble does');
-      },
       async complete(prompt: string): Promise<string> {
         const candidate = prompt.split('Candidate approach:\n')[1]?.split('\nSibling approaches')[0] ?? '';
         const branch = MEDIANS.findIndex((_unused, index) => candidate.includes(`${MARK}${String(index)}`));

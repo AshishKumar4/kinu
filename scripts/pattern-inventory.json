@@ -606,7 +606,7 @@
       "file": "packages/pc-agent/src/update.js",
       "kind": "hand-parser",
       "owner": "parseUpdateFrame",
-      "sourceSha256": "6b399f6c554ffece81688b060cd2dbe7614bed81d84ca7b083482b1b46b29250",
+      "sourceSha256": "91cad547bede5572abb639f0d3b979052ebf4de7d1ce3a6773361d7391b0380c",
       "decision": "lexical"
     },
     {

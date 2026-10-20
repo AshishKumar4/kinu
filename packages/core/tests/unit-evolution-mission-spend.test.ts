@@ -41,7 +41,7 @@ function workspace() {
 
   const counted: AgentRuntime = {
     ...rt,
-    llm: { stream: rt.llm.stream.bind(rt.llm), complete: async (p) => {
+    llm: { complete: async (p) => {
       completions++;
 
       return inner(p);

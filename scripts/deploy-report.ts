@@ -47,8 +47,12 @@ const EntrySchema = v.variant('kind', [
   // A row with no command of its own, such as armada's row for a CI task that ended before its verdict, is its name.
   v.object({ kind: v.literal('timing'), phase: v.string(), what: v.string(), command: v.optional(v.string()), seconds: v.number(), silence: v.optional(v.number()) }),
   // The validator's reading of the Worker's startup as wrangler printed it: before a reset (`validated`, the version
-  // uploaded and not deployed) and at the deploy (`deployed`).
-  v.object({ kind: v.literal('startup'), at: v.picklist(['validated', 'deployed']), reading: v.union([v.number(), v.picklist(['refused', 'none'])]) }),
+  // uploaded and not deployed) and at the deploy (`deployed`). `withheld`: the Durable Object classes new to the target,
+  // left out of the validated version, which cannot bind a class before its deploy provisions it (reset.ts).
+  v.object({
+    kind: v.literal('startup'), at: v.picklist(['validated', 'deployed']), reading: v.union([v.number(), v.picklist(['refused', 'none'])]),
+    withheld: v.optional(v.array(v.string())),
+  }),
 ]);
 
 export type ReportEntry = v.InferOutput<typeof EntrySchema>;
@@ -172,13 +176,26 @@ export function recordTiming(dir: string, timing: Omit<Extract<ReportEntry, { ki
   append(dir, { kind: 'timing', ...timing });
 }
 
-/** The validator's startup reading as deploy.sh read it from wrangler's log: ms, `refused`, or `none`. */
-export function recordStartup(dir: string, at: 'validated' | 'deployed', said: string): void {
+/** The validator's startup reading as deploy.sh read it from wrangler's log: ms, `refused`, or `none`; and the classes the
+ *  validated version left out. */
+export function recordStartup(dir: string, at: 'validated' | 'deployed', said: string, withheld: readonly string[] = []): void {
   let reading: number | 'refused' | 'none' = 'none';
 
   if (/^\d+$/u.test(said)) reading = Number(said);
   else if (said === 'refused') reading = 'refused';
-  append(dir, { kind: 'startup', at, reading });
+  append(dir, withheld.length === 0 ? { kind: 'startup', at, reading } : { kind: 'startup', at, reading, withheld: [...withheld] });
+}
+
+/** One startup reading as the report says it. */
+function startupLine(entry: Extract<ReportEntry, { kind: 'startup' }>): string {
+  const reading = typeof entry.reading === 'number' ? `${String(entry.reading)} ms` : entry.reading;
+
+  if (entry.at === 'deployed') return `- the deployed version: ${reading}`;
+
+  const without = entry.withheld === undefined ? '' : `, without the bindings of ${entry.withheld.join(', ')}: new to this target, `
+    + 'a version cannot bind them before the deploy provisions them; the script it read is the one deployed';
+
+  return `- the version uploaded before the reset: ${reading}${without}`;
 }
 
 /** A plan row the deploy did not run, and why. */
@@ -420,8 +437,7 @@ export function renderReport(input: ReportInput): RenderedReport {
     ...section('Soak, after the verdict', soak.length === 0 ? [] : [
       `${String(soak.length)} red in the eval soak, which ran after this deploy's verdict and is no red of it.`, ...redSections(soak, () => true),
     ]),
-    ...section("The Worker's startup, as the validator read it", startups.map((entry) =>
-      `- ${entry.at === 'validated' ? 'the version uploaded before the reset' : 'the deployed version'}: ${typeof entry.reading === 'number' ? `${String(entry.reading)} ms` : entry.reading}`)),
+    ...section("The Worker's startup, as the validator read it", startups.map(startupLine)),
     ...section('Rows, longest first', rowTimes.length === 0 ? [] : ['| row | seconds | longest silence (seconds) | command |', '| --- | ---: | ---: | --- |', ...rowTimes]),
     ...section('Eval cache usage', cacheLines(evals, previous)),
     ...section('When', timings.length === 0 ? [] : ['| mark | seconds from the start |', '| --- | --- |', ...timings]),
@@ -466,8 +482,8 @@ if (import.meta.main) {
     process.exit(0);
   }
 
-  if (command === 'startup' && rest.length === 2 && (rest[0] === 'validated' || rest[0] === 'deployed')) {
-    recordStartup(first, rest[0], rest[1] ?? '');
+  if (command === 'startup' && rest.length >= 2 && (rest[0] === 'validated' || rest[0] === 'deployed')) {
+    recordStartup(first, rest[0], rest[1] ?? '', rest.slice(2));
     process.exit(0);
   }
 

@@ -3,7 +3,7 @@
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from './workers-ai';
 import { knownReasoningEfforts, type ReasoningEffort } from './reasoning-effort';
 import { ProviderFailureSchema, type ProviderFailure } from './registry';
-import { MODEL_CAPABILITIES, specProvider, specWithoutAccount, type ModelCapability } from './types';
+import { MODEL_CAPABILITIES, ModelPricingSchema, specProvider, specWithoutAccount, type ModelCapability, type ModelPricing } from './types';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
 import { positiveInteger } from './util';
@@ -25,6 +25,7 @@ const ModelEntryPayloadSchema = v.object({
   capabilities: v.optional(v.unknown()),
   contextWindow: v.optional(v.unknown()),
   reasoningEfforts: v.optional(v.unknown()),
+  cost: v.optional(v.unknown()),
 });
 
 export interface AgentModelEntry {
@@ -35,6 +36,8 @@ export interface AgentModelEntry {
   contextWindow?: number;
   /** Effort levels the model accepts, in provider order; absent when unknown. */
   reasoningEfforts?: ReasoningEffort[];
+  /** The listing account's rate; absent when its catalog does not price the model. */
+  cost?: ModelPricing;
 }
 
 /** Pickable models plus providers that could not be listed; one failure costs only its own models. */
@@ -134,7 +137,7 @@ function normalizeModelEntries(input: { rows: unknown[] }): AgentModelEntry[] {
     const entry: AgentModelEntry = {
       spec,
       label,
-      provider: provider || spec.split('/', 1)[0] || 'model',
+      provider: provider || (specProvider(spec) ?? 'model'),
     };
 
     const capabilityNames = capabilities.success
@@ -154,6 +157,9 @@ function normalizeModelEntries(input: { rows: unknown[] }): AgentModelEntry[] {
     const efforts = v.safeParse(v.array(v.unknown()), item.reasoningEfforts);
 
     if (efforts.success) entry.reasoningEfforts = knownReasoningEfforts(efforts.output);
+    const cost = v.safeParse(ModelPricingSchema, item.cost);
+
+    if (cost.success) entry.cost = cost.output;
 
     return [entry];
   });

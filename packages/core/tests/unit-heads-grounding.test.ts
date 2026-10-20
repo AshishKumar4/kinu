@@ -84,7 +84,6 @@ describe('grounded head outcome scores', () => {
     const mergePrompts: string[] = [];
 
     const judge: LLM = {
-      async *stream() { yield ''; },
       async complete(prompt) {
         return prompt.includes('verification harness')
           ? '```js\nif (x !== 42) throw new Error("wrong answer");\n```'
@@ -132,7 +131,6 @@ describe('grounded head outcome scores', () => {
 
     // Judge that throws if ever asked — proves the aborted head spends no call.
     const throwingJudge: LLM = {
-      stream() { throw new Error('should not be called for the aborted head'); },
       async complete() { return JSON.stringify({ score: 0.9 }); },
     };
 
@@ -163,7 +161,6 @@ describe('grounded head outcome scores', () => {
     const { journal } = newJournal();
 
     const brokenJudge: LLM = {
-      stream() { throw new Error('judge provider unreachable'); },
       async complete(): Promise<string> { throw new Error('judge provider unreachable'); },
     };
 
@@ -253,7 +250,6 @@ describe('k-sample median merge', () => {
     const mergePrompts: string[] = [];
 
     const scoringJudge: LLM = {
-      async *stream() { yield ''; },
       async complete(prompt: string) {
         if (prompt.includes('Synthesized answer:')) {
           const s = synthesisScore(prompt);
@@ -290,7 +286,6 @@ describe('k-sample median merge', () => {
 
     // Valid JSON: 5e-1 is 0.5, so the middle candidate is the median, not 1 (a misread "5").
     const exponentJudge: LLM = {
-      async *stream() { yield ''; },
       async complete(prompt: string) {
         if (!prompt.includes('Synthesized answer:')) return JSON.stringify({ score: 0.5 });
 
@@ -324,7 +319,6 @@ describe('k-sample median merge', () => {
     // Only the merge-narrative scorer rejects: the k syntheses are paid for, so lose the tie-break, not the
     // merge.
     const halfBrokenJudge: LLM = {
-      async *stream() { yield ''; },
       async complete(prompt: string) {
         if (prompt.includes('Synthesized answer:')) throw new Error('judge provider unreachable');
 

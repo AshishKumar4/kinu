@@ -17,7 +17,7 @@ import { type Expression, parseSync } from 'oxc-parser';
 import { gitIn } from '../packages/test-utils/src/git-env';
 import { type DuplicateGroup, findDuplicateGroups } from './ast-duplication';
 import { canonical, commentCharacters } from './comment-only';
-import { measureFile } from './complexity';
+import { measureFile, oxlintCounts } from './complexity';
 import { exportedDeclarations, inScope } from './dead-code';
 import { assertMeasured } from './gate-ratchet';
 import { packageOf, readMatching, readSources, readTests } from './sources';
@@ -426,12 +426,13 @@ function literalFields(node: SyntaxNode): { kind: 'type' | 'schema'; fields: rea
     : undefined;
 }
 
-function censusOfFile(file: string, text: string): FileCensus {
+/** One file's census; `counts`, oxlint's complexity of its functions by byte offset (`oxlintCounts`). */
+function censusOfFile(file: string, text: string, counts: ReadonlyMap<number, number>): FileCensus {
   const { root: tree, lineAt } = parse(file, text);
   const { comments } = parseSync(file, text);
   const commentChars = commentCharacters(text, comments);
   const size = treeSize(tree);
-  const measured = new Map(measureFile(file, text).map((entry) => [entry.offset, entry]));
+  const measured = new Map(measureFile(file, text, counts).map((entry) => [entry.offset, entry]));
   const exported = exportedStatements(file, text, tree);
   const functions: FunctionRow[] = [];
   const wrappers: WrapperRow[] = [];
@@ -601,7 +602,8 @@ if (import.meta.main) {
 
   const started = performance.now();
   const sources = readSources();
-  const censuses = [...sources].map(([file, text]) => censusOfFile(file, text));
+  const counts = oxlintCounts(root, [...sources.keys()]);
+  const censuses = [...sources].map(([file, text]) => censusOfFile(file, text, counts.get(file) ?? new Map()));
   const files = censuses.map((census) => census.row);
   const functions = censuses.flatMap((census) => census.functions).sort((a, b) => b.nodes - a.nodes);
   const wrappers = censuses.flatMap((census) => census.wrappers);

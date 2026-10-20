@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import {
   CODEX_CRED_KEY, DEVICE_CONNECT_PATH,
-  chatgptEgressAllowed, codexEgressAllowed, DEVICE_FRAMES, DEVICE_METHOD,
+  DEVICE_FRAMES, DEVICE_METHOD,
 } from '@kinu.run/core';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { createTestUserDO, testOwner, type AcceptedSocket, type TestUserDO } from './helpers/user-do';
@@ -26,7 +26,6 @@ const RelayModuleSchema = v.object({
   RELAY_METHOD: v.string(),
   RELAY_HEAD_FRAME: v.string(),
   RELAY_BODY_FRAME: v.string(),
-  RELAY_ROUTES: v.record(v.string(), v.array(v.string())),
   CHATGPT_METHODS: v.object({ status: v.string(), signIn: v.string(), signOut: v.string() }),
   CHATGPT_SIGNED_OUT: v.string(),
   relayRefusal: v.pipe(v.function(), v.args(v.tuple([v.string(), v.string()])), v.returns(v.nullable(v.string()))),
@@ -358,6 +357,17 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
     expect(output.text()).not.toContain(ACCESS_TOKEN);
   });
 
+  // The SquareYak audit: the hub's rule let a URL carrying a user and password through to the machine, whose own copy
+  // refused it; both ends now read one rule.
+  test('the hub refuses a call with credentials in its URL before the machine sees it', async () => {
+    const before = upstream.calls.length;
+
+    await expect(harness.userDO.relayModelCall(await testOwner(), deviceId, 'call-userinfo', new Request('https://user:pass@chatgpt.com/backend-api/codex/responses', {
+      method: 'POST', body: '{"model":"gpt-5.5"}', headers: { authorization: `Bearer ${ACCESS_TOKEN}` },
+    }))).rejects.toMatchObject({ code: 'denied' });
+    expect(upstream.calls.length).toBe(before);
+  });
+
   test('a Stop drops the call to chatgpt.com, not just the answer', async () => {
     const owner = await testOwner();
     const before = upstream.calls.length;
@@ -502,23 +512,13 @@ describe('the daemon carries only what core allows', () => {
     expect(pcAgent.CHATGPT_SIGNED_OUT).toBe('chatgpt_signed_out');
   });
 
-  test('its allow-list and core\'s agree on every route, host and method', () => {
-    const urls = [
-      ...Object.entries(pcAgent.RELAY_ROUTES).flatMap(([host, routes]) => routes.map((route) => `https://${host}${route.split(' ')[1] ?? ''}`)),
-      'https://chatgpt.com/backend-api/codex/other', 'https://chatgpt.com:8443/backend-api/codex/responses',
-      'http://chatgpt.com/backend-api/codex/responses', 'https://evil.example/backend-api/codex/responses',
-      'https://api.openai.com/v1/chat/completions', 'https://api.openai.com:8443/v1/responses', 'http://api.openai.com/v1/responses',
-      'https://auth.openai.com/api/accounts/oauth/token', 'https://chatgpt.com/v1/responses', 'https://api.openai.com/backend-api/codex/responses',
-    ];
+  test('it carries the Codex and ChatGPT plan routes and nothing else, as the hub does', () => {
+    const calls = [
+      ['POST', 'https://chatgpt.com/backend-api/codex/responses'], ['GET', 'https://api.openai.com/v1/models'],
+      ['POST', 'https://user:pass@chatgpt.com/backend-api/codex/responses'], ['POST', 'http://api.openai.com/v1/responses'],
+      ['POST', 'https://api.openai.com/v1/chat/completions'], ['GET', 'https://chatgpt.com/backend-api/conversation'],
+    ] as const;
 
-    for (const url of urls) {
-      for (const method of ['GET', 'POST', 'PUT', 'DELETE']) {
-        expect({ method, url, carried: pcAgent.relayRefusal(method, url) === null })
-          .toEqual({ method, url, carried: codexEgressAllowed({ method, url }) || chatgptEgressAllowed({ method, url }) });
-      }
-    }
-
-    // Stricter than core, as the container is.
-    expect(pcAgent.relayRefusal('GET', 'https://user:pass@chatgpt.com/backend-api/wham/usage')).not.toBeNull();
+    expect(calls.map(([method, url]) => pcAgent.relayRefusal(method, url) === null)).toEqual([true, true, false, false, false, false]);
   });
 });

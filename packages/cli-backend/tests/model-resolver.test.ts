@@ -3,20 +3,31 @@ import { generateText, jsonSchema, Output, streamText } from 'ai';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, usageTotal, WORKSPACE_RUN_ID,
 } from '@kinu.run/core';
-import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport, ModelCallSpend } from '@kinu.run/core';
-import { cloudProxyBaseURL, createDefaultWebSearchProvider, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
-import { createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver';
+import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport } from '@kinu.run/core';
+import { cloudProxyBaseURL, createDefaultWebSearchProvider, providerListingOf, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
+import { createLocalModelResolver } from '../src/model-resolver';
 import { createFileOAuthStore } from '../src/oauth-store';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { asFetchFunction, callRetries, requestUrl } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, unobservedSpend, WORKERS_AI_MODELS_DEV, workspaceDatabase } from '@kinu.run/test-utils';
+import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, WORKERS_AI_MODELS_DEV, workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
 
-const UNOBSERVED: ModelCallSpend = { source: 'reflection', report: unobservedSpend };
+/** A Workers AI endpoint served on `port`, as `--base-url` hands one to the CLI. */
+function servedWorkersAi(port: number | undefined): LLMProviderConfig {
+  return { name: 'workers-ai', baseURL: `http://127.0.0.1:${port}/v1`, headers: { Authorization: 'Bearer test' }, model: '@cf/test/model' };
+}
+
+/** A session-less runtime over `llm`, as `kinu evolve` opens one; its routed lanes are the ones under test. */
+function endpointRuntime(llm: LLMProviderConfig) {
+  const db = workspaceDatabase(scratchPath('model-resolver', 'agent.db'));
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+
+  return { db, rt: createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm }) };
+}
 
 describe('createLocalModelResolver', () => {
   test('sessions sharing credentials keep routed waits in the calling actor after a sibling closes', async () => {
@@ -163,6 +174,27 @@ describe('createLocalModelResolver', () => {
     }
   });
 
+  // The InternalFish audit: the cloud menu priced its models and ordered its fast candidates by price, and a signed-in
+  // CLI rebuilt the models from the display rows without prices, so its unset fast tier followed display order.
+  test("a signed-in machine's model listing keeps the account's prices, so its fast pick is the account's", async () => {
+    const entry = (id: string, cost: { input: number; output: number }) => ({
+      spec: `workers-ai/${id}`, label: id, provider: 'workers-ai', capabilities: ['tools', 'structured-outputs'], contextWindow: 131_072, cost,
+    });
+
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: (request) => (new URL(request.url).pathname === '/api/cli/models'
+      ? Response.json({ models: [entry('@cf/house/large', { input: 3, output: 9 }), entry('@cf/house/small', { input: 0.1, output: 0.3 })], failures: [] })
+      : new Response('not here', { status: 404 })) });
+
+    try {
+      const resolver = createLocalModelResolver({ llm: null, cloud: { origin: server.url.toString(), token: 'ptc_listing' } });
+      const listing = providerListingOf(await resolver.listModels());
+
+      expect(listing.fast?.map(({ model }) => model).slice(0, 2)).toEqual(['workers-ai/@cf/house/small', 'workers-ai/@cf/house/large']);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test('a session lane and a session-less lane spend the same route retry allowance', async () => {
     let requests = 0;
 
@@ -209,8 +241,8 @@ describe('createLocalModelResolver', () => {
     }
   });
 
-  /** Neither lane may set an output cap, and a config object still carrying one must be inert. */
-  test('neither lane this seam builds carries an output cap, whatever the config holds', async () => {
+  /** A routed lane sets no output cap, and a config object still carrying one must be inert. */
+  test('a runtime lane carries no output cap, whatever the config holds', async () => {
     const bodies: JsonObject[] = [];
 
     const server = Bun.serve({
@@ -242,27 +274,13 @@ describe('createLocalModelResolver', () => {
       },
     });
 
-    const llm: LLMProviderConfig = {
-      name: 'workers-ai',
-      baseURL: `http://127.0.0.1:${server.port}/v1`,
-      headers: { Authorization: 'Bearer test' },
-      model: '@cf/test/model',
-    };
-
     const staleCap = { maxTokens: 123 };
+    const route = { source: 'reflection', tier: 'fast', model: 'workers-ai/@cf/test/model', reasoningEffort: null, fallbacks: [], retries: 0 } as const;
+    const runtimes = [endpointRuntime(servedWorkersAi(server.port)), endpointRuntime({ ...servedWorkersAi(server.port), ...staleCap })];
 
     try {
-      await createLocalProviderLLM({ llm, affinity: { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }, spend: UNOBSERVED }).complete('uncapped');
-      await createLocalProviderLLM({ llm: { ...llm, ...staleCap }, affinity: { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }, spend: UNOBSERVED }).complete('stale cap');
-      let streamed = '';
-
-      for await (const chunk of createLocalProviderLLM({ llm: { ...llm, ...staleCap }, affinity: { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }, spend: UNOBSERVED })
-        .stream({ system: 'be brief', messages: [{ role: 'user', content: 'stream' }] })) {
-        streamed += chunk;
-      }
-
-      expect(streamed).toBe('ok');
-      expect(bodies).toHaveLength(3);
+      for (const { rt } of runtimes) await rt.modelForRoute?.(route).complete('reflect');
+      expect(bodies).toHaveLength(2);
 
       for (const body of bodies) {
         expect(Object.hasOwn(body, 'max_tokens')).toBe(false);
@@ -270,11 +288,14 @@ describe('createLocalModelResolver', () => {
       }
     } finally {
       await server.stop(true);
+
+      for (const { db } of runtimes) db.close();
     }
   });
 
-  // This seam alone sees judge / fast-tier / reflection spend; unmeasured spend must read as unmeasured, never free.
-  test('reports every completed call, silent providers included', async () => {
+  // A runtime lane alone sees session-less judge / fast-tier / reflection spend; unmeasured spend must read as
+  // unmeasured, never free.
+  test('a runtime lane reports every completed call under its source and canonical spec, silent providers included', async () => {
     const reports: ModelCallReport[] = [];
     let quiet = false;
 
@@ -296,23 +317,18 @@ describe('createLocalModelResolver', () => {
       },
     });
 
-    const llm: LLMProviderConfig = {
-      name: 'workers-ai',
-      baseURL: `http://127.0.0.1:${server.port}/v1`,
-      headers: { Authorization: 'Bearer test' },
-      model: '@cf/test/model',
-    };
+    const { db, rt } = endpointRuntime(servedWorkersAi(server.port));
+    rt.setModelCallSink?.((report) => { reports.push(report); });
+    // A bare id, as an owner types one: the row names the spec the registry spells.
+    const route = { source: 'judge', tier: 'deep', model: '@cf/test/model', reasoningEffort: null, fallbacks: [], retries: 0 } as const;
 
     try {
-      const judge = createLocalProviderLLM({
-        llm, affinity: { sessionAffinity: 'kinu-test', workspaceAffinity: 'kinu-test' }, spend: { source: 'judge', report: (report) => { reports.push(report); } },
-      });
-
-      expect(await judge.complete('grade this')).toBe('graded');
+      expect(await rt.modelForRoute?.(route).complete('grade this')).toBe('graded');
       quiet = true;
-      await judge.complete('grade this too');
+      await rt.modelForRoute?.(route).complete('grade this too');
     } finally {
       await server.stop(true);
+      db.close();
     }
 
     expect(reports).toHaveLength(2);
@@ -341,13 +357,7 @@ describe('createLocalModelResolver', () => {
       },
     });
 
-    const db = workspaceDatabase(scratchPath('model-resolver', 'agent.db'));
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-
-    const rt = createCLIRuntime(db, {
-      cwd: scratchDir('workspace-folder'),
-      llm: { name: 'workers-ai', baseURL: `http://127.0.0.1:${server.port}/v1`, headers: { Authorization: 'Bearer test' }, model: '@cf/test/model' },
-    });
+    const { db, rt } = endpointRuntime(servedWorkersAi(server.port));
 
     try {
       for (const reasoningEffort of ['high', null] as const) {
@@ -375,13 +385,7 @@ describe('createLocalModelResolver', () => {
       },
     });
 
-    const db = workspaceDatabase(scratchPath('model-resolver', 'agent.db'));
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-
-    const rt = createCLIRuntime(db, {
-      cwd: scratchDir('workspace-folder'),
-      llm: { name: 'workers-ai', baseURL: `http://127.0.0.1:${server.port}/v1`, headers: { Authorization: 'Bearer test' }, model: '@cf/test/model' },
-    });
+    const { db, rt } = endpointRuntime(servedWorkersAi(server.port));
 
     try {
       const route = { source: 'fast', tier: 'fast', model: 'workers-ai/@cf/test/model', reasoningEffort: null, fallbacks: [], retries: 1 } as const;
