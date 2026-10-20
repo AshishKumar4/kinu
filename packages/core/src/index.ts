@@ -1317,7 +1317,7 @@ export {
 } from './memory/account';
 
 export {
-  JsonValueSchema, JsonObjectSchema, JsonArraySchema,
+  JsonValueSchema, JsonObjectSchema, JsonArraySchema, renderIssuesUnquoted,
   parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, jsonResultOrVoid, projectJsonValue, nonEmptyString,
   binaryReplacer, type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
