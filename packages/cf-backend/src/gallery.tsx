@@ -2013,11 +2013,12 @@ function gallerySessions(method: string, args: readonly unknown[]): readonly Ter
   return method === "listComputerSessions" ? GALLERY_SESSIONS.map((session) => ({ ...session, open: session.open && computerAwake })) : null;
 }
 
-/** The PC's sessions (1014-t) as its daemon keeps them: its shell, and a build running in another. Its daemon reads no
- *  last command, port or branch. */
+/** The PC's sessions (1014-t) as its daemon lists them (1019-aa): its shell, a dev server on a port, and a deploy asking
+ *  a question. Its daemon reads no last command: that needs the owner's shell rc. */
 const GALLERY_DEVICE_SESSIONS: TerminalSession[] = [
-  { id: "pty-shell", name: "shell", cwd: "/Users/ashish/work/storefront", open: true, running: null, last: null, ports: [], branch: null, needsInput: false },
-  { id: "pty-build", name: "build", cwd: "/Users/ashish/work/storefront", open: true, running: "cargo", last: null, ports: [], branch: null, needsInput: false },
+  { id: "pty-shell", name: "shell", cwd: "/Users/ashish/work/storefront", open: true, running: null, last: null, ports: [], branch: "main", needsInput: false },
+  { id: "pty-build", name: "build", cwd: "/Users/ashish/work/storefront", open: true, running: "node", last: null, ports: [5173], branch: "main", needsInput: false },
+  { id: "pty-deploy", name: "deploy", cwd: "/Users/ashish/work/storefront/infra", open: true, running: "npm", last: null, ports: [], branch: "main", needsInput: true },
 ];
 
 function galleryDeviceSessions(method: string, args: readonly unknown[]): readonly TerminalSession[] | SessionRecord | null {

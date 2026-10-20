@@ -11,6 +11,8 @@
 
 const { afterEach, describe, expect, test } = require('bun:test');
 
+const fs = require('node:fs');
+
 const path = require('node:path');
 
 const { AwaitedList, scratchDir } = require('@kinu.run/test-utils');
@@ -276,6 +278,55 @@ describe("a workspace's named sessions", () => {
 
     return (await ws.response(frame.id)).result;
   };
+
+  // 1019-aa: a PC's row says what the computer's does, read from /proc: the folder its shell is in now (kept for a
+  // restart), that folder's branch, the ports a process under it listens on, and a program waiting for an answer.
+  test('a session lists the folder it is in, its branch, the ports under it, and a program waiting for input', async () => {
+    if (process.platform !== 'linux') return;
+    const { ctx } = context();
+    const ws = fakeWs();
+    const repo = scratchDir('pty-named-repo');
+    const say = (line) => handle({ type: PTY_INPUT_FRAME, session: opened.session, data: Buffer.from(line).toString('base64') }, ws, ctx);
+
+    fs.mkdirSync(path.join(repo, '.git'));
+    fs.writeFileSync(path.join(repo, '.git', 'HEAD'), 'ref: refs/heads/feature/rows\n');
+    const opened = await call(ws, ctx, { id: 'rpc-named-facts', method: PTY_OPEN_METHOD, workspace: WORKSPACE, sandbox: RAW, params: [80, 24] });
+
+    say(`python3 -c 'import socket, time; s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(); print("port", s.getsockname()[1], flush=True); time.sleep(60)' &\r`);
+    await ws.until(() => /port (\d+)/.test(ws.output()));
+    const port = Number(/port (\d+)/.exec(ws.output())[1]);
+
+    say(`cd ${repo} && read answer\r`);
+    await ws.until(() => ws.output().includes('read answer'));
+
+    // The list asked until the shell has done what it was told: each answer is a read of the system as it is then.
+    let asked = 0;
+
+    const listedWhen = async (holds) => {
+      for (;;) {
+        asked += 1;
+        const [row] = await call(ws, ctx, { id: `rpc-named-facts-${asked}`, method: 'ptyList', workspace: WORKSPACE, params: [] });
+
+        if (holds(row) || asked > 5000) return row;
+        await new Promise((resolve) => { setImmediate(resolve); });
+      }
+    };
+
+    const waiting = await listedWhen((row) => row.needsInput);
+
+    say('yes\rsleep 30\r');
+    const sleeping = await listedWhen((row) => row.running === 'sleep');
+
+    expect({
+      waiting: { cwd: waiting.cwd, branch: waiting.branch, ports: waiting.ports, needsInput: waiting.needsInput, running: waiting.running },
+      sleeping: { running: sleeping.running, needsInput: sleeping.needsInput },
+      kept: ctx.terminals.find(WORKSPACE, opened.session).cwd,
+    }).toEqual({
+      waiting: { cwd: repo, branch: 'feature/rows', ports: [port], needsInput: true, running: null },
+      sleeping: { running: 'sleep', needsInput: false },
+      kept: repo,
+    });
+  });
 
   test("a pane's detach keeps the shell and its newest output; the next open resumes that shell and shows it first", async () => {
     const { ctx } = context();

@@ -132,10 +132,13 @@ function machineLabel(machine: Machine, exec: ExecutorInfo | undefined): string 
 }
 
 /** A PC's state is the account's first: offline, or connected without this workspace's grant. */
-function machineStatus(machine: Machine, exec: ExecutorInfo | undefined): StatusReading {
+function machineStatus(machine: Machine, exec: ExecutorInfo | undefined, seen: { waiting: boolean }): StatusReading {
   if (machine.device !== null && !machine.device.connected) return { word: "Offline", tone: "off" };
 
   if (machine.device !== null && !machine.device.granted) return { word: "No access", tone: "attention" };
+
+  // A PC's program waiting for an answer reads as the computer's does (1019-aa).
+  if (seen.waiting) return { word: "Needs input", tone: "attention" };
 
   return statusOf(machine.mount, exec);
 }
@@ -175,6 +178,11 @@ function computerStatus(mount: EnvironmentInfo, exec: ExecutorInfo | undefined, 
   return statusOf(mount, exec);
 }
 
+/** A machine one of whose sessions waits for an answer. */
+function sessionWaits(read: MachineSessions): boolean {
+  return read.sessions?.some((session) => session.needsInput) === true;
+}
+
 function Dot({ tone }: { tone: Tone }) {
   return <span aria-hidden className="p-env-dot" data-tone={tone} />;
 }
@@ -209,9 +217,16 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
 
   const selectedMachine = environments.find((m) => m.key === selected) ?? defaultMachine;
   const computerLive = environments.some((m) => m.key === "computer" && m.mount.live);
-  // The computer's sessions are read while they are on screen: its tabs, or the wide column's list.
+  // The computer's sessions are read while they are on screen: its tabs, or the wide column's list. A PC's are read
+  // while it is chosen and this workspace holds it (1019-aa); either one's waiting session marks its machine.
   const sessions = useMachineSessions(rpc, computerLive && (wide || selectedMachine?.key === "computer"), null);
-  const waiting = new Set(sessions.sessions?.some((session) => session.needsInput) === true ? ["computer"] : []);
+  const chosenDevice = selectedMachine?.device ?? null;
+  const pcSessions = useMachineSessions(rpc, chosenDevice !== null && chosenDevice.connected && chosenDevice.granted, chosenDevice?.id ?? null);
+
+  const waiting = new Set([
+    ...(sessionWaits(sessions) ? ["computer"] : []),
+    ...(chosenDevice !== null && selectedMachine !== null && sessionWaits(pcSessions) ? [selectedMachine.key] : []),
+  ]);
 
   const choose = (machine: string, tab?: string) => {
     setSelected(machine);
@@ -248,7 +263,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
           executorOutputs={executorOutputs}
           onExecute={onExecute}
           onOpenFiles={onOpenFiles}
-          sessions={sessions}
+          sessions={chosenDevice === null ? sessions : pcSessions}
           shown={shown}
           wide={wide}
           machineRow={machineRow}
@@ -322,7 +337,7 @@ function MachineRow({ environments, execByName, selected, chosen, onSelect, onCo
         const exec = execByName.get(m.mount.name);
         const { Icon: KindIcon, about } = environmentOf(m.mount.name);
         const active = selected === m.key;
-        const status = active && chosen !== null ? chosen.status : machineStatus(m, exec);
+        const status = active && chosen !== null ? chosen.status : machineStatus(m, exec, { waiting: waiting.has(m.key) });
 
         return (
           <div key={m.key} data-env-card={m.mount.name} className="min-w-0">
@@ -362,6 +377,7 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
   executorOutputs: Map<string, ExecutorOutput[]>;
   onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
   onOpenFiles: (root: string) => void;
+  /** The computer's sessions, or the chosen PC's. */
   sessions: MachineSessions;
   shown: Shown;
   wide: boolean;
@@ -373,10 +389,11 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
   const size = useComputerSize(rpc, computer && mount.live);
   const name = machineLabel(machine, exec);
   const restarting = computer && size.pending === "resize";
-  const machineSessions = useChosenSessions(rpc, machine, sessions);
+  // The computer's sessions or the chosen PC's, read above for the machine row's marks too; another machine has one shell.
+  const machineSessions = computer || device !== null ? sessions : null;
   const listed = sessions.sessions ?? [];
   const seen = { waiting: listed.some((session) => session.needsInput), awake: listed.some((session) => session.open) };
-  const status = computer ? computerStatus(mount, exec, size, seen) : machineStatus(machine, exec);
+  const status = computer ? computerStatus(mount, exec, size, seen) : machineStatus(machine, exec, { waiting: device !== null && seen.waiting });
 
   return (
     <section aria-label={name} className="flex min-h-0 flex-1 flex-col">
@@ -475,17 +492,6 @@ function EnvironmentView({ mount, machineKey, device, exec, name, workspace, des
       trailing={wide && sessions !== null ? <SplitToggle sessions={sessions} shown={shown} showing={id} /> : null} />);
 
   return <>{tabs}<MachinePanes showing={showing} sessions={sessions} pane={pane} /></>;
-}
-
-/** The chosen machine's sessions: the computer's (read above, for the wide column too), or a PC's (1014-t), read while it
- *  is chosen and this workspace holds it. */
-function useChosenSessions(rpc: WorkspaceRpc, machine: Machine, computerSessions: MachineSessions): MachineSessions | null {
-  const { device } = machine;
-  const pc = useMachineSessions(rpc, device !== null && device.connected && device.granted, device?.id ?? null);
-
-  if (machine.mount.name === "computer") return computerSessions;
-
-  return device === null ? null : pc;
 }
 
 /** The tab a machine shows: the one chosen, or its first session where its list lacks the chosen one (a closed
