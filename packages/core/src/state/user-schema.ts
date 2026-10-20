@@ -325,7 +325,7 @@ export function initUserTables(sql: SqlExec): void {
   // carries `ticket_hash`'s ticket, which claims it on a machine with no session; `workspace` is the one whose
   // Environment issued it, which the device is granted on registering.
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS device_joins ( /* regenerable cache, refilled by the device's next join: each row a ticket of 30 minutes */
+    CREATE TABLE IF NOT EXISTS device_joins ( /* refilled by the device's next join: each row a ticket of 30 minutes */
       device_id   TEXT PRIMARY KEY,
       ticket_hash TEXT NOT NULL UNIQUE,
       workspace   TEXT,
@@ -349,7 +349,7 @@ export function initUserTables(sql: SqlExec): void {
   // The pushed overview is the one source; `activity` and `decisions` are stored derivations of it, read by the roster's
   // counts, and the JSON goes last so a count never reads it.
   sql.exec(`
-    CREATE TABLE IF NOT EXISTS workspace_overviews ( /* regenerable cache, refilled by each workspace's overview push (user/workspaces.ts) */
+    CREATE TABLE IF NOT EXISTS workspace_overviews ( /* refilled by each workspace's overview push (user/workspaces.ts) */
       name       TEXT PRIMARY KEY,
       activity   TEXT GENERATED ALWAYS AS (json_extract(overview, '$.activity')) STORED
                    CHECK (activity IN ('working', 'unfinished', 'idle')),

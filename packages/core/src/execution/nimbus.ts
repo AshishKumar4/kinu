@@ -15,7 +15,10 @@ import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-r
 import { shellQuote } from '../utils/shell';
 import { principalExecId } from './secrets-caller';
 import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
-import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
+import { attempt, detach, hold, KinuError, logged, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
+import { Cause, Effect, Exit } from 'effect';
+import { newJobId, type AdoptsJobs } from '../types/jobs';
+import { currentWorkMode } from './work-mode';
 import { parseInput, type JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SessionExecOptions, SessionPort, SessionStartResult } from '@nimbus-sh/core/runtime/session-protocol.js';
@@ -36,7 +39,8 @@ export type NimbusExecResult = ExecOutput;
 
 export type NimbusPortInfo = SessionPort;
 
-/** `startProcess` result: the process is still running, so no exit code or output; read `logs`, stop via `stopProcess`. */
+/** `startProcess` result: the process is still running, so no exit code or output; read `logs`, stop via `stopProcess`,
+ *  and await its end with `processes.whenEnded`. */
 export type NimbusStartResult = SessionStartResult;
 
 /** A remote session's file plane as Kinu reads it: the SDK's `NimbusSandbox.files`. `as(cred)` binds it to one identity. */
@@ -59,6 +63,8 @@ export interface NimbusSandboxHandle {
     list?(): Promise<JsonValue | undefined>;
     kill?(pid: number): Promise<JsonValue | undefined>;
     logs?(pid: number, options?: { lines?: number; bytes?: number }): Promise<JsonValue | undefined>;
+    /** Its exit code once it leaves `running`, however it leaves (Nimbus's `SessionProcessSupervisor.whenEnded`). */
+    whenEnded?(pid: number): Promise<number>;
   };
   ports?: {
     expose?(port: number): Promise<{ port: number; url?: string; route: PreviewRouteCheck; pid?: number | null; capability?: string | null }>;
@@ -74,6 +80,8 @@ export interface NimbusSandboxHandle {
 
 export interface NimbusSessionOpts {
   box: NimbusSandboxHandle;
+  /** The actor's jobs: each process `startProcess` starts is one of them. */
+  jobs: AdoptsJobs;
   /** Whether session ports can be published as preview URLs; false when the backend's preview origin is unconfigured. */
   inboundNetwork?: boolean;
   /** Whether interpreter runtimes (python, ruby, clang) can be installed; gates declaring `python`/`native_binary`. */
@@ -116,6 +124,7 @@ function stringifyResult(input: { value: unknown }): string {
 interface NimbusReach {
   readonly box: NimbusSandboxHandle;
   readonly touch: <T>(fn: () => Promise<T>) => Promise<T>;
+  readonly jobs: NimbusSessionOpts['jobs'];
 }
 
 /** A process id as `startProcess` answers it: the Nimbus pid, as text. */
@@ -130,28 +139,106 @@ const KilledSchema = v.object({ ok: v.boolean() });
 
 const LoggedSchema = v.object({ text: v.string() });
 
-/** `workspace.startProcess`. */
-function startProcessMember({ box, touch }: NimbusReach): ExecutorTool {
-  return commandTool('Start a background process in Nimbus; returns while it is still running.', (args) => {
-    const startProcess = box.startProcess;
+/** A process started as a job's: its id, its end, and how to stop it. */
+export interface JobProcess {
+  readonly processId: string;
+  readonly ended: Promise<{ readonly processId: string; readonly exitCode: number }>;
+  readonly stopping: Effect.Effect<void>;
+}
 
-    if (!startProcess) return { refused: handleLacks('startProcess') };
+/** The box's process start and end, or the refusal that says which it lacks. */
+function processControl(box: NimbusSandboxHandle) {
+  const startProcess = box.startProcess;
+  const processes = box.processes;
+
+  if (!startProcess) return handleLacks('startProcess');
+
+  if (!processes?.whenEnded || !processes.kill) return handleLacks("a process's end");
+
+  // Bound here: binding keeps `this`.
+  return { startProcess, whenEnded: processes.whenEnded.bind(processes), kill: processes.kill.bind(processes) };
+}
+
+/**
+ * `command` started as job `jobId`'s process, carrying the job's id as its exec id as a job's commands do, so a port it
+ * serves is its job's. The member's start, and a retry's (`processRetryTool`).
+ */
+export async function startJobProcess(
+  box: NimbusSandboxHandle,
+  request: { readonly command: string; readonly cwd?: string; readonly jobId: string },
+  touch: <T>(fn: () => Promise<T>) => Promise<T> = (fn) => fn(),
+): Promise<JobProcess | Refusal> {
+  const control = processControl(box);
+
+  if ('success' in control) return control;
+  const { command, cwd, jobId } = request;
+  let pid: number;
+
+  try {
+    pid = (await touch(() => control.startProcess(command, { ...(cwd !== undefined && { cwd }), execId: principalExecId(jobId) }))).pid;
+  } catch (err) {
+    return refusalOf(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
+  }
+
+  const processId = String(pid);
+
+  return {
+    processId,
+    ended: control.whenEnded(pid).then((exitCode) => ({ processId, exitCode })),
+    stopping: logged('nimbus.process_stop_failed', { doing: `stopping process ${processId}`, otherwise: 'io' }, async () => {
+      await touch(() => control.kill(pid));
+    }, { processId }),
+  };
+}
+
+/**
+ * `workspace.startProcess`: the process is a job of the actor's from its start, held and told of as a call that outran
+ * its window is: the job keeps the workspace awake while the process runs, and its end, or a restart that lost it, wakes
+ * the actor. A process no job took is stopped.
+ */
+function startProcessMember({ box, touch, jobs }: NimbusReach): ExecutorTool {
+  return commandTool('Start a background process in Nimbus as a job; returns while it is still running.', (args) => {
+    const control = processControl(box);
+
+    if ('success' in control) return { refused: control };
     const command = parseInput(StringSchema, { value: args[0] });
 
     if (command === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus startProcess: command must be a string')) };
     const options = parseInput(StartOptionsSchema, { value: args[1] });
 
     if (options === undefined) return { refused: refusalOf(new KinuError('bad_input', 'nimbus startProcess: its options are `{ cwd? }`')) };
+    const doing = `nimbus startProcess \`${command}\``;
+    const where = options.cwd === undefined ? {} : { cwd: options.cwd };
 
     // Nimbus starts it in the home unless told a directory, and takes no named shell from an agent.
     return {
-      call: { text: command, ...(options.cwd !== undefined && { cwd: options.cwd }), context: {} },
+      call: { text: command, ...where, context: {} },
       run: async () => {
-        try {
-          return { processId: String((await touch(() => startProcess(command, options))).pid) };
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
-        }
+        // Its job's id before it starts, which the process carries.
+        const jobId = newJobId();
+        const started = await startJobProcess(box, { command, ...where, jobId }, touch);
+
+        if ('success' in started) return started;
+        const { processId, ended, stopping } = started;
+        const controller = new AbortController();
+
+        // A cancelled job, or one its actor's retirement stopped, ends its process.
+        controller.signal.addEventListener('abort', () => { detach(stopping); }, { once: true });
+
+        const adopting = attempt({ doing: `${doing}: holding the process as a job`, otherwise: 'io' }, () => jobs.adopt({
+          jobId, kind: 'startProcess', mode: currentWorkMode(), controller, promise: ended,
+          input: options.cwd === undefined ? { command, processId } : { command, cwd: options.cwd, processId },
+        }));
+
+        // A process no job took is stopped: none runs outside its actor's jobs. It ran, so its refusal is `cancelled`, which
+        // spends an approval (`CODE_WORK_DID_NOT_START`).
+        const adopted = await hold(Effect.onExit(adopting, (exit) => (Exit.isSuccess(exit) && exit.value.detached ? Effect.void : stopping)));
+
+        const stopped = (why: string) => refusalOf(new KinuError('cancelled', `${doing}: ${why}, so the process was stopped`));
+
+        if (Exit.isFailure(adopted)) return stopped(`no job took it (${renderThrownChain({ cause: Cause.squash(adopted.cause) })})`);
+
+        return adopted.value.detached ? { processId, jobId: adopted.value.jobId } : stopped(adopted.value.reason);
       },
     };
   });
@@ -273,7 +360,7 @@ export function nimbusSession(opts: NimbusSessionOpts) {
     }
   };
 
-  const nimbus: NimbusReach = { box, touch };
+  const nimbus: NimbusReach = { box, touch, jobs: opts.jobs };
 
   const tools: ExecutorProvider['tools'] = {
     startProcess: startProcessMember(nimbus),

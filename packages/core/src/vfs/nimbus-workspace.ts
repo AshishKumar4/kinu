@@ -370,9 +370,14 @@ export interface WorkspaceGeneration {
   readonly table: typeof GENERATION_TABLE;
 }
 
+/** Made on a hosted workspace's first use; a repair's trial reads its shape from here too. */
+export function initWorkspaceGenerationTable(sql: SqlDatabase): void {
+  sql.exec(`CREATE TABLE IF NOT EXISTS ${GENERATION_TABLE} (id INTEGER PRIMARY KEY, value INTEGER NOT NULL)`);
+}
+
 /** The generation counter as a single SQLite row, so it survives eviction and restarts. */
 export function workspaceGenerationStorage(sql: SqlDatabase): WorkspaceGeneration {
-  sql.exec(`CREATE TABLE IF NOT EXISTS ${GENERATION_TABLE} (id INTEGER PRIMARY KEY, value INTEGER NOT NULL)`);
+  initWorkspaceGenerationTable(sql);
 
   return { table: GENERATION_TABLE };
 }

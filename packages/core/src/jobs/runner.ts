@@ -8,10 +8,10 @@ import { every, REAL_CLOCK, type Clock } from '../types/clock';
 import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob, type JobResume } from './store';
 import { JobOutputFeeds, type JobOutputFrame } from './live-output';
-import { nanoid } from '../utils/nanoid';
 import { runWorkModeInvocation } from '../execution/work-mode';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import type { WorkMode } from '../types/turn';
+import { newJobId, type JobAdoption } from '../types/jobs';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { attempt as attempted, classify, diagnostics, hold, renderThrownChain, toKinuError } from '../obs/index';
@@ -111,17 +111,11 @@ export interface BackgroundRetryRequest {
   readonly controller: AbortController;
 }
 
-interface DetachRequest {
-  readonly kind: string;
-  readonly input: JsonValue;
-  readonly mode: WorkMode;
-  readonly controller: AbortController;
-  readonly promise: Promise<unknown>;
+/** Running work a job takes over (`adopt`): a call that outran its window, or a process started as one. */
+interface DetachRequest extends Omit<JobAdoption, 'jobId'> {
+  /** The id it was started under; absent, one is minted. */
+  readonly jobId?: string;
   readonly ownership?: DeviceRequestOwnership;
-}
-
-export function newJobId(): string {
-  return `bgjob-${nanoid()}`;
 }
 
 export interface BackgroundJobRunnerDeps {
@@ -181,7 +175,7 @@ function describeJobInput(kind: string, input: JsonValue): string | undefined {
     }
   }
 
-  if (kind === 'shell') {
+  if (kind === 'shell' || kind === 'startProcess') {
     const parsed = v.safeParse(RunJobInputSchema, input);
 
     if (parsed.success) {
@@ -340,7 +334,7 @@ export class BackgroundJobRunner {
       thresholdMs: this.policy.detachAfterMs,
       clock: this.deps.clock ?? REAL_CLOCK,
       onThreshold: async (kind, promise) =>
-        await this.onThreshold({ kind, input, mode, controller, promise, ownership }),
+        await this.adopt({ kind, input, mode, controller, promise, ...(ownership !== undefined && { jobId: ownership.jobId, ownership }) }),
       released: (release) => {
         this.releasable.add(release);
 
@@ -365,7 +359,11 @@ export class BackgroundJobRunner {
     return true;
   }
 
-  private async onThreshold(request: DetachRequest): Promise<DetachOutcome> {
+  /**
+   * Running work made a job: a call its window moved, or a process `workspace.startProcess` started, which is one from
+   * its start. Past the cap it is refused, and the work stays its caller's.
+   */
+  async adopt(request: DetachRequest): Promise<DetachOutcome> {
     const { kind, input, mode, controller, promise, ownership } = request;
     const running = this.liveDetachedCount();
 
@@ -375,7 +373,7 @@ export class BackgroundJobRunner {
       return { detached: false, reason: 'too many jobs already running' };
     }
 
-    const jobId = this.createJob(ownership?.jobId ?? newJobId(), { kind, input, mode, controller });
+    const jobId = this.createJob(request.jobId ?? newJobId(), { kind, input, mode, controller });
     this.deps.logActivity?.('bg_job_started', `${kind} -> ${jobId}`);
     // In the detaching request's trace, so a call cancelled after its job took it over can be joined to the job.
     diagnostics.event('jobs.detached', { jobId, kind });

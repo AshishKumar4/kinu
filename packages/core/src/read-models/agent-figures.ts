@@ -137,7 +137,7 @@ export function initAgentFiguresTable(execRaw: RawSqlExec): void {
     figures  TEXT NOT NULL
   )`);
   // An agent's own totals as its last read left them, and the newest of its run events they include.
-  execRaw(`CREATE TABLE IF NOT EXISTS agent_figure_folds (
+  execRaw(`CREATE TABLE IF NOT EXISTS agent_figure_folds ( /* derived from run_events: through is a rowid of its */
     actor_id TEXT PRIMARY KEY,
     through  INTEGER NOT NULL,
     totals   TEXT NOT NULL

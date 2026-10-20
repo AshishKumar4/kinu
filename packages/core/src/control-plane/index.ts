@@ -80,6 +80,7 @@ export {
   FLEET_PROBE_PREFIX,
   sampleFleet,
   settleFleet,
+  initSignalStreaksTable,
   type FleetEnv,
 } from './fleet-alerts';
 

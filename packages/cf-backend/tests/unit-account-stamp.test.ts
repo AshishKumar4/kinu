@@ -1,8 +1,7 @@
-// An account a release left behind is repaired as its object starts, before any call reads it: its stale tables
-// rebuilt keeping their rows, a pending join (a regenerable ticket) made anew, its retired tables dropped, and it is
-// stamped and serves (core state/schema-repair.ts). One
-// whose repair refuses answers every call with SQLite's reason, and its tables stay as they were. One its class never
-// made is made and stamped as it starts.
+// An account a release left behind is reset as its object starts, before any call reads it: each changed table is
+// dropped and made anew empty, its retired tables dropped, every other table kept, and it is stamped and serves (core
+// state/schema-repair.ts). One whose reset refuses answers every call with SQLite's reason, and its tables stay as they
+// were. One its class never made is made and stamped as it starts.
 import { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import { opsCaller, SCHEMA_STAMPS } from '@kinu.run/core';
@@ -39,7 +38,7 @@ async function leftBehind() {
   return { storage, owner };
 }
 
-test('an account behind this build is repaired as it starts, keeping its rows, and serves', async () => {
+test('an account behind this build is reset as it starts: its changed tables made anew empty, the rest kept, and serves', async () => {
   const { storage, owner } = await leftBehind();
   const behind = createTestUserDO({ storage });
 
@@ -49,37 +48,36 @@ test('an account behind this build is repaired as it starts, keeping its rows, a
 
     const answer = await behind.userDO.opsTables(await ops());
 
-    expect({ rebuilt: answer.repair?.rebuilt, refilled: answer.repair?.refilled, retired: answer.repair?.retired, refused: answer.refused })
-      .toEqual({ rebuilt: ['user_share_cards'], refilled: ['device_joins'], retired: ['user_peer_grants'], refused: null });
-    // The card is kept, received before the column was, so it reads as seen.
-    expect(storage.query('SELECT share_id, received_at FROM user_share_cards').all()).toEqual([{ share_id: 's-1', received_at: 0 }]);
+    expect({ dropped: answer.repair?.dropped, retired: answer.repair?.retired, refused: answer.refused })
+      .toEqual({ dropped: ['device_joins', 'user_share_cards'], retired: ['user_peer_grants'], refused: null });
+    expect(storage.query('SELECT COUNT(*) AS n FROM user_share_cards UNION ALL SELECT COUNT(*) FROM device_joins').all()).toEqual([{ n: 0 }, { n: 0 }]);
     expect(answer.census.find(({ table }) => table === 'user_profile')?.rows).toBe(1);
   } finally {
     behind.close();
   }
 });
 
-test('an account whose repair refuses answers every call with why, and keeps its tables as they were', async () => {
+test('an account whose init cannot run over what it holds answers every call with why, and keeps its tables', async () => {
   const { storage, owner } = await leftBehind();
 
-  // A table whose rows the build's shape cannot take: a NOT NULL column with no default and no source.
-  storage.exec('DROP TABLE cli_agent_connect_tickets');
-  storage.exec("CREATE TABLE cli_agent_connect_tickets (ticket_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL); INSERT INTO cli_agent_connect_tickets VALUES ('t', 1)");
+  // A table holding the name of an index the init makes: no reset can run the init, so it refuses.
+  storage.exec('DROP INDEX idx_cli_agent_connect_tickets_exp; CREATE TABLE idx_cli_agent_connect_tickets_exp (id TEXT)');
+  storage.exec("DROP TABLE cli_agent_connect_tickets; CREATE TABLE cli_agent_connect_tickets (ticket_hash TEXT PRIMARY KEY); INSERT INTO cli_agent_connect_tickets VALUES ('t')");
   const refused = createTestUserDO({ storage });
 
   try {
-    await expect(refused.userDO.getProfile(owner)).rejects.toThrow('NOT NULL constraint failed: cli_agent_connect_tickets.user_id');
+    await expect(refused.userDO.getProfile(owner)).rejects.toThrow('idx_cli_agent_connect_tickets_exp');
     // A socket or request is refused as a call is.
     expect((await refused.userDO.fetch(new Request('https://user/devices/connect'))).status).toBe(503);
     expect(kvOf(storage).get('kinu.schema_stamp')).toBe(1);
     expect(storage.query('SELECT ticket_hash FROM cli_agent_connect_tickets').all()).toEqual([{ ticket_hash: 't' }]);
-    expect((await refused.userDO.opsTables(await ops())).refused).toContain('cli_agent_connect_tickets');
+    expect((await refused.userDO.opsTables(await ops())).refused).toContain('idx_cli_agent_connect_tickets_exp');
   } finally {
     refused.close();
   }
 });
 
-test('the builtin sign-in directory repairs its own tables as production made them, keeping every passkey', async () => {
+test('the builtin sign-in directory drops its changed passkeys table as production made it, and the account stays', async () => {
   const storage = new Database(':memory:');
 
   createTestUserDO({ storage }).close();
@@ -91,8 +89,8 @@ test('the builtin sign-in directory repairs its own tables as production made th
   const directory = createTestUserDO({ storage });
 
   try {
-    expect((await directory.userDO.opsTables(await ops())).repair?.rebuilt).toContain('builtin_passkeys');
-    expect(storage.query('SELECT credential_id, counter FROM builtin_passkeys').all()).toEqual([{ credential_id: 'cred', counter: 3 }]);
+    expect((await directory.userDO.opsTables(await ops())).repair?.dropped).toContain('builtin_passkeys');
+    expect(storage.query('SELECT COUNT(*) AS n FROM builtin_passkeys').all()).toEqual([{ n: 0 }]);
     storage.exec("INSERT INTO builtin_passkeys (credential_id, user_id, public_key, counter) VALUES ('cred-2', 'u-1', 'key', 0)");
   } finally {
     directory.close();

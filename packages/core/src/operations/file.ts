@@ -1,4 +1,4 @@
-/** The workspace's files: read, edit, write, list, stat and search. */
+/** The workspace's files: read, edit, write, list, stat, search, and which machine a path is on. */
 import * as v from 'valibot';
 import { ImageCarrierSchema } from '../types/tool-images';
 import { described, namespace } from './operation';
@@ -87,5 +87,14 @@ export const FILE = {
     impact: 'observe',
     input: v.strictObject({ path: Path, query: v.pipe(v.string(), v.nonEmpty()) }),
     output: v.strictObject({ path: v.string(), matches: v.array(v.strictObject({ line: v.number(), text: v.string() })), truncated: Truncated }),
+  }),
+  machine: fileOp({
+    name: 'machine',
+    help: 'Which machine a path is on, and the path there: a command whose cwd it is runs on that machine.',
+    impact: 'observe',
+    input: v.strictObject({ path: Path }),
+    output: v.strictObject({
+      machine: v.picklist(['workspace', 'computer', 'device']), device: v.optional(described(v.string(), 'Which device, on `device`.')), path: v.string(),
+    }),
   }),
 } as const;

@@ -50,12 +50,19 @@ export function mailAddressOf(username: string, path: string, domain: string): s
 /**
  * A name as an address label: lowercased, `.` and `_` (and anything else a label cannot hold) turned into `-`, cut
  * to 20 characters, with no hyphen at either end. Null when nothing usable is left. The caller makes it unique per
- * person (`-2`, `-3`, …) against the labels it already holds.
+ * person against the labels it already holds (`mailLabelNumbered`).
  */
 export function mailLabelOf(name: string): string | null {
   const label = name.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-+/u, '').slice(0, 20).replace(/-+$/u, '');
 
   return LABEL.test(label) ? label : null;
+}
+
+/** `label` numbered `n` (`-2`, `-3`, …) to tell it from one it clashes with, inside a label's 20 characters. */
+export function mailLabelNumbered(label: string, n: number): string {
+  const suffix = `-${String(n)}`;
+
+  return `${label.slice(0, 20 - suffix.length).replace(/-+$/u, '')}${suffix}`;
 }
 
 /** Usernames no account may have: the mailbox names mail systems and people expect to reach a deployment's operator. */

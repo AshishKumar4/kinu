@@ -406,7 +406,8 @@ export function hostedRetryTools(seams: HostedActorSeams, reference: ActorRefere
       text: '',
     }));
 
-    return surface.raw;
+    // A process job runs again as `processRetryTool`, under the kind its job was given.
+    return { ...surface.raw, startProcess: actor.runtime.processRetry };
   }));
 }
 
