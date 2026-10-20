@@ -1,6 +1,7 @@
 /** A stored tool is filtered by effective score, handed to the program as its source, compiled in the program's own
  *  scope and invoked as `tools.<name>`; each backend's program runner is tested in that backend. */
 
+import { markCraftBroken } from '../src/craft/preference';
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { createTestRuntime, conversationsFor, actorJobsFor } from './helpers';
@@ -60,12 +61,10 @@ describe('crafted-tool execution integration', () => {
     for (const [name, code] of [
       ['healthy', '  async () => 1  '], ['shell', 'async () => 2'],
       ['mcp_shadow', 'async () => 3'], ['empty', '   '], ['comment', '  // disabled'],
-      ['retired', 'async () => 4'],
     ] as const) {
       rt.craftStore.create({ name, code, description: '' });
     }
 
-    void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'retired'`;
     const crafted = capturedSurface(rt)().craftedTools();
 
     expect(crafted).toEqual(selectInjectableCraftedTools(rt.craftStore, rt.storage.sql));
@@ -144,11 +143,15 @@ describe('crafted-tool execution integration', () => {
     expect(await execute({ code: 'return await tools.identity(2);' })).toEqual({ result: 3 });
   });
 
-  test('low-scoring tools never reach the program', () => {
+  test('a broken tool still reaches the program, its description naming its last raise', () => {
     const { rt } = createTestRuntime();
     rt.craftStore.create({ name: 'noisy', description: 'noisy', code: 'async () => "nope"' });
-    void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'noisy'`;
+    markCraftBroken(rt.storage.sql, 'noisy', 'TypeError: x is undefined');
 
-    expect(capturedSurface(rt)().craftedTools()).toEqual([]);
+    expect(capturedSurface(rt)().craftedTools()).toEqual([{
+      name: 'noisy', code: 'async () => "nope"',
+      description: 'noisy Broken: its last call raised "TypeError: x is undefined". Rewrite it with `workspace.createTool`, '
+        + 'or retire it with `workspace.retireTool`.',
+    }]);
   });
 });

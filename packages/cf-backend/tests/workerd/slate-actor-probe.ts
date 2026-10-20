@@ -2,6 +2,7 @@
  * Hosted Plan/eval probe: crafted-tool declarations are re-read, not cached,
  * and `plan` mode is refused at the seam `build` is admitted at.
  */
+import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { Effect } from 'effect';
 import { Agent } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
@@ -86,7 +87,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     files.mkdir('/slates/crafted', { recursive: true });
     files.writeFile('/slates/crafted/package.json', JSON.stringify({ main: 'server.ts' }));
     const sql = bindAgentSql(this);
-    this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS crafted_tools(name TEXT, score REAL, last_used_at INTEGER)');
+    initCraftedToolsTables(sql);
     initAgentDataTables((statement) => { this.ctx.storage.sql.exec(statement); });
     initSlateBuildTable((statement) => { this.ctx.storage.sql.exec(statement); });
 

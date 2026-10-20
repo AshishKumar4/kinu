@@ -40,6 +40,7 @@ export interface EvolutionLanesDeps {
     | 'deferTurnReview'
     | 'runDeferredTurnReviews'
     | 'onSessionComplete'
+    | 'countCraftOffers'
   >;
   /** Absent: no governor wired. Present-but-unscoped is the normal uncapped turn. */
   budget?: MissionGovernor;
@@ -143,7 +144,8 @@ export class EvolutionLanes {
 
     // The append carries the review obligation; never dispatch inline here, or an eviction loses it and a
     // replay runs it twice.
-    const appendOpts = { awaitsFollowup, id: opts?.id };
+    // Its offers are facts about the turn, counted with its record, so a rating that fails cannot lose them.
+    const appendOpts = { awaitsFollowup, id: opts?.id, recorded: () => { this.lanes.engine.countCraftOffers(scoped); } };
     this.window.append(
       scoped,
       opts?.recordedAt === undefined ? appendOpts : { ...appendOpts, now: opts.recordedAt },

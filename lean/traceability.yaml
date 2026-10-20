@@ -100,7 +100,6 @@ requirements:
       - Kinu.Evolution.FullCraftLifecycle.consolidation_nonincreasing
       - Kinu.Evolution.FullCraftLifecycle.remove_nonincreasing
       - Kinu.Evolution.FullCraftLifecycle.full_lifecycle_nonempty
-      - Kinu.Evolution.FullCraftLifecycle.ema_nonneg
       - Kinu.Evolution.FullCraftLifecycle.below_threshold_filtered
       - Kinu.Evolution.FullCraftLifecycle.pipeline_preserves_nonempty
     tsRefs:
@@ -112,20 +111,9 @@ requirements:
       - packages/core/src/evolution/engine.ts#EvolutionEngine.runDeferredTurnReviews
       - packages/core/src/craft/conflict.ts#checkConflictsBeforeAdding
     remainingEvidence:
-      - The list models omit SQL persistence details, score decay, and the real craft retirement policy
+      - The list models omit SQL persistence details, the preference counters, and the real craft retirement policy
       - Production extraction has conflict and misevolution vetoes plus create-versus-update behavior absent from the prepend-only model
       - WP-F4 differential fixtures for extraction and consolidation behavior
-  PR-EVOL-003:
-    statement: The scaled-natural EMA model remains bounded when both abstract inputs are at most one thousand.
-    status: proved-in-abstract-model
-    theorems:
-      - Kinu.Evolution.FullCraftLifecycle.ema_bounded
-      - Kinu.Evolution.FullCraftLifecycle.ema_stays_bounded
-    tsRefs:
-      - packages/core/src/craft/ema.ts#updateCraftScores
-    remainingEvidence:
-      - The TypeScript uses configurable floating-point arithmetic and unbounded observations rather than this fixed scaled-Nat model
-      - WP-F4 differential fixtures after the production arithmetic is settled
   PR-EXEC-001:
     statement: Every shipped executor, over the inputs its constructor reads, either owns or shares its files as its kind says, never claims docker or gpu, and a workspace with a Nimbus session keeps every workspace capability and gains every Nimbus capability but owned files.
     status: proved-in-abstract-model

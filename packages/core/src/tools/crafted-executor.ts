@@ -3,7 +3,7 @@
 import type { CraftedTool } from '../types/craft';
 import type { CraftStore } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
-import { filterByEffectiveScore } from '../craft/ema';
+import { rankByPreference } from '../craft/preference';
 import { isReservedCraftToolName } from '../craft/in-episode';
 import { holdsNoCode } from '../craft/source';
 import { diagnostics, KinuError } from '../obs/index';
@@ -28,10 +28,11 @@ export function toCraftedToolSource(t: CraftedTool): CraftedToolSource | null {
   return { name: t.name, description: t.description ?? `Crafted tool: ${t.name}`, code };
 }
 
-/** Read failures must reach the caller, never masquerade as an empty tool set. */
-export function selectInjectableCraftedTools(
-  store: Pick<CraftStore, 'list'>, sql: SqlExecutor, minScore?: number,
-): CraftedToolSource[] {
+/**
+ * The crafted tools a turn is offered, best preference first and capped (craft/preference.ts); a broken one says so
+ * in its description. Read failures must reach the caller, never masquerade as an empty tool set.
+ */
+export function selectInjectableCraftedTools(store: Pick<CraftStore, 'list'>, sql: SqlExecutor): CraftedToolSource[] {
   const sources = store.list().flatMap((row) => {
     const source = toCraftedToolSource(row);
 
@@ -48,5 +49,9 @@ export function selectInjectableCraftedTools(
     return [{ ...source, description: craftedToolDescription(source.name, source.description) }];
   });
 
-  return filterByEffectiveScore(sql, sources, minScore);
+  return rankByPreference(sql, sources).map(({ broken, ...source }) => (broken === null ? source : {
+    ...source,
+    description: `${source.description} Broken: its last call raised ${JSON.stringify(broken)}. Rewrite it with `
+      + '`workspace.createTool`, or retire it with `workspace.retireTool`.',
+  }));
 }

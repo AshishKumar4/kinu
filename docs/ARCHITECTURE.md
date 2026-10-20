@@ -494,9 +494,10 @@ Evolution runs on four timescales. The step clock ticks inside one long turn.
 The other three belong to the `EvolutionEngine`
 (`packages/core/src/evolution/engine.ts`):
 
-- In-episode: every settled `eval` call scores crafted-tool fitness into
-  `craft_scores` with one synchronous SQL write and no model call
-  (`packages/core/src/orchestrator/craft-cycle.ts` over `craft/in-episode.ts`).
+- In-episode: every settled `eval` call marks a crafted tool that raised
+  broken, and clears one that returned clean, on its `crafted_tools` row with
+  no model call (`craft/in-episode.ts`). A turn's offers and choices are counted
+  as it is recorded, its rating at its review (`craft/preference.ts`).
 - Turn level: `reviewTurn()` rates the finished turn; a strong one extracts a
   crafted tool into the CraftStore.
 - Session level: `onSessionComplete()` keeps the lifetime cadence and the

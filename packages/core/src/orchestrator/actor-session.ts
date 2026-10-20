@@ -978,8 +978,9 @@ export class ActorSession {
           snapshot: () => {
             const context = this.stepContext(input.dynamic, profile, tools);
 
-            // The turn scores only the lessons it was shown.
+            // The turn scores only the lessons it was shown, and counts only the crafted tools it was offered.
             this.orchestrator.acc.noteLessonsShown(context.toolLessons ?? []);
+            this.orchestrator.acc.noteCraftedOffered(context.craftedTools ?? []);
 
             return context;
           },

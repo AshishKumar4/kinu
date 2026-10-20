@@ -33,15 +33,13 @@ function decide(score: number, corrected: number, wrong: string): DecisionPort {
 }
 
 describe('a turn is judged by the user reply alone', () => {
-  test('a turn nobody answered moves no crafted tool score, however cleanly its tools ran', async () => {
+  test('a turn nobody answered credits no crafted tool, however cleanly its tools ran', async () => {
     const { rt, stores } = createTestRuntime();
     rt.craftStore.create({ name: 'export_report', description: 'exports', code: 'async () => "ok"' });
-    const before = rt.storage.sql<{ score: number }>`SELECT score FROM crafted_tools WHERE name = 'export_report'`[0]?.score;
 
     await new EvolutionEngine(rt, historyTurnPairs(stores.history)).reviewTurn(turn(), null);
 
-    expect(rt.storage.sql<{ score: number }>`SELECT score FROM crafted_tools WHERE name = 'export_report'`[0]?.score)
-      .toBe(before);
+    expect(rt.storage.sql<{ rated: number }>`SELECT rated FROM crafted_tools WHERE name = 'export_report'`[0]?.rated).toBe(0);
   });
 
   test('a reply that corrects the turn is rated low on what went wrong, and leaves the lesson to the dream', async () => {

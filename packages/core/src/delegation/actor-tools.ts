@@ -80,7 +80,7 @@ function craftLedgerOver(rt: Pick<AgentRuntime, 'craftStore' | 'storage'>): Craf
   let opened: CraftLedger | undefined;
   const ledger = (): CraftLedger => (opened ??= createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql }));
 
-  return { names: () => ledger().names(), observe: (names, quality) => ledger().observe(names, quality) };
+  return { names: () => ledger().names(), broke: (name, error) => { ledger().broke(name, error); }, repaired: (names) => { ledger().repaired(names); } };
 }
 
 /**

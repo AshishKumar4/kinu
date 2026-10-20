@@ -29,7 +29,7 @@ import { tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { upsertCraftedTool } from '../craft/conflict';
 import { periodicCraftConsolidation } from '../craft/consolidation';
-import { updateCraftScores } from '../craft/ema';
+import { countCraftOffers, rateCraftedTools } from '../craft/preference';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import type { TurnPairReader } from '../identity/conversation-store';
@@ -71,6 +71,7 @@ const GeneralizedToolSchema = v.object({
 
 import type { AgentConfigStore } from '../config/store';
 import { diagnostics, toKinuError, KinuError } from '../obs/index';
+import { nowMs } from '../utils/date';
 
 
 /** Tombstone scope for one turn's two durable rating writes (`turn_ratings` row
@@ -88,6 +89,13 @@ type EffectiveRating = Pick<TurnRating, 'score' | 'corrected' | 'wrong' | 'sourc
 /** Read-only calls prove nothing about whether the turn's work landed, so the pattern extractor skips them. */
 function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'op'>): boolean {
   return call.name === 'memory' && v.is(v.picklist(['recall', 'search', 'searchConversations', 'readConversation', 'listConversations']), call.op);
+}
+
+/** Chosen means offered and called: a tool the turn made and then called was not offered to it. */
+function chosenCraftedTools(turn: CompletedTurn): string[] {
+  const offered = turn.craftedOffered ?? [];
+
+  return (turn.craftedToolsUsed ?? []).filter((name) => offered.includes(name));
 }
 
 export class EvolutionEngine {
@@ -313,9 +321,6 @@ export class EvolutionEngine {
       return reading === null ? null : { ...reading, source: 'model' };
     };
 
-    // Crafted tools are codemode-only, so they come from the turn record, not from the non-builtin tool names.
-    const craftedToolNames = turn.craftedToolsUsed ?? [];
-
     // One commit for the rating row, craft scores, tombstone and announcement: a synchronous run is atomic
     // inside a Durable Object but not against a CLI kill. Announced last, so a death cannot replay the writes.
     this.commit(() => {
@@ -337,10 +342,8 @@ export class EvolutionEngine {
 
       const rated = effective();
 
-      // A failed EMA write silences the retirement signal, so it is not swallowed.
-      if (rated !== null && craftedToolNames.length > 0) {
-        updateCraftScores(this.rt.storage.sql, craftedToolNames, ratingQuality(rated.score));
-      }
+      // Under the graded tombstone, so a resumed review rates nothing twice.
+      if (rated !== null) rateCraftedTools(this.rt.storage.sql, chosenCraftedTools(turn), rated.score);
 
       if (gradedKey !== null) {
         recordEffectDone(this.rt.storage.sql, this.rt.actor, { scope: TURN_GRADED_SCOPE, key: gradedKey });
@@ -363,7 +366,7 @@ export class EvolutionEngine {
 
       if (patternKey === null
         || !effectAlreadyDone(this.rt.storage.sql, this.rt.actor, TURN_REVIEW_STEP_SCOPE, patternKey)) {
-        await this.extractPattern(turn, ratingQuality(rating.score), patternKey);
+        await this.extractPattern(turn, patternKey);
       }
     }
   }
@@ -572,6 +575,11 @@ export class EvolutionEngine {
   }
 
   /** Lifetime cycle, automatic every N windows. */
+  /** A recorded turn's offers: each crafted tool its declarations offered, and of those each it called. */
+  countCraftOffers(turn: CompletedTurn): void {
+    countCraftOffers(this.rt.storage.sql, { offered: turn.craftedOffered ?? [], chosen: chosenCraftedTools(turn), at: nowMs() });
+  }
+
   async onLifetimeEvolution(): Promise<void> {
     await periodicCraftConsolidation(this.rt);
     this.emit({ type: 'consolidation', message: 'CraftStore consolidation complete' });
@@ -580,7 +588,6 @@ export class EvolutionEngine {
   /** Pure-lookup calls are skipped: they encode no reusable pattern. */
   private async extractPattern(
     turn: CompletedTurn,
-    quality: number,
     /** Written next to the upsert so no await separates the tool from its record. */
     patternKey: string | null,
   ): Promise<void> {
@@ -630,7 +637,6 @@ export class EvolutionEngine {
       name: parsed.output.name,
       description: parsed.output.description ?? '',
       code: parsed.output.code,
-      score: quality,
     });
 
     // One commit for the discovery event, marker and answer retirement, so a kill

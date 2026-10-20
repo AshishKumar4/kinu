@@ -12,17 +12,13 @@ A headless actor runs the step clock and nothing above it. `runHeadInference` (`
 
 The step clock fires on every settled `eval` call, read off the tool-result hook. The hook carries the call's own args, so the code graded is the code that ran. Creation is credited only to a call that itself invoked `workspace.createTool`. Invocation means call sites in the submitted code: `tools.<name>(`, the one namespace a crafted tool answers in. Comments and literal text are blanked first, so a tool body passed to `createTool` is not read as a call.
 
-The fitness signal is execution, observed at the host. A crafted tool that raised is stamped with its own name as the error leaves the sandbox, so the failure lands on the artifact whether or not the model caught it. A call that broke on its own account blames nobody. A completed call credits only tools that already existed when it started, so a tool cannot certify itself on the call that created it. A call moved to the background is not a result and credits nothing.
+Execution is evidence about a tool, never its fitness. A crafted tool that raised is stamped with its own name as the error leaves the sandbox, so the failure lands on the artifact whether or not the model caught it, and the raise marks the tool broken with its error (`crafted_tools.broken`, `markCraftBroken` in `packages/core/src/craft/preference.ts`). Its declaration then reads its description followed by `Broken: its last call raised "<error>". Rewrite it with workspace.createTool, or retire it with workspace.retireTool.`, and it stays callable: the agent decides. A later clean return, or a rewrite through `createTool`, clears the flag. A call that broke on its own account blames nobody. A completed call clears only tools that already existed when it started, so a tool cannot certify itself on the call that created it. A call moved to the background is not a result and clears nothing.
 
-Two gates stand between observation and effect. The misevolution veto runs before each crafted-tool write. The injection floor applies because `workspace.createTool` calls `craftStore.create` (`packages/core/src/tools/inline-executor.ts`) with the `CRAFT_NEUTRAL_PRIOR` quality of `0.5` (`packages/core/src/craft/in-episode.ts`), so an unscored tool cannot bypass the filter. Extracted candidates go through the same store (`upsertCraftedTool`, `packages/core/src/craft/conflict.ts`). Each settled block updates the tool's row in one synchronous SQL statement.
+The misevolution veto runs before each crafted-tool write, `workspace.createTool` (`packages/core/src/tools/inline-executor.ts`) and extracted candidates (`upsertCraftedTool`, `packages/core/src/craft/conflict.ts`) alike. An extracted pattern that conflicts with a tool replaces it only while that tool is broken.
 
-`CRAFT_INVOCATION_QUALITY` maps a returned call to `0.7` and a raised call to `0.1`. The store applies `DEFAULT_CONFIG.craftStore.emaAlpha`, `0.3`. From the neutral `0.5` prior, four raises give `0.196`, below the `0.2` injection floor. One later return lifts that score to `0.347`. These values are policy arithmetic over the constants in `craft/in-episode.ts` and `config.ts`, not a measured success rate.
+Each turn writes at most one `craft_cycle` run event carrying `crafted`, `invoked`, `reused`, `returned`, `raised`, and `broke` (the tools a raise marked broken that turn), with `turn_end` as the denominator. `reused` is the numerator that matters: a tool crafted this turn and called by a later block is the loop closing.
 
-A tool that keeps raising drops out of the callable set for the rest of the episode, because both backends re-read the store per run.
-
-Each turn writes at most one `craft_cycle` run event carrying `crafted`, `invoked`, `reused`, `returned`, `raised`, and `dropped`, with `turn_end` as the denominator. `reused` is the numerator that matters: a tool crafted this turn and called by a later block is the loop closing.
-
-Execution-grounded fitness measures "it ran and did not raise". It never measures "it did the right thing", which needs a verifier the agent did not choose. The sealed bench has one; production does not. So this channel feeds tool injection and nothing with a wider blast radius. No scaffold, prompt, or gate is ever promoted on it. A `--no-auto-evolve` run observes nothing, so a benchmark's arms still mean what they say.
+Execution-grounded evidence measures "it ran and did not raise". It never measures "it did the right thing", which needs a verifier the agent did not choose. The sealed bench has one; production does not. So this channel only marks a tool broken, and never ranks one. No scaffold, prompt, or gate is ever promoted on it. A `--no-auto-evolve` run observes nothing, so a benchmark's arms still mean what they say.
 
 ### The knowledge channel (execution recoveries)
 
@@ -153,7 +149,7 @@ The scaffold lineage is a read model over `scaffold_versions` (`listScaffoldArch
 
 `onLifetimeEvolution()` fires from `onSessionComplete` when the count of closed session windows is a multiple of `lifetimeEvolutionInterval`, which is 5 (`DEFAULT_EVOLUTION_CONFIG`, `core/src/evolution/types.ts`). With a 5-turn window that is every 25 turns. There is no separate manual-trigger RPC.
 
-CraftStore consolidation (`periodicCraftConsolidation`, `core/src/craft/consolidation.ts`) computes `effectiveScore` with the EMA (α = 0.3) and time decay on a 30-day half-life. It retires tools below 0.1 that have been used at least twice. Unscored tools are skipped. The whole pass aborts if it would empty the store: a workspace whose every tool went stale keeps a low-quality toolbox rather than an empty one.
+CraftStore consolidation (`periodicCraftConsolidation`, `core/src/craft/consolidation.ts`) retires each tool offered in at least 50 turns that no turn chose in the last 30 days, with a memory note naming them. The whole pass aborts if it would empty the store: a workspace whose every tool went unchosen keeps it rather than an empty one.
 
 ## Evolution changelog
 
@@ -270,20 +266,20 @@ When a turn ran with any, its rater is asked one more question: does the reply t
 graph LR
     A[Tool call pattern<br/>in conversation] -->|"extractPattern()"| B[LLM generalizes<br/>to reusable function]
     B -->|"upsertCraftedTool()"| C[crafted_tools table<br/>+ FTS5 index]
-    C -->|"filterByEffectiveScore()"| D[Injected into the<br/>eval sandbox]
+    C -->|"rankByPreference()"| D[Offered to the turn,<br/>bound in its sandbox]
     D -->|"Model calls tool"| E[Execute via<br/>the runtime executor]
-    E -->|"Score updated"| F[EMA scoring<br/>craft_scores table]
-    F -->|"periodicCraftConsolidation()"| G{effectiveScore<br/>above threshold?}
-    G -->|Yes| C
-    G -->|No| H[Retired]
+    E -->|"A raise marks it broken; a clean return clears it"| F[crafted_tools.broken]
+    D -->|"Turn recorded"| G[offered, chosen<br/>rated, rating_sum]
+    G -->|"periodicCraftConsolidation()"| H{offered 50 turns,<br/>unchosen 30 days?}
+    H -->|No| C
+    H -->|Yes| I[Retired]
 ```
 
-The scoring constants live in `DEFAULT_CONFIG.craftStore` (`core/src/config.ts`):
+A turn is offered the crafted tools its declarations list: at most 20 (`DEFAULT_CONFIG.craftStore.offeredCap`, `core/src/config.ts`), best preference first (`rankByPreference`, `core/src/craft/preference.ts`), the same set the sandboxes bind. A tool's preference is how often it was chosen when offered, weighted by how the turns that chose it were rated:
 
-- EMA update: `newScore = 0.7 * oldScore + 0.3 * observation`, so α = 0.3.
-- Time decay: `effectiveScore = score * 0.5^(daysSinceLastUse / 30)`.
-- Injection cutoff: `effectiveScore >= 0.2`. Unscored tools pass, which is why `workspace.createTool` seeds the 0.5 neutral prior at creation.
-- Retirement threshold: `effectiveScore < 0.1`, and only after 2 uses.
+- `preference = (chosen + 1) / (offered + 2) × (rating_sum + 1.2) / (rated + 2)`, where `rating_sum` adds rating/5 for each rated turn that chose it. The smoothing reads a tool nothing has offered as chosen once in two offers and rated 3 of 5, so a new tool is not zero.
+- A choice is a call of a tool the turn was offered: a tool made and called in the same turn was not offered to it. A turn's offers are counted as the turn is recorded (`countCraftOffers`, through the window's append), so a rating that fails cannot lose them; its rating is credited at its review (`rateCraftedTools`), under the review's tombstone. A thumb given before the review is the rating credited; a later one moves no tool.
+- The agent can delete a tool itself with `workspace.retireTool(name)`; consolidation retires one no turn chooses, as above.
 
 Extraction happens on an accepted turn (`extractPattern`), with no length gate. `upsertCraftedTool` decides usability by compiling the code the way the runtime will.
 

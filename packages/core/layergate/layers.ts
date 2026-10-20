@@ -1521,7 +1521,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'craft-fitness/turn-usage-is-the-call-site-scan',
         asserts: 'the turn reports as crafted-tool use exactly what the call-site scan saw: an MCP or native tool call contributes nothing, and a run with evolution off reports none',
         observe: async () => {
-          const ledger: CraftLedger = { names: () => ['sum', 'fmt'], observe: () => [] };
+          const ledger: CraftLedger = { names: () => ['sum', 'fmt'], broke: () => {}, repaired: () => {} };
 
           // Only `eval` is observed (`buildActorTools` wraps it alone): any other tool's call contributes nothing.
           const turn = async (

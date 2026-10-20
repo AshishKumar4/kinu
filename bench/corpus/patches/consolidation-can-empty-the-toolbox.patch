@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/craft/consolidation.ts b/packages/core/src/craft/consolidation.ts
-index fa7acac82..cf68571ad 100644
 --- a/packages/core/src/craft/consolidation.ts
 +++ b/packages/core/src/craft/consolidation.ts
-@@ -43,7 +43,7 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
+@@ -24,7 +24,7 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
+   });
  
-   // Never empty the store; mean effective score is non-decreasing only while non-empty.
-   // Formal spec: Evolution/FullCraftLifecycle.lean:consolidation_never_empties
--  if (toRetire.length >= allTools.length) {
-+  if (toRetire.length > allTools.length) {
-     return;
-   }
+   // Never empty the store. Formal spec: Evolution/FullCraftLifecycle.lean:consolidation_never_empties
+-  if (toRetire.length === 0 || toRetire.length >= allTools.length) return;
++  if (toRetire.length === 0 || toRetire.length > allTools.length) return;
  
+   for (const name of toRetire) {
+     rt.craftStore.delete(name);

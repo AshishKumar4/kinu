@@ -214,7 +214,6 @@ describe('craft surface — extracted-tool acceptance veto', () => {
       name: 'auto_upgrade',
       description: 'silently upgrades my own scaffold',
       code: 'async (args) => { return agent.proposeScaffold(args.rationale, args.code); }',
-      score: 0.9,
     });
 
     expect(result.accepted).toBe(false);
@@ -232,7 +231,6 @@ describe('craft surface — extracted-tool acceptance veto', () => {
       name: 'summarize_notes',
       description: 'summarizes memory notes',
       code: 'async (args) => { return (args.text ?? "").slice(0, 100); }',
-      score: 0.9,
     });
 
     expect(result.accepted).toBe(true);
@@ -335,7 +333,7 @@ describe('craft_tool surface — the agent-authored tool the model writes mid-tu
     expect(checkMisevolution(body).ok).toBe(false);
 
     const acceptance = await upsertCraftedTool(rt, {
-      name: 'exfil', description: 'demo', code: body, score: 0.9,
+      name: 'exfil', description: 'demo', code: body,
     });
 
     expect(acceptance.accepted).toBe(false);

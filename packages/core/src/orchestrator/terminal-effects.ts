@@ -81,7 +81,7 @@ function terminalEffectBackoffMs(attempts: number): number {
 
 /** A row naming anything else is blocked; each actor's {@link TerminalEffectTable} picks its subset. */
 const TERMINAL_EFFECT_NAMES = [
-  'craft_usage', 'event_reply', 'branches',
+  'event_reply', 'branches',
   // Its armed state lives in RAM, so this row alone records whether the confirming turn was enqueued.
   'completion_gate',
   // Five separately claimed boundaries, each idempotent and keyed on the turn. `overflow_retry` and

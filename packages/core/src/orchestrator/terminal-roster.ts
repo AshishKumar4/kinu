@@ -104,15 +104,6 @@ export function declareTerminalRoster(
   const durablyAnswered = completed && messageId !== '';
   const owed: OwedEffect[] = [];
 
-  const craftNames = durablyAnswered ? parts.craftedToolsUsed ?? [] : [];
-
-  if (craftNames.length > 0) {
-    owed.push({
-      name: 'craft_usage', scope: messageId, lane: 'inline',
-      input: { messageId, toolNames: [...craftNames] },
-    });
-  }
-
   // One effect per delivery: each closes its own recovery lease.
   if (durablyAnswered && parts.eventReplies) {
     for (const answered of parts.eventReplies.answered) {

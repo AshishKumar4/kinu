@@ -319,15 +319,15 @@ describe('a workspace fork', () => {
     });
 
     await chat.say({ id: 'm1', role: 'user', text: 'hi' });
-    void src.sql`UPDATE crafted_tools SET score = ${0.9}, uses = ${12} WHERE name = ${'doubleIt'}`;
+    void src.sql`UPDATE crafted_tools SET offered = ${30}, chosen = ${12}, rated = ${5}, rating_sum = ${4}, broken = ${'boom'} WHERE name = ${'doubleIt'}`;
 
     const result = await forkInto(src, tgt, { untilMessageId: 'm1' });
 
     expect(result.craftedToolsCopied).toBe(1);
 
-    expect(tgt.sql<{ name: string; code: string; score: number; uses: number }>`
-      SELECT name, code, score, uses FROM crafted_tools`).toEqual([
-      { name: 'doubleIt', code: 'async (n) => n * 2', score: 0.5, uses: 0 },
+    expect(tgt.sql<{ name: string; code: string; offered: number; chosen: number; rated: number; broken: string | null }>`
+      SELECT name, code, offered, chosen, rated, broken FROM crafted_tools`).toEqual([
+      { name: 'doubleIt', code: 'async (n) => n * 2', offered: 0, chosen: 0, rated: 0, broken: null },
     ]);
   });
 

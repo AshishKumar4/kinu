@@ -1,11 +1,10 @@
-/** The in-episode fitness signal, pure half: derived from what the runtime saw; prose mentions are not
- *  calls, and a block that failed on its own account blames nobody. */
+/** In-episode evidence: derived from what the runtime saw; prose mentions are not calls, a block that failed on its
+ *  own account blames nobody, and a stamped raise marks its tool broken until a clean return. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql } from './helpers';
 import {
-  CRAFT_NEUTRAL_PRIOR,
   craftFailureBlame, craftFailureMarker, craftInvocationError, craftInvocationSites,
   createCraftLedger, observeCraftCall, type CraftLedger,
 } from '../src/craft/in-episode';
@@ -70,7 +69,7 @@ describe('craftInvocationSites — what the runtime saw called', () => {
 
 describe('a call is credited with creating a tool only when it asked for one', () => {
   /** The tools a call's program could have created: the store grew by `w` while it ran. */
-  const grown: CraftLedger = { names: () => ['w'], observe: () => [] };
+  const grown: CraftLedger = { names: () => ['w'], broke: () => {}, repaired: () => {} };
 
   const created = (code: string): readonly string[] => observeCraftCall(grown, { code, before: new Set(), result: '{}', failed: false })?.created ?? [];
 
@@ -106,11 +105,11 @@ describe('craftFailureBlame — attribution by stamp only', () => {
   });
 });
 
-/** A call of `name` that raised: its failure names it. What the score retired comes back. */
-function raised(ledger: CraftLedger, name: string): readonly string[] {
-  const failure = craftInvocationError(name, new Error('boom')).message;
+/** A call of `name` that raised: its failure names it. */
+function raised(ledger: CraftLedger, name: string, error = 'boom'): void {
+  const failure = craftInvocationError(name, new Error(error)).message;
 
-  return observeCraftCall(ledger, { code: `await tools.${name}(1)`, before: new Set([name]), result: failure, failed: true })?.dropped ?? [];
+  observeCraftCall(ledger, { code: `await tools.${name}(1)`, before: new Set([name]), result: `Error: ${failure}\n    at program`, failed: true });
 }
 
 function ledgerFixture() {
@@ -134,13 +133,20 @@ describe('the craft ledger — where an in-episode observation lands', () => {
     expect(ledger.names()).toEqual(['summarize']);
   });
 
-  test('names() is the callable set, not the whole store — a retired tool is gone', () => {
+  test('names() is the offered set: best preference first, and no more than 20', () => {
     const { ledger, db } = ledgerFixture();
     const sql = makeSql(db);
-    db.run(`INSERT INTO crafted_tools (name) VALUES ('kept'), ('retired')`);
-    // Column defaults seed the neutral prior; the retired tool's score is set low.
-    void sql`UPDATE crafted_tools SET score = 0.01 WHERE name = 'retired'`;
-    expect(ledger.names()).toEqual(['kept']);
+
+    for (let i = 0; i < 22; i++) db.run(`INSERT INTO crafted_tools (name) VALUES ('t${String(i)}')`);
+    // Chosen in every turn that offered it, in turns rated 5: first. Offered often and never chosen: last, and cut.
+    void sql`UPDATE crafted_tools SET offered = 10, chosen = 10, rated = 10, rating_sum = 10 WHERE name = 't5'`;
+    void sql`UPDATE crafted_tools SET offered = 40 WHERE name IN ('t0', 't1')`;
+
+    const names = ledger.names();
+    expect(names).toHaveLength(20);
+    expect(names[0]).toBe('t5');
+    expect(names).not.toContain('t0');
+    expect(names).not.toContain('t1');
   });
 
   test('a store that cannot answer is a fault, not a runtime with no crafted tools', () => {
@@ -156,64 +162,24 @@ describe('the craft ledger — where an in-episode observation lands', () => {
     expect(() => ledger.names()).toThrow('not initialized');
   });
 
-  test('observations accumulate through the existing EMA, not a parallel score', () => {
+  test('a raise marks the tool broken with its stamped error, and a clean return clears it', () => {
     const { ledger, db } = ledgerFixture();
     db.run(`INSERT INTO crafted_tools (name) VALUES ('summarize')`);
+    const broken = () => db.query<{ broken: string | null }, []>(`SELECT broken FROM crafted_tools WHERE name='summarize'`).get()?.broken;
 
-    const before = db.query<{ score: number; uses: number }, []>(
-      `SELECT score, uses FROM crafted_tools WHERE name='summarize'`,
-    ).get();
+    raised(ledger, 'summarize', 'args.text is undefined');
+    expect(broken()).toBe('args.text is undefined');
+    // Still offered: a broken tool stays callable, and its declaration says so.
+    expect(ledger.names()).toEqual(['summarize']);
 
-    if (!before) throw new Error('expected seeded craft score');
-    expect(before.score).toBe(CRAFT_NEUTRAL_PRIOR);
-    expect(before.uses).toBe(0);
-
-    // A clean call of a tool that existed before it ran.
     observeCraftCall(ledger, { code: 'return await tools.summarize(1)', before: new Set(['summarize']), result: '{"result":1}', failed: false });
-
-    const after = db.query<{ score: number; uses: number }, []>(
-      `SELECT score, uses FROM crafted_tools WHERE name='summarize'`,
-    ).get();
-
-    if (!after) throw new Error('expected observed craft score');
-    expect(after.score).toBeGreaterThan(before.score);
-    expect(after.uses).toBe(1);
+    expect(broken()).toBeNull();
   });
 
-  test('a tool that keeps raising falls below the injection floor, and says which', () => {
+  test('a raise of a tool outside the store is a no-op, not a resurrection', () => {
     const { ledger, db } = ledgerFixture();
-    db.run(`INSERT INTO crafted_tools (name) VALUES ('broken')`);
-
-    const dropped: string[] = [];
-
-    for (let i = 0; i < 4; i++) dropped.push(...raised(ledger, 'broken'));
-
-    // Forgiving of a flake, decisive about a persistently broken artifact.
-    expect(dropped).toEqual(['broken']);
-  });
-
-  test('one success is enough to keep a tool that merely stumbled', () => {
-    const { ledger, db } = ledgerFixture();
-    db.run(`INSERT INTO crafted_tools (name) VALUES ('flaky')`);
-    expect(raised(ledger, 'flaky')).toEqual([]);
-    expect(observeCraftCall(ledger, { code: 'await tools.flaky(1)', before: new Set(['flaky']), result: 'ok', failed: false })?.dropped).toEqual([]);
-    expect(raised(ledger, 'flaky')).toEqual([]);
-  });
-
-  test('a creation carries its neutral prior in the same INSERT — nothing to seed', () => {
-    const { db } = ledgerFixture();
-    db.run(`INSERT INTO crafted_tools (name) VALUES ('fresh')`);
-
-    const row = db.query<{ score: number; uses: number }, []>(
-      `SELECT score, uses FROM crafted_tools WHERE name='fresh'`,
-    ).get();
-
-    expect(row).toEqual({ score: CRAFT_NEUTRAL_PRIOR, uses: 0 });
-  });
-
-  test('an observation of a tool outside the store is a no-op, not a resurrection', () => {
-    const { ledger, db } = ledgerFixture();
-    expect(ledger.observe(['ghost'], CRAFT_NEUTRAL_PRIOR)).toEqual([]);
+    ledger.broke('ghost', 'boom');
+    ledger.repaired(['ghost']);
     expect(db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM crafted_tools`).get()?.n).toBe(0);
   });
 });

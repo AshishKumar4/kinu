@@ -41,7 +41,7 @@ function memberPath(path: readonly string[]): readonly string[] {
  * slates. Matched on `namespace.member`, `*` for either half; a member the impact table keeps from slates is refused too.
  */
 /** `agents.*` is not here: the catalog keeps it to the owner's own slate (`slateOwnerOnly`). */
-const SLATE_EXCLUDED = ['agent.*', 'report.*', '*.createTool', '*.slate', '*.slates'] as const;
+const SLATE_EXCLUDED = ['agent.*', 'report.*', '*.createTool', '*.retireTool', '*.slate', '*.slates'] as const;
 
 export const SlateCallRequestSchema = v.strictObject({
   /** `[member]` of the workspace executor, `[namespace, member]`, or `[namespace, name, member]` under `mcp` and `slates`. */

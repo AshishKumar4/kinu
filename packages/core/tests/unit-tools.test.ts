@@ -455,18 +455,17 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(result.result).toBe(42);
   });
 
-  test('low-scoring crafted tools filtered out of the tools namespace', async () => {
+  test('past the 20 crafted tools a turn is offered, the least preferred is not in the tools namespace', async () => {
     const { rt } = createTestRuntime();
-    rt.craftStore.create({
-      name: 'weak', description: 'low quality',
-      code: 'async () => "should never run"',
-    });
-    void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'weak'`;
+
+    for (let i = 0; i < 20; i++) rt.craftStore.create({ name: `t${String(i)}`, description: 'kept', code: 'async () => 1' });
+    rt.craftStore.create({ name: 'weak', description: 'offered often, never chosen', code: 'async () => "should never run"' });
+    void rt.storage.sql`UPDATE crafted_tools SET offered = 40 WHERE name = 'weak'`;
 
     const t = tools(rt);
     const evalTool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.eval) };
-    const result = await evalTool.execute({ code: 'return typeof tools.weak;' });
-    expect(result.result).toBe('undefined');
+    const result = await evalTool.execute({ code: 'return [typeof tools.weak, typeof tools.t0];' });
+    expect(result.result).toEqual(['undefined', 'function']);
   });
 
   test('a crafted tool shadowing a builtin or MCP name never reaches tools.*', async () => {

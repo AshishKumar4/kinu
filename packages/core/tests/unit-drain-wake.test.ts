@@ -81,6 +81,7 @@ function inertEngine(): AgentOrchestratorDeps['engine'] {
     onSessionComplete: async () => {},
     recordRecovery: () => {},
     deferTurnReview: (turn, followup, opts) => store.enqueueReview(turn, followup, opts),
+    countCraftOffers: () => {},
     runDeferredTurnReviews: async () => ({ reviewed: 0, refused: [] }),
     runStoredTurnReview: async () => {},
   };

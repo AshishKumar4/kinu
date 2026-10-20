@@ -43,6 +43,8 @@ export const CompletedTurnSchema = v.object({
   /** Crafted tools this turn called, per the craft clock. Not derivable from `toolCalls`:
    *  crafted tools are codemode-only. Empty = observed none; absent = not observed. */
   craftedToolsUsed: v.optional(v.pipe(v.array(v.string()), v.readonly())),
+  /** Crafted tools its declarations offered; a choice is a call of one of these. Absent on turns recorded before. */
+  craftedOffered: v.optional(v.pipe(v.array(v.string()), v.readonly())),
   steps: v.number(),
   durationMs: v.number(),
   /** Null at completion; set later by EvolutionEngine.reviewTurn. */
@@ -169,6 +171,9 @@ interface AppendTurnOpts {
    *  `turn_append` tombstone, since `sweepSettled` may already have deleted the
    *  row. Omit when the recording cannot be replayed. */
   id?: string;
+  /** What the turn's record owes besides its row, run once with the insert in its synchronous pass: never for a
+   *  keyed replay. */
+  recorded?: () => void;
   /** Epoch ms; defaults to now. */
   now?: number;
 }
@@ -291,6 +296,8 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
       void sql`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at)
           VALUES (${actorId}, ${id}, ${encoded}, ${null}, 1, ${review}, ${now})
           ON CONFLICT(actor_id, id) DO NOTHING`;
+
+      opts.recorded?.();
 
       // Same synchronous pass, so nothing observes the row without its tombstone.
       if (opts.id !== undefined) recordEffectDone(sql, actor, { scope: APPEND_SCOPE, key: opts.id });

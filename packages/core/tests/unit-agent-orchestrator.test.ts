@@ -68,6 +68,7 @@ function fakeEngine(opts?: { enabled?: boolean; dying?: { first: boolean } }) {
     recordRecovery: () => {},
     // Real store, so deferral and drain run the production path.
     deferTurnReview: (turn, followup, review) => store.enqueueReview(turn, followup, review),
+    countCraftOffers: () => {},
     runDeferredTurnReviews: async () => {
       const taken = store.takeQueuedReviews(5);
       let reviewed = 0;
@@ -862,7 +863,7 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
 
 describe('AgentOrchestrator — the in-episode evolution clock', () => {
   /** One `eval` call the turn's tools observed where they ran, as its record keeps it. */
-  const SCORED: CraftCall = { created: [], invoked: ['summarize'], raised: [], returned: ['summarize'], dropped: [] };
+  const SCORED: CraftCall = { created: [], invoked: ['summarize'], raised: [], returned: ['summarize'] };
 
   test('a turn records its crafted-tool use while evolution is on and it is not Plan', () => {
     const { host } = fakeHost();
@@ -889,7 +890,7 @@ describe('AgentOrchestrator — the in-episode evolution clock', () => {
     orch.beginTurn(Date.now());
     orch.acc.ledgers.craft.note('eval_0', SCORED);
     expect(orch.acc.ledgers.craft.snapshot()).toEqual({
-      crafted: [], invoked: ['summarize'], reused: [], returned: 1, raised: 0, dropped: [],
+      crafted: [], invoked: ['summarize'], reused: [], returned: 1, raised: 0, broke: [],
     });
 
     orch.beginTurn(Date.now());

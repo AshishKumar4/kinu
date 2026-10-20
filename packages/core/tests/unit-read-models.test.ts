@@ -509,22 +509,21 @@ describe('agent status', () => {
     w.db.close();
   });
 
-  test('the tool list carries each crafted tool with its live score', async () => {
+  test('the tool list carries each crafted tool with its preference and choices', async () => {
     const { rt, db } = createTestRuntime();
     const sql = makeSql(db);
     // This UPDATE stands in for a real usage history on the crafted_tools row.
     await rt.craftStore.create({
       name: 'summarize', description: 'sum', code: 'x',
     });
-    void sql`UPDATE crafted_tools SET score = 0.9, uses = 7 WHERE name = 'summarize'`;
+    void sql`UPDATE crafted_tools SET offered = 8, chosen = 7, rated = 3, rating_sum = 2.4 WHERE name = 'summarize'`;
 
-    const list = getToolList(sql);
-    expect(list.crafted).toEqual([
-      { name: 'summarize', description: 'sum', qualityScore: 0.9, usageCount: 7 },
+    expect(getToolList(sql).crafted).toEqual([
+      { name: 'summarize', description: 'sum', qualityScore: (8 / 10) * (3.6 / 5), usageCount: 7 },
     ]);
-    // An unscored tool reads as the neutral prior, never as zero.
-    void sql`UPDATE crafted_tools SET score = 0.5, uses = 0 WHERE name = 'summarize'`;
-    expect(getToolList(sql).crafted[0]).toMatchObject({ qualityScore: 0.5, usageCount: 0 });
+    // A tool nothing has offered reads as the smoothing's prior, never as zero.
+    void sql`UPDATE crafted_tools SET offered = 0, chosen = 0, rated = 0, rating_sum = 0 WHERE name = 'summarize'`;
+    expect(getToolList(sql).crafted[0]).toMatchObject({ qualityScore: 0.3, usageCount: 0 });
     db.close();
   });
 });

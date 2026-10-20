@@ -25,7 +25,7 @@ import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-fixture';
-import { initToolEffectClaimTable, openLocalActor } from '@kinu.run/core';
+import { craftPreference, initToolEffectClaimTable, openLocalActor } from '@kinu.run/core';
 import { tierAuthority, toolSequenceModel } from './helpers/local-session';
 import { LocalAgentSession } from '../src/local-session';
 
@@ -579,8 +579,8 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     await expect(run({ command: 'cat note.txt', runtime: 'device' })).rejects.toMatchObject({ code: 'unavailable' });
   });
 
-  /** A head's `workspace.*` crafted-tool EMA calls run over its own scratch database, which must carry `crafted_tools`. */
-  test('its own workspace plane scores the tools it crafts', async () => {
+  /** A head's `workspace.*` crafted-tool calls run over its own scratch database, which must carry `crafted_tools`. */
+  test('its own workspace plane lists the tools it crafts', async () => {
     const rt = await createHeadRuntime(makeParent(), 'h3');
     const workspace = present(routerOf(rt).getProvider('workspace'), 'the workspace executor');
 
@@ -589,7 +589,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
       'echo_back', 'Return its argument.', 'async (args) => args',
     )).toEqual({ ok: true, name: 'echo_back', action: 'created' });
     expect(await workspace.tools.listTools.execute()).toEqual([
-      { name: 'echo_back', description: 'Return its argument.', qualityScore: 0.5 },
+      { name: 'echo_back', description: 'Return its argument.', preference: craftPreference({ offered: 0, chosen: 0, rated: 0, rating_sum: 0 }), broken: null },
     ]);
   });
 });

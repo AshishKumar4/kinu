@@ -123,6 +123,8 @@ export class TurnAccumulator {
   readonly ledgers: TurnLedgers;
   /** The tool lessons a step listed, id to the revision shown. */
   private readonly lessons = new Map<string, number>();
+  /** The crafted tools a step's declarations offered. */
+  private readonly offered = new Set<string>();
   private gate: SpendGate | undefined;
 
   /** `evolving`: whether the turn under way evolves, read by its crafted-tool record. */
@@ -161,6 +163,7 @@ export class TurnAccumulator {
     this.ledgers.escalations.reset();
     this.ledgers.craft.reset();
     this.lessons.clear();
+    this.offered.clear();
   }
 
   /** Restores totals without charging them again. */
@@ -179,6 +182,14 @@ export class TurnAccumulator {
 
   lessonsShown(): { id: string; revision: number }[] {
     return [...this.lessons].map(([id, revision]) => ({ id, revision }));
+  }
+
+  noteCraftedOffered(declarations: readonly { readonly name: string }[]): void {
+    for (const declaration of declarations) this.offered.add(declaration.name);
+  }
+
+  craftedOffered(): string[] {
+    return [...this.offered];
   }
 
   /** `undefined` when no step reported anything; a reported zero comes back as one. */

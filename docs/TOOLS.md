@@ -339,7 +339,7 @@ full TypeScript declarations, `describe('db.select')` one member's, and
 | Caller | Reaches |
 |---|---|
 | An actor's own program: main's, a hire's, a head's or a swarm node's | what its own native tools reach and no more: `file`, `memory` (the account's scope where it is wired), `tasks`, `db` with its `private` tables, and each machine it has; `agent` where its lifecycle or owner-wait host is wired, `web`'s browser sessions where they are wired, `agents` where its native `agents` is wired, and `report` where its native `report` is. A head or swarm node holds only `eval shell file web` (and a node `report`), so its programs reach no `memory`, `tasks` or `agents` (`narrowAdmittedSurface`) |
-| A slate's call, or a crafted tool a slate runs | the members `slateReaches` admits (`slates/surface.ts`): no `agents`, `agent`, `report`, `createTool` or slate lifecycle, no member its operation keeps from slates (`switchRole`, the desktop), no account memory and no `private` tables; a share's viewer drives no browser |
+| A slate's call, or a crafted tool a slate runs | the members `slateReaches` admits (`slates/surface.ts`): no `agents`, `agent`, `report`, `createTool`, `retireTool` or slate lifecycle, no member its operation keeps from slates (`switchRole`, the desktop), no account memory and no `private` tables; a share's viewer drives no browser |
 | The owner's own slate | a slate's reach, plus `agents` |
 
 ### Machines
@@ -363,10 +363,10 @@ every machine:
 Every `device` member also takes `{ device? }`. A variable a process needs goes
 at the head of its command (`PORT=4100 node server.js`).
 
-- The hosted workspace has all of them, plus `createTool`, `listTools` and
-  `slates`.
-- The CLI workspace has `exec` and `fs`, plus `createTool`, `listTools` and
-  `slates`; it declares no `process_long` or `net_inbound`.
+- The hosted workspace has all of them, plus `createTool`, `listTools`,
+  `retireTool` and `slates`.
+- The CLI workspace has `exec` and `fs`, plus `createTool`, `listTools`,
+  `retireTool` and `slates`; it declares no `process_long` or `net_inbound`.
 - The computer has all of them, plus `resize(size)` where it has sizes,
   `rest(answer)`, and the eight desktop members (`screenshot`, `watch`,
   `click`, `type`, `key`, `scroll`, `move`, `drag`) where it has a screen.
@@ -397,8 +397,9 @@ namespace (a `private` `db` table), `agents.hire`'s `mission` (`message`), and
 
 | Member | What it does |
 |-----|-------------|
-| `workspace.listTools()` | Crafted tools with their EMA scores |
-| `workspace.createTool(name, description, code)` | Create or update a crafted tool; answers `{ name, action }`. Callable as `tools.<name>(args)` from the next `eval` call, because the sandbox that created it is already built |
+| `workspace.listTools()` | Crafted tools, best first, each with its preference and, if its last call raised, the error |
+| `workspace.createTool(name, description, code)` | Create or update a crafted tool; answers `{ name, action }`. Callable as `tools.<name>(args)` from the next `eval` call, because the sandbox that created it is already built. A rewrite clears its broken flag |
+| `workspace.retireTool(name)` | Delete a crafted tool; answers `{ name, action: 'retired' }` |
 | `workspace.slates` | `.<id>.<method>(...args)`, `.<id>.$preview()`, `.$list()`, ...; present when slates are wired, see below |
 
 In an `eval` program, `process.cwd()` is the workspace root, and
@@ -470,9 +471,9 @@ a bare `ReferenceError`: `explainSandboxError` names
 [CRAFT-ARCHITECTURE.md](./CRAFT-ARCHITECTURE.md).
 
 `codemodeSurface` (`packages/core/src/tools/builtins.ts`) is the one reader of
-the injectable crafted tools (`selectInjectableCraftedTools`, effective score at
-least 0.2); both backends' `eval` read its `craftedTools()` on every call. The
-preamble uses the same filter.
+the crafted tools a turn is offered (`selectInjectableCraftedTools`, at most 20 by
+preference); both backends' `eval` read its `craftedTools()` on every call. The
+preamble uses the same set.
 
 ### agents.*
 
@@ -609,11 +610,13 @@ waiting on an unrated or neutral one. Imported scaffolds enter `modifyScaffold` 
 
 ## CraftStore lifecycle
 
-`EvolutionEngine.extractPattern()` extracts patterns. `updateCraftScores()`
-applies an EMA with α=0.3. Injection needs an effective score of 0.2.
-Consolidation retires tools below 0.1 after at least 2 uses, and skips the pass
-if it would retire every tool. Surviving tools are called as
-`tools.<name>(args)`.
+`EvolutionEngine.extractPattern()` extracts patterns. A turn is offered at most
+20 crafted tools by preference: how often each was chosen when offered,
+weighted by the ratings of the turns that chose it (`craft/preference.ts`). A
+raise marks a tool broken, which its declaration says, until a clean return or
+a rewrite. Consolidation retires a tool offered 50 turns that no turn chose in
+30 days, and skips the pass if it would retire every tool. Offered tools are
+called as `tools.<name>(args)`.
 
 ## Why eight tools
 

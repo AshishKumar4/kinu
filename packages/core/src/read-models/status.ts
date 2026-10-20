@@ -7,7 +7,7 @@ import { CHAT_PAGE_BYTES, CHAT_SEED_ROWS, CHAT_SESSION_ID } from '../session/tra
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
 import { missionOf } from '../identity/soul';
 import { BUILTIN_TOOLS } from '../tools/registry';
-import { CRAFT_NEUTRAL_PRIOR } from '../craft/in-episode';
+import { craftPreference, type CraftPreferenceRow } from '../craft/preference';
 import type { SqlExecutor } from '../types/primitives';
 import type { ReasoningEffort } from '../providers/effort';
 import type { TierSource } from '../profiles/resolve';
@@ -164,14 +164,11 @@ export async function chatSeed(transcript: SessionTranscriptReader, media: Media
 
 export type ChatHistoryPage = Page<ChatHistoryEntry, PositionCursor>;
 
-/** The tools an agent has: the built-ins and what it crafted, newest first, each with its quality and use. */
+/** The tools an agent has: the built-ins and what it crafted, newest first, each with its preference and choices. */
 export function getToolList(sql: SqlExecutor) {
-  const crafted = sql<{ name: string; description: string; score: number | null; uses: number | null }>`
-    SELECT name, description, score, uses FROM crafted_tools ORDER BY updated_at DESC`.map((row) => ({
-    name: row.name, description: row.description,
-    qualityScore: row.score ?? CRAFT_NEUTRAL_PRIOR,
-    usageCount: row.uses ?? 0,
-  }));
+  const crafted = sql<CraftPreferenceRow & { description: string }>`
+    SELECT name, description, offered, chosen, rated, rating_sum, broken, last_used_at FROM crafted_tools ORDER BY updated_at DESC`
+    .map((row) => ({ name: row.name, description: row.description, qualityScore: craftPreference(row), usageCount: row.chosen }));
 
   return { builtIn: [...BUILTIN_TOOLS], crafted };
 }

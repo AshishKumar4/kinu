@@ -1003,10 +1003,10 @@ export {
   type PendingScaffold, type ScaffoldDecisionEvents,
 } from './scaffold/versions';
 
-// CraftStore quality
-export { effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema';
+// Crafted tools by preference
+export { craftPreference, craftPreferences, rankByPreference, type CraftPreferenceRow } from './craft/preference';
 
-export { CRAFT_NEUTRAL_PRIOR, type CraftCall } from './craft/in-episode';
+export { type CraftCall } from './craft/in-episode';
 
 export { TurnCraftLedger } from './craft/turn-ledger';
 

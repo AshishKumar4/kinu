@@ -15,6 +15,7 @@ import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { historyTurnPairs } from '../src/identity/conversation-store';
 import { createCompletedTurnStore } from '../src/evolution/session-window';
+import { craftPreferences } from '../src/craft/preference';
 
 function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   return {
@@ -113,44 +114,38 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     expect(listTurnRatings(rt.storage.sql, rt.actor)[0]?.score).toBeCloseTo(4.6);
   });
 
-  test('craft EMA moves on ratings: a low one pushes a tool score down, a high one up', async () => {
+  test('a rated turn credits each crafted tool it chose with its rating, and only those it was offered', async () => {
     const { rt, stores } = createTestRuntime();
     ratedAs(rt, 'corrected');
-    void rt.storage.sql`INSERT INTO crafted_tools (name, score, uses, last_used_at)
-        VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
+    void rt.storage.sql`INSERT INTO crafted_tools (name) VALUES ('my_crafted_tool'), ('made_this_turn')`;
     const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
 
-    const turn = makeTurn({
+    await engine.reviewTurn(makeTurn({
       toolCalls: [compactToolCall({ name: 'eval', args: {}, result: 'x' })],
-      craftedToolsUsed: ['my_crafted_tool'],
-    });
+      craftedOffered: ['my_crafted_tool'],
+      craftedToolsUsed: ['my_crafted_tool', 'made_this_turn'],
+    }), 'wrong again — that broke the deploy');
 
-    await engine.reviewTurn(turn, 'wrong again — that broke the deploy');
-
-    const after = rt.storage.sql<{ score: number }>`
-      SELECT score FROM crafted_tools WHERE name = 'my_crafted_tool'`[0];
-
-    expect(after.score).toBeLessThan(0.5);
-
-    const { rt: rt2, stores: stores2 } = createTestRuntime({ llmResponses: { 'Extract a reusable pattern': 'not json' } });
-    ratedAs(rt2, 'accepted');
-
-    void rt2.storage.sql`INSERT INTO crafted_tools (name, score, uses, last_used_at)
-        VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
-    const engine2 = new EvolutionEngine(rt2, historyTurnPairs(stores2.history));
-    await engine2.reviewTurn(makeTurn({
-      toolCalls: [compactToolCall({ name: 'eval', args: {}, result: 'x' })],
-      craftedToolsUsed: ['my_crafted_tool'],
-    }), 'thanks, that worked — next please deploy it');
-
-    const after2 = rt2.storage.sql<{ score: number }>`
-      SELECT score FROM crafted_tools WHERE name = 'my_crafted_tool'`[0];
-
-    expect(after2.score).toBeGreaterThan(0.5);
+    const rows = craftPreferences(rt.storage.sql);
+    expect(rows.get('my_crafted_tool')).toMatchObject({ rated: 1, rating_sum: 1.5 / 5 });
+    // Made and called in the turn, not offered to it: not a choice, so not credited.
+    expect(rows.get('made_this_turn')).toMatchObject({ rated: 0, rating_sum: 0 });
   });
 
-  test('an MCP tool call is not a crafted-tool use and scores nothing', async () => {
-    // Crafted tools are codemode-only, so the EMA must come from the turn record.
+  test('recording a turn counts its offers once, and a keyed replay counts nothing', () => {
+    const { rt } = createTestRuntime();
+    void rt.storage.sql`INSERT INTO crafted_tools (name) VALUES ('a'), ('b')`;
+    const engine = new EvolutionEngine(rt, historyTurnPairs(createTestRuntime().stores.history));
+    const turn = makeTurn({ craftedOffered: ['a', 'b'], craftedToolsUsed: ['a'] });
+
+    for (let i = 0; i < 2; i++) engine.sessionWindow.append(turn, { awaitsFollowup: false, id: 'turn-1', recorded: () => { engine.countCraftOffers(turn); } });
+
+    const rows = craftPreferences(rt.storage.sql);
+    expect([rows.get('a'), rows.get('b')]).toMatchObject([{ offered: 1, chosen: 1 }, { offered: 1, chosen: 0 }]);
+  });
+
+  test('an MCP tool call is not a crafted-tool use and credits nothing', async () => {
+    // Crafted tools are codemode-only, so a choice must come from the turn record.
     const { rt, stores } = createTestRuntime();
     ratedAs(rt, 'corrected');
     const engine = new EvolutionEngine(rt, historyTurnPairs(stores.history));
@@ -158,7 +153,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
       toolCalls: [compactToolCall({ name: 'mcp__github__create_issue', args: {}, result: 'x' })],
       craftedToolsUsed: [],
     }), 'wrong again — that broke the deploy');
-    expect(rt.storage.sql`SELECT name FROM crafted_tools WHERE uses > 0`).toEqual([]);
+    expect(rt.storage.sql`SELECT name FROM crafted_tools WHERE rated > 0`).toEqual([]);
   });
 
   test('trivial turn (greeting): no model call, no rating, no events', async () => {

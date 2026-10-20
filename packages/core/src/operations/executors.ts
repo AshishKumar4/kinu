@@ -107,8 +107,10 @@ const ws = executorOp('workspace');
 
 export const WORKSPACE = {
   listTools: ws({
-    name: 'listTools', help: 'Your crafted tools, with each one\'s quality score.', impact: 'observe', input: v.strictObject({}),
-    output: v.array(v.object({ name: v.string(), description: v.string(), qualityScore: v.number() })),
+    name: 'listTools', impact: 'observe', input: v.strictObject({}),
+    help: 'Your crafted tools, best first: each one\'s preference (how often you chose it when offered, weighted by how '
+      + 'the turns that used it were rated, 0 to 1) and, if its last call raised, the error.',
+    output: v.array(v.object({ name: v.string(), description: v.string(), preference: v.number(), broken: v.nullable(v.string()) })),
   }),
   createTool: ws({
     name: 'createTool', impact: 'mutate',
@@ -118,6 +120,12 @@ export const WORKSPACE = {
       + '`createTool(name, description, async (args) => { ... })`, saved as its source: it closes over nothing in this program.',
     input: v.strictObject({ name: v.pipe(v.string(), v.nonEmpty()), description: v.pipe(v.string(), v.nonEmpty()), code: v.pipe(v.string(), v.nonEmpty()) }),
     output: v.object({ name: v.string(), action: v.picklist(['created', 'updated']) }),
+  }),
+  retireTool: ws({
+    name: 'retireTool', impact: 'mutate',
+    help: 'Delete a crafted tool you no longer need, or one that keeps raising and is not worth a rewrite.',
+    input: v.strictObject({ name: v.pipe(v.string(), v.nonEmpty()) }),
+    output: v.object({ name: v.string(), action: v.literal('retired') }),
   }),
 } as const;
 

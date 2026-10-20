@@ -233,7 +233,8 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     };
 
     const called = await call();
-    void this.boundSql`UPDATE crafted_tools SET score = 0.01, uses = 9, last_used_at = ${Date.now()} WHERE name = 'double'`;
+    // Main retires it, as `workspace.retireTool` or consolidation would.
+    void this.boundSql`DELETE FROM crafted_tools WHERE name = 'double'`;
 
     return { mainActorId: this.actorHandle().actorId, nodeActorId: seat.actor.record.actorId, called, retired: await call() };
   }

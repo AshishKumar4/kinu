@@ -140,7 +140,9 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('completion_gate'), converted: v.boolean() }),
   v.object({ ...BaseFields, type: v.literal('craft_cycle'), crafted: v.pipe(v.array(v.string()), v.readonly()),
     invoked: v.pipe(v.array(v.string()), v.readonly()), reused: v.pipe(v.array(v.string()), v.readonly()), returned: v.number(),
-    raised: v.number(), dropped: v.pipe(v.array(v.string()), v.readonly()) }),
+    raised: v.number(),
+    /** Tools a raise this turn marked broken; absent on a cycle recorded before the flag. */
+    broke: v.optional(v.pipe(v.array(v.string()), v.readonly())) }),
   v.object({ ...BaseFields, type: v.literal('execution_recovery'), recoveries: v.pipe(v.array(v.object({
     tool: v.string(), failures: v.number(), failedSignature: v.string(),
   })), v.readonly()) }),

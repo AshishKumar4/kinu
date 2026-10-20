@@ -123,7 +123,6 @@ import {
   BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   // Declared reach axis; getToolDescriptions reports it rather than guessing from ToolSet keys.
   TOOL_REACH,
-  updateCraftScores,
   forkWorkspace, ForkTargetWriter, ForkTransferReceiver,
   type ForkTransport, type ForkFrame,
   readWorkspaceArchivePage, type ArchiveAgentSource, type ArchiveCursor, type ArchivePage,
@@ -150,7 +149,7 @@ import {
   type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore, dispatchEmailRepliesForTurn,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
-  qualitySeries, qualityWindow, type QualityDay, type QualityWindow, ratingQuality, thumbsRating, listThumbs,
+  qualitySeries, qualityWindow, type QualityDay, type QualityWindow, listThumbs, craftPreference, craftPreferences,
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   listAlternateTakeSets, latestAlternateTakeSet,
@@ -3698,17 +3697,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         },
       }),
 
-      craft_usage: terminalEffect({
-        input: v.object({ messageId: v.string(), toolNames: v.array(v.string()) }),
-        runSync: ({ messageId, toolNames }) => {
-          void this.sql`INSERT INTO turn_craft_usage (actor_id, message_id, tool_names)
-                   VALUES (${this.actorHandle().actorId}, ${messageId}, ${JSON.stringify(toolNames)})
-                   ON CONFLICT(actor_id, message_id) DO UPDATE SET tool_names = excluded.tool_names`;
-
-          return { status: 'completed' };
-        },
-      }),
-
       event_reply: terminalEffect({
         input: v.object({
           drainTurnId: v.string(), answer: v.string(), requestId: v.string(),
@@ -4376,13 +4364,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     initSleepTimeUpdatesTable(execRaw);
     initTurnBranchesTable(execRaw);
-    // Keyed per actor and message, as a thumb is: the thumbs re-score reads this table.
-    execRaw(`CREATE TABLE IF NOT EXISTS turn_craft_usage (
-      actor_id   TEXT NOT NULL,
-      message_id TEXT NOT NULL,
-      tool_names TEXT NOT NULL,
-      PRIMARY KEY (actor_id, message_id)
-    )`);
     // Owned by this root: the container is the workspace's; subordinates ride their parent's.
     initSandboxLifecycleTable(execRaw);
     initActivationTable(execRaw);
@@ -5167,14 +5148,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * A thumb is the user's own rating of the turn (`evolution/ratings.ts`); `feedback: null` clears it. Applies an
-   * EMA observation at that rating to the crafted tools recorded for this message in turn_craft_usage.
+   * A thumb is the user's own rating of the turn (`evolution/ratings.ts`); `feedback: null` clears it. A thumb given
+   * before the turn's review is the rating its crafted tools are credited with (`EvolutionEngine.reviewTurn`).
    */
   @callable()
   setTurnFeedback(
     messageId: string,
     feedback: 'positive' | 'negative' | null,
-  ): Promise<{ ok: true; messageId: string; feedback: 'positive' | 'negative' | null; rescored: number }> {
+  ): Promise<{ ok: true; messageId: string; feedback: 'positive' | 'negative' | null }> {
     return settle(Effect.gen({ self: this }, function* () {
       if (messageId.length === 0) {
         return yield* new KinuError('bad_input', 'messageId must be a non-empty string');
@@ -5184,26 +5165,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return yield* new KinuError('bad_input', `feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
       }
 
-      let rescored = 0;
-
-      const usageRows = feedback === null ? [] : this.sql<{ tool_names: string }>`
-      SELECT tool_names FROM turn_craft_usage
-      WHERE actor_id = ${this.actorHandle().actorId} AND message_id = ${messageId} LIMIT 1`;
-
-      if (feedback !== null && usageRows[0]?.tool_names) {
-        const parsedNames = v.safeParse(v.array(v.string()), JSON.parse(usageRows[0].tool_names));
-        const names = parsedNames.success ? parsedNames.output : [];
-
-        if (names.length > 0) {
-          updateCraftScores(this.boundSql, names, ratingQuality(thumbsRating(feedback).score));
-          rescored = names.length;
-        }
-      }
-
       // The thumb wins over the model's rating of this turn.
       yield* Effect.promise(async () => settleLogged('feedback.explicit_apply_failed', { doing: 'recording a thumb in the rating ledger', otherwise: 'io' }, () => this.engine.applyExplicitFeedback(messageId, feedback), { messageId }));
 
-      return { ok: true, messageId, feedback, rescored };
+      return { ok: true, messageId, feedback };
     }));
   }
 
@@ -6265,10 +6230,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const craftedRaw = this.rt.craftStore.list();
 
+    // crafted_tools is workspace-wide with no actor_id, so preference is keyed by name alone.
+    const preferences = craftPreferences(this.boundSql);
+
     const crafted = craftedRaw.map(t => {
-      // crafted_tools is workspace-wide with no actor_id, so quality is keyed by name alone.
-      const scoreRow = this.sql<{ score: number; uses: number }>`
-        SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
+      const row = preferences.get(t.name);
 
       return {
         name: t.name,
@@ -6278,8 +6244,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // so codemode is their reach and they are wired whenever the store holds them.
         exposure: 'codemode' as const,
         wired: true,
-        qualityScore: scoreRow[0]?.score ?? 0.5,
-        usageCount: scoreRow[0]?.uses ?? 0,
+        qualityScore: craftPreference(row ?? { offered: 0, chosen: 0, rated: 0, rating_sum: 0 }),
+        usageCount: row?.chosen ?? 0,
       };
     });
 
