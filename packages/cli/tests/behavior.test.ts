@@ -11,7 +11,7 @@ import {
   type JsonValue,
 } from "@kinu.run/core";
 import * as v from "valibot";
-import { present, runToExit } from '@kinu.run/test-utils';
+import { chatCompletionBody, chatCompletionStream, present, runToExit, type ChatUsage } from "@kinu.run/test-utils";
 
 /** Output to assertable text, stripped of terminal decoration. */
 function toText(output: string): string {
@@ -530,7 +530,7 @@ describe("kinu exec --json — the turn-end usage payload", () => {
   });
 });
 
-function startMockLlm(answer: string, usage: JsonObject | null = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 }) {
+function startMockLlm(answer: string, usage: ChatUsage | null = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 }) {
   const requests: JsonValue[] = [];
 
   const server = Bun.serve({
@@ -545,39 +545,11 @@ function startMockLlm(answer: string, usage: JsonObject | null = { prompt_tokens
       requests.push(raw);
       const body = v.parse(RequestBodySchema, raw);
 
-      if (!body.stream) {
-        const completion: JsonObject = {
-          id: "chatcmpl-mock",
-          object: "chat.completion",
-          created: 1,
-          model: "mock-model",
-          choices: [{ index: 0, message: { role: "assistant", content: answer }, finish_reason: "stop" }],
-        };
+      const reply = { model: "mock-model", text: answer, ...(usage !== null && { usage }) };
 
-        if (usage) completion.usage = usage;
-
-        return Response.json(completion);
-      }
-
-      const chunk = (data: JsonValue) => `data: ${JSON.stringify(data)}\n\n`;
-
-      const finalChunk: JsonObject = {
-        id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
-        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-      };
-
-      if (usage) finalChunk.usage = usage;
-
-      const sse = [
-        chunk({
-          id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
-          choices: [{ index: 0, delta: { role: "assistant", content: answer }, finish_reason: null }],
-        }),
-        chunk(finalChunk),
-        "data: [DONE]\n\n",
-      ].join("");
-
-      return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+      return body.stream
+        ? new Response(chatCompletionStream(reply), { headers: { "content-type": "text/event-stream" } })
+        : new Response(chatCompletionBody(reply), { headers: { "content-type": "application/json" } });
     },
   });
 
@@ -603,44 +575,16 @@ function startToolLoopMockLlm(
       const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
 
       if (!body.stream) {
-        return Response.json({
-          id: "chatcmpl-mock", object: "chat.completion", created: 1, model: "mock-model",
-          choices: [{ index: 0, message: { role: "assistant", content: answer }, finish_reason: "stop" }],
-          usage,
-        });
+        return new Response(chatCompletionBody({ model: "mock-model", text: answer, usage }), { headers: { "content-type": "application/json" } });
       }
 
       const step = streamed++;
 
-      const chunk = (choice: JsonObject, extra: JsonObject = {}) =>
-        `data: ${JSON.stringify({
-          id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
-          choices: [choice], ...extra,
-        })}\n\n`;
+      const reply = step < calls
+        ? { model: "mock-model", toolCall: { id: `call-${step}`, ...call }, usage }
+        : { model: "mock-model", text: answer, usage };
 
-      const body_ = step < calls
-        ? [
-            chunk({
-              index: 0,
-              delta: {
-                role: "assistant",
-                tool_calls: [{
-                  index: 0, id: `call-${step}`, type: "function",
-                  function: { name: call.name, arguments: call.arguments },
-                }],
-              },
-              finish_reason: null,
-            }),
-            chunk({ index: 0, delta: {}, finish_reason: "tool_calls" }, { usage }),
-          ]
-        : [
-            chunk({ index: 0, delta: { role: "assistant", content: answer }, finish_reason: null }),
-            chunk({ index: 0, delta: {}, finish_reason: "stop" }, { usage }),
-          ];
-
-      return new Response([...body_, "data: [DONE]\n\n"].join(""), {
-        headers: { "content-type": "text/event-stream" },
-      });
+      return new Response(chatCompletionStream(reply), { headers: { "content-type": "text/event-stream" } });
     },
   });
 
