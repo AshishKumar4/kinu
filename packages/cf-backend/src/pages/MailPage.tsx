@@ -14,7 +14,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { useAccount } from "@/hooks/use-account";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { claimMailAddress, listMailThreads, readMailBoxes, type MailBoxes } from "@/lib/mail-api";
@@ -68,6 +68,30 @@ function mailLocation(params: URLSearchParams, boxes: readonly MailBox[], splat:
   const opened = splat === "" || splat === undefined ? params.get("thread") : splat;
 
   return { view, path, query, before, opened };
+}
+
+function ThreadList({ resource, view, boxes, path, owner, reading, onOpen, onRetry }: {
+  resource: AsyncResource<Inbox>; view: MailView; boxes: readonly MailBox[]; path: string | undefined;
+  owner: string; reading: string | null; onOpen: (id: string) => void; onRetry: () => void;
+}) {
+  const loaded = lastValue(resource);
+  const threads = loaded?.listing.threads ?? [];
+
+  return <>
+    {resource.status === "loading" && <div role="status" aria-label="Loading mail" className="p-4"><Loader /></div>}
+    {resource.status === "error" && <LoadFailure what="your mail" message={resource.message} onRetry={onRetry} className="p-card p-4" />}
+    {loaded !== null && <div data-mail-list aria-label={view} className="p-group">
+      {threads.map((thread) => {
+        const box = boxes.find((each) => each.path === thread.path);
+        const from = thread.from[0];
+
+        return view === "important"
+          ? <ImportantMailRow key={thread.id} open={reading === thread.id} onOpen={() => onOpen(thread.id)} mail={{ thread: thread.id, from: { name: from?.name ?? from?.address ?? "", address: from?.address ?? "" }, to: box?.address ?? "", subject: thread.subject, reason: thread.important ?? "", at: thread.at, unread: thread.unread }} />
+          : <MailRow key={thread.id} thread={thread} open={reading === thread.id} onOpen={() => onOpen(thread.id)} owner={owner} drafts={view === "drafts"} box={path === undefined && box?.kind !== "person" ? box : undefined} />;
+      })}
+      {threads.length === 0 && <p className="px-4 py-8 text-center p-row-text p-text-3">Nothing here.</p>}
+    </div>}
+  </>;
 }
 
 function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
@@ -163,19 +187,7 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
           {waiting ? <div data-mail-no-assistant className="p-card flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
             <p className="p-row-text p-text-2">No assistant yet</p><FilledButton onClick={() => setInstalling(true)}>Set up your assistant</FilledButton>
           </div> : <>
-            {inbox.resource.status === "loading" && <div role="status" aria-label="Loading mail" className="p-4"><Loader /></div>}
-            {inbox.resource.status === "error" && <LoadFailure what="your mail" message={inbox.resource.message} onRetry={inbox.reload} className="p-card p-4" />}
-            {loaded !== null && <div data-mail-list aria-label={view} className="p-group">
-              {threads.map((thread) => {
-                const box = account.boxes.find((each) => each.path === thread.path);
-                const from = thread.from[0];
-
-                return view === "important"
-                  ? <ImportantMailRow key={thread.id} open={reading === thread.id} onOpen={() => choose(thread.id)} mail={{ thread: thread.id, from: { name: from?.name ?? from?.address ?? "", address: from?.address ?? "" }, to: box?.address ?? "", subject: thread.subject, reason: thread.important ?? "", at: thread.at, unread: thread.unread }} />
-                  : <MailRow key={thread.id} thread={thread} open={reading === thread.id} onOpen={() => choose(thread.id)} owner={owner} drafts={view === "drafts"} box={path === undefined && box?.kind !== "person" ? box : undefined} />;
-              })}
-              {threads.length === 0 && <p className="px-4 py-8 text-center p-row-text p-text-3">Nothing here.</p>}
-            </div>}
+            <ThreadList resource={inbox.resource} view={view} boxes={account.boxes} path={path} owner={owner} reading={reading} onOpen={choose} onRetry={inbox.reload} />
             {loaded !== null && <div className="mt-2 flex justify-between gap-2">
               {before !== undefined && <Button variant="ghost" size="sm" onClick={() => at({ before: null })}>Newest</Button>}
               {threads.length === 50 && <Button variant="ghost" size="sm" className="ml-auto" onClick={() => at({ before: String(threads.at(-1)?.at) })}>Older</Button>}

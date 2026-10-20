@@ -18,6 +18,7 @@ function installFixture(): void {
   const params = new URLSearchParams(location.search);
   const next = window.fetch.bind(window);
   const assistant = params.get("assistant") !== "none";
+  const email = params.get("account") === "claim" ? OWNER.address.toUpperCase() : OWNER.address;
   let address: string | null = params.has("account") ? null : "ashish@kinu.run";
 
   const boxes: MailBox[] = ADDRESSES.map((box) => {
@@ -124,7 +125,7 @@ function installFixture(): void {
     const url = new URL(request.url);
 
     if (url.pathname === "/api/user/profile") return Promise.resolve(Response.json({
-      email: params.get("account") === "claim" ? OWNER.address.toUpperCase() : OWNER.address, displayName: OWNER.name, createdAt: Date.now(), lastSeenAt: Date.now(), onboardedAt: Date.now(), workspaceCount: 2, controlPlane: false,
+      email, displayName: OWNER.name, createdAt: Date.now(), lastSeenAt: Date.now(), onboardedAt: Date.now(), workspaceCount: 2, controlPlane: false,
     }));
 
     if (!url.pathname.startsWith("/api/user/mail/")) return next(input, init);
