@@ -19,7 +19,9 @@ const protocol = require('../src/device-protocol.json');
 
 const { handle } = require('../src/index.js');
 
-const { createScreens, readScreenData, screenFrames } = require('../src/daemon/screen.js');
+const { createScreens, readScreenData } = require('../src/daemon/screen.js');
+
+const { screenDataFrames } = require('../../core/src/execution/device-screen-data.ts');
 
 const STREAM = 7;
 
@@ -440,7 +442,7 @@ describe("the daemon's screen streams", () => {
   });
 
   test("screen data frames carry the stream and at most the protocol's bytes each", () => {
-    const frames = screenFrames(0xfedcba98, Buffer.alloc(protocol.screenData.maxBytes + 5, 1));
+    const frames = screenDataFrames(0xfedcba98, Buffer.alloc(protocol.screenData.maxBytes + 5, 1));
 
     expect(frames.map((frame) => ({ kind: frame[0], stream: readScreenData(frame)?.stream, bytes: readScreenData(frame)?.bytes.byteLength }))).toEqual([
       { kind: protocol.screenData.kind, stream: 0xfedcba98, bytes: protocol.screenData.maxBytes },

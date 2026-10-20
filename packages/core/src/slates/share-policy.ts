@@ -3,7 +3,7 @@
  * call: what the shared server may use, whether a personal part's call may use its viewer's connection, and the one
  * effect each approval admits. `lean/Kinu/SharingNimbus` states and proves these.
  */
-import type { JsonValue } from '../utils/json';
+import { isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import type { ShareGrant, SharePreapproval } from './sharing';
 import { settleSync } from '../obs/effect';
@@ -171,8 +171,49 @@ export interface PartCall {
 }
 
 /** Whether a tool's call stays with its own server: read-only and closed-world by its server's own marks. */
-export function containedTool(descriptor: { readonly readOnly?: true; readonly closedWorld?: true }): boolean {
+function containedTool(descriptor: { readonly readOnly?: true; readonly closedWorld?: true }): boolean {
   return descriptor.readOnly === true && descriptor.closedWorld === true;
+}
+
+/** A connection's tool as a part call resolves it: the viewer's own MCP descriptor, by its server's name. */
+interface PartToolDescriptor {
+  readonly serverName: string;
+  readonly name: string;
+  readonly presetId?: string;
+  readonly readOnly?: true;
+  readonly closedWorld?: true;
+}
+
+/** A personal part's call as the viewer's connections resolve it: the one rule running it and replaying it both read. */
+export type ResolvedPartCall<D extends PartToolDescriptor> =
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'malformed' }
+  | { readonly kind: 'resolved'; readonly descriptor: D; readonly payload: JsonObject; readonly call: PartCall };
+
+/** A part's `workspace.ai` call: the viewer's own models, contained, with no root. */
+export function partAiCall(tool: 'run' | 'stream'): PartCall {
+  return { server: 'ai', root: {}, tool, contained: true };
+}
+
+/**
+ * `mcp.<server>.<tool>(object)` on the viewer's connections: the descriptor it names (none: `missing`), its one JSON
+ * object argument (anything else: `malformed`), and the call its consent is checked for.
+ */
+export function resolvePartCall<D extends PartToolDescriptor>(
+  descriptors: readonly D[], request: { readonly server: string; readonly tool: string; readonly args: readonly JsonValue[] },
+): ResolvedPartCall<D> {
+  const { server, tool, args } = request;
+  const descriptor = server.startsWith('mcp.') ? descriptors.find((item) => item.serverName === server.slice('mcp.'.length) && item.name === tool) : undefined;
+
+  if (descriptor === undefined) return { kind: 'missing' };
+  const [payload] = args;
+
+  if (args.length !== 1 || payload === undefined || !isJsonObject(payload)) return { kind: 'malformed' };
+
+  return {
+    kind: 'resolved', descriptor, payload,
+    call: { server, root: partCallRoot({ preset: descriptor.presetId ?? null, tool }, payload), tool, contained: containedTool(descriptor) },
+  };
 }
 
 export type PartCallVerdict =

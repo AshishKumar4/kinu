@@ -7,38 +7,24 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import {
-  durableStamps, EmailOutbox, initMailboxTables, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
+  durableStamps, EmailOutbox, initMailboxTables, mailboxEmail, sha256Hex, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
   type MailAgentMessage, type MailBox, type MailboxAgentCalls, type MailboxCalls, type MailCaller, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
-  type MailRecipient, type MailThreadSummary, type MailThreadView, type MailWake,
+  type MailRecipient, type MailThreadSummary, type MailThreadView, type MailTriaged, type MailTriageItem, type MailTriagePick, type MailWake,
   MailStore, type MailBlobs,
 } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { parseMail } from './parse';
+import { isListedOperator } from '../control-plane/admin-caller';
+
+/** A message's send in the outbox: this prefix and the message's id. */
+const MAIL_SEND_KEY = 'mail:';
 
 /** Sends a day for an account that is not one of the deployment's operators (the owner, 2026-10-19). */
 const DAILY_SEND_CAP = 100;
 
-async function sha256(value: Uint8Array | string): Promise<string> {
-  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : new Uint8Array(value);
-
-  return [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-/** Whether `email` is one of the deployment's operators, who have no send cap and may always claim an address. */
-function isMailOperator(env: Pick<Env, 'CONTROL_PLANE_ADMINS'>, email: string): boolean {
-  return (env.CONTROL_PLANE_ADMINS ?? '').split(',').map((each) => each.trim().toLowerCase()).includes(email.trim().toLowerCase());
-}
-
 const IdentityRow = v.object({ user_id: v.string(), email: v.string() });
-
-/** A message's own id, and for a reply what it answers. */
-function replyHeaders(headerId: string, inReplyTo: string | null): Record<string, string> {
-  const own = { 'Message-ID': `<${headerId}>` };
-
-  return inReplyTo === null ? own : { ...own, 'In-Reply-To': inReplyTo, References: inReplyTo };
-}
 
 export class MailboxDO extends DurableObject<Env> implements MailboxCalls, MailboxAgentCalls {
   private readonly store: MailStore;
@@ -71,10 +57,13 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
     // A deployment with no bucket for mail's bytes answers no call; its rows wait for one.
     if (this.bucket === null) this.refusal ??= new KinuError('unavailable', 'This deployment has no MAIL_BUCKET.');
-    this.outbox = new EmailOutbox(ctx.storage.sql, (at) => this.arm(at));
+    // A message the service sent keeps the Message-ID it wrote, which replies name; its send state is the outbox's alone.
+    this.outbox = new EmailOutbox(ctx.storage.sql, (at) => this.arm(at), (key, messageId) => {
+      if (key.startsWith(MAIL_SEND_KEY)) this.store.sentAs(key.slice(MAIL_SEND_KEY.length), messageId);
+    });
     this.store = new MailStore({
       sql: ctx.storage.sql, blobs: this.blobs(), domain: env.EMAIL_DOMAIN ?? '', now: () => Date.now(), id: () => crypto.randomUUID(),
-      parse: parseMail, digest: sha256,
+      parse: parseMail, digest: async (bytes) => sha256Hex(bytes), sendState: (messageId) => this.outbox.stateOf(`${MAIL_SEND_KEY}${messageId}`),
     });
     installAnalyticsDiagnostics(env);
   }
@@ -137,8 +126,12 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     return settle(this.served(() => this.store.readBy(reader)));
   }
 
-  untriagedFor(caller: MailCaller, limit: number): Promise<readonly MailThreadView[]> {
-    return settle(this.served(() => this.store.untriagedFor(caller, limit)));
+  untriagedFor(caller: MailCaller, limit: number, skip?: readonly string[]): Promise<readonly MailTriageItem[]> {
+    return settle(this.served(() => this.store.untriagedFor(caller, limit, skip)));
+  }
+
+  triagedFor(caller: MailCaller, thread: string, version: number, pick: MailTriagePick): Promise<MailTriaged> {
+    return settle(this.served(() => this.store.triagedFor(caller, thread, version, pick)));
   }
 
   boxes(): Promise<readonly MailBox[]> {
@@ -157,13 +150,13 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     return settle(this.served(() => this.store.thread(id)));
   }
 
-  async update(id: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): Promise<MailThreadSummary> {
-    if (this.refusal !== undefined) return settleSync(Effect.fail(this.refusal));
-    const summary = this.store.update(id, change);
+  update(id: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): Promise<MailThreadSummary> {
+    return settle(this.changed(change, () => this.store.update(id, change)));
+  }
 
-    if (change.trashed === true) await this.arm();
-
-    return summary;
+  /** The one way a thread changes, the person's or an agent's: one moved to Trash arms the alarm that empties it. */
+  private changed(change: { trashed?: boolean }, apply: () => MailThreadSummary): Effect.Effect<MailThreadSummary, KinuError> {
+    return Effect.tap(this.served(apply), () => (change.trashed === true ? Effect.promise(async () => this.arm()) : Effect.void));
   }
 
   draft(outgoing: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
@@ -171,11 +164,11 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   }
 
   send(outgoing: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
-    return settle(this.sendOut(async () => ({ ...await this.store.queue(outgoing), outgoing })));
+    return settle(this.sendOut(() => this.store.queue(outgoing)));
   }
 
   /** Files it (`file`) and hands it to the outbox, within the account's daily cap (none for operators). */
-  private sendOut(file: () => Promise<{ view: MailMessageView; headerId: string; from: string; inReplyTo: string | null; outgoing: MailOutgoing }>): Effect.Effect<MailMessageView, KinuError> {
+  private sendOut(file: () => Promise<{ view: MailMessageView; from: string; inReplyTo: string | null; outgoing: MailOutgoing }>): Effect.Effect<MailMessageView, KinuError> {
     const { env, store, outbox, refusal } = this;
     const sender = this.identity()?.email ?? '';
     const arm = async (): Promise<void> => this.arm();
@@ -183,7 +176,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     return Effect.gen(function* () {
       if (refusal !== undefined) return yield* Effect.fail(refusal);
 
-      if (!isMailOperator(env, sender) && store.sentToday() >= DAILY_SEND_CAP) {
+      if (!isListedOperator(env, sender) && store.sentToday() >= DAILY_SEND_CAP) {
         return yield* Effect.fail(new KinuError('budget', `This account has sent ${String(DAILY_SEND_CAP)} messages in the last day; mail goes again as the day's first ones age out.`));
       }
 
@@ -191,17 +184,16 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
       if (binding === undefined) return yield* Effect.fail(new KinuError('unavailable', 'This deployment cannot send mail yet: it has no Email Sending binding.'));
 
-      const { view, headerId, from, inReplyTo, outgoing } = yield* Effect.promise(file);
+      const { view, from, inReplyTo, outgoing } = yield* Effect.promise(file);
 
-      const sent = yield* Effect.promise(async () => outbox.send(binding, `mail:${view.id}`, {
-        from, to: [...outgoing.to], subject: outgoing.subject, text: outgoing.text, headers: replyHeaders(headerId, inReplyTo),
-      }, Date.now()));
+      const sent = yield* Effect.promise(async () => outbox.send(binding, `${MAIL_SEND_KEY}${view.id}`, mailboxEmail({
+        from, to: outgoing.to, cc: outgoing.cc ?? [], subject: outgoing.subject, text: outgoing.text, inReplyTo,
+      }), Date.now()));
 
-      // Not yet sent is still queued: the outbox retries on this object's alarm.
-      if (sent.status !== 'failed') store.markSent(view.id, 'sent');
-      else yield* Effect.promise(arm);
+      // Not yet sent is still queued: the outbox retries on this object's alarm, and the view reads its state from it.
+      if (sent.status === 'failed') yield* Effect.promise(arm);
 
-      return { ...view, sendState: sent.status === 'failed' ? 'queued' : 'sent' };
+      return (yield* Effect.promise(async () => store.messageView(view.threadId, view.id))) ?? view;
     });
   }
 
@@ -220,15 +212,15 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   }
 
   draftFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView> {
-    return settle(this.served(() => this.store.draftFor(caller, message)));
+    return settle(this.served(async () => this.store.draft(this.store.messageFor(caller, message))));
   }
 
   sendFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView> {
-    return settle(this.sendOut(() => this.store.queueFor(caller, message)));
+    return settle(this.sendOut(async () => this.store.queue(this.store.messageFor(caller, message))));
   }
 
   updateFor(caller: MailCaller, thread: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): Promise<MailThreadSummary> {
-    return settle(this.served(() => this.store.updateFor(caller, thread, change)));
+    return settle(this.changed(change, () => this.store.updateFor(caller, thread, change)));
   }
 
   setWake(path: string, wake: MailWake, allow?: readonly string[]): Promise<MailBox> {

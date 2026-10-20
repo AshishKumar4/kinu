@@ -13,11 +13,12 @@ import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
-  err, isMailLabel, json, mailAddressOf, mailThreadText, objectNamed, ownerCaller, safeJson,
-  type MailListQuery, type MailView, type ObjectNamespace, type OwnerCapabilityEnv,
+  err, isMailLabel, json, MAIL_MESSAGE_FIELDS, MAIL_VIEWS, MAIL_WAKES, MailAddress, mailText, mailAddressOf, mailThreadText, objectNamed, ownerCaller, safeJson,
+  type MailListQuery, type ObjectNamespace, type OwnerCapabilityEnv,
 } from '@kinu.run/core';
 import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
 import type { FamilyEnv } from '../api/context';
+import { isListedOperator } from '../control-plane/admin-caller';
 import type { OrchestratorAgent } from '../orchestrator';
 import { installedAssistant } from '../user/blueprint-install';
 import type { UserDO } from '../user/user-do';
@@ -39,16 +40,10 @@ export interface MailRoutesEnv extends OwnerCapabilityEnv {
 
 type MailContext = Context<FamilyEnv<MailRoutesEnv>>;
 
-const VIEWS = ['important', 'all', 'sent', 'drafts', 'trash'] as const satisfies readonly MailView[];
-
-const Address = v.pipe(v.string(), v.trim(), v.toLowerCase(), v.email(), v.maxLength(254));
-
 const Outgoing = v.object({
   path: v.pipe(v.string(), v.maxLength(41)),
-  to: v.pipe(v.array(Address), v.minLength(1), v.maxLength(50)),
-  cc: v.optional(v.pipe(v.array(Address), v.maxLength(50))),
-  subject: v.pipe(v.string(), v.maxLength(998)),
-  text: v.pipe(v.string(), v.maxLength(1_000_000)),
+  ...MAIL_MESSAGE_FIELDS,
+  text: mailText('person'),
   inReplyTo: v.optional(v.nullable(v.string())),
   threadId: v.optional(v.string()),
 });
@@ -61,15 +56,15 @@ const Handed = v.object({ thread: v.pipe(v.string(), v.nonEmpty(), v.maxLength(6
 
 const Wake = v.object({
   path: v.pipe(v.string(), v.maxLength(41)),
-  wake: v.picklist(['owner', 'allowlist', 'verified', 'never']),
-  allow: v.optional(v.pipe(v.array(Address), v.maxLength(200))),
+  wake: v.picklist(MAIL_WAKES),
+  allow: v.optional(v.pipe(v.array(MailAddress), v.maxLength(200))),
 });
 
 /** Whether the signed-in person may hold an address on this deployment (docs/MAIL.md §1). */
 function mayClaim(env: MailRoutesEnv, email: string): boolean {
   if (env.MAIL_ACCOUNTS === 'everyone') return true;
 
-  return (env.CONTROL_PLANE_ADMINS ?? '').split(',').some((each) => each.trim().toLowerCase() === email.trim().toLowerCase());
+  return isListedOperator(env, email);
 }
 
 const mailbox = (c: MailContext): MailboxReach => objectNamed(c.env.MAILBOX, c.get('identity').userId);
@@ -150,9 +145,9 @@ mailRoutes.get('/api/user/mail/important', async (c) => {
 });
 
 mailRoutes.get('/api/user/mail/threads', async (c) => {
-  const view = v.safeParse(v.picklist(VIEWS), c.req.query('view') ?? 'all');
+  const view = v.safeParse(v.picklist(MAIL_VIEWS), c.req.query('view') ?? 'all');
 
-  if (!view.success) return err(400, `view is one of ${VIEWS.join(', ')}`);
+  if (!view.success) return err(400, `view is one of ${MAIL_VIEWS.join(', ')}`);
 
   if (await addressOf(c) === null) return err(404, 'This account has no mail address yet.');
 

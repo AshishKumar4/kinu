@@ -105,7 +105,7 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
 
     return (
       <>
-        <MailSendBody send={{ agent: mail.by, from: mail.from, to: mail.to, subject: mail.subject }} text={mail.text} />
+        <MailSendBody send={mail} text={mail.text} />
         <div className="mt-1 p-meta p-text-3">Approving sends exactly this, once · asked {timeAgo(action.at)}</div>
       </>
     );

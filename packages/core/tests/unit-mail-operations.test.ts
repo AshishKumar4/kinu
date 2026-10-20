@@ -7,6 +7,7 @@ import {
   type JsonValue,
 } from '../src/index';
 import { createMailCodemodeProvider, type MailSendApprovals } from '../src/tools/mail-codemode';
+import { inWorkMode, providersInWorkMode } from '../src/execution/work-mode';
 import type { MailSend } from '../src/safety/approval-kind';
 import type { Served } from '../src/operations/operation';
 import { makeSqlExec } from './helpers';
@@ -39,12 +40,13 @@ function mailbox(): MailboxAgentCalls {
     readableBy: (caller) => Promise.resolve(store.readableBy(caller)),
     findFor: (caller, query) => Promise.resolve(store.findFor(caller, query)),
     readFor: async (caller, thread) => store.readFor(caller, thread),
-    untriagedFor: async (caller, limit) => store.untriagedFor(caller, limit),
-    draftFor: async (caller, message) => store.draftFor(caller, message),
+    untriagedFor: async (caller, limit, skip) => store.untriagedFor(caller, limit, skip),
+    triagedFor: (caller, thread, version, pick) => Promise.resolve(store.triagedFor(caller, thread, version, pick)),
+    draftFor: async (caller, message) => store.draft(store.messageFor(caller, message)),
     sendFor: async (caller, message) => {
       sent.push(message);
 
-      return (await store.queueFor(caller, message)).view;
+      return (await store.queue(store.messageFor(caller, message))).view;
     },
     updateFor: (caller, thread, change) => Promise.resolve(store.updateFor(caller, thread, change)),
   };
@@ -149,6 +151,11 @@ describe('a message leaves only on the owner\'s approval of that exact message',
     expect(sent).toHaveLength(1);
   });
 
+  test('an address is read as the person\'s own sends read it: trimmed and lowercased, so the card shows what leaves', async () => {
+    expect(await call(SCOUT, 'send', { ...reply, to: [' Dana@Northwind.IO '], cc: ['Priya@Raman.dev'] })).toMatchObject({ status: 'asked' });
+    expect(parked).toMatchObject([{ to: ['dana@northwind.io'], cc: ['priya@raman.dev'] }]);
+  });
+
   test('approving one message admits no other: a changed word asks anew', async () => {
     const asked = v.parse(Asked, await call(SCOUT, 'send', reply));
 
@@ -186,5 +193,25 @@ describe('what mail says is input, never an instruction', () => {
     const { thread } = v.parse(v.object({ thread: v.string() }), await call(SCOUT, 'draft', { to: ['dana@northwind.io'], subject: 'Webhooks', text: 'Checking the signing change.' }));
 
     expect(await call(SCOUT, 'read', { thread })).toMatchObject({ untrusted: true, subject: 'Webhooks' });
+  });
+});
+
+describe('a Plan turn, which mail may have started, changes nothing it cannot undo', () => {
+  test('it may mark a thread read, but moving one to Trash waits for a Build turn', async () => {
+    const { thread } = v.parse(v.object({ thread: v.string() }), await call(MAIN, 'draft', { to: ['dana@northwind.io'], subject: 'Webhooks', text: 'Checking the signing change.' }));
+    const [plan] = providersInWorkMode('plan', [createMailCodemodeProvider({ caller: () => MAIN, mailbox, approvals })]);
+    const tools = plan?.tools ?? {};
+    // As a program calls them: the thread, then the options.
+    const run = (name: string, ...args: JsonValue[]) => inWorkMode('plan', async () => tools[name]?.execute(...args));
+
+    expect(await run('update', thread, { read: false })).toMatchObject({ id: thread });
+    await run('update', thread, { trashed: true });
+    await run('trash', thread);
+
+    expect((await store.thread(thread))?.thread.trashedAt).toBeNull();
+    expect(await call(MAIN, 'trash', { thread })).toMatchObject({ id: thread });
+    expect((await store.thread(thread))?.thread.trashedAt).toBe(NOW);
+    await call(MAIN, 'trash', { thread, restore: true });
+    expect((await store.thread(thread))?.thread.trashedAt).toBeNull();
   });
 });

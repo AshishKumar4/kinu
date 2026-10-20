@@ -51,8 +51,19 @@ afterEach(() => { globalThis.fetch = originalFetch; });
 
 interface StoredCredential { key: string; baseURL?: string; headers?: Record<string, string> }
 
-function setupEnv(stored: StoredCredential[]) {
+/** `stored`, each credential replaced by `replacedBy`'s of its key right after its first read, as the owner saving a
+ *  new endpoint and key while a forward reads the old one. */
+function setupEnv(stored: StoredCredential[], replacedBy: StoredCredential[] = []) {
   const byKey = new Map(stored.map((c) => [c.key, c]));
+
+  const read = (key: string) => {
+    const now = byKey.get(key);
+    const next = replacedBy.find((c) => c.key === key);
+
+    if (next !== undefined) byKey.set(key, next);
+
+    return now;
+  };
 
   const userDO = cliAccount({
     async verifyCliToken(_caller: UserCaller, bearer: string) {
@@ -78,12 +89,17 @@ function setupEnv(stored: StoredCredential[]) {
       return stored.map((c) => ({ key: c.key, kind: 'bearer' as const, createdAt: 0, updatedAt: 0 }));
     },
     async getCredentialEndpoint(_caller: UserCaller, key: string) {
-      const baseURL = byKey.get(key)?.baseURL;
+      const baseURL = read(key)?.baseURL;
 
       return baseURL === undefined ? null : { baseURL };
     },
     async getAuthHeaders(_caller: UserCaller, key: string) {
-      return byKey.get(key)?.headers ?? null;
+      return read(key)?.headers ?? null;
+    },
+    async getAuth(_caller: UserCaller, key: string) {
+      const credential = read(key);
+
+      return credential?.headers === undefined ? null : { headers: credential.headers, ...(credential.baseURL !== undefined && { baseURL: credential.baseURL }) };
     },
   });
 
@@ -376,6 +392,21 @@ describe('POST /forward', () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]?.url).toBe('https://api.openai.com/v1/chat/completions');
     expect(seen.every((s) => !s.url.includes('attacker.example'))).toBe(true);
+  });
+
+  // The SelfishJaguar audit: the endpoint and the key were read in two calls, so a credential replaced between them
+  // sent the new key to the old endpoint, which the forward had validated the target against.
+  test('a credential replaced mid-forward never sends one endpoint\'s key to the other\'s', async () => {
+    const upstream = captureUpstream(() => Response.json({ ok: true }));
+
+    const env = setupEnv(
+      [{ key: 'openai-compat', baseURL: 'https://old-gateway.example/v1', headers: { authorization: 'Bearer old-key' } }],
+      [{ key: 'openai-compat', baseURL: 'https://new-gateway.example/v1', headers: { authorization: 'Bearer new-key' } }],
+    );
+
+    handled(await providerProxy(forwardRequest({ cred: 'openai-compat', target: 'https://old-gateway.example/v1/chat/completions' }), env));
+    expect(upstream.map((sent) => [new URL(sent.url).origin, sent.headers.get('authorization')]))
+      .toEqual([['https://old-gateway.example', 'Bearer old-key']]);
   });
 
   test('a target that only looks like the provider is refused', async () => {

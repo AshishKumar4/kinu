@@ -224,6 +224,19 @@ describe('personal part calls on the viewer\'s own account', () => {
     expect(recordedMcpToolCalls()).toEqual([]);
   });
 
+  test('a paused run\'s call is replayed only where running it would go: one JSON object, on a connection offered', async () => {
+    const { user, caller, read } = await connection();
+    const malformed = ([[ROOT, ROOT], [], ['text']] satisfies JsonValue[][]).map((args) => ({ ...read, args }));
+
+    await user.userDO.consentSlate(caller, CONSENT);
+    // A consent for the whole connection, which a call with no readable root would otherwise fall under.
+    await user.userDO.consentSlate(caller, { ...CONSENT, root: {}, tools: ['list_issues'], effects: false });
+
+    for (const call of malformed) await expect(user.userDO.slatePartTool(caller, call)).rejects.toMatchObject({ code: 'bad_input' });
+
+    expect(await user.userDO.slatePartConsented(caller, [read, ...malformed, { ...read, server: 'github' }])).toEqual([true, false, false, false, false]);
+  });
+
   test('AI consent names run or stream at this revision and delegates only to this account\'s slateAi', async () => {
     const user = account();
     const caller = await testOwner();

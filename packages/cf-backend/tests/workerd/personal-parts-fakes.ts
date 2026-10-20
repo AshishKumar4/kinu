@@ -1,31 +1,26 @@
 /**
  * Each viewer's own account as a personal part reaches it, faked where it holds the connections and decided as the real
- * account decides: `partCallVerdict` on their consents, `containedTool` on the tool's own marks, and one effect per
+ * account decides: `resolvePartCall` over their connections' tools, `partCallVerdict` on their consents, and one effect per
  * approval (`EffectApprovals`). Every call a connection received is logged, so a test sees what was dispatched.
  */
 import {
-  canonicalRoot, containedTool, EffectApprovals, partCallRoot, partCallVerdict,
-  type EffectCall, type SlateConsent, type ToolContract } from '@kinu.run/core/slates';
+  canonicalRoot, EffectApprovals, partCallVerdict, resolvePartCall,
+  type EffectCall, type SlateConsent } from '@kinu.run/core/slates';
 import type { JsonValue } from '@kinu.run/core';
 import type { PartAiAnswer, PartConnectionAnswer } from '@kinu.run/core/slates';
 import type { PartConnections, PartToolCall, PartViewer } from '../../src/slates/part-runs';
 
-/** Each server's tools by their own marks: GitHub's read is read-only and closed-world; Fetch's get may reach anywhere. */
-/** A connection's tool as each viewer's catalog knows it: GitHub is the GitHub preset; the rest are no preset's. */
-function contractOf(server: string, tool: string): ToolContract {
-  return { preset: server === 'mcp.GitHub' ? 'github' : null, tool };
-}
-
-interface ToolMarks {
-  readonly readOnly?: true;
-  readonly closedWorld?: true;
-}
-
-const TOOLS = new Map<string, ReadonlyMap<string, ToolMarks>>([
-  // The GitHub preset's own tools, scoped to the repository their owner and repo name (share-policy.ts).
-  ['mcp.GitHub', new Map<string, ToolMarks>([['issue_read', { readOnly: true, closedWorld: true }], ['add_issue_comment', {}], ['search_issues', { readOnly: true, closedWorld: true }]])],
-  ['mcp.Fetch', new Map<string, ToolMarks>([['get', { readOnly: true }]])],
-]);
+/**
+ * Each viewer's connections' tools, as their account's descriptors name them: GitHub is the GitHub preset, whose tools
+ * are scoped to the repository their owner and repo name (share-policy.ts); its reads are read-only and closed-world.
+ * Fetch is no preset's, and its get may reach anywhere.
+ */
+const TOOLS = [
+  { serverName: 'GitHub', name: 'issue_read', presetId: 'github', readOnly: true, closedWorld: true },
+  { serverName: 'GitHub', name: 'add_issue_comment', presetId: 'github' },
+  { serverName: 'GitHub', name: 'search_issues', presetId: 'github', readOnly: true, closedWorld: true },
+  { serverName: 'Fetch', name: 'get', readOnly: true },
+] as const;
 
 /** What a viewer's private issue says: theirs alone. */
 export function privateIssue(email: string): string {
@@ -89,13 +84,14 @@ export class FakeViewerAccounts implements PartConnections {
     await Promise.resolve();
     before?.();
     admit();
-    const descriptor = TOOLS.get(call.server)?.get(call.tool);
+    const resolved = resolvePartCall(TOOLS, call);
 
-    if (descriptor === undefined) return { kind: 'missing', message: `${viewer.email}'s ${call.server} offers no ${call.tool}` };
-    const payload: JsonValue = call.args.length === 1 ? call.args[0] ?? null : call.args;
-    const root = partCallRoot(contractOf(call.server, call.tool), payload);
+    if (resolved.kind === 'missing') return { kind: 'missing', message: `${viewer.email}'s ${call.server} offers no ${call.tool}` };
+
+    if (resolved.kind === 'malformed') return Promise.reject(new Error(`${call.server}.${call.tool} takes one JSON object argument.`));
+    const { payload, call: { root } } = resolved;
     const consent = this.consents.get(JSON.stringify([viewer.email, call.workspace, call.slate, call.server, canonicalRoot(root)])) ?? null;
-    const verdict = partCallVerdict(consent, { server: call.server, root, tool: call.tool, contained: containedTool(descriptor) }, call.revision, false);
+    const verdict = partCallVerdict(consent, resolved.call, call.revision, false);
 
     if (verdict.kind === 'needs-consent') return verdict;
     const effect: EffectCall = { workspace: call.workspace, slate: call.slate, revision: call.revision, server: call.server, tool: call.tool, root, payload };
@@ -139,11 +135,12 @@ export class FakeViewerAccounts implements PartConnections {
   consented(viewer: PartViewer, calls: readonly PartToolCall[]): Promise<readonly boolean[]> {
     return Promise.resolve(calls.map((call) => {
       if (call.server === 'ai') return true;
-      const descriptor = TOOLS.get(call.server)?.get(call.tool);
-      const root = partCallRoot(contractOf(call.server, call.tool), call.args.length === 1 ? call.args[0] ?? null : call.args);
-      const consent = this.consents.get(JSON.stringify([viewer.email, call.workspace, call.slate, call.server, canonicalRoot(root)])) ?? null;
+      const resolved = resolvePartCall(TOOLS, call);
 
-      return descriptor !== undefined && partCallVerdict(consent, { server: call.server, root, tool: call.tool, contained: containedTool(descriptor) }, call.revision, true).kind === 'run';
+      if (resolved.kind !== 'resolved') return false;
+      const consent = this.consents.get(JSON.stringify([viewer.email, call.workspace, call.slate, call.server, canonicalRoot(resolved.call.root)])) ?? null;
+
+      return partCallVerdict(consent, resolved.call, call.revision, true).kind === 'run';
     }));
   }
 

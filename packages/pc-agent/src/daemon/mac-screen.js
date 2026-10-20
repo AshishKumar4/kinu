@@ -361,4 +361,4 @@ function createMacSource({ home, log, spawn = Bun.spawn, release = os.release(),
   });
 }
 
-module.exports = { createMacSource, macKeyCode };
+module.exports = { createMacSource };

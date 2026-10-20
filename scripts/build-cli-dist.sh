@@ -54,11 +54,17 @@ BUN="$ROOT/node_modules/.bin/bun"
 # place — the exact failure the checksum gate exists for. Caught here instead.
 MAX_ASSET_BYTES=$((25 * 1024 * 1024))
 
-PLATFORMS=(darwin-arm64 darwin-x64 linux-arm64 linux-x64)
+# The archives by core's inventory (packages/core/src/http/deployed-assets.ts), which the launcher and the update
+# protocol download from, read through Bun as the external-package set below is: one platform list, one name each.
+inventory="$("$BUN" -e 'const a = await import(process.argv[1]); for (const p of a.CLI_DIST_PLATFORMS) console.log(p, a.cliArchiveName(p)); console.log("runtime", a.CLI_RUNTIME_PATH.slice(a.CLI_RUNTIME_PATH.lastIndexOf("/") + 1))' "$ROOT/packages/core/src/http/deployed-assets.ts")"
+PLATFORMS=()
+ARCHIVES=()
+while read -r platform archive; do
+  # The runtime unpacks into the same tree as a platform artifact, so the launcher extracts both over one directory
+  # and moves it into place once.
+  if [ "$platform" = runtime ]; then CPYTHON_ARTIFACT="$archive"; else PLATFORMS+=("$platform"); ARCHIVES+=("$archive"); fi
+done <<< "$inventory"
 NATIVE_SCOPE="@opentui"
-# Unpacks into the same tree as a platform artifact, so the launcher extracts
-# both over one directory and moves it into place once.
-CPYTHON_ARTIFACT="kinu-runtime-cpython.tar.gz"
 CPYTHON_PATH="node_modules/@nimbus-sh/runtime-cpython"
 
 # Shared with the Harbor compiled build: one authoritative external-asset set.
@@ -205,7 +211,8 @@ publish() {
   echo "build-cli-dist: published $name ($(( bytes / 1024 )) KiB)"
 }
 
-for platform in "${PLATFORMS[@]}"; do
+for at in "${!PLATFORMS[@]}"; do
+  platform="${PLATFORMS[$at]}"
   # The whole scope, not just this platform's directory: the launch check above
   # staged the host's native library, and leaving it in place shipped it inside
   # every other platform's artifact.
@@ -230,8 +237,8 @@ for platform in "${PLATFORMS[@]}"; do
     mv "$tmp/native-$platform/package" "$native_dir"
   fi
 
-  tar -czf "$OUT_DIR/kinu-cli-$platform.tar.gz" --exclude "kinu/$CPYTHON_PATH" -C "$tmp" kinu
-  publish "kinu-cli-$platform.tar.gz"
+  tar -czf "$OUT_DIR/${ARCHIVES[$at]}" --exclude "kinu/$CPYTHON_PATH" -C "$tmp" kinu
+  publish "${ARCHIVES[$at]}"
 done
 
 tar -czf "$OUT_DIR/$CPYTHON_ARTIFACT" -C "$tmp" "kinu/$CPYTHON_PATH"

@@ -151,7 +151,20 @@ export const READS_TERMINAL = `reads_terminal() {
 /** A tmux session name the attach and the read can pass unquoted: tmux reads `.` and `:` as targets. */
 const SessionIdSchema = v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9-]{0,31}$/u));
 
-export const SessionNameSchema = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(40));
+/** A session's name, as the strip shows it; a PC's sessions take the same rule (pc-agent daemon/terminals.js). */
+const SESSION_NAME_MAX = 40;
+
+export const SessionNameSchema = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(SESSION_NAME_MAX));
+
+/** The rule {@link SessionNameSchema} holds a name to, as a refusal says it. */
+export const SESSION_NAME_RULE = `a session's name is 1 to ${String(SESSION_NAME_MAX)} characters`;
+
+/** A session's name as a person typed it, trimmed; null when it breaks {@link SESSION_NAME_RULE}. */
+export function sessionName(typed: string): string | null {
+  const parsed = v.safeParse(SessionNameSchema, typed);
+
+  return parsed.success ? parsed.output : null;
+}
 
 const SessionRecordSchema = v.object({
   id: SessionIdSchema,
@@ -176,7 +189,7 @@ export function jobSessionId(processId: string): string {
 export function jobSessionName(command: string): string {
   const line = command.replace(/\s+/gu, ' ').trim();
 
-  return line.length <= 40 ? line : `${line.slice(0, 37)}...`;
+  return line.length <= SESSION_NAME_MAX ? line : `${line.slice(0, SESSION_NAME_MAX - 3)}...`;
 }
 
 /** The session a box has before anyone opens another, and again when every other is closed. */
@@ -255,7 +268,12 @@ function recordFields(line: string): string[] {
   return fields;
 }
 
-const SHELLS = new Set(['bash', 'sh', 'zsh', 'fish', 'dash']);
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'fish', 'dash', 'ksh']);
+
+/** A shell at its prompt, its login form (`-bash`) too: what holds a terminal's foreground while nothing else runs. */
+export function isShell(command: string): boolean {
+  return SHELLS.has(command.replace(/^-/u, ''));
+}
 
 /** A pane: the session it is in, its folder, its foreground command, and its last command's exit, time and line. */
 const PaneRow = v.tuple([v.literal('P'), SessionIdSchema, v.string(), v.string(), v.string(), v.string(), v.string()]);
@@ -275,7 +293,7 @@ function paneState([, id, cwd, command, exit, at, last]: v.InferOutput<typeof Pa
   return {
     id,
     cwd,
-    running: SHELLS.has(command) ? null : command,
+    running: isShell(command) ? null : command,
     last: ended.success ? { exit: ended.output[0], at: ended.output[1] * 1000, command: decoded(last) } : null,
     ports: [],
     branch: null,
@@ -347,11 +365,12 @@ export function newSessionId(records: readonly SessionRecord[]): string {
   }
 }
 
-/** The next free name in the `shell`, `shell 2` sequence. */
+/** The next free name in the `shell`, `shell 2` sequence; a PC names its sessions by it too. */
 export function newSessionName(records: readonly SessionRecord[]): string {
   const names = new Set(records.map((record) => record.name));
+  const first = FIRST_SESSION.name;
 
-  if (!names.has('shell')) return 'shell';
+  if (!names.has(first)) return first;
 
-  for (let n = 2; ; n++) if (!names.has(`shell ${String(n)}`)) return `shell ${String(n)}`;
+  for (let n = 2; ; n++) if (!names.has(`${first} ${String(n)}`)) return `${first} ${String(n)}`;
 }

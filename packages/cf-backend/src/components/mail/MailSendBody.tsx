@@ -2,24 +2,21 @@
  * An agent's outgoing mail as its approval card shows it in Needs-you (`AttentionStack`): the exact message, read as a
  * letter. Approving sends exactly these bytes, once (docs/MAIL.md §3); to change them, the owner writes in Mail.
  */
+import type { MailSend } from "@kinu.run/core";
 import { inputCls } from "@/components/ui/form";
 
-export interface MailSend {
-  /** The agent that wrote it. */
-  readonly agent: string;
-  readonly from: string;
-  readonly to: readonly string[];
-  readonly subject: string;
-}
+/** The message's envelope, as the approval holds it: `by` is the agent that wrote it. */
+type MailEnvelope = Pick<MailSend, "by" | "from" | "to" | "cc" | "subject">;
 
 /** `onText`: the body as an editor, where the owner writes the mail (the Mail wireframe); absent, it is read. */
-export function MailSendBody({ send, text, onText }: { send: MailSend; text: string; onText?: (text: string) => void }) {
+export function MailSendBody({ send, text, onText }: { send: MailEnvelope; text: string; onText?: (text: string) => void }) {
   return (
     <>
-      <div className="p-row-text p-text">{send.agent} wants to send this mail</div>
+      <div className="p-row-text p-text">{send.by} wants to send this mail</div>
       <dl className="mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 p-meta">
         <dt className="p-text-3">From</dt><dd className="truncate p-text-2">{send.from}</dd>
         <dt className="p-text-3">To</dt><dd className="truncate p-text-2">{send.to.join(", ")}</dd>
+        {send.cc.length > 0 && <><dt className="p-text-3">Cc</dt><dd className="truncate p-text-2" data-mail-send-cc>{send.cc.join(", ")}</dd></>}
         <dt className="p-text-3">Subject</dt><dd className="truncate p-text-2">{send.subject}</dd>
       </dl>
       {onText !== undefined

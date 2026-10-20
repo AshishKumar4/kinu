@@ -93,6 +93,11 @@ const CREATE_TOOL_CONTRACT = 'Save a crafted tool, callable as `tools.<name>(arg
   + `${CRAFTED_TOOL_BODY}; helpers may precede it. In its body, ${WORKSPACE_FILE_BINDINGS}, and call `
   + '`tools.<name>(args)`; `require`, `import` and `eval` are refused.';
 
+/** The workspace executor's capabilities over the toolchain its host declares: its row's, and an inspection's of it. */
+export function workspaceCapabilities(toolchain: readonly ExecutorCapability[] = []): Set<ExecutorCapability> {
+  return new Set<ExecutorCapability>(['javascript', 'typescript', 'shell', 'fs_shared', ...toolchain]);
+}
+
 export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider {
   const { vfs, craftStore, shell, sql, actor, resourceLimits } = deps;
 
@@ -292,9 +297,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     homeDir: async () => planes.cwd,
     // The plane's own root: a relative path starts where the file plane starts it.
     fileRoot: async () => ({ root: '' }),
-    capabilities: new Set<ExecutorCapability>([
-      'javascript', 'typescript', 'shell', 'fs_shared', ...(deps.toolchain ?? []),
-    ]),
+    capabilities: workspaceCapabilities(deps.toolchain),
     filesOwner: deps.filesOwner,
     isAvailable: () => true,
     connect: async () => {},

@@ -16,8 +16,10 @@ import {
   WorkspaceActorDirectory,
   createAgentConfigStore, getCurrentScaffoldVersion,
   type ActorHandle,
+  type ExecutorCapability,
   type SqlExecutor,
   type WorkspaceActor,
+  workspaceCapabilities,
   readWorkspaceWork,
   type WorkspaceWork,
   createFactsStore,
@@ -95,7 +97,7 @@ export interface LocalExecutorInfo {
   name: string;
   kind: 'workspace';
   status: 'connected';
-  capabilities: string[];
+  capabilities: ExecutorCapability[];
 }
 
 export interface LocalExecResult {
@@ -370,16 +372,9 @@ export function getLocalQuality(name: string, days?: number): QualityDay[] {
   return withLocalDb(name, (db) => qualitySeries(makeSql(db), mainActor(db), days === undefined ? {} : { days }));
 }
 
-/** Uses the live provider's toolchain probe so this listing matches the row the agent is given. */
+/** The live provider's declaration over the same toolchain probe, so this listing is the row the agent is given. */
 export function listLocalExecutors(): LocalExecutorInfo[] {
-  return [
-    {
-      name: 'workspace',
-      kind: 'workspace',
-      status: 'connected',
-      capabilities: [...new Set(['shell', 'fs', 'memory', 'craft', ...hostToolchainCapabilities()])],
-    },
-  ];
+  return [{ name: 'workspace', kind: 'workspace', status: 'connected', capabilities: [...workspaceCapabilities(hostToolchainCapabilities())] }];
 }
 
 export function getLocalToolSurface(name: string): {

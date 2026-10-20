@@ -1,6 +1,7 @@
 import { attempt, KinuError, settle, settleSync, tolerate } from '@kinu.run/core/obs';
+import { hostGenerationReader } from '../../cli-backend/src/process-generation';
 import { Effect } from 'effect';
-import { closeSync, fstatSync, openSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { reportingEnv } from './ambient-env';
 
 /**
@@ -99,9 +100,6 @@ const NONE_LEFT = 1;
 /** As a group, 0 is ours and 1 is everyone. */
 const FIRST_OWN_PID = 2;
 
-/** `ps` counts whole seconds; file clocks are coarse. */
-const CLOCK_SLACK_S = 2;
-
 function waitForExit(pid: number): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
     const waiter = process.platform === 'darwin'
@@ -119,73 +117,67 @@ export async function awaitExit(pid: number): Promise<void> {
   return settle(waitForExit(pid));
 }
 
+/**
+ * A process a fixture started, by its pid and the run of that pid it was when recorded (cli-backend's process-generation.ts): a
+ * pid an unrelated process holds now reads as another generation, and is never killed.
+ */
 export interface Recorded {
   readonly pid: number;
-  /** mtime, epoch ms. */
-  readonly writtenAt: number;
+  readonly generation: string;
 }
 
-/** One descriptor, so a replaced record cannot mix pid and mtime. */
-export function recordedIn(file: string, pattern = /^\s*(\d+)/u): Recorded | null {
-  const descriptor = tolerate(() => openSync(file, 'r'), 'enoent');
+const GENERATIONS = hostGenerationReader();
 
-  if (descriptor === undefined) return null;
-  let writtenAt: number;
-  let text: string;
+/** The run `pid` names now; null when no process holds it. */
+function generationOf(pid: number): Effect.Effect<string | null, KinuError> {
+  if (GENERATIONS === null) return Effect.fail(new KinuError('io', `this host (${process.platform}) reads no process generation`));
+  const probe = GENERATIONS.read(pid);
 
-  try {
-    writtenAt = fstatSync(descriptor).mtimeMs;
-    text = readFileSync(descriptor, 'utf8');
-  } finally {
-    closeSync(descriptor);
+  if (probe.state === 'unreadable') return Effect.fail(new KinuError('io', `pid ${String(pid)}'s generation could not be read`));
+
+  return Effect.succeed(probe.state === 'read' ? probe.identity : null);
+}
+
+/** Whether the process holding `pid` names `fixture` in its command line or environment, as a fixture's own process
+ *  names its home or root. */
+function namesFixture(pid: number, fixture: string): boolean {
+  if (process.platform === 'darwin') {
+    const ps = Bun.spawnSync({ cmd: ['/bin/ps', '-E', '-ww', '-o', 'command=', '-p', String(pid)], env: { LC_ALL: 'C', LANG: 'C' }, stdout: 'pipe', stderr: 'ignore' });
+
+    return ps.stdout.toString().includes(fixture);
   }
 
-  const pid = Number(pattern.exec(text)?.[1]);
+  // A process gone since the probe answers ESRCH or ENOENT; one not ours, EACCES: none is the fixture's.
+  const read = (name: string): string => tolerate(() => tolerate(() => tolerate(() => readFileSync(`/proc/${String(pid)}/${name}`, 'utf8'), 'esrch'), 'enoent'), 'eacces') ?? '';
 
-  return settleSync(Number.isSafeInteger(pid) && pid >= FIRST_OWN_PID
-    ? Effect.succeed({ pid, writtenAt })
-    : Effect.fail(new KinuError('io', `${file} records no pid: ${JSON.stringify(text)}`)));
+  return read('cmdline').includes(fixture) || read('environ').includes(fixture);
 }
 
-/** `ps` stat and etime, Linux and macOS. */
-const STATE_AND_ELAPSED = /^\s*(\S+)\s+(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)\s*$/u;
+/**
+ * The process `file` records, when the process holding that pid names `fixture`, the home or root its run was given;
+ * null when none does. A pidfile outlives its writer and its pid may be a stranger's by now, so a pid is judged by who
+ * holds it, never by when: the generation is read before and after the check, so both are about one run.
+ */
+export function recordedIn(file: string, fixture: string, pattern = /^\s*(\d+)/u): Recorded | null {
+  return settleSync(Effect.gen(function* () {
+    const text = tolerate(() => readFileSync(file, 'utf8'), 'enoent');
 
-interface Holder {
-  /** Exited, unreaped. */
-  readonly zombie: boolean;
-  readonly earliestStart: number;
-}
+    if (text === undefined) return null;
+    const pid = Number(pattern.exec(text)?.[1]);
 
-function holderOf(pid: number): Effect.Effect<Holder | null, KinuError> {
-  return Effect.gen(function* () {
-    const asked = Date.now();
-    const ps = yield* ran(['ps', '-o', 'stat=,etime=', '-p', String(pid)]);
+    if (!Number.isSafeInteger(pid) || pid < FIRST_OWN_PID) return yield* Effect.fail(new KinuError('io', `${file} records no pid: ${JSON.stringify(text)}`));
+    const generation = yield* generationOf(pid);
 
-    if (ps.exitCode === NONE_LEFT && ps.stdout.trim() === '') return null;
+    if (generation === null || !namesFixture(pid, fixture) || (yield* generationOf(pid)) !== generation) return null;
 
-    if (ps.exitCode !== 0) return yield* Effect.fail(new KinuError('io', `ps -p ${String(pid)} failed (${String(ps.exitCode)}): ${ps.stderr}`));
-    const [, state, days = '0', hours = '0', minutes, seconds] = STATE_AND_ELAPSED.exec(ps.stdout) ?? [];
-
-    if (state === undefined || minutes === undefined || seconds === undefined) {
-      return yield* Effect.fail(new KinuError('io', `ps gave pid ${String(pid)} no state and elapsed time: ${ps.stdout}`));
-    }
-
-    const elapsed = ((Number(days) * 24 + Number(hours)) * 60 + Number(minutes)) * 60 + Number(seconds);
-
-    return { zombie: state.startsWith('Z'), earliestStart: asked - (elapsed + CLOCK_SLACK_S) * 1000 };
-  });
-}
-
-function runs(recorded: Recorded, holder: Holder | null): boolean {
-  return holder !== null && !holder.zombie && holder.earliestStart <= recorded.writtenAt;
+    return { pid, generation };
+  }));
 }
 
 export async function killAndAwaitExit(recorded: Recorded, options: { readonly group?: boolean } = {}): Promise<void> {
   return settle(Effect.gen(function* () {
-    const holder = yield* holderOf(recorded.pid);
-    const heldByStranger = holder !== null && holder.earliestStart > recorded.writtenAt;
-
-    if (heldByStranger) return;
+    // Ended, or another process holds the pid now.
+    if ((yield* generationOf(recorded.pid)) !== recorded.generation) return;
 
     if (options.group !== true) {
       tolerate(() => process.kill(recorded.pid, 'SIGKILL'), 'esrch');
@@ -203,7 +195,7 @@ export async function killAndAwaitExit(recorded: Recorded, options: { readonly g
 
     for (const member of members.stdout.split('\n').filter((line) => line !== '')) yield* waitForExit(Number(member));
 
-    if (runs(recorded, yield* holderOf(recorded.pid))) {
+    if ((yield* generationOf(recorded.pid)) === recorded.generation && isRunning(recorded.pid)) {
       return yield* Effect.fail(new KinuError('io', `pid ${String(recorded.pid)} leads no process group`));
     }
   }));

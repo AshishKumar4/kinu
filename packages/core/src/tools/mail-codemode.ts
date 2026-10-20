@@ -15,6 +15,7 @@ import type { ActiveRoster } from '../types/dynamic-context';
 import { serve, type Served } from '../operations/operation';
 import { codemodeNamespace } from './operation-surfaces';
 import { MAIL } from '../operations/mail';
+import { filedRecipients } from '../mail/message';
 
 /** Where an agent's message waits on the owner: the workspace's approval queue, as every parked action does. */
 export interface MailSendApprovals {
@@ -84,7 +85,9 @@ function serveMail({ caller: callerNow, mailbox, approvals }: MailDeps): readonl
 
       return { draft: draft.id, thread: draft.threadId };
     }),
-    serve(MAIL.send, ({ replyTo, ...message }) => Effect.gen(function* () {
+    serve(MAIL.send, ({ replyTo, ...asked }) => Effect.gen(function* () {
+      // The card shows the recipients as the Mailbox files and sends them: what is approved is what leaves.
+      const message = filedRecipients(asked);
       const boxes = yield* Effect.promise(async () => mailbox().readableBy(caller()));
       const from = (message.box === undefined ? boxes[0] : boxes.find((box) => box.path === message.box))?.address;
 
@@ -92,7 +95,7 @@ function serveMail({ caller: callerNow, mailbox, approvals }: MailDeps): readonl
 
       const who = caller();
       const by = who.actorId === who.mainActorId ? who.title : who.name;
-      const send: MailSend = { by, from, to: message.to, cc: message.cc ?? [], subject: message.subject, text: message.text, thread: replyTo ?? null };
+      const send: MailSend = { by, from, to: message.to, cc: message.cc, subject: message.subject, text: message.text, thread: replyTo ?? null };
       const id = `mail-${sha256Hex(mailSendText(send), 32)}`;
       const verdict = approvals.ask(id, send);
 
@@ -110,6 +113,7 @@ function serveMail({ caller: callerNow, mailbox, approvals }: MailDeps): readonl
       return { status: 'sent' as const, message: sent.id, thread: sent.threadId };
     })),
     serve(MAIL.update, async ({ thread, ...change }) => summaryOf(await mailbox().updateFor(caller(), thread, change))),
+    serve(MAIL.trash, async ({ thread, restore }) => summaryOf(await mailbox().updateFor(caller(), thread, { trashed: restore !== true }))),
   ];
 }
 

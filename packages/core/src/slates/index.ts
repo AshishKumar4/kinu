@@ -69,7 +69,7 @@ export { slateAiAnswer, type SlateAiModel, type SlateAiRoute, type SlateAiSeams 
 export { answer as slateAnswer } from './controller';
 
 export {
-  EffectApprovals, canonicalRoot, containedTool, partCallRoot, partCallVerdict, plainData, preapprovedEffect, serverAuthority, slateRevision, type ToolContract,
+  EffectApprovals, canonicalRoot, partAiCall, partCallRoot, partCallVerdict, plainData, preapprovedEffect, resolvePartCall, serverAuthority, slateRevision, type ToolContract,
   type EffectCall, type LiveShareAuthority, type PartCall, type PartCallVerdict, type ServerAuthority,
 } from './share-policy';
 

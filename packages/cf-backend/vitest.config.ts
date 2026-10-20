@@ -363,6 +363,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         })],
 ['delete-all-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('delete-all-probe.ts'),
         durableObjects: { DELETE_ALL_PROBE: { className: 'DeleteAllProbeDO', useSQLite: true } } })],
+['mailbox-probe', async () => ({ ...workerCompatibility, modules: probeModules('mailbox-probe.ts', probeRuntime), bindings: { EMAIL_DOMAIN: 'kinu.run' },
+        r2Buckets: ['MAIL_BUCKET'], durableObjects: { MAILBOX: { className: 'MailboxProbeDO', useSQLite: true } } })],
 ['device-user-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('device-user-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'ZGV2aWNlLXVzZXItcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
         // Main's turns are its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
         serviceBindings: { ASSETS: agentAssets() },
@@ -553,6 +555,7 @@ const runnerOptions = {
           HIRE_WORKSPACE: { className: 'OrchestratorAgent', scriptName: 'hire-probe', useSQLite: true },
           SLATE_DURABILITY_PROBE: { className: 'SlateDurabilityProbeRoot', scriptName: 'slate-durability-probe', useSQLite: true },
           DELETE_ALL_PROBE: { className: 'DeleteAllProbeDO', scriptName: 'delete-all-probe', useSQLite: true },
+          MAILBOX: { className: 'MailboxProbeDO', scriptName: 'mailbox-probe', useSQLite: true },
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', scriptName: 'account-reset-probe', useSQLite: true },
           DEVICE_USER_PROBE: { className: 'UserDO', scriptName: 'device-user-probe', useSQLite: true },
           STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', scriptName: 'store-reset-probe', useSQLite: true },

@@ -218,7 +218,7 @@ function rootedAtHome(deviceId: string, home: string, ranIn: string): EvalSubgoa
 
 /** Put the joined machine away: the daemon `kinu connect` started detached, stopped first, then its row revoked. */
 async function detachJoined(account: DeviceAccount, deviceId: string, home: string): Promise<string | null> {
-  const daemon = recordedIn(join(home, '.kinu', 'pc-agent.pid'));
+  const daemon = recordedIn(join(home, '.kinu', 'pc-agent.pid'), home);
 
   if (daemon !== null) await killAndAwaitExit(daemon);
 

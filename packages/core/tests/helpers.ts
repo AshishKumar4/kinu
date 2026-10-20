@@ -36,7 +36,7 @@ import { createScaffoldSurface } from '../src/scaffold/surface';
 import { WORKSPACE_IDENTITY_DDL, tableExists } from '../src/identity/schema';
 import { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
-import { WORKSPACE_ROOT, workspacePath } from '../src/vfs/workspace-path';
+import { WORKSPACE_ROOT, walkedPath } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { workspaceShell } from '@kinu.run/test-utils';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
@@ -109,8 +109,9 @@ export function createMemoryVFS(db: Database): WorkspaceBundle['vfs'] {
  */
 function afterSeed(workspace: WorkspaceBundle, seed: () => Promise<void>): VFS & Required<Pick<VFS, 'readRange'>> {
   const { vfs } = workspace;
-  // The workspace store's own revisions, as production's file plane reaches them through its namespace.
-  const at = (p: string): string => workspacePath(p, WORKSPACE_ROOT);
+  // The workspace store's own revisions, as production's file plane reaches them through its namespace: joined onto the
+  // root, each '..' left for the store to walk after a link (`mounts.ts`, `walkedPath`).
+  const at = (p: string): string => walkedPath(p, WORKSPACE_ROOT);
 
   let seeded: Promise<void> | null = null;
 

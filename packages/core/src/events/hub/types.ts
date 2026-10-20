@@ -4,6 +4,7 @@ import { Data } from 'effect';
 import type { WorkMode } from '../../types/turn';
 import type { SubordinateInheritedContext } from '../../types/subordinates';
 import type { JsonObject, JsonValue } from '../../utils/json';
+import type { MailWoke } from '../../mail/mailbox-api';
 
 /** Meet-semilattice `external < authenticated < owner < self`; merge only restricts. */
 export type TrustLevel = 'external' | 'authenticated' | 'owner' | 'self';
@@ -346,7 +347,7 @@ export type IngressDescriptor =
       variant: 'email';
       payload: EmailPayload;
       /** The verified owner's instruction, or untrusted input (docs/MAIL.md §3). */
-      sender_class: 'owner' | 'input';
+      sender_class: MailWoke;
     }
   | {
       ingress: 'self_emit';
