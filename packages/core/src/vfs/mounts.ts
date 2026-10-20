@@ -11,7 +11,7 @@ import type { CheckpointFiles } from '../types/primitives';
 import { Cause, Effect, Exit, Result } from 'effect';
 import type { FilesOwner } from '../safety/command-review';
 import type { ExecutorStatus } from '../execution/types';
-import { attempt, hold, KinuError, renderThrownChain, settle, settleSync, tolerateAsync } from '../obs/index';
+import { attempt, hold, KinuError, renderThrownChain, settle, settleSync, toKinuError, tolerateAsync } from '../obs/index';
 import { isVfsError, syscallError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { CompositeVFS, type Principal, type VfsRoute } from '@nimbus-sh/core/vfs/composite.js';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -516,24 +516,31 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 
 			return target.namespace === null ? target.at : namespacePath(await route(target.namespace, target.at, options?.follow ?? true));
 		},
-		async owner(path) {
-			const target = await on(path);
+		owner: (path) => settle(Effect.gen(function* () {
+			const target = yield* Effect.promise(() => on(path));
 
-			if (target.namespace === null) return { executor: 'workspace', path: target.at };
-			const route = await routeStrict(target.namespace, target.at, true);
+			if (target.namespace === null) return { executor: 'workspace', path: target.at } satisfies PathOwner;
+			const { namespace } = target;
+
+			// A lookup's refusal stays the VFS's (a place not there); anything else is a failure to look.
+			const route = yield* Effect.tryPromise({
+				try: () => routeStrict(namespace, target.at, true),
+				catch: (cause) => (isVfsError(cause) ? cause : toKinuError({ doing: `find the machine ${path} is on`, cause, otherwise: 'io' })),
+			});
+
 			const executor = declared.find((mount) => (mount.at ?? `/${mount.name}`) === route.point)?.executor;
 
-			if (executor === undefined) return { executor: 'workspace', path: namespacePath(route) };
+			if (executor === undefined) return { executor: 'workspace', path: namespacePath(route) } satisfies PathOwner;
 
-			if (route.source === null) throw new KinuError('unavailable', route.absentReason ?? `${route.point} is not mounted`);
+			if (route.source === null) return yield* new KinuError('unavailable', route.absentReason ?? `${route.point} is not mounted`);
 
-			if (executor === 'computer') return { executor, path: route.path };
+			if (executor === 'computer') return { executor, path: route.path } satisfies PathOwner;
 			const [device = '', ...rest] = route.path.split('/').filter((part) => part !== '');
 
-			if (device === '') throw new KinuError('bad_input', `${route.point} holds one directory per device: name one, as ${route.point}/<device>/…`);
+			if (device === '') return yield* new KinuError('bad_input', `${route.point} holds one directory per device: name one, as ${route.point}/<device>/...`);
 
-			return { executor, device, path: `/${rest.join('/')}` };
-		},
+			return { executor, device, path: `/${rest.join('/')}` } satisfies PathOwner;
+		})),
 		// ENOTSUP, not EPERM: callers like the `file` scan fall back on this code; only `readBoundedWithVfsOps` may whole-read.
 		readRange: (path, offset, length) => settle(optionalOperation(() => on(path), path, 'this plane serves no ranged read', (files, at) => files.readRange?.(at, offset, length))),
 		readlink: (path) => settle(optionalOperation(() => on(path), path, 'this plane serves no readlink', (files, at) => files.readlink?.(at))),
