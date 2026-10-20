@@ -56,3 +56,27 @@ test('plans, briefs and reports about a browser check are not execution of a pro
   expect(prototypeSteps(plans, ['chess'])).toEqual([]);
   expect(prototypeSteps([...plans, { name: 'web', args: JSON.stringify({ op: 'screenshot', url: 'http://localhost:8000' }) }], ['chess'])).toHaveLength(1);
 });
+
+// chess trial 3 (rc22 2620e7c05, dir 14): the asked-for slate previewed through a name of the program's own, then looked at.
+const CHESS_ALIASED = call('const s = workspace.slates.chess;\nconst t = async (label, run) => ({ [label]: await run() });\nawait t("preview", () => s.$preview());');
+
+// The preview's URL, as rc22's transcripts redact it.
+const SHOT = { name: 'web', args: JSON.stringify({ op: 'screenshot', url: 'https://<opaque>.staging.kinu.run/' }) };
+
+test('the asked-for slate previewed through an alias of the program\'s own is previewed, and a look after it its check', () => {
+  expect(prototypeSteps([CHESS_ALIASED, SHOT], ['chess'])).toEqual([]);
+  // An alias of another slate is still a slate standing in.
+  expect(prototypeSteps([call('const s = workspace.slates["chess-test"];\nawait s.$preview();'), SHOT], ['chess'])).toHaveLength(2);
+});
+
+// chess trial 4 turn 2, dashboards trials 1-3 turn 8 (rc22): the preview made in an earlier turn is still up.
+test('a look at a slate an earlier turn previewed is its check; with no preview before, it is not', () => {
+  expect(prototypeSteps([SHOT], ['logs'], [LOGS_CHECKED])).toEqual([]);
+  expect(prototypeSteps([SHOT], ['logs'], [call('return await workspace.slates["logs-draft"].$preview();')])).toHaveLength(1);
+});
+
+// dashboards trial 3 turn 8 (rc22): a comment about a screenshot is no browser.
+test('a program that only says "screenshot" opens no browser', () => {
+  expect(prototypeSteps([call('// confirm the slate serves data (screenshot may just be racing the load)\nconst days = await workspace.slates.logs.days();')], ['logs'])).toEqual([]);
+  expect(prototypeSteps([{ name: 'shell', args: JSON.stringify({ command: 'chromium --screenshot http://localhost:8000' }) }], ['logs'])).toHaveLength(1);
+});
