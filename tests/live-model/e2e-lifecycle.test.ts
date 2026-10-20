@@ -23,7 +23,7 @@ import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import { soulIn, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { evalSession, type EvalSession, type LiveToolCall } from './harness';
 import { localTargetFolder, provisionLocalTarget, type LocalTarget } from './target-local';
-import { EVAL_BACKEND_ENV, liveChatModel, liveModelTarget,
+import { EVAL_BACKEND_ENV, liveModelTarget,
 recordLiveModelEpisode, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM, workspaceDatabase,
 } from '@kinu.run/test-utils';
 
@@ -72,6 +72,8 @@ describe('E2E Lifecycle', () => {
   let db: InstanceType<typeof Database>;
   let rt: CLIRuntime;
   let turns: CompletedTurn[];
+  /** What each turn wrote, every text part, as the owner watched it. */
+  let texts: string[];
   let callsPerTurn: (readonly LiveToolCall[])[];
   let target: LocalTarget;
   /** The product's own session over the workspace, as `kinu` runs it: its prompt, its history, its evolution. */
@@ -92,6 +94,7 @@ describe('E2E Lifecycle', () => {
     rt = target.runtime;
     db = target.db;
     turns = [];
+    texts = [];
     callsPerTurn = [];
   });
 
@@ -122,7 +125,7 @@ describe('E2E Lifecycle', () => {
     // records and can fetch it back (measured 2026-08-20: an unthreaded turn 5
     // still summarised turn 1 through it). Both are kept: a suite that only checked
     // the mechanism would pass on a model that ignored what it was handed.
-    agent = evalSession({ rt, db, model: liveChatModel(LLM_CONFIG) });
+    agent = evalSession({ rt, db, llm: LLM_CONFIG });
 
     const messages = [
       // Named so turn 2's judgement is mechanical: turn 2's own prompt never
@@ -140,12 +143,13 @@ describe('E2E Lifecycle', () => {
     for (const [i, message] of messages.entries()) {
       console.log(`  Turn ${i + 1}: ${message.slice(0, 50)}...`);
       const asked = agent.requests.prompts().length;
-      const { turn, calls } = await agent.turn(message);
+      const { turn, text, calls } = await agent.turn(message);
       sentPerTurn.push(agent.requests.prompts().slice(asked).find((prompt) => prompt.includes(message)) ?? '');
       turns.push(turn);
+      texts.push(text);
       callsPerTurn.push(calls);
-      expect(turn.assistantResponse.length).toBeGreaterThan(0);
-      console.log(`    Response: ${turn.assistantResponse.slice(0, 80)}...`);
+      expect(text.length).toBeGreaterThan(0);
+      console.log(`    Response: ${text.slice(0, 80)}...`);
 
       if (turn.toolCalls.length > 0) console.log(`    Tools: ${turn.toolCalls.map(t => t.name).join(', ')}`);
     }
@@ -167,10 +171,10 @@ describe('E2E Lifecycle', () => {
 
     // ── The BEHAVIOUR: the model used what it was handed ────────────────────
     // Turn 2 continues turn 1's work; its own prompt never says "sortNumbers".
-    const followUp = turns[1];
+    const followUp = texts[1];
 
-    if (!followUp) throw new Error('turn 2 was never recorded');
-    expect(followUp.assistantResponse,
+    if (followUp === undefined) throw new Error('turn 2 was never recorded');
+    expect(followUp,
       'turn 2 does not reference sortNumbers — the turn-1 function never reached its context, '
       + 'so this was two separate conversations, not one').toContain('sortNumbers');
 
@@ -198,13 +202,13 @@ describe('E2E Lifecycle', () => {
     // Turn 5 summarizes THIS conversation: at least two of the discussed
     // topics, by name. A model with no history answers that nothing was
     // discussed, which is exactly the red this assertion exists to produce.
-    const summary = turns[4];
+    const summary = texts[4];
 
-    if (!summary) throw new Error('turn 5 was never recorded');
-    expect(summary.assistantResponse,
+    if (summary === undefined) throw new Error('turn 5 was never recorded');
+    expect(summary,
       'turn 5\'s summary never mentions sorting — the discussed work did not reach it')
       .toMatch(/sort/i);
-    expect(summary.assistantResponse,
+    expect(summary,
       'turn 5\'s summary never mentions validation or input types — the discussed work did not reach it')
       .toMatch(/validat|input type/i);
 

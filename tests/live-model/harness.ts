@@ -16,6 +16,7 @@ import {
 } from '../../packages/core/src/index';
 import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { LocalAgentSession, type LocalSessionDb } from '../../packages/cli-backend/src/local-session';
+import { createLocalModelResolver, type LocalModelResolver } from '../../packages/cli-backend/src/model-resolver';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { REPO_ROOT } from '../../scripts/repo-root';
@@ -111,7 +112,8 @@ type ModelV4 = Extract<LanguageModel, { specificationVersion: 'v4' }>;
  * observer only reads what both specifications share.
  */
 export interface RecordedRequestSurface {
-  readonly model: LanguageModel;
+  /** `model`, each request it is sent observed; a model id string, which the SDK resolves out of sight, is refused. */
+  wrap(model: LanguageModel): LanguageModel;
   /** Over the turn requests from the `since`-th on (every one by default), so one turn's evidence is its own. */
   evidence(since?: number): RequestSurfaceEvidence;
   /** Each turn request's prompt as the provider received it, serialised, oldest first. */
@@ -196,13 +198,7 @@ function observedModel(model: ModelV2 | ModelV3 | ModelV4, observe: (options: Ob
  * and the compiler is right to refuse. The branches delegate identically
  * because the observer only reads what both specifications share.
  */
-function recordRequestSurface(model: LanguageModel): RecordedRequestSurface {
-  if (!isResolvedLanguageModel(model)) {
-    throw new Error(
-      'recordRequestSurface needs a resolved LanguageModel, not a model id string: '
-      + 'a string is resolved inside the SDK, where the request cannot be observed');
-  }
-
+function recordRequestSurface(): RecordedRequestSurface {
   // A turn's own requests: one offered no tools is a lane beside the turn (a title, a review), with no surface to read.
   const turnRequests: { readonly tools: readonly string[]; readonly system: string; readonly prompt: string }[] = [];
 
@@ -222,10 +218,16 @@ function recordRequestSurface(model: LanguageModel): RecordedRequestSurface {
     turnRequests.push({ tools, system, prompt: JSON.stringify(options.prompt) });
   };
 
-  const recording = observedModel(model, observe);
-
   return {
-    model: recording,
+    wrap: (model) => {
+      if (!isResolvedLanguageModel(model)) {
+        throw new Error(
+          'recordRequestSurface needs a resolved LanguageModel, not a model id string: '
+          + 'a string is resolved inside the SDK, where the request cannot be observed');
+      }
+
+      return observedModel(model, observe);
+    },
     evidence: (since = 0) => {
       const read = turnRequests.slice(since);
       const offered = new Set(read.flatMap((request) => request.tools));
@@ -274,6 +276,9 @@ export function scriptedEvalModel(script: readonly [ScriptedEvalStep, ...Scripte
 export interface EvalTurn {
   readonly turnId: string;
   readonly turn: CompletedTurn;
+  /** Everything the model wrote this turn, as the owner watched it stream: every text part, tool steps between them. The
+   *  turn's recorded answer is only the part it ended on. */
+  readonly text: string;
   readonly calls: readonly LiveToolCall[];
   readonly error: string | null;
 }
@@ -281,6 +286,7 @@ export interface EvalTurn {
 /** What one turn has said so far, as its events arrive. */
 interface TurnObservation {
   readonly calls: LiveToolCall[];
+  text: string;
   error: string | null;
   ended: TurnEndEvent | null;
 }
@@ -295,14 +301,27 @@ export interface EvalSession {
   end(): Promise<void>;
 }
 
+/** `resolver`, every model it resolves observed by `wrap`, a call-scoped one too. */
+function observedResolver(resolver: LocalModelResolver, wrap: (model: LanguageModel) => LanguageModel): LocalModelResolver {
+  return {
+    ...resolver,
+    resolveModel: (spec, affinity) => wrap(resolver.resolveModel(spec, affinity)),
+    withCallScope: (scope) => observedResolver(resolver.withCallScope?.(scope) ?? resolver, wrap),
+  };
+}
+
 /**
- * THE EVAL AGENT IS THE PRODUCT'S. A suite drives `LocalAgentSession` with `model` as `kinu` does: its prompt, its tool
- * surface, its turn gates and what it records are the product's, so a score cannot be of a surface the suite assembled.
+ * THE EVAL AGENT IS THE PRODUCT'S. A suite drives `LocalAgentSession` as `kinu` does: over an endpoint (`llm`, as
+ * `--base-url` gives one), resolved by the product's own registry for the turn and every lane beside it, or over one
+ * scripted `model`. Its prompt, its tool surface, its turn gates and what it records are the product's, so a score
+ * cannot be of a surface the suite assembled.
  */
-export function evalSession(input: { readonly rt: CLIRuntime; readonly db: LocalSessionDb; readonly model: LanguageModel }): EvalSession {
-  const requests = recordRequestSurface(input.model);
+export function evalSession(input: { readonly rt: CLIRuntime; readonly db: LocalSessionDb } & (
+  { readonly llm: LLMProviderConfig } | { readonly model: LanguageModel }
+)): EvalSession {
+  const requests = recordRequestSurface();
   // What the turn under way has said so far; each turn starts a fresh one.
-  let current: TurnObservation = { calls: [], error: null, ended: null };
+  let current: TurnObservation = { calls: [], text: '', error: null, ended: null };
 
   const events: SessionEvent[] = [];
 
@@ -320,6 +339,8 @@ export function evalSession(input: { readonly rt: CLIRuntime; readonly db: Local
         call.result = parsed.success ? parsed.output : event.result;
         call.outcome = v.parse(ToolOutcomeSchema, event);
       }
+    } else if (event.type === 'text-delta') {
+      current.text += event.delta;
     } else if (event.type === 'turn-end') {
       current.ended = event;
     } else if (event.type === 'error') {
@@ -327,20 +348,28 @@ export function evalSession(input: { readonly rt: CLIRuntime; readonly db: Local
     }
   };
 
-  const session = new LocalAgentSession({ rt: input.rt, db: input.db, model: requests.model, onEvent: observe });
+  const session = new LocalAgentSession({
+    rt: input.rt, db: input.db, onEvent: observe,
+    ...'llm' in input
+      ? { modelResolver: observedResolver(createLocalModelResolver({ llm: input.llm }), (model) => requests.wrap(model)) }
+      : { model: requests.wrap(input.model) },
+  });
 
   return {
     session,
     requests,
     events,
     async turn(text) {
-      current = { calls: [], error: null, ended: null };
+      current = { calls: [], text: '', error: null, ended: null };
       await session.send(text, { id: crypto.randomUUID() });
       const finished = current.ended;
 
       if (finished === null) throw new Error(`the session ended no turn for ${JSON.stringify(text.slice(0, 60))}${current.error === null ? '' : `: ${current.error}`}`);
 
-      return { turnId: finished.turnId, turn: finished.turn, calls: current.calls, error: current.error };
+      // A turn the provider refused said nothing; that is the provider's failure, named, not the model's empty answer.
+      if (current.error !== null && current.text === '') throw new Error(`the provider refused the turn for ${JSON.stringify(text.slice(0, 60))}: ${current.error}`);
+
+      return { turnId: finished.turnId, turn: finished.turn, text: current.text, calls: current.calls, error: current.error };
     },
     end: () => session.end(),
   };

@@ -14,7 +14,7 @@ import {
 import { evalSession, scriptedEvalModel, type EvalSession } from './harness';
 import { provisionLocalTarget, type LocalTarget } from './target-local';
 import {
-  liveChatModel, liveModelTarget, recordLiveModelEpisode,
+  liveModelTarget, recordLiveModelEpisode,
   reportLiveModelSpend, UNCONFIGURED_LLM,
 } from '@kinu.run/test-utils';
 
@@ -92,7 +92,7 @@ describe('Exploration evals — the agent reaches for exploration', () => {
 
   liveTest('AUTONOMOUS: the model reaches for exploration on a task that warrants it', async () => {
     // PRD §9.5: the turn runs the product's own projection and tool surface, through its session.
-    agent = evalSession({ rt: target.runtime, db: target.db, model: liveChatModel(LLM_CONFIG) });
+    agent = evalSession({ rt: target.runtime, db: target.db, llm: LLM_CONFIG });
     const { calls } = await agent.turn(EXPLORATION_TASK);
 
     recordLiveModelEpisode(target.runtime.storage.sql, target.runtime.actor);

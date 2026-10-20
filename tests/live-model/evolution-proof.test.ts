@@ -28,7 +28,7 @@ import { type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { evalSession, type EvalSession, type LiveToolCall, type RequestSurfaceEvidence } from './harness';
 import { provisionLocalTarget, type LocalTarget } from './target-local';
 import { finalIntegerAnswer, letterKey,
-liveChatModel, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend,
+liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend,
 UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
@@ -77,11 +77,11 @@ interface TurnResult {
 /** One challenge as a turn of the product's own session. */
 async function proofTurn(agent: EvalSession, userMessage: string): Promise<TurnResult> {
   const asked = agent.requests.prompts().length;
-  const { turnId, turn, calls } = await agent.turn(userMessage);
+  const { turnId, turn, text, calls } = await agent.turn(userMessage);
   const reuseMode: ReuseMode = /\b(?:must\s+)?use eval\b/i.test(userMessage) ? 'instructed' : 'autonomous';
 
   return {
-    turnId, text: turn.assistantResponse, toolCalls: turn.toolCalls, calls, steps: turn.steps, durationMs: turn.durationMs,
+    turnId, text, toolCalls: turn.toolCalls, calls, steps: turn.steps, durationMs: turn.durationMs,
     reuseMode, craftedOffered: turn.craftedOffered ?? [], craftedUsed: turn.craftedToolsUsed ?? [], request: agent.requests.evidence(asked),
   };
 }
@@ -329,10 +329,16 @@ describe('Evolution Proof', () => {
 
   /** The proof checked the turn's answer, so it rates it as the owner would: a thumb, before the next message arrives,
    *  whose arrival runs the review that reads it. */
-  const rateAsChecked = async (turnId: string): Promise<void> => { await engine.applyExplicitFeedback(turnId, 'positive'); };
+  const rateAsChecked = async (turnId: string): Promise<void> => {
+    await engine.applyExplicitFeedback(turnId, 'positive');
+    checked.push(turnId);
+  };
+
+  /** The turns whose answers checked, so rated: a turn answered wrongly is not, and fails its own arm. */
+  const checked: string[] = [];
 
   const session = (): EvalSession => {
-    agent ??= evalSession({ rt, db: target.db, model: liveChatModel(LLM_CONFIG) });
+    agent ??= evalSession({ rt, db: target.db, llm: LLM_CONFIG });
     drove = true;
 
     return agent;
@@ -433,6 +439,9 @@ describe('Evolution Proof', () => {
     await session().turn('Thanks, that is all for today.');
     // Session 1 ends as a `kinu` run ends; session 2 is a fresh one over the same workspace.
     await agent?.end();
+    // What session 1's own evolution said it did, so an empty store below reads as declined or as never asked.
+    const evolved = (agent?.events ?? []).flatMap((event) => (event.type === 'evolution' ? [`${event.event}: ${event.message.slice(0, 80)}`] : []));
+    console.log(`    Session 1 evolution: ${evolved.join(' | ') || '(none)'}`);
     agent = undefined;
   }, 0);
 
@@ -445,11 +454,11 @@ describe('Evolution Proof', () => {
     const thumbs = rt.storage.sql<{ turn_id: string; score: number }>`
       SELECT turn_id, score FROM turn_ratings WHERE source = 'thumbs'`;
 
-    const turnsThatRanTools = session1Results.filter(r => r.toolCalls.length > 0).length;
+    const ratedThatRanTools = session1Results.filter(r => checked.includes(r.turnId) && r.toolCalls.length > 0).length;
     console.log(`    Rated turns: ${thumbs.map(r => `${r.turn_id}:${String(r.score)}`).join(', ')}`);
-    expect(turnsThatRanTools).toBeGreaterThan(0);
+    expect(ratedThatRanTools).toBeGreaterThan(0);
     expect(thumbs.map((row) => ({ turnId: row.turn_id, score: row.score })).sort((a, b) => a.turnId.localeCompare(b.turnId)))
-      .toEqual(session1Results.map((r) => ({ turnId: r.turnId, score: 5 })).sort((a, b) => a.turnId.localeCompare(b.turnId)));
+      .toEqual(checked.map((turnId) => ({ turnId, score: 5 })).sort((a, b) => a.turnId.localeCompare(b.turnId)));
 
     // WHAT THE RUN RECORDED, as content rather than as a size: the artifact evolution produces from an ACCEPTED turn.
     // extractPattern generalizes the turn's tool calls and upsertCraftedTool admits the result only after compiling it

@@ -27,7 +27,7 @@ import { makeSql, soulIn, type CLIRuntime } from '../../packages/cli-backend/src
 import { evalSession, scriptedEvalModel, type EvalSession } from './harness';
 import { localTargetFolder, provisionLocalTarget } from './target-local';
 import { finalIntegerAnswer,
-liveChatModel, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend,
+liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend,
 UNCONFIGURED_LLM, workspaceDatabase,
 } from '@kinu.run/test-utils';
 
@@ -102,7 +102,7 @@ describe('E2E Full Lifecycle', () => {
   let agent: EvalSession | undefined;
 
   const live = (): EvalSession => {
-    agent ??= evalSession({ rt, db, model: liveChatModel(LLM_CONFIG) });
+    agent ??= evalSession({ rt, db, llm: LLM_CONFIG });
 
     return agent;
   };
@@ -175,42 +175,49 @@ describe('E2E Full Lifecycle', () => {
   // ── Step 3: Chat turn 1 — simple, no tools ──────────────────
 
   liveTest('3. chat turn 1: simple math question', async () => {
-    const { turn, calls } = await live().turn('What is 2+2? Answer briefly.');
-    console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 120)}`);
+    const { text, calls } = await live().turn('What is 2+2? Answer briefly.');
+    console.log(`  Response (${text.length} chars): ${text.slice(0, 120)}`);
     console.log(`  Tools: ${calls.map((call) => call.name).join(', ') || 'none'}`);
     // The extracted integer, not a substring: any '4' anywhere in the reply
     // would satisfy `toContain`, including one from the question's echo.
-    expect(finalIntegerAnswer(turn.assistantResponse)).toBe(4);
+    expect(finalIntegerAnswer(text)).toBe(4);
   }, 120_000);
 
   // ── Step 4: Chat turn 2 — should use eval ──────────
 
   liveTest('4. chat turn 2: code execution', async () => {
-    const { turn, calls } = await live().turn(
+    const { text, calls } = await live().turn(
       'Use eval to write and run a JS prime checker for 7, 10, and 13. '
         + 'Print the results as one JSON object mapping each input to a boolean. '
         + 'Summarize which inputs are prime, then end your answer with their total count as a standalone integer.',
     );
 
-    console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
+    console.log(`  Response (${text.length} chars): ${text.slice(0, 200)}`);
     console.log(`  Tools: ${calls.map((call) => call.name).join(', ') || 'none'}`);
 
-    const execution = calls.find((call) => call.name === 'eval');
-    expect(execution, 'the model did not use eval').toBeDefined();
-    const output = v.parse(v.object({ logs: v.array(v.string()) }), execution?.result);
-    expect(output.logs.map((line) => tolerate(() => extractJsonObject(line), 'malformed-input')))
+    const executions = calls.filter((call) => call.name === 'eval');
+    expect(executions.length, 'the model did not use eval').toBeGreaterThan(0);
+
+    // What its programs said, printed or returned: the subject is that the code ran, not which of the two it used.
+    const said = executions.flatMap((call) => {
+      const output = v.parse(v.object({ result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())) }), call.result);
+
+      return [...output.logs ?? [], JSON.stringify(output.result ?? null)];
+    });
+
+    expect(said.map((line) => tolerate(() => extractJsonObject(line), 'malformed-input')))
       .toContainEqual({ 7: true, 10: false, 13: true });
-    expect(finalIntegerAnswer(turn.assistantResponse)).toBe(2);
+    expect(finalIntegerAnswer(text)).toBe(2);
   }, 300_000);
 
   // ── Step 5: Chat turn 3 — persist a memory note ───────────────
 
   liveTest('5. chat turn 3: save note to memory', async () => {
-    const { turn, calls } = await live().turn(
+    const { text, calls } = await live().turn(
       `The project's recovery identifier is ${MEMORY_CODE}. Use the memory tool to save it for a later conversation.`,
     );
 
-    console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
+    console.log(`  Response (${text.length} chars): ${text.slice(0, 200)}`);
     console.log(`  Tools: ${calls.map((call) => call.name).join(', ') || 'none'}`);
 
     const wrote = calls.find((call) => call.name === 'memory' && (call.args.op === 'note' || call.args.op === 'remember'));

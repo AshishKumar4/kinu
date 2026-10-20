@@ -16,7 +16,7 @@ import { type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { evalSession, type EvalSession } from './harness';
 import { provisionLocalTarget, type LocalTarget } from './target-local';
 import { finalIntegerAnswer,
-liveChatModel, liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend, UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
+liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend, UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
 // which target and cost basis this run used, or why it is skipping — and throws
@@ -84,14 +84,14 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
   });
 
   liveTest('solve 8 algorithmic problems with native tool calling', async () => {
-    agent = evalSession({ rt, db: target.db, model: liveChatModel(LLM_CONFIG) });
+    agent = evalSession({ rt, db: target.db, llm: LLM_CONFIG });
 
     for (const problem of PROBLEMS) {
       console.log(`\n  ── Problem ${problem.id} [${problem.difficulty}] ──`);
       console.log(`  Q: ${problem.question.slice(0, 80)}...`);
 
-      const { turn, calls } = await agent.turn(problem.question);
-      const response = turn.assistantResponse.trim();
+      const { text, calls } = await agent.turn(problem.question);
+      const response = text.trim();
       const toolNames = calls.map((call) => call.name);
 
       // THE ORACLE. `response.includes(String(problem.answer))` stood here and it
