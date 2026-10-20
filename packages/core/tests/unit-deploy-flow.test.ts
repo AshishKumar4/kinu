@@ -192,6 +192,41 @@ class FakeCloudflare implements CloudflareTransport {
     return { status: 200, body: { success: true, errors: [], result: { enabled: true } } };
   }
 
+  private readonly ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
+
+  /** The zone's DNS records: read by type and name, patched by id, and written unless Cloudflare manages the name. */
+  private dnsCall(id: string, rest: string, call: CloudflareCall): CloudflareHttpResponse | null {
+    if (rest.startsWith('dns_records?')) {
+      const type = /type=([^&]+)/u.exec(rest)?.[1];
+      const name = decodeURIComponent(/name=([^&]+)/u.exec(rest)?.[1] ?? '');
+
+      return this.ok(this.dns.flatMap(({ zone: held, locked: _locked, ...record }, at) => (held === id && record.type === type && record.name === name ? [{ id: `record-${String(at)}`, ...record }] : [])));
+    }
+
+    const patched = /^dns_records\/record-(\d+)$/u.exec(rest);
+    const target = patched === null ? undefined : this.dns[Number(patched[1])];
+
+    if (target !== undefined && call.method === 'PATCH') {
+      target.content = bodyText(call.body ?? {}, 'content');
+
+      return this.ok({ id: `record-${patched?.[1] ?? ''}` });
+    }
+
+    if (rest === 'dns_records' && call.method === 'POST') {
+      const body = call.body ?? {};
+
+      if (this.dns.some((record) => record.zone === id && record.locked === true && record.name === bodyText(body, 'name'))) {
+        return { status: 400, body: { success: false, errors: [{ code: 890190, message: 'This zone is managed by Email Routing. Disable Email Routing to add/modify MX records.' }], result: null } };
+      }
+
+      this.dns.push({ zone: id, type: bodyText(body, 'type'), name: bodyText(body, 'name'), content: bodyText(body, 'content') });
+
+      return this.ok({ id: `record-${String(this.dns.length)}` });
+    }
+
+    return null;
+  }
+
   private zoneCall(call: CloudflareCall): CloudflareHttpResponse | null {
     const zone = /^\/zones\/([^/?]+)\/(.+)$/u.exec(call.path);
     const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
@@ -220,33 +255,7 @@ class FakeCloudflare implements CloudflareTransport {
 
     if (rest.startsWith('email/sending/subdomains')) return this.sendingCall(id, rest, call);
 
-    if (rest.startsWith('dns_records?')) {
-      const type = /type=([^&]+)/u.exec(rest)?.[1];
-      const name = decodeURIComponent(/name=([^&]+)/u.exec(rest)?.[1] ?? '');
-
-      return ok(this.dns.flatMap(({ zone: held, locked: _locked, ...record }, at) => (held === id && record.type === type && record.name === name ? [{ id: `record-${String(at)}`, ...record }] : [])));
-    }
-
-    const patched = /^dns_records\/record-(\d+)$/u.exec(rest);
-    const target = patched === null ? undefined : this.dns[Number(patched[1])];
-
-    if (target !== undefined && call.method === 'PATCH') {
-      target.content = bodyText(call.body ?? {}, 'content');
-
-      return ok({ id: `record-${patched?.[1] ?? ''}` });
-    }
-
-    if (rest === 'dns_records' && call.method === 'POST') {
-      const body = call.body ?? {};
-
-      if (this.dns.some((record) => record.zone === id && record.locked === true && record.name === bodyText(body, 'name'))) {
-        return { status: 400, body: { success: false, errors: [{ code: 890190, message: 'This zone is managed by Email Routing. Disable Email Routing to add/modify MX records.' }], result: null } };
-      }
-
-      this.dns.push({ zone: id, type: bodyText(body, 'type'), name: bodyText(body, 'name'), content: bodyText(body, 'content') });
-
-      return ok({ id: `record-${String(this.dns.length)}` });
-    }
+    if (rest.startsWith('dns_records')) return this.dnsCall(id, rest, call);
 
     return null;
   }
