@@ -10,6 +10,7 @@ import { CODEX_CRED_KEY } from './codex';
 import { CLOUDFLARE_OAUTH_CRED_KEY, cloudflareClientAuth, type CloudflareOAuthEnv } from './cloudflare-oauth';
 import { CHATGPT_CRED_KEY } from './chatgpt';
 import { CHATGPT_REVOKE_URL, chatgptRegistrationOf } from './chatgpt-sign-in';
+import { plainFetch } from './fetch-shim';
 
 export interface RevocationEndpoint {
   /** Named in a refusal, so the owner knows whose words they read. */
@@ -75,7 +76,7 @@ function revokeOne(input: Parameters<typeof revokeOAuthGrant>[0], token: string,
   const submitted = [credential.accessToken, credential.refreshToken ?? '', ...clientSecrets, ...Object.values(endpoint.client.headers).flatMap(authorizationSecrets)];
 
   const sent = attempt({ doing: `revoking the ${hint} at ${endpoint.provider}`, otherwise: 'unavailable' }, async () => {
-    const response = await input.fetch(endpoint.url, { method: 'POST', headers, body, redirect: 'error' });
+    const response = await plainFetch(input.fetch)(endpoint.url, { method: 'POST', headers, body, redirect: 'error' });
 
     if (response.ok) return null;
     const text = await response.text();
