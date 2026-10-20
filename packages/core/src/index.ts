@@ -1570,7 +1570,7 @@ export {
 } from './safety/argument-digest';
 
 export {
-  InstructionApprovalStore, initInstructionApprovalsTable, instructionDigest, trustOfInstructionApprovals,
+  InstructionApprovalStore, initInstructionApprovalsTable, instructionDigest,
   admitInstructionDecision, type InstructionTrust, type InstructionDecision, type InstructionApproval,
   type InstructionTrustResolver, type VerifiedInstructionTrust, type AdmittedInstructionDecision,
 } from './safety/instruction-trust';

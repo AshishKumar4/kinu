@@ -73,7 +73,7 @@ function toApproval(row: Row): InstructionApproval {
  * Trust needs a decision for this path and a stored digest equal to the content's digest. The only
  * implementation of that rule; `InstructionApprovalStore` delegates here.
  */
-export function trustOfInstructionApprovals(
+function trustOfInstructionApprovals(
   rows: ReadonlyArray<InstructionApproval>,
   path: string,
   content: string,
