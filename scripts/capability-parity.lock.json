@@ -15,6 +15,7 @@
   "movable packages/cf-backend/src/egress/keyed-socket.ts",
   "movable packages/cf-backend/src/egress/model-relay-route.ts",
   "movable packages/cf-backend/src/egress/send-out.ts",
+  "movable packages/cf-backend/src/lib/connect-window.ts",
   "movable packages/cf-backend/src/lib/part-bridge.ts",
   "movable packages/cf-backend/src/lib/sign-in.ts",
   "movable packages/cf-backend/src/slates/sources.ts",
