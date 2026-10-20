@@ -14,6 +14,7 @@ import {
 import { McpPresetCards, presetBrand } from "@/components/plugins/McpPresetCards";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
+import { PAGE_BODY, PageHeader } from "@/components/ui/PageHeader";
 
 function serverLine(server: McpServerSummary): string {
   if (server.error !== null) return server.error;
@@ -28,7 +29,7 @@ function InstalledStrip({ servers }: { servers: readonly McpServerSummary[] }) {
 
   return (
     <section aria-label="Installed" className="space-y-2">
-      <h2 className="p-eyebrow px-1">Installed</h2>
+      <h2 className="p-label px-1">Installed</h2>
       <div data-installed-strip className="flex flex-wrap items-center gap-2 px-1">
         {servers.map((server) => {
           const brand = presetBrand(server.presetId);
@@ -48,21 +49,17 @@ function InstalledStrip({ servers }: { servers: readonly McpServerSummary[] }) {
   );
 }
 
-function PluginSection({ title, rows, onRetry, what, action, note, empty }: {
+function PluginSection({ title, rows, onRetry, what, note, empty }: {
   title: string;
   rows: AsyncResource<readonly ReactNode[]>;
   onRetry: () => void;
   what: string;
-  action?: ReactNode;
   note?: string;
   empty?: ReactNode;
 }) {
   return (
     <section aria-label={title} className="space-y-2">
-      <div className="flex items-center justify-between gap-3 px-1">
-        <h2 className="p-eyebrow">{title}</h2>
-        {action}
-      </div>
+      <h2 className="p-label px-1">{title}</h2>
       {note && <p className="px-1 p-meta p-text-3">{note}</p>}
       {rows.status === "loading" && <div className="flex justify-center py-4"><Loader size="sm" /></div>}
       {rows.status === "error" && <LoadFailure what={what} message={rows.message} onRetry={onRetry} />}
@@ -82,14 +79,10 @@ export default function PluginsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="mx-auto max-w-4xl space-y-8 px-6 py-8">
-        <header className="flex items-start gap-3">
-          <PuzzlePieceIcon size={22} className="mt-1 shrink-0 p-text-3" />
-          <div>
-            <h1 className="p-display text-2xl">Plugins</h1>
-            <p className="p-meta p-text-3">Services your agents can use in every workspace.</p>
-          </div>
-        </header>
+      <div className={`space-y-8 ${PAGE_BODY}`}>
+        <PageHeader icon={<PuzzlePieceIcon size={22} />} title="Plugins">
+          <Button variant="secondary" size="sm" onClick={() => setManaging(true)}>Manage</Button>
+        </PageHeader>
 
         <InstalledStrip servers={lastValue(servers.resource) ?? []} />
 
@@ -102,7 +95,6 @@ export default function PluginsPage() {
         />
 
         <PluginSection title="MCP servers" onRetry={servers.reload} what="your MCP servers"
-          action={<Button variant="ghost" size="sm" onClick={() => setManaging(true)}>Manage</Button>}
           empty="No MCP servers of your own yet. Use Manage to add one."
           rows={mapResource(servers.resource, (rows) => rows
             .filter((server) => server.presetId === null)

@@ -273,13 +273,14 @@ function Crumbs({ path }: { path: string }) {
 /** A heading that names a kind of thing in a place is quiet; one that names who a share came from or went to leads. */
 const SECTION_HEADING = { quiet: "mb-2.5 p-meta font-medium p-text-3", lead: "mb-3 p-heading text-[15px] p-text" } as const;
 
-function Section({ label, titled = true, heading = "quiet", children }: {
-  label: string; titled?: boolean; heading?: keyof typeof SECTION_HEADING; children: ReactNode;
+/** A titled group: tiles in the grid, or `rows` in one `p-group` (things with no picture, docs/APP-CONSISTENCY.md). */
+function Section({ label, titled = true, heading = "quiet", rows = false, children }: {
+  label: string; titled?: boolean; heading?: keyof typeof SECTION_HEADING; rows?: boolean; children: ReactNode;
 }) {
   return (
     <section aria-label={label} data-drive-section={label}>
       {titled && <h2 className={SECTION_HEADING[heading]}>{label}</h2>}
-      <ul className={GRID}>{children}</ul>
+      <ul className={rows ? "p-group" : GRID}>{children}</ul>
     </section>
   );
 }
@@ -579,13 +580,15 @@ function subtitleOf(tab: DriveTab, path: string): ReactNode {
 }
 
 function SectionList({ groups, titled = false, heading = "quiet" }: {
-  groups: readonly { label: string; tiles: readonly ReactNode[] }[]; titled?: boolean; heading?: keyof typeof SECTION_HEADING;
+  groups: readonly { label: string; tiles: readonly ReactNode[]; rows?: boolean }[]; titled?: boolean; heading?: keyof typeof SECTION_HEADING;
 }) {
   const shown = groups.filter((group) => group.tiles.length > 0);
 
   return (
     <div className={heading === "lead" ? "space-y-10" : "space-y-7"}>
-      {shown.map((group) => <Section key={group.label} label={group.label} titled={titled || shown.length > 1} heading={heading}>{group.tiles}</Section>)}
+      {shown.map((group) => (
+        <Section key={group.label} label={group.label} titled={titled || shown.length > 1} heading={heading} rows={group.rows}>{group.tiles}</Section>
+      ))}
     </div>
   );
 }
@@ -939,7 +942,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     }
 
     return (
-      <FolderTile key={entry.name} name={full === DRIVE_SKILLS_DIR ? "Skills" : entry.name} icon={icon}
+      <FolderTile key={entry.name} name={full === DRIVE_SKILLS_DIR ? "Skills" : entry.name} icon={icon} row={!inSkills}
         href={folderHref(opens)} menu={folderMenu(entry)} attributes={attributes} />
     );
   };
@@ -1009,7 +1012,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
           <DropZone label={isRoot ? "My stuff" : path.slice(path.lastIndexOf("/") + 1)} onFiles={uploadFiles}>
             <MineBody resource={listing.resource} onRetry={listing.reload} empty={isEmptyMine(contents) && uploads.length === 0}>
               <SectionList groups={[
-                { label: inSkills ? "Skills" : "Folders", tiles: inSkills ? skillTiles() : contents.folders.map(folderTile) },
+                { label: inSkills ? "Skills" : "Folders", tiles: inSkills ? skillTiles() : contents.folders.map(folderTile), rows: !inSkills },
                 { label: "Files", tiles: [...contents.files.map(fileTile), ...uploads.map(uploadTile)] },
               ]} />
             </MineBody>

@@ -56,7 +56,8 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
       {/* Its primary slate's picture; without one, its logo on the same recessed ground as Explore's tiles (`Cover`). */}
       <SlatePicture workspace={workspace.name} slate={pictured} className="block aspect-[16/10] w-full border-b p-border object-cover object-top"
         fallback={(
-          <span className="flex aspect-[16/10] w-full items-center justify-center border-b p-border p-recessed">
+          // One column on a phone: no row to line up with, so the logo's ground stays short there.
+          <span className="flex aspect-[3/1] w-full items-center justify-center border-b p-border p-recessed sm:aspect-[16/10]">
             <WorkspaceLogo title={title} logo={workspace.logo} size={36} />
           </span>
         )} />
