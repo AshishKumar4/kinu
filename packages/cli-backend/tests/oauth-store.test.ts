@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { present, scratchDir, createRecordingLogger } from '@kinu.run/test-utils';
 import { withConfigLock } from '../src/config-lock';
 import { createFileOAuthStore, signOutChatGptLogin } from '../src/oauth-store';
-import { asFetchFunction, CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, JsonObjectSchema } from '@kinu.run/core';
+import { asFetchFunction, CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, JsonObjectSchema, requestUrl } from '@kinu.run/core';
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
@@ -404,15 +404,32 @@ describe('createFileOAuthStore', () => {
     expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({ providers: { claude: near } });
   });
 
-  test('a login with no refresh token is no login: never advertised, never used', async () => {
+  // Claude Code's `setup-token` issues a long-lived subscription token with no refresh token.
+  test('a login with no refresh token is used until it expires, refused it is no login, and nothing renews it', async () => {
     const configPath = join(scratchDir('oauth-store'), 'config.json');
+    const renewals: string[] = [];
+    const bare = { accessToken: 'sk-ant-oat01-bare', expiresAt: Date.now() + 3_600_000 };
 
-    writeFileSync(configPath, `${JSON.stringify({ providers: { claude: { accessToken: 'sk-ant-oat01-bare' } } })}\n`);
-    const store = createFileOAuthStore(configPath);
+    const renewing = asFetchFunction(async (input) => {
+      renewals.push(requestUrl(input));
 
-    expect(store.has(CLAUDE_CRED_KEY)).toBe(false);
-    expect(store.keys()).toEqual([]);
-    expect(await store.getAuth(CLAUDE_CRED_KEY)).toBeNull();
+      return new Response('', { status: 500 });
+    });
+
+    writeFileSync(configPath, `${JSON.stringify({ providers: { claude: bare } })}\n`);
+    const store = createFileOAuthStore(configPath, { fetch: renewing });
+    const held = { has: store.has(CLAUDE_CRED_KEY), keys: store.keys(), used: (await store.getAuth(CLAUDE_CRED_KEY))?.headers['Authorization'] };
+    const refused = await store.getAuth(CLAUDE_CRED_KEY, { rejected: { Authorization: 'Bearer sk-ant-oat01-bare' } });
+
+    writeFileSync(configPath, `${JSON.stringify({ providers: { claude: { ...bare, expiresAt: Date.now() - 1_000 } } })}\n`);
+    const expired = { has: store.has(CLAUDE_CRED_KEY), used: await store.getAuth(CLAUDE_CRED_KEY) };
+
+    expect({ held, refused, expired, renewals }).toEqual({
+      held: { has: true, keys: [CLAUDE_CRED_KEY], used: 'Bearer sk-ant-oat01-bare' },
+      refused: null,
+      expired: { has: false, used: null },
+      renewals: [],
+    });
   });
 });
 
