@@ -27,7 +27,7 @@ import {
   GATE_DEADLINE_SECONDS, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaRowVerdicts, jobDrove, onArmada, secretGroup, recordArmadaRow,
+  HAMMER_PARTS, HAMMER_REPEATS, HAMMER_ROW_LABEL, ciUnits, changedTestGate, splitCIGate, type Gate, type ArmadaReport, armadaPhaseRows, armadaPhaseRun, armadaReport, armadaReproduce, armadaRowVerdicts, jobDrove, onArmada, secretGroup, recordArmadaRow,
 } from './ladder';
 import { ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite, isVitestEvalSuite, readMatching } from './sources';
 import { REPO_ROOT as root } from './repo-root';
@@ -753,6 +753,16 @@ describe('a deploy row with secrets of its own', () => {
       ],
     });
     expect(() => armadaPhaseRun('source', rows, sha, 'https://staging.kinu.run')).toThrow('different secrets');
+  });
+
+  // The report's reproduce line kept only the plan's arguments, so a pasted line ran with none of the row's secrets.
+  test("its report's reproduce line is the job's own command, its secrets with it", () => {
+    const sha = 'a'.repeat(40);
+    const devbox = armadaPhaseRun('source', armadaPhaseRows(['source']).filter((gate) => secretGroup(gate) !== ''), sha, 'https://staging.kinu.run');
+
+    expect(armadaReproduce(devbox)).toBe(`node_modules/.bin/armada run ${sha} `
+      + '--secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,KINU_EVAL_STAGING_WEB_IDENTITY,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY '
+      + '-- --deploy-phase=source --deploy-secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,KINU_EVAL_STAGING_WEB_IDENTITY,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY');
   });
 
   // The upgrade fixtures' two builtin passwords and the REST token their anchor is kept with are their own, beside the
