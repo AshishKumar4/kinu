@@ -67,6 +67,8 @@ export function createAIGatewayProvider(): ModelProvider {
           // Never fetched: the transport parses the URL into the binding's {gateway, provider, endpoint}.
           baseURL: String(deps.env.AI_GATEWAY_URL),
           fetch: heardFetch(createGatewayBindingFetch(resolved)),
+          // Workers AI takes a `json_schema` response format on its chat models, as the binding sends one.
+          supportsStructuredOutputs: true,
         }).chatModel(workersAiModelId(modelId)))));
     },
   };
