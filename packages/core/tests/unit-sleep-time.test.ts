@@ -169,7 +169,7 @@ describe('Sleep-time compute', () => {
   // rc24 staging: the fast tier's model left `rationale` out on text alone, and on a replay of those turns
   // glm-4.7-flash once answered `{}`. Asked through the structured output, an answer off the schema goes to the next
   // model on the route, and the update that comes back is the schema's.
-  test("is asked for its schema, and an answer off it goes to the route's next model", async () => {
+  test('is asked for its schema, and an answer off it ends the route walk, as a wrong answer does', async () => {
     const formats: string[] = [];
 
     const answering = (text: string) => new MockLanguageModelV3({
@@ -183,25 +183,26 @@ describe('Sleep-time compute', () => {
       },
     });
 
-    const models = new Map([['workers-ai/glm-4.7-flash', answering('{}')], ['workers-ai/glm-5.3-flash', answering('{"upserts":[{"key":"build.dir","value":"dist","confidence":0.9,"rationale":"the build said so"}],"decay":[]}')]]);
-
     const route: ModelRouteResolution = {
       source: 'fast', tier: 'fast', model: 'workers-ai/glm-4.7-flash', reasoningEffort: null, retries: 0,
       fallbacks: [{ model: 'workers-ai/glm-5.3-flash', reasoningEffort: null }],
     };
 
-    const lane = (served: ReadonlyMap<string, MockLanguageModelV3>) => ({
-      object: <S extends v.GenericSchema>(prompt: string, schema: S) => objectOnRoute(route, {
-        llm: (serving) => routedLlm((bound) => ({ model: present(served.get(bound.model), bound.model) }), serving, { report: () => {} }),
-      }, prompt, schema),
-    });
+    const lane = (first: string) => {
+      const served = new Map([['workers-ai/glm-4.7-flash', answering(first)], ['workers-ai/glm-5.3-flash', answering('{"upserts":[],"decay":[]}')]]);
 
-    expect(await runSleepTimeCompute(lane(models), { turns: ONE_TURN, currentFacts: [] }))
+      return {
+        object: <S extends v.GenericSchema>(prompt: string, schema: S) => objectOnRoute(route, {
+          llm: (serving) => routedLlm((bound) => ({ model: present(served.get(bound.model), bound.model) }), serving, { report: () => {} }),
+        }, prompt, schema),
+      };
+    };
+
+    expect(await runSleepTimeCompute(lane('{"upserts":[{"key":"build.dir","value":"dist","confidence":0.9,"rationale":"the build said so"}],"decay":[]}'), { turns: ONE_TURN, currentFacts: [] }))
       .toEqual({ upserts: [{ key: 'build.dir', value: 'dist', confidence: 0.9, rationale: 'the build said so' }], decay: [] });
+    // The fallback is never asked: a wrong answer is not the serving model's outage.
+    await expect(runSleepTimeCompute(lane('{}'), { turns: ONE_TURN, currentFacts: [] })).rejects.toMatchObject({ code: 'bad_input' });
     expect(formats).toEqual(['json schema', 'json schema']);
-    // Every model off the schema: the walk asked each, and the failure is definitive.
-    await expect(runSleepTimeCompute(lane(new Map([['workers-ai/glm-4.7-flash', answering('{}')], ['workers-ai/glm-5.3-flash', answering('no')]])), { turns: ONE_TURN, currentFacts: [] }))
-      .rejects.toMatchObject({ code: 'bad_input' });
   });
 
   test('applySleepTimeUpdate upserts facts + decays existing', () => {

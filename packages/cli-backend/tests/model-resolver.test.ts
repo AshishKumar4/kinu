@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { generateText, streamText } from 'ai';
+import { generateText, jsonSchema, Output, streamText } from 'ai';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, usageTotal, WORKSPACE_RUN_ID,
 } from '@kinu.run/core';
@@ -126,6 +126,38 @@ describe('createLocalModelResolver', () => {
         })).rejects.toThrow();
         expect(received).toEqual(Array.from({ length: retries + 1 }, () => false));
       }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  // Staging rc24: a fast model sent no schema answered sleep-time without `rationale`; the deployment's binding sends it.
+  test('a structured call to Workers AI sends its schema, through the local gateway as through the account relay', async () => {
+    const sent: unknown[] = [];
+
+    const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
+      sent.push(await request.json());
+
+      return Response.json({
+        id: 'c', object: 'chat.completion', created: 1, model: 'm', usage: { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 },
+        choices: [{ index: 0, message: { role: 'assistant', content: '{"key":"build.dir"}' }, finish_reason: 'stop' }],
+      });
+    } });
+
+    const output = Output.object({ schema: jsonSchema<{ key: string }>({ type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }) });
+    const affinity = { sessionAffinity: 'relay', workspaceAffinity: 'relay' };
+
+    try {
+      for (const resolver of [
+        createLocalModelResolver({ llm: null, cloud: { origin: server.url.toString(), token: 'ptc_transport' } }),
+        createLocalModelResolver({ llm: { name: 'workers-ai', baseURL: server.url.toString(), headers: { Authorization: 'Bearer test' }, model: '@cf/test/relay' } }),
+      ]) {
+        const model = resolver.resolveModel('workers-ai/@cf/test/relay', affinity);
+
+        expect((await generateText({ model, prompt: 'where does the build go?', output, maxRetries: 0 })).output).toEqual({ key: 'build.dir' });
+      }
+
+      expect(sent).toEqual([0, 1].map(() => expect.objectContaining({ response_format: expect.objectContaining({ type: 'json_schema' }) })));
     } finally {
       await server.stop(true);
     }

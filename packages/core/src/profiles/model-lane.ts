@@ -1,6 +1,6 @@
 import type { ModelAttemptIdentity } from '../providers/attempt-identity';
-import { NoObjectGeneratedError, type LanguageModel } from 'ai';
-import * as v from 'valibot';
+import type { LanguageModel } from 'ai';
+import type * as v from 'valibot';
 import type { ActorReference } from '../identity/actor-handle';
 import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, toKinuError } from '../obs/index';
@@ -101,9 +101,9 @@ export function routedLlm(bind: RouteModelBinder, route: ModelRouteResolution, s
       return (await generateReported(request, call)).text.trim();
     },
     async object(prompt, schema) {
-      const { request: { model, providerOptions, maxRetries }, call } = sent(prompt);
+      const { request, call } = sent(prompt);
 
-      return await generateObjectReported({ model, prompt, ...(system !== undefined && { system }), ...(maxRetries !== undefined && { maxRetries }), ...(providerOptions !== undefined && { providerOptions }) }, schema, call);
+      return await generateObjectReported(request, schema, call);
     },
   };
 }
@@ -112,27 +112,9 @@ export function completeOnRoute(route: ModelRouteResolution, lane: RouteCallComp
   return onRoute(route, lane, (serving) => lane.llm(serving).complete(prompt));
 }
 
-/** Whether the walk ended on an answer off the schema (`generateObjectReported`), however deep the walk wrapped it. */
-function answeredOffSchema(failure: KinuError): boolean {
-  for (let at: unknown = failure, depth = 0; at instanceof Error && depth < 8; at = at.cause, depth++) {
-    if (at instanceof v.ValiError || NoObjectGeneratedError.isInstance(at)) return true;
-  }
-
-  return false;
-}
-
-/**
- * `schema`'s answer on the route: an answer off the schema goes to the route's next model (`generateObjectReported`
- * fails it `unavailable`). When the last model asked answered off it too, the failure is definitive (`bad_input`):
- * asking the route again asks the same models the same question.
- */
+/** `schema`'s answer on the route; an answer off it ends the walk (`generateObjectReported`), as a wrong answer does. */
 export function objectOnRoute<S extends v.GenericSchema>(route: ModelRouteResolution, lane: RouteCallComponents, prompt: string, schema: S): Promise<v.InferOutput<S>> {
-  return settle(Effect.tryPromise({
-    try: () => onRoute(route, lane, (serving) => lane.llm(serving).object(prompt, schema)),
-    catch: (cause) => (cause instanceof KinuError ? cause : toKinuError({ doing: `calling the ${route.tier} tier`, cause, otherwise: 'unavailable' })),
-  }).pipe(Effect.mapError((failure) => (answeredOffSchema(failure)
-    ? new KinuError('bad_input', `the ${route.tier} tier answered off its schema`, { cause: failure })
-    : failure))));
+  return onRoute(route, lane, (serving) => lane.llm(serving).object(prompt, schema));
 }
 
 /** The route's model, then its configured chain, as a turn walks it; `invoke` is one call on the serving entry. */

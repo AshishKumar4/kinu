@@ -45,15 +45,15 @@ export function createScriptedLLM(responses: string[]): ScriptedLLM {
 }
 
 /**
- * A scripted answer read as a routed lane's structured call reads one (`objectOnRoute`): through `schema`, and an
- * answer off it refused definitively, as a route whose last model answered off it is.
+ * A scripted answer read as a structured call reads one (`generateObjectReported`): through `schema`, and an answer off
+ * it refused as wrong (`bad_input`).
  */
 export function answeredAs<S extends v.GenericSchema>(schema: S, text: string): v.InferOutput<S> {
   const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), schema), text);
 
   return settleSync(parsed.success
     ? Effect.succeed(parsed.output)
-    : Effect.fail(new KinuError('bad_input', 'the scripted tier answered off its schema', { cause: new v.ValiError(parsed.issues) })));
+    : Effect.fail(new KinuError('bad_input', 'the scripted model answered off its schema', { cause: new v.ValiError(parsed.issues) })));
 }
 
 /** An LLM that returns canned JSON. */

@@ -365,6 +365,8 @@ function createGatewayBackedProvider(opts: {
         headers: withAffinity(opts.llm, deps.sessionAffinity).headers,
         modelId,
         fetch: opts.fetch,
+        // Workers AI's models take the schema, as the deployment's binding sends it.
+        structuredOutputs: opts.catalogProviderId === 'cloudflare-workers-ai',
       });
     },
   };
@@ -556,7 +558,7 @@ class CloudProxyProvider implements ModelProvider {
 
     return opts.id === 'my-gateway'
         ? gatewayWireModel(opts.id, modelId, transport)
-        : createWireModel({ name: opts.id, modelId, ...transport, protocol: 'chat-completions', reasoning: false });
+        : createWireModel({ name: opts.id, modelId, ...transport, protocol: 'chat-completions', reasoning: false, structuredOutputs: opts.id === 'workers-ai' });
   }
 }
 

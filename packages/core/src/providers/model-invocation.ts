@@ -15,6 +15,7 @@ import {
 import type { Embedder } from '../memory/vector-store';
 import { normalizeUsage, type Usage } from '../usage';
 import { callAccountOf } from './quota';
+import { mergeProviderOptions, type ProviderOptions } from './effort';
 
 export type GenerateRequest = Parameters<typeof generateText>[0];
 
@@ -43,8 +44,14 @@ function reportOf(
   return modelId === undefined || modelId.length === 0 ? report : { ...report, modelId };
 }
 
-/** Files the row before the caller parses the answer: the call was billed either way. An answer stopped at the model's
- *  output limit is no answer: a one-shot call has no next step to continue it, so it fails rather than reads complete. */
+/** An answer stopped at the model's output limit is no answer: a one-shot call has no next step to continue it. */
+function outputLimitFailure(modelId: string, finishReason: string, cause?: Error): KinuError {
+  return new KinuError('unavailable', `${modelId} stopped its answer at its output limit (${finishReason})`, cause === undefined ? undefined : { cause });
+}
+
+/** Files the row before the caller parses the answer: the call was billed either way, and an answer the requested output
+ *  could not read (`NoObjectGeneratedError`, thrown inside the call) was answered too. An answer stopped at the model's
+ *  output limit fails rather than reads complete ({@link outputLimitFailure}). */
 export function generateReported(
   request: GenerateRequest,
   call: ReportedCall,
@@ -53,50 +60,56 @@ export function generateReported(
   return settle(Effect.gen(function* () {
     const operation = beginModelOperation(call.spend, op, { spec: call.spec });
 
-    const result = yield* Effect.onError(Effect.promise(() => generateText(request)),
-      (cause) => Effect.sync(() => operation.failed({ cause: Cause.squash(cause) })));
+    const billed = (usage: Usage, response: { readonly modelId?: string; readonly headers?: Readonly<Record<string, string>> }) => {
+      operation.completed({ usage, modelId: response.modelId });
+      call.spend.report(reportOf(call, usage, response));
+    };
 
-    const usage = normalizeUsage(result.usage);
-    operation.completed({ usage, modelId: result.response.modelId });
-    call.spend.report(reportOf(call, usage, result.response));
+    const result = yield* Effect.onError(Effect.promise(() => generateText(request)), (cause) => Effect.sync(() => {
+      const failure = Cause.squash(cause);
 
-    if (result.finishReason === 'length') {
-      return yield* Effect.fail(new KinuError('unavailable', `${result.response.modelId} stopped its answer at its output limit (${result.rawFinishReason ?? 'length'})`));
-    }
+      if (NoObjectGeneratedError.isInstance(failure) && failure.usage !== undefined && failure.response !== undefined) billed(normalizeUsage(failure.usage), failure.response);
+      else operation.failed({ cause: failure });
+    }));
+
+    billed(normalizeUsage(result.usage), result.response);
+
+    if (result.finishReason === 'length') return yield* Effect.fail(outputLimitFailure(result.response.modelId, result.rawFinishReason ?? 'length'));
 
     return result;
   }));
 }
 
-/** Files the row once the stream drains; an abandoned stream leaves only the start row. */
-/** What a structured call sends: the routed call's model, prompt and options; the output is the schema's. */
-export interface ObjectRequest {
-  readonly model: GenerateRequest['model'];
-  readonly prompt: string;
-  readonly system?: string;
-  readonly maxRetries?: number;
-  readonly providerOptions?: GenerateRequest['providerOptions'];
-}
+/**
+ * Strict structured output admits only closed objects whose every field is required (OpenAI's `strict`, which the
+ * OpenAI and OpenAI-compatible adapters default to): a schema with an optional field or an open JSON value is refused
+ * there before any answer. The schema is still sent; the answer is read through it.
+ */
+const NON_STRICT: ProviderOptions = { openai: { strictJsonSchema: false }, openaiCompatible: { strictJsonSchema: false } };
 
 /**
  * One answer of `schema`'s shape, through the model's structured output: the provider is sent the schema as JSON
  * Schema (`toJsonSchema`; a value it cannot express, as a JSON value, is any value there), and the answer is read back
  * through `schema` itself. Billed as {@link generateReported} bills. An answer off the schema was billed and is no
- * answer: it fails `unavailable`, caused by the SDK's `NoObjectGeneratedError` or the schema's `ValiError`, so a route
- * walk hands the call to its next model.
+ * answer: it fails `bad_input`, as a wrong answer does, and is not asked of another model; an answer stopped at the
+ * output limit fails `unavailable`, as {@link generateReported}'s does.
  */
-export function generateObjectReported<S extends v.GenericSchema>(request: ObjectRequest, schema: S, call: ReportedCall): Promise<v.InferOutput<S>> {
-  const { system, ...sent } = request;
-
+export function generateObjectReported<S extends v.GenericSchema>(request: GenerateRequest, schema: S, call: ReportedCall): Promise<v.InferOutput<S>> {
   const generated: GenerateRequest = {
-    ...sent, ...(system !== undefined && { system }), output: Output.object({ schema: jsonSchema(toJsonSchema(schema, { errorMode: 'ignore' })) }),
+    ...request,
+    output: Output.object({ schema: jsonSchema(toJsonSchema(schema, { errorMode: 'ignore' })) }),
+    providerOptions: mergeProviderOptions(request.providerOptions, NON_STRICT),
   };
 
-  const offSchema = (cause: Error) => new KinuError('unavailable', `${call.spec ?? 'the model'} answered off its schema`, { cause });
+  const offSchema = (cause: Error) => new KinuError('bad_input', `${call.spec ?? 'the model'} answered off its schema`, { cause });
 
   return settle(Effect.promise(() => generateReported(generated, call)).pipe(
     // Any other failure is the provider's, kept as it came for the route walk to read.
-    Effect.catchDefect((defect) => (NoObjectGeneratedError.isInstance(defect) ? Effect.fail(offSchema(defect)) : Effect.die(defect))),
+    Effect.catchDefect((defect) => {
+      if (!NoObjectGeneratedError.isInstance(defect)) return Effect.die(defect);
+
+      return Effect.fail(defect.finishReason === 'length' ? outputLimitFailure(defect.response?.modelId ?? call.spec ?? 'the model', 'length', defect) : offSchema(defect));
+    }),
     Effect.flatMap((result) => {
       const parsed = v.safeParse(schema, result.output);
 
@@ -105,6 +118,7 @@ export function generateObjectReported<S extends v.GenericSchema>(request: Objec
   ));
 }
 
+/** Files the row once the stream drains; an abandoned stream leaves only the start row. */
 export async function* streamTextReported(
   request: StreamRequest,
   call: ReportedCall,
