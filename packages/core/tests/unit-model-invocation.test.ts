@@ -21,6 +21,8 @@ import { buildCfWebSearchProvider } from '../src/web/provider-factory';
 import { DEFAULT_WEB_SEARCH_CHAIN } from '../src/providers/web-search';
 import type { ModelCallSink } from '../src/events/model-call';
 import type { Usage } from '../src/usage';
+import { renderThrownChain } from '../src/obs/error';
+import { sha256Hex } from '../src/safety/argument-digest';
 
 interface Spent {
   readonly calls: number;
@@ -140,6 +142,19 @@ describe('a structured call', () => {
     }
 
     expect(producers()).toEqual({ fast: { calls: 3, unmeasured: 0, usage: { input: 27, output: 6 } } });
+  });
+
+  // Each layer a refusal crosses logs its chain: one refused memory pass logged its 0.2 MB answer three times (2026-10-20).
+  test('a refused answer is named by its length and digest, never quoted', async () => {
+    const prose = 'word '.repeat(40_000);
+
+    for (const text of [prose, `{"value":"${prose}"}`]) {
+      const [refused] = await Promise.allSettled([generateObjectReported({ model: answering(text), prompt: 'p' }, Fact, { spend: { source: 'fast', report: () => {} } })]);
+      const chain = refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered';
+
+      expect(chain).toContain(`(${String(text.length)} characters, sha256 ${sha256Hex(text, 12)})`);
+      expect(chain).not.toContain('word word');
+    }
   });
 
   // Cut off, the answer is incomplete rather than wrong: asked again, the model may finish it.

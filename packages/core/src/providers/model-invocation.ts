@@ -4,7 +4,7 @@
  * when the call returns. A call that threw was not billed and files none.
  */
 
-import { generateText, jsonSchema, NoObjectGeneratedError, Output, streamText } from 'ai';
+import { generateText, JSONParseError, jsonSchema, NoObjectGeneratedError, Output, streamText, TypeValidationError } from 'ai';
 import { toJsonSchema } from '@valibot/to-json-schema';
 import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
@@ -14,6 +14,7 @@ import {
 } from '../events/model-call';
 import type { Embedder } from '../memory/vector-store';
 import { normalizeUsage, type Usage } from '../usage';
+import { sha256Hex } from '../safety/argument-digest';
 import { callAccountOf } from './quota';
 import { mergeProviderOptions, type ProviderOptions } from './effort';
 
@@ -105,7 +106,10 @@ export function generateObjectReported<S extends v.GenericSchema>(request: Objec
     providerOptions: mergeProviderOptions(request.providerOptions, NON_STRICT),
   };
 
-  const offSchema = (cause: Error) => new KinuError('bad_input', `${call.spec ?? 'the model'} answered off its schema`, { cause });
+  // Named by its length and digest: each layer the refusal crosses logs its chain, and the answer in it was three log
+  // lines of 0.2 MB for one refused memory pass (2026-10-20).
+  const offSchema = (text: string, cause: Error) => new KinuError('bad_input',
+    `${call.spec ?? 'the model'} answered off its schema (${String(text.length)} characters, sha256 ${sha256Hex(text, 12)})`, { cause });
 
   return settle(Effect.gen(function* () {
     // Drained before anything is read, so the call is filed whatever its answer; a provider's failure is kept as it came
@@ -121,13 +125,25 @@ export function generateObjectReported<S extends v.GenericSchema>(request: Objec
     if (finishReason === 'length') return yield* Effect.fail(outputLimitFailure(modelId, 'length'));
 
     const output = yield* Effect.tryPromise({ try: async () => await result.output, catch: (cause) => cause }).pipe(
-      Effect.catch((cause) => (NoObjectGeneratedError.isInstance(cause) ? Effect.fail(offSchema(cause)) : Effect.die(cause))),
+      Effect.catch((cause) => (NoObjectGeneratedError.isInstance(cause) ? Effect.fail(offSchema(cause.text ?? '', withoutAnswer(cause))) : Effect.die(cause))),
     );
 
     const parsed = v.safeParse(schema, output);
 
-    return parsed.success ? parsed.output : yield* Effect.fail(offSchema(new v.ValiError(parsed.issues)));
+    if (parsed.success) return parsed.output;
+    const text = yield* Effect.promise(async () => await result.text);
+
+    return yield* Effect.fail(offSchema(text, new v.ValiError(parsed.issues)));
   }));
+}
+
+/** The SDK's refusal of an answer that is no object, less the answer its parse and validation errors quote whole: their
+ *  own cause says why. */
+function withoutAnswer(refused: NoObjectGeneratedError): Error {
+  const quoting = refused.cause;
+  const why = JSONParseError.isInstance(quoting) || TypeValidationError.isInstance(quoting) ? quoting.cause : quoting;
+
+  return why instanceof Error ? new Error(refused.message, { cause: why }) : new Error(refused.message);
 }
 
 /** A reported stream read to its end; what it returned, its result with every promise settled. */
