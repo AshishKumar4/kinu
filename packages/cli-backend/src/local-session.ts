@@ -84,11 +84,11 @@ import { ActorSession, type ActorTurnLease,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
-  applyScaffoldDecision, getEvolutionStatus,
+  applyScaffoldDecision, getEvolutionStatus, recordedTurns, type RecordedTurn,
   type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
   type EvolutionStatus,
-  activateDreamSkills, evolutionAnswerWake, idleDream, listRefinements, refinementPass, requestOwnerRefinement,
+  activateDreamSkills, activateReplayedScaffold, evolutionAnswerWake, idleDream, listRefinements, refinementPass, requestOwnerRefinement,
   type RefinementLaneStep,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
   revertChangelogEntryById, type ChangelogRevertResult,
@@ -1675,7 +1675,12 @@ export class LocalAgentSession {
     const cold = openingCacheCold(opening, null);
     this.turnArtifacts = artifactOverrides(turnArtifacts(this.rt.storage.sql, this.rt.actor, cold));
 
-    if (cold) await activateDreamSkills(this.refinementDeps);
+    if (cold) {
+      await activateDreamSkills(this.refinementDeps);
+      // Before the turn's program is chosen, so this turn runs the version it promotes.
+      await activateReplayedScaffold(this.refinementDeps.control);
+    }
+
     // Set before anything reads the tool surface: the report gate is a property of this turn.
     this.turnLaneOf = turnLane({ hirer: this.rt.actor.parentActorId }, turnTags(item).authorship);
     this.turnLearns = this.engine.recordsTurns;
@@ -2167,6 +2172,7 @@ export class LocalAgentSession {
       approvals: this.instructionApprovals,
       refiner: this.teamDeps?.temporary ?? null,
       skillsVfs: this.rt.ownFiles,
+      recordedTurns: () => this.recordedTurns(),
     };
   }
 
@@ -2206,6 +2212,11 @@ export class LocalAgentSession {
 
   listRefinements(limit = 20) {
     return listRefinements(this.refinementDeps, limit);
+  }
+
+  /** The newest answered turns as recorded, which a pending scaffold is replayed against (`scaffold/replay.ts`). */
+  recordedTurns(limit?: number): Promise<RecordedTurn[]> {
+    return recordedTurns(this.stores, limit);
   }
 
   getEvolutionStatus(): EvolutionStatus {

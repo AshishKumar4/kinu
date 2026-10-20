@@ -6,6 +6,7 @@ import {
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
   initAgentIsolateSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, readSubordinateInspection,
   chatMediaPath, chatSeed, drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
+  recordedTurns, type RecordedTurn,
   type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
   readAgentFigures, NO_FIGURES, type AgentFigures,
   localContextTree, readableActor, type ReadableActor, type ContextEditor, type ContextTree, type ConversationRecall,
@@ -668,6 +669,11 @@ export class AgentDatabase {
 
   async turnRequest(at: TurnRequestAt): Promise<TurnRequestPage> {
     return await turnRequestPage(this.actorHost().bindStores(this.reference()).stores, at);
+  }
+
+  /** What a pending scaffold is replayed against: this agent's newest answered turns, as its session recorded them. */
+  recordedTurns(limit?: number): Promise<RecordedTurn[]> {
+    return recordedTurns(this.actorHost().bindStores(this.reference()).stores, limit);
   }
 
   async inheritedContext(): Promise<SerializedMessage[]> {

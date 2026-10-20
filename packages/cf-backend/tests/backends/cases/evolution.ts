@@ -137,6 +137,22 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     },
   },
   {
+    title: 'the turns a scaffold is replayed against are the answered ones, each with what it was asked and what it said',
+    async run({ surface }) {
+      await surface.send('first question');
+      await surface.send('second question');
+
+      const turns = await surface.recordedTurns(1);
+      expect(turns.map((turn) => turn.task)).toEqual(['second question']);
+
+      const both = await surface.recordedTurns();
+      expect(both.map((turn) => turn.task)).toEqual(['first question', 'second question']);
+      // What the second was asked in holds the first exchange; what it said is its own answer.
+      expect(both[1]?.input.map((message) => message.role).filter((role) => role !== 'system')).toContain('assistant');
+      expect(both[1]?.output.at(-1)?.role).toBe('assistant');
+    },
+  },
+  {
     title: 'a proposed scaffold waits for the owner, who can roll it back',
     async run(backend) {
       const { surface } = backend;

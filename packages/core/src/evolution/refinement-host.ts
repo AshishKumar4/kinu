@@ -1,5 +1,6 @@
 /** Host-facing refinement calls, shared by both backends; the lane is refinement-lane.ts. */
 
+import { replayPendingScaffold } from '../scaffold/replay-gate';
 import { revertRejectedChanges } from './watch';
 import {
   advanceRefinementLane, dreamRequest, requestRefinement,
@@ -48,6 +49,7 @@ export async function refinementPass(deps: RefinementDeps, trigger: 'cadence' | 
   releaseRefinementLane(sql, rt.actor.actorId);
 
   return settle(attempt({ doing: 'running the refinement lane', otherwise: 'unavailable' }, async () => {
+    await replayPendingScaffold(deps.control, deps.recordedTurns);
     await revertRejectedChanges(deps);
     await dreamRequest(deps, trigger);
 

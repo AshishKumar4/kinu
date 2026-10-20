@@ -55,7 +55,7 @@ type SameCall =
   | 'latestAlternateTakes' | 'pickAlternateTake'
   | 'getActivePlanReview' | 'savePlanReviewAnnotations' | 'decidePlanReview' | 'dismissPlanReview'
   | 'checkpointStatus' | 'listFileCheckpoints' | 'planFileRestore' | 'restoreFileCheckpoint'
-  | 'listRefinements'
+  | 'listRefinements' | 'recordedTurns'
   | 'revertConversation' | 'clearConversation' | 'branchTurn' | 'sendState' | 'awaitSend';
 
 /** The cf signature, answered asynchronously: the CLI's synchronous answers are awaited the same way. */
@@ -236,6 +236,7 @@ async function cloudflare(opens: BackendOpening): Promise<SharedBackend> {
       planFileRestore: (dir, id) => agent.planFileRestore(dir, id),
       restoreFileCheckpoint: (dir, id) => agent.restoreFileCheckpoint(dir, id),
       listRefinements: (limit) => agent.listRefinements(limit),
+      recordedTurns: (limit) => agent.recordedTurns(limit),
       requestRefinement: (opts) => agent.requestRefinement(opts),
       revertConversation: (entryId) => agent.revertConversation(entryId),
       clearConversation: () => agent.clearConversation(),
@@ -384,6 +385,7 @@ async function cli(opens: BackendOpening): Promise<SharedBackend> {
       planFileRestore: (dir, id) => session.planFileRestore(dir, id),
       restoreFileCheckpoint: (dir, id) => session.restoreFileCheckpoint(dir, id),
       listRefinements: async (limit) => session.listRefinements(limit),
+      recordedTurns: (limit) => session.recordedTurns(limit),
       requestRefinement: (opts) => session.requestRefinement(opts),
       revertConversation: (entryId) => session.revertConversation(entryId),
       // The clear's answer is the emptied request's measure, which cf records instead of returning.

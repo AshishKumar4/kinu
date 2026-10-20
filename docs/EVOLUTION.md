@@ -133,7 +133,15 @@ An edit that passed the pre-live tests is staged (`stageArtifact`, `core/src/evo
 
 The owner's revert does not wait: a staged version is discarded, and a current one gives way to the version it replaced, or to the bundled text, from the next turn, at the cost of one cache rewrite.
 
-The scaffold's pending proposal is decided by the owner (`applyScaffoldDecision`), which re-runs the misevolution check against the on-disk file before it swaps.
+The scaffold's pending proposal is replayed against recorded turns ("Scaffold replay" below) before it can run. A pass becomes current at the next turn whose prompt cache is cold, before that turn's program is chosen (`activateReplayedScaffold`, beside `turnArtifacts` on both hosts), so that turn runs it. The promotion goes through `applyPromotionDecision`, which re-runs the misevolution check against the on-disk file before it swaps. The owner can still decide a pending version by hand (`applyScaffoldDecision`).
+
+### Scaffold replay
+
+A pending scaffold is replayed against the agent's newest answered turns, up to 10, as its session recorded them (`replayScaffold`, `core/src/scaffold/replay.ts`). `recordedTurns` reads each: the conversation at its admission (the history before it and the user's message) and its outputs in order. On cf they live in the agent's isolate, which serves them through one call (`AgentFacet.recordedTurns`) in the session codec's durable form.
+
+Each turn runs the pending source in a scripted host. Its model calls (`host.llmStream`, `host.defaultInference`) are served the recorded steps in order. A tool call (`host.callTool`) is answered from the recording when its name and arguments match a recorded call, and refused otherwise. Memory reads see the agent's memory, but writes stay in the replay, and no machine is reachable, so nothing a replay does reaches the agent. A turn passes when it completes with an answer, makes no call the recording does not hold, makes at most twice its recorded steps plus 8 model and tool calls, and finishes within 30 s. The first turn that fails decides, with the reason. With no answered turn recorded there is nothing to hold the version to, which is a failure, never a pass.
+
+The dream lane's pass replays the pending version first, once per version (`replayPendingScaffold`, `core/src/scaffold/replay-gate.ts`). A pass is recorded as `scaffold_replayed` with the number of turns, and the version stays pending until a cold turn promotes it. A failure rolls it back at once, through the same decision, with the reason on its `scaffold_rollback` event: `its replay failed on turn <id>: <why>`.
 
 ### How much of a turn a judge sees
 

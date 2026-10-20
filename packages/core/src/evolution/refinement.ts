@@ -5,6 +5,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 // activation, not clock; the row carries its pass's claim token so a revoked pass stops before
 // its next owner write.
 
+import type { RecordedTurn } from '../scaffold/replay';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 
@@ -167,6 +168,8 @@ export interface RefinementDeps {
   readonly approvals?: InstructionApprovalStore;
   /** The plane the turn's skills index reads, where a dream's skill lands and stages. */
   readonly skillsVfs: VFS;
+  /** The agent's newest answered turns as recorded, which a pending scaffold is replayed against. */
+  readonly recordedTurns: () => Promise<RecordedTurn[]>;
 }
 
 const RefinementRouteSchema = v.object({

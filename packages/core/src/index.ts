@@ -1008,6 +1008,13 @@ export {
 // Crafted tools by preference
 export { craftPreference, craftPreferences, rankByPreference, type CraftPreferenceRow } from './craft/preference';
 
+// Scaffold replay against recorded turns
+export { activateReplayedScaffold } from './scaffold/replay-gate';
+
+export {
+  decodeRecordedTurns, encodeRecordedTurns, recordedTurns, replayScaffold, type RecordedTurn, type ReplayVerdict,
+} from './scaffold/replay';
+
 export { type CraftCall } from './craft/in-episode';
 
 export { TurnCraftLedger } from './craft/turn-ledger';

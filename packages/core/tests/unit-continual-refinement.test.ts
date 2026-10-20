@@ -280,7 +280,7 @@ function fixture(): Fixture {
         return { answers: { fixes: { type: 'noul', noul: better ? 0.9 : 0.1 }, harms: { type: 'noul', noul: better ? 0.1 : 0.9 } }, usage: { input: 1, output: 1 } };
       };
 
-      return { control: scriptedControl(rt), facts, refiner: withReviewer(refiner, reviewer, reviews), approvals, skillsVfs: rt.agentStateVfs };
+      return { control: scriptedControl(rt), facts, refiner: withReviewer(refiner, reviewer, reviews), approvals, skillsVfs: rt.agentStateVfs, recordedTurns: async () => [] };
     },
   };
 }
