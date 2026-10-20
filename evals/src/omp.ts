@@ -9,7 +9,7 @@
  * one secret policy (`redactSecrets`, through `compactToolCall` for calls).
  */
 import * as v from 'valibot';
-import { JsonValueSchema, redactSecrets, type CompletedTurn, type JsonObject, type JsonValue } from '../../packages/core/src/index';
+import { CompletedTurnSchema, JsonValueSchema, redactSecrets, type JsonObject, type JsonValue } from '../../packages/core/src/index';
 import { compactToolCall } from '../../packages/core/src/evolution/tool-call-record';
 
 const TextBlock = v.object({ type: v.literal('text'), text: v.string() });
@@ -46,11 +46,18 @@ export function parseLogLine(text: string): LogLine | null {
 }
 
 /** An owner turn as the converter keeps it: the recorded turn, when it was asked, and how the owner answered it. */
-export interface OwnerTurn {
-  readonly turn: CompletedTurn;
-  readonly at: string;
+export const OwnerTurnSchema = v.object({
+  turn: CompletedTurnSchema,
+  at: v.string(),
   /** The owner's next message on the same branch; null when the session ended there. */
-  readonly followup: { readonly text: string; readonly at: string } | null;
+  followup: v.nullable(v.object({ text: v.string(), at: v.string() })),
+});
+
+export type OwnerTurn = v.InferOutput<typeof OwnerTurnSchema>;
+
+/** A dataset file the converter wrote: one owner turn per line. */
+export function ownerTurnsFrom(jsonl: string): OwnerTurn[] {
+  return jsonl.split('\n').filter((row) => row.trim() !== '').map((row) => v.parse(v.pipe(v.string(), v.parseJson(), OwnerTurnSchema), row));
 }
 
 /** A text the harness shook out of its context to save room, and where its bytes went. */
