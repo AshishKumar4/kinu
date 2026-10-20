@@ -1,7 +1,7 @@
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
 import * as v from 'valibot';
 import { Effect, Result } from 'effect';
-import { DevboxError, attempt, attemptSync, settle } from './errors';
+import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
 import { TERM_GRACE_MS } from './lifecycle';
 import { BOX_CHROMIUM_POLICY, CHROMIUM_POLICIES, CHROMIUM_PROFILES } from './desktop';
 import { INSTALL_SESSION_FILES, READS_TERMINAL, SAVED_SESSIONS, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE } from './sessions';
@@ -15,6 +15,19 @@ const SYSTEM_BUNDLE = '/etc/ssl/certs/ca-certificates.system.crt';
 // Native exec does not inherit start() env; the upstream coding-agents example passes this per process. The trust
 // bundles, and the desktop's display, so a window a program opens lands on the screen the owner watches (D89).
 export const CONTAINER_ENV = { NODE_EXTRA_CA_CERTS: CA_PATH, REQUESTS_CA_BUNDLE: BUNDLE, DISPLAY: ':0' };
+
+/**
+ * Ends `pid` in the container with an exec of `kill`, whose failure the box reads and says. The platform's own kill
+ * (`ExecProcess.kill()`, or aborting the signal an exec was given) is a task workerd adds and nobody can await: on a
+ * container whose connection was lost it failed the box's request as an uncaught "Network connection lost." (staging
+ * rc23, 2026-10-19; `connection-lost.test.ts`). So no exec of the box's is given a signal or killed by the platform.
+ */
+export function endProcess(container: Pick<Container, 'exec'>, pid: number, doing: string): () => void {
+  return observe(attempt('process', async () => await (await container.exec(['kill', '-KILL', String(pid)])).output(), doing), {
+    success: () => undefined,
+    failure: (cause) => { console.error(`[devbox] ${cause.message}`); },
+  });
+}
 
 /** Each certificate in the CA file as a JSON string of its base64 DER, comma-separated. */
 const CA_DER = String.raw`awk '/-----BEGIN/{der="";next} /-----END/{printf "%s\"%s\"", sep, der; sep=",";next} {der=der $0}' ${CA_PATH}`;

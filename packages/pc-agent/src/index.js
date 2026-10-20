@@ -113,6 +113,8 @@ const chatgpt = require('./chatgpt.js');
 
 const screen = require('./daemon/screen.js');
 
+const { createTerminalRecords } = require('./daemon/terminals.js');
+
 const { runToExit } = update;
 
 /** This daemon's own file, as Bun started it. Not `__filename`: a release bundles this file, and the bundler writes the
@@ -217,13 +219,15 @@ const PTY_INPUT_FRAME = FRAMES.ptyInput;
 
 const PTY_RESIZE_FRAME = FRAMES.ptyResize;
 
+const PTY_DETACH_FRAME = FRAMES.ptyDetach;
+
 const PTY_OUTPUT_FRAME = FRAMES.ptyOutput;
 
 const PTY_EXIT_FRAME = FRAMES.ptyExit;
 
 /** The frames the hub sends a live session or screen stream. Each names one
  *  this daemon already opened, so none of them is a way to start work. */
-const LIVE_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, screen.SCREEN_CLOSE_FRAME]);
+const LIVE_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, PTY_DETACH_FRAME, screen.SCREEN_CLOSE_FRAME]);
 
 /**
  * How far behind the socket may fall before live output — a terminal's, or a
@@ -237,6 +241,9 @@ const LIVE_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, screen.SCREEN_CL
  * holds several of them and a brief stall stays invisible.
  */
 const LIVE_BACKLOG_MAX_BYTES = 256 * 1024;
+
+/** A resumed session's kept output goes to its new pane in frames of at most this many bytes. */
+const TERMINAL_REPLAY_BYTES = 16 * 1024;
 
 /**
  * The provider relay: the hub asks this machine to make a model call for the
@@ -1020,6 +1027,7 @@ function handleLiveFrame(msg, ctx) {
   try {
     if (msg.type === PTY_INPUT_FRAME) sessions.write(msg.session, msg.data);
     else if (msg.type === PTY_RESIZE_FRAME) sessions.resize(msg.session, msg.cols, msg.rows);
+    else if (msg.type === PTY_DETACH_FRAME) sessions.detach(msg.session);
   } catch (err) {
     log('device.terminal_frame_dropped', msg.type, msg.session, errorDetail(err));
   }
@@ -1031,24 +1039,92 @@ function handleLiveFrame(msg, ctx) {
  *  sandboxed frame. A terminal is device access, so it is confined exactly as
  *  a command is. */
 async function openTerminalSession(msg, ws, ctx) {
-  const { id, params } = msg;
+  const { params } = msg;
 
   supervisor.assertSupervisionSupported();
   assertCommandShellPresent();
 
-  if (!ctx || !ctx.sessions) throw new Error('this daemon was started without terminal support');
-  const plan = await planFromFrame(msg, SESSION_COMMAND, { source: sessionSource() });
+  if (!ctx || !ctx.sessions || !ctx.terminals) throw new Error('this daemon was started without terminal support');
+  const workspace = msg.workspace;
+  // No session named: the workspace's first, as a pane that names none opens.
+  const record = params[2] === undefined ? ctx.terminals.list(workspace)[0] : ctx.terminals.find(workspace, params[2]);
+
+  if (!record) throw new Error('that terminal session is gone; open a new one');
+  const send = (frame) => sendLiveFrame(ws, frame);
+  // The confinement it runs under is the frame's: a shell opened under another (the owner turned the Sandbox switch
+  // since) is ended, not handed back.
+  const confinement = JSON.stringify(msg.sandbox ?? null);
+
+  if (ctx.sessions.has(record.id)) {
+    const attached = ctx.sessions.attach(record.id, send);
+
+    if (attached.plan === confinement) {
+      for (let at = 0; at < attached.retained.length; at += TERMINAL_REPLAY_BYTES) {
+        send({ type: PTY_OUTPUT_FRAME, session: record.id, data: attached.retained.subarray(at, at + TERMINAL_REPLAY_BYTES).toString('base64') });
+      }
+
+      const window = ctx.sessions.resize(record.id, params[0], params[1]);
+
+      return { session: record.id, pid: attached.pid, cols: window.cols, rows: window.rows, resumed: true };
+    }
+
+    ctx.sessions.detach(record.id);
+    await ctx.sessions.close(record.id).ended;
+  }
+
+  // Its folder, where its shell opened before: a restart brings the session back there, as the computer's do (D90).
+  const framed = record.cwd !== null && msg.cwd === undefined ? { ...msg, cwd: record.cwd } : msg;
+  const plan = await planFromFrame(framed, SESSION_COMMAND, { source: sessionSource() });
+
+  // A close that landed while this open planned forgot the session: nothing could list or close its shell.
+  if (ctx.terminals.find(workspace, record.id) === null) throw new Error('that terminal session was closed while it opened');
 
   const opened = ctx.sessions.open({
-    session: id,
+    session: record.id,
     cols: params[0],
     rows: params[1],
     argv: plan.argv,
     env: leaderEnvironment(plan),
-    send: (frame) => sendLiveFrame(ws, frame),
+    cwd: plan.spawnCwd,
+    plan: confinement,
+    send,
   });
 
-  return { session: id, pid: opened.pid, cols: opened.cols, rows: opened.rows };
+  if (typeof plan.cwd === 'string') ctx.terminals.settle(workspace, record.id, plan.cwd);
+
+  return { session: record.id, pid: opened.pid, cols: opened.cols, rows: opened.rows, resumed: false };
+}
+
+/** A workspace's sessions on this machine, and whether each has a shell now and what it runs. */
+function listTerminals(msg, ctx) {
+  const { sessions, terminals } = terminalsOf(ctx);
+
+  return terminals.list(msg.workspace).map((record) => ({
+    id: record.id, name: record.name, cwd: record.cwd ?? '', open: sessions.has(record.id), running: sessions.running(record.id),
+  }));
+}
+
+/** Ends a session's shell, if one runs, and forgets it. */
+async function closeTerminal(msg, ctx) {
+  const { sessions, terminals } = terminalsOf(ctx);
+  const record = terminals.find(msg.workspace, msg.params[0]);
+
+  if (record === null) return null;
+
+  if (sessions.has(record.id)) {
+    sessions.detach(record.id);
+    await sessions.close(record.id).ended;
+  }
+
+  terminals.remove(msg.workspace, record.id);
+
+  return null;
+}
+
+function terminalsOf(ctx) {
+  if (!ctx || !ctx.sessions || !ctx.terminals) throw new Error('this daemon was started without terminal support');
+
+  return { sessions: ctx.sessions, terminals: ctx.terminals };
 }
 
 /** Answers `id` once `pending` settles: with its value, or with its error's message. */
@@ -1337,13 +1413,17 @@ async function relayCall(ws, id, request) {
   }
 }
 
-/** Methods past the file and command set: the provider relay, this machine's screen and its ChatGPT sign-in,
- *  else the answer an older hub's newer frame gets. */
+/** Methods past the file and command set: the provider relay, this machine's screen, its named terminal sessions and
+ *  its ChatGPT sign-in, else the answer an older hub's newer frame gets. */
 function answerLaterMethod(msg, ws, ctx) {
   const { id, method, params } = msg;
 
   if (method === RELAY_METHOD) rpcWhenSettled(ws, id, relayCall(ws, id, params[0]));
   else if (method === METHODS.screenOpen) rpc(ws, id, screensOf(ctx).open(params[0], ws));
+  else if (method === METHODS.ptyList) rpc(ws, id, listTerminals(msg, ctx));
+  else if (method === METHODS.ptyCreate) rpc(ws, id, terminalsOf(ctx).terminals.create(msg.workspace, params[0]));
+  else if (method === METHODS.ptyRename) rpc(ws, id, terminalsOf(ctx).terminals.rename(msg.workspace, params[0], params[1]));
+  else if (method === METHODS.ptyClose) rpcWhenSettled(ws, id, closeTerminal(msg, ctx));
   else if (method === CHATGPT_METHODS.status) rpc(ws, id, chatgptSession.status());
   else if (method === CHATGPT_METHODS.signIn) rpcWhenSettled(ws, id, chatgptSession.signIn());
   else if (method === CHATGPT_METHODS.signOut) rpcWhenSettled(ws, id, chatgptSession.signOut({ revoke: params?.[0]?.revoke === true }));
@@ -1991,6 +2071,7 @@ async function main() {
   const ctx = {
     checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }),
     sessions,
+    terminals: createTerminalRecords({ file: path.join(DEVICE_HOME, 'terminals.json'), log }),
     screens,
   };
 
@@ -2038,8 +2119,16 @@ async function main() {
   const loop = startConnectLoop({
     getTicket: () => getConnectTicket(cfg, HTTP_ORIGIN),
     // A dead credential is not a transient failure, so the process exits
-    // non-zero and the log says which command relinks the machine.
-    onRejected: () => { process.exitCode = REJECTED_EXIT; },
+    // non-zero and the log says which command relinks the machine. A revoked
+    // machine keeps no shell: detached ones would run on with nothing that may
+    // reach them, and keep this process alive.
+    onRejected: () => {
+      process.exitCode = REJECTED_EXIT;
+      const ended = ctx.sessions.closeAll();
+
+      if (ended.length > 0) log('device.terminals_closed_with_credential', ended.join(' '));
+      ctx.screens.closeAll();
+    },
     secret: () => cfg.token,
     onClose: (event) => {
       // The successor this daemon started has connected: the hub gave it this
@@ -2068,12 +2157,11 @@ async function main() {
       // here is what keeps a dropped socket from leaving work running that
       // nothing can name, stop or observe.
       supervision.terminateUnanswered().catch(reportSweepFailure);
-      // A terminal outlives nothing: the socket that carried its bytes is the
-      // socket that carried its keystrokes, so the shell is hung up here
-      // rather than left running with no way to reach it.
-      const ended = ctx.sessions.closeAll();
+      // A terminal outlives its pane, and the pane went with the socket: each
+      // keeps running, detached, for the pane the next socket attaches (1014-t).
+      const detached = ctx.sessions.detachAll();
 
-      if (ended.length > 0) log('device.terminals_closed_with_socket', ended.join(' '));
+      if (detached.length > 0) log('device.terminals_detached_with_socket', detached.join(' '));
       // A screen is drawn for whoever is watching, and the socket was the only way to them.
       ctx.screens.closeAll();
     },

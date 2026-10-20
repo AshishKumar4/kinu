@@ -2,7 +2,8 @@
  * The signed-out page a visitor lands on advertises a way to sign in, and that way works. A fresh browser opens the
  * deployment's home, follows the sign-in it links, and reads the ways the sign-in page offers; each is tried as far as a
  * visitor without the owner's own provider login can go. A password form signs a built-in account kept on the
- * deployment in, reaches a signed-in page and signs out, its session revoked, so the account ends as it began. A
+ * deployment in, reaches a signed-in page and signs out, its session revoked, so the account ends as it began; on a
+ * deployment with no owner yet it is the first owner's, and the case reads that it asks for the setup token. A
  * provider's link starts that provider's sign-in for this deployment: it sends the visitor to the provider with a
  * return to this deployment's callback, and the provider answers with its own sign-in, not an error (an unknown client
  * answers `/oauth/error?error=invalid_client`, measured at Cloudflare 2026-10-19). No model.
@@ -37,6 +38,11 @@ afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE
 /** A built-in account kept on a deployment whose sign-in offers a password, made once by an invite of its owner; its
  *  password is an armada secret (docs/DEPLOYMENT.md, the upgrade fixtures). Signing in and out leaves it as it was. */
 const ACCOUNT = { email: 'upgrade-fixture@kinu.run', secret: 'KINU_UPGRADE_FIXTURE_PASSWORD' } as const;
+
+/** The password form's mode (`sign-in`, or `register` for the first owner or an invite) and whether it asks for the
+ *  setup token, as the page draws it (packages/core/src/http/public-pages.ts). */
+const FORM = `({ mode: document.querySelector('#builtin-sign-in')?.getAttribute('data-mode') ?? null,
+  setup: document.querySelector('#builtin-sign-in [name="setup"]') !== null })`;
 
 /** `/api/auth/me`: the signed-in user, or null with a 401. */
 const MeSchema = v.object({ user: v.nullable(v.looseObject({ email: v.optional(v.nullable(v.string())) })) });
@@ -74,6 +80,13 @@ async function passwordSignIn(page: Page, origin: string, me: Me): Promise<EvalS
     },
     { what: 'sign-out-revokes-the-session', reached: cookie !== undefined && afterSignOut.status === 401 && afterSignOut.email === null, detail: JSON.stringify({ me: afterSignOut }) },
   ];
+}
+
+/** The password form, by what it is for: signing an account in, or a first owner's setup, which the case reads only. */
+async function passwordWay(page: Page, at: { origin: string; form: { mode: string | null; setup: boolean }; me: Me }): Promise<EvalSubgoal[]> {
+  if (at.form.mode === 'sign-in') return await passwordSignIn(page, at.origin, at.me);
+
+  return [{ what: 'first-owner-setup-offered', reached: at.form.setup, detail: JSON.stringify(at.form) }];
 }
 
 /**
@@ -122,14 +135,17 @@ describe(SUITE, () => {
 
           await page.goto(`${plan.origin}/login`);
           const ways = v.parse(v.array(v.string()), await page.evaluate(WAYS_IN));
+          const form = v.parse(v.object({ mode: v.nullable(v.string()), setup: v.boolean() }), await page.evaluate(FORM));
 
           const offered = [
             { what: 'home-links-sign-in', reached: linked.length > 0, detail: JSON.stringify({ linked }) },
             { what: 'sign-in-offers-a-way-in', reached: ways.includes('password') || ways.includes('passkey') || ways.some((way) => way.startsWith('/auth/')), detail: JSON.stringify({ ways }) },
           ];
 
-          // Each way the page offers, tried; one the page does not offer is not this deployment's to prove.
-          const password = ways.includes('password') ? await passwordSignIn(page, plan.origin, me) : [];
+          // Each way the page offers, tried; one the page does not offer is not this deployment's to prove. A deployment
+          // with no owner yet (a reset empties it) offers its password form to the first owner, with the setup token
+          // its deployer holds: no account exists to sign in, and the case does not claim the deployment.
+          const password = ways.includes('password') ? await passwordWay(page, { origin: plan.origin, form, me }) : [];
           const providers = await Promise.all(ways.filter((way) => way.startsWith('/auth/')).map(async (way) => await providerSignIn(plan.origin, way)));
 
           return [...offered, ...password, ...providers] satisfies EvalSubgoal[];

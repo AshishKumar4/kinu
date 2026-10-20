@@ -83,7 +83,7 @@ function Who({ as, workspace }: { as: AgentStatus; workspace: string | undefined
   const since = new Date(as.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 
   return (
-    <Section id="agent-who" title="Who it is" icon={<IdentificationCardIcon size={14} className="p-text-2" />}>
+    <Section id="agent-who" title="Profile" icon={<IdentificationCardIcon size={14} className="p-text-2" />}>
       <div className="space-y-3">
         <div className="flex items-center gap-3.5">
           <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl border p-border p-fill">
@@ -91,7 +91,7 @@ function Who({ as, workspace }: { as: AgentStatus; workspace: string | undefined
           </span>
           <div className="min-w-0">
             <div className="p-title truncate p-text" title={title}>{title}</div>
-            <div className="truncate p-meta p-text-3" title={as.name}>Its own agent · since {since}</div>
+            <div className="truncate p-meta p-text-3" title={as.name}>Since {since}</div>
           </div>
         </div>
         {as.purpose !== "" && <p className="p-row-text p-text-2">{as.purpose}</p>}
@@ -126,22 +126,22 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
     && factsResource.status !== "error";
 
   return (
-    <Section id="memory" title="What it knows" icon={<BrainIcon size={14} className="p-text-2" />}
+    <Section id="memory" title="Memory" icon={<BrainIcon size={14} className="p-text-2" />}
       badge={facts.length + notes.length > 0 ? <Badge variant="secondary">{facts.length + notes.length}</Badge> : undefined}>
       <div className="space-y-3">
         <label className="flex h-8 items-center gap-2 rounded-lg border p-border p-elevated px-2.5 focus-within:ring-1 focus-within:ring-[var(--c-accent)]">
           <MagnifyingGlassIcon size={13} className="shrink-0 p-text-3" aria-hidden />
           <input value={search} onChange={(event) => { setSearch(event.target.value); onSearchMemory(event.target.value); }}
-            placeholder="Search what it knows" aria-label="Search what it knows"
+            placeholder="Search memory" aria-label="Search memory"
             className="min-w-0 flex-1 bg-transparent text-sm p-text placeholder:p-text-3 focus:outline-none" />
         </label>
 
         {/* The page's notice gives the reason once; this offers the retry. */}
-        {read.state === "failed" && <LoadFailure what="what it knows" onRetry={read.retry} />}
+        {read.state === "failed" && <LoadFailure what="memory" onRetry={read.retry} />}
         {read.state === "loading" && <div className="flex h-16 items-center justify-center"><Loader size="sm" /></div>}
-        {empty && <p data-empty className="p-row-text p-text-3">Nothing yet. It keeps notes and facts as it works, and you can ask it to remember something.</p>}
+        {empty && <p data-empty className="p-row-text p-text-3">No notes yet.</p>}
 
-        {searching && notes.length === 0 && <Quiet>Nothing it knows matches.</Quiet>}
+        {searching && notes.length === 0 && <Quiet>No matches.</Quiet>}
 
         {notes.length > 0 && (
           <div className="space-y-1.5">
@@ -159,16 +159,16 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
 
         {!searching && memoryContent !== "" && (
           <details className="group/memory">
-            <summary className="cursor-pointer p-meta p-text-3 hover:p-text">The whole memory file</summary>
-            <div className="mt-2 max-h-[420px] overflow-y-auto p-card px-4 py-3 prose-chat p-text"><MarkdownContent content={memoryContent} /></div>
+            <summary className="cursor-pointer p-meta p-text-3 hover:p-text">Memory file</summary>
+            <div data-memory-file className="mt-2 max-h-[420px] overflow-y-auto p-card px-4 py-3 prose-chat p-text"><MarkdownContent content={memoryContent} /></div>
           </details>
         )}
 
-        {factsResource.status === "error" && <LoadFailure what="what it has noticed" message={factsResource.message} onRetry={reloadFacts} />}
+        {factsResource.status === "error" && <LoadFailure what="facts" message={factsResource.message} onRetry={reloadFacts} />}
 
         {!searching && facts.length > 0 && (
           <div className="space-y-1.5">
-            <p className="p-meta p-text-3">Noticed between turns</p>
+            <p className="p-meta p-text-3">Facts</p>
             <div className="p-group">
               {facts.map((fact) => (
                 <div key={fact.key} className="group/fact flex items-start gap-3 px-3 py-2.5" data-world-model-fact={fact.key}>
@@ -205,7 +205,7 @@ function Changing({ rpc, readMoves, version }: {
   const entries = view?.entries ?? [];
 
   return (
-    <Section id="evolution" title="How it's changing" icon={<GitBranchIcon size={14} className="p-text-2" />}
+    <Section id="evolution" title="Evolution" icon={<GitBranchIcon size={14} className="p-text-2" />}
       badge={version === null ? undefined : <Badge variant="secondary">v{version}</Badge>}>
       <div className="space-y-5">
         {(view === null || resource.status === "error") && <ChangelogFailure resource={resource} reload={reload} />}
@@ -218,12 +218,7 @@ function Changing({ rpc, readMoves, version }: {
             {entries.map((entry) => <ChangelogEntryCard key={entry.id} grouped entry={entry} seenAt={seenAt} rpc={rpc} onReverted={reload} />)}
           </div>
         )}
-        {version !== null && (
-          <section className="space-y-1.5">
-            <p className="p-eyebrow">Prompt versions</p>
-            <ScaffoldLineage rpc={rpc} currentVersion={version} />
-          </section>
-        )}
+        {version !== null && <ScaffoldLineage rpc={rpc} currentVersion={version} />}
       </div>
     </Section>
   );
@@ -243,7 +238,7 @@ export function AgentSurface(
       {as !== null && <Who as={as} workspace={workspace} />}
       <Knows read={readOf(as !== null, snapshot.status === "error", onRetryLoad)} memory={memory} memoryContent={memoryContent}
         onSearchMemory={onSearchMemory} facts={facts} factsResource={factsResource} reloadFacts={reloadFacts} workspace={as?.name ?? null} />
-      <Section id="agent-doing" title="How it's doing" icon={<ChartLineUpIcon size={14} className="p-text-2" />}>
+      <Section id="agent-doing" title="Activity" icon={<ChartLineUpIcon size={14} className="p-text-2" />}>
         <QualityView rpc={rpc} moved={readMoves.getQuality ?? 0} />
       </Section>
       <Changing rpc={rpc} readMoves={readMoves} version={as?.scaffoldVersion ?? null} />

@@ -75,6 +75,8 @@ export type TrialIdentity = {
   readonly taskVersion: string;
   readonly evalCommit: string;
   readonly slotOf: (input: EvalRunInput) => EvalAccount;
+  /** The run's trials are sequences, one account each (EvalMatrix.sequence). */
+  readonly sequence: boolean;
 };
 
 /** How an isolate memory reset reads when it surfaces (platform catalog `do.isolate.oom_reported`). */
@@ -357,7 +359,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
             // The trial's workspace is named for it, so a retry of it knows its own earlier attempt's (prepareTrialAccount).
             const subject = `${task.id}-${String(input.trial)}`;
 
-            await timeline.span('account', () => prepareTrialAccount(own, Date.now(), subject));
+            await timeline.span('account', () => prepareTrialAccount(own, Date.now(), { subject, sequence: identity.sequence }));
             productSha = (await timeline.span('build', () => deployedBuild(own))).sha;
 
             const created = await timeline.span('open', () => openWorkspace(own, { subject, mission: task.mission, model: input.model }));

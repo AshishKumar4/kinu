@@ -64,6 +64,27 @@ export const ROW_NOTICES_ENV = 'KINU_ROW_NOTICES';
 /** How far into its bound of silence a run is told: late enough that a slow run is not, early enough to answer. */
 const NOTICE_AT = 0.75;
 
+/** Where a run's silence stands at a watchdog tick: since when it has been silent, the stretch it was last told about,
+ *  and when (all on the runner's clock, in ms). */
+export interface Watch { readonly silentFrom: number; readonly noticed: number; readonly noticedAt: number }
+
+/** What one tick does: append the notice, send the kill, both, or neither. */
+export interface Tick { readonly notice: boolean; readonly kill: boolean }
+
+/**
+ * What the watchdog does at one tick, `now`, for a run with `boundMs` of silence: tell it once per silent stretch, at
+ * NOTICE_AT of the bound, and kill it once the bound has passed and it has had the rest of the bound since it was told.
+ * An on-time tick tells it at NOTICE_AT and kills it at the bound, as ever. A tick held late (the watchdog is a timer on
+ * the runner's own busy loop) finds the silence past both at once: it tells the run, and the kill waits for its answer.
+ */
+export function watchTick(watch: Watch, now: number, boundMs: number): Tick {
+  const silent = now - watch.silentFrom;
+  const notice = watch.noticed !== watch.silentFrom && silent >= boundMs * NOTICE_AT;
+  const toldAt = notice ? now : watch.noticedAt;
+
+  return { notice, kill: silent >= boundMs && now - toldAt >= boundMs * (1 - NOTICE_AT) };
+}
+
 /** The name every process a run starts inherits, so what outlives the run is found by it. */
 export const RUN_MARK = 'KINU_RUN';
 
@@ -431,18 +452,22 @@ async function watched(run: DeadlineRun): Promise<DeadlineOutcome> {
 
   // Until the pipes close, not only until the child exits: a process holding one keeps the run open.
   let noticed = -1;
+  let noticedAt = 0;
   let waiting: string[] = [];
 
   const watchdog = setInterval(() => {
+    if (killed || searching) return;
+    const now = performance.now();
     const silentFrom = Math.max(lastOutput, searchedAt);
-    const silent = performance.now() - silentFrom;
+    const tick = watchTick({ silentFrom, noticed, noticedAt }, now, run.seconds * 1000);
 
-    if (!killed && !searching && noticed !== silentFrom && silent >= run.seconds * 1000 * NOTICE_AT) {
+    if (tick.notice) {
       noticed = silentFrom;
-      appendFileSync(notice, `silent ${(silent / 1000).toFixed(1)}s of ${String(run.seconds)}s\n`);
+      noticedAt = now;
+      appendFileSync(notice, `silent ${((now - silentFrom) / 1000).toFixed(1)}s of ${String(run.seconds)}s\n`);
     }
 
-    if (killed || searching || silent < run.seconds * 1000) return;
+    if (!tick.kill) return;
     killed = true;
     waiting = waitingIn(child.pid);
     signalGroup('SIGTERM');

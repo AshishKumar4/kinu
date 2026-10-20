@@ -1148,7 +1148,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/eval-plan-run.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
@@ -2519,8 +2519,9 @@ export const LADDER: readonly Gate[] = [
       + "this pull request's name. It also creates workspaces, links real machines and spends "
       + 'model calls on a shared account, none of which belongs on a pull request.',
     evidence: 'first-run',
-    // sign-in-advertised signs in through a login page that offers a password as the upgrade fixture's built-in account (m1922a).
-    secrets: ['KINU_UPGRADE_FIXTURE_PASSWORD'],
+    // sign-in-advertised signs in through a login page that offers a password as the upgrade fixture's built-in account
+    // (m1922a); the scripted tier signs its gateway account in to Cloudflare with the gateway token on its account.
+    secrets: ['KINU_UPGRADE_FIXTURE_PASSWORD', 'WEBSEARCH_CF_ACCOUNT', 'WEBSEARCH_CF_TOKEN'],
     phase: 'post-publish',
     deadline: {
       seconds: 720,

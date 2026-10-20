@@ -13,6 +13,7 @@ import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
+import { principalExecId } from './secrets-caller';
 import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { parseInput, type JsonValue } from '../utils/json';
@@ -367,7 +368,7 @@ async function sessionCall(
 
   if (cred !== undefined) execOptions.cred = cred;
 
-  if (job !== undefined) execOptions.execId = job;
+  if (job !== undefined) execOptions.execId = principalExecId(job);
 
   // A job that outruns its window frees its shell for the next call; it runs on, and its later cd and exports are not kept.
   if (name !== undefined && detached !== undefined) execOptions.detach = detached;
@@ -400,7 +401,7 @@ function runOnBox(box: NimbusSandboxHandle, call: SessionCall, options: ShellExe
   // Absent: not started. Pending: starting, which nothing cancels until the box answers. Fulfilled: running until its exit.
   let launch: Promise<ExecStream> | undefined;
   // Named before it is sent, so a Stop whose start answer is lost can still find the command by it.
-  const execId = call.execOptions.execId ?? `exec-${crypto.randomUUID()}`;
+  const execId = call.execOptions.execId ?? principalExecId(`exec-${crypto.randomUUID()}`);
 
   return raceAbort(async () => {
     await box.ready();

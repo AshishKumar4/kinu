@@ -140,6 +140,11 @@ export interface HostedWorkspace {
   /** One agent's view: a named call runs in the runtime's named shell, keyed by `scope` and the name. */
   box(scope: string): HostedBox;
   /**
+   * The same agent's view for a share's viewer (`withViewerPrincipal`): its named shells are keyed in a domain of their
+   * own, which no name of the owner's can reach, whatever the name holds.
+   */
+  viewerBox(scope: string): HostedBox;
+  /**
    * Each exposed workspace port with the job whose process listens on it, by the exec id that process carries, and every
    * job with a live process here.
    */
@@ -349,18 +354,21 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     return { routed: true, capability, slate, capture, refused: null };
   };
 
+  const boxFor = (scope: string, domain: ShellDomain): HostedBox => ({
+    ...workspaceBox({
+      runtime, ports: portRegistry, ctx: deps.ctx, scope, domain, previewUrl: deps.previewUrl, previewGates, exposed: deps.onPortsChanged,
+      mountTable: (mounts, principal) => bundle.mountTable(mounts, principal),
+      namespace: (principal) => bundle.namespace(principal),
+    }),
+    store: (plane) => storeFiles(async () => (await bundle.session()).vfs, plane),
+  });
+
   return {
     bundle,
     supervisorOp: async (envelope) => (await runtime()).supervisorOp(envelope),
     session: async (scope) => (await runtime()).session(scope),
-    box: (scope) => ({
-      ...workspaceBox({
-        runtime, ports: portRegistry, ctx: deps.ctx, scope, previewUrl: deps.previewUrl, previewGates, exposed: deps.onPortsChanged,
-        mountTable: (mounts, principal) => bundle.mountTable(mounts, principal),
-        namespace: (principal) => bundle.namespace(principal),
-      }),
-      store: (plane) => storeFiles(async () => (await bundle.session()).vfs, plane),
-    }),
+    box: (scope) => boxFor(scope, 'agent'),
+    viewerBox: (scope) => boxFor(scope, 'viewer'),
     // A listing says which job serves a port; it is no authority over the port's exposure. A runtime this isolate never
     // composed runs no process, so it answers nothing without booting the workspace.
     serving: async () => {
@@ -502,11 +510,15 @@ function namedShellCwd(sql: SqlStorage, id: string): string | null {
   return saved.success ? saved.output.cwd : null;
 }
 
+/** Whose named shells a box's are: an agent's (the owner's work), or a share's viewer's. */
+type ShellDomain = 'agent' | 'viewer';
+
 function workspaceBox(deps: {
   runtime: () => Promise<HostedRuntime>;
   ports: PortRegistry;
   ctx: DurableObjectState;
   scope: string;
+  domain: ShellDomain;
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
   previewGates(port: number, handle: string): Promise<PreviewGates>;
   /** An exposure changed which ports are exposed; a withdrawal is the registry's own move. */
@@ -514,9 +526,10 @@ function workspaceBox(deps: {
   mountTable: NonNullable<NimbusSandboxHandle['mountTable']>;
   namespace: NonNullable<NimbusSandboxHandle['namespace']>;
 }): NimbusSandboxHandle {
-  const { runtime, scope } = deps;
-  // An agent's shell names are its own: keyed by its scope, two agents' names never meet in the workspace.
-  const keyed = (name: string): string => `agent:${sha256Hex(`${scope}\u0000${name}`)}`;
+  const { runtime, scope, domain } = deps;
+  // An agent's shell names are its own: keyed by its scope, two agents' names never meet in the workspace; and by its
+  // domain outside the hash, so a viewer's never meet the owner's, whatever either name holds.
+  const keyed = (name: string): string => `${domain}:${sha256Hex(`${scope}\u0000${name}`)}`;
 
   const named = <O extends { readonly shellId?: string }>(options: O | undefined) => {
     if (options?.shellId === undefined) return options;

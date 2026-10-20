@@ -62,6 +62,8 @@ export type HubPush =
   /** A call, with the owner's Sandbox switch composed the way the hub composes it. */
   | {
     id: string; method: string; params: unknown[]; sandbox?: { tier: 'raw' | 'sandboxed'; agentHome: string; roots: string[] };
+    /** The proven workspace, which the daemon keys a workspace's terminal sessions on (1014-t). */
+    workspace?: string;
     /** The hub watches the command's output as it is printed. */
     output?: boolean;
   };

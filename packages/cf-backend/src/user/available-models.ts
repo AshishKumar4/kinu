@@ -2,7 +2,7 @@
  *  source of truth for models; models.dev for which providers a BYO key can connect. */
 import {
   objectNamed,
-  catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL, testModel,
+  catalogCredKey, fastCandidatesOf, listModelsDevProviders, modelsDevCompatBaseURL, testModel,
   type ModelMenuResponse, type ModelMenuEntry, type ModelTestResult, type ModelsDevProviderInfo, type ProviderCatalogEntry,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry, userCredentials, type UserCredentialClient } from '../providers/agent-registry';
@@ -35,7 +35,7 @@ export async function listAvailableModels<Id>(
     reasoningEfforts: model.reasoningEfforts,
   }));
 
-  return { models: out, failures: menu.failures, ...(menu.accounts !== undefined && { accounts: menu.accounts }) };
+  return { models: out, failures: menu.failures, ...(menu.accounts !== undefined && { accounts: menu.accounts }), fast: fastCandidatesOf(menu) };
 }
 
 /** models.dev providers the openai-compat path can drive, plus those a static provider serves under

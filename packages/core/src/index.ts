@@ -1139,7 +1139,7 @@ export {
 } from './vfs/workspace-path';
 
 export {
-  agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid,
+  agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid, VIEWER_HOME_NAME,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleSharedRoots,
   actorHomeName,
@@ -2133,6 +2133,7 @@ export {
   DEFAULT_ROLE_ID,
   providerListingOf, providerSnapshotOf, ProviderListingCache,
   type ProviderListing, type ProviderCacheOutcome, type ProviderSnapshotRead,
+  fastAssignment, fastCandidatesOf, type FastCandidate,
   agentRoleSwitch, changeRoleAsOwner,
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
   type RoleChangeRefusal, type RoleStateStore,
@@ -2568,7 +2569,9 @@ export {
 
 export { withCommandEnvironment, type CommandEnvironment } from './execution/command-environment';
 
-export { providersWithoutOwnerSecrets, withholdingOwnerSecrets, type SecretsCaller } from './execution/secrets-caller';
+export { isViewerProcess, providersWithoutOwnerSecrets, withholdingOwnerSecrets, type SecretsCaller } from './execution/secrets-caller';
+
+export { viewerCred, withViewerPrincipal, type ViewerPlace } from './execution/viewer-principal';
 
 export {
   objectNamed, type ObjectNamespace,

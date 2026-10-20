@@ -285,7 +285,11 @@ describe("opening a PC's desktop (1014-t)", () => {
 
         return await open(device);
       },
-      openDeviceTerminal: () => { throw new Error('openDeviceTerminal: a desktop opens no terminal'); },
+      openDeviceTerminal: async (window: { cols: number; rows: number }, target: { device?: string; session?: string }) => {
+        calls.push(`openDeviceTerminal:${String(window.cols)}x${String(window.rows)}:${target.device ?? '-'}:${target.session ?? '-'}`);
+
+        return { session: 'pty-token', user: 'user-1' };
+      },
       fetch: () => { throw new Error('fetch: a desktop is not the workspace\'s terminal'); },
     });
 
@@ -329,6 +333,15 @@ describe("opening a PC's desktop (1014-t)", () => {
 
     expect({ status: value?.status, error: (await body(value)).error }).toEqual({ status: 503, error: 'this PC shares no screen' });
     expect({ forwarded: trace.forwarded.length, events: logs.map((log) => log.event) }).toEqual({ forwarded: 0, events: ['desktop.device_refused'] });
+  });
+
+  test("a PC's pane names its session, and the route hands it and the PC to the workspace (1014-t)", async () => {
+    const { deps, trace } = deviceLane(async () => ({ session: 'scr-0123456789abcdef', user: 'user-1' }));
+    const request = new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal?executor=device&cols=100&rows=30&device=dev-mac&session=pty-build`, { headers: { upgrade: 'websocket' } });
+
+    expect((await terminalRequest(request, deps))?.status).toBe(200);
+    expect(trace.calls).toEqual(['prepareTerminal:device', 'openDeviceTerminal:100x30:dev-mac:pty-build', 'UserDO:user-1']);
+    expect(new URL(trace.forwarded[0]?.url ?? 'https://unforwarded.invalid/').search).toBe('?session=pty-token');
   });
 
   test('a desktop request that is not an upgrade opens nothing', async () => {

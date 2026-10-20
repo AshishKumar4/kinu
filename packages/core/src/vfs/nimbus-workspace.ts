@@ -24,6 +24,7 @@ import {
   agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleSharedRoots, provisionWorkspaceSoul,
   type HomeRootVfs, type TmpConfiner,
+  refuseViewerIdentityChange,
 } from './agent-home';
 import * as v from 'valibot';
 import { walkedPath, WORKSPACE_ROOT } from './workspace-path';
@@ -259,6 +260,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     // Trusted host init, once per engine boot: a registration is not stored with the tree.
     settleSharedRoots(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
     provisionWorkspaceSoul(workspace.vfs.as(CRED_KERNEL));
+    await refuseViewerIdentityChange(workspace.registry, opts.sql);
 
     const root = workspace.vfs.as(CRED_KERNEL);
     const main = agentIdentity(opts.sql, MAIN_AGENT);

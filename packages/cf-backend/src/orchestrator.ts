@@ -66,7 +66,10 @@ import {
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
-import { agentArtifactDirectory, agentHome, agentNameOfUid, MAIN_AGENT } from '@kinu.run/core';
+import {
+  agentArtifactDirectory, agentHome, agentIdentity, agentNameOfUid, confineAgentTmp, isViewerProcess, MAIN_AGENT, provisionAgentHome,
+  VIEWER_HOME_NAME, viewerCred, withViewerPrincipal, type ViewerPlace,
+} from '@kinu.run/core';
 import { contextFill, type AgentStanding, type AgentStandingReport } from '@kinu.run/core';
 import type { ChatWire } from './chat-transport';
 import { SLATE_SHARE_PATH, liveShareEntryPage, slateShareUrl, viewerEntryUrl } from './slate-share-route';
@@ -567,6 +570,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
+   * The egress of a process a share's viewer started (`isViewerProcess`): it names no owner, so no request of it is
+   * ever given a secret, and it is minted even for a workspace with an owner, whose own egress it must never fall to.
+   */
+  private viewerEgress(): WorkspaceEgress {
+    return this.ctx.exports.KinuEgress({ props: { principal: 'viewer', workspaceName: this.name } });
+  }
+
+  /**
    * The agent a workspace process acts for: the one whose own credential it runs under, or the workspace's own agent
    * for a session-user process an exec named (the owner's terminal names none). Null when it acts for nobody named.
    */
@@ -585,6 +596,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       previewUrl: (port, capability) => nimbusPreviewUrl(this.env, this.name, port, capability),
       egress: () => this.workspaceEgress(),
       egressFor: (process) => {
+        if (isViewerProcess(process, (uid) => agentNameOfUid(this.ctx.storage.sql, uid) === VIEWER_HOME_NAME)) return this.viewerEgress();
         const actorId = this.actingAgent(process);
 
         return actorId === null ? undefined : this.workspaceEgress(actorId);
@@ -667,8 +679,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.hostedWorkspace().serving();
   }
 
+  /** Each agent's view of the workspace's box, where a share's viewer's call runs as the viewer (`withViewerPrincipal`). */
   protected workspaceBox(shellId: string): HostedBox {
-    return this.hostedWorkspace().box(shellId);
+    const workspace = this.hostedWorkspace();
+    const box = workspace.box(shellId);
+
+    return { ...box, ...withViewerPrincipal({ owner: box, viewer: workspace.viewerBox(shellId) }, () => this.viewerPlace()) };
+  }
+
+  /** The viewer's own uid, home and `/tmp` on the box, provisioned as each of its calls asks (the first allocates them). */
+  private async viewerPlace(): Promise<ViewerPlace> {
+    const { root, confiner, sql } = await this.facetHomeHost();
+    const identity = agentIdentity(sql, VIEWER_HOME_NAME);
+
+    return {
+      home: provisionAgentHome(root, VIEWER_HOME_NAME, identity),
+      tmp: confineAgentTmp(confiner, VIEWER_HOME_NAME, identity),
+      cred: viewerCred(identity),
+    };
   }
 
   /** Every owner-library call crosses the UserDO capability gate. Absent until the workspace
@@ -6355,6 +6383,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     await this.computerBox()?.closeTerminalSession(id);
   }
 
+  /** The workspace's named sessions on its PC `device` (1014-t), as the computer's read: the same rows, the same strip. */
+  @callable() async listDeviceSessions(device: string): Promise<readonly TerminalSession[]> {
+    return await this.requireOwnerUserDO().listDeviceSessions(await this.userCaller(), this.workspaceName(), device);
+  }
+
+  @callable() async openDeviceSession(device: string, name?: string): Promise<SessionRecord> {
+    return await this.requireOwnerUserDO().openDeviceSession(await this.userCaller(), this.workspaceName(), device, name);
+  }
+
+  @callable() async renameDeviceSession(device: string, id: string, name: string): Promise<SessionRecord> {
+    return await this.requireOwnerUserDO().renameDeviceSession(await this.userCaller(), this.workspaceName(), device, { id, name });
+  }
+
+  @callable() async closeDeviceSession(device: string, id: string): Promise<void> {
+    await this.requireOwnerUserDO().closeDeviceSession(await this.userCaller(), this.workspaceName(), device, id);
+  }
+
   /** The workspace's computer, where this deployment binds one. */
   private computerBox(): SandboxBox | undefined {
     return this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
@@ -6753,7 +6798,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     recordOutput: (executorId, command, output) => { this.recordExecutorOutput(executorId, command, output); },
     broadcast: (frame) => { this.broadcast(frame); },
     ownerUserId: () => this.getOwnerUserId(),
-    openOwnerTerminal: async (window, device) => await this.requireOwnerUserDO().openDeviceTerminal(await this.userCaller(), this.workspaceName(), window, device),
+    openOwnerTerminal: async (window, target) => await this.requireOwnerUserDO().openDeviceTerminal(await this.userCaller(), this.workspaceName(), window, target),
     openOwnerScreen: async (device) => await this.requireOwnerUserDO().openDeviceScreen(await this.userCaller(), this.workspaceName(), device),
   });
 
@@ -6807,8 +6852,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Opens via this object because only it holds the workspace capability token the hub needs.
    * `device`: the PC the pane names, when the account has several connected; the one connected without it.
    */
-  openDeviceTerminal(window: { cols: number; rows: number }, device?: string): Promise<{ session: string; user: string } | { error: string }> {
-    return this.executors.openDeviceTerminal(window, device);
+  openDeviceTerminal(window: { cols: number; rows: number }, target: { device?: string; session?: string }): Promise<{ session: string; user: string } | { error: string }> {
+    return this.executors.openDeviceTerminal(window, target);
   }
 
   /** As {@link openDeviceTerminal}, for the screen of the PC `device` (1014-t). */

@@ -17,7 +17,7 @@ test('a request a hired agent\'s command makes leaves through an egress naming t
   await present(child.actor.runtime.shell, 'the hired agent\'s shell').exec('curl -s http://10.0.0.1/child');
 
   expect(EGRESS_FETCHES.slice(before)).toEqual([
-    { url: 'http://10.0.0.1/main', actorId: main.actor.handle.actorId },
-    { url: 'http://10.0.0.1/child', actorId: child.actor.handle.actorId },
+    { url: 'http://10.0.0.1/main', principal: 'owner', actorId: main.actor.handle.actorId },
+    { url: 'http://10.0.0.1/child', principal: 'owner', actorId: child.actor.handle.actorId },
   ]);
 });

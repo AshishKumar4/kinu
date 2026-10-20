@@ -1956,6 +1956,8 @@ const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promis
 
   if (method.endsWith("ComputerSession") || method === "listComputerSessions") return rpcResult(v.parse(JsonValueSchema, gallerySessions(method, args ?? []))).json<T>();
 
+  if (method.endsWith("DeviceSession") || method === "listDeviceSessions") return rpcResult(v.parse(JsonValueSchema, galleryDeviceSessions(method, args ?? []))).json<T>();
+
   // Read as `result.builtIn.map(...)`; three halves, as the orchestrator answers it.
   if (method === "getToolDescriptions") return rpcResult({ builtIn: [], executors: [], crafted: [] }).json<T>();
 
@@ -2007,6 +2009,32 @@ function gallerySessions(method: string, args: readonly unknown[]): readonly Ter
   if (method === "closeComputerSession" && found !== undefined) GALLERY_SESSIONS.splice(at, 1);
 
   return method === "listComputerSessions" ? GALLERY_SESSIONS.map((session) => ({ ...session, open: session.open && computerAwake })) : null;
+}
+
+/** The PC's sessions (1014-t) as its daemon keeps them: its shell, and a build running in another. Its daemon reads no
+ *  last command, port or branch. */
+const GALLERY_DEVICE_SESSIONS: TerminalSession[] = [
+  { id: "pty-shell", name: "shell", cwd: "/Users/ashish/work/storefront", open: true, running: null, last: null, ports: [], branch: null, needsInput: false },
+  { id: "pty-build", name: "build", cwd: "/Users/ashish/work/storefront", open: true, running: "cargo", last: null, ports: [], branch: null, needsInput: false },
+];
+
+function galleryDeviceSessions(method: string, args: readonly unknown[]): readonly TerminalSession[] | SessionRecord | null {
+  if (method === "openDeviceSession") {
+    const record = { id: `pty-${String(GALLERY_DEVICE_SESSIONS.length + 1)}`, name: `shell ${String(GALLERY_DEVICE_SESSIONS.length + 1)}`, cwd: "" };
+
+    GALLERY_DEVICE_SESSIONS.push({ ...record, open: false, running: null, last: null, ports: [], branch: null, needsInput: false });
+
+    return record;
+  }
+
+  const at = GALLERY_DEVICE_SESSIONS.findIndex((session) => session.id === args[1]);
+  const found = GALLERY_DEVICE_SESSIONS[at];
+
+  if (method === "renameDeviceSession" && typeof args[2] === "string" && found !== undefined) GALLERY_DEVICE_SESSIONS[at] = { ...found, name: args[2] };
+
+  if (method === "closeDeviceSession" && found !== undefined) GALLERY_DEVICE_SESSIONS.splice(at, 1);
+
+  return method === "listDeviceSessions" ? GALLERY_DEVICE_SESSIONS : null;
 }
 
 /* `?createFails=1`: the first create rejects with a two-frame cause chain; the second succeeds. */
@@ -6974,6 +7002,26 @@ function AgentFrame() {
 }
 
 
+/** What the api Worker's agent has noted as it worked. */
+const AGENT_TAB_NOTES: MemoryEntry[] = [
+  { path: "memory/MEMORY.md", content: "A renamed D1 binding: read both names until every environment has redeployed.", matchScore: 1, updatedAt: "2026-10-19", savedBy: "main" },
+  { path: "memory/MEMORY.md", content: "Staging takes its migration before the deploy: wrangler d1 migrations apply SESSIONS_DB --env staging --remote", matchScore: 1, updatedAt: "2026-10-18", savedBy: "main" },
+];
+
+/** The Agent tab at the inspector's width (`frame=agenttab`): an agent that has worked a while, or, with `&state=new`, one that has not. */
+function AgentTabFrame() {
+  const fresh = new URLSearchParams(location.search).get("state") === "new";
+
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div data-gallery-inspector className="w-[380px] max-w-full min-h-screen border-x p-border p-sidebar px-4 py-5">
+        <AgentSurface snapshot={{ status: "ready", value: BRAIN_STATUS }} memory={fresh ? [] : AGENT_TAB_NOTES} memoryContent={fresh ? "" : BRAIN_MEMORY}
+          onSearchMemory={() => {}} onRetryLoad={() => {}} rpc={workspaceRpc(fresh ? workspacePageRpc : evolutionRpc)} workspace={WORKSPACE_PAGE_NAME} />
+      </div>
+    </div>
+  );
+}
+
 /** Five transcript states that must not render as one blank pane. */
 function TranscriptFrame() {
   return (
@@ -7927,6 +7975,7 @@ async function mount() {
       return Promise.resolve({ entries: ["/"], node: <QualityLiveFrame /> });
     }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
+    ["agenttab", () => Promise.resolve({ entries: ["/"], node: <AgentTabFrame /> })],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);

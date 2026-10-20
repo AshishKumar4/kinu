@@ -95,7 +95,12 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'device.rpc', name: 'cancelDeviceRequestsForBackgroundJob', run: (u, c) => u.cancelDeviceRequestsForBackgroundJob(c, 'job-1') },
   { capability: 'device.rpc', name: 'deviceRuntimeStatus', run: (u, c) => u.deviceRuntimeStatus(c) },
   { capability: 'device.rpc', name: 'watchDeviceStatus', run: (u, c) => u.watchDeviceStatus(c, false) },
-  { capability: 'device.rpc', name: 'openDeviceTerminal', run: (u, c) => u.openDeviceTerminal(c, WORKSPACE, { cols: 80, rows: 24 }) },
+  { capability: 'device.rpc', name: 'openDeviceTerminal', run: (u, c) => u.openDeviceTerminal(c, WORKSPACE, { cols: 80, rows: 24 }, {}) },
+  { capability: 'device.rpc', name: 'openDeviceScreen', run: (u, c) => u.openDeviceScreen(c, WORKSPACE) },
+  { capability: 'device.rpc', name: 'listDeviceSessions', run: (u, c) => u.listDeviceSessions(c, WORKSPACE, 'dev-none') },
+  { capability: 'device.rpc', name: 'openDeviceSession', run: (u, c) => u.openDeviceSession(c, WORKSPACE, 'dev-none') },
+  { capability: 'device.rpc', name: 'renameDeviceSession', run: (u, c) => u.renameDeviceSession(c, WORKSPACE, 'dev-none', { id: 'pty-shell', name: 'build' }) },
+  { capability: 'device.rpc', name: 'closeDeviceSession', run: (u, c) => u.closeDeviceSession(c, WORKSPACE, 'dev-none', 'pty-shell') },
 
   // `device.consent.read_self` narrows the file view's own path scope, so refusing it would widen the scope.
   { capability: 'device.consent.read_self', name: 'getDeviceFileView', run: (u, c) => u.getDeviceFileView(c, WORKSPACE) },

@@ -116,6 +116,8 @@ export const ModelMenuResponseSchema = v.object({
   models: v.array(ModelMenuEntrySchema),
   failures: v.array(ProviderFailureSchema),
   accounts: v.optional(v.pipe(v.record(v.string(), v.pipe(v.array(v.string()), v.readonly())), v.readonly())),
+  /** What an unset fast tier may run on, cheapest first (`fastCandidatesOf`), so settings name the pick. */
+  fast: v.optional(v.array(v.object({ model: v.string(), contextWindow: v.optional(v.number()) }))),
 });
 
 export type ModelMenuResponse = v.InferOutput<typeof ModelMenuResponseSchema>;
