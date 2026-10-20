@@ -7,7 +7,7 @@ import { diagnostics, KinuError, settle, toKinuError } from '../obs/index';
 import { accountOf, MAIN_ACCOUNT } from '../credentials/accounts';
 import { attemptOrUnknown, FallbackRoute, type CallFailure } from '../providers/fallback-route';
 import { reasoningEffortOptions, type ProviderOptions, type ReasoningEffort } from '../providers/effort';
-import { generateObjectReported, generateReported, type GenerateRequest } from '../providers/model-invocation';
+import { generateObjectReported, generateReported, type ObjectRequest } from '../providers/model-invocation';
 import type { ModelCallSpend } from '../events/model-call';
 import { callRetries } from '../providers/middleware/retry';
 import { formatModelSpec, parseModelSpec } from '../providers/types';
@@ -78,7 +78,7 @@ export function routeRetryOptions(call: Pick<ModelRouteResolution, 'retries'>) {
 export function routedLlm(bind: RouteModelBinder, route: ModelRouteResolution, spend: Omit<ModelCallSpend, 'source'>, system?: string): RoutedLLM {
   const sent = (prompt: string) => {
     const { model, providerOptions } = bind(route);
-    const request: GenerateRequest = { model, prompt, ...routeRetryOptions(route) };
+    const request: ObjectRequest = { model, prompt, ...routeRetryOptions(route) };
 
     if (providerOptions !== undefined) request.providerOptions = { ...request.providerOptions, ...providerOptions };
 

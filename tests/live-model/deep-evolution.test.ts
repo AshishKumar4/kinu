@@ -1,28 +1,22 @@
 /**
  * Deep Evolution Test — 8 algorithmic challenges with verifiable answers.
  *
- * Uses native AI SDK generateText({ tools, stopWhen }) — no hand-rolled parsing.
+ * Each problem is a turn of the product's own session, as `kinu` runs one.
  * The agent must write and execute code to solve each problem.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { generateText, isStepCount, type LanguageModel, type ToolSet, type StepResult } from 'ai';
 
 import {
-  EvolutionEngine, historyTurnPairs,
   type LLMProviderConfig,
-  type CompletedTurn,
-  type EvolutionEvent,
 } from '../../packages/core/src/index';
-import { soulIn, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
-import {
-  buildEvalAgentSurface, createStepToolCallLog,
-} from './harness';
+import { type CLIRuntime } from '../../packages/cli-backend/src/runtime';
+import { evalSession, type EvalSession } from './harness';
 import { provisionLocalTarget, type LocalTarget } from './target-local';
-import { seedTranscriptEntry, finalIntegerAnswer,
-liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
+import { finalIntegerAnswer,
+liveModelTarget, recordLiveModelEpisode, reportLiveModelSpend, UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
 // which target and cost basis this run used, or why it is skipping — and throws
@@ -55,62 +49,11 @@ const PROBLEMS: Problem[] = [
   { id: 8, question: '4x4 grid (0-3), paths from (0,0) to (3,3), right/down only, cells (1,1) and (2,2) blocked. How many? Use eval. ONLY the number.', answer: 4, difficulty: 'hard' },
 ];
 
-/** Run one problem using native AI SDK tool calling */
-async function solveProblem(
-  model: LanguageModel,
-  rt: CLIRuntime,
-  tools: ToolSet,
-  problem: Problem,
-): Promise<{ response: string; turn: CompletedTurn; toolNames: string[] }> {
-  const start = Date.now();
-  const soul = soulIn(rt.space) ?? '';
-  const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
-
-  const log = createStepToolCallLog();
-
-  const result = await generateText({
-    model,
-    instructions: `${soul}\n\nKnowledge:\n${knowledge}\n\nAlways use eval to compute and verify answers. Never guess.`,
-    messages: [{ role: 'user' as const, content: problem.question }],
-    tools,
-    stopWhen: isStepCount(500),
-    onStepEnd: (step: StepResult<ToolSet>) => { log.onStepFinish(step); },
-  });
-
-  recordLiveModelSpend(result.usage);
-
-  const response = result.text.trim();
-  const toolCallRecords = log.records();
-  const toolNames = toolCallRecords.map((record) => record.name);
-  const stepCount = log.steps;
-
-  // Store in DB
-  const id = crypto.randomUUID();
-  await seedTranscriptEntry(rt.stores.history, 'deep', { id, message: { role: 'user', content: problem.question }, origin: 'input' });
-  await seedTranscriptEntry(rt.stores.history, 'deep', {
-    id: crypto.randomUUID(), message: { role: 'assistant', content: response }, origin: 'output',
-  });
-
-  const turn: CompletedTurn = {
-    userMessage: problem.question,
-    assistantResponse: response,
-    toolCalls: toolCallRecords,
-    steps: stepCount,
-    durationMs: Date.now() - start,
-    feedback: null,
-    hadError: false,
-  };
-
-  return { response, turn, toolNames };
-}
-
 describe('Deep Evolution — 8 Algorithmic Challenges', () => {
   let rt: CLIRuntime;
   let target: LocalTarget;
-  let tools: ToolSet;
-  let engine: EvolutionEngine;
-  let events: EvolutionEvent[];
-  let model: LanguageModel;
+  /** The product's own session over the workspace: its prompt, its tools, and its evolution, on as the product runs it. */
+  let agent: EvalSession | undefined;
 
   const scorecard: Array<{
     id: number; difficulty: string; correct: boolean; answered: number | null;
@@ -131,32 +74,25 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
       llm: LLM_CONFIG,
     });
     rt = target.runtime;
-
-    events = [];
-    engine = new EvolutionEngine(rt, historyTurnPairs(rt.stores.history), { enabled: true });
-    engine.onEvent(e => events.push(e));
-
-    // The model is resolved BEFORE the surface, because the production actor
-    // root needs one: `agents` is built from deps that carry the model a search
-    // expands with, so a surface built first would be the product's minus its
-    // delegation tool.
-    model = liveChatModel(LLM_CONFIG);
-    tools = buildEvalAgentSurface({ rt, model, llm: LLM_CONFIG }).tools;
   });
 
   afterAll(async () => {
+    await agent?.end();
     reportLiveModelSpend('Deep Evolution');
     // Teardown owns the store and the directory.
     target?.teardown();
   });
 
   liveTest('solve 8 algorithmic problems with native tool calling', async () => {
+    agent = evalSession({ rt, db: target.db, llm: LLM_CONFIG });
+
     for (const problem of PROBLEMS) {
       console.log(`\n  ── Problem ${problem.id} [${problem.difficulty}] ──`);
       console.log(`  Q: ${problem.question.slice(0, 80)}...`);
 
-      const { response, turn, toolNames } = await solveProblem(model, rt, tools, problem);
-      await engine.reviewTurn(turn, null);
+      const { text, calls } = await agent.turn(problem.question);
+      const response = text.trim();
+      const toolNames = calls.map((call) => call.name);
 
       // THE ORACLE. `response.includes(String(problem.answer))` stood here and it
       // was not one: four of these eight answers are single digits and three of
@@ -180,6 +116,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
       console.log(`  ${correct ? '✅ CORRECT' : '❌ WRONG'} ${usedExecuteCode ? '(used eval)' : '(no code execution)'}`);
     }
 
+    recordLiveModelEpisode(rt.storage.sql, rt.actor);
     const correctCount = scorecard.filter(s => s.correct).length;
     console.log(`\n  Correct: ${correctCount}/${PROBLEMS.length}`);
     // ONE is a floor on "an answer was really computed", and only now is it that.
@@ -193,7 +130,7 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     // answered — and this is the liveness floor under it. Eight problems
     // attempted once each, on whichever tier the run pins, is too small a sample
     // to carry a higher bar, and a provider failure already reds this suite
-    // through `solveProblem`'s throw rather than through a low count. Raising it
+    // through the session's turn throwing rather than through a low count. Raising it
     // would trade a real floor for a flake on a model wobble.
     expect(correctCount).toBeGreaterThanOrEqual(1);
   }, 1800_000);
@@ -219,10 +156,12 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
 
     console.log(`\n  Results: ${correct} correct, ${PROBLEMS.length - correct} wrong out of ${PROBLEMS.length}`);
     console.log(`  Used eval: ${usedCode}/${PROBLEMS.length}`);
+    // The session's own evolution says what it did as `evolution` events.
+    const events = (agent?.events ?? []).flatMap((event) => (event.type === 'evolution' ? [event] : []));
     console.log(`\n  Evolution events: ${events.length}`);
     const byType: Record<string, number> = {};
 
-    for (const e of events) byType[e.type] = (byType[e.type] ?? 0) + 1;
+    for (const e of events) byType[e.event] = (byType[e.event] ?? 0) + 1;
 
     for (const [type, count] of Object.entries(byType)) console.log(`    ${type}: ${count}`);
 
