@@ -1,5 +1,5 @@
 /** The production Mail page, reading and writing the HTTP fixture made from the approved wireframe's mail. */
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useParams } from "react-router-dom";
 import * as v from "valibot";
 import type { MailBox, MailListing, MailMessageView, MailThreadSummary, MailThreadView, MailView } from "@kinu.run/core";
 import Layout from "@/components/layout";
@@ -92,7 +92,7 @@ function installFixture(): void {
     return { threads: shown.slice(0, 50), unread: shown.filter((thread) => thread.unread).length };
   };
 
-  const answer = (value: MailBoxes | MailListing | MailThreadView | MailThreadSummary | MailMessageView | Important | { address: string }): Promise<Response> => Promise.resolve(Response.json(value));
+  const answer = (value: MailBoxes | MailListing | MailThreadView | MailThreadSummary | MailMessageView | Important | { address: string } | { status: "queued" | "skipped" }): Promise<Response> => Promise.resolve(Response.json(value));
 
   const write = (outgoing: Outgoing, draft: boolean): Promise<Response> => {
     const id = `written-${String(++written)}`;
@@ -120,20 +120,16 @@ function installFixture(): void {
     return answer(message);
   };
 
-  window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-    const request = new Request(new URL(input instanceof Request ? input.url : String(input), location.href), init);
-    const url = new URL(request.url);
-
-    if (url.pathname === "/api/user/profile") return Promise.resolve(Response.json({
-      email, displayName: OWNER.name, createdAt: Date.now(), lastSeenAt: Date.now(), onboardedAt: Date.now(), workspaceCount: 2, controlPlane: false,
-    }));
-
-    if (!url.pathname.startsWith("/api/user/mail/")) return next(input, init);
+  /** A call to Mail's API, or to "Send to a workspace…", recorded and answered as the server would. */
+  const mailAnswer = (request: Request, url: URL, init: RequestInit | undefined): Promise<Response> => {
     const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : null;
     calls.push({ method: request.method, path: `${url.pathname}${url.search}`, body });
     document.documentElement.dataset.mailCalls = JSON.stringify(calls);
 
     const fail = params.get("fail");
+
+    // `&fail=hand`: the workspace does not take the thread.
+    if (url.pathname.startsWith("/api/workspaces/")) return answer({ status: fail === "hand" ? "skipped" : "queued" });
 
     if (fail === "thread" && url.pathname.startsWith("/api/user/mail/threads/") || fail === "send" && url.pathname.endsWith("/send")) {
       return Promise.resolve(Response.json({ error: "The mail server refused this request." }, { status: 503 }));
@@ -185,7 +181,24 @@ function installFixture(): void {
     }
 
     return answer(held);
+  };
+
+  window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const request = new Request(new URL(input instanceof Request ? input.url : String(input), location.href), init);
+    const url = new URL(request.url);
+
+    if (url.pathname === "/api/user/profile") return Promise.resolve(Response.json({
+      email, displayName: OWNER.name, createdAt: Date.now(), lastSeenAt: Date.now(), onboardedAt: Date.now(), workspaceCount: 2, controlPlane: false,
+    }));
+
+    if (!url.pathname.startsWith("/api/user/mail/") && !/^\/api\/workspaces\/[^/]+\/mail$/.test(url.pathname)) return next(input, init);
+
+    return mailAnswer(request, url, init);
   }, { preconnect: next.preconnect });
+}
+
+function WorkspaceChat() {
+  return <p data-gallery-workspace-chat={useParams().name} />;
 }
 
 export default function mailPageFrame() {
@@ -197,6 +210,10 @@ export default function mailPageFrame() {
 
   return {
     entries: [`/mail${thread === null ? "" : `/${encodeURIComponent(thread)}`}?view=${view}`],
-    node: <Routes><Route element={<Layout />}><Route path="/mail/*" element={<MailPage />} /></Route></Routes>,
+    node: <Routes><Route element={<Layout />}>
+      <Route path="/mail/*" element={<MailPage />} />
+      {/* Where "Send to a workspace…" goes: the workspace's chat, named. */}
+      <Route path="/workspace/:name" element={<WorkspaceChat />} />
+    </Route></Routes>,
   };
 }

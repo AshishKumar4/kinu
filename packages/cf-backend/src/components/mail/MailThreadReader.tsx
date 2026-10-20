@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader } from "@cloudflare/kumo";
-import { CaretLeftIcon, ShieldWarningIcon, TrashIcon, TrayIcon } from "@phosphor-icons/react";
-import type { MailBox, MailThreadView } from "@kinu.run/core";
+import { ArrowSquareOutIcon, CaretLeftIcon, ShieldWarningIcon, TrashIcon, TrayIcon } from "@phosphor-icons/react";
+import type { MailBox, MailThreadSummary, MailThreadView } from "@kinu.run/core";
 import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
@@ -10,6 +10,7 @@ import { readMailThread, updateMailThread } from "@/lib/mail-api";
 import { MailMessage } from "./MailMessage";
 import { ReplyBox } from "./MailEditor";
 import { mailBoxLabel } from "./MailRow";
+import { SendToWorkspace } from "./SendToWorkspace";
 
 export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }: {
   id: string; boxes: readonly MailBox[]; owner: string; drafts: boolean; onBack: () => void; onChanged: () => void;
@@ -38,6 +39,16 @@ export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }
   );
 }
 
+/** A thread's menu: one in Trash is restored; any other is sent to a workspace or deleted. */
+function threadMenu(thread: MailThreadSummary, change: (trashed: boolean) => void, hand: () => void): MenuItem[] {
+  if (thread.trashedAt !== null) return [{ label: "Restore", icon: <TrayIcon size={15} />, onSelect: () => change(false) }];
+
+  return [
+    { label: "Send to a workspace…", icon: <ArrowSquareOutIcon size={15} />, onSelect: hand },
+    { label: "Delete", icon: <TrashIcon size={15} />, danger: true, apart: true, onSelect: () => change(true) },
+  ];
+}
+
 function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
   mail: MailThreadView; box: MailBox | undefined; owner: string; drafts: boolean; onBack: () => void; onChanged: () => void;
 }) {
@@ -45,6 +56,7 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
   const messages = mail.messages.filter((message) => message.sendState !== "draft");
   const last = messages.at(-1);
   const [opened, setOpened] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const [handing, setHanding] = useState(false);
   const { busy, error, run } = useLabelledStep(onChanged);
   const toggle = (id: string): void => setOpened((previous) => new Map(previous).set(id, !(previous.get(id) ?? id === last?.id)));
 
@@ -53,9 +65,7 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
     onBack();
   });
 
-  const menu: MenuItem[] = thread.trashedAt === null
-    ? [{ label: "Delete", icon: <TrashIcon size={15} />, danger: true, onSelect: () => change(true) }]
-    : [{ label: "Restore", icon: <TrayIcon size={15} />, onSelect: () => change(false) }];
+  const menu = threadMenu(thread, change, () => setHanding(true));
 
   let reader = box === undefined ? "" : mailBoxLabel(box);
 
@@ -84,6 +94,7 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
       </div>}
       {error !== null && <p role="alert" className="p-row-text p-danger">{error}</p>}
       {box !== undefined && thread.trashedAt === null && (last?.verified !== false || thread.draft) && <ReplyBox mail={mail} box={box} drafts={drafts} onChanged={onChanged} onSent={drafts ? onBack : () => undefined} />}
+      {handing && <SendToWorkspace thread={thread.id} onClose={() => setHanding(false)} />}
     </article>
   );
 }

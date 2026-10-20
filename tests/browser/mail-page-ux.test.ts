@@ -58,6 +58,18 @@ async function reader(page: Page, id: string): Promise<void> {
   await page.waitForSelector(`[data-mail-reader="${id}"]`);
 }
 
+/** The open thread, sent through its menu to the workspace found by `typed`, named `workspace`. */
+async function handTo(page: Page, typed: string, workspace: string): Promise<void> {
+  await page.waitForSelector('[data-mail-reader]');
+  await page.click('[aria-label="More for Thread"]');
+  await action(page, 'Send to a workspace…');
+  await page.waitForSelector('[data-mail-hand] input');
+  await page.type('[data-mail-hand] input', typed);
+  await page.waitForFunction((name) => [...document.querySelectorAll('[role="option"]')].some((option) => option.textContent?.includes(name)), {}, workspace);
+  await page.$$eval('[role="option"]', (options, name) => { options.find((option) => option.textContent?.includes(name))?.dispatchEvent(new MouseEvent('click', { bubbles: true })); }, workspace);
+  await page.click('[data-mail-hand-commit]');
+}
+
 describe('Mail', () => {
   test('the approved wireframe still opens the Mail page and workspace mail', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -131,6 +143,23 @@ describe('Mail', () => {
       await page.waitForFunction(() => document.querySelector('[data-mail-thread="t-dana"]') === null);
       expect((await calls(page)).filter((call) => call.method === 'PATCH' && v.is(v.object({ trashed: v.boolean() }), call.body)).map((call) => call.body)).toEqual([{ trashed: true }, { trashed: false }]);
       await page.close();
+    });
+  });
+
+  test('Send to a workspace hands the thread to the chosen workspace and opens its chat; one not taken stays open with why', async () => {
+    await withGallery(async (gallery) => {
+      const page = await open(gallery, '&view=all&thread=t-dana');
+      await handTo(page, 'API', 'api-worker');
+      await page.waitForSelector('[data-gallery-workspace-chat="api-worker"]');
+      expect((await calls(page)).filter((call) => call.path.startsWith('/api/workspaces/'))).toEqual([{ method: 'POST', path: '/api/workspaces/api-worker/mail', body: { thread: 't-dana' } }]);
+      await page.close();
+
+      const refused = await open(gallery, '&view=all&thread=t-dana&fail=hand');
+      await handTo(refused, 'Dew', 'perf-audit');
+      await refused.waitForSelector('[data-mail-hand] [role="alert"]');
+      expect(await refused.$eval('[data-mail-hand] [role="alert"]', (alert) => alert.textContent)).toBe('Dew did not take it.');
+      expect(await refused.$('[data-gallery-workspace-chat]')).toBeNull();
+      await refused.close();
     });
   });
 

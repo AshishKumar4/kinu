@@ -90,6 +90,11 @@ export function sendMail(message: MailWrite): Promise<MailMessageView> {
   return settle(request(MessageSchema, "/api/user/mail/send", { method: "POST", json: message }));
 }
 
+/** "Send to a workspace…": the thread, as its agent reads mail, becomes a turn of that workspace's own. */
+export function handMailThread(workspace: string, thread: string): Promise<{ status: "queued" | "skipped" }> {
+  return settle(request(v.object({ status: v.picklist(["queued", "skipped"]) }), `/api/workspaces/${encodeURIComponent(workspace)}/mail`, { method: "POST", json: { thread } }));
+}
+
 export function saveMailDraft(message: MailWrite): Promise<MailMessageView> {
   return settle(request(MessageSchema, "/api/user/mail/drafts", { method: "POST", json: message }));
 }
