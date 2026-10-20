@@ -7,10 +7,17 @@
 import { Data, Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import { refusedHostname } from '../safety/egress-destination';
+import { credentialValueScanners } from '../safety/secret-patterns';
 
-/** Mirrors hermes-agent/agent/redact.py. */
-const SECRET_PREFIX_RE =
-  /(sk-[A-Za-z0-9_-]{10,}|sk_[A-Za-z0-9_]{10,}|ghp_[A-Za-z0-9]{10,}|gho_[A-Za-z0-9]{10,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{20,})/;
+/**
+ * Fragments shorter than the credential shapes (`credentialValueScanners`) hold, refused in a URL alone: a URL has
+ * no reason to carry even a part of one (after hermes-agent/agent/redact.py). Every whole credential is the shapes'.
+ */
+const URL_CREDENTIAL_FRAGMENT = /sk-[A-Za-z0-9_-]{10,}|sk_[A-Za-z0-9_]{10,}|gh[po]_[A-Za-z0-9]{10,}|AIza[0-9A-Za-z_-]{20,}/;
+
+function carriesCredential(text: string): boolean {
+  return URL_CREDENTIAL_FRAGMENT.test(text) || credentialValueScanners().some((scanner) => scanner.test(text));
+}
 
 export class UnsafeUrlError extends Data.TaggedError('UnsafeUrlError')<{ readonly message: string; readonly cause?: unknown }> {
   constructor(public readonly reason: string, options?: ErrorOptions) {
@@ -24,7 +31,7 @@ export function assertSafeUrl(url: string): URL {
 }
 
 function safeUrl(url: string): Effect.Effect<URL, UnsafeUrlError> {
-  return Effect.flatMap(safeDecode(url), (decoded) => (SECRET_PREFIX_RE.test(url) || SECRET_PREFIX_RE.test(decoded)
+  return Effect.flatMap(safeDecode(url), (decoded) => (carriesCredential(url) || carriesCredential(decoded)
     ? Effect.fail(new UnsafeUrlError('URL contains what appears to be an API key or token: secrets must not be sent in URLs'))
     : parsedSafeUrl(url)));
 }

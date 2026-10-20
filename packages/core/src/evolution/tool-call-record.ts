@@ -7,6 +7,7 @@ import { evidenceWindow, EVIDENCE_BUDGETS } from '../utils/evidence-window';
 import { decodeJsonValue, isJsonObject, type JsonObject, type JsonValue, isJsonString } from '../utils/json';
 import { fnv1a64 } from '../utils/fnv1a';
 import { detached } from '../utils/text';
+import { redactSecrets } from '../safety/secret-patterns';
 
 export interface ToolCallInput {
   toolCallId?: string;
@@ -20,66 +21,31 @@ const ACTION_TARGET_CHARS = 80;
 
 const TargetSchema = v.pipe(v.string(), v.trim(), v.nonEmpty());
 
+/** Redacted before it is cut, so a credential the cut would split is masked whole. */
 function actionTarget(args: JsonObject): string {
   for (const key of ['path', 'op', 'command', 'code']) {
     const value = v.safeParse(TargetSchema, args[key]);
 
-    if (value.success) return detached((value.output.split('\n')[0] ?? '').slice(0, ACTION_TARGET_CHARS));
+    if (value.success) return detached((redactSecrets(value.output).split('\n')[0] ?? '').slice(0, ACTION_TARGET_CHARS));
   }
 
   return '';
 }
 
-/** Shapes mirror `scripts/secret-scan.ts`; private-key blocks go first. */
-const PRIVATE_KEY_BLOCK = /-----BEGIN[^-]*PRIVATE KEY[^-]*-----[\s\S]*?-----END[^-]*PRIVATE KEY[^-]*-----|-----BEGIN[^-]*PRIVATE KEY[^-]*-----/gu;
-
-const BEARER_TOKEN = /Bearer\s+[A-Za-z0-9\-._~+/=]{20,}/gu;
-
-const AWS_ACCESS_KEY = /AKIA[0-9A-Z]{16}/gu;
-
-const PROVIDER_SECRET = /\b(?:[sr]k_live_[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|sk-ant-[A-Za-z0-9-]{20,}|sk-proj-[A-Za-z0-9_-]{20,})/gu;
-
-const KINU_TOKEN = /\bp(?:ta|tc|dt)_[0-9a-f]{8,}/gu;
-
-function obfuscateString(value: string): string {
-  return value
-    .replace(PRIVATE_KEY_BLOCK, '[redacted private-key]')
-    .replace(BEARER_TOKEN, '[redacted bearer]')
-    .replace(AWS_ACCESS_KEY, '[redacted api-key]')
-    .replace(PROVIDER_SECRET, '[redacted api-key]')
-    .replace(KINU_TOKEN, '[redacted kinu-token]');
-}
-
-function obfuscateSecrets(value: JsonValue): JsonValue {
-  if (isJsonString(value)) return obfuscateString(value);
+/** Every string `value` holds, through the one secret policy (`redactSecrets`); the same value where none changed. */
+function redactLeaves(value: JsonValue): JsonValue {
+  if (isJsonString(value)) return redactSecrets(value);
 
   if (Array.isArray(value)) {
-    let changed = false;
+    const next = value.map(redactLeaves);
 
-    const next = value.map((entry) => {
-      const obfuscated = obfuscateSecrets(entry);
-
-      if (obfuscated !== entry) changed = true;
-
-      return obfuscated;
-    });
-
-    return changed ? next : value;
+    return next.some((entry, at) => entry !== value[at]) ? next : value;
   }
 
   if (!isJsonObject(value)) return value;
+  const next = Object.fromEntries(Object.entries(value).map(([field, fieldValue]) => [field, redactLeaves(fieldValue)]));
 
-  let changed = false;
-  const next: JsonObject = {};
-
-  for (const [field, fieldValue] of Object.entries(value)) {
-    const obfuscated = obfuscateSecrets(fieldValue);
-
-    if (obfuscated !== fieldValue) changed = true;
-    next[field] = obfuscated;
-  }
-
-  return changed ? next : value;
+  return Object.keys(next).some((field) => next[field] !== value[field]) ? next : value;
 }
 
 const WRITE_PATTERNS: ReadonlyArray<RegExp> = [
@@ -129,10 +95,10 @@ function pathsMatching(text: ReadonlyArray<string>, patterns: ReadonlyArray<RegE
 }
 
 /** `serialized`: `value`'s stable serialization, where the caller already took it; the window takes it again only for a
- *  value whose secrets it obfuscated. */
+ *  value whose secrets it redacted. */
 function window(value: JsonValue, serialized?: string): string {
-  const obfuscated = obfuscateSecrets(value);
-  const text = obfuscated === value && serialized !== undefined ? serialized : stableStringify(obfuscated);
+  const redacted = redactLeaves(value);
+  const text = redacted === value && serialized !== undefined ? serialized : stableStringify(redacted);
 
   return detached(evidenceWindow(text, EVIDENCE_BUDGETS.patternToolCall));
 }
@@ -160,8 +126,9 @@ export function compactToolCall(call: ToolCallInput): ToolCallRecord {
     target: actionTarget(call.args),
     op,
     argsDigest: Object.keys(call.args).length === 0 ? null : fnv1a64(`${call.name}:${serialized}`),
-    writtenPaths: [...written].map(detached),
-    revisitedPaths: [...revisited].map(detached),
+    // Found in the arguments as written, then kept as every other projection is: through the secret policy.
+    writtenPaths: [...written].map((path) => detached(redactSecrets(path))),
+    revisitedPaths: [...revisited].map((path) => detached(redactSecrets(path))),
   };
 
   if (call.toolCallId !== undefined) record.toolCallId = call.toolCallId;
@@ -170,7 +137,7 @@ export function compactToolCall(call: ToolCallInput): ToolCallRecord {
 
   if (call.result !== undefined) record.resultWindow = window(call.result);
 
-  if (call.name === 'eval') record.program = codemodeProgramOf(call.name, call.args);
+  if (call.name === 'eval') record.program = redactSecrets(codemodeProgramOf(call.name, call.args));
 
   return record;
 }
