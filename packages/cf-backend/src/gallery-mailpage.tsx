@@ -132,7 +132,8 @@ function installFixture(): void {
 
   /** The newest few Important threads, as the footer and Home read them. */
   const importantAnswer = (limit: number) => {
-    if (!enabled) return { enabled, unread: 0, items: [] };
+    // As the route answers: nothing before the person has an address.
+    if (!enabled || address === null) return { enabled, unread: 0, items: [] };
     const listing = list(new URL("/api/user/mail/threads?view=important", location.href));
 
     return { enabled, unread: listing.unread, items: listing.threads.slice(0, limit).map((thread) => ({
