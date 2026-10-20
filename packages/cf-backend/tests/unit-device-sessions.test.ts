@@ -14,7 +14,10 @@ const SHELL = { id: 'pty-shell', name: 'shell', cwd: '/home/ashish/project', ope
 
 /** The daemon's side of the session calls: one workspace's sessions, and a terminal that opens at once. */
 function sessionsDaemon(frame: DeviceFrame): JsonValue {
-  if (frame.method === DEVICE_METHOD.ptyList) return [SHELL, { ...SHELL, id: 'pty-build', name: 'build', open: false }];
+  // A daemon of 1019-aa lists a row's ports, branch and waiting; one of before lists none, and reads as having none.
+  if (frame.method === DEVICE_METHOD.ptyList) {
+    return [{ ...SHELL, running: 'vite', ports: [5173], branch: 'main', needsInput: true }, { ...SHELL, id: 'pty-build', name: 'build', open: false }];
+  }
 
   if (frame.method === DEVICE_METHOD.ptyCreate) return { id: 'pty-new', name: 'shell 2', cwd: null };
 
@@ -43,7 +46,7 @@ describe("a PC's named sessions", () => {
 
     expect({ listed, workspace: asked.workspace }).toEqual({
       listed: [
-        { ...SHELL, last: null, ports: [], branch: null, needsInput: false },
+        { ...SHELL, running: 'vite', last: null, ports: [5173], branch: 'main', needsInput: true },
         { ...SHELL, id: 'pty-build', name: 'build', open: false, last: null, ports: [], branch: null, needsInput: false },
       ],
       workspace: WORKSPACE,
