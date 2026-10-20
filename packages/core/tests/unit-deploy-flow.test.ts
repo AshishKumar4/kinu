@@ -161,9 +161,11 @@ class FakeCloudflare implements CloudflareTransport {
 
       if (name !== undefined) return { status: 409, body: { success: false, errors: [{ code: 1000, message: 'Sending subdomain already exists' }], result: null } };
       this.routing.sending.set(id, asked);
+      // As on kinu.run: the DKIM key is held as two strings, and a _dmarc of Sending's own is written unless one is held.
       this.dns.push(
         { zone: id, type: 'MX', name: `cf-bounce.${asked}`, content: 'route1.mx.cloudflare.net', priority: 32, locked: true },
-        { zone: id, type: 'TXT', name: `cf-bounce._domainkey.${asked}`, content: '"v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN"', locked: true },
+        { zone: id, type: 'TXT', name: `cf-bounce._domainkey.${asked}`, content: '"v=DKIM1; h=sha256; k=rsa; p=MII" "BIjAN"', locked: true },
+        ...this.dns.some((record) => record.zone === id && record.name === `_dmarc.${asked}`) ? [] : [{ zone: id, type: 'TXT', name: `_dmarc.${asked}`, content: '"v=DMARC1; p=reject;"' }],
       );
 
       return ok({ tag: `tag-${asked}`, name: asked, enabled: true });
@@ -176,6 +178,18 @@ class FakeCloudflare implements CloudflareTransport {
       { type: 'TXT', name: `cf-bounce._domainkey.${name ?? ''}`, content: '"v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN"' },
       { type: 'TXT', name: `_dmarc.${name ?? ''}`, content: '"v=DMARC1; p=reject;"' },
     ]);
+  }
+
+  private routingDns(id: string, call: CloudflareCall): CloudflareHttpResponse {
+    const named = call.body?.['name'];
+
+    if (typeof named === 'string' && [...this.zones].some(([zone, held]) => held === id && zone === named)) {
+      return { status: 422, body: { success: false, errors: [{ code: 1001, message: `Invalid Input: must be a subdomains of ${named}` }], result: null } };
+    }
+
+    this.routing.enabled.add(id);
+
+    return { status: 200, body: { success: true, errors: [], result: { enabled: true } } };
   }
 
   private zoneCall(call: CloudflareCall): CloudflareHttpResponse | null {
@@ -196,10 +210,9 @@ class FakeCloudflare implements CloudflareTransport {
       return { status: 403, body: { success: false, errors: [{ code: 10000, message: 'Authentication error' }], result: null } };
     }
 
-    // Email Routing is enabled through its DNS: `routing/enable` is deprecated and not served here.
-    if (rest === 'email/routing/dns' && call.method === 'POST') { this.routing.enabled.add(id);
-
- return ok({ enabled: true }); }
+    // Email Routing is enabled through its DNS: `routing/enable` is deprecated and not served here. A `name` is for a
+    // subdomain only: the zone's own name is refused, as the API refused kinu.run's (2026-10-20).
+    if (rest === 'email/routing/dns' && call.method === 'POST') return this.routingDns(id, call);
 
     if (rest === 'email/routing/rules/catch_all') { this.routing.catchAll.set(id, call.body ?? null);
 
@@ -211,7 +224,16 @@ class FakeCloudflare implements CloudflareTransport {
       const type = /type=([^&]+)/u.exec(rest)?.[1];
       const name = decodeURIComponent(/name=([^&]+)/u.exec(rest)?.[1] ?? '');
 
-      return ok(this.dns.filter((record) => record.zone === id && record.type === type && record.name === name).map(({ zone: _held, locked: _locked, ...record }) => record));
+      return ok(this.dns.flatMap(({ zone: held, locked: _locked, ...record }, at) => (held === id && record.type === type && record.name === name ? [{ id: `record-${String(at)}`, ...record }] : [])));
+    }
+
+    const patched = /^dns_records\/record-(\d+)$/u.exec(rest);
+    const target = patched === null ? undefined : this.dns[Number(patched[1])];
+
+    if (target !== undefined && call.method === 'PATCH') {
+      target.content = bodyText(call.body ?? {}, 'content');
+
+      return ok({ id: `record-${patched?.[1] ?? ''}` });
     }
 
     if (rest === 'dns_records' && call.method === 'POST') {
@@ -732,10 +754,11 @@ describe('a guided run', () => {
     expect(rows.find((row) => row.id === 'mail')).toMatchObject({ state: 'done' });
     expect([...cloudflare.routing.enabled]).toEqual(['zone-raman']);
     expect(cloudflare.routing.catchAll.get('zone-raman')).toMatchObject({ matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: ['kinu'] }] });
-    // Sending wrote its bounce records itself; the step adds only its own DMARC, report-only, never Sending's.
+    // Sending wrote its bounce records and a DMARC of its own; the step leaves the records, and the DMARC is its own,
+    // report-only, since the domain had none before.
     expect(cloudflare.dns.map((record) => `${record.type} ${record.name} ${record.content}`)).toEqual([
       'MX cf-bounce.raman.dev route1.mx.cloudflare.net',
-      'TXT cf-bounce._domainkey.raman.dev "v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN"',
+      'TXT cf-bounce._domainkey.raman.dev "v=DKIM1; h=sha256; k=rsa; p=MII" "BIjAN"',
       'TXT _dmarc.raman.dev v=DMARC1; p=none; rua=mailto:dmarc@raman.dev',
     ]);
   });
@@ -745,7 +768,8 @@ describe('a guided run', () => {
     cloudflare.routing.sending.set('zone-raman', 'raman.dev');
     cloudflare.dns.push(
       { zone: 'zone-raman', type: 'MX', name: 'cf-bounce.raman.dev', content: 'route1.mx.cloudflare.net', priority: 32, locked: true },
-      { zone: 'zone-raman', type: 'TXT', name: 'cf-bounce._domainkey.raman.dev', content: '"v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN"', locked: true },
+      { zone: 'zone-raman', type: 'TXT', name: 'cf-bounce._domainkey.raman.dev', content: '"v=DKIM1; h=sha256; k=rsa; p=MII" "BIjAN"', locked: true },
+      { zone: 'zone-raman', type: 'TXT', name: '_dmarc.raman.dev', content: 'v=DMARC1; p=none; rua=mailto:dmarc@raman.dev' },
     );
     const rows = await run({ ...INPUTS, mailDomain: 'raman.dev' });
 
@@ -762,7 +786,7 @@ describe('a guided run', () => {
     await run({ ...INPUTS, mailDomain: 'raman.dev' });
 
     expect(cloudflare.dns.map((record) => record.content)).toEqual([
-      'v=DMARC1; p=quarantine', 'route1.mx.cloudflare.net', 'route1.mx.cloudflare.net', '"v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN"',
+      'v=DMARC1; p=quarantine', 'route1.mx.cloudflare.net', 'route1.mx.cloudflare.net', '"v=DKIM1; h=sha256; k=rsa; p=MII" "BIjAN"',
     ]);
   });
 
