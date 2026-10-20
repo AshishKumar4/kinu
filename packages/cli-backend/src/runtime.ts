@@ -44,7 +44,7 @@ import { hostWorkspaceExecutor } from './host-toolchain';
 import { agentHomeFiles, localFilePlane, localFileReach, spaceFiles, type LocalPlane } from './host-mount';
 import { sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { createSqlFiber, detectOrphanedFibers, localPlanes, SOUL_PATH } from '@kinu.run/core';
-import { createDecisionPort, restDecisionRun } from '@kinu.run/core';
+import { createDecisionPort, createStructuredDecider, decisionPortOf, restDecisionRun } from '@kinu.run/core';
 import { readLaunchDotenv } from './dotenv-provenance';
 import {
   createLocalModelResolver, createLocalProviderLLM, workersAiRoute,
@@ -329,12 +329,18 @@ function buildCLIRuntime(
   const decisionEndpoint = workersAiRoute(config.llm, config.cloud)?.auth;
 
   // `/ai/run` beside a chat model's `/ai/v1`: only Cloudflare's API and the worker's proxy serve one. Elsewhere, and
-  // with no Workers AI route, no turn is rated.
-  const decide = !/\/ai\/v1\/?$/.test(decisionEndpoint?.baseURL ?? '') ? undefined : createDecisionPort({
-    run: restDecisionRun({ getAuth: async () => decisionEndpoint ?? null }),
-    model: async () => (await ensureProfile()).decisionModel,
-    report,
-    refusals,
+  // with no Workers AI route, the fast tier answers what its measured agreement trusts it with.
+  const decide = decisionPortOf({
+    clef: !/\/ai\/v1\/?$/.test(decisionEndpoint?.baseURL ?? '') ? null : {
+      port: createDecisionPort({
+        run: restDecisionRun({ getAuth: async () => decisionEndpoint ?? null }),
+        model: async () => (await ensureProfile()).decisionModel,
+        report,
+        refusals,
+      }),
+      reachable: async () => true,
+    },
+    structured: createStructuredDecider(actor, modelLanes),
   });
 
   const schedule: Schedule = {

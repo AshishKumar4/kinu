@@ -14,6 +14,7 @@ import type { AuthResolver, WorkersAIRunBinding } from './types';
 import { KinuError, settle, tolerate, toKinuError } from '../obs/index';
 import { readJsonObjectText, type JsonObject } from '../utils/json';
 import type { ModelCallSink } from '../events/model-call';
+import type { StructuredDecider } from './structured-decision';
 import type { Usage } from '../usage';
 import type { TierRefusals } from '../types/refusals';
 import { OWNER_FIXABLE_REFUSALS, providerRefusalCode } from './util';
@@ -119,6 +120,29 @@ export function createDecisionPort(opts: {
   }));
 }
 
+
+/**
+ * The one decision port a host serves. Clef where the account reaches Workers AI; otherwise the fast tier's chat model
+ * answering categories (`structured-decision.ts`), where the agreement it measured trusts it for every question asked;
+ * otherwise Clef again, which says once what the owner must connect, or nothing on a host Clef cannot serve.
+ */
+export function decisionPortOf(opts: {
+  readonly clef: { readonly port: DecisionPort; readonly reachable: () => Promise<boolean> } | null;
+  readonly structured: StructuredDecider | null;
+}): DecisionPort | undefined {
+  const { clef, structured } = opts;
+
+  if (clef === null && structured === null) return undefined;
+
+  return async (request) => {
+    if (clef !== null && await clef.reachable()) return await clef.port(request);
+    const answered = structured === null ? undefined : await structured(request);
+
+    if (answered !== undefined) return answered;
+
+    return clef === null ? null : await clef.port(request);
+  };
+}
 
 /**
  * Through the deployment's Workers AI binding, which answers a decision as a whole object. `Ai.run` rereads its options

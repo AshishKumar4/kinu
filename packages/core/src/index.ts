@@ -1760,7 +1760,8 @@ export { activeOperationProfile, captureOperationProfile, currentOperationProfil
   withOperationProfile, operationProfileStream, type OperationProfile } from './profiles/operation';
 
 export {
-  bindRoute, completeOnRoute, createRoutedModelLane, routedCallOptions, routedLlm, type RouteModelBinder, type RouteModelBinding,
+  bindRoute, completeOnRoute, createRoutedModelLane, routedCallOptions, routedLlm, type ModelLaneComponents, type RouteModelBinder,
+  type RouteModelBinding,
 } from './profiles/model-lane';
 
 export { tierRefusals } from './profiles/tier-refusals';
