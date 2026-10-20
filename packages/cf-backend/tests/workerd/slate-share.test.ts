@@ -409,6 +409,16 @@ it('a slate\'s class reads ai.stream a piece at a time, as the model writes it, 
   expect(v.parse(v.array(v.string()), pieces).length).toBeGreaterThan(1);
 });
 
+// The slates skill (core skills/builtins.ts) writes `new Response((await workspace.agent.ask({ text })).reply).text()`:
+// a reply decoded to text in the slate failed it with "This ReadableStream did not return bytes" (rc22 chat-app evals).
+it('a slate\'s class reads agent.ask\'s reply as the slates skill writes it, its UTF-8 bytes read as text', async () => {
+  const probe = env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName('asker-whole'));
+
+  const answered = await probe.typed('hello', 'ask-whole');
+
+  expect(JSON.parse(answered), answered).toEqual(['The agent says hello']);
+});
+
 it('a slate\'s class reads agent.ask\'s reply a piece at a time, the answer\'s stream carried across the binding', async () => {
   const probe = env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName('asker'));
   const pieces = v.parse(v.array(v.string()), JSON.parse(await probe.typed('hello', 'ask')));
