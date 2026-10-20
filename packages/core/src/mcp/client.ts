@@ -4,7 +4,7 @@
  * What reads the SDK's own classes (failures, tool lists, session renewal) loads with the SDK, at a call's first use.
  */
 
-import { Effect, Exit } from 'effect';
+import { Effect } from 'effect';
 import { diagnostics, hold } from '../obs/index';
 import { copyHeaders } from '../providers/fetch-shim';
 import { describeMcpTool, type ListedMcpTools, type McpToolRefusal } from '../tools/mcp-surface';
@@ -66,30 +66,30 @@ function presentedRefreshToken(init: RequestInit | undefined): string | null {
 }
 
 /**
- * `send`, presenting each refresh token once. Every request a connection sends that meets a 401 runs its own SDK auth
- * flow, and a connection sends several at once (discovery lists tools, prompts and resources together; a turn calls
- * tools in parallel), so each flow refreshed the same token, and a provider that rotates refresh tokens revokes the grant
- * on the second. A token request presenting a refresh token already sent is answered with a copy of that one answer,
- * in flight or come, however long the token endpoint takes; a request that got no answer fails each that shared it, and
- * the next presents the token again.
+ * `send`, presenting each refresh token once at a time. Every request a connection sends that meets a 401 runs its own
+ * SDK auth flow, and a connection sends several at once (discovery lists tools, prompts and resources together; a turn
+ * calls tools in parallel), so each flow refreshed the same token, and a provider that rotates refresh tokens revokes the
+ * grant on the second. A token request presenting a refresh token already in flight is answered with a copy of that one
+ * answer, however long the token endpoint takes. Once it is answered the token may be presented again: a provider that
+ * keeps its refresh tokens (Google) answers it with a new access token when the last one expires, where a copy of an old
+ * answer would hand back one long expired (the rc27 review).
  */
 function refreshingOnce(send: TransportFetch): TransportFetch {
-  const answers = new Map<string, Promise<Response>>();
+  const inFlight = new Map<string, Promise<Response>>();
 
   return async (url, init) => {
     const token = presentedRefreshToken(init);
 
     if (token === null) return send(url, init);
     const key = `${url.toString()} ${token}`;
-    const known = answers.get(key);
+    const joined = inFlight.get(key);
 
-    if (known !== undefined) return (await known).clone();
+    if (joined !== undefined) return (await joined).clone();
     const answer = send(url, init);
 
-    answers.set(key, answer);
-
-    // A request that got no answer leaves the token unanswered, so the next presents it again; this one fails as sent.
-    if (Exit.isFailure(await hold(Effect.promise(async () => answer)))) answers.delete(key);
+    inFlight.set(key, answer);
+    await hold(Effect.promise(async () => answer));
+    inFlight.delete(key);
 
     return (await answer).clone();
   };
