@@ -74,12 +74,6 @@ export function routeRetryOptions(call: Pick<ModelRouteResolution, 'retries'>) {
   return { maxRetries: 0, providerOptions: callRetries(call.retries) };
 }
 
-export function routedCallOptions(call: Pick<ModelRouteResolution, 'reasoningEffort' | 'retries'>, spec: string) {
-  const effort = reasoningEffortOptions(call.reasoningEffort, parseModelSpec(spec).provider);
-
-  return { maxRetries: 0, providerOptions: { ...effort, ...callRetries(call.retries) } };
-}
-
 /** One routed call as an {@link RoutedLLM}, billed under the route's source once it completes. */
 export function routedLlm(bind: RouteModelBinder, route: ModelRouteResolution, spend: Omit<ModelCallSpend, 'source'>, system?: string): RoutedLLM {
   const sent = (prompt: string) => {
