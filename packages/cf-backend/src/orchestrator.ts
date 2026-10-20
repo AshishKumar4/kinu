@@ -177,7 +177,7 @@ import {
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
   type TriggerView,
-  type MailAdmission, type MailArrival, type HandedMail, handedMailSignal, spillEventContent, mailInContext, type MailInContext, type ActiveRoster,
+  type MailAdmission, type MailArrival, type HandedMail, handedMailSignal, spillEventContent, unreadMailForTurn,
   PeerHub, type PeerMessage, type ReceiveResult,
   getAgentStatus, getToolList, readLatestSearchTree, readSearchTree, type ActorSnapshot,
   readSearchNodeDetail, type SearchNodeDetail,
@@ -2073,7 +2073,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       attachmentBudget: turn?.surface.ledgers.context ?? turnLedgers().context,
       extensions: () => (reach.kind === 'workspace' ? this.extensions.list() : []),
       accountFacts: () => planes.facts ?? this.account.factsForTurn(this.actorHandle().name),
-      mail: () => this.unreadMail(actor.handle.actorId, actor.record.name),
+      mail: async () => {
+        const mail = this.mailFor(actor.handle.actorId, actor.record.name);
+
+        return mail === null ? undefined : unreadMailForTurn(mail, this.name);
+      },
       dynamic: (reads) => (profile, tools) => this.actorDynamicContext(actor, reach, { profile, tools, reads, surface: turn?.surface ?? null }),
       operation: (profile, operationInputs) => captureOperationProfile({
         actor: actor.handle, profile, inputs: operationInputs, runId: turn?.surface.key.runId ?? WORKSPACE_RUN_ID, turnId: turn?.surface.key.turnId ?? null,
@@ -2627,24 +2631,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         settle: async (spend, outcome) => this.deferrals.settle(spend, outcome, actorId),
       },
     };
-  }
-
-  /** An agent's unread mail for its turn's context (docs/MAIL.md §8): none without a box, and none, said, on a failed read. */
-  private unreadMail(actorId: string, name: string): Promise<ActiveRoster<MailInContext> | undefined> {
-    const mail = this.mailFor(actorId, name);
-
-    if (mail === null) return Promise.resolve(undefined);
-
-    return settle(Effect.catch(
-      attempt({ doing: 'reading the agent\'s unread mail for its turn', otherwise: 'unavailable' }, async () => mailInContext(
-        await mail.mailbox().findFor(mail.caller(), { view: 'all', unread: true, limit: 5 }),
-      )),
-      (failure) => Effect.sync(() => {
-        diagnostics.failure('mail.context_read_failed', failure, { workspace: this.name });
-
-        return undefined;
-      }),
-    ));
   }
 
   /** Never throws pre-schema; an untitled workspace sends as the product, not its slug. */
@@ -7335,6 +7321,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   async mailArrived(arrival: MailArrival, actorId?: string): Promise<MailAdmission> {
     return await this.email.accept(arrival, actorId ?? this.actorHandle().actorId);
+  }
+
+  /**
+   * This workspace, the owner's Personal assistant, reads their own box from now on (docs/MAIL.md §7). Worker-only: the
+   * assistant's install and the owner's claim of an address call it, each having read that this is their assistant.
+   */
+  async readOwnerMail(): Promise<void> {
+    const owner = this.getOwnerUserId();
+
+    if ((this.env.EMAIL_DOMAIN ?? '') === '' || owner === null) return;
+    await objectNamed(this.env.MAILBOX, owner).readBy({ workspace: this.name, actorId: this.actorHandle().actorId });
   }
 
   /**

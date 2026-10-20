@@ -34,7 +34,7 @@ import type { ActiveSkillSet } from '../skills/types';
 import { describeActivationReason } from '../skills/render';
 import { compareCodeUnits, oneLineClip } from '../utils/text';
 import type { ActiveRoster, DelegationChoices, DynamicApproval, MissingCapability, ShownLesson } from '../types/dynamic-context';
-import type { MailListing } from '../mail/mailbox-api';
+import { MAX_MAIL_IN_CONTEXT, type MailInContext } from '../mail/in-context';
 import { renderCraftedToolsDeclaration, type CraftedDeclaration, type ExternalToolDeclaration } from '../tools/sandbox-contract';
 import { formatByteCap } from '../utils/format';
 
@@ -109,26 +109,6 @@ export interface DynamicContext {
   failingSlates?: readonly string[];
   /** The owner's secrets granted to this workspace, by name and host, never a placeholder or a value; and how many are not. */
   secrets?: SecretsInContext;
-}
-
-/** An unread thread as the agent's context names it; `from` and `subject` are the sender's words. */
-export interface MailInContext {
-  readonly from: string;
-  readonly subject: string;
-  readonly at: number;
-  readonly verified: boolean;
-}
-
-const MAX_MAIL = 5;
-
-/** A box's unread listing as its context section: the newest few, and the count of all. Read once per turn. */
-export function mailInContext(listing: MailListing): ActiveRoster<MailInContext> {
-  return {
-    items: listing.threads.filter((thread) => thread.unread).slice(0, MAX_MAIL).map((thread) => ({
-      from: thread.from.at(-1)?.address ?? '', subject: thread.subject, at: thread.at, verified: thread.verified,
-    })),
-    total: listing.unread,
-  };
 }
 
 export interface SecretsInContext {
@@ -517,6 +497,14 @@ function secretsSection(secrets: SecretsInContext | undefined): RenderedSection 
   ].join('\n') };
 }
 
+/** A line per unread thread, its sender and subject quoted, so a subject cannot pass for a line of this block. */
+function mailSection(mail: ActiveRoster<MailInContext> | undefined): RenderedSection | null {
+  return rosterSection(
+    DYNAMIC_SECTION_TITLES.mail, mail ?? EMPTY_ROSTER, { cap: MAX_MAIL_IN_CONTEXT, keyed: false },
+    (m) => `- ${new Date(m.at).toISOString().slice(0, 16).replace('T', ' ')} UTC, from ${JSON.stringify(clip(m.from, 80))}${m.verified ? '' : ' (not verified)'}: ${JSON.stringify(clip(m.subject))}`,
+  );
+}
+
 /** Each slate whose latest source does not build, in the compiler's words. */
 function failingSlatesSection(failures: readonly string[]) {
   return rosterSection(
@@ -652,11 +640,7 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
     (a) => `- ${clip(a.kind, 40)}: ${clip(a.detail)}`,
   ));
 
-  // Quoted, so a subject cannot pass for a line of this block.
-  add('mail', rosterSection(
-    DYNAMIC_SECTION_TITLES.mail, ctx.mail ?? EMPTY_ROSTER, { cap: MAX_MAIL, keyed: false },
-    (m) => `- ${new Date(m.at).toISOString().slice(0, 16).replace('T', ' ')} UTC, from ${JSON.stringify(clip(m.from, 80))}${m.verified ? '' : ' (not verified)'}: ${JSON.stringify(clip(m.subject))}`,
-  ));
+  add('mail', mailSection(ctx.mail));
 
   add('missingCapabilities', rosterSection(
     DYNAMIC_SECTION_TITLES.missingCapabilities,

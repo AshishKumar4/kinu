@@ -133,6 +133,10 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     return settle(this.served(() => this.store.boxFor(owner)));
   }
 
+  readBy(reader: { workspace: string; actorId: string }): Promise<MailBox | null> {
+    return settle(this.served(() => this.store.readBy(reader)));
+  }
+
   boxes(): Promise<readonly MailBox[]> {
     return settle(this.served(() => this.store.boxes()));
   }

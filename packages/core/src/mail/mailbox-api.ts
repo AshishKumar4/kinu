@@ -183,6 +183,8 @@ export interface MailboxCalls {
    */
   boxFor(owner: { readonly kind: 'workspace' | 'agent'; readonly workspace: string; readonly name: string; readonly actorId: string }): Promise<MailBox>;
   boxes(): Promise<readonly MailBox[]>;
+  /** The owner's Personal assistant's main agent reads their own box from now on; null before they have an address. */
+  readBy(reader: { readonly workspace: string; readonly actorId: string }): Promise<MailBox | null>;
   /**
    * Files a raw message that reached `recipient`; decides, by the box's wake and the verdict, whom it wakes. A label
    * the person does not have is filed in their own box and wakes nothing. Null only before the person has a box.

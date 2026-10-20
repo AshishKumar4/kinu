@@ -7,7 +7,7 @@ import { Effect } from 'effect';
 import type { ModelWindow } from '../context-window';
 import type { KinuExtension } from '../extension';
 import type { Fact } from '../memory/facts';
-import type { MailInContext } from '../prompting/volatile-context';
+import type { MailInContext } from '../mail/in-context';
 import type { ActiveRoster } from '../types/dynamic-context';
 import type { SpendGate } from '../mission-budget';
 import { buildSystemPromptParts, renderUnverifiedInstructions, systemPromptText, type SystemPromptOptions } from '../prompt';
@@ -219,6 +219,13 @@ function resolvedTurnProfile(sources: TurnAssemblySources, turn: Pick<TurnDraft,
 }
 
 /** Effect-free: a measure between turns assembles too. */
+/** What every step of the turn renders the same bytes of: MEMORY.md's tail, the account's facts and the agent's mail. */
+async function readTurnOnce(sources: TurnAssemblySources, activeSkills: ActiveSkillSet | undefined): Promise<TurnReads> {
+  const [memoryTail, accountFacts, mail] = await Promise.all([sources.memoryTail(), sources.accountFacts?.(), sources.mail?.()]);
+
+  return { memoryTail, activeSkills: activeSkills ?? null, ...(accountFacts !== undefined && { accountFacts }), ...(mail !== undefined && { mail }) };
+}
+
 export async function assembleActorTurn(sources: TurnAssemblySources, request: TurnAssemblyRequest): Promise<AssembledTurn> {
   const { models } = sources;
   const { frozen } = request;
@@ -249,9 +256,8 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const externalTools = allowed.has('eval') ? pick(external, allowed) : {};
   const { pinned, invoked } = splitTurnSkills(activeSkills);
 
-  const [window, agentsMd, soul, identity, memoryTail, accountFacts, mail] = await Promise.all([
-    models.catalog.windowFor(spec), sources.agentsMd(limits), sources.soul(), sources.identity(), sources.memoryTail(),
-    sources.accountFacts?.(), sources.mail?.(),
+  const [window, agentsMd, soul, identity, reads] = await Promise.all([
+    models.catalog.windowFor(spec), sources.agentsMd(limits), sources.soul(), sources.identity(), readTurnOnce(sources, activeSkills),
     models.catalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model)),
   ]);
 
@@ -301,9 +307,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
       loopVersion: await sources.rt.identity.scaffold.version(),
       chat,
       extensions: sources.extensions(),
-      dynamic: sources.dynamic({
-        memoryTail, activeSkills: activeSkills ?? null, ...(accountFacts !== undefined && { accountFacts }), ...(mail !== undefined && { mail }),
-      }),
+      dynamic: sources.dynamic(reads),
       // Out of the cached prefix.
       instructions: renderUnverifiedInstructions({ agentsMd, activeSkills: pinned }),
       activated: invoked ? activatedSkillsBlock(invoked) : null,

@@ -129,6 +129,14 @@ export class MailStore {
     return this.box('') ?? this.boxOf({ path: '', kind: 'person', workspace: null, actor_id: null, wake: 'owner' });
   }
 
+  /** The Personal assistant the owner has now reads their box, in place of one they had before (docs/MAIL.md §7). */
+  readBy(reader: { workspace: string; actorId: string }): MailBox | null {
+    if (this.identity() === null) return null;
+    this.deps.sql.exec("UPDATE mail_addresses SET workspace = ?, actor_id = ? WHERE path = ''", reader.workspace, reader.actorId);
+
+    return this.box('');
+  }
+
   /** The box a workspace's main agent or one of its other agents reads; made on first ask. */
   boxFor(owner: { kind: 'workspace' | 'agent'; workspace: string; name: string; actorId: string }): MailBox {
     // By kind too: the Personal assistant's main agent reads the person's box and its workspace's.

@@ -49,7 +49,7 @@ export function initMailboxTables(sql: SqlExec): void {
       CHECK ((state = 'retired') = (retired_at IS NOT NULL))
     )
   `);
-  sql.exec('CREATE UNIQUE INDEX IF NOT EXISTS mail_addresses_actor ON mail_addresses (workspace, actor_id) WHERE actor_id IS NOT NULL');
+  sql.exec('CREATE UNIQUE INDEX IF NOT EXISTS mail_addresses_actor ON mail_addresses (workspace, actor_id, kind) WHERE actor_id IS NOT NULL');
   sql.exec(`
     CREATE TABLE IF NOT EXISTS mail_allow (
       path        TEXT    NOT NULL REFERENCES mail_addresses (path),

@@ -275,6 +275,7 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
 **The personal assistant holds the person's own address.**
 
 - `ashish@kinu.run` belongs to the owner's Personal assistant: a workspace installed from the `personal-assistant` blueprint at onboarding, with its main agent "Kinu". The Home lane designs the blueprint and its Home strip.
+- Built: the box is handed to the assistant's main agent (`readOwnerMail`, `MailStore.readBy`) when the assistant that becomes Home is installed and when the owner claims an address, whichever comes second. A new assistant replaces an old one as the reader. A failed hand-over leaves the install and the claim standing and logs `mail.assistant_unlinked`; the next claim tries again.
 - Its main mail view is **Important**: the assistant's picks, each with a one-line reason. Home's "Today" strip shows the top three with the same row (`components/mail/ImportantMailRow.tsx`).
 - **The assistant is called by its own name** everywhere: "Kinu", or what the owner renamed it to ("Kinu picked these", "Kinu's draft"), never "Personal assistant's".
 - **With no assistant installed,** each place that needs one offers it: Important shows a card that opens a modal to install the blueprint.
@@ -458,7 +459,8 @@ CREATE TABLE IF NOT EXISTS mail_addresses (
   CHECK ((state = 'retired') = (retired_at IS NOT NULL))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS mail_addresses_actor ON mail_addresses (workspace, actor_id) WHERE actor_id IS NOT NULL;
+-- By kind too: the Personal assistant's main agent holds its workspace's box and the person's.
+CREATE UNIQUE INDEX IF NOT EXISTS mail_addresses_actor ON mail_addresses (workspace, actor_id, kind) WHERE actor_id IS NOT NULL;
 
 -- Senders who may wake a box whose wake is 'allowlist'. The verified owner always may.
 CREATE TABLE IF NOT EXISTS mail_allow (

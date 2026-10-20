@@ -4,9 +4,10 @@
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { AgentStores } from './agent-stores';
 import {
-  agentDynamicContext, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MailInContext, type MissingCapability,
-  type RuntimeFacts, type SecretsInContext,
+  agentDynamicContext, type DynamicApproval, type DynamicContext, type DynamicDelegate, type MissingCapability, type RuntimeFacts,
+  type SecretsInContext,
 } from '../prompting/volatile-context';
+import type { MailInContext } from '../mail/in-context';
 import type { ActiveRoster, ShownLesson } from '../types/dynamic-context';
 import { renderFactsForTurn } from '../orchestrator/turn-surface';
 import { listRecoveryFindings } from '../evolution/recovery';
