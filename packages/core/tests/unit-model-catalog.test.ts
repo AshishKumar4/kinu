@@ -4,10 +4,12 @@ import {
   CODEX_CRED_KEY,
   DEFAULT_PROVIDER_RETRIES,
   OPENAI_CRED_KEY,
+  OPENROUTER_CRED_KEY,
   catalogModelInfo,
   relayRefusal,
   createCodexProvider,
   createOpenAIProvider,
+  createOpenRouterProvider,
   createProviderRegistry,
   createWorkersAIProvider,
   toProviderError,
@@ -227,6 +229,25 @@ describe('provider model catalogs', () => {
     expect(menu.failures.map((failure) => failure.provider)).toEqual(['codex']);
     expect(menu.failures[0]?.reason).toContain('HTTP 403');
     expect(menu.models.filter((model) => model.provider === 'codex')).toEqual([]);
+  });
+
+  // The SufficientKoala audit: OpenRouter answered every refusal as a catalog with no models, so a 429 dropped its
+  // choices unexplained and could disqualify the configured model.
+  test.each([
+    ['a 429', () => new Response('rate limited', { status: 429 }), 'HTTP 429'],
+    ['an unreadable catalog', () => Response.json({ data: 'not rows' }), 'cannot read'],
+  ])('%s from OpenRouter is a named failure, not a catalog with no models', async (_case, answer, reason) => {
+    const registry = createProviderRegistry();
+    registry.register(createOpenRouterProvider());
+
+    const menu = await registry.listAllModels(deps({ [OPENROUTER_CRED_KEY]: { headers: { Authorization: 'Bearer or-test' } } }, fetchStub(async (input) => (
+      requestedUrl(input).startsWith('https://openrouter.ai/') ? answer() : new Response('upstream down', { status: 503 })
+    ))));
+
+    const failed = menu.failures.find((failure) => failure.provider === 'openrouter');
+
+    expect(failed?.reason).toContain(reason);
+    expect(menu.models.filter((model) => model.provider === 'openrouter')).toEqual([]);
   });
 
   test('an unreadable models.dev list is a named failure with no guessed models', async () => {

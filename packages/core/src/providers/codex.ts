@@ -3,7 +3,8 @@ import { APICallError, wrapLanguageModel, type LanguageModel, type LanguageModel
 import type { ModelAffinity, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { authenticatedSend, signedSend } from './authenticated-send';
-import { authCacheKey, cloneModelInfos, conversationUuid, positiveInteger, StaleModelList, statelessResponses } from './util';
+import { conversationUuid, positiveInteger, statelessResponses } from './util';
+import { catalogBody, credentialCatalog } from './credential-catalog';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import { withCallAccount } from './quota';
 import { nonEmptyString } from '../utils/json';
@@ -11,7 +12,7 @@ import * as v from 'valibot';
 
 import { JsonValueSchema } from '../utils/json';
 import { Effect } from 'effect';
-import { diagnostics, KinuError, renderThrownChain, settle } from '../obs/index';
+import { diagnostics, KinuError, settle } from '../obs/index';
 import { knownReasoningEfforts } from './reasoning-effort';
 import { heardFetch } from './middleware/attempt';
 import { lazyModel } from './wire-model';
@@ -93,7 +94,7 @@ export interface CodexProviderOptions {
 export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvider {
   const baseURL = opts.baseURL ?? CODEX_BASE_URL;
   // Keyed by credential so switching ChatGPT account invalidates the catalog.
-  let modelCache: { at: number; authKey: string; models: ModelInfo[] } | null = null;
+  const catalog = credentialCatalog('Codex', CODEX_MODELS_TTL_MS);
 
   return {
     id: 'codex',
@@ -107,44 +108,14 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
       return 'No Codex OAuth credential: connect ChatGPT via the device-code flow.';
     },
     async listModels(deps) {
-      return settle(Effect.gen(function* () {
-        const auth = yield* Effect.promise(() => deps.getAuth(CODEX_CRED_KEY));
-
-        if (!auth) {
-          modelCache = null;
-
-          return [];
-        }
-
-        const authKey = authCacheKey(auth);
-
-        if (modelCache && modelCache.authKey === authKey && Date.now() - modelCache.at < CODEX_MODELS_TTL_MS) {
-          return cloneModelInfos(modelCache.models);
-        }
-
-        const stale = (failure: { readonly reason: string; readonly cause?: unknown }): StaleModelList => {
-          diagnostics.event('codex.models_fallback', {
-            error: failure.cause === undefined ? failure.reason : renderThrownChain({ cause: failure.cause }),
-          });
-
-          return new StaleModelList([], { ...failure, reason: `Codex models could not be read: ${failure.reason}` });
-        };
-
-        const res = yield* Effect.tryPromise({
-          try: () => (opts.egress ?? deps.fetch ?? fetch)(`${baseURL.replace(/\/+$/, '')}/models?client_version=1.0.0`, { headers: auth.headers }),
-          catch: (cause) => ({ cause }),
-        }).pipe(Effect.catch((failed) => Effect.fail(stale({ reason: 'chatgpt.com could not be reached', cause: failed.cause }))));
-
-        if (networkRefused(res)) return yield* Effect.fail(stale({ reason: NETWORK_REFUSED }));
-
-        if (!res.ok) return yield* Effect.fail(stale({ reason: `chatgpt.com answered HTTP ${String(res.status)}` }));
-        const body: unknown = yield* Effect.promise(() => res.json());
+      return catalog(await deps.getAuth(CODEX_CRED_KEY), (auth) => Effect.gen(function* () {
+        const url = `${baseURL.replace(/\/+$/, '')}/models?client_version=1.0.0`;
+        const body = yield* catalogBody('chatgpt.com', JsonValueSchema, () => (opts.egress ?? deps.fetch ?? fetch)(url, { headers: auth.headers }), (res) => (networkRefused(res) ? NETWORK_REFUSED : null));
         const models = parseCodexModels({ body });
 
-        if (models.length === 0) return yield* Effect.fail(stale({ reason: 'chatgpt.com listed no models' }));
-        modelCache = { at: Date.now(), authKey, models };
+        if (models.length === 0) return yield* Effect.fail({ reason: 'chatgpt.com listed no models' });
 
-        return cloneModelInfos(models);
+        return models;
       }));
     },
 
