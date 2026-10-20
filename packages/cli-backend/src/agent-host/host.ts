@@ -806,14 +806,7 @@ export class LocalAgentHost {
       const rt = parent.tree.runtimes.get(binding.reference.actorId);
 
       if (!rt) throw new KinuError('missing', 'The hosted subordinate has no bound runtime.');
-      const ws: LocalHostedAgent = { rt, openConfig: this.childOpenConfig(parent, binding) };
-
-      if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;
-
-      if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
-
-      // A child resolves role and tier against its root's (account) catalog.
-      if (parent.ws.profileAuthority) ws.profileAuthority = parent.ws.profileAuthority;
+      const ws = this.childHostedAgent(parent, binding, rt);
 
       const entry = await this.buildEntry({
         key,
@@ -840,6 +833,21 @@ export class LocalAgentHost {
     if (!isSubordinateOrigin(binding.origin)) throw new KinuError('denied', 'The roster path is not a subordinate actor.');
 
     return { ...parent.ws.openConfig, cwd: parent.ref.cwd, facet: actorHomeName(binding), actorBinding: binding };
+  }
+
+  /**
+   * A hire, born or reopened, as its parent's model authority serves it: the parent's resolver, model, role and tier
+   * catalog and provider revision, so it reaches what its parent reaches and sees a provider connected elsewhere. A
+   * workspace with no reachable model hires; its hire's turn refuses as its own would (turn-assembly.ts), not here.
+   */
+  private childHostedAgent(parent: HostEntry, binding: LocalActorBinding, rt: CLIRuntime): LocalHostedAgent {
+    const { modelResolver, staticModel, profileAuthority, providerRevision } = parent.ws;
+
+    return {
+      rt, openConfig: this.childOpenConfig(parent, binding),
+      ...(modelResolver !== undefined && { modelResolver }), ...(staticModel !== undefined && { staticModel }),
+      ...(profileAuthority !== undefined && { profileAuthority }), ...(providerRevision !== undefined && { providerRevision }),
+    };
   }
 
   private buildPeerEndpoint(entry: HostEntry, hubSql: SqlExec): LocalPeerEndpoint {
@@ -1270,12 +1278,6 @@ export class LocalAgentHost {
     key: string,
     binding: LocalActorBinding,
   ): Promise<HostEntry> {
-    const llm = parent.ws.openConfig.llm;
-
-    if (!llm) {
-      throw new Error('No model provider is connected, so this workspace cannot create agents.');
-    }
-
     const tree = parent.tree;
     const sql = makeSql(tree.db);
 
@@ -1295,13 +1297,7 @@ export class LocalAgentHost {
       const descriptor = subordinateDescriptorSource(config).read();
 
       if (!descriptor) throw new Error(`subordinate "${input.name}" has no readable descriptor after creation`);
-      const ws: LocalHostedAgent = { rt, openConfig: this.childOpenConfig(parent, binding) };
-
-      if (parent.ws.modelResolver) ws.modelResolver = parent.ws.modelResolver;
-
-      if (parent.ws.staticModel) ws.staticModel = parent.ws.staticModel;
-
-      if (parent.ws.profileAuthority) ws.profileAuthority = parent.ws.profileAuthority;
+      const ws = this.childHostedAgent(parent, binding, rt);
 
       const entry = await this.buildEntry({
         key,

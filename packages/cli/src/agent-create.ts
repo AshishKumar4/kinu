@@ -89,17 +89,12 @@ export function isCloudAuthConfigured(): boolean {
   return Boolean(loadConfigFile().accessToken);
 }
 
-/** An unparseable config.json propagates rather than reading as a fresh install. */
+/** An incomplete setup is not set up yet; an unparseable config.json propagates rather than reading as a fresh install. */
 export function isLocalModelConfigured(): boolean {
-  try {
-    // An OpenAI-compatible endpoint counts before it names a model.
-    return resolveModelDefaults({ defaultModel: readDefaultTier()?.model }).spec !== null
-      || loadConfigFile().providers?.openaiCompat?.default !== undefined;
-  } catch (error) {
-    // Only the half-set-override diagnostic means "not usable yet".
-    if (error instanceof Error && error.message.startsWith('No LLM auth configured')) return false;
-    throw error;
-  }
+  const defaults = resolveModelDefaults({ defaultModel: readDefaultTier()?.model });
+
+  // An OpenAI-compatible endpoint counts before it names a model.
+  return defaults.missing === null && (defaults.spec !== null || loadConfigFile().providers?.openaiCompat?.default !== undefined);
 }
 
 export function defaultCreateMode(): AgentMode {

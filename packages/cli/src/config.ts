@@ -391,6 +391,10 @@ export interface LocalModelDefaults {
   /** An endpoint the process was given (`--base-url` and `--auth`, or `KINU_BASE_URL` and `KINU_AUTH`), served as
    *  itself; null without one. */
   readonly endpoint: LLMProviderConfig | null;
+  /** What an incomplete setup still lacks, as the fix to name: a base URL given with no auth header and nothing else
+   *  to serve. A path that runs a model refuses with it ({@link usableModelDefaults}); a readiness view reads it as
+   *  not set up. Null when the setup is complete or simply absent. */
+  readonly missing: string | null;
 }
 
 interface ModelChoice {
@@ -418,10 +422,11 @@ function givenEndpoint(baseURL: string, auth: string, model: string | undefined)
   const endpointModel = directEndpointModelId(model ?? DEFAULT_WORKERS_AI_MODEL_ID);
   const served = endpointModel.startsWith('@cf/') ? WORKERS_AI_PROVIDER_ID : name;
 
-  return { spec: `${served}/${endpointModel}`, endpoint: { name, baseURL, headers: { 'Authorization': auth }, model: endpointModel } };
+  return { spec: `${served}/${endpointModel}`, endpoint: { name, baseURL, headers: { 'Authorization': auth }, model: endpointModel }, missing: null };
 }
 
-/** The model this machine uses where none is chosen; see {@link requireModelDefaults}. */
+/** The model this machine uses where none is chosen, as a result a readiness view reads; see
+ *  {@link usableModelDefaults} and {@link requireModelDefaults} for the paths that must run one. */
 export function resolveModelDefaults(opts?: ModelChoice): LocalModelDefaults {
   const file = loadConfigFile();
   const { baseURL, auth, model } = chosenModel(opts);
@@ -433,23 +438,30 @@ export function resolveModelDefaults(opts?: ModelChoice): LocalModelDefaults {
   const signedIn = resolveCloudSession() !== null;
   const workersAi = `${WORKERS_AI_PROVIDER_ID}/${workersAIModelId(model)}`;
 
-  if (signedIn && (!model || isNativeCloudSpec(model))) return { spec: workersAi, endpoint: null };
+  if (signedIn && (!model || isNativeCloudSpec(model))) return { spec: workersAi, endpoint: null, missing: null };
 
   const spec = credentialedSpec(file, model) ?? (signedIn ? workersAi : null);
 
-  if (spec === null && baseURL && !auth) {
-    throw new Error(
-      'A base URL is set (--base-url or KINU_BASE_URL) but no auth header (--auth or KINU_AUTH).\n' +
-      '  Set both, or unset the base URL and run kinu setup to pick a model provider.'
-    );
-  }
+  const missing = spec === null && baseURL && !auth
+    ? 'A base URL is set (--base-url or KINU_BASE_URL) but no auth header (--auth or KINU_AUTH).\n'
+      + '  Set both, or unset the base URL and run kinu setup to pick a model provider.'
+    : null;
 
-  return { spec, endpoint: null };
+  return { spec, endpoint: null, missing };
+}
+
+/** For a path that runs a model: the defaults, or what an incomplete setup lacks, refused. */
+export function usableModelDefaults(opts?: ModelChoice): LocalModelDefaults {
+  const defaults = resolveModelDefaults(opts);
+
+  if (defaults.missing !== null) throw new Error(defaults.missing);
+
+  return defaults;
 }
 
 /** For seams that must name a model before any is chosen (workspace creation); the failure names every fix. */
 export function requireModelDefaults(opts?: Parameters<typeof resolveModelDefaults>[0]): LocalModelDefaults {
-  const defaults = resolveModelDefaults(opts);
+  const defaults = usableModelDefaults(opts);
 
   if (defaults.spec !== null) return defaults;
   throw new Error(
