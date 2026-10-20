@@ -1916,6 +1916,35 @@ describe('a dream is cross-judged: the dreamer drafts, the decision model measur
     expect(sectionVersions(fx.rt)).toEqual([]);
   });
 
+  test('an edit no decision model answered for is refused as unmeasured, never as a measured zero', async () => {
+    const fx = fixture();
+    seedGradedTurns(fx.rt, 3);
+    const briefs: string[] = [];
+
+    const { port } = scriptedRefiner(proposalText({
+      scope: 'workspace', summary: 'a shorter section',
+      edits: [{ kind: 'prompt_section', sectionId: TARGET_ID, source: CANDIDATE, rationale: 'three corrected turns all asked for a shorter answer than the section invites' }],
+    }));
+
+    const deps = fx.deps(port, undefined, undefined, (brief, edits) => {
+      briefs.push(brief);
+
+      return acceptEvery(brief, edits);
+    });
+
+    // Triage is answered; the judge's questions are not, as an untrusted structured port leaves them.
+    const triage = fx.rt.decide;
+    fx.rt.decide = async (request) => ('worth' in request.questions ? await triage?.(request) ?? null : null);
+
+    const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
+    await advanceRefinementLane(deps);
+    const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the dream');
+
+    expect(routeFor(row.routes, 'prompt_section')).toMatchObject({ disposition: 'refused' });
+    expect(briefs.join('')).not.toContain('fix 0.00');
+    expect(JSON.stringify(row)).toContain('no decision model is trusted to judge this edit, so it was not measured');
+  });
+
   test('a tool\'s own text is drafted, measured and reviewed like a section, and moves the tool only at a cold turn', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);

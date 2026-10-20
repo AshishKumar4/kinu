@@ -40,9 +40,10 @@ const JUDGE_QUESTIONS = {
 
 /**
  * A bad turn scores `fixes`, a regression turn 1 - `harms`. A turn the decision model did not judge (an owner-fixable
- * refusal it already said) scores 0 on either side, so no edit passes on it.
+ * refusal it already said, or no decision model trusted for these questions) is null, and scores 0 on either side, so
+ * no edit passes on it.
  */
-async function judgeTurn(decide: DecisionPort, input: { readonly artifactId: string; readonly before: string; readonly after: string; readonly turn: JudgedTurn }): Promise<number> {
+async function judgeTurn(decide: DecisionPort, input: { readonly artifactId: string; readonly before: string; readonly after: string; readonly turn: JudgedTurn }): Promise<number | null> {
   const result = await decide({
     state: `ARTIFACT ${input.artifactId}\n\nOLD TEXT:\n${input.before}\n\nNEW TEXT:\n${input.after}\n\nTURN:\n${input.turn.state}`,
     questions: JUDGE_QUESTIONS,
@@ -51,7 +52,7 @@ async function judgeTurn(decide: DecisionPort, input: { readonly artifactId: str
   const fixes = result?.answers.fixes;
   const harms = result?.answers.harms;
 
-  if (fixes?.type !== 'noul' || harms?.type !== 'noul') return 0;
+  if (fixes?.type !== 'noul' || harms?.type !== 'noul') return null;
 
   return Math.min(1, Math.max(0, input.turn.side === 'bad' ? fixes.noul : 1 - harms.noul));
 }
@@ -93,10 +94,17 @@ export async function scoreAuthoredEdit(deps: { readonly rt: AgentRuntime; reado
 
   const set = [...bad, ...regressionSet(rt, input.artifactId)];
   const scores = new Map<string, number>();
+  let judged = 0;
 
   for (const turn of set) {
-    scores.set(turn.id, await judgeTurn(deps.decide, { artifactId: input.artifactId, before, after: input.body, turn }));
+    const score = await judgeTurn(deps.decide, { artifactId: input.artifactId, before, after: input.body, turn });
+
+    if (score !== null) judged += 1;
+    scores.set(turn.id, score ?? 0);
   }
+
+  // Nothing judged it: a measured zero would misstate why it is refused.
+  if (judged === 0) return { refused: 'no decision model is trusted to judge this edit, so it was not measured' };
 
   const { passes, ...verdict } = judgeOnlyVerdict(scores, set);
   const bytes = (text: string): number => Buffer.byteLength(text, 'utf8');
