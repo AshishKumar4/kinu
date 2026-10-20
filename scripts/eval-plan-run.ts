@@ -94,8 +94,9 @@ export function ompGrant(store: string, login: OmpLogin): OAuthCredential {
 export async function planLogins(origin: string, secret: string, accounts: readonly string[], clear: boolean): Promise<string[]> {
   const cleared: string[] = [];
 
-  for (let at = 0; at < accounts.length; at += 8) {
-    cleared.push(...(await Promise.all(accounts.slice(at, at + 8).map(async (account) => {
+  // 32 at a time: a stop's clear of every staging eval account finishes well inside systemd's stop timeout.
+  for (let at = 0; at < accounts.length; at += 32) {
+    cleared.push(...(await Promise.all(accounts.slice(at, at + 32).map(async (account) => {
       const headers = { [DEV_IDENTITY_HEADER]: secret, ...account !== 'eval-service' && { [DEV_IDENTITY_ACCOUNT_HEADER]: account } };
       const held = v.parse(v.array(v.object({ key: v.string() })), await (await fetch(`${origin}/api/user/credentials`, { headers })).json());
       const plans = held.map(({ key }) => key).filter((key) => key === CLAUDE_CRED_KEY || key === CODEX_CRED_KEY || key === CHATGPT_KEY);
@@ -150,7 +151,8 @@ async function command(argv: readonly string[]): Promise<number> {
     rmSync(STATUS, { force: true });
     const holder = ['bun', join(ROOT, 'scripts/eval-plan-run.ts'), '--hold', ...argv.filter((word) => word === '--dry-run' || word.startsWith('--models='))];
 
-    const started = Bun.spawnSync(['systemd-run', '--user', `--unit=${UNIT}`, '--collect', `--working-directory=${ROOT}`, `--setenv=HOME=${process.env['HOME'] ?? ''}`,
+    // A stop waits for the holder's cleanup (a clear of every staging eval account) rather than the default 90 s.
+    const started = Bun.spawnSync(['systemd-run', '--user', `--unit=${UNIT}`, '--collect', '--property=TimeoutStopSec=300', `--working-directory=${ROOT}`, `--setenv=HOME=${process.env['HOME'] ?? ''}`,
       `--setenv=PATH=${process.env['PATH'] ?? ''}`, '--setenv=TMPDIR=/mnt/local/kinu/tmp', 'bash', '-c',
       `set -a; . "$HOME/.config/kinu/secrets.env"; set +a; exec ${holder.join(' ')} > ${join(STATE, 'holder.log')} 2>&1`]);
 
@@ -167,6 +169,23 @@ async function command(argv: readonly string[]): Promise<number> {
   for (const line of status.said) console.log(line);
 
   return status.phase === 'failed' ? 1 : 0;
+}
+
+/** Resolves after `ms`, or at once when `signal` aborts or has, leaving no timer to hold the process open. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+
+    const timer = setTimeout(done, ms);
+
+    signal.addEventListener('abort', done, { once: true });
+  });
 }
 
 /** The models a run measures: Muse, and each one named (`--models=haiku,luna`). */
@@ -209,6 +228,8 @@ async function hold(argv: readonly string[]): Promise<number> {
 
   const stop = async (why: string): Promise<void> => {
     for (const child of children) child.kill();
+    // Gone before the logins are cleared: a sequence still provisioning could store a grant after the clear.
+    await Promise.all(children.map(async (child) => await child.exited));
 
     for (const slug of models.map((each) => each.slug)) {
       const run = join(out, slug, 'run.json');
@@ -219,9 +240,11 @@ async function hold(argv: readonly string[]): Promise<number> {
     say('stopping', why);
   };
 
-  process.on('SIGTERM', () => {
-    stop('stopped by SIGTERM').then(() => process.exit(1), () => process.exit(1));
-  });
+  // A stop is only asked for here: the run below ends at it, and its one cleanup runs before the process exits.
+  const stopping = new AbortController();
+  const requestStop = (): void => { stopping.abort(new Error('stopped by SIGTERM')); };
+
+  process.on('SIGTERM', requestStop);
 
   /** Each token OMP has renewed since it was given, given again to the account that holds the old one. */
   const renew = async (): Promise<void> => {
@@ -238,12 +261,22 @@ async function hold(argv: readonly string[]): Promise<number> {
     }
   };
 
+  /** What the sequences answered when they all ended; null when `RENEWED_EVERY_MS` passed first; a stop throws. */
+  const awaitEnd = async (ended: Promise<number[]>): Promise<number[] | null> => {
+    const done = await Promise.race([ended, pause(RENEWED_EVERY_MS, stopping.signal).then(() => null)]);
+
+    stopping.signal.throwIfAborted();
+
+    return done;
+  };
+
   try {
     // A copy an earlier run left would be kept as the account's own (eval-provider-keys gives a grant once).
     const stale = await planLogins(origin, secret, stagingAccounts(), true);
 
     if (stale.length > 0) say('running', `cleared what an earlier run left: ${stale.join(', ')}`);
     mkdirSync(out, { recursive: true });
+    stopping.signal.throwIfAborted();
     say('running', `the sequences start, their work under ${out}`);
 
     for (const { slug, model, key } of models) {
@@ -257,12 +290,12 @@ async function hold(argv: readonly string[]): Promise<number> {
     }
 
     const ended = Promise.all(children.map(async (child) => await child.exited));
-    let done = await Promise.race([ended, Bun.sleep(RENEWED_EVERY_MS).then(() => null)]);
+    let done = await awaitEnd(ended);
 
     // While the sequences run, a renewed token reaches the account using the old one before that one ends.
     while (done === null) {
       await renew();
-      done = await Promise.race([ended, Bun.sleep(RENEWED_EVERY_MS).then(() => null)]);
+      done = await awaitEnd(ended);
     }
 
     say('cleaning', `the sequences ended: ${models.map((each, at) => `${each.slug} ${String(done[at])}`).join(', ')}`);
@@ -275,6 +308,7 @@ async function hold(argv: readonly string[]): Promise<number> {
   } finally {
     const cleared = await planLogins(origin, secret, stagingAccounts(), true);
 
+    process.off('SIGTERM', requestStop);
     say('done', `cleared every plan login: ${cleared.length === 0 ? 'none was held' : cleared.join(', ')}`);
   }
 }
