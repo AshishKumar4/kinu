@@ -21,3 +21,9 @@ export type ImageCarrier = v.InferOutput<typeof ImageCarrierSchema>;
 export function imageCarrier(output: JsonValue, images: readonly ToolImage[]): ImageCarrier {
   return { type: IMAGE_CARRIER, output, images: [...images] };
 }
+
+/** A carrier's images, once kept where they belong (the step's record and the owner's history), give up their bytes: the
+ *  SDK holds every step's result for the life of its call, and a turn's call is every step of the turn. */
+export function releaseCarriedImages(carrier: ImageCarrier): void {
+  carrier.images.length = 0;
+}
