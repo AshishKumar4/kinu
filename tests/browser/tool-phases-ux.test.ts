@@ -117,8 +117,8 @@ describe('a long turn, in the real chat', () => {
     await withGallery(async ({ newPage, origin }) => {
       const live = await opened(newPage, origin, '&at=37&lines=asked');
 
-      await live.waitForSelector('[data-tool-run="live"]');
-      await live.evaluate(() => new Promise((settle) => { setTimeout(settle, 1500); }));
+      // The settled phases above the running one ask; the stub finds no committed answer and writes nothing.
+      await live.waitForFunction(() => (document.documentElement.dataset.phaseLinesAsked ?? '').includes('lt-a1'));
       expect(await live.evaluate(() => ({
         running: document.querySelector('[data-tool-run="live"]') !== null,
         written: document.querySelector('[data-phase-title="model"]') !== null,
