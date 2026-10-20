@@ -157,7 +157,7 @@ export class GalleryIndex {
   installed(install: { readonly kind: ExploreKind; readonly workspace: string; readonly item: string; readonly userId: string }, now: number): boolean {
     const { kind, workspace, item, userId } = install;
 
-    if (this.db.exec('SELECT 1 FROM gallery_listings WHERE kind = ? AND workspace = ? AND item = ?', kind, workspace, item).toArray().length === 0) return false;
+    if (!this.holds(kind, workspace, item)) return false;
     this.db.exec('INSERT OR IGNORE INTO gallery_installs (kind, workspace, item, user_id, at) VALUES (?, ?, ?, ?, ?)', kind, workspace, item, userId, now);
 
     return true;
@@ -269,15 +269,20 @@ export class GalleryIndex {
   }
 
   /** A star from `email`, or its withdrawal; a slate that is not listed takes none. */
-  star(star: { readonly email: string; readonly workspace: string; readonly slate: string; readonly on: boolean }, now: number): boolean {
-    const { email, workspace, slate, on } = star;
+  /** A star on a listed item, an app's unless `kind` says; false when it is not listed. */
+  star(star: { readonly email: string; readonly workspace: string; readonly slate: string; readonly on: boolean; readonly kind?: ExploreKind }, now: number): boolean {
+    const { email, workspace, slate, on, kind = 'app' } = star;
 
-    if (this.listed(workspace, slate) === null) return false;
+    if (!this.holds(kind, workspace, slate)) return false;
 
-    if (on) this.db.exec("INSERT OR IGNORE INTO gallery_stars (kind, workspace, item, email, at) VALUES ('app', ?, ?, ?, ?)", workspace, slate, email, now);
-    else this.db.exec("DELETE FROM gallery_stars WHERE kind = 'app' AND workspace = ? AND item = ? AND email = ?", workspace, slate, email);
+    if (on) this.db.exec('INSERT OR IGNORE INTO gallery_stars (kind, workspace, item, email, at) VALUES (?, ?, ?, ?, ?)', kind, workspace, slate, email, now);
+    else this.db.exec('DELETE FROM gallery_stars WHERE kind = ? AND workspace = ? AND item = ? AND email = ?', kind, workspace, slate, email);
 
     return true;
+  }
+
+  private holds(kind: ExploreKind, workspace: string, item: string): boolean {
+    return this.db.exec('SELECT 1 FROM gallery_listings WHERE kind = ? AND workspace = ? AND item = ?', kind, workspace, item).toArray().length > 0;
   }
 
   /** The listings `email` starred, newest star first. */

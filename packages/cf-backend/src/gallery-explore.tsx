@@ -1,6 +1,7 @@
 /**
  * Explore in the gallery: `explore` (the feed; `&kind=`, `&category=`, `&q=` as its URL takes them) and
- * `explore-workspace&id=<blueprint>` (`&install=1` with Install open), in the product's own shell. `/api/explore` is
+ * `explore-workspace&id=<blueprint>` (`&install=1` with Install open; `&assistant=1` once it is the person's), in the
+ * product's own shell. `/api/explore` is
  * answered here from a fixed feed of the owner's kind of work, ranked as the index would. Kinu's blueprints show their
  * served pictures; an app's picture is a listing's read, which a test or a shot answers.
  */
@@ -161,6 +162,15 @@ function installExploreFixture(): void {
     const [, , area, kind, id, action] = url.pathname.split("/");
 
     if (url.pathname === "/api/explore") return feed(url.searchParams);
+
+    if (area === "explore" && kind === "workspaces" && id !== undefined && action === "star" && request.method === "POST") {
+      document.documentElement.dataset.exploreStarred = JSON.stringify({ id: decodeURIComponent(id), body: await request.json() });
+
+      return new Response(null, { status: 204 });
+    }
+
+    // `&assistant=1`: the person already has the Personal assistant.
+    if (url.pathname === "/api/user/assistant") return Response.json({ workspace: new URLSearchParams(location.search).has("assistant") ? "personal-assistant-4f2a" : null });
 
     if (area === "explore" && kind === "workspaces" && id !== undefined) {
       const found = blueprintOf(decodeURIComponent(id));

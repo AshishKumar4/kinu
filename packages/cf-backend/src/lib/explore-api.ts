@@ -10,7 +10,7 @@ import {
   type BlueprintPage, type ExploreKind, type ExplorePage, type GalleryCategory, type GallerySort,
 } from "@kinu.run/core";
 import { settle } from "@kinu.run/core/obs";
-import { request } from "./http";
+import { posted, request } from "./http";
 
 export { EXPLORE_KINDS } from "@kinu.run/core";
 
@@ -24,6 +24,11 @@ export function readExplore(query: { q: string; kind: ExploreKind | null; catego
 
 export function readBlueprint(id: string): Promise<BlueprintPage> {
   return settle(request(BlueprintPageSchema, workspaceBlueprintPath(id)));
+}
+
+/** Stars or unstars one of Kinu's workspace blueprints, as the signed-in person. */
+export function starBlueprint(id: string, on: boolean): Promise<void> {
+  return settle(posted(`${workspaceBlueprintPath(id)}/star`, { on }));
 }
 
 const InstalledSchema = v.object({ workspace: v.string() });
