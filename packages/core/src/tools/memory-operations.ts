@@ -4,11 +4,10 @@ import type * as v from 'valibot';
 import type { Memory } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { VectorStore } from '../memory/vector-store';
-import { createNoopVectorStore } from '../memory/vector-store';
 import { appendMemoryNote } from '../memory/note';
 import { normalizeFactKey, type Fact, type FactsStore, type MemoryScope } from '../memory/facts';
 import type { AccountMemory } from '../memory/account';
-import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search';
+import { searchMemoryHits } from '../memory/memory-search';
 import type { ConversationRecall } from '../memory/conversation-search';
 import { KinuError, renderThrownChain, toKinuError } from '../obs/index';
 import { serve, type Served } from '../operations/operation';
@@ -122,30 +121,11 @@ function unlabelled(found: { semantic: boolean; hits: SearchHit[] }) {
   return { semantic: found.semantic, hits: found.hits.map(({ ref, text, score }) => ({ ref, text, score })) };
 }
 
-/**
- * Both scopes as one ranked list (`unifiedFacts`): an account fact whose key this workspace holds is not a hit. The
- * account is read inside its arm, so a user object that does not answer costs the account's hits, never the search.
- */
+/** Both scopes as one ranked list (`unifiedFacts`): an account fact whose key this workspace holds is not a hit. */
 async function searchMemory({ memory, vectorStore, facts }: MemoryDeps, account: AccountMemory | undefined, query: string): Promise<{ semantic: boolean; hits: SearchHit[] }> {
+  const found = await searchMemoryHits(memory, vectorStore, query, { limit: 10, ...(facts !== undefined && { facts }), ...(account !== undefined && { account }) });
 
-  const accountNotes = account === undefined ? undefined : async (q: string, limit: number) => await account.searchNotes(q, limit);
-
-  // Without a semantic index, the vector arm is skipped and the rest fuse alike.
-  const index = vectorStore?.available === true ? vectorStore : createNoopVectorStore();
-
-  const lexical = async (q: string, k: number): Promise<LexicalHit[]> => (await memory.search(q, k)).map((r) => ({
-    // The vector store's chunk id, so RRF fuses both.
-    id: `${r.path}:${r.startLine}-${r.endLine}`, path: r.path, startLine: r.startLine, endLine: r.endLine, score: r.score, snippet: r.snippet,
-  }));
-
-  const hits = await hybridSearch(query, lexical, index, {
-    finalK: 10, rehydrate: memorySnippetRehydrator(memory),
-    ...(facts !== undefined && { facts: () => facts.all() }),
-    ...(account !== undefined && { accountFacts: async () => await account.facts() }),
-    ...(accountNotes !== undefined && { accountNotes }),
-  });
-
-  return { semantic: index.available, hits: hits.map((h) => ({ ref: h.label ?? `${h.path}:${h.startLine}-${h.endLine}`, text: h.snippet, score: h.rrfScore, scope: h.scope })) };
+  return { semantic: found.semantic, hits: found.hits.map((h) => ({ ref: h.label ?? `${h.path}:${h.startLine}-${h.endLine}`, text: h.snippet, score: h.rrfScore, scope: h.scope })) };
 }
 
 /** A recall store that fails is named as unavailable, with its own words. */

@@ -1287,6 +1287,8 @@ export {
   type LexicalSearchFn,
 } from './memory/hybrid-search';
 
+export { searchMemoryHits, type MemorySearchScope } from './memory/memory-search';
+
 // Memory writes
 export { memoryBytes } from './memory/note';
 

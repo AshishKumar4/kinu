@@ -34,6 +34,24 @@ test('each actor reaches its own private table rows: what one saves, another doe
   }).toEqual({ root: { value: [{ value: 'the root draft' }] }, hosted: { value: [] } });
 });
 
+// The SelfishJaguar audit: the remote search and the agent's own composed one memory search apart; their reach differs on
+// purpose, and now says so. The agent's search reads its facts too; a remote caller's reads the notes alone.
+test("a remote memory search reads the workspace's notes; the agent's own search reads its facts as well", async () => {
+  const workspace = orchestratorHarness();
+  const root = { actorId: workspaceActorId(workspace.db), turnId: null, mode: 'build' as const };
+
+  await workspace.agent.callOperation(root, 'memory.note', { content: 'the staging cluster runs on kubernetes' }, call());
+  await workspace.agent.callOperation(root, 'memory.remember', { key: 'kubernetes_version', value: '1.33' }, call());
+
+  const own = v.parse(v.object({ hits: v.array(v.object({ ref: v.string() })) }), (await workspace.agent.callOperation(root, 'memory.search', { query: 'kubernetes' }, call())).value);
+  const remote = await workspace.agent.searchMemoryHybrid('kubernetes');
+
+  expect({
+    own: own.hits.map((hit) => hit.ref.startsWith('fact:') ? 'fact' : 'note').sort(),
+    remote: remote.map((hit) => hit.label?.startsWith('fact:') === true ? 'fact' : 'note'),
+  }).toEqual({ own: ['fact', 'note'], remote: ['note'] });
+});
+
 test('a Plan caller lists only what Plan permits, and a write is refused', async () => {
   const workspace = orchestratorHarness();
   const plan = { actorId: workspaceActorId(workspace.db), turnId: null, mode: 'plan' as const };

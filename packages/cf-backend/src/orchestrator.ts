@@ -144,7 +144,7 @@ import {
   type RunEvent, type RunEventQuery, type StoredRunEvent,
 
   listProposedTasks, updateProposedTaskStatus,
-  hybridSearch, memorySnippetRehydrator, type HybridHit,
+  searchMemoryHits, type HybridHit,
   type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore, dispatchEmailRepliesForTurn,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler,
@@ -5808,23 +5808,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * The single memory-search surface for all remote callers (browser rpc, CLI /rpc, MCP).
    */
   @callable() async searchMemoryHybrid(query: string, limit = 10): Promise<HybridHit[]> {
-    const lexicalSearchFn = async (q: string, k: number) => {
-      const results = await this.rt.memory.search(q, k);
-
-      return results.map((r) => ({
-        // Must match the vector store's chunk id (`path:start-end`) so RRF fuses lexical and semantic hits.
-        id: `${r.path}:${r.startLine}-${r.endLine}`,
-        path: r.path,
-        startLine: r.startLine,
-        endLine: r.endLine,
-        score: r.score,
-        snippet: r.snippet,
-      }));
-    };
-
-    return hybridSearch(query, lexicalSearchFn, this.rt.vectorStore, {
-      finalK: limit, rehydrate: memorySnippetRehydrator(this.rt.memory),
-    });
+    // The workspace's notes alone: a remote caller has never been shown its facts or the account's.
+    return (await searchMemoryHits(this.rt.memory, this.rt.vectorStore, query, { limit })).hits;
   }
 
   @callable() async getMemoryContent() {
