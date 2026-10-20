@@ -88,7 +88,7 @@ import { ActorSession, type ActorTurnLease,
   type ScaffoldControl,
   createScaffoldCandidateSurface,
   type EvolutionStatus,
-  activateDreamSkills, activateReplayedScaffold, dreamSkillsHidden, evolutionAnswerWake, idleDream, listRefinements, refinementPass, requestOwnerRefinement,
+  activateDreamSkills, activateReplayedScaffold, dreamSkillsHidden, idleDream, listRefinements, refinementPass, requestOwnerRefinement,
   type RefinementLaneStep,
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
   revertChangelogEntryById, type ChangelogRevertResult,
@@ -2185,7 +2185,6 @@ export class LocalAgentSession {
       control: this.scaffoldControl,
       facts: this.factsStore,
       approvals: this.instructionApprovals,
-      refiner: this.teamDeps?.temporary ?? null,
       skillsVfs: this.rt.ownFiles,
       recordedTurns: () => this.recordedTurns(),
     };
@@ -2193,14 +2192,6 @@ export class LocalAgentSession {
 
   async runRefinementLane(): Promise<void> {
     this.announceRefinement(await refinementPass(this.refinementDeps));
-  }
-
-  async runEvolutionAnswer(now: number): Promise<void> {
-    const step = await evolutionAnswerWake(this.refinementDeps, now, (failure) => {
-      diagnostics.failure('refinement.answer_wake_failed', failure);
-    });
-
-    if (step) this.announceRefinement(step);
   }
 
   private announceRefinement(step: RefinementLaneStep): void {

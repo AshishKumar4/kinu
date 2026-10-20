@@ -168,6 +168,7 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
     let scores = 0;
     const advisor = scriptedAdvisorPort();
     rt.judgeModel = {
+      object: async () => { throw new Error('a swarm node is scored on text'); },
       async *stream() { yield ''; },
       complete: async () => { scores++;
 

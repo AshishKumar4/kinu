@@ -1597,7 +1597,6 @@ export class LocalAgentHost {
       await this.drive(entry, async () => {
         await entry.session.flushPendingDrains();
         await this.drainAssignedWork(entry);
-        await entry.session.runEvolutionAnswer(Date.now());
       });
     }, { agent: entry.key, source });
   }

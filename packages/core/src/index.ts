@@ -1887,7 +1887,7 @@ export { withToolText, type ToolTextOverrides } from './tools/tool-text';
 // Continual refinement: each proposed edit routes to the authority that owns the artifact.
 export {
   REFINEMENT_EDIT_KINDS, RefinementProposalSchema,
-  createRefinementStore, evolutionDebt, initRefinementTables, nextEvolutionAnswerAt, refinementRequestView,
+  createRefinementStore, evolutionDebt, initRefinementTables, refinementRequestView,
   refinementStagingPath, RefinementRequestViewSchema,
   type EvolutionDebt, type RefinementDeps,
   type RefinementDisposition, type RefinementEdit,
@@ -1900,7 +1900,7 @@ export {
 export { type RefinementLaneStep } from './evolution/refinement-lane';
 
 export {
-  listRefinements, evolutionAnswerWake, idleDream, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
+  listRefinements, idleDream, refinementPass, requestOwnerRefinement, RefinementListingSchema, type RefinementListing,
 } from './evolution/refinement-host';
 
 export { activateDreamSkills, dreamSkillsHidden } from './evolution/refinement-skill';

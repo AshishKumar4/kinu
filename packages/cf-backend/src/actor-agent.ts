@@ -1640,7 +1640,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return {
       control: this.scaffoldControl,
       facts: this.facts,
-      refiner: this.temporaryAgentPort(),
       approvals: this.instructionApprovals(),
       skillsVfs: this.rt.storage.vfs,
       recordedTurns: () => this.recordedTurns(),
