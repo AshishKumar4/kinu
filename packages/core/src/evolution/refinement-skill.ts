@@ -153,7 +153,7 @@ export function activateDreamSkills(deps: RefinementDeps): Promise<void> {
         if (standing === null) approvals.approve(route.target, route.digest, 'dream');
         const promoted = yield* Effect.result(promoteStagedSkill(planeOf(deps), request, route));
 
-        if (Result.isSuccess(promoted) && promoted.success) diagnostics.event('dream.applied', { change: route.target, dream: request.id });
+        if (Result.isSuccess(promoted) && promoted.success) diagnostics.event('dream.skill_applied', { change: route.target, dream: request.id });
       }
     }
   }));
@@ -307,7 +307,7 @@ export async function revertDreamSkill(
     : existing);
 
   if (!store.record(request.id, request.stage, { routes })) return { ok: false, error: `dream ${request.id} moved while you were reverting` };
-  diagnostics.event('dream.reverted', { change: route.target, dream: request.id });
+  diagnostics.event('dream.skill_reverted', { change: route.target, dream: request.id });
 
   return { ok: true, detail: removed ? `removed ${route.target} and revoked its trust` : `revoked trust for ${route.target}` };
 }

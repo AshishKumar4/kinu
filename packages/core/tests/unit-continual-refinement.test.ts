@@ -1522,9 +1522,9 @@ describe('a dream says what it did', () => {
       .filter((line) => line.event.startsWith('dream.'));
 
     expect(said).toEqual([
-      { event: 'dream.applied', fields: { change: `${ARTIFACT}@1`, replaced: 0 } },
+      { event: 'dream.text_applied', fields: { change: `${ARTIFACT}@1`, replaced: 0 } },
       { event: 'dream.completed', fields: { dream: id, trigger: 'explicit', stage: 'applied', turns: 6, edits: 1, staged: 1, applied: 0, refused: 0 } },
-      { event: 'dream.reverted', fields: { change: `${ARTIFACT}@1` } },
+      { event: 'dream.text_reverted', fields: { change: `${ARTIFACT}@1` } },
     ]);
   });
 });

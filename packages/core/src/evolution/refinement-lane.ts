@@ -923,7 +923,7 @@ function routeFact(
 
   const outcome = deps.facts.upsert(edit.key, edit.value, { source: `refinement:${request.id}`, origin: { by: 'background' } });
 
-  if (outcome !== 'unchanged') diagnostics.event('dream.applied', { change: `fact:${edit.key}`, dream: request.id });
+  if (outcome !== 'unchanged') diagnostics.event('dream.fact_applied', { change: edit.key, dream: request.id });
 
   return {
     kind: 'fact',

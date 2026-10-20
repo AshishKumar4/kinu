@@ -560,7 +560,7 @@ function revertArtifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId:
 
   revertArtifact(sql, actor, artifactId, version);
   markStoreChanged(sql);
-  diagnostics.event('dream.reverted', { change: `${artifactId}@${String(version)}` });
+  diagnostics.event('dream.text_reverted', { change: `${artifactId}@${String(version)}` });
 
   return { ok: true, detail: row.status === 'current' && row.parent === null ? `${artifactId} is back on its built-in wording` : `reverted ${artifactId} v${String(version)}` };
 }
