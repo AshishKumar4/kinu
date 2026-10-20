@@ -33,6 +33,18 @@ import {
   type MovieTarget,
 } from './landing-movie-timeline';
 import { SlateDashboard } from './SlateDashboard';
+import { countingRpc, type WorkspaceRpc } from '@/lib/workspace-rpc';
+
+/**
+ * `rpc`, counting the reads it has not answered: the fixture is a frame's only async source (no socket, no network), so
+ * a frame showing none pending has rendered every answer its tabs asked for (`data-reads-pending`).
+ */
+function useCountedReads(rpc: WorkspaceRpc): readonly [WorkspaceRpc, number] {
+  const [pending, setPending] = useState(0);
+  const counted = useMemo(() => countingRpc(rpc, (delta) => { setPending((count) => count + delta); }), [rpc]);
+
+  return [counted, pending];
+}
 
 export type LandingFrameKind = 'work' | 'plan' | 'slate';
 
@@ -132,7 +144,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   const decidePlan = useMemo(() => planRpc(setDecided, plan), [plan]);
   const [, setWorkVersion] = useState(0);
   const work = useMemo(() => workerWorkFixture(() => setWorkVersion((version) => version + 1)), []);
-  const rpc = kind === 'plan' ? decidePlan : work.rpc;
+  const [rpc, readsPending] = useCountedReads(kind === 'plan' ? decidePlan : work.rpc);
   const [mode, setMode] = useState<WorkMode>(frame.mode);
   usePlanApprovedMode(plan, setMode);
   useEffect(() => {
@@ -461,6 +473,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
       <div
         ref={stageRef}
         data-landing-frame={kind}
+        data-reads-pending={readsPending}
         {...(isMovie
           ? { 'data-movie-phase': discrete.phase, 'data-movie-settled': discrete.settled ? 'true' : 'false' }
           : {})}
