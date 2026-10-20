@@ -12,6 +12,7 @@ export {
   withBackgroundThreshold,
   withSpawnDetach,
   BACKGROUND_POLICY,
+  RESUMED_SURFACE,
   invocationBackgroundPolicy,
   SPAWN_STARTED_OPTION,
   readSpawnStarted,

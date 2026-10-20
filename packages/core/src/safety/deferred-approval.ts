@@ -10,6 +10,7 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { AgentSignal } from '../types/signals';
 import type { ApprovalConsumedRecord } from '../events/types';
+import { InvocationSurfaceSchema, resumedSurfaceMetadata, type InvocationSurface } from '../types/jobs';
 import * as v from 'valibot';
 import {
   describeExecutionContext,
@@ -80,6 +81,9 @@ export interface DeferredApproval {
   readonly status: DeferredApprovalStatus;
   readonly requestedAt: number;
   readonly decidedAt: number | null;
+  /** The surface of the turn that asked, which set its background policy: the wake an answer sends resumes it there
+   *  (`RESUMED_SURFACE`). None for an ask made in no turn. The queue's own fact: a surface listing the queue shows none. */
+  readonly surface?: InvocationSurface;
 }
 
 const DeferredApprovalStatusSchema = v.picklist(['queued', 'approved', 'denied', 'spent']);
@@ -111,7 +115,7 @@ interface UsedApproval {
 
 interface Row {
   actor_id: string; id: string; command: string; executor: string; context: string; reason: string; status: string;
-  requested_at: number; decided_at: number | null;
+  requested_at: number; decided_at: number | null; surface: string | null;
 }
 
 /** A row plus which spend of it is being reported. */
@@ -131,6 +135,7 @@ function toAction(r: Row): DeferredApproval {
     status: status.success ? status.output : 'queued',
     requestedAt: r.requested_at,
     decidedAt: r.decided_at,
+    surface: r.surface === null ? undefined : v.parse(InvocationSurfaceSchema, r.surface),
   };
 }
 
@@ -147,6 +152,7 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
     requested_at INTEGER NOT NULL,
     decided_at   INTEGER,
     spend_seq    INTEGER NOT NULL DEFAULT 0,
+    surface      TEXT,
     PRIMARY KEY (actor_id, id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_status
@@ -194,7 +200,7 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     return this.sql<Row>`
-      SELECT d.actor_id, d.id, d.command, d.executor, d.context, d.reason, d.status, d.requested_at, d.decided_at
+      SELECT d.actor_id, d.id, d.command, d.executor, d.context, d.reason, d.status, d.requested_at, d.decided_at, d.surface
       FROM deferred_approvals d JOIN workspace_actors a ON a.actor_id = d.actor_id
       WHERE d.status='queued' AND a.retiring_at IS NULL AND a.deleted_at IS NULL
       ORDER BY d.requested_at ASC LIMIT ${limit}`.map(toAction);
@@ -223,7 +229,7 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     const rows = this.sql<Row>`
-      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at
+      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface
       FROM deferred_approvals
       WHERE actor_id = ${this.actorId} AND command = ${ask.command} AND executor = ${ask.executor}
         AND context = ${executionContextKey(ask.context)}
@@ -274,16 +280,16 @@ export class DeferredApprovalStore {
   /** The asks still open on `executor`, as {@link retireOpen} would retire them. */
   private openOn(executor: string): DeferredApproval[] {
     return this.sql<Row>`
-      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at FROM deferred_approvals
+      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface FROM deferred_approvals
       WHERE actor_id = ${this.actorId} AND executor = ${executor} AND status IN ('queued', 'approved')`.map(toAction);
   }
 
   create(action: Omit<DeferredApproval, 'actor' | 'status' | 'decidedAt'>, hits: readonly DeferredApprovalHit[]): DeferredApproval {
     this.actor.assertCurrent();
     void this.sql`INSERT INTO deferred_approvals
-        (actor_id, id, command, executor, context, reason, status, requested_at, decided_at)
+        (actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface)
       VALUES (${this.actorId}, ${action.id}, ${action.command}, ${action.executor}, ${executionContextKey(action.context)}, ${action.reason},
-        'queued', ${action.requestedAt}, NULL)`;
+        'queued', ${action.requestedAt}, NULL, ${action.surface ?? null})`;
     markStoreChanged(this.sql);
 
     for (const hit of hits) {
@@ -293,6 +299,7 @@ export class DeferredApprovalStore {
 
     return { ...action, actor: this.actorId, status: 'queued', decidedAt: null };
   }
+
 
   hits(id: string): DeferredApprovalHit[] {
     this.actor.assertCurrent();
@@ -329,7 +336,7 @@ export class DeferredApprovalStore {
     const rows = this.sql<SpendRow>`
       UPDATE deferred_approvals SET status='spent', spend_seq = spend_seq + 1
       WHERE actor_id = ${this.actorId} AND id = ${id} AND status = 'approved'
-      RETURNING actor_id, id, command, executor, context, reason, status, requested_at, decided_at, spend_seq`;
+      RETURNING actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface, spend_seq`;
 
     if (rows.length > 0) markStoreChanged(this.sql);
 
@@ -370,7 +377,7 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     const rows = this.sql<Row>`
-      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at
+      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface
       FROM deferred_approvals WHERE actor_id = ${this.actorId} AND id = ${id} LIMIT 1`;
 
     return rows[0] ? toAction(rows[0]) : null;
@@ -381,7 +388,7 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     return this.sql<Row>`
-      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at
+      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface
       FROM deferred_approvals WHERE actor_id = ${this.actorId} AND status='queued'
       ORDER BY requested_at ASC LIMIT ${limit}`.map(toAction);
   }
@@ -515,8 +522,9 @@ export class DeferredApprovalQueue {
     return this.channelFor(this.deps.store.actorId);
   }
 
-  /** The gate's view for one actor: run, or the words to hand the model, plus the way back for an unused spend. */
-  channelFor(actorId: string): DeferredApprovalChannel {
+  /** The gate's view for one actor: run, or the words to hand the model, plus the way back for an unused spend.
+   *  `surface`, its live turn's: an ask it parks records it, so the wake an answer sends resumes the call there. */
+  channelFor(actorId: string, surface?: () => InvocationSurface): DeferredApprovalChannel {
     const told = (verdict: DeferredApprovalVerdict | UsedApproval) => {
       if (verdict.outcome === 'run') return { run: true, spent: verdict.spend } as const;
 
@@ -534,7 +542,7 @@ export class DeferredApprovalQueue {
 
     return {
       park: async (req) => {
-        const verdict = await this.park(req, actorId);
+        const verdict = await this.park(req, actorId, surface?.());
 
         if (verdict.outcome !== 'queued') return told(verdict);
         const rules = this.storeOf(actorId).hits(verdict.action.id).filter((hit) => hit.decision === 'gate').map((hit) => hit.rule);
@@ -598,19 +606,19 @@ export class DeferredApprovalQueue {
 
   /** Parks an action or answers with the owner's standing decision; a re-ask returns the same row, so the turn's
    *  repeat detector sees a loop. A write's bytes are kept first, then held until its row names them. */
-  async park(req: ShellApprovalRequest, actorId: string = this.deps.store.actorId): Promise<DeferredApprovalVerdict> {
+  async park(req: ShellApprovalRequest, actorId: string = this.deps.store.actorId, surface?: InvocationSurface): Promise<DeferredApprovalVerdict> {
     const { writes } = this.deps;
     const parked = approvalKindOf(req);
     const digest = parked.kind === 'write' ? parked.write.next : undefined;
     const next = req.write?.next;
 
-    if (writes === null || digest === undefined || next === undefined) return await this.parkNow(req, actorId);
+    if (writes === null || digest === undefined || next === undefined) return await this.parkNow(req, actorId, surface);
     this.parking.set(digest, (this.parking.get(digest) ?? 0) + 1);
 
     try {
       await this.serial(() => writes.content.retain(next));
 
-      return await this.parkNow(req, actorId);
+      return await this.parkNow(req, actorId, surface);
     } finally {
       const holds = (this.parking.get(digest) ?? 1) - 1;
 
@@ -620,12 +628,12 @@ export class DeferredApprovalQueue {
     }
   }
 
-  private async parkNow(req: ShellApprovalRequest, actorId: string): Promise<DeferredApprovalVerdict> {
+  private async parkNow(req: ShellApprovalRequest, actorId: string, surface: InvocationSurface | undefined): Promise<DeferredApprovalVerdict> {
     const now = this.now();
     const store = this.storeOf(actorId);
     // Delete expired denials on the write path; nothing else sweeps them.
     const swept = store.sweepDenials(now);
-    const verdict = this.answer(req, now, store);
+    const verdict = this.answer(req, { now, surface }, store);
     await this.release(boundBytes(swept));
 
     return verdict;
@@ -648,7 +656,9 @@ export class DeferredApprovalQueue {
     return standing?.status === 'queued' ? { outcome: 'queued', action: standing } : null;
   }
 
-  private answer(req: ShellApprovalRequest, now: number, store: DeferredApprovalStore): DeferredApprovalVerdict {
+  /** `asked`: when, and on which turn's surface. */
+  private answer(req: ShellApprovalRequest, asked: { readonly now: number; readonly surface: InvocationSurface | undefined }, store: DeferredApprovalStore): DeferredApprovalVerdict {
+    const { now } = asked;
     const held = this.held(req, now, store);
 
     if (held !== null) return held;
@@ -660,6 +670,7 @@ export class DeferredApprovalQueue {
       context: req.context,
       reason: formatApproval(req.review),
       requestedAt: now,
+      surface: asked.surface,
     }, req.review.hits.map(({ rule, decision }) => ({ rule, decision })));
 
     this.notify({ kind: 'queued', action });
@@ -780,7 +791,11 @@ export class DeferredApprovalQueue {
       return Effect.result(this.deps.wake(actorId, {
         kind: DEFERRED_APPROVAL_SIGNAL,
         text: decisionWakeMessage(own, written),
-        metadata: { decision: answer, count: own.length, ids: own.map((a) => a.id) },
+        metadata: {
+          decision: answer, count: own.length, ids: own.map((a) => a.id),
+          // The resumption device consent's answers carry too: a denial re-issues nothing.
+          ...resumedSurfaceMetadata(answer === 'denied' ? [] : own.map((a) => a.surface)),
+        },
       }));
     });
 
@@ -916,8 +931,9 @@ export class DeferredApprovalQueue {
   }
 
   /** Everything still parked in the workspace, oldest first, each with the actor that asked. */
+  /** The workspace's waiting asks, as a surface shows them: the surface an ask was made on is the queue's alone. */
   list(): DeferredApproval[] {
-    return this.deps.store.workspaceQueued();
+    return this.deps.store.workspaceQueued().map(({ surface: _surface, ...listed }) => listed);
   }
 
   /** One actor's parked actions for its per-step dynamic-context block, re-telling the turn they have not run. */

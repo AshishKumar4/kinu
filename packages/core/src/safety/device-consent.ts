@@ -7,7 +7,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
  */
 
 import type { DynamicApproval } from '../types/dynamic-context';
-import { InvocationSurfaceSchema, type InvocationSurface } from '../types/jobs';
+import { InvocationSurfaceSchema, resumedSurfaceMetadata, type InvocationSurface } from '../types/jobs';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { AgentSignal } from '../types/signals';
 import { diagnostics, renderThrownChain, settle, type ErrorCode, type KinuError } from '../obs/index';
@@ -139,10 +139,6 @@ export interface DeviceConsentRegistryDeps {
 
 /** The `kinuEvent` kind an answer wakes its asker under. */
 const DEVICE_CONSENT_SIGNAL = 'device_consent';
-
-/** The turn-metadata key under which a wake that resumes parked calls carries the surface they were made on: the turn
- *  it opens re-issues them, under the background policy of the turn they were parked from. */
-export const RESUMED_SURFACE = 'kinuSurface';
 
 type DeviceConsentStatus = 'queued' | DeviceConsentAnswer;
 
@@ -292,19 +288,6 @@ function answerWakeMessage(answered: readonly DeviceConsentAsk[]): string {
   return lines.join('\n');
 }
 
-/**
- * The surface the turn re-issuing `approved` runs under: the one they were made on. Calls parked from both surfaces are
- * re-issued as interactive ones, since a call detached at its window still ends, as a job that wakes its agent, while
- * one held past its own holds a turn a person watches. Null when none recorded one.
- */
-function resumedSurface(approved: readonly DeviceConsentAsk[]): InvocationSurface | null {
-  const surfaces = new Set(approved.flatMap((ask) => ask.surface ?? []));
-
-  if (surfaces.size === 0) return null;
-
-  return surfaces.has('interactive') ? 'interactive' : 'one-shot';
-}
-
 /** The asks parked on the owner for a workspace's device calls, and the answers waiting on the calls they answer. */
 export class DeviceConsentRegistry {
   private readonly now: () => number;
@@ -370,7 +353,6 @@ export class DeviceConsentRegistry {
 
     return Effect.forEach(askers, (actorId) => {
       const own = answered.filter((ask) => ask.actorId === actorId);
-      const surface = resumedSurface(own.filter((ask) => ask.status !== 'deny'));
 
       return Effect.result(this.deps.wake(actorId, {
         kind: DEVICE_CONSENT_SIGNAL,
@@ -380,7 +362,7 @@ export class DeviceConsentRegistry {
           ids: own.map((ask) => ask.consentId),
           approved: own.filter((ask) => ask.status !== 'deny').length,
           denied: own.filter((ask) => ask.status === 'deny').length,
-          ...(surface !== null && { [RESUMED_SURFACE]: surface }),
+          ...resumedSurfaceMetadata(own.filter((ask) => ask.status !== 'deny').map((ask) => ask.surface)),
         },
       }));
     });
