@@ -84,7 +84,7 @@ import { useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { CreateWebhookModal, NewWebhookCard } from "@/components/WorkspaceAutomations";
 import { AddServerCard } from "@/components/account/McpServersPanel";
-import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
+import { DevicesFrame, PluginsFrame, SetupModalFrame, UserMcpFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
@@ -238,7 +238,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
 });
 
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices", "devices-empty", "secretpaste"]);
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "usermcp", "devices", "devices-empty", "secretpaste"]);
 
 /* Account-settings failure rig: Codex stays failed until `gallery:settings-heal`, the gateway read pends until
    `gallery:settings-release`; sibling GETs settle immediately so branch-local publication is observable. */
@@ -8032,6 +8032,7 @@ async function mount() {
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
     ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["usermcp", { node: <UserMcpFrame />, entries: ["/user/settings/mcp"] }],
     ["characters", { node: <CharactersFrame />, entries: ["/"] }],
     ["devices-empty", { node: <DevicesFrame />, entries: ["/devices"] }],
   ]);
