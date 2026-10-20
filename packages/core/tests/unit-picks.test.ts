@@ -2,8 +2,8 @@
 // in a turn the user corrected and another in the next one.
 import { describe, expect, test } from 'bun:test';
 import { compactToolCall } from '../src/evolution/tool-call-record';
-import { confusedPicks, renderConfusedPicks, turnPicks, type TurnPicks } from '../src/evolution/picks';
-import { initTurnRatingTables, listTurnRatings, recordTurnRating, type TurnRating } from '../src/evolution/ratings';
+import { confusedPicks, renderConfusedPicks, turnPicks } from '../src/evolution/picks';
+import { initTurnRatingTables, listTurnRatings, recordTurnRating, type TurnPicks, type TurnRating } from '../src/evolution/ratings';
 import { createTestRuntime } from './helpers';
 
 const read = (path: string) => compactToolCall({ name: 'file', args: { op: 'read', path } });

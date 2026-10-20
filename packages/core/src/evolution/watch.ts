@@ -13,7 +13,7 @@ import { RunEventRecorder } from '../events/recorder';
 import { artifactLabel, artifactVersion } from './artifacts';
 import { changeStanding, type ChangeOwners, type ChangeStanding, type Standing } from './change-standing';
 import { executeChangelogRevert, type ChangelogRevertAction } from './changelog';
-import { listRejections, listTurnRatings, type TurnRating } from './ratings';
+import { isCorrected, listRejections, listTurnRatings, type TurnRating } from './ratings';
 import {
   createRefinementStore, type RefinementDeps, type RefinementEdit, type RefinementRequest, type RefinementRoute,
 } from './refinement';
@@ -196,7 +196,7 @@ function watched(owners: ChangeOwners, facts: FactsStore, routed: Routed): Watch
 
 function turnsSummary(ratings: readonly TurnRating[]): string {
   const mean = ratings.reduce((total, rating) => total + rating.score, 0) / ratings.length;
-  const corrected = ratings.filter((rating) => rating.corrected >= 0.5).length;
+  const corrected = ratings.filter(isCorrected).length;
 
   return `mean ${mean.toFixed(1)} with ${String(corrected)} corrected`;
 }
