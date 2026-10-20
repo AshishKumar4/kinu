@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import { KinuError, settleSync } from '@kinu.run/core/obs';
-import type { JsonValue, RoutedLLM, TemporaryAgentPort, TemporaryRunRequest } from '@kinu.run/core';
+import { renderIssuesUnquoted, type JsonValue, type RoutedLLM, type TemporaryAgentPort, type TemporaryRunRequest } from '@kinu.run/core';
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
 
@@ -49,7 +49,7 @@ export function answeredAs<S extends v.GenericSchema>(schema: S, text: string): 
 
   return settleSync(parsed.success
     ? Effect.succeed(parsed.output)
-    : Effect.fail(new KinuError('bad_input', 'the scripted model answered off its schema', { cause: new v.ValiError(parsed.issues) })));
+    : Effect.fail(new KinuError('bad_input', 'the scripted model answered off its schema', { cause: new KinuError('bad_input', renderIssuesUnquoted(parsed.issues)) })));
 }
 
 /** An LLM that returns canned JSON. */

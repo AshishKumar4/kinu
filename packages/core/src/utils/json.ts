@@ -189,6 +189,32 @@ export function digestJsonValue(input: { value: unknown }): JsonValue | undefine
   ));
 }
 
+/** The most of one path key {@link renderIssuesUnquoted} shows: a record's keys are the input's own text. */
+const UNQUOTED_KEY_CHARS = 40;
+
+/**
+ * A valibot failure as one line without a value of its input: per issue, its path, what was expected and the type that
+ * came. A valibot message quotes what it received, a string whole, and a model's refused answer rides every log line its
+ * refusal crosses (a 200 KB string where a number belongs, 2026-10-20).
+ */
+export function renderIssuesUnquoted(issues: readonly v.BaseIssue<unknown>[]): string {
+  return issues
+    .map((issue) => {
+      const path = issue.path?.map((segment) => String(segment.key).slice(0, UNQUOTED_KEY_CHARS)).join('.') ?? '';
+      const check = issue.kind === 'schema' ? '' : ` (${issue.type})`;
+
+      return `${path === '' ? 'the answer' : path}: expected ${issue.expected ?? issue.type}${check}, received ${receivedType(issue)}`;
+    })
+    .join('; ');
+}
+
+/** The type of what an issue received, as JSON names it. */
+function receivedType(issue: v.BaseIssue<unknown>): string {
+  if (issue.input === null) return 'null';
+
+  return Array.isArray(issue.input) ? 'array' : typeof issue.input;
+}
+
 /** A valibot failure as one line, `path: message` per issue. */
 export function renderIssues(issues: readonly v.BaseIssue<unknown>[]): string {
   return issues

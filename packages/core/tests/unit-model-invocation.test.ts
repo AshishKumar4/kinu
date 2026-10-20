@@ -147,14 +147,24 @@ describe('a structured call', () => {
   // Each layer a refusal crosses logs its chain: one refused memory pass logged its 0.2 MB answer three times (2026-10-20).
   test('a refused answer is named by its length and digest, never quoted', async () => {
     const prose = 'word '.repeat(40_000);
+    const Count = v.object({ count: v.number() });
 
-    for (const text of [prose, `{"value":"${prose}"}`]) {
-      const [refused] = await Promise.allSettled([generateObjectReported({ model: answering(text), prompt: 'p' }, Fact, { spend: { source: 'fast', report: () => {} } })]);
+    // Prose; JSON missing a key; JSON with the prose where a number belongs, which valibot's message quotes whole.
+    for (const [schema, text] of [[Fact, prose], [Fact, `{"value":"${prose}"}`], [Count, `{"count":"${prose}"}`]] as const) {
+      const [refused] = await Promise.allSettled([generateObjectReported({ model: answering(text), prompt: 'p' }, schema, { spend: { source: 'fast', report: () => {} } })]);
       const chain = refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered';
 
       expect(chain).toContain(`(${String(text.length)} characters, sha256 ${sha256Hex(text, 12)})`);
-      expect(chain).not.toContain('word word');
+      expect(chain).not.toContain('word');
     }
+  });
+
+  test('an answer off its schema says each path it got wrong, what was expected and what type came', async () => {
+    const Count = v.object({ count: v.number(), tags: v.array(v.string()) });
+    const [refused] = await Promise.allSettled([generateObjectReported({ model: answering('{"count":"many","tags":[1]}'), prompt: 'p' }, Count, { spend: { source: 'fast', report: () => {} } })]);
+
+    expect(refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered')
+      .toEndWith('count: expected number, received string; tags.0: expected string, received number');
   });
 
   // Cut off, the answer is incomplete rather than wrong: asked again, the model may finish it.
