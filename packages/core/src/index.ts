@@ -2413,8 +2413,11 @@ export { callRetries } from './providers/middleware/retry';
 export {
   type AnyToolPart,
   type RunStep,
+  type PartBlock,
   type ToolRunSummary,
   groupMessageParts,
+  phaseCalls,
+  rollUpTurn,
   toolRunSummary,
   parseProvisionError,
   partOutput,
@@ -2422,6 +2425,12 @@ export {
   partEffect,
   callFailed,
 } from './read-models/tool-call-grouping';
+
+export {
+  PHASE_TITLES_METADATA_KEY, TURN_TITLE_METADATA_KEY, phaseTitle, writtenTitles,
+} from './read-models/tool-phase-title';
+
+export { writePhaseLines, type PhaseLinePorts } from './orchestrator/phase-lines';
 
 export {
   type PlanPageRef,

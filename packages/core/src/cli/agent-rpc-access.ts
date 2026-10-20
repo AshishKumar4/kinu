@@ -56,6 +56,8 @@ export const AGENT_RPC_ACCESS = {
 
   branchTurn: 'interactive',
   cancelBackgroundJob: 'interactive',
+  // Spends a model call on the answer's phase lines and stamps them on it.
+  namePhases: 'interactive',
   stopSwarmWorker: 'interactive',
   cancelTrigger: 'interactive',
   checkpointStatus: 'interactive',
@@ -206,9 +208,13 @@ export interface HostedWindowActor {
 
 type HostedWindowCheck = (args: readonly JsonValue[], actor: HostedWindowActor) => boolean;
 
+/** A call that names the window's own agent as its first argument's `actor`. */
+const onOwnAgent: HostedWindowCheck = (args, actor) => v.is(v.object({ actor: v.literal(actor.id) }), args[0]);
+
 /** A hosted window's calls: on its own agent, or workspace-wide. */
 const HOSTED_WINDOW_RPC = {
-  getChatHistoryPage: (args, actor) => v.is(v.object({ actor: v.literal(actor.id) }), args[0]),
+  getChatHistoryPage: onOwnAgent,
+  namePhases: onOwnAgent,
   getActorSnapshot: (args, actor) => args[0] === actor.name,
   setModel: (args, actor) => args[1] === actor.name,
   setReasoningEffort: (args, actor) => args[1] === actor.name,

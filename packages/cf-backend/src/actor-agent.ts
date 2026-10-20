@@ -3028,6 +3028,22 @@ export abstract class ActorAgent extends Agent<Env> {
     }));
   }
 
+  /**
+   * A tab shows a settled answer whose phases have no line: they are named in its agent's own isolate, on its fast tier.
+   * The caller's own chat by default, or the subordinate a pane names; never part of a turn. False while no committed
+   * answer has the id, so the tab asks again once it has one.
+   */
+  @callable()
+  namePhases(request: { messageId: string; actor?: string }): Promise<boolean> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const { messageId, actor } = v.parse(v.strictObject({ messageId: v.string(), actor: v.optional(v.string()) }), request);
+
+      if (actor !== undefined) yield* this.requireSubordinateChat(actor);
+
+      return yield* Effect.promise(async () => this.agentCall(actor ?? this.actorHandle().actorId, (isolate, snapshot) => isolate.namePhases(snapshot, messageId)));
+    }));
+  }
+
   private requireSubordinateChat(actorId: string): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const directory = this.actorDirectoryStore();

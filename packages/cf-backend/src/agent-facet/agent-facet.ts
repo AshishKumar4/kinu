@@ -76,6 +76,9 @@ export interface AgentFacetCalls {
   answer(snapshot: AgentSnapshot, messageId: string): Promise<AgentAnswer | null>;
   /** Its conversation's newest rows first, for a lane its workspace runs on it. */
   newestFirst(snapshot: AgentSnapshot, limit: number): Promise<readonly ConversationProjection[]>;
+  /** A tab shows one of its settled answers whose phases have no line: they are named by its fast tier; false while it
+   *  has no committed answer of that id. */
+  namePhases(snapshot: AgentSnapshot, messageId: string): Promise<boolean>;
   /** The compaction ladder's forced rebuild, armed for its next turn assembly in the state that assembly reads. */
   armCompaction(snapshot: AgentSnapshot): Promise<void>;
   /** Its conversation as a fork of its workspace reads it: whether a message can be cut at, the cut's plan, a section's
@@ -377,6 +380,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async newestFirst(snapshot: AgentSnapshot, limit: number): Promise<readonly ConversationProjection[]> {
     return await this.open(snapshot).newestFirst(limit);
+  }
+
+  async namePhases(snapshot: AgentSnapshot, messageId: string): Promise<boolean> {
+    return await settle(this.withChat(snapshot, async (chat) => await chat.namePhases(messageId)));
   }
 
   async armCompaction(snapshot: AgentSnapshot): Promise<void> {
