@@ -321,7 +321,7 @@ describe('turn-pipeline correctness wiring', () => {
   test("a hosted actor's snapshot reports the effective model and the tier source that chose it", async () => {
     // Defends: the snapshot reported the child's own (never-set) config pin, and (measured 2026-09-18) a
     // workspace pinned to one model answered an added agent's pane on another. The snapshot and the
-    // hosted turn resolve one profile (`hostedActorProfile`). Added via `createSubordinateAgent` so the
+    // hosted turn resolve one profile (`hostedActorProfile`). Added via `createSubagentAgent` so the
     // roster row is the one a real add writes.
     const workspace = orchestratorHarness();
     workspace.agent.harnessInstallCatalog({
@@ -332,13 +332,13 @@ describe('turn-pipeline correctness wiring', () => {
     // An added agent inherits the workspace's purpose, so it needs one.
     await workspace.agent.setSoul('# Purpose\n\nShip the deploy gates.');
 
-    const added = await workspace.agent.createSubordinateAgent();
+    const added = await workspace.agent.createSubagentAgent();
 
     const pinned = await workspace.agent.getActorSnapshot(added.name);
     expect(pinned.model).toEqual({ model: 'workers-ai/pinned-model', source: 'workspace' });
 
     // Unpinned: the role's tier, with source `role`.
-    for (const actorId of [workspaceMainActor(workspace.db).actorId, present(added.subordinate.actorId, 'the added agent')]) {
+    for (const actorId of [workspaceMainActor(workspace.db).actorId, present(added.subagent.actorId, 'the added agent')]) {
       actorOverWorkspace(workspace.agent, actorId).config.delete(AGENT_CONFIG_KEYS.model);
     }
 
@@ -354,7 +354,7 @@ describe('turn-pipeline correctness wiring', () => {
       availableModels: ['workers-ai/account-default', 'workers-ai/pinned-model'],
     });
     await workspace.agent.setSoul('# Purpose\n\nShip the deploy gates.');
-    const added = await workspace.agent.createSubordinateAgent();
+    const added = await workspace.agent.createSubagentAgent();
 
     // Pinned on the agent alone: the workspace's own chat keeps its tier's model.
     await workspace.agent.setModel('workers-ai/pinned-model', added.name);
@@ -394,8 +394,8 @@ describe('turn-pipeline correctness wiring', () => {
     await workspace.agent.setReasoningEffort('xhigh');
 
     const effortAs = async (role: string) => {
-      const added = await workspace.agent.createSubordinateAgent();
-      actorOverWorkspace(workspace.agent, present(added.subordinate.actorId, 'the added agent')).config.set(AGENT_CONFIG_KEYS.roleSelection, role);
+      const added = await workspace.agent.createSubagentAgent();
+      actorOverWorkspace(workspace.agent, present(added.subagent.actorId, 'the added agent')).config.set(AGENT_CONFIG_KEYS.roleSelection, role);
 
       return (await workspace.agent.getActorSnapshot(added.name)).reasoningEffort;
     };
@@ -409,7 +409,7 @@ describe('turn-pipeline correctness wiring', () => {
     const workspace = orchestratorHarness();
     await workspace.agent.setSoul('# Purpose\n\nShip the deploy gates.');
 
-    const added = await workspace.agent.createSubordinateAgent();
+    const added = await workspace.agent.createSubagentAgent();
     const snapshot = await workspace.agent.getActorSnapshot(added.name);
 
     expect({ role: snapshot.role, model: snapshot.model }).toEqual({

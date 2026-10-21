@@ -114,7 +114,7 @@ describe('deterministic trial insights', () => {
   test('report-triggered continuation is observed waiting; no report in the evidence is not a claim of never waiting', () => {
     const hired = [start, hire('counter'), end];
     expect(facts(hired).find((fact) => fact.kind === 'lead-report-wait')).toMatchObject({ data: { observed: 'no-report-recorded', reportRuns: [] } });
-    const report = { ...start, runId: 'report', caused_by: 'subordinate_report' };
+    const report = { ...start, runId: 'report', caused_by: 'subagent_report' };
     expect(facts([...hired, report, { ...end, runId: 'report' }]).find((fact) => fact.kind === 'lead-report-wait')).toMatchObject({
       data: { observed: 'resumed-on-report', reportRuns: ['report'] },
     });

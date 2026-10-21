@@ -7,7 +7,7 @@ import type { Usage } from './usage';
 import type { WorkspaceSpend } from './read-models/workspace-spend';
 import type { CommandResult } from './execution/exec-result';
 import type { MemoryNote } from './memory/note';
-import type { SubordinateStatus } from './delegation/agents-tool';
+import type { SubagentStatus } from './delegation/agents-tool';
 
 /** A journalled branch's lifecycle in the head journal's own vocabulary; distinct from the drawing vocabulary of {@link ForkNode.status}. */
 export type ForkNodeLifecycle = HeadReportStatus | HeadUnsettledStatus;
@@ -53,10 +53,10 @@ export interface ExecutorCommandResult {
 	refusal?: Exclude<CommandResult, string>;
 }
 
-export type { SubordinateStatus };
+export type { SubagentStatus };
 
-/** A parent's roster row as the client sees it, from listSubordinates; the store's row is `SubordinateRosterEntry`. */
-export interface SubordinateView {
+/** A parent's roster row as the client sees it, from listSubagents; the store's row is `SubagentRosterEntry`. */
+export interface SubagentView {
 	name: string;
 	/** Actor whose conversation `getChatHistoryPage({ actor })` pages; null until birth confirms one. */
 	actorId: string | null;
@@ -65,27 +65,27 @@ export interface SubordinateView {
 	nameOrigin: "user" | "auto";
 	origin: "user" | "agent" | "evolution";
 	lifetime: "durable" | "task";
-	status: SubordinateStatus;
+	status: SubagentStatus;
 	currentTask: string | null;
 	createdAt: number;
 	dismissedAt: number | null;
 }
 
 /** Evolution and one-question helpers get no tab or list row. */
-export function ownerFacingSubordinate(entry: Pick<SubordinateView, "origin" | "lifetime">): boolean {
+export function ownerFacingSubagent(entry: Pick<SubagentView, "origin" | "lifetime">): boolean {
 	return !evolutionHelper(entry) && entry.lifetime === "durable";
 }
 
-export function evolutionHelper(entry: Pick<SubordinateView, "origin">): boolean {
+export function evolutionHelper(entry: Pick<SubagentView, "origin">): boolean {
 	return entry.origin === "evolution";
 }
 
 /** A task assignment or report mirrored into the main chat as a linked card. */
-export interface SubordinateActivityEvent {
-	type: "subordinate_event";
+export interface SubagentActivityEvent {
+	type: "subagent_event";
 	id: string;
 	kind: "task" | "report";
-	subordinate: string;
+	subagent: string;
 	status?: string;
 	content: string;
 	task?: string;

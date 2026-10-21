@@ -2,43 +2,43 @@
  * Task-lifetime agents on a durable hire's runtime and roster: started at once; the settling report wakes the hirer.
  */
 
-import type { SubordinateReportStatus } from '../events/hub/types';
+import type { SubagentReportStatus } from '../events/hub/types';
 import type { EventLog } from '../events/hub/log';
 import { Cause, Effect } from 'effect';
 import { settle } from '../obs/effect';
 import { KinuError, renderCauseChain, toKinuError, type ErrorCode } from '../obs/error';
-import type { SubordinateRosterStore } from './roster';
-import type { SubordinateRuntime } from './support';
-import { admitSubordinateBirth, type SubordinateBirthRequest } from './birth';
+import type { SubagentRosterStore } from './roster';
+import type { SubagentRuntime } from './support';
+import { admitSubagentBirth, type SubagentBirthRequest } from './birth';
 import { codenameFor } from '../identity/naming';
 import type { ActorReference } from '../identity/actor-handle';
 import {
   TEMPORARY_LIFETIME,
   type TemporaryAgentPort, type TemporaryRunOutcome,
-} from '../types/subordinates';
+} from '../types/subagents';
 
 export {
   TEMPORARY_LIFETIME,
   type TemporaryAgentPort, type TemporaryRunOutcome, type TemporaryRunRequest,
-} from '../types/subordinates';
+} from '../types/subagents';
 
 /** How long a roster row lives; state cannot tell the two apart. */
-export const SUBORDINATE_LIFETIMES = ['durable', 'task'] as const;
+export const SUBAGENT_LIFETIMES = ['durable', 'task'] as const;
 
-export type SubordinateLifetime = (typeof SUBORDINATE_LIFETIMES)[number];
+export type SubagentLifetime = (typeof SUBAGENT_LIFETIMES)[number];
 
 /** Later while a hire works, input is queued, or a settled hire's report waits unread. An evolution helper (the
  *  turn's advisor) answers the runtime, never this turn, so it holds nothing. */
 export function taskAnswerIsLater(input: {
-  readonly roster: SubordinateRosterStore;
+  readonly roster: SubagentRosterStore;
   readonly log: EventLog;
   readonly turnTaskId?: string;
 }): boolean {
   return input.roster.list().some((hire) => hire.status === 'working' && hire.origin !== 'evolution')
-    || input.log.pending({ variant: 'subordinate_task' }).some((row) => row.id !== input.turnTaskId)
+    || input.log.pending({ variant: 'subagent_task' }).some((row) => row.id !== input.turnTaskId)
     // Delivered to it and not yet answered by a turn of its own: its answer is that turn's.
     || input.log.openAssignments().some((id) => id !== input.turnTaskId)
-    || input.log.pending({ variant: 'subordinate_report' }).length > 0;
+    || input.log.pending({ variant: 'subagent_report' }).length > 0;
 }
 
 /** How a task child's turn ended. The set must stay closed: the hirer is owed exactly one report. */
@@ -75,7 +75,7 @@ const TASK_ENDING_REPORT = {
 } as const satisfies Record<TaskTurnEnding, string | null>;
 
 export interface OwedReport {
-  readonly status: SubordinateReportStatus;
+  readonly status: SubagentReportStatus;
   readonly content: string;
   /** A Stop: settles the row, wakes no one. */
   readonly quiet?: true;
@@ -95,7 +95,7 @@ export function reportReadsNarration(ending: TaskTurnEnding): boolean {
 
 /** A child's terminal report: a task answer, any failure, a quiet Stop; null for a durable answer. */
 export async function terminalTaskReport(input: {
-  readonly lifetime: SubordinateLifetime;
+  readonly lifetime: SubagentLifetime;
   readonly ending: TaskTurnEnding;
   readonly assistantText: string;
   /** Each step's words, oldest first; read only for a task that did not answer. */
@@ -132,7 +132,7 @@ export async function terminalTaskReport(input: {
 
 /** Whether this report ends the run; only a deliberate mid-work note is progress. */
 export function temporaryRunSettles(input: {
-  readonly status: SubordinateReportStatus;
+  readonly status: SubagentReportStatus;
   readonly origin: 'report_tool' | 'turn_end';
 }): boolean {
   return !(input.status === 'progress' && input.origin === 'report_tool');
@@ -164,8 +164,8 @@ function renderTemporaryTaskBrief(input: {
 
 /** Task-lifetime policy over the shared roster. */
 export function createTemporaryAgentPort(deps: {
-  roster: SubordinateRosterStore;
-  runtime: SubordinateRuntime;
+  roster: SubagentRosterStore;
+  runtime: SubagentRuntime;
   /** From what the hire was first asked (its brief), else its role (`agentNamer`). */
   createName(role: string, brief: string | null): string;
   now(): number;
@@ -194,7 +194,7 @@ export function createTemporaryAgentPort(deps: {
 
       if (request.lane) deps.roster.helpers.record(name, request.lane, startedAt);
 
-      const birth: SubordinateBirthRequest = {
+      const birth: SubagentBirthRequest = {
         seed: {
           name, displayName: chosen ?? codenameFor(name), nameOrigin: chosen === undefined ? 'auto' : 'user', role: request.role, mission: task,
           lifetime: TEMPORARY_LIFETIME, origin: request.lane ? 'evolution' : 'agent',
@@ -206,7 +206,7 @@ export function createTemporaryAgentPort(deps: {
         createdAt: startedAt,
       };
 
-      const failure = yield* Effect.catchCause(Effect.as(Effect.promise(() => admitSubordinateBirth(deps.roster, deps.runtime, birth)), null), (failed) => Effect.succeed(
+      const failure = yield* Effect.catchCause(Effect.as(Effect.promise(() => admitSubagentBirth(deps.roster, deps.runtime, birth)), null), (failed) => Effect.succeed(
         toKinuError({ doing: 'completing an admitted temporary actor birth', cause: Cause.squash(failed), otherwise: 'unavailable' }),
       ));
 

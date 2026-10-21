@@ -363,9 +363,9 @@ function recordDelegations(calls: readonly Call[], add: RecordFact) {
     if (assignment !== null) assignments.push(assignment);
 
     if (op === 'list') {
-      const roster = v.safeParse(v.object({ subordinates: v.array(Helper) }), call.event.result);
+      const roster = v.safeParse(v.object({ subagents: v.array(Helper) }), call.event.result);
 
-      for (const helper of roster.success ? roster.output.subordinates : []) {
+      for (const helper of roster.success ? roster.output.subagents : []) {
         helpers.set(helper.name, recordedHelper({
           status: helper.status, runs: helper.runs?.map((run) => ({ status: run.status, asked: run.userMessage })),
         }, helpers.get(helper.name), call.evidence));
@@ -471,8 +471,8 @@ function recordReports(assignments: readonly Assignment[], runs: readonly Ledger
 
   const lead = first.call.run.start.agentId;
 
-  const reports = runs.filter((owner) => owner.start.agentId === lead && (owner.start.caused_by === 'subordinate_report'
-    || (owner.start.turn?.kind === 'programmatic' && owner.start.turn.text.includes('subordinate_report'))));
+  const reports = runs.filter((owner) => owner.start.agentId === lead && (owner.start.caused_by === 'subagent_report'
+    || (owner.start.turn?.kind === 'programmatic' && owner.start.turn.text.includes('subagent_report'))));
 
   const ends = runs.filter((owner) => owner.start.agentId === lead && owner.end !== undefined);
 

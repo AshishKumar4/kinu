@@ -1,7 +1,7 @@
 import { silenceBoundMs, type LiveRead, type RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
-import type { KinuPublicSession, PublicAgent, PublicBackgroundJob, PublicMessage, PublicSubordinate } from './session';
+import type { KinuPublicSession, PublicAgent, PublicBackgroundJob, PublicMessage, PublicSubagent } from './session';
 
 /** How often a busy workspace that says nothing moved is looked at, for a hang alone: while the turn's own stream is
  *  open, and while a run, helper or job holds it. Each look reads every run's new rows over HTTP: once a second for 180
@@ -10,7 +10,7 @@ const LOOK_MS = 30_000;
 
 /** The reads settle decides on: a frame naming one sends it to read again, and one between two reads makes neither
  *  count as quiet. */
-const SETTLE_READS: readonly LiveRead[] = ['listWorkspaceAgents', 'listSubordinates', 'listBackgroundJobs'];
+const SETTLE_READS: readonly LiveRead[] = ['listWorkspaceAgents', 'listSubagents', 'listBackgroundJobs'];
 
 /** Polls in a row the deployment's transport may fail before the trial fails as infrastructure. */
 const DROPPED_POLLS = 3;
@@ -52,7 +52,7 @@ const WALL_CLOCK: WatchClock = {
 
 /** What a watch reads of a workspace, the helpers' rooms it asks to hear, and the reads the workspace says moved. */
 export type WatchedWorkspace = Pick<KinuPublicSession,
-  'runEvents' | 'backgroundJobs' | 'subordinates' | 'agents' | 'toolCallsInFlight' | 'heard' | 'listen' | 'readsMoved' | 'readsMoving'>;
+  'runEvents' | 'backgroundJobs' | 'subagents' | 'agents' | 'toolCallsInFlight' | 'heard' | 'listen' | 'readsMoved' | 'readsMoving'>;
 
 /** How a turn is watched: its clock, where to say once a minute which jobs it waits on, and the run's cancel. */
 export type WatchOptions = { readonly clock?: WatchClock; readonly waiting?: (line: string) => void; readonly cancelled?: AbortSignal };
@@ -92,7 +92,7 @@ type HeldJob = { readonly job: PublicBackgroundJob; readonly helper: string | nu
 /** What holds a workspace busy: its open runs, the helpers that stream, the agents working past both (a turn owed and
  *  not yet run, a hire's hire), and the jobs it waits on. */
 type Holders = {
-  readonly runs: readonly string[]; readonly helpers: readonly PublicSubordinate[]; readonly agents: readonly PublicAgent[]; readonly jobs: readonly HeldJob[];
+  readonly runs: readonly string[]; readonly helpers: readonly PublicSubagent[]; readonly agents: readonly PublicAgent[]; readonly jobs: readonly HeldJob[];
 };
 
 function openRuns(events: readonly RunEvent[]): string[] {
@@ -216,9 +216,9 @@ export class TurnWatch {
 
   /** The ledger and what holds the workspace: its open runs, its working helpers and agents, and the jobs it waits on.
    *  `fresh` reads each helper's own jobs now rather than as last read. */
-  private async read(fresh = false): Promise<{ events: readonly RunEvent[]; working: readonly PublicSubordinate[]; held: Holders }> {
+  private async read(fresh = false): Promise<{ events: readonly RunEvent[]; working: readonly PublicSubagent[]; held: Holders }> {
     const [events, agents, helpers, jobs] = await Promise.all([
-      this.workspace.runEvents(), this.workspace.agents(), this.workspace.subordinates(), this.workspace.backgroundJobs(),
+      this.workspace.runEvents(), this.workspace.agents(), this.workspace.subagents(), this.workspace.backgroundJobs(),
     ]);
 
     const working = helpers.filter((helper) => helper.status === 'working');
@@ -286,7 +286,7 @@ export class TurnWatch {
 
   /** Each working helper's own running jobs: a task helper whose turn ended with one running stays working until it
    *  settles (core `finishTurn`), streaming nothing meanwhile. */
-  private async jobsOfHelpers(working: readonly PublicSubordinate[], fresh: boolean): Promise<ReadonlyMap<string, readonly PublicBackgroundJob[]>> {
+  private async jobsOfHelpers(working: readonly PublicSubagent[], fresh: boolean): Promise<ReadonlyMap<string, readonly PublicBackgroundJob[]>> {
     const now = this.clock.now();
 
     for (const name of this.helperJobs.keys()) {

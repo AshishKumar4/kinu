@@ -144,11 +144,11 @@ describe('event briefs name only real callables', () => {
       topic: 'sync', body: 'text', from_agent_name: 'peer', from_user_id: 'user-1',
       sender_event_id: 'sender-1', kinu_mode: 'build',
     } },
-    { ...EVENT_BASE, variant: 'subordinate_task', payload_visibility: 'full', payload: {
+    { ...EVENT_BASE, variant: 'subagent_task', payload_visibility: 'full', payload: {
       kind: 'task', body: 'do the thing', from_workspace: 'ws', kinu_mode: 'build',
     } },
-    { ...EVENT_BASE, variant: 'subordinate_report', payload_visibility: 'full', payload: {
-      status: 'completed', content: 'done', from_subordinate: 'sub',
+    { ...EVENT_BASE, variant: 'subagent_report', payload_visibility: 'full', payload: {
+      status: 'completed', content: 'done', from_subagent: 'sub',
       sequence_id: 'seq-1', kinu_mode: 'build',
     } },
     { ...EVENT_BASE, variant: 'email', payload_visibility: 'full', payload: {

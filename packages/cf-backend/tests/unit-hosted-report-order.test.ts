@@ -4,7 +4,7 @@
  */
 import { expect, test } from 'bun:test';
 import {
-  agentSql, armedWakes, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, reactivateOrchestratorHarness, wakeForDelegatedTask,
+  agentSql, armedWakes, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, hostedSubagentHarness, reactivateOrchestratorHarness, wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { abandonHarnessFibers, joinHarnessFibers, joinHarnessKeepAlives } from './helpers/agents-sdk';
 import { KINU_TIMER_JOB } from '../src/wake-jobs';
@@ -31,7 +31,7 @@ test("a helper waiting on its task hire gets its answer, then takes up the repor
 
   await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
 
-  const middle = await hostedSubordinateHarness(workspace, {
+  const middle = await hostedSubagentHarness(workspace, {
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
@@ -113,7 +113,7 @@ for (const { verb, args, notes } of CASES) {
 
     await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
 
-    const middle = await hostedSubordinateHarness(workspace, {
+    const middle = await hostedSubagentHarness(workspace, {
       name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
     });
 
@@ -125,7 +125,7 @@ for (const { verb, args, notes } of CASES) {
 
     await driveUntil(workspace, 'the durable hire never started its turn', () => parked);
 
-    const durable = sql<{ name: string }>`SELECT s.name FROM actor_subordinates s
+    const durable = sql<{ name: string }>`SELECT s.name FROM actor_subagents s
       JOIN workspace_actors a ON a.actor_id = json_extract(s.actor_reference, '$.actorId')
       WHERE s.actor_id = ${middleId} AND a.lifetime = 'durable'`[0]?.name;
 
@@ -173,7 +173,7 @@ test("a report its durable hire made during a helper's turn is taken up though t
   const first = gatewayWorkspace(stubAiBinding(script(false)), world);
   await first.agent.setSoul('# Purpose\n\nDo each task asked.');
 
-  const middle = await hostedSubordinateHarness(first, {
+  const middle = await hostedSubagentHarness(first, {
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
@@ -181,7 +181,7 @@ test("a report its durable hire made during a helper's turn is taken up though t
   const middleId = middle.actor.handle.actorId;
 
   const pendingReports = (): number => sql<{ n: number }>`
-    SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ${middleId} AND variant = 'subordinate_report' AND turn_id IS NULL`[0]?.n ?? 0;
+    SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ${middleId} AND variant = 'subagent_report' AND turn_id IS NULL`[0]?.n ?? 0;
 
   await wakeForDelegatedTask(first, middleId, 'Middle task.');
 
@@ -228,7 +228,7 @@ test("a report to an idle helper survives a reset before its drain: the durable 
   const first = gatewayWorkspace(stubAiBinding(script), world);
   await first.agent.setSoul('# Purpose\n\nDo each task asked.');
 
-  const middle = await hostedSubordinateHarness(first, {
+  const middle = await hostedSubagentHarness(first, {
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
@@ -236,7 +236,7 @@ test("a report to an idle helper survives a reset before its drain: the durable 
   const middleId = middle.actor.handle.actorId;
 
   const pendingReports = (): number => sql<{ n: number }>`
-    SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ${middleId} AND variant = 'subordinate_report' AND turn_id IS NULL`[0]?.n ?? 0;
+    SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ${middleId} AND variant = 'subagent_report' AND turn_id IS NULL`[0]?.n ?? 0;
 
   await wakeForDelegatedTask(first, middleId, 'Middle task.');
   await driveUntil(first, 'the durable hire never reported', () => pendingReports() > 0);

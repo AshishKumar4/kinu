@@ -54,9 +54,9 @@ The earlier agent-core architecture investigation was a what-if and does not req
 | **Workspace** | The ownership and working-state boundary: identity, canonical files, agents, durable work and their records. |
 | **Workspace address** | The routing name used to find a workspace. It is not its generated or user-chosen display title. |
 | **Main agent** | The workspace's default conversational agent. Additional agents do not create additional copies of the shared workspace files. |
-| **Subordinate** | An agent recorded under a parent in the workspace, created by the owner or admitted delegation. It has its own identity, context, role and lifecycle. |
-| **Temporary helper** | A task-lifetime subordinate created for one question. Completion releases it from further model messaging; retained evidence remains inspectable by the owner. |
-| **Persistent subordinate** | A workspace-lifetime agent that remains available for further assignments until dismissed. |
+| **Subagent** | An agent recorded under a parent in the workspace, created by the owner or admitted delegation. It has its own identity, context, role and lifecycle. |
+| **Temporary subagent** | A task-lifetime subagent created for one question. Completion releases it from further model messaging; retained evidence remains inspectable by the owner. |
+| **Persistent subagent** | A workspace-lifetime agent that remains available for further assignments until dismissed. |
 | **Swarm node** | A tool-using agent participating in exploration. A `search_nodes` row is a tree vertex; it is not automatically an agent. |
 | **Exploration head** | A tool-using exploration actor with a defined assignment and reporting contract. |
 | **Rollout branch** | A search attempt with the capabilities declared for that attempt. A toolless branch must not be described as a full tool-using agent. |
@@ -79,7 +79,7 @@ Each name keeps one meaning across the product. Workspace, agent, conversation, 
 These rules govern every feature below.
 
 1. **One workspace file plane.** The workspace owns one canonical base filesystem. Agent homes and private temporary paths are views inside it, not separate copies of the project.
-2. **Shared workspace state is explicit.** In the cloud product, the main agent and its subordinate and exploration actors share one workspace SQLite store. Agent identity and access rules still partition the records.
+2. **Shared workspace state is explicit.** In the cloud product, the main agent and its subagent and exploration actors share one workspace SQLite store. Agent identity and access rules still partition the records.
 3. **Shared storage is not shared authority.** Sharing a database gives an actor no access to another actor's private context, the owner's credentials or policy tables.
 4. **One core for full agents.** Main, persistent, temporary and tool-using exploration actors run the same core turn. Their wrappers supply identity, role, lifetime, context seed and task-specific ports.
 5. **Visible state is truthful.** Queued, running, waiting for approval, failed, cancelled, completed and missing are different states. A transport acknowledgement is not a completed task.
@@ -101,7 +101,7 @@ A hosted workspace has a root `OrchestratorAgent` Durable Object. Its SQLite sto
 
 ![Current workspace ownership with one shared actor store](diagrams/product-workspace-current.svg)
 
-One root actor directory issues immutable actor and parent references and keeps logical aliases apart from physical storage keys. Actor-scoped storage uses `actor_config`, `actor_program_state` and `actor_subordinates`. The root directory uses `workspace_actors`.
+One root actor directory issues immutable actor and parent references and keeps logical aliases apart from physical storage keys. Actor-scoped storage uses `actor_config`, `actor_program_state` and `actor_subagents`. The root directory uses `workspace_actors`.
 
 On 2026-09-08, 8 directory cases and 3 admitted-birth cases passed locally. They cover colliding state keys, lost acknowledgements, cross-parent refusal, retirement retries and reused aliases. The native Worker tier passed 2 actor-identity cases and 5 retained-inspection cases. These are local proofs, not a deployment claim.
 
@@ -116,7 +116,7 @@ In the cloud product, one workspace Durable Object owns:
 - agent-scoped conversations, working contexts, loop versions and durable work;
 - memory, tools, evolution records and the state needed to recover admitted work.
 
-A workspace can hold any number of subordinate or exploration actors without separate databases. Each keeps its own identity, context, role, queue and records inside the shared store.
+A workspace can hold any number of subagent or exploration actors without separate databases. Each keeps its own identity, context, role, queue and records inside the shared store.
 
 Account-level services stay separate where ownership differs. The user registry, provider credentials, operator control plane and external machines are never agent-editable workspace data.
 
@@ -164,11 +164,11 @@ Its descriptor distinguishes:
 
 A role is not a second agent class. A temporary lifetime is not a reduced text-only completion. An exploration assignment does not get its own copy of tool use, cancellation or history handling.
 
-There are three inference tiers: `fast`, `default` and `deep` (`TIER_IDS` in `packages/core/src/types/profile.ts`). A tier without an explicit override inherits the default-tier setting, and changing the default keeps explicit per-tier overrides. Roles and templates stay separate; the main agent discovers and uses admitted subordinate templates (message 614).
+There are three inference tiers: `fast`, `default` and `deep` (`TIER_IDS` in `packages/core/src/types/profile.ts`). A tier without an explicit override inherits the default-tier setting, and changing the default keeps explicit per-tier overrides. Roles and templates stay separate; the main agent discovers and uses admitted subagent templates (message 614).
 
 A new user, or a user with no default override, gets **GLM 5.3 on Workers AI** (message 851; model ID `@cf/zai-org/glm-5.3`). Existing overrides stay. Missing credentials produce an actionable availability state, not a silent switch to another model.
 
-The backend runs every full agent (main, subordinate, temporary and tool-using exploration actors) on shared `ActorAgent` and core code, as logical actors on the one workspace store (§4).
+The backend runs every full agent (main, subagent, temporary and tool-using exploration actors) on shared `ActorAgent` and core code, as logical actors on the one workspace store (§4).
 
 ![Agent lifecycle and retained terminal state](diagrams/product-agent-lifecycle.svg)
 
@@ -177,15 +177,15 @@ The backend runs every full agent (main, subordinate, temporary and tool-using e
 | Operation | Purpose | Context and lifetime contract |
 |---|---|---|
 | Direct work | The current agent handles the task. | Uses that agent's current working context and capabilities. |
-| Ask an existing subordinate | Assign one question to an available subordinate. | Returns accepted/working state and correlation promptly; the report arrives through the durable reporting path. It retains the target conversation and does not spawn a hidden fresh actor. |
+| Ask an existing subagent | Assign one question to an available subagent. | Returns accepted/working state and correlation promptly; the report arrives through the durable reporting path. It retains the target conversation and does not spawn a hidden fresh actor. |
 | Ask by role | Create one temporary full agent for one question. | Waits for its terminal answer/outcome, not merely a progress report; then releases the task-lifetime actor with truthful evidence retention. |
-| Hire | Add a persistent subordinate. | The actor retains its own conversation, role and lifecycle for later work. |
+| Hire | Add a persistent subagent. | The actor retains its own conversation, role and lifecycle for later work. |
 | Swarm | Explore alternatives under a stated search configuration and objective. | Context initialization, tool use, scoring, settlement and resource budgets are explicit. A judged search and an unranked ideation sweep are not reported as measured optimization. |
 | Ask a workspace peer | Ask an authorized agent in another workspace. | Waits for the peer reply. Its workspace ownership boundary is preserved; this is not an implicit child or shared-filesystem grant. |
 
 `agent` and `role` are different `hire` targets. `role` creates the agent and `lifetime` says how long it lives; `agent` hands the workstream to one that exists. Invalid combinations and unknown fields are refused before any work or spend.
 
-The return contract depends on the target on purpose: message 748 accepts immediate subordinate assignment and awaited peer replies. Native and codemode forms agree for each target. `msg` keeps its own message and event correlation at both of its targets.
+The return contract depends on the target on purpose: message 748 accepts immediate subagent assignment and awaited peer replies. Native and codemode forms agree for each target. `msg` keeps its own message and event correlation at both of its targets.
 
 A workspace path in a delegation brief points the receiver at context to read. It does not prove the receiver read it; acceptance inspects the actual calls or the source-grounded result.
 
@@ -209,7 +209,7 @@ Completion pairs admitted work with one terminal outcome and its evidence. A chi
 
 Dismissal does not prove every durable effect settled. Retained history gives the model no permission to send more work to a dismissed agent.
 
-The owner can inspect retained subordinate history and recursive lineage through an authorized read path. Missing actor storage returns an explicit missing result, not an empty history. Reading a settled archive starts no new agent work; genuine pending recovery behaves as usual.
+The owner can inspect retained subagent history and recursive lineage through an authorized read path. Missing actor storage returns an explicit missing result, not an empty history. Reading a settled archive starts no new agent work; genuine pending recovery behaves as usual.
 
 ## 6. State, contexts and editable files
 
@@ -258,7 +258,7 @@ The final paths reuse the existing agent-home and VFS addressing conventions. Th
 7. The next relevant request demonstrably consumes the new revision.
 8. A failed activation or regression leaves a usable rollback path and a truthful failure record.
 
-Parent and owner edits to a subordinate go through the same checks. A parent that read an older snapshot cannot overwrite the child's newer context.
+Parent and owner edits to a subagent go through the same checks. A parent that read an older snapshot cannot overwrite the child's newer context.
 
 ### 6.4 Mutable working history and immutable evidence
 
@@ -282,7 +282,7 @@ This is the source inventory for the reviewed revision. It is not a proposed sch
 | Optional SDK session/context | `assistant_sessions`, context-block and search tables | SDK facilities. Their existence in the package does not prove Kinu uses them for every actor. |
 | Stream replay | none durable | A tab that reconnects mid-turn is replayed the chunks the chat transport relayed for the turn in progress, held in memory until the turn ends. The one durable copy of an answer in progress is `stream_parts`. |
 | SDK lifecycle | `cf_agents_state`, the job queue (`cf_agents_jobs`, which holds Kinu's two wakes), workflows, runs and fibers | SDK-owned runtime state in the workspace database, with root coordination where the SDK requires it. |
-| Kinu identity/roster | `workspace_identity`, `workspace_actors`, `actor_config`, `actor_subordinates` | Root directory or actor-scoped rows. The parent roster is distinct from the child identity. Capability-bearing records are protected state. |
+| Kinu identity/roster | `workspace_identity`, `workspace_actors`, `actor_config`, `actor_subagents` | Root directory or actor-scoped rows. The parent roster is distinct from the child identity. Capability-bearing records are protected state. |
 | Program state | `actor_program_state`; `db` tables (`app_*`, catalogued in `agent_data_tables`) | `actor_program_state` is actor-private JSON key/value state behind `state.*`. `db` tables are agent-declared structured data at actor or workspace scope (§9.1). |
 | Admitted work/effects | `pending_steers`, `actor_turn_claims`, `run_events`, `background_jobs`, `tool_effect_claims`, `terminal_effects`, `effect_tombstones` | The actor's durable work, mode, outcome and recovery records. They must not become ordinary editable prompt text. |
 | Compaction/prompt versions | `compaction_state`, `compaction_archive`, `artifact_versions` | Actor/session-scoped context planning, recall locations and prompt trials. |
@@ -291,7 +291,7 @@ This is the source inventory for the reviewed revision. It is not a proposed sch
 | Memory/tasks/permissions | Memory chunks/FTS, `agent_facts`, `agent_tasks`, plan reviews and instruction approvals | The scope supplied by the actor/root adapter. An instruction's approval is not equivalent to permission to write its file. |
 | Nimbus file storage | `vfs_inodes`, `vfs_contents`, `vfs_content_chunks`, `vfs_chunks`, their GC, history and snapshot tables, append receipt/writer/revocation records, and the `nimbus_*` identity and storage-ledger tables | Root Nimbus SQLite VFS. These tables store files; they do not automatically project arbitrary conversation tables as files. |
 
-The main implementations are `orchestrator/chat-session.ts` (the `ChatSession` both backends drive), `identity/conversation-store.ts`, `config/conversation.ts`, `subordinates/roster.ts`, `events/recorder.ts`, `scaffold/surface.ts`, `prompting/volatile-context.ts`, the compaction stores, and the pinned Agents SDK. The private source map records individual symbols and paths.
+The main implementations are `orchestrator/chat-session.ts` (the `ChatSession` both backends drive), `identity/conversation-store.ts`, `config/conversation.ts`, `subagents/roster.ts`, `events/recorder.ts`, `scaffold/surface.ts`, `prompting/volatile-context.ts`, the compaction stores, and the pinned Agents SDK. The private source map records individual symbols and paths.
 
 ### 7.1 State that is not a conversation table
 
@@ -307,7 +307,7 @@ None of this forms one serializable prompt file. Each mutable runtime object is 
 | `SOUL.md` | Owner-editable workspace identity/purpose prose. | Permission for an agent to rewrite owner policy. |
 | `memory/MEMORY.md`, `memory/*` | Durable notes and indexed memory. | The exact active conversation. |
 | `scaffold/agent.js`, `scaffold/agent.js.vN` | Main scaffold view and version source. SQL selects the current/promoted version. | That any arbitrary file overwrite automatically changes an in-flight loop. |
-| `.kinu/agents/<storage-key>/scaffold/agent.js[.vN]` | Scaffold source for every non-main actor (subordinate, head, node, branch), in shared files, with version metadata in that actor's SQL. The physical key is distinct from the logical alias; graph IDs remain logical search identities. | That the scaffold file itself carries authority (the version decision lives in that actor's SQL rows), or complete consumed-version provenance for exploration actors. |
+| `.kinu/agents/<storage-key>/scaffold/agent.js[.vN]` | Scaffold source for every non-main actor (subagent, head, node, branch), in shared files, with version metadata in that actor's SQL. The physical key is distinct from the logical alias; graph IDs remain logical search identities. | That the scaffold file itself carries authority (the version decision lives in that actor's SQL rows), or complete consumed-version provenance for exploration actors. |
 | Actor homes and temporary roots | Credentialed homes/shell identities within the canonical workspace. | Unrestricted access to every actor's private state. |
 | `.kinu/compaction/<session>/<range>.md` | Recall text for a compacted range, cited by SQL archive records. | A writable projection of the current working conversation. |
 | Tool-output, attachment and event-content spill areas | Large content retained outside a prompt-sized response. | Permission to replace canonical event outcomes or claim every byte was included in the prompt. |
@@ -608,14 +608,14 @@ A valid identity, a workspace grant, an actor role and tool availability answer 
 
 For Cloudflare sign-in, the original login establishes both Kinu identity and Workers AI authorization. Refreshing the stored credential is the normal path; interactive reauthentication is for real expiry, revocation or unavailable refresh, not a daily second login. Other sign-in providers grant no Cloudflare permissions. This comes from message 7 and does not claim every deployed credential lifetime has been verified.
 
-The main agent is never the human owner. A subordinate cannot widen its authority by changing a role string, editing a context file or constructing a different actor path.
+The main agent is never the human owner. A subagent cannot widen its authority by changing a role string, editing a context file or constructing a different actor path.
 
 | Resource | Actor-facing access rule |
 |---|---|
 | Shared project files | Credentialed VFS and work-mode rules; mounted machines retain their own grants. |
 | Own working context/loop | Managed, revision-checked operations within the selected role/mode. |
-| Subordinate working context/loop | Owner or explicit ancestor-management authority; file visibility alone does not authorize replacement. |
-| Retained subordinate history | Owner inspection through the supported read path. Dismissed messaging and execution remain separate. |
+| Subagent working context/loop | Owner or explicit ancestor-management authority; file visibility alone does not authorize replacement. |
+| Retained subagent history | Owner inspection through the supported read path. Dismissed messaging and execution remain separate. |
 | Provider and MCP credentials | Opaque use of admitted services; no raw secret extraction through code bindings, context files or database access. |
 | Approval/consent records | Host/owner-controlled decisions. The requesting agent cannot approve itself by editing a row or result. |
 | Run/effect/spend evidence | Host-written observations. Editable working history cannot alter them retroactively. |
@@ -752,7 +752,7 @@ For the shared store: create several actors, write colliding logical state keys 
 
 ### B. Delegate a real recursive question
 
-**Given** a seeded workspace file whose nonce is absent from the task text, **when** one agent asks a temporary helper that asks one nested helper, **then** retained evidence shows the actual calls and lineage, and the leaf reads the declared context reference and returns the real value.
+**Given** a seeded workspace file whose nonce is absent from the task text, **when** one agent asks a temporary subagent that asks one nested subagent, **then** retained evidence shows the actual calls and lineage, and the leaf reads the declared context reference and returns the real value.
 
 A nonce in a model answer is not enough by itself. The owner inspects the retained children after settlement, and the model gets no messaging authority over dismissed actors.
 
@@ -817,7 +817,7 @@ A group status does not close every historical bug mapped to it; each fix still 
 | <a id='accept-workspace-identity'></a>**workspace-identity** | Start the first agent turn from the creation mission without reprompting; cold-open the generated title; rename without changing routing identity; reject invalid addresses before resource creation. | **Production proof, scoped**. Title/address cases passed. Initial-turn and complete creation-journey acceptance must be checked separately. | workspace-title and preview-address first-run receipts; messages 58, 186, 267, 972 |
 | <a id="accept-actor-core"></a>**actor-core** | Run the same status/cancellation/loop-version contract on main, persistent, temporary and tool-using exploration actors; vary only declared capabilities/lifetime. | **Partial**. One `ActorAgent` base; every kind is a logical actor on one `ActorHost`, run by the same claimed-turn runner, and no facet class remains. Heads read their own loop pointer each turn; search nodes start from the bootstrap loop origin. Cross-kind acceptance of the shared contract is not claimed. | ActorAgent; runHeadInference/runNodeLoop; messages 97, 300, 387, 935, 975 |
 | <a id="accept-delegation-contract"></a>**delegation-contract** | Ask an existing actor without spawning; ask by role as a real temporary actor; inspect actual nested context-reference reads and retained outcomes. | **Implemented paths; live acceptance incomplete**. Core behavior and owner inspection have local proof. A completed live recursive journey is not claimed. | temporary.ts; eval tier; owner inspection; messages 724, 741, 748, 749, 750 |
-| <a id="accept-fork-semantics"></a>**fork-semantics** | Compare fresh, inherited-prefix and workspace-fork cases; preserve lineage and task on re-entry; prove no unintended file copy or parent-context mutation. | **Source-defined; acceptance partial**. Hire uses a bounded parent digest. Swarm fork/fresh is a context choice. Workspace forks are separate. | subordinates/support.ts; swarm-expansion.ts; identity/fork-driver.ts; messages 282, 387, 724, 975 |
+| <a id="accept-fork-semantics"></a>**fork-semantics** | Compare fresh, inherited-prefix and workspace-fork cases; preserve lineage and task on re-entry; prove no unintended file copy or parent-context mutation. | **Source-defined; acceptance partial**. Hire uses a bounded parent digest. Swarm fork/fresh is a context choice. Workspace forks are separate. | subagents/support.ts; swarm-expansion.ts; identity/fork-driver.ts; messages 282, 387, 724, 975 |
 | <a id="accept-context-editability"></a>**context-editability** | Read the actual active context/loop through VFS; edit with expected revision; observe the next request change; reject stale/invalid/unauthorized edits and retain prior evidence. | **Missing/partial target**. Scaffold versions cover part of loop editing. Canonical editable context/history projections are missing. | §6, §7; scaffold/surface.ts; conversation-store.ts; messages 41, 141, 491, 975 |
 | <a id="accept-context-engineering"></a>**context-engineering** | Preserve stable prefixes, update volatile facts at the next step, verify actual submitted requests/counters, and retain recall through compaction and context edits. | **Implemented parts; full target pending**. Preparation, typed-error projection, pruning and recall exist. Editable-context invalidation is not implemented as one contract. | prepare-step.ts; tool-error-feedback.ts; compaction stores; messages 35, 154, 164, 165, 724 |
 | <a id="accept-crafted-tools"></a>**crafted-tools** | Author a real callable tool, validate it, invoke it on the actual backend, rediscover it next step and reject malformed or failing source without poisoning other calls. | **Mechanisms present; model journey incomplete**. Persistence, invocation and fitness mechanisms exist. Curated fixtures do not establish every model-authored workflow. | craft/execution paths; codemode-craft first-run; messages 724, 904, 905, 906, 910 |
@@ -828,7 +828,7 @@ A group status does not close every historical bug mapped to it; each fix still 
 | <a id="accept-exploration"></a>**exploration** | Run configured tool-using nodes and declared toolless attempts, measured/judged/ideation cases, fan-in and uneven-depth settlement with actual outcomes. | **Implemented core; full acceptance incomplete**. Core searches and journals exist. No universal exploration quality or performance gain is established. | strategy and heads core; exploration contracts; messages 331, 345, 374, 377, 724 |
 | <a id="accept-node-routing"></a>**node-routing** | Assign distinct node tasks/models, inspect actual provider requests, resume the original identity/brief and preserve deeper parent-authored rationale. | **Repairs locally verified**. Specific routing/re-entry/cache-identity defects were repaired. Broad live multi-model coverage is not claimed. | unit-swarm-profile-routing; node-agent and swarm-level; messages 724, 822, 836 |
 | <a id="accept-exploration-visibility"></a>**exploration-visibility** | Observe concurrent and retained trees, live text/reasoning/tools, selection/navigation and reconnect without losing status or context. | **Source/UI proof partial**. A static or local frame does not close the entire deployed live-stream journey. | Exploration UI and head/node stream journals; messages 268, 312, 313, 465, 598, 839, 840 |
-| <a id="accept-self-evolution"></a>**self-evolution** | Propose/evaluate/promote/revert a real change; verify consumed version and outcome provenance; keep invalid candidates inactive across restart. | **Partial; benefit unproved**. Root/subordinate scaffold mechanisms exist. Editable exploration-loop projections and measured improvement remain open. | scaffold/evolution stores; active inference paths; messages 140, 141, 220, 489, 490, 491, 626, 975 |
+| <a id="accept-self-evolution"></a>**self-evolution** | Propose/evaluate/promote/revert a real change; verify consumed version and outcome provenance; keep invalid candidates inactive across restart. | **Partial; benefit unproved**. Root/subagent scaffold mechanisms exist. Editable exploration-loop projections and measured improvement remain open. | scaffold/evolution stores; active inference paths; messages 140, 141, 220, 489, 490, 491, 626, 975 |
 | <a id="accept-memory"></a>**memory** | Save/search/edit notes and keyed facts, verify scope/index consistency, and recall a compacted range without replacing the active conversation silently. | **Implemented stores; scoped acceptance**. Notes, facts, retrieval and recall exist. They are not writable canonical context/history projections. | MemoryStore, facts, conversation search and compaction stores; messages 35, 141, 164, 165, 267 |
 | <a id="accept-slates"></a>**slates** | Use real JS-family client/server source, interactive browser behavior, server/file effects, source commit/fork/restore and real preview HTTP. | **Hosted proof; journeys remain**. Hosted authored examples and 15 operator checks passed. Strict model-authored and outer browser-session journeys remain unverified. | LIVE-UI; production714 first-run receipts; messages 165, 171, 935, 942, 943, 947, 951 |
 | <a id="accept-slate-authority"></a>**slate-authority** | Deny missing capabilities and literal/redirect escapes; preserve MCP data; isolate Plan and Build; prevent reuse of authority cached under an earlier configuration, and parent-origin access. | **Local security fix; rollout pending**. Reviewed egress/cache fixes are in the source candidate, not production714. DNS/raw networking residuals stay unmeasured. | slate-egress Worker proofs; preview-origin evidence; messages 936, 943, 948 |

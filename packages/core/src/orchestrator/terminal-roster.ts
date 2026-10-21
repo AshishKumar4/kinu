@@ -20,7 +20,7 @@ import { owesTurnLessons } from '../evolution/struggles';
 import type { ChatTurnInput } from './chat-session';
 import type { ActorIdentity } from '../identity/actor-handle';
 import type { KinuError } from '../obs/index';
-import { reportReadsNarration, type TaskTurnEnding } from '../subordinates/temporary';
+import { reportReadsNarration, type TaskTurnEnding } from '../subagents/temporary';
 import { turnTags } from '../types/turn-metadata';
 import type { TaskReminder } from '../tasks/reminder';
 import { announcementOf } from '../utils/ui-message';

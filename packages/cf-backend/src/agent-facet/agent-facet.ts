@@ -8,7 +8,7 @@ import {
   encodeModelMessageValues, readAgentArchivePage,
   type InspectedWork,
   type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
-  type NimbusSandboxFiles, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
+  type NimbusSandboxFiles, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubagentInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
   type SendState, DeliverySchema, type AdmittedDelivery, type Delivery, type DeliveryAnswer, type InputProducer, type OwedDelivery,
 } from '@kinu.run/core';
@@ -125,7 +125,7 @@ export interface AgentFacetCalls {
   media(snapshot: AgentSnapshot, ref: MediaRef): Promise<StoredImage | null>;
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
   messageCount(snapshot: AgentSnapshot): Promise<number>;
-  inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
+  inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubagentInspectionResult>;
   inheritedContext(snapshot: AgentSnapshot): Promise<SerializedMessage[]>;
   /** In the session codec's durable form, as `AgentWorkspace.resume`. */
   workingContext(snapshot: AgentSnapshot): Promise<readonly JsonValue[]>;
@@ -492,7 +492,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return readAgentArchivePage(this.ctx.storage.sql, this.open(snapshot).reference().actorId, cursor, maxBytes);
   }
 
-  async inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult> {
+  async inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubagentInspectionResult> {
     return await this.open(snapshot).inspect(request);
   }
 

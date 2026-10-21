@@ -25,8 +25,8 @@ import {
   createFactsStore,
   initEventsHubTables,
   getChatHistoryPage, keptMediaName, readSessionTranscript, CHAT_SESSION_ID,
-  missingSubordinateHistory, inspectDescendant, readSubordinateInspection, SubordinateInspectionRequestSchema,
-  type SubordinateInspectionRequest, type SubordinateInspectionResult,
+  missingSubagentHistory, inspectDescendant, readSubagentInspection, SubagentInspectionRequestSchema,
+  type SubagentInspectionRequest, type SubagentInspectionResult,
   getEvolutionChangelog,
   qualitySeries,
   type QualityDay,
@@ -331,13 +331,13 @@ export function getLocalChatHistory(name: string, limit = 100): Promise<ChatHist
 }
 
 /** Walks from the main actor; starts nothing. */
-export function inspectLocalSubordinate(name: string, request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
-  const input = v.parse(SubordinateInspectionRequestSchema, request);
+export function inspectLocalSubagent(name: string, request: SubagentInspectionRequest): Promise<SubagentInspectionResult> {
+  const input = v.parse(SubagentInspectionRequestSchema, request);
 
   return withLocalDbAsync(name, async (db) => {
     const directory = actorDirectory(db);
 
-    if (directory === null) return missingSubordinateHistory(input.path);
+    if (directory === null) return missingSubagentHistory(input.path);
     const sql = makeSql(db);
     const files = inspectionFiles(db, resolveLocalAgent(name).cwd);
 
@@ -347,7 +347,7 @@ export function inspectLocalSubordinate(name: string, request: SubordinateInspec
     // The file is the owner's own, so the walk needs no owner check. Every actor's rows are in it.
     return inspectDescendant({
       sql, raw, actor: directory.main(), directory, transcriptFor,
-      ownRows: (actor, own) => readSubordinateInspection({ sql, raw, actor, transcriptFor: () => transcriptFor(actor) }, own),
+      ownRows: (actor, own) => readSubagentInspection({ sql, raw, actor, transcriptFor: () => transcriptFor(actor) }, own),
     }, input);
   });
 }

@@ -4,7 +4,7 @@
  */
 import { expect, test } from 'bun:test';
 import {
-  agentSql, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask,
+  agentSql, driveUntil, gatewayWorkspace, hostedSubagentHarness, wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 import { wrapDatabase } from '@kinu.run/core/identity';
@@ -29,7 +29,7 @@ test("a durable grandchild that only worked its assignment shows the task, from 
 
   await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
 
-  const middle = await hostedSubordinateHarness(workspace, {
+  const middle = await hostedSubagentHarness(workspace, {
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
@@ -50,7 +50,7 @@ test("a durable grandchild that only worked its assignment shows the task, from 
   const { items } = await workspace.agent.getChatHistoryPage({ actor: actorId, limit: 20 });
 
   expect(items.map((item) => ({ role: item.role, content: rowText(item), from: item.metadata?.['kinuFrom'], event: item.metadata?.['kinuEvent'] }))).toEqual([
-    { role: 'system', content: 'Durable task.', from: 'middle', event: 'subordinate_task' },
+    { role: 'system', content: 'Durable task.', from: 'middle', event: 'subagent_task' },
     { role: 'assistant', content: 'Durable done.', from: undefined, event: undefined },
   ]);
 

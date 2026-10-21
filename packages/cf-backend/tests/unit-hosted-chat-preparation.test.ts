@@ -24,8 +24,8 @@ test("an agent whose bad model pin failed its turn answers once the owner correc
   const workspace = gatewayWorkspace(gateway);
 
   await workspace.agent.setSoul('# Purpose\n\nGreet whoever asks.');
-  const { name, subordinate } = await workspace.agent.createSubordinateAgent();
-  const actorId = v.parse(v.string(), subordinate.actorId);
+  const { name, subagent } = await workspace.agent.createSubagentAgent();
+  const actorId = v.parse(v.string(), subagent.actorId);
   const say = () => asPane([actorConnectionTag(actorId)], () => workspace.agent.send(ASK, crypto.randomUUID()));
 
   const asking = () => gateway.runs.filter((run) => JSON.stringify(requestOf(run).messages).includes(ASK));

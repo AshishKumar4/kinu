@@ -26,7 +26,7 @@ function store(scope = 'test') {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initInstructionApprovalsTable(execRaw);
-  // Keyed by actor before scope: a subordinate does not inherit the root's approval.
+  // Keyed by actor before scope: a subagent does not inherit the root's approval.
   const actor = createTestActors(sql, execRaw).main;
 
   return {

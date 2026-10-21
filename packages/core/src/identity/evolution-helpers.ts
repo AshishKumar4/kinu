@@ -87,7 +87,7 @@ export class EvolutionHelperStore {
 
     const rows = this.sql.exec(
       `SELECT h.name, h.answer_status, h.answer FROM evolution_helpers h
-       LEFT JOIN actor_subordinates s ON s.actor_id = h.actor_id AND s.name = h.name
+       LEFT JOIN actor_subagents s ON s.actor_id = h.actor_id AND s.name = h.name
        WHERE h.actor_id = ? AND h.lane_request_id = ?
          AND (h.answer_status IS NOT NULL OR s.status != 'dismissed')
        ORDER BY h.answer_status IS NULL, h.created_at DESC, h.name DESC LIMIT 1`,

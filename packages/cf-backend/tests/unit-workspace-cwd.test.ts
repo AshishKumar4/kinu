@@ -104,7 +104,7 @@ describe('hosted workspace actor shell state', () => {
     await workspace.fs.mkdir('/home/main/beta', { recursive: true });
     const box = sdkBox(workerHost(workspace, new Map()));
 
-    const alpha = shell('subordinate:alpha');
+    const alpha = shell('subagent:alpha');
     const beta = shell('head:beta');
 
     const [, alphaPwd] = await Promise.all([

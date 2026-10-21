@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import type { UIMessage } from 'ai';
 import { actorConnectionTag, CHAT_REWOUND_EVENT, classifyProgrammaticTurn, TURN_AUTHOR_METADATA_KEY } from '@kinu.run/core';
 import {
-  hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, storedChat, type HarnessOrchestratorAgent,
+  hostedSubagentHarness, orchestratorHarness, chatSessionTurns, storedChat, type HarnessOrchestratorAgent,
   type RecordedUserPlaneCalls, workspaceMainActor,
 } from './helpers/actor-harness';
 import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
@@ -32,7 +32,7 @@ describe('the workspace root answers the actor control plane', () => {
   test('a hosted child keeps its own model row in the same database', async () => {
     const workspace = orchestratorHarness();
 
-    const child = await hostedSubordinateHarness(workspace, {
+    const child = await hostedSubagentHarness(workspace, {
       name: 'control-plane-child',
       displayName: 'Control Plane Child',
       nameOrigin: 'user',
@@ -48,7 +48,7 @@ describe('the workspace root answers the actor control plane', () => {
 
   /**
    * A steer after the turn ended is committed to the actor's own queue in the same slice as the decision and answers
-   * 'queued' (KINU-N026: answering 'idle' let another turn file the guidance). Subordinates answer the same way.
+   * 'queued' (KINU-N026: answering 'idle' let another turn file the guidance). Subagents answer the same way.
    */
   test('steering with no turn running queues the text as the next ordinary turn', async () => {
     const harness = orchestratorHarness();
@@ -82,7 +82,7 @@ describe('the workspace root answers the actor control plane', () => {
   test('only the workspace root files its own cancellation, under its own actor id', async () => {
     const orchestrator = orchestratorHarness();
 
-    const child = await hostedSubordinateHarness(orchestrator, {
+    const child = await hostedSubagentHarness(orchestrator, {
       name: 'cancel-scope-child',
       displayName: 'Cancel Scope Child',
       nameOrigin: 'user',
@@ -102,8 +102,8 @@ describe('the workspace root answers the actor control plane', () => {
     const orchestrator = orchestratorHarness(userPlane);
 
     await orchestrator.agent.setSoul('# Purpose\n\nKeep the coast notes.');
-    const { subordinate } = await orchestrator.agent.createSubordinateAgent();
-    const hire = v.parse(v.string(), subordinate.actorId);
+    const { subagent } = await orchestrator.agent.createSubagentAgent();
+    const hire = v.parse(v.string(), subagent.actorId);
     const main = workspaceMainActor(orchestrator.db).actorId;
 
     await asPane([actorConnectionTag(hire)], () => orchestrator.agent.cancelCurrentWork());

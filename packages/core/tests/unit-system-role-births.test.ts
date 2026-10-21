@@ -8,9 +8,9 @@ import { describe, expect, test } from 'bun:test';
 import { createTestSql } from '@kinu.run/test-utils';
 import { createTestActor, makeSqlExec } from './helpers';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
-import { SubordinateRosterStore } from '../src/subordinates/roster';
-import { admitSubordinateBirth } from '../src/subordinates/birth';
-import type { SubordinateRuntime } from '../src/subordinates/support';
+import { SubagentRosterStore } from '../src/subagents/roster';
+import { admitSubagentBirth } from '../src/subagents/birth';
+import type { SubagentRuntime } from '../src/subagents/support';
 import { SYSTEM_ROLE_DEFINITIONS } from '../src/profiles/catalog';
 import { KinuError } from '../src/obs/error';
 import { explorationActorKey } from '../src/identity/actor-key';
@@ -20,13 +20,13 @@ function setup() {
   createTestActor(database.sql, database.execRaw, 'workspace', 'main');
   const directory = new WorkspaceActorDirectory(database.sql, { workspaceId: 'workspace', ownerUserId: '' });
   const main = directory.main();
-  const roster = new SubordinateRosterStore(makeSqlExec(database.db), main);
+  const roster = new SubagentRosterStore(makeSqlExec(database.db), main);
 
   roster.ensureSchema();
 
   const unused = async (): Promise<never> => { throw new KinuError('unsupported', 'A birth asks nothing else here.'); };
 
-  const runtime: SubordinateRuntime = {
+  const runtime: SubagentRuntime = {
     spawn: async (seed) => directory.apply(main, [], { action: 'register', name: seed.name, creationId: seed.creationId, origin: seed.origin, lifetime: seed.lifetime }).reference,
     cancelBirth: unused, assign: unused, status: unused, message: unused, rename: unused, dismiss: unused,
   };
@@ -40,7 +40,7 @@ describe('a system role hired as a temporary helper', () => {
       const { roster, runtime } = setup();
       const name = `${role.replace(/[^a-z0-9]+/gu, '-')}-a1b2`;
 
-      await admitSubordinateBirth(roster, runtime, {
+      await admitSubagentBirth(roster, runtime, {
         seed: { name, displayName: role, nameOrigin: 'auto', role, mission: 'Judge the drafted edits.', lifetime: 'task', origin: 'evolution' },
         assignment: null, createdAt: 1,
       });
@@ -55,7 +55,7 @@ describe('the roster stores only what it reads back', () => {
     const { roster, runtime } = setup();
 
     // The roster refuses the row as the birth is admitted, before any await.
-    const born = async () => await admitSubordinateBirth(roster, runtime, {
+    const born = async () => await admitSubagentBirth(roster, runtime, {
       seed: { name: 'judge-a1b2', displayName: 'Judge', nameOrigin: 'auto', role: 'not_a_role', mission: 'Judge.', lifetime: 'task', origin: 'evolution' },
       assignment: null, createdAt: 1,
     });
@@ -68,7 +68,7 @@ describe('the roster stores only what it reads back', () => {
     const { roster, database, directory, main } = setup();
     const node = directory.apply(main, [], { action: 'register', name: explorationActorKey('c1'), creationId: 'c1', origin: 'swarm', lifetime: 'task' });
 
-    void database.sql`INSERT INTO actor_subordinates (actor_id, name, status, created_at, actor_reference, delete_requested)
+    void database.sql`INSERT INTO actor_subagents (actor_id, name, status, created_at, actor_reference, delete_requested)
       VALUES (${main.actorId}, 'node', 'idle', 1, ${JSON.stringify(node.reference)}, 0)`;
     expect(() => roster.listAll()).toThrow(/row "node", origin: /u);
   });

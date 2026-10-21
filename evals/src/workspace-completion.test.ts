@@ -5,7 +5,7 @@ import {
 } from '@kinu.run/core';
 import { createTestActorsOver, createTestSql, handClock, hostDeliveries, present, type HandClock } from '@kinu.run/test-utils';
 import type { BackendHost } from '../../packages/core/src/types/backend-host';
-import type { PublicAgent, PublicBackgroundJob, PublicSubordinate } from './session';
+import type { PublicAgent, PublicBackgroundJob, PublicSubagent } from './session';
 import {
   answered, HUNG_AFTER_MS, settle, TrialCancelled, TurnWatch, type WatchClock, type WatchedWorkspace, WorkspaceHang, type WorkspaceHeld,
 } from './workspace-completion';
@@ -65,7 +65,7 @@ const hangOf = (watching: Promise<unknown>) => ended(watching, WorkspaceHang);
 /** `heard`: the live frames heard so far on every room the session listens to, as `heard()` counts them. `helperJobs`:
  *  each helper's own jobs, by its name. */
 type Snapshot = {
-  events: RunEvent[]; jobs?: PublicBackgroundJob[]; helperJobs?: Record<string, PublicBackgroundJob[]>; helpers?: PublicSubordinate[];
+  events: RunEvent[]; jobs?: PublicBackgroundJob[]; helperJobs?: Record<string, PublicBackgroundJob[]>; helpers?: PublicSubagent[];
   agents?: PublicAgent[]; inFlight?: string[]; heard?: number;
 };
 
@@ -90,7 +90,7 @@ function fixtureWorkspace(clock: FixtureClock, state: (elapsed: number) => Snaps
   return {
     runEvents: () => Promise.resolve(read().events),
     backgroundJobs: (of) => Promise.resolve(of === undefined ? read().jobs ?? [] : read().helperJobs?.[of] ?? []),
-    subordinates: () => Promise.resolve(read().helpers ?? []),
+    subagents: () => Promise.resolve(read().helpers ?? []),
     agents: () => Promise.resolve(read().agents ?? []),
     toolCallsInFlight: () => read().inFlight ?? [],
     heard: () => read().heard ?? 0,
@@ -263,7 +263,7 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
   test("a working helper is heard in its own room, which the watch listens to only while it works", async () => {
     const clock = watchClock();
     const listened: string[][] = [];
-    const helper = (status: PublicSubordinate['status']): PublicSubordinate => ({ name: 'task-helper', status, lifetime: 'task' });
+    const helper = (status: PublicSubagent['status']): PublicSubagent => ({ name: 'task-helper', status, lifetime: 'task' });
 
     // The lead's turn has ended; its helper streams for ten minutes in a room of its own, then goes idle.
     const delegated = fixtureWorkspace(clock, (elapsed) => (elapsed < 10 * MINUTE
@@ -354,7 +354,7 @@ function detachedCommand(hand: HandClock, never: boolean): DetachedCommand {
     workspace: {
       runEvents: () => read(() => [...ledger]),
       backgroundJobs: (of) => read(() => (of === undefined ? listBackgroundJobs(store, 50) : [])),
-      subordinates: () => read(() => []),
+      subagents: () => read(() => []),
       agents: () => read(() => []),
       toolCallsInFlight: () => inFlight,
       heard: () => 0,
@@ -439,7 +439,7 @@ function roomWorkspace(
   return {
     runEvents: () => ask('ledger', (state) => state.events),
     agents: () => ask('agents', (state) => state.agents),
-    subordinates: () => ask('roster', () => []),
+    subagents: () => ask('roster', () => []),
     backgroundJobs: (of) => ask(of === undefined ? 'jobs' : 'helper jobs', (state) => (of === undefined ? state.jobs : [])),
     toolCallsInFlight: () => [],
     heard: () => 0,
@@ -522,7 +522,7 @@ describe('a job is waited on until it settles, never judged by its silence', () 
     const clock = watchClock();
     const lines: string[] = [];
     const tests: PublicBackgroundJob = { id: 'bgjob-tests', kind: 'shell', status: 'running', label: 'workspace: npm test', createdAt: START + MINUTE };
-    const helper = (status: PublicSubordinate['status']): PublicSubordinate => ({ name: 'task-helper', status, lifetime: 'task' });
+    const helper = (status: PublicSubagent['status']): PublicSubagent => ({ name: 'task-helper', status, lifetime: 'task' });
     const lead = [start('run-1'), end('run-1', MINUTE, 1)];
 
     const delegated = fixtureWorkspace(clock, (elapsed) => (elapsed < 12 * MINUTE
@@ -576,7 +576,7 @@ describe("the run's cancel ends a held turn, naming what held it", () => {
   test("a working helper's own job is named with the helper, and a helper that only works as itself", async () => {
     const clock = watchClock();
     const tests: PublicBackgroundJob = { id: 'bgjob-tests', kind: 'shell', status: 'running', label: 'workspace: npm test', createdAt: START + MINUTE };
-    const helper = (name: string): PublicSubordinate => ({ name, status: 'working', lifetime: 'task' });
+    const helper = (name: string): PublicSubagent => ({ name, status: 'working', lifetime: 'task' });
     const run = new AbortController();
 
     // The writer streams the whole time; the tester waits on its tests, which never end.

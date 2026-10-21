@@ -156,14 +156,14 @@ describe(SUITE, () => {
             return announce(subgoals);
           }
 
-          const createdAnswer = await ask(rootSocket, 'createSubordinateAgent', []);
+          const createdAnswer = await ask(rootSocket, 'createSubagentAgent', []);
           const created = createdAnswer.ok ? v.safeParse(CreatedSchema, createdAnswer.value) : null;
 
           subgoals.push({
             what: 'helper-created',
             reached: created?.success === true,
             detail: rpcDetail({
-              rpc: 'createSubordinateAgent', answer: createdAnswer, refusal: 'refused',
+              rpc: 'createSubagentAgent', answer: createdAnswer, refusal: 'refused',
               said: created?.success === true ? `created ${JSON.stringify(created.output.name)}` : null,
             }),
           });

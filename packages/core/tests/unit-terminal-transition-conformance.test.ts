@@ -457,18 +457,18 @@ test('recorded terminal rosters with colliding identities belong only to their a
   };
 
   const root = open(actors.main);
-  const subordinate = open(child);
+  const subagent = open(child);
   root.record(TRANSITION, [{ name: 'turn_record', scope: 'same', lane: 'inline', input: { answer: 'root' } }]);
-  subordinate.record(TRANSITION, [{ name: 'turn_record', scope: 'same', lane: 'inline', input: { answer: 'child' } }]);
+  subagent.record(TRANSITION, [{ name: 'turn_record', scope: 'same', lane: 'inline', input: { answer: 'child' } }]);
   await wake(actors.main);
   expect(effects).toEqual([`${actors.main.actorId}:root`]);
-  expect(subordinate.incomplete()).toEqual([TRANSITION]);
+  expect(subagent.incomplete()).toEqual([TRANSITION]);
   await wake(child);
   await wake(actors.main);
   await wake(child);
   expect(effects).toEqual([`${actors.main.actorId}:root`, `${child.actorId}:child`]);
   expect(root.incomplete()).toEqual([]);
-  expect(subordinate.incomplete()).toEqual([]);
+  expect(subagent.incomplete()).toEqual([]);
   db.close();
 });
 

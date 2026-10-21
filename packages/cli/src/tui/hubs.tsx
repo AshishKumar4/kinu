@@ -4,16 +4,16 @@ import { tierIdsOf,
   type ProfileCatalogEnvelope,
   type ResolvedTurnProfile,
   type RoleId,
-  type SubordinateChild,
+  type SubagentChild,
   type WorkspaceWork,
   taskTreePhase,
   type JobOutputTail,
-  evolutionHelper, jobName, lastOutputLines, ownerFacingSubordinate,
+  evolutionHelper, jobName, lastOutputLines, ownerFacingSubagent,
 } from '@kinu.run/core';
 import type { AgentJobSummary } from '../agent-client';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { agentWorkspaceKey } from '../agent-list';
-import type { TuiAgentStatus, TuiAgentSummary, TuiSubordinate } from './tui-shell';
+import type { TuiAgentStatus, TuiAgentSummary, TuiSubagent } from './tui-shell';
 import { agentDisplayLabel } from '@kinu.run/core/tui';
 import { MessageList, type DisplayMessage } from './messages';
 import * as v from 'valibot';
@@ -24,7 +24,7 @@ export type TuiHubView = 'agents' | 'roles' | 'tiers';
 export interface TuiAgentHubEntry {
   readonly id: string;
   readonly label: string;
-  readonly kind: 'main' | 'subordinate' | 'swarm-node';
+  readonly kind: 'main' | 'subagent' | 'swarm-node';
   readonly status: 'idle' | 'running' | 'needs-you' | 'failed' | 'settled';
 
   /** A peer's database is not opened just to label a row. */
@@ -82,7 +82,7 @@ export interface TuiJobOwner {
   readonly actorId: string;
 }
 
-export function jobOwners(entries: readonly SubordinateChild[]): TuiJobOwner[] {
+export function jobOwners(entries: readonly SubagentChild[]): TuiJobOwner[] {
   return entries.flatMap((entry) => (entry.status === 'dismissed' || entry.actorReference === null ? [] : [{
     name: entry.name, label: agentDisplayLabel({ name: entry.name, label: entry.displayName }), actorId: entry.actorReference.actorId,
   }]));
@@ -114,9 +114,9 @@ const HELPER_WORK_STATUS = {
   working: 'running',
   awaiting_input: 'needs-you',
   dismissed: 'settled',
-} as const satisfies Record<SubordinateChild['status'], TuiWorkEntry['status']>;
+} as const satisfies Record<SubagentChild['status'], TuiWorkEntry['status']>;
 
-export function evolutionWork(entries: readonly SubordinateChild[]): TuiWorkEntry[] {
+export function evolutionWork(entries: readonly SubagentChild[]): TuiWorkEntry[] {
   return entries.flatMap((entry): TuiWorkEntry[] => (evolutionHelper(entry) && entry.actorReference !== null ? [{
     id: `helper:${entry.actorReference.actorId}`, title: entry.currentTask ?? 'refining from recent turns',
     label: agentDisplayLabel({ name: entry.name, label: entry.displayName }), path: [entry.name], actorId: entry.actorReference.actorId,
@@ -129,7 +129,7 @@ export interface TuiHelperRef {
   readonly actorId: string;
 }
 
-const AnsweredHelperSchema = v.looseObject({ agent: v.string(), lifetime: v.literal('task') });
+const AnsweredSubagentSchema = v.looseObject({ agent: v.string(), lifetime: v.literal('task') });
 
 /** Newest first. */
 export function answeredHelpers(messages: readonly DisplayMessage[], helpers: readonly TuiHelperRef[]): TuiHubRow[] {
@@ -137,7 +137,7 @@ export function answeredHelpers(messages: readonly DisplayMessage[], helpers: re
 
   for (const message of [...messages].reverse()) {
     if (message.role !== 'tool_result' || message.toolName !== 'agents') continue;
-    const answered = v.safeParse(v.pipe(v.string(), v.parseJson(), AnsweredHelperSchema), message.content);
+    const answered = v.safeParse(v.pipe(v.string(), v.parseJson(), AnsweredSubagentSchema), message.content);
     const helper = answered.success ? helpers.find((entry) => entry.name === answered.output.agent) : undefined;
 
     if (helper !== undefined && !rows.some((row) => row.actorId === helper.actorId)) {
@@ -148,11 +148,11 @@ export function answeredHelpers(messages: readonly DisplayMessage[], helpers: re
   return rows;
 }
 
-type SubordinateDraft = { -readonly [Key in keyof TuiSubordinate]: TuiSubordinate[Key] };
+type SubagentDraft = { -readonly [Key in keyof TuiSubagent]: TuiSubagent[Key] };
 
 const AGENT_KIND_LABEL = {
   main: 'main',
-  subordinate: 'agent',
+  subagent: 'agent',
   'swarm-node': 'swarm node',
 } as const satisfies Record<TuiAgentHubEntry['kind'], string>;
 
@@ -161,7 +161,7 @@ export function buildAgentHubEntries(input: {
   items: readonly TuiAgentSummary[];
   current: { name: string; mode: 'local' | 'cloud' };
   currentEntry: TuiAgentHubEntry;
-  subordinates: readonly TuiSubordinate[];
+  subagents: readonly TuiSubagent[];
 }): TuiAgentHubEntry[] {
   const { items, current, currentEntry } = input;
   const currentRow = items.find((item) => item.name === current.name && item.mode === current.mode);
@@ -174,30 +174,30 @@ export function buildAgentHubEntries(input: {
     ? items.filter((item) => item.mode === 'local' && agentWorkspaceKey(item) === groupKey)
     : alone;
 
-  const nestedUnder = (parentId: string, own: boolean, workspace: string, subordinates: readonly TuiSubordinate[]) =>
-    subordinates.map((subordinate): TuiAgentHubEntry => {
+  const nestedUnder = (parentId: string, own: boolean, workspace: string, subagents: readonly TuiSubagent[]) =>
+    subagents.map((subagent): TuiAgentHubEntry => {
       const row: HubEntryDraft = {
-        id: `${parentId}/${subordinate.id}`,
-        label: agentDisplayLabel({ name: subordinate.id, label: subordinate.label }),
-        kind: 'subordinate',
-        status: subordinate.status,
+        id: `${parentId}/${subagent.id}`,
+        label: agentDisplayLabel({ name: subagent.id, label: subagent.label }),
+        kind: 'subagent',
+        status: subagent.status,
         workspace,
       };
 
-      if (subordinate.task !== undefined) row.task = subordinate.task;
+      if (subagent.task !== undefined) row.task = subagent.task;
 
-      if (own) row.path = [subordinate.id];
+      if (own) row.path = [subagent.id];
 
       // Role and tier render as one pair: knowing only half shows neither.
-      if (subordinate.roleId !== undefined && subordinate.tierId !== undefined) {
-        row.roleId = subordinate.roleId;
-        row.tierId = subordinate.tierId;
+      if (subagent.roleId !== undefined && subagent.tierId !== undefined) {
+        row.roleId = subagent.roleId;
+        row.tierId = subagent.tierId;
       }
 
       return row;
     });
 
-  if (members.length === 0) return [currentEntry, ...nestedUnder(currentEntry.id, true, currentEntry.workspace, input.subordinates)];
+  if (members.length === 0) return [currentEntry, ...nestedUnder(currentEntry.id, true, currentEntry.workspace, input.subagents)];
 
   const workspace = current.mode === 'local'
     ? (currentRow?.workspaceId ?? currentEntry.workspace)
@@ -217,7 +217,7 @@ export function buildAgentHubEntries(input: {
           workspace,
         };
 
-    return [row, ...nestedUnder(`${member.mode}:${member.name}`, own, workspace, own ? input.subordinates : (member.subordinates ?? []))];
+    return [row, ...nestedUnder(`${member.mode}:${member.name}`, own, workspace, own ? input.subagents : (member.subagents ?? []))];
   });
 }
 
@@ -230,8 +230,8 @@ interface TuiProfileHubData {
 
 export interface TuiHubData {
   readonly agents: readonly TuiAgentHubEntry[];
-  readonly subordinates: readonly TuiSubordinate[];
-  readonly subordinatesError?: string;
+  readonly subagents: readonly TuiSubagent[];
+  readonly subagentsError?: string;
   readonly work: readonly TuiWorkEntry[];
   readonly workError?: string;
   readonly helpers: readonly TuiHelperRef[];
@@ -243,27 +243,27 @@ const ROSTER_STATUS = {
   idle: 'idle',
   working: 'running',
   awaiting_input: 'needs-you',
-} as const satisfies Record<Exclude<SubordinateChild['status'], 'dismissed'>, TuiAgentStatus>;
+} as const satisfies Record<Exclude<SubagentChild['status'], 'dismissed'>, TuiAgentStatus>;
 
-export function subordinatesFromRoster(entries: readonly SubordinateChild[]): TuiSubordinate[] {
-  return entries.flatMap((entry): TuiSubordinate[] => {
-    if (entry.status === 'dismissed' || entry.deleteRequested || !ownerFacingSubordinate(entry)) return [];
+export function subagentsFromRoster(entries: readonly SubagentChild[]): TuiSubagent[] {
+  return entries.flatMap((entry): TuiSubagent[] => {
+    if (entry.status === 'dismissed' || entry.deleteRequested || !ownerFacingSubagent(entry)) return [];
     const seed = entry.birth?.seed;
 
-    const subordinate: SubordinateDraft = {
+    const subagent: SubagentDraft = {
       id: entry.name,
       label: agentDisplayLabel({ name: entry.name, label: entry.displayName }),
       status: ROSTER_STATUS[entry.status],
     };
 
-    if (entry.currentTask !== null) subordinate.task = entry.currentTask;
+    if (entry.currentTask !== null) subagent.task = entry.currentTask;
 
     if (seed?.tier !== undefined) {
-      subordinate.roleId = seed.role;
-      subordinate.tierId = seed.tier;
+      subagent.roleId = seed.role;
+      subagent.tierId = seed.tier;
     }
 
-    return [subordinate];
+    return [subagent];
   });
 }
 
@@ -409,8 +409,8 @@ function AgentHubRows({ data, newAgentHint, selectedAgentId }: {
           ))}
         </box>
       )}
-      {data.subordinatesError !== undefined && (
-        <text><span fg={colors.intent.danger}>{data.subordinatesError}</span></text>
+      {data.subagentsError !== undefined && (
+        <text><span fg={colors.intent.danger}>{data.subagentsError}</span></text>
       )}
       {data.workError !== undefined && (
         <text><span fg={colors.intent.danger}>{data.workError}</span></text>

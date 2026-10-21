@@ -181,7 +181,7 @@ files, POSIX shell, code execution, processes, and ports. `shell`,
 Actors share files and processes but each keeps its own `shellId` across
 reconstruction. The key is `agent:<name>` for the main actor
 (`ActorAgent.shellId()`, `cf-backend/src/actor-agent.ts`) and
-`subordinate:<storage-key>` or `run:<storage-key>` for every hosted logical
+`subagent:<storage-key>` or `run:<storage-key>` for every hosted logical
 actor (`hostedActorPlacement(record)`, `cf-backend/src/actor-hosting.ts`, one
 function for every kind). It is keyed on the immutable storage key, not the
 registered name, because a rename must not move an actor's cwd and exported
@@ -422,7 +422,7 @@ added by `buildBuiltinTools`) is wired on an owner's root turn in either mode, a
 `WorkMode` (`plan` or `build`) propagates to delegation, jobs, and exploration.
 A job's wake carries `kinuMode: job.workMode` (`core/src/jobs/runner.ts`), and
 `turnTags` (`core/src/types/turn-metadata.ts`) reads it, so a wake cannot
-weaken Plan to build. Plan heads and subordinates report research
+weaken Plan to build. Plan heads and subagents report research
 to their parent. Swarm sets `executionPolicy` to `judge-only` in Plan
 mode, spending no executor call (`core/src/strategy/swarm-scoring.ts`).
 

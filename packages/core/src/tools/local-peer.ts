@@ -1,7 +1,7 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Local peer transport: agent-to-agent mail among root agents sharing one `{ cwd, workspaceId }` pair.
- * Membership is exact pair equality; subordinates never hold this transport.
+ * Membership is exact pair equality; subagents never hold this transport.
  */
 
 import {

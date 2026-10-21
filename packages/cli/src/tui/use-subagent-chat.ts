@@ -28,7 +28,7 @@ export function useSubagentChat(client: AgentClient, target: SubagentTarget | nu
         const helper = actorId === null ? { path: [...path] } : { path: [], actor: actorId };
 
         const conversation = await readConversation(async (page) => {
-          const result = await client.inspectSubordinate({ ...helper, view: 'history', page });
+          const result = await client.inspectSubagent({ ...helper, view: 'history', page });
 
           if (result.view === 'missing') throw new Error(result.error);
 

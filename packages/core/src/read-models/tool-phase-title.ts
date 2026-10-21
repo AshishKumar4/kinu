@@ -89,7 +89,7 @@ function factsOf(calls: readonly AnyToolPart[]): PhaseFacts {
     if (name === "file" && (op === "edit" || op === "write")) facts.edited.push(basename(path));
     else if (name === "file") facts.read.push(basename(path));
     else if (name === "web") facts.web = true;
-    else if (name === "agents" && op === "hire" && input.success) facts.hired.push(input.output.name ?? "a helper");
+    else if (name === "agents" && op === "hire" && input.success) facts.hired.push(input.output.name ?? "a subagent");
     else if (name === "shell" || name === "run") noteCommand(facts, part, command);
     else facts.other.push(describeToolCall(name, argsOf(part)) || `used ${name}`);
   }

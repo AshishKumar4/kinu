@@ -17,7 +17,7 @@ async function hire(workspace: ActorHarness<HarnessOrchestratorAgent>, count: nu
 
   await workspace.agent.setSoul('# Kinu\n\n## Mission\n\nCount the paths.\n');
 
-  for (let index = 0; index < count; index += 1) labels.push((await workspace.agent.createSubordinateAgent()).displayName);
+  for (let index = 0; index < count; index += 1) labels.push((await workspace.agent.createSubagentAgent()).displayName);
 
   return labels;
 }
@@ -68,7 +68,7 @@ describe('the roster', () => {
     const hired = (await workspace.agent.listWorkspaceAgents()).find((agent) => agent.category === 'hired');
 
     expect(hired?.figures.tokens).toBeGreaterThan(0);
-    await workspace.agent.dismissSubordinate('counter', true);
+    await workspace.agent.dismissSubagent('counter', true);
 
     expect((await workspace.agent.listWorkspaceAgents()).map((agent) => agent.label)).toEqual(['Main']);
     expect(workspace.agent.harnessDynamicWorkers.calls.slice(before)).toEqual([]);

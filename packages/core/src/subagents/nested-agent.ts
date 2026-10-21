@@ -1,19 +1,19 @@
 import { codenameFor } from '../identity/naming';
-import type { SubordinateView } from '../protocol';
+import type { SubagentView } from '../protocol';
 import type { SeekCursor } from '../session/page';
-import type { SubordinateChild, SubordinateInspectionRequest, SubordinateInspectionResult } from './inspection';
+import type { SubagentChild, SubagentInspectionRequest, SubagentInspectionResult } from './inspection';
 
 /** How the web UI reaches an agent below a direct child: its row in its parent's roster, kept or live. */
 
 /** A blank name is a pre-codename row; it shows the word pair it would have been born with. */
-export function agentTitle(entry: Pick<SubordinateView, "name" | "displayName">): string {
+export function agentTitle(entry: Pick<SubagentView, "name" | "displayName">): string {
   return entry.displayName.trim() || codenameFor(entry.name);
 }
 
-/** The roster read a nested agent's row comes from: `inspectSubordinate` over the page's socket. */
-export type InspectSubordinate = (request: SubordinateInspectionRequest) => Promise<SubordinateInspectionResult>;
+/** The roster read a nested agent's row comes from: `inspectSubagent` over the page's socket. */
+export type InspectSubagent = (request: SubagentInspectionRequest) => Promise<SubagentInspectionResult>;
 
-async function rosterRow(inspect: InspectSubordinate, roster: { path: string[]; actor?: string }, name: string): Promise<SubordinateChild | null> {
+async function rosterRow(inspect: InspectSubagent, roster: { path: string[]; actor?: string }, name: string): Promise<SubagentChild | null> {
   let cursor: SeekCursor | undefined;
 
   do {
@@ -36,7 +36,7 @@ export interface AgentLinkIds {
 
 type NestedAgent = { readonly live: boolean; readonly title: string; readonly actorId: string | null };
 
-export async function nestedAgent(inspect: InspectSubordinate, path: string, ids: AgentLinkIds): Promise<NestedAgent | null> {
+export async function nestedAgent(inspect: InspectSubagent, path: string, ids: AgentLinkIds): Promise<NestedAgent | null> {
   const names = path.split('/');
   const name = names.at(-1) ?? path;
 

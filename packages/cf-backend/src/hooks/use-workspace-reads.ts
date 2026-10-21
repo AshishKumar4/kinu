@@ -2,7 +2,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction } from "react";
 import { Effect } from "effect";
 import {
-  activateMctsProgressActor, applyMctsProgress, createMctsProgressState, SubordinateActivityEventSchema,
+  activateMctsProgressActor, applyMctsProgress, createMctsProgressState, SubagentActivityEventSchema,
   type MctsProgress, branchHeadId, CHANGES_MOVED_EVENT, followJobOutput, JOB_OUTPUT_EVENT, LIVE_READS,
   READS_CHANGED_EVENT, SLATES_CHANGED_EVENT, WORK_TAB_JOBS, type JobOutputTail, listedOn, type LiveRead,
   type PendingAction, type SlateSummary,
@@ -10,9 +10,9 @@ import {
 import * as v from "valibot";
 import { explorationForkTree, type OwedOwnerIntent } from "@kinu.run/core";
 import type {
-  MemoryEntry, ForkNode, PendingConsent, AskingAgent, SubordinateActivityEvent, TabPresence,
+  MemoryEntry, ForkNode, PendingConsent, AskingAgent, SubagentActivityEvent, TabPresence,
 } from "@kinu.run/core";
-import type { BackgroundJob, SubordinateView } from "@kinu.run/core/protocol";
+import type { BackgroundJob, SubagentView } from "@kinu.run/core/protocol";
 import type { ExecutorInfo, PanelAgent } from "@kinu.run/core";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "@kinu.run/core";
 import { appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas } from "@kinu.run/core";
@@ -191,8 +191,8 @@ export function useWorkspaceReads(link: ChatLink) {
     retire: retireDelta,
   }), [headDeltaMap, retireDelta]);
 
-  const [subordinates, setSubordinates] = useState<SubordinateView[]>([]);
-  const [subordinateEvents, setSubordinateEvents] = useState<SubordinateActivityEvent[]>([]);
+  const [subagents, setSubagents] = useState<SubagentView[]>([]);
+  const [subagentEvents, setSubagentEvents] = useState<SubagentActivityEvent[]>([]);
   const [signalCards, setSignalCards] = useState<readonly SignalCard[]>([]);
 
   // A socket can replay a frame after reconnect; `pushSeq` is per root, so frames for different
@@ -285,11 +285,11 @@ export function useWorkspaceReads(link: ChatLink) {
   ), [applySlates, refreshCurrentLiveResource, rpc]);
 
   /** Through the "roster" admission, so a read still in flight cannot overwrite it. */
-  const writeRoster = useCallback((next: SetStateAction<SubordinateView[]>) => refreshCurrentLiveResource(
-    "roster", async () => next, setSubordinates,
+  const writeRoster = useCallback((next: SetStateAction<SubagentView[]>) => refreshCurrentLiveResource(
+    "roster", async () => next, setSubagents,
   ), [refreshCurrentLiveResource]);
 
-  const refreshRoster = useCallback(() => refreshCurrentLiveResource("roster", () => rpc("listSubordinates", []), setSubordinates), [refreshCurrentLiveResource, rpc]);
+  const refreshRoster = useCallback(() => refreshCurrentLiveResource("roster", () => rpc("listSubagents", []), setSubagents), [refreshCurrentLiveResource, rpc]);
 
   // The server pushes the fact, not the rows; one re-read updates every open tab.
   const reread = async (resource: string, refresh: () => Promise<void>): Promise<void> => {
@@ -388,13 +388,13 @@ export function useWorkspaceReads(link: ChatLink) {
         knownWorkspacePlans.current.add(key);
         setArrivedReference(msg.reference);
       }
-    } else if (msg.type === "subordinate_event") {
-      const subordinateEvent = parseSubordinateActivityEvent({ value: msg });
+    } else if (msg.type === "subagent_event") {
+      const subagentEvent = parseSubagentActivityEvent({ value: msg });
 
-      if (subordinateEvent) {
-        setSubordinateEvents((current) => current.some((listed) => listed.id === subordinateEvent.id)
+      if (subagentEvent) {
+        setSubagentEvents((current) => current.some((listed) => listed.id === subagentEvent.id)
           ? current
-          : [...current.slice(-49), subordinateEvent]);
+          : [...current.slice(-49), subagentEvent]);
       }
     } else if (msg.type === "executor-output") {
       setExecutorOutputs(prev => {
@@ -464,7 +464,7 @@ export function useWorkspaceReads(link: ChatLink) {
     getMemoryContent: () => refreshCurrentLiveResource("memoryContent", () => rpc("getMemoryContent", []), setMemoryContent),
     getExecutors: () => refreshCurrentLiveResource("executors", () => rpc("getExecutors", []), setExecutors),
     listWorkspaceAgents: () => refreshCurrentLiveResource("agents", () => rpc("listWorkspaceAgents", []), setWorkspaceAgents),
-    listSubordinates: refreshRoster,
+    listSubagents: refreshRoster,
     listBackgroundJobs: refreshBackgroundJobs,
     inspectWork: refreshInspectedWork,
     listPendingActions: refreshPendingActions,
@@ -551,7 +551,7 @@ export function useWorkspaceReads(link: ChatLink) {
     try {
       await Promise.all([
         refreshExposedPorts(), refreshOwnerQuestions(), refreshOwedIntents(),
-        refreshCurrentLiveResource("roster", () => listedOn(snap.subordinates), setSubordinates),
+        refreshCurrentLiveResource("roster", () => listedOn(snap.subagents), setSubagents),
         refreshCurrentLiveResource("consents", () => listedOn(snap.pendingConsents), setPendingConsents),
         refreshCurrentLiveResource("agents", () => listedOn(snap.workspaceAgents), setWorkspaceAgents),
       ]);
@@ -594,8 +594,8 @@ export function useWorkspaceReads(link: ChatLink) {
     setPendingConsents([]);
     setPendingActions([]);
     setBranchRuns([]);
-    setSubordinates([]);
-    setSubordinateEvents([]);
+    setSubagents([]);
+    setSubagentEvents([]);
     setSignalCards([]);
   }, [actorKey]);
 
@@ -715,33 +715,33 @@ export function useWorkspaceReads(link: ChatLink) {
       /** Throws on error ('agent busy', 'fork point not found', 'agent name already exists'). */
       forkAgent: (untilMessageId: string, opts?: { name?: string }) =>
         rpc("forkAgent", [untilMessageId, opts ?? {}]),
-      subordinates,
-      subordinateEvents,
+      subagents,
+      subagentEvents,
       signalCards,
       /** The server answers a blank displayName; the UI shows "New agent" until the titler lands. `opening` names it. */
-      createSubordinate: async (opening?: string) => {
-        const result = await rpc("createSubordinateAgent", opening === undefined ? [] : [opening]);
+      createSubagent: async (opening?: string) => {
+        const result = await rpc("createSubagentAgent", opening === undefined ? [] : [opening]);
 
         await writeRoster((current) => [
-          ...current.filter((entry) => entry.name !== result.subordinate.name),
-          result.subordinate,
+          ...current.filter((entry) => entry.name !== result.subagent.name),
+          result.subagent,
         ]);
 
         return result;
       },
       /** A user-chosen name permanently blocks auto-retitling (server-side). */
-      renameSubordinate: async (name: string, displayName: string) => {
-        const result = await rpc("renameSubordinateAgent", [name, displayName]);
+      renameSubagent: async (name: string, displayName: string) => {
+        const result = await rpc("renameSubagentAgent", [name, displayName]);
 
-        const entry = result.subordinate;
+        const entry = result.subagent;
         await writeRoster((current) => current.map(
           (existing) => existing.name === entry.name ? entry : existing,
         ));
 
         return entry;
       },
-      dismissSubordinate: async (name: string, keepHistory?: boolean) => {
-        const result = await rpc("dismissSubordinate", keepHistory === undefined ? [name] : [name, keepHistory]);
+      dismissSubagent: async (name: string, keepHistory?: boolean) => {
+        const result = await rpc("dismissSubagent", keepHistory === undefined ? [name] : [name, keepHistory]);
 
         await writeRoster((current) => current.filter((entry) => entry.name !== result.name));
 
@@ -751,8 +751,8 @@ export function useWorkspaceReads(link: ChatLink) {
   };
 }
 
-function parseSubordinateActivityEvent({ value }: { value: unknown }): SubordinateActivityEvent | null {
-  const parsed = v.safeParse(SubordinateActivityEventSchema, value);
+function parseSubagentActivityEvent({ value }: { value: unknown }): SubagentActivityEvent | null {
+  const parsed = v.safeParse(SubagentActivityEventSchema, value);
 
   return parsed.success ? parsed.output : null;
 }

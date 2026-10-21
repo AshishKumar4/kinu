@@ -34,7 +34,7 @@ export interface CanaryLedger {
   readonly history: readonly PublicMessage[];
   readonly jobs: readonly PublicBackgroundJob[];
   readonly helpers: readonly HelperRecord[];
-  readonly roster: Awaited<ReturnType<KinuPublicSession['subordinates']>>;
+  readonly roster: Awaited<ReturnType<KinuPublicSession['subagents']>>;
   readonly agents: Awaited<ReturnType<KinuPublicSession['agents']>>;
   readonly swarms: Awaited<ReturnType<KinuPublicSession['swarmRuns']>>;
 }
@@ -80,7 +80,7 @@ export async function readCanaryLedger(session: KinuPublicSession): Promise<Cana
   const output = capturedOutput(await session.stepMessages(events));
 
   const [history, jobs, roster, agents, swarms] = await Promise.all([
-    session.history(), session.backgroundJobs(), session.subordinates(), session.agents(), session.swarmRuns(),
+    session.history(), session.backgroundJobs(), session.subagents(), session.agents(), session.swarmRuns(),
   ]);
 
   const helpers: HelperRecord[] = [];
@@ -382,12 +382,12 @@ export function ledgerFindings(measured: CanaryMeasurement): CanaryFinding[] {
   }
 
   if (measured.helper.found !== 1) findings.push({ name: 'helper.not-found-exactly-once', kind: 'defect', cause: 'The retained helper ledger did not identify exactly one canary task hire.',
-    evidence: [{ at: null, event: 'inspectSubordinate', count: measured.helper.found, detail: measured.helper.helpers.map((helper) => helper.name).join(', ') }] });
+    evidence: [{ at: null, event: 'inspectSubagent', count: measured.helper.found, detail: measured.helper.helpers.map((helper) => helper.name).join(', ') }] });
 
   for (const helper of measured.helper.helpers) {
     if (helper.failure !== null) {
       findings.push({ name: 'helper.ledger-unavailable', kind: 'measurement', cause: helper.failure,
-        evidence: [{ at: null, event: 'inspectSubordinate', count: 1, detail: helper.name }] });
+        evidence: [{ at: null, event: 'inspectSubagent', count: 1, detail: helper.name }] });
       continue;
     }
 

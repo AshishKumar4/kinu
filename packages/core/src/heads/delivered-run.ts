@@ -5,7 +5,7 @@
  * host supplies each round's preparation and what its end records; what the run does around that is here, once.
  */
 import type { HostedActor } from '../state/actor-host';
-import type { AgentTurnTask } from '../subordinates/agent-isolate';
+import type { AgentTurnTask } from '../subagents/agent-isolate';
 import { classifyRunEnd, closeRunIn, closeTurnRun, openTurnRun } from '../orchestrator/turn-lifecycle';
 import { runMetadata } from '../orchestrator/chat-queue';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';

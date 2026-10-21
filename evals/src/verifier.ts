@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { ephemeralSlateId, JsonValueSchema, projectJsonValue, rowText, slateUiSegments, type JsonValue, type RunEvent, type SubordinateInspectionRequest } from '@kinu.run/core';
+import { ephemeralSlateId, JsonValueSchema, projectJsonValue, rowText, slateUiSegments, type JsonValue, type RunEvent, type SubagentInspectionRequest } from '@kinu.run/core';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicMessage, PublicSlateListing, PublicSwarmRun, WorkBoard } from './session';
 import { browserOwner, openPreviewAsOwner, type WorkspaceWeb } from './workspace-roster';
@@ -45,7 +45,7 @@ export type VerifierSession = {
   memoryContent(): Promise<string>;
   memoryFacts(): Promise<readonly { key: string; value: JsonValue }[]>;
   workspaceWork(): Promise<WorkBoard>;
-  inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer>;
+  inspect(request: SubagentInspectionRequest): Promise<InspectionAnswer>;
   swarmRuns(): Promise<PublicSwarmRun[]>;
   execute(executor: string, command: string): Promise<PublicExecutorResult>;
   exposedPorts(executor: string): Promise<readonly { port: number; url: string }[]>;

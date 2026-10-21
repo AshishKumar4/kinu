@@ -64,7 +64,7 @@ function relayingGateway() {
 async function addedAgent(): Promise<{ parent: ActorHarness<HarnessOrchestratorAgent>; name: string }> {
   const parent = gatewayWorkspace(relayingGateway());
   await parent.agent.setSoul(SOUL);
-  const { name } = await parent.agent.createSubordinateAgent();
+  const { name } = await parent.agent.createSubagentAgent();
 
   return { parent, name };
 }
@@ -72,13 +72,13 @@ async function addedAgent(): Promise<{ parent: ActorHarness<HarnessOrchestratorA
 /** The name each side shows: the agent's own pane, and the parent's roster. */
 async function shownNames(parent: ActorHarness<HarnessOrchestratorAgent>, name: string): Promise<[string, string]> {
   const own = (await parent.agent.getActorSnapshot(name)).displayName;
-  const listed = (await parent.agent.listSubordinates()).find((entry) => entry.name === name)?.displayName ?? '';
+  const listed = (await parent.agent.listSubagents()).find((entry) => entry.name === name)?.displayName ?? '';
 
   return [own, listed];
 }
 
 async function listedOrigin(parent: ActorHarness<HarnessOrchestratorAgent>, name: string) {
-  return (await parent.agent.listSubordinates()).find((entry) => entry.name === name)?.nameOrigin;
+  return (await parent.agent.listSubagents()).find((entry) => entry.name === name)?.nameOrigin;
 }
 
 describe('an agent the owner added without naming it', () => {
@@ -92,11 +92,11 @@ describe('an agent the owner added without naming it', () => {
   test('a rename wins on both sides, and a second rename wins again, listed as the owner\'s', async () => {
     const { parent, name } = await addedAgent();
 
-    await parent.agent.renameSubordinateAgent(name, 'Jarvis');
+    await parent.agent.renameSubagentAgent(name, 'Jarvis');
     expect(await shownNames(parent, name)).toEqual(['Jarvis', 'Jarvis']);
     expect(await listedOrigin(parent, name)).toBe('user');
 
-    await parent.agent.renameSubordinateAgent(name, 'Just Jarvis');
+    await parent.agent.renameSubagentAgent(name, 'Just Jarvis');
     expect(await shownNames(parent, name)).toEqual(['Just Jarvis', 'Just Jarvis']);
   });
 });
@@ -124,7 +124,7 @@ describe('the first message to an agent the owner added without naming it', () =
 
   test('never touches a name the owner typed', async () => {
     const { parent, name } = await addedAgent();
-    await parent.agent.renameSubordinateAgent(name, 'Jarvis');
+    await parent.agent.renameSubagentAgent(name, 'Jarvis');
 
     await catalogTurn(parent.agent, tell(name, FIRST));
 

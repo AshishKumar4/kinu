@@ -181,7 +181,7 @@ describe('the post-turn lanes', () => {
   const notes = (harness: Harness): number => count(harness, "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'");
 
   const advisorsWorking = (harness: Harness): number =>
-    count(harness, "SELECT COUNT(*) AS n FROM actor_subordinates WHERE (name = 'ask-advisor' OR name LIKE 'ask-advisor-%') AND status = 'working'");
+    count(harness, "SELECT COUNT(*) AS n FROM actor_subagents WHERE (name = 'ask-advisor' OR name LIKE 'ask-advisor-%') AND status = 'working'");
 
   // The workspace agent's review was the one recorded without its model: its snapshot was cf's own, not its advisor's.
   test("the workspace agent's owed review names the advisor's model, as every agent's does", async () => {

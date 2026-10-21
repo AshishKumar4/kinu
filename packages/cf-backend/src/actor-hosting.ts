@@ -19,7 +19,7 @@ import {
   type NodeHomeHost, type NodeWorkspace, type ProfileAuthorityInputs,
   type ResolvedTurnProfile, type SeatedActor, type SlateCallResult, type SlateOperation, type SqlExec,
   type SqlExecutor, type SqlValue, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
-  type WriteObserver, actorPolicy, isSubordinateOrigin, type TierRefusals, currentOperationProfile, providerAccounts,
+  type WriteObserver, actorPolicy, isSubagentOrigin, type TierRefusals, currentOperationProfile, providerAccounts,
 } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { flight, KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
@@ -61,7 +61,7 @@ export interface WorkspaceHostSeams {
   /** Root-owned uid-0 view, principal registry and uid table, so homes are provisioned in this isolate. */
   homeHost(): Promise<NodeHomeHost>;
   readonly homes: HostedActorHomes;
-  /** The profile authority chats resolve through, so role restrictions narrow heads, nodes and subordinates identically. */
+  /** The profile authority chats resolve through, so role restrictions narrow heads, nodes and subagents identically. */
   resolveProfile(input: {
     readonly actor: ActorHandle;
     readonly availableTools: readonly string[];
@@ -97,7 +97,7 @@ export type CFSeat = SeatedActor<CFRuntime>;
 export interface HostedActorPlacement {
   /** A swarm node's home is in `head-`. */
   readonly homeName: string | null;
-  /** Origin-prefixed: a head's and a subordinate's differ. */
+  /** Origin-prefixed: a head's and a subagent's differ. */
   readonly shellId: string;
 }
 
@@ -106,7 +106,7 @@ export function hostedActorPlacement(record: WorkspaceActor): HostedActorPlaceme
 
   return {
     homeName: actorHomeName(record),
-    shellId: `${isSubordinateOrigin(record.origin) ? 'subordinate' : 'run'}:${record.storageKey}`,
+    shellId: `${isSubagentOrigin(record.origin) ? 'subagent' : 'run'}:${record.storageKey}`,
   };
 }
 
@@ -263,7 +263,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
       vfs: seams.workspaceBox(hostedActorPlacement(bound.record).shellId).store({ home: WORKSPACE_ROOT }) }),
 
     /**
-     * Heads and branches inherit the parent's promoted loop; hired subordinates start builtin.
+     * Heads and branches inherit the parent's promoted loop; hired subagents start builtin.
      * The root is always a readable parent (inheritance needs only durable state); a deeper
      * parent must be live, else the guard refuses rather than silently starting builtin.
      */

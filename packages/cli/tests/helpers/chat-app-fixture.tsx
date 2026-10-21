@@ -2,7 +2,7 @@
 import { createTestRenderer } from '@opentui/core/testing';
 import { InputRenderable, TextareaRenderable } from '@opentui/core';
 import { createRoot, flushSync } from '@opentui/react';
-import { missingSubordinateHistory, type EvolutionConfigView } from '@kinu.run/core';
+import { missingSubagentHistory, type EvolutionConfigView } from '@kinu.run/core';
 
 import type {
   AgentClient,
@@ -45,7 +45,7 @@ export function soloHub(client: AgentClient): TuiHubData {
       id: client.agentName, label: client.agentName, kind: 'main', status: 'idle',
       roleId: 'task', tierId: 'default', workspace: client.agentName,
     }],
-    subordinates: [],
+    subagents: [],
     work: [],
     helpers: [],
     profile: {
@@ -80,7 +80,7 @@ interface FakeClientOptions {
   connect?: AgentClient['connect'];
   history?: AgentClient['history'];
   rename?: AgentClient['rename'];
-  inspectSubordinate?: AgentClient['inspectSubordinate'];
+  inspectSubagent?: AgentClient['inspectSubagent'];
   workspaceWork?: AgentClient['workspaceWork'];
   listJobs?: AgentClient['listJobs'];
   workspaceSpend?: AgentClient['workspaceSpend'];
@@ -180,7 +180,7 @@ export function fakeClient(options: FakeClientOptions) {
       failures: [],
     })),
     testModel: options.testModel ?? (async () => ({ ok: true, firstTokenMs: 0, totalMs: 0 })),
-    inspectSubordinate: options.inspectSubordinate ?? (async (request) => missingSubordinateHistory(request.path)),
+    inspectSubagent: options.inspectSubagent ?? (async (request) => missingSubagentHistory(request.path)),
     workspaceWork: options.workspaceWork ?? (async () => ({ plans: [], tasks: [] })),
   };
 

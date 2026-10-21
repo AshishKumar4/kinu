@@ -102,14 +102,14 @@ import { Effect } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import type { ActorLedger } from './results';
 import { inspectedStepMessages, type StepMessageCache, type StepMessages } from './transcript';
-import { StepOutputInspectionSchema } from '../../packages/core/src/subordinates/inspection';
+import { StepOutputInspectionSchema } from '../../packages/core/src/subagents/inspection';
 import { helperAddress, ROOT, type HelperAddress } from './helper-address';
 
 import {
   EVAL_WORKSPACE_BEAT_MS, hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG,
   RunEventSchema, SendStateSchema, STEER_STEP_METADATA_KEY, ChatHistoryEntrySchema, positionPageSchema, renderSoulMarkdown, CommandResultSchema,
   type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type PositionPageRequest, type RunEvent, type SendState,
-  type SubordinateInspectionRequest, type WorkMode, type WorkspaceSpend,
+  type SubagentInspectionRequest, type WorkMode, type WorkspaceSpend,
   QualityDaySchema, type QualityDay, betaSwarms,
   ChangelogEntrySchema, RefinementListingSchema, type ChangelogEntry, type RefinementListing,
 } from '../../packages/core/src/index';
@@ -326,7 +326,7 @@ function pageOf<Item extends v.GenericSchema>(item: Item) {
   ]);
 }
 
-/** The inspector's answers a check reads (`inspectSubordinate`): the lead's helpers and each helper's runs. */
+/** The inspector's answers a check reads (`inspectSubagent`): the lead's helpers and each helper's runs. */
 export const InspectionAnswerSchema = v.variant('view', [
   StepOutputInspectionSchema,
   v.object({ view: v.literal('children'), page: pageOf(v.object({
@@ -492,24 +492,24 @@ const SlateListingSchema = v.object({
 
 export type PublicSlateListing = v.InferOutput<typeof SlateListingSchema>;
 
-/** The roster rows `listSubordinates` serves (orchestrator.ts:5536), narrowed
+/** The roster rows `listSubagents` serves (orchestrator.ts:5536), narrowed
  *  to the three facts a delegation case grades: WHO was hired, whether the row
  *  is still active, and the `lifetime` that decided it — the one column no
- *  later state recovers (core/src/subordinates/roster.ts:38-44), which is what
+ *  later state recovers (core/src/subagents/roster.ts:38-44), which is what
  *  makes "a task hire retired itself" checkable at all.
  *
  *  The RPC the AGENT SURFACE reads: `AgentSurface.tsx:321`'s `loadRoster` and
  *  the chat's own roster refresh (`hooks/use-workspace-reads.ts`) both call it. */
-const SubordinateRowSchema = v.object({
+const SubagentRowSchema = v.object({
   name: v.string(),
   status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
   lifetime: v.string(),
 });
 
-const SubordinateRosterSchema = v.array(SubordinateRowSchema);
+const SubagentRosterSchema = v.array(SubagentRowSchema);
 
 /** One row of the roster, as the Agents surface lists it. */
-export type PublicSubordinate = v.InferOutput<typeof SubordinateRowSchema>;
+export type PublicSubagent = v.InferOutput<typeof SubagentRowSchema>;
 
 /** An agent as the Agents panel lists it: `working` from a turn owed to it (queued, handed over, or due from its event
  *  log) through the claim that runs it, until that turn ends (core `read-models/workspace-agents.ts`). `open.path` is a
@@ -1317,12 +1317,12 @@ export class KinuPublicSession {
     }
   }
 
-  /** A subordinate's children, transcript, runs or events, as the Agents surface's inspector reads them
-   *  (`inspectSubordinate`). */
-  async inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer> {
+  /** A subagent's children, transcript, runs or events, as the Agents surface's inspector reads them
+   *  (`inspectSubagent`). */
+  async inspect(request: SubagentInspectionRequest): Promise<InspectionAnswer> {
     return v.parse(InspectionAnswerSchema, await this.boundary(
-      `inspectSubordinate on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('inspectSubordinate', [v.parse(JsonValueSchema, request)]),
+      `inspectSubagent on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('inspectSubagent', [v.parse(JsonValueSchema, request)]),
     ));
   }
 
@@ -1361,7 +1361,7 @@ export class KinuPublicSession {
   }
 
   /**
-   * The delegation roster — `listSubordinates`, the RPC the Agents surface's
+   * The delegation roster — `listSubagents`, the RPC the Agents surface's
    * own card is bound to (`components/surfaces/AgentSurface.tsx:321`) and the
    * one the chat refreshes on every reconnect (`hooks/use-kinu.ts:1990`).
    *
@@ -1370,13 +1370,13 @@ export class KinuPublicSession {
    * only the roster holds — a hire result says who was hired, never who is
    * still employed.
    */
-  async subordinates(): Promise<readonly PublicSubordinate[]> {
+  async subagents(): Promise<readonly PublicSubagent[]> {
     const rows = await this.boundary(
-      `listSubordinates on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('listSubordinates', []),
+      `listSubagents on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('listSubagents', []),
     );
 
-    return v.parse(SubordinateRosterSchema, rows);
+    return v.parse(SubagentRosterSchema, rows);
   }
 
   /** Every agent of the workspace as the Agents panel lists it (`listWorkspaceAgents`, `hooks/use-kinu.ts`). */

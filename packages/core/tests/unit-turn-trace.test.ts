@@ -9,7 +9,7 @@ import { jsonSchema, tool } from 'ai';
 import { scriptedTurnModel, type ScriptedTurnResult, admitTestClaim, createRecordingTracer } from '@kinu.run/test-utils';
 import { sessionFixture } from './helpers-session';
 import { recoverActorTurns } from '../src/state/actor-host';
-import { createAgentsTool, ROOT_DELEGATION_BUDGET, type SubordinateHandoff, type SubordinateRosterEntry, type TeamToolDeps } from '../src/index';
+import { createAgentsTool, ROOT_DELEGATION_BUDGET, type SubagentHandoff, type SubagentRosterEntry, type TeamToolDeps } from '../src/index';
 import {
   createAgentTracing,
 } from '../src/obs/index';
@@ -24,7 +24,7 @@ const ANSWER = 'Done: plan written and the researcher told.';
 
 const FILE_RESULT = { ok: true, path: 'plan.txt', note: 'wrote launch codes 7731' };
 
-const roster: SubordinateRosterEntry = {
+const roster: SubagentRosterEntry = {
   name: 'researcher', actorReference: null, birth: null, deleteRequested: false,
   origin: 'agent', status: 'idle', currentTask: null, createdAt: 1,
   dismissedAt: null, lifetime: 'durable', taskEventId: null,
@@ -33,15 +33,15 @@ const roster: SubordinateRosterEntry = {
 /** Only `msg`'s path is exercised: the roster lists the researcher and `message` hands off. */
 function team() {
   const messages: string[] = [];
-  const handoff = { eventId: 'ev-1', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } } satisfies SubordinateHandoff;
+  const handoff = { eventId: 'ev-1', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } } satisfies SubagentHandoff;
 
   const deps: TeamToolDeps = {
     delegation: ROOT_DELEGATION_BUDGET,
     list: async () => [roster],
     snapshot: () => [roster],
     knows: async (name) => name === roster.name,
-    create: async () => ({ name: roster.name, displayName: 'Researcher', subordinate: roster }),
-    rename: async (input) => ({ ok: true, name: input.name, displayName: input.displayName, subordinate: roster }),
+    create: async () => ({ name: roster.name, displayName: 'Researcher', subagent: roster }),
+    rename: async (input) => ({ ok: true, name: input.name, displayName: input.displayName, subagent: roster }),
     spawn: async () => ({ name: roster.name, displayName: 'Researcher' }),
     status: async () => ({ roster: [roster] }),
     dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true, stoppedJobs: [] }),
@@ -126,7 +126,7 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
     expect(span.attributes.get('kinu.duration_ms')).toBeGreaterThanOrEqual(0);
     // The hosted actor, not the object's root, owns every span of its turn.
     expect(span.attributes.get('kinu.actor')).toBe('cc1ea3f2cd703a7c');
-    expect(span.attributes.get('kinu.actor_kind')).toBe('subordinate');
+    expect(span.attributes.get('kinu.actor_kind')).toBe('subagent');
     expect(span.exceptions).toEqual([]);
   }
 
@@ -166,7 +166,7 @@ test('a turn a dead process left admitted is recorded settled when recovery clos
     expect(Object.fromEntries(settled?.attributes ?? [])).toMatchObject({
       'kinu.turn': 'dad8e99b8d206857', 'kinu.turn.epoch': admitted.epoch,
       'kinu.turn.outcome': 'error', 'kinu.turn.recovered': true,
-      'kinu.actor': 'cd1ea585cc7038e9', 'kinu.actor_kind': 'subordinate',
+      'kinu.actor': 'cd1ea585cc7038e9', 'kinu.actor_kind': 'subagent',
     });
     expect(settled?.openAcrossAwait).toBe(false);
   } finally {

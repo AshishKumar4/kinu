@@ -9,7 +9,7 @@ import { MEMORY_PATH } from '@kinu.run/core';
 import { createCLIRuntime, makeSql } from '@kinu.run/cli-backend';
 import { createCliAgent } from '../src/agent-create';
 import { AGENT_HOME, agentDbPath, updateConfigFile } from '../src/config';
-import { getLocalAgentState, inspectLocalSubordinate, listLocalExecutors, readLocalMemory, searchLocalMemory } from '../src/local-inspection';
+import { getLocalAgentState, inspectLocalSubagent, listLocalExecutors, readLocalMemory, searchLocalMemory } from '../src/local-inspection';
 import { present } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { claimFences } from '@kinu.run/core';
@@ -44,7 +44,7 @@ async function say(db: Database, actor: ActorHandle, said: { id: string; content
   await seedTranscriptEntry(history, said.session ?? CHAT_SESSION_ID, { id: said.id, origin: 'input', message: { role: 'user', content: said.content } });
 }
 
-describe('local inspection of a subordinate', () => {
+describe('local inspection of a subagent', () => {
   test('a request that names an actor reads that actor\'s kept chat, not the owner\'s', async () => {
     await createCliAgent({
       name: NAME, mode: 'local', purpose: 'inspect a helper',
@@ -62,7 +62,7 @@ describe('local inspection of a subordinate', () => {
     await say(db, helper, { id: 'helper-words', content: 'the refiner answered' });
     db.close();
 
-    const read = await inspectLocalSubordinate(NAME, { path: [], view: 'history', page: {}, actor: helper.actorId });
+    const read = await inspectLocalSubagent(NAME, { path: [], view: 'history', page: {}, actor: helper.actorId });
 
     expect(read).toMatchObject({ view: 'history', page: { items: [{ parts: [{ type: 'text', text: 'the refiner answered' }] }] } });
   });

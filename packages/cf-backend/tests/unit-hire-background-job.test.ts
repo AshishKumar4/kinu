@@ -49,7 +49,7 @@ async function hiredServer() {
   workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
   // An agent added takes the workspace's purpose, so the workspace has one first.
   await workspace.agent.setSoul('# Purpose\n\nRun the dev server.');
-  const { name } = await workspace.agent.createSubordinateAgent();
+  const { name } = await workspace.agent.createSubagentAgent();
   const route = await workspace.agent.resolveHostedActorRoute(name);
 
   if ('reason' in route) throw new Error(route.error);

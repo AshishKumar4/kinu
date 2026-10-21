@@ -14,7 +14,7 @@ import {
   type SessionNotification,
 } from '@agentclientprotocol/sdk';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
-import { missingSubordinateHistory, type ShellApprovalOutcome, type ShellApprovalRequest } from '@kinu.run/core';
+import { missingSubagentHistory, type ShellApprovalOutcome, type ShellApprovalRequest } from '@kinu.run/core';
 import { createAcpAgent } from '../src/acp/agent';
 import { CloudTurnStream } from '../src/cloud-turn-stream';
 import { createCliSession } from '../src/session';
@@ -128,7 +128,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     setEvolutionConfig: async () => { throw new Error('no evolution config'); },
     listModels: async () => ({ models: [], failures: [] }),
     testModel: async () => ({ ok: true, firstTokenMs: 0, totalMs: 0 }),
-    inspectSubordinate: async (request) => missingSubordinateHistory(request.path),
+    inspectSubagent: async (request) => missingSubagentHistory(request.path),
     workspaceWork: async () => ({ plans: [], tasks: [] }),
   };
 

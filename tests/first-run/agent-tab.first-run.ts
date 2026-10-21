@@ -2,10 +2,10 @@
  * FIRST RUN: the agent tab the web UI's "+" opens answers its own reads.
  *
  * THE ASK. Create a subagent exactly the way the tab strip's "+" does —
- * `createSubordinateAgent`, the call `WorkspacePage`'s `createAndOpenAgent`
- * makes through `useKinu`'s `createSubordinate` — then open that actor's OWN
+ * `createSubagentAgent`, the call `WorkspacePage`'s `createAndOpenAgent`
+ * makes through `useKinu`'s `createSubagent` — then open that actor's OWN
  * chat path and ask over it the two RPCs the tab makes on mount:
- * `getActorSnapshot` (the read `loadSubordinateData` depends on) and
+ * `getActorSnapshot` (the read `loadSubagentData` depends on) and
  * `getChatHistoryPage` naming the actor's id (the read `useChatThread` draws the
  * tab's conversation from). Then send one
  * message to that subagent and read its answer. Every check reads what the
@@ -183,16 +183,16 @@ describe(SUITE, () => {
           }
 
           // ── The "+" path: one call, identity only, no form. ─────────────
-          const createdAnswer = await ask(rootSocket, 'createSubordinateAgent', []);
+          const createdAnswer = await ask(rootSocket, 'createSubagentAgent', []);
           const created = createdAnswer.ok ? v.safeParse(CreatedSchema, createdAnswer.value) : null;
 
           subgoals.push({
             what: 'tab-creates',
             reached: created !== null && created.success,
             detail: rpcDetail({
-              rpc: 'createSubordinateAgent', answer: createdAnswer, refusal: 'refused',
+              rpc: 'createSubagentAgent', answer: createdAnswer, refusal: 'refused',
               said: created !== null && created.success
-                ? `createSubordinateAgent answered with ${JSON.stringify(created.output.name)}`
+                ? `createSubagentAgent answered with ${JSON.stringify(created.output.name)}`
                 : null,
             }),
           });

@@ -16,7 +16,7 @@ import {
 import { analyticsPlane, type AnalyticsEnv, type AnalyticsWriter } from './writer';
 
 /**
- * `''` means not attributable to one actor. Only the root writes rows: subordinates, heads and
+ * `''` means not attributable to one actor. Only the root writes rows: subagents, heads and
  * branches run `runHeadInference` and record nothing, so fleet metrics omit their spend.
  */
 export type AgentKind = 'orchestrator' | '';
