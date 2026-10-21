@@ -28,7 +28,8 @@ export function Menu({ label, items, trigger }: {
       <DropdownMenu.Trigger render={<button type="button" aria-label={label} title={label} data-row-menu className="p-menu-trigger" />}>
         {trigger ?? <DotsThreeIcon size={16} weight="bold" />}
       </DropdownMenu.Trigger>
-      <DropdownMenu.Content align="end" className="p-menu">
+      {/* Its positioner over a dialog's scrim (z-50) and under the design bar: a row's ⋯ opens inside Plugins' modal too. */}
+      <DropdownMenu.Content align="end" className="p-menu" style={{ zIndex: 60 }}>
         {items.map(({ label: itemLabel, title, icon: Icon, run, danger = false, apart = false }) => (
           <div key={itemLabel} className="contents">
             {apart && <DropdownMenu.Separator />}

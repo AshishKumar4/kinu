@@ -305,10 +305,11 @@ body { background: var(--c-bg); color: var(--c-text); }
 @layer components {
 
 /* ── Chat markdown ─────────────────────────────────────────────────── */
-/* The `chat` role — agent response prose: 16px/26px at a 16px root. */
+/* The `chat` role — agent response prose: Inter at 15.5px/26px, the x-height Schibsted's 16px had
+   (docs/DESIGN-SYSTEM.md §1.3). */
 .prose-chat {
-  font-size: 1rem; line-height: 1.625; color: var(--c-text-2);
-  letter-spacing: -0.006em;
+  font-size: 0.96875rem; line-height: 1.68; color: var(--c-text-2);
+  letter-spacing: 0;
   p { margin: 0.45em 0; }
   p:first-child { margin-top: 0; }
   p:last-child { margin-bottom: 0; }
@@ -358,7 +359,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* One name per role, in rem at a 16px root; the comment carries the pixel
    a default root renders. A `text-[…]` literal beside one of these is an
    exception and says why on its own line. */
-.p-t-chat     { font-size: 1rem; line-height: 1.625; }                                   /* chat prose — 16/26 */
+.p-t-chat     { font-size: 0.96875rem; line-height: 1.68; }                              /* chat prose — 15.5/26 */
 .p-t-composer { font-size: 1rem; line-height: 1.5; }                                     /* composer input — 16/24 */
 .p-t-control  { font-size: 0.875rem; line-height: 1.4286; font-weight: 500; }            /* navigation & controls — 14/20 */
 .p-t-status   { font-family: var(--font-ui); font-size: 0.75rem; line-height: 1.5; font-weight: 500; } /* status labels — 12/18, sans */
@@ -1805,16 +1806,16 @@ body > .annotation-toolbar {
    rem at a 16px root; comments carry the pixels a default root renders. */
 :is([data-workbench], .p-workbench) {
   .prose-chat {
-    /* 14.496px on 1.7 — the scale the owner approved for assistant prose. */
-    font-size: 0.906rem;
-    line-height: 1.7;
+    /* 14px on 1.72: Inter at the x-height of the 14.5px Schibsted the owner approved for assistant prose. */
+    font-size: 0.875rem;
+    line-height: 1.72;
 
     /* Headings were em-scaled off the prose size before d04: they keep that
        hierarchy rather than rem rungs. */
-    h1, h2, h3 { line-height: 1.7; }
+    h1, h2, h3 { line-height: 1.72; }
     h1 { font-size: 1.1em; } h2 { font-size: 1.05em; } h3 { font-size: 1em; }
   }
-  .p-t-chat    { font-size: 0.875rem; line-height: 1.6; }    /* user bubble — 14px */
+  .p-t-chat    { font-size: 0.84375rem; line-height: 1.6; }  /* user bubble — 13.5px, 14px Schibsted's x-height */
   .p-t-control { font-size: 0.6875rem; }                     /* navigation & controls — 11px */
   .p-t-status  { font-size: 0.6875rem; }                     /* status labels — 11px */
   .p-t-code    { font-size: 0.78125rem; line-height: 1.55; } /* code — 12.5px */

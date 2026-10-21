@@ -1,28 +1,25 @@
 /**
  * The faces under the owner's review, for the gallery build alone: nothing the app imports names them, so they never
- * ship. Each is fontsource's latin variable cut (OFL, beside it in `gallery-fonts/`). `<html data-face>` names one, and
- * `data-face-scope` how far it reaches: `chat`, the assistant's prose and the person's bubble; `everywhere`, those and
- * every page's UI and display text (`--font-ui`, `--font-display`). The chat is sized so its x-height matches Schibsted
- * Grotesk's at today's 14.5px (each face's own OS/2 sxHeight) and led per face; the UI sets its roles at their own px.
- * Fragment Mono sets code in every case. Unnamed, every page is as it ships.
+ * ship. `<html data-face>` names one, and `data-face-scope` how far it reaches: `chat`, the assistant's prose and the
+ * person's bubble; `everywhere`, those and every page's UI and display text (`--font-ui`, `--font-display`). Inter is
+ * the face the app ships; another is sized so its x-height matches Inter's at the chat's own sizes (each face's OS/2
+ * sxHeight) and led per face; the UI sets its roles at their own px. Fragment Mono sets code in every case. Unnamed, or
+ * named Inter, every page is as it ships.
  */
-import interUrl from "@/gallery-fonts/inter-latin-opsz.woff2?url";
+import schibstedUrl from "../public/assets/fonts/schibsted-latin-var.woff2?url";
 import geistUrl from "@/gallery-fonts/geist-latin-wght.woff2?url";
 
 interface ChatFace {
   readonly label: string;
-  /**
-   * Its own tracking, by role, where the shipped roles' (set for Schibsted) would be wrong for it everywhere. Inter's
-   * optical size already tightens it as it grows, so its body roles want none and its display roles only a little.
-   */
+  /** Its own tracking, by role, where the shipped roles' (set for Inter) would be wrong for it everywhere. */
   readonly roles?: Readonly<Record<string, string>>;
   readonly family: string | null;
   readonly url: string | null;
   /** OS/2 sxHeight over unitsPerEm. */
   readonly xHeight: number;
   /**
-   * The chat's copy of the face drawn this much of its size (`@font-face size-adjust`): Inter's x-height brought to
-   * Schibsted's, so the chat reads at the size it ships at. The UI sets the face unadjusted, at its roles' own px.
+   * The chat's copy of the face drawn this much of its size (`@font-face size-adjust`), so the chat reads at the size it
+   * ships at. The UI sets the face unadjusted, at its roles' own px.
    */
   readonly sizeAdjust?: number;
   /** Line height at the workbench's prose size. */
@@ -32,19 +29,12 @@ interface ChatFace {
 
 const SCHIBSTED_X_HEIGHT = 0.527;
 
+/** Inter's own: the face the app ships (core's web/fonts.ts), at the sizes index.css sets it. */
+const INTER_X_HEIGHT = 0.546;
+
 export const CHAT_FACES = {
-  schibsted: { label: "Schibsted Grotesk", family: null, url: null, xHeight: SCHIBSTED_X_HEIGHT, leading: 1.7, tracking: "-0.006em" },
-  inter: {
-    label: "Inter", family: "Gallery Inter", url: interUrl, xHeight: 0.546, sizeAdjust: SCHIBSTED_X_HEIGHT / 0.546, leading: 1.72, tracking: "0em",
-    roles: {
-      // Display (page titles, 24px) and headings: a touch tighter than none; Schibsted's -0.02em and -0.015em pinch it.
-      ".p-display": "-0.011em",
-      ".p-heading": "-0.008em",
-      ".prose-chat :is(h1,h2,h3)": "-0.006em",
-      // Body sizes, 11 to 15px: none.
-      ".p-title, .p-row-text, .p-meta, .p-button, .p-pill, .p-tool, .p-env-chip, .p-page-link, .p-bar-sizer, .p-bar-link, .p-bar-tab[data-title] :is(.p-bar-sizer, .p-bar-link)": "0em",
-    },
-  },
+  inter: { label: "Inter", family: null, url: null, xHeight: INTER_X_HEIGHT, leading: 1.72, tracking: "0em" },
+  schibsted: { label: "Schibsted Grotesk", family: "Gallery Schibsted", url: schibstedUrl, xHeight: SCHIBSTED_X_HEIGHT, leading: 1.7, tracking: "-0.006em" },
   geist: { label: "Geist", family: "Gallery Geist", url: geistUrl, xHeight: 0.53, leading: 1.7, tracking: "0em" },
 } as const satisfies Record<string, ChatFace>;
 
@@ -57,14 +47,14 @@ export const FACE_SCOPES = ["chat", "everywhere"] as const;
 export type FaceScope = (typeof FACE_SCOPES)[number];
 
 /** The prose and bubble sizes the chat ships at, in rem: the workbench's (WorkspacePage) and the default's. */
-const SHIPPED = { workbench: { prose: 0.906, bubble: 0.875 }, page: { prose: 1, bubble: 1 } } as const;
+const SHIPPED = { workbench: { prose: 0.875, bubble: 0.84375 }, page: { prose: 0.96875, bubble: 0.96875 } } as const;
 
 function faceCss(name: ChatFaceName): string {
   const face: ChatFace = CHAT_FACES[name];
 
   if (face.family === null || face.url === null) return "";
   const adjust = face.sizeAdjust ?? 1;
-  const ratio = SCHIBSTED_X_HEIGHT / (face.xHeight * adjust);
+  const ratio = INTER_X_HEIGHT / (face.xHeight * adjust);
   const fallback = `-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"`;
   const stack = `"${face.family}", ${fallback}`;
   const chatStack = `"${face.family} Chat", ${fallback}`;

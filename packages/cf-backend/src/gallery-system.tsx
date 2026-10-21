@@ -39,6 +39,7 @@ import { Tabs } from "@/components/ui/Tabs";
 import { CaptureMat, TILE, TILE_GRID, TileShell, TypesetCover } from "@/components/ui/Tiles";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { ChatMascot, personMascot, WorkspaceLogo } from "@/components/Marks";
+import { KumoPortalProvider } from "@cloudflare/kumo";
 import { THEME_NAMES, type ThemeName } from "@kinu.run/core";
 import { GALLERY_PICTURE, galleryPicture } from "@/gallery-pictures";
 
@@ -152,10 +153,11 @@ function groundOf(colour: (token: string) => Rgba, ground: string): Rgba {
 function Quadrant({ look, mode, children }: { look: ThemeName; mode: "light" | "dark"; children: (colour: (token: string) => Rgba) => ReactNode }) {
   const [scope, colour] = useLook();
 
+  // Kumo's popups (a menu, a select, a popover) open inside the quadrant, so they wear its look and not the page's.
   return (
-    <div ref={scope} data-theme={look} data-mode={mode} data-system-look={`${look}-${mode}`} className="min-w-0 rounded-[var(--r-card)] border p-border p-bg p-text p-6">
+    <div ref={scope} data-theme={look} data-mode={mode} data-system-look={`${look}-${mode}`} className="relative min-w-0 rounded-[var(--r-card)] border p-border p-bg p-text p-6">
       <p className="mb-4 t-label">{LOOK_NAME[look]} {mode}</p>
-      {children(colour)}
+      <KumoPortalProvider container={scope}>{children(colour)}</KumoPortalProvider>
     </div>
   );
 }

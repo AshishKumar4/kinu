@@ -2387,7 +2387,9 @@ describe('a revoked device whose command may still run', () => {
       // Revoke is in the row's menu, beside Rename.
       await page.waitForSelector('[data-device="dev-1"] [data-row-menu]');
       await page.click('[data-device="dev-1"] [data-row-menu]');
-      await page.click('[title="Revoke device"]');
+      // The menu is a popup that opens on the press, so its item is there once it has.
+      await page.waitForSelector('[role="menuitem"][title="Revoke device"]');
+      await page.click('[role="menuitem"][title="Revoke device"]');
       await page.waitForSelector('[role="dialog"]');
       expect(await page.$eval('[role="dialog"]', (dialog) => dialog.textContent ?? '')).toContain('Agents will lose access');
       await pressInDialog(page, 'Revoke');
