@@ -13,6 +13,7 @@ import { AgentsNavProvider, useAgentsNav } from "@/hooks/use-agents-nav";
 import { DESKTOP_QUERY } from "@/hooks/use-media-query";
 import { AppBackground } from "./AppBackground";
 import { Button } from "@/components/ui/Button";
+import { Surface } from "@/components/ui/Surface";
 
 /** The root isolates its stacking so the negative-z canvas paints above its ground and under in-flow children. */
 
@@ -69,7 +70,7 @@ function Shell() {
   return (
     <WorkspaceRosterProvider>
     <OwnerAlerts />
-    <div className="isolate flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
+    <Surface look="page" className="isolate flex h-screen w-screen flex-col p-text overflow-hidden md:flex-row">
       <AppBackground />
       <header className={`h-14 shrink-0 items-center justify-between border-b p-border p-sidebar px-3 md:hidden ${ownBar ? "hidden" : "flex"}`}>
         <div className="flex items-center gap-1">
@@ -89,9 +90,9 @@ function Shell() {
       {drawerOpen && (
         <div className="fixed inset-0 z-50 animate-fade-in md:hidden">
           <div className="p-scrim absolute inset-0" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
-          <aside data-drawer role="dialog" aria-modal="true" aria-label="Menu" className="absolute inset-y-0 left-0 w-72 max-w-[85vw] p-sidebar border-r p-border p-shadow-overlay">
+          <Surface look="chrome" as="aside" className="absolute inset-y-0 left-0 w-72 max-w-[85vw] border-r p-border p-shadow-overlay" data-drawer role="dialog" aria-modal="true" aria-label="Menu">
             <Sidebar />
-          </aside>
+          </Surface>
         </div>
       )}
 
@@ -103,7 +104,7 @@ function Shell() {
         </DrawerContext.Provider>
       </main>
 
-    </div>
+    </Surface>
     </WorkspaceRosterProvider>
   );
 }

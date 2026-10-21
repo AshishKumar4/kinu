@@ -18,6 +18,7 @@ import { personReaches, reachConnection } from "@/components/slates/ForkReachPan
 import { registerWorkspace } from "@/lib/user-api";
 import { getBlueprint, signedInEmail } from "@/lib/shared-api";
 import { Notice } from "@/components/ui/Notice";
+import { Surface } from "@/components/ui/Surface";
 
 export function SecretWarning({ warnings, children }: { warnings: BlueprintView["warnings"]; children: ReactNode }) {
   if (warnings.length === 0) return null;
@@ -119,7 +120,7 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
   };
 
   return (
-    <div className="min-h-screen p-bg p-text">
+    <Surface look="page" className="min-h-screen p-text">
       <header className="flex h-14 items-center justify-between border-b p-border px-5">
         <a href="/" aria-label="Kinu home" className="flex items-center"><KinuLogo /></a>
         <span className="t-meta p-text-3">Shared blueprint</span>
@@ -149,6 +150,6 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
       {/* Outside the shell: no sidebar lists the new workspace, so it is only registered. */}
       {forking && view !== null && <ForkDialog blueprint={view.id} title={view.title} onClose={() => setForking(false)} workspaces={workspaces}
         create={(mission) => registerWorkspace(undefined, mission.trim())} />}
-    </div>
+    </Surface>
   );
 }

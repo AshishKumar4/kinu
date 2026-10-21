@@ -18,6 +18,7 @@ import type {
 } from "@kinu.run/core";
 import { breakdownView, shareOfMeasured, type BreakdownPlane, type BreakdownRow } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
 
 const STREAMING_POLL_MS = 1500;
 
@@ -172,9 +173,9 @@ function Meter({ value }: { value: number }) {
   const tone = value >= 0.9 ? "var(--c-danger)" : belowDanger;
 
   return (
-    <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--c-hover)" }}>
-      <div className="h-full rounded-full" style={{ width: `${pct}%`, background: tone }} />
-    </div>
+    <Surface look="round" className="h-1.5 overflow-hidden" style={{ background: "var(--c-hover)" }}>
+      <Surface look="round" className="h-full" style={{ width: `${pct}%`, background: tone }} />
+    </Surface>
   );
 }
 
@@ -225,7 +226,7 @@ function StackedBar(
 ) {
   return (
     <div>
-      <div className="flex h-3 rounded-sm overflow-hidden" style={{ background: "var(--c-hover)" }}>
+      <Surface look="clip" className="flex h-3 overflow-hidden" style={{ background: "var(--c-hover)" }}>
         {planes.map((row) => (
           <div
             key={row.plane}
@@ -233,7 +234,7 @@ function StackedBar(
             title={`${PLANE_LABEL[row.plane]}: ${row.chars.toLocaleString()} composed characters`}
           />
         ))}
-      </div>
+      </Surface>
       <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
         {planes.map((row) => (
           <span key={row.plane} className="t-meta flex items-center gap-1 p-text-3">
@@ -438,7 +439,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                         >{mission.label}</span>
                         <span className="t-body p-text-3 shrink-0">×{mission.calls}</span>
                         {mission.exhausted && (
-                          <span className="px-1 rounded-sm p-badge-danger shrink-0">spent</span>
+                          <Surface look="clip" as="span" className="px-1 p-badge-danger shrink-0">spent</Surface>
                         )}
                       </span>
                     </td>
@@ -742,9 +743,9 @@ export function LogBlock({ log }: { log: readonly ActivityLogEntry[] }) {
           Nothing has been logged yet. The first turn starts the log.
         </Empty>
       ) : (
-        <ol className="max-h-72 overflow-y-auto rounded-lg border p-border p-surface m-0 list-none p-0">
+        <Surface look="panel" as="ol" className="max-h-72 overflow-y-auto m-0 list-none p-0">
           {rows}
-        </ol>
+        </Surface>
       )}
     </section>
   );

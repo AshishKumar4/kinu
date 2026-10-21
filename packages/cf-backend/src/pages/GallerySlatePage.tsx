@@ -24,6 +24,7 @@ import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { readExplore, type ExploreItem } from "@/lib/explore-api";
 import { readGallerySlate, reportListing, starListing } from "@/lib/gallery-api";
 import { Group } from "@/components/ui/Group";
+import { Surface } from "@/components/ui/Surface";
 
 function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; onClose: () => void; onSent: () => void }) {
   const [reason, setReason] = useState("");
@@ -155,10 +156,10 @@ export default function GallerySlatePage() {
         </>
       )}>
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-        <div data-gallery-hero className="relative aspect-[2/1] overflow-hidden rounded-[var(--r-card)] border p-border">
+        <Surface look="outlined" className="relative aspect-[2/1] overflow-hidden" data-gallery-hero>
           <SlatePicture workspace={listing.workspace} slate={{ id: listing.slate, title: listing.title, picture: listing.picture }} at={galleryPicturePath}
             className="absolute inset-0 size-full object-cover object-left-top" fallback={<TypesetCover title={listing.title} line={listing.line} />} />
-        </div>
+        </Surface>
         <div className="min-w-0 space-y-4">
           <p className="t-body flex items-center gap-2 p-text-3"><Avatar name={listing.owner.name} size={20} />{listing.owner.name} · {CATEGORY_WORDS[listing.category]}</p>
           <p className="t-body p-text-2">{listing.line}</p>

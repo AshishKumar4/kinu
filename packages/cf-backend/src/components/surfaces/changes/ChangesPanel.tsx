@@ -12,6 +12,7 @@ import { ChangeMark, count, Counts, DiffBody, sinceLabel } from "./diff";
 import { FileTree, IconButton, MarkReviewed, Since, SourceMenu, Summary, typing } from "./parts";
 import { NotesFailure, SendFeedback, useNotes } from "./notes";
 import { Button } from "@/components/ui/Button";
+import { Surface } from "@/components/ui/Surface";
 
 // Lazy: plannotator's panel loads only with the first note.
 const NotesPanel = lazy(() => import("./notes-panel"));
@@ -58,10 +59,10 @@ function NoLines({ file, onOpenInFiles }: { file: FileDiff; onOpenInFiles: (() =
   if (text === null) return null;
 
   return (
-    <div className="m-3 rounded-lg p-sunken px-3 py-3" data-no-lines={body.kind}>
+    <Surface look="well" className="m-3 px-3 py-3" data-no-lines={body.kind}>
       <p className="t-body p-text-2">{text}</p>
       {onOpenInFiles !== null && <Button variant="ghost" size="sm" className="mt-2" onClick={onOpenInFiles}>Open in Files</Button>}
-    </div>
+    </Surface>
   );
 }
 
@@ -105,10 +106,10 @@ function NextFile({ next, reviewable, onOpen, onReviewed, onList }: {
 }) {
   if (next === undefined) {
     return (
-      <div className="mx-3 mb-6 mt-4 flex items-center gap-3 rounded-lg border p-border px-3 py-3">
+      <Surface look="outlined" className="mx-3 mb-6 mt-4 flex items-center gap-3 px-3 py-3">
         <span className="t-body min-w-0 flex-1 p-text-2">That is every change.</span>
         {reviewable ? <MarkReviewed onClick={onReviewed} /> : <Button variant="ghost" size="sm" onClick={onList}>All files</Button>}
-      </div>
+      </Surface>
     );
   }
 
@@ -255,8 +256,7 @@ function FileCard({ file, split, register, onOpenInFiles }: {
   const [folded, setFolded] = useState(false);
 
   return (
-    <section ref={(element) => register(file.path, element)} data-file-card={file.path} aria-label={file.path}
-      className="scroll-mt-3 overflow-clip rounded-xl border p-border p-sidebar">
+    <Surface look="chrome" as="section" className="scroll-mt-3 overflow-clip border p-border" ref={(element) => register(file.path, element)} data-file-card={file.path} aria-label={file.path}>
       <header className={`sticky top-0 z-[1] flex h-10 items-center gap-2 p-sidebar pl-2 pr-2 ${folded ? "" : "border-b p-border"}`}>
         <IconButton label={folded ? `Show ${file.path}` : `Fold ${file.path}`} onClick={() => setFolded((value) => !value)}>
           <CaretDownIcon size={12} className={`transition-transform ${folded ? "-rotate-90" : ""}`} />
@@ -270,7 +270,7 @@ function FileCard({ file, split, register, onOpenInFiles }: {
         </span>
       </header>
       {!folded && <FileBody file={file} stacked split={split} onOpenInFiles={onOpenInFiles === null ? null : () => onOpenInFiles(file.path)} />}
-    </section>
+    </Surface>
   );
 }
 
@@ -366,11 +366,11 @@ function Expanded({ files, repositories, file, split, tree, notesShown, onNotes,
           </div>
         </nav>
       )}
-      <div ref={stack} onScroll={follow} tabIndex={-1} className="min-w-0 flex-1 overflow-y-auto p-bg outline-none" data-review-stack>
+      <Surface look="page" className="min-w-0 flex-1 overflow-y-auto outline-none" ref={stack} onScroll={follow} tabIndex={-1} data-review-stack>
         <div className="space-y-4 px-5 py-4 max-md:px-2 max-md:py-3">
           {files.map((each) => <FileCard key={each.path} file={each} split={split} register={register} onOpenInFiles={onOpenInFiles} />)}
         </div>
-      </div>
+      </Surface>
       {notesShown && <Suspense><NotesPanel width={`${String(COLUMN_PX.notes)}px`} onClose={() => onNotes(false)} onReveal={reveal} /></Suspense>}
     </div>
   );

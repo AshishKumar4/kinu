@@ -13,6 +13,7 @@ import { mailBoxLabel } from "./MailRow";
 import { SendToWorkspace } from "./SendToWorkspace";
 import { Button } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
+import { Surface } from "@/components/ui/Surface";
 
 export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }: {
   id: string; boxes: readonly MailBox[]; owner: string; drafts: boolean; onBack: () => void; onChanged: () => void;
@@ -87,10 +88,10 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
         </div>
       </header>
       {thread.important !== null && <p data-mail-why className="t-body p-text-2">{thread.important}</p>}
-      {last !== undefined && !last.verified && <p data-mail-unverified-banner className="t-body flex items-center gap-2 rounded-lg bg-[var(--c-warning-tint)] px-3 py-2 p-text">
+      {last !== undefined && !last.verified && <Surface look="clip" as="p" className="t-body flex items-center gap-2 bg-[var(--c-warning-tint)] px-3 py-2 p-text" data-mail-unverified-banner>
         <ShieldWarningIcon size={15} weight="fill" className="shrink-0 p-warning" />
         {last.from.address.toLowerCase() === owner.toLowerCase() ? "Not verified · claims to be you" : "Not verified"}
-      </p>}
+      </Surface>}
       {messages.length > 0 && <div className="divide-y divide-dashed divide-[var(--c-dash)] border-y border-dashed border-[var(--c-dash)]">
         {messages.map((message) => <MailMessage key={message.id} mail={message} box={box} owner={owner} open={opened.get(message.id) ?? message.id === last?.id} onToggle={() => toggle(message.id)} />)}
       </div>}

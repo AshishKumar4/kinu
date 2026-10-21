@@ -6,6 +6,7 @@ import {
 } from "@phosphor-icons/react";
 import type { DeployStepRow } from "@kinu.run/core/deploy";
 import { Notice } from "@/components/ui/Notice";
+import { Surface } from "@/components/ui/Surface";
 
 export function StepRow({ row, onRetry }: {
   row: DeployStepRow;
@@ -26,7 +27,7 @@ export function StepRow({ row, onRetry }: {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2">
             <span className={`t-body ${row.state === "pending" ? "p-text-3" : "p-text"}`}>{row.title}</span>
-            {row.attempt > 1 && <span className="t-meta p-badge-neutral rounded-sm px-1 py-px">attempt {row.attempt}</span>}
+            {row.attempt > 1 && <Surface look="clip" as="span" className="t-meta p-badge-neutral px-1 py-px">attempt {row.attempt}</Surface>}
           </div>
           {row.state === "done" && row.detail !== "" && <p className="t-meta mt-px p-text-3">{row.detail}</p>}
           {row.state === "running" && note !== "" && <p className="t-meta mt-px p-text-3">{note}</p>}

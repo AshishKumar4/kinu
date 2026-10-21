@@ -5,6 +5,7 @@ import { toneFill, type StatusTone } from "@/components/ui/Status";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
 
 /** A trend needs this many rated days to say anything. */
 const TREND_DAYS = 3;
@@ -43,7 +44,7 @@ export function QualityView({ rpc, moved }: { rpc: WorkspaceRpc; moved: number }
         <p className="t-body p-text-3">No rated turns in the last 7 days.</p>
       ) : (
         <div className="flex items-baseline gap-3" title={`95% interval ${week.satisfaction.lo.toFixed(2)}–${week.satisfaction.hi.toFixed(2)}, ${week.from} to ${week.to} (UTC)`}>
-          <span className="size-2 shrink-0 self-center rounded-full" style={{ background: toneFill(toneOf(week.satisfaction.mean)) }} aria-hidden />
+          <Surface look="round" as="span" className="size-2 shrink-0 self-center" style={{ background: toneFill(toneOf(week.satisfaction.mean)) }} aria-hidden />
           <span className="t-title shrink-0 whitespace-nowrap tabular-nums p-text">
             {week.satisfaction.mean.toFixed(1)}<span className="t-body p-text-3"> / 5</span>
           </span>
@@ -99,8 +100,7 @@ function SatisfactionDays({ days }: { days: readonly QualityDay[] }) {
                   <>
                     <span className="absolute left-1/2 w-px -translate-x-1/2 opacity-50"
                       style={{ top: at(day.satisfaction.hi), bottom: `calc(100% - ${at(day.satisfaction.lo)})`, background: toneFill(toneOf(day.satisfaction.mean)) }} />
-                    <span className="absolute left-1/2 size-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-                      style={{ top: at(day.satisfaction.mean), background: toneFill(toneOf(day.satisfaction.mean)) }} />
+                    <Surface look="round" as="span" className="absolute left-1/2 size-[7px] -translate-x-1/2 -translate-y-1/2" style={{ top: at(day.satisfaction.mean), background: toneFill(toneOf(day.satisfaction.mean)) }} />
                   </>
                 )}
               </div>

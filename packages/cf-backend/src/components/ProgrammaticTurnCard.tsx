@@ -10,6 +10,7 @@ import {
 } from "@kinu.run/core";
 import { IconControl } from "@/components/ui/IconControl";
 import { PillButton } from "@/components/ui/Pill";
+import { Surface } from "@/components/ui/Surface";
 
 export type CardState = SignalCard["state"];
 
@@ -151,7 +152,7 @@ function DrainedEvents({ text, state, count }: { text: string; state: CardState;
       state={state}
       count={repeats * count}
       badge={event.replyExpected && (
-        <span className="t-meta shrink-0 rounded-sm px-1 p-badge-warning" title="The sender is waiting on the agent's reply">reply expected</span>
+        <Surface look="clip" as="span" className="t-meta shrink-0 px-1 p-badge-warning" title="The sender is waiting on the agent's reply">reply expected</Surface>
       )}
       hooks={{ "data-drained-event": event.variant, "data-reply-expected": event.replyExpected ? "" : undefined }}
     />

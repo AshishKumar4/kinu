@@ -6,6 +6,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { mailTime } from "./ImportantMailRow";
 import { Pressable } from "@/components/ui/Pressable";
+import { Surface } from "@/components/ui/Surface";
 
 export function mailExcerpt(text: string): string {
   const lines = splitQuotedReply(text).own.split("\n").map((line) => line.trim()).filter(Boolean);
@@ -35,9 +36,9 @@ export function SealedMailHtml({ html }: { html: string }) {
   const height = Math.min(520, Math.max(220, Math.round(html.replace(/<[^>]+>/gu, "").length * 0.85)));
 
   return (
-    <div className="resize-y overflow-hidden rounded-lg border p-border bg-white" style={{ height }}>
+    <Surface look="outlined" className="resize-y overflow-hidden bg-white" style={{ height }}>
       <iframe title="Message" sandbox="" referrerPolicy="no-referrer" srcDoc={sandboxedHtml(html)} data-mail-sealed className="block h-full w-full" />
-    </div>
+    </Surface>
   );
 }
 

@@ -13,6 +13,8 @@ import type { ChatActions } from "@/hooks/use-agents-nav";
 import { InspectorToggle, type InspectorControl } from "@/components/WorkbenchPanels";
 import { IconControl, IconLink } from "@/components/ui/IconControl";
 import { PressableLink } from "@/components/ui/Pressable";
+import { Surface } from "@/components/ui/Surface";
+import { Count } from "@/components/ui/Badge";
 
 type Rename = (name: string) => Promise<void>;
 
@@ -157,9 +159,9 @@ export function WorkspaceBarActions({ workspace, working, view, inspector, onAge
         <UsersThreeIcon size={16} />
         {/* The agents at work out of sight, those with no tab of their own, counted where the owner can open them. */}
         {working > 0 && (
-          <span data-working-agents={working} className="t-micro p-agents-badge absolute -right-px -top-px min-w-[14px] rounded-full px-[3px] text-center tabular-nums">
+          <Surface look="round" as="span" className="t-micro p-agents-badge absolute -right-px -top-px min-w-[14px] px-[3px] text-center tabular-nums" data-working-agents={working}>
             {working}
-          </span>
+          </Surface>
         )}
       </IconControl>
       <IconLink place="bar" to={`/workspace/${workspace}/settings`} aria-current={view === "settings" ? "page" : undefined} aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></IconLink>
@@ -200,7 +202,7 @@ export function FocusBar({ workspace, agent, line, leading, trailing, tabs }: {
         {tabs !== undefined && (
           <IconControl place="bar" className="relative" onClick={tabs.show} aria-label={`Show the ${String(tabs.count)} chats`} title="Show chats" data-focus-tabs>
             <ChatsCircleIcon size={16} />
-            <span className="t-micro absolute -right-px -top-px min-w-[14px] rounded-full bg-[var(--c-fill)] px-[3px] text-center tabular-nums p-text-2">{tabs.count}</span>
+            <Count count={tabs.count} tone="quiet" />
           </IconControl>
         )}
         {trailing}

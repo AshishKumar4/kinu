@@ -10,13 +10,14 @@ import { Button } from "@/components/ui/Button";
 import { type ConsentAsk, type EffectAsk, type JsonValue } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { rootWords, serverWords } from "./words";
+import { Surface } from "@/components/ui/Surface";
 
 /** What leaves, as it will leave: the payload's own JSON, never a summary of it. */
 function Payload({ value, ...data }: { value: JsonValue; [attribute: `data-${string}`]: string | boolean | undefined }) {
   return (
-    <pre {...data} className="t-meta t-mono max-h-56 overflow-auto rounded-lg p-sunken px-3 py-2 p-text whitespace-pre-wrap break-words">
+    <Surface look="well" as="pre" className="t-meta t-mono max-h-56 overflow-auto px-3 py-2 p-text whitespace-pre-wrap break-words" {...data}>
       {JSON.stringify(value, null, 2)}
-    </pre>
+    </Surface>
   );
 }
 

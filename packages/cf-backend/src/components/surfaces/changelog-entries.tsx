@@ -18,6 +18,7 @@ import { ScaffoldVersionDiff } from "./ScaffoldLineage";
 import { changelogFactKey } from "./shared";
 import { timeAgo } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Dot } from "@/components/ui/Dot";
 
 interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
 
@@ -200,7 +201,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
     <div className="min-w-0 flex-1">
       <div className="flex items-center gap-2">
         <span className="t-body p-text flex-1 decoration-[var(--c-border-strong)] underline-offset-4 group-hover/expander:underline" title={entry.summary}>{entry.summary}</span>
-        {fresh && !kept && <span className="shrink-0 size-1.5 rounded-full bg-[var(--c-accent)]" />}
+        {fresh && !kept && <Dot tone="accent" />}
       </div>
       <div className="t-meta mt-1 p-text-3">{timeAgo(entry.at)}</div>
     </div>

@@ -20,6 +20,7 @@ import { presetBrand } from "@/components/plugins/McpPresetCards";
 import { installBlueprint, type BlueprintPage } from "@/lib/explore-api";
 import { DEFAULT_ASSISTANT } from "@/components/assistant/AssistantStep";
 import { TextInput } from "@/components/ui/Field";
+import { Surface } from "@/components/ui/Surface";
 
 /** The brief times Install offers; the blueprint's own is 08:00. */
 const BRIEF_TIMES = ["07:00", "07:30", "08:00", "08:30", "09:00", "09:30"] as const;
@@ -65,7 +66,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
         )}
         <div>
           <div className="t-item mb-2 p-text">What it reaches</div>
-          <ul className="divide-y divide-[var(--c-border)] overflow-hidden rounded-xl border p-border">
+          <Surface look="outlined" as="ul" className="divide-y divide-[var(--c-border)] overflow-hidden">
             {page.workspace.needs.map((need) => {
               const brand = presetBrand(need.connection);
               const title = need.connection === null ? (need.secret ?? "A secret") : (mcpPresetById(need.connection)?.title ?? need.connection);
@@ -73,9 +74,9 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
 
               return (
                 <li key={`${need.connection ?? ""}${need.secret ?? ""}`} className="flex items-center gap-3 px-3 py-2">
-                  <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-[var(--c-hover)]">
+                  <Surface look="wash" as="span" className="flex size-6 shrink-0 items-center justify-center">
                     {brand !== undefined ? <BrandMark brand={brand} size={12} bare /> : <KeyIcon size={12} className="p-text-2" />}
-                  </span>
+                  </Surface>
                   <span className="min-w-0 flex-1">
                     <span className="t-body block p-text">{title} <span className="t-meta p-text-3">{need.access === "read" ? "to read" : "to read and write"}</span></span>
                   </span>
@@ -85,7 +86,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
                 </li>
               );
             })}
-          </ul>
+          </Surface>
           <p className="t-meta mt-2 p-text-3">Install now and connect the rest later: it asks for what it can't reach yet.</p>
         </div>
         {failure !== null && <p className="t-meta p-danger">{failure}</p>}

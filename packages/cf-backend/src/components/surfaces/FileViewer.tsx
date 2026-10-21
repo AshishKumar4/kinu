@@ -12,6 +12,7 @@ import {
   viewerKindOf, type FileText, type TextRender,
 } from "@kinu.run/core";
 import { Button } from "@/components/ui/Button";
+import { Surface } from "@/components/ui/Surface";
 
 export function FileViewer({ path, read, revision, rawHref, downloadHref, onSaved, onClose }: {
   path: string;
@@ -84,10 +85,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
   const editable = kind === "text" && fileTextEditable(file);
 
   return (
-    <div
-      data-files-preview
-      className="absolute inset-0 z-10 p-bg flex flex-col border-l p-border @[64rem]:static @[64rem]:w-[42%] @[64rem]:shrink-0"
-    >
+    <Surface look="page" className="absolute inset-0 z-10 flex flex-col border-l p-border @[64rem]:static @[64rem]:w-[42%] @[64rem]:shrink-0" data-files-preview>
       <div className="px-3 py-2 border-b p-border flex items-center gap-2 shrink-0">
         <FileIcon size={13} className="p-text-3 shrink-0" />
         <span className="t-meta t-mono p-text truncate" title={path}>{name}</span>
@@ -144,7 +142,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
       <div data-files-preview-body className="flex-1 min-h-0 overflow-auto">
         {kind === "image" && (
           <div className="h-full flex items-center justify-center p-4">
-            <img src={rawHref} alt={name} className="max-w-full max-h-full object-contain rounded-sm border p-border" />
+            <Surface look="outlined" as="img" className="max-w-full max-h-full object-contain" src={rawHref} alt={name} />
           </div>
         )}
         {kind === "pdf" && (
@@ -162,7 +160,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
           />
         )}
       </div>
-    </div>
+    </Surface>
   );
 }
 

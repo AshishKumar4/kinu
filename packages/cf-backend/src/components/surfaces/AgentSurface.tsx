@@ -31,6 +31,7 @@ import type { OrchestratorAgent } from "@/orchestrator";
 import { Group } from "@/components/ui/Group";
 import { IconControl } from "@/components/ui/IconControl";
 import { Chip } from "@/components/ui/Chip";
+import { Surface } from "@/components/ui/Surface";
 
 type Fact = Awaited<ReturnType<OrchestratorAgent["getFacts"]>>[number];
 
@@ -97,9 +98,9 @@ function Who({ as, workspace, address }: { as: AgentStatus; workspace: string | 
     <Section id="agent-who" title="Profile" icon={<IdentificationCardIcon size={14} className="p-text-2" />}>
       <div className="space-y-3">
         <div className="flex items-center gap-4">
-          <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl border p-border p-fill">
+          <Surface look="tile" as="span" className="flex size-12 shrink-0 items-center justify-center border p-border">
             <ChatMascot seed={look.seed} colour={look.colour} activity="idle" size={30} />
-          </span>
+          </Surface>
           <div className="min-w-0">
             <div className="t-title truncate p-text" title={title}>{title}</div>
             {address !== null && <div className="t-meta t-mono truncate p-text-2" data-agent-address>{address}</div>}
@@ -166,12 +167,12 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
     <Section id="memory" title="Memory" icon={<BrainIcon size={14} className="p-text-2" />}
       badge={facts.length + notes.length > 0 ? <Badge>{facts.length + notes.length}</Badge> : undefined}>
       <div className="space-y-3">
-        <label data-focus-box className="flex h-8 items-center gap-2 rounded-lg border p-border p-fill px-2">
+        <Surface look="tile" as="label" className="flex h-8 items-center gap-2 border p-border px-2" data-focus-box>
           <MagnifyingGlassIcon size={13} className="shrink-0 p-text-3" aria-hidden />
           <input value={search} onChange={(event) => { setSearch(event.target.value); onSearchMemory(event.target.value); }}
             placeholder="Search memory" aria-label="Search memory"
             className="t-body min-w-0 flex-1 bg-transparent p-text placeholder:p-text-3" />
-        </label>
+        </Surface>
 
         {/* The page's notice gives the reason once; this offers the retry. */}
         {read.state === "failed" && <LoadFailure what="memory" onRetry={read.retry} />}

@@ -6,6 +6,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
 import type { ReadMoves } from "@/hooks/use-workspace-reads";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
 
 type Repo = WorkspaceGitHubView["repos"][number];
 
@@ -67,14 +68,14 @@ function checkedLine(github: WorkspaceGitHubView): string {
 
 function Panel({ icon, title, count, children }: { icon: ReactNode; title: string; count: number | undefined; children: ReactNode }) {
   return (
-    <section className="flex min-w-0 flex-col rounded-xl border p-border">
+    <Surface look="outlined" as="section" className="flex min-w-0 flex-col">
       <header className="flex items-center gap-2 px-4 pb-2 pt-3">
         <span className="p-text-3">{icon}</span>
         <span className="t-item p-text-2">{title}</span>
         {count !== undefined && count > 0 && <span className="t-meta ml-auto tabular-nums p-text-3">{count}</span>}
       </header>
       <ul className="flex flex-col pb-1">{children}</ul>
-    </section>
+    </Surface>
   );
 }
 

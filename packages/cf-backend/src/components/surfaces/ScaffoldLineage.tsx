@@ -13,6 +13,7 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import type { OrchestratorAgent } from "@/orchestrator";
 import { Pressable } from "@/components/ui/Pressable";
 import { TextInput } from "@/components/ui/Field";
+import { Surface } from "@/components/ui/Surface";
 
 type ScaffoldDiff = Awaited<ReturnType<OrchestratorAgent["getScaffoldDiff"]>>;
 
@@ -30,14 +31,14 @@ function versionStatus(status: string): VersionStatus {
 
 function DiffView({ diff }: { diff: ScaffoldDiff }) {
   return (
-    <div className="rounded-md border p-border overflow-hidden">
+    <Surface look="outlined" className="overflow-hidden">
       <div className="t-meta t-mono flex items-center gap-3 px-3 py-1 border-b p-border p-text-3">
         <span>v{diff.previousVersion ?? "∅"} → v{diff.version}</span>
         <span className="p-success">+{diff.added}</span>
         <span className="p-danger">−{diff.removed}</span>
       </div>
       <DiffLines lines={diff.lines} />
-    </div>
+    </Surface>
   );
 }
 
@@ -130,7 +131,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
                   </Button>
                 </div>
                 {previewOut && (
-                  <pre className="t-code p-fill border p-border rounded-md p-2 max-h-40 overflow-auto whitespace-pre-wrap p-text-2">{previewOut}</pre>
+                  <Surface look="tile" as="pre" className="t-code border p-border p-2 max-h-40 overflow-auto whitespace-pre-wrap p-text-2">{previewOut}</Surface>
                 )}
               </div>
 

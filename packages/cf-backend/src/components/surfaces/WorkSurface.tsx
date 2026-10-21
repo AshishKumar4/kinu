@@ -38,6 +38,7 @@ import { PlanPageList } from "./PlanPage";
 import { usePlanPages } from "./use-plan-pages";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
 
 // A surface drawn only once it is chosen loads with its first view, outside the workspace's first chunk.
 const FilesSurface = lazyRoute<FilesSurfaceProps>(async () => {
@@ -283,7 +284,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const bodyFit = bodyFitFor(surface, previewSelected);
 
   return (
-    <div className="@container flex flex-col h-full p-sidebar">
+    <Surface look="chrome" className="@container flex flex-col h-full">
       <InspectorBar surface={surface} pages={pages} tools={tools} choose={choose} trailing={<>
         {chip !== null && (
           <button
@@ -369,7 +370,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
       </div>
       <ListingStatus error={props.previewError} starting={props.previewStarting} onRetry={props.onRefreshPorts} />
       {connecting && <ConnectDeviceDialog workspace={props.workspace} onClose={closeConnect} />}
-    </div>
+    </Surface>
   );
 }
 

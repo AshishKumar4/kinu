@@ -25,6 +25,7 @@ import type { WorkspaceWorkRead } from "./use-workspace-work";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Group } from "@/components/ui/Group";
 import { Pressable } from "@/components/ui/Pressable";
+import { Surface } from "@/components/ui/Surface";
 
 /** Kinds the attention stack decides: their rows open its card. */
 const STACKED: ReadonlySet<PendingActionKind> = new Set(["deferred_action"]);
@@ -121,7 +122,7 @@ function NeedsYou({ pendingActions, onOpenAsk, onOpenSurface, onOpenPlan }: {
   };
 
   return (
-    <div className="rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] bg-[var(--c-selected)] px-[18px] pt-2 pb-3 [&_.p-label]:!text-[var(--c-accent-fg)]">
+    <Surface look="selected" className="border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] px-[18px] pt-2 pb-3 [&_.p-label]:!text-[var(--c-accent-fg)]">
       <Section id="work-needs-you" title="Needs you"
         icon={<WarningCircleIcon size={14} className="p-warning" />}
         badge={<Badge>{pendingActions.length}</Badge>}>
@@ -131,7 +132,7 @@ function NeedsYou({ pendingActions, onOpenAsk, onOpenSurface, onOpenPlan }: {
           ))}
         </div>
       </Section>
-    </div>
+    </Surface>
   );
 }
 

@@ -13,6 +13,7 @@ import { EyeIcon, LockSimpleIcon, PlugIcon, SignInIcon, WarningCircleIcon } from
 import type { PartAction, PartRunAnswer } from "@kinu.run/core";
 import { serverWords } from "./words";
 import { TextInput } from "@/components/ui/Field";
+import { Surface } from "@/components/ui/Surface";
 
 /** What the frame does for its viewer; the decisions among them open in the top page. */
 export interface PartControls {
@@ -42,11 +43,11 @@ function InPlace({ icon, said, action, onAct, ...data }: {
   [attribute: `data-${string}`]: string | boolean | undefined;
 }) {
   return (
-    <div {...data} className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-lg p-sunken px-4 py-6 text-center">
+    <Surface look="well" className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-4 py-6 text-center" {...data}>
       <span className="shrink-0 p-text-3">{icon}</span>
       <p className="t-body max-w-sm p-text-2">{said}</p>
       {action !== null && <Button variant="primary" size="sm" onClick={onAct}>{action}</Button>}
-    </div>
+    </Surface>
   );
 }
 

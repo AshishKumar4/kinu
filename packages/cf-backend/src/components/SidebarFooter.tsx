@@ -12,6 +12,7 @@ import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
 import { NAV_HOVER } from "./nav";
 import { Pressable } from "@/components/ui/Pressable";
+import { Count } from "@/components/ui/Badge";
 
 /** Kinu's source. */
 const KINU_REPOSITORY = "https://github.com/AshishKumar4/kinu";
@@ -26,10 +27,7 @@ function CountBadge({ count, label }: { count: number; label: string }) {
   if (count <= 0) return null;
 
   return (
-    <span aria-label={label} data-count-badge={count}
-      className="t-micro absolute -right-px -top-px flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--c-accent)] px-1 text-[var(--c-accent-on)] ring-2 ring-[var(--c-sidebar)]">
-      {count > 9 ? "9+" : count}
-    </span>
+    <Count count={count} label={label} data-count-badge={count} />
   );
 }
 

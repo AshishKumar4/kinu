@@ -19,6 +19,7 @@ import { usePartHost } from "@/hooks/use-part-host";
 import { openLiveShare } from "@/lib/shared-api";
 import { signInAndReturn } from "@/lib/sign-in";
 import { Notice } from "@/components/ui/Notice";
+import { Surface } from "@/components/ui/Surface";
 
 /**
  * The share's slate, framed with its host context as the owner's previews frame it, so its page knows the app it answers
@@ -73,7 +74,7 @@ export default function LiveSharePage() {
   }, [workspace, share]);
 
   return (
-    <div className="flex h-dvh flex-col p-bg p-text">
+    <Surface look="page" className="flex h-dvh flex-col p-text">
       <header className="flex h-11 shrink-0 items-center gap-3 border-b p-border px-4">
         <a href="/" aria-label="Kinu home" className="flex shrink-0 items-center"><KinuLogo /></a>
         <span className="t-item min-w-0 flex-1 truncate" data-shared-title>{opened?.title ?? "Shared slate"}</span>
@@ -82,6 +83,6 @@ export default function LiveSharePage() {
       {signedOut && <SignInToOpen />}
       {opened === null && !signedOut && err === null && <div className="flex flex-1 items-center justify-center"><Loader size="base" /></div>}
       {err !== null && <main className="mx-auto w-full max-w-3xl px-6 py-8"><Notice tone="danger">{err}</Notice></main>}
-    </div>
+    </Surface>
   );
 }

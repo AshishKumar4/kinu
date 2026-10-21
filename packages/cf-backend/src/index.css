@@ -666,6 +666,25 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-icon-tile { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; border-radius: var(--r-inner); background: var(--c-hover); }
 .p-icon-tile.size-7 { border-radius: var(--r-control); }
 
+/* Surface (ui/Surface.tsx): the named grounds a box may take, each with its edge and radius. */
+.p-surface-page { background: var(--c-bg); }
+.p-surface-chrome { background: var(--c-sidebar); }
+.p-surface-panel { border: 1px solid var(--c-border); border-radius: var(--r-card); background: var(--c-surface); }
+.p-surface-sheet { background: var(--c-surface); }
+.p-surface-well { border-radius: var(--r-control); background: var(--c-sunken); }
+.p-surface-tile { border-radius: var(--r-inner); background: var(--c-fill); }
+.p-surface-wash { border-radius: var(--r-control); background: var(--c-hover); }
+.p-surface-selected { border-radius: var(--r-row); background: var(--c-selected); }
+.p-surface-outlined { border: 1px solid var(--c-border); border-radius: var(--r-control); }
+.p-surface-round { border-radius: var(--r-pill); }
+.p-surface-clip { overflow: hidden; border-radius: var(--r-control); }
+/* Count (ui/Badge.tsx): a count over a mark, at its top right. */
+.p-count { position: absolute; top: -1px; right: -1px; display: flex; min-width: 16px; height: 16px; align-items: center; justify-content: center; padding: 0 4px; border-radius: var(--r-pill); text-align: center; }
+.p-count-accent { background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 2px var(--c-sidebar); }
+.p-count-quiet { min-width: 14px; height: auto; padding: 0 3px; background: var(--c-fill); color: var(--c-text-2); }
+/* ProgressBar (ui/Meter.tsx): a run's steps, one thin bar on the fill, the accent's part growing. */
+.p-progress { height: 4px; width: 100%; overflow: hidden; border-radius: var(--r-pill); background: var(--c-fill); }
+.p-progress-fill { height: 100%; border-radius: var(--r-pill); background: var(--c-accent); transition: width var(--dur-fold) ease-out; }
 /* Rail (ui/Rail.tsx): a strip of the tabs above below its breakpoint, fading at its scrolling edge; a column of rows
    from it up, the open row on the selected ground. */
 .p-rail { display: flex; border-bottom: 1px solid var(--c-border); mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }

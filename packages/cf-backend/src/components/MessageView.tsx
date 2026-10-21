@@ -46,6 +46,7 @@ import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
 import { Dot } from "@/components/ui/Dot";
 import { InlineAction } from "@/components/ui/InlineAction";
+import { Surface } from "@/components/ui/Surface";
 
 const MessageCreatedAtSchema = v.looseObject({
   createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),
@@ -83,7 +84,7 @@ export function eventTurnKey(message: UIMessage): string | null {
 
 function FilePartView({ part }: { part: FileUIPart }) {
   return part.mediaType.startsWith("image/")
-    ? <img src={part.url} alt={part.filename ?? "image"} className="max-h-48 max-w-full rounded-lg border p-border" />
+    ? <Surface look="outlined" as="img" className="max-h-48 max-w-full" src={part.url} alt={part.filename ?? "image"} />
     : <AttachmentChip part={part} />;
 }
 
@@ -319,7 +320,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
       </Pressable>
       {toolName === "agents" && <SubagentChatLink output={output} />}
       {expanded && provisionErr && (
-        <div className="t-meta p-tint-warning mt-2 ml-5 rounded-lg border px-3 py-2 p-text-2 flex items-start gap-2">
+        <Surface look="outlined" className="t-meta p-tint-warning mt-2 ml-5 px-3 py-2 p-text-2 flex items-start gap-2">
           <WrenchIcon size={12} className="p-warning mt-px shrink-0" />
           <div className="space-y-1">
             <div>
@@ -331,10 +332,10 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
               Open the <span className="font-medium">Environment</span> tab to provision it.
             </div>
           </div>
-        </div>
+        </Surface>
       )}
       {expanded && (
-        <div className="border-t border-dashed border-[var(--c-dash)] px-4 py-3 space-y-2 animate-scale-in bg-[var(--c-sunken)]">
+        <Surface look="well" className="border-t border-dashed border-[var(--c-dash)] px-4 py-3 space-y-2 animate-scale-in">
           {errorText && (
             <div>
               <div className="t-label mb-1 p-danger">Error</div>
@@ -352,7 +353,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
             </div>
           )}
           {output != null && <ToolOutput output={output} />}
-        </div>
+        </Surface>
       )}
     </div>
   );
@@ -384,9 +385,9 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
         onToggleExpand={onToggleExpand}
       />
       {previewUrl && (
-        <div className="mt-2 h-64 overflow-hidden rounded-md border p-border">
+        <Surface look="outlined" className="mt-2 h-64 overflow-hidden">
           <PreviewFrame url={previewUrl} />
-        </div>
+        </Surface>
       )}
       <PartPictures part={part} size="thumb" />
     </div>

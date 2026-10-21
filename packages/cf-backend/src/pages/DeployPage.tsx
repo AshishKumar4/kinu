@@ -18,6 +18,7 @@ import { Notice } from "@/components/ui/Notice";
 import { TextInput } from "@/components/ui/Field";
 import { Select } from "@/components/ui/Select";
 import { Checkbox } from "@/components/ui/Check";
+import { Surface } from "@/components/ui/Surface";
 
 /** The run key is a capability: `sessionStorage` under the run id, sent in an `authorization` header, never a URL. */
 function heldRunKey(runId: string): string {
@@ -223,9 +224,9 @@ function Done({ snapshot, email }: { snapshot: DeploySnapshot; email: string }) 
       </div>
       <div className="p-card px-5 py-4">
         <h2 className="t-title p-text">Connect this machine</h2>
-        <pre className="t-meta t-mono mt-2 overflow-x-auto rounded-md bg-[var(--c-surface)] px-3 py-2 p-text">
+        <Surface look="sheet" as="pre" className="t-meta t-mono mt-2 overflow-x-auto px-3 py-2 p-text">
           curl -fsSL {origin}/install.sh | bash
-        </pre>
+        </Surface>
       </div>
     </section>
   );
@@ -297,7 +298,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
     && snapshot.steps.length === 0;
 
   return (
-    <div className="min-h-screen p-bg p-text">
+    <Surface look="page" className="min-h-screen p-text">
       <header className="flex h-14 items-center justify-between border-b p-border px-5">
         <a href="/" aria-label="Kinu home" className="flex items-center"><KinuLogo /></a>
         <span className="t-meta p-text-3">Deploy your own Kinu</span>
@@ -347,6 +348,6 @@ export default function DeployPage({ fixture, fixtureOptions }: {
           </>
         )}
       </main>
-    </div>
+    </Surface>
   );
 }

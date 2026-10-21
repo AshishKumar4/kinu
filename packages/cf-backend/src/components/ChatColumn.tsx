@@ -25,6 +25,7 @@ import type { useFileDrop } from "@/hooks/use-file-drop";
 import type { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useOpeningMessage } from "@/components/workspaces/NewChatView";
+import { Surface } from "@/components/ui/Surface";
 
 type ChatState = ReturnType<typeof useChatOwner>["chat"];
 
@@ -83,8 +84,8 @@ export function ConversationSkeleton() {
       {SKELETON_ROWS.map((row, index) => (
         <div key={index} className={`flex ${row.mine ? "justify-end" : "justify-start"}`} aria-hidden>
           <div className="max-w-[82%] space-y-2" style={{ width: row.width }}>
-            <div className="p-skeleton-bar h-3.5 rounded-md" />
-            <div className="p-skeleton-bar h-3.5 w-[70%] rounded-md" />
+            <Surface look="clip" className="p-skeleton-bar h-3.5" />
+            <Surface look="clip" className="p-skeleton-bar h-3.5 w-[70%]" />
           </div>
         </div>
       ))}
@@ -166,12 +167,11 @@ const VERSION_NOTICE: ComposerNotice = {
 /** Files hovering over the column. */
 function DropOverlay() {
   return (
-    <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center rounded-lg border-2 border-dashed"
-      style={{ borderColor: "var(--c-accent)", background: "var(--c-selected)" }}>
-      <div className="t-body flex items-center gap-2 p-text px-3 py-1 rounded-lg p-fill border p-border">
+    <Surface look="clip" className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center border-2 border-dashed" style={{ borderColor: "var(--c-accent)", background: "var(--c-selected)" }}>
+      <Surface look="tile" className="t-body flex items-center gap-2 p-text px-3 py-1 border p-border">
         <PaperclipIcon size={16} className="p-accent-fg" />Drop files to attach
-      </div>
-    </div>
+      </Surface>
+    </Surface>
   );
 }
 

@@ -15,3 +15,9 @@ export function Badge({ tone = "neutral", icon, children, className, ...data }: 
 } & Readonly<Record<`data-${string}`, string>>) {
   return <span className={`p-badge p-badge-${tone}${className === undefined ? "" : ` ${className}`}`} {...data}>{icon}{children}</span>;
 }
+
+/** A count over a mark (an avatar's unread, a bar icon's open runs): `accent` filled and ringed in the ground it sits on,
+ *  `quiet` on the fill; 9 and more say 9+. */
+export function Count({ count, tone = "accent", label, ...data }: { count: number; tone?: "accent" | "quiet"; label?: string } & Readonly<Record<`data-${string}`, string | number>>) {
+  return <span className={`p-count p-count-${tone} t-micro tabular-nums`} aria-label={label} {...data}>{count > 9 ? "9+" : count}</span>;
+}

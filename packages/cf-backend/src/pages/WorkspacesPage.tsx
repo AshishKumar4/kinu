@@ -13,6 +13,7 @@ import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverview
 import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
 import { TextInput } from "@/components/ui/Field";
+import { Surface } from "@/components/ui/Surface";
 
 const VIEW_KEY = "kinu:workspaces-view";
 
@@ -132,11 +133,11 @@ export default function WorkspacesPage() {
         {shown.length > 0 && (
           <section aria-label="Workspaces" data-workspaces-view={view}>
             {view === "list" ? (
-              <div className="overflow-hidden rounded-[14px] border p-border p-surface">
+              <Surface look="panel" className="overflow-hidden">
                 {shown.map((workspace, index) => (
                   <WorkspaceOverviewCard key={workspace.name} workspace={workspace} variant="line" first={index === 0} />
                 ))}
-              </div>
+              </Surface>
             ) : (
               <div className={TILE_GRID}>
                 {shown.map((workspace) => (

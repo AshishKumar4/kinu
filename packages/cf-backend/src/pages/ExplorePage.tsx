@@ -22,6 +22,7 @@ import { Page } from "@/components/ui/PageHeader";
 import { TILE_GRID } from "@/components/ui/Tiles";
 import { useSearchChoice } from "@/hooks/use-search-choice";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
+import { Surface } from "@/components/ui/Surface";
 
 const SORT_WORDS: Record<GallerySort, string> = { trending: "Trending", new: "New", stars: "Most starred" };
 
@@ -72,21 +73,21 @@ function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights:
 /** The rest of Kinu's own, as rows beside the lead. */
 function AlsoFromKinu({ workspaces }: { workspaces: readonly WorkspaceCard[] }) {
   return (
-    <div className="flex min-w-0 flex-col overflow-hidden rounded-[var(--r-card)] border p-border p-surface">
+    <Surface look="panel" className="flex min-w-0 flex-col overflow-hidden">
       <span className="t-label border-b p-border px-4 pb-2 pt-3">Also from Kinu</span>
       {workspaces.map((workspace) => (
         <Link key={workspace.id} to={exploreWorkspaceHref(workspace.id)} data-explore-also={workspace.id}
           className="flex items-center gap-3 border-b p-border px-4 py-3 transition-colors last:border-b-0 p-card-hover">
-          <span className="relative block h-12 w-[76px] shrink-0 overflow-hidden rounded-lg border p-border">
+          <Surface look="outlined" as="span" className="relative block h-12 w-[76px] shrink-0 overflow-hidden">
             {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt="" className="absolute inset-0 size-full object-cover object-left-top" />}
-          </span>
+          </Surface>
           <span className="min-w-0 flex-1">
             <span className="t-item block truncate p-text">{workspace.title}</span>
             <span className="t-meta line-clamp-2 p-text-3">{workspace.line}</span>
           </span>
         </Link>
       ))}
-    </div>
+    </Surface>
   );
 }
 

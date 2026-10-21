@@ -14,6 +14,7 @@ import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from "@kinu.run/core";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 import WorkspacePage from "./WorkspacePage";
+import { Surface } from "@/components/ui/Surface";
 
 /** Home: the owner's Personal assistant's chat once they have one; until then, a new workspace's mission, which is also
  *  its own page (`NewWorkspacePage`). A read that fails shows the mission too, so Home never waits on it. */
@@ -84,11 +85,11 @@ function MissionHome() {
               <span className="t-label">Recent</span>
               {listFailed && <span className="t-status p-warning">could not load</span>}
             </div>
-            <div className="overflow-hidden rounded-[14px] border p-border p-surface">
+            <Surface look="panel" className="overflow-hidden">
               {workspaces.slice(0, RECENT_WORKSPACES).map((agent, index) => (
                 <WorkspaceOverviewCard key={agent.name} workspace={agent} variant="line" first={index === 0} />
               ))}
-            </div>
+            </Surface>
           </section>
         )}
       </main>

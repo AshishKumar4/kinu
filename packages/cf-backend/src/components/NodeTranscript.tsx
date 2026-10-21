@@ -26,6 +26,7 @@ import { fmtTokens, timeAgo } from "@kinu.run/core";
 import type { ForkNode } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Button } from "@/components/ui/Button";
+import { Surface } from "@/components/ui/Surface";
 
 
 /** Shared by this panel and the run pane's node list; covers head-journal and search-node statuses. An unknown status gets the quiet dot. */
@@ -48,7 +49,7 @@ function TaskHeader({ task }: { task: string }) {
   const long = task.length > TASK_CLAMP;
 
   return (
-    <div className="shrink-0 border-b p-border px-4 py-2 p-sunken">
+    <Surface look="well" className="shrink-0 border-b p-border px-4 py-2">
       <div className="flex items-start gap-2">
         <div className="t-label pt-px shrink-0">Task</div>
         <div className="min-w-0 flex-1">
@@ -63,7 +64,7 @@ function TaskHeader({ task }: { task: string }) {
           )}
         </div>
       </div>
-    </div>
+    </Surface>
   );
 }
 
@@ -111,8 +112,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
         </div>
       )}
       {view.answer && (
-        <div className="shrink-0 border-b p-border border-l-2 px-4 py-3 p-fill"
-          style={{ borderLeftColor: "var(--c-accent)" }}>
+        <Surface look="tile" className="shrink-0 border-b p-border border-l-2 px-4 py-3" style={{ borderLeftColor: "var(--c-accent)" }}>
           <div className="t-status flex items-center gap-2 uppercase p-accent-fg">
             <CheckCircleIcon size={11} weight="fill" />
             {view.origin === "head" ? "Report" : "Proposal"}
@@ -120,7 +120,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
           <div className="mt-1 prose-chat p-text max-h-64 overflow-y-auto">
             <MarkdownContent content={view.answer} />
           </div>
-        </div>
+        </Surface>
       )}
     </>
   );
@@ -257,11 +257,11 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
             <DetailSection title="Decisions">
               <div className="space-y-1">
                 {view.decisions.map((decision, index) => (
-                  <div key={index} className="t-body rounded-md p-fill border p-border p-2">
+                  <Surface look="tile" className="t-body border p-border p-2" key={index}>
                     <div className="p-text-2">{decision.question}</div>
                     <div className="p-accent-fg mt-px">→ {decision.choice}</div>
                     {decision.rationale && <div className="p-text-3 mt-px">{decision.rationale}</div>}
-                  </div>
+                  </Surface>
                 ))}
               </div>
             </DetailSection>
@@ -392,10 +392,10 @@ export function NodeTranscript({ selection, ownerPath = null, trees, rpc, headAc
 
   if (selection === null) {
     return (
-      <div className="min-h-0 flex-1 flex items-center justify-center rounded-lg border p-border p-surface">
+      <Surface look="panel" className="min-h-0 flex-1 flex items-center justify-center">
         <EmptyState icon={<TreeStructureIcon size={28} />} title="Pick a branch"
           hint="Select one in the tree to read its input, every step, and its answer." />
-      </div>
+      </Surface>
     );
   }
 
@@ -423,14 +423,14 @@ export function NodeTranscript({ selection, ownerPath = null, trees, rpc, headAc
   }
 
   return (
-    <div className="min-h-0 flex-1 flex flex-col rounded-lg border p-border p-surface overflow-hidden">
+    <Surface look="panel" className="min-h-0 flex-1 flex flex-col overflow-hidden">
       {/* Keeps the last loaded transcript underneath the error. */}
       {resource.status === "error" && (
         <LoadFailure what="this branch's transcript" message={resource.message} onRetry={reload}
           className="shrink-0 border-b p-border px-4 py-2" />
       )}
       {body}
-    </div>
+    </Surface>
   );
 }
 

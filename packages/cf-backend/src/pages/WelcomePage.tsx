@@ -28,6 +28,7 @@ import { signedInWith } from "@/lib/shared-api";
 import { useElementSize } from "@/hooks/use-element-size";
 import { MailAddressField, useMailUsername } from "@/components/mail/MailAddressField";
 import { createMailAddress, readMailBoxes } from "@/lib/mail-api";
+import { Surface } from "@/components/ui/Surface";
 
 
 /** Setup's steps: Mail's only where the deployment has mail and the person may create an address and has none. */
@@ -70,9 +71,9 @@ function ShowcaseStep({ revealed }: { revealed: boolean }) {
           className={`flex items-start gap-3 rounded-xl border p-border p-surface p-4 transition-all duration-500 ${revealed ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'}`}
           style={{ transitionDelay: `${i * 90}ms` }}
         >
-          <div className="size-9 shrink-0 rounded-lg p-fill flex items-center justify-center">
+          <Surface look="tile" className="size-9 shrink-0 flex items-center justify-center">
             <Icon size={18} className="p-accent-fg" />
-          </div>
+          </Surface>
           <div>
             <div className="t-label p-text">{title}</div>
             <p className="t-meta p-text-3 mt-px">{copy}</p>
@@ -227,7 +228,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   })), [step, name, profile, account, onMail, address.username, LAST_STEP, goTo]);
 
   return (
-    <div className="fixed inset-0 p-bg overflow-y-auto">
+    <Surface look="page" className="fixed inset-0 overflow-y-auto">
       <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-4 py-8">
         <div className="mb-6 flex justify-center"><KinuLogo /></div>
         <h1 className="t-page-title text-center">Let's set up your account</h1>
@@ -262,9 +263,9 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
                 {s.id === 'profile' && (
                   <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-                    <div data-avatar className="t-page-title size-16 rounded-full p-selected p-accent-mark flex items-center justify-center">
+                    <Surface round look="selected" className="t-page-title size-16 p-accent-mark flex items-center justify-center" data-avatar>
                       {letter}
-                    </div>
+                    </Surface>
                     <div className="w-full flex-1">
                       <DisplayNameField value={displayName} onChange={setName} saving={busy} bare />
                       {profile !== null && !profile.displayName && provider !== null && (
@@ -330,6 +331,6 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
           </div>
         </section>
       </div>
-    </div>
+    </Surface>
   );
 }

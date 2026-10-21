@@ -18,6 +18,7 @@ import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "@kinu.run/core"
 import { showing, detach } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
+import { Surface } from "@/components/ui/Surface";
 
 export function TakesChip({ set, onPick }: {
   set: AlternateTakeSet;
@@ -189,7 +190,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
 
   return (
     <div className="flex flex-col items-start gap-1 animate-fade-in py-px">
-      <div className="t-body inline-flex items-center gap-2 max-w-full px-3 py-1 rounded-full p-fill border p-border p-text-2">
+      <Surface round look="tile" className="t-body inline-flex items-center gap-2 max-w-full px-3 py-1 border p-border p-text-2">
         {run.status === "running" && (
           <>
             <Loader size="sm" />
@@ -217,15 +218,15 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
         {run.status !== "running" && (
           <Button variant="ghost" size="sm" icon={<XIcon size={14} />} className="shrink-0" onClick={onDismiss} aria-label="Dismiss branch chip" />
         )}
-      </div>
+      </Surface>
       {open && (
-        <div className="w-full max-h-96 flex flex-col rounded-lg border p-border p-surface overflow-hidden">
+        <Surface look="panel" className="w-full max-h-96 flex flex-col overflow-hidden">
           {resource.status === "error" && (
             <LoadFailure what="this branch's transcript" message={resource.message} onRetry={reload}
               className="shrink-0 border-b p-border px-4 py-2" />
           )}
           {branchBody}
-        </div>
+        </Surface>
       )}
     </div>
   );

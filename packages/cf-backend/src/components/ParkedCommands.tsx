@@ -16,6 +16,7 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Checkbox } from "@/components/ui/Check";
 import { Group } from "@/components/ui/Group";
+import { Surface } from "@/components/ui/Surface";
 
 function countLabel(chosen: number, total: number): string {
   if (total === 1) return "";
@@ -230,12 +231,12 @@ export function ParkedWriteChange({ id, rpc }: { id: string; rpc: WorkspaceRpc }
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="rounded-md px-2 py-1 p-fill" data-parked-write={id}>
+    <Surface look="tile" className="px-2 py-1" data-parked-write={id}>
       <Button variant="ghost" size="sm" onClick={() => setOpen((was) => !was)} aria-expanded={open}>
         {open ? "Hide the change" : "Show the change"}
       </Button>
       {open && <ParkedWriteDiff id={id} rpc={rpc} />}
-    </div>
+    </Surface>
   );
 }
 
@@ -259,7 +260,7 @@ function ParkedWriteDiff({ id, rpc }: { id: string; rpc: WorkspaceRpc }) {
         <div className="t-status p-warning">The file changed after the agent asked, so approving writes nothing.</div>
       )}
       {review.diff.omitted === undefined
-        ? <div className="overflow-hidden rounded-md border p-border"><FileBody file={review.diff} stacked={false} onOpenInFiles={null} /></div>
+        ? <Surface look="outlined" className="overflow-hidden"><FileBody file={review.diff} stacked={false} onOpenInFiles={null} /></Surface>
         : <div className="t-meta p-text-2">{OMITTED_TEXT[review.diff.omitted]}.</div>}
     </div>
   );

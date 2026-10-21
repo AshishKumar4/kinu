@@ -14,6 +14,7 @@ import type { ForkNode } from "@kinu.run/core";
 import { ancestorIds, cleanNodeLabel, clipToWidth, isCompeted, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, viewNoteFor, type ExplorerSelection } from "@kinu.run/core/swarm-view";
 import { scoreBand } from '@kinu.run/core/swarm-view';
 import { Button } from "@/components/ui/Button";
+import { Surface } from "@/components/ui/Surface";
 
 interface SwarmTreeRegion {
 	runId: string;
@@ -931,12 +932,12 @@ export function SwarmTree({
 					{competedSelected ? (
 						<>
 							<span className="flex items-center gap-2">
-								<span className="h-2 w-14 rounded-full" style={{ background: "linear-gradient(90deg in oklab, var(--c-danger), var(--c-warning), var(--c-success))" }} />
+								<Surface look="round" as="span" className="h-2 w-14" style={{ background: "linear-gradient(90deg in oklab, var(--c-danger), var(--c-warning), var(--c-success))" }} />
 								score
 							</span>
 							{width >= 470 && (
 								<>
-									<span className="flex items-center gap-1"><span className="size-1 rounded-full p-dot-neutral" /><span className="size-2 rounded-full p-dot-neutral" />visits</span>
+									<span className="flex items-center gap-1"><Surface look="round" as="span" className="size-1 p-dot-neutral" /><Surface look="round" as="span" className="size-2 p-dot-neutral" />visits</span>
 									<span className="flex items-center gap-1"><span className="inline-block w-3 h-px" style={{ background: "var(--c-accent)" }} />winning line</span>
 									<span className="opacity-70">dashed = pruned · hollow = failed</span>
 								</>
@@ -952,8 +953,7 @@ export function SwarmTree({
 					)}
 					{fansInSelected && (
 						<span className="flex items-center gap-1">
-							<span aria-hidden className="inline-block size-2 rounded-[1px] border"
-								style={{ borderColor: "var(--c-accent)" }} />
+							<Surface look="outlined" as="span" className="inline-block size-2" aria-hidden style={{ borderColor: "var(--c-accent)" }} />
 							fan-in vertex
 						</span>
 					)}
@@ -1042,15 +1042,12 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 	const flip = tip.x + TIP_W + 24 > width;
 
 	return (
-		<div
-			className="t-meta absolute z-50 pointer-events-none p-surface p-border border rounded-lg px-3 py-2 p-shadow-menu animate-scale-in"
-			style={{
+		<Surface look="panel" className="t-meta absolute z-50 pointer-events-none px-3 py-2 p-shadow-menu animate-scale-in" style={{
 				width: TIP_W,
 				left: flip ? undefined : tip.x + 16,
 				right: flip ? width - tip.x + 16 : undefined,
 				top: tip.y + 12,
-			}}
-		>
+			}}>
 			<div className="font-medium p-text mb-2 leading-snug line-clamp-2">
 				{cleanNodeLabel(node.action, runName)}
 			</div>
@@ -1090,6 +1087,6 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 					{node.observation}
 				</div>
 			)}
-		</div>
+		</Surface>
 	);
 }
