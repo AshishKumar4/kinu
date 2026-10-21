@@ -2374,7 +2374,9 @@ export const LADDER: readonly Gate[] = [
     run: 'bun test --timeout=0 tests/browser/live-app-connect.test.ts',
     label: 'Live app in a browser: a connect through the Worker',
     tier: 'ci',
-    seconds: 180,
+    // Measured 2026-10-23 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at fa5806580: 219.0 s wall,
+    // 459 CPU seconds, 5.5 GiB peak (scripts/gate-cost.json); four sign-ins and a finish page beside the dev server's boot.
+    seconds: 220,
     catches: 'an MCP server\'s sign-in on `vite dev` (workerd with real Durable Objects) driven in Chrome, through the '
       + 'Worker\'s own OAuth callback, account storage and MCP SDK, against a loopback provider that asks the person '
       + '(scripts/consenting-oauth.ts). Run in the tab itself from setup\'s tools step reached by Next, it comes back '

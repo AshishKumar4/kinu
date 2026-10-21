@@ -1083,6 +1083,18 @@
       "loadAtStart": 0.23,
       "exit": 0
     },
+    "bun test --timeout=0 tests/browser/live-app-connect.test.ts": {
+      "wallSeconds": 218.97,
+      "cpuSeconds": 458.75,
+      "peakRssMb": 5667.89,
+      "peakRunnable": 15,
+      "peakCpuThreads": 3.83,
+      "meanThreads": 2.1,
+      "samples": 732,
+      "loadAtStart": 0.45,
+      "exit": 0,
+      "machine": "linux x64, AMD EPYC (8 threads)"
+    },
     "bun test --timeout=0 tests/browser/live-app-root-turn.test.ts": {
       "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 144.35,
