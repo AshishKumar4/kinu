@@ -7,7 +7,7 @@ import { bootstrappedProfile, workerContext } from './helpers/bindings';
 import { serveFamily } from './helpers/api';
 import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import { calculatePKCECodeChallenge } from 'oauth4webapi';
-import { CLOUDFLARE_WORKERS_AI_SCOPES, connectedPath } from '@kinu.run/core';
+import { cloudflareConnectPath, CLOUDFLARE_WORKERS_AI_SCOPES, connectedPath, connectEndedOf } from '@kinu.run/core';
 import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { makeKv } from './helpers/kv';
 import type { BrowserSessionIdentity } from '../src/user/sessions';
@@ -137,14 +137,10 @@ const CONNECT_RUN = '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162';
 async function startCloudflareLogin(
   env: AuthRoutesEnv<string>, prompt?: 'login', connect?: { readonly session: string },
 ): Promise<CloudflareHandoff> {
-  const start = new URL(`${ORIGIN}/auth/cloudflare/start`);
+  // A connect starts at the address the page's Connect Cloudflare button opens, so dropping its intent is a red test.
+  const start = new URL(connect === undefined ? '/auth/cloudflare/start' : cloudflareConnectPath(CONNECT_RUN), ORIGIN);
 
   if (prompt) start.searchParams.set('prompt', prompt);
-
-  if (connect !== undefined) {
-    start.searchParams.set('intent', 'connect');
-    start.searchParams.set('run', CONNECT_RUN);
-  }
 
   const response = await authPages(new Request(start, connect === undefined ? {} : { headers: { cookie: connect.session } }), env);
 
@@ -289,12 +285,21 @@ describe('connecting Cloudflare attaches to the account that asked, and signs no
     try {
       const signedIn = await completeCloudflareLogin(env, await startCloudflareLogin(env));
       const session = (sessionCookieIn(signedIn) ?? '').split(';')[0] ?? '';
-      const unsigned = await authPages(new Request(`${ORIGIN}/auth/cloudflare/start?intent=connect&run=${CONNECT_RUN}`), env);
+      const unsigned = await authPages(new Request(`${ORIGIN}${cloudflareConnectPath(CONNECT_RUN)}`), env);
       // Its session gone by the callback: the grant is attached to nobody, and the finish page says why.
       const ended = await completeCloudflareLogin(env, await startCloudflareLogin(env, 'login', { session }));
 
-      expect({ unsigned: unsigned?.status, ended: new URL(ended.headers.get('location') ?? '').searchParams.get('error'), credentials: [...accounts.credentialsOf.values()].flat() })
-        .toEqual({ unsigned: 401, ended: 'The Kinu account that started connecting is no longer signed in here.', credentials: ['cf-a'] });
+      // Refused at its start, it still ends on the finish page for its run (second review, 2026-10-23: a 401 page in the
+      // helper tab left the starting page waiting).
+      const refusedAt = new URL(unsigned?.headers.get('location') ?? '', ORIGIN);
+
+      expect({
+        unsigned: { status: unsigned?.status, page: refusedAt.pathname, ended: connectEndedOf(refusedAt.searchParams) },
+        ended: new URL(ended.headers.get('location') ?? '').searchParams.get('error'), credentials: [...accounts.credentialsOf.values()].flat(),
+      }).toEqual({
+        unsigned: { status: 302, page: '/connected', ended: { run: CONNECT_RUN, service: 'Cloudflare', error: expect.stringContaining('sign in') } },
+        ended: 'The Kinu account that started connecting is no longer signed in here.', credentials: ['cf-a'],
+      });
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -315,6 +320,48 @@ describe('connecting Cloudflare attaches to the account that asked, and signs no
       expect({ none: (await started(''))?.status, malformed: (await started('&run=tab-1'))?.status, named: (await started(`&run=${CONNECT_RUN}`))?.status })
         .toEqual({ none: 400, malformed: 400, named: 302 });
     } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+// Second review (2026-10-23): the handoff cookie held one binding, so a second sign-in or connect begun in the same
+// browser, in any tab, replaced the first one's, whose callback was then refused as not this browser's.
+describe('two starts in one browser each finish', () => {
+  test('the first start\'s callback, arriving after a second start, signs in', async () => {
+    const { env } = setupEnv();
+    const originalFetch = globalThis.fetch;
+
+    try {
+      globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-a', refresh_token: 'cf-a-refresh' }, 'a@example.com').fetchFake;
+      const first = await startCloudflareLogin(env);
+      const again = await authPages(new Request(`${ORIGIN}/auth/cloudflare/start`, { headers: { cookie: first.setCookie.split(';')[0] ?? '' } }), env);
+      const held = again?.headers.getSetCookie().find((value) => value.startsWith(`${OAUTH_STATE_COOKIE_NAME}=`)) ?? '';
+      const done = await completeCloudflareLogin(env, { state: first.state, setCookie: held });
+
+      expect({ status: done.status, signedIn: sessionCookieIn(done) !== undefined }).toEqual({ status: 302, signedIn: true });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test('a connect whose callback comes after its state expired still ends on the finish page for its run', async () => {
+    const { env } = setupEnv();
+    const originalFetch = globalThis.fetch;
+
+    try {
+      globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-a', refresh_token: 'cf-a-refresh' }, 'a@example.com').fetchFake;
+      const signedIn = await completeCloudflareLogin(env, await startCloudflareLogin(env));
+      const session = (sessionCookieIn(signedIn) ?? '').split(';')[0] ?? '';
+      const handoff = await startCloudflareLogin(env, 'login', { session });
+
+      setSystemTime(new Date(Date.now() + 11 * 60_000));
+      const late = new URL((await completeCloudflareLogin(env, handoff, session)).headers.get('location') ?? '', ORIGIN);
+
+      expect({ page: late.pathname, ended: connectEndedOf(late.searchParams) })
+        .toEqual({ page: '/connected', ended: { run: CONNECT_RUN, service: 'Cloudflare', error: expect.stringMatching(/expired/) } });
+    } finally {
+      setSystemTime();
       globalThis.fetch = originalFetch;
     }
   });

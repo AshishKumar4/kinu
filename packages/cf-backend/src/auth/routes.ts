@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { AuthError, authenticateRequest, devIdentityEmail, readSessionToken, requestIdentity } from './session';
 import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, readCookie, sessionCookie, setCookie } from './cookies';
 import {
-  consumeOAuthState, createOAuthState, createSession, revokeSession,
+  bindingsCookie, consumeOAuthState, createOAuthState, createSession, heldBindings, OAUTH_HANDOFF_LIFETIME_MS, revokeSession,
   type OAuthProfile, type SessionAuthority,
 } from './store';
 import { connectedPath, ConnectRunSchema, objectNamed, sanitizeReturnTo } from '@kinu.run/core';
@@ -221,11 +221,13 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
     const run = v.safeParse(ConnectRunSchema, url.searchParams.get('run'));
 
     if (connecting && !run.success) return html('Nothing to connect', '<p>A connect starts from the page that asks for it.</p>', { status: 400 });
+    // A connect refused before it reaches the provider ends where every connect ends, for the run that asked.
+    const refused = (error: string) => redirect(new URL(connectedPath({ run: run.success ? run.output : null, service: provider.label, error }), url.origin).toString());
 
-    if (connecting && !CONNECTS.has(provider.id)) return html('Nothing to connect', `<p>Kinu keeps nothing from ${escapeHtml(provider.label)} to connect.</p>`, { status: 404 });
+    if (connecting && !CONNECTS.has(provider.id)) return refused(`Kinu keeps nothing from ${provider.label} to connect.`);
     const connectFor = connecting ? (yield* Effect.promise(async () => requestIdentity(request, env)))?.userId ?? null : null;
 
-    if (connecting && connectFor === null) return html('Sign in first', '<p>Connecting a service needs the Kinu account it is for: <a href="/login">sign in</a>, then connect again.</p>', { status: 401 });
+    if (connecting && connectFor === null) return refused('Connecting a service needs the Kinu account it is for: sign in, then connect again.');
     const as = yield* Effect.promise(async () => getAuthorizationServer(provider));
 
     if (!as.authorization_endpoint) return yield* Effect.die(new Error(`${provider.label} OAuth metadata has no authorization endpoint.`));
@@ -259,30 +261,49 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
       addProviderPrompt(authorizationUrl, provider);
     }
 
-    // KV holds only the binding's hash; this cookie is what the callback proves the sign-in with.
+    // KV holds only the binding's hash; this cookie is what the callback proves the sign-in with, beside the bindings of
+    // this browser's other starts still under way.
     const headers = new Headers({ 'cache-control': 'no-store' });
-    headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, binding, lifetimeMs));
+    headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, bindingsCookie(heldBindings(readCookie(request, OAUTH_STATE_COOKIE_NAME)), { add: binding }), lifetimeMs));
 
     return redirect(authorizationUrl.toString(), { headers });
   });
 }
 
-/** Burns the handoff cookie whatever the outcome; its state record is already spent. */
+/** Burns this callback's binding from the handoff cookie whatever the outcome (its state record is already spent), and
+ *  keeps the bindings of the browser's other starts; the cookie goes with its last one. */
 function finishOAuth<Id>(
   request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'>, providerId: string,
 ): Effect.Effect<Response, KinuError> {
   return Effect.gen(function* () {
-    const response = yield* completeOAuth(request, env, ctx, providerId);
-    response.headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, '', 0));
+    const held = heldBindings(readCookie(request, OAUTH_STATE_COOKIE_NAME));
+    const spent: SpentBinding = { binding: null };
+    const response = yield* completeOAuth(request, env, ctx, { providerId, held, spent });
+    const kept = spent.binding === null ? held.join('.') : bindingsCookie(held, { spent: spent.binding });
+
+    response.headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, kept, kept === '' ? 0 : OAUTH_HANDOFF_LIFETIME_MS));
 
     return response;
   });
 }
 
+/** Where a callback notes the binding it spent, for the cookie to drop: none until a handoff is consumed. */
+interface SpentBinding {
+  binding: string | null;
+}
+
+/** A provider's callback: the provider, the bindings this browser holds, and where the one it spends is noted. */
+interface OAuthCallback {
+  readonly providerId: string;
+  readonly held: readonly string[];
+  readonly spent: SpentBinding;
+}
+
 function completeOAuth<Id>(
-  request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'>, providerId: string,
+  request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'>, handoff: OAuthCallback,
 ): Effect.Effect<Response, KinuError> {
   return Effect.gen(function* () {
+    const { providerId } = handoff;
     const provider = getOAuthProvider(env, providerId);
 
     if (!provider) return html('Sign in unavailable', '<p>This deployment has no sign-in set up for that provider. Go back and choose another one.</p>', { status: 404 });
@@ -295,15 +316,18 @@ function completeOAuth<Id>(
     if (!state) return html('Sign in failed', '<p>The sign-in response came back without its state. Return to <a href="/login">sign in</a> and try again.</p>', { status: 400 });
 
     let stage = 'state';
-    // A connect that fails after its state was read still ends on the finish page, naming its run.
+    // A connect whose handoff this browser holds ends on the finish page, naming its run, whatever fails after: its
+    // state expired or another provider's included.
     let connecting: { readonly run: string | null } | null = null;
 
     return yield* Effect.catchCause(Effect.gen(function* () {
-      const savedState = yield* Effect.promise(async () => consumeOAuthState(
-        env.AUTH_KV, state, provider.id, readCookie(request, OAUTH_STATE_COOKIE_NAME),
-      ));
+      const consumed = yield* Effect.promise(async () => consumeOAuthState(env.AUTH_KV, state, provider.id, handoff.held));
+      const savedState = consumed.record;
 
+      handoff.spent.binding = consumed.binding;
       connecting = savedState.connectFor === null ? null : { run: savedState.connectRun };
+
+      if (consumed.refusal !== null) return yield* Effect.die(new Error(consumed.refusal));
 
       stage = 'metadata';
       const as = yield* Effect.promise(async () => getAuthorizationServer(provider));

@@ -60,6 +60,13 @@ export const ConnectRunSchema = v.pipe(v.string(), v.uuid());
 /** The same-origin broadcast a finish page answers on: it needs no opener, which a provider's pages may cut. */
 export const CONNECT_CHANNEL = 'kinu-connected';
 
+/** Connects a Cloudflare login's Workers AI to this account, for the run `beginConnect` began: a connect, never a
+ *  sign-in, so a login under another email attaches here rather than signing in as another account. Cloudflare asks
+ *  which login. The Worker's own tests start their connects here, so the address the button opens is the one proven. */
+export function cloudflareConnectPath(run: string): string {
+  return `/auth/cloudflare/start?${new URLSearchParams({ intent: 'connect', prompt: 'login', run }).toString()}`;
+}
+
 /** Where a connect ends, for every connect: the finish page, naming its run, the service and why it failed. */
 export function connectedPath(ended: ConnectEnded): string {
   const query = new URLSearchParams({ service: ended.service });

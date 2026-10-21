@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { WarningCircleIcon } from "@phosphor-icons/react";
-import type { ConnectEnded } from "@kinu.run/core";
-import { cloudflareConnectPath } from "@/lib/user-api";
+import { cloudflareConnectPath, type ConnectEnded } from "@kinu.run/core";
 import { beginConnect } from "@/lib/connect-window";
 
 interface CloudflareAIConnectNoticeProps {

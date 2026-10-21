@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
-  accountIdFor, consumeOAuthState, createOAuthState, createSession, revokeSession, verifySession,
+  accountIdFor, bindingsCookie, consumeOAuthState, createOAuthState, heldBindings, createSession, revokeSession, verifySession,
   type AuthStoreEnv, type OAuthProfile, type OAuthStateInput, type SessionAuthority,
 } from '../src/auth/store';
 import { bootstrappedProfile } from './helpers/bindings';
@@ -168,30 +168,65 @@ describe('OAuth handoff state', () => {
     const kv = makeKv();
     const { state, binding } = await started(kv, { returnTo: '/workspaces/jarvis' });
 
-    const consumed = await consumeOAuthState(kv, state, 'cloudflare', binding);
+    const consumed = await consumeOAuthState(kv, state, 'cloudflare', [binding]);
     expect(consumed).toMatchObject({
-      provider: 'cloudflare',
-      codeVerifier: 'verifier',
-      returnTo: '/workspaces/jarvis',
+      record: { provider: 'cloudflare', codeVerifier: 'verifier', returnTo: '/workspaces/jarvis' },
+      binding,
+      refusal: null,
     });
 
-    await expect(consumeOAuthState(kv, state, 'cloudflare', binding))
+    await expect(consumeOAuthState(kv, state, 'cloudflare', [binding]))
       .rejects.toThrow();
   });
 
-  test('a callback from another provider cannot spend this state', async () => {
+  test('a browser holding none of its bindings cannot spend the state, and learns nothing of it', async () => {
     const kv = makeKv();
-    const { state, binding } = await started(kv);
+    const { state } = await started(kv, { connectFor: 'account-a', connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' });
 
-    await expect(consumeOAuthState(kv, state, 'github', binding))
-      .rejects.toThrow(/provider mismatch/);
+    await expect(consumeOAuthState(kv, state, 'cloudflare', ['another-browser']))
+      .rejects.toThrow(/not issued to this browser/);
+  });
+
+  test('a callback from another provider cannot spend this state, and the record still says whose connect it was', async () => {
+    const kv = makeKv();
+    const { state, binding } = await started(kv, { connectFor: 'account-a', connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' });
+
+    expect(await consumeOAuthState(kv, state, 'github', [binding]))
+      .toMatchObject({ refusal: expect.stringMatching(/provider mismatch/), record: { connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' } });
+  });
+
+  // Second review (2026-10-23): a callback after the state's ten minutes found no record, so a connect's starting page
+  // was never told; and a second start in the browser replaced the first one's binding.
+  test('a late callback is refused as expired, its record kept long enough to say whose it was', async () => {
+    const kv = makeKv();
+    const { state, binding, lifetimeMs } = await started(kv, { connectFor: 'account-a', connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' });
+
+    setSystemTime(new Date(Date.now() + 11 * 60_000));
+
+    try {
+      expect({ lifetimeMs, consumed: await consumeOAuthState(kv, state, 'cloudflare', [binding]) })
+        .toMatchObject({ lifetimeMs: 60 * 60_000, consumed: { refusal: expect.stringMatching(/expired/), record: { connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' } } });
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('two starts in one browser each keep their binding, and a callback spends only its own', async () => {
+    const kv = makeKv();
+    const first = await started(kv);
+    const second = await started(kv);
+    const held = heldBindings(bindingsCookie(heldBindings(bindingsCookie([], { add: first.binding })), { add: second.binding }));
+    const consumed = await consumeOAuthState(kv, first.state, 'cloudflare', held);
+
+    expect({ spent: consumed.binding, left: heldBindings(bindingsCookie(held, { spent: consumed.binding })) })
+      .toEqual({ spent: first.binding, left: [second.binding] });
   });
 
   test('a hostile return_to is neutralised on the way in, not just on the way out', async () => {
     const kv = makeKv();
     const { state, binding } = await started(kv, { returnTo: '//evil.example.com/steal' });
 
-    expect((await consumeOAuthState(kv, state, 'cloudflare', binding)).returnTo).toBe('/');
+    expect((await consumeOAuthState(kv, state, 'cloudflare', [binding])).record.returnTo).toBe('/');
   });
 
   test('neither half of the handoff is stored, so a KV dump replays nothing', async () => {

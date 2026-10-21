@@ -432,13 +432,6 @@ export const listCloudflareGateways = () =>
 
 export const selectCloudflareGateway = (id: string | null) => settle(putCloudflareSelection('/cloudflare/gateway', id));
 
-/** Connects a Cloudflare login's Workers AI to this account, for the run `beginConnect` began: a connect, never a
- *  sign-in, so a login under another email attaches here rather than signing in as another account. Cloudflare asks
- *  which login. */
-export function cloudflareConnectPath(run: string): string {
-  return `/auth/cloudflare/start?${new URLSearchParams({ intent: 'connect', prompt: 'login', run }).toString()}`;
-}
-
 export interface McpServerInput {
   name?: string;
   serverUrl?: string;
