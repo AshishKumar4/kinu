@@ -15,7 +15,7 @@ import {
   decodeJsonValue, explainSandboxError, programSurface,
   renderCodemodeDescription, codemodeInputSchema,
   withCraftedToolDeclarations, renderCraftedDefinitions,
-  codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel, shownConsoleValue, createToolArguments, nestedMembers,
+  codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel, shownConsoleValue, programNamespace, type ProgramMember, type ProgramNamespace,
 } from '@kinu.run/core';
 import { tool, type ToolSet } from 'ai';
 import { programBody } from './executor';
@@ -97,10 +97,10 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
           }
 
-          const providerBindings: Record<string, Record<string, CodemodeExecute | Record<string, CodemodeExecute>>> = {};
+          const providerBindings: Record<string, ProgramNamespace> = {};
 
           for (const p of reached.filter((reachedProvider) => reachedProvider.name !== CRAFTED_TOOL_NAMESPACE)) {
-            const nsp: Record<string, CodemodeExecute> = {};
+            const nsp: Record<string, ProgramMember> = {};
 
             for (const [toolName, t] of Object.entries(p.tools)) {
               // An operation namespace reads the program's signal and shell context from its scope; its arguments are the program's own.
@@ -109,13 +109,8 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
               nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...call(toolArgs)));
             }
 
-            // `workspace.createTool` takes the function itself, sent as its source, as in the CF sandbox.
-            const create = nsp['createTool'];
-
-            if (p.name === 'workspace' && create !== undefined) nsp['createTool'] = (...toolArgs) => create(...createToolArguments(toolArgs));
-
-            // A member group (`fs.read`) is an object of its members, as in the CF sandbox.
-            providerBindings[p.name] = nestedMembers(nsp);
+            // As the cloud's sandbox holds it: member groups, createTool's function as its source, a missing member refused.
+            providerBindings[p.name] = programNamespace(p.name, nsp);
           }
 
           const workspace = providerBindings['workspace'] ?? {};

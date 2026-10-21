@@ -582,7 +582,7 @@ export {
   renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, programSurface, codemodeFunction, renderCraftedDefinitions,
   slateToolReach, callCodemodeMember, requireCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
-  shownConsoleValue, createToolArguments, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
+  shownConsoleValue, programNamespace, type ProgramMember, type ProgramNamespace, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';

@@ -1341,7 +1341,8 @@ describe('LocalAgentHost', () => {
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     // What a program reaches of the workspace's own planes: delegation, the agent's own lifecycle, its tasks and memory;
     // and of `agent.*`, what waits on its owner, which a hire reads of its own work.
-    const probe = 'return [typeof agents, typeof agent?.schedule, typeof tasks, typeof memory, typeof agent?.waitingOnOwner];';
+    // A member a namespace serves is its own, as in the cloud's sandbox, where any other name reads as one that refuses.
+    const probe = "return [typeof agents, 'schedule' in agent, typeof tasks, typeof memory, 'waitingOnOwner' in agent];";
 
     // Every turn runs the probe once, then answers.
     const model = new TestLanguageModelV2({
@@ -1373,7 +1374,7 @@ describe('LocalAgentHost', () => {
       const seen = (agent: string): JsonValue => v.parse(v.object({ result: JsonValueSchema }), JSON.parse(present(reached.get(agent), `${agent}'s program`))).result;
 
       expect({ root: seen('root'), hire: seen('root/auditor') })
-        .toEqual({ root: ['object', 'function', 'object', 'object', 'function'], hire: ['object', 'undefined', 'object', 'object', 'function'] });
+        .toEqual({ root: ['object', true, 'object', 'object', true], hire: ['object', false, 'object', 'object', true] });
     } finally {
       await host.close();
     }

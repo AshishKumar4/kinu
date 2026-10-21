@@ -17,7 +17,7 @@ import { parsesAsExpression } from '../craft/source';
 import type { CraftedToolSource } from './crafted-executor';
 import { toolDescription } from '../utils/tool-description';
 import { allowedInPlan, defineOperation, serve, statedInput, type Served } from '../operations/operation';
-import { objectInputDeclaration, operationInputSchema } from './operation-surfaces';
+import { nestedMembers, objectInputDeclaration, operationInputSchema, type NestedMembers } from './operation-surfaces';
 
 export {
   CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type CodemodeResult,
@@ -44,9 +44,40 @@ export function shownConsoleValue(logged: { readonly value: unknown }): string {
   }));
 }
 
-/** `workspace.createTool` takes a function as itself and sends its source: every function argument is sent so. */
-export function createToolArguments(args: readonly unknown[]): unknown[] {
-  return args.map((arg) => (typeof arg === 'function' ? String(arg) : arg));
+/** A member a program calls in-process: what it passes, answered as JSON, as an executor's provider serves it. */
+export type ProgramMember = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
+
+/** A namespace as a program holds it: its members, its member groups, and `then`, which is never a member. */
+export interface ProgramNamespace {
+  readonly [name: string]: ProgramMember | Readonly<Record<string, ProgramMember>> | undefined;
+}
+
+/**
+ * A namespace as a program holds it in-process, as the cloud's sandbox holds one (its vendor's proxy, then
+ * `reachableAsWritten`): each member it serves is its own property, so `'slates' in workspace` says whether slates are
+ * served; a member group (`fs.read`) is an object of its members; `workspace.createTool` takes a function as its source;
+ * `then` is undefined, so it is never a thenable. Any other name is a member it does not serve, refused by name when
+ * called, in the sandbox's words.
+ */
+export function programNamespace(name: string, members: Readonly<Record<string, ProgramMember>>): ProgramNamespace {
+  const create = members['createTool'];
+  const served: ProgramNamespace = nestedMembers(members);
+
+  // A function the program passes reaches the member as its source: what the cloud's sandbox sends it.
+  const sourced: NestedMembers<ProgramMember> = name === 'workspace' && create !== undefined
+    ? { createTool: async (...args) => create(...args.map((arg) => (typeof arg === 'function' ? String(arg) : arg))) }
+    : {};
+
+  return new Proxy({ ...served, ...sourced }, {
+    get: (target, member) => {
+      // Never a member: an await reads it, and a namespace is no promise.
+      if (typeof member !== 'string' || member === 'then') return undefined;
+
+      if (Object.hasOwn(target, member)) return target[member];
+
+      return async () => settle(Effect.fail(new KinuError('missing', `Tool "${member}" not found`)));
+    },
+  });
 }
 
 /** `shownConsoleValue` as sandbox source, applied to every console level the sandbox captures. */
@@ -55,7 +86,7 @@ export const SANDBOX_CONSOLE_PRELUDE = 'const __kinuShown = (value) => { if (typ
   + 'catch (error) { return `[unserializable: ${error instanceof Error ? error.message : String(error)}]`; } }; '
   + 'for (const level of ["log", "warn", "error"]) { const write = console[level]; console[level] = (...args) => write(...args.map(__kinuShown)); }';
 
-/** `createToolArguments` as sandbox source, over the program's `workspace` namespace. */
+/** `programNamespace`'s createTool as sandbox source, over the program's `workspace` namespace: a function as its source. */
 export const SANDBOX_CREATE_TOOL_PRELUDE = '{ const create = workspace.createTool; workspace.createTool = '
   + '(...args) => create(...args.map((arg) => (typeof arg === "function" ? String(arg) : arg))); }';
 
