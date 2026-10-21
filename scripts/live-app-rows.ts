@@ -1714,12 +1714,36 @@ async function addCustomServer(page: Page, name: string, serverUrl: string): Pro
   await pressButton(page, 'button', 'Add server');
 }
 
+/** The tab `press` opens from `page`, or null where none opens within `ms`: read off the browser's targets as each is
+ *  made, so a wait that ends finds nothing left listening. */
+async function opensTab(page: Page, press: () => Promise<void>, ms: number): Promise<Target | null> {
+  const browser = page.browser();
+  const { promise, resolve } = Promise.withResolvers<Target | null>();
+  const created = (target: Target) => { if (target.opener() === page.target()) resolve(target); };
+
+  const timer = setTimeout(() => { resolve(null); }, ms);
+
+  browser.on('targetcreated', created);
+
+  try {
+    await press();
+
+    return await promise;
+  } finally {
+    clearTimeout(timer);
+    browser.off('targetcreated', created);
+  }
+}
+
 /** The helper tab a click starts a sign-in in, at the provider's consent page; `closed` settles as it closes. */
 async function signInHelper(page: Page, press: () => Promise<void>): Promise<{ readonly helper: Page; readonly closed: Promise<void> }> {
-  const opened = page.browser().waitForTarget((target) => target.opener() === page.target(), { timeout: ACROSS_PAGE_LOADS_MS });
+  const target = await named('the sign-in tab', async () => opensTab(page, press, ACROSS_PAGE_LOADS_MS));
 
-  await press();
-  const helper = await (await named('the sign-in tab', async () => opened)).page();
+  if (target === null) {
+    throw new Error(`the sign-in opened no tab; its page said ${await page.evaluate(() => document.querySelector('[data-connect-ended]')?.textContent ?? 'nothing')}`);
+  }
+
+  const helper = await target.page();
 
   if (helper === null) throw new Error('the sign-in opened no tab');
   const closed = new Promise<void>((resolve) => { helper.once('close', () => { resolve(); }); });
@@ -1852,7 +1876,8 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
     const denied = { helperClosed, said: deniedSaid, status: denyhub.status, signInOffered: await panel.$(signIn) !== null };
 
     if (!denied.signInOffered) return { sameTab, planted: plantedSaw, denied, retried: null };
-    const again = await signInHelper(panel, async () => panel.click(signIn));
+    // Pressed as `pressButton` presses: the row sits in setup's own scrolled step, where a mouse lands on what covers it.
+    const again = await signInHelper(panel, async () => panel.$eval(signIn, (button) => { if (button instanceof HTMLElement) button.click(); }));
 
     await consent(again.helper, 'approve');
     await named('the approved sign-in\'s tab to close', async () => closedSoon(again.closed));
