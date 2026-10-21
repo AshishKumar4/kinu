@@ -190,6 +190,11 @@ export class DeployFakeControl extends WorkerEntrypoint {
     await this.hit('/r2', { on });
   }
 
+  /** On Workers Free from now on, as the Containers API answers it. */
+  async free(on: boolean): Promise<void> {
+    await this.hit('/free', { on });
+  }
+
   /** The Cloudflare user `GET /user` answers from now on. */
   async signInAs(user: { id: string; email: string }): Promise<void> {
     await this.hit('/user', user);

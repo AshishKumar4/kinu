@@ -570,11 +570,6 @@ function beginRun(request: Request, env: Env): Effect.Effect<Response, KinuError
 
     if (yield* Effect.promise(async () => run.busy())) return err(409, 'A run is already going in this account; continue it.');
 
-    // A run starts only on an account preflight has nothing left to ask of: Workers Paid first, then R2.
-    const checked = yield* preflight(bearerTransport(held.token), asked.account, Date.now());
-
-    if (checked.needs.length > 0) return json({ body: { needs: checked.needs } }, { status: 409 });
-
     const planned = yield* plannedRun(bearerTransport(held.token), held.user, asked).pipe(Effect.matchCause({
       onSuccess: (plan) => ({ plan }),
       onFailure: (failed) => ({ refused: refusedAnswer(failed, asked.account) }),

@@ -96,11 +96,7 @@ function authorize(door: DeployDoor, clientId: string): Effect.Effect<void> {
       clientId, redirectUri: CLI_DEPLOY_REDIRECT_URI, code, verifier: pkce.verifier,
     }));
 
-    yield* Effect.promise(() => door.holdToken({
-      accessToken: token.accessToken,
-      refreshToken: token.refreshToken,
-      expiresInSeconds: token.expiresInSeconds,
-    }));
+    yield* Effect.promise(() => door.holdToken(token));
   });
 }
 

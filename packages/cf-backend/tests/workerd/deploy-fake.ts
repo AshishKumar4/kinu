@@ -420,6 +420,8 @@ interface Held {
   /** Off: every bucket call is refused as R2 not turned on, until the row turns it on. */
   r2: boolean;
   r2Reads: number;
+  /** Workers Free: the Containers API refuses as it did the owner's free account (2026-10-21). */
+  free: boolean;
   /** By zone id; a zone added by `POST /zones` is pending until the row activates it. */
   zones: Map<string, { name: string; status: string }>;
   domains: string[];
@@ -466,6 +468,7 @@ function fresh(): Held {
     user: DEPLOY_FAKE_USER,
     r2: true,
     r2Reads: 0,
+    free: false,
     zones: new Map(),
     domains: [],
     refuseOnce: null,
@@ -502,6 +505,7 @@ function reset(): void {
   held.user = DEPLOY_FAKE_USER;
   held.r2 = true;
   held.r2Reads = 0;
+  held.free = false;
   held.zones = new Map();
   held.domains = [];
   held.refuseOnce = null;
@@ -600,7 +604,7 @@ const ExpireSchema = v.object({ expiresIn: v.number() });
 /** Anything else is a caller's typo and is refused. */
 const CONTROL_PATHS: readonly string[] = [
   '/reset', '/refuse', '/serve', '/publish', '/state', '/stall', '/stall/reached',
-  '/stall/release', '/weigh', '/expire', '/existing', '/r2', '/user', '/zone', '/activate', '/unrefuse',
+  '/stall/release', '/weigh', '/expire', '/existing', '/r2', '/free', '/user', '/zone', '/activate', '/unrefuse',
 ];
 
 function envelope(result: JsonValue, status = 200): Response {
@@ -666,6 +670,10 @@ async function api(url: URL, request: Request): Promise<Response> {
 
   if (zoned !== undefined) return zoned;
 
+  if (held.free && path.endsWith('/containers/applications')) {
+    return refusal(401, 1000, '{"error":"Unauthorized: You do not have access to Cloudflare Containers. Deploying containers requires the Workers Paid plan."}');
+  }
+
   if (path.includes('/r2/buckets')) {
     held.r2Reads += request.method === 'GET' ? 1 : 0;
 
@@ -704,7 +712,7 @@ function storageApi(path: string, request: Request, named: (key: string) => stri
     return envelope({ id: `id-${named('title')}` });
   }
 
-  if (path.endsWith('/r2/buckets?per_page=100')) {
+  if (path.endsWith('/r2/buckets?per_page=100') || path.endsWith('/r2/buckets?per_page=1')) {
     return envelope({ buckets: held.buckets.map((name) => ({ name })) });
   }
 
@@ -986,6 +994,8 @@ async function control(url: URL, request: Request): Promise<Response> {
   if (url.pathname === '/expire') held.shortGrant = v.parse(ExpireSchema, await request.json()).expiresIn;
 
   if (url.pathname === '/r2') held.r2 = v.parse(v.object({ on: v.boolean() }), await request.json()).on;
+
+  if (url.pathname === '/free') held.free = v.parse(v.object({ on: v.boolean() }), await request.json()).on;
 
   if (url.pathname === '/user') held.user = v.parse(v.object({ id: v.string(), email: v.string() }), await request.json());
 

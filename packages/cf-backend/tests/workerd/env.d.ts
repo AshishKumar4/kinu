@@ -573,6 +573,7 @@ interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
   expireGrant(expiresIn: number): Promise<void>;
   existing(): Promise<void>;
   r2(on: boolean): Promise<void>;
+  free(on: boolean): Promise<void>;
   unrefuse(): Promise<void>;
   signInAs(user: { id: string; email: string }): Promise<void>;
   zone(zone: { id: string; name: string }): Promise<void>;
