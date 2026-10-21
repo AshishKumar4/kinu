@@ -67,13 +67,13 @@ function chatActivity(walk: Pick<Walk, 'sql' | 'chat'>, actorId: string, running
 
 /** A shell command the agent parked for the person: the workspace's own row. */
 function commandParked(sql: SqlExecutor, actorId: string): boolean {
-  return sql<{ x: number }>`SELECT 1 AS x FROM deferred_approvals WHERE actor_id = ${actorId} AND status = 'queued' LIMIT 1`.length > 0;
+  return sql<{ x: number }>`SELECT 1 AS x FROM owner_requests WHERE kind = 'action' AND actor_id = ${actorId} AND status = 'queued' LIMIT 1`.length > 0;
 }
 
 /** A device ask parked on the person: the owner's own, or a live agent's (a retired one's answers nobody). */
 function deviceAsks(sql: SqlExecutor): boolean {
-  return sql<{ x: number }>`SELECT 1 AS x FROM device_consent_asks c LEFT JOIN workspace_actors a ON a.actor_id = c.actor_id
-    WHERE c.status = 'queued' AND (c.actor_id IS NULL OR (a.retiring_at IS NULL AND a.deleted_at IS NULL AND a.actor_id IS NOT NULL)) LIMIT 1`.length > 0;
+  return sql<{ x: number }>`SELECT 1 AS x FROM owner_requests c LEFT JOIN workspace_actors a ON a.actor_id = c.actor_id
+    WHERE c.kind = 'device' AND c.status = 'queued' AND (c.actor_id IS NULL OR (a.retiring_at IS NULL AND a.deleted_at IS NULL AND a.actor_id IS NOT NULL)) LIMIT 1`.length > 0;
 }
 
 function subordinateActivity(walk: Pick<Walk, 'sql' | 'chat'>, entry: SubordinateRosterEntry, actorId: string, running: boolean): AgentActivity {

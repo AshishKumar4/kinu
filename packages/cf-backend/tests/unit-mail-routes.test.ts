@@ -82,7 +82,7 @@ function env(accounts: 'operators' | 'everyone' = 'operators'): MailRoutesEnv {
           const held = claims.get(claimed);
 
           if (held !== undefined && held.user_id !== userId) return Promise.reject(new KinuError('denied', `"${claimed}" is taken.`));
-          const claim: MailNameClaim = { label: claimed, user_id: userId, kind: 'username', target_path: null, state: 'active' };
+          const claim: MailNameClaim = { label: claimed, user_id: userId, kind: 'username', target_path: null };
 
           claims.set(claimed, claim);
 

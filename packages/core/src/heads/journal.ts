@@ -6,6 +6,7 @@
 
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
+import { KinuError } from '../obs/index';
 import { boundedInt } from '../utils/bounds';
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
@@ -282,7 +283,7 @@ export class HeadJournal {
 
   /**
    * The unfinished run for this task, so one request stays one run across re-drives. Keyed by the
-   * task plus no `head_merge_results` row; independent of head status, which `abandonRunning` may already
+   * task plus no cached merge; independent of head status, which `abandonRunning` may already
    * have settled. The owner predicate is what makes the task key safe.
    */
   findResumableRun(task: string): HeadId | null {
@@ -291,8 +292,7 @@ export class HeadJournal {
     const rows = this.sql<{ root_id: string }>`
       SELECT r.root_id AS root_id
       FROM head_runs r
-      LEFT JOIN head_merge_results m ON m.actor_id = r.actor_id AND m.root_id = r.root_id
-      WHERE r.actor_id = ${this.actorId} AND r.rationale = ${task} AND m.root_id IS NULL
+      WHERE r.actor_id = ${this.actorId} AND r.rationale = ${task} AND r.merged_narrative IS NULL
       ORDER BY r.spawned_at DESC LIMIT 1`;
 
     return rows[0]?.root_id ?? null;
@@ -390,19 +390,25 @@ export class HeadJournal {
 
   /**
    * The settlement: a cached merge closes the run, so every unfinished head is settled `aborted` in the same
-   * transition, before the merge row exists. Idempotent in both halves.
+   * transition, before the merge is on the run's header. Idempotent in both halves; a run with no header, which a
+   * top-level run records at its split, has nowhere to keep its merge and is refused.
    */
   cacheMerge(rootId: HeadId, narrative: string): void {
-    this.actor.assertCurrent();
-    void this.sql`UPDATE head_journal
-      SET status = 'aborted', completed_at = ${Date.now()},
-          error_message = ${UNREPORTED_AT_MERGE_REASON}
-      WHERE actor_id = ${this.actorId}
-        AND root_id = ${rootId}
-        AND id != ${rootId}
-        AND (status = 'running' OR status = 'interrupted')`;
-    void this.sql`INSERT OR REPLACE INTO head_merge_results (actor_id, root_id, merged_narrative)
-      VALUES (${this.actorId}, ${rootId}, ${narrative})`;
+    return settleSync(Effect.gen({ self: this }, function* () {
+      this.actor.assertCurrent();
+      void this.sql`UPDATE head_journal
+        SET status = 'aborted', completed_at = ${Date.now()},
+            error_message = ${UNREPORTED_AT_MERGE_REASON}
+        WHERE actor_id = ${this.actorId}
+          AND root_id = ${rootId}
+          AND id != ${rootId}
+          AND (status = 'running' OR status = 'interrupted')`;
+
+      const kept = this.sql<{ root_id: string }>`UPDATE head_runs SET merged_narrative = ${narrative}
+        WHERE actor_id = ${this.actorId} AND root_id = ${rootId} RETURNING root_id`;
+
+      if (kept.length === 0) return yield* new KinuError('missing', `the run ${rootId} has no header to keep its merge on`);
+    }));
   }
 
   /** Read on every model step, so the `root_id IN (running)` subquery bounds the aggregate to open roots via `idx_head_journal_status` instead of scanning all history. */
@@ -533,8 +539,8 @@ export class HeadJournal {
       .filter((h) => h.id !== rootId)
       .map((h) => headViewOf(h));
 
-    const runRow = this.sql<{ rationale: string | null }>`
-      SELECT rationale FROM head_runs WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`[0];
+    const runRow = this.sql<{ rationale: string | null; merged_narrative: string | null }>`
+      SELECT rationale, merged_narrative FROM head_runs WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`[0];
 
     const rationale = runRow?.rationale ?? rootRow?.rationale ?? '';
 
@@ -542,11 +548,8 @@ export class HeadJournal {
     const named = [rootRow?.task, rationale, heads.at(0)?.task].find((candidate) => candidate !== undefined && candidate !== '');
     const task = named ?? '(head run)';
 
-    const mergeRow = this.sql<{ merged_narrative: string }>`
-      SELECT merged_narrative
-      FROM head_merge_results WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`[0];
-
-    const merge = mergeRow ? { narrative: mergeRow.merged_narrative } : null;
+    const merged = runRow?.merged_narrative ?? null;
+    const merge = merged === null ? null : { narrative: merged };
 
     const status = rootRow?.status ?? runStatusOf(heads, merge !== null);
 

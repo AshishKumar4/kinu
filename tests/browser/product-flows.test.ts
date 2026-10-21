@@ -92,8 +92,13 @@ describe(productFlowTestName('welcome', 'the product reaches its home page'), ()
     observed = await flowRow('welcome', reachesHome);
   });
 
-  test('through setup when the account has not done it, and straight there when it has', () => {
-    expect(verdictOf(observed, 'welcome').landedAt).toBe('/');
+  // Setup's default installs the Personal assistant, and Home is its chat (389aac88a); an account set up before keeps
+  // the Home it chose.
+  test('through setup onto the assistant\'s chat when the account has not done it, and straight there when it has', () => {
+    const welcome = verdictOf(observed, 'welcome');
+
+    expect(welcome.landedAt).toBe('/');
+    expect(!welcome.welcomed || welcome.assistantHome).toBe(true);
   });
 });
 

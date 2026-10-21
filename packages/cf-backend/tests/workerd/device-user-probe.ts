@@ -105,7 +105,7 @@ export class DeviceUserProbeDO extends UserDO {
     await (await this.workspaceTarget(workspace)).claimOwner(this.name);
     const { token, tokenHash } = await freshWorkspaceCapability();
 
-    commitWorkspaceCapability(this.probeSql, workspace, tokenHash);
+    if (!commitWorkspaceCapability(this.probeSql, workspace, tokenHash)) throw new Error(`the workspace ${workspace} took no identity`);
     this.callers.set(workspace, { workspaceToken: token });
     this.ctx.storage.sql.exec(
       `INSERT INTO device_consent (agent_name, device_id, policy, updated_at) VALUES (?, ?, 'allow', ?)`, workspace, deviceId, Date.now(),

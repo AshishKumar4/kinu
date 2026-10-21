@@ -57,7 +57,7 @@ import {
   userCredentials,
 } from "./providers/agent-registry";
 import { ownerCaller, type UserCaller } from "@kinu.run/core";
-import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
+import { adaptMemory, backfillMemoryVectors, forgetMemoryVectors } from "@kinu.run/core";
 import { actorAffinity } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 import { workspaceServingScope, type HostedBox, type WorkspaceServing } from "./workspace-host";
@@ -199,6 +199,8 @@ function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCre
 export type CFRuntime = AgentRuntime & {
   /** The reflection lane: routed, so it answers to a schema where a fast lane is absent. */
   llm: RoutedLLM;
+  /** The workspace memory's vectors deleted, as the workspace is (`forgetMemoryVectors`): its teardown's alone. */
+  forgetMemoryVectors(): Promise<void>;
   /** Also what the parent-file RPC serves a fork, so a fork reads exactly its parent's bytes. */
   localVfs: WorkspaceFiles;
   /** `refreshStatus()` is awaited at turn start. */
@@ -230,7 +232,7 @@ export interface CFRuntimeHooks {
   /** Read at exec time, as resolving during construction re-enters the runtime getter. Undefined (head,
      *  subordinate): no queue, so 'strict' refuses. */
   deferrals?: () => DeferredApprovalChannel | undefined;
-  slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
+  slate?: (operation: SlateOperation, turn?: string) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
   liveReadsMoved?: (reads: readonly LiveRead[]) => void;
   /** A computer port was exposed or withdrawn, which can change the job that serves it; awaited by the call. */
@@ -589,6 +591,7 @@ export function createCFRuntime(
     localVfs: baseWorkspaceVfs,
     deviceTransport,
     vectorStore,
+    forgetMemoryVectors: () => forgetMemoryVectors(memoryStore, { store: vectorStore }),
     sandboxHandle,
     processRetry: processRetryTool(executionBox),
     portHolders: () => {

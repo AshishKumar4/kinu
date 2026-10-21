@@ -79,6 +79,8 @@ export interface SlateAppCall {
   readonly args: JsonValue[];
   readonly chain?: readonly string[];
   readonly viewer?: SlateViewer;
+  /** The turn whose program began the chain (`SlateInvocation.turn`). */
+  readonly turn?: string;
   /** The caller's word on the call, read again where it is sent with nothing awaited between: it throws to refuse. */
   readonly admit?: () => void;
 }
@@ -108,6 +110,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   ownerUserId?(): string | null;
+  /** A signed-in viewer's key on `share`, the deployment's keyed hash of them (`shareViewerKey`); null without a key. */
+  viewerKey?(share: string, userId: string): Promise<string | null>;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
   /** A live share of `slate` started or stopped: its server's authority changed, so its running app ends. */
@@ -178,6 +182,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       ...(ports.admitted !== undefined && { admitted: ports.admitted.bind(ports) }),
       ...(ports.budget !== undefined && { budget: ports.budget.bind(ports) }),
       ...(ports.ownerUserId !== undefined && { ownerUserId: ports.ownerUserId.bind(ports) }),
+      ...(ports.viewerKey !== undefined && { viewerKey: ports.viewerKey.bind(ports) }),
       ...(ports.ownerEffects !== undefined && { ownerEffects: ports.ownerEffects }),
     });
     this.servers = new SharedServers({
@@ -397,7 +402,8 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
    * One operation a caller runs on the workspace's slates, checked against the caller's mode first. A slate's history
    * answers only for this workspace's slates.
    */
-  operation(caller: SlateCaller, input: SlateOperation): Promise<SlateCallResult> {
+  /** `turn`: the turn whose program makes this operation, stamped by the actor that runs it (`SlateInvocation.turn`). */
+  operation(caller: SlateCaller, input: SlateOperation, turn?: string): Promise<SlateCallResult> {
     return settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
       const parsed = v.safeParse(SlateOperationSchema, input);
 
@@ -406,18 +412,18 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
       requireSlateWorkMode(operation, caller.workMode);
 
-      return yield* this.dispatch(caller, operation);
+      return yield* this.dispatch(caller, operation, turn);
     }), (failed) => Effect.map(refusing('slate operation', 'io')(failed), (refusal): SlateCallResult => ({ ok: false, ...refusal }))));
   }
 
-  private dispatch(caller: SlateCaller, operation: SlateOperation): Effect.Effect<SlateCallResult, KinuError> {
+  private dispatch(caller: SlateCaller, operation: SlateOperation, turn: string | undefined): Effect.Effect<SlateCallResult, KinuError> {
     const running = <Value>(run: () => Promise<Value>) => Effect.promise(run);
 
     switch (operation.op) {
       case 'list': return Effect.map(running(async () => this.list(caller)), (value) => answered({ value }));
       case 'preview': return running(async () => this.preview(caller, operation.id));
       case 'methods': return Effect.map(running(async () => this.processes.booted(caller, operation.id)), ({ process }) => answered({ value: [...process.methods] }));
-      case 'call': return running(async () => this.ports.call({ caller, id: operation.id, method: operation.method, args: operation.args ?? [] }));
+      case 'call': return running(async () => this.ports.call({ caller, id: operation.id, method: operation.method, args: operation.args ?? [], ...turn !== undefined && { turn } }));
       case 'remove': return running(async () => this.remove(caller, operation.id));
       case 'history': return Effect.map(this.history(operation.id, operation.after), (value) => answered({ value }));
       case 'commit': return running(async () => answered({ value: (await (await this.slates(caller.cred)).commit(new SlateId(operation.id))).toData() }));
@@ -477,7 +483,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     return settle(answer(`changing slate ${slate}'s files`, Effect.gen({ self: this }, function* () {
       const session = yield* Effect.promise(async () => this.ports.session());
       const root = `${SLATES_ROOT}/${slate}`;
-      const batch = writeSlateBatch({ session, root, files, slate, editor, marks: this.live, revision: slateRevision(this.builds, slate) });
+      const batch = writeSlateBatch({ session, root, files, slate, editor, marks: this.live });
 
       for (const share of this.live.list().filter((row) => row.slate === slate && row.revokedAt === null && row.mode === 'owner')) this.ports.ownerEffects?.retire(share.slate);
       this.filesChanged(batch.paths.map((path) => `${root}/${path}`));
@@ -624,6 +630,16 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
    * Every live share of `slate` ended, or of every slate here: before a slate's source is removed, or its workspace is
    * deleted, so nothing removed is still shared or found in the Gallery. Whether any was.
    */
+  /**
+   * A deleted account forgotten here: no share of this workspace admits it, by its id or by an email that later signs up
+   * again, and the traces it left name no one (`SlateLiveShareStore.forgetPerson`). The overview goes out again.
+   */
+  async forgetPerson(person: { readonly userId: string; readonly email: string }, viewerKey: (share: string) => Promise<string | null>): Promise<void> {
+    new SlateShareStore(this.ports.sql).forgetUser(person);
+    await this.live.forgetPerson(person, viewerKey);
+    await this.ports.sharesChanged?.();
+  }
+
   async endLiveShares(slate?: string): Promise<boolean> {
     const live = this.live.list().filter((row) => row.revokedAt === null && (slate === undefined || row.slate === slate));
 
@@ -674,7 +690,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
         if (input.mode === 'owner' && mark !== null) {
           // A different last-good revision can belong to an older in-flight build. The reviewed tree must itself be
-          // the one the current root image compiled, not merely newer than revisionBefore. Capture joins this VFS/SQL
+          // the one the current root image compiled, not merely newer than the revision before the edit. Capture joins this VFS/SQL
           // transaction directly, without an await or a nested files.transaction().
           const content = this.content ?? new WorkspaceSlateContentStore(session.vfs.as(CRED_KERNEL));
           const files = new SlateFiles(session.vfs.as(CRED_SESSION_USER), content, this.ports.sql, (body) => session.vfs.withTransaction(body));

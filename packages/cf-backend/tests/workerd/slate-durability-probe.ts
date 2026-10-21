@@ -754,7 +754,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   /** Hold the graph await while a real editor batch commits, reproducing the own-to-owner R0 approval race. */
   async editorFence(latest = false): Promise<{
     pending: string; afterPendingMode: string | null; approved: boolean; cleared: boolean; lending: string;
-    afterOwnerBuild: { grantRevision: string | null; editedBy: string | null } | null; stopped: string; revisionBefore: string | null;
+    afterOwnerBuild: { grantRevision: string | null; editedBy: string | null } | null; stopped: string;
   }> {
     const { sql } = this.ctx.storage;
     const raw = (ddl: string) => { sql.exec(ddl); };
@@ -826,14 +826,13 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
       const second = await controller.writeShared('board', { 'server.ts': { text: 'r2', base: sha256Hex('r1') } }, 'sam');
 
       if (!second.ok) throw new Error(second.error);
-      const revisionBefore = labelOf(controller.live.editMark('board')?.revisionBefore ?? null);
       const firstBuildApproval = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: first, approved: [] });
       const mode = controller.live.get(share.id)?.mode ?? null;
       const secondBuilt = revision('r2');
       const secondBuildApproval = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: secondBuilt, approved: [] });
 
       return {
-        pending: JSON.stringify(firstBuildApproval), afterPendingMode: mode, revisionBefore,
+        pending: JSON.stringify(firstBuildApproval), afterPendingMode: mode,
         approved: secondBuildApproval.ok, cleared: controller.live.editMark('board') === null,
         lending: serverAuthority(controller.live.authoritiesOf('board'), secondBuilt).kind,
         afterOwnerBuild: null, stopped: 'none',
@@ -853,7 +852,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return {
       pending: JSON.stringify(pending), afterPendingMode, approved: approved.ok, cleared, lending,
       afterOwnerBuild: after === undefined ? null : { grantRevision: labelOf(after.grantRevision), editedBy: after.editedBy },
-      stopped: serverAuthority(controller.live.authoritiesOf('board'), current).kind, revisionBefore: labelOf(controller.live.editMark('board')?.revisionBefore ?? null),
+      stopped: serverAuthority(controller.live.authoritiesOf('board'), current).kind,
     };
   }
 

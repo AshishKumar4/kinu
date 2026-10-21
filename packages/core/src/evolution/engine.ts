@@ -31,7 +31,7 @@ import { upsertCraftedTool } from '../craft/conflict';
 import { periodicCraftConsolidation } from '../craft/consolidation';
 import { countCraftOffers, rateCraftedTools } from '../craft/preference';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
-import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
+import { effectAlreadyDone, preparedOutput, prepareOutput, recordEffectDone, retirePreparedOutput } from '../identity/effect-tombstones';
 import type { TurnPairReader } from '../identity/conversation-store';
 import {
   ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, AdvisorRowDataSchema, normalizeNote,
@@ -40,7 +40,7 @@ import {
 import { initLessonTables } from './lessons';
 import { dreamChangesFor } from './watch';
 import {
-  applyStruggleLesson, initStruggleTables, listToolLessons, MAX_TOOL_LESSONS, owesTurnLessons, recordTurnStruggles,
+  applyStruggleLesson, initStruggleTables, listToolLessons, MAX_TOOL_LESSONS, owesTurnLessons,
   scoreToolLessons, StruggleLessonSchema, struggleLessonPrompt, teachingStruggle,
 } from './struggles';
 import {
@@ -376,7 +376,7 @@ export class EvolutionEngine {
 
   /**
    * The `turn_lessons` terminal effect's body, apart from the turn's rating, which may wait on a reply that never
-   * comes: records its struggles and scores the lessons it was shown, then has the fast tier write one lesson about
+   * comes: scores the lessons it was shown, then has the fast tier write one lesson about
    * the tool it struggled with most. Each part has its tombstone, so a retry neither rescores nor asks again; a
    * refusal throws, for the ledger to retry or park. A turn with no id has none to key them by.
    */
@@ -389,7 +389,6 @@ export class EvolutionEngine {
 
     if (!effectAlreadyDone(sql, actor, TURN_REVIEW_STEP_SCOPE, recordKey)) {
       this.commit(() => {
-        recordTurnStruggles(sql, actor, turn);
         scoreToolLessons(sql, actor, turn);
         recordEffectDone(sql, actor, { scope: TURN_REVIEW_STEP_SCOPE, key: recordKey });
       });
@@ -603,11 +602,8 @@ export class EvolutionEngine {
 
     // The answer is persisted before it is applied, so a replay applies what was
     // decided instead of asking the model again.
-    const recorded = patternKey === null
-      ? undefined
-      : this.rt.storage.sql<{ answer: string }>`
-          SELECT answer FROM pattern_extractions
-          WHERE actor_id = ${this.rt.actor.actorId} AND effect_key = ${patternKey}`[0]?.answer;
+    const effect = patternKey === null ? null : { scope: TURN_REVIEW_STEP_SCOPE, key: patternKey };
+    const recorded = effect === null ? undefined : preparedOutput(this.rt.storage.sql, this.rt.actor, effect);
 
     const generalized = recorded ?? await this.reviewLlm(turn).complete(
       `A successful interaction used these tool calls:\n${callSummary}\n\n` +
@@ -627,11 +623,7 @@ export class EvolutionEngine {
     // Shape only; upsertCraftedTool compiles the code before storing it.
     if (!parsed.success || !parsed.output.name || !parsed.output.code) return;
 
-    if (patternKey !== null && recorded === undefined) {
-      void this.rt.storage.sql`INSERT INTO pattern_extractions (actor_id, effect_key, answer)
-        VALUES (${this.rt.actor.actorId}, ${patternKey}, ${generalized})
-        ON CONFLICT(actor_id, effect_key) DO NOTHING`;
-    }
+    if (effect !== null && recorded === undefined) prepareOutput(this.rt.storage.sql, this.rt.actor, effect, generalized);
 
     const discovered = (parsed.output.description ?? parsed.output.name).slice(0, 60);
 
@@ -651,10 +643,9 @@ export class EvolutionEngine {
         });
       }
 
-      if (patternKey !== null) {
-        recordEffectDone(this.rt.storage.sql, this.rt.actor, { scope: TURN_REVIEW_STEP_SCOPE, key: patternKey });
-        void this.rt.storage.sql`DELETE FROM pattern_extractions
-          WHERE actor_id = ${this.rt.actor.actorId} AND effect_key = ${patternKey}`;
+      if (effect !== null) {
+        recordEffectDone(this.rt.storage.sql, this.rt.actor, effect);
+        retirePreparedOutput(this.rt.storage.sql, this.rt.actor, effect);
       }
     });
   }

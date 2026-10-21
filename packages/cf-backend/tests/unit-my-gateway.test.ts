@@ -529,6 +529,35 @@ describe('UserDO gateway credential derivation', () => {
     }
   });
 
+  // The gateway is named in every Cloudflare request's headers, so the model catalog a workspace holds is that
+  // gateway's: a change moves the revision a warm workspace reconciles on, which a fan-out skipping it cannot.
+  test('selecting or clearing a gateway moves the credentials\' revision; the same selection and the generic config write do not', async () => {
+    const restore = stubGatewayListing([{ id: 'gw-one', authentication: false }, { id: 'gw-two', authentication: false }]);
+    const harness = createTestUserDO();
+
+    try {
+      const owner = await testOwner();
+      await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, oauthCredential());
+      const revision = async () => await harness.userDO.getCredentialsRevision(owner);
+      const before = await revision();
+
+      await harness.userDO.selectAIGateway(owner, 'gw-one');
+      const selected = await revision();
+      await harness.userDO.selectAIGateway(owner, 'gw-one');
+      const again = await revision();
+      await harness.userDO.selectAIGateway(owner, null);
+      const cleared = await revision();
+      await harness.userDO.selectAIGateway(owner, null);
+
+      expect([selected > before, again === selected, cleared > again, (await revision()) === cleared]).toEqual([true, true, true, true]);
+      await expect(harness.userDO.setConfig(owner, 'cloudflare_ai_gateway', 'gw-two')).rejects.toThrow('has a dedicated route');
+      expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_OAUTH_CRED_KEY)).toMatchObject({ 'cf-aig-gateway-id': 'default' });
+    } finally {
+      harness.close();
+      restore();
+    }
+  });
+
   test('login-time discovery auto-selects a sole gateway', async () => {
     const restore = stubGatewayListing([{ id: 'gw-solo', authentication: false }]);
     const harness = createTestUserDO();

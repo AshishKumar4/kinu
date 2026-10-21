@@ -845,8 +845,8 @@ describe('one workspace database, many logical actors', () => {
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'), { kind: 'actor' });
     const claim = await admitTestClaim(actor.stores.claims, { runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor), program: BUILTIN });
     const step = await actor.stores.claims.consume(claim, { index: 0, messages: [{ role: 'user', content: 'go' }] });
-    // The row naming the step's list, which no request written before the requests lineage has.
-    void fx.sql`DELETE FROM request_renders WHERE actor_id=${claim.actorId} AND request_id=${step.requestId}`;
+    // The step's list unnamed, as no request written before the requests lineage names one.
+    void fx.sql`UPDATE actor_requests SET rendered_context_id=NULL, rendered_revision=NULL WHERE actor_id=${claim.actorId} AND request_id=${step.requestId}`;
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
 
