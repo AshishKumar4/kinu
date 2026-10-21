@@ -1,12 +1,11 @@
 import { Effect, Cause } from 'effect';
+import { SaveBar } from "@/components/ui/SaveBar";
 import { startTransition, useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
-import {
-  FloppyDiskIcon, BrainIcon, CheckIcon,
-  ShieldIcon, KeyIcon,
-  DownloadSimpleIcon, EyeIcon, ChatsCircleIcon, TrashIcon,
-} from "@phosphor-icons/react";
+import { Loader } from "@cloudflare/kumo";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { GearSixIcon, KeyIcon, TrashIcon } from "@phosphor-icons/react";
+import { Page } from "@/components/ui/PageHeader";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
   WORKSPACE_ARCHIVE_EXTENSION,
@@ -20,7 +19,6 @@ import type { AgentStatus, WorkspaceLayout, WorkspaceNotice } from "@kinu.run/co
 import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
 import { Card, Field, composing, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Segmented } from "@/components/ui/Segmented";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { CardSlot } from "@/components/ui/CardSlot";
@@ -30,7 +28,7 @@ import { showing, detach, settle } from '@kinu.run/core/obs';
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 const APPROVAL_LABEL: Record<ShellApprovalMode, string> = {
-  strict: "Strict (review)",
+  strict: "Strict",
   allow_all: "Allow all",
   deny_all: "Deny all",
 };
@@ -47,6 +45,8 @@ interface SettingField<T> {
   hydrate: (value: T) => void;
   fail: (thrown: { cause: unknown }) => void;
   markSaved: (value: T) => void;
+  /** Puts the read value back: the edit is dropped. */
+  discard: () => void;
 }
 
 function useSettingField<T>(): SettingField<T> {
@@ -68,7 +68,7 @@ function useSettingField<T>(): SettingField<T> {
     resource,
     value: edited ? edited.value : lastValue(resource),
     dirty: edited !== null,
-    edit, hydrate, fail, markSaved,
+    edit, hydrate, fail, markSaved, discard: () => setEdited(null),
   };
 }
 
@@ -87,14 +87,6 @@ function FieldState<T>({ field, what, onRetry, children }: {
 const LAYOUT_CHOICES: { id: WorkspaceLayout; label: string }[] = [{ id: "workbench", label: "Workbench" }, { id: "focus", label: "Focus" }];
 
 const ADVISOR_SWITCH = [{ id: "off", label: "Off" }, { id: "on", label: "On" }] as const;
-
-function saveLabel(saving: boolean, saved: boolean): string {
-  if (saving) return "Saving…";
-
-  if (saved) return "Saved";
-
-  return "Save";
-}
 
 /** The workspace socket's pieces settings read; the page shares the chat's socket rather than opening its own. */
 interface SettingsSource {
@@ -124,7 +116,7 @@ function LogoField({ title, logo, rpc }: { title: string; logo: string | null | 
     <Field label="Logo">
       <div className="flex items-center gap-3" data-logo-field>
         <WorkspaceLogo title={title} logo={logo} size={40} />
-        <button type="button" onClick={redraw} disabled={drawing} className="p-btn-quiet inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs">
+        <button type="button" onClick={redraw} disabled={drawing} className={buttonClass({ size: "sm" })}>
           {drawing ? <><Loader size="sm" /> Drawing…</> : "Draw a new one"}
         </button>
       </div>
@@ -149,7 +141,6 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   const advisor = useSettingField<AdvisorConfig>();
 
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   // The title is the roster's; the soul rides the workspace snapshot, so it hydrates or fails with it.
@@ -243,8 +234,6 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
       yield* Effect.promise(async () => Promise.all(writes));
 
       for (const commit of commits) commit();
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
     }), showing(setErr)), Effect.sync(() => {
       setSaving(false);
     }));
@@ -263,130 +252,101 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto" data-workspace-settings>
-      <div className="mx-auto max-w-3xl space-y-8 px-5 pb-16 pt-9 sm:px-8">
-        <header className="flex flex-wrap items-end justify-between gap-4 border-b p-border pb-6">
-          <div className="min-w-0">
-            <h1 className="p-display text-[26px] leading-8">Settings</h1>
-            <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 p-row-text p-text-3">
-              <span className="font-mono">{agentId}</span>
-              <CopyButton value={agentId} what="the workspace slug" size={11}
-                className="rounded-sm p-0.5 p-card-hover hover:p-text transition-colors" />
-              <span>·</span>
-              <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
-                <KeyIcon size={11} /> Account settings and credentials
-              </Link>
-            </p>
+    <Page fill icon={<GearSixIcon size={22} />} title="Settings" data-workspace-settings
+      actions={<Link to="/user/settings" className={buttonClass({ variant: "ghost" })}><KeyIcon size={14} />Account settings</Link>}>
+      {err && <div className="p-notice-danger px-4 py-3 text-xs">{err}</div>}
+
+      <div className="space-y-5">
+      <Card title="Identity">
+        <LogoField title={title} logo={logo} rpc={rpc} />
+        <Field label="Address">
+          <div className="flex items-center gap-2">
+            <input value={agentId} readOnly aria-label="The workspace's address" className={`${inputCls} font-mono p-text-2`} />
+            <CopyButton value={agentId} what="the workspace's address" size={13} className="shrink-0 rounded-[var(--r-control)] p-2 p-text-3 transition-colors hover:p-text" />
           </div>
-        </header>
-
-        {err && <div className="p-notice-danger px-4 py-3 text-xs">{err}</div>}
-
-        <div className="space-y-5">
-        <Card title="Identity" icon={BrainIcon}>
-          <LogoField title={title} logo={logo} rpc={rpc} />
-          <Field label="Display name">
-            <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
-              {(value) => (
-                <input value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} className={inputCls} />
-              )}
-            </FieldState>
-          </Field>
-          <Field label="Layout" hint="Focus shows the chat alone; its chats, agents and inspector open from the bar.">
-            <FieldState field={layout} what="the layout" onRetry={retryLoad}>
-              {(value) => (
-                <div className="flex">
-                  <Segmented label="Layout" value={value} segments={LAYOUT_CHOICES} onChange={(chosen) => layout.edit(chosen)} />
-                </div>
-              )}
-            </FieldState>
-          </Field>
-          <Field label="SOUL.md">
-            <FieldState field={soul} what="SOUL.md" onRetry={retryLoad}>
-              {(value) => (
-                <textarea value={value} onChange={(e) => soul.edit(e.target.value)} rows={8}
-                  className={`${inputCls} font-mono`} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
-              )}
-            </FieldState>
-          </Field>
-        </Card>
-
-
-        <Card title="Advisor" icon={EyeIcon}>
-          <FieldState field={advisor} what="the advisor settings" onRetry={loadRpcFields}>
+        </Field>
+        <Field label="Display name">
+          <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
             {(value) => (
-              <>
-                <div className="space-y-1.5">
-                  <label className="block text-xs p-text-2 font-medium">Second opinion</label>
-                  <div className="flex">
-                    <Segmented label="Second opinion" value={value.advisorEnabled ? "on" : "off"} segments={ADVISOR_SWITCH}
-                      onChange={(id) => advisor.edit({ ...value, advisorEnabled: id === "on" })} />
-                  </div>
-                  <p className="p-meta p-text-3">
-                    Off by default. When on, a second model reads each turn and can add one note. That is one extra model call per turn.
-                  </p>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="block text-xs p-text-2 font-medium">Minimum severity</label>
-                  <div className="flex">
-                    <Segmented label="Minimum severity" value={value.advisorMinSeverity}
-                      segments={ADVISOR_SEVERITIES.map((severity) => ({ id: severity, label: ADVISOR_SEVERITY_LABEL[severity] }))}
-                      onChange={(severity) => advisor.edit({ ...value, advisorMinSeverity: severity })} />
-                  </div>
-                  <p className="p-meta p-text-3">
-                    Notes at or above this severity show in the conversation. Lower ones go to the Changelog. The default is concern.
-                  </p>
-                </div>
-              </>
+              <input value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} className={inputCls} />
             )}
           </FieldState>
-        </Card>
-
-
-        <Card title="Shell-command approval" icon={ShieldIcon}>
-          <FieldState field={approval} what="the approval mode" onRetry={loadRpcFields}>
+        </Field>
+        <Field label="Layout">
+          <FieldState field={layout} what="the layout" onRetry={retryLoad}>
             {(value) => (
-              <div className="grid grid-cols-3 gap-2">
-                {(['strict', 'allow_all', 'deny_all'] satisfies ShellApprovalMode[]).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => approval.edit(m)}
-                    className={`p-2 rounded-md text-xs ${value === m ? 'p-accent-bg p-accent' : 'p-card p-card-hover'}`}
-                  >{APPROVAL_LABEL[m]}</button>
-                ))}
+              <div className="flex">
+                <Segmented label="Layout" value={value} segments={LAYOUT_CHOICES} onChange={(chosen) => layout.edit(chosen)} />
               </div>
             )}
           </FieldState>
-        </Card>
-        <StandingApprovalsCard rpc={rpc} />
-        <InstructionApprovalsCard rpc={rpc} />
+        </Field>
+        <Field label="SOUL.md">
+          <FieldState field={soul} what="SOUL.md" onRetry={retryLoad}>
+            {(value) => (
+              <textarea value={value} onChange={(e) => soul.edit(e.target.value)} rows={8}
+                className={`${inputCls} font-mono`} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
+            )}
+          </FieldState>
+        </Field>
+      </Card>
 
 
-        <AlwaysActiveSkillsCard rpc={rpc} />
+      <Card title="Advisor">
+        <FieldState field={advisor} what="the advisor settings" onRetry={loadRpcFields}>
+          {(value) => (
+            <>
+              <div className="space-y-1.5">
+                <label className="block text-xs p-text-2 font-medium">Second opinion</label>
+                <div className="flex">
+                  <Segmented label="Second opinion" value={value.advisorEnabled ? "on" : "off"} segments={ADVISOR_SWITCH}
+                    onChange={(id) => advisor.edit({ ...value, advisorEnabled: id === "on" })} />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-xs p-text-2 font-medium">Minimum severity</label>
+                <div className="flex">
+                  <Segmented label="Minimum severity" value={value.advisorMinSeverity}
+                    segments={ADVISOR_SEVERITIES.map((severity) => ({ id: severity, label: ADVISOR_SEVERITY_LABEL[severity] }))}
+                    onChange={(severity) => advisor.edit({ ...value, advisorMinSeverity: severity })} />
+                </div>
+              </div>
+            </>
+          )}
+        </FieldState>
+      </Card>
 
-        <div className="p-card border p-border p-5" id="automations"><WorkspaceAutomations rpc={rpc} workspace={agentId} /></div>
 
-        <WorkspaceBackupCard rpc={rpc} workspace={agentId} />
+      <Card title="Shell-command approval">
+        <FieldState field={approval} what="the approval mode" onRetry={loadRpcFields}>
+          {(value) => (
+            <div className="flex">
+              <Segmented label="Shell-command approval" value={value} onChange={(chosen) => approval.edit(chosen)}
+                segments={(['strict', 'allow_all', 'deny_all'] satisfies ShellApprovalMode[]).map((mode) => ({ id: mode, label: APPROVAL_LABEL[mode] }))} />
+            </div>
+          )}
+        </FieldState>
+      </Card>
+      <StandingApprovalsCard rpc={rpc} />
+      <InstructionApprovalsCard rpc={rpc} />
 
-        <Card title="Main's conversation" icon={ChatsCircleIcon}>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="p-meta p-text-3">Clearing removes Main's messages. Memory, SOUL.md, learned tools and evolution stay.</p>
-            <Button size="sm" variant="secondary" icon={<TrashIcon size={12} />} onClick={clearMain}>Clear history</Button>
-          </div>
-        </Card>
+
+      <AlwaysActiveSkillsCard rpc={rpc} />
+
+      <div className="p-card border p-border p-5" id="automations"><WorkspaceAutomations rpc={rpc} workspace={agentId} /></div>
+
+      <WorkspaceBackupCard rpc={rpc} workspace={agentId} />
+
+      <Card title="Main's conversation">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="p-meta p-text-3">Clearing removes Main's messages. Memory, SOUL.md, learned tools and evolution stay.</p>
+          <Button size="sm" variant="secondary" icon={<TrashIcon size={12} />} onClick={clearMain}>Clear history</Button>
         </div>
-        {/* Where the edits are: the bar rises from the page's foot once there is something to save. */}
-        {(dirty || saving || saved) && (
-          <div className="sticky bottom-4 z-10 flex items-center justify-between gap-3 rounded-[14px] border p-border p-overlay py-2.5 pl-4 pr-2.5 p-shadow-menu animate-fade-in">
-            <span className="p-row-text p-text-2">{saved && !dirty ? "Changes saved." : "You have unsaved changes."}</span>
-            <FilledButton onClick={save} disabled={saving || !dirty} className="px-3">
-              {saved && !dirty ? <CheckIcon size={14} /> : <FloppyDiskIcon size={14} />}
-              <span>{saveLabel(saving, saved && !dirty)}</span>
-            </FilledButton>
-          </div>
-        )}
+      </Card>
       </div>
-    </div>
+      <SaveBar dirty={dirty} saving={saving} onSave={save}
+        onDiscard={() => { for (const field of [displayName, soul, layout, approval, advisor]) field.discard(); }} />
+    </Page>
   );
 }
 
@@ -418,7 +378,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   if (resource.status !== "error" && grants !== null && grants.length === 0) return null;
 
   return (
-    <Card title="Standing approvals" icon={ShieldIcon}>
+    <Card title="Standing approvals">
       <p className="p-meta p-text-3">
         “Always” stops Kinu asking about this check in this environment. It does not give the agent any more access.
       </p>
@@ -529,7 +489,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   if (resource.status !== "error" && rows !== null && rows.length === 0 && !cursor) return null;
 
   return (
-    <Card title="Workspace instruction files" icon={ShieldIcon}>
+    <Card title="Workspace instruction files">
       <p className="p-meta p-text-3">
         Your agent can write these files. Kinu follows a file as instructions only when you approve its
         contents. After any edit it becomes reference material again until you approve it again.
@@ -660,15 +620,15 @@ function WorkspaceBackupCard({
   })), [rpc, workspace]);
 
   return (
-    <Card title="Backup" icon={DownloadSimpleIcon}>
+    <Card title="Backup">
       <p className="p-meta p-text-3">
         Download an archive of this workspace: transcripts, memory, files and evolution history. Restore it
         with <code className="font-mono">kinu import &lt;file&gt;</code>. Download one before you delete a
         workspace. The archive holds everything in the workspace, so keep it as safe as a password.
       </p>
-      <FilledButton onClick={() => detach(Effect.promise(async () => { await download(); }))} disabled={busy || !workspace}>
+      <Button variant="primary" size="sm" onClick={() => detach(Effect.promise(async () => { await download(); }))} disabled={busy || !workspace}>
         {busy ? "Exporting…" : "Download archive"}
-      </FilledButton>
+      </Button>
       {status && <div className="p-meta p-text-2 mt-1">{status}</div>}
       {err && <div className="p-meta p-danger mt-1">Export failed: {err}</div>}
     </Card>
@@ -718,7 +678,7 @@ function AlwaysActiveSkillsCard({
   }, [names, save]);
 
   return (
-    <Card title="Always-active skills" icon={KeyIcon}>
+    <Card title="Always-active skills">
       <p className="p-meta p-text-3">
         Pin a workflow skill, such as <code className="font-mono">audit-implementation</code>, and it runs
         every turn without you typing /name.
@@ -742,7 +702,7 @@ function AlwaysActiveSkillsCard({
           onKeyDown={(e) => detach(Effect.promise(async () => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }))}
           className={inputCls + " text-xs"}
         />
-        <FilledButton onClick={() => detach(Effect.promise(async () => { await add(); }))} disabled={busy || !input.trim()}>Pin</FilledButton>
+        <Button variant="primary" size="sm" onClick={() => detach(Effect.promise(async () => { await add(); }))} disabled={busy || !input.trim()}>Pin</Button>
       </div>
       {err && <div className="p-meta p-danger mt-1">{err}</div>}
     </Card>

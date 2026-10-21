@@ -29,6 +29,8 @@ export interface LivingCanvasSpec<Frame extends ArtFrame, Art extends LivingArt<
   readonly shown?: (frame: Frame, canvas: HTMLCanvasElement, still: boolean) => void;
   readonly events: { readonly failed: LogEventName; readonly faulted: LogEventName; readonly fallbackFailed: LogEventName };
   readonly canvasClassName: string;
+  /** A picture that can rest: once it says so, the clock stops until `wake`, a resize or a theme draws again. */
+  readonly settled?: (art: Art) => boolean;
 }
 
 /** `work` is ms one tick spent in simulation and encode; `interval` is wall time between ticks. */
@@ -41,6 +43,10 @@ export interface LivingCanvas<Frame extends ArtFrame, Art extends LivingArt<Fram
   freeze(): void;
   thaw(): void;
   align(): void;
+  /** Something moved the picture (the pointer, the roster): run the clock again until it settles. */
+  wake(): void;
+  /** Frames drawn since mount, so a reader can count what an idle page costs. */
+  renders(): number;
   dispose(): void;
 }
 
@@ -113,18 +119,30 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
   let renderer: ArtRenderer | null = null;
   let canvas: HTMLCanvasElement | null = null;
   let still = false;
+  let rendered = 0;
+  // A resting picture's clock is stopped; anything that moves it wakes it.
+  let resting = false;
 
   const show = (picture: Art, isStill: boolean): void => {
     if (renderer === null || canvas === null) return;
     const frame = picture.frame();
     renderer.render(frame);
+    rendered += 1;
     spec.shown?.(frame, canvas, isStill);
   };
 
-  const playback = createPlayback(host, () => !still && renderer !== null, (step) => {
+  const playback = createPlayback(host, () => !still && !resting && renderer !== null, (step) => {
     art.step(step);
     show(art, false);
+
+    // The loop asks `wanted` before its next frame, so a settled picture draws this one and stops.
+    if (spec.settled?.(art) === true) resting = true;
   });
+
+  const wake = (): void => {
+    resting = false;
+    playback.sync();
+  };
 
   const teardownRenderer = (): void => {
     playback.stop();
@@ -241,18 +259,21 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
     renderer?.setPalette(palette);
 
     if (still) paintStill();
+    else if (resting) show(art, false);
   };
 
   const refit = (): void => {
     fit();
 
     if (still) paintStill();
+    else if (resting) show(art, false);
   };
 
   const align = (): void => {
     spec.fit?.(art, host);
 
     if (still) paintStill();
+    else if (resting) show(art, false);
   };
 
   const resize = new ResizeObserver(refit);
@@ -282,6 +303,8 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
       show(art, still);
     },
     align,
+    wake,
+    renders: () => rendered,
     dispose() {
       disposed = true;
       resize.disconnect();

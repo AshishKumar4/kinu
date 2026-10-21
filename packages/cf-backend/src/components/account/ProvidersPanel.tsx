@@ -3,9 +3,10 @@
  * Each read is its own resource and fails visibly: a swallowed rejection shows a connected account as disconnected.
  */
 import { Effect } from 'effect';
+import { Button, buttonClass } from "@/components/ui/Button";
 import { useState, type ReactNode } from "react";
 import { Combobox } from "@cloudflare/kumo";
-import { CheckIcon, PlugIcon } from "@phosphor-icons/react";
+import { CheckIcon } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import {
   listCredentials, setCredential, deleteCredential,
@@ -21,7 +22,6 @@ import type { ProfileCatalogEnvelope } from '@kinu.run/core';
 import { Card, Choice, Field, inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { CardSlot } from "@/components/ui/CardSlot";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
 import { ChatGptConnect, ChatGptPlanUsage, ChatGptWelcome } from "@/components/account/ChatGptConnect";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -47,11 +47,11 @@ function loginEnds(credentials: readonly CredentialSummary[], key: string): Reac
   return ends === undefined ? null : <>until {new Date(ends).toLocaleString()}, then sign in again</>;
 }
 
-const dangerQuietCls = "p-btn-quiet inline-flex h-6.5 shrink-0 items-center gap-1 px-2 text-xs p-danger";
+const dangerQuietCls = buttonClass({ variant: "danger", size: "sm" });
 
 /** The panel in its own titled card; `framed` false where its host already says "Connect a provider". */
 function Framed({ framed, children }: { framed: boolean; children: ReactNode }) {
-  return framed ? <Card title="Connect a provider" icon={PlugIcon}>{children}</Card> : <>{children}</>;
+  return framed ? <Card title="Connect a provider">{children}</Card> : <>{children}</>;
 }
 
 export function ProvidersPanel({ framed = true }: { framed?: boolean }) {
@@ -367,7 +367,7 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
         Signing in with a Claude subscription runs Kinu on your own Claude plan. Anthropic&apos;s terms limit subscription use to its own apps, so you connect at your own risk.
       </p>
       {authorizeUrl === null ? (
-        <FilledButton onClick={() => detach(start())} disabled={busy}>Sign in with Claude</FilledButton>
+        <Button variant="primary" size="sm" onClick={() => detach(start())} disabled={busy}>Sign in with Claude</Button>
       ) : (
         <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
           hint="The code Claude shows, or the address your browser ended on if the page did not load.">
@@ -381,9 +381,9 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
               className={`${inputCls} min-w-0 flex-1`}
             />
             <button type="submit" disabled={busy || code.trim() === ''}
-              className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">{busy ? '...' : 'Connect'}</button>
+              className={buttonClass()}>{busy ? '...' : 'Connect'}</button>
             <button type="button" onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))} disabled={busy}
-              className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">Start again</button>
+              className={buttonClass()}>Start again</button>
           </form>
         </Field>
       )}
@@ -480,7 +480,7 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
                 aria-label="Base URL" className={`${inputCls} min-w-0 flex-1`} />
               <span className="basis-full" aria-hidden />
               <label data-invalid={windowValid ? undefined : ""}
-                className="flex h-9 w-full max-w-72 cursor-text items-center gap-2 rounded-md border border-[var(--c-input-border)] bg-[var(--c-surface)] px-3 text-sm p-text transition-all focus-within:border-[var(--c-accent)] focus-within:ring-1 focus-within:ring-[var(--c-accent-subtle)] data-[invalid]:border-[var(--c-danger)]">
+                className="flex h-9 w-full max-w-72 cursor-text items-center gap-2 rounded-md border border-[var(--c-field-border)] bg-[var(--c-surface)] px-3 text-sm p-text transition-all focus-within:border-[var(--c-accent)] focus-within:ring-1 focus-within:ring-[var(--c-selected)] data-[invalid]:border-[var(--c-danger)]">
                 <span className="shrink-0 p-text-3">Context window</span>
                 <input value={compatWindow} onChange={(e) => setCompatWindow(e.target.value)} inputMode="numeric" placeholder="optional"
                   aria-label="Context window in tokens" aria-invalid={windowValid ? undefined : true}
@@ -501,7 +501,7 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
             className={`${inputCls} min-w-0 flex-1`}
           />
           <button type="submit" disabled={saving || !ready}
-            className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">{saving ? '...' : saveWord}</button>
+            className={buttonClass()}>{saving ? '...' : saveWord}</button>
         </form>
       )}
       {compat && !windowValid && <p className="mb-1 text-xs p-danger">The context window is a whole number of tokens, or blank.</p>}

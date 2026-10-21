@@ -4,7 +4,7 @@
  * the page is in. The section's own header titles it, so the card carries no header of its own.
  */
 import { useState } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { Effect } from "effect";
 import { MoonIcon, SunIcon } from "@phosphor-icons/react";
 import { THEME_NAMES, type ThemeName } from "@kinu.run/core";
@@ -31,9 +31,9 @@ function Swatch({ theme, mode }: { theme: ThemeName; mode: ThemeMode }) {
     <span data-theme={theme} data-mode={mode} aria-hidden="true"
       className="flex h-[84px] overflow-hidden rounded-[10px] border border-[var(--c-border)] bg-[var(--c-bg)]">
       <span className="flex w-[26%] flex-col gap-1.5 border-r border-[var(--c-border)] bg-[var(--c-sidebar)] p-2">
-        <span className="h-1.5 w-3/4 rounded-full bg-[var(--c-accent-subtle)]" />
-        <span className="h-1.5 w-1/2 rounded-full bg-[var(--c-neutral-tint)]" />
-        <span className="h-1.5 w-2/3 rounded-full bg-[var(--c-neutral-tint)]" />
+        <span className="h-1.5 w-3/4 rounded-full bg-[var(--c-selected)]" />
+        <span className="h-1.5 w-1/2 rounded-full bg-[var(--c-hover)]" />
+        <span className="h-1.5 w-2/3 rounded-full bg-[var(--c-hover)]" />
       </span>
       <span className="flex flex-1 flex-col justify-center p-2.5">
         <span className="flex flex-col gap-1.5 rounded-md border border-[var(--c-border)] bg-[var(--c-surface)] p-2">
@@ -52,7 +52,7 @@ function NotificationsField() {
 
   if (permission === null) return null;
 
-  const hint = { default: "Shown at the same moments, once this browser allows them.", granted: "On in this browser.", denied: "Blocked in this browser's settings for this site." }[permission];
+  const hint = { default: undefined, granted: undefined, denied: "Blocked in this browser's settings for this site." }[permission];
 
   return (
     <Field label="Notifications" hint={hint} inline>
@@ -69,7 +69,7 @@ function AlertFields() {
 
   return (
     <>
-      <Field label="Sound" hint="A soft chime when a turn finishes or something waits on you, while Kinu is in the background. On this device." inline>
+      <Field label="Sound" hint="A chime when a turn ends or something waits on you." inline>
         <Switch on={sound} onChange={setAlertSound} label="Sound" data-alerts-sound />
       </Field>
       <NotificationsField />
@@ -100,7 +100,7 @@ export function AppearanceCard() {
           <div role="radiogroup" aria-label="Theme" className="grid gap-3 sm:grid-cols-2">
             {THEME_NAMES.map((theme) => (
               <label key={theme} data-theme-choice={theme}
-                className="group relative block cursor-pointer rounded-[14px] border p-border p-2 transition-colors hover:border-[var(--c-border-strong)] has-[:checked]:border-[var(--c-accent)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--c-accent-subtle)] has-[:disabled]:cursor-default">
+                className="group relative block cursor-pointer rounded-[14px] border p-border p-2 transition-colors hover:border-[var(--c-border-strong)] has-[:checked]:border-[var(--c-accent)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--c-selected)] has-[:disabled]:cursor-default">
                 <input type="radio" name="theme" value={theme} checked={name === theme} disabled={saving !== null}
                   onChange={() => detach(choose(theme))} className="sr-only" />
                 <Swatch theme={theme} mode={mode} />
@@ -113,12 +113,12 @@ export function AppearanceCard() {
             ))}
           </div>
         </Field>
-        <Field label="Mode" hint="On this device." inline>
-          <div role="radiogroup" aria-label="Mode" className="flex items-center gap-0.5 rounded-lg p-recessed p-0.5">
+        <Field label="Mode" inline>
+          <div role="radiogroup" aria-label="Mode" className="flex items-center gap-0.5 rounded-lg p-sunken p-0.5">
             {MODES.map(({ id, label, Icon }) => (
               <label key={id} className="cursor-pointer">
                 <input type="radio" name="mode" value={id} checked={mode === id} onChange={() => setMode(id)} className="peer sr-only" />
-                <span className="flex h-7 items-center gap-1.5 rounded-md px-3 text-xs font-medium p-text-3 transition-colors peer-checked:bg-[var(--c-surface)] peer-checked:p-text peer-checked:shadow-[0_0_0_1px_var(--c-border)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--c-accent-subtle)] hover:p-text">
+                <span className="flex h-7 items-center gap-1.5 rounded-md px-3 text-xs font-medium p-text-3 transition-colors peer-checked:bg-[var(--c-surface)] peer-checked:p-text peer-checked:shadow-[0_0_0_1px_var(--c-border)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--c-selected)] hover:p-text">
                   <Icon size={13} />{label}
                 </span>
               </label>

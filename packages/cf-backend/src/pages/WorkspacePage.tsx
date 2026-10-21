@@ -2,8 +2,8 @@ import { askedBy } from "@/components/QuestionCard";
 import { Effect, Cause } from 'effect';
 import { createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type ReactNode, type RefObject } from "react";
 import { useParams, useLocation, Link, Navigate, useMatch, useNavigate, useSearchParams } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import {
   ArrowsClockwiseIcon, GitBranchIcon, ListIcon,
   WarningCircleIcon,
@@ -49,7 +49,7 @@ import { FileLinkContext } from "@/components/surfaces/shared";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { KeptChatColumn } from "@/components/KeptChatColumn";
 import { FocusBar, WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
-import { mascotColour, mascotSeed } from "@/components/Marks";
+import { useMascotOf } from "@/hooks/use-chat-mascot";
 import { RemoveWorkspaceDialog } from "@/components/RemoveWorkspaceDialog";
 import { DeleteChatDialog } from "@/components/DeleteChatDialog";
 import { NewChatView } from "@/components/workspaces/NewChatView";
@@ -130,9 +130,9 @@ function ForkModal({
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <FilledButton onClick={submit} disabled={busy}>
+        <Button variant="primary" size="sm" onClick={submit} disabled={busy}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Forking…</span></> : "Fork"}
-        </FilledButton>
+        </Button>
       </>}
     >
       <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
@@ -528,6 +528,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   const menu = drawer && <button type="button" onClick={drawer} className="p-bar-icon" aria-label="Open menu"><ListIcon size={18} /></button>;
   const barActions = <WorkspaceBarActions workspace={workspace} working={working} view={view} inspector={inspector} onAgents={() => agentsNav.enter(workspace)} />;
   const speaking = shown ?? agents.find((agent) => agent.category === "main");
+  const mascotOf = useMascotOf(workspace);
 
   if (pending) return <header className="p-bar" data-workspace-bar data-layout="pending">{menu && <div className="p-bar-menu">{menu}</div>}</header>;
 
@@ -536,8 +537,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
       <FocusBar
         workspace={{ name: workspace, title, logo, to: `/workspace/${workspace}/overview` }}
         agent={{
-          label: focus.label ?? "", seed: mascotSeed(workspace, speaking?.key ?? "main"),
-          colour: mascotColour(workspace, speaking?.colour ?? 0), activity: speaking?.activity,
+          label: focus.label ?? "", ...mascotOf(speaking?.key ?? "main", speaking?.colour ?? 0), activity: speaking?.activity,
         }}
         line={focus.line}
         leading={menu}

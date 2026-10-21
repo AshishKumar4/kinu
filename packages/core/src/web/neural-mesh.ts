@@ -9,8 +9,9 @@
  * A cell fires: a spike runs down its axon, the synapse glints, the signal creeps up the dendrite to the next soma, and
  * the next cell may fire in turn, so a thought travels through the mesh as a cascade that always dies out. Idle, cells
  * fire rarely; while agents work, often, and the cascades run on. A decision arriving starts a cascade from a corner.
- * The pointer charges the cells beneath it, and a click fires the nearest. The whole mesh carries MESH_OPACITY of its
- * ink: texture first, neurons when you look.
+ * The pointer charges the cells beneath it, and a click fires the nearest. The whole mesh carries its temperament's
+ * share of its ink: texture first, neurons when you look. Quiet, it never fires on its own, so it settles and a
+ * renderer draws nothing until the pointer moves (`settled`).
  *
  * Every resting stroke is written once into the frame's rest prefix, which a renderer keeps; only lit cells and
  * travelling signals are drawn each frame, and a tick touches only the cells doing anything. Lengths are CSS pixels; a
@@ -41,12 +42,47 @@ export interface MeshOptions {
   readonly activity?: MeshActivity;
   /** The page beside the rail; the whole view by default. */
   readonly field?: Field;
-  /** How much of its full ink the whole mesh carries, resting tissue and firing alike; MESH_OPACITY by default. */
+  /** How much of its full ink the whole mesh carries, resting tissue and firing alike; its temperament's by default. */
   readonly opacity?: number;
+  /** `today`, as it ships; `quiet`, the owner's proposal: fainter, held to the edges, and still unless touched. */
+  readonly temperament?: MeshTemperamentName;
 }
 
-/** The mesh's ink: texture first, neurons when you look. The owner's Fainter. */
-const MESH_OPACITY = 0.2;
+/** How the mesh sits on the page and moves on it. */
+interface MeshTemperament {
+  /** How deep the tissue reaches in from an edge: this share of the page's shorter side, between the bounds in px. */
+  readonly bandShare: number;
+  readonly bandPx: readonly [number, number];
+  /** How fast it thins across the band: past 1 it stays solid a while at the edge before falling away. */
+  readonly falloff: number;
+  /** The mesh's ink: texture first, neurons when you look. */
+  readonly opacity: number;
+  /** Cells firing on their own, per second across the whole mesh, idle and while agents work; 0 never. */
+  readonly idleRate: number;
+  readonly workingRate: number;
+  /** How much more likely a synapse fires its cell while agents work; past about 1.3 a cascade can run on and on. */
+  readonly workingRelease: number;
+  readonly pointerReach: number;
+  readonly pointerCharge: number;
+  /** How much a cell under the pointer lights before it fires. */
+  readonly senseLight: number;
+  /** Seconds after the pointer last moved that it lets go, so a resting pointer leaves a resting mesh. */
+  readonly pointerRest: number;
+}
+
+const TEMPERAMENTS = {
+  today: {
+    bandShare: 0.32, bandPx: [120, 340], falloff: 1.7, opacity: 0.2, idleRate: 0.7, workingRate: 1.8, workingRelease: 1.35,
+    pointerReach: 130, pointerCharge: 0.55, senseLight: 0.55, pointerRest: Number.POSITIVE_INFINITY,
+  },
+  quiet: {
+    bandShare: 0.22, bandPx: [90, 240], falloff: 2.6, opacity: 0.12, idleRate: 0, workingRate: 0, workingRelease: 1,
+    pointerReach: 180, pointerCharge: 0.2, senseLight: 0.9, pointerRest: 0.8,
+  },
+} as const satisfies Record<string, MeshTemperament>;
+
+export type MeshTemperamentName = keyof typeof TEMPERAMENTS;
+
 
 interface Layer {
   readonly scale: number;
@@ -75,13 +111,6 @@ const LAYERS: readonly Layer[] = [
   { scale: 1, spacing: 48, cap: 220, ink: 1, width: 1, tone: TONE_ACCENT, glow: 0.18, basal: 3, tuft: 3, apicalSegments: 3, targets: 3, reach: 170, collaterals: 2 },
 ];
 
-/** How deep the tissue reaches in from an edge: about the outer third of the page's shorter side, between the bounds. */
-const BAND_SHARE = 0.32;
-
-const BAND_PX = [120, 340] as const;
-
-/** How fast it thins across the band: past 1 it stays solid a while at the edge before falling away. */
-const FALLOFF = 1.7;
 
 /** Somas of different planes keep at least this far apart. */
 const ANY_SPACING_PX = 6;
@@ -125,15 +154,9 @@ const REFRACTORY = 4;
  */
 const RELEASE = [0.26, 0.36] as const;
 
-const WORKING_RELEASE = 1.35;
-
 /** What an arrival that does not fire its cell adds to the cell's charge, so close arrivals still sum. */
 const ARRIVAL_CHARGE = 0.3;
 
-/** Cells firing on their own, per second across the whole mesh, idle and while agents work. */
-const IDLE_RATE = 0.7;
-
-const WORKING_RATE = 1.8;
 
 const MAX_SPIKES = 220;
 
@@ -152,12 +175,10 @@ const GLOW_DECAY = 1.1;
 
 const FLASH_DECAY = 0.55;
 
-const POINTER_REACH_PX = 130;
 
 /** The grid wiring looks up neighbours in, px. */
 const WIRE_CELL = 64;
 
-const POINTER_CHARGE = 0.55;
 
 /** Keep-out reach in view widths: whole cover within HOLD, fading over FADE. */
 const HOLD = 0.012;
@@ -301,6 +322,9 @@ export class NeuralMesh {
   private hold = 0;
   private elapsed = 0;
   private nextFiring = 1;
+  /** When the pointer last moved, in the mesh's seconds. */
+  private pointerMoved = 0;
+  private readonly temperament: MeshTemperament;
   /** Seconds since a decision arrived; null before the first. */
   private flashAge: number | null = null;
   /** A cascade a decision starts: cells to fire, and when. */
@@ -333,7 +357,10 @@ export class NeuralMesh {
     this.field = options.field ?? { left: 0, right: 1 };
     this.aspect = options.aspect;
     this.chance = seededRandom(options.seed + 1);
-    this.opacity = clamp(options.opacity ?? MESH_OPACITY, 0, 1);
+    this.temperament = TEMPERAMENTS[options.temperament ?? 'today'];
+    this.opacity = clamp(options.opacity ?? this.temperament.opacity, 0, 1);
+
+    if (this.temperament.idleRate === 0 && this.temperament.workingRate === 0) this.nextFiring = Number.POSITIVE_INFINITY;
     this.lift = { dark: MESH_LIFT.dark * this.opacity, light: MESH_LIFT.light * this.opacity };
     this.glint = this.opacity > 0 ? Math.sqrt(GLINT_OPACITY / Math.min(this.opacity, GLINT_OPACITY)) : 1;
 
@@ -401,6 +428,18 @@ export class NeuralMesh {
 
   setPointer(x: number, y: number): void {
     this.pointer = [x * this.width, y * this.height()];
+    this.pointerMoved = this.elapsed;
+  }
+
+  /**
+   * Nothing lit, charged, travelling or waiting, and no pointer held: another step would draw the same frame, so a
+   * renderer may stop until something moves. A temperament that fires on its own never settles.
+   */
+  settled(): boolean {
+    if (Number.isFinite(this.nextFiring)) return false;
+    const attention = this.flashAge !== null && envelope(this.flashAge) > 0.02;
+
+    return !attention && this.hold === 0 && this.active.length === 0 && this.spikes.length === 0 && this.flashing.length === 0 && this.queued.length === 0;
   }
 
   clearPointer(): void {
@@ -418,6 +457,8 @@ export class NeuralMesh {
 
     this.elapsed += tick;
 
+    if (this.pointer !== null && this.elapsed - this.pointerMoved > this.temperament.pointerRest) this.pointer = null;
+
     if (this.flashAge !== null) this.flashAge += tick;
     this.hold = this.pointer === null ? Math.max(0, this.hold - tick * 1.5) : Math.min(1, this.hold + tick * 2);
     this.charge(tick);
@@ -426,7 +467,7 @@ export class NeuralMesh {
 
     if (this.nextFiring <= 0 && this.cells.length > 0) {
       this.fire(Math.floor(this.chance() * this.cells.length), false);
-      this.nextFiring = -Math.log(1 - this.chance()) / (this.activity.working ? WORKING_RATE : IDLE_RATE);
+      this.nextFiring = -Math.log(1 - this.chance()) / (this.activity.working ? this.temperament.workingRate : this.temperament.idleRate);
     }
 
     if (this.queued.length > 0) {
@@ -447,7 +488,7 @@ export class NeuralMesh {
       const cell = this.cells[index];
 
       if (cell === undefined) continue;
-      const lit = cell.glow + 0.55 * cell.sense;
+      const lit = cell.glow + this.temperament.senseLight * cell.sense;
 
       if (lit < 0.06) continue;
       count = this.writeLit(cell, count);
@@ -510,7 +551,9 @@ export class NeuralMesh {
   private band(): number {
     const fieldWidth = (this.field.right - this.field.left) * this.width;
 
-    return clamp(BAND_SHARE * Math.min(fieldWidth, this.height()), BAND_PX[0], BAND_PX[1]);
+    const { bandShare, bandPx } = this.temperament;
+
+    return clamp(bandShare * Math.min(fieldWidth, this.height()), bandPx[0], bandPx[1]);
   }
 
   /** 1 at an edge of the page beside the rail and into its corners, thinning across the band to 0 past it. */
@@ -518,7 +561,8 @@ export class NeuralMesh {
     const left = this.field.left * this.width;
     const right = this.field.right * this.width;
     const band = this.band();
-    const across = (distance: number): number => (1 - clamp(distance / band, 0, 1)) ** FALLOFF;
+    const { falloff } = this.temperament;
+    const across = (distance: number): number => (1 - clamp(distance / band, 0, 1)) ** falloff;
     const fx = across(Math.max(0, Math.min(x - left, right - x)));
     const fy = across(Math.max(0, Math.min(y, this.height() - y)));
 
@@ -917,7 +961,7 @@ export class NeuralMesh {
 
     // The pointer wakes the cells beneath it; once awake, a cell's sense follows the pointer until it rests again.
     if (pointer !== null && this.hold > 0) {
-      for (const id of this.around(pointer[0], pointer[1], POINTER_REACH_PX)) this.wake(id);
+      for (const id of this.around(pointer[0], pointer[1], this.temperament.pointerReach)) this.wake(id);
     }
 
     let kept = 0;
@@ -929,8 +973,8 @@ export class NeuralMesh {
       if (cell === undefined) continue;
       cell.charge *= leak;
       cell.glow *= glow;
-      cell.sense = pointer === null ? 0 : this.hold * clamp(1 - Math.hypot(cell.x - pointer[0], cell.y - pointer[1]) / POINTER_REACH_PX, 0, 1);
-      cell.charge += POINTER_CHARGE * cell.sense * cell.sense * dt;
+      cell.sense = pointer === null ? 0 : this.hold * clamp(1 - Math.hypot(cell.x - pointer[0], cell.y - pointer[1]) / this.temperament.pointerReach, 0, 1);
+      cell.charge += this.temperament.pointerCharge * cell.sense * cell.sense * dt;
 
       if (cell.charge >= 1) this.fire(index, false);
 
@@ -966,7 +1010,7 @@ export class NeuralMesh {
 
   /** Spikes run on; one at a trunk's end splits down each branch, one at a synapse climbs the dendrite. */
   private travel(dt: number): void {
-    const gain = this.activity.working ? WORKING_RELEASE : 1;
+    const gain = this.activity.working ? this.temperament.workingRelease : 1;
     const current = this.spikes;
 
     // Survivors, the spikes they become, and those a firing starts all join one list, capped at MAX_SPIKES.
@@ -1083,7 +1127,7 @@ export class NeuralMesh {
       const piece = this.pieces[index];
 
       if (piece === undefined || piece.cover >= 0.995) continue;
-      const lit = cell.glow * (1 - 0.5 * piece.depth) + 0.5 * cell.sense;
+      const lit = cell.glow * (1 - 0.5 * piece.depth) + (this.temperament.senseLight * 0.5 / 0.55) * cell.sense;
 
       this.inked(piece.alpha * (1 - piece.cover) * 1.3 * this.glint * lit, GLINT_GLOW * clamp(0.3 + lit, 0, 1), TONE_ACCENT);
       count = this.writeStroke(count, piece);

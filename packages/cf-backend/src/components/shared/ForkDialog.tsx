@@ -2,12 +2,12 @@
 import { Effect } from 'effect';
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { GitBranchIcon } from "@phosphor-icons/react";
 import { showing, detach } from "@kinu.run/core/obs";
 import { workspaceDisplayTitle, type BlueprintFork, type WorkspaceEntry } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { listWorkspaces } from "@/lib/user-api";
 import { forkBlueprint, forkLiveShare } from "@/lib/shared-api";
@@ -78,9 +78,9 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces, create
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton onClick={submit} disabled={busy || roster === null || (target === NEW_WORKSPACE && mission.trim() === "")}>
+        <Button variant="primary" size="md" onClick={submit} disabled={busy || roster === null || (target === NEW_WORKSPACE && mission.trim() === "")}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Forking…</span></> : "Fork"}
-        </FilledButton>
+        </Button>
       </>}
     >
       <p className="text-xs p-text-2 leading-relaxed">
@@ -90,13 +90,13 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces, create
       {roster !== null && (
         <fieldset className="space-y-1" aria-label="Target workspace">
           {roster.map((entry) => (
-            <label key={entry.name} className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-sm cursor-pointer ${target === entry.name ? "p-border p-elevated" : "border-transparent p-card-hover"}`}>
+            <label key={entry.name} className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-sm cursor-pointer ${target === entry.name ? "p-border p-fill" : "border-transparent p-card-hover"}`}>
               <input type="radio" name="fork-target" value={entry.name} checked={target === entry.name} onChange={() => setTarget(entry.name)} disabled={busy} />
               <span className="min-w-0 flex-1 truncate p-text">{workspaceDisplayTitle(entry)}</span>
-              <span className="p-meta p-text-4 font-mono">{entry.name}</span>
+              <span className="p-meta p-text-3 font-mono">{entry.name}</span>
             </label>
           ))}
-          <label className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-sm cursor-pointer ${target === NEW_WORKSPACE ? "p-border p-elevated" : "border-transparent p-card-hover"}`}>
+          <label className={`flex items-center gap-2.5 rounded-md border px-3 py-2 text-sm cursor-pointer ${target === NEW_WORKSPACE ? "p-border p-fill" : "border-transparent p-card-hover"}`}>
             <input type="radio" name="fork-target" value={NEW_WORKSPACE} checked={target === NEW_WORKSPACE} onChange={() => setTarget(NEW_WORKSPACE)} disabled={busy} />
             <span className="p-text">New workspace</span>
           </label>

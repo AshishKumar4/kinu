@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { DesktopTowerIcon, EnvelopeSimpleIcon, GearIcon, ShieldCheckIcon, SignOutIcon } from "@phosphor-icons/react";
+import { DesktopTowerIcon, EnvelopeSimpleIcon, GearIcon, GithubLogoIcon, ShieldCheckIcon, SignOutIcon } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
+import { settingsPath, settingsSection } from "@/components/SettingsRail";
 import { useAccount } from "@/hooks/use-account";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { lastValue } from "@/hooks/use-async-resource";
@@ -10,6 +11,9 @@ import { Avatar } from "./ui/Avatar";
 import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
 import { NAV_HOVER } from "./nav";
+
+/** Kinu's source. */
+const KINU_REPOSITORY = "https://github.com/AshishKumar4/kinu";
 
 const MENU_ROW = "flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover";
 
@@ -30,10 +34,12 @@ function CountBadge({ count, label }: { count: number; label: string }) {
 
 /** Mail, with what the assistant marked Important and you have not read, and the machines you connected. */
 export function FooterIcons({ vertical = false }: { vertical?: boolean }) {
-  const { pathname } = useLocation();
+  const { pathname, hash } = useLocation();
   const { enabled, unread } = useImportantMail();
-  const cls = (open: boolean) => `relative flex size-8 items-center justify-center rounded-lg transition-colors ${open ? "bg-[var(--c-accent-subtle)] p-accent" : `p-text-3 ${NAV_HOVER}`}`;
+  const cls = (open: boolean) => `relative flex size-8 items-center justify-center rounded-lg transition-colors ${open ? "bg-[var(--c-selected)] p-accent" : `p-text-3 ${NAV_HOVER}`}`;
   const at = (root: string) => pathname === root || pathname.startsWith(`${root}/`);
+  // Devices is a Settings section: its icon is the open page while that section is.
+  const devicesOpen = at(APP_ROUTES.userSettings) && settingsSection(hash) === "devices";
   const mailWords = unread > 0 ? `Mail, ${String(unread)} important unread` : "Mail";
 
   return (
@@ -42,8 +48,8 @@ export function FooterIcons({ vertical = false }: { vertical?: boolean }) {
         <EnvelopeSimpleIcon size={17} />
         <CountBadge count={unread} label={`${String(unread)} important unread`} />
       </Link>}
-      <Link to={APP_ROUTES.devices} aria-label="Devices" title="Devices" aria-current={at(APP_ROUTES.devices) ? "page" : undefined} data-footer-devices
-        className={cls(at(APP_ROUTES.devices))}>
+      <Link to={settingsPath("devices")} aria-label="Devices" title="Devices" aria-current={devicesOpen ? "page" : undefined} data-footer-devices
+        className={cls(devicesOpen)}>
         <DesktopTowerIcon size={17} />
       </Link>
     </div>
@@ -71,6 +77,8 @@ export function AccountMenu({ onClose, className }: { onClose: () => void; class
       )}
       <ModeToggle />
       <FeedbackButton />
+      {/* Help: the source, here rather than in the phone's app bar (design review 2026-10-20). */}
+      <a href={KINU_REPOSITORY} target="_blank" rel="noopener noreferrer" className={MENU_ROW}><GithubLogoIcon size={14} /><span>GitHub</span></a>
       <a href="/logout" className={MENU_ROW}><SignOutIcon size={14} /><span>Sign out</span></a>
     </div>
   );
@@ -104,7 +112,7 @@ export function SidebarFooter({ initiallyOpen = false }: { initiallyOpen?: boole
   return (
     <div ref={ref} className="relative flex items-center gap-1 border-t p-border px-2 py-2" data-sidebar-footer>
       <button type="button" onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" data-account-menu
-        className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2 text-left transition-colors ${open ? "bg-[var(--c-neutral-tint)]" : "hover:bg-[var(--c-neutral-tint)]"}`}>
+        className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2 text-left transition-colors ${open ? "bg-[var(--c-hover)]" : "hover:bg-[var(--c-hover)]"}`}>
         <Avatar name={name === "" ? "?" : name} size={24} />
         <span className="min-w-0 flex-1 truncate p-row-text font-medium p-text">{name === "" ? "Account" : name}</span>
       </button>

@@ -1,3 +1,4 @@
+import { buttonClass } from "@/components/ui/Button";
 import { useState } from "react";
 import { StopIcon } from "@phosphor-icons/react";
 
@@ -17,7 +18,7 @@ export function ViewOnlyBar({ running, onStop }: { running: boolean; onStop: () 
       <span className="flex-1 p-meta p-text-3">This agent takes no messages.</span>
       {running && (
         <button type="button" disabled={stopping} onClick={() => { setStopping(true); onStop(); }}
-          className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2"
+          className={buttonClass()}
           aria-label="Stop this agent" title="Stop this agent's work">
           <StopIcon size={14} weight="fill" />
           <span className="p-meta">{stopping ? "Stopping…" : "Stop"}</span>

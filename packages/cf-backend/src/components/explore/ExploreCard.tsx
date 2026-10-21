@@ -1,7 +1,8 @@
 /**
  * A thing on Explore, as a card that says at a glance what it is: an app you open (a listed slate) or a workspace you
- * install (a workspace blueprint); what it does, who made it, what it needs of yours, and how many use it.
+ * install (a workspace blueprint); what it does, who made it, and how many use it. What it needs of yours is on its page.
  */
+import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { Link } from "react-router-dom";
 import { AppWindowIcon, DownloadSimpleIcon, EyeIcon, KeyIcon, SealCheckIcon, SquaresFourIcon, StarIcon } from "@phosphor-icons/react";
 import { galleryPagePath, galleryPicturePath } from "@kinu.run/core";
@@ -9,7 +10,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { presetBrand } from "@/components/plugins/McpPresetCards";
 import { KinuMark } from "@/components/ui/KinuLogo";
-import { Cover } from "@/components/drive/DriveTiles";
+import { CaptureMat, TILE, TileShell, TypesetCover } from "@/components/ui/Tiles";
 import { SlatePicture } from "@/components/slates/SlatePicture";
 import type { ExploreItem, ExploreKind, ExploreNeed } from "@/lib/explore-api";
 
@@ -31,17 +32,13 @@ const KIND_WORDS: Record<ExploreKind, { label: string; verb: string }> = {
 };
 
 /** What it is, in a word. `onPicture`: solid, so it reads over any picture. */
-export function KindBadge({ kind, onPicture = false, className = "" }: { kind: ExploreKind; onPicture?: boolean; className?: string }) {
+export function KindBadge({ kind, onPicture = false, className }: { kind: ExploreKind; onPicture?: boolean; className?: string }) {
   const Icon = kind === "app" ? AppWindowIcon : SquaresFourIcon;
-  let ground = kind === "workspace" ? "bg-[var(--c-accent-subtle)] p-accent" : "bg-[var(--c-neutral-tint)] p-text-2";
+  let tone: BadgeTone = kind === "workspace" ? "accent" : "neutral";
 
-  if (onPicture) ground = `border p-border bg-[var(--c-surface)] shadow-sm ${kind === "workspace" ? "p-accent" : "p-text"}`;
+  if (onPicture) tone = "onPicture";
 
-  return (
-    <span data-explore-kind={kind} className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold tracking-[0.01em] ${ground} ${className}`}>
-      <Icon size={12} weight="bold" />{KIND_WORDS[kind].label}
-    </span>
-  );
+  return <Badge tone={tone} icon={<Icon size={12} weight="bold" />} className={className} data-explore-kind={kind}>{KIND_WORDS[kind].label}</Badge>;
 }
 
 /** Who made it: a person by their initial, or Kinu, which keeps its own. */
@@ -68,7 +65,7 @@ export function Needs({ needs }: { needs: readonly ExploreNeed[] }) {
         const brand = presetBrand(need.connection);
 
         return (
-          <span key={`${need.connection ?? ""}${need.secret ?? ""}`} className="flex size-5 items-center justify-center rounded-md bg-[var(--c-neutral-tint)]">
+          <span key={`${need.connection ?? ""}${need.secret ?? ""}`} className="flex size-5 items-center justify-center rounded-md bg-[var(--c-hover)]">
             {brand !== undefined ? <BrandMark brand={brand} size={12} bare /> : <KeyIcon size={11} className="p-text-2" />}
           </span>
         );
@@ -82,13 +79,12 @@ export function ExploreCard({ item }: { item: ExploreItem }) {
     const { app } = item;
 
     return (
-      <Card href={galleryPagePath(app.workspace, app.slate)} kind="app" title={app.title} line={app.line} id={app.slate}
+      <Card href={galleryPagePath(app.workspace, app.slate)} kind="app" title={app.title} line={app.line} id={app.slate} typeset={app.picture === undefined}
         picture={(
-          <SlatePicture workspace={app.workspace} slate={{ id: app.slate, title: app.title, picture: app.picture }} at={galleryPicturePath}
-            className={ZOOMED} fallback={<Cover title={app.title} />} />
+          <SlatePicture mat workspace={app.workspace} slate={{ id: app.slate, title: app.title, picture: app.picture }} at={galleryPicturePath}
+            className={ZOOMED} fallback={<TypesetCover title={app.title} line={app.line} mark={false} />} />
         )}
         maker={<Maker maker={{ name: app.owner.name, kinu: false }} />}
-        needs={item.needs}
         numbers={<><EyeIcon size={13} className="p-text-3" />{count(app.viewers)}<StarIcon size={13} className="ml-1.5 p-text-3" />{count(app.stars)}</>} />
     );
   }
@@ -97,41 +93,36 @@ export function ExploreCard({ item }: { item: ExploreItem }) {
 
   return (
     <Card href={exploreWorkspaceHref(workspace.id)} kind="workspace" title={workspace.title} line={workspace.line} id={workspace.id}
+      typeset={workspace.picture === null}
       picture={workspace.picture === null
-        ? <Cover title={workspace.title} />
-        : <img src={kinuBlueprintPicture(workspace.picture)} alt="" loading="lazy" className={ZOOMED} />}
+        ? <TypesetCover title={workspace.title} line={workspace.line} mark={false} />
+        : <CaptureMat><img src={kinuBlueprintPicture(workspace.picture)} alt="" loading="lazy" className={ZOOMED} /></CaptureMat>}
       maker={<Maker maker={workspace.maker} />}
-      needs={workspace.needs}
       numbers={<><DownloadSimpleIcon size={13} className="p-text-3" />{count(workspace.installs)}<StarIcon size={13} className="ml-1.5 p-text-3" />{count(workspace.stars)}</>} />
   );
 }
 
-function Card({ href, kind, id, title, line, picture, maker, needs, numbers }: {
-  href: string; kind: ExploreKind; id: string; title: string; line: string;
-  picture: React.ReactNode; maker: React.ReactNode; needs: readonly ExploreNeed[]; numbers: React.ReactNode;
+/** `typeset`: the cover sets `line` itself, so the body does not say it again (as `WorkspaceOverviewCard` does). */
+function Card({ href, kind, id, title, line, typeset, picture, maker, numbers }: {
+  href: string; kind: ExploreKind; id: string; title: string; line: string; typeset: boolean;
+  picture: React.ReactNode; maker: React.ReactNode; numbers: React.ReactNode;
 }) {
   return (
     <li className="min-w-0" data-explore-item={id}>
-      <Link to={href} aria-label={`${title}: ${KIND_WORDS[kind].label.toLowerCase()} to ${KIND_WORDS[kind].verb.toLowerCase()}`}
-        className="group flex h-full flex-col overflow-hidden rounded-[14px] border p-border p-surface p-card-lift focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--c-accent)]">
-        <span className="relative block aspect-[16/10] shrink-0 overflow-hidden border-b p-border">
-          {picture}
-          <KindBadge kind={kind} onPicture className="absolute left-2.5 top-2.5" />
-        </span>
-        <span className="flex flex-1 flex-col gap-1.5 px-3.5 pb-3 pt-3">
-          <span className="truncate p-row-text font-semibold p-text">{title}</span>
-          <span className="line-clamp-2 min-h-[2lh] p-meta p-text-2">{line}</span>
-          <span className="mt-1 flex min-w-0 items-center gap-2 p-meta p-text-3">
+      {/* The card is the link; Install lives on the detail page's header. */}
+      <Link to={href} aria-label={`${title}: ${KIND_WORDS[kind].label.toLowerCase()} to ${KIND_WORDS[kind].verb.toLowerCase()}`} className={TILE}>
+        <TileShell title={title} cover={(
+          <>
+            {picture}
+            <KindBadge kind={kind} onPicture className="absolute left-2.5 top-2.5" />
+          </>
+        )}>
+          {!typeset && <span className="line-clamp-1 p-meta p-text-2">{line}</span>}
+          <span className="flex min-w-0 items-center gap-2 p-meta p-text-3">
             {maker}
-            <span className="ml-auto inline-flex shrink-0 items-center gap-1">{numbers}</span>
+            <span className="ml-auto inline-flex shrink-0 items-center gap-1 tabular-nums">{numbers}</span>
           </span>
-          <span className="mt-1 flex items-center justify-between gap-2 border-t p-border pt-2.5">
-            <Needs needs={needs} />
-            <span className="shrink-0 rounded-full px-2.5 py-0.5 text-[12px] font-medium transition-colors bg-[var(--c-neutral-tint)] p-text group-hover:bg-[var(--c-accent)] group-hover:text-[var(--c-accent-on)]">
-              {KIND_WORDS[kind].verb}
-            </span>
-          </span>
-        </span>
+        </TileShell>
       </Link>
     </li>
   );

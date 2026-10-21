@@ -37,7 +37,7 @@ function PlanCard({ item, onOpen }: { item: OwnedPlan; onOpen: () => void }) {
   return (
     <div className="p-group" data-plan-card={plan.revision}>
       <button type="button" onClick={onOpen}
-        className="w-full rounded-t-md px-3 pt-2.5 pb-2 text-left transition-colors hover:p-elevated">
+        className="w-full rounded-t-md px-3 pt-2.5 pb-2 text-left transition-colors hover:p-hover">
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="p-row-text p-text min-w-0 truncate">{planTitle(plan.content)}</span>
           <span className="p-meta p-text-3 shrink-0">r{plan.revision} · {plan.status}</span>

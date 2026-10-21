@@ -1,7 +1,7 @@
 /** What adds to or changes the Drive: New, and the dialogs its menus open. */
 import { Effect } from 'effect';
 import { startTransition, useCallback, useRef, useState, type ReactNode } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button, ICON_ON_PHONE, buttonClass } from "@/components/ui/Button";
 import {
   BookOpenIcon, FileArchiveIcon, FolderPlusIcon, FolderSimpleIcon, PencilSimpleIcon, PlusIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
@@ -15,7 +15,6 @@ import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { useWorkspaceRpc } from "@/hooks/use-chat-owner";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { inputCls } from "@/components/ui/form";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
@@ -62,7 +61,7 @@ function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: 
     <Modal title={title} icon={icon} onClose={onClose} busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton data-drive-dialog-commit onClick={submit} disabled={!valid || busy}>{busy ? `${action}…` : action}</FilledButton>
+        <Button variant="primary" size="md" data-drive-dialog-commit onClick={submit} disabled={!valid || busy}>{busy ? `${action}…` : action}</Button>
       </>}>
       <form onSubmit={(event) => { event.preventDefault(); submit(); }} className="space-y-2">
         <label className="block p-meta p-text-3" htmlFor="drive-name">{label}</label>
@@ -105,9 +104,9 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
     <Modal title="New skill" icon={<BookOpenIcon size={18} className="p-accent" />} onClose={onClose} busy={busy} maxWidthClass="max-w-lg"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton data-drive-add-skill-commit onClick={() => run(() => addSkillText(text))} disabled={busy || text.trim() === ""}>
+        <Button variant="primary" size="md" data-drive-add-skill-commit onClick={() => run(() => addSkillText(text))} disabled={busy || text.trim() === ""}>
           {busy ? "Adding…" : "Add"}
-        </FilledButton>
+        </Button>
       </>}>
       <div className="space-y-3">
         <p className="p-row-text p-text-2">
@@ -118,9 +117,9 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
           aria-label="SKILL.md" className={`${inputCls} font-mono text-xs leading-relaxed`} />
         <div className="flex flex-wrap items-center gap-2">
           <span className="p-meta p-text-3">or pick</span>
-          <button type="button" className="p-btn-quiet inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs" disabled={busy}
+          <button type="button" className={buttonClass({ size: "sm" })} disabled={busy}
             onClick={() => folderInput.current?.click()}><FolderSimpleIcon size={13} /> a folder</button>
-          <button type="button" className="p-btn-quiet inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs" disabled={busy}
+          <button type="button" className={buttonClass({ size: "sm" })} disabled={busy}
             onClick={() => zipInput.current?.click()}><FileArchiveIcon size={13} /> a zip</button>
           <input ref={folderInput} type="file" className="hidden" {...{ webkitdirectory: "" }} data-drive-skill-folder
             onChange={(event) => {
@@ -149,7 +148,6 @@ function DriveShareSheet({ slate, onClose, onListingPending }: { slate: OwnedSla
   return <ShareSlateDialog workspace={slate.workspace} slate={slate.id} title={slate.title} rpc={rpc} onClose={onClose} onListingPending={onListingPending} />;
 }
 
-const NEW_BUTTON = "h-8 gap-1.5 px-3 text-sm max-sm:!size-9 max-sm:rounded-full max-sm:!p-0";
 
 interface NewProps {
   readonly onFiles: (files: File[]) => void;
@@ -178,17 +176,17 @@ function NewMenu({ onFiles, onFolder, onZip, onNewFolder, onNewSkill }: NewProps
 
   return (
     <div ref={menu} className="relative">
-      <FilledButton className={NEW_BUTTON} aria-label="New" aria-haspopup="menu" aria-expanded={open}
+      <Button variant="primary" size="sm" className={ICON_ON_PHONE} aria-label="New" aria-haspopup="menu" aria-expanded={open}
         data-drive-new onClick={() => setOpen((value) => !value)}>
         <PlusIcon size={14} weight="bold" /><span className="max-sm:hidden">New</span>
-      </FilledButton>
+      </Button>
       {open && (
         <div role="menu" className="absolute right-0 top-full z-30 mt-1 w-52 p-card border p-border p-1.5 p-shadow-menu animate-fade-in">
           {items.map((item) => (
             <div key={item.label}>
               {item.apart === true && <div className="mx-1 my-1.5 border-t p-border" />}
               <button type="button" role="menuitem" {...{ [item.marker]: "" }} onClick={() => { setOpen(false); item.run(); }}
-                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm p-text transition-colors hover:bg-[var(--c-elevated)]">
+                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm p-text transition-colors hover:bg-[var(--c-hover)]">
                 <span className="flex shrink-0 p-text-3">{item.icon}</span>{item.label}
               </button>
             </div>
@@ -215,9 +213,9 @@ export function PrimaryAction({ inSkills, ...rest }: NewProps & { readonly inSki
   if (!inSkills) return <NewMenu {...rest} />;
 
   return (
-    <FilledButton className={NEW_BUTTON} aria-label="New skill" data-drive-add-skill onClick={rest.onNewSkill}>
+    <Button variant="primary" size="md" className={ICON_ON_PHONE} aria-label="New skill" data-drive-add-skill onClick={rest.onNewSkill}>
       <PlusIcon size={14} weight="bold" /><span className="max-sm:hidden">New skill</span>
-    </FilledButton>
+    </Button>
   );
 }
 

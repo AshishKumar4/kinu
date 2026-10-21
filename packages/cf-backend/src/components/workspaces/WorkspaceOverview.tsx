@@ -1,5 +1,6 @@
 /** The workspace's page: where things stand, its GitHub work, and every agent's tasks; each section reads a real
  *  source or says none exists yet. */
+import { Page } from "@/components/ui/PageHeader";
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
 import type { AgentTaskTree, ForkLineageRow, PanelAgent, PlanReview, WorkspaceWork, WorkspaceWorkOwner } from "@kinu.run/core";
@@ -94,32 +95,24 @@ export function WorkspaceOverview({ workspace, title, logo, rpc, readMoves, plan
   const cards = useMemo(() => (work === null ? [] : cardsOf(work, agents)), [work, agents]);
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto" data-workspace-overview>
-      <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-10 px-5 pb-16 pt-9 sm:px-8">
-        <header className="flex items-center gap-4">
-          <WorkspaceLogo title={title} logo={logo} size={44} />
-          <div className="flex min-w-0 flex-col gap-1">
-            <h1 className="p-display text-[26px] font-semibold leading-tight p-text">{title}</h1>
-            <p className="text-[13.5px] p-text-3" data-overview-summary>
-              {work === null ? "Reading the workspace…" : summaryOf(agents, cards)}
-              {lineage && <> · forked from <Link to={`/workspace/${lineage.sourceWorkspaceName}`} className="p-accent hover:underline">its parent</Link></>}
-            </p>
-          </div>
-        </header>
+    <Page fill icon={<WorkspaceLogo title={title} logo={logo} size={20} />} title={title} data-workspace-overview>
+      <p className="p-row-text p-text-3" data-overview-summary>
+        {work === null ? "Reading the workspace…" : summaryOf(agents, cards)}
+        {lineage && <> · forked from <Link to={`/workspace/${lineage.sourceWorkspaceName}`} className="p-accent hover:underline">its parent</Link></>}
+      </p>
 
-        <section aria-labelledby="overview-github" className="flex flex-col gap-3">
-          <h2 id="overview-github" className="p-eyebrow">GitHub</h2>
-          <GitHubSection rpc={rpc} readMoves={readMoves} agents={agents} />
-        </section>
+      <section aria-labelledby="overview-github" className="flex flex-col gap-3">
+        <h2 id="overview-github" className="p-eyebrow">GitHub</h2>
+        <GitHubSection rpc={rpc} readMoves={readMoves} agents={agents} />
+      </section>
 
-        <section aria-labelledby="overview-tasks" className="flex flex-col gap-3">
-          <h2 id="overview-tasks" className="p-eyebrow">Tasks</h2>
-          {resource.status === "error" && work === null
-            ? <LoadFailure what="this workspace's tasks" message={resource.message} onRetry={reload} />
-            : <Board cards={cards} workspace={workspace} loaded={work !== null} open={open} />}
-        </section>
-      </div>
-    </div>
+      <section aria-labelledby="overview-tasks" className="flex flex-col gap-3">
+        <h2 id="overview-tasks" className="p-eyebrow">Tasks</h2>
+        {resource.status === "error" && work === null
+          ? <LoadFailure what="this workspace's tasks" message={resource.message} onRetry={reload} />
+          : <Board cards={cards} workspace={workspace} loaded={work !== null} open={open} />}
+      </section>
+    </Page>
   );
 }
 
@@ -136,10 +129,10 @@ function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; wor
           const shown = cards.filter((card) => card.lane === lane);
 
           return (
-            <div key={lane} className="flex min-w-0 flex-col gap-2 rounded-2xl bg-[var(--c-neutral-tint)] p-2" data-lane={lane}>
+            <div key={lane} className="flex min-w-0 flex-col gap-2 rounded-2xl bg-[var(--c-hover)] p-2" data-lane={lane}>
               <div className="flex items-baseline justify-between px-2 pb-0.5 pt-1.5">
                 <span className={`text-[13px] font-medium ${lane === "waiting" && shown.length > 0 ? "p-accent" : "p-text-2"}`}>{title}</span>
-                <span className="p-meta tabular-nums p-text-4">{shown.length}</span>
+                <span className="p-meta tabular-nums p-text-3">{shown.length}</span>
               </div>
               {shown.map((card) => <TaskCard key={card.id} card={card} workspace={workspace} open={open} />)}
             </div>
@@ -174,7 +167,7 @@ function TaskBody({ card }: { card: Card }) {
         <span className="min-w-0 truncate">{card.agent?.label ?? card.owner.title}</span>
         {card.progress && (
           <span className="ml-auto flex shrink-0 items-center gap-1.5 tabular-nums" aria-label={`${card.progress.done} of ${card.progress.total} steps done`}>
-            <span className="relative h-1 w-10 overflow-hidden rounded-full bg-[var(--c-neutral-tint)]">
+            <span className="relative h-1 w-10 overflow-hidden rounded-full bg-[var(--c-hover)]">
               <span className="absolute inset-y-0 left-0 rounded-full bg-[var(--c-accent-mark)]" style={{ width: `${(100 * card.progress.done) / card.progress.total}%` }} />
             </span>
             {card.progress.done}/{card.progress.total}

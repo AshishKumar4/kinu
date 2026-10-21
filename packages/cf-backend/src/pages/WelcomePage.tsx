@@ -2,7 +2,8 @@
 import { Cause, Effect } from 'effect';
 import { useState, useCallback, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button, buttonClass } from "@/components/ui/Button";
 import {
   AppWindowIcon, DesktopTowerIcon, SparkleIcon,
   type Icon as PhosphorIcon,
@@ -11,13 +12,13 @@ import {
   APP_ROUTES, ONBOARDING_STEPS, PERSONAL_ASSISTANT_ID, suggestedMailUsername,
 } from "@kinu.run/core";
 import { renderThrownChain, settle, showing, detach } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
 import { DefaultModelField } from "@/components/account/DefaultModelField";
 import { WebSearchSettings } from "@/components/account/WebSearchSettings";
 import { AssistantStep, DEFAULT_ASSISTANT, type AssistantChoice } from "@/components/assistant/AssistantStep";
+import { personName } from "@/hooks/use-chat-mascot";
 import { McpServersSection } from "@/components/account/McpServersPanel";
 import { completeOnboarding, setDisplayName } from "@/lib/user-api";
 import { installBlueprint } from "@/lib/explore-api";
@@ -167,7 +168,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
     return yield* Effect.catchCause(Effect.gen(function* () {
       // The assistant first: Home is its chat the moment setup ends.
-      if (assistant.install) yield* Effect.promise(async () => installBlueprint(PERSONAL_ASSISTANT_ID, { agent: assistant.name, brief: assistant.brief, home: true }));
+      // Its brief keeps the blueprint's 08:00 in the person's own time zone; the time is changed in its settings.
+      if (assistant.install) yield* Effect.promise(async () => installBlueprint(PERSONAL_ASSISTANT_ID, { displayName: assistant.name, agent: assistant.name, home: true }));
       const { onboardedAt } = yield* Effect.promise(async () => completeOnboarding());
       const current = lastValue(account.profile);
 
@@ -228,7 +230,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
     <div className="fixed inset-0 p-bg overflow-y-auto">
       <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-4 py-8">
         <div className="mb-6 flex justify-center"><KinuLogo /></div>
-        <h1 className="p-display text-[26px] leading-8 text-center">Let's set up your account</h1>
+        <h1 className="p-page-title text-center">Let's set up your account</h1>
 
         <ol aria-label="Setup steps" className="mt-6 mb-5 flex items-center justify-center gap-1.5">
           {steps.map((s, i) => (
@@ -260,11 +262,11 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
                 {s.id === 'profile' && (
                   <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-                    <div data-avatar className="size-16 rounded-full p-accent-subtle text-[22px] font-semibold p-accent-mark flex items-center justify-center">
+                    <div data-avatar className="size-16 rounded-full p-selected text-[22px] font-semibold p-accent-mark flex items-center justify-center">
                       {letter}
                     </div>
                     <div className="w-full flex-1">
-                      <DisplayNameField value={displayName} onChange={setName} saving={busy} />
+                      <DisplayNameField value={displayName} onChange={setName} saving={busy} bare />
                       {profile !== null && !profile.displayName && provider !== null && (
                         <p className="mt-2 text-xs p-text-3">{provider} didn't share a name.</p>
                       )}
@@ -295,7 +297,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                   </div>
                 )}
 
-                {s.id === 'assistant' && <AssistantStep choice={assistant} onChange={setAssistant} />}
+                {s.id === 'assistant' && <AssistantStep choice={assistant} onChange={setAssistant} person={personName(profile === null ? null : { displayName, email: profile.email })} />}
 
                 {s.id === 'showcase' && <ShowcaseStep revealed={revealed} />}
               </div>
@@ -313,18 +315,18 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
             {step < LAST_STEP ? (
               <div className="flex items-center gap-3">
                 <button type="button" disabled={busy} onClick={finish}
-                  className="p-btn-ghost inline-flex h-6.5 items-center rounded-md px-2 text-xs">
+                  className={buttonClass({ variant: "ghost" })}>
                   Skip setup
                 </button>
                 {onMail && <Button variant="ghost" size="sm" data-mail-not-now disabled={busy} onClick={() => goTo(Math.min(step + 1, LAST_STEP))}>Not now</Button>}
-                <FilledButton disabled={busy || (onMail && address.state !== "available")} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
+                <Button variant="primary" size="md" disabled={busy || (onMail && address.state !== "available")} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
                   {busy && <Loader size="sm" />} Next
-                </FilledButton>
+                </Button>
               </div>
             ) : (
-              <FilledButton disabled={busy} onClick={finish}>
+              <Button variant="primary" size="md" disabled={busy} onClick={finish}>
                 {busy && <Loader size="sm" />} Finish setup
-              </FilledButton>
+              </Button>
             )}
           </div>
         </section>

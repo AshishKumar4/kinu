@@ -4,7 +4,7 @@
  * access; one on the owner's access says so, and why.
  */
 import { useState } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { GALLERY_CATEGORIES, type GalleryCategory, type LiveShareRecord } from "@kinu.run/core";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { Switch } from "@/components/ui/Switch";
@@ -45,11 +45,11 @@ export function ShareListing({ share, onList, disabled }: { share: LiveShareReco
           setDrafting(false);
         }}>
           <input value={line} onChange={(event) => setLine(event.target.value)} placeholder="One line about it" aria-label="One line about it" data-share-gallery-line maxLength={140}
-            className="w-full rounded-md border p-border bg-[var(--c-input-bg)] px-2.5 py-1.5 p-row-text p-text outline-none placeholder:text-[var(--c-text-4)]" />
+            className="w-full rounded-md border p-border bg-[var(--c-field)] px-2.5 py-1.5 p-row-text p-text outline-none placeholder:text-[var(--c-text-3)]" />
           <div role="radiogroup" aria-label="Category" className="flex flex-wrap gap-1.5">
             {GALLERY_CATEGORIES.map((each) => (
               <button key={each} type="button" role="radio" aria-checked={each === category} data-share-gallery-category={each} onClick={() => setCategory(each)}
-                className={`rounded-full px-2.5 py-0.5 text-xs ${each === category ? "bg-[var(--c-accent-subtle)] p-accent font-medium" : "p-fill p-text-2"}`}>{CATEGORY_WORDS[each]}</button>
+                className={`rounded-full px-2.5 py-0.5 text-xs ${each === category ? "bg-[var(--c-selected)] p-accent font-medium" : "p-fill p-text-2"}`}>{CATEGORY_WORDS[each]}</button>
             ))}
           </div>
           <div className="flex justify-end"><Button size="sm" variant="secondary" type="submit" data-share-gallery-list disabled={disabled}>List it</Button></div>

@@ -5,6 +5,7 @@
  * (core/src/prompting/volatile-context.ts); file browsing lives in Files.
  */
 import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { Button } from "@/components/ui/Button";
 import { useParams } from "react-router-dom";
 import {
   ArrowsInIcon, ArrowsOutIcon, DesktopIcon, DesktopTowerIcon, FolderOpenIcon, GitForkIcon, LockSimpleIcon, PlugIcon, PlusIcon,
@@ -31,7 +32,6 @@ import { Effect } from "effect";
 import { useWorkspaceArea, type WorkspaceArea } from "@/components/layout";
 import { DesktopScreen } from "./DesktopScreen";
 import { useAccountMachines, type AccountMachine } from "./EnvironmentMachines";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { detach, renderThrownChain, type KinuError } from "@kinu.run/core/obs";
 import {
   ONE_SHELL, SessionDetails, SessionTabs, openSession, useMachineSessions, type MachineSessions,
@@ -722,7 +722,7 @@ function GiveAccess({ name, onGive }: { name: string; onGive: () => Effect.Effec
           <p className="p-row-text font-semibold p-text">{name} is connected</p>
           <p className="p-meta p-text-2">This workspace can&apos;t use it yet.</p>
         </div>
-        <FilledButton onClick={() => detach(give)} disabled={giving}>{giving ? "Giving access…" : "Give this workspace access"}</FilledButton>
+        <Button variant="primary" size="sm" onClick={() => detach(give)} disabled={giving}>{giving ? "Giving access…" : "Give this workspace access"}</Button>
         {failure !== null && <p className="p-meta p-danger">{failure}</p>}
       </div>
     </div>

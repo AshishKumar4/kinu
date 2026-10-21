@@ -7,7 +7,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Effect } from "effect";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { Segmented } from "@/components/ui/Segmented";
+import { Choice } from "@/components/ui/form";
 import { CheckIcon, CompassIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { GALLERY_CATEGORIES, GALLERY_SORTS, PERSONAL_ASSISTANT_ID, type GalleryCategory, type GallerySort } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
@@ -15,7 +18,8 @@ import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ExploreCard, exploreWorkspaceHref, KindBadge, Maker, Needs, kinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { EXPLORE_KINDS, readExplore, type ExploreItem, type ExploreKind, type ExplorePage, type WorkspaceCard } from "@/lib/explore-api";
-import { PAGE_BODY, PageHeader } from "@/components/ui/PageHeader";
+import { Page } from "@/components/ui/PageHeader";
+import { TILE_GRID } from "@/components/ui/Tiles";
 import { useSearchChoice } from "@/hooks/use-search-choice";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 
@@ -23,11 +27,15 @@ const SORT_WORDS: Record<GallerySort, string> = { trending: "Trending", new: "Ne
 
 const KIND_FILTER_WORDS: Record<ExploreKind, string> = { app: "Apps", workspace: "Workspaces" };
 
-const chip = (on: boolean) => `rounded-full px-3 py-1 text-xs font-medium transition-colors ${on ? "bg-[var(--c-accent-subtle)] p-accent" : "p-text-2 hover:bg-[var(--c-elevated)]"}`;
+/** The filter row's one grammar: the kind's `Segmented`, 28 px category chips, then a 32 px sort and search, all at the
+ *  control radius. */
+const chip = (on: boolean) => `h-7 rounded-[var(--r-control)] border px-2.5 text-xs font-medium transition-colors ${on ? "border-[var(--c-border-strong)] bg-[var(--c-hover)] p-text" : "p-border p-text-2 hover:bg-[var(--c-hover)]"}`;
 
-const quietChip = (on: boolean) => `rounded-full border px-3 py-1 text-xs transition-colors ${on ? "border-[var(--c-text-3)] p-text" : "p-border p-text-2 hover:bg-[var(--c-elevated)]"}`;
+const FIELD_32 = "h-8 rounded-[var(--r-control)] border border-[var(--c-field-border)] bg-[var(--c-surface)]";
 
-const GRID = "grid grid-cols-1 gap-4 min-[520px]:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4";
+type KindChoice = ExploreKind | "all";
+
+const GRID = TILE_GRID;
 
 /** Kinu's lead blueprint, wide: what it is, what it needs, and Install. */
 function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights: readonly string[] }) {
@@ -36,7 +44,7 @@ function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights:
 
   return (
     <Link to={exploreWorkspaceHref(workspace.id)} data-explore-hero={workspace.id}
-      className="group flex min-w-0 flex-col overflow-hidden rounded-[18px] border p-border p-surface p-card-lift md:flex-row">
+      className="group flex min-w-0 flex-col overflow-hidden rounded-[var(--r-card)] border p-border p-surface p-card-lift md:flex-row">
       <span className="relative block aspect-[16/10] shrink-0 overflow-hidden border-b p-border md:aspect-auto md:w-[56%] md:border-b-0 md:border-r">
         {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt="" className="absolute inset-0 size-full object-cover object-left-top" />}
       </span>
@@ -53,8 +61,8 @@ function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights:
           <Maker maker={workspace.maker} />
           <Needs needs={workspace.needs} />
           {installed
-            ? <span className="ml-auto inline-flex items-center gap-1 rounded-full border p-border px-4 py-1.5 text-[13px] font-semibold p-text-2" data-explore-installed><CheckIcon size={13} weight="bold" />Installed</span>
-            : <span className="ml-auto rounded-full bg-[var(--c-accent)] px-4 py-1.5 text-[13px] font-semibold text-[var(--c-accent-on)]">Install</span>}
+            ? <span className={`ml-auto ${buttonClass({ variant: "secondary" })}`} data-explore-installed><CheckIcon size={13} weight="bold" />Installed</span>
+            : <span className={`ml-auto ${buttonClass({ variant: "primary" })}`}>Install</span>}
         </span>
       </span>
     </Link>
@@ -64,7 +72,7 @@ function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights:
 /** The rest of Kinu's own, as rows beside the lead. */
 function AlsoFromKinu({ workspaces }: { workspaces: readonly WorkspaceCard[] }) {
   return (
-    <div className="flex min-w-0 flex-col overflow-hidden rounded-[18px] border p-border p-surface">
+    <div className="flex min-w-0 flex-col overflow-hidden rounded-[var(--r-card)] border p-border p-surface">
       <span className="border-b p-border px-4 pb-2.5 pt-3.5 p-eyebrow">Also from Kinu</span>
       {workspaces.map((workspace) => (
         <Link key={workspace.id} to={exploreWorkspaceHref(workspace.id)} data-explore-also={workspace.id}
@@ -101,42 +109,34 @@ function Filters({ kind, category, sort, q, choose }: {
 
   return (
     <div className="flex flex-wrap items-center gap-2" data-explore-filters>
-      <button type="button" aria-pressed={kind === null} onClick={() => choose("kind", null)} className={chip(kind === null)}>All</button>
-      {EXPLORE_KINDS.map((each) => (
-        <button key={each} type="button" aria-pressed={each === kind} data-explore-kind-filter={each} onClick={() => choose("kind", each)} className={chip(each === kind)}>
-          {KIND_FILTER_WORDS[each]}
-        </button>
-      ))}
-      <span className="mx-1 h-4 w-px bg-[var(--c-border)]" />
+      <Segmented<KindChoice> label="Kind" value={kind ?? "all"} onChange={(chosen) => choose("kind", chosen === "all" ? null : chosen)}
+        segments={[{ id: "all", label: "All" }, ...EXPLORE_KINDS.map((each) => ({ id: each, label: KIND_FILTER_WORDS[each] }))]} />
       {GALLERY_CATEGORIES.map((each) => (
-        <button key={each} type="button" aria-pressed={each === category} data-explore-category={each} onClick={() => choose("category", each === category ? null : each)} className={quietChip(each === category)}>
+        <button key={each} type="button" aria-pressed={each === category} data-explore-category={each} onClick={() => choose("category", each === category ? null : each)} className={chip(each === category)}>
           {CATEGORY_WORDS[each]}
         </button>
       ))}
-      <span className="ml-auto flex flex-wrap items-center gap-2">
-        <span className="flex items-center gap-1">
-          {GALLERY_SORTS.map((each) => (
-            <button key={each} type="button" aria-pressed={each === sort} data-explore-sort={each} onClick={() => choose("sort", each === "trending" ? null : each)}
-              className={`rounded-md px-2 py-1 text-xs transition-colors ${each === sort ? "font-semibold p-text" : "p-text-3 hover:p-text"}`}>
-              {SORT_WORDS[each]}
-            </button>
-          ))}
-        </span>
-        <label className="flex h-8 w-full items-center gap-2 rounded-lg border p-border bg-[var(--c-input-bg)] px-3 sm:w-64">
+      <span className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
+        <div className="w-40 shrink-0" data-explore-sort>
+          <Choice label="Sort" size="sm" className="!h-8" value={sort} onChange={(chosen) => choose("sort", chosen === "trending" ? null : chosen)}
+            options={GALLERY_SORTS.map((each) => ({ value: each, label: SORT_WORDS[each] }))} />
+        </div>
+        <label className={`${FIELD_32} flex min-w-0 flex-1 items-center gap-2 px-3 sm:w-64 sm:flex-none`}>
           <MagnifyingGlassIcon size={14} className="shrink-0 p-text-3" />
           <input value={typed} onChange={(event) => { setTyped(event.target.value); choose("q", event.target.value); }} type="search" placeholder="Search apps and workspaces" aria-label="Search apps and workspaces" data-explore-search
-            className="min-w-0 flex-1 bg-transparent p-row-text p-text outline-none placeholder:text-[var(--c-text-4)]" />
+            className="min-w-0 flex-1 bg-transparent p-row-text p-text outline-none placeholder:text-[var(--c-text-3)]" />
         </label>
       </span>
     </div>
   );
 }
 
-/** The feed after Kinu's own, and the next page. Empty under Kinu's own, it says nothing: the page is not empty. */
+/** The feed after Kinu's own, and the next page. Empty under Kinu's own, one quiet line says what will appear there. */
 function Feed({ items, next, q, more, below }: { items: readonly ExploreItem[]; next: number | null; q: string; more: (page: number) => void; below: boolean }) {
   return (
     <>
       {items.length === 0 && !below && <p className="py-12 text-center p-text-3" data-explore-no-match>{q === "" ? "Nothing here yet" : `Nothing matches “${q}”`}</p>}
+      {items.length === 0 && below && next === null && <p className="py-10 text-center p-meta p-text-3" data-explore-only-kinu>That's all for now. Apps and workspaces people publish will appear here.</p>}
       {items.length > 0 && <ul className={`mt-4 ${GRID}`}>{items.map((item) => <ExploreCard key={item.kind === "app" ? `a/${item.app.workspace}/${item.app.slate}` : `w/${item.workspace.id}`} item={item} />)}</ul>}
       {next !== null && (
         <div className="mt-6 flex justify-center">
@@ -183,9 +183,7 @@ export default function ExplorePage() {
   const [lead, ...also] = kinus;
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className={`space-y-6 ${PAGE_BODY}`}>
-        <PageHeader icon={<CompassIcon size={22} />} title="Explore" />
+    <Page icon={<CompassIcon size={22} />} title="Explore">
         {lead !== undefined && (
           <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
             <Hero workspace={lead} highlights={HERO_HIGHLIGHTS.get(lead.id) ?? []} />
@@ -200,7 +198,6 @@ export default function ExplorePage() {
             <Feed items={shown.items.filter((item) => !(item.kind === "workspace" && kinus.includes(item.workspace)))} next={shown.next} q={q} more={more} below={lead !== undefined} />
           )}
         </div>
-      </div>
-    </div>
+    </Page>
   );
 }

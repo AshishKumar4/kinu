@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { Link, Outlet, useLocation, useMatch } from "react-router-dom";
-import { GithubLogoIcon, ListIcon } from "@phosphor-icons/react";
+import { ListIcon } from "@phosphor-icons/react";
 import Sidebar from "./Sidebar";
 import { SidebarRail } from "./SidebarRail";
 import { FeedbackButton } from "./FeedbackButton";
@@ -86,9 +86,6 @@ function Shell() {
         </div>
         <div className="flex items-center gap-1">
           <FeedbackButton compact />
-          <a href="https://github.com/AshishKumar4/kinu" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
-            <GithubLogoIcon size={17} />
-          </a>
           <NewWorkspaceIconButton className="size-9 rounded-full" />
         </div>
       </header>

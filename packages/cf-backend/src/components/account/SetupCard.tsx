@@ -8,7 +8,7 @@ export function SetupCard() {
   return (
     <>
       <div className="rounded-[14px] border p-border p-surface px-[18px] py-4">
-        <div className="mb-2.5 text-xs font-semibold p-text-4">Setup</div>
+        <div className="mb-2.5 text-xs font-semibold p-text-3">Setup</div>
         <button type="button" onClick={() => setOpen('providers')}
           className="block w-full py-[5px] text-left p-t-control p-accent">
           Connect providers →

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { CheckCircleIcon, ChatCircleDotsIcon, NotePencilIcon, TrashIcon } from "@phosphor-icons/react";
 import {
   freshNotes,
@@ -21,7 +22,6 @@ import type { Block, EditorMode } from "@plannotator/ui/types";
 import { extractFrontmatter, parseMarkdownToBlocks } from "@plannotator/ui/utils/parser";
 import { createPlanAnnotationSaveQueue } from "@kinu.run/core";
 import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { usePlanDecision } from "@/hooks/use-plan-decision";
 import { usePlanRepliesSeen } from "@/hooks/use-plan-replies-seen";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
@@ -233,7 +233,7 @@ function PlanHeaderActions({ comments, unread, panelOpen, onToggle, mode, onMode
         {unread && <span data-plan-comments-unread className="size-1.5 rounded-full p-dot-accent" aria-hidden="true" />}
       </Button>
       {mode !== null && (
-        <div className="flex items-center rounded-md border p-border p-recessed p-0.5" aria-label="Annotation mode">
+        <div className="flex items-center rounded-md border p-border p-sunken p-0.5" aria-label="Annotation mode">
           <Button
             type="button"
             size="sm"
@@ -571,23 +571,23 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
               >
                 {deciding === "request" ? <Loader size="sm" /> : "Request changes"}
               </Button>
-              <FilledButton
+              <Button variant="primary" size="sm"
                 className="grow justify-center whitespace-nowrap @[36rem]:grow-0"
                 onClick={() => detach(Effect.promise(async () => decide("approve")))}
                 disabled={held || saving || planDecisionRefusal(shown, "approve") !== null}
               >
                 {deciding === "approve" ? <Loader size="sm" /> : <><CheckCircleIcon size={14} />Approve &amp; implement</>}
-              </FilledButton>
+              </Button>
             </div>
           )}
           {handoffPending && (
-            <FilledButton
+            <Button variant="primary" size="sm"
               className="justify-center whitespace-nowrap"
               onClick={() => detach(Effect.promise(async () => decide(plan.status === "approved" ? "approve" : "request_changes")))}
               disabled={held || saving}
             >
               {deciding ? <Loader size="sm" /> : retryLabel}
-            </FilledButton>
+            </Button>
           )}
         </div>
       </footer>

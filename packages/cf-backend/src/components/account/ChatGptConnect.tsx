@@ -1,6 +1,7 @@
 /** Connect a ChatGPT plan two ways: through a machine running Kinu, which keeps the sign-in, or here, by pasting back
  *  the local address the sign-in lands on. */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Button, buttonClass } from "@/components/ui/Button";
 import { Loader } from "@cloudflare/kumo";
 import { Effect } from "effect";
 import { ArrowSquareOutIcon, DesktopTowerIcon, GlobeIcon } from "@phosphor-icons/react";
@@ -12,7 +13,6 @@ import {
 } from "@/lib/user-api";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { CopyButton } from "@/components/ui/CopyButton";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 
@@ -39,7 +39,7 @@ const PASTE_OUTCOME = {
 export function ChatGptWelcome({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="You're using your ChatGPT plan" icon={<BrandMark brand="openai" size={16} bare />} onClose={onClose}
-      footer={<FilledButton onClick={onClose}>Got it</FilledButton>}>
+      footer={<Button variant="primary" size="sm" onClick={onClose}>Got it</Button>}>
       <p className="text-sm p-text-2">
         Eligible requests in Kinu now use your ChatGPT plan. You can review and limit that usage in{" "}
         <a href={CHATGPT_USAGE_URL} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">ChatGPT settings</a>.
@@ -98,7 +98,8 @@ export function ChatGptConnect({ plan, onSignedIn }: { plan: ChatGptPlan; onSign
 function WayButton({ icon, title, text, onClick }: { icon: ReactNode; title: string; text: string; onClick: () => void }) {
   return (
     <button type="button" onClick={onClick}
-      className="flex flex-col items-start gap-1 rounded-xl border p-border px-3.5 py-3 text-left transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-neutral-tint)]">
+      // A row to pick, not a box inside the card (design review 2026-10-20).
+      className="-mx-2 flex flex-col items-start gap-1 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--c-hover)]">
       <span className="flex items-center gap-2 text-[13px] font-medium p-text">{icon}{title}</span>
       <span className="p-meta p-text-3">{text}</span>
     </button>
@@ -153,10 +154,10 @@ function OnYourPc({ plan, onDone, onGaveUp, onFailed }: {
       <div className="space-y-2" data-chatgpt-way="pc" data-chatgpt-state="open">
         <p className="text-xs p-text-2">Sign in from a browser on <span className="font-medium p-text">{signIn.device.label}</span>. The sign-in comes back to that machine.</p>
         <div className="flex flex-wrap items-center gap-2">
-          <a href={signIn.authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-btn-quiet inline-flex items-center gap-1.5 px-3 py-1.5 text-xs">
+          <a href={signIn.authorizeUrl} target="_blank" rel="noopener noreferrer" className={buttonClass({ size: "sm" })}>
             <ArrowSquareOutIcon size={12} /> Open ChatGPT sign-in
           </a>
-          <CopyButton value={signIn.authorizeUrl} what="the sign-in link" size={13} className="p-btn-quiet inline-flex size-7 items-center justify-center" />
+          <CopyButton value={signIn.authorizeUrl} what="the sign-in link" size={13} className={buttonClass({ size: "sm", iconOnly: true })} />
         </div>
         <p className="flex items-center gap-2 p-meta p-text-3"><Loader size="sm" /> Waiting for the sign-in to finish on {signIn.device.label}…</p>
       </div>
@@ -215,7 +216,7 @@ function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; on
     <div className="space-y-3" data-chatgpt-way="here">
       <div className="space-y-1.5">
         <p className="text-xs p-text-2">1. Open ChatGPT and sign in.</p>
-        <a href={started.authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-btn-quiet inline-flex items-center gap-1.5 px-3 py-1.5 text-xs">
+        <a href={started.authorizeUrl} target="_blank" rel="noopener noreferrer" className={buttonClass({ size: "sm" })}>
           <ArrowSquareOutIcon size={12} /> Open ChatGPT sign-in
         </a>
       </div>
@@ -224,13 +225,13 @@ function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; on
         <div className="flex flex-col gap-2 sm:flex-row">
           <input value={pasted} onChange={(event) => setPasted(event.target.value)} placeholder={`${started.redirectUri}?code=…`}
             aria-label="Address the sign-in landed on" className={`${inputCls} text-xs`} disabled={busy} />
-          <FilledButton onClick={finish} disabled={busy || pasted.trim() === ""} className="shrink-0">{busy ? "Finishing…" : "Finish"}</FilledButton>
+          <Button variant="primary" size="sm" onClick={finish} disabled={busy || pasted.trim() === ""} className="shrink-0">{busy ? "Finishing…" : "Finish"}</Button>
         </div>
       </div>
       {note && (
         <p className="flex flex-wrap items-center gap-2 text-xs p-warning">
           {note}
-          <button type="button" onClick={begin} className="p-btn-quiet px-2 py-1 text-xs">Start again</button>
+          <button type="button" onClick={begin} className={buttonClass({ size: "sm" })}>Start again</button>
         </p>
       )}
     </div>

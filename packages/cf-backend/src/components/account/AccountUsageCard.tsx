@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { ArrowsClockwiseIcon, ChartBarIcon, GaugeIcon } from "@phosphor-icons/react";
+import { ArrowsClockwiseIcon } from "@phosphor-icons/react";
 import {
   fmtTokens, fmtUsd, limitHeading, limitUnreadText, limitWindowText, quotaWindowText, timeAgo, usageTotal,
   type AccountSpend, type AccountUsage, type LimitReport, type LimitWindow,
@@ -28,7 +28,7 @@ function LimitRow({ report, now }: { report: LimitReport; now: number }) {
             <li key={window.name} className="space-y-0.5">
               <p className="p-meta p-text-2">{limitWindowText(window, now)}</p>
               {share !== undefined && (
-                <div className="h-1 overflow-hidden rounded-full bg-[var(--c-elevated)]" aria-hidden="true">
+                <div className="h-1 overflow-hidden rounded-full bg-[var(--c-fill)]" aria-hidden="true">
                   <div className={`h-full rounded-full ${share >= 0.9 ? "bg-[var(--c-danger)]" : "bg-[var(--c-accent)]"}`} style={{ width: `${String(Math.round(share * 100))}%` }} />
                 </div>
               )}
@@ -123,12 +123,12 @@ export function AccountUsageCard() {
 
   return (
     <>
-      <Card title="Limits · what each account has left" icon={GaugeIcon}>
+      <Card title="Limits">
         <CardSlot resource={usage.resource} what="your limits" onRetry={usage.reload}>
           {(value) => <LimitsTable usage={value} onRefresh={readAgain} />}
         </CardSlot>
       </Card>
-      <Card title="By account · API-equivalent cost" icon={ChartBarIcon}>
+      <Card title="By account · API-equivalent cost">
         <CardSlot resource={usage.resource} what="your usage" onRetry={usage.reload}>
           {(value) => <SpendTable usage={value} />}
         </CardSlot>

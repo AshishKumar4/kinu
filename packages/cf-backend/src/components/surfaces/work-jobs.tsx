@@ -1,7 +1,7 @@
 /** Background jobs (auto-detached >30s tool calls) as Work cards, with cancel, retry and dismiss. */
 import { Effect } from 'effect';
 import { useState, useCallback } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import {
   XCircleIcon, ArrowClockwiseIcon, TrashIcon, CheckCircleIcon,
   WarningCircleIcon, ProhibitIcon, SpinnerGapIcon, BroadcastIcon,

@@ -79,7 +79,7 @@ Write the slate itself: the \`<slate-ui>\` block in your answer, or the slate's 
 
 ## It looks like the chat
 
-A slate is drawn in the app's theme already, dark and light: its text, font, colours, buttons and inputs. Write plain HTML or JSX and add layout only. Set no page background, text colour or font. Where you need a colour, use the theme's: \`var(--c-text)\`, \`--c-text-2\`, \`--c-text-3\`, \`--c-accent\`, \`--c-border\`, \`--c-surface\`, \`--c-elevated\`, \`--c-success\`, \`--c-warning\`, \`--c-danger\`.
+A slate is drawn in the app's theme already, dark and light: its text, font, colours, buttons and inputs. Write plain HTML or JSX and add layout only. Set no page background, text colour or font. Where you need a colour, use the theme's: \`var(--c-text)\`, \`--c-text-2\`, \`--c-text-3\`, \`--c-accent\`, \`--c-border\`, \`--c-surface\`, \`--c-fill\`, \`--c-success\`, \`--c-warning\`, \`--c-danger\`.
 
 In the chat a slate is as tall as its content, like the text around it. Never size to the viewport (no \`100vh\`, no \`height: 100%\` on \`html\` or \`body\`) and add no scroller of your own. Make it work at a phone's width: one column, large touch targets. \`alert()\` and \`confirm()\` are blocked.
 

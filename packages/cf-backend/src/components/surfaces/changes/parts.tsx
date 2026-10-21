@@ -7,9 +7,9 @@ import { ChangeMark, count, Counts, fullTime, sinceLabel } from "./diff";
 function Tag({ file }: { file: FileDiff }) {
   const body = changeBody(file);
 
-  if (body.kind === "binary") return <span className="shrink-0 text-[11px] p-text-4">binary</span>;
+  if (body.kind === "binary") return <span className="shrink-0 text-[11px] p-text-3">binary</span>;
 
-  if (body.kind === "uncompared") return <span className="shrink-0 text-[11px] p-text-4">too large</span>;
+  if (body.kind === "uncompared") return <span className="shrink-0 text-[11px] p-text-3">too large</span>;
 
   return <Counts added={file.added} removed={file.removed} />;
 }
@@ -33,7 +33,7 @@ export function FileTree({ files, repositories, current, onOpen }: {
               data-repository-row={row.repository ? row.path : undefined} title={row.repository ? `Git repository ${row.path}` : undefined}>
               {row.repository
                 ? <GitBranchIcon size={13} weight="bold" className="shrink-0 p-text-3" />
-                : <FolderSimpleIcon size={13} weight="fill" className="shrink-0 p-text-4 opacity-70" />}
+                : <FolderSimpleIcon size={13} weight="fill" className="shrink-0 p-text-3 opacity-70" />}
               <span className={`min-w-0 truncate ${row.repository ? "font-medium p-text-2" : ""}`}>{row.name}</span>
             </li>
           );
@@ -44,7 +44,7 @@ export function FileTree({ files, repositories, current, onOpen }: {
         return (
           <li key={row.file.path}>
             <button type="button" onClick={() => onOpen(row.file.path)} style={inset} data-file-row={row.file.path} aria-current={selected ? "true" : undefined}
-              className={`flex h-8 w-full items-center gap-2 pr-3.5 text-left transition-colors max-md:h-10 ${selected ? "bg-[var(--c-fill)] p-text" : "p-text-2 hover:bg-[var(--c-elevated)] hover:p-text"}`}>
+              className={`flex h-8 w-full items-center gap-2 pr-3.5 text-left transition-colors max-md:h-10 ${selected ? "bg-[var(--c-fill)] p-text" : "p-text-2 hover:bg-[var(--c-hover)] hover:p-text"}`}>
               <ChangeMark status={row.file.status} />
               <span className={`min-w-0 flex-1 truncate p-row-text ${row.file.status === "removed" ? "line-through decoration-[color-mix(in_srgb,currentColor_45%,transparent)]" : ""}`}>
                 {row.file.path.slice(row.file.path.lastIndexOf("/") + 1)}
@@ -100,7 +100,7 @@ export function SourceMenu({ sets, source, initiallyOpen = false, onPick }: {
   return (
     <div ref={box} className="relative shrink-0">
       <button type="button" onClick={() => setOpen((value) => !value)} aria-haspopup="menu" aria-expanded={open} data-source-menu
-        className="flex items-center gap-1 rounded-md px-1.5 py-0.5 -mx-1.5 p-text-2 transition-colors hover:bg-[var(--c-elevated)] hover:p-text">
+        className="flex items-center gap-1 rounded-md px-1.5 py-0.5 -mx-1.5 p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
         {sets.find((set) => set.source === source)?.label}
         <CaretDownIcon size={10} />
       </button>
@@ -110,7 +110,7 @@ export function SourceMenu({ sets, source, initiallyOpen = false, onPick }: {
           {sets.map((set) => (
             <button key={set.source} type="button" role="menuitemradio" aria-checked={set.source === source}
               onClick={() => { setOpen(false); onPick(set.source); }}
-              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left p-row-text p-text-2 transition-colors hover:bg-[var(--c-elevated)] hover:p-text">
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left p-row-text p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
               <span className="flex size-3.5 shrink-0 items-center justify-center p-accent">{set.source === source && <CheckIcon size={12} weight="bold" />}</span>
               <span className="min-w-0 flex-1 truncate">{set.label}</span>
               <span className={`shrink-0 p-meta ${set.error === undefined ? "p-text-3" : "p-warning"}`}>{sourceNote(set)}</span>
@@ -135,7 +135,7 @@ export function IconButton({ label, onClick, disabled = false, children, classNa
 }) {
   return (
     <button type="button" aria-label={label} title={label} onClick={onClick} disabled={disabled}
-      className={`flex size-7 shrink-0 items-center justify-center rounded-md p-text-3 transition-colors hover:bg-[var(--c-elevated)] hover:p-text disabled:opacity-35 disabled:hover:bg-transparent ${className}`}>
+      className={`flex size-7 shrink-0 items-center justify-center rounded-md p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text disabled:opacity-35 disabled:hover:bg-transparent ${className}`}>
       {children}
     </button>
   );
@@ -144,7 +144,7 @@ export function IconButton({ label, onClick, disabled = false, children, classNa
 export function MarkReviewed({ onClick, className = "" }: { onClick: () => void; className?: string }) {
   return (
     <button type="button" onClick={onClick} data-mark-reviewed
-      className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border p-border px-2.5 text-xs font-medium p-text-2 transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-elevated)] hover:p-text ${className}`}>
+      className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border p-border px-2.5 text-xs font-medium p-text-2 transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-hover)] hover:p-text ${className}`}>
       <CheckIcon size={12} weight="bold" />
       Mark reviewed
     </button>

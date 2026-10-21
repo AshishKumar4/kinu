@@ -40,12 +40,12 @@ export function markDocument(): string {
 }
 
 /** Self-hosted latin subsets (OFL in `public/assets/fonts/`). */
-const UI_FONT_PATH = '/assets/fonts/schibsted-latin-var.woff2';
+const UI_FONT_PATH = '/assets/fonts/inter-latin-opsz.woff2';
 
 const MONO_FONT_PATH = '/assets/fonts/fragmentmono-latin.woff2';
 
 const FONT_FACES = [
-  `@font-face{font-family:"Schibsted Grotesk";src:url("${UI_FONT_PATH}") format("woff2-variations");font-weight:400 900;font-style:normal;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}`,
+  `@font-face{font-family:"Inter";src:url("${UI_FONT_PATH}") format("woff2-variations");font-weight:100 900;font-style:normal;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}`,
   `@font-face{font-family:"Fragment Mono";src:url("${MONO_FONT_PATH}") format("woff2");font-weight:400;font-style:normal;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}`,
 ].join('\n');
 
@@ -53,8 +53,8 @@ const SHELL_CSS = `
 ${FONT_FACES}
 *,::before,::after{box-sizing:border-box}
 :root{color-scheme:light dark;
---font-display:"Schibsted Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
---font-ui:"Schibsted Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif,"Apple Color Emoji","Segoe UI Emoji";
+--font-display:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+--font-ui:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif,"Apple Color Emoji","Segoe UI Emoji";
 --font-mono:"Fragment Mono",ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 --gutter:clamp(20px,4.6vw,54px);--rule:1px solid var(--c-border);
 --ease:cubic-bezier(.23,1,.32,1)}
@@ -63,7 +63,7 @@ body{margin:0;min-height:100vh;background:var(--c-bg);color:var(--c-text);
 font-family:var(--font-ui);font-size:16px;line-height:1.55;
 display:flex;flex-direction:column;align-items:center}
 a{color:inherit;text-decoration:none}
-::selection{background:var(--c-accent-subtle)}
+::selection{background:var(--c-selected)}
 :focus-visible{outline:2px solid var(--c-accent);outline-offset:2px;border-radius:var(--r-control)}
 
 /* One measured column with hairline edges. Every surface on the page is a cell
@@ -122,7 +122,7 @@ text-transform:uppercase;color:var(--c-accent)}
    No radius anywhere on this surface; depth comes from the two background
    steps, never from shadows. */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;
-min-height:38px;padding:0 15px;border:1px solid var(--c-input-border);border-radius:var(--r-row);
+min-height:38px;padding:0 15px;border:1px solid var(--c-field-border);border-radius:var(--r-row);
 background:transparent;color:var(--c-text);font:inherit;font-size:14px;font-weight:600;
 white-space:nowrap;cursor:pointer;transition:background 150ms var(--ease),border-color 150ms var(--ease)}
 .btn:hover{background:var(--c-fill)}
@@ -186,9 +186,9 @@ padding:18px 24px;align-items:baseline}
 overflow-wrap:anywhere}
 .rows.faint .metric{color:var(--c-text-3)}
 
-code{font-family:var(--font-mono);font-size:13px;color:var(--c-code)}
+code{font-family:var(--font-mono);font-size:13px;color:var(--c-accent-fg)}
 .cmd{display:flex;align-items:center;justify-content:space-between;gap:20px;
-padding:17px 20px;border:1px solid var(--c-border);background:var(--c-recessed);
+padding:17px 20px;border:1px solid var(--c-border);background:var(--c-sunken);
 font-family:var(--font-mono);font-size:13px}
 .cmd code{white-space:nowrap;overflow:hidden;min-width:0;text-overflow:ellipsis}
 .cmd code .dollar{color:var(--c-accent)}

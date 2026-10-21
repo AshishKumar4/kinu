@@ -172,7 +172,7 @@ function Meter({ value }: { value: number }) {
   const tone = value >= 0.9 ? "var(--c-danger)" : belowDanger;
 
   return (
-    <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--c-neutral-tint)" }}>
+    <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--c-hover)" }}>
       <div className="h-full rounded-full" style={{ width: `${pct}%`, background: tone }} />
     </div>
   );
@@ -225,7 +225,7 @@ function StackedBar(
 ) {
   return (
     <div>
-      <div className="flex h-3 rounded-sm overflow-hidden" style={{ background: "var(--c-neutral-tint)" }}>
+      <div className="flex h-3 rounded-sm overflow-hidden" style={{ background: "var(--c-hover)" }}>
         {planes.map((row) => (
           <div
             key={row.plane}

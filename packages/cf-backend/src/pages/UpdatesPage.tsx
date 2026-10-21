@@ -3,6 +3,7 @@
  * A poll failing mid-run is expected: the Worker being replaced is the update working.
  */
 import { showing, detach } from "@kinu.run/core/obs";
+import { Button } from "@/components/ui/Button";
 import { Effect } from "effect";
 import { useCallback, useEffect, useState } from "react";
 import { Loader } from "@cloudflare/kumo";
@@ -12,7 +13,6 @@ import {
   type DeploySnapshot, type UpdateBuild, type UpdateOffer,
 } from "@kinu.run/core/deploy";
 import * as v from "valibot";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { StepRow } from "@/components/deploy/DeployStepRow";
 
 const RUN_POLL_MS = 2000;
@@ -134,9 +134,9 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
             {offer.reason !== "" && <p className="text-sm p-text-2">{offer.reason}</p>}
             {offer.upToDate && <p className="p-row-text p-text" data-updates="up-to-date">Up to date.</p>}
             {offer.installable && (
-              <FilledButton onClick={apply} disabled={busy || going} className="!h-9 !px-4 !text-sm">
+              <Button variant="primary" size="md" onClick={apply} disabled={busy || going} >
                 <ArrowUpIcon size={15} /> Install {offer.available?.version ?? ""}
-              </FilledButton>
+              </Button>
             )}
           </div>
         </section>

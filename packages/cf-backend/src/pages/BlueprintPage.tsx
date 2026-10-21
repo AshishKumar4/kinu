@@ -2,7 +2,9 @@
  * `/shared/blueprint/:id`: read-only, no workspace chrome; the viewer may have no account.
  * A secret-shaped scan hit is reported by location, never content.
  */
+import { FRAME_PAGE, PageHeader } from "@/components/ui/PageHeader";
 import { type WorkspaceEntry } from '@kinu.run/core';
+import { Button } from "@/components/ui/Button";
 import { showing, detach } from "@kinu.run/core/obs";
 import { Effect } from "effect";
 import { useEffect, useState, type ReactNode } from "react";
@@ -11,7 +13,6 @@ import { Loader } from "@cloudflare/kumo";
 import { FileIcon, FolderIcon, GitBranchIcon, LinkIcon, WarningIcon, type Icon } from "@phosphor-icons/react";
 import type { BlueprintView } from "@kinu.run/core";
 import { KinuLogo } from "@/components/ui/KinuLogo";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { personReaches, reachConnection } from "@/components/slates/ForkReachPanel";
 import { registerWorkspace } from "@/lib/user-api";
@@ -122,26 +123,27 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
         <a href="/" aria-label="Kinu home" className="flex items-center"><KinuLogo /></a>
         <span className="p-meta p-text-3">Shared blueprint</span>
       </header>
-      <main className="mx-auto max-w-3xl space-y-6 px-6 py-8">
-        {err && <div className="p-notice-danger rounded-md px-3 py-2 text-xs">{err}</div>}
-        {view === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
-        {view !== null && (
-          <>
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0">
-                <h1 className="p-display text-2xl">{view.title}</h1>
-                {view.description && <p className="mt-1 text-sm p-text-2">{view.description}</p>}
-                <p className="mt-2 p-meta p-text-3">
-                  A committed version of a slate. A fork runs in your workspace, as you, on your own connections. Nothing of the publisher's comes with it.
-                </p>
+      <main className={FRAME_PAGE}>
+        <PageHeader icon={<GitBranchIcon size={22} />} title={view?.title ?? "Blueprint"}>
+          {view !== null && (
+            <Button variant="primary" onClick={fork} disabled={email === undefined}>
+              <GitBranchIcon size={15} /> Fork into Kinu
+            </Button>
+          )}
+        </PageHeader>
+        <div className="mt-8 space-y-6">
+          {err && <div className="p-notice-danger rounded-md px-3 py-2 text-xs">{err}</div>}
+          {view === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
+          {view !== null && (
+            <>
+              <div>
+                {view.description && <p className="p-row-text p-text-2">{view.description}</p>}
+                <p className="mt-1 p-meta p-text-3">A fork runs in your workspace, as you, on your own connections. Nothing of the publisher's comes with it.</p>
               </div>
-              <FilledButton onClick={fork} disabled={email === undefined} className="!h-9 shrink-0 !px-4 !text-sm">
-                <GitBranchIcon size={15} /> Fork into Kinu
-              </FilledButton>
-            </div>
-            <BlueprintBody view={view} />
-          </>
-        )}
+              <BlueprintBody view={view} />
+            </>
+          )}
+        </div>
       </main>
       {/* Outside the shell: no sidebar lists the new workspace, so it is only registered. */}
       {forking && view !== null && <ForkDialog blueprint={view.id} title={view.title} onClose={() => setForking(false)} workspaces={workspaces}

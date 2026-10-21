@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import { useState, useCallback, type ReactNode } from "react";
-import { Button, Badge, Loader } from "@cloudflare/kumo";
+import { Badge, Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { PlayIcon } from "@phosphor-icons/react";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -122,7 +123,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
                 <div className="flex items-center gap-2">
                   <input value={previewTask} onChange={(e) => setPreviewTask(e.target.value)}
                     placeholder={`Run a task under v${selected} to preview it…`}
-                    className="flex-1 rounded-md border p-border p-elevated px-2.5 py-1.5 text-xs p-text focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]" />
+                    className="flex-1 rounded-md border p-border p-fill px-2.5 py-1.5 text-xs p-text focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]" />
                   <Button size="sm" variant="secondary" disabled={!previewTask.trim() || busy === "preview"}
                     onClick={runPreview} icon={busy === "preview" ? <Loader size="sm" /> : <PlayIcon size={12} />}>
                     Preview

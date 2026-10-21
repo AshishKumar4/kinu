@@ -4,7 +4,8 @@
  */
 import { useState, useCallback, useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import {
   GitForkIcon, TreeStructureIcon, ArrowsOutIcon, ArrowLeftIcon, CaretRightIcon, CaretDownIcon,
   XIcon,
@@ -700,7 +701,7 @@ function SwarmResolutionBody(
 
   return (
     <div data-swarm-resolution={resolution?.kind ?? "none"}
-      className="mt-1 rounded-md border p-border p-recessed px-3 py-2">
+      className="mt-1 rounded-md border p-border p-sunken px-3 py-2">
       {resolution !== undefined && (
         <>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">

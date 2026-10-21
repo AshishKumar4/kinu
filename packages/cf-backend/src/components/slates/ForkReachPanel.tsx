@@ -1,10 +1,11 @@
 /** What a forked slate reaches on its forker's surface, before its preview first runs: each namespace it calls, as the
  *  forker, and where to connect what it needs. */
 import { useState } from "react";
+import { Button, buttonClass } from "@/components/ui/Button";
 import { Link } from "react-router-dom";
 import { ArrowSquareOutIcon, PlugsConnectedIcon } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { settingsPath } from "@/components/SettingsRail";
 
 interface ReachConnection {
   readonly text: string;
@@ -27,7 +28,7 @@ export function reachConnection(namespace: string): ReachConnection {
   switch (head) {
     case "mcp": return { text: `Connect an MCP server named "${name}" to your account.`, to: APP_ROUTES.userMcp, label: "MCP servers" };
     case "slates": return { text: `Calls another slate with id "${name}"; fork or author it in this workspace.` };
-    case "device": return { text: "Runs on one of your machines: link a device and grant this workspace access.", to: APP_ROUTES.devices, label: "Devices" };
+    case "device": return { text: "Runs on one of your machines: link a device and grant this workspace access.", to: settingsPath("devices"), label: "Devices" };
     case "web": return { text: "Uses this workspace's web access, as you." };
     case "memory": return { text: "Reads and writes this workspace's memory, as you." };
     case "tasks": return { text: "Reads and writes this workspace's tasks, as you." };
@@ -71,7 +72,7 @@ export function ForkReachPanel({ title, reaches, onOpen }: {
                   <p className="mt-0.5 text-xs p-text-2">{connection.text}</p>
                 </div>
                 {connection.to !== undefined && (
-                  <Link to={connection.to} className="p-btn-quiet inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2.5 text-xs">
+                  <Link to={connection.to} className={buttonClass({ size: "sm" })}>
                     <ArrowSquareOutIcon size={12} /> {connection.label}
                   </Link>
                 )}
@@ -80,7 +81,7 @@ export function ForkReachPanel({ title, reaches, onOpen }: {
           })}
         </ul>
         <div className="flex justify-end pt-1">
-          <FilledButton onClick={() => { setOpening(true); onOpen(); }} disabled={opening}>Open the preview</FilledButton>
+          <Button variant="primary" size="sm" onClick={() => { setOpening(true); onOpen(); }} disabled={opening}>Open the preview</Button>
         </div>
       </div>
     </div>

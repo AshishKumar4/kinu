@@ -2,20 +2,21 @@
  * A listed slate's own page (sharing v7 `gallery-slate`): Open by its link, Fork with its key, Star, and Report.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button, buttonClass } from "@/components/ui/Button";
 import { FlagIcon, FolderIcon, GitForkIcon, GithubLogoIcon, PlayIcon, PlugIcon, SparkleIcon, StarIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, galleryPicturePath, type GalleryListing, type GallerySlate, type RoomService } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { useGallerySignedIn } from "@/hooks/use-gallery-signed-in";
-import { Cover } from "@/components/drive/DriveTiles";
+import { FRAME_PAGE, Page } from "@/components/ui/PageHeader";
+import { TILE_GRID, TypesetCover } from "@/components/ui/Tiles";
 import { ExploreCard } from "@/components/explore/ExploreCard";
 import { SlatePicture } from "@/components/slates/SlatePicture";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { Avatar } from "@/components/ui/Avatar";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Modal } from "@/components/ui/Modal";
 import { hereAsking, signInAndReturn } from "@/lib/sign-in";
@@ -41,12 +42,12 @@ function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; o
       footer={(
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
-          <FilledButton disabled={reason.trim() === "" || busy} data-gallery-report-send onClick={send}>Report</FilledButton>
+          <Button variant="primary" size="md" disabled={reason.trim() === "" || busy} data-gallery-report-send onClick={send}>Report</Button>
         </div>
       )}>
       <p className="p-row-text p-text-2">Say what is wrong with it. The people who run Kinu read every report.</p>
       <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={3} maxLength={500} aria-label="What is wrong" data-gallery-report-reason
-        className="w-full rounded-md border p-border bg-[var(--c-input-bg)] px-2.5 py-1.5 p-row-text p-text outline-none placeholder:text-[var(--c-text-4)]" />
+        className="w-full rounded-md border p-border bg-[var(--c-field)] px-2.5 py-1.5 p-row-text p-text outline-none placeholder:text-[var(--c-text-3)]" />
       {failure !== null && <p role="alert" className="p-meta p-danger">{failure}</p>}
     </Modal>
   );
@@ -67,7 +68,7 @@ const SERVICE_ICON: Record<RoomService["kind"], typeof PlugIcon> = { github: Git
  * What a visitor's own connections it uses (docs/SLATE-SHARING-NIMBUS.md §4): a listed slate runs on each person's own
  * access, so each of these asks them before it reads anything; nothing of its author's is used.
  */
-function UsesYours({ needs, author }: { needs: readonly RoomService[]; author: string }) {
+function UsesYours({ needs }: { needs: readonly RoomService[] }) {
   return (
     <div data-gallery-needs className="pt-2">
       <h2 className="mb-2 p-meta font-medium p-text-2">Uses your own</h2>
@@ -82,7 +83,6 @@ function UsesYours({ needs, author }: { needs: readonly RoomService[]; author: s
           })}
         </ul>
       )}
-      <p className="mt-2 p-meta p-text-3">Each asks you before it reads anything of yours. Nothing of {author}&apos;s is used.</p>
     </div>
   );
 }
@@ -133,7 +133,7 @@ export default function GallerySlatePage() {
   }, [star, workspace, slate]);
 
   if (failure !== null) {
-    return <div className="mx-auto max-w-[1120px] px-4 pt-8 sm:px-8"><LoadFailure what="this slate" message={failure} onRetry={() => { setFailure(null); setTries((count) => count + 1); }} /></div>;
+    return <div className={FRAME_PAGE}><LoadFailure what="this slate" message={failure} onRetry={() => { setFailure(null); setTries((count) => count + 1); }} /></div>;
   }
 
   if (read === null || star === null) return <div className="flex h-full items-center justify-center"><Loader size="base" /></div>;
@@ -141,52 +141,46 @@ export default function GallerySlatePage() {
   const { listing } = read;
 
   return (
-    <div className="h-full overflow-y-auto" data-gallery-slate={listing.slate}>
-      <div className="mx-auto w-full max-w-[1120px] px-4 pb-16 pt-6 sm:px-8 sm:pt-8">
-        <p className="p-meta p-text-3"><Link to={`${APP_ROUTES.explore}?kind=app`} className="p-text-2 hover:underline">Explore</Link> / {listing.title}</p>
-        <div className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-          <div data-gallery-hero className="relative aspect-[2/1] overflow-hidden rounded-[14px] border p-border">
-            <SlatePicture workspace={listing.workspace} slate={{ id: listing.slate, title: listing.title, picture: listing.picture }} at={galleryPicturePath}
-              className="absolute inset-0 size-full object-cover object-left-top" fallback={<Cover title={listing.title} />} />
-          </div>
-          <div className="min-w-0 space-y-4">
-            <div>
-              <h1 className="p-display text-2xl">{listing.title}</h1>
-              <p className="mt-1 flex items-center gap-2 p-row-text p-text-3"><Avatar name={listing.owner.name} size={20} />{listing.owner.name} · {CATEGORY_WORDS[listing.category]}</p>
-            </div>
-            <p className="p-row-text p-text-2">{listing.line}</p>
-            <div className="flex flex-wrap items-center gap-2">
-              <a href={listing.url} data-gallery-open className="p-btn inline-flex h-9 items-center gap-1.5 rounded-md px-5 text-sm font-medium"><PlayIcon size={14} weight="fill" />Open</a>
-              <Button size="base" variant="secondary" data-gallery-fork onClick={() => (signedIn ? setDialog("fork") : signInAndReturn(hereAsking("fork")))}>
-                <GitForkIcon size={15} />Fork
-              </Button>
-              <Button size="base" variant="ghost" aria-pressed={star.on} data-gallery-star data-gallery-stars={star.count} onClick={signedIn ? toggleStar : () => signInAndReturn()}>
-                <StarIcon size={15} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : ""} />{star.on ? "Starred" : "Star"} · {star.count.toLocaleString("en-US")}
-              </Button>
-            </div>
-            {starFailure !== null && <p role="alert" className="p-meta p-danger">{starFailure}</p>}
-            <p className="flex flex-wrap items-center gap-x-3 gap-y-1 p-meta p-text-3">
-              <span data-gallery-viewers={listing.viewers}>{listing.viewers === 1 ? "Opened by 1 person" : `Opened by ${listing.viewers.toLocaleString("en-US")} people`}</span>
-              {read.people !== undefined && <span data-gallery-people>Used by about {read.people.toLocaleString("en-US")} people this week</span>}
-              {read.forks !== undefined && <span data-gallery-forks>{read.forks === 1 ? "1 fork" : `${read.forks.toLocaleString("en-US")} forks`}</span>}
-              {reported
-                ? <span data-gallery-reported className="ml-auto inline-flex items-center gap-1"><FlagIcon size={12} />Reported</span>
-                : <button type="button" data-gallery-report onClick={() => (signedIn ? setDialog("report") : signInAndReturn())} className="ml-auto inline-flex items-center gap-1 hover:underline"><FlagIcon size={12} />Report</button>}
-            </p>
-            {read.needs !== undefined && <UsesYours needs={read.needs} author={listing.owner.name.split(" ")[0] ?? listing.owner.name} />}
-          </div>
+    <Page back={{ to: `${APP_ROUTES.explore}?kind=app`, label: "Back to Explore" }} icon={null} title={listing.title} data-gallery-slate={listing.slate}
+      actions={(
+        <>
+          <Button variant="secondary" aria-pressed={star.on} data-gallery-star data-gallery-stars={star.count} onClick={signedIn ? toggleStar : () => signInAndReturn()}>
+            <StarIcon size={15} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : ""} />{star.on ? "Starred" : "Star"} · {star.count.toLocaleString("en-US")}
+          </Button>
+          <Button variant="secondary" data-gallery-fork onClick={() => (signedIn ? setDialog("fork") : signInAndReturn(hereAsking("fork")))}>
+            <GitForkIcon size={15} />Fork
+          </Button>
+          <a href={listing.url} data-gallery-open className={buttonClass({ variant: "primary" })}><PlayIcon size={14} weight="fill" />Open</a>
+        </>
+      )}>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+        <div data-gallery-hero className="relative aspect-[2/1] overflow-hidden rounded-[var(--r-card)] border p-border">
+          <SlatePicture workspace={listing.workspace} slate={{ id: listing.slate, title: listing.title, picture: listing.picture }} at={galleryPicturePath}
+            className="absolute inset-0 size-full object-cover object-left-top" fallback={<TypesetCover title={listing.title} line={listing.line} />} />
         </div>
-        <div className="mt-10 grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-          {like.length > 0 && (
-            <div data-gallery-like>
-              <h2 className="mb-3 p-heading text-[15px] p-text">More like it</h2>
-              <ul className="grid gap-4 sm:grid-cols-2">{like.map((each) => <ExploreCard key={each.kind === "app" ? `${each.app.workspace}/${each.app.slate}` : each.workspace.id} item={each} />)}</ul>
-            </div>
-          )}
+        <div className="min-w-0 space-y-4">
+          <p className="flex items-center gap-2 p-row-text p-text-3"><Avatar name={listing.owner.name} size={20} />{listing.owner.name} · {CATEGORY_WORDS[listing.category]}</p>
+          <p className="p-row-text p-text-2">{listing.line}</p>
+          {starFailure !== null && <p role="alert" className="p-meta p-danger">{starFailure}</p>}
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 p-meta p-text-3">
+            <span data-gallery-viewers={listing.viewers}>{listing.viewers === 1 ? "Opened by 1 person" : `Opened by ${listing.viewers.toLocaleString("en-US")} people`}</span>
+            {read.people !== undefined && <span data-gallery-people>Used by about {read.people.toLocaleString("en-US")} people this week</span>}
+            {read.forks !== undefined && <span data-gallery-forks>{read.forks === 1 ? "1 fork" : `${read.forks.toLocaleString("en-US")} forks`}</span>}
+            {reported
+              ? <span data-gallery-reported className="ml-auto inline-flex items-center gap-1"><FlagIcon size={12} />Reported</span>
+              : <button type="button" data-gallery-report onClick={() => (signedIn ? setDialog("report") : signInAndReturn())} className="ml-auto inline-flex items-center gap-1 hover:underline"><FlagIcon size={12} />Report</button>}
+          </p>
+          {read.needs !== undefined && <UsesYours needs={read.needs} />}
         </div>
       </div>
+      {like.length > 0 && (
+        <section data-gallery-like>
+          <h2 className="mb-3 p-label">More like it</h2>
+          <ul className={TILE_GRID}>{like.map((each) => <ExploreCard key={each.kind === "app" ? `${each.app.workspace}/${each.app.slate}` : each.workspace.id} item={each} />)}</ul>
+        </section>
+      )}
       {dialog === "fork" && <ForkListing listing={listing} onClose={() => setDialog(null)} />}
       {dialog === "report" && <ReportDialog listing={listing} onClose={() => setDialog(null)} onSent={() => { setReported(true); setDialog(null); }} />}
-    </div>
+    </Page>
   );
 }

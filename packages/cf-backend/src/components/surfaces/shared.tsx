@@ -153,7 +153,7 @@ function AnswerSegment({ segment, place }: { segment: SlateUiSegment; place: Ans
 
   // Its page is read from the stored answer, so until the answer is stored it is a quiet line.
   if (segment.kind === "open" || (drawn && !place.stored)) {
-    return <div data-slate-ui-pending={segment.name} aria-label={`Drawing ${segment.name}`} className="my-2 h-8 rounded-md p-recessed animate-pulse" />;
+    return <div data-slate-ui-pending={segment.name} aria-label={`Drawing ${segment.name}`} className="my-2 h-8 rounded-md p-sunken animate-pulse" />;
   }
 
   const address = place.chat === undefined ? null : { actorId: place.chat.actorId, messageId: place.messageId, name: segment.name };
@@ -236,7 +236,7 @@ export function EmptyState({ icon, title, hint, children }: {
 
 export function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-md border p-border p-recessed px-2 py-1.5">
+    <div className="rounded-md border p-border p-sunken px-2 py-1.5">
       <div className="p-eyebrow">{label}</div>
       <div className="p-row-text p-text font-mono tabular-nums">{value}</div>
     </div>

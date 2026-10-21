@@ -119,7 +119,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
                 <p className="mb-8 max-w-[520px] text-[17.5px] leading-[1.65] text-pretty p-text-3">
                   Put agents to work on your files, with tools they write themselves. They get better as you correct them, and can run several attempts at once, keeping whichever one your objective scores highest.
                 </p>
-                <div className="flex max-w-[540px] items-center justify-between gap-4 rounded-xl border p-border p-recessed px-4 py-3.5">
+                <div className="flex max-w-[540px] items-center justify-between gap-4 rounded-xl border p-border p-sunken px-4 py-3.5">
                   <code className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-[12.5px] leading-relaxed p-text-2"><span aria-hidden="true" className="p-accent">$</span> <span data-install-command>{install}</span></code>
                   <Button type="button" variant="ghost" size="sm" onClick={() => copy(install)} aria-label="Copy install command">
                     {COPY_LABEL[status]}
@@ -129,7 +129,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
                   <LandingActionLink href="/login" primary>Try cloud agents →</LandingActionLink>
                   <LandingActionLink href="/deploy">Self-host</LandingActionLink>
                   <LandingActionLink href="#platform">Run locally</LandingActionLink>
-                  <span className="w-full text-[12.5px] p-text-4 sm:w-auto">MIT · open source</span>
+                  <span className="w-full text-[12.5px] p-text-3 sm:w-auto">MIT · open source</span>
                 </div>
               </div>
             </div>
@@ -139,7 +139,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
       <div className="landing-shell pb-20 lg:pb-24">
         <figure className="mt-14 lg:mt-16">
           <LandingFrame kind="work" caption={WORK_FRAME_CAPTION} />
-          <figcaption className="px-1 pt-3 text-[11px] leading-relaxed p-text-4">The tabs, the Work panel and Retry act on this page only.</figcaption>
+          <figcaption className="px-1 pt-3 text-[11px] leading-relaxed p-text-3">The tabs, the Work panel and Retry act on this page only.</figcaption>
         </figure>
       </div>
     </section>

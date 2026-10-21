@@ -47,7 +47,7 @@ function TaskHeader({ task }: { task: string }) {
   const long = task.length > TASK_CLAMP;
 
   return (
-    <div className="shrink-0 border-b p-border px-4 py-2.5 p-recessed">
+    <div className="shrink-0 border-b p-border px-4 py-2.5 p-sunken">
       <div className="flex items-start gap-2">
         <div className="p-eyebrow pt-0.5 shrink-0">Task</div>
         <div className="min-w-0 flex-1">
@@ -111,7 +111,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
         </div>
       )}
       {view.answer && (
-        <div className="shrink-0 border-b p-border border-l-2 px-4 py-3 p-elevated"
+        <div className="shrink-0 border-b p-border border-l-2 px-4 py-3 p-fill"
           style={{ borderLeftColor: "var(--c-accent)" }}>
           <div className="flex items-center gap-1.5 p-t-status uppercase tracking-normal p-accent">
             <CheckCircleIcon size={11} weight="fill" />

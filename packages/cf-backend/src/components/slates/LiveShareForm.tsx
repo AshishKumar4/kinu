@@ -1,7 +1,8 @@
 /** The server grant is the read set plus the ticked set; the dialog renders, never decides. */
 import { Effect } from 'effect';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button, buttonClass } from "@/components/ui/Button";
 import {
   CaretDownIcon, CaretRightIcon, FileDashedIcon, GlobeIcon, IdentificationCardIcon, PackageIcon, SquaresFourIcon, StopCircleIcon, UserCircleIcon,
   UsersIcon, WarningIcon,
@@ -9,7 +10,6 @@ import {
 import * as v from "valibot";
 import { OwnedLiveShareSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareVisibility, type OwnedLiveShare, type SharePreapproval, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { listShare, readPreapprovals, revokeShare, setShareMode, shareLive, withdrawPreapproval } from "@/lib/shared-api";
 import { ShareListing, type ListShare } from "./ShareListing";
@@ -84,7 +84,7 @@ function ChoiceCards<T extends string>({ label, marker, options, value, onChange
       {options.map((option) => (
         <button key={option.id} type="button" role="radio" aria-checked={value === option.id} {...{ [marker]: option.id }} onClick={() => onChange(option.id)}
           disabled={disabled || option.disabled === true}
-          className={`flex w-full items-start gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-elevated)] ${value === option.id ? "bg-[var(--c-elevated)]" : ""}`}>
+          className={`flex w-full items-start gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-hover)] ${value === option.id ? "bg-[var(--c-fill)]" : ""}`}>
           <span className={`mt-0.5 flex shrink-0 ${value === option.id ? "p-accent" : "p-text-3"}`}>{option.icon}</span>
           <span className="min-w-0 flex-1">
             <span className="block p-row-text font-medium p-text">{option.label}</span>
@@ -175,12 +175,12 @@ function PrimaryAction({ reviewing, busy, canShare, canApprove, onShare, onAppro
   onShare: () => void;
   onApprove: () => void;
 }) {
-  if (reviewing) return <FilledButton className="h-8 px-4 text-sm" onClick={onApprove} disabled={busy || !canApprove} data-share-approve-reach>Approve the new reach</FilledButton>;
+  if (reviewing) return <Button variant="primary" size="sm"  onClick={onApprove} disabled={busy || !canApprove} data-share-approve-reach>Approve the new reach</Button>;
 
   return (
-    <FilledButton className="h-8 px-4 text-sm" onClick={onShare} disabled={!canShare} data-share-submit>
+    <Button variant="primary" size="sm"  onClick={onShare} disabled={!canShare} data-share-submit>
       {busy ? <><Loader size="sm" /><span className="ml-1">Sharing…</span></> : "Share"}
-    </FilledButton>
+    </Button>
   );
 }
 
@@ -203,7 +203,7 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
   if (row.problem !== undefined) {
     members = <p className="p-badge-danger inline-block rounded px-2 py-0.5 text-[11px]">{row.problem}</p>;
   } else if (row.members.length === 0) {
-    members = <p className="p-text-4">No members.</p>;
+    members = <p className="p-text-3">No members.</p>;
   } else {
     members = (
       <ul className="space-y-1">
@@ -216,8 +216,8 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
             return (
               <li key={key} className="flex items-center gap-2">
                 <span className="font-mono p-text-2">{member.member}</span>
-                <span className="p-text-4">{IMPACT_WORDS[member.impact]}</span>
-                <span className="ml-auto p-text-4">Always on</span>
+                <span className="p-text-3">{IMPACT_WORDS[member.impact]}</span>
+                <span className="ml-auto p-text-3">Always on</span>
               </li>
             );
           }
@@ -244,7 +244,7 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
     <li className="space-y-1.5 py-2">
       <div className="flex flex-wrap items-baseline gap-x-2">
         <span className="font-mono text-xs font-medium p-text">{row.namespace}</span>
-        {row.title !== row.namespace && <span className="p-text-4">{row.title}</span>}
+        {row.title !== row.namespace && <span className="p-text-3">{row.title}</span>}
       </div>
       {members}
     </li>
@@ -274,13 +274,13 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
   return (
     <div className="p-group">
       <button type="button" aria-expanded={open} data-share-reach onClick={() => setOpen((shown) => !shown)}
-        className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-elevated)]">
+        className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-hover)]">
         <span className="w-14 shrink-0 p-row-text font-medium p-text">Reach</span>
         <span className="flex min-w-0 flex-1 p-meta p-text-3">
           <span className="truncate">{names}</span>
           <span className="shrink-0 whitespace-pre"> · {changes}</span>
         </span>
-        {open ? <CaretDownIcon size={13} className="shrink-0 p-text-4" /> : <CaretRightIcon size={13} className="shrink-0 p-text-4" />}
+        {open ? <CaretDownIcon size={13} className="shrink-0 p-text-3" /> : <CaretRightIcon size={13} className="shrink-0 p-text-3" />}
       </button>
       {open && (
         <div className="space-y-2 border-t p-border px-3.5 py-2 text-xs">
@@ -460,7 +460,7 @@ function SharedRow({ row, actions }: { row: OwnedLiveShare; actions: SharedRowAc
       </div>
       {row.mode === "owner" && row.stale && (
         <div className="pl-[26px]">
-          <Button size="xs" variant="secondary" data-live-share-review={row.id} onClick={() => actions.onReview(row.id)} disabled={actions.disabled}>Review the new reach</Button>
+          <Button size="sm" variant="secondary" data-live-share-review={row.id} onClick={() => actions.onReview(row.id)} disabled={actions.disabled}>Review the new reach</Button>
         </div>
       )}
       {listing && row.mode === "own" && <div className="pl-[26px]"><ShareListing share={row} onList={(next) => actions.onList(row.id, next)} disabled={actions.disabled} /></div>}
@@ -511,7 +511,7 @@ function AlwaysAllowed({ standing, graph, onWithdraw, disabled }: {
               <span className="block truncate p-meta p-text-2"><span className="font-mono">{entry.member}</span> on {titleOf(entry)}</span>
               {Object.keys(entry.root).length > 0 && <span className="block truncate p-meta p-text-3">{rootWords(entry.root)}</span>}
             </span>
-            <Button size="xs" variant="ghost" data-share-always-withdraw onClick={() => onWithdraw(entry)} disabled={disabled}>Revoke</Button>
+            <Button size="sm" variant="ghost" data-share-always-withdraw onClick={() => onWithdraw(entry)} disabled={disabled}>Revoke</Button>
           </li>
         ))}
       </ul>
@@ -807,11 +807,11 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
           ) : (
             <div className="flex items-center gap-2">
               <a href={created.url} className="min-w-0 flex-1 break-all font-mono p-accent" target="_blank" rel="noopener noreferrer">{created.url}</a>
-              <CopyButton value={created.url} what="the share link" className="p-btn-quiet rounded p-1" />
+              <CopyButton value={created.url} what="the share link" className={buttonClass({ size: "sm", iconOnly: true })} />
             </div>
           )}
         </div>
-        <div className="flex justify-end"><FilledButton className="h-8 px-4 text-sm" onClick={onClose}>Done</FilledButton></div>
+        <div className="flex justify-end"><Button variant="primary" size="md" onClick={onClose}>Done</Button></div>
       </>
     );
   }

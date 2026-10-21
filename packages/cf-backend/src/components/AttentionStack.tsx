@@ -5,11 +5,10 @@
  */
 import { Cause, Effect } from "effect";
 import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import { revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwedIntent, type OwedOwnerIntent, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { MailSendBody } from "@/components/mail/MailSendBody";
 import { AlwaysLine, alwaysLabel, ParkedCommands, ParkedDecisionFlow, ParkedWriteChange } from "@/components/ParkedCommands";
 import { QuestionCard } from "@/components/QuestionCard";
@@ -89,7 +88,7 @@ function AnswerButton({ answer, busy, onAnswer }: { answer: Answer; busy: boolea
   const Mark = answer.icon;
   const label = <>{Mark && <Mark size={12} weight="bold" aria-hidden />}{answer.label}</>;
 
-  if (answer.weight === "primary") return <FilledButton disabled={busy} onClick={() => detach(onAnswer(answer))}>{label}</FilledButton>;
+  if (answer.weight === "primary") return <Button variant="primary" size="sm" disabled={busy} onClick={() => detach(onAnswer(answer))}>{label}</Button>;
 
   return (
     <Button size="sm" variant={answer.weight === "secondary" ? "secondary" : "ghost"} disabled={busy} title={answer.title} onClick={() => detach(onAnswer(answer))}>

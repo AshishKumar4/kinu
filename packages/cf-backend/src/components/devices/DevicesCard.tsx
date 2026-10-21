@@ -1,12 +1,13 @@
 /** A failed poll keeps the last roster on screen and says it failed, rather than blanking to `[]`. */
 import { Effect } from 'effect';
 import { useCallback, useState } from "react";
-import { DesktopTowerIcon, PlugIcon } from "@phosphor-icons/react";
 import {
   acknowledgeUnstoppedDevice, listDeviceConsents, registerDevice, revokeDevice,
   type DeviceConsent,
 } from "@/lib/user-api";
+import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/form";
+import { Modal } from "@/components/ui/Modal";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, type Revalidate } from "@/hooks/use-async-resource";
 import { DEVICE_ROSTER_POLL_MS, useDeviceRoster } from "@/hooks/use-device-roster";
@@ -66,11 +67,13 @@ export function DevicesCard() {
     }));
   })), [publishDevices, devices, reloadDevices]);
 
+  const [connecting, setConnecting] = useState(false);
+
   return (
     <>
-      <Card title="Connected devices" icon={DesktopTowerIcon}>
+      <Card title="Connected devices" actions={<Button variant="secondary" size="sm" data-connect-open onClick={() => setConnecting(true)}>Connect a machine</Button>}>
         {devices.length > 0 ? (
-          <div className="p-group text-xs">
+          <div className="-my-3 p-group">
             {devices.map((d) => (
               <DeviceRow
                 key={d.id}
@@ -86,10 +89,8 @@ export function DevicesCard() {
             ))}
           </div>
         ) : roster.resource.status === "ready" && (
-          <p data-devices-empty className="p-row-text p-text-3 leading-relaxed">
-            No machine is linked yet. On the PC you want to link, run{" "}
-            <code className="font-mono p-text">kinu connect</code> in the folder the agent may use. No Kinu CLI
-            there yet? Get the one-line install command below.
+          <p data-devices-empty className="p-row-text p-text-3">
+            No machine yet. Run <code className="font-mono p-text">kinu connect</code> in the folder the agent may use.
           </p>
         )}
         {roster.resource.status === "error" && (
@@ -101,9 +102,11 @@ export function DevicesCard() {
         {err && <p className="text-xs p-danger">{err}</p>}
       </Card>
 
-      <Card title="Connect a machine" icon={PlugIcon}>
-        <ConnectDevicePanel flow={flow} devices={lastValue(roster.resource)} />
-      </Card>
+      {connecting && (
+        <Modal title="Connect a machine" onClose={() => setConnecting(false)} maxWidthClass="max-w-lg">
+          <ConnectDevicePanel flow={flow} devices={lastValue(roster.resource)} />
+        </Modal>
+      )}
       {dialog}
     </>
   );

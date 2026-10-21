@@ -54,7 +54,7 @@ export function QualityView({ rpc, moved }: { rpc: WorkspaceRpc; moved: number }
         </div>
       )}
       {ratedDays < TREND_DAYS
-        ? <p className="p-meta p-text-4">A trend shows once three days have ratings.</p>
+        ? <p className="p-meta p-text-3">A trend shows once three days have ratings.</p>
         : <SatisfactionDays days={days} />}
     </div>
   );
@@ -81,7 +81,7 @@ function SatisfactionDays({ days }: { days: readonly QualityDay[] }) {
   return (
     <div className="p-card px-3 pt-3 pb-2">
       <div className="grid grid-cols-[14px_minmax(0,1fr)] gap-2">
-        <div className="relative h-24 p-annotation p-text-4" aria-hidden>
+        <div className="relative h-24 p-annotation p-text-3" aria-hidden>
           <span className="absolute top-0 -translate-y-1/2">5</span>
           <span className="absolute top-1/2 -translate-y-1/2">3</span>
           <span className="absolute bottom-0 translate-y-1/2">1</span>
@@ -108,7 +108,7 @@ function SatisfactionDays({ days }: { days: readonly QualityDay[] }) {
           </div>
         </div>
       </div>
-      <div className="mt-1.5 flex justify-between pl-[22px] p-annotation p-text-4">
+      <div className="mt-1.5 flex justify-between pl-[22px] p-annotation p-text-3">
         <span>{label(days[0]?.day ?? "")}</span><span>{label(days.at(-1)?.day ?? "")}</span>
       </div>
     </div>

@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { useState, useCallback } from "react";
-import { Button, Badge, Loader } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { Badge, Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import {
   LightningIcon, CheckIcon,
   PlusIcon, TrashIcon, WarningIcon, PlugIcon,
@@ -17,6 +17,7 @@ import { StatusDot, type StatusTone } from "@/components/ui/Status";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import * as v from "valibot";
 import { showing, detach } from '@kinu.run/core/obs';
+import { dailyTimeOf } from "@kinu.run/core";
 import type { WorkspaceAnswer, WorkspaceRpc } from "@/lib/workspace-rpc";
 
 type TriggerRow = WorkspaceAnswer<"listTriggers">["triggers"][number];
@@ -68,7 +69,7 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: WorkspaceRpc; wo
       {triggers !== null && triggers.length > 0 && (
         <div className="rounded-md border p-border overflow-hidden text-xs">
           {triggers.map((t) => (
-            <TriggerLine key={t.id} trigger={t} onRevoke={() => revoke(t.id)} />
+            <TriggerLine key={t.id} trigger={t} onRevoke={() => revoke(t.id)} rpc={rpc} onMoved={reload} />
           ))}
         </div>
       )}
@@ -88,21 +89,44 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: WorkspaceRpc; wo
 const TRIGGER_TONE: ReadonlyMap<string, StatusTone> = new Map([["active", "success"], ["paused", "warning"]]);
 
 /** The delivery URL carries a signed route capability; a URL built here would 404. */
-function TriggerLine({ trigger, onRevoke }: {
-  trigger: TriggerRow; onRevoke: () => void;
+/** A daily schedule's time, kept as typed until it is sent; a refusal says why beside it. */
+function DailyTime({ rpc, trigger, at, onMoved }: { rpc: WorkspaceRpc; trigger: TriggerRow; at: string; onMoved: () => void }) {
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const move = (next: string) => (next === "" || next === at ? Effect.void : Effect.catchCause(Effect.gen(function* () {
+    setFailure(null);
+    yield* Effect.promise(() => rpc("retimeDailySchedule", [trigger.id, next]));
+    onMoved();
+  }), showing(setFailure)));
+
+  return (
+    <span className="flex shrink-0 items-center gap-1.5" data-schedule-time={trigger.id}>
+      <span className="p-text-3">each day at</span>
+      <input type="time" defaultValue={at} aria-label="Time of day" disabled={trigger.state === "revoked"}
+        onBlur={(event) => detach(move(event.target.value))} onKeyDown={(event) => detach(event.key === "Enter" ? move(event.currentTarget.value) : Effect.void)}
+        className="rounded-sm border p-border bg-transparent px-1 font-mono p-text-2" />
+      {failure !== null && <span className="p-danger" role="alert">{failure}</span>}
+    </span>
+  );
+}
+
+function TriggerLine({ trigger, onRevoke, rpc, onMoved }: {
+  trigger: TriggerRow; onRevoke: () => void; rpc: WorkspaceRpc; onMoved: () => void;
 }) {
   const isWebhook = trigger.kind === "webhook_durable" || trigger.kind === "webhook_ephemeral";
   const url = trigger.url ? `${window.location.origin}${trigger.url}` : null;
   // The spec is the trigger's own JSON: a label and a cron are read where they are strings.
   const label = typeof trigger.spec.label === "string" ? trigger.spec.label : trigger.id;
   const cron = typeof trigger.spec.cron === "string" ? trigger.spec.cron : null;
+  const daily = cron === null ? null : dailyTimeOf(cron);
 
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
       <StatusDot tone={TRIGGER_TONE.get(trigger.state) ?? "neutral"} />
       <span className="font-medium p-text-2 truncate max-w-40" title={label}>{label}</span>
       <span className="font-mono p-text-3 shrink-0">{trigger.kind}</span>
-      {cron && <code className="p-fill px-1 rounded-sm p-text-3 shrink-0">{cron}</code>}
+      {daily !== null && <DailyTime rpc={rpc} trigger={trigger} at={daily} onMoved={onMoved} />}
+      {cron !== null && daily === null && <code className="p-fill px-1 rounded-sm p-text-3 shrink-0">{cron}</code>}
       <span className="flex-1" />
       {trigger.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{trigger.fire_count} fires</span>}
       <span className="p-text-3 shrink-0">{trigger.state}</span>
@@ -276,9 +300,9 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
       busy={submitting}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={submitting}>Cancel</Button>
-        <FilledButton onClick={submit} disabled={submitting || !label.trim()}>
+        <Button variant="primary" size="sm" onClick={submit} disabled={submitting || !label.trim()}>
           {submitting ? <><Loader size="sm" /><span className="ml-1">Creating…</span></> : "Create"}
-        </FilledButton>
+        </Button>
       </>}
     >
       <div className="space-y-2">

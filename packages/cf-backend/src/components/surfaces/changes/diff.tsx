@@ -79,7 +79,7 @@ const WORD_TINT: Record<ChangeRow["kind"], string> = {
 const GUTTER_TONE: Record<ChangeRow["kind"], string> = {
   add: "p-success",
   del: "p-danger",
-  ctx: "p-text-4",
+  ctx: "p-text-3",
 };
 
 const QUIET_ROW = "bg-[color-mix(in_srgb,var(--c-text)_3.5%,transparent)]";
@@ -221,9 +221,9 @@ function Rows({ rows, draw }: { rows: readonly ChangeRow[]; draw: Draw }) {
 function Fold({ label, context, gutter, onOpen }: { label: string; context: string | null; gutter: string; onOpen: (() => void) | null }) {
   const inner = (
     <>
-      <span style={{ width: gutter }} className="flex shrink-0 justify-end pr-1 p-text-4">{onOpen !== null && <CaretUpDownIcon size={12} />}</span>
+      <span style={{ width: gutter }} className="flex shrink-0 justify-end pr-1 p-text-3">{onOpen !== null && <CaretUpDownIcon size={12} />}</span>
       <span className="shrink-0 pl-2.5 font-sans p-meta">{label}</span>
-      {context !== null && <span className="min-w-0 truncate pr-4 text-[11px] p-text-4">{context}</span>}
+      {context !== null && <span className="min-w-0 truncate pr-4 text-[11px] p-text-3">{context}</span>}
     </>
   );
 
@@ -251,7 +251,7 @@ function Blocks({ blocks, draw, open, onOpen }: {
           return (
             <button key={index} type="button" onClick={() => onOpen(block.id)} data-diff-fold
               className={`flex h-8 w-full items-center gap-2 text-left ${QUIET_ROW} p-text-2 transition-colors hover:p-text`}>
-              <span style={{ width: draw.gutter }} className="flex shrink-0 justify-end pr-1 p-text-4"><CaretDownIcon size={12} /></span>
+              <span style={{ width: draw.gutter }} className="flex shrink-0 justify-end pr-1 p-text-3"><CaretDownIcon size={12} /></span>
               <span className="pl-2.5 font-sans p-meta">{block.deleted ? `Show the ${count(block.count)} deleted lines` : `Show ${count(block.count)} more lines`}</span>
             </button>
           );

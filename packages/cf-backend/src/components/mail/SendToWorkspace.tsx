@@ -1,10 +1,9 @@
 /** "Send to a workspace…" (docs/MAIL.md §8): a thread handed to one of the owner's workspaces, whose chat it opens. */
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import { Modal } from "@/components/ui/Modal";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
 import { WorkspacePicker, type ChosenWorkspace } from "@/components/secrets/SecretRows";
 import { handMailThread } from "@/lib/mail-api";
@@ -23,9 +22,9 @@ export function SendToWorkspace({ thread, onClose }: { thread: string; onClose: 
     <Modal title="Send to a workspace" icon={<ArrowSquareOutIcon size={16} />} onClose={onClose} busy={busy !== null}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy !== null}>Cancel</Button>
-        <FilledButton data-mail-hand-commit onClick={() => { if (chosen !== null) send(chosen); }} disabled={chosen === null || busy !== null}>
+        <Button variant="primary" size="md" data-mail-hand-commit onClick={() => { if (chosen !== null) send(chosen); }} disabled={chosen === null || busy !== null}>
           {busy ?? "Send"}
-        </FilledButton>
+        </Button>
       </>}>
       <div data-mail-hand className="space-y-2">
         <WorkspacePicker chosen={chosen} onChange={setChosen} placeholder="Workspace" />

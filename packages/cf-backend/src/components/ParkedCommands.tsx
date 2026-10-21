@@ -6,10 +6,10 @@
  */
 import { Cause, Effect } from "effect";
 import { useCallback, useState, useSyncExternalStore } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { revealMisrepresenting, timeAgo, type Omitted, type PendingAction } from "@kinu.run/core";
 import { detach, renderThrownChain, settle } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FileBody } from "@/components/surfaces/changes/ChangesPanel";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -179,7 +179,7 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: {
       <div className="space-y-1">
         {actions.map((action) => (
           <label key={action.id} data-parked-command={action.id}
-            className="flex items-start gap-2 rounded-md px-2 py-1.5 p-elevated cursor-pointer">
+            className="flex items-start gap-2 rounded-md px-2 py-1.5 p-fill cursor-pointer">
             <input type="checkbox" className="mt-0.5 shrink-0 cursor-pointer accent-[var(--c-accent)] hover:brightness-110" checked={chosen.has(action.id)}
               onChange={() => flow.toggle(action.id, allIds)} disabled={state.busy} />
             <span className="min-w-0 flex-1">
@@ -199,10 +199,10 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: {
       {decidedLine && <div className="p-t-status p-text-3">{decidedLine}</div>}
 
       <div className="flex items-center justify-end gap-1.5 flex-wrap">
-        <FilledButton disabled={state.busy || chosen.size === 0}
+        <Button variant="primary" size="sm" disabled={state.busy || chosen.size === 0}
           onClick={() => detach(Effect.promise(async () => flow.decide("approved", [...chosen])))}>
           Approve {countLabel(chosen.size, actions.length)}
-        </FilledButton>
+        </Button>
         <Button size="sm" variant="secondary" disabled={state.busy || chosen.size === 0}
           onClick={() => detach(Effect.promise(async () => flow.decide("always", [...chosen])))}
           title={saysAlways ? "Approve these, and allow each from now on as its row says." : "Approve these checks for this environment. Revoke under Settings → Standing approvals."}>
@@ -228,7 +228,7 @@ export function ParkedWriteChange({ id, rpc }: { id: string; rpc: WorkspaceRpc }
   const [open, setOpen] = useState(false);
 
   return (
-    <div className="rounded-md px-2 py-1.5 p-elevated" data-parked-write={id}>
+    <div className="rounded-md px-2 py-1.5 p-fill" data-parked-write={id}>
       <button type="button" className="p-meta p-accent-fg hover:underline" onClick={() => setOpen((was) => !was)} aria-expanded={open}>
         {open ? "Hide the change" : "Show the change"}
       </button>

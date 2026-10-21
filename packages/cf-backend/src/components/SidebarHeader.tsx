@@ -12,7 +12,7 @@ export function SidebarHeader({ onCollapse }: { onCollapse?: () => void }) {
   return (
     <div className="relative flex items-center gap-1 pl-2.5 pr-2.5 pt-3.5 pb-2">
       <Link to={APP_ROUTES.home} aria-label="Kinu home" data-sidebar-home
-        className="flex min-w-0 items-center gap-2 rounded-lg py-1.5 pl-2 pr-2 transition-colors hover:bg-[var(--c-neutral-tint)]">
+        className="flex min-w-0 items-center gap-2 rounded-lg py-1.5 pl-2 pr-2 transition-colors hover:bg-[var(--c-hover)]">
         <KinuMark size={20} />
         <span className="text-[16px] font-medium p-text">Kinu</span>
       </Link>
@@ -24,7 +24,7 @@ export function SidebarHeader({ onCollapse }: { onCollapse?: () => void }) {
           aria-label="Hide sidebar"
           title="Hide sidebar"
           data-rail-collapse
-          className="flex size-8 items-center justify-center rounded-full p-text-3 transition-colors hover:bg-[var(--c-neutral-tint)] hover:p-text"
+          className="flex size-8 items-center justify-center rounded-full p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text"
         >
           <SidebarSimpleIcon size={17} />
         </button>

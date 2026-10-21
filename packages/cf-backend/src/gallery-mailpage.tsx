@@ -15,7 +15,7 @@ const OutgoingSchema = v.object({
 
 type Outgoing = v.InferOutput<typeof OutgoingSchema>;
 
-function installFixture(): void {
+export function installMailPageFixture(): void {
   const params = new URLSearchParams(location.search);
   const next = window.fetch.bind(window);
   const assistant = params.get("assistant") !== "none";
@@ -217,7 +217,7 @@ function WorkspaceChat() {
 }
 
 export default function mailPageFrame() {
-  installFixture();
+  installMailPageFixture();
   const params = new URLSearchParams(location.search);
   const view = MAIL_VIEWS.find((name) => name === params.get("view")) ?? "important";
   const thread = params.get("thread");

@@ -6,6 +6,9 @@ import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { answerPictures } from "@kinu.run/core/web/picture-src";
+import { SystemFrame } from "@/gallery-system";
+import { galleryPicture } from "@/gallery-pictures";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
 import { connectedPath, connectEndedOf, mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
@@ -21,8 +24,7 @@ const IDLE_TURN: TurnLiveness = { kind: "idle" };
 const LIVE_TURN: TurnLiveness = { kind: "live", turnId: null };
 
 import { diagnostics, renderThrownChain, toKinuError, tolerate, settle } from "@kinu.run/core/obs";
-import { Button } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { Button } from "@/components/ui/Button";
 import {
   TrashIcon, BrainIcon, ListIcon,
 } from "@phosphor-icons/react";
@@ -131,13 +133,13 @@ import { galleryChatStartsAt, galleryChatWindow, galleryClearChat, galleryServer
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
 /** `&env=computer`: the workspace shell with its computer up, so Environment shows its terminal and its desktop. */
-const SHELL_COMPUTER = frame === "workspaceshell" && new URLSearchParams(location.search).get("env") === "computer";
+const SHELL_COMPUTER = (frame === "workspaceshell" || frame === "whole") && new URLSearchParams(location.search).get("env") === "computer";
 
 /** The owner's PC in the Environment frames: the account's device row that `ENVIRONMENT_EXECUTORS`' device names. */
 const GALLERY_PC = { id: "dev-mac", label: "Ashish's MacBook" };
 
 /** `&pc=granted|ungranted|offline`: the owner's account holds a PC, which this workspace holds or not (EnvironmentMachines). */
-const SHELL_PC = frame === "workspaceshell" ? new URLSearchParams(location.search).get("pc") : null;
+const SHELL_PC = frame === "workspaceshell" || frame === "whole" ? new URLSearchParams(location.search).get("pc") : null;
 
 /**
  * `&pcdesktop=ready|setup|permission`: the PC's screen as its daemon reports it (1014-t); absent, it has none.
@@ -250,6 +252,12 @@ window.addEventListener("gallery:settings-heal", () => { settingsCodexHealthy = 
 
 window.addEventListener("gallery:settings-release", () => SETTINGS_GATEWAY_HOLD.resolve());
 
+// The whole app (gallery-app.tsx) shows every settings card settled, as the owner meets them.
+if (frame === "whole") {
+  settingsCodexHealthy = true;
+  SETTINGS_GATEWAY_HOLD.resolve();
+}
+
 function fixtureJson(body: JsonValue | ProfileCatalogEnvelope | AccountUsage, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -274,13 +282,13 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
     signIn: false, error: null, presetId: null,
   },
   {
-    id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
+    id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.app/sse",
     transport: "sse", status: "authenticating", toolsCount: 0,
     allowedTools: ["create_issue"], signIn: true,
     error: null, presetId: null,
   },
   {
-    id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.example/sse",
+    id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.com/sse",
     transport: "sse", status: "failed", toolsCount: 0, allowedTools: null,
     signIn: false, error: "The server refused the connection.", presetId: null,
   },
@@ -289,10 +297,11 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
 /** A name the account already claims refuses the preset's own add; 'github' is the GitHub preset's name. */
 const GALLERY_UNCLAIMED_MCP = GALLERY_CUSTOM_MCP.filter((row) => row.name !== "github");
 
-/** Mutable so the preset add is observable on the next GET. `mcp-preset=connected` swaps in the preset-tagged states; `mcp-preset=open` leaves every preset unclaimed. */
+/** Mutable so the preset add is observable on the next GET. `mcp-preset=connected` swaps in the preset-tagged states; `mcp-preset=open` leaves every preset unclaimed.
+ *  The whole app opens connected: a preset added is tagged, so the mockup shows GitHub once, under Connected. */
 let galleryMcpRows: McpServerSummary[] = [...GALLERY_CUSTOM_MCP];
 
-const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset");
+const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset") ?? (frame === "whole" ? "connected" : null);
 
 /** `&mcp-sign-in=refused`: a custom server's add needs a sign-in, and the account refuses to begin it. */
 const MCP_SIGN_IN_REFUSED = new URLSearchParams(location.search).get("mcp-sign-in") === "refused";
@@ -337,7 +346,8 @@ const mcpSecrets = (() => {
 
 function pluginsFixture(path: string): Response | null {
   if (path === "/api/user/devices/consents") {
-    return fixtureJson(frame === "devices"
+    // The Devices frame and the whole app: one workspace the Workstation is allowed for, one it refused.
+    return fixtureJson(frame === "devices" || frame === "whole"
       ? [
         { agentName: "api-worker", deviceId: "dev-1", policy: "allow", lastMethod: "exec", lastSummary: "bun test" },
         { agentName: "landing-page", deviceId: "dev-1", policy: "denied", lastMethod: "exec", lastSummary: null },
@@ -1034,7 +1044,10 @@ const GALLERY_LOGO = sanitizeWorkspaceLogoSvg(
   + "6' height='7' rx='3.5' fill='#115e59'/></svg>",
 );
 
-const galleryRoster: RosterEntry[] = new URLSearchParams(location.search).get("roster") === "assistant"
+// The whole app opens on the assistant's account unless `&roster=` names another.
+const ROSTER_ASKED = new URLSearchParams(location.search).get("roster") ?? (frame === "whole" ? "assistant" : null);
+
+const galleryRoster: RosterEntry[] = ROSTER_ASKED === "assistant"
   // The workspaces the personal assistant runs and watches (gallery-assistant.tsx).
   ? ASSISTANT_ROSTER.map((entry) => ({ ...entry, logo: entry.name === "api-worker" ? GALLERY_LOGO : entry.logo }))
   : [
@@ -1312,6 +1325,9 @@ function userFixture(path: string, method: string, body: BodyInit | null | undef
   if (decided !== null) return Promise.resolve(decided);
 
   if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) return userSettingsFixture(path, method, body);
+
+  // The whole app: the account's own reads; the roster, profile and model menu stay the shell's.
+  if (frame === "whole" && path.startsWith("/api/user/") && !/^\/api\/user\/(?:workspaces(?:\/|$)|profile$|models$)/u.test(path)) return userSettingsFixture(path, method, body);
   const memory = accountMemoryFixture(path, method);
 
   return memory === null ? null : Promise.resolve(memory);
@@ -4666,15 +4682,14 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Controls() {
   return (
     <div className="space-y-6 max-w-2xl">
-      {/* Kumo's `primary`/`destructive` force `!text-white` (2.4:1 on brass), so the filled action is FilledButton. */}
+      {/* The one Button's filled looks: primary, and the confirm dialog's destructive. */}
       <div className="flex flex-wrap items-center gap-3">
-        <FilledButton>FilledButton</FilledButton>
-        <FilledButton danger>danger</FilledButton>
+        <Button variant="primary" size="md">Primary</Button>
+        <Button variant="destructive" size="md">danger</Button>
         <Button variant="secondary" size="sm">Kumo secondary</Button>
         <Button variant="ghost" size="sm">Kumo ghost</Button>
-        <button className="p-btn-quiet inline-flex h-6.5 items-center gap-1 px-2 text-xs">p-btn-quiet</button>
-        <button className="p-btn-ghost inline-flex h-6.5 items-center gap-1 px-2 text-xs">p-btn-ghost</button>
-        <button className="p-btn inline-flex h-9 items-center gap-2 px-3 text-sm font-medium">p-btn at 36px</button>
+        <Button variant="danger" size="sm">Danger</Button>
+        <Button variant="secondary" size="md" disabled>Disabled</Button>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-neutral">workspace</span>
@@ -4692,7 +4707,7 @@ function Controls() {
       </div>
       <div className="max-w-md space-y-2">
         <input className="w-full px-3 py-1.5 border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]" placeholder="raw input (fork modal style)" />
-        <textarea rows={2} className="block w-full resize-y rounded-md border p-border p-bg px-3 py-3 text-sm leading-7 p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-accent-subtle)]" placeholder="mission textarea (home page style)" />
+        <textarea rows={2} className="block w-full resize-y rounded-md border p-border p-bg px-3 py-3 text-sm leading-7 p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-selected)]" placeholder="mission textarea (home page style)" />
       </div>
       <EmptyState icon={<BrainIcon size={32} />} title="No exploration trees yet" hint="Exploration trees appear when the agent runs agents.swarm with a depth to investigate subproblems." />
     </div>
@@ -5114,14 +5129,8 @@ function HistoryAuthorityFrame() {
     <div data-history-authority className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
         <GalleryWorkspaceHeader />
-        <button data-history-release type="button" onClick={() => hold.resolve()}
-          className="p-btn-quiet m-2 self-start px-2 py-1 text-xs">
-          Release first page
-        </button>
-        <button data-history-reset type="button" onClick={history.reset}
-          className="p-btn-quiet m-2 self-start px-2 py-1 text-xs">
-          Clear fetched history
-        </button>
+        <Button size="sm" data-history-release onClick={() => hold.resolve()} className="m-2 self-start">Release first page</Button>
+        <Button size="sm" data-history-reset onClick={history.reset} className="m-2 self-start">Clear fetched history</Button>
         <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
           <ConversationStartBoundary
             hasEntries={false}
@@ -5220,11 +5229,7 @@ function ClientContinuityFrame() {
         <div data-image-failure>
           <MarkdownContent content="![Request flow diagram](/assets/missing-continuity-image.png)" />
         </div>
-        <button data-continuity-reset type="button"
-          onClick={() => { setDraft(""); setSends(0); setFiles([]); }}
-          className="p-btn-quiet px-2 py-1 text-xs">
-          Reset fixture
-        </button>
+        <Button size="sm" data-continuity-reset onClick={() => { setDraft(""); setSends(0); setFiles([]); }}>Reset fixture</Button>
         <div data-continuity-probe className="hidden"
           data-draft={draft}
           data-sends={sends}
@@ -5388,7 +5393,7 @@ function GalleryModal() {
         onClose={() => {}}
         footer={<>
           <Button size="sm" variant="ghost">Cancel</Button>
-          <FilledButton danger>Remove</FilledButton>
+          <Button variant="destructive" size="md">Remove</Button>
         </>}
       >
         <p className="text-xs p-text-2 leading-relaxed">
@@ -5400,8 +5405,8 @@ function GalleryModal() {
 }
 
 const SURFACE_STEPS = [
-  ["recessed", "--c-recessed"], ["base", "--c-bg"], ["panel", "--c-sidebar"],
-  ["card", "--c-surface"], ["raised", "--c-elevated"], ["overlay", "--c-overlay"],
+  ["sunken", "--c-sunken"], ["base", "--c-bg"], ["panel", "--c-sidebar"],
+  ["card", "--c-surface"], ["fill", "--c-fill"], ["overlay", "--c-overlay"],
 ] as const;
 
 /** Role names only: per-theme contrast ratios are asserted by `scripts/palette-ux`. */
@@ -5442,11 +5447,11 @@ function Palette() {
       <div>
         <div className="p-eyebrow mb-2">The accent carries intent only</div>
         <div className="flex items-center gap-3 flex-wrap">
-          <button className="p-btn px-3.5 h-9 p-row-text inline-flex items-center gap-2">Primary action</button>
-          <button className="p-btn-quiet px-3.5 h-8 p-row-text inline-flex items-center">Secondary</button>
-          <button className="p-btn-ghost px-3 h-8 p-row-text inline-flex items-center">Ghost</button>
+          <Button variant="primary">Primary action</Button>
+          <Button>Secondary</Button>
+          <Button variant="ghost">Ghost</Button>
           <a className="p-accent p-row-text underline underline-offset-2" href="#top">A link</a>
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full p-accent-subtle">
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full p-selected">
             <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
             <span className="p-meta p-accent font-medium">working</span>
           </span>
@@ -7534,7 +7539,7 @@ function DeviceSandboxFrame() {
 
 /** The shipped shell as App.tsx composes it; the background's contrast and UX gate are measured here. */
 async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
-  const { default: HomePage } = await import("@/pages/HomePage");
+  const { default: HomePage, NewWorkspacePage } = await import("@/pages/HomePage");
 
   return {
     entries: [new URLSearchParams(location.search).get("path") ?? "/"],
@@ -7548,6 +7553,7 @@ async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string
           <Route path={APP_ROUTES.driveFolder} element={<DriveRoute tab="mine" />} />
           <Route path={APP_ROUTES.slates} element={<DriveRoute tab="slates" />} />
           <Route path={APP_ROUTES.shared} element={<DriveRoute tab="shared" />} />
+          <Route path={APP_ROUTES.newWorkspace} element={<NewWorkspacePage />} />
         </Route>
       </Routes>
     ),
@@ -7798,6 +7804,7 @@ const DESIGN_FRAMES = new Map([
   ["tabs", <TabsFrame />],
   ["markdown", <MarkdownFrame />],
   ["coderendering", <CodeRenderingFrame />],
+  ["system", <SystemFrame />],
 ]);
 
 function lazyRouteFrame(): MountedFrame {
@@ -8009,6 +8016,8 @@ function snapshotRaceFrame(): MountedFrame {
 
 
 async function mount() {
+  // Every frame's pictures are the gallery's own files: its server holds no picture routes.
+  answerPictures(galleryPicture);
   const document_ = publicDocument(frame);
 
   if (document_ !== null) {
@@ -8072,10 +8081,10 @@ async function mount() {
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
-    ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["devices", { node: <DevicesFrame />, entries: ["/user/settings#devices"] }],
     ["usermcp", { node: <UserMcpFrame />, entries: ["/user/settings/mcp"] }],
     ["characters", { node: <CharactersFrame />, entries: ["/"] }],
-    ["devices-empty", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["devices-empty", { node: <DevicesFrame />, entries: ["/user/settings#devices"] }],
   ]);
 
   const fixture = fixtureFrames.get(frame);
@@ -8115,6 +8124,12 @@ async function mount() {
       return Promise.resolve({ entries: ["/"], node: <QualityLiveFrame /> });
     }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
+    // The whole app, every page through its own sidebar, with the design bar's live switches (gallery-app.tsx).
+    ["whole", async () => {
+      const { appFrame } = await import("@/gallery-app");
+
+      return appFrame(workspacePageRpc, seedFrameTranscript);
+    }],
     ["agenttab", () => Promise.resolve({ entries: ["/"], node: <AgentTabFrame /> })],
     ["assistant-home", () => Promise.resolve(assistantHomeFrame(workspacePageRpc))],
     ["explore", () => Promise.resolve(exploreFrame("explore"))],

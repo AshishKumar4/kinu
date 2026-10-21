@@ -87,13 +87,13 @@ function TuiPreview(): ReactElement {
   const agentRows = (ids: readonly AgentId[], onChoose: (id: AgentId) => void, filtered: boolean): ReactElement[] => (
     ids.filter((id) => !filtered || drawerMatches(id)).map((id) => (
       <div key={id}>
-        <button type="button" onClick={() => onChoose(id)} className={`block w-full whitespace-pre px-2 text-left leading-6 ${id === agentId ? 'p-elevated p-text' : 'p-text-2 hover:p-text'}`}>
-          <span className={id === agentId ? 'p-accent' : 'p-text-4'}>{id === agentId ? '› ' : '  '}</span>
-          <span className={agents[id].status === 'running' ? 'p-accent' : 'p-text-4'}>{agents[id].status === 'running' ? TUI_MARKS.activity.running : TUI_MARKS.activity.idle} </span>
+        <button type="button" onClick={() => onChoose(id)} className={`block w-full whitespace-pre px-2 text-left leading-6 ${id === agentId ? 'p-fill p-text' : 'p-text-2 hover:p-text'}`}>
+          <span className={id === agentId ? 'p-accent' : 'p-text-3'}>{id === agentId ? '› ' : '  '}</span>
+          <span className={agents[id].status === 'running' ? 'p-accent' : 'p-text-3'}>{agents[id].status === 'running' ? TUI_MARKS.activity.running : TUI_MARKS.activity.idle} </span>
           {agents[id].label}
         </button>
         {agents[id].subordinate !== null && (
-          <div className="whitespace-pre px-2 leading-6 p-text-4"><span className="p-text-4">    └ </span>{agents[id].subordinate}</div>
+          <div className="whitespace-pre px-2 leading-6 p-text-3"><span className="p-text-3">    └ </span>{agents[id].subordinate}</div>
         )}
       </div>
     ))
@@ -101,7 +101,7 @@ function TuiPreview(): ReactElement {
 
   const groupHeader = (label: string, count: number, expanded: boolean, onToggle: () => void) => (
     <button type="button" aria-expanded={expanded} onClick={onToggle} className="block w-full whitespace-pre px-2 text-left leading-6 p-text-2 hover:p-text">
-      <span className="p-text-4">{`  ${expanded ? '▾' : '▸'} `}</span><strong className="font-semibold">{label}</strong><span className="p-text-4">{` · ${String(count)}`}</span>
+      <span className="p-text-3">{`  ${expanded ? '▾' : '▸'} `}</span><strong className="font-semibold">{label}</strong><span className="p-text-3">{` · ${String(count)}`}</span>
     </button>
   );
 
@@ -117,26 +117,26 @@ function TuiPreview(): ReactElement {
   const hint = TUI_ADVERTISED_HINTS[1];
 
   return (
-    <div data-tui-agent={agentId} aria-label="Kinu terminal interface preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] font-mono text-xs leading-6 shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
-      <div className="grid h-10 grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--c-border-strong)] p-sidebar px-4 text-[10px] p-text-4">
+    <div data-tui-agent={agentId} aria-label="Kinu terminal interface preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-field)] font-mono text-xs leading-6 shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
+      <div className="grid h-10 grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--c-border-strong)] p-sidebar px-4 text-[10px] p-text-3">
         <div className="flex gap-2"><span className="size-2 rounded-full bg-[var(--c-danger)] opacity-70" /><span className="size-2 rounded-full bg-[var(--c-warning)] opacity-70" /><span className="size-2 rounded-full bg-[var(--c-success)] opacity-70" /></div>
         <span className="uppercase tracking-[.14em]">kinu tui · {agent.label}</span>
         <span className="justify-self-end uppercase tracking-[.1em]">terminal</span>
       </div>
       <div className="flex min-h-8 items-center justify-between gap-4 whitespace-pre px-2 p-text-2">
-        <div className="min-w-0 truncate">kinu <span className="p-accent">{TUI_MARKS.prompt}</span> <strong className="font-semibold p-text">{agent.label}</strong> <span className="p-text-4">{agent.location}</span></div>
+        <div className="min-w-0 truncate">kinu <span className="p-accent">{TUI_MARKS.prompt}</span> <strong className="font-semibold p-text">{agent.label}</strong> <span className="p-text-3">{agent.location}</span></div>
         <div className="flex items-center gap-3">
-          <div className="hidden truncate p-text-4 sm:block">Muse Spark 1.3 <span className="p-text-4">[Ctrl+L]</span>  ctx ~68/1.1M  effort medium <span className="p-success">●</span></div>
+          <div className="hidden truncate p-text-3 sm:block">Muse Spark 1.3 <span className="p-text-3">[Ctrl+L]</span>  ctx ~68/1.1M  effort medium <span className="p-success">●</span></div>
           <button ref={drawerTriggerRef} type="button" aria-expanded={drawerOpen} aria-controls="landing-tui-workspaces" onClick={() => setDrawerOpen((open) => !open)} className="rounded-md border p-border px-2 leading-5 p-text-3 hover:p-text lg:hidden">{hint.keys} {hint.label}</button>
         </div>
       </div>
-      <div className="relative flex items-center border-t border-[var(--c-border-strong)] pr-3 text-right"><span className="hidden w-full text-[11px] p-text-4 lg:block">{hint.keys} hide workspaces</span></div>
+      <div className="relative flex items-center border-t border-[var(--c-border-strong)] pr-3 text-right"><span className="hidden w-full text-[11px] p-text-3 lg:block">{hint.keys} hide workspaces</span></div>
       <div className="relative grid min-h-[600px] lg:grid-cols-[220px_minmax(0,1fr)]">
         <aside aria-label="Pinned workspaces" className="hidden flex-col border-r border-[var(--c-border-strong)] p-sidebar py-2 lg:flex">
           <div className="px-2"><strong className="font-semibold p-text">Workspaces</strong></div>
-          <div className="px-2 p-text-4">3 of 3 · api-worker</div>
+          <div className="px-2 p-text-3">3 of 3 · api-worker</div>
           <div className="mt-2">{workspaceGroups(false, setAgentId)}</div>
-          <div className="mt-auto px-2 leading-5 p-text-4">Create a workspace from a mission.</div>
+          <div className="mt-auto px-2 leading-5 p-text-3">Create a workspace from a mission.</div>
         </aside>
         {drawerOpen && (
           <>
@@ -151,7 +151,7 @@ function TuiPreview(): ReactElement {
             >
               <div className="flex items-center justify-between gap-2 px-2">
                 <strong className="font-semibold p-text">Workspaces</strong>
-                <button type="button" onClick={closeDrawer} aria-label="Close workspaces" className="p-text-4 hover:p-text">Esc close</button>
+                <button type="button" onClick={closeDrawer} aria-label="Close workspaces" className="p-text-3 hover:p-text">Esc close</button>
               </div>
               <input
                 autoFocus
@@ -159,7 +159,7 @@ function TuiPreview(): ReactElement {
                 onChange={(event) => setDrawerFilter(event.currentTarget.value)}
                 aria-label="Filter workspaces"
                 placeholder="Filter workspaces…"
-                className="mx-2 my-2 w-[calc(100%-1rem)] border p-border bg-[var(--c-input-bg)] px-2 py-1 text-xs p-text outline-none"
+                className="mx-2 my-2 w-[calc(100%-1rem)] border p-border bg-[var(--c-field)] px-2 py-1 text-xs p-text outline-none"
               />
               {workspaceGroups(filter !== '', chooseAgent)}
             </aside>
@@ -167,7 +167,7 @@ function TuiPreview(): ReactElement {
         )}
         <div className="flex min-h-[600px] min-w-0 flex-col">
           <div className="flex-1 overflow-hidden px-2 py-2 sm:px-3">
-            <p className="p-text-4">Connected to {agent.label}. Type a message or /help for commands.</p>
+            <p className="p-text-3">Connected to {agent.label}. Type a message or /help for commands.</p>
             <div data-tui-role="user" className="mt-6 grid grid-cols-[3ch_minmax(0,1fr)] gap-2">
               <span className="p-accent">{TUI_MARKS.userGutter}</span>
               <p className="p-text">{agent.prompt}</p>
@@ -175,8 +175,8 @@ function TuiPreview(): ReactElement {
             <div className="mt-6 min-w-0">
               {agent.tools.map(([tool, args, result]) => (
                 <div key={`${tool}-${args}`}>
-                  <p className="truncate"><span className="p-accent">{TUI_MARKS.toolCall}</span> <span className="p-text">{tool}</span> <span className="p-text-4">{args}</span></p>
-                  <p className="pl-[2ch] p-text-4">{TUI_MARKS.toolResult} <span className="p-success">{result}</span></p>
+                  <p className="truncate"><span className="p-accent">{TUI_MARKS.toolCall}</span> <span className="p-text">{tool}</span> <span className="p-text-3">{args}</span></p>
+                  <p className="pl-[2ch] p-text-3">{TUI_MARKS.toolResult} <span className="p-success">{result}</span></p>
                 </div>
               ))}
             </div>
@@ -185,7 +185,7 @@ function TuiPreview(): ReactElement {
             </div>
           </div>
           <div className="px-2 pb-2 sm:px-3">
-            <div className="rounded-md border border-[var(--c-border-strong)] px-3 py-1 p-text-4">{TUI_COMPOSER_PLACEHOLDER}</div>
+            <div className="rounded-md border border-[var(--c-border-strong)] px-3 py-1 p-text-3">{TUI_COMPOSER_PLACEHOLDER}</div>
           </div>
         </div>
       </div>
@@ -202,16 +202,16 @@ function CliPreview(): ReactElement {
     : 'kinu exec --workspace workshop --json "Review this diff. Check the changed paths and report evidence."';
 
   return (
-    <div data-cli-mode={mode} aria-label="Kinu command line preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)]">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-border p-recessed px-5 py-3">
-        <span className="font-mono text-[11px] p-text-4">Example invocation · not a recorded run</span>
+    <div data-cli-mode={mode} aria-label="Kinu command line preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-field)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-border p-sunken px-5 py-3">
+        <span className="font-mono text-[11px] p-text-3">Example invocation · not a recorded run</span>
         <Tabs tabs={[{ value: 'run', label: 'Terminal' }, { value: 'ci', label: 'CI runner' }]} value={mode} onValueChange={setMode} variant="segmented" activateOnFocus />
       </div>
       <div className="grid gap-8 p-6 sm:p-8 lg:grid-cols-[1.15fr_1fr]">
         <div className="min-w-0">
           <div className="mb-4 flex items-center justify-between gap-3"><span className="font-mono text-[11px] uppercase tracking-[.1em] p-accent">{mode === 'run' ? 'One task' : 'Non-interactive runner'}</span><Button type="button" variant="ghost" size="sm" aria-label="Copy task command" onClick={() => copy(command)}>{COPY_LABEL[status]}</Button></div>
           <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.9] p-text"><code>{command}</code></pre>
-          <p className="mt-5 text-xs leading-[1.7] p-text-4">Needs a configured workspace, a checkout its executor can reach, and provider credentials.</p>
+          <p className="mt-5 text-xs leading-[1.7] p-text-3">Needs a configured workspace, a checkout its executor can reach, and provider credentials.</p>
         </div>
         <div className="border-t p-border pt-6 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
           <h3 className="text-base font-semibold">{mode === 'run' ? 'One task, then exit' : 'Runs without prompts'}</h3>

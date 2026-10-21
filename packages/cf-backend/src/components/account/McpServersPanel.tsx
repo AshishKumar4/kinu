@@ -1,7 +1,8 @@
 /** MCP server panel. A server that signs in connects through `beginConnect`; its end updates this panel in place. */
 import { Effect, Cause } from 'effect';
 import { useState, useCallback } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { PlugIcon, PlusIcon, TrashIcon, ArrowSquareOutIcon, CheckIcon, WarningIcon } from "@phosphor-icons/react";
 import type { ConnectEnded, McpTransport } from "@kinu.run/core";
 import { beginConnect, signInMcpServer } from "@/lib/connect-window";

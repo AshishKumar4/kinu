@@ -10,7 +10,8 @@ import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { isPlaceholderWorkspaceTitle, rosterHeadline, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { SidebarAgents } from "./SidebarAgents";
-import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
+import { ChatMascot, WorkspaceLogo } from "./Marks";
+import { useMascotOf } from "@/hooks/use-chat-mascot";
 import { AgentStatusMark } from "./AgentStatus";
 import { RemoveWorkspaceDialog } from "./RemoveWorkspaceDialog";
 import { useAgentsNav, useOpenAgentsPanel, type WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
@@ -81,7 +82,7 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
             event.preventDefault();
             onDone();
           }}
-          className="min-w-0 flex-1 rounded-sm px-1.5 py-1 text-xs p-elevated p-text border p-border focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
+          className="min-w-0 flex-1 rounded-sm px-1.5 py-1 text-xs p-fill p-text border p-border focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-selected)]"
           aria-label={label}
         />
         <button
@@ -177,7 +178,7 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
       <div className="relative min-h-0 flex-1 overflow-clip">
       <div className="p-slide" data-drilled={drilled || undefined}>
       <div className="h-full overflow-y-auto pt-2 pb-3" inert={drilled}>
-        <div className="px-5 pb-2 pt-4 p-eyebrow">
+        <div className="px-5 pb-2 pt-4 p-eyebrow p-label-sm p-text-3">
           Workspaces{workspaceTotal > workspaces.length ? ` · ${workspaces.length}/${workspaceTotal}` : ""}
         </div>
         {!listLoading && workspaces.length === 0 && !listError && (
@@ -216,7 +217,7 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
                           <span className="p-logo-badge"><WorkspaceDot entry={a} /></span>
                         </span>
                         <span className={`min-w-0 flex-1 truncate p-row-text font-semibold ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? `italic ${isActive ? '' : 'p-text-3'}` : ''}`}>{shown}</span>
-                        {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
+                        {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-3 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
                       </NavLink>
                       <button
                         onClick={() => setEditingWorkspace(a.name)}
@@ -280,7 +281,7 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
           <UsersThreeIcon size={13} className="w-[13px] shrink-0" aria-hidden />
           <span className="flex-1">All agents</span>
           {working && <AgentStatusMark activity="working" />}
-          {others > 0 && <span className="p-meta tabular-nums p-text-4">{others}</span>}
+          {others > 0 && <span className="p-meta tabular-nums p-text-3">{others}</span>}
           <CaretRightIcon size={11} aria-hidden />
         </button>
       </li>
@@ -291,6 +292,7 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
 /** A chat's row, with the tab's own rename and delete beside its name: on hover with a pointer, always at a touch. */
 function ChatRow({ chat, panel, onRename }: { chat: PanelAgent; panel: WorkspaceAgentsPanel; onRename: () => void }) {
   const { remove, clears = false } = panel.actions(chat);
+  const look = useMascotOf(panel.workspace)(chat.key, chat.colour);
   const reveal = "opacity-60 transition-opacity focus-visible:opacity-100 lg:opacity-0 lg:group-hover/chat:opacity-70 lg:group-focus-within/chat:opacity-70";
 
   return (
@@ -298,7 +300,7 @@ function ChatRow({ chat, panel, onRename }: { chat: PanelAgent; panel: Workspace
       <button type="button" onClick={() => panel.open(chat)} data-workspace-chat={chat.key} data-status={chat.activity}
         aria-current={panel.shown === chat.key ? "page" : undefined}
         className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 text-left transition-colors ${remove ? "pr-12 lg:pr-3 lg:group-hover/chat:pr-12 lg:group-focus-within/chat:pr-12" : "pr-7 lg:pr-3 lg:group-hover/chat:pr-7 lg:group-focus-within/chat:pr-7"} ${navRowCls(panel.shown === chat.key)}`}>
-        <ChatMascot seed={mascotSeed(panel.workspace, chat.key)} colour={mascotColour(panel.workspace, chat.colour)} activity={chat.activity} />
+        <ChatMascot seed={look.seed} colour={look.colour} activity={chat.activity} />
         <span className="p-status-label min-w-0 flex-1 truncate p-row-text">{chat.label}</span>
       </button>
       <button type="button" onClick={onRename} title="Rename" aria-label={`Rename chat ${chat.label}`}

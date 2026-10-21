@@ -7,7 +7,8 @@ import { WORKSPACE_TITLE_MAX, type PanelAgent } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { composing } from "@/components/ui/form";
 import { TabOutline, useTabOutline } from "@/components/ui/TabOutline";
-import { ChatMascot, WorkspaceLogo, mascotColour, mascotSeed } from "./Marks";
+import { ChatMascot, WorkspaceLogo } from "./Marks";
+import { useMascotOf } from "@/hooks/use-chat-mascot";
 import type { ChatActions } from "@/hooks/use-agents-nav";
 import { InspectorToggle, type InspectorControl } from "@/components/WorkbenchPanels";
 
@@ -46,10 +47,12 @@ interface WorkspaceHeaderProps {
 }
 
 export function WorkspaceHeader({ workspace, chats, active, newChat, leading, trailing }: WorkspaceHeaderProps) {
+  const mascotOf = useMascotOf(workspace.name);
+
   const items: BarItem[] = [
     { key: "overview", label: workspace.title, logo: workspace.logo ?? null, to: workspace.to, title: true, rename: { value: workspace.editValue, save: workspace.rename }, remove: workspace.remove },
     ...chats.map(({ agent, to, rename, remove, clears }) => ({
-      key: agent.key, label: agent.label, to, activity: agent.activity, mascot: { seed: mascotSeed(workspace.name, agent.key), colour: mascotColour(workspace.name, agent.colour) }, rename: { value: agent.label, save: rename },
+      key: agent.key, label: agent.label, to, activity: agent.activity, mascot: mascotOf(agent.key, agent.colour), rename: { value: agent.label, save: rename },
       ...(remove && { remove }), ...(clears === true && { clears }),
       tab: agent.open.kind === "chat" ? agent.open.path ?? "main" : agent.key,
     })),
@@ -185,7 +188,7 @@ export function FocusBar({ workspace, agent, line, leading, trailing, tabs }: {
     <header className="p-bar" data-workspace-bar data-layout="focus">
       {leading && <div className="p-bar-menu">{leading}</div>}
       <div className="flex min-w-0 flex-1 items-center gap-3 pl-4">
-        <Link to={workspace.to} className="flex min-w-0 items-center gap-2.5 rounded-lg py-1 pr-2 transition-colors hover:bg-[var(--c-neutral-tint)]"
+        <Link to={workspace.to} className="flex min-w-0 items-center gap-2.5 rounded-lg py-1 pr-2 transition-colors hover:bg-[var(--c-hover)]"
           title={`${workspace.title}: its agents, slates and plan`} data-focus-identity>
           <ChatMascot seed={agent.seed} colour={agent.colour} activity={agent.activity} size={24} />
           <span className="flex min-w-0 flex-col leading-tight">
@@ -198,7 +201,7 @@ export function FocusBar({ workspace, agent, line, leading, trailing, tabs }: {
         {tabs !== undefined && (
           <button type="button" onClick={tabs.show} className="p-bar-icon relative" aria-label={`Show the ${String(tabs.count)} chats`} title="Show chats" data-focus-tabs>
             <ChatsCircleIcon size={16} />
-            <span className="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-[var(--c-elevated)] px-[3px] text-center text-[9px] font-semibold leading-[14px] tabular-nums p-text-2">{tabs.count}</span>
+            <span className="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-[var(--c-fill)] px-[3px] text-center text-[9px] font-semibold leading-[14px] tabular-nums p-text-2">{tabs.count}</span>
           </button>
         )}
         {trailing}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ClockCounterClockwiseIcon, NotebookIcon, SealCheckIcon } from "@phosphor-icons/react";
+import { ClockCounterClockwiseIcon, SealCheckIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import * as v from "valibot";
 import { JsonValueSchema, type AccountMemoryProposal, type JsonValue } from "@kinu.run/core";
@@ -78,7 +78,7 @@ export function AccountMemoryCard() {
   );
 
   return (
-    <Card title="Account memory" icon={NotebookIcon}>
+    <Card title="Account memory">
       <CardSlot resource={resource} what="your account memory" onRetry={reload}>
         {(state) => (
           <div className="space-y-4" data-account-memory>
@@ -109,7 +109,7 @@ function Pending({ pending, busy, act, decide }: Omit<SectionProps, "state"> & {
     <section className="space-y-2" data-account-memory-pending>
       <div className="p-t-label p-text-2">Waiting for you</div>
       {pending.map((item) => (
-        <div key={item.id} className="rounded-md px-3 py-2 p-elevated space-y-1" data-account-memory-proposal={item.id}>
+        <div key={item.id} className="rounded-md px-3 py-2 p-fill space-y-1" data-account-memory-proposal={item.id}>
           <div className="p-row-text p-text break-words">
             {item.proposal.kind === "fact" ? <><span className="font-mono">{item.proposal.key}</span>: {valueText(item.proposal.value)}</> : item.proposal.content}
           </div>

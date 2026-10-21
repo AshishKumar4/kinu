@@ -40,7 +40,7 @@ export function LandingFrame({ kind, caption }: { kind: LandingFrameKind; captio
 
   return (
     <div>
-      <div className="flex items-center gap-3 rounded-t-2xl border border-b-0 p-border p-recessed px-4 py-2.5 font-mono text-[11px] p-text-4 sm:px-5">
+      <div className="flex items-center gap-3 rounded-t-2xl border border-b-0 p-border p-sunken px-4 py-2.5 font-mono text-[11px] p-text-3 sm:px-5">
         <span aria-hidden="true" className="flex gap-1.5">
           <span className="size-2.5 rounded-full bg-[var(--c-danger)] opacity-70" />
           <span className="size-2.5 rounded-full bg-[var(--c-warning)] opacity-70" />
@@ -55,7 +55,7 @@ export function LandingFrame({ kind, caption }: { kind: LandingFrameKind; captio
       <Suspense fallback={waiting}>
         {hydrated ? <LandingWorkspaceFrame kind={kind} /> : waiting}
       </Suspense>
-      <p className="px-1 pt-3 text-[11px] leading-relaxed p-text-4 sm:hidden">{caption}</p>
+      <p className="px-1 pt-3 text-[11px] leading-relaxed p-text-3 sm:hidden">{caption}</p>
     </div>
   );
 }

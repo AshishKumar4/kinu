@@ -1,6 +1,7 @@
+import { Button } from "@/components/ui/Button";
+import { SaveBar } from "@/components/ui/SaveBar";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Button } from '@cloudflare/kumo';
-import { BrainIcon, CaretRightIcon, CheckIcon, IdentificationCardIcon, MinusIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
+import { CaretRightIcon, CheckIcon, MinusIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
 import {
   BUILTIN_ROLE_DEFINITIONS,
   BUILTIN_SKILL_HEADERS,
@@ -36,7 +37,6 @@ import { lastValue, useAsyncResource, type AsyncResource } from '@/hooks/use-asy
 import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog } from '../lib/user-api';
 import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
 import { Card, Choice, Field, composing, inputCls, tabCls } from './ui/form';
-import { FilledButton } from './ui/FilledButton';
 import { Segmented } from './ui/Segmented';
 
 const EMPTY_MENU: ModelMenuResponse = { models: [], failures: [] };
@@ -116,7 +116,7 @@ function useCatalogEdit() {
   })), [draft, envelope, dirty, saving, publish]);
 
   return {
-    envelope, draft, setDraft, dirty, save, setError,
+    envelope, draft, setDraft, dirty, save, setError, saving,
     menu: lastValue(models.resource) ?? EMPTY_MENU,
     busy: saving || catalog.resource.status === 'loading' || models.resource.status === 'loading',
     error: saveError ?? readFailure(catalog.resource, models.resource),
@@ -125,7 +125,7 @@ function useCatalogEdit() {
 }
 
 export function ProfileCatalogSettings() {
-  const { envelope, draft, setDraft, dirty, save, setError, menu, busy, error, load } = useCatalogEdit();
+  const { envelope, draft, setDraft, dirty, save, setError, saving, menu, busy, error, load } = useCatalogEdit();
 
   const [selectedRole, setSelectedRole] = useState<RoleId>('task');
   const [newRoleId, setNewRoleId] = useState('');
@@ -294,17 +294,17 @@ export function ProfileCatalogSettings() {
 
   return (
     <>
-      <Card title="Tiers" icon={BrainIcon}>
+      <Card title="Tiers">
         {!draft || !envelope ? (
           <div className="flex items-center gap-2 p-row-text p-text-3">
             <span>{busy ? 'Loading account profiles…' : 'Profiles are unavailable.'}</span>
-            {!busy && <Button size="xs" variant="secondary" onClick={load}>Retry</Button>}
+            {!busy && <Button size="sm" variant="secondary" onClick={load}>Retry</Button>}
             {error && <span className="p-danger">{error}</span>}
           </div>
         ) : (
           <>
             <div data-tier="default" className="space-y-3">
-              <Field label="Main model" hint="Every chat and every new workspace runs on it.">
+              <Field label="Main model">
                 <ModelPicker
                   models={menu.models}
                   failures={menu.failures}
@@ -322,7 +322,6 @@ export function ProfileCatalogSettings() {
 
             <div className="border-t p-border pt-4" data-section="tiers">
               <div className="p-row-text font-medium p-text">For particular work</div>
-              <p className="mt-0.5 p-meta p-text-3">Left unset, Quick picks the cheapest of your providers' models that can do the work; the others use the main model.</p>
               <div className="mt-1">
                 {tierIdsOf(draft).filter((tierId) => tierId !== 'default').map((tierId) => {
                   const assignment = draft.tiers[tierId];
@@ -429,8 +428,7 @@ export function ProfileCatalogSettings() {
       </Card>
 
       {(draft && envelope) && (
-        <Card title="Agent roles" icon={IdentificationCardIcon}
-          description="What each kind of agent is for: its brief, its model and what it may use.">
+        <Card title="Agent roles">
           <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
             {/* A scrolling tab strip below md, the accent-tinted list row at md and up. */}
             <nav ref={roleNav} aria-label="Agent roles"
@@ -446,8 +444,8 @@ export function ProfileCatalogSettings() {
                     aria-current={current ? 'true' : undefined}
                     className={`${tabCls} ${current ? 'p-tab-active' : ''} md:mb-0 md:w-full md:rounded-md md:border-b-0 md:px-3 md:py-2 ${
                       current
-                        ? 'md:bg-[var(--c-accent-subtle)] md:text-[var(--c-accent-fg)]'
-                        : 'md:text-[var(--c-text-2)] md:hover:bg-[var(--c-neutral-tint)] md:hover:text-[var(--c-text)]'
+                        ? 'md:bg-[var(--c-selected)] md:text-[var(--c-accent-fg)]'
+                        : 'md:text-[var(--c-text-2)] md:hover:bg-[var(--c-hover)] md:hover:text-[var(--c-text)]'
                     }`}
                     onClick={() => { setSelectedRole(roleId); setAddingRole(false); }}
                   >
@@ -493,7 +491,7 @@ export function ProfileCatalogSettings() {
               ) : (
                 <button
                   type="button"
-                  className="p-btn-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] p-t-control md:mb-0 md:w-full md:rounded-md md:px-3 md:py-2"
+                  className="p-button-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] p-t-control md:mb-0 md:w-full md:rounded-md md:px-3 md:py-2"
                   onClick={() => setAddingRole(true)}
                 >
                   <PlusIcon size={12} /> New role
@@ -517,18 +515,7 @@ export function ProfileCatalogSettings() {
         </Card>
       )}
 
-      {(draft && envelope) && (
-        <div className="sticky bottom-3 z-10 p-card p-surface px-4 py-3 shadow-[var(--shadow-composer)]">
-          {error && <div className="mb-3 rounded-md px-3 py-2 text-xs p-notice-danger">{error}</div>}
-          <div className="flex items-center justify-between gap-3">
-            {dirty && <span className="p-meta p-warning">Unsaved changes</span>}
-            <div className="ml-auto flex gap-2">
-              <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
-              <FilledButton disabled={!dirty || busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save'}</FilledButton>
-            </div>
-          </div>
-        </div>
-      )}
+      {(draft && envelope) && <SaveBar dirty={dirty} saving={saving} error={error} onDiscard={() => setDraft(envelope.catalog)} onSave={() => void save()} />}
     </>
   );
 }
@@ -666,7 +653,7 @@ function RoleEditor(props: {
             {props.customized ? 'Customized' : origin} · <span className="p-annotation">{props.id}</span>
           </div>
         </div>
-        <Button size="xs" variant="secondary" disabled={!props.customized} onClick={props.onReset}>
+        <Button size="sm" variant="secondary" disabled={!props.customized} onClick={props.onReset}>
           {builtin ? 'Reset to built-in' : 'Delete role'}
         </Button>
       </div>
@@ -683,7 +670,7 @@ function RoleEditor(props: {
             onChange={(tier) => set('tier', tier)} />
         </Field>
         <div className="sm:col-span-2">
-          <Field label="When to use it" hint="Shown in the role list, and read by an agent deciding whom to hire.">
+          <Field label="When to use it">
             <input className={inputCls} aria-label="Description"
               value={props.role.description}
               onChange={(event) => set('description', event.target.value)} />

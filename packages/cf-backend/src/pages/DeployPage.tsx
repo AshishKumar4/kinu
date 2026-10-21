@@ -1,5 +1,6 @@
 /** `/deploy` (docs/SELF-DEPLOY.md § The Cloudflare door). Public: the run key minted in this tab authorizes everything. */
 import { Effect } from 'effect';
+import { Button } from "@/components/ui/Button";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { CloudArrowUpIcon } from "@phosphor-icons/react";
@@ -11,7 +12,6 @@ import {
 import { showing, detach } from "@kinu.run/core/obs";
 import * as v from "valibot";
 import { KinuLogo } from "@/components/ui/KinuLogo";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Field, inputCls } from "@/components/ui/form";
 import { StepRow } from "@/components/deploy/DeployStepRow";
 
@@ -233,13 +233,13 @@ function Answered({ options, runId, onStarted }: {
       {err !== null && <div className="p-notice-danger rounded-md px-3 py-2 text-xs" role="alert">{err}</div>}
       <div className="flex items-center justify-between gap-3">
         <p className="p-meta p-text-3">Kinu {options.version} will be uploaded into your account.</p>
-        <FilledButton
+        <Button variant="primary" size="md"
           onClick={() => detach(deploy())}
           disabled={busy || answers.accountId === "" || answers.ownerEmail === ""}
           className="!h-9 !px-4 !text-sm"
         >
           <CloudArrowUpIcon size={15} /> Deploy my Kinu
-        </FilledButton>
+        </Button>
       </div>
     </section>
   );
@@ -365,9 +365,9 @@ export default function DeployPage({ fixture, fixtureOptions }: {
                     + " its sign-in. The token stays with this run and is deleted when the run ends."
                     + " After that, your deployment uses its own."}
               </p>
-              <FilledButton onClick={() => detach(signIn())} className="mt-4 !h-9 !px-4 !text-sm">
+              <Button variant="primary" size="md" onClick={() => detach(signIn())} className="mt-4 !h-9 !px-4 !text-sm">
                 Sign in with Cloudflare
-              </FilledButton>
+              </Button>
             </div>
             <p className="p-meta p-text-3">This installs Kinu {options.version}.</p>
           </section>

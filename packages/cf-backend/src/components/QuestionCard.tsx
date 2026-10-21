@@ -5,10 +5,9 @@
  */
 import { createContext, useContext, useState, type ReactNode } from "react";
 import * as v from "valibot";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { ChatCircleTextIcon, CheckIcon, XIcon } from "@phosphor-icons/react";
 import { AskOwnerInputSchema, OTHER_OPTION, timeAgo, type AskedQuestions, type AskingAgent, type OwnerAnswer, type OwnerQuestion } from "@kinu.run/core";
-import { FilledButton } from "@/components/ui/FilledButton";
 
 interface AnswerDraft {
   readonly selected: readonly string[];
@@ -166,9 +165,9 @@ export function QuestionCard({ asking, busy, owed = false, onAnswer, onDismiss }
         <Button size="sm" variant="ghost" disabled={busy} onClick={dismiss} data-question-dismiss>
           <XIcon size={12} weight="bold" aria-hidden />Dismiss
         </Button>
-        <FilledButton disabled={busy || !ready} onClick={send} data-question-answer>
+        <Button variant="primary" size="sm" disabled={busy || !ready} onClick={send} data-question-answer>
           <CheckIcon size={12} weight="bold" aria-hidden />Answer
-        </FilledButton>
+        </Button>
       </div>
     </div>
   );

@@ -3,7 +3,8 @@ import { ArrowLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { fmtPct, fmtSpan, fmtTokens, fmtUsd, type PanelAgent } from "@kinu.run/core";
 import type { WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
 import { AgentStatusMark } from "./AgentStatus";
-import { ChatMascot, mascotColour, mascotSeed } from "./Marks";
+import { ChatMascot } from "./Marks";
+import { useMascotOf } from "@/hooks/use-chat-mascot";
 import { navRowCls } from "./nav";
 
 /** Agents nobody talks to: listed apart, folded until asked for. */
@@ -70,6 +71,7 @@ function AgentBranch({ agent, panel }: { agent: PanelAgent; panel: WorkspaceAgen
 function AgentRow({ agent, panel }: { agent: PanelAgent; panel: WorkspaceAgentsPanel }) {
   const shown = panel.shown === agent.key;
   const figures = figuresLine(agent.figures);
+  const look = useMascotOf(panel.workspace)(agent.key, agent.colour);
 
   return (
     <button type="button" onClick={() => panel.open(agent)} data-agent-row={agent.key} data-status={agent.activity}
@@ -77,7 +79,7 @@ function AgentRow({ agent, panel }: { agent: PanelAgent; panel: WorkspaceAgentsP
       className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2.5 pr-3 text-left transition-colors ${navRowCls(shown)}`}>
       {/* A chat and a hire each wear their own mascot; a swarm worker or a background helper, its state mark. */}
       {agent.tab || agent.category === "hired" || agent.category === "user"
-        ? <ChatMascot seed={mascotSeed(panel.workspace, agent.key)} colour={mascotColour(panel.workspace, agent.colour)} activity={agent.activity} />
+        ? <ChatMascot seed={look.seed} colour={look.colour} activity={agent.activity} />
         : <span className="flex w-4 shrink-0 justify-center"><AgentStatusMark activity={agent.activity} /></span>}
       <span className="p-status-label min-w-0 flex-1 truncate p-row-text">{agent.label}</span>
     </button>
@@ -95,7 +97,7 @@ function AgentGroup({ title, members, panel }: { title: string; members: readonl
         <CaretRightIcon size={11} className={`w-[13px] shrink-0 transition-transform duration-150 ${open ? "rotate-90" : ""}`} aria-hidden />
         <span className="min-w-0 flex-1 truncate p-t-control">{title}</span>
         {busy && <AgentStatusMark activity="working" />}
-        <span className="p-meta tabular-nums p-text-4">{members.length}</span>
+        <span className="p-meta tabular-nums p-text-3">{members.length}</span>
       </button>
       <div className="p-fold" data-folded={open ? undefined : ""}>
         <div inert={!open}>

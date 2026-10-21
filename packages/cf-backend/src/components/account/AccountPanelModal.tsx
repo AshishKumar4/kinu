@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { PlugIcon, PlugsConnectedIcon, TerminalIcon } from "@phosphor-icons/react";
 import { Modal } from "@/components/ui/Modal";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";

@@ -99,7 +99,7 @@ export function HelperRow({ agent, onOpen }: { agent: PanelAgent; onOpen?: (agen
   if (!onOpen) return <div className="flex items-start gap-2 py-1" data-helper-row={agent.key}>{text}</div>;
 
   return (
-    <button type="button" data-helper-row={agent.key} onClick={() => onOpen(agent)} className="flex w-full items-start gap-2 rounded-md py-1 text-left transition-colors hover:p-elevated">
+    <button type="button" data-helper-row={agent.key} onClick={() => onOpen(agent)} className="flex w-full items-start gap-2 rounded-md py-1 text-left transition-colors hover:p-hover">
       {text}
     </button>
   );

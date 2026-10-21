@@ -141,12 +141,12 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
         </div>
       )}
       {kind === "text" && file?.readOnlyReason && draft === null && (
-        <div className="px-3 py-1.5 p-t-status p-text-4 border-b p-border">
+        <div className="px-3 py-1.5 p-t-status p-text-3 border-b p-border">
           {file.readOnlyReason}
         </div>
       )}
       {kind === "text" && file?.truncated && draft === null && (
-        <div className="px-3 py-1.5 p-t-status p-text-4 border-b p-border">
+        <div className="px-3 py-1.5 p-t-status p-text-3 border-b p-border">
           Preview truncated. Download the full file to edit it.
         </div>
       )}
@@ -244,7 +244,7 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
   return (
     <div className="px-3">
       <CodeBlock className={`language-${name.slice(name.lastIndexOf(".") + 1)}`}>{content}</CodeBlock>
-      {file.truncated && <p className="text-xs p-text-4">… preview truncated. Download the full file.</p>}
+      {file.truncated && <p className="text-xs p-text-3">… preview truncated. Download the full file.</p>}
     </div>
   );
 }

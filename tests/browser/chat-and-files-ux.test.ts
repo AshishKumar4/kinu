@@ -1514,7 +1514,7 @@ describe('a chat\'s events', () => {
       expect(drawn).toEqual({
         handOffs: [['anthropic/claude-s', '×2'], ['workers-ai/llama-4', '1']],
         offline: 'No machine connected',
-        connect: '/devices',
+        connect: '/user/settings#devices',
       });
 
       // One line until opened, as every event row is.
@@ -2384,8 +2384,12 @@ describe('a revoked device whose command may still run', () => {
         '[data-settings-section="devices"]',
         (entry) => entry.getAttribute('aria-current'),
       )).toBe('true');
-      await page.waitForSelector('[title="Revoke device"]');
-      await page.click('[title="Revoke device"]');
+      // Revoke is in the row's menu, beside Rename.
+      await page.waitForSelector('[data-device="dev-1"] [data-row-menu]');
+      await page.click('[data-device="dev-1"] [data-row-menu]');
+      // The menu is a popup that opens on the press, so its item is there once it has.
+      await page.waitForSelector('[role="menuitem"][title="Revoke device"]');
+      await page.click('[role="menuitem"][title="Revoke device"]');
       await page.waitForSelector('[role="dialog"]');
       expect(await page.$eval('[role="dialog"]', (dialog) => dialog.textContent ?? '')).toContain('Agents will lose access');
       await pressInDialog(page, 'Revoke');

@@ -4,10 +4,9 @@
  * anyway. Nothing leaves the browser until they choose.
  */
 import { useRef, useState, type ReactNode } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { KeyIcon, ShieldWarningIcon } from "@phosphor-icons/react";
 import { pastedSecrets, type PastedSecret } from "@kinu.run/core";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
 import { Switch } from "@/components/ui/Switch";
@@ -80,7 +79,7 @@ export function usePastedSecretGuard(input: {
 
           if (held !== null) acts.current.get(held.key)?.();
         }}>Send anyway</Button>
-        <FilledButton data-secret-offer-move onClick={() => setMoving(true)}><KeyIcon size={12} /> Move to Secrets</FilledButton>
+        <Button variant="primary" size="sm" data-secret-offer-move onClick={() => setMoving(true)}><KeyIcon size={12} /> Move to Secrets</Button>
       </div>
       {moving && <MoveToSecrets found={waiting} workspace={workspace} onClose={() => setMoving(false)} onMoved={moved} />}
     </div>
@@ -113,13 +112,13 @@ function MoveToSecrets({ found, workspace, onClose, onMoved }: {
     <Modal title="Move to Secrets" icon={<KeyIcon size={16} className="p-text-3" />} onClose={onClose} busy={saving} maxWidthClass="max-w-2xl"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
-        <FilledButton data-secret-move-save disabled={!rowsReady(rows) || saving} onClick={() => run("save", async () => {
+        <Button variant="primary" size="sm" data-secret-move-save disabled={!rowsReady(rows) || saving} onClick={() => run("save", async () => {
           const entries = secretEntries(rows);
 
           await putSecrets(entries, allowHere && workspace !== undefined ? [workspace] : []);
           // Each row replaces what was found in the draft, edited or not; a row left out stays in the draft, to be asked about again.
           onMoved(new Map(rows.flatMap((row): [string, string][] => (row.found === undefined || row.name.trim() === "" ? [] : [[row.found, row.name.trim()]]))));
-        })}>{saving ? "Saving…" : `Save and use ${said}`}</FilledButton>
+        })}>{saving ? "Saving…" : `Save and use ${said}`}</Button>
       </>}>
       <p className="p-row-text p-text-2">
         Stored sealed in your account. Your message will say <code>{said}</code> instead, and agents use the stand-in it holds, which becomes the value only when sent over https to these hosts.

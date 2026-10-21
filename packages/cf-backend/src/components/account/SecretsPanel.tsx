@@ -4,12 +4,11 @@
  * only when it is sent over https to the hosts listed.
  */
 import { useCallback, useState } from "react";
-import { Button } from "@cloudflare/kumo";
-import { CaretDownIcon, CaretRightIcon, KeyIcon, PlusIcon, TrashIcon } from "@phosphor-icons/react";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { CaretDownIcon, CaretRightIcon, TrashIcon } from "@phosphor-icons/react";
 import { positionWords } from "@kinu.run/core";
 import { Card, Field, inputCls } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Segmented } from "@/components/ui/Segmented";
 import { Switch } from "@/components/ui/Switch";
 import { useConfirmation, useLabelledStep } from "@/components/ui/ConfirmDialog";
@@ -36,8 +35,7 @@ export function SecretsPanel() {
 
   return (
     <>
-      <Card title="Your secrets" icon={KeyIcon}
-        description={<>In a workspace you allow, each is <code>$NAME</code> in commands and <code>env.NAME</code> in programs. It holds a stand-in that becomes the value only when sent over https to its hosts.</>}>
+      <Card title="Your secrets">
         <CardSlot resource={resource} what="your secrets" onRetry={reload}>
           {(secrets) => (secrets.length === 0
             ? <p className="p-row-text p-text-3" data-secrets-empty>No secrets yet. Add one below, or paste a .env file.</p>
@@ -48,7 +46,7 @@ export function SecretsPanel() {
             ))}
         </CardSlot>
       </Card>
-      <Card title="Add secrets" icon={PlusIcon}>
+      <Card title="Add secrets">
         <AddSecrets onSaved={reload} />
       </Card>
     </>
@@ -69,11 +67,11 @@ function SecretItem({ secret, onChanged }: { secret: SecretSummary; onChanged: (
   return (
     <li data-secret={secret.name}>
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
-        className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-left hover:bg-[var(--c-neutral-tint)]">
+        className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-left hover:bg-[var(--c-hover)]">
         <Caret size={12} className="shrink-0 p-text-3" />
         <span className="font-mono p-row-text font-medium p-text">{secret.name}</span>
         <span className="flex min-w-0 flex-wrap gap-1">
-          {secret.hosts.map((host) => <span key={host} className="rounded-sm p-recessed px-1.5 py-0.5 font-mono p-meta p-text-2">{host}</span>)}
+          {secret.hosts.map((host) => <span key={host} className="rounded-sm p-sunken px-1.5 py-0.5 font-mono p-meta p-text-2">{host}</span>)}
           {secret.position.kind !== "authorization" && <span className="self-center p-meta p-text-3">in {positionWords(secret.position)}</span>}
         </span>
         <span className="ml-auto p-meta p-text-3">
@@ -105,7 +103,7 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
           <div className="flex gap-2">
             <input value={hosts} onChange={(e) => setHosts(e.target.value)} spellCheck={false} aria-label={`Hosts ${secret.name} may be sent to`}
               className={`${inputCls} h-9 min-w-0 flex-1 font-mono`} />
-            <button type="submit" disabled={!destinationMoved || busy !== null} className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">
+            <button type="submit" disabled={!destinationMoved || busy !== null} className={buttonClass()}>
               {busy === "destination" ? "Saving…" : "Save"}
             </button>
           </div>
@@ -120,7 +118,7 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
         }}>
           <input type="password" value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off" placeholder="Paste a new value"
             aria-label={`New value of ${secret.name}`} className={`${inputCls} h-9 min-w-0 flex-1`} />
-          <button type="submit" disabled={value === "" || busy !== null} className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">
+          <button type="submit" disabled={value === "" || busy !== null} className={buttonClass()}>
             {busy === "value" ? "Replacing…" : "Replace"}
           </button>
         </form>
@@ -212,15 +210,15 @@ function AddSecrets({ onSaved }: { onSaved: () => void }) {
 
       {(mode === "one" || rows.length > 0) && <SecretRows rows={rows} onChange={setRows} removable={mode === "env"} />}
 
-      <Field label="Use in" hint="Agents in these workspaces get it. You can allow more workspaces later.">
+      <Field label="Use in" hint={<>Agents there read it as <code>$NAME</code> in commands and <code>env.NAME</code> in programs.</>}>
         <WorkspaceChooser chosen={workspaces} onChange={setWorkspaces} placeholder="Choose workspaces…" />
       </Field>
 
       <div className="flex items-center justify-between gap-3">
         {error === null ? <span /> : <p role="alert" className="p-meta p-danger">{error}</p>}
-        <FilledButton type="submit" disabled={!ready || saving}>
+        <Button variant="primary" size="sm" type="submit" disabled={!ready || saving}>
           {action}
-        </FilledButton>
+        </Button>
       </div>
     </form>
   );

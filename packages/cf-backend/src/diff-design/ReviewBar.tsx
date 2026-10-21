@@ -63,7 +63,7 @@ export function ReviewBar() {
               {DESIGN_VIEWS.filter((view) => view.group === group).map((view) => (
                 <a key={view.id} href={`${location.pathname}?frame=diff-design${view.query}&theme=${mode}`}
                   data-design-view={view.id} data-design-query={view.query} data-design-width={view.width ?? "both"}
-                  className="block rounded-md px-2 py-1.5 text-sm p-text-2 transition-colors hover:bg-[var(--c-elevated)] hover:p-text">
+                  className="block rounded-md px-2 py-1.5 text-sm p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
                   {view.label}
                 </a>
               ))}
@@ -73,11 +73,11 @@ export function ReviewBar() {
       )}
       <div className="flex items-center gap-0.5 rounded-full border p-border p-overlay p-1 p-shadow-menu">
         <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} data-design-review
-          className="rounded-full px-3 py-1.5 text-xs font-medium p-text-2 transition-colors hover:bg-[var(--c-elevated)] hover:p-text">
+          className="rounded-full px-3 py-1.5 text-xs font-medium p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
           Diff design · {DESIGN_VIEWS.length} states
         </button>
         <button type="button" onClick={toggleMode} aria-label="Switch theme"
-          className="flex size-7 items-center justify-center rounded-full p-text-3 transition-colors hover:bg-[var(--c-elevated)] hover:p-text">
+          className="flex size-7 items-center justify-center rounded-full p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
           {mode === "dark" ? <SunIcon size={14} /> : <MoonIcon size={14} />}
         </button>
       </div>
