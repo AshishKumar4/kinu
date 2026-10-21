@@ -12,7 +12,7 @@ export function chainStoreRoot(boxPrefix: string): string {
 /** Where the container sees the store, through S3Mount. */
 export const STORE_MOUNT = '/backups';
 
-/** The host S3Mount gives a route: `routeHost` in @cloudflare/sandbox 1.0.0 (index.mjs:1520). */
+/** The host S3Mount gives a route: `routeHost` in @cloudflare/sandbox 1.0.2 (index.mjs:1573). */
 export function storeRouteHost(routeId: string): string {
   return `s3-${routeId}.sandbox.internal`;
 }

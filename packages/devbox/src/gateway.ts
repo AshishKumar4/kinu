@@ -46,7 +46,7 @@ export class DevboxGateway extends WorkerEntrypoint<Record<string, R2Bucket | un
   }
 }
 
-// @cloudflare/sandbox 1.0.0, sandbox-tools/s3_mount/marker_store.rs:100-104.
+// @cloudflare/sandbox 1.0.2, sandbox-tools/s3_mount/marker_store.rs:101-113 (the same lowercase hex digest as 1.0.0's).
 // D40 and the upstream ask record this internal-format coupling; replace this read when the SDK
 // exposes registrations.
 const SDK_STORE_MARKER = '/run/sandbox/s3-mounts/markers/'

@@ -33,11 +33,11 @@ fetch squashfuse.tar.gz https://github.com/vasi/squashfuse/releases/download/0.1
 
 fetch bun.zip https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux-x64.zip 3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18
 unzip -p bun.zip bun-linux-x64/bun > "$out/usr/local/bin/bun"
-# The one layer of docker.io/cloudflare/sandbox@sha256:5bc187515bad0d9d486a4f1476f7d8ad39fe97c57965f044e4b0a0dcc93eac06 (1.0.0): the shim.
+# The one layer of docker.io/cloudflare/sandbox@sha256:c2733169f130f73ba4f1cc0de169570936145ed013fbdf63707bf7d5386a4b81 (1.0.2): the shim.
 token=$(curl -fsS 'https://auth.docker.io/token?service=registry.docker.io&scope=repository:cloudflare/sandbox:pull' | jq -r .token)
 curl -fsSL -H "Authorization: Bearer $token" -o shim.tar.gz \
-  https://registry-1.docker.io/v2/cloudflare/sandbox/blobs/sha256:df3ac1c2dcd527c14bc65136ee282385067cc5df20c8a5341276b3d1c1f5759b
-echo 'df3ac1c2dcd527c14bc65136ee282385067cc5df20c8a5341276b3d1c1f5759b  shim.tar.gz' | sha256sum -c --quiet -
+  https://registry-1.docker.io/v2/cloudflare/sandbox/blobs/sha256:70b334e5506d6f0e4ea973dc56c91993a03865b816a100c9f06b3d09274c2e2d
+echo '70b334e5506d6f0e4ea973dc56c91993a03865b816a100c9f06b3d09274c2e2d  shim.tar.gz' | sha256sum -c --quiet -
 tar -xzf shim.tar.gz -C "$out" usr/local/bin/sandbox-shim
 
 # An offline apt repository of the closure of what a box needs, and KasmVNC's own release (D70), which Debian lacks.
