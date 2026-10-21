@@ -213,8 +213,7 @@ const ReadCallSchema = v.object({ op: v.literal('read') });
  */
 /** The native `file` tool over the actor's served file operations; `files` is what its results are clamped into. */
 export function createFileTool(served: Readonly<Record<keyof typeof FILE, Served>>, files: Pick<FileDeps, 'vfs' | 'home' | 'budget'>): Tool {
-  // A whole file is a program's to hold; the native tool reads a window of it.
-  const tool = nativeTool(BUILTIN_TOOL_DESCRIPTIONS.file, Object.values(served).filter((member) => member !== served.text && member !== served.machine));
+  const tool = nativeTool(BUILTIN_TOOL_DESCRIPTIONS.file, Object.values(served));
   const clamp = { files: { vfs: files.vfs, home: files.home }, budget: files.budget, producer: 'file_read', images: true } as const;
   const reads = withClampedToolResult(tool, { ...clamp, maxChars: FILE_READ_MAX_CHARS });
   const others = withClampedToolResult(tool, clamp);
