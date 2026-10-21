@@ -3630,9 +3630,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (!container.running) return;
     const ending = container.monitor();
-    container.signal(15);
+    // PID 1 is tini, which catches no signal, so the kernel drops a TERM sent it from inside: every other process gets
+    // one, and tini exits with its child, the container with it (staging, 2026-10-21: a new boot id after). Through
+    // the seam, as the platform's `signal()` is a task nobody can await (`containerExec`). Its exec may end with the
+    // container it ends, which is no failure.
+    const sending = containerExec(container, ['kill', '-TERM', '-1']).then(async (sent) => { await sent.output(); });
 
-    try { await ending; }
+    try { await Promise.all([sending, ending]); }
     catch (cause) { if (container.running) throw cause; }
 
     // The box ended this container itself: the next one is a start, not a replacement.

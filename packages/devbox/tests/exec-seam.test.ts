@@ -13,3 +13,14 @@ test('a box that starts sends no exec whose stdin the platform must end', async 
 
   expect(container.unownedStdin).toEqual([]);
 });
+
+// The platform's `signal()` is the same task: a stop ends the container by an exec through the seam instead.
+test('a box that stops ends its container by an exec, and asks the platform for no signal', async () => {
+  const { box, container } = harness(TestDevbox);
+
+  await box.devboxStartup();
+  await box.stop();
+
+  expect({ running: container.running.running, signals: container.platformSignals, unowned: container.unownedStdin })
+    .toEqual({ running: false, signals: [], unowned: [] });
+});
