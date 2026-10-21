@@ -828,8 +828,17 @@ if [ "$KINU_RESET" = "1" ]; then
     || { publish_red "the reset failed; its lines in the deploy's output say what it deleted before it stopped, and a deploy with --reset finishes it from its record"; return 1; }
 fi
 
-# The tables plan's record becomes the rollback barrier only now, the last step before any object can repair.
+# The tables plan's record becomes the rollback barrier only now, the last step before any object can repair. Just
+# before it, every table's rows and digest on every object, as the build before holds them: the walk's census after the
+# upload is read against this one (census-diff below), the proof the reset dropped what its plan named and no more.
 if [ "$KINU_RESET_TABLES" = "1" ]; then
+  bun "$KINU_ROOT/scripts/reset.ts" census "$KINU_ENV" "$KINU_TABLES_RECORD.before.tsv" \
+    || { publish_red "the census before the upload could not be taken; nothing was uploaded"; return 1; }
+  # A database it could not read is one census-diff cannot prove after: refused here, before anything changes.
+  if grep -q $'\t!unreachable\t' "$KINU_TABLES_RECORD.before.tsv"; then
+    publish_red "the census before the upload could not read $(grep -c $'\t!unreachable\t' "$KINU_TABLES_RECORD.before.tsv") object(s) (lines with !unreachable in $KINU_TABLES_RECORD.before.tsv); nothing was uploaded"
+    return 1
+  fi
   bun "$KINU_ROOT/scripts/reset.ts" tables-record "$KINU_ENV" "$KINU_TABLES_RECORD" \
     || { publish_red "the tables plan's record could not be published as the rollback barrier; nothing was uploaded"; return 1; }
 fi
@@ -905,6 +914,9 @@ if [ "$KINU_RESET_TABLES" = "1" ]; then
   fi
   KINU_VERSION="$KINU_VERSION" KINU_PROPAGATION_SECONDS="$KINU_PROPAGATION_SECONDS" bun "$KINU_ROOT/scripts/reset.ts" tables "$KINU_ENV" "$KINU_TABLES_RECORD" \
     || { publish_red "the tables walk found a reset that refused (its lines name it); 'KINU_VERSION=$KINU_VERSION bun scripts/reset.ts tables $KINU_ENV $KINU_TABLES_RECORD' walks again"; return 1; }
+  # The reset's structure fails a deploy anywhere; a change outside its plan fails one only where nothing else writes.
+  bun "$KINU_ROOT/scripts/reset.ts" census-diff "$KINU_ENV" "$KINU_TABLES_RECORD.before.tsv" "$KINU_TABLES_RECORD.census.tsv" "$KINU_TABLES_RECORD" \
+    || { publish_red "the census after the reset is not the one before it but for the plan's tables (its lines name each); 'bun scripts/reset.ts census-diff $KINU_ENV $KINU_TABLES_RECORD.before.tsv $KINU_TABLES_RECORD.census.tsv $KINU_TABLES_RECORD' reads them again"; return 1; }
 fi
 
 # ── Step 4: Post-deploy smoke test ───────────────────────────────

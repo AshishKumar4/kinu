@@ -297,6 +297,19 @@ test('a census names every table, its rows and a digest of what they hold, sorte
   expect(second.map(({ digest }, at) => digest === first[at]?.digest)).toEqual([false, true, true]);
 });
 
+test('a census reads the activations row by row, by ordinal, so a later one tells rows added from rows lost or rewritten', () => {
+  const { sql } = world(`CREATE TABLE workspace_activations (slot INTEGER PRIMARY KEY, ordinal INTEGER NOT NULL, started_at INTEGER NOT NULL, version TEXT);
+    INSERT INTO workspace_activations VALUES (2, 258, 5, 'v'), (0, 256, 3, 'v'), (1, 257, 4, NULL);`, '', []);
+
+  const ledger = censusOf(sql).find(({ table }) => table === 'workspace_activations')?.ledger ?? [];
+
+  // By ordinal, not by slot: a full ring's newest row sits in its oldest slot.
+  expect(ledger.map((entry) => entry.split(':')[0])).toEqual(['256', '257', '258']);
+  expect(new Set(ledger.map((entry) => entry.split(':')[1])).size).toBe(3);
+  // Any other table carries none.
+  expect(censusOf(world('CREATE TABLE notes (id TEXT);', '', []).sql)[0]?.ledger).toBeUndefined();
+});
+
 test('only the capability /ops/tables mints is admitted', async () => {
   await requireOps(KEY, await opsCaller(KEY));
   await expect(requireOps(KEY, { opsToken: 'b'.repeat(64) })).rejects.toThrow('only through the deployment\'s /ops/tables route');

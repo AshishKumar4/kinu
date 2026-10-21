@@ -29,7 +29,7 @@
 import { randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import * as v from 'valibot';
-import { derivedFrom, OPS_OBJECTS_PER_REQUEST, sha256Hex, type TablesAnswer } from '@kinu.run/core';
+import { ACTIVATION_SLOTS, derivedFrom, OPS_OBJECTS_PER_REQUEST, sha256Hex, type TablesAnswer } from '@kinu.run/core';
 import { restCall } from './cloudflare-rest';
 import type { GenesisLock } from './schema-drift';
 
@@ -238,7 +238,229 @@ export function storesOf(reached: readonly Reached[]): Store[] {
 export function censusLines(reached: readonly Reached[]): string[] {
   const unreachable = reached.filter((object) => object.answer === undefined).map((object) => `${object.className}\t${object.name ?? object.id}\t!unreachable\t${object.error ?? ''}`);
 
-  return [...unreachable, ...storesOf(reached).flatMap((store) => store.answer.census.map((row) => `${store.kind}\t${store.label}\t${row.table}\t${String(row.rows)}\t${row.digest}`))].sort();
+  return [...unreachable, ...storesOf(reached).flatMap((store) => store.answer.census.map((row) => (
+    `${store.kind}\t${store.label}\t${row.table}\t${String(row.rows)}\t${row.digest}${row.ledger === undefined ? '' : `\t${row.ledger.join(',')}`}`
+  )))].sort();
+}
+
+/** One table of one database, as a census line reads (`censusLines`). */
+interface CensusRow {
+  readonly database: string;
+  readonly table: string;
+  readonly rows: number;
+  readonly digest: string;
+  /** A ledger table's rows, ordinal to digest (`censusOf`); null where the census carried none. */
+  readonly ledger: ReadonlyMap<number, string> | null;
+}
+
+/** The databases a census could not read, and every table of those it did. */
+interface Census {
+  readonly unreadable: readonly string[];
+  readonly rows: ReadonlyMap<string, CensusRow>;
+}
+
+function censusOfLines(text: string): Census {
+  const lines = text.split('\n').filter((line) => line !== '');
+  const unreadable = lines.filter((line) => line.includes('\t!unreachable\t')).map((line) => line.split('\t').slice(0, 2).join('\t'));
+
+  return {
+    unreadable,
+    rows: new Map(lines.filter((line) => !line.includes('\t!unreachable\t')).map((line): [string, CensusRow] => {
+      const [kind = '', label = '', table = '', rows = '', digest = '', ...rest] = line.split('\t');
+      const entries = rest.length === 0 ? null : (rest[0] ?? '').split(',').filter((entry) => entry !== '');
+      const ledger = entries === null ? null : new Map(entries.map((entry): [number, string] => [Number(entry.split(':')[0]), entry]));
+
+      return [`${kind}\t${label}\t${table}`, { database: `${kind}\t${label}`, table, rows: Number(rows), digest, ledger }];
+    })),
+  };
+}
+
+/** The table each activation of a hosted workspace counts in: one row, whose value moves. */
+const GENERATION = 'kinu_workspace_generation';
+
+/** The tables an FTS5 index keeps itself in, beside it: made with it, the rows its creation writes included. */
+const FTS_SHADOWS = ['data', 'idx', 'content', 'docsize', 'config'];
+
+/** The planned index whose own table `table` is in its database, by FTS5's names and only where that database holds the
+ *  index's `_data` and `_idx`, as every FTS5 index does; undefined for any other table. */
+function plannedIndexOf(row: CensusRow, rows: ReadonlyMap<string, CensusRow>, planned: ReadonlySet<string>): string | undefined {
+  return [...planned].find((index) => FTS_SHADOWS.some((suffix) => row.table === `${index}_${suffix}`)
+    && rows.has(`${row.database}\t${index}_data`) && rows.has(`${row.database}\t${index}_idx`));
+}
+
+/** What a census taken after a reset says of one taken before it: the proof a `--reset-tables` deploy keeps. */
+export interface CensusDiff {
+  readonly lines: readonly string[];
+  /** What fails the deploy: on every target, the reset's own structure; on a frozen one, any change outside its plan. */
+  readonly failed: readonly string[];
+}
+
+/** The rows each ledger table keeps before its newest replaces its oldest: the activations' ring (identity/activations.ts). */
+const LEDGER_RING = new Map([['workspace_activations', ACTIVATION_SLOTS]]);
+
+/** A ledger's rows after against before: how many were added, or why the earlier ones are not all there as they were.
+ *  A ring at its size lets go exactly as many of its oldest as came past it, and no other row. */
+function ledgerRead(was: ReadonlyMap<number, string>, now: ReadonlyMap<number, string>, ring: number): { readonly added: number } | { readonly wrong: string } {
+  const newest = Math.max(Number.NEGATIVE_INFINITY, ...was.keys());
+  const added = [...now.keys()].filter((at) => at > newest).length;
+  const inserted = [...now.keys()].filter((at) => !was.has(at) && at <= newest);
+  const rewritten = [...was].filter(([at, row]) => now.has(at) && now.get(at) !== row).map(([at]) => at);
+  const gone = [...was.keys()].filter((at) => !now.has(at));
+  const kept = [...was.keys()].filter((at) => now.has(at));
+
+  if (rewritten.length > 0) return { wrong: `row(s) ${rewritten.join(', ')} rewritten` };
+
+  if (inserted.length > 0 || [...now.keys()].some((at) => Number.isNaN(at))) return { wrong: 'a row added out of order' };
+
+  if (gone.length !== Math.max(0, was.size + added - ring) || gone.some((at) => kept.some((held) => held < at))) return { wrong: `row(s) ${gone.join(', ')} lost` };
+
+  return { added };
+}
+
+/**
+ * A ledger read across the one release that crosses into it: the census before came from a build that kept no ledger,
+ * so its rows are known by count and digest alone. Fewer rows, or as many with other contents below the ring's size,
+ * is a loss; more than one added on a frozen target is a second open. What passes is named as counted only.
+ */
+function ledgerCounted(said: string, was: CensusRow, now: CensusRow, frozen: boolean): Judged | { readonly kind: 'alike' } {
+  const added = now.rows - was.rows;
+
+  if (added === 0 && now.digest === was.digest) return { kind: 'alike' };
+
+  if (added < 0 || (added === 0 && was.rows < (LEDGER_RING.get(was.table) ?? Number.POSITIVE_INFINITY))) return { kind: 'hard', said: `${said}: row(s) lost or rewritten` };
+
+  if (frozen && added > 1) return { kind: 'hard', said: `${said}: ${String(added)} rows added, where one walk opens it once` };
+
+  return { kind: 'expected', said: `${said} (counted only: the census before came from a build before the ledger)` };
+}
+
+/** Why a ledger table after a reset is not its rows before and the ones added since; null when it is. On a frozen
+ *  target the walk opened each object once, so one row at most is new. */
+function ledgerBadly(was: CensusRow, now: CensusRow, frozen: boolean): string | null {
+  if (was.ledger === null || now.ledger === null) return 'no row-by-row proof: a census on either side came from a build before the ledger';
+  const read = ledgerRead(was.ledger, now.ledger, LEDGER_RING.get(was.table) ?? Number.POSITIVE_INFINITY);
+
+  if ('wrong' in read) return read.wrong;
+
+  return frozen && read.added > 1 ? `${String(read.added)} rows added, where one walk opens it once` : null;
+}
+
+/**
+ * The census before the upload against the walk's after it. Fails, everywhere: a database either census could not read
+ * (no proof of it); a planned table that kept rows (a reset leaves it empty, or gone where retired); a table outside
+ * the plan that is gone; a workspace's generation table that holds other than one row; a ledger table (activations)
+ * that lost or rewrote an earlier row. The writes a first open makes are named as such: a ledger's new rows, and a
+ * generation's moved or made row on a database the walk reset. On a frozen target (staging during a release's eval)
+ * every other change outside the plan fails too; on production, where people write all along, it is named only.
+ */
+export function censusDiff(before: string, after: string, planned: ReadonlySet<string>, frozen: boolean): CensusDiff {
+  const was = censusOfLines(before);
+  const now = censusOfLines(after);
+  const reset = new Set([...was.rows.values()].filter((row) => planned.has(row.table)).map((row) => row.database));
+  const found: Findings = { hard: [], soft: [], emptied: [], expected: [], alike: 0 };
+  const unproven = (database: string, when: string) => `${database}: not read ${when}, so nothing of it is proven`;
+
+  // A database a census could not read leaves nothing of it proven: no table of it can be judged.
+  found.hard.push(...was.unreadable.map((database) => unproven(database, 'before the upload')), ...now.unreadable.map((database) => unproven(database, 'after the walk')));
+
+  for (const [key, row] of was.rows) {
+    const index = plannedIndexOf(row, was.rows, planned);
+    const judged = index === undefined ? judgedBefore(key, row, now.rows.get(key), { planned, frozen, reset }) : null;
+
+    if (index !== undefined) found.emptied.push(`${key}\tmade anew with ${index}`);
+    else if (judged?.kind === 'alike') found.alike += 1;
+    else if (judged !== null) found[judged.kind].push(judged.said);
+  }
+
+  for (const [key, row] of now.rows) {
+    const judged = was.rows.has(key) || plannedIndexOf(row, now.rows, planned) !== undefined ? null : judgedNew(key, row, planned, reset);
+
+    if (judged !== null) found[judged.kind].push(judged.said);
+  }
+
+  const section = (title: string, lines: readonly string[]) => (lines.length === 0 ? [] : [`${title} (${String(lines.length)}):`, ...lines.map((line) => `  ${line}`)]);
+
+  return {
+    lines: [
+      `census-diff: ${String(found.alike)} table(s) as they were`,
+      ...section('emptied or retired, as planned', found.emptied),
+      ...section('written by a first open, as expected (activations added; a reset database\'s generation)', found.expected),
+      ...section('REFUSED, the reset\'s structure', found.hard),
+      ...section(frozen ? 'CHANGED OUTSIDE THE PLAN on a frozen target' : 'changed outside the plan, as people wrote (not a failure on production)', found.soft),
+    ],
+    failed: frozen ? [...found.hard, ...found.soft] : found.hard,
+  };
+}
+
+/** What a census-diff found, as it goes: the tables that fail anywhere, those that fail on a frozen target, those
+ *  the plan emptied, the writes a first open makes, and how many read as they were. */
+interface Findings {
+  readonly hard: string[];
+  readonly soft: string[];
+  readonly emptied: string[];
+  readonly expected: string[];
+  alike: number;
+}
+
+/** How one table a census before held reads after: `hard` fails anywhere, `soft` on a frozen target. */
+interface Judged {
+  readonly kind: 'hard' | 'soft' | 'emptied' | 'expected';
+  readonly said: string;
+}
+
+interface Judging {
+  readonly planned: ReadonlySet<string>;
+  readonly frozen: boolean;
+  /** The databases holding a planned table: the walk reset them, and their first open writes. */
+  readonly reset: ReadonlySet<string>;
+}
+
+function judgedBefore(key: string, row: CensusRow, then: CensusRow | undefined, at: Judging): Judged | { readonly kind: 'alike' } {
+  const said = `${key}\t${String(row.rows)} → ${then === undefined ? 'gone' : String(then.rows)}`;
+
+  // A planned table is the reset's to drop: whatever it held, it holds nothing after.
+  if (at.planned.has(row.table)) return then === undefined || then.rows === 0 ? { kind: 'emptied', said } : { kind: 'hard', said: `${said}: a planned table kept rows` };
+
+  if (then === undefined) return { kind: 'hard', said: `${said}: a table outside the plan is gone` };
+
+  if (row.table === GENERATION) return judgedGeneration(said, row, then, at.reset);
+
+  // A ledger table by its name, whatever the census carried: one without its rows proves nothing of them.
+  if (LEDGER_RING.has(row.table)) {
+    if (row.ledger === null && then.ledger !== null) return ledgerCounted(said, row, then, at.frozen);
+    const wrong = ledgerBadly(row, then, at.frozen);
+
+    if (wrong !== null) return { kind: 'hard', said: `${said}: ${wrong}` };
+
+    return then.rows === row.rows && then.digest === row.digest ? { kind: 'alike' } : { kind: 'expected', said };
+  }
+
+  if (then.digest === row.digest && row.digest !== '') return { kind: 'alike' };
+
+  return { kind: 'soft', said: `${said}${row.digest === '' ? ' (no digest before)' : ''}` };
+}
+
+/** A workspace's generation is one row before and after; its value moves where the walk reset the database. */
+function judgedGeneration(said: string, row: CensusRow, then: CensusRow, reset: ReadonlySet<string>): Judged | { readonly kind: 'alike' } {
+  if (row.rows !== 1 || then.rows !== 1) return { kind: 'hard', said: `${said}: a workspace's generation is one row` };
+
+  if (then.digest === row.digest) return { kind: 'alike' };
+
+  return reset.has(row.database) ? { kind: 'expected', said } : { kind: 'soft', said };
+}
+
+/** A table only the census after holds: a planned one must be empty; a generation must be one row, made by the walk's
+ *  first open on a database it reset. */
+function judgedNew(key: string, row: CensusRow, planned: ReadonlySet<string>, reset: ReadonlySet<string>): Judged | null {
+  const said = `${key}\tnew, ${String(row.rows)} row(s)`;
+
+  if (planned.has(row.table)) return row.rows === 0 ? null : { kind: 'hard', said: `${said}: a planned table kept rows` };
+
+  if (row.table !== GENERATION) return { kind: 'soft', said };
+
+  if (row.rows !== 1) return { kind: 'hard', said: `${said}: a workspace's generation is one row` };
+
+  return reset.has(row.database) ? { kind: 'expected', said } : { kind: 'soft', said };
 }
 
 /** What the walk found, to print, and the databases that fail it: a reset that refused. An object the walk did not reach is a gap in its census, never a failure: it repairs at its first
@@ -319,7 +541,7 @@ const RepairSchema = v.object({
 
 const StoreEntries = {
   // A build before the digest answers none.
-  census: v.array(v.object({ table: v.string(), rows: v.number(), digest: v.optional(v.string(), '') })),
+  census: v.array(v.object({ table: v.string(), rows: v.number(), digest: v.optional(v.string(), ''), ledger: v.optional(v.array(v.string())) })),
   repair: v.nullable(RepairSchema),
   refused: v.nullable(v.string()),
 };
