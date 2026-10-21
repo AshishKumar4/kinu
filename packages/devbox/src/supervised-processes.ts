@@ -27,6 +27,12 @@ type Started = { readonly kind: 'started'; readonly process: ProcessRecord; read
 
 type Stopped = { readonly kind: 'stopped'; readonly stopped: boolean };
 
+/** What ended a job's process, where not itself, and the look it was told under. */
+export interface EndTold {
+  readonly why?: string;
+  readonly current?: () => boolean;
+}
+
 type Reaped = { readonly kind: 'reaped'; readonly ended: boolean };
 
 const STALE = { kind: 'stale' } as const;
@@ -51,8 +57,10 @@ interface Ports {
   /**
    * A process that runs as a job has ended, or is about to be forgotten: its end is told to the workspace while its spec
    * still names the job. `process` is its record, null where there is none; `why` says what ended it, where not itself.
+   * Told only while `current` holds after what it wrote is read: a stale look tells nothing, and leaves the spec to
+   * whatever holds the box now.
    */
-  readonly ended: (spec: SupervisedProcessSpec & { readonly job: string }, process: ProcessRecord | null, why?: string) => Promise<void>;
+  readonly ended: (spec: SupervisedProcessSpec & { readonly job: string }, process: ProcessRecord | null, as?: EndTold) => Promise<void>;
 }
 
 /** A run's answer, with the job its reservation names, if it runs as one. */
@@ -87,7 +95,7 @@ export class SupervisedProcesses {
   async forget(processId: string, why: string): Promise<void> {
     const spec = await this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${processId}`);
 
-    if (spec?.job !== undefined) await this.ports.ended({ ...spec, job: spec.job }, null, why);
+    if (spec?.job !== undefined) await this.ports.ended({ ...spec, job: spec.job }, null, { why });
     await this.ports.storage.delete(`${SUPERVISED_SPEC_PREFIX}${processId}`);
   }
 
@@ -156,7 +164,10 @@ export class SupervisedProcesses {
           if (!current()) return STALE;
 
           if (run !== null && isProcessLive(run.status)) return { kind: 'started', process: run, job: ownerJob };
-          yield* attempt('io', () => this.ports.ended({ ...was, job: ownerJob }, run));
+          yield* attempt('io', () => this.ports.ended({ ...was, job: ownerJob }, run, { current }));
+
+          // Telling it reads what it wrote: a teardown or a replaced container may have come meanwhile.
+          if (!current()) return STALE;
         }
 
         // A re-issue keeps its id and takes the variables and the starter it was asked with, for this start and every
@@ -244,7 +255,9 @@ export class SupervisedProcesses {
       if (!current()) return STALE;
 
       if (run !== null && isProcessLive(run.status)) return { kind: 'reaped', ended: false };
-      yield* attempt('io', () => this.ports.ended({ ...owner, job }, run));
+      yield* attempt('io', () => this.ports.ended({ ...owner, job }, run, { current }));
+
+      if (!current()) return STALE;
       yield* attempt('io', () => this.ports.storage.delete(`${SUPERVISED_SPEC_PREFIX}${owner.processId}`));
 
       return { kind: 'reaped', ended: true };
@@ -277,7 +290,10 @@ export class SupervisedProcesses {
         if (held !== undefined && job !== undefined) {
           const run = yield* attempt('process', () => native.get(request.processId));
 
-          yield* attempt('io', () => this.ports.ended({ ...held, job }, run, 'it was stopped'));
+          if (!current()) return STALE;
+          yield* attempt('io', () => this.ports.ended({ ...held, job }, run, { why: 'it was stopped', current }));
+
+          if (!current()) return STALE;
         }
 
         yield* attempt('io', () => this.ports.storage.delete(`${SUPERVISED_SPEC_PREFIX}${request.processId}`));

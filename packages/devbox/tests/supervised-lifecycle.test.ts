@@ -580,6 +580,96 @@ describe('a supervised process that runs as a job', () => {
     expect(await reservations(box)).toEqual([first.processId]);
   });
 
+  // Second review, 2026-10-21: an end told while the box was torn down wrote its incident, and a start after it its
+  // spec, into the storage the teardown had just emptied.
+  for (const entry of ['start', 'heartbeat', 'stop'] as const) {
+    test(`a ${entry} that tells an earlier end while the box is destroyed writes nothing after it`, async () => {
+      const { box, container, rows } = harness(Devbox);
+      const { processId } = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-first' });
+      const paused = gate();
+
+      container.files.set(`/var/tmp/devbox/processes/${processId}/exit`, '1');
+      container.logsHeld = paused;
+
+      const operations = {
+        start: () => box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-second' }),
+        heartbeat: () => box.devboxHeartbeat(),
+        stop: () => box.stopSupervised(processId),
+      };
+
+      const telling = Promise.allSettled([operations[entry]()]);
+
+      await paused.reached;
+
+      try {
+        await box.destroy();
+      } finally {
+        paused.release();
+        await telling;
+      }
+
+      expect([...rows.keys()].filter((key) => key.startsWith('devbox:proc:') || key.startsWith('devbox:incident:'))).toEqual([]);
+    });
+  }
+
+  // Second review, 2026-10-21: no test held a heartbeat inside its look at an ended run while the agent came for the same
+  // command, so a reap that told an end twice, or took a successor's spec for the run it saw end, would pass (D105).
+  for (const entry of ['start', 'stop'] as const) {
+    test(`a heartbeat telling an end holds its run; a ${entry} of it waits, the end is told once, and nothing after it is lost`, async () => {
+      const { box, container, rows } = harness(Devbox);
+      const first = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-first' });
+      const paused = gate();
+
+      container.files.set(`/var/tmp/devbox/processes/${first.processId}/exit`, '1');
+      container.logsHeld = paused;
+      const beating = box.devboxHeartbeat();
+
+      await paused.reached;
+      const next = entry === 'start' ? box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-second' }) : box.stopSupervised(first.processId);
+      let waited = false;
+
+      try {
+        waited = await Promise.race([next.then(() => false), new Promise<boolean>((resolve) => { setTimeout(() => { resolve(true); }, 50); })]);
+      } finally {
+        paused.release();
+        await beating;
+      }
+
+      const answered = await next;
+
+      expect(waited).toBe(true);
+      expect(told(rows)).toEqual([expect.objectContaining({ stage: 'process-ended', job: 'bgjob-first', exitCode: 1 })]);
+
+      if (entry === 'start') {
+        await box.devboxHeartbeat();
+        const kept = await reservations(box);
+
+        expect(kept).toHaveLength(1);
+        expect(answered).toEqual({ processId: kept[0], job: 'bgjob-second' });
+        expect(told(rows)).toHaveLength(1);
+      } else expect(await reservations(box)).toEqual([]);
+    });
+  }
+
+  test('a job process seen finished at quiesce is told once, by the reap, and the forget after it tells nothing', async () => {
+    const { box, container, rows } = chainBox();
+
+    try {
+      await box.start();
+      const { processId } = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-done' });
+      const row = container.processes.get(processId);
+
+      container.processes.set(processId, { id: processId, pid: row?.pid ?? 1, command: COMMAND, status: 'completed' });
+      container.files.set(`/var/tmp/devbox/processes/${processId}/exit`, '0');
+      expect((await box.quiesce()).kind).toBe('committed');
+
+      expect(told(rows)).toEqual([expect.objectContaining({ stage: 'process-ended', processId, job: 'bgjob-done', exitCode: 0 })]);
+      expect(await reservations(box)).toEqual([]);
+    } finally {
+      await box.destroy();
+    }
+  });
+
   test('a process that runs as no job is not told, and keeps its spec for the restore', async () => {
     const { box, container, rows } = harness(Devbox);
     const { processId } = await box.startSupervised(COMMAND);

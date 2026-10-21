@@ -37,6 +37,11 @@ export class ComputerProcessEnds {
 
   constructor(private readonly jobs: ComputerProcessJobRows) {}
 
+  /** Where the job's row stands. */
+  state(jobId: string): ComputerProcessJobState {
+    return this.jobs.state(jobId);
+  }
+
   /** The job's process's end: when the box tells it, or at once for a job whose row has settled. */
   ended(jobId: string): Promise<ComputerProcessEnd> {
     if (this.jobs.state(jobId) === 'settled') return Promise.resolve(SETTLED_ALREADY);

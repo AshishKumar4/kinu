@@ -255,7 +255,7 @@ export interface CFRuntimeHooks {
   /** The actor's jobs, a process it starts among them; read at the call, as its runner is built over this runtime. */
   jobs: () => AdoptsJobs;
   /** Where its computer's processes run as jobs end, as the box tells it: the workspace object's, every actor's. */
-  processEnds: () => Pick<ComputerProcessEnds, 'ended'>;
+  processEnds: () => Pick<ComputerProcessEnds, 'ended' | 'state'>;
   /** `children` is opened under the actor host's directory authority, never by a caller knowing an id. */
   contextPlane?: {
     readonly actorId: string;
@@ -464,7 +464,11 @@ export function createCFRuntime(
         desktop: { driver: actor.actor.actorId, screen: { ...DESKTOP_SIZE, sheet: WATCH_SHEET } },
         environment: access.commandEnvironment,
         // Each process it starts is a job of the actor's, which its box's word on the process's end settles.
-        processJobs: { adopt: async (request) => await hooks.jobs().adopt(request), ended: (jobId) => hooks.processEnds().ended(jobId) },
+        processJobs: {
+          adopt: async (request) => await hooks.jobs().adopt(request),
+          ended: (jobId) => hooks.processEnds().ended(jobId),
+          state: (jobId) => hooks.processEnds().state(jobId),
+        },
       }));
       diagnostics.event('computer.executor_registered', {
         sandboxId,

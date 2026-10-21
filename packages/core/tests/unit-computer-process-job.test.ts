@@ -84,7 +84,9 @@ function computerBox(jobs: ReturnType<typeof actorJobs>, runs?: string) {
     unexposePort: async () => {}, getExposedPorts: async () => [],
   };
 
-  const processJobs = { adopt: (request: Parameters<typeof jobs.runner.adopt>[0]) => jobs.runner.adopt(request), ended: (jobId: string) => ends.ended(jobId) };
+  const processJobs = {
+    adopt: (request: Parameters<typeof jobs.runner.adopt>[0]) => jobs.runner.adopt(request), ended: (jobId: string) => ends.ended(jobId), state: (jobId: string) => ends.state(jobId),
+  };
 
   return { handle, starts, stopped, ends, processJobs };
 }
@@ -144,8 +146,27 @@ describe("the computer's startProcess, each process a job of the actor's", () =>
     const box = computerBox(jobs, 'bgjob-earlier');
     const computer = createSandboxExecutor(box.handle, { processJobs: box.processJobs });
 
+    await jobs.runner.adopt({
+      jobId: 'bgjob-earlier', kind: 'startProcess', mode: 'build', controller: new AbortController(), promise: box.ends.ended('bgjob-earlier'),
+      input: { command: 'npm run dev', cwd: '/workspace', processId: 'proc-dev', machine: 'computer', job: 'bgjob-earlier' },
+    });
+
     expect(await computer.tools.startProcess.execute('npm run dev')).toEqual({ processId: 'proc-dev', jobId: 'bgjob-earlier' });
-    expect(jobs.store.list(20).filter((job) => job.kind === 'startProcess')).toEqual([]);
+    expect(jobs.store.list(20).filter((job) => job.kind === 'startProcess').map((job) => job.id)).toEqual(['bgjob-earlier']);
+  });
+
+  // Second review, 2026-10-21: a first start whose reply was lost left its process running under a job never made; a
+  // start after it answered that job, and its end met no row.
+  test("a start of a command whose first start lost its reply makes that start's job, under the id its process carries", async () => {
+    const jobs = actorJobs();
+    const box = computerBox(jobs, 'bgjob-lost');
+    const computer = createSandboxExecutor(box.handle, { processJobs: box.processJobs });
+
+    expect(await computer.tools.startProcess.execute('npm run dev')).toEqual({ processId: 'proc-dev', jobId: 'bgjob-lost' });
+    expect(jobs.store.get('bgjob-lost')).toMatchObject({ kind: 'startProcess', status: 'running' });
+
+    await box.ends.record('bgjob-lost', { exitCode: 0, tail: 'done\n' });
+    expect(jobs.store.get('bgjob-lost')).toMatchObject({ status: 'completed' });
   });
 
   test('without the actor\'s jobs, a process is no job, as before', async () => {

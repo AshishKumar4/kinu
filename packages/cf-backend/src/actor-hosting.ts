@@ -80,7 +80,7 @@ export interface WorkspaceHostSeams {
   /** The runner `actor`'s calls become jobs on, a process it starts among them. */
   jobs(actor: BoundActor): AdoptsJobs;
   /** Where the workspace's computer processes run as jobs end. */
-  processEnds(): Pick<ComputerProcessEnds, 'ended'>;
+  processEnds(): Pick<ComputerProcessEnds, 'ended' | 'state'>;
   /** The loop origin a creation site named for this actor, or null for the kind's default. */
   chosenLoopOrigin(record: WorkspaceActor): LoopOrigin | null;
   /**

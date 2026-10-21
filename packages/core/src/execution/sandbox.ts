@@ -315,6 +315,8 @@ export function computerProcessJob(kind: string, input: JsonValue): { readonly p
 /** The actor's jobs, and the box's word on when a job's process ends. */
 export interface ComputerProcessJobs extends AdoptsJobs {
   ended(jobId: string): Promise<ComputerProcessEnd>;
+  /** Whether a job's row exists, and still runs: one a lost reply left unmade is `missing`. */
+  state(jobId: string): 'missing' | 'running' | 'settled';
 }
 
 interface Computer {
@@ -449,10 +451,13 @@ function startProcessMember({ handle, touch, environment, processJobs }: Compute
 
           if (processJobs === undefined || jobId === undefined) return { processId: started.processId };
 
-          // The same command still runs as an earlier start's job: it is that job's, and no second is made of it.
-          if (started.job !== undefined && started.job !== jobId) return { processId: started.processId, jobId: started.job };
+          // The same command still runs as an earlier start's job: it is that job's, and no second is made of it. One
+          // whose start lost its reply before its job was made is made now, under the id its process carries.
+          const job = started.job ?? jobId;
 
-          return await adoptedProcess({ handle, touch, jobs: processJobs, jobId, command, cwd, processId: started.processId });
+          if (job !== jobId && processJobs.state(job) !== 'missing') return { processId: started.processId, jobId: job };
+
+          return await adoptedProcess({ handle, touch, jobs: processJobs, jobId: job, command, cwd, processId: started.processId });
         } catch (err) {
           return refusalOf(sandboxFailure({ doing: `computer.startProcess \`${command}\``, cause: err }));
         }

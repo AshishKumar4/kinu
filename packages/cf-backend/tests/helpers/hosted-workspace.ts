@@ -150,7 +150,7 @@ export async function hostedWorkspace(
     deferrals: () => undefined,
     jobs: () => NO_JOBS,
     // No box here tells a process's end.
-    processEnds: () => ({ ended: () => new Promise(() => undefined) }),
+    processEnds: () => ({ ended: () => new Promise(() => undefined), state: () => 'missing' }),
     chosenLoopOrigin: (record) => chosen.get(record.actorId) ?? null,
     chosenWriteObserver: () => null,
     ...overrides,

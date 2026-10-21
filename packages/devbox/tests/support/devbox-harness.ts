@@ -1172,9 +1172,21 @@ export class FakeSandbox {
   }
 
   /** The process scripts' file protocol: `launch` stands for the claim symlink and holds its target. */
+  /** The next read of what a process wrote waits on this, to interleave work with a report that reads it. */
+  logsHeld: Gate | undefined;
+
   async #processScript(args: string[], pid: number): Promise<ExecProcess> {
-    // What it wrote, both streams, the last `bytes` of it when asked (`processes.ts` LOGS).
+    // What it wrote, both streams, the last `bytes` of it when asked (`processes.ts` LOGS); held once if a test asks.
     if (args[3] === 'devbox-logs') {
+      const held = this.logsHeld;
+
+      this.logsHeld = undefined;
+
+      if (held !== undefined) {
+        held.enter();
+        await held.promise;
+      }
+
       const dir = args[4] ?? '';
       const bytes = Number(args[6] ?? '0');
       const text = `${this.files.get(`${dir}/stdout.log`) ?? ''}${this.files.get(`${dir}/stderr.log`) ?? ''}`;

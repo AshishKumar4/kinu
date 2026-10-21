@@ -162,6 +162,80 @@ describe('BackgroundJobRunner.note: telling of a job that still runs', () => {
   });
 });
 
+// Second review of the computer process jobs, 2026-10-21: an end told from outside (`complete`) settled a job while its
+// cancel was deciding, so a cancel that stopped the work answered as if the job had already ended.
+describe('BackgroundJobRunner.complete: an outside end waits for a cancel in flight', () => {
+  const held = () => {
+    const gate = Promise.withResolvers<void>();
+    const entered = Promise.withResolvers<void>();
+
+    return { gate, entered };
+  };
+
+  for (const refused of [false, true]) {
+    test(refused ? 'a refused cancel leaves the job running, which the end then completes' : 'a cancel that stops the work leaves nothing to complete', async () => {
+      const { gate, entered } = held();
+
+      const { runner, store, enqueued } = setup({
+        onCancelled: async () => {
+          entered.resolve();
+          await gate.promise;
+
+          if (refused) throw new Error('the computer did not stop it');
+        },
+      });
+
+      const jobId = 'bgjob-cancel-race';
+
+      await runner.adopt({
+        jobId, kind: 'startProcess', mode: 'build', controller: new AbortController(), promise: new Promise<never>(() => undefined),
+        input: { command: 'npm run dev', processId: 'proc-dev', machine: 'computer', job: jobId },
+      });
+
+      const cancelling = runner.cancel(jobId);
+      await entered.promise;
+      const completing = runner.complete(jobId, { processId: 'proc-dev', exitCode: 143, tail: 'killed' });
+
+      await Promise.resolve();
+      expect(store.get(jobId)?.status).toBe('running');
+      gate.resolve();
+
+      expect(await cancelling).toBe(!refused);
+      await completing;
+      expect(store.get(jobId)?.status).toBe(refused ? 'completed' : 'cancelled');
+      expect(enqueued.map((turn) => turn.metadata?.status)).toEqual([refused ? 'completed' : 'cancelled']);
+    });
+  }
+
+  test('a retire that stops the work wakes no one, for an end told meanwhile too', async () => {
+    const { gate, entered } = held();
+
+    const { runner, store, enqueued } = setup({
+      onCancelled: async () => {
+        entered.resolve();
+        await gate.promise;
+      },
+    });
+
+    const jobId = 'bgjob-retire-race';
+
+    await runner.adopt({
+      jobId, kind: 'startProcess', mode: 'build', controller: new AbortController(), promise: new Promise<never>(() => undefined),
+      input: { command: 'npm run dev', processId: 'proc-dev', machine: 'computer', job: jobId },
+    });
+
+    const retiring = runner.retire();
+    await entered.promise;
+    const completing = runner.complete(jobId, { processId: 'proc-dev', exitCode: 143, tail: 'killed' });
+
+    gate.resolve();
+    expect(await retiring).toEqual({ stopped: [jobId], refused: [] });
+    await completing;
+    expect(store.get(jobId)?.status).toBe('cancelled');
+    expect(enqueued).toEqual([]);
+  });
+});
+
 describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
   test('resolving work settles the job + wakes a synthesis turn (once)', async () => {
     const { runner, store, enqueued, stashes, settled, notified } = setup();

@@ -69,7 +69,7 @@ import {
   type RunningForRest,
 } from './lifecycle';
 import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, type ResourceScope } from './operation-lanes';
-import { SupervisedProcesses } from './supervised-processes';
+import { SupervisedProcesses, type EndTold } from './supervised-processes';
 import { DevboxError, attempt, attemptSync, hold, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
@@ -3179,11 +3179,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    * to have written nothing, and one something else ended says what did. A crash is not restarted on a clock: the job
    * ends, and its agent decides.
    */
-  async #jobEnded(spec: SupervisedProcessSpec & { readonly job: string }, process: ProcessRecord | null, why?: string): Promise<void> {
+  async #jobEnded(spec: SupervisedProcessSpec & { readonly job: string }, process: ProcessRecord | null, as: EndTold = {}): Promise<void> {
     // A tail the box cannot read is no reason to keep the end untold.
     const read = await hold(attempt('io', async () => (process === null ? '' : await this.#processes().logs(spec.processId, { bytes: INCIDENT_REASON_MAX_CHARS }))));
+
+    // A teardown or a replaced container came while it read: nothing is written to a box that is gone, and the spec it
+    // leaves is told, or restored, by what holds the box now.
+    if (as.current?.() === false) return;
     const tail = Exit.isSuccess(read) ? read.value : `(what it wrote could not be read: ${describe({ cause: Cause.squash(read.cause) })})`;
-    const reason = [why, tail.trim() === '' ? undefined : tail].filter((part) => part !== undefined).join('\n') || 'it ended, and wrote nothing';
+    const reason = [as.why, tail.trim() === '' ? undefined : tail].filter((part) => part !== undefined).join('\n') || 'it ended, and wrote nothing';
 
     await this.#record('process-ended', reason, { processId: spec.processId, job: spec.job, ...(process?.exitCode !== undefined && { exitCode: process.exitCode }) });
   }
@@ -3653,7 +3657,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       storage: this.ctx.storage, lane: this.#resources, native: () => this.#processes(), generation: () => this.#generation,
       failedStop: (processId, cause) => this.#record('process', describe({ cause }), { processId }),
       revealed: () => this.revealedEnv(),
-      ended: (spec, process, why) => this.#jobEnded(spec, process, why),
+      ended: (spec, process, as) => this.#jobEnded(spec, process, as),
     });
   }
 

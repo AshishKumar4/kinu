@@ -256,6 +256,8 @@ export class BackgroundJobRunner {
    */
   private readonly cancelling = new Set<string>();
   private readonly fenced = new Map<string, () => Promise<void>>();
+  /** Each cancel in flight, settled once it has decided the job's row: what an outside completion waits on. */
+  private readonly deciding = new Map<string, Promise<unknown>>();
 
   /** Each watched job's context: when it last answered, the probe it has not answered yet, and how to stop asking. */
   private readonly heard = new Map<string, WatchedJob>();
@@ -741,6 +743,9 @@ export class BackgroundJobRunner {
    * running has nothing to complete.
    */
   async complete(jobId: string, result: JsonValue): Promise<void> {
+    // A cancel in flight decides first, as it does for a settle by the job's own promise: a cancel that stops the work
+    // leaves nothing to complete, and one refused leaves the job running, which this completes. Its failure is its own.
+    await Promise.allSettled([this.deciding.get(jobId)]);
     const job = this.deps.store.get(jobId);
 
     if (job?.status !== 'running' || !this.deps.store.settle(jobId, job.epoch, serializeJobResult({ value: result }), Date.now())) return;
@@ -808,6 +813,18 @@ export class BackgroundJobRunner {
     if (this.deps.store.get(jobId)?.status !== 'running') return 'settled';
 
     if (this.cancelling.has(jobId)) return 'refused';
+    const deciding = this.decide(jobId);
+
+    this.deciding.set(jobId, deciding);
+
+    try {
+      return await deciding;
+    } finally {
+      this.deciding.delete(jobId);
+    }
+  }
+
+  private async decide(jobId: string): Promise<'stopped' | 'refused' | 'settled'> {
     this.cancelling.add(jobId);
     let refusal: { readonly error: unknown } | undefined;
 
