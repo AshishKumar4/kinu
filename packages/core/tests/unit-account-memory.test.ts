@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { createMemoryVfs, createTestFactsStore, createTestRuntime } from '@kinu.run/test-utils';
 import {
-  accountProposals, actorNamespaces, callOperation, initEffectTombstoneTable, initFactsTable, initSleepTimeUpdatesTable, listOperations, renderFactsBlock,
+  accountProposals, actorNamespaces, callOperation, initEffectTombstoneTable, initFactsTable, initSleepTimeTables, listOperations, renderFactsBlock,
   searchFacts, SleepTimeLane, sleepTimeWindow, SURFACE_POLICY, TurnContextBudget,
   unifiedFacts, WORKSPACE_ROOT,
   type AccountMemory, type AccountProposal, type ConversationProjection, type Fact, type JsonObject, type SurfaceActor,
@@ -274,7 +274,7 @@ describe("the background pass's proposals reach the account, once each", () => {
     const { rt, stores, testSql } = createTestRuntime();
 
     initFactsTable(testSql.execRaw);
-    initSleepTimeUpdatesTable(testSql.execRaw);
+    initSleepTimeTables(testSql.execRaw);
     initEffectTombstoneTable(testSql.execRaw);
     stores.config.setSleepTimeComputeEnabled(true);
 

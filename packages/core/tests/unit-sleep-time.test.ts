@@ -7,7 +7,7 @@ import { profileCatalogDigest, resolveTurnProfile } from '../src/profiles';
 import {
   runSleepTimeCompute, applySleepTimeUpdate,
   SLEEP_TIME_CADENCE,
-  initEffectTombstoneTable, initFactsTable, initSleepTimeUpdatesTable, SleepTimeLane,
+  initEffectTombstoneTable, initFactsTable, initSleepTimeTables, SleepTimeLane,
   sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type ConversationProjection,
 } from '../src/index';
@@ -315,7 +315,7 @@ describe('an idle wake dreams first', () => {
   function lane(count: number) {
     const { rt, stores, testSql } = createTestRuntime();
     initFactsTable(testSql.execRaw);
-    initSleepTimeUpdatesTable(testSql.execRaw);
+    initSleepTimeTables(testSql.execRaw);
     initEffectTombstoneTable(testSql.execRaw);
     stores.config.setSleepTimeComputeEnabled(true);
     const order: string[] = [];

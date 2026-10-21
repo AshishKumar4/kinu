@@ -58,7 +58,7 @@ import { ActorSession, type ActorTurnLease,
   steerSkillsBlock,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
-  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
+  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeTables,
   toolsBehindBoundary, type ToolBoundary, assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TurnReportFacts,
@@ -441,7 +441,7 @@ export class LocalAgentSession {
     this.eventLog = orchestration.eventLog;
 
     initTerminalEffectTable(this.rt.storage.execRaw);
-    initSleepTimeUpdatesTable(this.rt.storage.execRaw);
+    initSleepTimeTables(this.rt.storage.execRaw);
     // `turn_id` is NULL when the send queued while the actor was idle.
     initPendingSendTables(this.rt.storage.execRaw);
     const pendingSends = new PendingSendStore(this.rt.storage.sql, this.rt.actor.actorId);
