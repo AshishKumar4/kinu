@@ -428,7 +428,7 @@ describe('a workspace shell over the user\'s mounts', () => {
     };
 
     const files = withApprovalGatedFiles(mounted, 'workspace', {
-      planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => mounted.resolve(path, { follow, creating }),
+      planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => mounted.resolve(path, { follow, creating }), owner: (path) => mounted.owner(path),
       userRoots: () => mounted.userRoots(), locate: null, parksWrites: false,
     }, { mode: () => 'strict', requestApproval: deny });
 
@@ -459,7 +459,7 @@ describe('a workspace shell over the user\'s mounts', () => {
       (await workspace.session()).vfs.as(CRED_SESSION_USER).symlink('/pc/proj/sub', `${WORKSPACE_ROOT}/sub-link`);
 
       const files = withApprovalGatedFiles(mounted, 'workspace', {
-        planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => mounted.resolve(path, { follow, creating }),
+        planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => mounted.resolve(path, { follow, creating }), owner: (path) => mounted.owner(path),
         userRoots: () => mounted.userRoots(), locate: null, parksWrites: false,
       }, {
         mode: () => 'strict',

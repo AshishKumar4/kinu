@@ -397,7 +397,8 @@ export function createCFRuntime(
   });
 
   const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
-    planes, resolve: (path, follow, creating) => agentFileVfs.resolve(path, { follow, creating }), userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
+    planes, resolve: (path, follow, creating) => agentFileVfs.resolve(path, { follow, creating }), owner: (path) => agentFileVfs.owner(path),
+    userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
   }, approvalPolicy);
 
   executionRouter.register(createNimbusWorkspaceExecutor({
