@@ -367,8 +367,10 @@ describe('two starts in one browser each finish', () => {
         return { status: lost?.status, signIn: page.includes('/login'), action: /Return to (?:sign in|Kinu)/u.exec(page)?.[0] ?? null };
       };
 
-      expect({ signedIn: await offered(session), signedOut: await offered() }).toEqual({
+      // A session no account object can vouch for right now still holds the browser: it is offered no sign-in either.
+      expect({ signedIn: await offered(session), unverifiable: await offered(`${SESSION_COOKIE_NAME}=ps_${'0'.repeat(32)}_${'x'.repeat(64)}`), signedOut: await offered() }).toEqual({
         signedIn: { status: 400, signIn: false, action: 'Return to Kinu' },
+        unverifiable: { status: 400, signIn: false, action: 'Return to Kinu' },
         signedOut: { status: 400, signIn: true, action: 'Return to sign in' },
       });
     } finally {

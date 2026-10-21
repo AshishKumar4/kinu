@@ -348,7 +348,7 @@ function completeOAuth<Id>(
       return redirect(destination, {
         headers,
       });
-    }), (failed) => Effect.gen(function* () {
+    }), (failed) => Effect.sync(() => {
       const e = Cause.squash(failed);
       const failure = summarizeOAuthFailure({ cause: e });
       diagnostics.failure('auth.oauth_callback_failed', toKinuError({
@@ -362,9 +362,10 @@ function completeOAuth<Id>(
         return redirect(new URL(connectedPath({ run: connecting.run, service: provider.label, error: failure.reason }), url.origin).toString());
       }
 
-      // Signed in, this browser needs no sign-in, and one offered here could switch it into another account: a connect
-      // whose handoff could not be read ends here in its helper tab. It is told to start again from Kinu instead.
-      const signedIn = (yield* Effect.promise(async () => requestIdentity(request, env))) !== null;
+      // A browser holding a session needs no sign-in, and one forced here could switch it into another account: a
+      // connect whose handoff could not be read ends here in its helper tab. It is told to start again from Kinu. Read
+      // off the cookie alone, so an account object that cannot answer neither fails this page nor holds it up.
+      const signedIn = readSessionToken(request) !== null;
 
       const action = signedIn
         ? '<div class="actions"><a class="provider" href="/">Return to Kinu</a></div>'
