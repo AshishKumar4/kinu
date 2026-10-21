@@ -136,6 +136,32 @@ function setup(opts: {
   };
 }
 
+// Main's decision, 2026-10-20: a computer's process run as a job is noted to the agent when the box starts it again,
+// while the job runs on; a running job's wake would read as its end.
+describe('BackgroundJobRunner.note: telling of a job that still runs', () => {
+  test('wakes the agent as running, one message per note; a settled job is noted nothing', async () => {
+    const { runner, store, enqueued, settled } = setup();
+    const id = runner.create('startProcess', { command: 'npm run dev' }, 'build', new AbortController());
+    const end = Promise.withResolvers<string>();
+
+    runner.detach(id, 'startProcess', end.promise);
+    await runner.note(id, { id: 'restored-1', text: 'the computer restarted and started it again' });
+    await runner.note(id, { id: 'restored-1', text: 'the computer restarted and started it again' });
+
+    // A re-delivery is the same message: the inbox admits one turn per key.
+    const note = { text: `Background startProcess job ${id} is still running: the computer restarted and started it again`, status: 'running' };
+    expect(enqueued.map((turn) => ({ text: turn.text, status: turn.metadata?.status }))).toEqual([note, note]);
+    expect(new Set(enqueued.map((turn) => turn.idempotencyKey)).size).toBe(1);
+    expect(store.get(id)?.status).toBe('running');
+
+    end.resolve('exited 0');
+    await settled();
+    await runner.note(id, { id: 'restored-2', text: 'late' });
+
+    expect(enqueued.map((turn) => turn.metadata?.status)).toEqual(['running', 'running', 'completed']);
+  });
+});
+
 describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
   test('resolving work settles the job + wakes a synthesis turn (once)', async () => {
     const { runner, store, enqueued, stashes, settled, notified } = setup();

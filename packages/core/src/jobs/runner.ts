@@ -735,6 +735,24 @@ export class BackgroundJobRunner {
     } satisfies AgentSignal);
   }
 
+  /**
+   * Tells the agent something of a job that is still running, which it still waits on: a running job's wake would read
+   * as its end. Once per `note`: a re-delivery of the same note lands as one message. A job no longer running has
+   * nothing to note.
+   */
+  async note(jobId: string, note: { readonly id: string; readonly text: string }): Promise<void> {
+    const job = this.deps.store.get(jobId);
+
+    if (job?.status !== 'running') return;
+
+    await this.deps.inbox.send({
+      kind: 'background_job',
+      text: `Background ${job.kind} job ${jobId} is still running: ${note.text}`,
+      idempotencyKey: `${backgroundJobWakeTrigger(jobId)}:note:${note.id}`,
+      metadata: { kinuMode: job.workMode, jobId, kind: job.kind, status: job.status },
+    } satisfies AgentSignal);
+  }
+
   /** Abort, mark cancelled, and wake the agent, which was told to wait for this result. */
   async cancel(jobId: string): Promise<boolean> {
     if (await this.stop(jobId) !== 'stopped') return false;
