@@ -30,6 +30,7 @@ import {
   type SubagentReportLedger, type ActorToolsets,
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type BackgroundJobRunner, type JobAuthority,
   teamToolDepsFor,
+  peersToolDeps,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps, type BuiltinStoreInputs, type ServedStores,
   type BoundActor, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult,
@@ -3448,38 +3449,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Owner resolution is lazy inside each action: the toolset is cached across turns (including
    *  pre-claim). */
   private getPeersToolDeps(): PeersToolDeps {
-    /** Same-owner roster check so a typo'd name errors instead of materializing an unowned DO. */
-    const requirePeer = async (agent: string): Promise<void> => {
-      this.requireOwner();
-
-      if (agent === this.name) throw new KinuError('bad_input', 'that is this agent: pick another peer (op:"list")');
-      const { stub, caller } = await this.userHub();
-      const known = await stub.hasWorkspace(caller, agent);
-
-      if (!known) throw new KinuError('missing', `unknown peer "${agent}": list your team with op:"list"`);
-    };
-
-    return {
-      listPeers: async () => {
+    return peersToolDeps(this.peerHub, {
+      self: this.name,
+      // The owner's other workspaces, self excluded.
+      peers: async () => {
         this.requireOwner();
         const { stub, caller } = await this.userHub();
 
-        // The owner's other workspaces, self excluded.
-        return (await stub.listActiveWorkspaces(caller))
-          .filter((peer) => peer.name !== this.name)
-          .map((peer) => ({ name: peer.name, displayName: peer.displayName }));
+        return (await stub.listActiveWorkspaces(caller)).filter((peer) => peer.name !== this.name);
       },
-      ask: async ({ agent, topic, message, mode, signal }) => {
-        await requirePeer(agent);
+      // Same-owner roster check so a typo'd name errors instead of materializing an unowned DO.
+      known: async (agent) => {
+        this.requireOwner();
+        const { stub, caller } = await this.userHub();
 
-        return this.peerHub.ask({ agent, userId: this.requireOwner(), topic, message, mode, signal });
+        return await stub.hasWorkspace(caller, agent);
       },
-      send: async ({ agent, topic, message, mode }) => {
-        await requirePeer(agent);
-
-        return this.peerHub.send({ agent, userId: this.requireOwner(), topic, message, mode });
-      },
-      reply: async ({ eventId, message }) => this.peerHub.reply({ eventId, message }),
+      userId: () => this.requireOwner(),
       spawnWorkspace: async ({ name, purpose, message, mode, signal }): Promise<PeerSpawnOutcome> => {
         const userId = this.requireOwner();
         const { stub: userDO, caller } = await this.userHub();
@@ -3501,7 +3487,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return { agent: agentName, created, ...outcome };
       },
-    };
+    });
   }
 
   /** Reads its deps lazily so a mid-lifetime claimOwner lands without rebuilding eval. */
