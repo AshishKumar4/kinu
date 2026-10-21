@@ -333,19 +333,27 @@ const NEW_KINU = { kind: 'new', account: DEPLOY_FAKE_ACCOUNT, name: 'kinu', addr
 
 const newKinu = JSON.stringify(NEW_KINU);
 
-/** One browser on the page: its sign-in cookie, carried as a browser carries it. */
-async function signedInPage(): Promise<string> {
-  const started = await env.DEPLOY_DOOR_PROBE.hit('POST', '/api/deploy/signin', { 'content-type': 'application/json', ...FROM_THE_PAGE }, JSON.stringify({ end: 'tab' }));
+/** One browser's sign-in leg on the page: `ask` starts it, and `answer` is what Cloudflare sends back with its state.
+ *  The callback's answer, and the sign-in cookie, carried as a browser carries it. */
+async function pageSignIn(ask: Readonly<Record<string, string>>, answer = (state: string) => `code=probe-code&state=${encodeURIComponent(state)}`) {
+  const started = await env.DEPLOY_DOOR_PROBE.hit('POST', '/api/deploy/signin', { 'content-type': 'application/json', ...FROM_THE_PAGE }, JSON.stringify(ask));
   const cookie = (name: string) => started.setCookie.find((each) => each.startsWith(`${name}=`))?.split(';')[0] ?? '';
   const state = new URL(v.parse(v.object({ location: v.string() }), JSON.parse(started.body)).location).searchParams.get('state') ?? '';
 
   const landed = await env.DEPLOY_DOOR_PROBE.hit(
-    'GET', `/deploy/callback?code=probe-code&state=${encodeURIComponent(state)}`, { cookie: `${cookie(DEPLOY_STATE_COOKIE)}; ${cookie(DEPLOY_SESSION_COOKIE)}` },
+    'GET', `/deploy/callback?${answer(state)}`, { cookie: `${cookie(DEPLOY_STATE_COOKIE)}; ${cookie(DEPLOY_SESSION_COOKIE)}` },
   );
+
+  return { landed, cookie: cookie(DEPLOY_SESSION_COOKIE) };
+}
+
+/** One browser on the page: its sign-in cookie. */
+async function signedInPage(): Promise<string> {
+  const { landed, cookie } = await pageSignIn({ end: 'tab' });
 
   expect({ status: landed.status, location: landed.location }).toEqual({ status: 302, location: '/deploy' });
 
-  return cookie(DEPLOY_SESSION_COOKIE);
+  return cookie;
 }
 
 /** What a browser says of a request the page itself made. */
@@ -376,6 +384,25 @@ it('refuses the page\'s routes to a request from a sibling host, which carries t
     page: (await page(cookie, 'GET', '/api/deploy/session')).status,
     cli: (await env.DEPLOY_DOOR_PROBE.hit('POST', '/api/deploy/runs')).status,
   }).toEqual({ session: 403, run: 403, carryOn: 403, current: 403, page: 200, cli: 200 });
+});
+
+// The page's sign-in in a helper window: the finish page tells only the tab whose connect run it names
+// (connect-window.ts `finishConnect`), so a finish with no run left the page waiting.
+it('ends a helper sign-in on the finish page that names the page\'s connect run, a refusal in Cloudflare\'s words', async () => {
+  await env.DEPLOY_FAKE.reset();
+
+  const run = crypto.randomUUID();
+  const signed = await pageSignIn({ end: 'helper', run });
+  const refused = await pageSignIn({ end: 'helper', run }, (state) => `error=access_denied&error_description=${encodeURIComponent('The user denied access.')}&state=${encodeURIComponent(state)}`);
+  const unnamed = await pageSignIn({ end: 'helper' });
+  const forged = await env.DEPLOY_DOOR_PROBE.hit('POST', '/api/deploy/signin', { 'content-type': 'application/json', ...FROM_THE_PAGE }, JSON.stringify({ end: 'helper', run: 'not-a-run' }));
+
+  expect({ signed: signed.landed.location, refused: refused.landed.location, unnamed: unnamed.landed.location, forged: forged.status }).toEqual({
+    signed: `/connected?service=cloudflare-deploy&run=${run}`,
+    refused: `/connected?service=cloudflare-deploy&run=${run}&error=The+user+denied+access.`,
+    unnamed: '/connected?service=cloudflare-deploy',
+    forged: 400,
+  });
 });
 
 /** The run is named for its Cloudflare user and account; the sign-in for its cookie's digest. */

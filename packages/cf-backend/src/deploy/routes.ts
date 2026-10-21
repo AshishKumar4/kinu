@@ -358,11 +358,14 @@ function callback(request: Request, env: Env, url: URL): Effect.Effect<Response,
 function backTo(env: Env, session: string | null, params: Readonly<Record<string, string>>): Effect.Effect<Response, KinuError> {
   if (session === null || session === '') return Effect.succeed(burnt(toPage(params)));
 
-  return Effect.map(attemptInItsWords('io', async () => sessionStub(env, session).ending()), (end) => {
-    if (end === 'tab') return burnt(toPage(params));
+  return Effect.map(attemptInItsWords('io', async () => sessionStub(env, session).ending()), (ending) => {
+    if (ending.end === 'tab') return burnt(toPage(params));
     const said = new URLSearchParams(params);
     const finish = new URLSearchParams({ service: 'cloudflare-deploy' });
     const error = [said.get('error_description'), said.get('error')].find((words) => words !== null && words !== '') ?? '';
+
+    // The finish page tells only the tab whose connect run it names; with none, it tells no one.
+    if (ending.run !== null) finish.set('run', ending.run);
 
     if (error !== '') finish.set('error', error);
 
@@ -396,10 +399,14 @@ function burnt(response: Response): Response {
   return response;
 }
 
-/** `helper`: the leg runs in a helper window and ends on the shared finish page, which tells the tab. `tab` (a
- *  blocked popup, and the default): it ends back on `/deploy`. */
+/** `helper`: the leg runs in a helper window and ends on the shared finish page, which tells the tab whose connect run
+ *  (`run`, from `beginConnect`) it names. `tab` (the default): it ends back on `/deploy`. */
 // `for: 'api-tokens'`: the page's computer row asked the person to sign in again and tick API Tokens.
-const SignInAskSchema = v.object({ end: v.optional(v.picklist(['helper', 'tab']), 'tab'), for: v.optional(v.picklist(['api-tokens'])) });
+const SignInAskSchema = v.object({
+  end: v.optional(v.picklist(['helper', 'tab']), 'tab'),
+  run: v.optional(v.pipe(v.string(), v.uuid())),
+  for: v.optional(v.picklist(['api-tokens'])),
+});
 
 /** The page's sign-in leg. A fresh sign-in object each time, named by a new cookie; the old one's hour runs out alone. */
 async function signIn(request: Request, env: Env): Promise<Response> {
@@ -414,7 +421,7 @@ async function signIn(request: Request, env: Env): Promise<Response> {
   const pkce = await createPkcePair();
 
   await session.openSession();
-  const state = await session.holdSignIn(pkce.verifier, asked.end, asked.for === 'api-tokens');
+  const state = await session.holdSignIn(pkce.verifier, { end: asked.end, run: asked.run ?? null, forApiTokens: asked.for === 'api-tokens' });
   const redirectUri = new URL(DEPLOY_CALLBACK_PATH, new URL(request.url).origin).href;
 
   const handoff = json({
