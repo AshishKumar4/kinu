@@ -60,14 +60,15 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'forgetActivation');
     Reflect.deleteProperty(this, 'pendingNimbusTasks');
     Reflect.deleteProperty(this, 'executorRows');
+    Reflect.deleteProperty(this, 'storedStreamChars');
     Reflect.deleteProperty(this, 'runShell');
     Reflect.deleteProperty(this, 'previewTabs');
     Reflect.deleteProperty(this, 'failingSlates');
     Reflect.deleteProperty(this, 'wakeOnce');
     Reflect.deleteProperty(this, 'approveWaitingEffects');
     sealRpcSurface(this, [
-      ...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs',
-      'failingSlates', 'wakeOnce', 'approveWaitingEffects',
+      ...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'storedStreamChars', 'runShell',
+      'previewTabs', 'failingSlates', 'wakeOnce', 'approveWaitingEffects',
     ]);
   }
 

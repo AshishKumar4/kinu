@@ -933,9 +933,8 @@ export const PLATFORM_CATALOG = {
     bounds: 'row',
     evidence: 'proven-by-probe',
     provenance:
-      'production Cloudflare, compat 2026-10-20 (probe Worker kinu-probe-rowsize, deleted after; '
-      + '/mnt/local/kinu/tmp/rowsize-probe/RESULT.md); local workerd 1.20260930.2 through Miniflare '
-      + '(/mnt/local/kinu/tmp/rowsize-local/run.mjs), the same probe shape',
+      '/mnt/local/kinu/evidence/do-sqlite-row-bytes-2026-10-21/RESULT.md:3-6 (production, compat 2026-10-20, probe Worker '
+      + 'worker.ts, deleted after) and LOCAL.md:5-8 there (local workerd 1.20260930.2 through Miniflare, local-run.mjs)',
     date: '2026-10-21',
     trigger: 'an INSERT or UPDATE whose row, or any single string/BLOB in it, exceeds 8 MiB',
     onBreach: 'the write fails; reads and deletes continue to work',
@@ -1240,7 +1239,7 @@ export const PLATFORM_CATALOG = {
     // Raised with do.sqlite.row_bytes, whose SQLite holds the value; measured on local workerd, not on production.
     evidence: 'proven-by-probe',
     provenance:
-      'local workerd 1.20260930.2 through Miniflare (/mnt/local/kinu/tmp/rowsize-local/run.mjs, a Uint8Array '
+      '/mnt/local/kinu/evidence/do-sqlite-row-bytes-2026-10-21/LOCAL.md:9-10 (local workerd 1.20260930.2, a Uint8Array '
       + 'put and read back); before, workerd util/sqlite.c++:1362-1380 and api/sync-kv.h:15-16, behaviour probed at '
       + '~/Nimbus/scratchpad/workerd-capability-survey.md §1.2 (route /synckv)',
     date: '2026-10-21',

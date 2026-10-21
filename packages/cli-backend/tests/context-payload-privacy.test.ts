@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { createCLIRuntime } from '../src/runtime';
-import { localActorDirectory } from '@kinu.run/core';
+import { localActorDirectory, PLATFORM_CATALOG } from '@kinu.run/core';
 import { SessionPayloads } from '../../core/src/session/payload';
 import { scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
 
@@ -17,7 +17,8 @@ test('large canonical payloads use the issued child home', async () => {
     if (!runtime.filesForActor) throw new Error('runtime did not install its actor file resolver');
     const filesForActor = runtime.filesForActor;
     const payloads = new SessionPayloads(() => filesForActor(left));
-    const text = 'retained\ud83d\ude00'.repeat(110_000);
+    // Past the inline bound, half a row, so it is published to a file.
+    const text = 'retained\ud83d\ude00'.repeat(Math.ceil(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 2 / 12) + 1);
     const payload = await payloads.prepare(text);
 
     if (payload.path === null) throw new Error('large payload was not published through VFS');
