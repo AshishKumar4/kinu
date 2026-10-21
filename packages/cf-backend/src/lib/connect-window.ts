@@ -20,7 +20,7 @@ const PROVIDER_WINDOW = { width: 520, height: 720 } as const;
  * script opens is refused exactly as a popup is, so there is no second `window.open` to try, and the fallback is the
  * caller's.
  */
-function openProviderWindow(name: string, url?: string): Window | null {
+export function openProviderWindow(name: string, url?: string): Window | null {
   const { width, height } = PROVIDER_WINDOW;
   const left = Math.round(window.screenX + (window.outerWidth - width) / 2);
   const top = Math.round(window.screenY + (window.outerHeight - height) / 2);

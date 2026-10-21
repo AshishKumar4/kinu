@@ -11,6 +11,7 @@
 // Delivery itself is pinned next door, in unit-agents-tool.test.ts, and that
 // suite is deliberately untouched: an instrument that changed what it measures
 // would be worse than no instrument.
+import { lonelyTree } from './helpers-agents';
 import { describe, test, expect, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestRuntime, toolExecute, createTestActorsOver, type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
@@ -111,6 +112,7 @@ function makeTeam(delivery: SubagentDelivery) {
   const deps: TeamToolDeps = {
     delegation: ROOT_DELEGATION_BUDGET,
     list: async () => [rosterEntry],
+    tree: lonelyTree,
     snapshot: () => [rosterEntry],
     knows: async (name) => name === rosterEntry.name,
     create: async () => ({ name: rosterEntry.name, displayName: 'Researcher', subagent: rosterEntry }),

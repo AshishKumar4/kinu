@@ -332,8 +332,10 @@ async function childLane(run: HireRun, body: OutboundBody, results: readonly str
   if (run.childScript !== 'answer' && run.childScript !== 'throw' && run.childScript !== 'park' && allUsers(body).includes(NEST_MISSION)) {
     if (onReport(body)) return textBody(model, `${NEST_RELAY} ${lastUser(body)}`.slice(0, 600));
 
-    // At the depth cap `hire` is not among this subagent's operations: it is the bottom of the chain, so it answers.
-    if (results.some((result) => result.includes('unknown op') && result.includes('hire'))) return textBody(model, CHAIN_BOTTOM);
+    // At the depth cap this subagent has no `agents` tool, or none that hires: it is the bottom of the chain, so it answers.
+    const capped = (result: string) => (result.includes('unknown op') && result.includes('hire')) || result.includes('unavailable tool \'agents\'');
+
+    if (results.some(capped)) return textBody(model, CHAIN_BOTTOM);
 
     if (results.length !== 0) return textBody(model, 'SUBAGENT-WAITS');
 

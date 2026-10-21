@@ -388,7 +388,7 @@ class DevicePlane {
             () => settle(terminateDeviceExec(this.rpc, requestId, deviceId)),
           );
 
-          return commandAnswer(call.settle(v.parse(DeviceExecResultSchema, result)), v.is(ExecPartsSchema, args[1]), reportCwd);
+          return commandAnswer(call.settle(v.parse(DeviceExecResultSchema, result)), v.is(ExecPartsSchema, args[1]), reportCwd, { machine: 'device', command });
         }, refusalOf), (message) => refusalOf(new KinuError('unavailable', message))),
         catch: (cause) => ({ cause }),
       }).pipe(Effect.catch((failed) => {

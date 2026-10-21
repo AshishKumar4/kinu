@@ -27,7 +27,8 @@ import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { classifyToolFailure } from '../src/read-models/tool-failures';
 import type { RunEvent, RunEventBase } from '../src/events/types';
 import { KinuError } from '../src/obs/index';
-import { failedToolOutcome } from '../src/tools/outcome';
+import { failedToolOutcome, withCodemodeProgram } from '../src/tools/outcome';
+import { codemodeFunction } from '../src/tools/sandbox-contract';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes, resolvePath } from '../src/vfs/resolve';
 
@@ -781,6 +782,30 @@ describe('file tool', () => {
     }
 
     expect(indexed).toEqual(['memory/a.md', 'memory/a.md', 'memory/a.md']);
+  });
+
+  // Review, 2026-10-21: a program's record of a write came after the memory index, so an index that failed after the
+  // bytes landed left the program recorded as having written nothing.
+  test("a write whose bytes landed is a program's record, though the memory index after it failed", async () => {
+    const memory: Memory = {
+      async write() {},
+      async append() {},
+      async index() { throw new Error('index unavailable'); },
+      async search() { return []; },
+      async read() { return null; },
+      async chunk() { return null; },
+      async tail() { return null; },
+    };
+
+    const entry = fileToolOver({ home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
+
+    const answered = await withCodemodeProgram(async () => {
+      await codemodeFunction('tools', 'file', async () => toolExecute<{ op: string; path: string; content: string }, JsonValue>(entry)({ op: 'write', path: 'memory/plan.md', content: '# Plan' }))();
+
+      return { result: null };
+    }, { call: 'call-index' });
+
+    expect(answered.effects).toEqual({ call: 'call-index', files: [{ path: 'memory/plan.md', change: 'created' }] });
   });
 
   test('a file that reads back as bytes is decoded, not thrown out of the tool', async () => {

@@ -29,6 +29,8 @@ import {
   bindActorHandle,
   READS_CHANGED_EVENT,
   JsonValueSchema,
+  programEffectsOf,
+  toolCallEffect,
   type ActorHandle,
   type JsonValue,
   type HostedAgentRef,
@@ -1375,6 +1377,64 @@ describe('LocalAgentHost', () => {
 
       expect({ root: seen('root'), hire: seen('root/auditor') })
         .toEqual({ root: ['object', true, 'object', 'object', true], hire: ['object', false, 'object', 'object', true] });
+    } finally {
+      await host.close();
+    }
+  });
+
+  // WEB-3 and REWIND-0924: a program's chip and a rewind's notice read what it did from a record the host made as it ran,
+  // at the file plane's write and the command's own outcome: no text a program returns or throws says it.
+  test("a program's answer carries the host's record of what it changed, bound to its call", async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
+    const program = [
+      "await workspace.fs.write('notes/plan.md', 'step one');",
+      "await workspace.fs.edit('notes/plan.md', [{ old_text: 'one', new_text: 'two' }]);",
+      "await workspace.exec('exit 3');",
+      // The shell tool a program calls runs its command as the tool does, and is recorded the same.
+      "await tools.shell({ command: 'exit 4' }).catch(() => null);",
+      "await workspace.fs.read('notes/plan.md');",
+      'return 1;',
+    ].join('\n');
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => ({
+        stream: options.prompt.at(-1)?.role === 'tool' ? textStream('done', usage) : toolCallStream('eval', { code: program }, usage),
+        response: { headers: {} },
+      }),
+    });
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const answered: { readonly call: string; readonly result: string }[] = [];
+
+    host.subscribe((_agent, event) => {
+      if (event.type === 'tool-result' && event.toolName === 'eval') answered.push({ call: event.toolCallId, result: String(event.result) });
+    });
+
+    try {
+      const root = await host.acquire('root');
+      await root.send('Write the plan.', { id: crypto.randomUUID() });
+
+      const [ran] = answered;
+
+      const output = v.parse(JsonValueSchema, JSON.parse(present(ran, "the program's answer").result));
+      const effects = programEffectsOf(present(ran, "the program's answer").call, output);
+
+
+      expect(effects).toEqual({
+        call: 'eval-0',
+        files: [{ path: 'notes/plan.md', change: 'created' }],
+        commands: [{ machine: 'workspace', command: 'exit 3', exitCode: 3 }, { machine: 'workspace', command: 'exit 4', exitCode: 4 }],
+        operations: {},
+      });
+      // A program's chip says what its record says: it changed a file.
+      expect(toolCallEffect('eval', { code: program }, { toolCallId: 'eval-0', output })).toBe('mutate');
+      // The record names its own call: claimed for another, it is not trusted.
+      expect(programEffectsOf('eval-1', output)).toBeNull();
     } finally {
       await host.close();
     }

@@ -13,6 +13,7 @@ import { NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_DOCTRINE } from '../st
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
 import { TierIdSchema } from '../profiles';
 import { SUBAGENT_LIFETIMES } from '../subagents/temporary';
+import { AGENT_TREE_LIMIT, AGENT_TREE_MAX } from './agent-tree';
 import { SWARM_CONTEXTS } from '../types/swarm';
 import { MissionBudgetExhausted } from '../mission-budget';
 import { endWhenSettled } from '../turn-trace';
@@ -172,10 +173,16 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
   }
 
   if (offers.has('list')) {
-    const listed = [...(team ? ['your subagents'] : []), ...(peers ? ['peer workspace agents'] : []), ...(temporary ? ['the task-lifetime agents running now'] : [])];
+    const tree = 'Your agents as a tree: you and every agent below you, each after the one that started it, running first, '
+      + 'with its kind, status, what it works on, depth, last activity and its reports you have not read; '
+      + `${String(AGENT_TREE_LIMIT)} rows unless \`limit\` says more.`;
 
-    served.push(serve(agentsOp('list', `The roster: ${listed.join(', ')}.`, true, {
-      agent: optional(described(v.string(), 'Only this agent.')),
+    const help = team ? `${tree}${peers ? ' Peer workspace agents beside it.' : ''}` : 'Peer workspace agents.';
+
+    served.push(serve(agentsOp('list', help, true, {
+      agent: optional(described(v.string(), 'Only this agent, in detail.')),
+      retired: optional(described(v.boolean(), 'true lists dismissed agents and finished swarm workers too.')),
+      limit: optional(described(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(AGENT_TREE_MAX)), `Rows at most; default ${String(AGENT_TREE_LIMIT)}.`)),
     }), (fields, call) => dispatched({ op: 'list', fields }, call)));
   }
 

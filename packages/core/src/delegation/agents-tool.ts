@@ -74,6 +74,7 @@ import {
   countedMsgSend,
   type MsgSendResult,
 } from '../obs/msg-counters';
+import { AGENT_TREE_LIMIT, type AgentTreeView } from './agent-tree';
 
 export {
   PEER_REPLY_TOPIC,
@@ -135,6 +136,8 @@ export interface TeamToolDeps {
   readonly delegation: DelegationBudget;
   /** The workspace's subagent roster (dismissed entries excluded). */
   list(): Promise<SubagentRosterEntry[]>;
+  /** This actor's subtree of the workspace's agents, as `agents.list` shows it ({@link agentTree}). */
+  tree(input: { readonly retired: boolean; readonly limit: number }): Promise<AgentTreeView>;
   snapshot(): SubagentRosterEntry[];
   /** Create an idle durable subagent for the owner; it has no task until messaged or assigned. Role defaults
    *  to `task`, mission to the creator's; the model's `hire` uses {@link spawn}. `role` is the catalog id,
@@ -320,7 +323,8 @@ export interface AgentsToolDeps {
 }
 
 interface UnifiedRosterResult {
-  subagents?: SubagentRosterEntry[];
+  tree?: AgentTreeView['tree'];
+  counts?: AgentTreeView['counts'];
   peers?: Array<{ name: string; displayName?: string }>;
   note?: string;
 }
@@ -331,6 +335,11 @@ function teamOffered(deps: AgentsWiring): boolean {
   return deps.team !== undefined && !delegationExhausted(deps.team.delegation);
 }
 
+/** At the cap: a search's nodes are agents a level below it too, so the cap that ends a hire ends a search. */
+function atDepthCap(deps: AgentsWiring): boolean {
+  return deps.team !== undefined && delegationExhausted(deps.team.delegation);
+}
+
 /** Whether an actor has an `agents` tool at all: an operation to take, or a search the account's beta withholds, which
  *  a call is told how to turn on. */
 export function agentsWired(deps: AgentsToolDeps): boolean {
@@ -339,7 +348,7 @@ export function agentsWired(deps: AgentsToolDeps): boolean {
 
 /** What wires each operation; a search needs exactly the exploration substrate, so it has no deps group of its own. */
 const OFFERED_WHEN = {
-  swarm: (deps) => deps.swarm !== undefined && deps.swarms,
+  swarm: (deps) => deps.swarm !== undefined && deps.swarms && !atDepthCap(deps),
   hire: (deps) => teamOffered(deps),
   assign: (deps) => teamOffered(deps) || deps.peers !== undefined,
   hireWorkspace: (deps) => deps.peers !== undefined,
@@ -364,9 +373,9 @@ export function agentsActionsFor(deps: AgentsWiring): AgentsOp[] {
 }
 
 /** The deps with what is not offered withheld, so every rendering omits it: the substrate while the account's swarms
- *  are off, the team at the depth cap. */
+ *  are off, and the team and the substrate both at the depth cap. */
 export function offered(deps: AgentsToolDeps): AgentsToolDeps {
-  return { ...deps, ...(!deps.swarms && { swarm: undefined }), ...(!teamOffered(deps) && { team: undefined }) };
+  return { ...deps, ...((!deps.swarms || atDepthCap(deps)) && { swarm: undefined }), ...(!teamOffered(deps) && { team: undefined }) };
 }
 
 /** A search's fields, as `agents.swarm` admits them. */
@@ -435,6 +444,9 @@ interface ReplyFields {
 
 interface ListFields {
   readonly agent?: string;
+  /** Dismissed agents and settled swarm workers too. */
+  readonly retired?: boolean;
+  readonly limit?: number;
 }
 
 interface DismissFields {
@@ -759,7 +771,7 @@ function requestedTopic(requested: string | undefined): { topic: string } {
 
 /** The refusal of a `swarm` the account's beta withholds; null when the beta is not what stops it. */
 export function withheldBeta(wired: AgentsToolDeps, op: AgentsOp): string | null {
-  if (op !== 'swarm' || wired.swarm === undefined || wired.swarms) return null;
+  if (op !== 'swarm' || wired.swarm === undefined || wired.swarms || atDepthCap(wired)) return null;
 
   return `swarm is a beta this account has not turned on: "${SWARMS_BETA_SETTING}" in Settings, Beta`;
 }
@@ -955,22 +967,25 @@ async function messageAgent(deps: AgentsToolDeps, fields: MessageFields, { mode,
   return badInput(`unknown agent "${agent}": check the roster with op:"list"`);
 }
 
-/** The roster, or one agent's status: provenance, not addressing, so `knows` includes archived rows. */
+/** The caller's subtree, or one agent's status: provenance, not addressing, so `knows` includes archived rows. */
 async function roster(deps: AgentsToolDeps, fields: ListFields): Promise<object> {
   const { team, peers } = deps;
 
   if (fields.agent && team && await team.knows(fields.agent)) return await team.status({ name: fields.agent });
 
-  const subagents = team ? await team.list() : undefined;
+  const view = team ? await team.tree({ retired: fields.retired ?? false, limit: fields.limit ?? AGENT_TREE_LIMIT }) : undefined;
   const peerRoster = peers ? await peers.listPeers() : undefined;
-  const empty = (subagents?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
+  const counts = view?.counts;
+  const alone = counts === undefined || counts.running + counts.waiting + counts.idle + counts.failed + counts.retired === 0;
   const listed: UnifiedRosterResult = {};
 
-  if (subagents) Object.assign(listed, { subagents });
+  if (view) Object.assign(listed, { tree: view.tree, counts: view.counts });
 
   if (peerRoster) Object.assign(listed, { peers: peerRoster });
 
-  if (empty) Object.assign(listed, { note: 'No subagents yet: create one with op:"hire".' });
+  const note = alone && (peerRoster?.length ?? 0) === 0 ? 'No subagents yet: create one with op:"hire".' : view?.note;
+
+  if (note !== undefined) Object.assign(listed, { note });
 
   return listed;
 }
@@ -998,14 +1013,14 @@ export async function dispatchAgentsCall(
     return (await team.list()).some((entry) => entry.name === name);
   };
 
-  // Depth seam: at the cap a spawn is refused as the cap, pointing to a search, though a toolset cached before the
-  // identity was seeded still offers a hire. An assignment to an existing agent is not a spawn.
+  // Depth seam: at the cap a hire or a search is refused as the cap, though a toolset cached before the identity was
+  // seeded still offers it. An assignment to an existing agent is not a spawn.
   const spawnDepthRefusal = () =>
     deps.team && delegationExhausted(deps.team.delegation) ? delegationDepthRefusal(deps.team.delegation) : null;
 
-  const hireDepth = call.op === 'hire' ? spawnDepthRefusal() : null;
+  const spawnDepth = call.op === 'hire' || call.op === 'swarm' ? spawnDepthRefusal() : null;
 
-  if (hireDepth) throw new KinuError(hireDepth.reason, hireDepth.error);
+  if (spawnDepth) throw new KinuError(spawnDepth.reason, spawnDepth.error);
 
   // An operation this actor does not wire: `unsupported` (obs/error.ts), classified so it counts as refused.
   const admission = opAdmission(offeredOps, mode, call.op, withheldBeta(deps, call.op));

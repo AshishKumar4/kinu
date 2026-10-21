@@ -125,7 +125,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
         return {
           call: shellCall(command, options, { stdin: true }),
-          run: async () => commandAnswer(await shell.exec(command, options), v.is(ExecPartsSchema, args[1]), false),
+          run: async () => commandAnswer(await shell.exec(command, options), v.is(ExecPartsSchema, args[1]), false, { machine: 'workspace', command }),
         };
       },
     ),

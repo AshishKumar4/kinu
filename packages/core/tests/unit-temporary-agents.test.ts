@@ -1,6 +1,7 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // `lifetime:'task'` hires through the public surfaces (native dispatch and sandbox namespace). A hire returns at once;
 // its answer is one `subagent_report` on the hirer's rail, which wakes it, and the child retires after its turn.
+import { readModelTree } from './helpers-agents';
 import { Database } from 'bun:sqlite';
 import { asSchema, type ModelMessage } from 'ai';
 import { describe, expect, test } from 'bun:test';
@@ -102,7 +103,7 @@ interface Scene {
 function rosterWorld(db: Database) {
   const actors = createTestActors(makeSql(db), makeExecRaw(db));
 
-  return { roster: new SubagentRosterStore(makeSqlExec(db), actors.main), directory: actors.directory };
+  return { roster: new SubagentRosterStore(makeSqlExec(db), actors.main), directory: actors.directory, main: actors.main };
 }
 
 function makeScene(options: {
@@ -114,7 +115,8 @@ function makeScene(options: {
   originContext?: ModelMessage[];
 } = {}): Scene {
   const eventDb = new Database(':memory:');
-  const { roster, directory } = rosterWorld(eventDb);
+  const world = rosterWorld(eventDb);
+  const { roster, directory } = world;
   roster.ensureSchema();
   const { vfs: files } = createMemoryVfs();
   const calls: string[] = [];
@@ -192,6 +194,7 @@ function makeScene(options: {
     originContext: async () => options.originContext ?? [],
     ownMission: () => 'Keep the release train moving.',
     rosterMoved: () => { /* no listeners in this scene */ },
+    ...readModelTree(eventDb, world, log),
     broadcastTask: () => { /* no listeners in this scene */ },
   };
 
@@ -452,7 +455,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
     await scene.report({ status: 'progress', content: 'Reading the March export.', origin: 'report_tool' });
     expect(scene.published()).toBe(1);
     expect(await scene.call('list', {})).toMatchObject({
-      subagents: [{ name: TEMP_NAME, lifetime: 'task', status: 'working' }],
+      tree: [{ name: 'main', you: true }, { name: TEMP_NAME, kind: 'hired', depth: 1, doing: 'Audit the ledger.' }],
     });
     await scene.report({ content: 'Totals reconcile.' });
     expect(scene.published()).toBe(2);
@@ -492,37 +495,29 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     expect(await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' })).toMatchObject({ status: 'working' });
     expect(scene.lastReport()).toMatchObject({ content: 'The answer reaches the parent before its assignment acknowledgement.' });
     expect(scene.wakes).toEqual([1]);
-    expect(await scene.call('list', {})).toMatchObject({ subagents: [] });
+    expect(await scene.call('list', {})).toMatchObject({ tree: [{ name: 'main' }], counts: { retired: 1 } });
   });
 
-  test('running under lifetime task, released into history, never a subagent', async () => {
+  test('running under lifetime task, released into history, listed only when retired agents are asked for', async () => {
     const scene = makeScene();
-    expect(await scene.call('list', {})).toEqual({
-      subagents: [],
+    expect(await scene.call('list', {})).toMatchObject({
+      tree: [{ name: 'main', you: true }],
       note: 'No subagents yet: create one with op:"hire".',
     });
 
     await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
     const running = await scene.call('list', {});
     expect(running).toMatchObject({
-      subagents: [{
-        name: TEMP_NAME,
-        lifetime: 'task',
-        status: 'working',
-        currentTask: 'Audit the ledger.',
-        createdAt: NOW,
-        dismissedAt: null,
-        taskEventId: 'evt-1',
-      }],
+      tree: [{ name: 'main' }, { name: TEMP_NAME, kind: 'hired', depth: 1, doing: 'Audit the ledger.' }],
+      counts: { retired: 0 },
     });
-    expect(running).not.toHaveProperty('temporary');
     expect(running).not.toHaveProperty('note');
 
     await scene.report({ content: 'Totals reconcile.' });
 
     const after = await scene.call('list', {});
-    expect(after).toMatchObject({ subagents: [] });
-    expect(after).not.toHaveProperty('temporary_history');
+    expect(after).toMatchObject({ tree: [{ name: 'main' }], counts: { idle: 0, retired: 1 } });
+    expect(await scene.call('list', { retired: true })).toMatchObject({ tree: [{ name: 'main' }, { name: TEMP_NAME, status: 'dismissed' }] });
     expect(scene.roster.listAll()).toMatchObject([{
       name: TEMP_NAME, lifetime: 'task', status: 'dismissed', dismissedAt: NOW,
     }]);
@@ -534,7 +529,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
     await scene.report({ content: 'Totals reconcile.' });
 
-    expect(await scene.call('list', {})).toMatchObject({ subagents: [] });
+    expect(await scene.call('list', {})).toMatchObject({ tree: [{ name: 'main' }], counts: { retired: 1 } });
     expect(await scene.call('list', { agent: TEMP_NAME })).toMatchObject({
       roster: { name: TEMP_NAME, lifetime: 'task', status: 'dismissed' },
     });
@@ -714,10 +709,10 @@ describe('the two hire targets are decided by `role`', () => {
       await codemodeFunction('agents', 'hire', hire)('auditor', '   ', { lifetime: 'task' });
 
       return { result: null };
-    });
+    }, { call: 'call-test' });
 
     expect(successfulToolOutcome('eval', { output: recovered })).toEqual({ success: true, failures: census });
-    expect(await thrownOutcome(withCodemodeProgram(async () => ({ result: await codemodeFunction('agents', 'hire', hire)('auditor', '   ', { lifetime: 'task' }) }))))
+    expect(await thrownOutcome(withCodemodeProgram(async () => ({ result: await codemodeFunction('agents', 'hire', hire)('auditor', '   ', { lifetime: 'task' }) }), { call: 'call-test' })))
       .toMatchObject({ success: false, reason: 'bad_input', failures: census });
     // The port refuses a brief with no role the same way, for the hirers that are not this tool.
     await expect(scene.temporary.start({ role: 'auditor', roleLabel: ' ', task: 'Survey auth', mode: 'build' })).rejects.toMatchObject({ code: 'bad_input' });
@@ -811,11 +806,12 @@ describe('the rung is structural, and so is its absence', () => {
     expect(capped.roster.listAll()).toEqual([]);
   });
 
-  test('the depth refusal suggests only calls the surface accepts', () => {
-    // The refusal teaches only a retry the capped surface can take, or it teaches an unwinnable one.
+  test('the depth refusal suggests no call the capped surface refuses', () => {
+    // The refusal teaches only what the capped agent can do, or it teaches an unwinnable retry: at the cap it has no
+    // team and no search, so it names neither and says to do the work itself.
     const remedy = delegationDepthRefusal({ depth: DELEGATION_MAX_DEPTH, maxDepth: 0 }).error;
-    expect(remedy).toContain('config:{context:"inherit"}');
-    // An agent at the cap has no team, so the refusal names no call to one.
+    expect(remedy).toContain('do the work yourself');
+    expect(remedy).not.toContain('op:"swarm"');
     expect(remedy).not.toContain('op:"assign"');
     expect(remedy).not.toContain('ask by');
   });

@@ -1,5 +1,6 @@
 /** Unit tests for the canonical tool surface. `skills` is not a BuiltinToolDeps field. */
 
+import { lonelyTree } from './helpers-agents';
 import { createFileCodemodeProvider } from '../src/tools/file-operations';
 import { buildToolSurface, type CodemodeSurface } from '../src/tools/builtins';
 import { serveMemory } from '../src/tools/memory-operations';
@@ -144,6 +145,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       delegation: ROOT_DELEGATION_BUDGET,
       snapshot: () => [],
       list: async () => [],
+      tree: lonelyTree,
       create: async () => ({
         name: 's',
         displayName: 'S',

@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
 import { SHARE_KINDS, type ShareKind, type SlateShareRecord } from './sharing';
-import { sqlCheckList } from '../identity/schema';
+import { sqlCheckList } from '../utils/sql';
 
 export function initSlateShareTables(execRaw: RawSqlExec): void {
   // One id for every share of either kind, so a revoke, a card or a job that names a share by id names one. A blueprint
