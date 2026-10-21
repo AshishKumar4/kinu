@@ -1,5 +1,11 @@
 import type { McpServerSummary } from "@kinu.run/core";
-import type { PluginStatus } from "./PluginRow";
+import type { StatusTone } from "@/components/ui/Status";
+
+/** What a server's row says of it: the words and the tone they are drawn in. */
+export interface PluginStatus {
+  readonly label: string;
+  readonly tone: StatusTone;
+}
 
 /** An MCP server's state as every view of it words and colours it: in sentence case, as every status reads. */
 export function mcpServerStatus(status: McpServerSummary["status"]): PluginStatus {

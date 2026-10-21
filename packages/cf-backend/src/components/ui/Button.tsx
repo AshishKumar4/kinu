@@ -22,19 +22,21 @@ export function buttonClass({ variant = "secondary", size = "md", iconOnly = fal
 /** A page's or a tool's primary on a phone: the 32 square of its icon, its label hidden (`max-sm:hidden` on the label). */
 export const ICON_ON_PHONE = "max-sm:!size-8 max-sm:!px-0";
 
-export function Button({ variant = "secondary", size = "md", icon, className, type = "button", children, ...rest }: {
+export function Button({ variant = "secondary", size = "md", icon, busy = false, className, type = "button", children, disabled, ...rest }: {
   variant?: ButtonVariant;
   size?: ButtonSize;
   /** Before the label; alone, it is the whole button and `aria-label` names it. */
   icon?: ReactNode;
+  /** Working: a spinner takes the icon's place and the button holds its width, pressed no more until it is done. */
+  busy?: boolean;
 } & ButtonHTMLAttributes<HTMLButtonElement>) {
   const iconOnly = children === undefined || children === null || children === false;
   // Layout only (a margin, `shrink-0`, `max-sm:` collapse); the box itself is the variant's and the size's.
   const extra = className === undefined ? "" : ` ${className}`;
 
   return (
-    <button type={type} className={`${buttonClass({ variant, size, iconOnly })}${extra}`} {...rest}>
-      {icon}
+    <button type={type} className={`${buttonClass({ variant, size, iconOnly })}${extra}`} disabled={disabled === true || busy} aria-busy={busy || undefined} {...rest}>
+      {busy ? <span aria-hidden className="p-button-spinner" /> : icon}
       {children}
     </button>
   );

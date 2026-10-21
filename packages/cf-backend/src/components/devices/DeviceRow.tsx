@@ -13,8 +13,8 @@ import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode } from "@kinu.run/core";
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
 import { composing, inputCls } from "@/components/ui/form";
-import { PluginRow, PluginTile } from "@/components/plugins/PluginRow";
-import { RowMenu } from "@/components/ui/RowMenu";
+import { Row, RowTile } from "@/components/ui/Row";
+import { Menu } from "@/components/ui/Menu";
 import { Chip } from "@/components/ui/Chip";
 import { Switch } from "@/components/ui/Switch";
 import { Status } from "@/components/ui/Status";
@@ -192,7 +192,7 @@ export function DeviceRow({
   // Plugins' row grid (design review 2026-10-20, A3), the Sandbox switch a track of its own; what it reaches is under it.
   return (
     <>
-      <PluginRow attributes={{ "data-device": device.id }} tile={<PluginTile icon={DesktopTowerIcon} />}
+      <Row attributes={{ "data-device": device.id }} tile={<RowTile icon={DesktopTowerIcon} />}
         title={editing === null ? device.label : nameField}
         meta={(
           <span data-sandbox-mode={mode} data-whole-machine={device.wholeMachine ? "true" : undefined}>
@@ -213,7 +213,7 @@ export function DeviceRow({
           </>
         )}
         action={(
-          <RowMenu label={`${device.label} options`} items={[
+          <Menu label={`${device.label} options`} items={[
             { label: "Rename", title: "Rename this device", icon: PencilSimpleIcon, run: () => setEditing(device.label) },
             { label: "Revoke", title: "Revoke device", icon: TrashIcon, run: onRevoke, danger: true },
           ]} />

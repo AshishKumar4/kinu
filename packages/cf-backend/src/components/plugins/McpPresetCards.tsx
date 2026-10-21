@@ -12,9 +12,9 @@ import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
-import { PluginRow, PLUGIN_ACTION } from "@/components/plugins/PluginRow";
+import { ROW_ACTION, Row } from "@/components/ui/Row";
 import { Status } from "@/components/ui/Status";
-import { RowMenu } from "@/components/ui/RowMenu";
+import { Menu } from "@/components/ui/Menu";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
 
@@ -128,7 +128,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged }: {
 
   if (server !== undefined) {
     trailing = (
-      <RowMenu label={`More for ${preset.title}`} items={[
+      <Menu label={`More for ${preset.title}`} items={[
         { label: "Docs", icon: ArrowSquareOutIcon, run: () => { window.open(preset.docsUrl, "_blank", "noopener,noreferrer"); } },
         { label: "Remove", icon: TrashIcon, run: remove, danger: true },
       ]} />
@@ -136,7 +136,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged }: {
   } else if (asking) {
     trailing = (
       <button type="button" data-plugin-cancel onClick={() => setOpenToken(false)}
-        aria-label={`Cancel ${preset.title}`} title="Cancel" className={PLUGIN_ACTION}>
+        aria-label={`Cancel ${preset.title}`} title="Cancel" className={ROW_ACTION}>
         <XIcon size={14} />
       </button>
     );
@@ -144,7 +144,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged }: {
     trailing = (
       <button type="button" data-plugin-add onClick={(...args: Parameters<typeof connect>) => detach(Effect.promise(async () => connect(...args)))} disabled={busy}
         aria-label={`Add ${preset.title}`} title={`Add ${preset.title}`}
-        className={PLUGIN_ACTION}>
+        className={ROW_ACTION}>
         <PlusIcon size={16} />
       </button>
     );
@@ -153,7 +153,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged }: {
   return (
     <>
     {dialog}
-    <PluginRow attributes={{ "data-plugin": preset.title, "data-plugin-source": preset.id, "data-plugin-state": server === undefined ? 'Not added' : mcpServerStatus(server.status).label }}
+    <Row attributes={{ "data-plugin": preset.title, "data-plugin-source": preset.id, "data-plugin-state": server === undefined ? 'Not added' : mcpServerStatus(server.status).label }}
       title={preset.title} meta={preset.description}
       tile={<BrandMark brand={brand} size={18} />}
       status={server === undefined ? undefined : <ServerStatus status={server.status} />}

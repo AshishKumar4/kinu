@@ -1,25 +1,36 @@
 /**
- * A small named thing a row holds, with its one control (a device's grant to a workspace; design review 2026-10-20,
- * D4): 24 tall and round, on the neutral wash, or the danger wash in danger ink for a refusal.
+ * A small named thing a row holds, with its one control (docs/DESIGN-SYSTEM.md §2; a device's grant to a workspace):
+ * 24 tall and round, on the hover wash, or a tone's tint in its ink.
  */
 import type { ReactNode } from "react";
 import { XIcon } from "@phosphor-icons/react";
 
-export function Chip({ tone = "neutral", children, onRemove, removeLabel }: {
-  tone?: "neutral" | "danger";
+export type ChipTone = "neutral" | "success" | "warning" | "danger" | "info" | "accent";
+
+const GROUND: Record<ChipTone, string> = {
+  neutral: "p-chip-neutral",
+  success: "p-chip-success",
+  warning: "p-chip-warning",
+  danger: "p-chip-danger",
+  info: "p-chip-info",
+  accent: "p-chip-accent",
+};
+
+export function Chip({ tone = "neutral", icon, children, onRemove, removeLabel }: {
+  tone?: ChipTone;
+  /** A 14 icon before the words. */
+  icon?: ReactNode;
   children: ReactNode;
-  /** The chip's own control, a 16 px ×; `removeLabel` names what it does. */
+  /** The chip's own control, a 16 ghost ×; `removeLabel` names what it does. */
   onRemove?: () => void;
   removeLabel?: string;
 }) {
-  const ground = tone === "danger" ? "bg-[var(--c-danger-tint)] p-danger" : "bg-[var(--c-hover)] p-text-2";
-
   return (
-    <span className={`inline-flex h-6 max-w-full items-center gap-1 rounded-full text-xs font-medium leading-4 ${ground} ${onRemove === undefined ? "px-2.5" : "pl-2.5 pr-1"}`}>
+    <span className={`p-chip ${GROUND[tone]}${onRemove === undefined ? "" : " p-chip-removable"}`}>
+      {icon}
       <span className="truncate">{children}</span>
       {onRemove !== undefined && (
-        <button type="button" onClick={onRemove} aria-label={removeLabel} title={removeLabel}
-          className="flex size-4 shrink-0 items-center justify-center rounded-full opacity-70 transition-colors hover:bg-[var(--c-hover)] hover:opacity-100">
+        <button type="button" onClick={onRemove} aria-label={removeLabel} title={removeLabel} className="p-chip-remove">
           <XIcon size={10} weight="bold" />
         </button>
       )}

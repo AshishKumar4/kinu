@@ -11,9 +11,9 @@ import { BrandMark, brandTitle } from "@/components/ui/BrandMark";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { removeMcpServer } from "@/lib/user-api";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { PluginRow, PluginTile } from "@/components/plugins/PluginRow";
+import { Row, RowTile } from "@/components/ui/Row";
 import { addablePresets, hostBrand, McpPresetCards, presetOf, PresetRow, ServerStatus, type PresetAvailability } from "@/components/plugins/McpPresetCards";
-import { RowMenu } from "@/components/ui/RowMenu";
+import { Menu } from "@/components/ui/Menu";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
 import { Page } from "@/components/ui/PageHeader";
 
@@ -39,10 +39,10 @@ function CustomServerRow({ server, onChanged }: { server: McpServerSummary; onCh
   return (
     <>
       {dialog}
-      <PluginRow attributes={{ "data-plugin": name, "data-plugin-state": mcpServerStatus(server.status).label }} title={name} meta={serverLine(server)}
-        tile={brand === undefined ? <PluginTile icon={PlugsConnectedIcon} /> : <BrandMark brand={brand} size={18} />}
+      <Row attributes={{ "data-plugin": name, "data-plugin-state": mcpServerStatus(server.status).label }} title={name} meta={serverLine(server)}
+        tile={brand === undefined ? <RowTile icon={PlugsConnectedIcon} /> : <BrandMark brand={brand} size={18} />}
         status={<ServerStatus status={server.status} />}
-        action={<RowMenu label={`More for ${name}`} items={[{ label: "Remove", icon: TrashIcon, run: remove, danger: true }]} />} />
+        action={<Menu label={`More for ${name}`} items={[{ label: "Remove", icon: TrashIcon, run: remove, danger: true }]} />} />
     </>
   );
 }

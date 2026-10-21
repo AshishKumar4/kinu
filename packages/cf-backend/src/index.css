@@ -139,6 +139,7 @@ html, body, #root {
   --layout-tool-list: 400px;
   --layout-tool-places: 220px;
   --layout-reader: 760px;
+  --layout-flow: 520px;
 
   /* motion */
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
@@ -702,20 +703,196 @@ body { background: var(--c-bg); color: var(--c-text); }
   .p-tool-title { font-size: 17px; line-height: 24px; }
 }
 
-/* A connected or addable thing's row (components/plugins/PluginRow.tsx): tile · name and meta · status · ⋯ or +. */
-.p-plugin-row {
+/* ── The component set (components/ui/, docs/DESIGN-SYSTEM.md §2): each class is its component's alone ── */
+
+/* Row: tile · name and meta · status · ⋯ or + (ui/Row.tsx). */
+.p-row {
   display: grid; align-items: center; column-gap: 12px; min-height: 56px; padding: 0 8px;
   grid-template-columns: 32px minmax(0, 1fr) 120px 28px;
   border-radius: var(--r-row);
   transition: background-color var(--dur-state) ease-out;
 }
-.p-plugin-row:hover { background: var(--c-hover); }
-.p-plugin-row-control { grid-template-columns: 32px minmax(0, 1fr) 120px auto 28px; }
-.p-plugin-row-state { display: contents; }
+.p-row:hover { background: var(--c-hover); }
+.p-row[aria-current="true"] { background: var(--c-selected); }
+.p-row:focus-within:has(:focus-visible) { outline: 2px solid var(--c-focus); outline-offset: -2px; }
+.p-row-control { grid-template-columns: 32px minmax(0, 1fr) 120px auto 28px; }
+.p-row-state { display: contents; }
 @media (max-width: 639px) {
-  .p-plugin-row-control { grid-template-columns: 32px minmax(0, 1fr) 28px; }
-  .p-plugin-row-control .p-plugin-row-state { display: flex; align-items: center; gap: 12px; grid-row: 2; grid-column: 2 / -1; padding-bottom: 8px; }
+  .p-row-control { grid-template-columns: 32px minmax(0, 1fr) 28px; }
+  .p-row-control .p-row-state { display: flex; align-items: center; gap: 12px; grid-row: 2; grid-column: 2 / -1; padding-bottom: 8px; }
 }
+.p-row-tile {
+  display: flex; width: 32px; height: 32px; flex-shrink: 0; align-items: center; justify-content: center;
+  border: 1px solid var(--c-border); border-radius: var(--r-control); background: var(--c-fill); color: var(--c-text-3);
+}
+.p-row-action, .p-menu-trigger {
+  display: flex; width: 28px; height: 28px; flex-shrink: 0; align-items: center; justify-content: center;
+  border-radius: var(--r-control); color: var(--c-text-3); transition: background-color var(--dur-state) ease-out, color var(--dur-state) ease-out;
+}
+.p-row-action:hover, .p-menu-trigger:hover, .p-menu-trigger[data-popup-open] { background: var(--c-hover); color: var(--c-text); }
+.p-row-action:disabled { opacity: 0.4; }
+.p-row-action:focus-visible, .p-menu-trigger:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
+
+/* Menu: Kumo's dropdown at the row radius, items 32 (ui/Menu.tsx). */
+.p-menu { min-width: 180px !important; padding: 4px !important; border-radius: var(--r-row) !important; box-shadow: var(--shadow-menu) !important; }
+.p-menu [role="menuitem"] { min-height: 32px; border-radius: var(--r-control); font: 500 13px/20px var(--font-ui); }
+
+/* Pressable: a whole row or tile to press, its wash and its ring and nothing else (ui/Pressable.tsx). */
+.p-pressable {
+  display: block; width: 100%; text-align: left; background: transparent; border: 0; padding: 0; color: inherit; font: inherit;
+  border-radius: var(--r-row); cursor: pointer; transition: background-color var(--dur-state) ease-out;
+}
+.p-pressable:hover { background: var(--c-hover); }
+.p-pressable:active { background: var(--c-pressed); }
+.p-pressable:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
+
+/* A busy button's spinner, in the icon's place. */
+.p-button-spinner {
+  width: 14px; height: 14px; flex-shrink: 0; border-radius: var(--r-pill);
+  border: 2px solid currentColor; border-right-color: transparent; animation: p-spin 0.8s linear infinite;
+}
+@keyframes p-spin { to { transform: rotate(360deg); } }
+
+/* Field: the text controls, md 32 / sm 28, on the field ground with the 3:1 edge (ui/Field.tsx, ui/Select.tsx). */
+.p-field {
+  width: 100%; padding: 0 12px; border: 1px solid var(--c-field-border); border-radius: var(--r-control);
+  background: var(--c-field); color: var(--c-text); font: 400 13px/20px var(--font-ui);
+  transition: border-color var(--dur-state) ease-out;
+}
+.p-field::placeholder { color: var(--c-text-3); }
+.p-field:hover { border-color: var(--c-border-strong); }
+.p-field:focus { outline: none; border-color: var(--c-focus); }
+.p-field[aria-invalid="true"] { border-color: var(--c-danger); }
+.p-field:disabled { opacity: 0.5; cursor: default; }
+.p-field-md { height: 32px; }
+.p-field-sm { height: 28px; padding: 0 10px; }
+.p-field-area { min-height: 80px; height: auto; padding: 8px 12px; resize: vertical; }
+.p-select {
+  width: 100%; border-radius: var(--r-control) !important; border: 1px solid var(--c-field-border) !important;
+  background: var(--c-field) !important; box-shadow: none !important; font: 400 13px/20px var(--font-ui) !important;
+}
+.p-select.p-field-md { height: 32px !important; }
+.p-select.p-field-sm { height: 28px !important; }
+.p-select:focus-visible { border-color: var(--c-focus) !important; }
+
+/* Checkbox and radio: 16, the check radius and the pill (ui/Check.tsx). */
+.p-check, .p-radio {
+  display: inline-flex; width: 16px; height: 16px; flex-shrink: 0; align-items: center; justify-content: center;
+  border: 1px solid var(--c-field-border); background: var(--c-field); color: var(--c-accent-on);
+  transition: background-color var(--dur-state) ease-out, border-color var(--dur-state) ease-out;
+}
+.p-check { border-radius: var(--r-check); }
+.p-radio { border-radius: var(--r-pill); }
+.p-check[data-checked], .p-check[data-indeterminate], .p-radio[data-checked] { background: var(--c-accent); border-color: var(--c-accent); }
+.p-radio-dot { width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--c-accent-on); }
+.p-check:focus-visible, .p-radio:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
+.p-check[data-disabled], .p-radio[data-disabled] { opacity: 0.5; }
+
+/* Switch: a 32 by 18 track, a 14 thumb, white in both modes (ui/Switch.tsx). */
+.p-switch {
+  position: relative; display: inline-flex; width: 32px; height: 18px; flex-shrink: 0; align-items: center; padding: 0 2px;
+  border: 0; border-radius: var(--r-pill); background: color-mix(in srgb, var(--c-field-border) 60%, transparent);
+  cursor: pointer; transition: background-color var(--dur-state) ease-out;
+}
+.p-switch[data-checked] { background: var(--c-accent); }
+.p-switch:disabled { opacity: 0.5; cursor: default; }
+.p-switch:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
+.p-switch-thumb {
+  width: 14px; height: 14px; border-radius: var(--r-pill); background: var(--c-button-bg);
+  box-shadow: 0 1px 2px var(--c-shadow-drop); transition: transform var(--dur-state) var(--ease-glide);
+}
+.p-switch-thumb[data-checked] { transform: translateX(14px); background: var(--c-accent-on); }
+@media (prefers-reduced-motion: reduce) { .p-switch-thumb { transition: none; } }
+
+/* Tabs: an underline strip 40 tall (ui/Tabs.tsx). */
+.p-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--c-border); overflow-x: auto; scrollbar-width: none; }
+.p-tabs::-webkit-scrollbar { display: none; }
+.p-tabs-tab {
+  display: inline-flex; height: 40px; flex-shrink: 0; align-items: center; gap: 6px; padding: 0 10px; margin-bottom: -1px;
+  border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--c-text-3); font: 500 14px/20px var(--font-ui);
+  white-space: nowrap; cursor: pointer; transition: color var(--dur-state) ease-out;
+}
+.p-tabs-tab:hover { color: var(--c-text-2); }
+.p-tabs-tab[aria-current="page"] { color: var(--c-accent-fg); border-bottom-color: var(--c-accent); }
+.p-tabs-tab:focus-visible { outline: 2px solid var(--c-focus); outline-offset: -2px; }
+
+/* Chip: 24 tall and round, the status role (ui/Chip.tsx). */
+.p-chip {
+  display: inline-flex; height: 24px; max-width: 100%; align-items: center; gap: 4px; padding: 0 8px;
+  border-radius: var(--r-pill); font: 500 12px/16px var(--font-ui);
+}
+.p-chip-removable { padding-right: 4px; }
+.p-chip-neutral { background: var(--c-hover); color: var(--c-text-2); }
+.p-chip-success { background: var(--c-success-tint); color: var(--c-success); }
+.p-chip-warning { background: var(--c-warning-tint); color: var(--c-warning); }
+.p-chip-danger { background: var(--c-danger-tint); color: var(--c-danger); }
+.p-chip-info { background: var(--c-info-tint); color: var(--c-info); }
+.p-chip-accent { background: var(--c-selected); color: var(--c-accent-fg); }
+.p-chip-remove {
+  display: flex; width: 16px; height: 16px; flex-shrink: 0; align-items: center; justify-content: center;
+  border: 0; border-radius: var(--r-pill); background: transparent; color: inherit; opacity: 0.7; cursor: pointer;
+}
+.p-chip-remove:hover { opacity: 1; background: var(--c-hover); }
+.p-chip-remove:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 1px; }
+
+/* Badge: what a thing is, 20 tall at the control radius (ui/Badge.tsx). */
+.p-badge {
+  display: inline-flex; height: 20px; flex-shrink: 0; align-items: center; gap: 4px; padding: 0 6px;
+  border-radius: var(--r-control); font: 600 11px/14px var(--font-ui); letter-spacing: 0.01em; white-space: nowrap;
+}
+.p-badge-neutral { background: var(--c-hover); color: var(--c-text-2); }
+.p-badge-accent { background: var(--c-selected); color: var(--c-accent-fg); }
+.p-badge-onPicture { background: color-mix(in srgb, var(--c-overlay) 92%, transparent); color: var(--c-text); box-shadow: 0 0 0 1px var(--c-border); }
+
+/* Card: the label above, the body a box at 20 inside and 20 apart (ui/Card.tsx). */
+.p-card-body {
+  display: flex; flex-direction: column; gap: 20px; padding: 20px;
+  background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-card);
+}
+
+/* FlowCard: the 520 card of a flow and its dots (ui/FlowCard.tsx). */
+.p-flow-dot { display: block; width: 16px; height: 6px; border-radius: var(--r-pill); background: var(--c-fill); transition: width var(--dur-enter) var(--ease-out-strong); }
+.p-flow-dot-here { width: 32px; background: var(--c-accent-fg); }
+.p-flow-dot-done { background: color-mix(in srgb, var(--c-accent-fg) 40%, transparent); }
+.p-flow-card { overflow: hidden; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-card); }
+.p-flow-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--c-border); }
+
+/* Dialog: 440, 560 or 720, 24 inside, the card radius, on the overlay (ui/Modal.tsx). */
+.p-dialog {
+  display: flex; width: 100%; max-height: calc(100vh - 2rem); flex-direction: column; gap: 16px; overflow-y: auto; padding: 24px;
+  background: var(--c-overlay); border: 1px solid var(--c-border); border-radius: var(--r-card); box-shadow: var(--shadow-overlay);
+  animation: p-dialog-in var(--dur-enter) var(--ease-out-strong);
+}
+.p-dialog-sm { max-width: 440px; }
+.p-dialog-md { max-width: 560px; }
+.p-dialog-lg { max-width: 720px; }
+@keyframes p-dialog-in { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+@media (max-width: 639px) { .p-dialog { padding: 16px; } }
+@media (prefers-reduced-motion: reduce) { .p-dialog { animation: none; } }
+
+/* Popover and tooltip (ui/Popover.tsx, ui/Tooltip.tsx). */
+.p-popover { padding: 12px !important; border-radius: var(--r-card) !important; box-shadow: var(--shadow-menu) !important; }
+.p-tooltip {
+  padding: 4px 8px !important; border-radius: var(--r-control) !important; background: var(--c-text) !important;
+  color: var(--c-bg) !important; font: 400 12px/16px var(--font-ui) !important; box-shadow: none !important;
+}
+
+/* Notice: the tone's tint, a line in its ink at 30%, the body in its ink (ui/Notice.tsx). */
+.p-notice { display: flex; align-items: flex-start; gap: 12px; padding: 12px 16px; border: 1px solid; border-radius: var(--r-row); }
+.p-notice-tone-info { background: var(--c-info-tint); border-color: color-mix(in srgb, var(--c-info) 30%, transparent); color: var(--c-info); }
+.p-notice-tone-success { background: var(--c-success-tint); border-color: color-mix(in srgb, var(--c-success) 30%, transparent); color: var(--c-success); }
+.p-notice-tone-warning { background: var(--c-warning-tint); border-color: color-mix(in srgb, var(--c-warning) 30%, transparent); color: var(--c-warning); }
+.p-notice-tone-danger { background: var(--c-danger-tint); border-color: color-mix(in srgb, var(--c-danger) 30%, transparent); color: var(--c-danger); }
+.p-notice .t-body { color: inherit; }
+
+/* Meter: a 4 bar on the hover wash (ui/Meter.tsx). */
+.p-meter-track { height: 4px !important; border-radius: var(--r-pill) !important; background: var(--c-hover) !important; }
+.p-meter-accent { background: var(--c-accent) !important; border-radius: var(--r-pill) !important; }
+.p-meter-warning { background: var(--c-warning) !important; border-radius: var(--r-pill) !important; }
+.p-meter-danger { background: var(--c-danger) !important; border-radius: var(--r-pill) !important; }
+
+/* CopyField: mono in a sunken well (ui/CopyField.tsx). */
+.p-copy-field { background: var(--c-sunken) !important; border-radius: var(--r-control) !important; font-family: var(--font-mono) !important; }
 
 /* Composer — the one place the user acts; a distinct raised surface that
    lifts a touch on focus. */
