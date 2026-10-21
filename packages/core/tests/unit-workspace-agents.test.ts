@@ -245,9 +245,10 @@ describe('the Agents panel lists every agent in the workspace', () => {
     const listed = await read();
     const figures = (label: string) => listed.find((agent) => agent.label === label)?.figures;
 
-    // The EMA seeds on the first rate (0) and moves α = 0.2 toward the second (0.9).
-    expect(figures('alice')).toEqual({ tokens: 3300, usd: 0.03, activeMs: 180_000, cacheEma: 0.2 * 0.9 });
-    expect(figures('Main')).toEqual({ tokens: 550, usd: 0.005, activeMs: 60_000, cacheEma: 0.8 });
+    // The EMA seeds on the first rate (0) and moves α = 0.2 toward the second (0.9); each was last active at its turn's end.
+    const start = Date.parse('2026-09-30T10:00:00.000Z');
+    expect(figures('alice')).toEqual({ tokens: 3300, usd: 0.03, activeMs: 180_000, cacheEma: 0.2 * 0.9, lastActiveAt: start + 180_000 });
+    expect(figures('Main')).toEqual({ tokens: 550, usd: 0.005, activeMs: 60_000, cacheEma: 0.8, lastActiveAt: start + 60_000 });
   });
 
   test('an agent that has not run shows no figures, not zeros', async () => {

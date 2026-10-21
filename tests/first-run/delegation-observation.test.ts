@@ -35,7 +35,7 @@ const taskHire = call('task', 4, { op: 'hire', lifetime: 'task', role: 'task', m
 
 const durableHire = call('roster', 4, { op: 'hire' }, { name: 'task-9j4odl' });
 
-const roster = call('roster', 10, { op: 'list' }, { subagents: [{ name: 'task-9j4odl' }] });
+const roster = call('roster', 10, { op: 'list' }, { tree: [{ name: 'main', status: 'running' }, { name: 'task-9j4odl', status: 'idle' }] });
 
 test('a task hire is read by the subagent it named and the message it gave', () => {
   expect(taskHires([durableHire, taskHire]).map((hire) => [hire.agent, hire.message])).toEqual([['ask-task-ymhu3n', MISSION]]);
@@ -102,8 +102,8 @@ test('the roster must contain the exact subagent name, not a peer or substring',
   expect(observeDurableHire([durableHire, roster])).toEqual({ durableName: 'task-9j4odl', shown: true });
 
   const results: JsonValue[] = [
-    { subagents: [], peers: [{ name: 'task-9j4odl' }] },
-    { subagents: [{ name: 'task-9j4odl-extra' }] },
+    { tree: [], peers: [{ name: 'task-9j4odl' }] },
+    { tree: [{ name: 'task-9j4odl-extra', status: 'idle' }] },
     { error: 'task-9j4odl' },
   ];
 
@@ -114,15 +114,18 @@ test('the roster must contain the exact subagent name, not a peer or substring',
 
 test('retirement needs that subagent dismissed and a valid later roster in the same run', () => {
   const dismiss = call('retire', 4, { op: 'dismiss', agent: 'task-9j4odl' }, { ok: true });
-  const empty = call('retire', 6, { op: 'list' }, { subagents: [] });
+  const empty = call('retire', 6, { op: 'list' }, { tree: [{ name: 'main', status: 'running' }] });
 
   expect(observeDelegationRetirement([dismiss, empty], 'task-9j4odl').retired).toBe(true);
 
   for (const events of [
     [call('retire', 4, { op: 'dismiss', agent: 'someone-else' }, { ok: true }), empty],
-    [dismiss, call('earlier', 99, { op: 'list' }, { subagents: [] })],
-    [dismiss, call('retire', 2, { op: 'list' }, { subagents: [] })],
+    [dismiss, call('earlier', 99, { op: 'list' }, { tree: [] })],
+    [dismiss, call('retire', 2, { op: 'list' }, { tree: [] })],
     [dismiss, call('retire', 6, { op: 'list' }, { error: 'unavailable' })],
-    [dismiss, call('retire', 6, { op: 'list' }, { subagents: [{ name: 'task-9j4odl' }] })],
+    [dismiss, call('retire', 6, { op: 'list' }, { tree: [{ name: 'task-9j4odl', status: 'idle' }] })],
   ]) expect(observeDelegationRetirement(events, 'task-9j4odl').retired).toBe(false);
+
+  // Listed with retired agents asked for, the dismissed one is there, said to be dismissed.
+  expect(observeDelegationRetirement([dismiss, call('retire', 6, { op: 'list', retired: true }, { tree: [{ name: 'task-9j4odl', status: 'dismissed' }] })], 'task-9j4odl').retired).toBe(true);
 });

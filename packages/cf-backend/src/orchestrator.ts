@@ -1889,8 +1889,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * An agent's delegation: swarms over its own runtime and working context, its subtree's team, and the owner's other
-   * workspaces where its reach is external. Rungs are bounded by its own depth; at the cap the team deps are absent, so
-   * hire/ask/send/list/dismiss vanish from the enum rather than refusing.
+   * workspaces where its reach is external. Rungs are bounded by its own depth; at the cap the team and the search are
+   * not offered, so hire/swarm/assign/message/list/dismiss vanish from the enum rather than refusing.
    */
   protected actorAgentsToolDeps(actor: CFSeat, reach: ActorReach, mode: WorkMode, operation: () => OperationProfile | null): AgentsToolDeps {
     const { runtime } = actor;
@@ -1953,6 +1953,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         kind: 'task',
         ...event,
       }),
+      workspaceAgents: () => this.listWorkspaceAgents(),
+      treeOwner: actor.handle.actorId,
+      events: new EventLog(this.watchedExec, actor.handle),
     });
   }
 

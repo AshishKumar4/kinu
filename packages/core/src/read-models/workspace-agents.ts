@@ -33,6 +33,8 @@ export interface PanelAgent {
   readonly tab: boolean;
   readonly input: boolean;
   readonly actorId?: string;
+  /** The task its hirer handed it and it has not finished; absent while it holds none. */
+  readonly doing?: string;
   readonly figures: AgentFigures;
   /** Its mascot's colour, as a birth rank: Main is 0, then each chat and hire by when it was born, retired ones
    *  keeping theirs, so no two agents born within a palette's length of each other share a colour, and none changes.
@@ -163,11 +165,14 @@ function rosterAgents(walk: Walk): Uncoloured[] {
     const category = subagentCategory(entry);
 
     const running = turnOwed({ exec, now, queued }, handleOf(row));
+    const activity = subagentActivity(walk, entry, row.actorId, running);
+    const task = entry.currentTask?.trim() ?? '';
 
     agents.push({
-      key: row.actorId, label, category, activity: subagentActivity(walk, entry, row.actorId, running), parent: row.parentActorId === root.actorId ? 'main' : row.parentActorId,
+      key: row.actorId, label, category, activity, parent: row.parentActorId === root.actorId ? 'main' : row.parentActorId,
       open: { kind: 'chat', path }, tab: category === 'user' && row.parentActorId === root.actorId && entry.status !== 'dismissed',
       input: category !== 'background', actorId: row.actorId, figures: NO_FIGURES,
+      ...(task !== '' && { doing: task }),
     });
   }
 
@@ -196,7 +201,7 @@ function swarmAgents({ sql, root, actors, paths, handleOf }: Walk): Uncoloured[]
           parent: node.parentId === null ? ownerKey : `${run.rootId}/${node.parentId}`,
           open: { kind: 'node', runId: run.rootId, nodeId: node.id, owner: ownerPath }, tab: false, input: false,
           ...(nodeActor !== undefined && { actorId: nodeActor.actorId }),
-          figures: { ...(tokens !== undefined && { tokens }), activeMs: node.wallClockMs, cacheEma: null },
+          figures: { ...(tokens !== undefined && { tokens }), activeMs: node.wallClockMs, cacheEma: null, lastActiveAt: node.lastStepAt ?? node.spawnedAt },
         });
       }
     }

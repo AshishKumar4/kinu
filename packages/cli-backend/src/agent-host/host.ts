@@ -91,8 +91,8 @@ import {
 } from '@kinu.run/core';
 import { osLeaseProcess } from './lease-process';
 import {
-  BACKGROUND_POLICY, DriverLeaseHold, REAL_CLOCK,
-  type DriverKind, type DriverLeaseHolder, type InvocationSurface,
+  BACKGROUND_POLICY, DriverLeaseHold, REAL_CLOCK, readAgentFigures, readWorkspaceAgents,
+  type ActorHandle, type DriverKind, type DriverLeaseHolder, type InvocationSurface, type PanelAgent,
   type SessionEvent,
 } from '@kinu.run/core';
 import {
@@ -159,6 +159,8 @@ interface LocalTickResult {
  */
 interface HostTree {
   readonly db: Database;
+  /** The workspace's own agent, the root of every hire here. */
+  readonly root: ActorHandle;
   readonly host: ActorHost;
   /** The root's actor directory, held: `localActorDirectory` refuses a non-root handle. */
   readonly directory: WorkspaceActorDirectory;
@@ -556,7 +558,7 @@ export class LocalAgentHost {
     });
 
     return {
-      db, host, directory, runtimes, orchestrations, liveReads, driving: 0, jobsDriven: new Set(),
+      db, root: ws.rt.actor, host, directory, runtimes, orchestrations, liveReads, driving: 0, jobsDriven: new Set(),
       hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: osLeaseProcess(process.pid) }, this.driverKind),
     };
   }
@@ -1136,6 +1138,19 @@ export class LocalAgentHost {
     };
   }
 
+  /** The workspace's agents as the cloud's sidebar reads them (`readWorkspaceAgents`), over this tree's one database:
+   *  an agent hosted here and pumping runs, and its own session reports its chat. */
+  private async workspaceAgents(tree: HostTree): Promise<PanelAgent[]> {
+    const sql = makeSql(tree.db);
+
+    return await readWorkspaceAgents({
+      sql, exec: makeSqlExec(tree.db), root: tree.root, actors: tree.directory.list({ retired: true }),
+      figures: (actorIds) => readAgentFigures(sql, actorIds),
+      queued: (actorId) => this.byActor.get(actorId)?.session.pumping() ?? false,
+      chat: (actorId) => this.byActor.get(actorId)?.session.chatReport() ?? null,
+    });
+  }
+
   private buildTeam(parent: HostEntry): TeamToolDeps {
     const delegation = delegationBudgetOf((actorId) => parent.tree.host.describe(actorId), parent.actor.record);
 
@@ -1154,6 +1169,9 @@ export class LocalAgentHost {
         { subagent: event.subagent, timestamp: event.timestamp },
         { status: 'task', text: event.content },
       )),
+      workspaceAgents: () => this.workspaceAgents(parent.tree),
+      treeOwner: parent.parentKey === null ? 'main' : parent.actor.record.actorId,
+      events: parent.eventLog,
     };
 
     // What a capped agent is offered is core's (`offered`): no team at all.

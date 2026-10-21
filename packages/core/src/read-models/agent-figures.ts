@@ -10,6 +10,8 @@ export interface AgentFigures {
   readonly usd?: number;
   readonly activeMs: number;
   readonly cacheEma: number | null;
+  /** When its newest run event was recorded (a step, a model call, a turn's start or end); absent before it ran. */
+  readonly lastActiveAt?: number;
 }
 
 export const NO_FIGURES: AgentFigures = { activeMs: 0, cacheEma: null };
@@ -31,6 +33,8 @@ const TotalsSchema = v.object({
   activeMs: CompensatedSchema,
   /** The newest {@link AGENT_STEP_WINDOW} steps, oldest first. */
   window: v.array(WindowStepSchema),
+  /** Its newest folded event's time; absent from totals folded before it was kept, until the next event. */
+  last: v.optional(v.number()),
 });
 
 type Compensated = v.InferOutput<typeof CompensatedSchema>;
@@ -90,9 +94,13 @@ function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
     WHERE e.actor_id = ${actorId} AND e.rowid > ${stored?.through ?? 0}
     ORDER BY e.ts, e.rowid`;
 
-  let { input, output, usd, activeMs } = totals;
+  let { input, output, usd, activeMs, last } = totals;
 
   for (const event of events) {
+    const at = Date.parse(event.ts);
+
+    if (Number.isFinite(at)) last = Math.max(last ?? at, at);
+
     if (event.input !== null) input = (input ?? 0) + event.input;
 
     if (event.output !== null) output = (output ?? 0) + event.output;
@@ -119,7 +127,7 @@ function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
     const through = events.reduce((newest, event) => Math.max(newest, event.seq), 0);
 
     void sql`INSERT INTO agent_figure_folds (actor_id, through, totals)
-      VALUES (${actorId}, ${through}, ${JSON.stringify({ input, output, usd, activeMs, window })})
+      VALUES (${actorId}, ${through}, ${JSON.stringify({ input, output, usd, activeMs, window, last })})
       ON CONFLICT (actor_id) DO UPDATE SET through = excluded.through, totals = excluded.totals`;
   }
 
@@ -128,6 +136,7 @@ function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
     ...(usd !== null && { usd: usd[0] + usd[1] }),
     activeMs: Math.round(activeMs[0] + activeMs[1]),
     cacheEma,
+    ...(last !== undefined && { lastActiveAt: last }),
   };
 }
 
@@ -149,6 +158,7 @@ const AgentFiguresSchema = v.object({
   usd: v.optional(v.number()),
   activeMs: v.number(),
   cacheEma: v.nullable(v.number()),
+  lastActiveAt: v.optional(v.number()),
 });
 
 export function recordAgentFigures(sql: SqlExecutor, actorId: string, figures: AgentFigures): void {

@@ -54,15 +54,12 @@ export function delegationBudgetOf(
   return { depth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - depth) };
 }
 
-/** Whether this actor may still hire. */
+/** Whether this actor may still hire or search: a search's nodes are agents a level below it, as a hire is. */
 export function delegationExhausted(budget: DelegationBudget): boolean {
   return budget.maxDepth <= 0;
 }
 
-/**
- * The refusal at the cap: `denied`, not `bad_input` (obs/error.ts). Covers both hire and
- * role-targeted `ask`, and points to a search, which has its own `depth` cap.
- */
+/** The refusal at the cap: `denied`, not `bad_input` (obs/error.ts). Covers a hire of either lifetime and a search. */
 export interface DelegationDepthRefusal {
   readonly reason: Extract<ErrorCode, 'denied'>;
   readonly error: string;
@@ -82,9 +79,7 @@ export function delegationDepthRefusal(budget: DelegationBudget): DelegationDept
     reason: 'denied',
     error:
       `Cannot create an agent below this one: ${whereItSits(budget)}`
-      + 'This covers BOTH lifetimes that birth a child: a durable hire and a `lifetime:"task"` '
-      + 'hire, because they add a level through the same substrate. An agent at this depth has no team; run '
-      + 'the work as a search where searches are on: agents({op:"swarm", task, config:{context:"inherit"}}) inherits '
-      + 'your conversation and adds no depth to the subagent tree. Otherwise do the work yourself.',
+      + 'This covers every call that starts one: a durable hire, a `lifetime:"task"` hire and a swarm, whose nodes '
+      + 'are agents a level below this one. An agent at this depth has no team and runs no search: do the work yourself.',
   };
 }
