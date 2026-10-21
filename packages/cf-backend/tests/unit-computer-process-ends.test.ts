@@ -1,54 +1,52 @@
 /**
  * Where a computer's process run as a job ends (`ComputerProcessEnds`): told while its job waits, it settles it; told
- * while none does (the workspace restarted and its job is not yet resumed), it is kept for the resume; told of a job that
- * no longer runs, nothing is kept.
+ * while none does (the workspace restarted and its job is not yet resumed), the job's row settles with it, so nothing
+ * else keeps the fact; a resume after that returns at once.
  */
-import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { ComputerProcessEnds, initComputerProcessEndsTable } from '@kinu.run/core';
+import { ComputerProcessEnds, type ComputerProcessEnd } from '@kinu.run/core';
 
-function ends(running: (jobId: string) => boolean) {
-  const db = new Database(':memory:');
-  initComputerProcessEndsTable((sql) => { db.run(sql); });
+/** Job rows as a runner settles them: running until completed with an end. */
+function rows(running: readonly string[]) {
+  const live = new Set(running);
+  const completed = new Map<string, ComputerProcessEnd>();
 
-  return {
-    // As a Durable Object's SQL: each statement runs as it is issued, and its rows are read after.
-    ends: new ComputerProcessEnds({
-      exec: (query, ...bindings) => {
-        const rows = db.query<Record<string, string | number | null>, (string | number | null)[]>(query).all(...bindings);
+  const ends = new ComputerProcessEnds({
+    running: (jobId) => live.has(jobId),
+    complete: async (jobId, end) => {
+      if (!live.delete(jobId)) return;
+      completed.set(jobId, end);
+    },
+  });
 
-        return { toArray: () => rows };
-      },
-    }, running),
-    kept: () => db.query('SELECT job FROM computer_process_ends').all(),
-  };
+  return { ends, completed, live };
 }
 
 describe("a computer process's end", () => {
-  test('told while its job waits, settles it at once', async () => {
-    const { ends: register, kept } = ends(() => true);
-    const waiting = register.ended('bgjob-dev');
+  test('told while its job waits, settles it through the waiting promise, and no row is written apart', async () => {
+    const { ends, completed } = rows(['bgjob-dev']);
+    const waiting = ends.ended('bgjob-dev');
 
-    register.record('bgjob-dev', { exitCode: 1, tail: 'EADDRINUSE' });
+    await ends.record('bgjob-dev', { exitCode: 1, tail: 'EADDRINUSE' });
 
     expect(await waiting).toEqual({ exitCode: 1, tail: 'EADDRINUSE' });
-    expect(kept()).toEqual([]);
+    expect(completed.size).toBe(0);
   });
 
-  test('told while none waits, is kept, and given once to the resume that asks', async () => {
-    const { ends: register, kept } = ends(() => true);
+  test('told while none waits, settles the job row with it; a resume after that returns at once', async () => {
+    const { ends, completed } = rows(['bgjob-api']);
 
-    register.record('bgjob-api', { tail: 'lost' });
+    await ends.record('bgjob-api', { tail: 'lost' });
 
-    expect(await register.ended('bgjob-api')).toEqual({ tail: 'lost' });
-    expect(kept()).toEqual([]);
+    expect(completed.get('bgjob-api')).toEqual({ tail: 'lost' });
+    expect(await ends.ended('bgjob-api')).toEqual({ tail: '' });
   });
 
-  test('told of a job that no longer runs, keeps nothing', () => {
-    const { ends: register, kept } = ends(() => false);
+  test('told of a job that no longer runs, settles nothing', async () => {
+    const { ends, completed } = rows([]);
 
-    register.record('bgjob-gone', { exitCode: 143, tail: '' });
+    await ends.record('bgjob-gone', { exitCode: 143, tail: '' });
 
-    expect(kept()).toEqual([]);
+    expect(completed.size).toBe(0);
   });
 });

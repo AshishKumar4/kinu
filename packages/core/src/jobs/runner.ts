@@ -736,6 +736,19 @@ export class BackgroundJobRunner {
   }
 
   /**
+   * A running job's work answered where its own promise cannot hear it (its object restarted before the job was resumed):
+   * its row settles with `result`, as its promise's would, and the agent is woken as for any settle. A job no longer
+   * running has nothing to complete.
+   */
+  async complete(jobId: string, result: JsonValue): Promise<void> {
+    const job = this.deps.store.get(jobId);
+
+    if (job?.status !== 'running') return;
+
+    if (this.deps.store.settle(jobId, job.epoch, serializeJobResult({ value: result }), Date.now())) await this.wake(jobId);
+  }
+
+  /**
    * Tells the agent something of a job that is still running, which it still waits on: a running job's wake would read
    * as its end. Once per `note`: a re-delivery of the same note lands as one message. A job no longer running has
    * nothing to note.

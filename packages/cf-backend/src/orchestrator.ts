@@ -269,7 +269,7 @@ import type { RestoreStatus, SessionRecord, TerminalSession } from "@kinu.run/de
 import type { BoxSize } from "@kinu.run/devbox/sizes";
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY, type ComputerSizeState } from "./computer-size";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
-import { forgetSandboxPreviews, initComputerProcessEndsTable, sandboxPreviewExposures } from "@kinu.run/core";
+import { forgetSandboxPreviews, sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
 import {
   terminalEffect, declareTerminalRoster, isDefinitiveTerminalFailure, CompletedTurnSchema,
@@ -4409,8 +4409,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     initTurnBranchesTable(execRaw);
     // Owned by this root: the container is the workspace's; subordinates ride their parent's.
     initSandboxLifecycleTable(execRaw);
-    // Where its computer's process jobs end, as the box tells it: the workspace object's, every actor's.
-    initComputerProcessEndsTable(execRaw);
     initActivationTable(execRaw);
     initForkNoticeTable(execRaw);
   }
@@ -7299,16 +7297,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sql: this.boundSql,
       inbox: this.workspaceAgentDeliveries().signals,
       jobs: {
-        ended: (jobId, end) => { this.processEnds.record(jobId, end); },
+        ended: (jobId, end) => this.processEnds.record(jobId, end),
         // The note goes to the actor whose job it is: the workspace agent's, or a hire's own.
         restored: async (jobId, note) => {
-          const [row] = this.ctx.storage.sql.exec('SELECT actor_id FROM background_jobs WHERE id = ?', jobId).toArray();
-          const actorId = typeof row?.['actor_id'] === 'string' ? row['actor_id'] : null;
+          const row = this.jobRow(jobId);
 
-          if (actorId === null) return;
-          const runner = actorId === this.actorHandle().actorId ? this.jobRunner : (this.jobAuthorities.live(actorId) ?? this.reviveJobAuthority(actorId))?.runner;
-
-          await runner?.note(jobId, note);
+          if (row !== null) await this.jobRunnerHolding(row.actorId)?.note(jobId, note);
         },
       },
       // The workspace name is the only dimension the lifecycle module cannot know.

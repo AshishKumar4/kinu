@@ -108,7 +108,7 @@ import {
   BackgroundJobRunner, type JobResumer, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
   invocationBackgroundPolicy,
   type BackgroundJobStore, type TaskListStore,
-  resumeBackgroundJob, resumableBackgroundJob, computerProcessResume, stopComputerProcessJob, harvestBackgroundJob, type ActorToolsets,
+  resumeBackgroundJob, resumableBackgroundJob, computerProcessJob, computerProcessResume, stopComputerProcessJob, harvestBackgroundJob, type ActorToolsets,
   cancelCurrentWork, getStoredModelSpec,
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
@@ -1898,8 +1898,34 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Where this object's actors' computer processes run as jobs end (`ComputerProcessEnds`). */
   protected get processEnds(): ComputerProcessEnds {
-    return this._processEnds ??= new ComputerProcessEnds(this.ctx.storage.sql, (jobId) => this.ctx.storage.sql
-      .exec('SELECT status FROM background_jobs WHERE id = ?', jobId).toArray()[0]?.['status'] === 'running');
+    return this._processEnds ??= new ComputerProcessEnds({
+      running: (jobId) => this.jobRow(jobId)?.status === 'running',
+      // The end is the job's own outcome: its row settles with it, through the runner that holds the job.
+      complete: async (jobId, end) => {
+        const row = this.jobRow(jobId);
+        const process = row === null ? null : computerProcessJob(row.kind, row.input);
+
+        if (row !== null && process !== null) await this.jobRunnerHolding(row.actorId)?.complete(jobId, { processId: process.processId, ...end });
+      },
+    });
+  }
+
+  /** A job's row in the workspace's one job table, whichever actor's it is. */
+  protected jobRow(jobId: string): { readonly actorId: string; readonly kind: string; readonly status: string; readonly input: JsonValue } | null {
+    const [row] = this.ctx.storage.sql.exec('SELECT actor_id, kind, status, input_json FROM background_jobs WHERE id = ?', jobId).toArray();
+    const parsed = v.safeParse(v.object({ actor_id: v.string(), kind: v.string(), status: v.string(), input_json: v.nullable(v.string()) }), row);
+
+    if (!parsed.success) return null;
+    const { actor_id: actorId, kind, status, input_json: input } = parsed.output;
+
+    return { actorId, kind, status, input: input === null ? null : v.parse(JsonValueSchema, JSON.parse(input)) };
+  }
+
+  /** The runner that holds `actorId`'s jobs: the workspace agent's, or a hire's own, revived if it is not hosted now. */
+  protected jobRunnerHolding(actorId: string): BackgroundJobRunner | null {
+    if (actorId === this.actorHandle().actorId) return this.jobRunner;
+
+    return (this.jobAuthorities.live(actorId) ?? this.reviveJobAuthority(actorId))?.runner ?? null;
   }
 
   protected get jobs(): BackgroundJobStore {
@@ -2097,10 +2123,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** A cancelled job that is a computer's process, read from the workspace's one job table, whichever actor's it is. */
   private async stopComputerProcessJob(jobId: string): Promise<void> {
-    const [row] = this.ctx.storage.sql.exec('SELECT kind, input_json FROM background_jobs WHERE id = ?', jobId).toArray();
-    const job = v.safeParse(v.object({ kind: v.string(), input_json: v.string() }), row);
-
-    await stopComputerProcessJob(job.success ? { kind: job.output.kind, input: v.parse(JsonValueSchema, JSON.parse(job.output.input_json)) } : null, this.rt.sandboxHandle, jobId);
+    await stopComputerProcessJob(this.jobRow(jobId), this.rt.sandboxHandle, jobId);
   }
 
   private async cancelBackgroundDeviceRequests(jobId: string): Promise<void> {

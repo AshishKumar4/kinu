@@ -410,11 +410,6 @@
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "computer_process_ends@packages/core/src/execution/computer-process-ends.ts": [
-    "job TEXT PRIMARY KEY",
-    "exit_code INTEGER",
-    "tail TEXT NOT NULL"
-  ],
   "connection_tickets@packages/core/src/state/user-schema.ts": [
     "ticket_hash TEXT PRIMARY KEY",
     "purpose TEXT NOT NULL CHECK (purpose IN (${sqlCheckList(CONNECTION_TICKET_PURPOSES)}))",

@@ -142,7 +142,7 @@ export interface SandboxLifecycleDeps {
    * (`runner.note`). The job's own wake tells the agent, so no incident text does.
    */
   readonly jobs?: {
-    readonly ended: (jobId: string, end: ComputerProcessEnd) => void;
+    readonly ended: (jobId: string, end: ComputerProcessEnd) => Promise<void>;
     readonly restored: (jobId: string, note: { readonly id: string; readonly text: string }) => Promise<void>;
   };
   /** Required: an absent instrument looks exactly like a quiet fleet. */
@@ -231,8 +231,12 @@ export function acceptSandboxLifecycleIncident(
     const { job } = incident;
 
     if (job !== undefined && deps.jobs !== undefined && (incident.stage === 'process-ended' || incident.stage === 'process-restored')) {
-      if (incident.stage === 'process-ended') deps.jobs.ended(job, { ...(incident.exitCode !== undefined && { exitCode: incident.exitCode }), tail: incident.reason });
-      else yield* attempt({ doing: "noting a computer process's restore to its job", otherwise: 'io' }, () => deps.jobs?.restored(job, { id: incident.incidentId, text: incidentText(incident) }) ?? Promise.resolve());
+      const { jobs } = deps;
+      const end = { ...(incident.exitCode !== undefined && { exitCode: incident.exitCode }), tail: incident.reason };
+
+      yield* incident.stage === 'process-ended'
+        ? attempt({ doing: "settling a computer process's job with its end", otherwise: 'io' }, () => jobs.ended(job, end))
+        : attempt({ doing: "noting a computer process's restore to its job", otherwise: 'io' }, () => jobs.restored(job, { id: incident.incidentId, text: incidentText(incident) }));
 
       void deps.sql`UPDATE sandbox_lifecycle_incidents SET outcome = ${'queued'} WHERE incident_id = ${incident.incidentId}`;
       recordSettlement('ok', '');
