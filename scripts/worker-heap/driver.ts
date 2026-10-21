@@ -144,7 +144,8 @@ type BindingInputs = { readonly stream?: boolean; readonly messages?: readonly o
 /**
  * What a call that is no turn's step answers, at once, in the form it asked for: a completion, and the memory lane's
  * structured call. A turn's step is known by the tools it offers, not by its stream: every Workers AI call streams
- * (`WORKERS_AI_STREAMS_GENERATE`). Answered a step's prose until 2026-10-20, the memory call failed off its schema,
+ * (`WORKERS_AI_STREAMS_GENERATE`). The gate's agents run the default roles, every step of which offers tools; a role
+ * offered none (an account role with `allowedTools: []`) would be answered here, so the gate does not measure one. Answered a step's prose until 2026-10-20, the memory call failed off its schema,
  * and each failure's three 0.2 MB log lines stayed live in the DevTools console this gate attaches: the idle workspace
  * held 6.6 MB where it had held 3.9 MB (armada evo-42). Null for a turn's step.
  */

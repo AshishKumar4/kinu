@@ -1186,6 +1186,75 @@ describe('LocalAgentHost', () => {
     await host.close();
   });
 
+  // An owner who never answers (a measured run has none) leaves the report its hirer was sent queued: settle is done
+  // once nothing can run, not once that report's turn has.
+  test("settle returns while a hire's report waits behind its hirer's open question to the owner", async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    const ask = { questions: [{ id: 'units', question: 'Which unit should the ledger store?', header: 'Units', options: [{ label: 'Cents', description: 'Exact.' }, { label: 'Dollars', description: 'Readable.' }], recommended: 0 }] };
+    const childStarted = Promise.withResolvers<void>();
+    const childGate = Promise.withResolvers<void>();
+    const rootAsked = Promise.withResolvers<void>();
+    const rootPrompts: string[] = [];
+    let calls = 0;
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => {
+        calls += 1;
+
+        if (calls === 1) {
+          childStarted.resolve();
+          await childGate.promise;
+
+          return { stream: textStream('child report', usage), response: { headers: {} } };
+        }
+
+        const prompt = JSON.stringify(options.prompt);
+        rootPrompts.push(prompt);
+
+        if (prompt.includes('ask_owner')) return { stream: textStream('ok', usage), response: { headers: {} } };
+
+        return {
+          stream: new ReadableStream<LanguageModelV2StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'tool-call', toolCallId: 'call_ask', toolName: 'ask_owner', input: JSON.stringify(ask) });
+              controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    });
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+
+    host.subscribe((agent, event) => {
+      if (agent === 'root' && event.type === 'turn-end') rootAsked.resolve();
+    });
+    const team = await host.team('root');
+
+    await team.create({ name: 'researcher', role: 'researcher', mission: 'Investigate the incident.' });
+    await team.assign({ name: 'researcher', task: 'Find the root cause and report it.', mode: 'build' });
+    await childStarted.promise;
+    const root = await host.acquire('root');
+
+    await root.send('Ask me which unit the ledger stores, then wait.', { id: crypto.randomUUID() });
+    await rootAsked.promise;
+    childGate.resolve();
+    await host.settle();
+
+    const open = (await root.listOwnerQuestions()).filter((asking) => asking.asked.status === 'open');
+
+    expect({ open: open.length, reportRead: rootPrompts.some((prompt) => prompt.includes('child report')), pumping: ['root', 'root/researcher'].map((key) => host.peek(key)?.pumping()) })
+      .toEqual({ open: 1, reportRead: false, pumping: [false, false] });
+    await host.close();
+  });
+
   /** B10, local host: one assignment row, one runner, one turn, driven by the brief rather than a reactor digest. */
   test('a hired child runs its brief once, as its own instruction, under the row\'s mode', async () => {
     const brief = 'Reconcile the ledger and report the variance.';

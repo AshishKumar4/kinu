@@ -33,7 +33,7 @@ const DECISION_MODEL_IDS: ReadonlySet<string> = new Set(['@cf/cloudflare/clef', 
 /** The product lanes that call the binding, each known by its real request shape: a decision model's `state` and
  *  `questions` (rating), a completion led by a system message (title), a user-only chat (sleep-time judge). Every
  *  Workers AI call streams (`WORKERS_AI_STREAMS_GENERATE`), so a turn is known by the tools it offers; turns call the
- *  HTTP seam, never here. */
+ *  HTTP seam, never here, so a tool-free role's turn reaching here would read as a title and is not one these suites run. */
 export const AI_LANES = ['decision', 'title', 'sleep'] as const;
 
 export function aiLane({ model, inputs }: AiRun): (typeof AI_LANES)[number] | null {
