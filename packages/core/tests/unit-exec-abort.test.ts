@@ -1,6 +1,6 @@
 // The AbortSignal chain from `shell` and executor exec tools; one dropped link makes it a no-op.
 import { describe, test, expect } from 'bun:test';
-import { oneMachine, toolExecute } from '@kinu.run/test-utils';
+import { NO_JOBS, oneMachine, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
@@ -359,7 +359,7 @@ describe('remote executor exec abort', () => {
     const { rt } = createTestRuntime();
 
     const provider = createNimbusWorkspaceExecutor({
-      box, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
+      box, jobs: NO_JOBS, inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
     });
 
     const controller = new AbortController();

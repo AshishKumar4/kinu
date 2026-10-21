@@ -1,15 +1,15 @@
 /**
- * A release that reshapes tables. Each Durable Object repairs its own database the first time the new build opens it,
+ * A release that reshapes tables. Each Durable Object resets its own database the first time the new build opens it,
  * before any call reads it (core state/schema-repair.ts), so no step here is needed for a database to be right. This is
- * the deploy's view of those repairs, before and after the upload.
+ * the deploy's view of those resets, before and after the upload.
  *
  * THE PLAN, before the upload. The genesis lock (scripts/schema-genesis.lock.json) of the build the deployment serves,
  * diffed against the candidate's: each table that changed, the class whose init makes it (scripts/schema-classes.json),
- * and what its repair does. A reshaped table is rebuilt keeping its rows; a removed one is dropped where it is held; one
- * gaining a NOT NULL column with no default cannot keep its rows, which a regenerable cache (its DDL says so, and what
- * refills it) gives up and any other table refuses. A changed table no class makes is repaired by no object, so it must
- * take this build's writes as it is. Every refusal stops the deploy before the upload; production confirms, in words
- * naming them, the tables whose rows go.
+ * and what its reset does (the owner's rule, 2026-10-20). A reshaped table is dropped where it is held and made anew
+ * empty, and so is every table that refers to it by a foreign key or declares itself derived from it, transitively,
+ * named with it; a removed one is dropped where it is held. No row is carried over. A changed table no class makes is
+ * reset by no object, so it is refused (the drift gate holds every table to a class). Every refusal stops the deploy
+ * before the upload; production confirms, in words naming them, every table that is dropped.
  *
  * THE WALK, after the upload: every object opened once under the candidate, so each repairs itself before a user waits
  * on it, and its census read back with what its repair did. It starts from the accounts `/ops/roots` names (the builtin
@@ -29,7 +29,7 @@
 import { randomBytes } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import * as v from 'valibot';
-import { OPS_OBJECTS_PER_REQUEST, REGENERABLE, sha256Hex, type TablesAnswer } from '@kinu.run/core';
+import { derivedFrom, OPS_OBJECTS_PER_REQUEST, sha256Hex, type TablesAnswer } from '@kinu.run/core';
 import { restCall } from './cloudflare-rest';
 import type { GenesisLock } from './schema-drift';
 
@@ -105,83 +105,76 @@ export function changedTables(from: GenesisLock, to: GenesisLock): ReleaseTables
   return { changed, added };
 }
 
-/** The word a genesis part starts with when it constrains the table, rather than declaring a column. */
-const TABLE_CONSTRAINT = /^(?:PRIMARY|UNIQUE|CHECK|FOREIGN|CONSTRAINT)\b/iu;
-
-/** A part's column, or null for a table constraint. */
-function columnOf(part: string): string | null {
-  return TABLE_CONSTRAINT.test(part) ? null : (part.split(/\s+/u)[0] ?? '').replaceAll('"', '');
-}
-
-/** A column a row cannot be written without: NOT NULL, no default (or a NULL one), not generated, not a rowid alias. */
-function required(part: string): boolean {
-  const defaulted = /\bDEFAULT\b/iu.test(part) && !/\bDEFAULT\s+\(?\s*NULL\b/iu.test(part);
-
-  return /\bNOT NULL\b/iu.test(part) && !defaulted && !/\bGENERATED\b|^\S+\s+INTEGER\s+PRIMARY KEY\b/iu.test(part);
-}
-
 /** One changed table as the plan finds it. */
 export interface TableVerdict {
   readonly table: string;
   /** The classes whose init makes it, in the candidate. */
   readonly classes: readonly string[];
-  readonly does: 'rebuild' | 'retire' | 'refill' | 'as-is' | 'local' | 'refuse';
-  /** For `refill`, what refills it; for `refuse`, why. */
+  readonly does: 'drop' | 'retire' | 'local' | 'refuse';
+  /** For a `drop` the table did not change, the table it refers to; for `refuse`, why. */
   readonly why?: string;
 }
 
-/** What each repair does to `table`, from its genesis in both locks: `regenerable` is what refills it, when its
- *  candidate DDL declares it a cache. */
-export function verdictOf(table: ChangedTable, at: { from: GenesisLock; to: GenesisLock; classes: Readonly<Record<string, readonly string[]>>; regenerable: string | null }): TableVerdict {
+/** What each reset does to `table`, from its genesis in both locks. */
+export function verdictOf(table: ChangedTable, at: { to: GenesisLock; classes: Readonly<Record<string, readonly string[]>> }): TableVerdict {
   const classes = Object.entries(at.classes).filter(([, tables]) => tables.includes(table.table)).map(([name]) => name);
-  const before = byTable(at.from).tables.get(table.table)?.parts ?? [];
   const after = byTable(at.to).tables.get(table.table)?.parts ?? [];
-  const held = new Set(before.map(columnOf));
-  const added = after.filter((part) => columnOf(part) !== null && !held.has(columnOf(part)));
-  const unfillable = added.filter(required).map(columnOf);
   const verdict = { table: table.table, classes };
 
   if (table.change === 'removed') return { ...verdict, does: 'retire' };
 
   if (classes.length > 0 && classes.every((name) => name === 'local')) return { ...verdict, does: 'local' };
 
-  // A view holds no rows: its class's repair makes it again from the init; none makes one no class's init does.
+  // A view holds no rows: its class's reset makes it again from the init; none makes one no class's init does.
   if (after.length === 1 && /^SELECT\b/iu.test(after[0] ?? '')) {
-    return classes.length > 0 ? { ...verdict, does: 'rebuild', why: 'a view, made again by its init' }
-      : { ...verdict, does: 'refuse', why: 'a view no class\'s init makes, so no repair makes it again' };
+    return classes.length > 0 ? { ...verdict, does: 'drop', why: 'a view, made again by its init' }
+      : { ...verdict, does: 'refuse', why: 'a view no class\'s init makes, so no reset makes it again' };
   }
 
-  if (classes.length === 0) {
-    // No object repairs it: it stays as the build before made it, which must take this build's writes.
-    const kept = new Set(after.map(columnOf));
-    const dropped = before.filter((part) => columnOf(part) !== null && !kept.has(columnOf(part)) && required(part)).map(columnOf);
+  if (classes.length > 0) return { ...verdict, does: 'drop' };
 
-    const reasons = [
-      ...added.length > 0 ? [`it lacks this build's new column(s) ${added.map(columnOf).join(', ')}`] : [],
-      ...dropped.length > 0 ? [`its old column(s) ${dropped.join(', ')} refuse this build's rows`] : [],
-      ...after.some((part) => columnOf(part) === null && !before.includes(part)) ? ['its constraints changed'] : [],
-      ...after.some((part) => columnOf(part) !== null && held.has(columnOf(part)) && !before.includes(part)) ? ['a column it keeps changed'] : [],
-    ];
+  // The drift gate holds every declared table to a class, so only a candidate it did not pass reaches this.
+  return { ...verdict, does: 'refuse', why: 'no class in scripts/schema-classes.json makes it, so no object resets it' };
+}
 
-    return reasons.length === 0 ? { ...verdict, does: 'as-is' }
-      : { ...verdict, does: 'refuse', why: `no class's init makes it, so no repair reaches it, and as the build before left it ${reasons.join('; ')}` };
+/** The tables `parts` name in a REFERENCES clause. */
+function parentsIn(parts: readonly string[]): string[] {
+  return parts.flatMap((part) => [...part.matchAll(/\bREFERENCES\s+"?([A-Za-z_][A-Za-z0-9_]*)"?/giu)].map((match) => match[1] ?? ''));
+}
+
+/** Each table a candidate file declares derived from others, by the mark beside its DDL (`DERIVED_FROM`). */
+export function derivedIn(source: string): Map<string, string[]> {
+  return new Map([...source.matchAll(/CREATE TABLE IF NOT EXISTS (\w+) \(([^\n]*)/gu)]
+    .map((match) => [match[1] ?? '', derivedFrom(match[2])] as const).filter(([, sources]) => sources.length > 0));
+}
+
+/** The tables the candidate holds that refer to a dropped one by a foreign key, or declare themselves derived from one
+ *  (`derived`, from `derivedIn`), transitively, and are not dropped already: each object drops them with it (core
+ *  state/schema-repair.ts), so the plan names each with the table it goes with. */
+export function referrersOf(verdicts: readonly TableVerdict[], at: { to: GenesisLock; classes: Readonly<Record<string, readonly string[]>>; derived: ReadonlyMap<string, readonly string[]> }): TableVerdict[] {
+  const tables = byTable(at.to).tables;
+  const named = new Set(verdicts.filter((verdict) => verdict.does === 'drop' || verdict.does === 'retire').map((verdict) => verdict.table));
+  const found: TableVerdict[] = [];
+  const classesOf = (table: string) => Object.entries(at.classes).filter(([, held]) => held.includes(table)).map(([name]) => name);
+
+  for (let grown = true; grown;) {
+    grown = false;
+
+    for (const [table, { parts }] of [...tables].sort(([a], [b]) => a.localeCompare(b))) {
+      const parent = parentsIn(parts).find((name) => named.has(name) && name !== table);
+      const source = (at.derived.get(table) ?? []).find((name) => named.has(name) && name !== table);
+
+      if (named.has(table) || (parent === undefined && source === undefined)) continue;
+      named.add(table);
+      found.push({ table, classes: classesOf(table), does: 'drop', why: parent === undefined ? `dropped with ${source ?? ''}, which it is derived from` : `dropped with ${parent}, which it refers to` });
+      grown = true;
+    }
   }
 
-  if (unfillable.length === 0) return { ...verdict, does: 'rebuild' };
-
-  return at.regenerable === null
-    ? { ...verdict, does: 'refuse', why: `its new column(s) ${unfillable.join(', ')} have no default, so its rows cannot be kept, and its DDL does not declare it a regenerable cache` }
-    : { ...verdict, does: 'refill', why: at.regenerable };
+  return found;
 }
 
-/** What refills `table`, read off its CREATE statement in `source` (its declaring file), or null for no cache. */
-export function regenerableIn(source: string, table: string): string | null {
-  const start = new RegExp(`CREATE TABLE IF NOT EXISTS ${table} \\(([^\\n]*)`, 'u').exec(source);
-
-  return start === null ? null : REGENERABLE.exec(start[1] ?? '')?.[1] ?? null;
-}
-
-/** The plan's lines: what each changed table's repair does, grouped, the tables whose rows go named first. */
+/** The plan's lines: what each changed table's reset does, grouped, the tables whose rows go named first. */
 export function planLines(verdicts: readonly TableVerdict[], added: readonly string[]): string[] {
   const named = (does: TableVerdict['does']) => verdicts.filter((verdict) => verdict.does === does);
   const line = (verdict: TableVerdict) => `  ${verdict.table} [${verdict.classes.join(', ') || 'no class'}]${verdict.why === undefined ? '' : `: ${verdict.why}`}`;
@@ -189,23 +182,20 @@ export function planLines(verdicts: readonly TableVerdict[], added: readonly str
 
   return [
     ...section('REFUSED (the deploy stops here):', 'refuse'),
-    ...section('LOSES DATA, a regenerable cache made anew empty where its rows cannot be copied, then refilled by:', 'refill'),
+    ...section('LOSES DATA, dropped where held and made anew empty by its init:', 'drop'),
     ...section('LOSES DATA, dropped where held (no build reads it):', 'retire'),
-    ...section('rebuilt where held, every row kept:', 'rebuild'),
-    ...section('left as the build before made it, which takes this build\'s writes (no class makes it):', 'as-is'),
     ...section('CLI-local, outside this deploy:', 'local'),
     ...added.length === 0 ? [] : [`added, made by each database's init: ${added.join(', ')}`],
   ];
 }
 
-/** The words a production deploy that loses rows is confirmed with, naming every table whose rows go; null where
- *  none does. */
+/** The words a production deploy that drops tables is confirmed with, naming every one; null where none is. */
 export function confirmation(verdicts: readonly TableVerdict[]): string | null {
   const named = (does: TableVerdict['does']) => verdicts.filter((verdict) => verdict.does === does).map(({ table }) => table).sort().join(',');
-  const refill = named('refill');
+  const drop = named('drop');
   const retire = named('retire');
 
-  return refill === '' && retire === '' ? null : `repair tables refill ${refill || '-'} retire ${retire || '-'}`;
+  return drop === '' && retire === '' ? null : `drop tables ${drop || '-'} retire ${retire || '-'}`;
 }
 
 /** One object as the walk reached it. */
@@ -237,38 +227,37 @@ export function storesOf(reached: readonly Reached[]): Store[] {
   });
 }
 
-/** Every table's rows per database, one tab-separated line each, sorted: two of these diff line by line. */
+/** Every table's rows and digest per database, one tab-separated line each, sorted: two of these diff line by line, so
+ *  a census before a reset and one after show exactly the tables it dropped. */
 export function censusLines(reached: readonly Reached[]): string[] {
   const unreachable = reached.filter((object) => object.answer === undefined).map((object) => `${object.className}\t${object.name ?? object.id}\t!unreachable\t${object.error ?? ''}`);
 
-  return [...unreachable, ...storesOf(reached).flatMap((store) => store.answer.census.map((row) => `${store.kind}\t${store.label}\t${row.table}\t${String(row.rows)}`))].sort();
+  return [...unreachable, ...storesOf(reached).flatMap((store) => store.answer.census.map((row) => `${store.kind}\t${store.label}\t${row.table}\t${String(row.rows)}\t${row.digest}`))].sort();
 }
 
-/** What the walk found, to print, and the databases that fail it: a repair that refused, or one whose rebuilt table's
- *  rows moved. An object the walk did not reach is a gap in its census, never a failure: it repairs at its first
+/** What the walk found, to print, and the databases that fail it: a reset that refused. An object the walk did not reach is a gap in its census, never a failure: it repairs at its first
  *  request, which correctness waits on, and the walk only warms. */
 export interface WalkReport {
   readonly lines: string[];
   readonly failed: string[];
 }
 
-/** What the walk found: each repair, each refusal, each object that did not answer, and each rebuilt table whose rows
- *  moved, which no repair should do. */
+/** What the walk found: each reset, each refusal, each object that did not answer, and each table a reset dropped. */
 export function walkLines({ reached, unnamed }: Walked): WalkReport {
   const stores = storesOf(reached);
   const repaired = stores.filter((store) => store.answer.repair !== null && store.answer.refused === null);
   const refused = stores.filter((store) => store.answer.refused !== null).map((store) => `${store.kind} ${store.label}: ${store.answer.refused ?? ''}`);
   const unreached = reached.filter((object) => object.answer === undefined).map((object) => `${object.className} ${object.name ?? object.id}: ${object.error ?? ''}`);
 
-  const moved = repaired.flatMap((store) => (store.answer.repair?.tables ?? [])
-    .filter((row) => store.answer.repair?.rebuilt.includes(row.table) === true && row.before !== row.after)
+  const dropped = repaired.flatMap((store) => (store.answer.repair?.tables ?? [])
+    .filter((row) => store.answer.repair?.dropped.includes(row.table) === true)
     .map((row) => `${store.kind} ${store.label}: ${row.table} ${String(row.before)} → ${String(row.after)}`));
 
   const unchecked = stores.flatMap((store) => ((store.answer.repair?.unchecked.length ?? 0) > 0 ? [`${store.kind} ${store.label}: ${store.answer.repair?.unchecked.join(', ') ?? ''}`] : []));
 
   const did = (store: Store) => {
     const repair = store.answer.repair;
-    const parts = [['rebuilt', repair?.rebuilt], ['refilled', repair?.refilled], ['retired', repair?.retired]] as const;
+    const parts = [['dropped', repair?.dropped], ['retired', repair?.retired]] as const;
 
     return `  ${store.kind} ${store.label}: ${parts.filter(([, tables]) => (tables?.length ?? 0) > 0).map(([what, tables]) => `${what} ${tables?.join(', ') ?? ''}`).join('; ') || 'stamped'}`;
   };
@@ -282,12 +271,12 @@ export function walkLines({ reached, unnamed }: Walked): WalkReport {
       ...repaired.map(did),
       ...section('UNCHECKED (held, but the init made no shape to compare; left as they are):', unchecked),
       ...section('REFUSED (kept as they are, refusing every call with why):', refused),
-      ...section('ROWS MOVED in a rebuild:', moved),
+      ...section('DROPPED and made anew (rows before → after, as each init seeds):', dropped),
       ...section('UNREACHED, a gap in this census (each repairs at its first request on this build):', unreached),
       ...unnamed.length === 0 ? [] : [`${String(unnamed.length)} object(s) Cloudflare lists that no root names, not opened (each repairs at its first `
         + `request): ${unnamed.slice(0, 5).join(', ')}${unnamed.length > 5 ? `, and ${String(unnamed.length - 5)} more` : ''}`],
     ],
-    failed: [...refused, ...moved],
+    failed: refused,
   };
 }
 
@@ -315,8 +304,7 @@ export interface OpsBody {
 
 const RepairSchema = v.object({
   schema: v.picklist(['account', 'workspace', 'agent', 'local', 'control']),
-  rebuilt: v.array(v.string()),
-  refilled: v.array(v.string()),
+  dropped: v.array(v.string()),
   retired: v.array(v.string()),
   unchecked: v.array(v.string()),
   tables: v.array(v.object({ table: v.string(), before: v.nullable(v.number()), after: v.nullable(v.number()) })),
@@ -324,7 +312,8 @@ const RepairSchema = v.object({
 });
 
 const StoreEntries = {
-  census: v.array(v.object({ table: v.string(), rows: v.number() })),
+  // A build before the digest answers none.
+  census: v.array(v.object({ table: v.string(), rows: v.number(), digest: v.optional(v.string(), '') })),
   repair: v.nullable(RepairSchema),
   refused: v.nullable(v.string()),
 };
@@ -348,7 +337,7 @@ const RootsSchema = v.object({ accounts: v.array(v.string()), control: v.array(v
 
 /** One call, asked again while the pass has not reached the edge that answers, and while a version other than the
  *  candidate answers (the build before has no `/ops`, so it answers 404). */
-async function askAdmitted<T>(target: TablesTarget, pass: string, call: { path: 'tables' | 'roots'; body: OpsBody | null; schema: v.GenericSchema<T> }): Promise<T> {
+async function askAdmitted<T>(target: TablesTarget, pass: string, call: { path: 'tables' | 'roots'; body: OpsBody | null; schema: v.GenericSchema<unknown, T> }): Promise<T> {
   const started = Date.now();
 
   for (;;) {

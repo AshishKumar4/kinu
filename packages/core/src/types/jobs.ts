@@ -1,10 +1,36 @@
 import * as v from 'valibot';
 import type { WorkMode } from './turn';
+import type { JsonValue } from '../utils/json';
+import { nanoid } from '../utils/nanoid';
 
 /** `serving` is reported, never stored (`listBackgroundJobs`). */
 export type BackgroundJobStatus = 'running' | 'serving' | 'completed' | 'failed' | 'cancelled';
 
 export const JOB_STAMP_ENV = 'KINU_JOB_ID';
+
+export function newJobId(): string {
+  return `bgjob-${nanoid()}`;
+}
+
+export type DetachOutcome =
+  | { readonly detached: true; readonly jobId: string }
+  | { readonly detached: false; readonly reason: string };
+
+/** Running work a job of the actor's takes over under the id it was started with: a process `startProcess` started. */
+export interface JobAdoption {
+  readonly jobId: string;
+  readonly kind: string;
+  readonly input: JsonValue;
+  readonly mode: WorkMode;
+  /** Its abort stops the work: the job's cancel, or its actor's retirement. */
+  readonly controller: AbortController;
+  readonly promise: Promise<unknown>;
+}
+
+/** An actor's jobs as running work joins them (`BackgroundJobRunner.adopt`): taken, or refused past the cap. */
+export interface AdoptsJobs {
+  adopt(request: JobAdoption): Promise<DetachOutcome>;
+}
 
 export interface BackgroundJob {
   id: string;

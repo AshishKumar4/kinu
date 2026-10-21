@@ -8,6 +8,8 @@ import { createSandboxExecutor } from '../src/execution/sandbox';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import { toolExecute, createRecordingLogger, present } from '@kinu.run/test-utils';
+import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils/vfs';
+import { standardMounts, withMountTable } from '../src/vfs/mounts';
 import { asSchema, jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime, conversationsFor, actorJobsFor, servedStoresFor } from './helpers';
@@ -414,8 +416,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(escalations.snapshot().escalations).toEqual(before);
   });
 
-  // rc22 release evals (coding): a computer command's cwd written as the workspace names the computer's files.
-  test("a computer command's cwd written as the workspace names it is refused with the computer's own path, before it runs", async () => {
+  // rc22 release evals (coding): a computer command's cwd written as the workspace names the computer's files. Owner
+  // decision, 2026-10-20 ("Run where the files live"): a command runs on the machine its cwd is on, in that machine's
+  // terms, which the file plane says.
+  test("a command whose cwd is the computer's runs there, in the computer's own terms", async () => {
     const { rt } = createTestRuntime();
     const ran: string[] = [];
     const unreachable = async (): Promise<never> => { throw new Error('the command alone reaches the computer'); };
@@ -432,11 +436,21 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
         return { stdout: 'ran', stderr: '', exitCode: 0 };
       },
     }));
-    const shellTool = { execute: toolExecute<{ command: string; runtime?: string; cwd?: string }, string>(tools({ ...rt, executionRouter: router }).shell) };
+    const computerFiles = createMemoryVfs().vfs;
+    await seedFiles(computerFiles, { '/workspace/true-myth/package.json': '{}' });
+    await rt.toolFiles.mkdir('notes', { recursive: true });
+    const toolFiles = withMountTable(rt.toolFiles, standardMounts((name) => (name === 'computer' ? { files: computerFiles, isAvailable: () => true } : undefined)));
+    const shellTool = { execute: toolExecute<{ command: string; runtime?: string; cwd?: string }, string>(tools({ ...rt, toolFiles, executionRouter: router }).shell) };
 
-    await expect(shellTool.execute({ command: 'npm test', runtime: 'computer', cwd: '/computer/workspace/true-myth' })).rejects
-      .toThrow('cwd "/computer/workspace/true-myth" is the workspace\'s name for computer\'s /workspace/true-myth; on computer it is "/workspace/true-myth"');
-    expect(ran).toEqual([]);
+    await shellTool.execute({ command: 'npm test', runtime: 'computer', cwd: '/computer/workspace/true-myth' });
+    await shellTool.execute({ command: 'npm run build', cwd: '/computer/workspace/true-myth' });
+    await shellTool.execute({ command: 'ls', runtime: 'computer', cwd: '/workspace/true-myth' });
+    // The computer starts each in the directory it was given.
+    expect(ran).toEqual(['npm test', 'npm run build', 'ls'].map((command) => `cd -- '/workspace/true-myth' || exit\n${command}`));
+
+    // The workspace's own place stays the workspace's.
+    expect(await shellTool.execute({ command: 'pwd', cwd: 'notes' })).not.toContain('ran');
+    expect(ran).toHaveLength(3);
   });
 
   test('gated run commands return an error the MODEL can act on', async () => {

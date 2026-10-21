@@ -1,5 +1,6 @@
 /**
- * Every database Kinu makes is of one class (an account, a workspace, an agent, a CLI-local workspace), and is
+ * Every database Kinu makes is of one class (an account, a workspace, an agent, a CLI-local workspace, the control
+ * plane, a mail name, a mailbox, the monitor, a deploy run), and is
  * stamped (a local one in `PRAGMA user_version`, a Durable Object in its own KV) with its class's stamp: the digest of the genesis of the tables that class's init
  * makes (`scripts/schema-classes.json`, `SCHEMA_STAMPS`). A database is asked its stamp, never caught failing:
  *
@@ -35,6 +36,8 @@ const FIRST_TABLE = {
   control: 'cp_users',
   mailname: 'mail_name',
   mailbox: 'mail_box',
+  monitor: 'monitor_incidents',
+  deploy: 'deploy_step',
 } as const satisfies Record<SchemaClass, string>;
 
 /** What a database says of itself, read once (and, for an unstamped one, whether its class made it). */

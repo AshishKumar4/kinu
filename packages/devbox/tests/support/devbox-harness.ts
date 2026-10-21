@@ -343,6 +343,11 @@ const IMAGE_DIRECTORIES = ['/', '/workspace', '/tmp', '/var/tmp'] as const;
 
 /** Faults are queues and gates are one-shot: the modelled defects exist only across two calls,
  *  so the fake must let one attempt differ from the next. */
+/** A caller's command runs under the launcher (`launched`), after its `--`; the box's own is `/bin/bash -c <command>`. */
+function commandOf(args: readonly string[]): string {
+  return (args[0] === '/usr/bin/perl' ? args[args.indexOf('--') + 1] : args[args.indexOf('-c') + 1]) ?? '';
+}
+
 export class FakeSandbox {
 
   /** Same object the Durable Object state hands the class as `ctx.container`, so a test that
@@ -999,7 +1004,7 @@ export class FakeSandbox {
 
     if (protocol !== undefined) return protocol;
 
-    // A caller's command is `setsid -w /bin/bash -c` (D69); the box's own is `/bin/bash -c`. A digest write names its file
+    // A caller's command is `setsid -w` over the launcher (D69); the box's own is `/bin/bash -c`. A digest write names its file
     // in argv (`file-digest-write.ts`).
     const onHost = options.cwd?.includes(DEVBOX_SCRATCH_PREFIX) === true || args[0] === 'setsid' || args[3] === "kill-tree" || args[3] === "port-listeners" || args[3] === 'stamped-processes'
       || args[3] === 'devbox-desktop' || args[3] === 'devbox-disk-stall' || (args[0] === 'python3' && args[3]?.includes(DEVBOX_SCRATCH_PREFIX) === true)
@@ -1155,8 +1160,7 @@ export class FakeSandbox {
       return processResult(Promise.resolve(this.nameBox), pid);
     }
 
-    // `/bin/bash -c <command>`: the command follows `-c`.
-    const command = args[args.indexOf('-c') + 1] ?? '';
+    const command = commandOf(args);
 
     return processResult(this.#execIn(command, { cwd: options.cwd }), pid);
   }

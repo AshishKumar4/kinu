@@ -22,7 +22,7 @@
  */
 import type { Page } from 'puppeteer';
 import * as v from 'valibot';
-import { AccountMemoryProposalSchema, CHANGES_MOVED_EVENT, executorLabel, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
+import { AccountMemoryProposalSchema, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
@@ -1654,9 +1654,23 @@ const DRIVE_SECTIONS = `[...document.querySelectorAll('[data-drive-section]')].m
 /** The Drive has drawn what it holds: its sections, or its empty state. */
 const DRIVE_DRAWN = `document.querySelector('[data-drive-section], [data-drive-empty]') !== null`;
 
+/** My stuff's root is the place shown, from its column row or its switch, and its listing has answered. */
+const MINE_DRAWN = `location.pathname === '/drive'
+  && document.querySelector('[data-drive-place="mine"][aria-current="page"], [data-drive-tab="mine"][aria-current="page"]') !== null
+  && ${DRIVE_DRAWN}`;
+
+/** My stuff's root lists something of the account's own: a file, or a folder besides the Skills folder every account has. */
+const MINE_HOLDS = `[...document.querySelectorAll('[data-drive-entry]')].some((entry) =>
+  entry.getAttribute('data-drive-kind') === 'file' || entry.getAttribute('data-drive-entry') !== ${JSON.stringify(DRIVE_SKILLS_DIR.slice(1))})`;
+
 export interface DriveOpensVerdict {
-  /** Where `/drive` landed: Slates when there is one, else My stuff, or Shared for an account that owns nothing yet. */
+  /**
+   * Where `/drive` landed. Files first (owner, 2026-10-19): My stuff, unless the account owns nothing there; then
+   * Slates when there is one, else Shared when anything is, else My stuff.
+   */
   readonly landedAt: string;
+  /** My stuff, opened from its own place after the landing is read, lists something of the account's own. */
+  readonly mineHolds: boolean;
   /** The places the Drive offers, by id (`mine`, `slates`, `shared`), as its column or its switch draws them. */
   readonly places: readonly string[];
   readonly sections: readonly { readonly title: string; readonly tiles: number }[];
@@ -1670,6 +1684,8 @@ export interface DriveOpensVerdict {
  *
  * Opens `/drive` and reads what it drew: every section it shows holds at least
  * one tile, and a Drive with nothing to show draws its empty state instead.
+ * Then it opens My stuff from its own place, unless it landed there, and reads
+ * whether it holds anything, which is what the landing turns on.
  */
 export async function driveOpens(target: FlowTarget): Promise<DriveOpensVerdict> {
   const page = await signedInPage(target.browser, target);
@@ -1690,7 +1706,16 @@ export async function driveOpens(target: FlowTarget): Promise<DriveOpensVerdict>
       `[...new Set([...document.querySelectorAll('[data-drive-place], [data-drive-tab]')].map((place) => place.getAttribute('data-drive-place') ?? place.getAttribute('data-drive-tab') ?? ''))]`,
     ));
 
-    return { landedAt: new URL(page.url()).pathname, places, sections, empty, sidebarLit };
+    const landedAt = new URL(page.url()).pathname;
+
+    if (landedAt !== '/drive') {
+      await page.evaluate(`${MY_STUFF_PLACE}?.click()`);
+      await until(page, 'My stuff to draw what it holds', MINE_DRAWN);
+    }
+
+    const mineHolds = v.parse(v.boolean(), await page.evaluate(MINE_HOLDS));
+
+    return { landedAt, mineHolds, places, sections, empty, sidebarLit };
   } finally {
     await page.close();
   }

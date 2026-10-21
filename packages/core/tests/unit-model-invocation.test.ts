@@ -147,14 +147,38 @@ describe('a structured call', () => {
   // Each layer a refusal crosses logs its chain: one refused memory pass logged its 0.2 MB answer three times (2026-10-20).
   test('a refused answer is named by its length and digest, never quoted', async () => {
     const prose = 'word '.repeat(40_000);
+    const Count = v.object({ count: v.number() });
 
-    for (const text of [prose, `{"value":"${prose}"}`]) {
-      const [refused] = await Promise.allSettled([generateObjectReported({ model: answering(text), prompt: 'p' }, Fact, { spend: { source: 'fast', report: () => {} } })]);
+    // Prose; JSON missing a key; JSON with the prose where a number belongs, which valibot's message quotes whole.
+    for (const [schema, text] of [[Fact, prose], [Fact, `{"value":"${prose}"}`], [Count, `{"count":"${prose}"}`]] as const) {
+      const [refused] = await Promise.allSettled([generateObjectReported({ model: answering(text), prompt: 'p' }, schema, { spend: { source: 'fast', report: () => {} } })]);
       const chain = refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered';
 
       expect(chain).toContain(`(${String(text.length)} characters, sha256 ${sha256Hex(text, 12)})`);
-      expect(chain).not.toContain('word word');
+      expect(chain).not.toContain('word');
     }
+  });
+
+  // Fail-fast: ten thousand wrong items made a log line larger than the answer (2026-10-20).
+  test('an answer with many wrong items names the first path it got wrong, and no other', async () => {
+    const Tags = v.object({ tags: v.array(v.string()) });
+    const text = JSON.stringify({ tags: Array.from({ length: 10_000 }, (_, at) => at) });
+    const [refused] = await Promise.allSettled([generateObjectReported({ model: answering(text), prompt: 'p' }, Tags, { spend: { source: 'fast', report: () => {} } })]);
+    const chain = refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered';
+
+    expect(chain).toContain('tags.0');
+    expect(chain).not.toContain('tags.1');
+  });
+
+  test('an answer off its schema names the path it got wrong and the type that came, never the value', async () => {
+    const Count = v.object({ count: v.number(), tags: v.array(v.string()) });
+    const [refused] = await Promise.allSettled([generateObjectReported({ model: answering('{"count":"many-fold","tags":[90210]}'), prompt: 'p' }, Count, { spend: { source: 'fast', report: () => {} } })]);
+    const chain = refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered';
+
+    // Fail-fast, the first path it got wrong: `count`, and the type that came.
+    for (const named of ['count', 'number', 'string']) expect(chain).toContain(named);
+
+    for (const value of ['many-fold', '90210']) expect(chain).not.toContain(value);
   });
 
   // Cut off, the answer is incomplete rather than wrong: asked again, the model may finish it.

@@ -456,6 +456,15 @@ let cancellationRequested = false;
 let cancellationSignalDelivered = false;
 let completed = false;
 
+// What the command left running may hold its pipes for as long as it lives. This process is their reader, so it ends
+// only once they close: a reader gone would end such a process at its next write (SIGPIPE).
+function exitWhenDrained() {
+  const open = [child && child.stdout, child && child.stderr].filter((stream) => stream && !stream.destroyed && !stream.closed);
+  let left = open.length;
+  if (left === 0) process.exit(0);
+  for (const stream of open) stream.once('close', () => { left -= 1; if (left === 0) process.exit(0); });
+}
+
 function finish(kind, exitCode, signal) {
   if (completed) return;
   completed = true;
@@ -464,7 +473,7 @@ function finish(kind, exitCode, signal) {
   endLive();
   if (kind === 'cancelled') {
     writeTerminalResult(kind, exitCode);
-    process.exit(0);
+    exitWhenDrained();
     return;
   }
   // The cloud may ACK as soon as result appears. Publish an open FIFO before
@@ -483,13 +492,13 @@ function awaitAcknowledgement(kind, exitCode, signal) {
   // the result file stays on disk, and whichever daemon reconciles it next
   // removes the directory itself.
   const orphaned = setInterval(() => {
-    if (process.ppid !== parentPid) process.exit(0);
+    if (process.ppid !== parentPid) { clearInterval(orphaned); exitWhenDrained(); }
   }, ORPHAN_POLL_MS);
   acknowledgement.once('data', () => {
     clearInterval(orphaned);
     acknowledgement.destroy();
     fs.rmSync(require('node:path').dirname(stateFile), { recursive: true, force: true });
-    process.exit(0);
+    exitWhenDrained();
   });
   acknowledgement.once('error', () => process.exit(125));
 }
@@ -594,10 +603,11 @@ child.once('exit', (code, signal) => {
     else finish('exited', 125);
   };
   setTimeout(() => {
-    // A background descendant can retain the inherited pipes forever. At this
-    // established drain boundary, closing them makes the command terminal; mark
-    if (child.stdout.readable) { fs.writeFileSync(stdoutFile + '.after-exit', '1'); child.stdout.destroy(); }
-    if (child.stderr.readable) { fs.writeFileSync(stderrFile + '.after-exit', '1'); child.stderr.destroy(); }
+    // A background descendant can retain the inherited pipes forever. At this established drain boundary the command
+    // is terminal and its capture ends; the pipes stay read, their bytes discarded (the data listeners stop at
+    // \`completed\`), until the last writer closes them.
+    if (child.stdout.readable) fs.writeFileSync(stdoutFile + '.after-exit', '1');
+    if (child.stderr.readable) fs.writeFileSync(stderrFile + '.after-exit', '1');
     finishAfterDrain();
   }, 250);
 });

@@ -178,7 +178,7 @@ import { BROWSER_PRELUDE } from './browser-prelude';
 import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
-import { slateAiAnswer } from '@kinu.run/core/slates';
+import { initSlateUsageTable, slateAiAnswer } from '@kinu.run/core/slates';
 import { OwnedModelServices } from "./owned-model-services";
 import { AgentStoreBroker } from "./agent-facets";
 import type { AgentFacetCalls } from "./agent-facet/agent-facet";
@@ -194,7 +194,8 @@ import { gatedClientHandlers } from "./client-socket-gate";
 import { isWorkspaceTerminal } from "@kinu.run/core";
 import type { HostedBox, HostedWorkspace, WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
-import { JOB_STAMP_ENV, sha256Hex, webSearchChainOf } from '@kinu.run/core';
+import { ensureIdentityTable, initMissionBudgetTable, JOB_STAMP_ENV, sha256Hex, webSearchChainOf } from '@kinu.run/core';
+import { initWorkspaceGenerationTable } from '@kinu.run/core/workspace';
 import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
@@ -564,9 +565,18 @@ export abstract class ActorAgent extends Agent<Env> {
   protected repairStorage(init: () => void): void {
     const { storage } = this.ctx;
 
+    const execRaw = (ddl: string) => { storage.sql.exec(ddl); };
+
     this.schemaRepair = repairSchema(storage.sql, {
       schema: 'workspace', tables: SCHEMA_TABLES.workspace, stamps: durableStamps(storage.kv),
       transactionSync: (write) => storage.transactionSync(write), init,
+      // Made on first use: the boot's agent identities, the hosted workspace's generation, a ledger, the slates.
+      later: () => {
+        ensureIdentityTable(storage.sql);
+        initWorkspaceGenerationTable(storage.sql);
+        initMissionBudgetTable(execRaw);
+        initSlateUsageTable(execRaw);
+      },
     }, `workspace ${this.name}`);
 
     if (this.schemaRepair?.refused == null) return;
@@ -2281,6 +2291,7 @@ export abstract class ActorAgent extends Agent<Env> {
         currentTurn: (reference) => this.currentTurnOf(reference),
         accounts: () => this.providerAccounts(),
         refusals: this.tierRefusals,
+        jobs: () => this.jobRunner,
         contextPlane: {
           actorId: this.actorHandle().actorId,
           // Main's context is its own isolate's, as every agent's is.

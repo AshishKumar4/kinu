@@ -4,7 +4,7 @@
  * and cause, plan use, and the platform bugs Workers Logs saw in the run's workspaces. Computed from the trials' own
  * records and the logs alone; the reviewer's judgement is beside it, never in it.
  */
-import type { EvalComparison, EvalStats } from './comparison';
+import type { EvalComparison, EvalStats, SideWaits } from './comparison';
 import { rate, seconds, signed, tokens, usd } from './format';
 import type { ToolFailure } from './results';
 import type { TaskPlatform } from './platform';
@@ -126,6 +126,36 @@ function platformTable(comparison: EvalComparison): string[] {
   ];
 }
 
+/** A call's input as a table cell: one line, no pipe to break the row. */
+function ranCell(ran: string): string {
+  return `\`${ran.replaceAll('|', '\\|').replaceAll('`', "'")}\``;
+}
+
+/** Where the candidate's agent waited: each call that became a job, each trial's time past the 30 s window beside
+ *  production's, and the slowest calls. */
+function waitsTables(comparison: EvalComparison): string[] {
+  const { baseline, candidate } = comparison.overall;
+  const { backgrounded, slowest } = candidate.waits;
+  const before = new Map((baseline?.waits.pastInteractive ?? []).map(({ trial, ms }) => [trial, ms]));
+  const past = [...new Set([...candidate.waits.pastInteractive.map(({ trial }) => trial), ...before.keys()])];
+  const after = new Map(candidate.waits.pastInteractive.map(({ trial, ms }) => [trial, ms]));
+  const count = (side: SideWaits | undefined) => (side === undefined ? '\u2014' : String(side.backgrounded.length));
+
+  return [
+    `Calls that became a job: ${count(candidate.waits)} on the candidate, ${count(baseline?.waits)} on production.`, '',
+    ...backgrounded.length === 0 ? ['No shell command or program on the candidate became a job.'] : [
+      '| Trial | Actor | Tool | Moved by | Waited | Ran |', '| --- | --- | --- | --- | --- | --- |',
+      ...backgrounded.map((call) => `| ${call.trial} | ${call.actor} | \`${call.tool}\` | ${call.by === 'window' ? 'its window' : 'a person writing'} | ${seconds(call.wallMs)} | ${ranCell(call.ran)} |`),
+    ], '',
+    ...past.length === 0 ? ['No call held an agent past 30 s on either side.'] : [
+      '| Trial | Past 30 s, production | Past 30 s, candidate |', '| --- | --- | --- |',
+      ...past.map((trial) => `| ${trial} | ${baseline === null ? '\u2014' : seconds(before.get(trial) ?? 0)} | ${seconds(after.get(trial) ?? 0)} |`),
+    ], '',
+    '| Trial | Actor | Tool | Took | Ran |', '| --- | --- | --- | --- | --- |',
+    ...slowest.map((call) => `| ${call.trial} | ${call.actor} | \`${call.tool}\` | ${seconds(call.wallMs)} | ${ranCell(call.ran)} |`),
+  ];
+}
+
 /** The run report's section of the results comment. */
 export function renderRunReport(comparison: EvalComparison): string[] {
   return [
@@ -138,6 +168,12 @@ export function renderRunReport(comparison: EvalComparison): string[] {
     ...failuresTable(comparison), '',
     '### Plan use', '',
     ...planTable(comparison), '',
+    '### Where the agent waited', '',
+    'Each shell command or program that became a job: moved when its foreground window ran out (30 s on a turn a person '
+      + 'watches, 300 s on one a wake started) or when a person wrote; its time is the wait until it moved. A call settles '
+      + 'on its own process\u2019s exit, so from rc29 on one that moved still had its process running. Then each trial\u2019s '
+      + 'time held past 30 s, what the 300 s window costs it, and the slowest calls.', '',
+    ...waitsTables(comparison), '',
     '### Platform bugs in the run\u2019s workspaces', '',
     'Trials whose workspace saw an invocation that threw, one the platform ended for what it spent, or an alarm with nothing '
       + 'to do, from Workers Logs; a significant rise is a regression.', '',

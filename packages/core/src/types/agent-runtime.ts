@@ -26,7 +26,7 @@ export interface AgentRuntime {
    *  hold it, else `storage.vfs` itself. */
   agentStateVfs: VFS;
   /** `storage.vfs` as the agent's own file tools reach it: gated past its own files. */
-  toolFiles: VFS & Partial<Pick<VfsMountRouting, 'resolve'>>;
+  toolFiles: VFS & Partial<Pick<VfsMountRouting, 'resolve' | 'owner'>>;
   /** Where each `root://` plane, `~` and a relative path land on this machine. */
   readonly planes: PathPlanes;
   memory: Memory;

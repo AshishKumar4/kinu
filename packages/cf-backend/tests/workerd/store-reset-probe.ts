@@ -7,7 +7,7 @@
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { opsCaller, ownerCaller, repairSchema, type Repair, type TablesAnswer } from '@kinu.run/core';
+import { censusOf, opsCaller, ownerCaller, repairSchema, type Repair, type TablesAnswer } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
@@ -21,8 +21,8 @@ const PROBE_OWNER_ID = '0123456789abcdef0123456789abcdef';
 
 const PLANTED = 'the older stamp is planted';
 
-/** How a planted workspace was left: a column the build before had (rebuilt away, its rows kept), or a table whose
- *  rows this build's shape cannot take (refused). */
+/** How a planted workspace was left: a column the build before had (its table dropped and made anew), or a table
+ *  holding the name of an index its init makes (refused: no reset can run the init over it). */
 export type Planted = 'stale' | 'refusing';
 
 /** The production orchestrator with what no production path has: planting an older build's storage, and its wake
@@ -44,9 +44,8 @@ export class OrchestratorAgent extends ProductionOrchestrator {
       sql.exec('ALTER TABLE turn_struggles ADD COLUMN arm TEXT');
       sql.exec("INSERT INTO turn_struggles (actor_id, turn_id, errors, steps, struggles, created_at, arm) VALUES ('main', 'turn', 1, 2, '[]', 1, 'candidate')");
     } else {
-      sql.exec('DROP TABLE turn_struggles');
-      sql.exec('CREATE TABLE turn_struggles (actor_id TEXT NOT NULL, turn_id TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (actor_id, turn_id))');
-      sql.exec("INSERT INTO turn_struggles VALUES ('main', 'turn', 1)");
+      sql.exec('DROP INDEX idx_turn_struggles_actor');
+      sql.exec('CREATE TABLE idx_turn_struggles_actor (id TEXT)');
     }
 
     this.ctx.storage.kv.put('kinu.schema_stamp', 1);
@@ -173,40 +172,47 @@ export class StoreResetProbeRoot extends DurableObject<ProbeRootEnv> {
   }
 
   /**
-   * A reshaped table rebuilt on this object's own SQLite, as a repair rebuilds one on a Durable Object: what the
-   * platform admits of it (renames, the deferred foreign keys, `table_info`, `foreign_key_check`, a rowid copied back)
-   * is only seen here. Its rows, a referring table's, and the rowids must all survive.
+   * A changed table reset on this object's own SQLite, as a repair resets one on a Durable Object: what the platform
+   * admits of it (the deferred foreign keys, the drops, `PRAGMA table_list` and `foreign_key_check`, a census digest
+   * paged by rowid) is only seen here. The changed table and what refers to it come back empty; another keeps its rows
+   * byte for byte.
    */
-  async rebuilt(): Promise<{ readonly repair: Pick<Repair, 'rebuilt' | 'refused'> | null; readonly notes: unknown[]; readonly children: unknown[] }> {
+  async reset(): Promise<{ readonly repair: Pick<Repair, 'dropped' | 'refused'> | null; readonly rows: unknown[]; readonly keptAlike: boolean }> {
     const { sql } = this.ctx.storage;
     let stamp = 1;
 
     sql.exec(`CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL, digest TEXT, CHECK (digest IS NULL OR length(digest) = 4))`);
     sql.exec(`CREATE INDEX notes_digest ON notes(digest)`);
     sql.exec(`CREATE TABLE notes_children (id TEXT PRIMARY KEY, note TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE)`);
-    sql.exec(`INSERT INTO notes (rowid, id, body, digest) VALUES (7, 'a', 'kept', 'abcd')`);
+    sql.exec(`CREATE TABLE kept (id INTEGER PRIMARY KEY, body TEXT, data BLOB)`);
+    sql.exec(`INSERT INTO notes (rowid, id, body, digest) VALUES (7, 'a', 'gone', 'abcd')`);
     sql.exec(`INSERT INTO notes_children VALUES ('c', 'a')`);
 
+    for (let at = 1; at <= 2500; at += 1) sql.exec('INSERT INTO kept VALUES (?, ?, ?)', at, `row ${String(at)}`, new Uint8Array([at % 256]));
+    const kept = () => censusOf(sql).find((row) => row.table === 'kept');
+    const before = kept();
+
     const repair = repairSchema(sql, {
-      schema: 'agent', tables: ['notes', 'notes_children'], stamps: { read: () => stamp, write: (next) => { stamp = next; } },
+      schema: 'agent', tables: ['notes', 'notes_children', 'kept'], stamps: { read: () => stamp, write: (next) => { stamp = next; } },
       transactionSync: this.ctx.storage.transactionSync.bind(this.ctx.storage),
       init: () => {
-        sql.exec(`CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, body TEXT NOT NULL)`);
+        sql.exec(`CREATE TABLE IF NOT EXISTS notes (id TEXT PRIMARY KEY, body TEXT NOT NULL, seq INTEGER NOT NULL)`);
         sql.exec(`CREATE TABLE IF NOT EXISTS notes_children (id TEXT PRIMARY KEY, note TEXT NOT NULL REFERENCES notes(id) ON DELETE CASCADE)`);
+        sql.exec(`CREATE TABLE IF NOT EXISTS kept (id INTEGER PRIMARY KEY, body TEXT, data BLOB)`);
       },
     }, 'probe');
 
     return {
-      repair: repair === null ? null : { rebuilt: repair.rebuilt, refused: repair.refused },
-      notes: sql.exec('SELECT rowid AS r, id, body FROM notes').toArray(),
-      children: sql.exec('SELECT id, note FROM notes_children').toArray(),
+      repair: repair === null ? null : { dropped: repair.dropped, refused: repair.refused },
+      rows: sql.exec('SELECT (SELECT COUNT(*) FROM notes) AS notes, (SELECT COUNT(*) FROM notes_children) AS children, (SELECT COUNT(*) FROM kept) AS kept').toArray(),
+      keptAlike: before !== undefined && JSON.stringify(before) === JSON.stringify(kept()),
     };
   }
 
   /** The deploy's walk of `workspace`: what its repair did, why it is refused if it is, and the agents it opened. */
-  async walked(workspace: string): Promise<Pick<TablesAnswer, 'refused' | 'agents'> & { readonly rebuilt: readonly string[] }> {
+  async walked(workspace: string): Promise<Pick<TablesAnswer, 'refused' | 'agents'> & { readonly dropped: readonly string[] }> {
     const answer = await (await this.target(workspace)).opsTables(await opsCaller(this.env));
 
-    return { rebuilt: answer.repair?.rebuilt ?? [], refused: answer.refused, agents: answer.agents };
+    return { dropped: answer.repair?.dropped ?? [], refused: answer.refused, agents: answer.agents };
   }
 }

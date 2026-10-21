@@ -14,7 +14,7 @@ import { DefaultExecutionRouter } from '../src/execution/router';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
 import type { SQLQueryBindings } from 'bun:sqlite';
 import type { SqlValue } from '@nimbus-sh/core';
-import { present } from '@kinu.run/test-utils';
+import { JOBS_WITH_ROOM, NO_JOBS, present } from '@kinu.run/test-utils';
 import { sessionFilesOver, type SessionBox } from '@kinu.run/test-utils/vfs';
 import { CommandResultSchema } from '../src/execution/exec-result';
 import { executorNamespace } from '../src/tools/executor-operations';
@@ -55,6 +55,8 @@ function fakeBox() {
     processes: {
       kill: async (pid) => ({ ok: true, pid }),
       logs: async (pid) => ({ pid, text: 'ready' }),
+      // Its server runs as long as the case does.
+      whenEnded: () => new Promise<number>(() => undefined),
     },
     ports: {
       expose: async (port) => ({ port, url: `https://${port}.example.test`, route: { reached: true } }),
@@ -75,6 +77,7 @@ describe('hosted Nimbus workspace provider', () => {
 
     const provider = createNimbusWorkspaceExecutor({
       box,
+      jobs: JOBS_WITH_ROOM,
       inline: {
         vfs,
         shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
@@ -126,9 +129,10 @@ describe('hosted Nimbus workspace provider', () => {
       sql: rt.storage.sql,
     };
 
-    expect(createNimbusWorkspaceExecutor({ box, inline }).capabilities.has('net_inbound')).toBe(true);
+    expect(createNimbusWorkspaceExecutor({ box, jobs: NO_JOBS, inline }).capabilities.has('net_inbound')).toBe(true);
     expect(createNimbusWorkspaceExecutor({
       box,
+      jobs: NO_JOBS,
       inline,
       inboundNetwork: false,
     }).capabilities.has('net_inbound')).toBe(false);
@@ -154,6 +158,7 @@ describe('hosted Nimbus workspace provider', () => {
 
     const provider = createNimbusWorkspaceExecutor({
       box,
+      jobs: NO_JOBS,
       inline: {
         vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         craftStore: rt.craftStore, sql: rt.storage.sql,
@@ -235,6 +240,7 @@ describe('hosted Nimbus workspace provider', () => {
 
     const provider = createNimbusWorkspaceExecutor({
       box,
+      jobs: NO_JOBS,
       inline: {
         vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         craftStore: rt.craftStore, sql: rt.storage.sql,
@@ -262,6 +268,7 @@ describe('hosted Nimbus workspace provider', () => {
 
     const provider = createNimbusWorkspaceExecutor({
       box,
+      jobs: NO_JOBS,
       inline: {
         vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         craftStore: rt.craftStore, sql: rt.storage.sql,
@@ -281,6 +288,7 @@ describe('the workspace process and port surface', () => {
 
     return createNimbusWorkspaceExecutor({
       box,
+      jobs: NO_JOBS,
       inline: {
         vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }),
         craftStore: rt.craftStore, sql: rt.storage.sql,

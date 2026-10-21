@@ -15,6 +15,7 @@ import {
 import type { Embedder } from '../memory/vector-store';
 import { normalizeUsage, type Usage } from '../usage';
 import { sha256Hex } from '../safety/argument-digest';
+import { renderIssuesUnquoted } from '../utils/json';
 import { callAccountOf } from './quota';
 import { mergeProviderOptions, type ProviderOptions } from './effort';
 
@@ -106,8 +107,8 @@ export function generateObjectReported<S extends v.GenericSchema>(request: Objec
     providerOptions: mergeProviderOptions(request.providerOptions, NON_STRICT),
   };
 
-  // Named by its length and digest: each layer the refusal crosses logs its chain, and the answer in it was three log
-  // lines of 0.2 MB for one refused memory pass (2026-10-20).
+  // Named by its length and digest, and why it was refused without a value of it: each layer the refusal crosses logs
+  // its chain, and the answer in it was three log lines of 0.2 MB for one refused memory pass (2026-10-20).
   const offSchema = (text: string, cause: Error) => new KinuError('bad_input',
     `${call.spec ?? 'the model'} answered off its schema (${String(text.length)} characters, sha256 ${sha256Hex(text, 12)})`, { cause });
 
@@ -125,25 +126,26 @@ export function generateObjectReported<S extends v.GenericSchema>(request: Objec
     if (finishReason === 'length') return yield* Effect.fail(outputLimitFailure(modelId, 'length'));
 
     const output = yield* Effect.tryPromise({ try: async () => await result.output, catch: (cause) => cause }).pipe(
-      Effect.catch((cause) => (NoObjectGeneratedError.isInstance(cause) ? Effect.fail(offSchema(cause.text ?? '', withoutAnswer(cause))) : Effect.die(cause))),
+      Effect.catch((cause) => (NoObjectGeneratedError.isInstance(cause) ? Effect.fail(offSchema(cause.text ?? '', noObject(cause))) : Effect.die(cause))),
     );
 
-    const parsed = v.safeParse(schema, output);
+    // Fail-fast: the refusal names the first path it got wrong and nothing more, so an answer of ten thousand wrong
+    // items makes one line, not ten thousand.
+    const parsed = v.safeParse(schema, output, { abortEarly: true });
 
     if (parsed.success) return parsed.output;
     const text = yield* Effect.promise(async () => await result.text);
 
-    return yield* Effect.fail(offSchema(text, new v.ValiError(parsed.issues)));
+    return yield* Effect.fail(offSchema(text, new KinuError('bad_input', renderIssuesUnquoted(parsed.issues))));
   }));
 }
 
-/** The SDK's refusal of an answer that is no object, less the answer its parse and validation errors quote whole: their
- *  own cause says why. */
-function withoutAnswer(refused: NoObjectGeneratedError): Error {
-  const quoting = refused.cause;
-  const why = JSONParseError.isInstance(quoting) || TypeValidationError.isInstance(quoting) ? quoting.cause : quoting;
+/** Why the SDK found no object in an answer, in words of ours: its parse error quotes the answer, the engine's
+ *  SyntaxError an excerpt, and a validation error a field. */
+function noObject(refused: NoObjectGeneratedError): KinuError {
+  if (JSONParseError.isInstance(refused.cause)) return new KinuError('bad_input', 'its answer is not JSON');
 
-  return why instanceof Error ? new Error(refused.message, { cause: why }) : new Error(refused.message);
+  return new KinuError('bad_input', TypeValidationError.isInstance(refused.cause) ? 'its answer does not fit the schema sent' : 'it answered no object');
 }
 
 /** A reported stream read to its end; what it returned, its result with every promise settled. */
