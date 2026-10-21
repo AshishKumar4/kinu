@@ -22,6 +22,8 @@ export const EvalRunSchema = v.object({
   /** The calls its trials make at once, at most: armada's budget, each trial's cost its task's peak. */
   budget: v.number(),
   wallSeconds: v.optional(v.number()), pass: v.boolean(),
+  /** A daily run: its candidate is the build production serves, and it has no baseline leg (`promote.ts daily`). */
+  daily: v.optional(v.boolean()),
 });
 
 export type EvalRun = v.InferOutput<typeof EvalRunSchema>;

@@ -147,15 +147,9 @@ const EvalVerdictSchema = v.object({ pass: v.boolean(), reason: v.string() });
 
 export type EvalVerdict = v.InferOutput<typeof EvalVerdictSchema>;
 
-/** Why the evals verdict `verdict` does not let its build be promoted, or undefined when it is green. */
-export function evalVerdictRefusal(verdict: EvalVerdict | undefined, where: string): string | undefined {
-  if (verdict === undefined) return `no eval verdict yet: ${where} names none`;
-
-  return verdict.pass ? undefined : `the eval verdict refuses: ${verdict.reason} (${where})`;
-}
-
-/** The evals verdict a directory of `scripts/evals-map.ts` output holds, with the armada jobs that ran it. */
-export function readEvalsVerdict(dir: string, sha: string) {
+/** A run `dir` holds, refused unless it is the full statistical matrix of this checkout's tasks, its trials run on its
+ *  own definitions; with its candidate's report and every tracked task file. */
+function fullMatrixRun(dir: string) {
   const run = readEvalRun(join(dir, 'run.json'));
   const all = trackedFiles().filter(isEvalTask).sort();
 
@@ -164,15 +158,25 @@ export function readEvalsVerdict(dir: string, sha: string) {
     throw new Error('a promotion needs the full statistical matrix, never a pilot or a soak');
   }
 
-  if (!run.definitions.startsWith(sha) || !run.candidateBuild.startsWith(sha)) throw new Error(`these evals did not measure ${sha} with its own definitions`);
   const candidate = readFileSync(join(dir, 'candidate', 'results.json'), 'utf8');
+
+  return { run, all, candidate };
+}
+
+function definedBy(run: { readonly definitions: string }, text: string): void {
+  if (trials(parseResults('promotion', text)).some((assertion) => assertion.meta.harness.run.session.metadata.evalCommit !== run.definitions)) {
+    throw new Error('the trial definitions do not match this evaluation run');
+  }
+}
+
+/** The evals verdict a directory of `scripts/evals-map.ts` output holds, with the armada jobs that ran it. */
+export function readEvalsVerdict(dir: string, sha: string) {
+  const { run, all, candidate } = fullMatrixRun(dir);
+
+  if (!run.definitions.startsWith(sha) || !run.candidateBuild.startsWith(sha)) throw new Error(`these evals did not measure ${sha} with its own definitions`);
   const baseline = readFileSync(join(dir, 'baseline', 'results.json'), 'utf8');
 
-  for (const text of [candidate, baseline]) {
-    if (trials(parseResults('promotion', text)).some((assertion) => assertion.meta.harness.run.session.metadata.evalCommit !== run.definitions)) {
-      throw new Error('the trial definitions do not match this evaluation run');
-    }
-  }
+  for (const text of [candidate, baseline]) definedBy(run, text);
 
   const comparison = compareEvalResults(baseline, candidate, {}, {
     baseline: parsePlatformReport(readFileSync(join(dir, 'baseline', 'platform.json'), 'utf8')),
@@ -193,15 +197,88 @@ const EvalProofSchema = v.object({ run: v.pick(EvalRunSchema, ['candidateBuild',
 
 export const evalsKey = (sha: string): string => `evals/${sha}.json`;
 
+/** The latest daily eval verdict, replaced by each day's run (`daily`). */
+export const DAILY_EVALS_KEY = 'evals/daily.json';
+
+/** How old the latest daily verdict may be and still let a build through: a day, and two hours for the run's own length. */
+export const DAILY_VERDICT_MAX_AGE_MS = 26 * 60 * 60 * 1000;
+
+/** A daily eval run's record: the build production served, the definitions it ran, the day before's build it was
+ *  compared with (null for the first, a baseline), its verdict and when it was recorded. */
+export const DailyVerdictSchema = v.object({
+  measured: v.string(), definitions: v.string(), baseline: v.nullable(v.string()), jobs: v.array(v.string()),
+  verdict: EvalVerdictSchema, recordedAt: v.string(),
+});
+
+export type DailyVerdict = v.InferOutput<typeof DailyVerdictSchema>;
+
+/**
+ * The verdict of the daily run in `dir` (owner, 2026-10-21, "Daily gated release"): the build production serves,
+ * measured once a day, against the run of the day before in `previous`; with no day before it is the baseline, with
+ * nothing to regress against. A run that is not complete is no verdict, and the latest one stands.
+ */
+export function readDailyVerdict(dir: string, previous: string | undefined, checkout: string) {
+  const { run, all, candidate } = fullMatrixRun(dir);
+
+  if (run.daily !== true) throw new Error('this run is no daily run: its candidate is not the build production serves (evals-map --daily)');
+
+  if (!run.definitions.startsWith(checkout)) throw new Error(`this daily run ran the definitions of ${run.definitions}, not this checkout's ${checkout}`);
+  definedBy(run, candidate);
+  const incomplete = whyIncomplete(candidate, { trials: run.trials, taskFiles: all, build: run.candidateBuild });
+
+  if (incomplete !== null) throw new Error(`the daily run is not complete, so it is no verdict, and the latest one stands: ${incomplete}`);
+
+  if (previous === undefined) {
+    return { run, baseline: null, verdict: { pass: true, reason: 'The first daily verdict: a baseline, with no earlier day to regress against.' } };
+  }
+
+  const before = readEvalRun(join(previous, 'run.json'));
+  const baseline = readFileSync(join(previous, 'candidate', 'results.json'), 'utf8');
+
+  const comparison = compareEvalResults(baseline, candidate, {}, {
+    baseline: parsePlatformReport(readFileSync(join(previous, 'candidate', 'platform.json'), 'utf8')),
+    candidate: parsePlatformReport(readFileSync(join(dir, 'candidate', 'platform.json'), 'utf8')),
+  });
+
+  const verdict = evalGateVerdict(comparison, {
+    candidate: null, baseline: whyIncomplete(baseline, { trials: before.trials, taskFiles: before.taskFiles, build: before.candidateBuild }),
+  });
+
+  return { run, baseline: before.candidateBuild, verdict };
+}
+
+/**
+ * Why `sha` may not be promoted on the evals, or undefined when it may: the latest daily verdict, 26 hours old at most and
+ * no regression; else a passing verdict on `sha` itself, as a fix's own run records it (`evals <dir>`), which is how
+ * promotion resumes after a regression (a P1) or a lapse.
+ */
+export function evalGateRefusal(sha: string, daily: DailyVerdict | undefined, own: { readonly candidateBuild: string; readonly verdict: EvalVerdict } | undefined, now: number): string | undefined {
+  if (own !== undefined && own.candidateBuild.startsWith(sha) && own.verdict.pass) return undefined;
+  const fix = `a fix lands and its own run passes (bun scripts/evals-map.ts ${sha.slice(0, 9)} --record)`;
+
+  if (daily === undefined) return `no eval verdict yet: no daily run has recorded one, and none names ${sha}; the daily run records the first`;
+  const age = now - Date.parse(daily.recordedAt);
+  const hours = age / 3_600_000;
+  const measured = `measured ${daily.measured.slice(0, 9)} at ${daily.recordedAt}`;
+
+  if (!daily.verdict.pass) return `the latest daily eval verdict is a regression, a P1 (${measured}): ${daily.verdict.reason}; promotion holds until ${fix}`;
+
+  // An unreadable time is no fresher than an old one.
+  if (!(age <= DAILY_VERDICT_MAX_AGE_MS)) {
+    return `the latest daily eval verdict is ${hours.toFixed(1)} h old (${measured}), more than ${String(DAILY_VERDICT_MAX_AGE_MS / 3_600_000)} h; promotion holds until the daily run records one, or ${fix}`;
+  }
+
+  return undefined;
+}
+
 /** The comparison may finish before the deploy writes its verified record. Keep them independent. */
-function assertEvalVerdict(sha: string, bucket: string): void {
-  const stored = wrangler(['r2', 'object', 'get', `${bucket}/${evalsKey(sha)}`, '--pipe', '--remote'], { timeoutMs: 600_000 });
+function assertEvalGate(sha: string, records: Records): void {
+  const daily = records.read(DAILY_EVALS_KEY);
+  const own = records.read(evalsKey(sha));
+  const proof = own === undefined ? undefined : v.parse(EvalProofSchema, JSON.parse(own));
 
-  if (!stored.ok) throw new Error(`no eval verdict yet for ${sha}: ${why(stored)}`);
-  const proof = v.parse(EvalProofSchema, JSON.parse(stored.stdout));
-
-  if (!proof.run.candidateBuild.startsWith(sha)) throw new Error(`the eval verdict is not ${sha}'s`);
-  const refused = evalVerdictRefusal(proof.verdict, `armada jobs ${proof.run.jobs.join(', ')}`);
+  const refused = evalGateRefusal(sha, daily === undefined ? undefined : v.parse(DailyVerdictSchema, JSON.parse(daily)),
+    proof === undefined ? undefined : { candidateBuild: proof.run.candidateBuild, verdict: proof.verdict }, Date.now());
 
   if (refused !== undefined) throw new Error(`${sha} cannot be promoted: ${refused}`);
 }
@@ -673,13 +750,28 @@ async function evalsCommand({ sha, records }: Context, [dir = '']: readonly stri
   return 0;
 }
 
-async function checkCommand({ sha, origins, buckets, records }: Context): Promise<number> {
+/** The daily run in `dir`, against the day before's in `previous`, recorded as the latest daily verdict. */
+async function dailyCommand({ sha, records }: Context, [dir = '', previous]: readonly string[]): Promise<number> {
+  const { run, baseline, verdict } = readDailyVerdict(dir, previous, sha);
+
+  const daily: DailyVerdict = {
+    measured: run.candidateBuild, definitions: run.definitions, baseline, jobs: run.jobs, verdict, recordedAt: new Date().toISOString(),
+  };
+
+  records.write(DAILY_EVALS_KEY, JSON.stringify(daily));
+  console.log(`promote: the daily eval verdict on ${run.candidateBuild.slice(0, 9)}${baseline === null ? '' : ` against ${baseline.slice(0, 9)}`}, `
+    + `from armada ${run.jobs.join(', ')}: ${verdict.pass ? 'green' : 'A REGRESSION, a P1'}: ${verdict.reason}`);
+
+  return verdict.pass ? 0 : 3;
+}
+
+async function checkCommand({ sha, origins, records }: Context): Promise<number> {
   refuseImageDrift();
   const verified = adoptedRecord(records, sha, false);
 
   await servedAs(origins.staging, sha, verified.downloads);
-  assertEvalVerdict(sha, buckets.staging);
-  console.log(`promote: ${sha} was verified on staging (version ${verified.stagingVersion}), staging serves that run's downloads, and its evals verdict is green`);
+  assertEvalGate(sha, records);
+  console.log(`promote: ${sha} was verified on staging (version ${verified.stagingVersion}), staging serves that run's downloads, and the eval gate lets it through`);
 
   return 0;
 }
@@ -772,6 +864,7 @@ const COMMANDS = new Map<string, Command>([
   ['record', { takes: [1, 2], run: recordCommand }],
   ['built', { takes: [1, 2], run: builtCommand }],
   ['evals', { takes: [1], run: evalsCommand }],
+  ['daily', { takes: [1, 2], run: dailyCommand }],
   ['check', { takes: [0], run: checkCommand }],
   ['override', { takes: [1], run: overrideCommand }],
   ['adopt', { takes: [0, 1], run: adoptCommand }],
@@ -780,7 +873,7 @@ const COMMANDS = new Map<string, Command>([
 ]);
 
 const USAGE = 'usage: bun scripts/promote.ts digest | forget | withdraw | record <staging version> [reset record] | built <staging version> [reset record] '
-  + '| evals <verdict dir> | check | override "<owner\'s words>" | adopt [override] | promoted [--override] <version> [reset record] | rollback';
+  + '| evals <verdict dir> | daily <daily run dir> [previous daily run dir] | check | override "<owner\'s words>" | adopt [override] | promoted [--override] <version> [reset record] | rollback';
 
 /** Whether `rest` is a shape the command takes beyond its count: adopt's one word is `override`, and promoted takes a
  *  version and a reset record after an optional `--override`. */

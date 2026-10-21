@@ -167,17 +167,18 @@ async function mapTrials(argv: string[], items: readonly QueuedTrial[], started:
 
 /**
  * The legs a run measures, each a deployment and the build it serves: staging against production, staging alone
- * (`stagingOnly`), or the one deployment KINU_EVAL_ORIGIN names (`pass`). `asked` is the build the caller expects the
- * candidate to serve.
+ * (`stagingOnly`), production alone (`daily`: its baseline is the day before's run, `promote.ts daily`), or the one
+ * deployment KINU_EVAL_ORIGIN names (`pass`). `asked` is the build the caller expects the candidate to serve.
  */
-async function legsOf(pass: boolean, stagingOnly: boolean, asked: string | undefined) {
-  const target = evalTargetVerdict(pass ? process.env['KINU_EVAL_ORIGIN'] : deploymentOf('staging').origin);
+async function legsOf(pass: boolean, stagingOnly: boolean, daily: boolean, asked: string | undefined) {
+  const candidateOrigin = pass ? process.env['KINU_EVAL_ORIGIN'] : deploymentOf(daily ? 'production' : 'staging').origin;
+  const target = evalTargetVerdict(candidateOrigin);
 
   if (target.kind === 'refused' || target.why !== 'deployment') throw new Error('evals-map names a real Kinu deployment through KINU_EVAL_ORIGIN');
 
   const origins: { leg: 'candidate' | 'baseline'; origin: string }[] = [{ leg: 'candidate', origin: target.origin }];
 
-  if (!pass && !stagingOnly) origins.push({ leg: 'baseline', origin: deploymentOf('production').origin });
+  if (!pass && !stagingOnly && !daily) origins.push({ leg: 'baseline', origin: deploymentOf('production').origin });
 
   const [candidateBuild = '', baselineBuild = ''] = await Promise.all(origins.map(async ({ origin }) => (await deployedBuild({ origin })).sha));
 
@@ -267,16 +268,11 @@ async function leasedMap(plan: MapPlan, started: (job: string) => void) {
   }
 }
 
-async function main(): Promise<number> {
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    tasks: { type: 'string' }, trials: { type: 'string' }, out: { type: 'string' }, post: { type: 'string' },
-    pass: { type: 'boolean', default: false }, record: { type: 'boolean', default: false },
-    'staging-only': { type: 'boolean', default: false },
-    'calls-at-once': { type: 'string' },
-    sequence: { type: 'boolean', default: false },
-    settle: { type: 'string' },
-  } });
-
+/** The calls a run makes at once (`--calls-at-once`), refused with any pair of flags that cannot run together. */
+function checkedBudget(values: {
+  readonly 'calls-at-once'?: string | undefined; readonly 'staging-only': boolean; readonly daily: boolean;
+  readonly pass: boolean; readonly record: boolean; readonly post?: string | undefined;
+}): number {
   // A run on someone's own plan keeps to fewer calls at once than the eval key's ceiling, never more.
   const budget = values['calls-at-once'] === undefined ? MUSE_CALLS_AT_ONCE : Number(values['calls-at-once']);
 
@@ -288,6 +284,27 @@ async function main(): Promise<number> {
   if (values['staging-only'] && (values.pass || values.record || values.post !== undefined)) {
     throw new Error('--staging-only measures models, never a build\'s verdict: drop --pass, --record and --post');
   }
+
+  // The daily run measures the build production serves; its verdict is `promote.ts daily`'s, against the day before's.
+  if (values.daily && (values.pass || values['staging-only'] || values.record || values.post !== undefined)) {
+    throw new Error('--daily is the full matrix on production, recorded by `promote.ts daily`: drop --pass, --staging-only, --record and --post');
+  }
+
+  return budget;
+}
+
+async function main(): Promise<number> {
+  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
+    tasks: { type: 'string' }, trials: { type: 'string' }, out: { type: 'string' }, post: { type: 'string' },
+    pass: { type: 'boolean', default: false }, record: { type: 'boolean', default: false },
+    'staging-only': { type: 'boolean', default: false },
+    'calls-at-once': { type: 'string' },
+    sequence: { type: 'boolean', default: false },
+    settle: { type: 'string' },
+    daily: { type: 'boolean', default: false },
+  } });
+
+  const budget = checkedBudget(values);
 
   // Resolved before hours of trials, in this caller's environment: the network scope the posting runs in need not find it.
   const gh = values.post === undefined ? null : resolveGh();
@@ -312,7 +329,7 @@ async function main(): Promise<number> {
   const sha = gitIn(ROOT, 'rev-parse', 'HEAD');
 
   if (!clean) throw new Error('armada measures a committed checkout: commit the tree first');
-  const { origins, candidateBuild, baselineBuild } = await legsOf(values.pass, values['staging-only'], positionals[0]);
+  const { origins, candidateBuild, baselineBuild } = await legsOf(values.pass, values['staging-only'], values.daily, positionals[0]);
 
   const matrix = evalMatrix({
     ...process.env, KINU_EVAL_TRIALS: values.pass ? '1' : values.trials ?? process.env['KINU_EVAL_TRIALS'], KINU_EVAL_SEQUENCE: values.sequence ? '1' : '0',
@@ -329,7 +346,7 @@ async function main(): Promise<number> {
 
   const run: EvalRun = {
     definitions: sha, candidateBuild, baselineBuild, taskFiles, models: [...matrix.models], arms: [...matrix.arms],
-    trials: matrix.trials, startedAt, jobs: [], budget, pass: values.pass,
+    trials: matrix.trials, startedAt, jobs: [], budget, pass: values.pass, ...values.daily && { daily: true },
   };
 
   // Kept as soon as armada names the job, so a run cut short still says which job holds its trials.
