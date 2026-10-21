@@ -78,6 +78,8 @@ export const VAR_POLICY = {
   OPS_ALERT_EMAIL: 'ours',
   // The domain a self-host's owner onboarded for mail, or '' for none: a deploy answer, like MAIL_ACCOUNTS.
   EMAIL_DOMAIN: 'derived',
+  // The mail domain's zone where it is a subdomain, so each address routes by a rule: found by the deploy run.
+  KINU_MAIL_ZONE: 'derived',
   CONTROL_PLANE_ACCESS_TEAM_DOMAIN: 'ours',
   CONTROL_PLANE_ACCESS_AUD: 'ours',
   // The digest of the runtime catalog a release's NIMBUS_RUNTIME_CACHE holds: every deployment of it reads the same one.

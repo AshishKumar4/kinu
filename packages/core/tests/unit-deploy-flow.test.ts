@@ -61,6 +61,7 @@ const MANIFEST: ReleaseManifest = {
     { name: 'CLI_PUBLIC_ORIGIN', policy: 'derived' },
     { name: 'SIGN_IN_PROVIDERS', policy: 'derived' },
     { name: 'EMAIL_DOMAIN', policy: 'derived' },
+    { name: 'KINU_MAIL_ZONE', policy: 'derived' },
     { name: 'MAIL_ACCOUNTS', policy: 'derived' },
     { name: 'CONTROL_PLANE_ADMINS', policy: 'derived' },
     { name: 'DEV_USER_EMAIL', policy: 'ours' },
@@ -1045,25 +1046,26 @@ describe('a guided run', () => {
       dmarc,
       { method: 'PATCH', path: '/zones/zone-raman/dns_records/record-2', body: { content: 'v=DMARC1; p=none; rua=mailto:dmarc@raman.dev' } },
     ]);
-    // The one read of the account's tokens is the retiring step's, which finds no earlier routing token and touches no zone.
-    expect(cloudflare.calls.filter((call) => call.path.includes('/tokens')).map((call) => `${call.method} ${call.path}`)).toEqual([`GET /accounts/${INPUTS.accountId}/tokens?per_page=50`]);
+    expect(cloudflare.calls.filter((call) => call.path.includes('/tokens'))).toEqual([]);
   });
+
+  /** What the run uploaded under `name`: a plain var's text, or a secret's. */
+  const uploaded = (name: string) => uploadedBindings([...cloudflare.calls].reverse().find((call) => call.path.endsWith('/workers/scripts/kinu') || call.path.endsWith('/workers/scripts/kinu/versions')))
+    .find((binding) => binding.name === name)?.text;
 
   test('a subdomain is routed by its name with no catch-all, and the run mints its routing token for that zone alone', async () => {
     cloudflare.zones.set('raman.dev', 'zone-raman');
     const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
-    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
 
     expect(rows.every((row) => row.state === 'done')).toBe(true);
     expect(cloudflare.calls.filter((call) => call.path.endsWith('/email/routing/dns')).map((call) => call.body)).toEqual([{ name: 'mail.raman.dev' }]);
     expect(cloudflare.routing.catchAll.size).toBe(0);
     expect(cloudflare.calls.find((call) => call.method === 'POST' && call.path.endsWith('/tokens'))?.body).toEqual({
-      name: 'kinu mail raman.dev run-tag-1 (Kinu)',
+      name: 'kinu mail raman.dev (Kinu)',
       policies: [{ effect: 'allow', resources: { 'com.cloudflare.api.account.zone.zone-raman': '*' }, permission_groups: [{ id: 'group-email-routing-rules-write' }] }],
     });
-    expect(uploadedBindings(upload).find((binding) => binding.name === 'KINU_MAIL_ROUTING')).toEqual({
-      type: 'secret_text', name: 'KINU_MAIL_ROUTING', text: JSON.stringify({ zone: 'zone-raman', worker: 'kinu', domain: 'mail.raman.dev', token: 'minted-token' }),
-    });
+    // The zone is the one new fact; the domain is EMAIL_DOMAIN's and the Worker its own.
+    expect([uploaded('KINU_MAIL_ZONE'), uploaded('KINU_MAIL_ROUTING_TOKEN'), uploaded('EMAIL_DOMAIN')]).toEqual(['zone-raman', 'minted-token', 'mail.raman.dev']);
     expect(cloudflare.dns.map((record) => `${record.type} ${record.name}`)).toEqual(['MX cf-bounce.mail.raman.dev', 'TXT cf-bounce._domainkey.mail.raman.dev', 'TXT _dmarc.mail.raman.dev']);
     expect(rows.find((row) => row.id === 'mail')?.detail).toBe('Mail onboarded on mail.raman.dev: each address routed to kinu by a rule of its own, sending, and DMARC at p=none.');
   });
@@ -1087,65 +1089,67 @@ describe('a guided run', () => {
     expect(rows.every((row) => row.state === 'done')).toBe(true);
     expect(rows.find((row) => row.id === 'mail-routing')?.detail).toBe('No routing token: Cloudflare refused minting one for raman.dev.');
     expect(asked).toEqual([expect.stringContaining('allow "Email Routing Rules" and "API Tokens"')]);
-    // Bound with no token, so the deployment refuses addresses it could not route rather than take itself for an apex.
-    expect(uploadedBindings(cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'))).find((binding) => binding.name === 'KINU_MAIL_ROUTING')?.text)
-      .toBe(JSON.stringify({ zone: 'zone-raman', worker: 'kinu', domain: 'mail.raman.dev', token: null }));
+    // Its zone set and no token: the deployment refuses addresses it could not route rather than take itself for an apex.
+    expect([uploaded('KINU_MAIL_ZONE'), uploaded('KINU_MAIL_ROUTING_TOKEN')]).toEqual(['zone-raman', undefined]);
   });
+
+  /** A first run on `mail.raman.dev`, live, then the next run an update, as a person's change is. */
+  const routedBefore = async (): Promise<void> => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.zones.set('northwind.dev', 'zone-northwind');
+    await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+    cloudflare.rules.set('rule-1', { zone: 'zone-raman', to: 'dana@mail.raman.dev', worker: 'kinu' });
+    cloudflare.rules.set('rule-2', { zone: 'zone-raman', to: 'eval@staging.raman.dev', worker: 'kinu-staging' });
+    cloudflare.calls.length = 0;
+    ledger = new ArrayLedger();
+    runTag = 'run-tag-2';
+    updating = true;
+    await vault.write(ACCESS_TOKEN_KEY, 'access-token-value');
+    await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
+    await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
+  };
 
   // Second review, 2026-10-21: an update rolled the running version's token before its replacement was live, so a
   // failed update left the running deployment unable to route an address.
-  test('an update mints a token of its own, and leaves the running version\'s as it is', async () => {
-    cloudflare.zones.set('raman.dev', 'zone-raman');
-    cloudflare.tokens.set('kinu mail raman.dev run-tag-0 (Kinu)', ['minted-token']);
-    updating = true;
-    const inputs = { ...INPUTS, mailDomain: 'mail.raman.dev' };
-    const step = deployPlan(MANIFEST, inputs).find((each) => each.id === 'mail-routing');
+  test('an update in the same zone keeps the running version\'s token: nothing is minted, rolled or retired', async () => {
+    await routedBefore();
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
 
-    expect(await settle(step?.run(await contextFor(inputs)) ?? Effect.succeed(''))).toBe(
-      'Minted "kinu mail raman.dev run-tag-1 (Kinu)", which may edit raman.dev\'s routing rules and nothing else.',
-    );
-    expect(cloudflare.calls.filter((call) => call.method === 'PUT' || call.method === 'DELETE')).toEqual([]);
-    expect([...cloudflare.tokens.keys()]).toEqual(['kinu mail raman.dev run-tag-0 (Kinu)', 'kinu mail raman.dev run-tag-1 (Kinu)']);
+    expect(rows.find((row) => row.id === 'mail-routing')?.detail).toBe('The running version\'s routing token for raman.dev is kept.');
+    expect(rows.find((row) => row.id === 'mail-routing-retired')?.detail).toBe('The mail routing is as it was.');
+    expect(cloudflare.calls.filter((call) => call.path.includes('/tokens') || call.path.includes('/email/routing/rules'))).toEqual([]);
+    expect(uploaded('KINU_MAIL_ZONE')).toBe('zone-raman');
   });
 
-  /** A deployment that routed by rules before: its tokens for two zones, and rules for the domains it held. */
-  const routedBefore = (): void => {
-    cloudflare.zones.set('raman.dev', 'zone-raman');
-    cloudflare.zones.set('northwind.dev', 'zone-northwind');
-    cloudflare.tokens.set('kinu mail raman.dev run-tag-0 (Kinu)', ['minted-token']);
-    cloudflare.tokens.set('kinu mail northwind.dev run-tag-0 (Kinu)', ['minted-token']);
-    cloudflare.tokens.set('kinu-staging mail raman.dev run-tag-0 (Kinu)', ['minted-token']);
-    cloudflare.rules.set('rule-1', { zone: 'zone-northwind', to: 'priya@mail.northwind.dev', worker: 'kinu' });
-    cloudflare.rules.set('rule-2', { zone: 'zone-raman', to: 'dana@mail.raman.dev', worker: 'kinu' });
-    cloudflare.rules.set('rule-3', { zone: 'zone-raman', to: 'dana@old.raman.dev', worker: 'kinu' });
-    cloudflare.rules.set('rule-4', { zone: 'zone-raman', to: 'eval@staging.raman.dev', worker: 'kinu-staging' });
-  };
-
-  test("once this version is live, the routing it replaced is retired: earlier tokens, and this Worker's rules for any other domain", async () => {
-    routedBefore();
-    const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+  test("a move to another zone mints for it, and once live retires the zone left: this Worker's rules there, and its token", async () => {
+    await routedBefore();
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.northwind.dev' });
 
     expect(rows.every((row) => row.state === 'done')).toBe(true);
-    expect(rows.find((row) => row.id === 'mail-routing-retired')?.detail).toBe('2 earlier routing token(s) and 2 rule(s) for another domain retired.');
-    expect([...cloudflare.tokens.keys()].sort()).toEqual(['kinu mail raman.dev run-tag-1 (Kinu)', 'kinu-staging mail raman.dev run-tag-0 (Kinu)']);
-    expect([...cloudflare.rules.keys()]).toEqual(['rule-2', 'rule-4']);
+    expect(rows.find((row) => row.id === 'mail-routing-retired')?.detail).toBe('1 rule(s) for another domain retired, and the token for raman.dev.');
+    expect([...cloudflare.tokens.keys()]).toEqual(['kinu mail northwind.dev (Kinu)']);
+    expect([...cloudflare.rules.keys()]).toEqual(['rule-2']);
+    expect(uploaded('KINU_MAIL_ZONE')).toBe('zone-northwind');
   });
 
-  test('a run that never goes live leaves the running version\'s token and rules as they were', async () => {
-    routedBefore();
+  test('a move that never goes live leaves the running version\'s token and rules as they were', async () => {
+    await routedBefore();
     health = 503;
-    const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.northwind.dev' });
 
     expect(rows.find((row) => row.id === 'smoke')?.state).toBe('failed');
     expect(cloudflare.calls.filter((call) => call.method === 'DELETE' || (call.method === 'PUT' && call.path.includes('/tokens/')))).toEqual([]);
-    expect([...cloudflare.rules.keys()]).toEqual(['rule-1', 'rule-2', 'rule-3', 'rule-4']);
+    expect([...cloudflare.tokens.keys()]).toEqual(['kinu mail raman.dev (Kinu)', 'kinu mail northwind.dev (Kinu)']);
+    expect([...cloudflare.rules.keys()]).toEqual(['rule-1', 'rule-2']);
   });
 
-  test('a mail host in no zone the token can read binds a grant with no token, so no address is given out that cannot receive', async () => {
-    await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+  test('mail turned off retires the zone it left: its rules there, and its token', async () => {
+    await routedBefore();
+    const rows = await run({ ...INPUTS, mailDomain: '' });
 
-    expect(uploadedBindings(cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'))).find((binding) => binding.name === 'KINU_MAIL_ROUTING')?.text)
-      .toBe(JSON.stringify({ zone: '', worker: 'kinu', domain: 'mail.raman.dev', token: null }));
+    expect(rows.find((row) => row.id === 'mail-routing-retired')?.detail).toBe('1 rule(s) for another domain retired, and the token for raman.dev.');
+    expect([...cloudflare.tokens.keys()]).toEqual([]);
+    expect([...cloudflare.rules.keys()]).toEqual(['rule-2']);
   });
 
   test('a deployment whose owner gave no mail answers has no mail domain, and only its operators may claim', async () => {

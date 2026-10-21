@@ -54,6 +54,23 @@ function storeOf(userId: string): MailStore {
   return store;
 }
 
+/** One label's MailName object: its claim, as a map of labels. */
+function mailName(label: string) {
+  return {
+    lookup: () => Promise.resolve(claims.get(label) ?? null),
+    claim: (claimed: string, userId: string) => {
+      const held = claims.get(claimed);
+
+      if (held !== undefined && held.user_id !== userId) return Promise.reject(new KinuError('denied', `"${claimed}" is taken.`));
+      const claim: MailNameClaim = { label: claimed, user_id: userId, kind: 'username', target_path: null };
+
+      claims.set(claimed, claim);
+
+      return Promise.resolve(claim);
+    },
+  };
+}
+
 function env(accounts: 'operators' | 'everyone' = 'operators'): MailRoutesEnv {
   return {
     EMAIL_DOMAIN: 'kinu.run', MAIL_ACCOUNTS: accounts, CONTROL_PLANE_ADMINS: ASHISH.email, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
@@ -74,29 +91,28 @@ function env(accounts: 'operators' | 'everyone' = 'operators'): MailRoutesEnv {
         },
       }),
     },
-    MAILNAME: {
-      idFromName: (label: string) => label,
-      get: (label: string) => ({
-        lookup: () => Promise.resolve(claims.get(label) ?? null),
-        claim: (claimed: string, userId: string) => {
-          const held = claims.get(claimed);
-
-          if (held !== undefined && held.user_id !== userId) return Promise.reject(new KinuError('denied', `"${claimed}" is taken.`));
-          const claim: MailNameClaim = { label: claimed, user_id: userId, kind: 'username', target_path: null };
-
-          claims.set(claimed, claim);
-
-          return Promise.resolve(claim);
-        },
-      }),
-    },
+    MAILNAME: { idFromName: (label: string) => label, get: mailName },
     MAILBOX: {
       idFromName: (userId: string) => userId,
       get: (userId: string) => {
         const store = storeOf(userId);
 
         return {
-          open: (account: Parameters<MailStore['open']>[0]) => Promise.resolve(store.open(account)),
+          // As MailboxDO.open: the rows first, as the one record of the name, then the name claimed; a refused claim
+          // unwrites the rows it wrote.
+          open: async (account: Parameters<MailStore['open']>[0]) => {
+            const fresh = store.boxes().length === 0;
+            const box = store.open(account);
+            const username = box.address.slice(0, box.address.lastIndexOf('@'));
+
+            const [claimed] = await Promise.allSettled([mailName(username).claim(username, account.userId)]);
+
+            if (claimed?.status !== 'rejected') return box;
+
+            if (fresh) store.unopen();
+
+            return Promise.reject(claimed.reason);
+          },
           boxes: () => Promise.resolve(store.boxes()),
           list: (query: Parameters<MailStore['list']>[0]) => Promise.resolve(store.list(query)),
           thread: (id: string) => store.thread(id),

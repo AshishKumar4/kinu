@@ -21,9 +21,8 @@ const caller = (actorId: 'main' | 'triage') => ({
   workspace: 'northwind-api', title: 'Northwind API', mainActorId: 'main', actorId, name: actorId === 'main' ? 'Northwind API' : 'Triage',
 });
 
-/** Her address, under a label each test keeps to itself: a label is claimed once, for good. */
+/** Her address, under a label each test keeps to itself: a label is claimed once, for good. Opening the box claims it. */
 async function priyaOpened(label: string, userId: string) {
-  await name(label).claim(label, userId);
   await mailbox(userId).open({ userId, email: 'priya.raman@example.com', username: label, assistant: null });
 }
 
@@ -66,11 +65,11 @@ describe('mail on a subdomain of its zone, each address by a rule of its own', (
     });
     expect((await mailbox('u-priya-2').boxes()).map((box) => box.path).sort()).toEqual(['', 'northwind-api']);
 
-    // A name claimed routes nothing until its box is opened, which is where the 201st is refused.
-    await name('dana').claim('dana', 'u-dana');
     expect(await refusalOf(async () => mailbox('u-dana').open({ userId: 'u-dana', email: 'dana@northwind.io', username: 'dana', assistant: null }))).toMatchObject({
       code: 'denied', message: `routing dana@${DOMAIN}: Cloudflare answered: Rule limit reached`,
     });
+    // Neither the name nor the box: the rows the box wrote first are unwritten with the claim refused.
+    expect(await name('dana').lookup()).toBeNull();
     expect(await mailbox('u-dana').boxes()).toEqual([]);
   });
 
@@ -92,11 +91,23 @@ describe('mail on a subdomain of its zone, each address by a rule of its own', (
     await priyaOpened('pr', 'u-priya-5');
     await mailbox('u-priya-5').readableBy(caller('triage'));
     await env.MAIL_RULES_FAKE.reset();
-    await mailbox('u-priya-5').routedUnder('zone-west kinu-northwind mail.west.dev');
+    await mailbox('u-priya-5').routedUnder('zone-west mail.west.dev');
 
     await mailbox('u-priya-5').boxes();
 
     expect([...(await env.MAIL_RULES_FAKE.state()).addresses].sort()).toEqual([`northwind-api.pr@${DOMAIN}`, `pr@${DOMAIN}`, `triage.northwind-api.pr@${DOMAIN}`]);
+  });
+
+  // The lead's decision, 2026-10-21: the box records the name first, then claims it, so an account holds no name its
+  // deletion cannot find, and none it does not own.
+  it('a name another account holds leaves the box unopened, recording nothing', async () => {
+    await priyaOpened('owned', 'u-priya-6');
+
+    expect(await refusalOf(async () => mailbox('u-dana-6').open({ userId: 'u-dana-6', email: 'dana@northwind.io', username: 'owned', assistant: null }))).toMatchObject({
+      code: 'denied', message: expect.stringContaining('"owned" is taken.'),
+    });
+    expect(await mailbox('u-dana-6').boxes()).toEqual([]);
+    expect(await name('owned').lookup()).toMatchObject({ user_id: 'u-priya-6' });
   });
 
   it("deletes every rule under the account's root as the account is, and never disables the zone's routing", async () => {

@@ -7,7 +7,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import {
-  objectNamed, mailAddressOf,
+  objectNamed,
   durableStamps, EmailOutbox, initMailboxTables, mailboxEmail, sha256Hex, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
   type MailAgentMessage, type MailBox, type MailboxAgentCalls, type MailboxCalls, type MailCaller, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
   type MailBoxOwner, type MailRecipient, type MailThreadSummary, type MailThreadView, type MailTriaged, type MailTriageItem, type MailTriagePick, type MailWake,
@@ -15,7 +15,7 @@ import {
 } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { Effect, Exit } from 'effect';
-import { diagnostics, hold, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { authoredRefusal, diagnostics, hold, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { mailRoutesOf, type MailRoutes } from '@kinu.run/core/deploy';
 import { parseMail } from './parse';
 import { isListedOperator } from '../control-plane/admin-caller';
@@ -47,7 +47,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.routes = mailRoutesOf(env.KINU_MAIL_ROUTING, env.EMAIL_DOMAIN ?? '');
+    this.routes = mailRoutesOf(env);
     // Storage a release left behind is repaired first, before any method reads it (core state/schema-repair.ts).
     const stamps = durableStamps(ctx.storage.kv);
     const unmade = readStamp(stamps, ctx.storage.sql, 'mailbox') === 'unmade';
@@ -230,12 +230,34 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     })));
   }
 
+  /**
+   * The person's address: its rows written first, as the one record of the name, then the name claimed (MailName's
+   * `claim`, which routes it on a subdomain), in one block so no call makes a box under a name not yet claimed. A claim
+   * refused (the name taken, or Cloudflare's 201st rule) unwrites the rows this call wrote, so the account records no
+   * name it does not hold; a retry claims again, whatever came between.
+   */
   open(account: { userId: string; email: string; username: string; assistant: { workspace: string; actorId: string } | null }): Promise<MailBox> {
-    // The person's address, routed as its box is opened: a name claimed whose box never opens routes nothing.
-    const person = () => (this.identity() === null ? [{ address: mailAddressOf(account.username, '', this.env.EMAIL_DOMAIN ?? ''), make: () => { this.store.open(account); } }] : []);
+    const opening = async (): Promise<Exit.Exit<MailBox, KinuError>> => {
+      const fresh = this.identity() === null;
+      const box = this.store.open(account);
+      const username = box.address.slice(0, box.address.lastIndexOf('@'));
 
-    return settle(Effect.andThen(this.addressed(person), this.served(() => this.store.open(account))));
+      // In the claim's own words, across the RPC: the name taken, or Cloudflare's refusal of its rule.
+      const claimed = await hold(Effect.tryPromise({
+        try: async () => objectNamed(this.env.MAILNAME, username).claim(username, account.userId),
+        catch: (cause) => authoredRefusal({ doing: `claiming ${username}`, cause }),
+      }));
+
+      if (Exit.isFailure(claimed) && fresh) this.store.unopen();
+
+      return Exit.isFailure(claimed) ? Exit.failCause(claimed.cause) : Exit.succeed(box);
+    };
+
+    return settle(this.refusal === undefined
+      ? Effect.flatMap(this.fenced(Effect.promise(async () => this.ctx.blockConcurrencyWhile(opening))), (exit) => exit)
+      : Effect.fail(this.refusal));
   }
+
 
   boxFor(owner: MailBoxOwner): Promise<MailBox> {
     return settle(Effect.andThen(this.addressed(this.boxesPlanned([owner])), this.served(() => this.store.boxFor(owner))));

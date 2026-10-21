@@ -23,7 +23,7 @@ import { bytesToBase64 } from '../utils/base64';
 import { randomToken } from '../utils/crypto';
 import { firstOwnerLinkSecret } from '../identity/builtin-sign-in';
 import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
-import { mailRoutingRetiredStep, mailRoutingStep, mailStep } from './mail';
+import { mailRoutingRetiredStep, mailRoutingStep, mailStep, mailZoneVar } from './mail';
 import { computerStep, computerTokenStep, computerToolsStep } from './computer';
 
 export interface DeployStep {
@@ -1044,6 +1044,8 @@ function derivedVar(context: DeployContext, name: string): string | null {
       return context.inputs.ownerEmail;
     case 'EMAIL_DOMAIN':
       return context.inputs.mailDomain ?? '';
+    case 'KINU_MAIL_ZONE':
+      return mailZoneVar(context);
     case 'MAIL_ACCOUNTS':
       return context.inputs.mailAccounts ?? 'operators';
     case 'PREVIEW_HOST_SUFFIX':

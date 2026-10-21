@@ -148,6 +148,12 @@ export class MailStore {
     return settleSync(this.written(''));
   }
 
+  /** A box just opened whose name could not be claimed, closed again: nothing routed to it, so nothing reached it. */
+  unopen(): void {
+    this.deps.sql.exec("DELETE FROM mail_addresses WHERE path = ''");
+    this.deps.sql.exec('DELETE FROM mail_box WHERE id = 1');
+  }
+
   /** The Personal assistant the owner has now reads their box, in place of one they had before (docs/MAIL.md §7). */
   readBy(reader: { workspace: string; actorId: string }): MailBox | null {
     if (this.identity() === null) return null;

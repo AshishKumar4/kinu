@@ -399,7 +399,13 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
 ['mail-routing-probe', async () => ({ ...workerCompatibility, modules: probeModules('mail-routing-probe.ts', { ...probeRuntime, keepNames: true }),
         bindings: {
           EMAIL_DOMAIN: MAIL_RULES_DOMAIN,
-          KINU_MAIL_ROUTING: JSON.stringify({ zone: MAIL_RULES_ZONE, worker: MAIL_RULES_WORKER, domain: MAIL_RULES_DOMAIN, token: MAIL_RULES_TOKEN }),
+          KINU_MAIL_ZONE: MAIL_RULES_ZONE,
+          KINU_MAIL_ROUTING_TOKEN: MAIL_RULES_TOKEN,
+          // The self-deploy record names the Worker each rule sends to.
+          KINU_DEPLOYMENT_RECORD: JSON.stringify({
+            inputs: { accountId: '0'.repeat(32), instanceName: MAIL_RULES_WORKER, address: { kind: 'workers-dev', hostname: '', zoneId: '' }, ownerEmail: 'priya.raman@example.com', providerKeyNames: [], sandbox: false, mailDomain: MAIL_RULES_DOMAIN },
+            address: `${MAIL_RULES_WORKER}.northwind.workers.dev`, version: '0.4.0', channelOrigin: 'https://kinu.run', clientId: 'probe-client', deployedAt: '2026-10-21T00:00:00Z',
+          }),
         },
         outboundService: mailRulesOutbound,
         r2Buckets: ['MAIL_BUCKET'],

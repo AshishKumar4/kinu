@@ -125,8 +125,10 @@ declare global {
     KINU_DEPLOYMENT_RECORD?: string;
     /** This deployment's own Cloudflare refresh token, so updates are pulls; absent ⇒ install nothing. */
     KINU_SELF_DEPLOY_REFRESH_TOKEN?: string;
-    /** Mail on a subdomain: the zone, this Worker and a token for the zone's routing rules (JSON); absent on an apex. */
-    KINU_MAIL_ROUTING?: string;
+    /** Mail on a subdomain: the zone its domain sits in, where each address routes by a rule; empty on an apex. */
+    KINU_MAIL_ZONE?: string;
+    /** Mail on a subdomain: the token that may edit that zone's routing rules, minted by the deploy run. */
+    KINU_MAIL_ROUTING_TOKEN?: string;
     /** The one identity usable without OAuth; off localhost it also needs `DEV_IDENTITY_SECRET`. */
     DEV_USER_EMAIL?: string;
     /** `on`: every user's Workers AI goes through this Worker's `AI` binding. */

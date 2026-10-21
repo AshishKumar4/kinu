@@ -1,27 +1,32 @@
 // Mail on a subdomain of its zone (docs/MAIL.md §5). Email Routing's catch-all is the apex's alone, and a subdomain's
 // addresses route only by literal rules (developers.cloudflare.com/email-service/configuration/subdomains/, read
 // 2026-10-21), so the deployment makes a rule for each address as it makes the address, and deletes the rules under a
-// root as the root is retired. Its grant, minted by the deploy run (`mailRoutingStep`), names the zone, this Worker,
-// and a token that may edit that zone's routing rules and nothing else. Nothing here disables a zone's routing, and
-// `bearerTransport` refuses the call that would.
+// root as the root is retired. It reads what the deployment already holds: its zone (`KINU_MAIL_ZONE`, which the deploy
+// run sets where the mail domain is a subdomain, empty on an apex), its mail domain (`EMAIL_DOMAIN`), its own Worker's
+// name (the self-deploy record) and the token the run mints for that zone, which may edit its routing rules and nothing
+// else (`KINU_MAIL_ROUTING_TOKEN`). Nothing here disables a zone's routing, and `bearerTransport` refuses the call that
+// would.
 import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { diagnostics, KinuError } from '../obs/index';
 import { CloudflareApiError, bearerTransport, cloudflarePages, cloudflareResult, type CloudflareTransport } from './cloudflare';
+import { DeploymentRecordSchema } from './inputs';
 
-/**
- * The zone, this Worker, the domain it was minted for, and the token; a null token where Cloudflare would not mint one,
- * so the deployment knows to refuse addresses it could not route rather than take itself for an apex.
- */
-const MailRoutingGrantSchema = v.object({ zone: v.string(), worker: v.string(), domain: v.string(), token: v.nullable(v.string()) });
+/** What the deployment holds that its routing reads. */
+export interface MailRoutingEnv {
+  readonly KINU_MAIL_ZONE?: string;
+  readonly KINU_MAIL_ROUTING_TOKEN?: string;
+  readonly KINU_DEPLOYMENT_RECORD?: string;
+  readonly EMAIL_DOMAIN?: string;
+}
 
-const GrantText = v.pipe(v.string(), v.parseJson(), MailRoutingGrantSchema);
+const RecordText = v.pipe(v.string(), v.parseJson(), DeploymentRecordSchema);
 
-type MailRoutingGrant = v.InferOutput<typeof MailRoutingGrantSchema>;
-
-/** The grant as its secret holds it. */
-export function mailRoutingGrant(grant: MailRoutingGrant): string {
-  return JSON.stringify(grant);
+interface MailRoutingGrant {
+  readonly zone: string;
+  readonly worker: string;
+  readonly domain: string;
+  readonly token: string;
 }
 
 const RuleSchema = v.object({
@@ -68,7 +73,7 @@ export interface MailRoutes {
   unrouted(root: string, domain: string): Effect.Effect<void, KinuError>;
 }
 
-function routingRules(grant: MailRoutingGrant & { readonly token: string }, transport: CloudflareTransport): MailRoutes {
+function routingRules(grant: MailRoutingGrant, transport: CloudflareTransport): MailRoutes {
   const path = `/zones/${grant.zone}/email/routing/rules`;
   const rules = Effect.promise(async () => cloudflarePages(transport, path, RuleSchema));
   const rule = (to: string) => ({ name: `Kinu ${to}`, enabled: true, matchers: [{ type: 'literal', field: 'to', value: to }], actions: [{ type: 'worker', value: [grant.worker] }] });
@@ -90,7 +95,7 @@ function routingRules(grant: MailRoutingGrant & { readonly token: string }, tran
   }));
 
   return {
-    under: `${grant.zone} ${grant.worker} ${grant.domain}`,
+    under: `${grant.zone} ${grant.domain}`,
     routed: (addresses) => (addresses.length === 0 ? Effect.void : Effect.gen(function* () {
       const listed = yield* refused(`routing ${addresses.join(', ')}`, rules);
 
@@ -115,32 +120,31 @@ function routingRules(grant: MailRoutingGrant & { readonly token: string }, tran
 }
 
 /**
- * The deployment's routes for its mail `domain` from its `KINU_MAIL_ROUTING`. Null without one, or with one minted for
- * another domain: the domain is an apex, kinu.run's among them, whose catch-all routes every address. A grant that does
- * not read as one, or holds no token, refuses every new address rather than give out one that cannot receive; the
+ * The deployment's routes. Null where its mail is on its zone's apex, or off: the catch-all routes every address, and
+ * nothing is made or deleted (kinu.run's is one). On a subdomain without the token Cloudflare would not mint, or
+ * without the record naming its Worker, every new address is refused rather than given out unable to receive; the
  * addresses already routed keep their rules, and a retirement goes on without deleting them, as for a grant Cloudflare
  * no longer honours.
  */
-export function mailRoutesOf(held: string | undefined, domain: string, fetchImpl: typeof fetch = fetch): MailRoutes | null {
-  if (held === undefined || held === '') return null;
-  const grant = v.safeParse(GrantText, held);
+export function mailRoutesOf(env: MailRoutingEnv, fetchImpl: typeof fetch = fetch): MailRoutes | null {
+  const zone = env.KINU_MAIL_ZONE ?? '';
+  const domain = env.EMAIL_DOMAIN ?? '';
 
-  if (grant.success && grant.output.domain !== domain) return null;
+  if (zone === '' || domain === '') return null;
+  const record = v.safeParse(RecordText, env.KINU_DEPLOYMENT_RECORD ?? '');
+  const worker = record.success ? record.output.inputs.instanceName : '';
+  const token = env.KINU_MAIL_ROUTING_TOKEN ?? '';
 
-  if (grant.success && grant.output.token !== null) return routingRules({ ...grant.output, token: grant.output.token }, bearerTransport(grant.output.token, fetchImpl));
+  if (worker !== '' && token !== '') return routingRules({ zone, worker, domain, token }, bearerTransport(token, fetchImpl));
 
-  const unread = Effect.fail(new KinuError('unavailable', grant.success
+  const unread = Effect.fail(new KinuError('unavailable', token === ''
     ? `Mail on ${domain} routes each address by a rule of its own, and Cloudflare would not mint this deployment the token to make one. Run the update and allow "Email Routing Rules".`
-    : "This deployment's KINU_MAIL_ROUTING is not a routing grant, so no address can be routed."));
+    : `Mail on ${domain} routes each address by a rule naming this deployment's Worker, and it holds no self-deploy record naming it.`));
 
   const kept = (root: string, domainOf: string) => Effect.sync(() => {
-    diagnostics.failure('mail.unroute_unhonoured', new KinuError('denied', `unrouting ${root}@${domainOf}: this deployment holds no routing token`));
+    diagnostics.failure('mail.unroute_unhonoured', new KinuError('denied', `unrouting ${root}@${domainOf}: this deployment cannot make or delete a rule`));
   });
 
-  // Its identity kept: addresses last routed under another grant are refused with the rest, not given out unrouted.
-  return {
-    under: grant.success ? `${grant.output.zone} ${grant.output.worker} ${grant.output.domain}` : '',
-    routed: (addresses) => (addresses.length === 0 ? Effect.void : unread),
-    unrouted: kept,
-  };
+  // Its identity kept: addresses last routed under another zone or domain are refused with the rest, not given out unrouted.
+  return { under: `${zone} ${domain}`, routed: (addresses) => (addresses.length === 0 ? Effect.void : unread), unrouted: kept };
 }

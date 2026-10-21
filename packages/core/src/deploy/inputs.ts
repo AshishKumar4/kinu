@@ -102,8 +102,9 @@ export const REGISTRY_TOKEN_SECRET = 'DEVBOX_REGISTRY_TOKEN';
 /** Minted by the computer's steps, so never asked of a person. */
 export const COMPUTER_SECRETS: readonly string[] = [REGISTRY_TOKEN_SECRET];
 
-/** The grant a deployment whose mail is on a subdomain routes each address with (`mail-rules.ts`): minted by the run. */
-export const MAIL_ROUTING_SECRET = 'KINU_MAIL_ROUTING';
+/** The token a deployment whose mail is on a subdomain routes each address with (`mail-rules.ts`): one per zone, minted
+ *  by the run and kept while the zone is. */
+export const MAIL_ROUTING_SECRET = 'KINU_MAIL_ROUTING_TOKEN';
 
 /** The first owner's one-time seat, as the deployment's built-in sign-in reads it (`firstOwnerLinkSecret`). */
 export const FIRST_OWNER_LINK_SECRET = 'KINU_FIRST_OWNER_LINK';

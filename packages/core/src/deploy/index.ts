@@ -56,7 +56,7 @@ export { deployPlan, type DeployStep } from './steps';
 
 export { MailPreviewSchema, mailPreview, type MailPreview, type MailPurpose, type MailRecord, type MailZone } from './mail';
 
-export { mailRoutesOf, type MailRoutes } from './mail-rules';
+export { mailRoutesOf, type MailRoutes, type MailRoutingEnv } from './mail-rules';
 
 export {
   DeployDomainsSchema, DeployPreflightSchema, DeployRunPlanSchema, DeployRunRequestSchema, DeploySessionSchema, accountChoices, cloudflareUser, deployedKinus,

@@ -807,14 +807,14 @@ export const SUPPLY = new Map<string, Supply>([
     source: 'written onto the new Worker by the flow\'s handover step (core/src/deploy/steps.ts); '
       + 'never typed by a person.',
   }],
-  ['KINU_MAIL_ROUTING', {
+  ['KINU_MAIL_ROUTING_TOKEN', {
     handling: 'out-of-band',
     required: false,
     absent: 'mail on a subdomain of its zone routes no new address: a subdomain has no catch-all, so each '
-      + 'address needs a rule of its own, which the deployment makes with this grant. An apex, kinu.run '
+      + 'address needs a rule of its own, which the deployment makes with this token. An apex, kinu.run '
       + 'among them, needs none.',
     source: 'minted by the flow\'s mail-routing step (core/src/deploy/mail.ts) from the person\'s grant: '
-      + 'Email Routing Rules Write on that zone only, with the zone and the Worker; never typed by a person.',
+      + 'Email Routing Rules Write on the zone KINU_MAIL_ZONE names, and nothing else; never typed by a person.',
   }],
   ['KINU_SELF_DEPLOY_REFRESH_TOKEN', {
     handling: 'out-of-band',

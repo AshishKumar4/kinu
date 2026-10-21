@@ -2,21 +2,24 @@
 // address is and deleted as its root is retired; and nothing ever disables a zone's Email Routing.
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { bearerTransport, mailRoutesOf, type CloudflareCall, type CloudflareHttpResponse, type MailRoutes } from '../src/deploy/index';
+import { bearerTransport, mailRoutesOf, type CloudflareCall, type CloudflareHttpResponse, type MailRoutes, type MailRoutingEnv } from '../src/deploy/index';
 import { settle } from '../src/obs/index';
 import { parseJsonObject, type JsonValue } from '../src/utils/json';
 
 const DOMAIN = 'mail.northwind.dev';
 
-/** A grant as the deploy run binds it (`KINU_MAIL_ROUTING`). */
-interface Grant {
-  readonly zone: string;
-  readonly worker: string;
-  readonly domain: string;
-  readonly token: string | null;
-}
+const WORKER = 'kinu-raman';
 
-const GRANT: Grant = { zone: 'zone-raman', worker: 'kinu-raman', domain: DOMAIN, token: 'rules-token' };
+/** What a deployment on a subdomain holds, as the deploy run left it: its zone, its domain, its record, its token. */
+const ROUTED: MailRoutingEnv = {
+  KINU_MAIL_ZONE: 'zone-raman',
+  EMAIL_DOMAIN: DOMAIN,
+  KINU_MAIL_ROUTING_TOKEN: 'rules-token',
+  KINU_DEPLOYMENT_RECORD: JSON.stringify({
+    inputs: { accountId: '0'.repeat(32), instanceName: WORKER, address: { kind: 'workers-dev', hostname: '', zoneId: '' }, ownerEmail: 'priya@raman.dev', providerKeyNames: [], sandbox: false },
+    address: `${WORKER}.raman.workers.dev`, version: '0.4.0', channelOrigin: 'https://kinu.run', clientId: 'client', deployedAt: '2026-10-21T00:00:00Z',
+  }),
+};
 
 /** A rule as a POST or PUT asks for it: one literal address, one Worker. */
 const AskedRule = v.object({
@@ -31,7 +34,7 @@ interface HeldRule {
   enabled: boolean;
 }
 
-function literal(to: string, worker = GRANT.worker) {
+function literal(to: string, worker = WORKER) {
   return { matchers: [{ type: 'literal', field: 'to', value: to }], actions: [{ type: 'worker', value: [worker] }] };
 }
 
@@ -80,11 +83,11 @@ function rulesZone(cap = 200) {
     return Response.json(answered.body, { status: answered.status });
   }, { preconnect: fetch.preconnect });
 
-  const routesFor = (grant: Grant): MailRoutes | null => mailRoutesOf(JSON.stringify(grant), DOMAIN, fetched);
+  const routesFor = (env: MailRoutingEnv): MailRoutes | null => mailRoutesOf(env, fetched);
 
   return {
     calls, rules, routesFor,
-    routes: () => present(routesFor(GRANT)),
+    routes: () => present(routesFor(ROUTED)),
     refuseAll: (status: number) => { refuse = { status, body: { success: false, errors: [{ code: 10000, message: 'Authentication error' }], result: null } }; },
     addresses: () => [...rules.values()].map((rule) => rule.to),
   };
@@ -126,10 +129,10 @@ describe('the rules a subdomain routes its addresses by', () => {
   test('a rule of its own that is off is turned on, not made twice', async () => {
     const zone = rulesZone();
 
-    zone.rules.set('rule-off', { id: 'rule-off', to: 'dana@mail.northwind.dev', worker: GRANT.worker, enabled: false });
+    zone.rules.set('rule-off', { id: 'rule-off', to: 'dana@mail.northwind.dev', worker: WORKER, enabled: false });
     await settle(zone.routes().routed(['dana@mail.northwind.dev']));
 
-    expect([...zone.rules.values()]).toEqual([{ id: 'rule-off', to: 'dana@mail.northwind.dev', worker: GRANT.worker, enabled: true }]);
+    expect([...zone.rules.values()]).toEqual([{ id: 'rule-off', to: 'dana@mail.northwind.dev', worker: WORKER, enabled: true }]);
     expect(zone.calls.filter((call) => call.method !== 'GET').map((call) => `${call.method} ${call.path}`)).toEqual(['PUT /zones/zone-raman/email/routing/rules/rule-off']);
   });
 
@@ -165,18 +168,16 @@ describe('the rules a subdomain routes its addresses by', () => {
   });
 });
 
-// Review, 2026-10-21: a deployment moved off a subdomain kept its grant, and one whose token Cloudflare would not mint
-// took itself for an apex and gave out addresses that could not receive.
-describe('the grant a deployment routes under', () => {
-  test('none, or one minted for another domain, is an apex: its catch-all routes every address, and nothing is made', () => {
-    const zone = rulesZone();
-
-    expect([mailRoutesOf(undefined, DOMAIN), mailRoutesOf('', DOMAIN), zone.routesFor({ ...GRANT, domain: 'mail.raman.dev' })]).toEqual([null, null, null]);
+// Review, 2026-10-21: a deployment whose token Cloudflare would not mint took itself for an apex and gave out addresses
+// that could not receive.
+describe('what a deployment routes under', () => {
+  test('no zone is an apex, or no mail: its catch-all routes every address, and nothing is made', () => {
+    expect([mailRoutesOf({}), mailRoutesOf({ ...ROUTED, KINU_MAIL_ZONE: '' }), mailRoutesOf({ ...ROUTED, EMAIL_DOMAIN: '' })]).toEqual([null, null, null]);
   });
 
-  test('one with no token refuses every new address in words that say what to do, and a retirement goes on', async () => {
+  test('a zone with no token refuses every new address in words that say what to do, and a retirement goes on', async () => {
     const zone = rulesZone();
-    const routes = present(zone.routesFor({ ...GRANT, token: null }));
+    const routes = present(zone.routesFor({ ...ROUTED, KINU_MAIL_ROUTING_TOKEN: undefined }));
 
     await expect(settle(routes.routed(['dana@mail.northwind.dev']))).rejects.toMatchObject({
       code: 'unavailable', message: expect.stringContaining('Run the update and allow "Email Routing Rules"'),
@@ -187,11 +188,17 @@ describe('the grant a deployment routes under', () => {
 
   // Second review, 2026-10-21: a grant with no token lost its identity, so a deployment moved onto a subdomain without
   // one gave out the addresses it already had, unrouted, instead of refusing them.
-  test('one with no token keeps its identity, so addresses last routed under another grant are refused with the rest', async () => {
-    const routes = present(rulesZone().routesFor({ ...GRANT, token: null }));
+  test('a zone with no token keeps its identity, so addresses last routed under another one are refused with the rest', async () => {
+    const routes = present(rulesZone().routesFor({ ...ROUTED, KINU_MAIL_ROUTING_TOKEN: undefined }));
 
     expect(routes.under).toBe(present(rulesZone().routes()).under);
     expect(await settle(routes.routed([]))).toBeUndefined();
+  });
+
+  test('a zone with no record naming its Worker refuses every new address, as it cannot say where they go', async () => {
+    const routes = present(rulesZone().routesFor({ ...ROUTED, KINU_DEPLOYMENT_RECORD: undefined }));
+
+    await expect(settle(routes.routed(['dana@mail.northwind.dev']))).rejects.toMatchObject({ code: 'unavailable', message: expect.stringContaining('no self-deploy record') });
   });
 });
 

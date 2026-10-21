@@ -315,7 +315,7 @@ const BindingsSchema = v.object({
 type ScriptBinding = NonNullable<v.InferOutput<typeof BindingsSchema>['bindings']>[number];
 
 /** `GET …/workers/scripts/{s}/settings` answers the script's bindings: plain-text vars with their text, secrets by name only. */
-function scriptBindings(transport: CloudflareTransport, account: string, script: string): Effect.Effect<readonly ScriptBinding[]> {
+export function scriptBindings(transport: CloudflareTransport, account: string, script: string): Effect.Effect<readonly ScriptBinding[]> {
   return Effect.promise(async () => {
     const settings = await cloudflareResult(transport, { method: 'GET', path: `/accounts/${account}/workers/scripts/${script}/settings` }, BindingsSchema);
 
@@ -323,7 +323,7 @@ function scriptBindings(transport: CloudflareTransport, account: string, script:
   });
 }
 
-function varsOf(bindings: readonly ScriptBinding[]): ReadonlyMap<string, string> {
+export function varsOf(bindings: readonly ScriptBinding[]): ReadonlyMap<string, string> {
   return new Map(bindings.filter((binding) => binding.type === 'plain_text').map((binding) => [binding.name, binding.text ?? '']));
 }
 

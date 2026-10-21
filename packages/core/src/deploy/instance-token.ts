@@ -16,8 +16,6 @@ export interface InstanceToken {
   /** What it may touch: `com.cloudflare.api.account.<id>` or `com.cloudflare.api.account.zone.<id>`. */
   readonly resource: string;
   readonly secret: string;
-  /** The secret's value around the token, where it carries more than the token. */
-  readonly stored?: (token: string) => string;
 }
 
 /**
@@ -36,7 +34,7 @@ export function instanceToken(context: DeployContext, token: InstanceToken): Eff
       context.transport, { method: 'PUT', path: `/accounts/${account}/tokens/${held.id}/value`, body: {} }, v.string(),
     ));
 
-    yield* Effect.promise(async () => context.vault.write(token.secret, token.stored?.(value) ?? value));
+    yield* Effect.promise(async () => context.vault.write(token.secret, value));
 
     return held === undefined ? 'minted' : 'rolled';
   });

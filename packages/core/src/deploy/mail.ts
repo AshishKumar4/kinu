@@ -13,7 +13,7 @@ import { CloudflareApiError, cloudflareResult, readEnvelope, type CloudflareCall
 import type { DeployContext } from './context';
 import { MAIL_ROUTING_SECRET, type DeployInputs } from './inputs';
 import { instanceToken } from './instance-token';
-import { mailRoutingGrant } from './mail-rules';
+import { scriptBindings, varsOf } from './account';
 import type { DeployStep } from './steps';
 import type { JsonObject } from '../utils/json';
 
@@ -149,8 +149,8 @@ const scopeRefused = (failed: Cause.Cause<KinuError>): boolean => {
 /** The zone the mail host is in, as the routing step found it, so the mail step asks for it no second time. */
 const FACT_MAIL_ZONE = 'mail.zone';
 
-/** The routing token this run minted, which the step after the promote keeps while it retires the ones before it. */
-const FACT_MAIL_TOKEN = 'mail.token';
+/** What the running version routed by before this run: its `KINU_MAIL_ZONE` and `EMAIL_DOMAIN`, `zone domain`. */
+const FACT_MAIL_BEFORE = 'mail.before';
 
 /** The zone a fact holds: `id name`, or empty where the host is in no zone this token can read. */
 function factZone(held: string): MailZone | null {
@@ -159,18 +159,34 @@ function factZone(held: string): MailZone | null {
   return id === '' ? null : { id, name };
 }
 
-/** This deployment's routing tokens are named `<instance> mail <zone> <run tag> (Kinu)`: one each run, never rolled. */
-const routingTokenPrefix = (inputs: DeployInputs): string => `${inputs.instanceName} mail `;
+/** `KINU_MAIL_ZONE`: the mail domain's zone where the domain is a subdomain of it, so each address routes by a rule;
+ *  empty on an apex, whose catch-all routes them, or without mail. */
+export function mailZoneVar(context: DeployContext): string {
+  const zone = factZone(context.facts.get(FACT_MAIL_ZONE) ?? '');
 
-const ROUTING_TOKEN_SUFFIX = ' (Kinu)';
+  return zone !== null && zone.name !== (context.inputs.mailDomain ?? '') ? zone.id : '';
+}
+
+/** This deployment's routing token for a zone: one per zone, kept while its mail is in that zone. */
+const routingTokenName = (inputs: DeployInputs, zoneName: string): string => `${inputs.instanceName} mail ${zoneName} (Kinu)`;
+
+/** What the running version routes by: its zone and mail domain, and whether it holds the routing token. */
+function routedBefore(context: DeployContext): Effect.Effect<{ readonly zone: string; readonly domain: string; readonly token: boolean }, KinuError> {
+  return Effect.map(scriptBindings(context.transport, context.inputs.accountId, context.inputs.instanceName), (bindings) => {
+    const vars = varsOf(bindings);
+
+    return { zone: vars.get('KINU_MAIL_ZONE') ?? '', domain: vars.get('EMAIL_DOMAIN') ?? '', token: bindings.some((binding) => binding.name === MAIL_ROUTING_SECRET) };
+  });
+}
 
 /**
- * Mail on a subdomain routes each address by a rule the deployment makes as it makes the address, so the run mints it a
- * token that may edit that zone's routing rules and nothing else, from the person's grant, and binds it with the zone,
- * this Worker and the domain as `KINU_MAIL_ROUTING`. Before the upload, which binds it. Each run mints its own, so the
- * running version keeps its token until this one is live (`mailRoutingRetiredStep`). Where Cloudflare will not mint it,
- * or the zone cannot be read, the grant holds no token and the deployment refuses addresses it could not route. An apex
- * needs none: its catch-all routes every address, and kinu.run's is untouched by this.
+ * Mail on a subdomain routes each address by a rule the deployment makes as it makes the address, so the run gives it a
+ * token that may edit that zone's routing rules and nothing else, minted from the person's grant, never asked of them,
+ * and bound as `KINU_MAIL_ROUTING_TOKEN` (its zone is `KINU_MAIL_ZONE`). Before the upload, which binds it. A version
+ * already routing in this zone keeps its token: nothing is minted, rolled or bound again. A new zone's token is minted;
+ * the old one goes once this version is live (`mailRoutingRetiredStep`). Where Cloudflare will not mint it, the
+ * deployment refuses addresses it could not route. An apex needs none: its catch-all routes every address, and
+ * kinu.run's is untouched by this.
  */
 export function mailRoutingStep(inputs: DeployInputs): DeployStep {
   return {
@@ -179,46 +195,41 @@ export function mailRoutingStep(inputs: DeployInputs): DeployStep {
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const domain = inputs.mailDomain ?? '';
+        const before = context.update ? yield* routedBefore(context) : { zone: '', domain: '', token: false };
+
+        context.facts.set(FACT_MAIL_BEFORE, `${before.zone} ${before.domain}`);
 
         if (domain === '') return 'No mail domain was given, so there is nothing to route.';
         const zone = yield* Effect.promise(async () => zoneOf(context.transport, inputs.accountId, domain));
-        const grant = (zoneId: string, token: string | null) => mailRoutingGrant({ zone: zoneId, worker: inputs.instanceName, domain, token });
 
         context.facts.set(FACT_MAIL_ZONE, zone === null ? '' : `${zone.id} ${zone.name}`);
 
-        // The mail step says what it needs; until then no address is given out that could not receive.
-        if (zone === null) {
-          yield* Effect.promise(async () => context.vault.write(MAIL_ROUTING_SECRET, grant('', null)));
-
-          return `${domain} is in no zone this token can read.`;
-        }
+        // The mail step says what it needs.
+        if (zone === null) return `${domain} is in no zone this token can read.`;
 
         if (zone.name === domain) return `${domain} is its zone's apex, whose catch-all routes every address.`;
-        const name = `${routingTokenPrefix(inputs)}${zone.name} ${context.tag}${ROUTING_TOKEN_SUFFIX}`;
+
+        if (before.zone === zone.id && before.token) return `The running version's routing token for ${zone.name} is kept.`;
+        const name = routingTokenName(inputs, zone.name);
 
         const outcome = yield* instanceToken(context, {
-          name, permission: EMAIL_ROUTING_RULES_WRITE, resource: `com.cloudflare.api.account.zone.${zone.id}`, secret: MAIL_ROUTING_SECRET, stored: (token) => grant(zone.id, token),
+          name, permission: EMAIL_ROUTING_RULES_WRITE, resource: `com.cloudflare.api.account.zone.${zone.id}`, secret: MAIL_ROUTING_SECRET,
         }).pipe(Effect.catchCause((failed) => (scopeRefused(failed) ? Effect.succeed('refused' as const) : Effect.failCause(failed))));
 
         if (outcome === 'refused') {
-          yield* Effect.promise(async () => context.vault.write(MAIL_ROUTING_SECRET, grant(zone.id, null)));
           context.note(`Mail on ${domain} routes each address by a rule of its own, which this deployment makes with a token it mints. `
             + 'Sign in again and allow "Email Routing Rules" and "API Tokens", then run the update; until then no address can be made.');
 
           return `No routing token: Cloudflare refused minting one for ${zone.name}.`;
         }
 
-        context.facts.set(FACT_MAIL_TOKEN, name);
-
-        if (outcome === 'kept') return `The routing token for ${domain} is held.`;
+        if (outcome === 'kept') return `The routing token for ${zone.name} is minted.`;
 
         return `${outcome === 'minted' ? 'Minted' : 'Rolled'} "${name}", which may edit ${zone.name}'s routing rules and nothing else.`;
       });
     },
   };
 }
-
-const TokensSchema = v.array(v.object({ id: v.string(), name: v.string() }));
 
 const RulesSchema = v.object({
   id: v.string(),
@@ -234,16 +245,16 @@ function ruleOf(rule: v.InferOutput<typeof RulesSchema>) {
   return { to, worker: rule.actions.find((action) => action.type === 'worker')?.value?.[0] };
 }
 
-/** In `zone`, the rules sending this Worker an address not at the mail domain now, deleted; null pages where refused. */
-async function rulesElsewhere(context: DeployContext, zone: MailZone, inputs: DeployInputs): Promise<{ readonly rules: number; readonly refused: boolean }> {
+/** In `zone`, the rules sending this Worker an address not at the mail domain now, deleted; null where refused. */
+async function rulesElsewhere(context: DeployContext, zone: string, inputs: DeployInputs): Promise<number | null> {
   const domain = inputs.mailDomain ?? '';
-  const path = `/zones/${zone.id}/email/routing/rules`;
+  const path = `/zones/${zone}/email/routing/rules`;
   const listed: v.InferOutput<typeof RulesSchema>[] = [];
 
   for (let page = 1; ; page += 1) {
     const batch = await allowed(context.transport, { method: 'GET', path: `${path}?per_page=50&page=${String(page)}` }, v.array(RulesSchema));
 
-    if (batch === null) return { rules: 0, refused: true };
+    if (batch === null) return null;
     listed.push(...batch);
 
     if (batch.length < 50) break;
@@ -255,17 +266,43 @@ async function rulesElsewhere(context: DeployContext, zone: MailZone, inputs: De
     return to !== '' && worker === inputs.instanceName && (domain === '' || !to.endsWith(`@${domain}`));
   });
 
-  let refused = false;
+  for (const rule of elsewhere) {
+    if ((await allowed(context.transport, { method: 'DELETE', path: `${path}/${rule.id}` }, v.unknown())) === null) return null;
+  }
 
-  for (const rule of elsewhere) refused ||= (await allowed(context.transport, { method: 'DELETE', path: `${path}/${rule.id}` }, v.unknown())) === null;
+  return elsewhere.length;
+}
 
-  return { rules: elsewhere.length, refused };
+/** This deployment's routing token for a zone it left, deleted; false where Cloudflare refused. */
+async function zoneTokenRetired(context: DeployContext, inputs: DeployInputs, zoneName: string): Promise<boolean> {
+  const account = inputs.accountId;
+  const tokens = await allowed(context.transport, { method: 'GET', path: `/accounts/${account}/tokens?per_page=50` }, v.array(v.object({ id: v.string(), name: v.string() })));
+  const held = tokens?.find((token) => token.name === routingTokenName(inputs, zoneName));
+
+  if (tokens === null) return false;
+
+  return held === undefined || (await allowed(context.transport, { method: 'DELETE', path: `/accounts/${account}/tokens/${held.id}` }, v.unknown())) !== null;
+}
+
+/** What the retiring step did, and what it asks of the owner where Cloudflare refused it. */
+function retiredWords(context: DeployContext, inputs: DeployInputs, left: { zone: string; name: string | undefined; rules: number | null; tokenGone: boolean }): string {
+  const zoneName = left.name ?? `zone ${left.zone}`;
+  const domain = inputs.mailDomain === undefined || inputs.mailDomain === '' ? 'any domain' : inputs.mailDomain;
+  const tokenLeft = left.zone !== mailZoneVar(context);
+
+  if (left.rules === null || !left.tokenGone) {
+    context.note(`The mail routing this version replaced could not all be removed: in ${zoneName}, delete the Email Routing rules sending `
+      + `addresses not at ${domain} to the Worker ${inputs.instanceName}, then the token "${routingTokenName(inputs, left.name ?? left.zone)}".`);
+  }
+
+  return `${String(left.rules ?? 0)} rule(s) for another domain retired${left.tokenGone && tokenLeft ? `, and the token for ${zoneName}` : ''}.`;
 }
 
 /**
- * Once this version is live: the routing tokens of the runs before it deleted, and the rules this Worker held for any
- * address not at its mail domain now (one it moved from, in that zone or another), with the person's own grant. A run
- * that never went live leaves the running version's token and rules as they were. A refusal is asked of the owner.
+ * Once this version is live, where the running one routed by rules in another zone or for another domain: its rules for
+ * any address not at the mail domain now deleted, and its token for a zone left behind, with the person's own grant.
+ * A run that never went live leaves them as they were; one routing as before touches nothing. A refusal leaves the
+ * token, so nothing is lost that could still be cleaned, and is asked of the owner.
  */
 export function mailRoutingRetiredStep(inputs: DeployInputs): DeployStep {
   return {
@@ -273,42 +310,16 @@ export function mailRoutingRetiredStep(inputs: DeployInputs): DeployStep {
     title: 'Retire the mail routing this version replaced',
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.promise(async () => {
-        const account = inputs.accountId;
-        const domain = inputs.mailDomain ?? '';
-        const kept = context.facts.get(FACT_MAIL_TOKEN) ?? '';
+        const [zone = '', domain = ''] = (context.facts.get(FACT_MAIL_BEFORE) ?? '').split(' ');
 
-        const prefix = routingTokenPrefix(inputs);
+        if (zone === '') return 'The version this one replaced routed no address by a rule of its own.';
 
-        // Mail turned off retires nothing here: its former grant no longer matches, so nothing more is routed with it.
-        if (domain === '') return 'No mail domain, so no routing to retire.';
-        const tokens = await allowed(context.transport, { method: 'GET', path: `/accounts/${account}/tokens?per_page=50` }, TokensSchema);
+        if (zone === mailZoneVar(context) && domain === (inputs.mailDomain ?? '')) return 'The mail routing is as it was.';
+        const held = await allowed(context.transport, { method: 'GET', path: `/zones/${zone}` }, v.object({ name: v.string() }));
+        const left = held === null ? null : { zone, name: held.name, rules: await rulesElsewhere(context, zone, inputs) };
+        const tokenGone = left !== null && left.rules !== null && (zone === mailZoneVar(context) || await zoneTokenRetired(context, inputs, left.name));
 
-        // A grant that may not read the tokens never minted one either: nothing of this deployment's is there to retire.
-        if (tokens === null) return 'The account\'s tokens could not be read, so no earlier routing token was looked for.';
-        const before = tokens.filter((token) => token.name !== kept && token.name.startsWith(prefix) && token.name.endsWith(ROUTING_TOKEN_SUFFIX));
-        const current = factZone(context.facts.get(FACT_MAIL_ZONE) ?? '');
-
-        // Only a deployment that routed by rules before has rules to retire: the zones its tokens were for, and this one.
-        const zoneNames = new Set(before.length === 0 ? [] : [...before.map((token) => token.name.slice(prefix.length).split(' ')[0] ?? ''), ...current === null ? [] : [current.name]]);
-        let rules = 0;
-        let refused = false;
-
-        for (const zoneName of zoneNames) {
-          const zone = current?.name === zoneName ? current : await zoneOf(context.transport, account, zoneName);
-          const retired = zone === null || zone.name !== zoneName ? { rules: 0, refused: false } : await rulesElsewhere(context, zone, inputs);
-
-          rules += retired.rules;
-          refused ||= retired.refused;
-        }
-
-        for (const token of before) refused ||= (await allowed(context.transport, { method: 'DELETE', path: `/accounts/${account}/tokens/${token.id}` }, v.unknown())) === null;
-
-        if (refused) {
-          context.note(`Some of the mail routing this version replaced could not be removed: delete the "${prefix}…" tokens other than this run's, `
-            + `and the Email Routing rules sending addresses not at ${domain === '' ? 'any domain' : domain} to the Worker ${inputs.instanceName}.`);
-        }
-
-        return `${String(before.length)} earlier routing token(s) and ${String(rules)} rule(s) for another domain retired.`;
+        return retiredWords(context, inputs, { zone, name: left?.name, rules: left?.rules ?? null, tokenGone });
       });
     },
   };

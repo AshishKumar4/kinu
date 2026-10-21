@@ -287,6 +287,9 @@
     // after the one-time Email Routing / Email Sending setup in
     // docs/EMAIL-INGRESS.md is done for this domain.
     "EMAIL_DOMAIN": "kinu.run",
+    // The zone a mail domain on a subdomain sits in, where each address routes by a rule of its own (docs/MAIL.md § 5);
+    // empty on an apex, whose catch-all routes every address, kinu.run's among them.
+    "KINU_MAIL_ZONE": "",
     // Where synthetic-monitoring alerts land. Same mail path as the Mission
     // Inbox, so it works exactly when outbound email does.
     "OPS_ALERT_EMAIL": "me@ashishkumarsingh.com",
@@ -566,6 +569,7 @@
         "CLOUDFLARE_AI_GATEWAY_ID": "default",
         "CLOUDFLARE_DEPLOY_CLIENT_ID": "d4a4eef20ae904413777223b4e9ea682",
         "EMAIL_DOMAIN": "staging.kinu.run",
+        "KINU_MAIL_ZONE": "",
         "OPS_ALERT_EMAIL": "",
         "CONTROL_PLANE_ACCESS_TEAM_DOMAIN": "",
         "CONTROL_PLANE_ACCESS_AUD": "",
