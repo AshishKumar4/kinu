@@ -157,7 +157,7 @@ import {
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   readWorkspaceWork, hasWorkspaceWork, WORK_TAB_JOBS, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
-  readWorkspaceAgents, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
+  measuredAt, readWorkspaceAgents, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, turnTags,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
@@ -4163,11 +4163,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         const reported = this.reportedReport(actorId)?.standing;
 
         if (reported === undefined) return null;
-        const stepped = Math.max(Date.parse(reported.measures.provider?.at ?? ''), Date.parse(reported.measures.gate?.at ?? ''));
+        const stepped = measuredAt(reported.measures);
 
         return {
           planPending: reported.plans.pending, lastFailed: reported.latestRun?.status === 'error',
-          ...(Number.isFinite(stepped) && { activeAt: stepped }),
+          ...(stepped !== undefined && { activeAt: stepped }),
         };
       },
     });

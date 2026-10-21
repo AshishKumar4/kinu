@@ -11,7 +11,7 @@ import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
 import { SubagentRosterStore } from '../src/subagents/roster';
 import { actorReferenceOf, type ActorHandle } from '../src/identity/actor-handle';
 import type { SubagentRosterEntry } from '../src/delegation/agents-tool';
-import { readWorkspaceAgents, type ChatReport, type PanelAgent } from '../src/read-models/workspace-agents';
+import { measuredAt, readWorkspaceAgents, type ChatReport, type PanelAgent } from '../src/read-models/workspace-agents';
 import { OWNER_STOPPED } from '../src/heads/types';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { initAgentFiguresTable, readAgentFigures } from '../src/read-models/agent-figures';
@@ -284,6 +284,17 @@ describe('the Agents panel lists every agent in the workspace', () => {
     rests(alice, { activeAt: stepped });
 
     expect((await read()).find((agent) => agent.label === 'alice')?.figures.lastActiveAt).toBe(stepped);
+  });
+
+  // A report may carry one measure and not the other: the step a gate admitted is a step all the same.
+  test('a report dates its agent by whichever measure it carries, and by none when it carries neither', () => {
+    const at = '2026-09-30T11:00:00.000Z';
+
+    expect([
+      measuredAt({ provider: null, gate: { at } }),
+      measuredAt({ provider: { at }, gate: { at: '2026-09-30T10:00:00.000Z' } }),
+      measuredAt({ provider: null, gate: null }),
+    ]).toEqual([Date.parse(at), Date.parse(at), undefined]);
   });
 
   test('an agent that has not run shows no figures, not zeros', async () => {

@@ -1744,7 +1744,7 @@ export {
 export { readGitHubRemotes } from './github/remotes';
 
 export {
-  mainPanelAgent, readWorkspaceAgents,
+  mainPanelAgent, measuredAt, readWorkspaceAgents,
   type PanelAgent, type AgentActivity, type ChatReport,
 } from './read-models/workspace-agents';
 

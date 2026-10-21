@@ -58,6 +58,17 @@ export interface ChatReport {
   readonly activeAt?: number;
 }
 
+/** When an isolate's report says its agent last stepped: its newest measure, either of which may be absent. */
+export function measuredAt(measures: { readonly provider: { readonly at: string } | null; readonly gate: { readonly at: string } | null }): number | undefined {
+  const times = [measures.provider, measures.gate].flatMap((measure) => {
+    const at = measure === null ? Number.NaN : Date.parse(measure.at);
+
+    return Number.isFinite(at) ? [at] : [];
+  });
+
+  return times.length === 0 ? undefined : Math.max(...times);
+}
+
 /** A question only the person can answer outranks a running turn; a failed last turn shows until the next one starts. */
 function chatActivity(walk: Pick<Walk, 'sql' | 'chat'>, actorId: string, running: boolean): AgentActivity {
   const reported = walk.chat(actorId);
