@@ -55,11 +55,20 @@ describe('the providers list', () => {
       await page.click('[data-provider="Cloudflare AI"] [data-connect-cloudflare]');
       const run = new URL((await started).url()).searchParams.get('run') ?? '';
 
-      // Where the callback sends the tab once Cloudflare answers: the finish page, for the run this tab began.
-      await page.goto(`${origin}/gallery.html?frame=connected&${new URLSearchParams({ run, service: 'Cloudflare' }).toString()}`);
-      await page.waitForFunction((at: string) => location.href === at, {}, left);
+      // Where the callback sends the tab once Cloudflare answers: the finish page, for the run this tab began. Loaded
+      // again for the same run, as `vite dev`'s reload of a page whose imports it just optimized loads it, it goes back
+      // again rather than read as another tab's end.
+      const finished = `${origin}/gallery.html?frame=connected&${new URLSearchParams({ run, service: 'Cloudflare' }).toString()}`;
+      const back: string[] = [];
 
-      expect(page.url()).toBe(left);
+      for (const visit of ['first', 'again']) {
+        await page.goto(finished);
+        // Back where it left, or saying its end and staying, as a page that tells another tab does.
+        await page.waitForFunction((at: string) => location.href === at || document.querySelector('[data-connect-finished] p') !== null, {}, left);
+        back.push(`${visit} ${page.url() === left ? 'back' : 'stayed'}`);
+      }
+
+      expect(back).toEqual(['first back', 'again back']);
       await page.close();
     });
   });

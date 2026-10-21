@@ -91,7 +91,9 @@ function ShowcaseStep({ revealed }: { revealed: boolean }) {
 function useAddressedStep(offerMail: boolean, initialStep: number) {
   const steps = stepsFor(offerMail);
   const [search, setSearch] = useSearchParams();
-  const addressed = steps.findIndex((candidate) => candidate.id === search.get("step"));
+  // A step it names that is not offered, Mail read as not offered after all, gives way to the step after it.
+  const named = ONBOARDING_STEPS.findIndex((candidate) => candidate.id === search.get("step"));
+  const addressed = named < 0 ? -1 : steps.findIndex((candidate) => ONBOARDING_STEPS.indexOf(candidate) >= named);
   const step = addressed >= 0 ? addressed : Math.min(Math.max(0, initialStep), steps.length - 1);
 
   const goTo = useCallback((index: number) => {

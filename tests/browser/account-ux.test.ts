@@ -758,6 +758,30 @@ describe('account panels', () => {
     });
   });
 
+  // Setup holds its step in the address by id (2026-10-23 review fix), so the step list shrinking when Mail is not
+  // offered after all moves no one: a step opened on keeps its place, and a named Mail gives way to the step after it.
+  test('a step setup opened on keeps its place when Mail is not offered, and a named Mail gives way to the next', async () => {
+    await withGallery(async (gallery) => {
+      const opened = [
+        { query: `welcome&mail=off&step=${String(ONBOARDING_STEP_IDS.indexOf('tools'))}`, shown: 'tools' },
+        { query: `welcome&mail=off&route=${encodeURIComponent('/welcome?step=mail')}`, shown: 'providers' },
+      ];
+
+      for (const { query, shown } of opened) {
+        const page = await freshPage(gallery, query, 'dark', 'mobile');
+
+        try {
+          await page.waitForFunction((count) => document.querySelectorAll('[aria-label="Setup steps"] li').length === count, {}, ONBOARDING_STEP_IDS.length - 1);
+          const at = await page.evaluate(() => document.querySelector('[data-welcome-step]:not([aria-hidden="true"])')?.getAttribute('data-welcome-step') ?? null);
+
+          expect({ query, at }).toEqual({ query, at: shown });
+        } finally {
+          await page.close();
+        }
+      }
+    });
+  });
+
   test('setup offers tools to connect, and every step can be passed by', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'welcome&step=1', 'light', 'mobile');

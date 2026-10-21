@@ -91,8 +91,9 @@ export function finishConnect(ended: ConnectEnded): FinishedConnect {
 
   if (ended.run === null) return { kind: "unknown" };
 
+  // Kept, not taken: a finish page loaded again for the same run, by a reload before it left, goes back all the same.
+  // The next connect's begin clears it.
   if (stored.success && stored.output.run === ended.run) {
-    sessionStorage.removeItem(RETURN_KEY);
     const back = sanitizeReturnTo(stored.output.back, window.location.origin);
 
     if (ended.error !== null) return { kind: "failed-here", back };
