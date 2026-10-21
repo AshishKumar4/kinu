@@ -14,6 +14,7 @@ import {
 } from "@kinu.run/core/deploy";
 import * as v from "valibot";
 import { StepRow } from "@/components/deploy/DeployStepRow";
+import { Notice } from "@/components/ui/Notice";
 
 const RUN_POLL_MS = 2000;
 
@@ -116,7 +117,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
       </div>
       {err !== null && (err.includes(NOT_OWNER)
         ? <p className="t-body p-text-2" data-updates="not-owner">{NOT_OWNER}</p>
-        : <div className="t-meta p-notice-danger rounded-md px-3 py-2" role="alert">{err}</div>)}
+        : <Notice tone="danger">{err}</Notice>)}
       {offer === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
       {offer !== null && (
         <section className="space-y-4" aria-label="This deployment's build">

@@ -19,6 +19,7 @@ import {
   type CloudflareGatewayStatus, type CloudflareAccountStatus,
 } from "@/lib/user-api";
 import type { ProfileCatalogEnvelope } from '@kinu.run/core';
+import { Notice } from '@/components/ui/Notice';
 import { Card, Choice, Field, inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { CardSlot } from "@/components/ui/CardSlot";
@@ -76,9 +77,9 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
     <>
       {chatgptWelcome && <ChatGptWelcome onClose={() => setChatgptWelcome(false)} />}
       {unrevoked !== null && (
-        <p role="status" className="t-meta rounded-md px-3 py-2 p-notice-warning">
+        <Notice tone="warning">
           {unrevoked.name} is disconnected from Kinu but not revoked. {unrevoked.words}
-        </p>
+        </Notice>
       )}
       <Framed framed={framed}>
         <CardSlot resource={creds.resource} what="your API keys" onRetry={reloadAll}>
@@ -364,9 +365,9 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
 
   return (
     <div className="space-y-3">
-      <p className="t-meta rounded-md px-3 py-2 p-notice-warning">
+      <Notice tone="warning">
         Signing in with a Claude subscription runs Kinu on your own Claude plan. Anthropic&apos;s terms limit subscription use to its own apps, so you connect at your own risk.
-      </p>
+      </Notice>
       {authorizeUrl === null ? (
         <Button variant="primary" size="sm" onClick={() => detach(start())} disabled={busy}>Sign in with Claude</Button>
       ) : (

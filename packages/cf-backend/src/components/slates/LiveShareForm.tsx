@@ -17,6 +17,7 @@ import { answered } from "./BlueprintShareForm";
 import { AccessPicker, EmailsField, emailsOf, Failure, Lead, type AccessOption } from "./ShareParts";
 import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Notice } from "@/components/ui/Notice";
 
 export interface LiveShareFixture {
   graph: SlateReach;
@@ -798,10 +799,10 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
     return (
       <>
         <div className="t-meta space-y-3">
-          <p className="p-notice-success rounded-md px-3 py-2" data-share-created>
+          <Notice tone="success" data-share-created="">
             Shared. {whoCanOpen(created.share)}
             {created.listing === "pending" && " The list will catch up."}
-          </p>
+          </Notice>
           {created.url === null ? (
             <p className="t-meta p-text-3">This deployment cannot make share links: it has no preview host or signing secret.</p>
           ) : (

@@ -7,6 +7,7 @@ import { Modal } from "@/components/ui/Modal";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
 import { WorkspacePicker, type ChosenWorkspace } from "@/components/secrets/SecretRows";
 import { handMailThread } from "@/lib/mail-api";
+import { Notice } from "@/components/ui/Notice";
 
 export function SendToWorkspace({ thread, onClose }: { thread: string; onClose: () => void }) {
   const [chosen, setChosen] = useState<ChosenWorkspace | null>(null);
@@ -28,7 +29,7 @@ export function SendToWorkspace({ thread, onClose }: { thread: string; onClose: 
       </>}>
       <div data-mail-hand className="space-y-2">
         <WorkspacePicker chosen={chosen} onChange={setChosen} placeholder="Workspace" />
-        {error !== null && <div role="alert" className="t-meta p-notice-danger rounded-md px-3 py-2">{error}</div>}
+        {error !== null && <Notice tone="danger">{error}</Notice>}
       </div>
     </Modal>
   );

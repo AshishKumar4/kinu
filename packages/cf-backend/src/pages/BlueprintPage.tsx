@@ -10,27 +10,28 @@ import { Effect } from "effect";
 import { useEffect, useState, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
-import { FileIcon, FolderIcon, GitBranchIcon, LinkIcon, WarningIcon, type Icon } from "@phosphor-icons/react";
+import { FileIcon, FolderIcon, GitBranchIcon, LinkIcon, type Icon } from "@phosphor-icons/react";
 import type { BlueprintView } from "@kinu.run/core";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { personReaches, reachConnection } from "@/components/slates/ForkReachPanel";
 import { registerWorkspace } from "@/lib/user-api";
 import { getBlueprint, signedInEmail } from "@/lib/shared-api";
+import { Notice } from "@/components/ui/Notice";
 
 export function SecretWarning({ warnings, children }: { warnings: BlueprintView["warnings"]; children: ReactNode }) {
   if (warnings.length === 0) return null;
 
   return (
-    <div className="t-meta p-notice-warning rounded-md px-3 py-2" role="alert">
-      <p className="flex items-center gap-2 font-medium"><WarningIcon size={14} /> Possible secrets in the source</p>
-      <p className="mt-1 opacity-90">{children}</p>
-      <ul className="mt-2 space-y-px font-mono">
+    <Notice tone="warning">
+      <p className="t-item">Possible secrets in the source</p>
+      <p className="mt-1">{children}</p>
+      <ul className="mt-2 space-y-px t-mono">
         {warnings.map((warning) => (
           <li key={`${warning.path}:${warning.line}:${warning.pattern}`}>{warning.path}:{warning.line}: {warning.message}</li>
         ))}
       </ul>
-    </div>
+    </Notice>
   );
 }
 
@@ -132,7 +133,7 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
           )}
         </PageHeader>
         <div className="mt-8 space-y-6">
-          {err && <div className="t-meta p-notice-danger rounded-md px-3 py-2">{err}</div>}
+          {err && <Notice tone="danger">{err}</Notice>}
           {view === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
           {view !== null && (
             <>

@@ -882,7 +882,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-notice-tone-success { background: var(--c-success-tint); border-color: color-mix(in srgb, var(--c-success) 30%, transparent); color: var(--c-success); }
 .p-notice-tone-warning { background: var(--c-warning-tint); border-color: color-mix(in srgb, var(--c-warning) 30%, transparent); color: var(--c-warning); }
 .p-notice-tone-danger { background: var(--c-danger-tint); border-color: color-mix(in srgb, var(--c-danger) 30%, transparent); color: var(--c-danger); }
-.p-notice .t-body { color: inherit; }
+.p-notice :is(.t-body, .t-item, .t-meta) { color: inherit; }
 
 /* Meter: a 4 bar on the hover wash (ui/Meter.tsx). */
 .p-meter-track { height: 4px !important; border-radius: var(--r-pill) !important; background: var(--c-hover) !important; }

@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { CaretDownIcon, CheckIcon } from "@phosphor-icons/react";
 import { inputCls } from "@/components/ui/form";
+import { Notice } from "@/components/ui/Notice";
 
 export function Lead({ children }: { children: ReactNode }) {
   return <p className="t-body p-text-2">{children}</p>;
@@ -81,5 +82,5 @@ export function StopButton({ onStop, disabled }: { onStop: () => void; disabled:
 }
 
 export function Failure({ message }: { message: string | null }) {
-  return message === null ? null : <div role="alert" className="t-meta p-notice-danger rounded-md px-3 py-2">{message}</div>;
+  return message === null ? null : <Notice tone="danger">{message}</Notice>;
 }

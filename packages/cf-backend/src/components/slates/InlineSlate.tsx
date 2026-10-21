@@ -16,6 +16,7 @@ import { Effect } from "effect";
 import { detach, showing } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { WorkspacePartHost } from "@/hooks/use-part-host";
+import { Notice } from "@/components/ui/Notice";
 
 
 /** `sized`: the page reports its own height, as every page kinu:slate serves does; a slate's own server does not. */
@@ -35,7 +36,7 @@ function refusalWords(id: string, refusal: { readonly reason: string; readonly e
 
 /** Shown over a slate whose latest edit does not build: the version under it is the last that did. */
 function BrokenNotice({ title }: { title: string }) {
-  return <span role="status" data-slate-broken className="t-meta block p-notice-warning px-3 py-1">{title} has a build error; showing the last working version.</span>;
+  return <Notice tone="warning" phrasing data-slate-broken="">{title} has a build error; showing the last working version.</Notice>;
 }
 
 const SavedSlateSchema = v.object({ id: v.string(), title: v.string() });
@@ -387,9 +388,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
         {notice}
         {decision}
         {refusal !== null && (
-          <div className="t-meta p-notice-danger rounded-lg px-3 py-2">
-            <p className="break-words m-0">{refusal}</p>
-          </div>
+          <Notice tone="danger"><p className="break-words">{refusal}</p></Notice>
         )}
         {content === null && refusal === null && (
           <div className="flex justify-center py-16"><Loader /></div>
@@ -409,9 +408,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
       {notice}
       {decision}
       {refusal !== null && (
-        <span className="t-meta block p-notice-danger px-3 py-2">
-          <span className="block break-words m-0">{refusal}</span>
-        </span>
+        <Notice tone="danger" phrasing><span className="block break-words">{refusal}</span></Notice>
       )}
       {(content === null || waiting) && refusal === null && (
         <span className={`flex items-center justify-center ${known === undefined ? "py-8" : ""}`} style={known === undefined ? undefined : { height: known }}><Loader /></span>

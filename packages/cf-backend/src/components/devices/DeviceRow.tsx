@@ -1,9 +1,9 @@
-import { buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 import { Effect } from 'effect';
 import { useState } from "react";
 import { startTransition } from "react";
 import {
-  DesktopTowerIcon, PencilSimpleIcon, TrashIcon, WarningIcon,
+  DesktopTowerIcon, PencilSimpleIcon, TrashIcon,
 } from "@phosphor-icons/react";
 import {
   renameDevice, revokeDeviceConsent, setDeviceSandboxTier,
@@ -19,6 +19,7 @@ import { Chip } from "@/components/ui/Chip";
 import { Switch } from "@/components/ui/Switch";
 import { Status } from "@/components/ui/Status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
+import { Notice } from "@/components/ui/Notice";
 
 const WHOLE_MACHINE_COPY = "Linked from /, so the agent has this whole machine: every file you can open, and its commands "
   + "run as you. The Sandbox switch applies again once you run kinu connect in a narrower folder.";
@@ -66,12 +67,23 @@ export function DeviceRow({
     const unstopped = device.unstoppedAt !== null;
 
     return (
-      <div data-device-incident={device.id} role="alert"
-        className="t-meta p-notice-danger rounded-none border-0 px-4 py-3">
-        <div className="flex items-start gap-2">
-          <WarningIcon size={14} className="mt-px shrink-0" />
-          <div className="min-w-0 flex-1 space-y-1">
-            <div className="font-medium">{device.label}</div>
+      <Notice tone="danger" data-device-incident={device.id} className="m-2" action={
+        <Button size="sm" disabled={acknowledging}
+          onClick={() => {
+            setAcknowledging(true);
+            startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+              yield* Effect.promise(async () => onAcknowledge());
+            }), showing((chain) => {
+              // A rejection escaping `onError` still leaves the row visibly unacknowledged.
+              onError(`Could not acknowledge the device warning: ${chain}`);
+            })), Effect.sync(() => {
+              setAcknowledging(false);
+            }))));
+          }}>
+          {acknowledging ? "Acknowledging…" : "Acknowledge"}
+        </Button>}>
+          <div className="space-y-1">
+            <div className="t-item">{device.label}</div>
             {device.reuseDetectedAt !== null && (
               <>
                 <p>Kinu revoked this device: its key was used after it had been replaced, so a copy of this machine&apos;s ~/.kinu/device.json exists somewhere else.</p>
@@ -86,23 +98,7 @@ export function DeviceRow({
             )}
             <p className="t-meta">{unstopped ? "Acknowledge clears this warning. It does not stop commands." : "Acknowledge clears this warning."}</p>
           </div>
-          <button type="button" disabled={acknowledging}
-            onClick={() => {
-              setAcknowledging(true);
-              startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-                yield* Effect.promise(async () => onAcknowledge());
-              }), showing((chain) => {
-                // A rejection escaping `onError` still leaves the row visibly unacknowledged.
-                onError(`Could not acknowledge the device warning: ${chain}`);
-              })), Effect.sync(() => {
-                setAcknowledging(false);
-              }))));
-            }}
-            className={buttonClass({ size: "sm" })}>
-            {acknowledging ? "Acknowledging…" : "Acknowledge"}
-          </button>
-        </div>
-      </div>
+      </Notice>
     );
   }
 

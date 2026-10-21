@@ -5,6 +5,7 @@ import {
   ArrowClockwiseIcon, CheckCircleIcon, CircleIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type { DeployStepRow } from "@kinu.run/core/deploy";
+import { Notice } from "@/components/ui/Notice";
 
 export function StepRow({ row, onRetry }: {
   row: DeployStepRow;
@@ -30,12 +31,12 @@ export function StepRow({ row, onRetry }: {
           {row.state === "done" && row.detail !== "" && <p className="t-meta mt-px p-text-3">{row.detail}</p>}
           {row.state === "running" && note !== "" && <p className="t-meta mt-px p-text-3">{note}</p>}
           {row.failure !== null && (
-            <div className="t-meta mt-2 p-notice-danger rounded-md px-3 py-2" role="alert">
-              <p className="font-mono">{row.failure.detail}</p>
+            <Notice tone="danger" className="mt-2">
+              <p className="t-mono">{row.failure.detail}</p>
               {row.failure.code !== 0 && (
                 <p className="mt-1 opacity-80">Cloudflare error {row.failure.code}, HTTP {row.failure.status}.</p>
               )}
-            </div>
+            </Notice>
           )}
         </div>
         {row.state === "failed" && onRetry !== undefined && (

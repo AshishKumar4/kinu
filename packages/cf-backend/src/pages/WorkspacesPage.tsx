@@ -11,6 +11,8 @@ import { Segmented } from "@/components/ui/Segmented";
 import { Page } from "@/components/ui/PageHeader";
 import { TILE_GRID } from "@/components/ui/Tiles";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
+import { Notice } from "@/components/ui/Notice";
+import { Button } from "@/components/ui/Button";
 
 const VIEW_KEY = "kinu:workspaces-view";
 
@@ -117,10 +119,7 @@ export default function WorkspacesPage() {
         </div>
 
         {error !== null && (
-          <div className="t-meta p-notice-danger flex items-center justify-between gap-3 rounded-md px-3 py-2">
-            <span className="min-w-0 truncate">{error}</span>
-            <button type="button" onClick={refresh} className="shrink-0 underline">Retry</button>
-          </div>
+          <Notice tone="danger" action={<Button variant="ghost" size="sm" onClick={refresh}>Retry</Button>}>{error}</Notice>
         )}
 
         {!roster.loading && entries.length === 0 && error === null && (

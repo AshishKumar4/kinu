@@ -23,6 +23,7 @@ import { Segmented } from "@/components/ui/Segmented";
 import { Status } from "@/components/ui/Status";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import { useAsyncResource } from "@/hooks/use-async-resource";
+import { Notice } from "@/components/ui/Notice";
 
 /** What a Test searches for: a question an agent of the owner's asks. */
 const TEST_QUERY = "Cloudflare Durable Objects alarms API";
@@ -357,7 +358,7 @@ function SearchTest({ route }: { route: WebSearchRoute }) {
           {outcome.answer.results[0] !== undefined && <span className="t-meta truncate p-text-3">First: {outcome.answer.results[0].title}</span>}
         </div>
       )}
-      {outcome?.kind === "refused" && <p className="t-meta rounded-md px-3 py-2 p-notice-danger" data-web-search-tested="refused">{outcome.words}</p>}
+      {outcome?.kind === "refused" && <Notice tone="danger" data-web-search-tested="refused">{outcome.words}</Notice>}
     </div>
   );
 }

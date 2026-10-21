@@ -15,6 +15,7 @@ import { BrandMark } from "@/components/ui/BrandMark";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
+import { Notice } from "@/components/ui/Notice";
 
 /** How often a waiting sign-in is read. */
 const SIGN_IN_POLL_MS = 2_000;
@@ -71,9 +72,9 @@ export function ChatGptConnect({ plan, onSignedIn }: { plan: ChatGptPlan; onSign
 
   return (
     <div className="space-y-3" data-chatgpt-connect>
-      <p className="t-meta rounded-md px-3 py-2 p-notice-warning">
+      <Notice tone="warning">
         OpenAI&apos;s open-source terms cover locally hosted apps, so you connect your ChatGPT plan to kinu.run at your own risk.
-      </p>
+      </Notice>
       {plan.status?.planDeclined === true && (
         <p className="t-meta p-text-2">{plan.status.email ?? "Your ChatGPT account"} signed in without ChatGPT plan usage. Sign in again to allow it.</p>
       )}

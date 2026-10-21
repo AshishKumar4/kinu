@@ -17,6 +17,7 @@ import { NO_HEAD_DELTAS, type HeadDeltas } from "@kinu.run/core";
 import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Notice } from "@/components/ui/Notice";
 
 export function TakesChip({ set, onPick }: {
   set: AlternateTakeSet;
@@ -138,14 +139,14 @@ function TakesComparison({ set, onPick, onClose }: {
       <div className="t-meta p-text-3">{takeEvidence(candidate)}</div>
 
       {notice && (
-        <div className="t-meta rounded-md px-3 py-2 p-notice-success">
+        <Notice tone="success">
           {notice}
-        </div>
+        </Notice>
       )}
       {err && (
-        <div className="t-meta rounded-md px-3 py-2 p-notice-danger">
+        <Notice tone="danger">
           {err}
-        </div>
+        </Notice>
       )}
     </Modal>
   );

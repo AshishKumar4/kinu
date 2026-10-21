@@ -4608,7 +4608,7 @@ describe('the home creation form, as a browser submits it', () => {
 
         const ta = document.querySelector('#workspace-mission');
 
-        return document.querySelector('.p-notice-danger') !== null
+        return document.querySelector('form [role="alert"]') !== null
           && btn instanceof HTMLButtonElement && !btn.disabled
           && ta instanceof HTMLTextAreaElement && !ta.disabled;
       });
@@ -4626,7 +4626,7 @@ describe('the home creation form, as a browser submits it', () => {
       // so navigation itself is unobservable — the roster row is the real
       // product state the create had to produce.
       await page.waitForFunction(
-        () => document.querySelector('.p-notice-danger') === null
+        () => document.querySelector('form [role="alert"]') === null
           && document.body.innerText.includes('Probe created'));
       expect(await page.evaluate(() => window.__createProbe.posts)).toBe(2);
       await page.close();

@@ -4,6 +4,7 @@ import { Loader } from "@/components/ui/Loader";
 import { composing } from "@/components/ui/form";
 import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl } from "@/components/Attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
+import { Notice } from "@/components/ui/Notice";
 
 const NO_DROP = () => {};
 
@@ -63,7 +64,7 @@ export function PromptCard({ id, label, placeholder, action, value, onChange, on
       </div>
       {attachments && <div className="px-3 pb-3 [&>[data-attachments]]:pt-0"><AttachmentTray attachments={attachments} /></div>}
       {notice && <div className="px-6 pb-4">{notice}</div>}
-      {error && <div className="t-meta mx-6 mb-4 rounded-md px-3 py-2 p-notice-danger">{error}</div>}
+      {error && <Notice tone="danger" className="mx-6 mb-4">{error}</Notice>}
       <div className="flex items-center justify-end gap-2 px-6 pb-5">
         {attachments && <div className="-ml-2 mr-auto"><AttachButton attachments={attachments} disabled={busy} /></div>}
         <Button variant="primary" size="md" type="submit" disabled={busy || blocked} >

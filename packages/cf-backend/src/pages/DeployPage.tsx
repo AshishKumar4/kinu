@@ -14,6 +14,7 @@ import * as v from "valibot";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { Field, inputCls } from "@/components/ui/form";
 import { StepRow } from "@/components/deploy/DeployStepRow";
+import { Notice } from "@/components/ui/Notice";
 
 /** The run key is a capability: `sessionStorage` under the run id, sent in an `authorization` header, never a URL. */
 function heldRunKey(runId: string): string {
@@ -231,7 +232,7 @@ function Answered({ options, runId, onStarted }: {
           </Field>
         ))}
       </div>
-      {err !== null && <div className="t-meta p-notice-danger rounded-md px-3 py-2" role="alert">{err}</div>}
+      {err !== null && <Notice tone="danger">{err}</Notice>}
       <div className="flex items-center justify-between gap-3">
         <p className="t-meta p-text-3">Kinu {options.version} will be uploaded into your account.</p>
         <Button variant="primary" size="md"
@@ -351,7 +352,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
             your side, and kinu.run keeps no credential of yours.
           </p>
         </div>
-        {err !== null && <div className="t-meta p-notice-danger rounded-md px-3 py-2" role="alert">{err}</div>}
+        {err !== null && <Notice tone="danger">{err}</Notice>}
         {options === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
         {options !== null && !options.cloudflare && <NotConfigured reason={options.reason} />}
         {options !== null && options.cloudflare && (snapshot === null || snapshot.state === "expired") && (

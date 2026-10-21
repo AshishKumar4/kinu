@@ -26,6 +26,7 @@ import { WorkspaceLogo } from "@/components/Marks";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { showing, detach, settle } from '@kinu.run/core/obs';
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Notice } from "@/components/ui/Notice";
 
 const APPROVAL_LABEL: Record<ShellApprovalMode, string> = {
   strict: "Strict",
@@ -254,7 +255,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   return (
     <Page fill icon={<GearSixIcon size={22} />} title="Settings" data-workspace-settings
       actions={<Link to="/user/settings" className={buttonClass({ variant: "ghost" })}><KeyIcon size={14} />Account settings</Link>}>
-      {err && <div className="t-meta p-notice-danger px-4 py-3">{err}</div>}
+      {err && <Notice tone="danger">{err}</Notice>}
 
       <div className="space-y-5">
       <Card title="Identity">

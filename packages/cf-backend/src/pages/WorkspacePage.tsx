@@ -61,6 +61,7 @@ import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
 import { WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 import { useCarriedAttachments } from "@/components/workspaces/NewChatView";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Notice } from "@/components/ui/Notice";
 
 /** The mission is shown as the standing brief, not sent as an opening message
  *  the agent would then try to carry out. */
@@ -160,9 +161,9 @@ function ForkModal({
       </div>
 
       {err && (
-        <div className="t-meta p-notice-danger rounded-md px-3 py-2">
+        <Notice tone="danger">
           {err}
-        </div>
+        </Notice>
       )}
     </Modal>
   );

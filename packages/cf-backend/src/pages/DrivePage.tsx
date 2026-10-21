@@ -38,6 +38,8 @@ import { TypesetCover } from "@/components/ui/Tiles";
 import { DriveDialog, pickedFolderName, PrimaryAction, type DriveDialogState } from "@/components/drive/DriveActions";
 import { FileViewer } from "@/components/surfaces/FileViewer";
 import { SlatePicture } from "@/components/slates/SlatePicture";
+import { Notice } from "@/components/ui/Notice";
+import { Button } from "@/components/ui/Button";
 
 export type DriveTab = "slates" | "mine" | "shared";
 
@@ -671,11 +673,10 @@ function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource
   return (
     <>
       {notice !== null && (
-        <div role="alert" data-drive-notice className="t-meta p-notice-danger mt-4 flex items-start gap-2 rounded-md px-3 py-2">
-          <WarningIcon size={13} className="mt-px shrink-0" />
-          <span className="min-w-0 break-words">{notice}</span>
-          <button type="button" onClick={onDismissNotice} className="ml-auto shrink-0 p-text-3 hover:p-text" aria-label="Dismiss"><XIcon size={12} /></button>
-        </div>
+        <Notice tone="danger" data-drive-notice="" className="mt-4"
+          action={<Button variant="ghost" size="sm" icon={<XIcon size={14} />} onClick={onDismissNotice} aria-label="Dismiss" />}>
+          <span className="break-words">{notice}</span>
+        </Notice>
       )}
       {listingPending && <p role="status" data-drive-listing-pending className="t-meta mt-4 p-text-3">Saved. The list will catch up.</p>}
       {libraryResource.status === "error" && (

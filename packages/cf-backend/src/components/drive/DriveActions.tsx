@@ -19,6 +19,7 @@ import { inputCls } from "@/components/ui/form";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
+import { Notice } from "@/components/ui/Notice";
 
 function relativePathOf(file: File): string {
   return file.webkitRelativePath === "" ? file.name : file.webkitRelativePath;
@@ -67,7 +68,7 @@ function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: 
         <label className="t-meta block p-text-3" htmlFor="drive-name">{label}</label>
         <input id="drive-name" autoFocus value={value} onChange={(event) => setValue(event.target.value)}
           onFocus={(event) => event.currentTarget.select()} className={inputCls} aria-invalid={value !== "" && !valid} />
-        {error !== null && <div role="alert" className="t-meta p-notice-danger rounded-md px-3 py-2">{error}</div>}
+        {error !== null && <Notice tone="danger">{error}</Notice>}
       </form>
     </Modal>
   );
@@ -136,7 +137,7 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
               if (file !== undefined) run(() => addSkillArchive(file, file.name.replace(/\.zip$/iu, "")));
             }} />
         </div>
-        {error !== null && <div role="alert" data-drive-skill-error className="t-meta p-notice-danger rounded-md px-3 py-2">{error}</div>}
+        {error !== null && <Notice tone="danger" data-drive-skill-error="">{error}</Notice>}
       </div>
     </Modal>
   );

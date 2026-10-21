@@ -12,6 +12,7 @@ import { SecretWarning } from "@/pages/BlueprintPage";
 import { publishBlueprint, revokeShare, type Published } from "@/lib/shared-api";
 import { EmailsField, emailsOf, Failure, Lead, StopButton } from "./ShareParts";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Notice } from "@/components/ui/Notice";
 
 const HistorySchema = v.object({ versions: v.array(v.object({ id: v.string() })), next: v.nullable(v.string()) });
 
@@ -140,9 +141,9 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
     return (
       <>
         <div className="t-meta space-y-3">
-          <p className="p-notice-success rounded-md px-3 py-2" data-blueprint-published>
+          <Notice tone="success" data-blueprint-published="">
             Published. Anyone with the link can read it and fork a copy.{published.listing === "pending" && " The list will catch up."}
-          </p>
+          </Notice>
           <div className="flex items-center gap-2">
             <a href={blueprintPagePath(published.id)} className="min-w-0 flex-1 break-all font-mono p-accent" target="_blank" rel="noopener noreferrer">{link}</a>
             <CopyButton value={link} what="the blueprint link" className={buttonClass({ size: "sm", iconOnly: true })} />
@@ -159,7 +160,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
       <div className="space-y-4">
         <Lead>People get their own copy to fork. Nothing of yours comes with it: no connections, chats or data.</Lead>
         {versions === null && err === null && <div className="flex justify-center py-2"><Loader size="sm" /></div>}
-        {versions !== null && versions.length === 0 && <div className="t-meta p-notice-info rounded-md px-3 py-2">Commit this slate first: a blueprint is cut from a committed version.</div>}
+        {versions !== null && versions.length === 0 && <Notice tone="info">Commit this slate first: a blueprint is cut from a committed version.</Notice>}
         {versions !== null && versions.length > 0 && (
           <dl className="space-y-3">
             <Field label="Version">

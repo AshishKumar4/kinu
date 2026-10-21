@@ -11,6 +11,7 @@ import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { listWorkspaces } from "@/lib/user-api";
 import { forkBlueprint, forkLiveShare } from "@/lib/shared-api";
+import { Notice } from "@/components/ui/Notice";
 
 const NEW_WORKSPACE = "\u0000new";
 
@@ -108,7 +109,7 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces, create
           )}
         </fieldset>
       )}
-      {err && <div className="t-meta p-notice-danger rounded-md px-3 py-2">{err}</div>}
+      {err && <Notice tone="danger">{err}</Notice>}
     </Modal>
   );
 }

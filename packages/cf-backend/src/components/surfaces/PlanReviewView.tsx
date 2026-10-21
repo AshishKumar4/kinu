@@ -25,6 +25,7 @@ import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
 import { usePlanDecision } from "@/hooks/use-plan-decision";
 import { usePlanRepliesSeen } from "@/hooks/use-plan-replies-seen";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Notice } from "@/components/ui/Notice";
 
 type RootNote = PassageNote | GeneralNote;
 
@@ -131,7 +132,7 @@ function decisionHold(owed: boolean, busy: "request" | "approve" | null): { read
 
 /** The footer's line: the failure that needs reading, or where the review stands. */
 function PlanFooterNote({ error, owed, note }: { error: string | null; owed: boolean; note: string }) {
-  if (error && !owed) return <p role="alert" className="t-meta p-notice-danger px-3 py-2 @[36rem]:mr-auto">{error}</p>;
+  if (error && !owed) return <Notice tone="danger" className="@[36rem]:mr-auto">{error}</Notice>;
 
   return owed
     ? <p role="status" className="t-meta p-text-3 @[36rem]:mr-auto">Your decision is on its way. The agent takes it when it next wakes.</p>
