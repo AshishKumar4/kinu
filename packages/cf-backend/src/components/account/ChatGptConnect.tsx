@@ -232,7 +232,7 @@ function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; on
       {note && (
         <p className="t-meta flex flex-wrap items-center gap-2 p-warning">
           {note}
-          <button type="button" onClick={begin} className={buttonClass({ size: "sm" })}>Start again</button>
+          <Button size="sm" onClick={begin}>Start again</Button>
         </p>
       )}
     </div>

@@ -117,9 +117,9 @@ function LogoField({ title, logo, rpc }: { title: string; logo: string | null | 
     <Field label="Logo">
       <div className="flex items-center gap-3" data-logo-field>
         <WorkspaceLogo title={title} logo={logo} size={40} />
-        <button type="button" onClick={redraw} disabled={drawing} className={buttonClass({ size: "sm" })}>
+        <Button size="sm" onClick={redraw} disabled={drawing}>
           {drawing ? <><Loader size="sm" /> Drawing…</> : "Draw a new one"}
-        </button>
+        </Button>
       </div>
       {note && <p className="t-meta p-text-3">{note}</p>}
     </Field>

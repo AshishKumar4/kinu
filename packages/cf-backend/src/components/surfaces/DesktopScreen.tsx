@@ -6,7 +6,7 @@
  * fresh client. Until a session is up, Kinu's own state covers the frame.
  */
 import { useEffect, useRef, useState } from "react";
-import { buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 import * as v from "valibot";
 import { KinuMark } from "@/components/ui/KinuLogo";
 
@@ -83,10 +83,9 @@ export function DesktopScreen({ src, title }: { src: string; title: string }) {
             <p className="t-meta p-text-3">{SAYS[phase].detail}</p>
           </div>
           {phase === "idle" && (
-            <button type="button" onClick={() => { setPhase("opening"); setUnanswered(0); setOpened((count) => count + 1); }}
-              className={`${buttonClass({ size: "sm" })} mt-1`}>
+            <Button size="sm" className="mt-1" onClick={() => { setPhase("opening"); setUnanswered(0); setOpened((count) => count + 1); }}>
               Open it again
-            </button>
+            </Button>
           )}
         </div>
       )}

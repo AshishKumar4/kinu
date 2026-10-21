@@ -1,7 +1,7 @@
 /** What adds to or changes the Drive: New, and the dialogs its menus open. */
 import { Effect } from 'effect';
 import { startTransition, useCallback, useRef, useState, type ReactNode } from "react";
-import { Button, ICON_ON_PHONE, buttonClass } from "@/components/ui/Button";
+import { Button, ICON_ON_PHONE } from "@/components/ui/Button";
 import {
   BookOpenIcon, FileArchiveIcon, FolderPlusIcon, FolderSimpleIcon, PencilSimpleIcon, PlusIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
@@ -118,10 +118,10 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
           aria-label="SKILL.md" className={`${inputCls} t-meta t-mono`} />
         <div className="flex flex-wrap items-center gap-2">
           <span className="t-meta p-text-3">or pick</span>
-          <button type="button" className={buttonClass({ size: "sm" })} disabled={busy}
-            onClick={() => folderInput.current?.click()}><FolderSimpleIcon size={13} /> a folder</button>
-          <button type="button" className={buttonClass({ size: "sm" })} disabled={busy}
-            onClick={() => zipInput.current?.click()}><FileArchiveIcon size={13} /> a zip</button>
+          <Button size="sm" disabled={busy}
+            onClick={() => folderInput.current?.click()}><FolderSimpleIcon size={13} /> a folder</Button>
+          <Button size="sm" disabled={busy}
+            onClick={() => zipInput.current?.click()}><FileArchiveIcon size={13} /> a zip</Button>
           <input ref={folderInput} type="file" className="hidden" {...{ webkitdirectory: "" }} data-drive-skill-folder
             onChange={(event) => {
               const files = picked(event.currentTarget.files);

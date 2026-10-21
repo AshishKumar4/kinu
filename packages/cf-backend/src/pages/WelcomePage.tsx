@@ -3,7 +3,7 @@ import { Cause, Effect } from 'effect';
 import { useState, useCallback, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
-import { Button, buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 import {
   AppWindowIcon, DesktopTowerIcon, SparkleIcon,
   type Icon as PhosphorIcon,
@@ -294,10 +294,9 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
             {step < LAST_STEP ? (
               <div className="flex items-center gap-3">
-                <button type="button" disabled={busy} onClick={finish}
-                  className={buttonClass({ variant: "ghost" })}>
+                <Button variant="ghost" disabled={busy} onClick={finish}>
                   Skip setup
-                </button>
+                </Button>
                 {onMail && <Button variant="ghost" size="sm" data-mail-not-now disabled={busy} onClick={() => setStep((s) => Math.min(s + 1, LAST_STEP))}>Not now</Button>}
                 <Button variant="primary" size="md" disabled={busy || (onMail && address.state !== "available")} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
                   {busy && <Loader size="sm" />} Next

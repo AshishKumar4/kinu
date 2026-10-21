@@ -383,10 +383,8 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
               autoComplete="off"
               className={`${inputCls} min-w-0 flex-1`}
             />
-            <button type="submit" disabled={busy || code.trim() === ''}
-              className={buttonClass()}>{busy ? '...' : 'Connect'}</button>
-            <button type="button" onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))} disabled={busy}
-              className={buttonClass()}>Start again</button>
+            <Button type="submit" disabled={busy || code.trim() === ''}>{busy ? '...' : 'Connect'}</Button>
+            <Button onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))} disabled={busy}>Start again</Button>
           </form>
         </Field>
       )}
@@ -503,8 +501,7 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
             aria-label="API key"
             className={`${inputCls} min-w-0 flex-1`}
           />
-          <button type="submit" disabled={saving || !ready}
-            className={buttonClass()}>{saving ? '...' : saveWord}</button>
+          <Button type="submit" disabled={saving || !ready}>{saving ? '...' : saveWord}</Button>
         </form>
       )}
       {compat && !windowValid && <p className="t-meta mb-1 p-danger">The context window is a whole number of tokens, or blank.</p>}

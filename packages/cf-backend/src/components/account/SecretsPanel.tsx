@@ -4,7 +4,7 @@
  * only when it is sent over https to the hosts listed.
  */
 import { useCallback, useState } from "react";
-import { Button, buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 import { CaretDownIcon, CaretRightIcon, TrashIcon } from "@phosphor-icons/react";
 import { positionWords } from "@kinu.run/core";
 import { Card, Field, inputCls } from "@/components/ui/form";
@@ -103,9 +103,9 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
           <div className="flex gap-2">
             <input value={hosts} onChange={(e) => setHosts(e.target.value)} spellCheck={false} aria-label={`Hosts ${secret.name} may be sent to`}
               className={`${inputCls} h-9 min-w-0 flex-1 font-mono`} />
-            <button type="submit" disabled={!destinationMoved || busy !== null} className={buttonClass()}>
+            <Button type="submit" disabled={!destinationMoved || busy !== null}>
               {busy === "destination" ? "Saving…" : "Save"}
-            </button>
+            </Button>
           </div>
           <PositionField position={position} onChange={setPosition} label={secret.name} />
         </form>
@@ -118,9 +118,9 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
         }}>
           <input type="password" value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off" placeholder="Paste a new value"
             aria-label={`New value of ${secret.name}`} className={`${inputCls} h-9 min-w-0 flex-1`} />
-          <button type="submit" disabled={value === "" || busy !== null} className={buttonClass()}>
+          <Button type="submit" disabled={value === "" || busy !== null}>
             {busy === "value" ? "Replacing…" : "Replace"}
-          </button>
+          </Button>
         </form>
       </Field>
 

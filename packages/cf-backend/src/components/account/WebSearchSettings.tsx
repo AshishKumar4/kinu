@@ -6,7 +6,7 @@
 import { useState, type ReactNode } from "react";
 import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
-import { Button, buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 import { ArrowSquareOutIcon, XIcon } from "@phosphor-icons/react";
 import {
   DEFAULT_WEB_SEARCH_CHAIN, WEB_SEARCH_PROVIDER_IDS, WEB_SEARCH_PROVIDERS,
@@ -260,9 +260,9 @@ function KeyEntry({ primary, stored, disabled, onSaved, onRemoved }: {
         <input type="password" value={key} onChange={(event) => setKey(event.target.value)} aria-label={`${WEB_SEARCH_PROVIDERS[provider].label} API key`}
           placeholder={has ? "••••••• (stored, paste to replace)" : `${WEB_SEARCH_PROVIDERS[provider].label} API key`}
           className={`${inputCls} h-9 min-w-0 flex-1`} />
-        <button type="submit" disabled={saving || disabled || key.trim() === ""} className={buttonClass()}>
+        <Button type="submit" disabled={saving || disabled || key.trim() === ""}>
           {action}
-        </button>
+        </Button>
       </form>
       <div className="t-meta flex flex-wrap items-center gap-x-3 gap-y-1 p-text-3">
         {has && <Status tone="success">Key stored</Status>}
