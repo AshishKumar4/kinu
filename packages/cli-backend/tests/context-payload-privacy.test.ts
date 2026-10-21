@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { createCLIRuntime } from '../src/runtime';
-import { localActorDirectory } from '@kinu.run/core';
-import { INLINE_PAYLOAD_BYTES, SessionPayloads } from '../../core/src/session/payload';
+import { localActorDirectory, PLATFORM_CATALOG } from '@kinu.run/core';
+import { SessionPayloads } from '../../core/src/session/payload';
 import { scratchDir, scratchPath, workspaceDatabase } from '@kinu.run/test-utils';
 
 // The homes are directories of the own space (2026-10-04); the uid wall between siblings was the in-SQLite plane's.
@@ -17,8 +17,8 @@ test('large canonical payloads use the issued child home', async () => {
     if (!runtime.filesForActor) throw new Error('runtime did not install its actor file resolver');
     const filesForActor = runtime.filesForActor;
     const payloads = new SessionPayloads(() => filesForActor(left));
-    // Past the inline bound, so it is published to a file.
-    const text = 'retained\ud83d\ude00'.repeat(Math.ceil(INLINE_PAYLOAD_BYTES / 12) + 1);
+    // A quarter of a row, past the inline bound, so it is published to a file.
+    const text = 'retained\ud83d\ude00'.repeat(Math.ceil(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 4 / 12));
     const payload = await payloads.prepare(text);
 
     if (payload.path === null) throw new Error('large payload was not published through VFS');

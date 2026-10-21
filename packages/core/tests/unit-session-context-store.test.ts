@@ -6,7 +6,7 @@ import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
 import { SessionMessages } from '../src/session/messages';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
-import { INLINE_PAYLOAD_BYTES } from '../src/session/payload';
+import { SPILLED_BYTES } from './helpers/fork-conversation';
 import { SessionPayloads } from '../src/session/payload';
 import { SessionContext, type ContextEntry, type ContextSelection } from '../src/session/context';
 import { SessionProposals } from '../src/session/proposals';
@@ -87,8 +87,8 @@ test('an accumulating part never puts one row over the platform limit and seals 
     s.messages.open('assistant', 'long', 'output');
     s.messages.streamOpenPart('long', { partNo: 0, streamOrder: 0, descriptor });
     const window = 'r'.repeat(300_000);
-    // Past the inline bound, half a row, so the sealed message spills.
-    const appends = Math.ceil(INLINE_PAYLOAD_BYTES / window.length) + 1;
+    // Past the inline bound, so the sealed message spills.
+    const appends = Math.ceil(SPILLED_BYTES / window.length);
 
     for (let i = 0; i < appends; i++) s.messages.streamAppend('long', 0, window);
     const widest = s.testSql.db.query<{ n: number }, []>('SELECT MAX(length(text)) AS n FROM stream_parts').get()?.n ?? -1;
@@ -380,7 +380,7 @@ test('read-only transcript authorization is checked again after payload access',
   try {
     initSessionTranscriptTables(s.rt.storage.execRaw);
     // Past the inline bound, so the read reaches the payload's file.
-    const text = 'retained text '.repeat(Math.ceil(INLINE_PAYLOAD_BYTES / 14) + 1);
+    const text = 'retained text '.repeat(Math.ceil(SPILLED_BYTES / 14));
     const prepared = await s.messages.prepare({ role: 'user', content: text }, 'input');
     const reference = s.messages.insert(prepared, 'input');
     const writer = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });

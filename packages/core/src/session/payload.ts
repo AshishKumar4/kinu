@@ -46,7 +46,7 @@ export function storedPayload(json: string | null, path: string | null): Effect.
  * held 20.8 MB, past the heap gate's 19.0 MB (`CONCURRENT_AGENT_LIVE_BOUND_BYTES`), red on 3 runs of 3; at 1 MB green on
  * 2 of 2 (armada heap-branch, heap-inline1mb). Independent of model token policy; well inside the row, beside its keys.
  */
-export const INLINE_PAYLOAD_BYTES = 1_000_000;
+const INLINE_PAYLOAD_BYTES = 1_000_000;
 
 const StringAttachmentReference = v.object({ $sessionStringAttachment: v.object({ path: v.string(), digest: v.string() }) });
 

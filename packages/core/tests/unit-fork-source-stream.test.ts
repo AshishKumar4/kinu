@@ -7,7 +7,6 @@ import { createTestWorkspace, type TestWorkspace } from './helpers';
 import {
   seedForkSource, SOURCE_ARTIFACTS, SPILLED_BYTES, type ForkConversation,
 } from './helpers/fork-conversation';
-import { INLINE_PAYLOAD_BYTES } from '../src/session/payload';
 import { reassemble, sourceFrames } from './helpers/fork-stream';
 import {
   FORK_ROW_SECTIONS, type ForkChunksFrame, type ForkFrame, type ForkPageFrame, type ForkRowFrame,
@@ -109,8 +108,8 @@ describe('forkTransferFrames source streamer', () => {
   test('bounds every row batch and frame of chunks while sending an oversized row intact', async () => {
     const ws = createTestWorkspace();
     const chat = await seedChain(ws);
-    // An unsplittable inline row crosses alone rather than being refused.
-    const inline = 'x'.repeat(INLINE_PAYLOAD_BYTES - 200);
+    // An unsplittable inline row, a hundred times the frame budget, crosses alone rather than being refused.
+    const inline = 'x'.repeat(204_800);
     await chat.say({ id: 'm4', role: 'user', text: inline });
     await writeText(ws.vfs, 'memory/large.md', 'y'.repeat(1_000_000));
 
