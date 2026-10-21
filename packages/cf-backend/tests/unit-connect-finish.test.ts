@@ -1,10 +1,10 @@
 // Every connect run in another tab ends on the one finish page, which tells the page that started it and closes; the
 // owner's report (2026-10-20): an MCP sign-in from setup's tools step ended inside the app, on setup's first step.
 import { describe, expect, setSystemTime, test } from 'bun:test';
-import { APP_ROUTES, connectEndedOf, type UserCaller } from '@kinu.run/core';
+import { APP_ROUTES, connectEndedOf, createCredentialCipher, type UserCaller } from '@kinu.run/core';
 import { serveFamily } from './helpers/api';
 import { createTestUserDO, sqlExec, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
-import { recordedMcpLifecycle, requireMcpSignIn, seedConfiguredMcpServer, seedSdkMcpServer } from './helpers/agents-sdk';
+import { inheritedMcpManager, recordedMcpLifecycle, requireMcpSignIn, seedConfiguredMcpServer, seedSdkMcpServer } from './helpers/agents-sdk';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
@@ -139,4 +139,108 @@ describe('an MCP server\'s sign-in ends on the finish page', () => {
     expect((await declined(true)).named).toBe(true);
   });
 
+
+  // Sol's final review (2026-10-23), the retention: a run is kept until its callback takes it or its server goes, not
+  // pruned by an age of its own.
+  test("a sign-in's run is named however late its callback, and goes with its server", async () => {
+    const callback = 'https://kinu.example.com/api/user/mcp/callback';
+    const harness = createTestUserDO();
+    const owner = await testOwner();
+
+    await harness.userDO.userMcp_list(owner);
+    seedConfiguredMcpServer(sqlExec(harness.db), 'srv1', { name: 'linear', url: 'https://mcp.linear.example/mcp', transport: 'streamable-http' });
+    seedSdkMcpServer('srv1', { type: 'streamable-http' }, { name: 'linear', url: 'https://mcp.linear.example/mcp', callbackUrl: callback, clientId: 'client-1', authUrl: 'https://auth.example/authorize?state=before.srv1' });
+
+    const woken = createTestUserDO({ storage: harness.db });
+    const [early, later, removed] = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+    const ended = async (state: string) => (await woken.userDO.userMcp_handleOAuthCallback(owner, `${callback}?state=${state}&error=access_denied`)).run;
+
+    try {
+      requireMcpSignIn('srv1', 'https://auth.example/authorize?state=early.srv1');
+      await woken.userDO.userMcp_beginConnect(owner, 'srv1', early);
+      // A day and more later, another tab begins one.
+      setSystemTime(new Date(Date.now() + 25 * 60 * 60_000));
+      requireMcpSignIn('srv1', 'https://auth.example/authorize?state=later.srv1');
+      await woken.userDO.userMcp_beginConnect(owner, 'srv1', later);
+      const lateNamed = await ended('early.srv1');
+
+      requireMcpSignIn('srv1', 'https://auth.example/authorize?state=gone.srv1');
+      await woken.userDO.userMcp_beginConnect(owner, 'srv1', removed);
+      await woken.userDO.userMcp_remove(owner, 'srv1');
+
+      expect({ late: lateNamed === early, afterRemoval: await ended('gone.srv1') }).toEqual({ late: true, afterRemoval: null });
+    } finally {
+      setSystemTime();
+      woken.close();
+      harness.close();
+    }
+  });
+
+  // Sol's final review (2026-10-23): a server offered its sign-in while it connected, discovered or was connected, and
+  // beginning one dialled it, closing its live transport; and any custom header was read as a token.
+  test('a server offers a sign-in only while one is pending or failed, and a credential header alone rules it out', async () => {
+    const callback = 'https://kinu.example.com/api/user/mcp/callback';
+    const harness = createTestUserDO();
+    const owner = await testOwner();
+
+    await harness.userDO.userMcp_list(owner);
+    const cipher = await createCredentialCipher({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+    // Headers sealed as an add seals them, for this object and its server: none, a tenant header, a token.
+    const seeded = [['srv-live', null], ['srv-tenant', { 'X-Tenant': 'acme' }], ['srv-token', { Authorization: 'Bearer ghp_test' }]] as const;
+
+    for (const [id, headers] of seeded) {
+      const sealed = headers === null ? null : await cipher.seal(`test-user-do:mcp:${id}`, JSON.stringify(headers));
+
+      seedConfiguredMcpServer(sqlExec(harness.db), id, { name: id, url: `https://${id}.example/mcp`, transport: 'streamable-http', headers: sealed });
+      seedSdkMcpServer(id, { type: 'streamable-http' }, { name: id, url: `https://${id}.example/mcp`, callbackUrl: callback, clientId: 'client-1' });
+    }
+
+    const woken = createTestUserDO({ storage: harness.db });
+
+    try {
+      // Awake: a read over the rows restores each server's connection.
+      await woken.userDO.userMcp_list(owner);
+      const live = inheritedMcpManager(woken.userDO).mcpConnections;
+      const offered: Record<string, boolean | undefined> = {};
+
+      for (const state of ['connecting', 'discovering', 'connected', 'authenticating', 'failed'] as const) {
+        for (const id of ['srv-live', 'srv-tenant', 'srv-token']) {
+          const connection = live[id];
+
+          if (connection === undefined) throw new Error(`no live connection for ${id}`);
+
+          // Waiting on a sign-in holds its link, as the SDK's does: one with none is dialled again by the read.
+          if (state === 'authenticating') requireMcpSignIn(id, `https://auth.example/authorize?state=pending.${id}`);
+
+          connection.connectionState = state;
+        }
+
+        for (const listed of await woken.userDO.userMcp_list(owner)) offered[`${listed.name} ${state}`] = listed.signIn;
+      }
+
+      const dialled = recordedMcpLifecycle().dialled.length;
+
+      for (const id of ['srv-live', 'srv-tenant', 'srv-token']) {
+        const connection = live[id];
+
+        if (connection !== undefined) connection.connectionState = 'connecting';
+      }
+
+      await expect(woken.userDO.userMcp_beginConnect(owner, 'srv-live', crypto.randomUUID())).rejects.toMatchObject({ code: 'bad_input' });
+
+      expect({ offered, dialledSince: recordedMcpLifecycle().dialled.length - dialled }).toEqual({
+        offered: {
+          'srv-live connecting': false, 'srv-tenant connecting': false, 'srv-token connecting': false,
+          'srv-live discovering': false, 'srv-tenant discovering': false, 'srv-token discovering': false,
+          'srv-live connected': false, 'srv-tenant connected': false, 'srv-token connected': false,
+          'srv-live authenticating': true, 'srv-tenant authenticating': true, 'srv-token authenticating': false,
+          'srv-live failed': true, 'srv-tenant failed': true, 'srv-token failed': false,
+        },
+        dialledSince: 0,
+      });
+    } finally {
+      woken.close();
+      harness.close();
+    }
+  });
 });

@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit } from 'effect';
 import {
-  ConnectRunSchema, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
+  ConnectRunSchema, nanoid, plainFetch, type ConnectEnded, type JsonObject, type JsonValue, JsonObjectSchema, decodeJsonValue, McpProtocolFailureSchema, type UserCaller, compareCodeUnits, type McpPresetId, mcpPresetById, describeMcpTool, omitEmptyOptionalArgs, type SerializableToolDescriptor, validateMcpServerInput, readAllowedTools, parseMcpHeaders, McpTransportSchema, type McpTransport, GITHUB_MCP_PRESET, GitHubRefreshAskSchema, refreshGitHub, type GitHubRefreshAnswer, type GitHubRefreshAsk, type McpPresetAvailability, type McpServerSummary, MCP_PRESETS, type McpPreset, CALLABLE_MCP_STATES, mapConnectionStatus, type McpConnectionStatus, mcpCredentialTransport, mcpListingRefusals, McpTransitionLog, observedMcpState, type McpObservedState, type McpToolListing,
 } from '@kinu.run/core';
 import type { MCPClientManager } from 'agents/mcp/client';
 import type { CallToolResult } from '@modelcontextprotocol/client';
@@ -88,6 +88,23 @@ const CatalogOptionsSchema = v.pipe(v.string(), v.parseJson(), v.object({
     type: v.optional(McpTransportSchema), sessionId: v.optional(v.string()), protocolVersion: v.optional(v.string()),
   })),
 }));
+
+/** Whether `headers` hold a credential the server authenticates by: an `Authorization` header, as a token's is sent
+ *  (`mcpCredentialTransport`). Any other header (a tenant, a version) leaves the server to sign in as it would. */
+function holdsCredential(headers: Record<string, string> | null): boolean {
+  return headers !== null && Object.keys(headers).some((name) => name.toLowerCase() === 'authorization');
+}
+
+/**
+ * Whether a server offers a sign-in now: it waits on one, or its last one failed and it signs in with OAuth (holds a
+ * client). Never while it connects, discovers or is connected, where beginning one would close its live transport, and
+ * never where a credential header authenticates it.
+ */
+function offersSignIn(status: McpConnectionStatus, server: { readonly oauthClient: boolean; readonly credential: boolean }): boolean {
+  if (server.credential) return false;
+
+  return status === 'authenticating' || (status === 'failed' && server.oauthClient);
+}
 
 /** A registered app's server is signed in to before it is used, unless a token in `headers` stands in for the app. */
 function signInBy(appCredentials: { clientId: string } | null, hasHeaders: boolean): 'first' | 'when-asked' {
@@ -180,12 +197,7 @@ function connectRunKey(serverId: string, state?: string): string {
   return `mcp-connect-run:${serverId}:${state ?? ''}`;
 }
 
-/** How long a sign-in's run is kept for its callback, which takes it: storage hygiene, not authorization. Whether a
- *  callback's code is still redeemable is the SDK's to judge (STATE_EXPIRATION_MS, 10 minutes); a late one still names
- *  its run, so the page that began it hears its failure. A sign-in left open a day has no page waiting on it. */
-const CONNECT_RUN_KEPT_MS = 24 * 60 * 60_000;
-
-const StoredConnectRunSchema = v.object({ run: ConnectRunSchema, at: v.number() });
+const StoredConnectRunSchema = v.object({ run: ConnectRunSchema });
 
 /** The account's MCP servers. */
 export class UserMcpServers {
@@ -411,10 +423,7 @@ export class UserMcpServers {
     await this.joinActivation();
     await this.redialUnusable('unlinked');
     const catalog = this.catalog();
-    // A server holds an OAuth client once a sign-in registered one (or its preset's app named one); one added with a
-    // token's headers authenticates by them, whatever app the deployment holds, and never signs in.
-    const oauthClients = new Set(this.host.mcp.listServers().filter((row) => (row.client_id ?? '') !== '').map((row) => row.id));
-    const tokenBacked = new Set(this.host.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers WHERE headers IS NOT NULL`).map((row) => row.id));
+    const signInFacts = await this.signInFacts();
 
     const rows = withCatalog(this.host.sqlx<{ id: string; allowed_tools: string | null; preset_id: McpPresetId | null }>(
       `SELECT id, allowed_tools, preset_id FROM user_mcp_servers`,
@@ -446,9 +455,8 @@ export class UserMcpServers {
 
       const toolsCount = allowed ? tools.filter((t: { name: string }) => allowed.includes(t.name)).length : tools.length;
 
-      // Waiting on a sign-in, or declined one and holding its OAuth client: either way the row offers a sign-in, which
-      // the person begins for a fresh address. A declined sign-in is not dialled again on its own.
-      const signIn = status !== 'ready' && !tokenBacked.has(r.id) && (status === 'authenticating' || oauthClients.has(r.id));
+      // The person begins it for a fresh address; a declined sign-in is not dialled again on its own.
+      const signIn = offersSignIn(status, signInFacts(r.id));
 
       return {
         id: r.id,
@@ -637,6 +645,8 @@ export class UserMcpServers {
 
     this.host.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
     this._mcpToolLists.delete(id);
+    // Its sign-ins' runs go with it: no callback of its can name one now.
+    await this.host.ctx.storage.delete([...(await this.host.ctx.storage.list({ prefix: connectRunKey(id, '') })).keys()]);
     await this.assistantConnectionsChanged();
   }
 
@@ -989,8 +999,14 @@ export class UserMcpServers {
       const name = this.catalog().get(id)?.name;
 
       if (!configured || name === undefined) return yield* new KinuError('missing', 'This account has no such MCP server.');
+      const facts = (yield* Effect.promise(async () => this.signInFacts()))(id);
 
-      if (mapConnectionStatus(this.host.mcp.mcpConnections[id]?.connectionState) === 'ready') return yield* new KinuError('bad_input', `${name} is connected already.`);
+      // Its row's own rule: a server connecting, discovering or connected is never dialled for a sign-in, which would
+      // close its live transport.
+      if (!offersSignIn(mapConnectionStatus(this.host.mcp.mcpConnections[id]?.connectionState), facts)) {
+        return yield* new KinuError('bad_input', `${name} offers no sign-in now.`);
+      }
+
       const result = yield* Effect.promise(async () => this.host.mcp.connectToServer(id));
 
       if (result.state !== 'authenticating' || !result.authUrl) return yield* new KinuError('bad_input', `${name} waits for no sign-in.`);
@@ -1042,17 +1058,33 @@ export class UserMcpServers {
     }
   }
 
-  /** Keeps `run` for the sign-in of `serverId` the SDK minted `state` for, and drops this server's runs kept past their
-   *  hygiene horizon: one tab's begin never replaces another's. */
+  /** Keeps `run` for the sign-in of `serverId` the SDK minted `state` for, until its callback takes it or the server
+   *  is removed: one tab's begin never replaces another's. */
   private async keepConnectRun(serverId: string, state: string, run: string): Promise<void> {
-    const storage = this.host.ctx.storage;
-    const now = Date.now();
-    const kept = await storage.list({ prefix: connectRunKey(serverId) });
-    const expired = [...kept].filter(([, stored]) => !v.is(StoredConnectRunSchema, stored) || now - stored.at > CONNECT_RUN_KEPT_MS).map(([key]) => key);
-
-    if (expired.length > 0) await storage.delete(expired);
-    await storage.put(connectRunKey(serverId, state), { run, at: now });
+    await this.host.ctx.storage.put(connectRunKey(serverId, state), { run });
   }
+
+  /** For each server: whether it holds an OAuth client (a sign-in registered one, or its preset's app names one), and
+   *  whether its headers hold a credential it authenticates by, opened from the vault per server that keeps any. */
+  private async signInFacts(): Promise<(serverId: string) => { readonly oauthClient: boolean; readonly credential: boolean }> {
+    const oauthClients = new Set(this.host.mcp.listServers().filter((row) => (row.client_id ?? '') !== '').map((row) => row.id));
+    const withHeaders = this.host.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers WHERE headers IS NOT NULL`).map((row) => row.id);
+    const credentialed = new Set((await Promise.all(withHeaders.map(async (id) => ((await this.headersHoldCredential(id)) ? [id] : [])))).flat());
+
+    return (serverId) => ({ oauthClient: oauthClients.has(serverId), credential: credentialed.has(serverId) });
+  }
+
+  /** Whether a server's stored headers hold a credential. Headers that no longer open are kept as one, and recorded:
+   *  they were stored to authenticate by, and its requests already fail on them (`openMcpHeaderMap`). */
+  private async headersHoldCredential(serverId: string): Promise<boolean> {
+    const exit = await hold(Effect.promise(async () => holdsCredential(await this.openMcpHeaderMap(serverId))));
+
+    if (Exit.isSuccess(exit)) return exit.value;
+    diagnostics.failure('mcp.headers_unreadable', toKinuError({ doing: "reading an MCP server's stored headers", cause: Cause.squash(exit.cause), otherwise: 'bad_input' }), { serverId });
+
+    return true;
+  }
+
 
   /** The run the sign-in `req` ends was begun for, taken: found by the exact state it carries, so one callback ends one
    *  run, and a callback with a state this account never minted ends none. Its age is not judged here: an expired

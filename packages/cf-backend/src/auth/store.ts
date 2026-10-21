@@ -25,15 +25,6 @@ import { sanitizeReturnTo } from '@kinu.run/core';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
-/**
- * How long a handoff record and its binding cookie last: as long as a provider holds a login and consent flow open, so
- * a callback is never later than its record. Cloudflare's dashboard runs Ory Hydra's flow (its consent form takes a
- * `consent_challenge`), whose `ttl.login_consent_request` defaults to 30m, "how long a user login and consent flow may
- * take" (ory/hydra .schema/config.schema.json); Cloudflare's own setting is not published. Past the state's own 10
- * minutes a callback is refused as expired, and a connect's still names its run.
- */
-const OAUTH_HANDOFF_LIFETIME_MS = 30 * 60 * 1000;
-
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface OAuthStateInput {
@@ -61,7 +52,6 @@ export interface ConsumedOAuthState {
 export interface OAuthHandoff {
   state: string;
   binding: string;
-  lifetimeMs: number;
 }
 
 export interface OAuthProfile {
@@ -151,9 +141,10 @@ export async function createOAuthState(
     expiresAt,
   };
 
-  await writeKvJson(kv, `oauth-state:${await sha256Hex(state)}`, record, OAUTH_HANDOFF_LIFETIME_MS);
+  // Kept as long as the state is redeemable: a later callback is named by its browser's own cookie (`handoffCookie`).
+  await writeKvJson(kv, `oauth-state:${await sha256Hex(state)}`, record, OAUTH_STATE_TTL_MS);
 
-  return { state, binding, lifetimeMs: OAUTH_HANDOFF_LIFETIME_MS };
+  return { state, binding };
 }
 
 /** Deleted before it is judged, so a concurrent second callback finds nothing, and a planted link spends its own state
@@ -171,7 +162,7 @@ export function consumeOAuthState(
     const record = yield* Effect.promise(async () => readKvJson(kv, key, OAuthStateSchema));
     yield* Effect.promise(async () => kv.delete(key));
 
-    if (!record) return yield* Effect.die(new Error('OAuth state is invalid or already used.'));
+    if (!record) return yield* Effect.die(new Error('OAuth state expired, or was already used. Start again.'));
 
     if (!binding || !timingSafeEqual(yield* Effect.promise(async () => sha256Hex(binding)), record.bindingHash)) {
       return yield* Effect.die(new Error('OAuth state was not issued to this browser. Start sign-in again.'));

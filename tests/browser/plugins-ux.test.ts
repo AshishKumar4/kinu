@@ -333,24 +333,58 @@ describe('MCP presets', () => {
 
         // The provider's own reason, as the finish page carried it.
         const said = await page.$eval(`${row} [data-plugin-error]`, (node) => node.textContent ?? '');
+
+        // A retry begun and abandoned (its tab closed with no end): the earlier failure stays, pending and after
+        // (Sol's final review: it was cleared as the retry began).
+        const signInAgain = async (runs: number) => {
+          const retryTarget = page.browser().waitForTarget((target) => target.opener() === page.target());
+
+          await page.click(`${row} [data-plugin-menu]`);
+          await page.click(`${row} [data-plugin-sign-in]`);
+          const tab = await (await retryTarget).page();
+
+          if (tab === null) throw new Error('the sign-in opened no tab');
+          await page.waitForFunction((count: number) => (localStorage.getItem('gallery-mcp-connects') ?? '').split('\n').filter(Boolean).length === count, {}, runs);
+
+          return tab;
+        };
+
+        const abandoned = await signInAgain(2);
+        const keptPending = await page.$(`${row} [data-plugin-error]`) !== null;
+
+        await abandoned.close();
+        const keptAbandoned = await page.$(`${row} [data-plugin-error]`) !== null;
+
         // Signed in again and connected: the earlier failure goes (Sol-round review: it stayed on a ready row).
-        const again = page.browser().waitForTarget((target) => target.opener() === page.target());
-
-        await page.click(`${row} [data-plugin-menu]`);
-        await page.click(`${row} [data-plugin-sign-in]`);
-        const retry = await (await again).page();
-
-        if (retry === null) throw new Error('the sign-in opened no tab');
-        await page.waitForFunction(() => (localStorage.getItem('gallery-mcp-connects') ?? '').split('\n').filter(Boolean).length === 2);
-        const retried = (await begunRuns(page))[1] ?? '';
+        const retry = await signInAgain(3);
+        const retried = (await begunRuns(page))[2] ?? '';
 
         await Promise.allSettled([retry.goto(`${gallery.origin}/gallery.html?frame=connected&${new URLSearchParams({ run: retried, service: 'Cloudflare' }).toString()}`)]);
         // The row has heard the retry's end once its helper closed (its finish page closes it after telling the row).
         await new Promise<void>((resolve) => { if (retry.isClosed()) resolve(); else retry.once('close', () => { resolve(); }); });
         await page.waitForFunction(() => new Promise((resolve) => { requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(true); }); }); }));
 
-        expect({ said: said.includes('access_denied: the person declined'), cleared: await page.$(`${row} [data-plugin-error]`) === null })
-          .toEqual({ said: true, cleared: true });
+        expect({ said: said.includes('access_denied: the person declined'), keptPending, keptAbandoned, cleared: await page.$(`${row} [data-plugin-error]`) === null })
+          .toEqual({ said: true, keptPending: true, keptAbandoned: true, cleared: true });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // Sol's final review (2026-10-23): an added row's menu offered Sign in by its preset's kind and the deployment's app,
+  // so a GitHub added with a token whose server refused it offered a sign-in its token never needs.
+  test("an added row offers Sign in only where the account says it signs in", async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'plugins&mcp-preset=token-failed', 'dark', 'desktop');
+      const row = '[data-plugin-source="github"]';
+
+      try {
+        await page.waitForSelector(`${row} [data-plugin-menu]`);
+        await page.click(`${row} [data-plugin-menu]`);
+        await page.waitForSelector('[role="menu"]');
+
+        expect(await page.$(`${row} [data-plugin-sign-in]`)).toBeNull();
       } finally {
         await page.close();
       }

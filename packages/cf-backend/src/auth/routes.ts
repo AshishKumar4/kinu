@@ -2,7 +2,7 @@ import { Effect, Cause, Data } from 'effect';
 import * as oauth from 'oauth4webapi';
 import { Hono } from 'hono';
 import { AuthError, authenticateRequest, devIdentityEmail, readSessionToken, requestIdentity } from './session';
-import { heldHandoffs, OAUTH_HANDOFFS_HELD, oauthStateCookieName, SESSION_COOKIE_NAME, readCookie, sessionCookie, setCookie } from './cookies';
+import { handoffCookie, oauthStateCookieName, readCookie, readHandoff, SESSION_COOKIE_NAME, sessionCookie, setCookie, startedHere } from './cookies';
 import {
   consumeOAuthState, createOAuthState, createSession, revokeSession,
   type OAuthProfile, type SessionAuthority,
@@ -212,6 +212,12 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
 
     if (!env.AUTH_KV) return html('Sign in unavailable', '<p>This deployment has no sign-in storage (<code>AUTH_KV</code>) set up, so no one can sign in yet.</p>', { status: 503 });
 
+    // Minted only for a start begun here: a sibling origin (a guest's preview) could otherwise mint handoffs in the
+    // person's browser, each a cookie of its own, until the browser drops the oldest, the session among them.
+    if (!startedHere(request)) {
+      return html('Start from Kinu', '<p>Signing in and connecting start from Kinu itself: <a href="/login">sign in</a>.</p>', { status: 403 });
+    }
+
     const url = new URL(request.url);
     const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
     const redirectUri = new URL(`/auth/${provider.id}/callback`, url.origin).toString();
@@ -229,13 +235,6 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
 
     if (connecting && connectFor === null) return refused('Connecting a service needs the Kinu account it is for: sign in, then connect again.');
 
-    // Refused rather than evicting one held: every handoff is a cookie of its own, and a browser keeps only so many.
-    if (heldHandoffs(request) >= OAUTH_HANDOFFS_HELD) {
-      const busy = `This browser has ${String(OAUTH_HANDOFFS_HELD)} sign-ins under way. Finish or close one, or wait until they expire, then try again.`;
-
-      return connecting ? refused(busy) : html('Too many sign-ins under way', `<p>${escapeHtml(busy)}</p>`, { status: 429 });
-    }
-
     const as = yield* Effect.promise(async () => getAuthorizationServer(provider));
 
     if (!as.authorization_endpoint) return yield* Effect.die(new Error(`${provider.label} OAuth metadata has no authorization endpoint.`));
@@ -244,7 +243,7 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
     const codeChallenge = yield* Effect.promise(async () => oauth.calculatePKCECodeChallenge(codeVerifier));
     const nonce = provider.kind === 'oidc' ? oauth.generateRandomNonce() : null;
 
-    const { state, binding, lifetimeMs } = yield* Effect.promise(async () => createOAuthState(env.AUTH_KV, {
+    const { state, binding } = yield* Effect.promise(async () => createOAuthState(env.AUTH_KV, {
       provider: provider.id,
       codeVerifier,
       nonce,
@@ -272,7 +271,7 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
     // KV holds only the binding's hash; this cookie is what the callback proves the sign-in with, beside the bindings of
     // this browser's other starts still under way.
     const headers = new Headers({ 'cache-control': 'no-store' });
-    headers.append('set-cookie', setCookie(oauthStateCookieName(yield* Effect.promise(async () => sha256Hex(state))), binding, lifetimeMs));
+    headers.append('set-cookie', handoffCookie(oauthStateCookieName(yield* Effect.promise(async () => sha256Hex(state))), { binding, run: run.success && connecting ? run.output : null }));
 
     return redirect(authorizationUrl.toString(), { headers });
   });
@@ -298,12 +297,15 @@ function completeOAuth<Id>(
     let stage = 'state';
     // A connect whose handoff this browser holds ends on the finish page, naming its run, whatever fails after: its
     // state expired or another provider's included.
-    let connecting: { readonly run: string | null } | null = null;
-    // This handoff's own cookie, spent with it whatever the outcome; the browser's other starts keep theirs.
-    const handoffCookie = oauthStateCookieName(yield* Effect.promise(async () => sha256Hex(state)));
+    // This handoff's own cookie, spent with it whatever the outcome; the browser's other starts keep theirs. A connect's
+    // names its run, so a callback its record no longer names (expired, already used) still ends that run.
+    const handoffName = oauthStateCookieName(yield* Effect.promise(async () => sha256Hex(state)));
+    const held = readHandoff(readCookie(request, handoffName));
+    const heldRun = v.safeParse(ConnectRunSchema, held?.run);
+    let connecting: { readonly run: string | null } | null = heldRun.success ? { run: heldRun.output } : null;
 
     const response = yield* Effect.catchCause(Effect.gen(function* () {
-      const consumed = yield* Effect.promise(async () => consumeOAuthState(env.AUTH_KV, state, provider.id, readCookie(request, handoffCookie)));
+      const consumed = yield* Effect.promise(async () => consumeOAuthState(env.AUTH_KV, state, provider.id, held?.binding ?? null));
       const savedState = consumed.record;
 
       connecting = savedState.connectFor === null ? null : { run: savedState.connectRun };
@@ -386,7 +388,7 @@ function completeOAuth<Id>(
     `, { status: 400 });
     }));
 
-    response.headers.append('set-cookie', setCookie(handoffCookie, '', 0));
+    response.headers.append('set-cookie', setCookie(handoffName, '', 0));
 
     return response;
   });

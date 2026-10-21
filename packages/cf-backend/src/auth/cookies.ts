@@ -38,18 +38,30 @@ export const KINU_COOKIE_NAMES: readonly string[] = [
  *  each family whole. */
 export const KINU_COOKIE_FAMILIES: readonly string[] = [OAUTH_STATE_COOKIE_NAME];
 
-/**
- * The handoffs one browser may hold at once, each its own cookie for its lifetime. RFC 6265 §6.1 asks a browser to keep
- * at least 50 cookies per domain, and Chromium purges an eTLD+1 past 180 (net/cookies/cookie_monster.cc): beyond its
- * budget a new cookie can evict an older one, the session among them. This many leaves most of the 50 to the app's
- * own cookies (`KINU_COOKIE_NAMES`) and to a guest's; a start past it is refused, never one held replaced.
- */
-export const OAUTH_HANDOFFS_HELD = 20;
+/** Whether `request` began at Kinu itself: a navigation or fetch from this origin, or one the person made (a typed
+ *  address, a bookmark). A browser names where a request began (`Sec-Fetch-Site`); a sibling origin on the same site,
+ *  a guest's preview among them, sends `same-site`, and another site `cross-site`. A client that names none (a
+ *  browser too old to, or no browser) is let through: it cannot plant a cookie in anyone else's browser. */
+export function startedHere(request: Request): boolean {
+  const site = request.headers.get('sec-fetch-site');
 
-/** How many handoff cookies (`KINU_COOKIE_FAMILIES`) `request` carries. */
-export function heldHandoffs(request: Request): number {
-  return (request.headers.get('cookie') ?? '').split(';')
-    .filter((part) => KINU_COOKIE_FAMILIES.some((family) => part.trim().startsWith(`${family}_`))).length;
+  return site === null || site === 'same-origin' || site === 'none';
+}
+
+/** One handoff's cookie: its binding and, for a connect, the run its page began, so a callback the record no longer
+ *  names still ends that run. Until its callback clears it, or the browser's session ends: no lifetime of its own. */
+export function handoffCookie(name: string, handoff: { readonly binding: string; readonly run: string | null }): string {
+  const value = handoff.run === null ? handoff.binding : `${handoff.binding}.${handoff.run}`;
+
+  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax`;
+}
+
+/** A handoff cookie's binding and run, as `handoffCookie` wrote them; a binding is base64url, so `.` ends it. */
+export function readHandoff(raw: string | null): { readonly binding: string; readonly run: string | null } | null {
+  if (raw === null || raw === '') return null;
+  const [binding = '', run] = raw.split('.', 2);
+
+  return { binding, run: run ?? null };
 }
 
 export function readCookie(request: Request, name: string): string | null {

@@ -106,6 +106,8 @@ function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
   const added = server !== undefined;
 
   // 'oauth' always signs in; 'oauth-app' only with the deployment's registration, else token fallback.
+  // Whether adding it signs in, from its kind and the deployment's app: for a row not yet added. An added one's own
+  // state says whether it offers a sign-in (`server.signIn`).
   const signIn = preset.auth === 'oauth' || (preset.auth === 'oauth-app' && appConfigured !== false);
 
   const tokenLabel = preset.auth === 'oauth-app'
@@ -162,10 +164,9 @@ function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
   let trailing: ReactNode;
 
   if (server !== undefined) {
-    // A preset that signs in and is not connected keeps the way to its sign-in: begun again for a run of its own, in a
-    // tab opened now, whether its last one waits, was declined or failed.
-    const signInAgain = !signIn || server.status === 'ready' ? null : async () => {
-      setErr(null);
+    // An added server offers its sign-in where the account says it does (`server.signIn`): begun again for a run of its
+    // own, in a tab opened now. An earlier failure stays until a sign-in connects (`ended`), not while one is pending.
+    const signInAgain = !server.signIn ? null : async () => {
       const failed = await signInMcpServer(beginConnect(), server.id, ended);
 
       if (failed !== null) setErr(failed);

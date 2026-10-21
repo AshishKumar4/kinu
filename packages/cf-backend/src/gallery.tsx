@@ -314,6 +314,16 @@ if (mcpPresetVariant === "connected") {
   ];
 } else if (mcpPresetVariant === "open") {
   galleryMcpRows = [...GALLERY_UNCLAIMED_MCP];
+} else if (mcpPresetVariant === "token-failed") {
+  // GitHub added with a personal access token, which the server refused: it authenticates by its token, never a sign-in.
+  galleryMcpRows = [
+    {
+      id: "srv-preset-github", name: "GitHub", serverUrl: "https://api.githubcopilot.com/mcp/",
+      transport: "streamable-http", status: "failed", toolsCount: 0, allowedTools: null,
+      signIn: false, error: "The server refused the token.", presetId: "github",
+    },
+    ...GALLERY_UNCLAIMED_MCP,
+  ];
 }
 
 /** `mcp-secrets=github` means GitHub alone; absent means every oauth-app preset is configured (production-shaped). */

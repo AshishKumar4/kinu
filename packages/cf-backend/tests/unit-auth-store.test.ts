@@ -194,17 +194,16 @@ describe('OAuth handoff state', () => {
       .toMatchObject({ refusal: expect.stringMatching(/provider mismatch/), record: { connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' } });
   });
 
-  // Second review (2026-10-23): a callback after the state's ten minutes found no record, so a connect's starting page
-  // was never told; and a second start in the browser replaced the first one's binding.
-  test('a late callback is refused as expired, its record kept long enough to say whose it was', async () => {
+  // A record kept as long as its state is redeemable, and no longer: a late callback's run is named by its own browser's
+  // cookie (the login test's late connect), not by a record kept past its use.
+  test('a callback after the state expired is refused as expired', async () => {
     const kv = makeKv();
-    const { state, binding, lifetimeMs } = await started(kv, { connectFor: 'account-a', connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' });
+    const { state, binding } = await started(kv, { connectFor: 'account-a', connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' });
 
     setSystemTime(new Date(Date.now() + 11 * 60_000));
 
     try {
-      expect({ lifetimeMs, consumed: await consumeOAuthState(kv, state, 'cloudflare', binding) })
-        .toMatchObject({ lifetimeMs: 30 * 60_000, consumed: { refusal: expect.stringMatching(/expired/), record: { connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' } } });
+      await expect(consumeOAuthState(kv, state, 'cloudflare', binding)).rejects.toThrow(/expired/);
     } finally {
       setSystemTime();
     }
