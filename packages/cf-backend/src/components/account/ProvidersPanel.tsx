@@ -25,6 +25,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
 import { ChatGptConnect, ChatGptPlanUsage, ChatGptWelcome } from "@/components/account/ChatGptConnect";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { useProviderWindow } from "@/hooks/use-provider-window";
 import { Status } from '@/components/ui/Status';
 import { showing, detach } from '@kinu.run/core/obs';
 import {
@@ -339,6 +340,7 @@ function CloudflareGatewaySection({ status, onChanged }: {
 function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
   const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
   const [code, setCode] = useState('');
+  const signInWindow = useProviderWindow('claude-sign-in');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -357,8 +359,10 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
   const finish = () => run(Effect.gen(function* () {
     const result = yield* Effect.promise(() => finishClaudeSignIn(code.trim()));
 
-    if (result.connected) onChanged();
-    else setError(result.error ?? 'Claude did not connect.');
+    if (result.connected) {
+      signInWindow.close();
+      onChanged();
+    } else setError(result.error ?? 'Claude did not connect.');
   }));
 
   return (
@@ -369,7 +373,7 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
       {authorizeUrl === null ? (
         <FilledButton onClick={() => detach(start())} disabled={busy}>Sign in with Claude</FilledButton>
       ) : (
-        <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
+        <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" onClick={signInWindow.open} className="p-accent underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
           hint="The code Claude shows, or the address your browser ended on if the page did not load.">
           <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); detach(finish()); }}>
             <input

@@ -462,6 +462,15 @@ const GALLERY_DEVICE = { id: "dev-1", label: "Owner's laptop" };
 /** `&chatgpt=signed-in`: the account holds a ChatGPT sign-in, so its entry offers the disconnect; OpenAI refuses the revoke. */
 let settingsChatGptSignedIn = new URLSearchParams(location.search).get("chatgpt") === "signed-in";
 
+/** `&chatgpt=device`: the sign-in the machine opened, read on every poll until `gallery:chatgpt-signed-in` ends it, as one
+ *  waits on its person, or a cancel does. */
+let settingsChatGptMachineSignIn: { state: "open"; authorizeUrl: string; device: typeof GALLERY_DEVICE } | null = null;
+
+window.addEventListener("gallery:chatgpt-signed-in", () => {
+  settingsChatGptSignedIn = true;
+  settingsChatGptMachineSignIn = null;
+});
+
 function galleryChatGptStatus() {
   return {
     signedIn: settingsChatGptSignedIn, email: settingsChatGptSignedIn ? "owner@example.com" : null, planEnabled: settingsChatGptSignedIn,
@@ -488,19 +497,26 @@ function chatgptFixture(path: string, method: string, body: BodyInit | null | un
   }
 
   if (path === "/api/user/chatgpt") {
+    const root = document.documentElement;
+    root.dataset.galleryChatgptReads = String(Number(root.dataset.galleryChatgptReads ?? "0") + 1);
+
     return fixtureJson(CHATGPT_DEVICE
-      ? { device: GALLERY_DEVICE, status: galleryChatGptStatus(), account: null, machineSignIn: null }
+      ? { device: GALLERY_DEVICE, status: galleryChatGptStatus(), account: null, machineSignIn: settingsChatGptMachineSignIn }
       : { device: null, status: null, account: settingsChatGptSignedIn ? { email: "owner@example.com" } : null, machineSignIn: null });
   }
 
   if (path === "/api/user/chatgpt/sign-in" && method === "POST") {
     if (!CHATGPT_DEVICE) return fixtureJson({ state: "waiting_for_machine" });
-    settingsChatGptSignedIn = true;
+    settingsChatGptMachineSignIn = { state: "open", authorizeUrl: "about:blank", device: GALLERY_DEVICE };
 
-    return fixtureJson({ state: "open", authorizeUrl: "about:blank", device: GALLERY_DEVICE });
+    return fixtureJson(settingsChatGptMachineSignIn);
   }
 
-  if (path === "/api/user/chatgpt/sign-in" && method === "DELETE") return fixtureJson({ cancelled: true });
+  if (path === "/api/user/chatgpt/sign-in" && method === "DELETE") {
+    settingsChatGptMachineSignIn = null;
+
+    return fixtureJson({ cancelled: true });
+  }
 
   if (path === "/api/user/chatgpt/paste/start" && method === "POST") {
     const root = document.documentElement;
