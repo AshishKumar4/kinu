@@ -14,6 +14,7 @@ import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ControlPlaneDO } from '../../src/control-plane/control-plane-do';
 import { MailboxDO } from '../../src/mail/mailbox-do';
+import { MailNameDO } from '../../src/mail/mailname-do';
 import { ORCHESTRATOR_RPC_SURFACE, USER_DO_RPC_SURFACE } from '../../src/rpc-surface';
 import { tenantDrive } from '../../src/drive/tenant';
 // Mossaic's own names for a tenant's objects and its base shard pool, so a census of the wrong objects cannot pass.
@@ -275,7 +276,61 @@ export class CensusWorkspace extends ProductionOrchestrator {
   }
 }
 
+/**
+ * The mail bucket as Cloudflare's, but with one write the test holds: armed, the next put starts and waits for the
+ * test's word. R2 is the mailbox's own external seam, so the test reaches nothing of the mailbox's inside.
+ */
+class HeldWrite {
+  armed = false;
+  started = Promise.withResolvers<void>();
+  released = Promise.withResolvers<void>();
+
+  bucket(bucket: R2Bucket | undefined): R2Bucket | undefined {
+    if (bucket === undefined) return undefined;
+
+    const put: R2Bucket['put'] = async (...args) => {
+      if (this.armed) {
+        this.armed = false;
+        this.started.resolve();
+        await this.released.promise;
+      }
+
+      return await bucket.put(...args);
+    };
+
+    return {
+      put, head: bucket.head.bind(bucket), get: bucket.get.bind(bucket), delete: bucket.delete.bind(bucket), list: bucket.list.bind(bucket),
+      createMultipartUpload: bucket.createMultipartUpload.bind(bucket), resumeMultipartUpload: bucket.resumeMultipartUpload.bind(bucket),
+    };
+  }
+}
+
 export class CensusMailboxDO extends MailboxDO {
+  private readonly held: HeldWrite;
+
+  constructor(ctx: DurableObjectState, env: ConstructorParameters<typeof MailboxDO>[1]) {
+    const held = new HeldWrite();
+
+    super(ctx, { ...env, MAIL_BUCKET: held.bucket(env.MAIL_BUCKET) });
+    this.held = held;
+  }
+
+  /** The next write to the bucket waits for `releaseWrite`. */
+  async holdNextWrite(): Promise<void> {
+    this.held.armed = true;
+    this.held.started = Promise.withResolvers();
+    this.held.released = Promise.withResolvers();
+  }
+
+  /** Answers once the held write has started. */
+  async writeHeld(): Promise<void> {
+    await this.held.started.promise;
+  }
+
+  async releaseWrite(): Promise<void> {
+    this.held.released.resolve();
+  }
+
   /** Rows in every mail table, and the objects under the account's R2 prefix. */
   async mailCensus(userId: string): Promise<Record<string, number>> {
     const sql = this.ctx.storage.sql;
@@ -287,6 +342,21 @@ export class CensusMailboxDO extends MailboxDO {
     const listed = await this.env.MAIL_BUCKET?.list({ prefix: `mail/${userId}/` });
 
     return { ...rows, r2_objects: listed?.objects.length ?? 0 };
+  }
+}
+
+/** A mail name, which tells a waiting test when it has been asked to retire. */
+export class CensusMailNameDO extends MailNameDO {
+  private readonly retiring = Promise.withResolvers<void>();
+
+  override async retire(userId: string): Promise<void> {
+    this.retiring.resolve();
+    await super.retire(userId);
+  }
+
+  /** Answers once `retire` has been called on this name. */
+  async whenRetired(): Promise<void> {
+    await this.retiring.promise;
   }
 }
 

@@ -146,4 +146,46 @@ describe("deleting an account on real workerd, every store's census", () => {
       danaAccount: { cards: 0, overviews: 0 },
     });
   });
+
+  // Review of the account deletion, 2026-10-20: a delivery mid-write when the box was deleted wrote its bytes after the
+  // sweep. The mailbox's bucket holds one write until this test releases it: the box's own R2 seam, nothing inside it.
+  it('a delivery mid-write when the account is deleted lands nothing after the sweep', async () => {
+    const [priyaId = ''] = await account('census-ids').accountsOf([EMAIL]);
+    const priya = { userId: priyaId, email: EMAIL };
+    const mailbox = env.CENSUS_MAILBOX.get(env.CENSUS_MAILBOX.idFromName(priya.userId));
+    const name = env.CENSUS_MAILNAME.get(env.CENSUS_MAILNAME.idFromName('priya'));
+    const recipient = parseMailRecipient('priya@kinu.run', 'kinu.run');
+
+    if (recipient === null) throw new Error('priya@kinu.run is no Kinu address');
+
+    await account(priya.userId).seedPriya(priya);
+    await name.claim('priya', priya.userId);
+    await mailbox.open({ userId: priya.userId, email: priya.email, username: 'priya', assistant: null });
+
+    // Each answer however it ends: the account's object aborts as its delete ends, which its caller reads as an error.
+    const ended = async (work: Promise<unknown>): Promise<string> => {
+      try {
+        await work;
+
+        return 'ok';
+      } catch (cause) {
+        return renderThrownChain({ cause });
+      }
+    };
+
+    await mailbox.holdNextWrite();
+    const delivering = ended(mailbox.deliver({ raw: new TextEncoder().encode(MIME), envelopeFrom: 'dana@northwind.io', recipient }));
+
+    await mailbox.writeHeld();
+    const retired = name.whenRetired();
+    const deleting = ended(account(priya.userId).deleteThis());
+
+    // The box has begun its delete: its names go first. The held write is let go only now.
+    await retired;
+    await mailbox.releaseWrite();
+    await Promise.all([delivering, deleting]);
+    const left = await mailbox.mailCensus(priya.userId);
+
+    for (const [table, rows] of Object.entries(left)) expect({ table, rows }).toEqual({ table, rows: 0 });
+  });
 });

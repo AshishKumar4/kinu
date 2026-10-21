@@ -327,11 +327,15 @@ interface CensusMailboxRpc extends Rpc.DurableObjectBranded {
   open(account: { userId: string; email: string; username: string; assistant: null }): Promise<import('@kinu.run/core').MailBox>;
   deliver(input: { raw: Uint8Array; envelopeFrom: string; recipient: import('@kinu.run/core').MailRecipient }): Promise<import('@kinu.run/core').MailDelivery | null>;
   mailCensus(userId: string): Promise<Record<string, number>>;
+  holdNextWrite(): Promise<void>;
+  writeHeld(): Promise<void>;
+  releaseWrite(): Promise<void>;
 }
 
 interface CensusMailNameRpc extends Rpc.DurableObjectBranded {
   claim(label: string, userId: string): Promise<{ label: string; user_id: string; state: string }>;
   lookup(): Promise<{ label: string; user_id: string; state: string } | null>;
+  whenRetired(): Promise<void>;
 }
 
 interface CensusStorageRpc extends Rpc.DurableObjectBranded {
