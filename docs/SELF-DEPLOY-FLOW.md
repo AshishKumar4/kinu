@@ -66,7 +66,7 @@ Each line is a read; none writes. They run together as soon as an account is cho
 | Workers is set up: the account has a workers.dev subdomain | `GET /accounts/{a}/workers/subdomain` | none yet: the run makes one from the account's name (`PUT …/workers/subdomain`, Workers Scripts Write) |
 | R2 is enabled (Cloudflare asks for a payment method; no API enables it) | `GET /accounts/{a}/r2/buckets` | "Enable R2" → `dash.cloudflare.com/{a}/r2/overview` in a hand-off; comes back by itself |
 | Zero Trust is set up, for sign-in | `GET /accounts/{a}/access/organizations` | only with the Access sign-in (§ 9 decision 1): Zero Trust's first setup is a checkout in the dashboard, even on its free plan |
-| Workers plan | see § 8 | only matters for "with its computer" |
+| Workers Paid | `GET /accounts/{a}/containers/applications` (401, code 1000 on Free) | "Kinu runs on Cloudflare's Workers Paid plan, $5 a month." → `dash.cloudflare.com/{a}/workers/plans` in a hand-off; first among the needs, and blocking (§ 8, 2026-10-21) |
 | Zones in this account | `GET /zones?account.id={a}` | none: the address step offers workers.dev or adding a domain |
 
 ## 5. The address (step 2)
@@ -125,9 +125,23 @@ on your address, Setting up mail (left out when there is none), Checking it answ
 
 Built as one catalog (`refusals.ts`) keyed by Cloudflare's error code (and the endpoint, where a code is shared or
 unmeasured), each entry naming the meaning, the action, and whether it is a need the run pauses on. Its entries: R2
-not turned on (10042, the probe's fixture: to measure), the computer on Workers Free (a 403 from `/containers/`:
-unmeasured), a sign-in Cloudflare refuses (10000, 9109), no workers.dev subdomain (10063), a secret written before its
-version serves (10215). Any code not in it shows Cloudflare's words with "Retry this step"; the page offers to copy
+not turned on (10042), Workers Free (1000 from `/containers/`, 10195 at the upload), a sign-in Cloudflare refuses
+(10000, 9109), no workers.dev subdomain (10063), a secret written before its version serves (10215), and a startup
+Cloudflare's check ran slow (10021).
+
+Decisions of 2026-10-21, from the free-plan run on the owner's free account (docs/SELF-DEPLOY.md § Live runs):
+- **Workers Paid only.** Kinu does not run on Workers Free: every agent runs in a Dynamic Worker (the `LOADER` binding),
+  and Cloudflare refuses that binding on Free (10195, "In order to use Dynamic Workers, you must switch to a paid
+  plan"). The plan is read before anything is made, by preflight and again by the run's first step; on Free it is the
+  first need and it blocks: "Kinu runs on Cloudflare's Workers Paid plan, $5 a month." The computer is part of that
+  baseline, gated only by the sign-in's API Tokens permission and the person's own choice.
+- **Analytics Engine is skipped where the account has it off.** No API turns it on, and a version that binds a dataset
+  is refused while it is off (10089). Its datasets are Kinu's own operational telemetry: the only readers are the
+  control plane's metrics view and the monitor's fleet sampling, both operators' and neither the person's. So the
+  upload, on 10089, leaves out the three optional datasets and uploads once more, noting "Analytics Engine is off on
+  this account, so usage analytics are off."; the one writer writes nothing with no dataset bound and counts each row
+  skipped (core obs/analytics/writer.ts); and each reader says "Usage analytics are off on this deployment."
+  (control-plane/analytics-sql.ts `analyticsOff`) instead of naming settings. Any code not in it shows Cloudflare's words with "Retry this step"; the page offers to copy
 the words of any refusal. The capabilities below are as documented (PersistentKite, 2026-10-20); none of the writes
 has been exercised yet.
 

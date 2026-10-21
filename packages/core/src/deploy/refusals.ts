@@ -73,6 +73,11 @@ interface CatalogEntry {
 
 const SIGN_IN_AGAIN: DeployAction = { label: 'Sign in again' };
 
+/** Kinu's agents run in Dynamic Workers, and its computer in Containers: both Workers Paid. */
+const PAID_PLAN = 'Kinu runs on Cloudflare\'s Workers Paid plan, $5 a month.';
+
+const upgradeToPaid = (account: string): DeployAction => ({ label: 'Upgrade to Workers Paid', href: `https://dash.cloudflare.com/${account}/workers/plans` });
+
 const RETRY: DeployAction = { label: 'Retry this step' };
 
 const CATALOG: readonly CatalogEntry[] = [
@@ -82,11 +87,17 @@ const CATALOG: readonly CatalogEntry[] = [
     sentence: 'Cloudflare needs R2, its file storage, turned on before Kinu can keep your files. It\'s free; Cloudflare asks for a card the first time.',
     action: (account) => ({ label: 'Turn on R2', href: `https://dash.cloudflare.com/${account}/r2/overview` }),
   },
-  // Unmeasured: the computer's container application on Workers Free. The plans page is wrangler 4.145.0's own hand-off.
+  // Measured on Workers Free (the owner's free account, 2026-10-21): 401, code 1000, "Unauthorized: You do not have access
+  // to Cloudflare Containers. Deploying containers requires the Workers Paid plan." The plans page is wrangler 4.145.0's.
   {
-    code: 0, endpoint: '/containers/', status: 403, need: 'plan',
-    sentence: 'Kinu\'s computer runs on Cloudflare\'s Workers Paid plan, $5 a month.',
-    action: (account) => ({ label: 'Upgrade to Workers Paid', href: `https://dash.cloudflare.com/${account}/workers/plans` }),
+    code: 1000, endpoint: '/containers/', status: 401, need: 'plan',
+    sentence: PAID_PLAN, action: (account) => upgradeToPaid(account),
+  },
+  // Measured on Workers Free (the owner's free account, 2026-10-21): the version upload refused, 403, "In order to use
+  // Dynamic Workers, you must switch to a paid plan at …/workers/plans": every agent runs in one (`LOADER`).
+  {
+    code: 10_195, endpoint: '/workers/scripts/', need: 'plan',
+    sentence: PAID_PLAN, action: (account) => upgradeToPaid(account),
   },
   // wrangler 4.145.0 reads 10000 as an authentication error; 9109 is a permission the sign-in did not carry.
   { code: 10_000, need: 'signin-again', sentence: 'Cloudflare no longer accepts this sign-in.', action: () => SIGN_IN_AGAIN },

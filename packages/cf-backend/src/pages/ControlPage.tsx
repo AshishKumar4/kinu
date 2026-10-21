@@ -10,7 +10,7 @@ import {
   fetchUsers, fetchWorkspaces, type ReconcileReport,
 } from '../lib/control-api';
 import {
-  METRICS_WINDOWS, type AnalyticsResult, type ControlAuditRow, type ControlFeedbackRow, type ControlUserRow,
+  ANALYTICS_OFF, METRICS_WINDOWS, type AnalyticsResult, type ControlAuditRow, type ControlFeedbackRow, type ControlUserRow,
   type ControlWorkspaceRow,
 } from '@kinu.run/core/control-plane';
 import { formatBytes, workspaceDisplayTitle, type SeekCursor } from '@kinu.run/core';
@@ -424,8 +424,10 @@ function MetricsView(): ReactNode {
       <Panel load={load}>
         {(metrics) => metrics.missing.length > 0 ? (
           <Notice tone="muted">
-            Analytics is not configured on this deployment: {metrics.missing.join(', ')} not set.
-            Every other view here is unaffected.
+            {metrics.missing.includes(ANALYTICS_OFF)
+              ? `${ANALYTICS_OFF} Its Cloudflare account has Analytics Engine off.`
+              : `Analytics is not configured on this deployment: ${metrics.missing.join(', ')} not set.`}
+            {' '}Every other view here is unaffected.
           </Notice>
         ) : (
           <div className="grid gap-3 md:grid-cols-2">

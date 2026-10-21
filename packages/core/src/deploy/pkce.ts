@@ -81,12 +81,33 @@ export interface DeployToken {
   readonly accessToken: string;
   readonly refreshToken: string;
   readonly expiresInSeconds: number;
+  /** The scopes Cloudflare granted, as its answer names them (an optional one the person left unticked is not among
+   *  them); null where the answer names none. */
+  readonly scopes: readonly string[] | null;
+}
+
+/** The scope the computer's registry token is minted with (core deploy/computer.ts). */
+const API_TOKENS_SCOPE = 'account-api-tokens.write';
+
+/**
+ * What a sign-in's grant means for the computer, as the page's computer row says it (`DeploySession.apiTokens`): the
+ * scope granted; missing; or missing again after a sign-in the person made to grant it. Cloudflare's consent screen
+ * shows this optional scope unticked (platform-catalog `oauth.consent.optional_scope_default`). A grant that names no
+ * scopes is read as granted: the computer's step then refuses in Cloudflare's own words if it was not.
+ */
+export type ApiTokensState = 'granted' | 'missing' | 'missing-after-reconsent';
+
+export function apiTokensState(scopes: readonly string[] | null, askedForIt: boolean): ApiTokensState {
+  if (scopes === null || scopes.includes(API_TOKENS_SCOPE)) return 'granted';
+
+  return askedForIt ? 'missing-after-reconsent' : 'missing';
 }
 
 const TokenAnswerSchema = v.object({
   access_token: v.optional(v.string()),
   refresh_token: v.optional(v.string()),
   expires_in: v.optional(v.number()),
+  scope: v.optional(v.string()),
   error: v.optional(v.string()),
   error_description: v.optional(v.string()),
 });
@@ -158,6 +179,7 @@ function tokenGrant(body: URLSearchParams, fetchImpl: typeof fetch): Effect.Effe
       accessToken: answer.access_token,
       refreshToken: answer.refresh_token,
       expiresInSeconds: answer.expires_in ?? 0,
+      scopes: answer.scope === undefined ? null : answer.scope.split(' ').filter((scope) => scope !== ''),
     };
 
     return token;
