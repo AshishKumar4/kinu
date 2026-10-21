@@ -71,7 +71,7 @@ test('the file tool reads and writes where the walk lands, past its approval gat
 
   // As the runtime gates it: the gate decides on the path the namespace's own lookup reaches.
   const gated = withApprovalGatedFiles(files, 'workspace', {
-    planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => files.resolve(path, { follow, creating }), userRoots: () => files.userRoots(),
+    planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => files.resolve(path, { follow, creating }), owner: (path) => files.owner(path), userRoots: () => files.userRoots(),
     locate: null, parksWrites: true,
   }, { mode: () => 'strict' });
 
@@ -112,7 +112,7 @@ function gatedTool(workspace: ReturnType<typeof createWorkspaceBundle>, memory?:
   const { files } = workspaceFilePlane(workspace, { mounts: [], principal: {}, home: WORKSPACE_ROOT });
 
   const gated = withApprovalGatedFiles(files, 'workspace', {
-    planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => files.resolve(path, { follow, creating }), userRoots: () => files.userRoots(),
+    planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => files.resolve(path, { follow, creating }), owner: (path) => files.owner(path), userRoots: () => files.userRoots(),
     locate: null, parksWrites: true,
   }, { mode: () => 'strict' });
 

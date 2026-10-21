@@ -279,12 +279,13 @@ export function localFilePlane(input: LocalFilePlane): LocalPlane {
  * namespace resolved, its links followed as node:fs follows them; a root is matched as named and as its real path,
  * since a mount point (the space) keeps its name while the folder's links resolve.
  */
-export function localFileReach(input: Pick<LocalFilePlane, 'folder' | 'space'>, planes: PathPlanes, plane: Pick<LocalPlane, 'resolve'>): FileReach {
+export function localFileReach(input: Pick<LocalFilePlane, 'folder' | 'space'>, planes: PathPlanes, plane: Pick<LocalPlane, 'resolve' | 'owner'>): FileReach {
   const roots = [input.folder, input.space].flatMap((root) => [root, tolerate(() => realpathSync(root), 'enoent') ?? root]);
 
   return {
     planes,
     resolve: (path, follow, creating) => plane.resolve(path, { follow, creating }),
+    owner: (path) => plane.owner(path),
     userRoots: () => [],
     locate: (path) => ({ hostPath: path, outside: !roots.some((root) => withinRoot(root, path)) }),
     parksWrites: false,
