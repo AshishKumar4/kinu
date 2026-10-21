@@ -368,7 +368,8 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
 ['delete-all-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('delete-all-probe.ts'),
         durableObjects: { DELETE_ALL_PROBE: { className: 'DeleteAllProbeDO', useSQLite: true } } })],
 ['mailbox-probe', async () => ({ ...workerCompatibility, modules: probeModules('mailbox-probe.ts', probeRuntime), bindings: { EMAIL_DOMAIN: 'kinu.run' },
-        r2Buckets: ['MAIL_BUCKET'], durableObjects: { MAILBOX: { className: 'MailboxProbeDO', useSQLite: true } } })],
+        // The mail names too, as every deployment binds them: opening a box claims its name.
+        r2Buckets: ['MAIL_BUCKET'], durableObjects: { MAILBOX: { className: 'MailboxProbeDO', useSQLite: true }, MAILNAME: { className: 'MailNameDO', useSQLite: true } } })],
 ['device-user-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('device-user-probe.ts', { ...probeRuntime, keepNames: true }), bindings: { CREDENTIAL_ENCRYPTION_KEY: 'ZGV2aWNlLXVzZXItcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
         // Main's turns are its own isolate's, loaded from the agent bundle as the deployed Worker serves it.
         serviceBindings: { ASSETS: agentAssets() },
@@ -411,7 +412,7 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         r2Buckets: ['MAIL_BUCKET'],
         durableObjects: {
           MAILBOX: { className: 'RoutedMailboxDO', useSQLite: true },
-          MAILNAME: { className: 'MailNameDO', useSQLite: true },
+          MAILNAME: { className: 'LossyMailNameDO', useSQLite: true },
         }, })],
 // Account deletion's census: every store the account has, each under the binding name production code reaches it by.
 ['account-census-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('account-census-probe.ts', { ...probeRuntime, keepNames: true }),
@@ -623,7 +624,7 @@ const runnerOptions = {
           DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', scriptName: 'deploy-probe', useSQLite: true },
           REQUEST_SIGNAL_PROBE: { className: 'RequestSignalProbeDO', scriptName: 'request-signal-probe', useSQLite: true },
           ROUTED_MAILBOX: { className: 'RoutedMailboxDO', scriptName: 'mail-routing-probe', useSQLite: true },
-          ROUTED_MAILNAME: { className: 'MailNameDO', scriptName: 'mail-routing-probe', useSQLite: true },
+          ROUTED_MAILNAME: { className: 'LossyMailNameDO', scriptName: 'mail-routing-probe', useSQLite: true },
         },
       } satisfies NonNullable<Parameters<typeof getDurableObjectDesignators>[0]['miniflare']>;
 

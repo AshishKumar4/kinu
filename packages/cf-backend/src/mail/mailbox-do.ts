@@ -26,10 +26,19 @@ const MAIL_SEND_KEY = 'mail:';
 /** Sends a day for an account that is not one of the deployment's operators (the owner, 2026-10-19). */
 const DAILY_SEND_CAP = 100;
 
-const IdentityRow = v.object({ user_id: v.string(), email: v.string() });
+const IdentityRow = v.object({ user_id: v.string(), email: v.string(), username: v.string() });
 
 /** The routing grant this account's addresses were last routed under (core deploy/mail-rules.ts). */
 const ROUTED_UNDER = 'mail:routed-under';
+
+/**
+ * The name this box's claim finished for: its acknowledgment of its own two-object step (its rows, then MailName's
+ * claim), not a mirror of MailName's ownership. Until it names the box's username, a call first finishes the claim.
+ */
+const CLAIMED = 'mail:claimed';
+
+/** MailName's own refusal, across RPC: it proves no claim was made. A lost reply, or a reset, proves nothing. */
+const AuthoredRefusal = v.object({ remote: v.literal(true), _tag: v.literal('KinuError') });
 
 export class MailboxDO extends DurableObject<Env> implements MailboxCalls, MailboxAgentCalls {
   private readonly store: MailStore;
@@ -79,7 +88,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
   /** Who the account is: null until its address is opened. */
   private identity(): v.InferOutput<typeof IdentityRow> | null {
-    const [row] = this.ctx.storage.sql.exec('SELECT user_id, email FROM mail_box WHERE id = 1').toArray();
+    const [row] = this.ctx.storage.sql.exec('SELECT user_id, email, username FROM mail_box WHERE id = 1').toArray();
 
     return row === undefined ? null : v.parse(IdentityRow, row);
   }
@@ -115,10 +124,22 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   private addressed(planned: () => readonly { readonly address: string; readonly make: () => void }[]): Effect.Effect<void, KinuError> {
     const routes = this.routes;
 
-    if (routes === null || this.refusal !== undefined) return Effect.void;
-    const stale = () => routes.under !== '' && this.ctx.storage.kv.get(ROUTED_UNDER) !== routes.under;
+    if (this.refusal !== undefined) return Effect.void;
+
+    const unclaimed = () => {
+      const owner = this.identity();
+
+      return owner !== null && this.ctx.storage.kv.get(CLAIMED) !== owner.username ? owner : null;
+    };
+
+    const stale = () => routes !== null && routes.under !== '' && this.ctx.storage.kv.get(ROUTED_UNDER) !== routes.under;
 
     const routing = async (): Promise<Exit.Exit<void, KinuError>> => {
+      const owner = unclaimed();
+      const claimed = owner === null ? Exit.void : await this.claimed(owner.username, owner.user_id);
+
+      if (Exit.isFailure(claimed) || routes === null) return claimed;
+
       if (stale()) {
         const again = await hold(routes.routed(this.store.boxes().map((box) => box.address)));
 
@@ -136,10 +157,30 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
       return Exit.void;
     };
 
-    const due = () => stale() || planned().length > 0;
+    const due = () => unclaimed() !== null || stale() || (routes !== null && planned().length > 0);
 
     return Effect.flatMap(this.fenced(Effect.promise(async () => (due() ? this.ctx.blockConcurrencyWhile(routing) : Exit.void))), (exit) => exit);
   }
+
+  /**
+   * The box's name claimed (MailName's `claim`, which routes it on a subdomain), and acknowledged once it is. MailName's
+   * own refusal (the name another account's, or Cloudflare's rule refused) proves no claim was made, so the rows that
+   * recorded the name go; a lost reply proves nothing, so they stay and the next call claims again.
+   */
+  private async claimed(username: string, userId: string): Promise<Exit.Exit<void, KinuError>> {
+    const [answered] = await Promise.allSettled([objectNamed(this.env.MAILNAME, username).claim(username, userId)]);
+
+    if (answered?.status !== 'rejected') {
+      this.ctx.storage.kv.put(CLAIMED, username);
+
+      return Exit.void;
+    }
+
+    if (v.is(AuthoredRefusal, answered.reason)) this.store.unopen();
+
+    return Exit.fail(authoredRefusal({ doing: `claiming ${username}`, cause: answered.reason }));
+  }
+
 
   /** The boxes `owners` would have made, each with its address and how it is made. */
   private boxesPlanned(owners: readonly MailBoxOwner[]): () => readonly { readonly address: string; readonly make: () => void }[] {
@@ -181,7 +222,13 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     this.deleting = true;
     const [box] = this.ctx.storage.sql.exec('SELECT username FROM mail_box WHERE id = 1').toArray();
 
-    const username = box === undefined ? undefined : v.parse(v.object({ username: v.string() }), box).username;
+    const recorded = box === undefined ? undefined : v.parse(v.object({ username: v.string() }), box).username;
+
+    // Only a name its claim finished for, or MailName says is its: a box whose open was interrupted may record one
+    // another account holds, whose rules are not this account's to delete.
+    const username = recorded !== undefined && (this.ctx.storage.kv.get(CLAIMED) === recorded || (await objectNamed(this.env.MAILNAME, recorded).lookup())?.user_id === userId)
+      ? recorded
+      : undefined;
 
     // Its rules first, the person's and every box's under it, while the box still records the name.
     const unrouted = username === undefined || this.routes === null ? Exit.void : await hold(this.routes.unrouted(username, this.env.EMAIL_DOMAIN ?? ''));
@@ -231,24 +278,14 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   }
 
   /**
-   * The person's address: its rows written first, as the one record of the name, then the name claimed (MailName's
-   * `claim`, which routes it on a subdomain), in one block so no call makes a box under a name not yet claimed. A claim
-   * refused (the name taken, or Cloudflare's 201st rule) unwrites the rows this call wrote, so the account records no
-   * name it does not hold; a retry claims again, whatever came between.
+   * The person's address: its rows written first, as the one record of the name, then the name claimed, in one block so
+   * no call makes a box under a name not yet claimed (`claimed`). A refused claim unwrites the rows, so the account
+   * records no name it does not hold; one interrupted is finished by the next call.
    */
   open(account: { userId: string; email: string; username: string; assistant: { workspace: string; actorId: string } | null }): Promise<MailBox> {
     const opening = async (): Promise<Exit.Exit<MailBox, KinuError>> => {
-      const fresh = this.identity() === null;
       const box = this.store.open(account);
-      const username = box.address.slice(0, box.address.lastIndexOf('@'));
-
-      // In the claim's own words, across the RPC: the name taken, or Cloudflare's refusal of its rule.
-      const claimed = await hold(Effect.tryPromise({
-        try: async () => objectNamed(this.env.MAILNAME, username).claim(username, account.userId),
-        catch: (cause) => authoredRefusal({ doing: `claiming ${username}`, cause }),
-      }));
-
-      if (Exit.isFailure(claimed) && fresh) this.store.unopen();
+      const claimed = await this.claimed(box.address.slice(0, box.address.lastIndexOf('@')), account.userId);
 
       return Exit.isFailure(claimed) ? Exit.failCause(claimed.cause) : Exit.succeed(box);
     };

@@ -110,6 +110,38 @@ describe('mail on a subdomain of its zone, each address by a rule of its own', (
     expect(await name('owned').lookup()).toMatchObject({ user_id: 'u-priya-6' });
   });
 
+  // The lead's decision, 2026-10-21: `mail:claimed` acknowledges the box's own two-object step; every call finishes an
+  // unacknowledged claim, and rows go only on MailName's own refusal.
+  it('an open whose claim reply was lost after the claim is finished by the next call', async () => {
+    expect(await refusalOf(async () => mailbox('u-lost-1').open({ userId: 'u-lost-1', email: 'priya.raman@example.com', username: 'lostafter1', assistant: null })))
+      .toMatchObject({ code: 'io', message: 'claiming lostafter1' });
+
+    expect((await mailbox('u-lost-1').boxes()).map((box) => box.address)).toEqual([`lostafter1@${DOMAIN}`]);
+    expect(await name('lostafter1').lookup()).toMatchObject({ user_id: 'u-lost-1' });
+    expect((await env.MAIL_RULES_FAKE.state()).addresses).toEqual([`lostafter1@${DOMAIN}`]);
+  });
+
+  it('an open cut off before its claim, whose name another account then takes, is undone by its next call', async () => {
+    expect(await refusalOf(async () => mailbox('u-lost-2').open({ userId: 'u-lost-2', email: 'priya.raman@example.com', username: 'lostbefore1', assistant: null })))
+      .toMatchObject({ code: 'io', message: 'claiming lostbefore1' });
+    await priyaOpened('lostbefore1', 'u-dana-2');
+
+    expect(await refusalOf(async () => mailbox('u-lost-2').boxes())).toMatchObject({ code: 'denied', message: '"lostbefore1" is taken.' });
+    expect(await mailbox('u-lost-2').boxes()).toEqual([]);
+    expect(await name('lostbefore1').lookup()).toMatchObject({ user_id: 'u-dana-2' });
+  });
+
+  it("deleting an account whose open was cut off before its claim takes nothing of the account that holds the name", async () => {
+    expect(await refusalOf(async () => mailbox('u-lost-3').open({ userId: 'u-lost-3', email: 'priya.raman@example.com', username: 'lostbefore2', assistant: null })))
+      .toMatchObject({ code: 'io', message: 'claiming lostbefore2' });
+    await priyaOpened('lostbefore2', 'u-dana-3');
+
+    await mailbox('u-lost-3').deleteBox('u-lost-3');
+
+    expect((await env.MAIL_RULES_FAKE.state()).addresses).toEqual([`lostbefore2@${DOMAIN}`]);
+    expect(await name('lostbefore2').lookup()).toMatchObject({ user_id: 'u-dana-3' });
+  });
+
   it("deletes every rule under the account's root as the account is, and never disables the zone's routing", async () => {
     await priyaOpened('praman', 'u-priya-3');
     await mailbox('u-priya-3').readableBy(caller('triage'));

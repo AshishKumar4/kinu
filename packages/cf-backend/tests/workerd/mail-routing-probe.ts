@@ -7,8 +7,28 @@ import { WorkerEntrypoint } from 'cloudflare:workers';
 import type { MailRulesState } from './mail-rules-fake';
 
 import { MailboxDO } from '../../src/mail/mailbox-do';
+import { MailNameDO, type MailNameClaim } from '../../src/mail/mailname-do';
 
-export { MailNameDO } from '../../src/mail/mailname-do';
+/**
+ * The mail names as deployed, whose first answer for a label a test names is lost: `lostbefore…` before the claim is
+ * made, as a reset would, and `lostafter…` once it is, as a dropped reply would. Neither is MailName's own refusal.
+ */
+export class LossyMailNameDO extends MailNameDO {
+  private readonly answered = new Set<string>();
+
+  override async claim(label: string, userId: string, kind: 'username' | 'alias' = 'username', targetPath: string | null = null): Promise<MailNameClaim> {
+    const first = !this.answered.has(label);
+
+    this.answered.add(label);
+
+    if (first && label.startsWith('lostbefore')) throw new Error('Network connection lost.');
+    const claimed = await super.claim(label, userId, kind, targetPath);
+
+    if (first && label.startsWith('lostafter')) throw new Error('Network connection lost.');
+
+    return claimed;
+  }
+}
 
 /** The account's Mailbox as deployed, which a test can tell its addresses were last routed under another grant. */
 export class RoutedMailboxDO extends MailboxDO {
