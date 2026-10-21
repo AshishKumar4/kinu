@@ -3,7 +3,7 @@ import { Data, Effect } from 'effect';
 import * as v from 'valibot';
 import { KinuError, renderThrownChain, classifyErrorCode, settle } from '../obs/index';
 import { FileRefusalError } from '../types/file-edits';
-import { BindingFailureSchema, ToolFailureValueSchema, type BindingFailure, type ToolOutcome } from '../types/tool-outcome';
+import { BindingFailureSchema, ToolFailureValueSchema, ToolOutcomeSchema, type BindingFailure, type ToolOutcome } from '../types/tool-outcome';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { McpToolError } from './mcp-error';
 import { EffectLog, withMemberEffects, type ProgramEffectsRecord } from '../execution/call-effects';
@@ -36,6 +36,14 @@ export function toolErrorText(input: Parameters<typeof renderThrownChain>[0]): s
   return v.is(v.string(), value) ? value : JSON.stringify(value);
 }
 
+/** RPC keeps an error's name and own fields, not its class (`codeByName`): a program's failure crosses the facet hop
+ *  with its outcome, the host's metadata, which its words do not carry as status. As trustworthy as the thrower. */
+function remoteProgramOutcome(error: Error): Extract<ToolOutcome, { success: false }> | null {
+  const remote = v.safeParse(v.looseObject({ remote: v.literal(true), _tag: v.literal('CodemodeProgramError'), outcome: ToolOutcomeSchema }), error);
+
+  return remote.success && !remote.output.outcome.success ? remote.output.outcome : null;
+}
+
 /** Read only producer-owned error metadata; output and diagnostic wording are not status. */
 export function failedToolOutcome(input: Parameters<typeof renderThrownChain>[0]): Extract<ToolOutcome, { success: false }> {
   const outcome: Extract<ToolOutcome, { success: false }> = { success: false, reason: null };
@@ -46,6 +54,9 @@ export function failedToolOutcome(input: Parameters<typeof renderThrownChain>[0]
     seen.add(error);
 
     if (error instanceof CodemodeProgramError) return error.outcome;
+    const remote = remoteProgramOutcome(error);
+
+    if (remote !== null) return remote;
 
     if (error instanceof KinuError) {
       outcome.reason ??= error instanceof FileRefusalError ? error.verdict : error.code;

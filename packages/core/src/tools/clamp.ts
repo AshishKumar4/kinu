@@ -139,9 +139,6 @@ export function clampSerializedToolResult(
   }));
 }
 
-/** The least a cut answer's text keeps, so its truncation marker always fits whatever its record takes. */
-const CUT_FLOOR_CHARS = 200;
-
 /** An eval's answer with its record of what it changed (`execution/call-effects.ts`) set aside, where it has one. */
 function setAside(producer: string | undefined, output: JsonValue | undefined) {
   const answer = producer === 'eval' ? v.safeParse(v.looseObject({ effects: JsonValueSchema }), output) : null;
@@ -155,7 +152,8 @@ function setAside(producer: string | undefined, output: JsonValue | undefined) {
 /**
  * A recorded answer within its bound: whole where it fits, else its rest cut to text beside its census and its record,
  * never cut. The cut is made again, narrower by what it overran, until the answer as returned, the text escaped inside
- * `result`, fits; never below a floor that keeps the marker. It is saved once, and charged as returned.
+ * `result`, fits, down to the marker alone. A census and a record that overrun the bound with the marker alone are
+ * returned so, never cut, and said. It is saved once, and charged as returned.
  */
 async function recordedAnswer(
   recorded: { readonly rest: JsonObject; readonly effects: JsonValue }, failures: JsonValue | undefined, opts: ClampToolResultOptions,
@@ -177,16 +175,21 @@ async function recordedAnswer(
   const saved = offloaded !== null && Exit.isSuccess(offloaded) ? offloaded.value : null;
   const marker = truncationMarker(saved);
   const answered = (clamped: string): JsonObject => ({ result: clamped, ...kept });
-  let width = Math.max(CUT_FLOOR_CHARS, cap - JSON.stringify(answered('')).length);
+  // The narrowest cut keeps the marker alone (`cutAround` with no room).
+  const floor = marker.length + MARKER_FENCE_CHARS;
+  let width = Math.max(floor, cap - JSON.stringify(answered('')).length);
   let cut = cutAround(text, marker, width);
 
-  // Each pass narrows strictly, so it ends at a fit or at the floor.
-  for (let over = JSON.stringify(answered(cut.clamped)).length - cap; over > 0 && width > CUT_FLOOR_CHARS; over = JSON.stringify(answered(cut.clamped)).length - cap) {
-    width = Math.max(CUT_FLOOR_CHARS, width - over);
+  // Each pass narrows strictly, so it ends at a fit or at the marker alone.
+  for (let over = JSON.stringify(answered(cut.clamped)).length - cap; over > 0 && width > floor; over = JSON.stringify(answered(cut.clamped)).length - cap) {
+    width = Math.max(floor, width - over);
     cut = cutAround(text, marker, width);
   }
 
   const answer = answered(cut.clamped);
+  const overrun = JSON.stringify(answer).length - cap;
+
+  if (overrun > 0) diagnostics.event('clamp.record_over_bound', { producer: opts.producer ?? 'eval', cap, overrun });
 
   chargedCut(JSON.stringify(answer).length, cut.omitted, saved, opts);
 

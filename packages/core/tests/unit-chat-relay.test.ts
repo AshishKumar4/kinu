@@ -5,7 +5,9 @@ import { isStepCount, streamText, tool, toUIMessageStream, type TextStreamPart, 
 import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
+import * as v from 'valibot';
 import { ChatRelay } from '../src/chat-relay';
+import { programEffectsOf } from '../src/execution/call-effects';
 import { pulledThrough } from '../src/utils/pulled-stream';
 
 type FinishPart = Extract<LanguageModelV3StreamPart, { type: 'finish' }>;
@@ -102,6 +104,26 @@ test("a tool's failure is shown live as it is stored, a failed program's record 
   await relay.observed;
 
   expect(shown).toEqual([expect.objectContaining({ type: 'tool-output-error', toolCallId: 'c1', errorText: words })]);
+});
+
+// Third review, 2026-10-21: redacted as one text, an unterminated key header in the program's own words took the rest of
+// the envelope with it, its record included.
+test("a secret in a failed program's words is redacted inside them, and its record stays readable", async () => {
+  const shown: UIMessageChunk[] = [];
+  const relay = new ChatRelay(async (chunks) => { shown.push(...await readAll(chunks)); }, { tools, describe });
+  const effects = { call: 'c2', files: [{ path: 'notes/plan.md', change: 'created' as const }], commands: [], operations: {} };
+  // Assembled here: a key's header is never a literal in the tree (scripts/secret-scan.ts).
+  const header = ['-----BEGIN PRIVATE', 'KEY-----'].join(' ');
+  const words = JSON.stringify({ success: false, reason: null, error: header, effects });
+
+  relay.push({ type: 'tool-error', toolCallId: 'c2', toolName: 'run', input: { command: 'ls' }, error: new Error(words) });
+  relay.end();
+  await relay.observed;
+
+  const errorText = v.parse(v.object({ errorText: v.string() }), shown.find((chunk) => chunk.type === 'tool-output-error')).errorText;
+
+  expect(errorText).not.toContain(header);
+  expect(programEffectsOf('c2', errorText)?.files).toEqual(effects.files);
 });
 
 test('a call that failed fails what the owner reads, after what was queued; one the owner let go queues nothing', async () => {

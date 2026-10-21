@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { jsonSchema, tool } from 'ai';
+import { jsonSchema, tool, type UIMessageChunk } from 'ai';
 import { toolExecute } from '@kinu.run/test-utils';
 import {
   codemodeFunction, programEffect, programEffectsOf, toolCallEffect, withClampedToolResult, withCodemodeProgram, type ProgramEffects,
@@ -14,8 +14,9 @@ import { imageModelOutput } from '../src/tools/image-results';
 import { commandAnswer } from '../src/execution/exec-result';
 import { computerDesktop } from '../src/operations/executors';
 import { servedImpacts } from '../src/tools/sandbox-contract';
-import { toolErrorOutput, toolErrorText } from '../src/tools/outcome';
+import { failedToolOutcome, toolErrorOutput, toolErrorText } from '../src/tools/outcome';
 import { KinuError } from '../src/obs/index';
+import { ChatRelay } from '../src/chat-relay';
 import { rewoundWork } from '../src/orchestrator/rewind-notice';
 import { EffectLog, noteFileChange } from '../src/execution/call-effects';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '../src/utils/json';
@@ -205,6 +206,54 @@ describe("a program's record survives every shape its answer is kept in", () => 
     expect(programEffectsOf('call-failed', JSON.stringify(output.value))?.files).toHaveLength(1);
   });
 
+  // Third review, 2026-10-21: with its record in its words and no cause, the hop dropped its class and with it its code.
+  test('its classified reason crosses the facet hop, as RPC keeps an error: its own fields, not its class', async () => {
+    const [settled] = await Promise.allSettled([failing(() => { throw new KinuError('denied', 'not yours'); })]);
+    const thrown = v.parse(v.looseObject({ message: v.string(), _tag: v.string(), outcome: v.unknown() }), settled?.status === 'rejected' ? settled.reason : null);
+    const hopped = Object.assign(new Error(thrown.message), { remote: true, _tag: thrown._tag, outcome: thrown.outcome });
+
+    expect(failedToolOutcome({ cause: hopped })).toMatchObject({ success: false, reason: 'denied' });
+    expect(programEffectsOf('call-failed', toolErrorText({ cause: hopped }))?.files).toHaveLength(1);
+  });
+
+  // Fourth review, 2026-10-21: a classified failure's words hold the program's envelope as a string, which the relay
+  // redacted whole: an unterminated key header in it took the record with it.
+  test('a classified failure with a key header in its words is redacted live, its record readable', async () => {
+    // Assembled here: a key's header is never a literal in the tree (scripts/secret-scan.ts).
+    const header = ['-----BEGIN PRIVATE', 'KEY-----'].join(' ');
+    const [settled] = await Promise.allSettled([failing(() => { throw new KinuError('denied', header); })]);
+    const shown: UIMessageChunk[] = [];
+    const relay = new ChatRelay(async (chunks) => { for await (const chunk of chunks) shown.push(chunk); }, { tools: {}, describe: () => 'failed' });
+
+    relay.push({ type: 'tool-error', toolCallId: 'call-failed', toolName: 'eval', input: { code: '' }, error: settled?.status === 'rejected' ? settled.reason : null });
+    relay.end();
+    await relay.observed;
+
+    const errorText = v.parse(v.object({ errorText: v.string() }), shown.find((chunk) => chunk.type === 'tool-output-error')).errorText;
+
+    expect(errorText).not.toContain(header);
+    expect(programEffectsOf('call-failed', errorText)?.files).toEqual([{ path: 'notes/plan.md', change: 'replaced' }]);
+  });
+
+  // Fifth review, 2026-10-21: decoded, a secret-named field lost the name that masks it.
+  test('a secret-named field in a failed program\'s words is masked live, as its name says', async () => {
+    // A bearer beside it, which a pattern masks in the encoded words first, must not leave the password unread.
+    const opaque = ['opaque', 'value', '123'].join('-');
+    const [settled] = await Promise.allSettled([failing(() => { throw new Error(JSON.stringify({ password: opaque, note: `Bearer ${'x'.repeat(20)}` })); })]);
+    const shown: UIMessageChunk[] = [];
+    const relay = new ChatRelay(async (chunks) => { for await (const chunk of chunks) shown.push(chunk); }, { tools: {}, describe: () => 'failed' });
+
+    relay.push({ type: 'tool-error', toolCallId: 'call-failed', toolName: 'eval', input: { code: '' }, error: settled?.status === 'rejected' ? settled.reason : null });
+    relay.end();
+    await relay.observed;
+
+    const errorText = v.parse(v.object({ errorText: v.string() }), shown.find((chunk) => chunk.type === 'tool-output-error')).errorText;
+
+    expect(errorText).not.toContain(opaque);
+    expect(errorText).not.toContain('x'.repeat(20));
+    expect(programEffectsOf('call-failed', errorText)?.files).toEqual([{ path: 'notes/plan.md', change: 'replaced' }]);
+  });
+
   test('one that changed nothing fails in its own words alone', async () => {
     expect(await stored(withCodemodeProgram(async () => { throw new Error('nothing done'); }, { call: 'call-plain' })))
       .toEqual({ type: 'error-text', value: 'nothing done' });
@@ -279,7 +328,24 @@ describe("a program's record keeps its answer within its bound", () => {
       tool({ inputSchema: jsonSchema<{ code: string }>({ type: 'object' }), execute: async () => ({ result, logs: [], effects: big }) }), { producer: 'eval', maxChars },
     ))({ code: '' });
 
-    expect(JSON.stringify(await run('y'.repeat(20_000), 600)).length).toBeLessThan(2_000);
     expect(JSON.stringify(await run('"\\'.repeat(5_000), 4_000)).length).toBeLessThanOrEqual(4_000);
+  });
+
+  // Third review, 2026-10-21: a fixed 200-character floor kept more text than a 600 bound left room for beside a record.
+  test('a record that leaves room for little more than the marker still fits its bound, and one that leaves none is whole', async () => {
+    const files = (count: number) => Array.from({ length: count }, (_, n) => ({ path: `notes/${'x'.repeat(40)}-${String(n)}.md`, change: 'edited' as const }));
+
+    const run = async (count: number) => toolExecute<{ code: string }, JsonValue>(withClampedToolResult(
+      tool({ inputSchema: jsonSchema<{ code: string }>({ type: 'object' }), execute: async () => ({ result: 'y'.repeat(20_000), logs: [], effects: recorded('call-room', { files: files(count) }) }) }),
+      { producer: 'eval', maxChars: 600 },
+    ))({ code: '' });
+
+    const roomy = await run(5);
+    const crowded = await run(6);
+
+    expect(JSON.stringify(recorded('call-room', { files: files(5) })).length).toBeGreaterThan(400);
+    expect(JSON.stringify(roomy).length).toBeLessThanOrEqual(600);
+    expect(programEffectsOf('call-room', roomy)?.files).toEqual(files(5));
+    expect(programEffectsOf('call-room', crowded)?.files).toEqual(files(6));
   });
 });
