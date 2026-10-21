@@ -2,7 +2,7 @@
 // created adapter-side by `initAccessTokenTable`. Every column the code touches is in its CREATE.
 
 import type { SqlExec } from '../types/primitives';
-import { sqlCheckList } from '../identity/schema';
+import { sqlCheckList } from '../utils/sql';
 import { initExperienceLibraryTables } from '../experience/library';
 import { initDeviceInflightTable } from '../execution/device-inflight';
 import { initEgressVaultTables } from '../safety/egress-vault';

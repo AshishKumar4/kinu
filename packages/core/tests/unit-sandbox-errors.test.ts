@@ -95,7 +95,7 @@ test('recovered host failures retain each binding in the census without failing 
     ]);
 
     return { result: 'recovered' };
-  });
+  }, { call: 'call-test' });
 
   const outcome = successfulToolOutcome('eval', { output });
   expect(outcome.success).toBe(true);
@@ -110,11 +110,11 @@ test('throwing the failure value propagates its native reason and a malformed pr
     await withCodemodeProgram(async () => {
       const file = codemodeFunction('tools', 'file', async () => { throw new KinuError('denied', 'blocked'); });
       throw await file({ op: 'write' });
-    });
+    }, { call: 'call-test' });
   } catch (cause) { error = cause; }
 
   expect(failedToolOutcome({ cause: error })).toMatchObject({ success: false, reason: 'denied', failures: [{ tool: 'file', op: 'write', reason: 'denied' }] });
-  await expect(withCodemodeProgram(async () => { throw new ReferenceError('run is not defined'); })).rejects.toBeInstanceOf(ReferenceError);
+  await expect(withCodemodeProgram(async () => { throw new ReferenceError('run is not defined'); }, { call: 'call-test' })).rejects.toBeInstanceOf(ReferenceError);
 });
 
 test('a native tool a program calls runs only on input its own schema admits', async () => {
@@ -200,7 +200,7 @@ test('every member of every namespace refuses with the one declared Refusal, and
           received = await codemodeFunction(namespace.name, member, entry.execute)(...args);
 
           return { result: null };
-        });
+        }, { call: 'call-test' });
 
         const refusal = v.safeParse(ToolFailureValueSchema, received);
 

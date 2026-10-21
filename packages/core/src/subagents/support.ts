@@ -30,6 +30,8 @@ import { KinuError, renderThrownChain } from '../obs/index';
 import type { SubagentInheritedContext } from '../types/subagents';
 import type { ModelMessage } from 'ai';
 import { inheritedContextFromHistory } from '../orchestrator/heads-support';
+import { agentTree, unreadReports } from '../delegation/agent-tree';
+import type { PanelAgent } from '../read-models/workspace-agents';
 
 export interface SubagentLiveStatus {
   lastActivity: number | null;
@@ -397,6 +399,12 @@ export function createTeamToolDeps(deps: {
   ownMission(): Promise<string> | string;
   rosterMoved(): void;
   broadcastTask(event: { subagent: string; content: string; timestamp: number }): void;
+  /** The workspace's agents as the person's sidebar reads them (`readWorkspaceAgents`): `agents.list` shows its subtree. */
+  workspaceAgents(): Promise<readonly PanelAgent[]>;
+  /** This roster's owner as that read keys it: `main`, or its actor id. */
+  readonly treeOwner: string;
+  /** The owner's own events: the reports it has not read yet. */
+  readonly events: Pick<EventLog, 'pending'>;
   /**
    * Built once per actor: the port holds the live `shell` waiters, and these deps are rebuilt per call.
    * Absent: no role-targeted ask, structurally.
@@ -499,6 +507,10 @@ export function createTeamToolDeps(deps: {
     delegation: deps.delegation,
     snapshot: () => deps.roster.list(),
     list: async () => deps.roster.list(),
+
+    tree: async ({ retired, limit }) => agentTree({
+      agents: await deps.workspaceAgents(), owner: deps.treeOwner, unread: unreadReports(deps.events), retired, limit,
+    }),
 
     create: (input) => settle(Effect.gen(function* () {
       const { name, displayName, subagent } = yield* provision(input, true, null);

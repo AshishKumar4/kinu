@@ -5,6 +5,7 @@ import { KinuError, refusalOf, RefusalSchema, type Refusal } from '../obs/index'
 import type { JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../types/file-edits';
 import type { Uncheckpointed } from '../types/primitives';
+import { noteCommand } from './call-effects';
 
 /** A file-plane verdict (`tools/file-tool.ts` `failure()`): unmet precondition, not an error class. */
 const FileVerdictSchema = v.object({ ...RefusalSchema.entries, reason: v.picklist(FILE_REFUSAL_REASONS) });
@@ -69,9 +70,14 @@ export const ExecPartsSchema = v.object({ parts: v.literal(true) });
 
 /**
  * A command's answer as its caller asked: with `parts`, `{ stdout, stderr, exitCode }` as the command wrote them, which a
- * program reads and never parses back from the text; else the text (`commandResultAt`).
+ * program reads and never parses back from the text; else the text (`commandResultAt`). What ran, on which machine, is
+ * recorded for the program that ran it, with its exit code (`call-effects.ts`); one refused never ran, and is not.
  */
-export function commandAnswer(outcome: ExecOutcome, parts: boolean, reportCwd: boolean): CommandResult | { stdout: string; stderr: string; exitCode: number } {
+export function commandAnswer(
+  outcome: ExecOutcome, parts: boolean, reportCwd: boolean, ran: { readonly machine: string; readonly command: string },
+): CommandResult | { stdout: string; stderr: string; exitCode: number } {
+  if (outcome.refusal === undefined) noteCommand(ran.machine, ran.command, outcome.exitCode ?? 0);
+
   return parts && outcome.refusal === undefined
     ? { stdout: outcome.stdout ?? '', stderr: outcome.stderr ?? '', exitCode: outcome.exitCode ?? 0 }
     : commandResultAt(outcome, reportCwd);

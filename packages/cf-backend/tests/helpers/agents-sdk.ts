@@ -803,6 +803,9 @@ export interface RecordedMcpLifecycle {
   established: readonly string[];
   /** Each server `connectToServer` dialled, in order: a sign-in begun, or a dial on its own. */
   dialled: readonly string[];
+  /** Each server `connectToServer` dialled while a connect of it was still running: the vendor's two `init`s then share
+   *  one client, and the first one's handshake goes out on the second one's transport. */
+  overlapped: readonly string[];
   discovered: readonly string[];
   restored: number;
   waited: number;
@@ -813,6 +816,14 @@ const mcpServers = new Map<string, RecordedMcpServer>();
 const mcpEstablished: string[] = [];
 
 const mcpDialled: string[] = [];
+
+const mcpOverlapped: string[] = [];
+
+/** Servers a `connectToServer` is running for. */
+const mcpConnecting = new Set<string>();
+
+/** The next `connectToServer`'s hold, once {@link hangNextMcpConnect} planted it. */
+let mcpConnectGate: { readonly entered: () => void; readonly released: Promise<void> } | null = null;
 
 const mcpDiscovered: string[] = [];
 
@@ -921,7 +932,20 @@ export function liveMcpFetch(id: string): McpCredentialTransport['fetch'] | null
 }
 
 export function recordedMcpLifecycle(): RecordedMcpLifecycle {
-  return { established: mcpEstablished, dialled: mcpDialled, discovered: mcpDiscovered, restored: mcpRestored, waited: mcpWaited };
+  return { established: mcpEstablished, dialled: mcpDialled, overlapped: mcpOverlapped, discovered: mcpDiscovered, restored: mcpRestored, waited: mcpWaited };
+}
+
+/**
+ * Holds the next `connectToServer` until `release`, as the vendor's `init` holds while its handshake is out: it has put
+ * a fresh client in place of the closed one, so the connection reads `closed` (ready, its client with no transport)
+ * until the connect lands (`client-BnYbNT3z.js:585-592`).
+ */
+export function hangNextMcpConnect(): McpEstablishGate {
+  const gate = Promise.withResolvers<void>();
+  const arrival = Promise.withResolvers<void>();
+  mcpConnectGate = { entered: () => { arrival.resolve(); }, released: gate.promise };
+
+  return { entered: arrival.promise, release: () => { gate.resolve(); } };
 }
 
 export interface McpEstablishGate {
@@ -1065,6 +1089,9 @@ export function resetRecordedMcp(): void {
   mcpServers.clear();
   mcpEstablished.length = 0;
   mcpDialled.length = 0;
+  mcpOverlapped.length = 0;
+  mcpConnecting.clear();
+  mcpConnectGate = null;
   mcpDiscovered.length = 0;
   mcpCallToolFailure = null;
   mcpDiscoveryFailure = null;
@@ -1342,6 +1369,30 @@ class FakeMCPClientManager {
 
     if (!connection) return { state: 'failed', error: `no registered server ${id}` };
     mcpDialled.push(id);
+
+    if (mcpConnecting.has(id)) mcpOverlapped.push(id);
+    mcpConnecting.add(id);
+
+    try {
+      return await this.connectedOrSigningIn(id, connection);
+    } finally {
+      mcpConnecting.delete(id);
+    }
+  }
+
+  private async connectedOrSigningIn(id: string, connection: RecordedMcpConnection): Promise<
+    | { state: 'failed'; error: string }
+    | { state: 'authenticating'; authUrl: string; clientId?: string }
+    | { state: 'connected' }
+  > {
+    const gate = mcpConnectGate;
+
+    if (gate !== null) {
+      mcpConnectGate = null;
+      connection.client = { request: async () => { throw new SdkError(SdkErrorCode.NotConnected, 'Not connected'); }, transport: undefined };
+      gate.entered();
+      await gate.released;
+    }
 
     const provider = connection.options.transport.authProvider;
     const signIn = mcpSignInRequired.get(id) ?? pendingMcpAuthUrl;

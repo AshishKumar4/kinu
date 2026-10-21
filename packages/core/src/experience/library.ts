@@ -13,7 +13,7 @@ import {
   type PublishableCandidate,
 } from './types';
 import type { SqlExec } from '../types/primitives';
-import { sqlCheckList } from '../identity/schema';
+import { sqlCheckList } from '../utils/sql';
 import type { SqlValue } from '../types/primitives';
 import * as v from 'valibot';
 

@@ -6,7 +6,7 @@
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { ASKED, historyTurnPairs, openWorkspaceMainActor, providerAccounts, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
-import type { ActorHandle, DeliveryAnswer, InProcessDeliveries, JsonObject, OwedDelivery, ReceiptExecution } from '@kinu.run/core';
+import type { ActorHandle, ChatReport, DeliveryAnswer, InProcessDeliveries, JsonObject, OwedDelivery, ReceiptExecution } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
 import type { LanguageModel, ToolSet } from 'ai';
@@ -1659,6 +1659,15 @@ export class LocalAgentSession {
    *  question to the owner is neither until the question closes. */
   pumping(): boolean {
     return this.chat.pumpPromise !== null;
+  }
+
+  /** Its chat as the workspace's read model asks of it, as a cloud agent's isolate reports it: a plan the owner has not
+   *  answered, and whether its latest run failed. */
+  chatReport(): ChatReport {
+    return {
+      planPending: this.stores.planReviews.getActive(CHAT_SESSION_ID)?.status === 'pending',
+      lastFailed: this.eventRecorder.latestRunHeader()?.status === 'error',
+    };
   }
 
   /** Append to the run-event log, scoped to the in-flight run unless `runId` is given. Never throws. */

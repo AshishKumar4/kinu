@@ -165,7 +165,9 @@ describe('E2E Full Lifecycle', () => {
       const { calls } = await scripted.turn('Work out six times seven with eval.');
 
       // Structural: the dispatcher answers `{result}`, the shape every live suite reads.
-      expect(calls.map((call) => ({ name: call.name, result: call.result }))).toEqual([{ name: 'eval', result: { result: 42 } }]);
+      // It only computed: the host's record of the program says it changed nothing.
+      expect(calls.map((call) => ({ name: call.name, result: call.result })))
+        .toEqual([{ name: 'eval', result: { result: 42, effects: { call: expect.any(String) } } }]);
     } finally {
       await scripted.end();
       own.teardown();
