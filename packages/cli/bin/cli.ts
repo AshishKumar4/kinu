@@ -8,6 +8,10 @@ import { chatCommand } from '../src/commands/chat';
 import { printHelp, printFailure, DIM } from '../src/display';
 import { runStartupUpdateCheck } from '../src/version-check';
 import { installTurnDiagnostics } from '../src/turn-log';
+import { installTrustedRoots } from '../../pc-agent/src/daemon/trust.js';
+
+// Before any command connects: every fetch and socket this process opens trusts the roots trust.js keeps.
+installTrustedRoots();
 
 const program = buildProgram();
 
