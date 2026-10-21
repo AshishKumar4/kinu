@@ -16,7 +16,7 @@ export function StepRow({ row, onRetry }: {
   const note = row.notes.at(-1) ?? "";
 
   return (
-    <li className="p-card px-4 py-3" data-step={row.id} data-state={row.state}>
+    <Surface look="panel" as="li" className="px-4 py-3" data-step={row.id} data-state={row.state}>
       <div className="flex items-start gap-3">
         <span className="mt-px shrink-0">
           {row.state === "done" && <CheckCircleIcon size={16} className="p-success" />}
@@ -46,6 +46,6 @@ export function StepRow({ row, onRetry }: {
           </Button>
         )}
       </div>
-    </li>
+    </Surface>
   );
 }

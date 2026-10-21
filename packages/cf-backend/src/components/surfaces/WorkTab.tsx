@@ -122,11 +122,11 @@ function NeedsYou({ pendingActions, onOpenAsk, onOpenSurface, onOpenPlan }: {
   };
 
   return (
-    <Surface look="selected" className="border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] px-[18px] pt-2 pb-3 [&_.p-label]:!text-[var(--c-accent-fg)]">
+    <Surface look="selected" className="p-needs-you px-[var(--layout-inset)] pt-2 pb-3">
       <Section id="work-needs-you" title="Needs you"
         icon={<WarningCircleIcon size={14} className="p-warning" />}
         badge={<Badge>{pendingActions.length}</Badge>}>
-        <div className="divide-y divide-dashed divide-[var(--c-dash)]">
+        <div className="p-rows-dashed">
           {pendingActions.map((action) => (
             <PendingRow key={action.id} action={action} onOpenSurface={onOpenSurface} onOpen={opener(action)} />
           ))}

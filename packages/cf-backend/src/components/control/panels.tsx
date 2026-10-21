@@ -5,6 +5,7 @@ import { Loader } from '@/components/ui/Loader';
 import { ArrowClockwiseIcon, LockKeyIcon, WarningIcon } from '@phosphor-icons/react';
 import type { ControlAnswer } from '../../lib/control-api';
 import { Button } from "@/components/ui/Button";
+import { Surface } from "@/components/ui/Surface";
 
 export type Load<Value> =
   | { phase: 'loading' }
@@ -101,19 +102,19 @@ export function Notice(
   },
 ): ReactNode {
   return (
-    <div className={`t-meta p-card p-3 flex items-start gap-2 ${NOTICE_TONE[tone]}`}>
+    <Surface look="panel" className={`t-meta p-3 flex items-start gap-2 ${NOTICE_TONE[tone]}`}>
       {icon}<div className="min-w-0">{children}</div>
-    </div>
+    </Surface>
   );
 }
 
 export function Stat({ label, value, hint }: { label: string; value: string; hint?: string }): ReactNode {
   return (
-    <div className="p-card p-4">
+    <Surface look="panel" className="p-4">
       <div className="t-label">{label}</div>
       <div className="t-page-title tabular-nums mt-1">{value}</div>
       {hint !== undefined && <div className="t-meta p-text-3 mt-1">{hint}</div>}
-    </div>
+    </Surface>
   );
 }
 

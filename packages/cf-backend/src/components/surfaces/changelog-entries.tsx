@@ -19,6 +19,9 @@ import { changelogFactKey } from "./shared";
 import { timeAgo } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Dot } from "@/components/ui/Dot";
+import { GroupBlock } from "@/components/ui/Group";
+import { Pressable } from "@/components/ui/Pressable";
+import { Surface } from "@/components/ui/Surface";
 
 interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
 
@@ -200,7 +203,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   const headline = (
     <div className="min-w-0 flex-1">
       <div className="flex items-center gap-2">
-        <span className="t-body p-text flex-1 decoration-[var(--c-border-strong)] underline-offset-4 group-hover/expander:underline" title={entry.summary}>{entry.summary}</span>
+        <span className="p-quiet-underline t-body p-text flex-1 group-hover/expander:underline" title={entry.summary}>{entry.summary}</span>
         {fresh && !kept && <Dot tone="accent" />}
       </div>
       <div className="t-meta mt-1 p-text-3">{timeAgo(entry.at)}</div>
@@ -208,19 +211,18 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   );
 
   return (
-    <div className={`${grouped ? "p-3" : "p-group p-3"} ${kept ? "opacity-70" : ""}`}>
+    <GroupBlock grouped={grouped} className={`p-3 ${kept ? "opacity-70" : ""}`}>
       <div className="grid grid-cols-[var(--layout-mark-row-end)] items-start gap-2">
         <Icon size={14} className={`mt-px shrink-0 ${fresh ? "p-accent-fg" : "p-text-3"}`} />
         {hasDetails ? (
-          <button
-            type="button"
-            className="group/expander min-w-0 cursor-pointer rounded-md text-left"
+          <Pressable look="compact"
+            className="group/expander min-w-0"
             aria-expanded={expanded}
             aria-controls={detailsId}
             onClick={() => setExpanded((previous) => !previous)}
           >
             {headline}
-          </button>
+          </Pressable>
         ) : headline}
         <div className="grid auto-cols-max grid-flow-col items-center gap-1 justify-self-end">
           {entry.scaffoldVersion != null && (
@@ -244,7 +246,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       {hasDetails && <EntryDetails entry={entry} id={detailsId} expanded={expanded} rpc={rpc} onReverted={onReverted} />}
 
       <EntryScaffoldDiff rpc={rpc} version={entry.scaffoldVersion} shown={diffShown} />
-    </div>
+    </GroupBlock>
   );
 }
 
@@ -253,7 +255,7 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Work
   const { busy, notice, revert } = useEntryRevert(entry.id, rpc, onReverted);
 
   return (
-    <li className={`rounded-md border p-border px-2 py-2 ${kept ? "opacity-70" : ""}`}>
+    <Surface look="outlined" as="li" className={`px-2 py-2 ${kept ? "opacity-70" : ""}`}>
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="t-meta p-text-2">{entry.summary}</div>
@@ -283,7 +285,7 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Work
       {entry.items && entry.items.length > 0 && (
         <SubEntryList items={entry.items} className="mt-2 space-y-2 pl-2 border-l p-border" rpc={rpc} onReverted={onReverted} />
       )}
-    </li>
+    </Surface>
   );
 }
 

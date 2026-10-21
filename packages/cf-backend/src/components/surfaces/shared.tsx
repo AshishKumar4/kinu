@@ -25,7 +25,7 @@ const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
 /** An empty truncated body (file too long to align) must read differently from one clipped at {@link MAX_LINES_PER_FILE}. */
 export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?: boolean }) {
   return (
-    <pre className="t-code overflow-x-auto max-h-[360px] overflow-y-auto m-0">
+    <pre className="t-code overflow-x-auto max-h-90 overflow-y-auto m-0">
       {lines.map((l, i) => {
         const { tone, mark } = DIFF_LINE[l.kind];
 
@@ -63,7 +63,7 @@ export function CodeBlock({ children, className, wrap = false }: { children: str
     ? resource.value.html : null;
 
   return (
-    <div className={`p-code my-2 rounded-lg overflow-hidden${wrap ? " p-code-wrap" : ""}`}>
+    <div className={`p-code p-code-block my-2${wrap ? " p-code-wrap" : ""}`}>
       <div className="t-meta t-mono p-code-head flex items-center justify-between gap-2 px-3 py-1">
         <span className="truncate font-mono">{lang || "code"}</span>
         <CopyText value={code} />
@@ -210,7 +210,7 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
       },
       img({ src, alt, title }) { return <MarkdownImage key={src ?? ""} src={src} alt={alt} title={title} />; },
       table({ children }) { return <Surface look="outlined" className="p-scroll-x my-2"><table className="t-meta p-text-2 w-full border-collapse">{children}</table></Surface>; },
-      th({ children }) { return <th className="border-b p-border px-2 py-1 text-left font-medium p-fill whitespace-nowrap">{children}</th>; },
+      th({ children }) { return <th className="p-table-head border-b p-border px-2 py-1 text-left whitespace-nowrap">{children}</th>; },
       td({ children }) { return <td className="border-b p-border px-2 py-1 align-top">{children}</td>; },
       // Drop the fence's own <pre>: CodeBlock supplies one, and nesting would nest scroll containers.
       pre({ children }) { return <>{children}</>; },
@@ -223,7 +223,7 @@ export function EmptyState({ icon, title, hint, children }: {
 }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center" data-empty>
-      <div className={`mb-3 ${icon ? "p-text-3 opacity-60" : "text-[var(--c-accent)] opacity-55"}`}>
+      <div className={`mb-3 ${icon ? "p-text-3 opacity-60" : "p-accent opacity-55"}`}>
         {icon ?? <KinuMark size={30} />}
       </div>
       <p className="t-label p-text-2">{title}</p>

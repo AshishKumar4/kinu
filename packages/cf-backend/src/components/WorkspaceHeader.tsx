@@ -7,14 +7,14 @@ import { WORKSPACE_TITLE_MAX, type PanelAgent } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { composing } from "@/components/ui/form";
 import { TabOutline, useTabOutline } from "@/components/ui/TabOutline";
-import { ChatMascot, WorkspaceLogo } from "./Marks";
+import { ChatMascot, WorkspaceLogo } from "@/components/ui/Marks";
 import { useMascotOf } from "@/hooks/use-chat-mascot";
 import type { ChatActions } from "@/hooks/use-agents-nav";
 import { InspectorToggle, type InspectorControl } from "@/components/WorkbenchPanels";
 import { IconControl, IconLink } from "@/components/ui/IconControl";
 import { PressableLink } from "@/components/ui/Pressable";
-import { Surface } from "@/components/ui/Surface";
 import { Count } from "@/components/ui/Badge";
+import { BarRename } from "@/components/ui/ChromeButton";
 
 type Rename = (name: string) => Promise<void>;
 
@@ -127,7 +127,7 @@ function RenameField({ value, hint, subject, save, done }: { value: string; hint
 
   return (
     <span className="p-bar-rename">
-      <input autoFocus value={draft} maxLength={WORKSPACE_TITLE_MAX} aria-label={subject} placeholder={hint} size={Math.max(draft.length, hint.length, 6)}
+      <BarRename autoFocus value={draft} maxLength={WORKSPACE_TITLE_MAX} aria-label={subject} placeholder={hint} size={Math.max(draft.length, hint.length, 6)}
         onFocus={(event) => event.currentTarget.select()}
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
@@ -159,9 +159,7 @@ export function WorkspaceBarActions({ workspace, working, view, inspector, onAge
         <UsersThreeIcon size={16} />
         {/* The agents at work out of sight, those with no tab of their own, counted where the owner can open them. */}
         {working > 0 && (
-          <Surface look="round" as="span" className="t-micro p-agents-badge absolute -right-px -top-px min-w-[14px] px-[3px] text-center tabular-nums" data-working-agents={working}>
-            {working}
-          </Surface>
+          <Count count={working} tone="bar" data-working-agents={working} />
         )}
       </IconControl>
       <IconLink place="bar" to={`/workspace/${workspace}/settings`} aria-current={view === "settings" ? "page" : undefined} aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></IconLink>
@@ -192,7 +190,7 @@ export function FocusBar({ workspace, agent, line, leading, trailing, tabs }: {
         <PressableLink to={workspace.to} className="flex w-auto min-w-0 items-center gap-3 py-1 pr-2"
           title={`${workspace.title}: its agents, slates and plan`} data-focus-identity>
           <ChatMascot seed={agent.seed} colour={agent.colour} activity={agent.activity} size={24} />
-          <span className="flex min-w-0 flex-col leading-tight">
+          <span className="flex min-w-0 flex-col">
             <span className="t-label truncate p-text">{agent.label}</span>
             <span className="t-meta truncate p-text-3" data-focus-line>{line}</span>
           </span>

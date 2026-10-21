@@ -190,6 +190,7 @@ Define every role for all four looks in `theme.ts`. Each value below is today's 
 | `role.workspace-tab` | `--t-workspace-tab` | 13.5 | the workspace tab's title (settled) |
 | `role.field-touch` | `--t-field-touch` | `max(16px, 1em)` | a field's value on a touch screen: iOS Safari zooms the page into any field under 16 px |
 | `role.wordmark` | `--t-wordmark` | 18 | the name beside Kinu's mark (17 in the app's sidebar) |
+| `role.hero` | `--t-hero`, `--t-hero-chat` | `clamp(38px, 4vw, 46px)`, `clamp(28px, 3.4vw, 40px)` | Home's question and a new chat's (approved) |
 | `role.public-body` | `--t-public-body` (theme.ts), `t-public-body` | 15 / 1.7 | a signed-out public page's body (landing, /privacy, /terms, the deploy flow), and with 500 a row's name there (`t-public-item`) |
 | `role.public-lede` | `--t-public-lede` (theme.ts), `t-public-lede` | 17 / 1.62 | a public page's lede |
 | `role.public-control` | `--t-public-control` (theme.ts), `Button size="lg"` | 14, 38 tall | a public page's call to action |
@@ -227,6 +228,11 @@ read one definition: someone not yet in the app reads at the public pages' size,
   | `tool-list` | 400 |
   | `tool-places` | 220 |
   | `reader` | 760 |
+
+  Past these, each fixed measure a screen keeps is named once beside them, its use in a comment: grid templates
+  (`lead`, `detail`, `mark-row`, `tool-row`, `exploration`…), the indents that line words up under a mark
+  (`under-icon`, `file-meta`, `mark-row-inset`), and a few heights and widths with their reason (`welcome-step`,
+  `questions`, `preview-pane`). A new one goes there, never into a class.
 
 ### 1.5 Radii (`RADII` in `theme.ts`)
 

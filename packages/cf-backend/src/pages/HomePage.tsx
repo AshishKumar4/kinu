@@ -54,9 +54,9 @@ function MissionHome() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:content-center md:px-8 lg:grid-cols-[var(--layout-home)]">
+      <main className="mx-auto grid min-h-full w-full max-w-[var(--layout-home-frame)] grid-cols-1 content-start gap-6 px-6 py-[var(--layout-home-pad)] md:content-center md:px-8 lg:grid-cols-[var(--layout-home)]">
         <header className="col-span-full mb-3">
-          <h1 className="t-page-title text-[clamp(38px,4vw,46px)] p-text">
+          <h1 className="t-page-title t-hero p-text">
             What do you wanna work on?
           </h1>
         </header>

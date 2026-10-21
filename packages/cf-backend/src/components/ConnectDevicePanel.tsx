@@ -136,7 +136,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
       {/* Said before the command is made (L111 #6): a machine connected from a workspace is that workspace's at once. */}
       {workspace !== null && (
         <p data-connect-grant className="t-meta p-text-1">
-          Connected from here, it is <span className="font-medium">{workspace}</span>'s at once: its agents use this machine
+          Connected from here, it is <strong>{workspace}</strong>'s at once: its agents use this machine
           without asking, until you take it back under Account settings → Devices. Before it links, the command shows the folder it shares.
         </p>
       )}

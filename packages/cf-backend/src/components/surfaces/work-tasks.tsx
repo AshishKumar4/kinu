@@ -5,10 +5,11 @@ import { taskSettled, type AgentTask, type AgentTaskTree, type PanelAgent, type 
 import { toneInk } from "@/components/ui/Status";
 import { Pressable } from "@/components/ui/Pressable";
 import { InlineAction } from "@/components/ui/InlineAction";
+import { GroupBlock } from "@/components/ui/Group";
 
 const STATUS_META = {
   open: { icon: CircleDashedIcon, tone: toneInk("neutral"), label: "Open", weight: "regular", text: "p-text-2" },
-  active: { icon: CircleIcon, tone: toneInk("live"), label: "Active", weight: "fill", text: "p-text font-medium" },
+  active: { icon: CircleIcon, tone: toneInk("live"), label: "Active", weight: "fill", text: "t-item p-text" },
   done: { icon: CheckCircleIcon, tone: toneInk("success"), label: "Done", weight: "fill", text: "p-text-3 line-through" },
   dropped: { icon: ProhibitIcon, tone: toneInk("neutral"), label: "Dropped", weight: "regular", text: "p-text-3 line-through" },
 } satisfies Record<TaskStatus, { icon: typeof CircleIcon; tone: string; label: string; weight: "fill" | "regular"; text: string }>;
@@ -45,7 +46,7 @@ function TaskRow({ task, depth, owner, onOpenOwner }: { task: AgentTask; depth: 
         weight={meta.weight}
         className={`${meta.tone} shrink-0 mt-px`}
       />
-      <code className="t-meta t-mono p-text-3 shrink-0 mt-[3px] w-7">{task.id}</code>
+      <span className="flex h-5 shrink-0 items-center"><code className="t-meta t-mono p-text-3 w-7">{task.id}</code></span>
       <span className={`t-body min-w-0 break-words ${meta.text}`} data-task-title>
         {task.title}
         <OwnerMark owner={owner} onOpenOwner={onOpenOwner} />
@@ -57,10 +58,10 @@ function TaskRow({ task, depth, owner, onOpenOwner }: { task: AgentTask; depth: 
 
 export function TaskTree({ task, grouped = false, owner, onOpenOwner }: { task: AgentTaskTree; grouped?: boolean } & TaskOwnership) {
   return (
-    <div className={grouped ? "px-3 py-2" : "p-group px-3 py-2"}>
+    <GroupBlock grouped={grouped} className="px-3 py-2">
       <TaskRow task={task} depth={0} owner={owner} onOpenOwner={onOpenOwner} />
       {task.subtasks.map((sub) => <TaskRow key={sub.id} task={sub} depth={1} owner={owner} onOpenOwner={onOpenOwner} />)}
-    </div>
+    </GroupBlock>
   );
 }
 

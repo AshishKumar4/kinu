@@ -39,6 +39,7 @@ import { usePlanPages } from "./use-plan-pages";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Surface } from "@/components/ui/Surface";
+import { Pressable } from "@/components/ui/Pressable";
 
 // A surface drawn only once it is chosen loads with its first view, outside the workspace's first chunk.
 const FilesSurface = lazyRoute<FilesSurfaceProps>(async () => {
@@ -166,7 +167,7 @@ function ListingStatus({ error, starting = [], onRetry }: { error: string | null
 
 /** A page, and Environment's terminal and screen, fill the column edge to edge; the rest scroll inside its margins. */
 function bodyFitFor(surface: SurfaceKind | null, previewSelected: boolean): string {
-  return previewSelected || surface === "Environment" ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
+  return previewSelected || surface === "Environment" ? "overflow-hidden" : "overflow-y-auto py-[var(--layout-inset)] pl-[var(--layout-inset)] pr-6";
 }
 
 export function WorkSurface(props: WorkSurfaceProps) {
@@ -287,18 +288,17 @@ export function WorkSurface(props: WorkSurfaceProps) {
     <Surface look="chrome" className="@container flex flex-col h-full">
       <InspectorBar surface={surface} pages={pages} tools={tools} choose={choose} trailing={<>
         {chip !== null && (
-          <button
-            type="button"
+          <Pressable look="compact" selected
             onClick={() => choose(chip.surface)}
             data-preview-ready
             title={chip.title}
             aria-label={`Preview ready: ${chip.title}`}
-            className="t-micro inline-flex shrink-0 items-center gap-2 rounded-full border p-border p-selected px-2 py-1 p-accent-fg transition-colors hover:p-hover @[28rem]:px-2"
+            className="t-micro inline-flex shrink-0 items-center gap-2 border p-border px-2 py-1 p-accent-fg"
           >
             <StatusDot tone="live" />
             {/* A narrow column keeps the pulse and gives its words to the pages; the name is the control's either way. */}
             <span className="hidden @[28rem]:inline">Preview ready</span>
-          </button>
+          </Pressable>
         )}
       </>} />
 

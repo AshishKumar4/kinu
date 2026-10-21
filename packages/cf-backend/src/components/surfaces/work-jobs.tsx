@@ -11,6 +11,7 @@ import { jobName, jobPhase, lastOutputLines, shortJobId, timeAgo, type Inspected
 import { showing, detach } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { toneInk, type StatusTone } from "@/components/ui/Status";
+import { GroupBlock } from "@/components/ui/Group";
 
 /** How a background job stands, here and on the operator's drilldown: running is live; serving is healthy. */
 export const JOB_TONE = {
@@ -119,7 +120,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
   const interrupted = interruptionNote(job, Date.now());
 
   return (
-    <div className={grouped ? "p-3" : "p-group p-3"}>
+    <GroupBlock grouped={grouped} className="p-3">
       <div className="grid grid-cols-[var(--layout-mark-row-end)] items-start gap-2">
         <Icon size={15} className={`${m.tone} shrink-0 mt-px ${m.spin ? "animate-spin" : ""}`}
           weight={live ? "bold" : "fill"} />
@@ -165,6 +166,6 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
           )}
         </div>
       </div>
-    </div>
+    </GroupBlock>
   );
 }

@@ -22,12 +22,12 @@ export function MailBody({ text }: { text: string }) {
   return (
     <div className="space-y-2">
       <div className="t-body space-y-3 p-text">
-        {own.split(/\n{2,}/u).map((paragraph, index) => <p key={index} className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{paragraph}</p>)}
+        {own.split(/\n{2,}/u).map((paragraph, index) => <p key={index} className="whitespace-pre-wrap break-words wrap-anywhere">{paragraph}</p>)}
       </div>
       {quote !== null && (shown
-        ? <p data-mail-quote className="t-body whitespace-pre-wrap break-words border-l-2 p-border pl-3 p-text-3 [overflow-wrap:anywhere]">{quote}</p>
-        : <button type="button" onClick={() => setShown(true)} data-mail-show-quote aria-label="Show the quoted mail" title="Show the quoted mail"
-          className="t-meta rounded-full bg-[var(--c-hover)] px-2 p-text-3 hover:p-text">•••</button>)}
+        ? <p data-mail-quote className="t-body whitespace-pre-wrap break-words border-l-2 p-border pl-3 p-text-3 wrap-anywhere">{quote}</p>
+        : <Pressable look="compact" onClick={() => setShown(true)} data-mail-show-quote aria-label="Show the quoted mail" title="Show the quoted mail"
+          className="t-meta px-2 p-text-3 hover:p-text">•••</Pressable>)}
     </div>
   );
 }
@@ -36,7 +36,7 @@ export function SealedMailHtml({ html }: { html: string }) {
   const height = Math.min(520, Math.max(220, Math.round(html.replace(/<[^>]+>/gu, "").length * 0.85)));
 
   return (
-    <Surface look="outlined" className="resize-y overflow-hidden bg-white" style={{ height }}>
+    <Surface look="paper" edged className="resize-y overflow-hidden" style={{ height }}>
       <iframe title="Message" sandbox="" referrerPolicy="no-referrer" srcDoc={sandboxedHtml(html)} data-mail-sealed className="block h-full w-full" />
     </Surface>
   );

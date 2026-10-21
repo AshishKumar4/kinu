@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 import { ArrowSquareOutIcon, PlugsConnectedIcon } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
 import { settingsPath } from "@/components/SettingsRail";
+import { Surface } from "@/components/ui/Surface";
 
 interface ReachConnection {
   readonly text: string;
@@ -51,7 +52,7 @@ export function ForkReachPanel({ title, reaches, onOpen }: {
   const shown = personReaches(reaches);
 
   return (
-    <div className="h-full overflow-y-auto px-[18px] py-[18px]" data-fork-reach>
+    <div className="h-full overflow-y-auto p-[var(--layout-inset)]" data-fork-reach>
       <div className="mx-auto max-w-xl space-y-4">
         <header className="flex items-start gap-3">
           <PlugsConnectedIcon size={20} className="mt-px shrink-0 p-accent-fg" />
@@ -61,12 +62,12 @@ export function ForkReachPanel({ title, reaches, onOpen }: {
           </div>
         </header>
         <ul className="space-y-2">
-          {shown.length === 0 && <li className="t-meta p-card px-4 py-3 p-text-3">It was published calling nothing of its publisher&apos;s. It runs on its own.</li>}
+          {shown.length === 0 && <Surface look="panel" as="li" className="t-meta px-4 py-3 p-text-3">It was published calling nothing of its publisher&apos;s. It runs on its own.</Surface>}
           {shown.map((namespace) => {
             const connection = reachConnection(namespace);
 
             return (
-              <li key={namespace} className="p-card flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:gap-4">
+              <Surface look="panel" as="li" key={namespace} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:gap-4">
                 <div className="min-w-0 flex-1">
                   <span className="t-body t-mono p-text">{namespace}</span>
                   <p className="t-meta mt-px p-text-2">{connection.text}</p>
@@ -76,7 +77,7 @@ export function ForkReachPanel({ title, reaches, onOpen }: {
                     <ArrowSquareOutIcon size={12} /> {connection.label}
                   </Link>
                 )}
-              </li>
+              </Surface>
             );
           })}
         </ul>

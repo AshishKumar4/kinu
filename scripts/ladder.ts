@@ -314,6 +314,17 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
+    run: 'bun test --timeout=0 tests/design-system.test.ts',
+    label: 'Design system scan',
+    tier: 'push',
+    seconds: 0.45, // Measured 2026-10-21 on the 24-thread workstation: 0.45 s.
+    catches: 'a page or feature component that draws its own ground, edge, radius, type or raw control instead of '
+      + "taking it from ui/, an arbitrary value other than a --layout-* constant, and a colour, font size or radius in "
+      + "index.css outside theme.ts and the role table",
+    blind: 'class names built at run time from parts, and what a component computes in the browser (computed-style.ts)',
+    inputs: { kind: 'derived', imports: CF_BACKEND_SOURCES },
+  },
+  {
     run: 'bun scripts/pattern-inventory.ts',
     label: 'Pattern inventory',
     tier: 'local',

@@ -72,7 +72,7 @@ function Shell() {
     <OwnerAlerts />
     <Surface look="page" className="isolate flex h-screen w-screen flex-col p-text overflow-hidden md:flex-row">
       <AppBackground />
-      <header className={`h-14 shrink-0 items-center justify-between border-b p-border p-sidebar px-3 md:hidden ${ownBar ? "hidden" : "flex"}`}>
+      <Surface look="chrome" as="header" className={`h-14 shrink-0 items-center justify-between border-b p-border px-3 md:hidden ${ownBar ? "hidden" : "flex"}`}>
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="sm" icon={<ListIcon size={14} />} aria-label="Open menu" onClick={() => setDrawerOpen(true)} />
           <Link to="/" aria-label="Kinu home" className="flex items-center px-2 py-1">
@@ -83,14 +83,14 @@ function Shell() {
           <FeedbackButton compact />
           <NewWorkspaceIconButton className="size-9" />
         </div>
-      </header>
+      </Surface>
 
       <SidebarRail folded={filling} />
 
       {drawerOpen && (
         <div className="fixed inset-0 z-50 animate-fade-in md:hidden">
           <div className="p-scrim absolute inset-0" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
-          <Surface look="chrome" as="aside" className="absolute inset-y-0 left-0 w-72 max-w-[85vw] border-r p-border p-shadow-overlay" data-drawer role="dialog" aria-modal="true" aria-label="Menu">
+          <Surface look="chrome" as="aside" className="absolute inset-y-0 left-0 w-72 max-w-[var(--layout-nav-drawer)] border-r p-border p-shadow-overlay" data-drawer role="dialog" aria-modal="true" aria-label="Menu">
             <Sidebar />
           </Surface>
         </div>

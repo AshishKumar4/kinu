@@ -19,10 +19,9 @@ import { timeAgo, workspaceDisplayTitle } from "@kinu.run/core";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { QualityView } from "./evolution-panels";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";
-import { ChatMascot } from "@/components/Marks";
+import { ChatMascot } from "@/components/ui/Marks";
 import { useMascotOf } from "@/hooks/use-chat-mascot";
-import { mailRowCls, mailTime } from "@/components/mail/ImportantMailRow";
-import { Link } from "react-router-dom";
+import { MAIL_ROW, mailTime } from "@/components/mail/ImportantMailRow";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import * as v from "valibot";
@@ -32,6 +31,8 @@ import { Group } from "@/components/ui/Group";
 import { IconControl } from "@/components/ui/IconControl";
 import { Chip } from "@/components/ui/Chip";
 import { Surface } from "@/components/ui/Surface";
+import { PressableLink } from "@/components/ui/Pressable";
+import { TextInput } from "@/components/ui/Field";
 
 type Fact = Awaited<ReturnType<OrchestratorAgent["getFacts"]>>[number];
 
@@ -127,16 +128,16 @@ function Mail({ mail }: { mail: AgentMail }) {
       badge={mail.unread > 0 ? <Badge>{mail.unread}</Badge> : undefined}>
       <Group>
         {mail.threads.map((thread) => (
-          <Link key={thread.id} to={`/mail/${encodeURIComponent(thread.id)}`} className={mailRowCls(false)} data-agent-mail-thread={thread.id}>
+          <PressableLink look="flush" key={thread.id} to={`/mail/${encodeURIComponent(thread.id)}`} className={MAIL_ROW} data-agent-mail-thread={thread.id}>
             <span className="flex min-w-0 items-baseline gap-2">
-              <span className={`t-body min-w-0 flex-1 truncate ${thread.unread ? "font-semibold p-text" : "p-text-2"}`}>
+              <span className={`t-body min-w-0 flex-1 truncate ${thread.unread ? "t-label p-text" : "p-text-2"}`}>
                 {thread.from.map((party) => party.name ?? party.address).join(", ")}
               </span>
               <span className="t-meta shrink-0 tabular-nums p-text-3">{mailTime(thread.at)}</span>
             </span>
             <span className={`t-body block truncate ${thread.unread ? "p-text" : "p-text-2"}`}>{thread.subject}</span>
             <span className="t-meta block truncate p-text-3">{thread.verified ? thread.snippet : `Not verified · ${thread.snippet}`}</span>
-          </Link>
+          </PressableLink>
         ))}
       </Group>
     </Section>
@@ -167,12 +168,8 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
     <Section id="memory" title="Memory" icon={<BrainIcon size={14} className="p-text-2" />}
       badge={facts.length + notes.length > 0 ? <Badge>{facts.length + notes.length}</Badge> : undefined}>
       <div className="space-y-3">
-        <Surface look="tile" as="label" className="flex h-8 items-center gap-2 border p-border px-2" data-focus-box>
-          <MagnifyingGlassIcon size={13} className="shrink-0 p-text-3" aria-hidden />
-          <input value={search} onChange={(event) => { setSearch(event.target.value); onSearchMemory(event.target.value); }}
-            placeholder="Search memory" aria-label="Search memory"
-            className="t-body min-w-0 flex-1 bg-transparent p-text placeholder:p-text-3" />
-        </Surface>
+        <TextInput value={search} onChange={(event) => { setSearch(event.target.value); onSearchMemory(event.target.value); }}
+          placeholder="Search memory" aria-label="Search memory" before={<MagnifyingGlassIcon size={13} className="block" aria-hidden />} />
 
         {/* The page's notice gives the reason once; this offers the retry. */}
         {read.state === "failed" && <LoadFailure what="memory" onRetry={read.retry} />}
@@ -198,7 +195,7 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
         {!searching && memoryContent !== "" && (
           <details className="group/memory">
             <summary className="t-meta cursor-pointer p-text-3 hover:p-text">Memory file</summary>
-            <div data-memory-file className="mt-2 max-h-[420px] overflow-y-auto p-card px-4 py-3 prose-chat p-text"><MarkdownContent content={memoryContent} /></div>
+            <Surface look="panel" data-memory-file className="mt-2 max-h-105 overflow-y-auto px-4 py-3 prose-chat p-text"><MarkdownContent content={memoryContent} /></Surface>
           </details>
         )}
 

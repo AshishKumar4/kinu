@@ -7,7 +7,7 @@ import { type WorkspaceEntry } from '@kinu.run/core';
 import { Button } from "@/components/ui/Button";
 import { showing, detach } from "@kinu.run/core/obs";
 import { Effect } from "effect";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { FileIcon, FolderIcon, GitBranchIcon, LinkIcon, type Icon } from "@phosphor-icons/react";
@@ -19,6 +19,11 @@ import { registerWorkspace } from "@/lib/user-api";
 import { getBlueprint, signedInEmail } from "@/lib/shared-api";
 import { Notice } from "@/components/ui/Notice";
 import { Surface } from "@/components/ui/Surface";
+
+/** A tree row's depth, for `p-tree-indent`. */
+function treeDepth(depth: number): CSSProperties & { readonly "--tree-depth": string } {
+  return { "--tree-depth": String(depth) };
+}
 
 export function SecretWarning({ warnings, children }: { warnings: BlueprintView["warnings"]; children: ReactNode }) {
   if (warnings.length === 0) return null;
@@ -50,14 +55,14 @@ function BlueprintBody({ view }: { view: BlueprintView }) {
         {personReaches(view.reaches).length === 0 ? (
           <p className="t-meta p-text-3">It was published calling nothing of its publisher&apos;s. A fork runs on its own.</p>
         ) : (
-          <ul className="p-card space-y-1 px-4 py-3">
+          <Surface look="panel" as="ul" className="space-y-1 px-4 py-3">
             {personReaches(view.reaches).map((namespace) => (
               <li key={namespace} className="t-body flex flex-wrap items-baseline gap-x-2">
                 <span className="font-mono p-text">{namespace}</span>
                 <span className="t-meta p-text-2">{reachConnection(namespace).text}</span>
               </li>
             ))}
-          </ul>
+          </Surface>
         )}
       </section>
       <SecretWarning warnings={view.warnings}>
@@ -65,19 +70,19 @@ function BlueprintBody({ view }: { view: BlueprintView }) {
       </SecretWarning>
       <section className="space-y-2" aria-label="Files">
         <h2 className="t-label">Files</h2>
-        <ul className="t-meta t-mono p-card px-4 py-3">
+        <Surface look="panel" as="ul" className="t-meta t-mono px-4 py-3">
           {view.entries.map((entry) => {
             const depth = entry.path.split("/").length - 1;
             const EntryIcon = ENTRY_ICON[entry.kind];
 
             return (
-              <li key={entry.path} className="flex items-center gap-2 py-px p-text-2" style={{ paddingLeft: `${depth * 14}px` }}>
+              <li key={entry.path} className="p-tree-indent flex items-center gap-2 py-px p-text-2" style={treeDepth(depth)}>
                 <EntryIcon size={12} className="p-text-3" />
                 {entry.path.split("/").at(-1)}
               </li>
             );
           })}
-        </ul>
+        </Surface>
       </section>
     </>
   );

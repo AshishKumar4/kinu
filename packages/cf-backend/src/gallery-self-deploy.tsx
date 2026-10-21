@@ -20,7 +20,7 @@ import { KinuLogo } from "@/components/ui/KinuLogo";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Switch } from "@/components/ui/Switch";
 import { inputCls } from "@/components/ui/form";
-import { ChatMascot } from "@/components/Marks";
+import { ChatMascot } from "@/components/ui/Marks";
 
 /** The dots: Start, Ready (and its Domain step), Deploying, Live. */
 const SCREENS = ["start", "manage", "ready", "domain", "deploying", "live"] as const;

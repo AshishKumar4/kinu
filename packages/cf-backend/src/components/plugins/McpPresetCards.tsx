@@ -12,7 +12,7 @@ import { beginConnect, signInMcpServer, type ConnectRun } from "@/lib/connect-wi
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
-import { ROW_ACTION, Row } from "@/components/ui/Row";
+import { Row, RowAction } from "@/components/ui/Row";
 import { Status } from "@/components/ui/Status";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
@@ -195,18 +195,16 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
     );
   } else if (asking) {
     trailing = (
-      <button type="button" data-plugin-cancel onClick={() => setOpenToken(false)}
-        aria-label={`Cancel ${preset.title}`} title="Cancel" className={ROW_ACTION}>
+      <RowAction data-plugin-cancel onClick={() => setOpenToken(false)} aria-label={`Cancel ${preset.title}`} title="Cancel">
         <XIcon size={14} />
-      </button>
+      </RowAction>
     );
   } else {
     trailing = (
-      <button type="button" data-plugin-add onClick={(...args: Parameters<typeof connect>) => detach(Effect.promise(async () => connect(...args)))} disabled={busy}
-        aria-label={`Add ${preset.title}`} title={`Add ${preset.title}`}
-        className={ROW_ACTION}>
+      <RowAction data-plugin-add onClick={(...args: Parameters<typeof connect>) => detach(Effect.promise(async () => connect(...args)))} disabled={busy}
+        aria-label={`Add ${preset.title}`} title={`Add ${preset.title}`}>
         <PlusIcon size={16} />
-      </button>
+      </RowAction>
     );
   }
 

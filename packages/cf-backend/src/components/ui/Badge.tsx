@@ -19,7 +19,7 @@ export function Badge({ tone = "neutral", icon, title, children, className, ...d
 }
 
 /** A count over a mark (an avatar's unread, a bar icon's open runs): `accent` filled and ringed in the ground it sits on,
- *  `quiet` on the fill; 9 and more say 9+. */
-export function Count({ count, tone = "accent", label, ...data }: { count: number; tone?: "accent" | "quiet"; label?: string } & Readonly<Record<`data-${string}`, string | number>>) {
+ *  `quiet` on the fill, `bar` the accent at the quiet one's size, ringed in the workspace bar's ground; 9 and more say 9+. */
+export function Count({ count, tone = "accent", label, ...data }: { count: number; tone?: "accent" | "quiet" | "bar"; label?: string } & Readonly<Record<`data-${string}`, string | number>>) {
   return <span className={`p-count p-count-${tone} t-micro tabular-nums`} aria-label={label} {...data}>{count > 9 ? "9+" : count}</span>;
 }

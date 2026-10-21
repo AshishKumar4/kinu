@@ -10,7 +10,7 @@ import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { isPlaceholderWorkspaceTitle, rosterHeadline, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { SidebarAgents } from "./SidebarAgents";
-import { ChatMascot, WorkspaceLogo } from "./Marks";
+import { ChatMascot, WorkspaceLogo } from "@/components/ui/Marks";
 import { useMascotOf } from "@/hooks/use-chat-mascot";
 import { AgentStatusMark } from "./AgentStatus";
 import { RemoveWorkspaceDialog } from "./RemoveWorkspaceDialog";
@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
 import { TextInput } from "@/components/ui/Field";
 import { NavRow, NavRowButton } from "@/components/ui/NavRow";
+import { Surface } from "@/components/ui/Surface";
 
 function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
   const { to, label, Icon } = item;
@@ -69,7 +70,7 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
   const said = error ?? waiting?.text ?? null;
 
   return (
-    <form onSubmit={submit} className="p-card px-1 py-1">
+    <Surface look="panel" as="form" onSubmit={submit} className="px-1 py-1">
       <div className="flex items-center gap-1">
         <TextInput size="sm" className="min-w-0 flex-1" autoFocus value={draft} maxLength={WORKSPACE_TITLE_MAX} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => {
             if (event.key !== "Escape" || composing(event.nativeEvent) || saving) return;
@@ -85,7 +86,7 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
           {said}
         </div>
       )}
-    </form>
+    </Surface>
   );
 }
 

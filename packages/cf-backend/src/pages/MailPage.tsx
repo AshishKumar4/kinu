@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearchParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { Button, ICON_ON_PHONE, buttonClass } from "@/components/ui/Button";
@@ -20,6 +20,7 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import { createMailAddress, listMailThreads, readMailBoxes, type MailBoxes } from "@/lib/mail-api";
 import { MailAddressField, useMailUsername } from "@/components/mail/MailAddressField";
 import { TextInput } from "@/components/ui/Field";
+import { Surface } from "@/components/ui/Surface";
 
 
 
@@ -28,18 +29,18 @@ function CreateAddress({ domain, suggested, onCreated }: { domain: string; sugge
   const { username, setUsername, state } = useMailUsername(suggested);
   const { busy, error, run } = useLabelledStep(onCreated);
 
-  const create = (event: FormEvent<HTMLFormElement>): void => {
+  const create = (event: { preventDefault: () => void }): void => {
     event.preventDefault();
     run("Creating", async () => { await createMailAddress(username); });
   };
 
   return (
-    <form data-mail-create onSubmit={create} className="p-card mt-5 max-w-md space-y-3 p-4">
+    <Surface look="panel" as="form" data-mail-create onSubmit={create} className="mt-5 max-w-md space-y-3 p-4">
       <h2 className="t-item p-text">Your email address</h2>
       <MailAddressField domain={domain} username={username} state={state} onChange={setUsername} disabled={busy !== null} />
       {error !== null && <p role="alert" className="t-body p-danger">{error}</p>}
       <Button variant="primary" size="md" type="submit" disabled={busy !== null || state !== "available"}>{busy === null ? "Create address" : "Creating…"}</Button>
-    </form>
+    </Surface>
   );
 }
 
@@ -79,7 +80,7 @@ function ThreadList({ resource, view, boxes, path, owner, reading, onOpen, onRet
   return <>
     {resource.status === "loading" && <div role="status" aria-label="Loading mail" className="p-4"><Loader /></div>}
     {resource.status === "error" && <LoadFailure what="your mail" message={resource.message} onRetry={onRetry} className="p-4" />}
-    {loaded !== null && <div data-mail-list aria-label={view} className="divide-y divide-dashed divide-[var(--c-dash)] border-b border-dashed border-[var(--c-dash)]">
+    {loaded !== null && <div data-mail-list aria-label={view} className="p-rows-dashed border-b border-dashed p-border-dash">
       {threads.map((thread) => {
         const box = boxes.find((each) => each.path === thread.path);
         const from = thread.from[0];
@@ -212,7 +213,7 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
         </>
       )}
 >
-      <section className={`min-w-0 overflow-y-auto p-border lg:w-[400px] lg:shrink-0 lg:border-r ${opened === null ? "flex-1 lg:flex-none" : "hidden lg:block"}`}>
+      <section className={`min-w-0 overflow-y-auto p-border lg:w-[var(--layout-tool-list)] lg:shrink-0 lg:border-r ${opened === null ? "flex-1 lg:flex-none" : "hidden lg:block"}`}>
         {navigation.error !== null && <p role="alert" className="t-body px-4 pt-3 p-danger">{navigation.error}</p>}
         {waiting ? <div data-mail-no-assistant className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
           <p className="t-body p-text-2">No assistant yet</p><Button variant="primary" size="md" onClick={() => setInstalling(true)}>Set up your assistant</Button>

@@ -25,6 +25,7 @@ import { readExplore, type ExploreItem } from "@/lib/explore-api";
 import { readGallerySlate, reportListing, starListing } from "@/lib/gallery-api";
 import { Group } from "@/components/ui/Group";
 import { Surface } from "@/components/ui/Surface";
+import { TextArea } from "@/components/ui/Field";
 
 function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; onClose: () => void; onSent: () => void }) {
   const [reason, setReason] = useState("");
@@ -48,8 +49,7 @@ function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; o
         </div>
       )}>
       <p className="t-body p-text-2">Say what is wrong with it. The people who run Kinu read every report.</p>
-      <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={3} maxLength={500} aria-label="What is wrong" data-gallery-report-reason
-        className="t-body w-full rounded-md border p-border bg-[var(--c-field)] px-2 py-1 p-text outline-none placeholder:p-text-3" />
+      <TextArea value={reason} onChange={(event) => setReason(event.target.value)} rows={3} maxLength={500} aria-label="What is wrong" data-gallery-report-reason />
       {failure !== null && <p role="alert" className="t-meta p-danger">{failure}</p>}
     </Modal>
   );
@@ -156,7 +156,7 @@ export default function GallerySlatePage() {
         </>
       )}>
       <div className="grid gap-6 lg:grid-cols-[var(--layout-detail)]">
-        <Surface look="outlined" className="relative aspect-[2/1] overflow-hidden" data-gallery-hero>
+        <Surface look="outlined" className="relative aspect-2/1 overflow-hidden" data-gallery-hero>
           <SlatePicture workspace={listing.workspace} slate={{ id: listing.slate, title: listing.title, picture: listing.picture }} at={galleryPicturePath}
             className="absolute inset-0 size-full object-cover object-left-top" fallback={<TypesetCover title={listing.title} line={listing.line} />} />
         </Surface>

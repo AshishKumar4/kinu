@@ -69,7 +69,7 @@ export function EventRow({ icon: Mark, tone, label, source, body, detail, state,
   const who = (
     <span data-event-source className="p-pill-source">
       {label}
-      {source !== undefined && <span className="ml-2 font-normal p-text-3">{source}</span>}
+      {source !== undefined && <span className="p-pill-source-note">{source}</span>}
     </span>
   );
 

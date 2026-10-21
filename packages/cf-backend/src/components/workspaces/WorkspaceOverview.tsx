@@ -9,7 +9,7 @@ import { useWorkspaceWork } from "@/components/surfaces/use-workspace-work";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { AgentStatusMark } from "@/components/AgentStatus";
 import { GitHubSection } from "@/components/workspaces/GitHubSection";
-import { WorkspaceLogo } from "@/components/Marks";
+import { WorkspaceLogo } from "@/components/ui/Marks";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Surface } from "@/components/ui/Surface";
 import { Pressable } from "@/components/ui/Pressable";

@@ -252,16 +252,10 @@ function Tissue({ known, temperament }: { readonly known: { current: MeshActivit
       data-app-background
       aria-hidden="true"
       data-background-temperament={temperament}
-      className={`pointer-events-none fixed inset-0 -z-10 [filter:blur(.4px)] ${MASK[temperament]}`}
+      className="p-backdrop pointer-events-none fixed inset-0 -z-10"
     />
   );
 }
-
-/** Quiet, the middle all but empties: the field lives at the page's edges and fades well before the copy. */
-const MASK: Record<MeshTemperamentName, string> = {
-  today: '[mask-image:radial-gradient(ellipse_55%_55%_at_58%_50%,rgba(0,0,0,.7),black_100%)]',
-  quiet: '[mask-image:radial-gradient(ellipse_62%_62%_at_58%_50%,transparent_35%,rgba(0,0,0,.6)_70%,black_100%)]',
-};
 
 export function AppBackground(): ReactElement | null {
   const { pathname } = useLocation();

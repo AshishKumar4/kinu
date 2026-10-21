@@ -6,7 +6,7 @@
  */
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { WorkspaceLogo } from "@/components/Marks";
+import { WorkspaceLogo } from "@/components/ui/Marks";
 
 export const TILE_GRID = "grid gap-5 grid-cols-[var(--layout-tiles)]";
 

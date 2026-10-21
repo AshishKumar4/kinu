@@ -184,7 +184,7 @@ function NotesBar({ open, onToggle }: { open: boolean; onToggle: () => void }) {
 
   return (
     <footer className="flex shrink-0 items-center gap-2 border-t p-border px-3 py-2" data-notes-bar>
-      <Pressable look="compact" onClick={onToggle} aria-expanded={open}
+      <Pressable look="compact" onClick={onToggle} aria-expanded={open} open={open}
         className={`t-meta -ml-2 inline-flex items-center gap-2 px-1 py-1 ${open ? "p-text" : "p-text-2 hover:p-text"}`}>
         <ChatCircleDotsIcon size={14} className="p-info" />
         {notes.notes.length} {notes.notes.length === 1 ? "note" : "notes"} for the agent

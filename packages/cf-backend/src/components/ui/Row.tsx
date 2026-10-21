@@ -4,7 +4,7 @@
  * so the dots of a column stack · the ⋯ or `+`. A device's Sandbox switch is a track of its own before the last
  * (`control`); what a row says past its two lines sits under the name (`below`). On a phone the row is tile · name · ⋯.
  */
-import type { ComponentType, ReactNode } from "react";
+import type { ComponentProps, ComponentType, ReactNode } from "react";
 
 /** A 32 tile for a thing with no brand mark (`BrandMark` at 18 draws the same box for one that has one). */
 export function RowTile({ icon: Icon }: { icon: ComponentType<{ size?: number; className?: string }> }) {
@@ -50,3 +50,8 @@ export function Row({ tile, title, meta, status, control, action, below, selecte
 
 /** The `+` of an addable row: a 28 ghost square in the row's last cell, on the x of a connected row's ⋯. */
 export const ROW_ACTION = "p-row-action";
+
+/** The row's own small press at its end (a ⋯'s place): `+` to add, × to cancel. */
+export function RowAction({ type = "button", ...rest }: Omit<ComponentProps<"button">, "className">) {
+  return <button type={type} className={ROW_ACTION} {...rest} />;
+}

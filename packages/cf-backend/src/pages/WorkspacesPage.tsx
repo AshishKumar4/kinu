@@ -118,10 +118,10 @@ export default function WorkspacesPage() {
         )}
 
         {!roster.loading && entries.length === 0 && error === null && (
-          <div className="p-card px-5 py-8 text-center">
+          <Surface look="panel" className="px-5 py-8 text-center">
             <p className="t-body p-text-3">No workspaces yet.</p>
             <Link to={APP_ROUTES.newWorkspace} className="t-control mt-2 inline-block p-accent-fg">Create one →</Link>
-          </div>
+          </Surface>
         )}
 
         {!loading && entries.length > 0 && shown.length === 0 && (

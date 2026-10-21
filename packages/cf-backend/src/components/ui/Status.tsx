@@ -6,19 +6,14 @@
 export type StatusTone = "success" | "live" | "accent" | "warning" | "danger" | "info" | "neutral";
 
 const TONE = {
-  success: { dot: "p-dot-success", ink: "p-success", fill: "var(--c-success)" },
-  live: { dot: "p-dot-accent p-dot-pulse", ink: "p-accent-fg", fill: "var(--c-accent)" },
-  accent: { dot: "p-dot-accent", ink: "p-accent-fg", fill: "var(--c-accent)" },
-  warning: { dot: "p-dot-warning", ink: "p-warning", fill: "var(--c-warning)" },
-  danger: { dot: "p-dot-danger", ink: "p-danger", fill: "var(--c-danger)" },
-  info: { dot: "p-dot-info", ink: "p-info", fill: "var(--c-info)" },
-  neutral: { dot: "p-dot-neutral", ink: "p-text-3", fill: "var(--c-text-3)" },
-} satisfies Record<StatusTone, { dot: string; ink: string; fill: string }>;
-
-/** A tone's colour, for a mark drawn in it (a bar, a band) rather than a dot or a word. */
-export function toneFill(tone: StatusTone): string {
-  return TONE[tone].fill;
-}
+  success: { dot: "p-dot-success", ink: "p-success" },
+  live: { dot: "p-dot-accent p-dot-pulse", ink: "p-accent-fg" },
+  accent: { dot: "p-dot-accent", ink: "p-accent-fg" },
+  warning: { dot: "p-dot-warning", ink: "p-warning" },
+  danger: { dot: "p-dot-danger", ink: "p-danger" },
+  info: { dot: "p-dot-info", ink: "p-info" },
+  neutral: { dot: "p-dot-neutral", ink: "p-text-3" },
+} satisfies Record<StatusTone, { dot: string; ink: string }>;
 
 /** A tone's ink, for a word or an icon that says the state without the dot. */
 export function toneInk(tone: StatusTone): string {

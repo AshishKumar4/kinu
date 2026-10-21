@@ -14,6 +14,7 @@ import { AlwaysLine, alwaysLabel, ParkedCommands, ParkedDecisionFlow, ParkedWrit
 import { QuestionCard } from "@/components/QuestionCard";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Surface } from "@/components/ui/Surface";
+import { ChromeButton } from "@/components/ui/ChromeButton";
 
 type ConsentChoice = "once" | "always" | "deny";
 
@@ -143,7 +144,7 @@ function ConsentBody({ consent }: { consent: PendingConsent }) {
 
   return (
     <>
-      <div className="t-body p-text">Use <span className="font-medium">{consent.deviceLabel}</span> for {forWhom}?</div>
+      <div className="t-body p-text">Use <strong>{consent.deviceLabel}</strong> for {forWhom}?</div>
       <Surface look="tile" as="code" className="t-code mt-1 block px-2 py-1 p-text-2 break-all">{revealMisrepresenting(consent.command || "(command)")}</Surface>
       <div className="t-meta mt-1 p-text-3">Commands use {consent.deviceLabel}'s Sandbox setting. Revoke access on the Devices page.</div>
     </>
@@ -332,12 +333,12 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
         const BehindIcon = KIND_ICON[kindOf(ask)];
 
         return (
-          <button key={ask.key} type="button" data-attention-behind={ask.key} onClick={() => { setError(null); setChosen(ask.key); }}
-            className="p-attention-behind" title="Answer this one first">
+          <ChromeButton part="behind" key={ask.key} data-attention-behind={ask.key} onClick={() => { setError(null); setChosen(ask.key); }}
+            title="Answer this one first">
             <BehindIcon size={11} className="shrink-0 p-text-3" aria-hidden />
             <span className="min-w-0 flex-1 truncate">{headline(ask)}</span>
             {depth === 0 && unshown > 0 && <span className="shrink-0 tabular-nums p-text-3">+{unshown}</span>}
-          </button>
+          </ChromeButton>
         );
       })}
       <div key={front.key} className="p-attention-card animate-fade-in" data-attention-card={front.key} data-attention-kind={kindOf(front)}

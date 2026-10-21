@@ -86,7 +86,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
   const editable = kind === "text" && fileTextEditable(file);
 
   return (
-    <Surface look="page" className="absolute inset-0 z-10 flex flex-col border-l p-border @[64rem]:static @[64rem]:w-[42%] @[64rem]:shrink-0" data-files-preview>
+    <Surface look="page" className="absolute inset-0 z-10 flex flex-col border-l p-border @[64rem]:static @[64rem]:w-[var(--layout-preview-pane)] @[64rem]:shrink-0" data-files-preview>
       <div className="px-3 py-2 border-b p-border flex items-center gap-2 shrink-0">
         <FileIcon size={13} className="p-text-3 shrink-0" />
         <span className="t-meta t-mono p-text truncate" title={path}>{name}</span>
@@ -220,13 +220,13 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
 
   if (body === "html") {
     return (
-      <iframe
+      <Surface look="paper" as="iframe"
         data-files-html-preview
         title={name}
         sandbox=""
         referrerPolicy="no-referrer"
         srcDoc={sandboxedHtml(content)}
-        className="w-full h-full border-0 bg-white"
+        className="w-full h-full border-0"
       />
     );
   }

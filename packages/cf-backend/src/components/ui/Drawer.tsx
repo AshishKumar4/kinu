@@ -9,3 +9,8 @@ export function Drawer({ onClose, children, ...data }: { onClose: () => void; ch
     </>
   );
 }
+
+/** The dimmed page behind a panel laid over it; pressed, it closes the panel. */
+export function Scrim({ label, onClose, ...data }: { label: string; onClose: () => void } & Readonly<Record<`data-${string}`, string | boolean>>) {
+  return <button type="button" aria-label={label} className="p-scrim" onClick={onClose} {...data} />;
+}

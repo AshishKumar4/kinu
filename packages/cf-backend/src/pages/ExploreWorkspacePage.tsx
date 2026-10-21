@@ -150,7 +150,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
     <Page back={{ to: "/explore?kind=workspace", label: "Back to Explore" }} icon={null} title={workspace.title} data-blueprint-page={workspace.id}
       actions={<BlueprintActions workspace={workspace} onInstall={() => setInstalling(true)} />}>
       <div className="grid gap-6 lg:grid-cols-[var(--layout-detail)]">
-        <Surface look="well" className="relative aspect-[16/10] overflow-hidden border p-border">
+        <Surface look="well" className="relative aspect-16/10 overflow-hidden border p-border">
           {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
         </Surface>
         <div className="flex min-w-0 flex-col gap-3">
@@ -178,7 +178,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
           </Section>
 
           <Section title="What a new workspace holds">
-            <Surface look="panel" as="ul" className="divide-y divide-[var(--c-border)] overflow-hidden">
+            <Surface look="panel" as="ul" className="p-rows-ruled overflow-hidden">
               {inside.agents.map((agent) => <Row key={agent.name} icon={<RobotIcon size={15} />} title={agent.name} meta="agent">{agent.about}</Row>)}
               {inside.automations.map((automation) => <Row key={automation.label} icon={<ClockIcon size={15} />} title={automation.label} meta={automation.when}>{automation.does}</Row>)}
               {inside.slates.map((slate) => <Row key={slate.title} icon={<AppWindowIcon size={15} />} title={slate.title} meta="slate">{slate.about}</Row>)}
@@ -193,7 +193,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
 
         <div className="space-y-8">
           <Section title="What it needs of yours">
-            <Surface look="panel" as="ul" className="divide-y divide-[var(--c-border)] overflow-hidden">
+            <Surface look="panel" as="ul" className="p-rows-ruled overflow-hidden">
               {workspace.needs.map((need) => <NeedRow key={`${need.connection ?? ""}${need.secret ?? ""}`} need={need} connected={has(need.connection)} />)}
               {workspace.needs.length === 0 && <li className="t-meta px-4 py-3 p-text-3">Nothing: it works with what any workspace has.</li>}
             </Surface>

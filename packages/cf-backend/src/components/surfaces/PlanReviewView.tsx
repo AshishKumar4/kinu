@@ -28,6 +28,7 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
 import { Dot } from "@/components/ui/Dot";
 import { Surface } from "@/components/ui/Surface";
+import { Scrim } from "@/components/ui/Drawer";
 
 type RootNote = PassageNote | GeneralNote;
 
@@ -513,13 +514,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
           </div>
         </div>
         {panelOpen && (
-          <button
-            type="button"
-            data-plan-scrim
-            aria-label="Close comments"
-            className="p-scrim"
-            onClick={closePanel}
-          />
+          <Scrim data-plan-scrim label="Close comments" onClose={closePanel} />
         )}
         <AnnotationPanel
           isOpen={panelOpen}

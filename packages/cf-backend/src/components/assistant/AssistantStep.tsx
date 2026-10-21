@@ -5,7 +5,7 @@
  * defaults, changed later in its settings.
  */
 import { PencilSimpleIcon } from "@phosphor-icons/react";
-import { ChatMascot, personMascot } from "@/components/Marks";
+import { ChatMascot, personMascot } from "@/components/ui/Marks";
 import { Choices } from "@/components/ui/Choices";
 import { TextInput } from "@/components/ui/Field";
 

@@ -66,7 +66,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
         )}
         <div>
           <div className="t-item mb-2 p-text">What it reaches</div>
-          <Surface look="outlined" as="ul" className="divide-y divide-[var(--c-border)] overflow-hidden">
+          <Surface look="outlined" as="ul" className="p-rows-ruled overflow-hidden">
             {page.workspace.needs.map((need) => {
               const brand = presetBrand(need.connection);
               const title = need.connection === null ? (need.secret ?? "A secret") : (mcpPresetById(need.connection)?.title ?? need.connection);

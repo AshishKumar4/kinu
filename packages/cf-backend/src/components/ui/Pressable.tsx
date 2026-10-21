@@ -17,14 +17,15 @@ export type PressableLook = "row" | "compact" | "flush" | "inline";
 
 /** `compact`: a strip inside a card or a bar (a fold's header, a menu's trigger), its own width at the control radius;
  *  `flush`: a row of a list in one box, edge to edge with no radius of its own; `inline`: an action inside running text
- *  (ui/InlineAction.tsx); `selected` is a row's. */
-export function Pressable({ look = "row", className, type = "button", selected = false, ...rest }: ComponentProps<"button"> & {
+ *  (ui/InlineAction.tsx); `selected` is a row's; `open` a control whose panel is showing, on the fill. */
+export function Pressable({ look = "row", className, type = "button", selected = false, open = false, ...rest }: ComponentProps<"button"> & {
   look?: PressableLook;
   selected?: boolean;
+  open?: boolean;
 }) {
   const base = BASE[look];
 
-  return <button type={type} className={`${base}${className === undefined ? "" : ` ${className}`}`} data-selected={selected ? "" : undefined} {...rest} />;
+  return <button type={type} className={`${base}${className === undefined ? "" : ` ${className}`}`} data-selected={selected ? "" : undefined} data-open={open ? "" : undefined} {...rest} />;
 }
 
 /** The same, off the app (a page of its own, Sign out): a row that is a plain anchor. */

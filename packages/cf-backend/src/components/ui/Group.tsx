@@ -11,3 +11,9 @@ export function Group({ label, list = false, children, ...data }: {
 
   return <div role={label === undefined ? undefined : "group"} aria-label={label} className="p-group" {...data}>{children}</div>;
 }
+
+/** One block that is a row of a group where it sits in one (`grouped`), else a group of its own: the box, its parts
+ *  split by the group's rule. */
+export function GroupBlock({ grouped, className, children }: { grouped: boolean; className?: string; children: ReactNode }) {
+  return <div className={`${grouped ? "" : "p-group "}${className ?? ""}`}>{children}</div>;
+}

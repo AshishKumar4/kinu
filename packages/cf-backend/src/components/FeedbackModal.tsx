@@ -25,6 +25,7 @@ import {
 } from "@kinu.run/core";
 import { TextArea } from "@/components/ui/Field";
 import { Checkbox } from "@/components/ui/Check";
+import { Surface } from "@/components/ui/Surface";
 
 const FeedbackReplySchema = v.object({
   id: v.optional(v.string()),
@@ -372,12 +373,12 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
                     : ""}
                 </span>
               </div>
-              <canvas
+              <Surface look="outlined" as="canvas"
                 ref={canvasRef}
                 onPointerDown={onDown}
                 onPointerMove={onMove}
                 onPointerUp={onUp}
-                className="block w-full cursor-crosshair rounded-md border p-border touch-none"
+                className="block w-full cursor-crosshair touch-none"
                 data-feedback-canvas
               />
               <p className="t-meta p-text-3">

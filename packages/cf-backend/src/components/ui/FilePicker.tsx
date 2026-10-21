@@ -8,10 +8,11 @@ export function FilePicker({ folder = false, ...rest }: Omit<ComponentProps<"inp
   return <input type="file" hidden {...(folder ? { webkitdirectory: "" } : {})} {...rest} />;
 }
 
-/** Over a place files can be dropped on, while they are held over it: what dropping them does, on the accent. */
-export function DropHint({ children }: { children: ReactNode }) {
+/** Over a place files can be dropped on, while they are held over it: what dropping them does, on the accent. `flush`
+ *  keeps the edge inside the place, where it fills its column to the brim (the chat's). */
+export function DropHint({ flush = false, children }: { flush?: boolean; children: ReactNode }) {
   return (
-    <div aria-hidden="true" className="p-drop-hint">
+    <div aria-hidden="true" className="p-drop-hint" data-flush={flush ? "" : undefined}>
       <span className="t-label p-drop-hint-words">{children}</span>
     </div>
   );

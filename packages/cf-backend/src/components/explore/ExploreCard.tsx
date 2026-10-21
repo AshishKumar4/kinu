@@ -23,7 +23,7 @@ export const exploreWorkspaceHref = (id: string) => `/explore/workspaces/${encod
 export const kinuBlueprintPicture = (picture: string) => `${import.meta.env.BASE_URL}assets/explore/${encodeURIComponent(picture)}.webp`;
 
 /** A picture of a whole page, cropped to its top left at a size its words can be read at in a card. */
-const ZOOMED = "absolute left-0 top-0 h-auto w-[165%] max-w-none";
+const ZOOMED = "absolute left-0 top-0 h-auto w-[var(--layout-zoomed)] max-w-none";
 
 const count = (n: number) => (n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : n.toLocaleString("en-US"));
 

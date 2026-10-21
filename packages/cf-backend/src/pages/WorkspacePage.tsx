@@ -58,6 +58,7 @@ import { WorkspaceSettings } from "@/pages/SettingsPage";
 import { useLayoutDrawer, useWorkspaceArea } from "@/components/layout";
 import { workspaceDisplayTitle, workspaceTitleDraft } from "@kinu.run/core";
 import { settleLogged, showing, detach, settle } from "@kinu.run/core/obs";
+import { TextInput } from "@/components/ui/Field";
 import { WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 import { useCarriedAttachments } from "@/components/workspaces/NewChatView";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
@@ -150,13 +151,12 @@ function ForkModal({
 
       <div className="space-y-1">
         <label className="t-meta p-text-3 block">Fork name (optional)</label>
-        <input
-          type="text"
+        <TextInput
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="a generated address, e.g. quiet-harbor-3f9a2c1d"
           disabled={busy}
-          className="t-body t-mono w-full px-3 py-1 border p-border p-card"
+          className="t-mono"
         />
         <p className="t-meta p-text-3">Lowercase letters, digits and hyphens, at most 31 characters</p>
       </div>
@@ -482,7 +482,7 @@ function SubagentChatColumn({
         : undefined}
       empty={
         <div className="flex h-full flex-col items-center justify-center text-center">
-          <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
+          <KinuMark size={30} className="mb-3 p-accent opacity-60" />
           <p className="t-body p-text-3">This agent's conversation starts here.</p>
         </div>
       }
@@ -921,12 +921,12 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
     <div className="h-full flex flex-col" data-workbench>
       {/* The chat stays mounted through reconnect so the in-flight turn survives. */}
       {state.connectionStatus === "disconnected" && !state.terminalClose && (
-        <div className="t-meta flex items-center justify-center gap-2 px-3 py-1 p-warning border-b p-border" style={{ background: "var(--c-warning-tint)" }}>
+        <div className="p-banner-warning t-meta flex items-center justify-center gap-2 px-3 py-1 p-warning border-b p-border">
           <ArrowsClockwiseIcon size={12} className="animate-spin" />Reconnecting...
         </div>
       )}
       {state.terminalClose && (
-        <div className="t-meta flex flex-wrap items-center justify-center gap-2 px-3 py-1 p-danger border-b p-border" style={{ background: "var(--c-danger-tint)" }}>
+        <div className="p-banner-danger t-meta flex flex-wrap items-center justify-center gap-2 px-3 py-1 p-danger border-b p-border">
           <WarningCircleIcon size={12} className="shrink-0" />
           <span className="break-words">
             {state.terminalClose.code === 1008

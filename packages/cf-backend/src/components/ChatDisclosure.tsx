@@ -150,7 +150,7 @@ export function ChatDisclosure({ label, after, live, failed = false, folded, fol
   if (following) bodyState = "live";
 
   // Following, it fades in at the top, so a step scrolled half out of view reads as going rather than cut.
-  if (following) shown = `${viewport} overflow-y-auto [mask-image:linear-gradient(to_bottom,transparent,#000_1.25rem)]`;
+  if (following) shown = `${viewport} overflow-y-auto p-fade-top`;
   else if (!open && folded === "hidden") shown = "hidden";
 
   return (

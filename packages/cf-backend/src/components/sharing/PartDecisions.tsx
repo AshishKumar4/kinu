@@ -72,7 +72,7 @@ export function ApprovalDecision({ slate, ask, onApprove, onDecline }: {
   return (
     <Modal title={`${slate} wants to make a change`} icon={<WarningCircleIcon size={18} className="p-warning" />} onClose={onDecline}
       footer={<div className="flex justify-end gap-2"><Button size="sm" variant="secondary" data-approval-decline onClick={onDecline}>Decline</Button><Button variant="primary" size="sm" data-approval-approve onClick={onApprove}>Approve once</Button></div>}>
-      <p className="t-body p-text-2"><strong data-approval-tool className="font-medium p-text">{ask.toolTitle ?? ask.tool}</strong> on your {serverWords(ask)}, within {rootWords(ask.root)}, with:</p>
+      <p className="t-body p-text-2"><strong data-approval-tool className="p-text">{ask.toolTitle ?? ask.tool}</strong> on your {serverWords(ask)}, within {rootWords(ask.root)}, with:</p>
       <Payload data-approval-payload value={ask.payload} />
       <p className="t-meta p-text-3">Only this change, with exactly this. It asks again for any other.</p>
     </Modal>

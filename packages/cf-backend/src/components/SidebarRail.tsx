@@ -109,7 +109,7 @@ function RailAccount({ name }: { name: string }) {
         className="flex size-9 items-center justify-center">
         <Avatar name={name} size={24} />
       </Pressable>
-      {open && <AccountMenu onClose={close} className="fixed bottom-3 left-15 w-60" />}
+      {open && <AccountMenu onClose={close} className="fixed bottom-3 left-[var(--layout-rail-menu)] w-60" />}
     </div>
   );
 }

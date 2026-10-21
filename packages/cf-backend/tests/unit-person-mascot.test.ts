@@ -4,7 +4,7 @@
  */
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
-import { mascotAccessory, personMascot } from '../src/components/Marks';
+import { mascotAccessory, personMascot } from '../src/components/ui/Marks';
 import { personName } from '../src/hooks/use-chat-mascot';
 
 const NAMES = ['Ada Lovelace', 'Ashish', 'Lucía Ferreira', 'kai', 'Owner', '李雷'];

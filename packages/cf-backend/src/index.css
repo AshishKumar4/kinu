@@ -158,44 +158,59 @@ html, body, #root {
   --layout-files-tiles: repeat(auto-fill, minmax(6.5rem, 1fr));
   /* The one tile grid (ui/Tiles.tsx): 300 or more across, one column on a phone. */
   --layout-tiles: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
-  --layout-questions-wide: min(55vh, 32rem);
-  /* A card of questions' most before it scrolls; -wide from sm up. */
-  --layout-questions: min(45vh, 32rem);
-  /* Where a mark row's words start, for a line under it: the 14 mark and the 8 gap. */
+  /* Figures in a row, as many as fit at 84 or more. */
+  --layout-stats: repeat(auto-fit, minmax(5.25rem, 1fr));
+  /* A lead beside what follows it, two to one (Explore's featured blueprint). */
+  --layout-lead: minmax(0, 2fr) minmax(0, 1fr);
+  /* A blueprint's page: what it shows beside what it says. */
+  --layout-detail: minmax(0, 1.25fr) minmax(0, 1fr);
+  /* A question's options beside the preview of the one under the pointer. */
+  --layout-question: minmax(0, 1fr) minmax(0, 1.2fr);
+  /* Home: the brief's column and the side column. */
+  --layout-home: minmax(0, 680px) 300px;
+  /* A head over what fills the rest. */
+  --layout-head-body: auto minmax(0, 1fr);
+  /* An exploration: the tree's column beside the board; -wide adds the reader on the right. */
+  --layout-exploration: minmax(220px, 280px) minmax(0, 1fr);
+  --layout-exploration-wide: minmax(200px, 250px) minmax(0, 1fr) minmax(330px, 400px);
+  /* A tool call's row: its icon, its words, its runtime and its state. */
+  --layout-tool-row: 20px minmax(0, 1fr) auto auto;
+  /* A row led by a 14 mark (a step's dot, a day's band), then its words; -end adds what closes it, -mark a 16 mark,
+     and -inset is where its words start, for a line under it. */
+  --layout-mark-row: 14px minmax(0, 1fr);
+  --layout-mark-row-end: 14px minmax(0, 1fr) auto;
+  --layout-mark-row-mark: 14px minmax(0, 1fr) 16px;
   --layout-mark-row-inset: 22px;
-  /* On a phone, the share of the explorer a node's transcript takes under the tree. */
-  --layout-transcript-phone: 55%;
-  /* A welcome step's most before it scrolls inside its card. */
-  --layout-welcome-step: 62vh;
+  /* A short label's column beside its value (a changelog entry's facts). */
+  --layout-label-row: 64px minmax(0, 1fr);
+  /* Labels as wide as the widest, then the values (a mail's To and Subject). */
+  --layout-label-auto: auto minmax(0, 1fr);
   /* Under a line led by a 15 icon, the words that line up with its words: the icon and its 8 gap. */
   --layout-under-icon: 23px;
   /* Under a file's header, the line that lines up with its name: past the back control and the mark. */
   --layout-file-meta: 34px;
-  /* Figures in a row, as many as fit at 84 or more. */
-  --layout-stats: repeat(auto-fit, minmax(5.25rem, 1fr));
-  --layout-exploration-wide: minmax(200px, 250px) minmax(0, 1fr) minmax(330px, 400px);
-  /* An exploration: the tree's column beside the board; -wide adds the reader on the right. */
-  --layout-exploration: minmax(220px, 280px) minmax(0, 1fr);
-  /* A head over what fills the rest. */
-  --layout-head-body: auto minmax(0, 1fr);
-  /* Home: the brief's column and the side column. */
-  --layout-home: minmax(0, 680px) 300px;
-  /* A question's options beside the preview of the one under the pointer. */
-  --layout-question: minmax(0, 1fr) minmax(0, 1.2fr);
-  /* A blueprint's page: what it shows beside what it says. */
-  --layout-detail: minmax(0, 1.25fr) minmax(0, 1fr);
-  /* Labels as wide as the widest, then the values (a mail's To and Subject). */
-  --layout-label-auto: auto minmax(0, 1fr);
-  /* A short label's column beside its value (a changelog entry's facts). */
-  --layout-label-row: 64px minmax(0, 1fr);
-  --layout-mark-row-mark: 14px minmax(0, 1fr) 16px;
-  --layout-mark-row-end: 14px minmax(0, 1fr) auto;
-  /* A row led by a 14 mark (a step's dot, a day's band), then its words; -end adds what closes it, -mark a 16 mark. */
-  --layout-mark-row: 14px minmax(0, 1fr);
-  /* A tool call's row: its icon, its words, its runtime and its state. */
-  --layout-tool-row: 20px minmax(0, 1fr) auto auto;
-  /* A lead beside what follows it, two to one (Explore's featured blueprint). */
-  --layout-lead: minmax(0, 2fr) minmax(0, 1fr);
+  /* The inspector's inset round its content and a work card's, the composer's 18. */
+  --layout-inset: 18px;
+  /* Home's frame and its room above and below, more on a taller screen within bounds; a new chat's the same. */
+  --layout-home-frame: 1080px;
+  --layout-home-pad: clamp(72px, 12vh, 132px);
+  --layout-new-chat: 720px;
+  --layout-new-chat-pad: clamp(48px, 12vh, 120px);
+  /* A welcome step's most before it scrolls inside its card. */
+  --layout-welcome-step: 62vh;
+  /* A card of questions' most before it scrolls; -wide from sm up. */
+  --layout-questions: min(45vh, 32rem);
+  --layout-questions-wide: min(55vh, 32rem);
+  /* On a phone, the share of the explorer a node's transcript takes under the tree. */
+  --layout-transcript-phone: 55%;
+  /* A file's preview beside its list, from 64rem up. */
+  --layout-preview-pane: 42%;
+  /* The phone's navigation drawer at its widest. */
+  --layout-nav-drawer: 85vw;
+  /* The folded rail's account menu, just past its 56. */
+  --layout-rail-menu: 60px;
+  /* A capture shown zoomed in its cover: its top left, at 165% of the cover's width. */
+  --layout-zoomed: 165%;
   /* The model picker's menu: as wide as its names, never past the screen; its list a scroll of its own. */
   --layout-picker: min(28rem, calc(100vw - 1rem));
   --layout-picker-list: min(24rem, 60vh);
@@ -352,6 +367,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 @utility p-text-3 { color: var(--c-text-3); }
 @utility p-accent-fg { color: var(--c-accent-fg); }
 @utility p-accent-mark { color: var(--c-accent-mark); }
+@utility p-accent { color: var(--c-accent); }
 @utility p-selected { background: var(--c-selected); }
 
 @utility p-success { color: var(--c-success); }
@@ -378,6 +394,9 @@ body { background: var(--c-bg); color: var(--c-text); }
   --t-workspace-tab: 13.5px;
   /* role.field-touch: a field's value on a touch screen. iOS Safari zooms the page into any field under 16px. */
   --t-field-touch: max(16px, 1em);
+  /* role.hero: Home's question, and a new chat's, growing with the window within bounds. */
+  --t-hero: clamp(38px, 4vw, 46px);
+  --t-hero-chat: clamp(28px, 3.4vw, 40px);
   /* role.wordmark: the name beside Kinu's mark. */
   --t-wordmark: 18px;
 }
@@ -423,6 +442,8 @@ body { background: var(--c-bg); color: var(--c-text); }
    reads, Fragment Mono for code. Weights are 400, 500 and 600. They sit in the components layer with the rest. */
 .t-hero       { font: 600 36px/44px var(--font-ui); letter-spacing: -0.015em; color: var(--c-text); }
 .t-page-title { font: 600 24px/32px var(--font-ui); letter-spacing: -0.011em; color: var(--c-text); }
+.t-hero { font-size: var(--t-hero); }
+.t-hero-chat { font-size: var(--t-hero-chat); }
 .t-title      { font: 600 15px/22px var(--font-ui); letter-spacing: -0.005em; color: var(--c-text); }
 .t-nav        { font: 500 14px/20px var(--font-ui); color: var(--c-text-2); }
 .t-label      { font: 600 13px/20px var(--font-ui); color: var(--c-text-2); }
@@ -452,6 +473,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-scrim { background: var(--c-scrim); backdrop-filter: blur(2px); }
 .p-border   { border-color: var(--c-border); }
 .p-border-strong { border-color: var(--c-border-strong); }
+.p-border-dash { border-color: var(--c-dash); }
 
 .p-accent-bg      { background: var(--c-selected); }
 
@@ -519,7 +541,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-group > * + * { border-top: 1px dashed var(--c-dash); }
 /* Inside a card (a Settings group, the mail reader), a group is its rows under that rule alone, never a second box
    (design review 2026-10-20, "no nested cards"): the card's own edge and padding are the group's. */
-.p-card .p-group, .p-card-body .p-group { border: 0; border-radius: 0; background: transparent; overflow: visible; }
+.p-card .p-group, .p-card-body .p-group, .p-surface-panel .p-group { border: 0; border-radius: 0; background: transparent; overflow: visible; }
 /* A `contents` wrapper (a CardSlot) draws no box, so its rows take the rule themselves. */
 .p-group > * + .contents > :first-child,
 .p-group > .contents > * + * { border-top: 1px dashed var(--c-dash); }
@@ -691,6 +713,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   pointer-events: none; position: absolute; inset: -12px; z-index: 20; display: flex; align-items: center; justify-content: center;
   border: 2px dashed var(--c-accent); border-radius: var(--r-card); background: color-mix(in srgb, var(--c-bg) 74%, transparent);
 }
+.p-drop-hint[data-flush] { inset: 0; }
 .p-drop-hint-words {
   display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: var(--r-pill); background: var(--c-accent);
   color: var(--c-accent-on); box-shadow: var(--shadow-menu);
@@ -741,10 +764,13 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-surface-outlined { border: 1px solid var(--c-border); border-radius: var(--r-control); }
 .p-surface-round { border-radius: var(--r-pill); }
 .p-surface-clip { overflow: hidden; border-radius: var(--r-control); }
+.p-surface-paper { background: var(--c-paper); }
+.p-surface-screen { background: var(--c-screen); }
 /* Count (ui/Badge.tsx): a count over a mark, at its top right. */
 .p-count { position: absolute; top: -1px; right: -1px; display: flex; min-width: 16px; height: 16px; align-items: center; justify-content: center; padding: 0 4px; border-radius: var(--r-pill); text-align: center; }
 .p-count-accent { background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 2px var(--c-sidebar); }
 .p-count-quiet { min-width: 14px; height: auto; padding: 0 3px; background: var(--c-fill); color: var(--c-text-2); }
+.p-count-bar { min-width: 14px; height: auto; padding: 0 3px; background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 1.5px var(--c-bg); }
 /* ProgressBar (ui/Meter.tsx): a run's steps, one thin bar on the fill, the accent's part growing. */
 .p-progress { height: 4px; width: 100%; overflow: hidden; border-radius: var(--r-pill); background: var(--c-fill); }
 .p-progress-fill { height: 100%; border-radius: var(--r-pill); background: var(--c-accent); transition: width var(--dur-fold) ease-out; }
@@ -983,7 +1009,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 /* Pressable: a whole row or tile to press, its wash and its ring and nothing else (ui/Pressable.tsx). */
 .p-pressable {
-  display: block; width: 100%; text-align: left; background: transparent; border: 0; padding: 0; color: inherit; font: inherit;
+  display: block; width: 100%; text-align: left; background: transparent; border-width: 0; padding: 0; color: inherit;
   border-radius: var(--r-row); cursor: pointer; transition: background-color var(--dur-state) ease-out;
 }
 .p-pressable:is(:hover, [data-force="hover"]) { background: var(--c-hover); }
@@ -993,11 +1019,13 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-pressable-flush { border-radius: 0; }
 /* The row whose content is open beside its list sits on the fill, as Files' open entry does. */
 .p-pressable[aria-current="true"] { background: var(--c-fill); }
-/* A compact control whose panel is open sits on the fill until it closes. */
-.p-pressable-compact[aria-expanded="true"] { background: var(--c-fill); }
+/* A control whose panel is open (`open`) sits on the fill until it closes. */
+.p-pressable[data-open] { background: var(--c-fill); }
 
 /* An action inside running text (ui/InlineAction.tsx): the sentence's type, accent ink, underlined on hover. */
-.p-inline-action { display: inline; padding: 0; border: 0; background: none; font: inherit; color: var(--c-accent-fg); text-align: inherit; cursor: pointer; }
+.p-inline-action { display: inline; padding: 0; border: 0; background: none; color: var(--c-accent-fg); text-align: inherit; cursor: pointer; }
+/* A press takes the type of what it sits in, unless it names a role of its own (`t-meta` on a strip, `t-body` on a menu row). */
+:where(.p-pressable, .p-inline-action) { font: inherit; }
 .p-inline-action:hover { text-decoration: underline; }
 .p-inline-action:disabled { cursor: default; color: var(--c-text-3); text-decoration: none; }
 
@@ -1262,6 +1290,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-pill-mark[data-tone="quiet"] { color: var(--c-text-3); }
 .p-pill-body { display: flex; min-width: 0; flex: 1 1 auto; align-items: baseline; gap: 6px; }
 .p-pill-source { flex-shrink: 0; color: var(--c-text); font-weight: 600; white-space: nowrap; }
+.p-pill-source-note { margin-left: 8px; font-weight: 400; color: var(--c-text-3); }
 .p-pill-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .p-pill-dim { min-width: 0; overflow: hidden; color: var(--c-text-3); text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .p-pill-action {
@@ -1430,6 +1459,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-shot-grid .p-shot { display: flex; margin: 0; }
 .p-shot-grid .p-shot-frame > img { width: 100%; height: 190px; max-height: none; object-fit: cover; object-position: top; }
 .p-shot-wait { display: block; width: min(100%, 520px); aspect-ratio: 16 / 10; }
+.p-skeleton-bar.p-shot-wait { border-radius: 0; }
 .p-shot[data-size="thumb"] .p-shot-wait { width: min(100%, 320px); }
 .p-shot-note {
   display: flex;
@@ -2154,6 +2184,33 @@ body > .annotation-toolbar {
    words on a stronger wash, folds and blank sides on a quiet one. Code wraps anywhere at a tab of 2, ligatures off so an
    operator reads as typed; a noted line's number is set heavier. */
 .p-diff { font-variant-ligatures: none; }
+/* The app's backdrop (AppBackground.tsx), softened a touch and masked by its temperament: today's field lit toward its
+   right, quiet's living only at the page's edges. */
+.p-backdrop { filter: blur(0.4px); }
+.p-backdrop[data-background-temperament="today"] { mask-image: radial-gradient(ellipse 55% 55% at 58% 50%, color-mix(in srgb, black 70%, transparent), black 100%); }
+.p-backdrop[data-background-temperament="quiet"] { mask-image: radial-gradient(ellipse 62% 62% at 58% 50%, transparent 35%, color-mix(in srgb, black 60%, transparent) 70%, black 100%); }
+/* Rows ruled apart by the hairline (a blueprint's steps, what an install adds), as the dashed rule splits a group's. */
+.p-rows-ruled > :not(:last-child) { border-bottom: 1px solid var(--c-border); }
+/* A row that holds a link and its own controls: the wash under the pointer, though the row itself is no press. */
+.p-hover-row { transition: background-color var(--dur-state) ease-out; }
+.p-hover-row:hover { background: var(--c-hover); }
+/* A list that scrolls under a header fades in from its top edge as it leaves it. */
+.p-fade-top { mask-image: linear-gradient(to bottom, transparent, black 1.25rem); }
+/* A tree's row stepped in by its depth, 14 a step. */
+.p-tree-indent { padding-left: calc(var(--tree-depth, 0) * 14px); }
+/* History not yet read, held as faint bars where its rows will land. */
+.p-history-reserve { background-image: repeating-linear-gradient(to bottom, transparent 0 12px, color-mix(in srgb, currentColor 5%, transparent) 12px 20px, transparent 20px 28px); background-size: 60% 28px; background-repeat: repeat-y; }
+/* Work's Needs you (surfaces/WorkTab.tsx): the selected ground in an accent edge, its section's label in the accent's ink. */
+.p-needs-you { border: 1px solid color-mix(in srgb, var(--c-accent) 32%, transparent); }
+.p-needs-you .p-label { color: var(--c-accent-fg) !important; }
+/* A strip across the workbench's top saying the connection's state: reconnecting on the warning's tint, closed on the danger's. */
+.p-banner-warning { background: var(--c-warning-tint); }
+.p-banner-danger { background: var(--c-danger-tint); }
+/* A code block's frame (surfaces/shared.tsx), and a markdown table's head on the fill. */
+.p-code-block { overflow: hidden; border-radius: var(--r-row); }
+.p-table-head { background: var(--c-fill); font-weight: 500; }
+/* An underline that waits for the pointer in a quiet ink, clear of the words' descenders (a changelog entry's headline). */
+.p-quiet-underline { text-decoration-color: var(--c-border-strong); text-underline-offset: 4px; }
 /* A head's outcome above its transcript (NodeTranscript.tsx): a failure on the danger's tint, a report on the tile, each
    ruled at its start in its tone. */
 .p-outcome[data-tone="danger"] { background: var(--c-danger-tint); border-left-color: var(--c-danger); }
@@ -2355,7 +2412,7 @@ tr[data-opens]:hover { background: var(--c-hover); }
 .p-icon-control:is(:hover, :focus-visible):not(:disabled) { background: var(--c-hover); color: var(--c-text); }
 .p-icon-control[data-danger]:is(:hover, :focus-visible) { color: var(--c-danger); }
 .p-bar-rename { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 calc(var(--flare) + 6px) 2px; }
-.p-bar-rename input {
+.p-bar-rename-field {
   min-width: 72px;
   max-width: 200px;
   height: 26px;
@@ -2377,8 +2434,6 @@ tr[data-opens]:hover { background: var(--c-hover); }
   border-radius: var(--r-control);
 }
 .p-icon-control-inline { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; padding: 4px; border-radius: var(--r-inner); }
-/* The header's count of agents at work out of sight: the accent, so it reads in dark and light alike. */
-.p-agents-badge { background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 1.5px var(--c-bg); }
 .p-icon-control:is([aria-current="page"], [aria-pressed="true"]) { color: var(--c-text); }
 .p-bar-trailing { display: flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 0 10px 0 6px; }
 .p-bar-outline { position: absolute; top: 8px; bottom: 0; left: 0; pointer-events: none; }
@@ -2728,7 +2783,7 @@ tr[data-opens]:hover { background: var(--c-hover); }
   color: var(--c-text);
 }
 .p-chip-toggle[aria-pressed="true"] > svg { color: var(--c-accent-mark); }
-.p-chip-toggle-sm { height: 28px; padding: 0 8px; font: 500 12px/16px var(--font-ui); letter-spacing: 0; }
+.p-chip-toggle[data-size="sm"] { height: 28px; padding: 0 8px; font: 500 12px/16px var(--font-ui); letter-spacing: 0; }
 /* One status language for machines and terminals: the dot's colour says the state, its motion says work. */
 .p-env-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: var(--r-pill); background: var(--c-success); }
 .p-env-dot[data-tone="working"] { background: var(--c-accent-mark); animation: dot-pulse 1.4s ease-in-out infinite; }

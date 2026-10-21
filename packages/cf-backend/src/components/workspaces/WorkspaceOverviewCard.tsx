@@ -2,7 +2,7 @@
 import { Link } from "react-router-dom";
 import { APP_ROUTES, rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type RosterEntry } from "@kinu.run/core";
 import { SlatePicture } from "@/components/slates/SlatePicture";
-import { ChatMascot } from "@/components/Marks";
+import { ChatMascot } from "@/components/ui/Marks";
 import { useMascotOf } from "@/hooks/use-chat-mascot";
 import { Status } from "@/components/ui/Status";
 import { TILE, TileShell, TypesetCover } from "@/components/ui/Tiles";
@@ -40,7 +40,7 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
 
   if (variant === 'line') {
     return (
-      <div className={`flex h-14 items-center gap-3 px-4 transition-colors p-card-hover ${first ? "" : "border-t p-border"}`}>
+      <div className={`p-hover-row flex h-14 items-center gap-3 px-4 ${first ? "" : "border-t p-border"}`}>
         <Link to={to} className="flex min-w-0 flex-1 items-center gap-3">
           <span className="min-w-0 flex-1">
             <span className="t-item block truncate p-text">{title}</span>

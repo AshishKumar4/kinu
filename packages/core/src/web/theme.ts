@@ -347,13 +347,19 @@ function selectors(theme: ThemeName, mode: Mode): string {
 }
 
 /** Colours the same in every look: a partner's full-colour mark sits on white, as its guidelines ask, and a mark drawn
- *  in white (GitHub's) on near-black; an avatar's initial is white on its name's hue; the prompt card's long soft drop. */
+ *  in white (GitHub's) on near-black; an avatar's initial is white on its name's hue; someone else's HTML is drawn on
+ *  white paper as its author drew it, and a remote screen in black; the prompt card's long soft drop. */
 const FIXED = {
   '--c-brand-tile': '#FFFFFF',
   '--c-brand-tile-ink': '#111318',
   '--c-avatar-ink': '#FFFFFF',
+  '--c-paper': '#FFFFFF',
+  '--c-screen': '#000000',
   '--shadow-prompt': '0 18px 55px -42px rgba(0, 0, 0, 0.75)',
 } satisfies Readonly<Record<`--c-${string}` | `--shadow-${string}`, string>>;
+
+/** What a feedback screenshot draws over a field it blocks out: opaque near-black, read as removed in either look. */
+export const REDACTION_FILL = '#111111';
 
 /** An avatar's ground (ui/Avatar.tsx): its name's hue at a middle lightness, so the white initial reads in every look. */
 export function avatarGround(hue: number): string {
