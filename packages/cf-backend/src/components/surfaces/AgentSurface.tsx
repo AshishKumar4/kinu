@@ -29,6 +29,7 @@ import * as v from "valibot";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import type { OrchestratorAgent } from "@/orchestrator";
 import { Group } from "@/components/ui/Group";
+import { IconControl } from "@/components/ui/IconControl";
 
 type Fact = Awaited<ReturnType<OrchestratorAgent["getFacts"]>>[number];
 
@@ -54,10 +55,9 @@ function PromoteFact({ fact, workspace }: { fact: Fact; workspace: string }) {
   if (state === "saving") label = "Keeping…";
 
   return (
-    <button type="button" className="p-pill-icon shrink-0 opacity-60 transition-opacity group-hover/fact:opacity-100 focus-visible:opacity-100 disabled:opacity-40"
-      disabled={state === "saving"} onClick={() => detach(promote())} aria-label={label} title={failed === null ? label : `${label}: ${failed}`}>
+    <IconControl place="pill" className="shrink-0 opacity-60 transition-opacity group-hover/fact:opacity-100 focus-visible:opacity-100 disabled:opacity-40" disabled={state === "saving"} onClick={() => detach(promote())} aria-label={label} title={failed === null ? label : `${label}: ${failed}`}>
       <GlobeHemisphereWestIcon size={14} />
-    </button>
+    </IconControl>
   );
 }
 

@@ -16,6 +16,7 @@ import {
 } from "@kinu.run/core";
 import type { ExecutorCommandResult } from "@kinu.run/core";
 import { WorkspaceTerminalOutputSchema } from "@kinu.run/core";
+import { IconControl } from "@/components/ui/IconControl";
 
 export type { TerminalPaneOutput };
 
@@ -334,13 +335,11 @@ function PtyTerminal({ workspace, executor, session, device: machine, frame }: {
     : { note: "⇧⌃C copies", title: "⌃C reaches a full-screen program. Suspend, fg and bg do not work here." };
 
   const restartShell = device ? null : (
-    <button type="button" aria-label="Restart the shell" title="Restart the shell: a new one, for after a shell exits"
-      onClick={() => detach(Effect.catchCause(Effect.gen(function* () {
+    <IconControl place="bar" className="shrink-0" aria-label="Restart the shell" title="Restart the shell: a new one, for after a shell exits" onClick={() => detach(Effect.catchCause(Effect.gen(function* () {
         yield* Effect.promise(async () => restart());
-      }), showing(setFailure)))}
-      className="p-bar-icon shrink-0">
+      }), showing(setFailure)))}>
       <ArrowCounterClockwiseIcon size={14} />
-    </button>
+    </IconControl>
   );
 
   return <TerminalFrame {...frame} state={state} failure={failure} copies={copies} action={restartShell} hostRef={hostRef} />;

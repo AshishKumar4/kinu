@@ -62,6 +62,7 @@ import { WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/
 import { useCarriedAttachments } from "@/components/workspaces/NewChatView";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
+import { IconControl } from "@/components/ui/IconControl";
 
 /** The mission is shown as the standing brief, not sent as an opening message
  *  the agent would then try to carry out. */
@@ -526,7 +527,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   const [tabsShown, setTabsShown] = useState(false);
   const working = agents.filter((agent) => !agent.tab && agent.activity === "working").length;
   const chats = agents.filter((agent) => agent.tab).map(actions);
-  const menu = drawer && <button type="button" onClick={drawer} className="p-bar-icon" aria-label="Open menu"><ListIcon size={18} /></button>;
+  const menu = drawer && <IconControl place="bar" onClick={drawer} aria-label="Open menu"><ListIcon size={18} /></IconControl>;
   const barActions = <WorkspaceBarActions workspace={workspace} working={working} view={view} inspector={inspector} onAgents={() => agentsNav.enter(workspace)} />;
   const speaking = shown ?? agents.find((agent) => agent.category === "main");
   const mascotOf = useMascotOf(workspace);

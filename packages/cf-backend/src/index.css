@@ -1121,7 +1121,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-pill[data-tone="warning"] { border-color: color-mix(in srgb, var(--c-warning) 28%, transparent); }
 .p-pills > .p-pill { width: 100%; }
-.p-pill:not(:has(.p-pill-action, .p-pill-icon)) { padding-right: 14px; }
+.p-pill:not(:has(.p-pill-action, .p-icon-control-pill)) { padding-right: 14px; }
 .p-pill-mark { display: flex; flex-shrink: 0; align-items: center; justify-content: center; width: 16px; height: 20px; }
 .p-pill-mark[data-tone="danger"] { color: var(--c-danger); }
 .p-pill-mark[data-tone="warning"] { color: var(--c-warning); }
@@ -1149,9 +1149,11 @@ body { background: var(--c-bg); color: var(--c-text); }
   transition: background-color var(--dur-state) ease-out;
 }
 .p-pill-action:hover { background: color-mix(in srgb, var(--c-text) 12%, transparent); }
+/* Quiet: ink only, in any tone of pill, under the pointer too. */
+.p-pill-action[data-quiet] { background: transparent !important; }
 .p-pill[data-tone="danger"] .p-pill-action { background: color-mix(in srgb, var(--c-danger) 16%, transparent); }
 .p-pill[data-tone="danger"] .p-pill-action:hover { background: color-mix(in srgb, var(--c-danger) 24%, transparent); }
-.p-pill-icon {
+.p-icon-control-pill {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
@@ -1159,11 +1161,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   width: 26px;
   height: 26px;
   border-radius: var(--r-pill);
-  color: var(--c-text-3);
-  cursor: pointer;
-  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
-.p-pill-icon:hover { color: var(--c-text); background: var(--c-hover); }
 /* Opened, a pill is a card of the same edge: its words wrap, its details below, its actions at the foot. */
 .p-pill[data-open] {
   display: flex;
@@ -1364,7 +1362,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-composer-quiet:hover:not(:disabled) { color: var(--c-text); background: var(--c-hover); }
 .p-composer-quiet[aria-pressed="true"] { color: var(--c-text); }
 .p-composer-mode { display: flex; flex-shrink: 0; align-items: center; }
-.p-composer-round, .p-composer-send {
+.p-icon-control-composer, .p-composer-send {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
@@ -1375,8 +1373,6 @@ body { background: var(--c-bg); color: var(--c-text); }
   cursor: pointer;
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out, opacity var(--dur-state) ease-out;
 }
-.p-composer-round { color: var(--c-text-3); }
-.p-composer-round:hover:not(:disabled) { color: var(--c-text); background: var(--c-hover); }
 .p-composer-send { background: var(--c-accent); color: var(--c-accent-on); }
 .p-composer-send:hover:not(:disabled) { background: color-mix(in srgb, var(--c-accent) 90%, var(--c-text)); }
 .p-composer-send:disabled { background: var(--c-hover); color: var(--c-text-3); cursor: default; }
@@ -2158,25 +2154,25 @@ body > .annotation-toolbar {
 @media (hover: hover) {
   .p-bar-tab:is(:hover, :focus-within) .p-bar-actions { opacity: 1; pointer-events: auto; }
   .p-bar-tab:is(:hover, :focus-within):has(.p-bar-actions) .p-bar-link { padding-right: calc(var(--flare) + 52px); }
-  .p-bar-tab:is(:hover, :focus-within):has(.p-bar-action:only-child) .p-bar-link { padding-right: calc(var(--flare) + 32px); }
+  .p-bar-tab:is(:hover, :focus-within):has(.p-icon-control-tab:only-child) .p-bar-link { padding-right: calc(var(--flare) + 32px); }
 }
 @media (hover: none) {
   .p-bar-tab[data-active] .p-bar-actions { opacity: 1; pointer-events: auto; }
   .p-bar-tab[data-active]:has(.p-bar-actions) :is(.p-bar-sizer, .p-bar-link) { padding-right: calc(var(--flare) + 52px); }
-  .p-bar-tab[data-active]:has(.p-bar-action:only-child) :is(.p-bar-sizer, .p-bar-link) { padding-right: calc(var(--flare) + 32px); }
+  .p-bar-tab[data-active]:has(.p-icon-control-tab:only-child) :is(.p-bar-sizer, .p-bar-link) { padding-right: calc(var(--flare) + 32px); }
 }
-.p-bar-action {
+.p-icon-control-tab {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 22px;
   height: 22px;
   border-radius: var(--r-inner);
-  color: var(--c-text-3);
-  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
-.p-bar-action:is(:hover, :focus-visible) { background: var(--c-hover); color: var(--c-text); }
-.p-bar-action[data-danger]:hover, .p-bar-action[data-danger]:focus-visible { color: var(--c-danger); }
+/* IconControl (ui/IconControl.tsx): the third ink, the text on the hover wash, a danger one danger. */
+.p-icon-control { color: var(--c-text-3); cursor: pointer; transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out; }
+.p-icon-control:is(:hover, :focus-visible):not(:disabled) { background: var(--c-hover); color: var(--c-text); }
+.p-icon-control[data-danger]:is(:hover, :focus-visible) { color: var(--c-danger); }
 .p-bar-rename { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 calc(var(--flare) + 6px) 2px; }
 .p-bar-rename input {
   min-width: 72px;
@@ -2191,20 +2187,17 @@ body > .annotation-toolbar {
 }
 .p-bar-rename-error { font-size: 11px; color: var(--c-danger); white-space: nowrap; }
 .p-bar-new { position: relative; z-index: 1; display: flex; flex-shrink: 0; align-items: center; height: 38px; padding: 0 10px 2px 2px; }
-.p-bar-icon {
+.p-icon-control-bar {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 28px;
   height: 28px;
   border-radius: var(--r-control);
-  color: var(--c-text-3);
-  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
-.p-bar-icon:is(:hover, :focus-visible) { background: var(--c-hover); color: var(--c-text); }
 /* The header's count of agents at work out of sight: the accent, so it reads in dark and light alike. */
 .p-agents-badge { background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 1.5px var(--c-bg); }
-.p-bar-icon[aria-current="page"], .p-bar-icon[aria-pressed="true"] { color: var(--c-text); }
+.p-icon-control:is([aria-current="page"], [aria-pressed="true"]) { color: var(--c-text); }
 .p-bar-trailing { display: flex; flex-shrink: 0; align-items: center; gap: 2px; padding: 0 10px 0 6px; }
 .p-bar-outline { position: absolute; top: 8px; bottom: 0; left: 0; pointer-events: none; }
 .p-bar-outline > span { position: absolute; bottom: 0; border: 0 solid var(--bar-line); }
@@ -2331,8 +2324,8 @@ body > .annotation-toolbar {
 .p-pages-row > .p-page:first-child, .p-page[data-open] { flex-shrink: 1; }
 .p-page[data-open] { color: var(--c-text); background: var(--c-surface); box-shadow: 0 0 0 1px var(--c-border), var(--shadow-tab); }
 .p-page[data-open] > .p-page-link > svg, .p-page-picker > svg:first-child { color: var(--c-accent-mark); }
-.p-page[data-open]:has(.p-bar-action) .p-page-link { padding-right: 2px; }
-.p-page > .p-bar-action { width: 20px; height: 20px; margin-right: 3px; }
+.p-page[data-open]:has(.p-icon-control-tab) .p-page-link { padding-right: 2px; }
+.p-page > .p-icon-control-tab { width: 20px; height: 20px; margin-right: 3px; }
 .p-page-picker { gap: 6px; max-width: 100%; padding: 0 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .p-page-picker > .p-tool-count { flex-shrink: 0; }
 .p-pages-menu { position: absolute; top: calc(100% + 8px); left: 0; z-index: 40; width: 240px; padding: 4px; }

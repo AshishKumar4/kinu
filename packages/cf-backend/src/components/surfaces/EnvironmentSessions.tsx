@@ -9,6 +9,7 @@ import { DesktopIcon, FolderOpenIcon, GitBranchIcon, PlusIcon, SparkleIcon, XIco
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { IconControl } from "@/components/ui/IconControl";
 
 /** A read is one exec in the box (about 150 ms there, 10 ms of it tmux, staging 2026-10-13); a few seconds keeps the
  *  marks current while the tab is open, and nothing reads while it is closed or hidden. */
@@ -195,9 +196,9 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
         )}
       </div>
       {onOpen !== null && (
-        <button type="button" aria-label="New session" title="New session" className="p-bar-icon mb-1 shrink-0" onClick={() => detach(onOpen())}>
+        <IconControl place="bar" className="mb-1 shrink-0" aria-label="New session" title="New session" onClick={() => detach(onOpen())}>
           <PlusIcon size={14} />
-        </button>
+        </IconControl>
       )}
     </div>
   );

@@ -7,6 +7,7 @@ import { DESKTOP_QUERY, useMediaQuery } from "@/hooks/use-media-query";
 import { needsTheUser, type PersonAsks } from "@kinu.run/core";
 
 import { useInspectorLayout } from "@/hooks/use-inspector-layout";
+import { IconControl } from "@/components/ui/IconControl";
 
 interface WorkbenchPanelsProps {
   /** `undefined` for a sample workbench: the policy decides on every mount. */
@@ -44,19 +45,10 @@ function toggleLabel({ collapsed, beside }: InspectorControl): string {
 
 export function InspectorToggle({ control }: { control: InspectorControl }) {
   return (
-    <button
-      type="button"
-      onClick={control.toggle}
-      aria-label={toggleLabel(control)}
-      title={toggleLabel(control)}
-      aria-pressed={!control.collapsed}
-      data-inspector-toggle
-      {...(control.collapsed ? { "data-inspector-expand": "" } : { "data-inspector-collapse": "" })}
-      className="p-bar-icon relative"
-    >
+    <IconControl place="bar" className="relative" onClick={control.toggle} aria-label={toggleLabel(control)} title={toggleLabel(control)} aria-pressed={!control.collapsed} data-inspector-toggle {...(control.collapsed ? { "data-inspector-expand": "" } : { "data-inspector-collapse": "" })}>
       <SidebarSimpleIcon size={16} style={{ transform: "scaleX(-1)" }} />
       {control.waiting > 0 && control.collapsed && <span className="p-bar-icon-dot" aria-hidden />}
-    </button>
+    </IconControl>
   );
 }
 

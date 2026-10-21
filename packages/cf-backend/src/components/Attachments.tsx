@@ -4,6 +4,7 @@ import type { FileUIPart } from "ai";
 import { PaperclipIcon } from "@phosphor-icons/react";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { FilePicker } from "@/components/ui/FilePicker";
+import { IconControl } from "@/components/ui/IconControl";
 
 export interface AttachmentsControl {
   readonly parts: readonly FileUIPart[];
@@ -86,10 +87,9 @@ export function AttachButton({ attachments, disabled }: { attachments: Attachmen
   return (
     <>
       <FilePicker ref={input} multiple onChange={(e) => { attachments.onAdd(e.currentTarget.files); e.currentTarget.value = ""; }} />
-      <button type="button" onClick={() => input.current?.click()} disabled={disabled}
-        className="p-composer-round" aria-label="Attach files" title="Attach files">
+      <IconControl place="composer" onClick={() => input.current?.click()} disabled={disabled} aria-label="Attach files" title="Attach files">
         <PaperclipIcon size={17} />
-      </button>
+      </IconControl>
     </>
   );
 }

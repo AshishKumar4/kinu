@@ -37,6 +37,7 @@ import {
   ONE_SHELL, SessionDetails, SessionTabs, openSession, useMachineSessions, type MachineSessions,
 } from "./EnvironmentSessions";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { IconControl } from "@/components/ui/IconControl";
 
 /** The terminal (xterm, 333 KB of the workspace's first chunk on 2026-10-08) loads with a command lane's first view. */
 const TerminalPane = lazyRoute<TerminalPaneProps>(async () => {
@@ -583,16 +584,16 @@ function SplitToggle({ sessions, shown, showing }: { sessions: MachineSessions; 
   const others = (sessions.sessions ?? []).filter((session) => session.id !== showing);
 
   if (shown.split === showing) {
-    return <button type="button" aria-label="One pane" title="One pane" className="p-bar-icon" onClick={() => shown.setSplit(null)}><XIcon size={13} /></button>;
+    return <IconControl place="bar" aria-label="One pane" title="One pane" onClick={() => shown.setSplit(null)}><XIcon size={13} /></IconControl>;
   }
 
   if (shown.split !== null || others[0] === undefined) return null;
   const next = others[0].id;
 
   return (
-    <button type="button" aria-label="Split" title={`Split: ${others[0].name} beside it`} className="p-bar-icon" onClick={() => shown.setSplit(next)}>
+    <IconControl place="bar" aria-label="Split" title={`Split: ${others[0].name} beside it`} onClick={() => shown.setSplit(next)}>
       <SplitHorizontalIcon size={14} />
-    </button>
+    </IconControl>
   );
 }
 

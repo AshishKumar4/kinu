@@ -8,6 +8,8 @@ import {
   ADVISOR_SEVERITY_LABEL, eventSourceLabel, eventVariantLabel, keptAdvisorNote, MAIL_HANDED_EVENT, MAIN_AGENT, parseDrainedEvents,
   type AdvisorSeverity, type ClassifiedProgrammaticTurn, type DrainedEvent, type SignalCard,
 } from "@kinu.run/core";
+import { IconControl } from "@/components/ui/IconControl";
+import { PillButton } from "@/components/ui/Pill";
 
 export type CardState = SignalCard["state"];
 
@@ -78,9 +80,9 @@ export function EventRow({ icon: Mark, tone, label, source, body, detail, state,
             <span className="p-pill-mark"><Mark size={14} weight="fill" className={tone} aria-hidden /></span>
             <span className="p-pill-body">{who}{badge}</span>
             {tail}
-            <button type="button" className="p-pill-icon -my-1 -mr-2" aria-label="Show less" aria-expanded onClick={() => setOpen(false)}>
+            <IconControl place="pill" className="-my-1 -mr-2" aria-label="Show less" aria-expanded onClick={() => setOpen(false)}>
               <CaretUpIcon size={12} weight="bold" />
-            </button>
+            </IconControl>
           </div>
           {body !== undefined && <p data-event-brief className="t-body mt-2 ml-6 whitespace-pre-wrap break-words p-text-2">{body}</p>}
           {detail !== undefined && <p className="t-body mt-2 ml-6 whitespace-pre-wrap break-words p-text-3">{detail}</p>}
@@ -88,7 +90,7 @@ export function EventRow({ icon: Mark, tone, label, source, body, detail, state,
         </div>
       ) : (
         <span className="p-pill-line">
-          <button type="button" className="p-pill" data-history aria-expanded={false} onClick={() => setOpen(true)}>
+          <PillButton data-history aria-expanded={false} onClick={() => setOpen(true)}>
             <span className="p-pill-mark"><Mark size={14} weight="fill" className={tone} aria-hidden /></span>
             <span className="p-pill-body">
               {who}
@@ -96,7 +98,7 @@ export function EventRow({ icon: Mark, tone, label, source, body, detail, state,
               {body !== undefined && <span data-event-brief className="p-pill-text truncate">{body}</span>}
             </span>
             {tail}
-          </button>
+          </PillButton>
           {action}
         </span>
       )}
