@@ -129,13 +129,27 @@ html, body, #root {
      `web/theme.ts`, which the signed-out pages share; they arrive through
      `virtual:kinu-theme.css`. What lives here only points at them. */
 
+  /* Layout constants (docs/DESIGN-SYSTEM.md §1.4): the only arbitrary measures feature code may name. */
+  --layout-frame: 1152px;
+  --layout-gutter: 32px;
+  --layout-bar: 46px;
+  --layout-sidebar: 240px;
+  --layout-tile-min: 300px;
+  --layout-chat-column: 780px;
+  --layout-tool-list: 400px;
+  --layout-tool-places: 220px;
+  --layout-reader: 760px;
+
   /* motion */
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-glide: cubic-bezier(0.32, 0.72, 0, 1);  /* a selection that travels: quick to leave, soft to land */
-  --dur-fast: 120ms;
-  --dur-state: 150ms;
+  /* The three durations (docs/DESIGN-SYSTEM.md §1.7): a state change, something entering, a fold. The landing's film
+     keeps two of its own, here beside them. */
+  --dur-state: 120ms;
   --dur-enter: 220ms;
   --dur-fold: 300ms;  /* a block that folds: longer than a control's change, since it moves a whole block */
+  --dur-rise: 700ms;
+  --dur-draw: 1100ms;
 
   /* The code surface: one silk tone on a recessed well rather than
      syntax-coloured — CodeBlock in components/surfaces/shared.tsx sets every
@@ -178,7 +192,7 @@ html, body, #root {
   --color-kumo-line: var(--c-button-line);
   --color-kumo-hairline: var(--c-field-border);
   --color-kumo-brand: var(--c-accent);
-  --color-kumo-brand-hover: color-mix(in srgb, var(--c-accent) 92%, #000);
+  --color-kumo-brand-hover: var(--c-accent-hover);
   --color-kumo-danger: var(--c-danger);
   --color-kumo-success: var(--c-success);
   --color-kumo-warning: var(--c-warning);
@@ -314,8 +328,27 @@ body { background: var(--c-bg); color: var(--c-text); }
   ul { list-style: disc; } ol { list-style: decimal; }
   h1, h2, h3 { font-size: 1em; font-weight: 600; margin: 0.5em 0 0.2em; color: var(--c-text-2); }
   &[data-folded] { max-height: 3lh; overflow: hidden; }
-  &[data-folded][data-overflows] { mask-image: linear-gradient(to bottom, #000 45%, transparent); }
+  &[data-folded][data-overflows] { mask-image: linear-gradient(to bottom, var(--c-text) 45%, transparent); }
 }
+
+/* ── Type roles (docs/DESIGN-SYSTEM.md §1.3): the only way to set a size, weight, leading or tracking ──
+   Rendered px; each role carries its default ink, which an ink utility beside it overrides. Inter for everything that
+   reads, Fragment Mono for code. Weights are 400, 500 and 600. They sit in the components layer with the rest. */
+.t-hero       { font: 600 36px/44px var(--font-ui); letter-spacing: -0.015em; color: var(--c-text); }
+.t-page-title { font: 600 24px/32px var(--font-ui); letter-spacing: -0.011em; color: var(--c-text); }
+.t-title      { font: 600 15px/22px var(--font-ui); letter-spacing: -0.005em; color: var(--c-text); }
+.t-nav        { font: 500 14px/20px var(--font-ui); color: var(--c-text-2); }
+.t-label      { font: 600 13px/20px var(--font-ui); color: var(--c-text-2); }
+.t-item       { font: 500 13px/20px var(--font-ui); color: var(--c-text); }
+.t-body       { font: 400 13px/20px var(--font-ui); color: var(--c-text-2); }
+.t-control    { font: 500 13px/20px var(--font-ui); }
+.t-meta       { font: 400 12px/16px var(--font-ui); color: var(--c-text-3); font-variant-numeric: tabular-nums; }
+.t-status     { font: 500 12px/16px var(--font-ui); }
+.t-micro      { font: 600 11px/14px var(--font-ui); letter-spacing: 0.01em; }
+.t-composer   { font: 400 15.5px/24px var(--font-ui); color: var(--c-text); }
+.t-code       { font: 400 13px/20px var(--font-mono); color: var(--c-accent-fg); }
+:not(pre) > .t-code { font-size: 0.92em; }
+.t-mono       { font-family: var(--font-mono); }
 
 /* ── Type roles — the scale lives here, not in per-component literals ─ */
 /* One name per role, in rem at a 16px root; the comment carries the pixel
@@ -603,7 +636,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px;
   border: 1px solid transparent; border-radius: var(--r-control); white-space: nowrap; cursor: pointer;
   font: 500 13px/20px var(--font-ui);
-  transition: background-color 120ms ease-out, border-color 120ms ease-out, box-shadow 120ms ease-out, color 120ms ease-out;
+  transition: background-color var(--dur-state) ease-out, border-color var(--dur-state) ease-out, box-shadow var(--dur-state) ease-out, color var(--dur-state) ease-out;
 }
 .p-button-md { height: 32px; padding: 0 14px; }
 .p-button-sm { height: 28px; padding: 0 10px; }
@@ -618,12 +651,9 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-button-secondary:hover { background: var(--c-button-bg-hover); border-color: var(--c-button-line-hover); }
 .p-button-secondary:active { background: var(--c-button-bg-active); box-shadow: none; }
 
-.p-button-primary { background: var(--c-accent); color: var(--c-accent-on); font-weight: 600;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), var(--shadow-button); }
-[data-mode="light"] .p-button-primary:hover { background: color-mix(in srgb, var(--c-accent) 92%, #000); }
-[data-mode="light"] .p-button-primary:active { background: color-mix(in srgb, var(--c-accent) 86%, #000); box-shadow: none; }
-[data-mode="dark"] .p-button-primary:hover { background: color-mix(in srgb, var(--c-accent) 90%, #fff); }
-[data-mode="dark"] .p-button-primary:active { background: color-mix(in srgb, var(--c-accent) 92%, #000); box-shadow: none; }
+.p-button-primary { background: var(--c-accent); color: var(--c-accent-on); font-weight: 600; box-shadow: var(--shadow-primary); }
+.p-button-primary:hover { background: var(--c-accent-hover); }
+.p-button-primary:active { background: var(--c-accent-active); box-shadow: none; }
 
 .p-button-ghost { background: transparent; color: var(--c-text-2); }
 .p-button-ghost:hover { background: var(--c-hover); color: var(--c-text); }
@@ -632,8 +662,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-button-danger { background: var(--c-button-bg); border-color: var(--c-button-line); color: var(--c-danger); box-shadow: var(--shadow-button); }
 .p-button-danger:hover { background: var(--c-danger-tint); border-color: color-mix(in srgb, var(--c-danger) 30%, transparent); }
 
-.p-button-destructive { background: var(--c-danger); color: var(--c-danger-on); font-weight: 600; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12); }
-.p-button-destructive:hover { background: color-mix(in srgb, var(--c-danger) 90%, #000); }
+.p-button-destructive { background: var(--c-danger); color: var(--c-danger-on); font-weight: 600; box-shadow: var(--shadow-destructive); }
+.p-button-destructive:hover { background: var(--c-danger-hover); }
 
 .p-button:disabled { cursor: default; box-shadow: none; }
 .p-button-secondary:disabled, .p-button-ghost:disabled, .p-button-danger:disabled { color: var(--c-text-3); background: transparent; border-color: var(--c-button-line); }
@@ -646,8 +676,8 @@ body { background: var(--c-bg); color: var(--c-text); }
   position: sticky; bottom: 16px; z-index: 10; display: flex; align-items: center; gap: 12px;
   height: 48px; margin-top: 24px; padding: 8px 8px 8px 16px;
   border: 1px solid var(--c-border); border-radius: var(--r-card); background: var(--c-overlay); box-shadow: var(--shadow-menu);
-  animation: p-save-bar-in 220ms var(--ease-out-strong);
-  transition: opacity 220ms var(--ease-out-strong), transform 220ms var(--ease-out-strong);
+  animation: p-save-bar-in var(--dur-enter) var(--ease-out-strong);
+  transition: opacity var(--dur-enter) var(--ease-out-strong), transform var(--dur-enter) var(--ease-out-strong);
 }
 .p-save-bar[data-state="closed"] { opacity: 0; transform: translateY(8px); }
 @keyframes p-save-bar-in { from { opacity: 0; transform: translateY(8px); } }
@@ -667,6 +697,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* The row scrolls rather than squeezing what it holds. */
 .p-tool-row > * { flex-shrink: 0; }
 @media (max-width: 639px) {
+  :root { --layout-gutter: 20px; --layout-bar: 48px; }
   .p-tool-bar { height: 48px; }
   .p-tool-title { font-size: 17px; line-height: 24px; }
 }
@@ -676,7 +707,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   display: grid; align-items: center; column-gap: 12px; min-height: 56px; padding: 0 8px;
   grid-template-columns: 32px minmax(0, 1fr) 120px 28px;
   border-radius: var(--r-row);
-  transition: background-color 120ms ease-out;
+  transition: background-color var(--dur-state) ease-out;
 }
 .p-plugin-row:hover { background: var(--c-hover); }
 .p-plugin-row-control { grid-template-columns: 32px minmax(0, 1fr) 120px auto 28px; }
@@ -724,7 +755,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   color: var(--c-text-3);
   font-size: 12px;
   cursor: pointer;
-  transition: color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out;
 }
 .p-attention-behind:hover { color: var(--c-text); }
 @media (max-width: 640px) {
@@ -794,7 +825,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   font-size: 12.5px;
   font-weight: 500;
   cursor: pointer;
-  transition: background-color var(--dur-fast) ease-out;
+  transition: background-color var(--dur-state) ease-out;
 }
 .p-pill-action:hover { background: color-mix(in srgb, var(--c-text) 12%, transparent); }
 .p-pill[data-tone="danger"] .p-pill-action { background: color-mix(in srgb, var(--c-danger) 16%, transparent); }
@@ -809,7 +840,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   border-radius: 999px;
   color: var(--c-text-3);
   cursor: pointer;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
 .p-pill-icon:hover { color: var(--c-text); background: var(--c-hover); }
 /* Opened, a pill is a card of the same edge: its words wrap, its details below, its actions at the foot. */
@@ -837,7 +868,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-pill-raw > summary { display: inline-flex; align-items: center; gap: 5px; color: var(--c-text-3); font-size: 12px; cursor: pointer; list-style: none; }
 .p-pill-raw > summary::-webkit-details-marker { display: none; }
 .p-pill-raw > summary:hover { color: var(--c-text); }
-.p-pill-raw > summary > svg { transition: transform var(--dur-fast) ease-out; }
+.p-pill-raw > summary > svg { transition: transform var(--dur-state) ease-out; }
 .p-pill-raw[open] > summary > svg { transform: rotate(90deg); }
 .p-code-wrap pre, .p-code-wrap code { white-space: pre-wrap; overflow-wrap: anywhere; }
 
@@ -883,7 +914,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   color: var(--c-text-3);
   font-size: 12.5px;
   cursor: pointer;
-  transition: border-color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: border-color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
 .p-pill[data-history]:hover { border-color: var(--c-border-strong); }
 /* The closed pill and its one action, capped together: capping the pill alone left it off-centre in a wider row. */
@@ -1007,7 +1038,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   color: var(--c-text-3);
   font-size: 13px;
   cursor: pointer;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
 .p-composer-quiet:hover:not(:disabled) { color: var(--c-text); background: var(--c-hover); }
 .p-composer-quiet[aria-pressed="true"] { color: var(--c-text); }
@@ -1021,7 +1052,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   height: 32px;
   border-radius: 50%;
   cursor: pointer;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out, opacity var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out, opacity var(--dur-state) ease-out;
 }
 .p-composer-round { color: var(--c-text-3); }
 .p-composer-round:hover:not(:disabled) { color: var(--c-text); background: var(--c-hover); }
@@ -1042,7 +1073,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   color: var(--c-text-3) !important;
   font-size: 13px !important;
   border-radius: 999px !important;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
 .p-composer-model :is(button, [role="combobox"]):hover { color: var(--c-text) !important; background: var(--c-hover) !important; }
 .p-composer-model :is(button, [role="combobox"]) > span[aria-hidden="true"]:last-child { right: 8px; }
@@ -1237,12 +1268,12 @@ body { background: var(--c-bg); color: var(--c-text); }
    weekly lines draw from left to right once, then hold. */
 @keyframes landing-rise { from { transform: scaleY(0); } to { transform: scaleY(1); } }
 @keyframes landing-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
-.landing-rise { transform-origin: bottom; animation: landing-rise 700ms var(--ease-out-strong) both; }
-.landing-draw { stroke-dasharray: 1; animation: landing-draw 1100ms ease-out both; }
+.landing-rise { transform-origin: bottom; animation: landing-rise var(--dur-rise) var(--ease-out-strong) both; }
+.landing-draw { stroke-dasharray: 1; animation: landing-draw var(--dur-draw) ease-out both; }
 
 @layer utilities {
   .animate-fade-in { animation: fade-in var(--dur-enter) var(--ease-out-strong); }
-  .animate-scale-in { animation: scale-in var(--dur-fast) ease-out; }
+  .animate-scale-in { animation: scale-in var(--dur-state) ease-out; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1623,7 +1654,7 @@ body > .annotation-toolbar {
    the grammar above and overrides `.p-card`'s transition list by order. */
 @layer components {
 .p-card-lift {
-  transition: border-color 120ms ease-out, transform 120ms ease-out;
+  transition: border-color var(--dur-state) ease-out, transform var(--dur-state) ease-out;
 }
 .p-card-lift:hover {
   border-color: color-mix(in srgb, var(--c-accent) 40%, transparent);
@@ -1748,7 +1779,7 @@ body > .annotation-toolbar {
   position: absolute;
   inset: 0;
   color: var(--c-text-3);
-  transition: color var(--dur-state) ease-out, padding var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, padding var(--dur-state) ease-out;
 }
 .p-bar-link:hover { color: var(--c-text-2); }
 .p-bar-link:focus-visible { outline: none; color: var(--c-text); text-decoration: underline; text-underline-offset: 4px; text-decoration-color: var(--c-accent); }
@@ -1764,7 +1795,7 @@ body > .annotation-toolbar {
   align-items: center;
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--dur-fast) ease-out;
+  transition: opacity var(--dur-state) ease-out;
 }
 /* A tap is no hover: on touch, only the open tab carries its actions, so a tap meant for a name never lands on a
    pencil or a cross that appeared under it. The workspace's name is open on its overview, and renames there. The open
@@ -1787,7 +1818,7 @@ body > .annotation-toolbar {
   height: 22px;
   border-radius: 6px;
   color: var(--c-text-3);
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
 .p-bar-action:hover, .p-bar-action:focus-visible { outline: none; background: var(--c-hover); color: var(--c-text); }
 .p-bar-action[data-danger]:hover, .p-bar-action[data-danger]:focus-visible { color: var(--c-danger); }
@@ -1815,7 +1846,7 @@ body > .annotation-toolbar {
   height: 28px;
   border-radius: 8px;
   color: var(--c-text-3);
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
 .p-bar-icon:hover, .p-bar-icon:focus-visible { outline: none; background: var(--c-hover); color: var(--c-text); }
 /* The header's count of agents at work out of sight: the accent, so it reads in dark and light alike. */
@@ -1841,7 +1872,7 @@ body > .annotation-toolbar {
   border-bottom-left-radius: var(--flare);
 }
 .p-bar-outline > [data-part="arm-end"] { right: 0; border-bottom-width: 1px; }
-.p-bar-outline[data-glide] > span { transition: left 260ms var(--ease-glide), width 260ms var(--ease-glide); }
+.p-bar-outline[data-glide] > span { transition: left var(--dur-fold) var(--ease-glide), width var(--dur-fold) var(--ease-glide); }
 @media (prefers-reduced-motion: reduce) {
   .p-bar-outline[data-glide] > span { transition: none; }
 }
@@ -1879,7 +1910,7 @@ body > .annotation-toolbar {
   font-weight: 500;
   letter-spacing: -0.005em;
   white-space: nowrap;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out, box-shadow var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out, box-shadow var(--dur-state) ease-out;
 }
 .p-tool:hover { color: var(--c-text); background: var(--c-hover); }
 .p-tool:focus-visible { outline: 1.5px solid var(--c-accent); outline-offset: 1px; }
@@ -1887,7 +1918,7 @@ body > .annotation-toolbar {
   padding: 0 9px 0 8px;
   color: var(--c-text);
   background: var(--c-surface);
-  box-shadow: 0 0 0 1px var(--c-border), 0 1px 2px rgb(0 0 0 / 0.18);
+  box-shadow: 0 0 0 1px var(--c-border), var(--shadow-tab);
 }
 .p-tool[aria-current="true"] > svg { color: var(--c-accent-mark); }
 .p-tool-count {
@@ -1940,13 +1971,13 @@ body > .annotation-toolbar {
   height: 26px;
   border-radius: 7px;
   color: var(--c-text-3);
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
 .p-page:hover { color: var(--c-text); background: var(--c-hover); }
 .p-page-link { display: flex; min-width: 0; align-items: center; gap: 6px; height: 100%; padding: 0 9px 0 8px; font-size: 12.5px; font-weight: 500; letter-spacing: -0.005em; white-space: nowrap; }
 .p-page-link:focus-visible { border-radius: 7px; outline: 1.5px solid var(--c-accent); outline-offset: 1px; }
 .p-pages-row > .p-page:first-child, .p-page[data-open] { flex-shrink: 1; }
-.p-page[data-open] { color: var(--c-text); background: var(--c-surface); box-shadow: 0 0 0 1px var(--c-border), 0 1px 2px rgb(0 0 0 / 0.18); }
+.p-page[data-open] { color: var(--c-text); background: var(--c-surface); box-shadow: 0 0 0 1px var(--c-border), var(--shadow-tab); }
 .p-page[data-open] > .p-page-link > svg, .p-page-picker > svg:first-child { color: var(--c-accent-mark); }
 .p-page[data-open]:has(.p-bar-action) .p-page-link { padding-right: 2px; }
 .p-page > .p-bar-action { width: 20px; height: 20px; margin-right: 3px; }
@@ -1964,7 +1995,7 @@ body > .annotation-toolbar {
   font-size: 12px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
 .p-bar-more:hover, .p-bar-more[aria-expanded="true"] { color: var(--c-text); background: var(--c-hover); }
 
@@ -2112,14 +2143,14 @@ body > .annotation-toolbar {
   grid-template-columns: 1fr 1fr;
   width: 200%;
   height: 100%;
-  transition: transform 280ms var(--ease-glide);
+  transition: transform var(--dur-fold) var(--ease-glide);
 }
-.p-slide > * { min-width: 0; transition: opacity 280ms var(--ease-glide); }
+.p-slide > * { min-width: 0; transition: opacity var(--dur-fold) var(--ease-glide); }
 .p-slide[data-drilled] { transform: translateX(-50%); }
 .p-slide[data-drilled] > :first-child, .p-slide:not([data-drilled]) > :last-child { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
   .p-slide { transition: none; }
-  .p-slide > * { transition-duration: 120ms; }
+  .p-slide > * { transition-duration: var(--dur-state); }
 }
 
 /* The composer floats over the chat's end: no rule, no band. The thread
@@ -2161,7 +2192,7 @@ body > .annotation-toolbar {
   font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.005em;
-  transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out, border-color var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out, border-color var(--dur-state) ease-out;
 }
 .p-env-chip:hover { border-color: var(--c-border-strong); color: var(--c-text); }
 .p-env-chip:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }

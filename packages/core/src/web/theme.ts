@@ -38,7 +38,9 @@ export type ColourToken =
   | '--c-button-bg' | '--c-button-bg-hover' | '--c-button-bg-active' | '--c-button-line' | '--c-button-line-hover'
   | '--c-user-bg' | '--c-user-border'
   | '--c-composer-bg' | '--c-composer-line' | '--c-composer-line-focus' | '--c-scrim' | '--c-shadow-drop'
-  | '--shadow-overlay' | '--shadow-card' | '--shadow-menu' | '--shadow-composer' | '--shadow-button';
+  | '--c-accent-hover' | '--c-accent-active' | '--c-danger-hover'
+  | '--shadow-overlay' | '--shadow-card' | '--shadow-menu' | '--shadow-composer' | '--shadow-button'
+  | '--shadow-primary' | '--shadow-destructive' | '--shadow-tab';
 
 /** Every block declares the complete set: an omitted token would resolve by source order. */
 export type TokenSet = Readonly<Record<ColourToken, string>>;
@@ -103,6 +105,14 @@ const GRAPHITE_DARK = {
   '--c-danger-on': '#1A0B08',
   // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
   '--c-focus': '#E0A458',
+  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark), and the lifts a filled
+  // button and a raised tab carry.
+  '--c-accent-hover': '#E3AD69',
+  '--c-accent-active': '#CE9751',
+  '--c-danger-hover': '#D77267',
+  '--shadow-primary': 'inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.04)',
+  '--shadow-destructive': 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
+  '--shadow-tab': '0 1px 2px rgba(0, 0, 0, 0.18)',
 } satisfies TokenSet;
 
 const GRAPHITE_LIGHT = {
@@ -156,6 +166,14 @@ const GRAPHITE_LIGHT = {
   '--c-danger-on': '#FFFFFF',
   // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
   '--c-focus': '#9D691C',
+  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark), and the lifts a filled
+  // button and a raised tab carry.
+  '--c-accent-hover': '#AF731B',
+  '--c-accent-active': '#A36B19',
+  '--c-danger-hover': '#9A3C30',
+  '--shadow-primary': 'inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 2px rgba(25, 24, 22, 0.06)',
+  '--shadow-destructive': 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
+  '--shadow-tab': '0 1px 2px rgba(0, 0, 0, 0.18)',
 } satisfies TokenSet;
 
 const WARM_DARK = {
@@ -209,6 +227,14 @@ const WARM_DARK = {
   '--c-danger-on': '#1A0B08',
   // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
   '--c-focus': '#E0A458',
+  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark), and the lifts a filled
+  // button and a raised tab carry.
+  '--c-accent-hover': '#E3AD69',
+  '--c-accent-active': '#CE9751',
+  '--c-danger-hover': '#B56F60',
+  '--shadow-primary': 'inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 1px 0 rgba(255, 240, 220, 0.04)',
+  '--shadow-destructive': 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
+  '--shadow-tab': '0 1px 2px rgba(0, 0, 0, 0.18)',
 } satisfies TokenSet;
 
 const WARM_LIGHT = {
@@ -262,6 +288,14 @@ const WARM_LIGHT = {
   '--c-danger-on': '#FFFFFF',
   // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
   '--c-focus': '#936212',
+  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark), and the lifts a filled
+  // button and a raised tab carry.
+  '--c-accent-hover': '#A36C11',
+  '--c-accent-active': '#986510',
+  '--c-danger-hover': '#873B28',
+  '--shadow-primary': 'inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 2px rgba(43, 26, 4, 0.07)',
+  '--shadow-destructive': 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
+  '--shadow-tab': '0 1px 2px rgba(0, 0, 0, 0.18)',
 } satisfies TokenSet;
 
 /** Each theme's token values by mode, for a reader that needs one colour outside the cascade. */
