@@ -142,31 +142,37 @@ function parentsIn(parts: readonly string[]): string[] {
   return parts.flatMap((part) => [...part.matchAll(/\bREFERENCES\s+"?([A-Za-z_][A-Za-z0-9_]*)"?/giu)].map((match) => match[1] ?? ''));
 }
 
-/** Each table a candidate file declares derived from others, by the mark beside its DDL (`DERIVED_FROM`). */
+/** Each table a candidate file declares derived from others, by the mark beside its DDL (`DERIVED_FROM`): a virtual
+ *  table's (an FTS index) too, which the genesis lock does not hold. */
 export function derivedIn(source: string): Map<string, string[]> {
-  return new Map([...source.matchAll(/CREATE TABLE IF NOT EXISTS (\w+) \(([^\n]*)/gu)]
+  return new Map([...source.matchAll(/CREATE (?:VIRTUAL )?TABLE IF NOT EXISTS (\w+) (?:USING \w+ ?)?\(([^\n]*)/gu)]
     .map((match) => [match[1] ?? '', derivedFrom(match[2])] as const).filter(([, sources]) => sources.length > 0));
 }
 
 /** The tables the candidate holds that refer to a dropped one by a foreign key, or declare themselves derived from one
  *  (`derived`, from `derivedIn`), transitively, and are not dropped already: each object drops them with it (core
- *  state/schema-repair.ts), so the plan names each with the table it goes with. */
+ *  state/schema-repair.ts), so the plan names each with the table it goes with. A virtual table no lock holds is named
+ *  by its mark alone, in the classes of the table it is derived from. */
 export function referrersOf(verdicts: readonly TableVerdict[], at: { to: GenesisLock; classes: Readonly<Record<string, readonly string[]>>; derived: ReadonlyMap<string, readonly string[]> }): TableVerdict[] {
   const tables = byTable(at.to).tables;
   const named = new Set(verdicts.filter((verdict) => verdict.does === 'drop' || verdict.does === 'retire').map((verdict) => verdict.table));
   const found: TableVerdict[] = [];
   const classesOf = (table: string) => Object.entries(at.classes).filter(([, held]) => held.includes(table)).map(([name]) => name);
 
+  const held = [...new Set([...tables.keys(), ...at.derived.keys()])].sort();
+
   for (let grown = true; grown;) {
     grown = false;
 
-    for (const [table, { parts }] of [...tables].sort(([a], [b]) => a.localeCompare(b))) {
-      const parent = parentsIn(parts).find((name) => named.has(name) && name !== table);
+    for (const table of held) {
+      const parent = parentsIn(tables.get(table)?.parts ?? []).find((name) => named.has(name) && name !== table);
       const source = (at.derived.get(table) ?? []).find((name) => named.has(name) && name !== table);
 
       if (named.has(table) || (parent === undefined && source === undefined)) continue;
       named.add(table);
-      found.push({ table, classes: classesOf(table), does: 'drop', why: parent === undefined ? `dropped with ${source ?? ''}, which it is derived from` : `dropped with ${parent}, which it refers to` });
+      const classes = tables.has(table) ? classesOf(table) : classesOf(source ?? '');
+
+      found.push({ table, classes, does: 'drop', why: parent === undefined ? `dropped with ${source ?? ''}, which it is derived from` : `dropped with ${parent}, which it refers to` });
       grown = true;
     }
   }
