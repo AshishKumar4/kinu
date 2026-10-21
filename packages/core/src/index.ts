@@ -694,7 +694,7 @@ export {
   parentAdmitsSubagentReport,
   readSubagentLiveStatus,
   subagentDescriptorSource,
-  owedSubagentTurnReport,
+  hireTurnSettled,
   type SubagentReportOrigin,
   type SubagentRuntime,
 } from './subagents/support';

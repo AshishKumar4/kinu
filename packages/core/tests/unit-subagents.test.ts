@@ -28,7 +28,7 @@ import {
   SUBAGENT_REPORT_HANDOFF_MAX_CHARS,
   type ReportDeps,
   type SubagentIngressDeps,
-  owedSubagentTurnReport,
+  hireTurnSettled,
   type SerializedMessage,
   type SqlExec,
   type SubagentDelivery,
@@ -996,10 +996,17 @@ describe('the owner talking to a subagent does not wake its parent', () => {
     return {
       roster,
       async turnEnds(input: { ownerDriven: boolean; assistantText: string; reportedThisTurn?: boolean }) {
-        // A durable hire's answered turn, as either backend ends one.
-        const owed = await owedSubagentTurnReport({
-          lifetime: 'durable', ending: 'answered', assistantText: input.assistantText, narration: async () => [],
-          reports: { spoke: input.reportedThisTurn ?? false, settled: false }, ownerDriven: input.ownerDriven, delegating: false,
+        // A durable hire's answered turn, as either backend ends one; the hire itself has hired no one.
+        const hire = makeWorld();
+        initEventsHubTables(hire.sql);
+        const own = new SubagentRosterStore(hire.sql, hire.actor);
+        own.ensureSchema();
+
+        const owed = await hireTurnSettled({
+          hirer: { roster, announce: () => {} },
+          hire: { record: { name: 'researcher', lifetime: 'durable' }, roster: own, log: new EventLog(hire.sql, hire.actor) },
+          turn: { reports: { spoke: input.reportedThisTurn ?? false, settled: false }, ownerDriven: input.ownerDriven, taskId: null },
+          ended: { ending: 'answered', assistantText: input.assistantText, narration: [] },
         });
 
         if (owed !== null) arrivesAtParent('turn_end', owed.content, owed.status);

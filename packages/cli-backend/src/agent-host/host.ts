@@ -41,8 +41,7 @@ import {
   subagentDescriptorSource,
   missionOf,
   recoverSubagentLifecycles,
-  owedSubagentTurnReport,
-  taskAnswerIsLater,
+  hireTurnSettled,
   type ActorHost,
   type ActorReference, type AgentSignal, type SendOutcome,
   type AgentRuntime,
@@ -1042,16 +1041,11 @@ export class LocalAgentHost {
       owed: async (turn) => {
         const parent = this.requireActorEntry(child.actor.record.parentActorId ?? '');
 
-        parent.roster.finishTurn(child.name, turn.ending, Date.now());
-
-        const state = child.relay;
-
-        if (state === null) return null;
-
-        return await owedSubagentTurnReport({
-          lifetime: child.actor.record.lifetime, ending: turn.ending, assistantText: turn.assistantText, narration: async () => turn.narration,
-          reports: state, ownerDriven: turn.ownerDriven,
-          delegating: taskAnswerIsLater({ roster: child.roster, log: child.eventLog, ...(turn.taskId !== null && { turnTaskId: turn.taskId }) }),
+        return await hireTurnSettled({
+          hirer: { roster: parent.roster, announce: () => { parent.tree.liveReads.moved(ROSTER_READS); } },
+          hire: { record: child.actor.record, roster: child.roster, log: child.eventLog },
+          // With no relay state the roster still moves, and nothing is owed.
+          turn: { reports: child.relay ?? { spoke: false, settled: true }, ownerDriven: turn.ownerDriven, taskId: turn.taskId }, ended: turn,
         });
       },
       sequenceId: (messageId) => `${child.key}:turn-end:${messageId}`,
