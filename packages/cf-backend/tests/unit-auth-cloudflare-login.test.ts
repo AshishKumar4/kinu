@@ -5,7 +5,7 @@ import { describe, expect, setSystemTime, test } from 'bun:test';
 import { authPageRoutes, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
 import { bootstrappedProfile, workerContext } from './helpers/bindings';
 import { serveFamily } from './helpers/api';
-import { oauthStateCookieName, SESSION_COOKIE_NAME } from '../src/auth/cookies';
+import { OAUTH_HANDOFFS_HELD, oauthStateCookieName, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import { calculatePKCECodeChallenge } from 'oauth4webapi';
 import { cloudflareConnectPath, CLOUDFLARE_WORKERS_AI_SCOPES, connectedPath, connectEndedOf, sha256Hex } from '@kinu.run/core';
 import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
@@ -350,6 +350,24 @@ describe('two starts in one browser each finish', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  // Sol-round review (2026-10-23): a cookie per handoff, unbounded, could fill the browser's cookie budget and evict
+  // the session. A start past the budget is refused, and sets no cookie.
+  test('a start past the handoff budget is refused and sets no cookie; a connect still ends on its finish page', async () => {
+    const { env } = setupEnv();
+    const held = Array.from({ length: OAUTH_HANDOFFS_HELD }, (_, n) => `${oauthStateCookieName(n.toString(16).padStart(16, '0'))}=b${String(n)}`).join('; ');
+    const signIn = await authPages(new Request(`${ORIGIN}/auth/cloudflare/start`, { headers: { cookie: held } }), env);
+    const connect = await authPages(new Request(`${ORIGIN}${cloudflareConnectPath(CONNECT_RUN)}`, { headers: { cookie: held } }), env);
+    const connectAt = new URL(connect?.headers.get('location') ?? '', ORIGIN);
+
+    expect({
+      signIn: { status: signIn?.status, cookies: signIn?.headers.getSetCookie().length },
+      connect: { status: connect?.status, page: connectAt.pathname, run: connectAt.searchParams.get('run'), cookies: connect?.headers.getSetCookie().length },
+    }).toEqual({
+      signIn: { status: 429, cookies: 0 },
+      connect: { status: 302, page: '/connected', run: CONNECT_RUN, cookies: 0 },
+    });
   });
 
 

@@ -411,8 +411,10 @@ export class UserMcpServers {
     await this.joinActivation();
     await this.redialUnusable('unlinked');
     const catalog = this.catalog();
-    // A server holds an OAuth client once a sign-in registered one (or its preset's app named one): it signs in.
+    // A server holds an OAuth client once a sign-in registered one (or its preset's app named one); one added with a
+    // token's headers authenticates by them, whatever app the deployment holds, and never signs in.
     const oauthClients = new Set(this.host.mcp.listServers().filter((row) => (row.client_id ?? '') !== '').map((row) => row.id));
+    const tokenBacked = new Set(this.host.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers WHERE headers IS NOT NULL`).map((row) => row.id));
 
     const rows = withCatalog(this.host.sqlx<{ id: string; allowed_tools: string | null; preset_id: McpPresetId | null }>(
       `SELECT id, allowed_tools, preset_id FROM user_mcp_servers`,
@@ -446,7 +448,7 @@ export class UserMcpServers {
 
       // Waiting on a sign-in, or declined one and holding its OAuth client: either way the row offers a sign-in, which
       // the person begins for a fresh address. A declined sign-in is not dialled again on its own.
-      const signIn = status !== 'ready' && (status === 'authenticating' || oauthClients.has(r.id));
+      const signIn = status !== 'ready' && !tokenBacked.has(r.id) && (status === 'authenticating' || oauthClients.has(r.id));
 
       return {
         id: r.id,

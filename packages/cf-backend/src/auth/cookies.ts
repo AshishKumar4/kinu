@@ -38,6 +38,20 @@ export const KINU_COOKIE_NAMES: readonly string[] = [
  *  each family whole. */
 export const KINU_COOKIE_FAMILIES: readonly string[] = [OAUTH_STATE_COOKIE_NAME];
 
+/**
+ * The handoffs one browser may hold at once, each its own cookie for its lifetime. RFC 6265 §6.1 asks a browser to keep
+ * at least 50 cookies per domain, and Chromium purges an eTLD+1 past 180 (net/cookies/cookie_monster.cc): beyond its
+ * budget a new cookie can evict an older one, the session among them. This many leaves most of the 50 to the app's
+ * own cookies (`KINU_COOKIE_NAMES`) and to a guest's; a start past it is refused, never one held replaced.
+ */
+export const OAUTH_HANDOFFS_HELD = 20;
+
+/** How many handoff cookies (`KINU_COOKIE_FAMILIES`) `request` carries. */
+export function heldHandoffs(request: Request): number {
+  return (request.headers.get('cookie') ?? '').split(';')
+    .filter((part) => KINU_COOKIE_FAMILIES.some((family) => part.trim().startsWith(`${family}_`))).length;
+}
+
 export function readCookie(request: Request, name: string): string | null {
   const cookie = request.headers.get('cookie');
 

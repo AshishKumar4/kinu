@@ -4,7 +4,7 @@ import { describe, expect, setSystemTime, test } from 'bun:test';
 import { APP_ROUTES, connectEndedOf, type UserCaller } from '@kinu.run/core';
 import { serveFamily } from './helpers/api';
 import { createTestUserDO, sqlExec, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
-import { requireMcpSignIn, seedConfiguredMcpServer, seedSdkMcpServer } from './helpers/agents-sdk';
+import { recordedMcpLifecycle, requireMcpSignIn, seedConfiguredMcpServer, seedSdkMcpServer } from './helpers/agents-sdk';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
@@ -101,7 +101,7 @@ describe('an MCP server\'s sign-in ends on the finish page', () => {
 
   // Sol's review (2026-10-23): a consent left open past the SDK's ten minutes lost its run, so the page that began it
   // never heard; and a decline was dialled again inside the callback, though the row's own sign-in begins a fresh one.
-  test('a declined sign-in names its run however late, is not dialled again, and its row still offers a sign-in', async () => {
+  async function declined(late: boolean) {
     const callback = 'https://kinu.example.com/api/user/mcp/callback';
     const first = createTestUserDO();
     const owner = await testOwner();
@@ -115,18 +115,28 @@ describe('an MCP server\'s sign-in ends on the finish page', () => {
     const run = crypto.randomUUID();
 
     try {
-      requireMcpSignIn('srv1', 'https://auth.example/authorize?state=late.srv1');
+      requireMcpSignIn('srv1', 'https://auth.example/authorize?state=asked.srv1');
       await woken.userDO.userMcp_beginConnect(owner, 'srv1', run);
-      setSystemTime(new Date(Date.now() + 11 * 60_000));
+      const dialledAtBegin = recordedMcpLifecycle().dialled.length;
 
-      const ended = await woken.userDO.userMcp_handleOAuthCallback(owner, `${callback}?state=late.srv1&error=access_denied`);
+      if (late) setSystemTime(new Date(Date.now() + 11 * 60_000));
+      const ended = await woken.userDO.userMcp_handleOAuthCallback(owner, `${callback}?state=asked.srv1&error=access_denied`);
       const [listed] = await woken.userDO.userMcp_list(owner);
 
-      expect({ run: ended.run, status: listed?.status, signIn: listed?.signIn }).toEqual({ run, status: 'failed', signIn: true });
+      return { named: ended.run === run, dialledAfter: recordedMcpLifecycle().dialled.length - dialledAtBegin, status: listed?.status, signIn: listed?.signIn };
     } finally {
       setSystemTime();
       woken.close();
       first.close();
     }
+  }
+
+  test('a declined sign-in is said at once, not dialled again, and its row still offers a sign-in', async () => {
+    expect(await declined(false)).toEqual({ named: true, dialledAfter: 0, status: 'failed', signIn: true });
   });
+
+  test('a sign-in declined after its state expired still names its run', async () => {
+    expect((await declined(true)).named).toBe(true);
+  });
+
 });

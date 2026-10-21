@@ -9,7 +9,7 @@ import {
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  lastOAuthStorage, liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedMcpAnswer, seedMcpTools, seedSdkMcpServer,
+  inheritedMcpManager, lastOAuthStorage, liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedMcpAnswer, seedMcpTools, seedSdkMcpServer,
 } from './helpers/agents-sdk';
 import { kvOf, makeCtx } from './helpers/platform-context';
 import { auth } from '@modelcontextprotocol/client';
@@ -70,6 +70,24 @@ describe('an MCP preset add', () => {
     expect(listed?.presetId).toBe('cloudflare');
     expect(listed?.status).toBe('authenticating');
     expect(listed?.signIn).toBe(true);
+    h.close();
+  });
+
+  // Sol-round review (2026-10-23): a token preset holds the deployment's app client id too, and a failed connection then
+  // offered Authorize, which its token never needs.
+  test('a token preset whose connection is refused offers no sign-in, though the deployment holds its app', async () => {
+    const h = harness({ mcpAppCredentials: ['github'] });
+    const owner = await testOwner();
+    const added = await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
+
+    const connection = inheritedMcpManager(h.userDO).mcpConnections[added.id];
+
+    // Its token refused: the connection fails, as the vendor fails it, holding the app's client all the same.
+    if (connection === undefined) throw new Error('the token preset holds no connection');
+    connection.connectionState = 'failed';
+    const listed = (await h.userDO.userMcp_list(owner)).find((server) => server.id === added.id);
+
+    expect({ status: listed?.status, signIn: listed?.signIn }).toEqual({ status: 'failed', signIn: false });
     h.close();
   });
 

@@ -2,7 +2,7 @@ import { Effect, Cause, Data } from 'effect';
 import * as oauth from 'oauth4webapi';
 import { Hono } from 'hono';
 import { AuthError, authenticateRequest, devIdentityEmail, readSessionToken, requestIdentity } from './session';
-import { oauthStateCookieName, SESSION_COOKIE_NAME, readCookie, sessionCookie, setCookie } from './cookies';
+import { heldHandoffs, OAUTH_HANDOFFS_HELD, oauthStateCookieName, SESSION_COOKIE_NAME, readCookie, sessionCookie, setCookie } from './cookies';
 import {
   consumeOAuthState, createOAuthState, createSession, revokeSession,
   type OAuthProfile, type SessionAuthority,
@@ -228,6 +228,14 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
     const connectFor = connecting ? (yield* Effect.promise(async () => requestIdentity(request, env)))?.userId ?? null : null;
 
     if (connecting && connectFor === null) return refused('Connecting a service needs the Kinu account it is for: sign in, then connect again.');
+
+    // Refused rather than evicting one held: every handoff is a cookie of its own, and a browser keeps only so many.
+    if (heldHandoffs(request) >= OAUTH_HANDOFFS_HELD) {
+      const busy = `This browser has ${String(OAUTH_HANDOFFS_HELD)} sign-ins under way. Finish or close one, or wait until they expire, then try again.`;
+
+      return connecting ? refused(busy) : html('Too many sign-ins under way', `<p>${escapeHtml(busy)}</p>`, { status: 429 });
+    }
+
     const as = yield* Effect.promise(async () => getAuthorizationServer(provider));
 
     if (!as.authorization_endpoint) return yield* Effect.die(new Error(`${provider.label} OAuth metadata has no authorization endpoint.`));

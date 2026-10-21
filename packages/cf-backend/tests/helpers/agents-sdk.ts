@@ -801,6 +801,8 @@ export interface RecordedMcpConnection {
 /** `restored` / `waited` are call counts: they prove a read did not touch the connection machinery. */
 export interface RecordedMcpLifecycle {
   established: readonly string[];
+  /** Each server `connectToServer` dialled, in order: a sign-in begun, or a dial on its own. */
+  dialled: readonly string[];
   discovered: readonly string[];
   restored: number;
   waited: number;
@@ -809,6 +811,8 @@ export interface RecordedMcpLifecycle {
 const mcpServers = new Map<string, RecordedMcpServer>();
 
 const mcpEstablished: string[] = [];
+
+const mcpDialled: string[] = [];
 
 const mcpDiscovered: string[] = [];
 
@@ -917,7 +921,7 @@ export function liveMcpFetch(id: string): McpCredentialTransport['fetch'] | null
 }
 
 export function recordedMcpLifecycle(): RecordedMcpLifecycle {
-  return { established: mcpEstablished, discovered: mcpDiscovered, restored: mcpRestored, waited: mcpWaited };
+  return { established: mcpEstablished, dialled: mcpDialled, discovered: mcpDiscovered, restored: mcpRestored, waited: mcpWaited };
 }
 
 export interface McpEstablishGate {
@@ -1060,6 +1064,7 @@ export function resetRecordedMcp(): void {
   mcpToolCalls.length = 0;
   mcpServers.clear();
   mcpEstablished.length = 0;
+  mcpDialled.length = 0;
   mcpDiscovered.length = 0;
   mcpCallToolFailure = null;
   mcpDiscoveryFailure = null;
@@ -1312,7 +1317,8 @@ class FakeMCPClientManager {
     const error = url.searchParams.get('error');
     const connection = this.mcpConnections[serverId];
 
-    // A provider's refusal fails the connection and spends its link, as the vendor's `failConnection` does.
+    // A provider's refusal fails the connection and spends its link, as the vendor's `failConnection` does for a state it
+    // can still redeem. Every state is redeemable here: an expired one, which the vendor ignores, is not modelled.
     if (error !== null && connection !== undefined) {
       connection.connectionState = 'failed';
       connection.connectionError = url.searchParams.get('error_description') ?? error;
@@ -1335,6 +1341,7 @@ class FakeMCPClientManager {
     const connection = this.mcpConnections[id];
 
     if (!connection) return { state: 'failed', error: `no registered server ${id}` };
+    mcpDialled.push(id);
 
     const provider = connection.options.transport.authProvider;
     const signIn = mcpSignInRequired.get(id) ?? pendingMcpAuthUrl;

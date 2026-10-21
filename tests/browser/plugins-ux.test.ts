@@ -332,7 +332,25 @@ describe('MCP presets', () => {
         await page.waitForSelector(`${row} [data-plugin-error]`);
 
         // The provider's own reason, as the finish page carried it.
-        expect(await page.$eval(`${row} [data-plugin-error]`, (node) => node.textContent ?? '')).toContain('access_denied: the person declined');
+        const said = await page.$eval(`${row} [data-plugin-error]`, (node) => node.textContent ?? '');
+        // Signed in again and connected: the earlier failure goes (Sol-round review: it stayed on a ready row).
+        const again = page.browser().waitForTarget((target) => target.opener() === page.target());
+
+        await page.click(`${row} [data-plugin-menu]`);
+        await page.click(`${row} [data-plugin-sign-in]`);
+        const retry = await (await again).page();
+
+        if (retry === null) throw new Error('the sign-in opened no tab');
+        await page.waitForFunction(() => (localStorage.getItem('gallery-mcp-connects') ?? '').split('\n').filter(Boolean).length === 2);
+        const retried = (await begunRuns(page))[1] ?? '';
+
+        await Promise.allSettled([retry.goto(`${gallery.origin}/gallery.html?frame=connected&${new URLSearchParams({ run: retried, service: 'Cloudflare' }).toString()}`)]);
+        // The row has heard the retry's end once its helper closed (its finish page closes it after telling the row).
+        await new Promise<void>((resolve) => { if (retry.isClosed()) resolve(); else retry.once('close', () => { resolve(); }); });
+        await page.waitForFunction(() => new Promise((resolve) => { requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(true); }); }); }));
+
+        expect({ said: said.includes('access_denied: the person declined'), cleared: await page.$(`${row} [data-plugin-error]`) === null })
+          .toEqual({ said: true, cleared: true });
       } finally {
         await page.close();
       }

@@ -94,12 +94,12 @@ function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // A sign-in's end: the list read again, and a failure kept on this row, its finish page having closed with the only copy.
+  // A sign-in's end: the list read again, and its outcome kept on this row, its finish page having closed with the only
+  // copy of a failure. A later success clears an earlier failure.
   const ended = (end: ConnectEnded) => {
     onChanged();
     onConnected?.(end);
-
-    if (end.error !== null) setErr(`${end.service} did not connect: ${end.error}`);
+    setErr(end.error === null ? null : `${end.service} did not connect: ${end.error}`);
   };
 
   const brand = PRESET_MARK[preset.id];
@@ -165,6 +165,7 @@ function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
     // A preset that signs in and is not connected keeps the way to its sign-in: begun again for a run of its own, in a
     // tab opened now, whether its last one waits, was declined or failed.
     const signInAgain = !signIn || server.status === 'ready' ? null : async () => {
+      setErr(null);
       const failed = await signInMcpServer(beginConnect(), server.id, ended);
 
       if (failed !== null) setErr(failed);
