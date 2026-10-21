@@ -1,5 +1,5 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
-import { objectNamed, ownerCaller, PLATFORM_CATALOG, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
+import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf, readMemoryTail } from '@kinu.run/core';
 import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateAnswer, slateRevision as builtRevision, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
@@ -320,10 +320,11 @@ const EXECUTOR_OUTPUT_CLIP = 16 * 1024;
 /** The terminal rows a reload shows per executor, and all `executor_output` keeps: an older row reaches no reader. */
 const EXECUTOR_HISTORY_ROWS = 50;
 
-/** Chars one stored field keeps. A row over do.sqlite.row_bytes fails its write (a 20 MB print did, SQLITE_TOOBIG), and
- *  three fields of at most three UTF-8 bytes a char fit it with room for the rest of the row. A stream's true length
- *  is its own column, so the head is stored as printed. */
-const EXECUTOR_FIELD_CHARS = Math.floor(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 10);
+/** Chars a stored command keeps: a reload reads fifty whole, so at most 50 x 200,000 chars of up to three UTF-8 bytes,
+ *  30 MB, beside the turn. It was a tenth of the 2 MB row (a 20 MB print once failed its write, SQLITE_TOOBIG) until
+ *  the row rose to 8 MiB (2026-10-21), and stays: a reload's memory holds it, not the row. A stream is stored as far as
+ *  a reload reads it, {@link EXECUTOR_OUTPUT_CLIP}, its printed length beside it. */
+const EXECUTOR_COMMAND_CHARS = 200_000;
 
 /** `stdout_len`/`stderr_len` are the streams' printed lengths, so a reader can tell a short command
  *  from a clipped one. */
@@ -6552,8 +6553,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const { stdout, stderr } = output;
     void this.sql`INSERT INTO executor_output (actor_id, executor, command, stdout, stdout_len, stderr, stderr_len, exit_code)
-      VALUES (${actorId}, ${executorId}, ${command.slice(0, EXECUTOR_FIELD_CHARS)}, ${stdout?.slice(0, EXECUTOR_FIELD_CHARS) ?? null},
-        ${stdout?.length ?? null}, ${stderr.slice(0, EXECUTOR_FIELD_CHARS)}, ${stderr.length}, ${output.exitCode})`;
+      VALUES (${actorId}, ${executorId}, ${command.slice(0, EXECUTOR_COMMAND_CHARS)}, ${stdout?.slice(0, EXECUTOR_OUTPUT_CLIP) ?? null},
+        ${stdout?.length ?? null}, ${stderr.slice(0, EXECUTOR_OUTPUT_CLIP)}, ${stderr.length}, ${output.exitCode})`;
     void this.sql`DELETE FROM executor_output WHERE actor_id = ${actorId} AND executor = ${executorId}
       AND rowid NOT IN (SELECT rowid FROM executor_output WHERE actor_id = ${actorId} AND executor = ${executorId}
         ORDER BY created_at DESC, rowid DESC LIMIT ${EXECUTOR_HISTORY_ROWS})`;

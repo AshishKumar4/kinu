@@ -193,7 +193,7 @@ type Writable<T> = { -readonly [Key in keyof T]: T[Key] };
 
 /**
  * Per-message aggregate cap on raw attachment bytes inlined as data URLs. The cloud cap
- * (CLOUD_MAX_INLINE_ATTACHMENT_BYTES, 1 MiB) comes from `do.sqlite.row_bytes`; locally the bound is
+ * (CLOUD_MAX_INLINE_ATTACHMENT_BYTES, 1 MiB) comes from the agents SDK's chat row guard; locally the bound is
  * the provider request: base64 of 8 MiB raw ≈ 11 MB, re-sent every later turn. Larger stays a path.
  */
 export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;

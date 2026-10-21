@@ -110,7 +110,8 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     metadata_json TEXT,
     UNIQUE (actor_id, id)
   )`);
-  // A row per file: one attachment fills most of `do.sqlite.row_bytes`, so a send's files cannot share a row.
+  // A row per file: a send's files, each up to CLOUD_MAX_INLINE_ATTACHMENT_BYTES as base64, are not counted, so together
+  // they can pass `do.sqlite.row_bytes` (8 MiB since 2026-10-21) where each alone cannot.
   execRaw(`CREATE TABLE IF NOT EXISTS pending_steer_files (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id   TEXT NOT NULL,
