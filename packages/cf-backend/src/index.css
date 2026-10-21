@@ -140,6 +140,8 @@ html, body, #root {
   --layout-chat-column: 780px;
   /* The composer: the chat column and its 20 of gutter each side, so its text lines up with the answers'. */
   --layout-composer: calc(var(--layout-chat-column) + 40px);
+  /* An open page tab's action and the gap after it: its 20 square and 3. */
+  --layout-page-action: 23px;
   --layout-tool-list: 400px;
   --layout-tool-places: 220px;
   --layout-reader: 760px;
