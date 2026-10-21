@@ -1672,7 +1672,7 @@ export {
   LiveHeadJournal, type AnnounceHeadActivity,
   type HeadStreamFrame, type HeadStreamKind,
   type ReportHeadDelta, type PublishHeadStream,
-  reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
+  reconcileInterruptedForks, reclaimSettledRunActors, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   ForkNotices, forkNoticeDeliveries, initForkNoticeTable, type ForkNotice,
   HeadController, runHeadSplit, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
