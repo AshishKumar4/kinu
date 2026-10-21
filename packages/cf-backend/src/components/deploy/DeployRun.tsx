@@ -3,13 +3,16 @@
  * on or refused with its one action, and, once live, the address, the one-time setup link and the CLI line.
  */
 import type { CSSProperties, ReactNode } from "react";
-import { ArrowSquareOutIcon, CheckIcon, CircleIcon, TerminalWindowIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon, CheckIcon, CircleIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import type { DeployPhase, DeployRunView } from "@kinu.run/core/deploy";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Loader } from "@/components/ui/Loader";
 import { CloudflareButton, CloudflareSaid, DeployShell, Disclosure, HandOff, KinuFace, NeedBox, Refused, type RefusalActions } from "@/components/deploy/DeployParts";
 import type { DeployRefused } from "@/lib/deploy-page-api";
+import { CopyField } from "@/components/ui/CopyField";
+import { ProgressBar } from "@/components/ui/Meter";
+import { Callout } from "@/components/ui/Callout";
 
 /** What this page asked the run for, when it asked in this tab: the words it ends on follow. Null for a run found again. */
 export type RunAsked = "new" | "update" | "change" | null;
@@ -19,15 +22,15 @@ function PhaseMark({ state }: { state: DeployPhase["state"] }) {
 
   if (state === "waiting") return <CircleIcon size={13} className="p-text-3" />;
 
-  return state === "refused" ? <WarningCircleIcon size={14} className="p-accent" /> : <Loader size="sm" />;
+  return state === "refused" ? <WarningCircleIcon size={14} className="p-accent-fg" /> : <Loader size="sm" />;
 }
 
 function Phases({ phases }: { phases: readonly DeployPhase[] }) {
   return (
     <ol className="space-y-2">
       {phases.map((phase) => (
-        <li key={phase.id} data-deploy-phase={phase.id} data-state={phase.state} className={`flex items-start gap-2.5 t-meta ${phase.state === "waiting" ? "" : "p-text-2"}`}>
-          <span className="flex size-4 shrink-0 items-center justify-center pt-0.5"><PhaseMark state={phase.state} /></span>
+        <li key={phase.id} data-deploy-phase={phase.id} data-state={phase.state} className={`flex items-start gap-3 t-meta ${phase.state === "waiting" ? "" : "p-text-2"}`}>
+          <span className="flex size-4 shrink-0 items-center justify-center pt-px"><PhaseMark state={phase.state} /></span>
           <span>{phase.words}{phase.note !== undefined && <span className="block p-text-3">{phase.note}</span>}</span>
         </li>
       ))}
@@ -35,14 +38,6 @@ function Phases({ phases }: { phases: readonly DeployPhase[] }) {
   );
 }
 
-/** Where the run stands, drawn as one bar. */
-function Progress({ index, of }: { index: number; of: number }) {
-  return (
-    <div className="h-1 w-full overflow-hidden rounded-[var(--r-pill)] p-fill" role="progressbar" aria-valuemin={0} aria-valuemax={of} aria-valuenow={index}>
-      <div className="h-full rounded-[var(--r-pill)] bg-[var(--c-accent)] transition-[width] duration-[var(--dur-fold)]" style={{ width: `${String(Math.max(6, (index / Math.max(1, of)) * 100))}%` }} />
-    </div>
-  );
-}
 
 function titleOf(asked: RunAsked): string {
   if (asked === "update") return "Updating your Kinu";
@@ -95,8 +90,8 @@ export function DeployRunning({ run, asked, handedOff, retrying, refusal, action
       <div className="flex flex-col items-center text-center" data-deploy-run={run.state}>
         <KinuFace activity={going ? "working" : "waiting"} />
         <h2 className="mt-4 t-page-title">{title}</h2>
-        {said !== null && <p data-deploy-now className="mt-1.5 max-w-md t-body">{said}</p>}
-        {going && <div className="mt-5 w-full max-w-sm"><Progress index={run.phase.index} of={run.phase.of} /></div>}
+        {said !== null && <p data-deploy-now className="mt-2 max-w-md t-public-body">{said}</p>}
+        {going && <div className="mt-5 w-full max-w-sm"><ProgressBar value={run.phase.index} max={run.phase.of} /></div>}
         {action !== null && <div className="mt-5 w-full max-w-md">{action}</div>}
         {refusal !== null && (refusal.need === null || refusal.need.id !== run.paused?.id) && <div className="mt-4 w-full max-w-md text-left"><Refused refusal={refusal} actions={actions} /></div>}
         {going && <p className="mt-5 t-meta">A few minutes. You can close this page; it carries on, and opening it again shows where it is.</p>}
@@ -109,14 +104,6 @@ export function DeployRunning({ run, asked, handedOff, retrying, refusal, action
     </DeployShell>
   );
 }
-
-const CELEBRATION = `
-@keyframes kinu-live-ring { from { transform: scale(0.7); opacity: 0.5; } to { transform: scale(1.45); opacity: 0; } }
-@keyframes kinu-live-spark { 0% { transform: translate(0, 0) scale(0.4); opacity: 0; } 20% { opacity: 1; } 100% { transform: translate(var(--dx), var(--dy)) scale(1); opacity: 0; } }
-[data-deploy-live] .kinu-live-ring { animation: kinu-live-ring 1.6s ease-out 0.2s 2 both; }
-[data-deploy-live] .kinu-live-spark { animation: kinu-live-spark 1.2s ease-out 0.35s 1 both; }
-@media (prefers-reduced-motion: reduce) { [data-deploy-live] .kinu-live-ring, [data-deploy-live] .kinu-live-spark { animation: none; opacity: 0; } }
-`;
 
 /** Eight small sparks, once, around the mark: celebrated, and over. */
 const SPARKS = Array.from({ length: 8 }, (_, at) => {
@@ -132,10 +119,9 @@ const SPARKS = Array.from({ length: 8 }, (_, at) => {
 function LiveMark() {
   return (
     <div className="relative flex size-24 items-center justify-center">
-      <style>{CELEBRATION}</style>
-      <span aria-hidden className="kinu-live-ring absolute inset-2 rounded-[var(--r-pill)] border-2 border-[var(--c-accent)]" />
+      <span aria-hidden className="kinu-live-ring absolute inset-2" />
       {SPARKS.map(({ at, style }) => (
-        <span key={at} aria-hidden className="kinu-live-spark absolute size-1.5 rounded-[var(--r-pill)] bg-[var(--c-accent)]" style={style} />
+        <span key={at} aria-hidden className="kinu-live-spark absolute" style={style} />
       ))}
       <KinuFace activity="done" live />
     </div>
@@ -171,7 +157,7 @@ export function DeployLive({ run, asked, refusal, actions, onAddDomain }: {
       <div data-deploy-live className="flex flex-col items-center pt-1 text-center">
         {fresh && setupLink !== "" ? <LiveMark /> : <KinuFace activity="idle" />}
         <h2 className="mt-3 t-page-title">{liveTitle(asked, setupLink)}</h2>
-        <div className="mt-2 inline-flex max-w-full items-center gap-1.5">
+        <div className="mt-2 inline-flex max-w-full items-center gap-2">
           <a href={url} target="_blank" rel="noopener noreferrer" data-deploy-live-address className="truncate t-title hover:underline">{host}</a>
           <CopyButton value={url} what="the address" />
         </div>
@@ -181,35 +167,30 @@ export function DeployLive({ run, asked, refusal, actions, onAddDomain }: {
           </a>
         </div>
         {setupLink !== "" && (
-          <p className="mt-2.5 max-w-sm t-meta">This link makes you the owner, once, and works until {dayOf(setupLinkExpiresAt)}. If you lose it, come back here for a new one.</p>
+          <p className="mt-3 max-w-sm t-meta">This link makes you the owner, once, and works until {dayOf(setupLinkExpiresAt)}. If you lose it, come back here for a new one.</p>
         )}
       </div>
 
       {pending !== undefined && (
-        <div data-deploy-pending={pending.ready ? "ready" : "waiting"} className="mt-6 rounded-[var(--r-row)] bg-[var(--c-selected)] px-4 py-3.5">
+        <Callout data-deploy-pending={pending.ready ? "ready" : "waiting"} className="mt-6">
           {pending.ready
             ? (
               <>
-                <p className="t-item">{pending.domain} points at Cloudflare now</p>
+                <p className="t-public-item">{pending.domain} points at Cloudflare now</p>
                 <p className="mt-1 t-meta p-text-2">Sign in once more and Kinu moves onto it; {host} keeps working.</p>
                 <div className="mt-3"><CloudflareButton busy={actions.signingIn} onClick={actions.onSignIn}>Sign in again</CloudflareButton></div>
               </>
             )
             : (
               <>
-                <p className="t-item">One more step for {pending.domain}</p>
+                <p className="t-public-item">One more step for {pending.domain}</p>
                 <p className="mt-1 t-meta p-text-2">Where you registered it, change its nameservers to these. Kinu sees the change by itself, usually within a few hours.</p>
-                <ul className="mt-2.5 space-y-1">
-                  {pending.nameservers.map((server) => (
-                    <li key={server} className="flex items-center gap-2 rounded-[var(--r-control)] p-surface px-2.5 py-1.5">
-                      <span className="min-w-0 flex-1 truncate t-code p-text">{server}</span>
-                      <CopyButton value={server} what="the nameserver" className="p-text-3 hover:p-text" />
-                    </li>
-                  ))}
+                <ul className="mt-3 space-y-1">
+                  {pending.nameservers.map((server) => <li key={server}><CopyField value={server} what="the nameserver" /></li>)}
                 </ul>
               </>
             )}
-        </div>
+        </Callout>
       )}
 
       {/* A domain ready to move onto already offers its sign-in: a carry-on refused for want of one says nothing more. */}
@@ -217,11 +198,7 @@ export function DeployLive({ run, asked, refusal, actions, onAddDomain }: {
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t p-border pt-4">
         <Disclosure summary="Use Kinu from your terminal">
-          <div className="flex items-center gap-2 rounded-[var(--r-control)] p-sunken px-3 py-2">
-            <TerminalWindowIcon size={14} className="shrink-0 p-text-3" />
-            <code className="min-w-0 flex-1 truncate t-code p-text-2">{cli}</code>
-            <CopyButton value={cli} what="the install command" className="p-text-3 hover:p-text" />
-          </div>
+          <CopyField value={cli} what="the install command" />
         </Disclosure>
         {pending === undefined && host.endsWith(".workers.dev") && <Button variant="ghost" size="sm" data-deploy-add-domain onClick={onAddDomain}>Add a domain</Button>}
       </div>

@@ -156,6 +156,8 @@ html, body, #root {
   --layout-files-row: 1rem minmax(0, 1fr) auto;
   --layout-files-row-wide: 1rem minmax(0, 1fr) 4.5rem 4rem;
   --layout-files-tiles: repeat(auto-fill, minmax(6.5rem, 1fr));
+  /* A flow's plan: a line's name, then what it is. */
+  --layout-plan-line: 7rem minmax(0, 1fr);
   /* The model picker's menu: as wide as its names, never past the screen; its list a scroll of its own. */
   --layout-picker: min(28rem, calc(100vw - 1rem));
   --layout-picker-list: min(24rem, 60vh);
@@ -666,6 +668,26 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-icon-tile { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; border-radius: var(--r-inner); background: var(--c-hover); }
 .p-icon-tile.size-7 { border-radius: var(--r-control); }
 
+/* Callout (ui/Callout.tsx): what the page waits on the person for, on the selected ground. */
+.p-callout { border-radius: var(--r-row); background: var(--c-selected); padding: 12px 16px; }
+/* Skeleton (ui/Skeleton.tsx): a line still being read. */
+.p-skeleton { display: block; height: 12px; border-radius: var(--r-pill); background: var(--c-fill); }
+/* ProgressBar (ui/Meter.tsx): a run's steps, one thin bar on the fill, the accent's part growing. */
+.p-progress { height: 4px; width: 100%; overflow: hidden; border-radius: var(--r-pill); background: var(--c-fill); }
+.p-progress-fill { height: 100%; border-radius: var(--r-pill); background: var(--c-accent); transition: width var(--dur-fold) ease-out; }
+/* FlowPage (ui/FlowCard.tsx): a flow's whole page, over the app, on the page's ground. */
+.p-flow-page { position: fixed; inset: 0; overflow-y: auto; background: var(--c-bg); color: var(--c-text); }
+/* A partner's mark on its white tile (ui/BrandMark.tsx CloudflareTile). */
+.p-brand-tile { display: flex; width: 20px; height: 20px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: var(--r-check); background: var(--c-brand-tile); }
+.p-icon-tile.size-9 { border-radius: var(--r-control); }
+/* A Kinu just live (deploy): a ring that widens twice and eight sparks, once, around its mark. */
+.kinu-live-ring { border-radius: var(--r-pill); border: 2px solid var(--c-accent); }
+.kinu-live-spark { width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--c-accent); }
+@keyframes kinu-live-ring { from { transform: scale(0.7); opacity: 0.5; } to { transform: scale(1.45); opacity: 0; } }
+@keyframes kinu-live-spark { 0% { transform: translate(0, 0) scale(0.4); opacity: 0; } 20% { opacity: 1; } 100% { transform: translate(var(--dx), var(--dy)) scale(1); opacity: 0; } }
+[data-deploy-live] .kinu-live-ring { animation: kinu-live-ring 1.6s ease-out 0.2s 2 both; }
+[data-deploy-live] .kinu-live-spark { animation: kinu-live-spark 1.2s ease-out 0.35s 1 both; }
+@media (prefers-reduced-motion: reduce) { [data-deploy-live] .kinu-live-ring, [data-deploy-live] .kinu-live-spark { animation: none; opacity: 0; } }
 /* Rail (ui/Rail.tsx): a strip of the tabs above below its breakpoint, fading at its scrolling edge; a column of rows
    from it up, the open row on the selected ground. */
 .p-rail { display: flex; border-bottom: 1px solid var(--c-border); mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }

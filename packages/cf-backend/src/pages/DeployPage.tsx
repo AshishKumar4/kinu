@@ -6,9 +6,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Effect } from "effect";
 import { useSearchParams } from "react-router-dom";
+import type { ConnectEnded } from "@kinu.run/core";
 import type { DeployedKinu, DeployRunRequest, DeployRunView, DeploySession } from "@kinu.run/core/deploy";
 import { detach } from "@kinu.run/core/obs";
 import { Loader } from "@/components/ui/Loader";
+import { beginConnect } from "@/lib/connect-window";
 import { CloudflareSaid, DeployShell, type RefusalActions } from "@/components/deploy/DeployParts";
 import { DeployStart, type DeclinedSignIn } from "@/components/deploy/DeployStart";
 import { DeployManage, type KinuChange } from "@/components/deploy/DeployManage";
@@ -79,7 +81,7 @@ function useFollow(run: DeployRunView | null, attempt: number, onHeard: (heard: 
 function Failed({ refusal }: { refusal: DeployRefused }) {
   return (
     <DeployShell dot={1} screen="failed" title="Kinu couldn't read your Cloudflare account">
-      <p role="alert" className="t-body">{refusal.refused?.sentence ?? refusal.need?.sentence ?? refusal.error}</p>
+      <p role="alert" className="t-public-body">{refusal.refused?.sentence ?? refusal.need?.sentence ?? refusal.error}</p>
       {refusal.refused !== null && <div className="mt-3"><CloudflareSaid words={refusal.refused.details} /></div>}
     </DeployShell>
   );
@@ -96,6 +98,12 @@ export default function DeployPage() {
   const [handedOff, setHandedOff] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // Arrived again: a sign-in in Cloudflare's window ended, so the page reads its session and lands anew.
+  const [arrivals, setArrivals] = useState(0);
+  // The sign-in for API Tokens ended: Ready's session is read again, Ready kept as it is.
+  const [tokenReads, setTokenReads] = useState(0);
+  // The sign-in Cloudflare's window ended without, in its words: shown on Start as a declined consent is.
+  const [ended, setEnded] = useState<DeclinedSignIn | null>(null);
 
   const go = useCallback((next: Stage) => {
     setRefusal(null);
@@ -175,25 +183,62 @@ export default function DeployPage() {
     detach(arrive(() => here));
 
     return () => { here = false; };
-  }, [arrive]);
+  }, [arrive, arrivals]);
 
-  // Signs in to Cloudflare in this tab; coming back, the page lands again and carries on a run that waited on it.
-  const signIn = useCallback(() => Effect.gen(function* () {
-    setSigningIn(true);
-    setRefusal(null);
-    const heard = yield* Effect.promise(async () => beginSignIn());
+  // Ready keeps what was chosen, with the session read again for what this sign-in can do now.
+  useEffect(() => {
+    if (tokenReads === 0) return undefined;
+    let here = true;
 
-    if ("refusal" in heard) {
-      setRefusal(heard.refusal);
-      setSigningIn(false);
+    detach(Effect.gen(function* () {
+      const heard = yield* Effect.promise(async () => readSession());
 
-      return;
+      if (here && "answer" in heard) setStage((now) => (now.kind === "ready" ? { ...now, session: heard.answer } : now));
+    }));
+
+    return () => { here = false; };
+  }, [tokenReads]);
+
+  // A sign-in in Cloudflare's window ended. Refused there, Start shows Cloudflare's words as a declined consent and any
+  // other screen its refusal; for API Tokens, Ready reads its session again; otherwise the page lands anew.
+  const signedIn = useCallback((end: ConnectEnded, apiTokens: boolean) => {
+    setSigningIn(false);
+
+    if (end.error !== null) {
+      setEnded({ error: end.error, description: "" });
+      setRefusal({ error: `Cloudflare didn't give Kinu access: ${end.error}`, status: 0, need: null, refused: null });
     }
 
-    location.assign(heard.answer.location);
-  }), []);
+    if (apiTokens) setTokenReads((count) => count + 1);
+    else if (end.error === null) setArrivals((count) => count + 1);
+  }, []);
 
-  const onSignIn = useCallback(() => detach(signIn()), [signIn]);
+  // Signs in to Cloudflare in its own window (`beginConnect`, opened at the click), this page waiting until its end
+  // (`signedIn`). A refused window runs it in this tab, and the finish page brings the tab back here.
+  const signIn = useCallback((apiTokens: boolean) => {
+    const connect = beginConnect();
+
+    setSigningIn(true);
+    setRefusal(null);
+    setEnded(null);
+
+    return Effect.gen(function* () {
+      const heard = yield* Effect.promise(async () => beginSignIn(connect.id, apiTokens));
+
+      if ("refusal" in heard) {
+        connect.cancel();
+        setRefusal(heard.refusal);
+        setSigningIn(false);
+
+        return;
+      }
+
+      connect.start(heard.answer.location, (end) => signedIn(end, apiTokens));
+    });
+  }, [signedIn]);
+
+  const onSignIn = useCallback(() => detach(signIn(false)), [signIn]);
+  const onApiTokens = useCallback(() => detach(signIn(true)), [signIn]);
 
   const asked = stage.kind === "run" ? stage.asked : null;
 
@@ -261,17 +306,17 @@ export default function DeployPage() {
     go("answer" in heard && heard.answer.signedIn ? { kind: "manage", session: heard.answer } : { kind: "start" });
   });
 
-  const refusalActions: RefusalActions = { signingIn, onSignIn, onHandedOff: setHandedOff };
+  const refusalActions: RefusalActions = { signingIn, onSignIn, onApiTokens, onHandedOff: setHandedOff };
 
   if (stage.kind === "loading") {
     return (
       <DeployShell dot={0} screen="loading">
-        <p className="inline-flex items-center gap-2 t-body" aria-busy="true"><Loader size="sm" />Opening…</p>
+        <p className="inline-flex items-center gap-2 t-public-body" aria-busy="true"><Loader size="sm" />Opening…</p>
       </DeployShell>
     );
   }
 
-  if (stage.kind === "start") return <DeployStart declined={declined} refusal={refusal?.error ?? null} signingIn={signingIn} onSignIn={onSignIn} />;
+  if (stage.kind === "start") return <DeployStart declined={ended ?? declined} refusal={refusal?.error ?? null} signingIn={signingIn} onSignIn={onSignIn} />;
 
   if (stage.kind === "failed") return <Failed refusal={stage.refusal} />;
 

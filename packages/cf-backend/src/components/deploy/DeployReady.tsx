@@ -7,16 +7,22 @@ import { useCallback, useEffect, useState } from "react";
 import { CpuIcon, EnvelopeSimpleIcon } from "@phosphor-icons/react";
 import {
   DEFAULT_INSTANCE_NAME,
-  type DeployChoice, type DeployedKinu, type DeployPreflight, type DeployRunRequest, type DeploySession, type DeployZone, type MailPreview, type MailPurpose,
+  type DeployAction, type DeployChoice, type DeployedKinu, type DeployPreflight, type DeployRunRequest, type DeploySession, type DeployZone, type MailPreview, type MailPurpose,
 } from "@kinu.run/core/deploy";
 import { Button } from "@/components/ui/Button";
 import { RadioGroup } from "@/components/ui/Check";
 import { Loader } from "@/components/ui/Loader";
 import { Select } from "@/components/ui/Select";
-import { DeployShell, Disclosure, Extra, Line, NeedBox, Refused, Unreadable, WhatGetsMade, type RefusalActions } from "@/components/deploy/DeployParts";
+import {
+  CloudflareButton, DeployShell, Disclosure, Extra, HandOff, Lack, Line, NeedBox, OnCloudflare, Refused, Unreadable, WhatGetsMade, type RefusalActions,
+} from "@/components/deploy/DeployParts";
 import { DeployDomain, type PickedDomain } from "@/components/deploy/DeployDomain";
 import { useDeployRead, type Reading } from "@/components/deploy/use-deploy-read";
 import { readMailPreview, readPreflight, type DeployRefused } from "@/lib/deploy-page-api";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { Card } from "@/components/ui/Card";
+import { Group } from "@/components/ui/Group";
+import { Callout } from "@/components/ui/Callout";
 
 /** How often the account is read again while a hand-off to Cloudflare is open. */
 const RECHECK_MS = 5000;
@@ -87,10 +93,10 @@ function MailChoice({ account, domain, host, onHost, onReady }: {
       <RadioGroup label="Where mail goes" value={host === domain ? "apex" : "sub"} onChange={(at) => onHost(at === "apex" ? domain : sub)}
         options={[{ value: "apex", label: `At ${domain}, like ada@${domain}` }, { value: "sub", label: `At ${sub}, like ada@${sub}` }]} />
       {previewed?.state === "reading" && <p className="inline-flex items-center gap-2 t-meta"><Loader size="sm" />Reading {host}…</p>}
-      {previewed?.state === "refused" && <p role="alert" className="t-body p-danger">{previewed.refusal.error}</p>}
+      {previewed?.state === "refused" && <p role="alert" className="t-public-body p-danger">{previewed.refusal.error}</p>}
       {previewed?.state === "read" && conflict === null && <MailWrites preview={previewed.answer} />}
       {moved !== null && host === sub && <p className="t-meta p-text-2">{domain} already gets mail at {moved}, so Kinu's mail uses {sub} and leaves yours as it is.</p>}
-      {conflict !== null && <p role="alert" className="t-body p-danger">{host} already gets mail at {conflict.mx}. Kinu's mail can't go there without taking it over; choose the other, or leave mail off.</p>}
+      {conflict !== null && <p role="alert" className="t-public-body p-danger">{host} already gets mail at {conflict.mx}. Kinu's mail can't go there without taking it over; choose the other, or leave mail off.</p>}
     </div>
   );
 }
@@ -98,11 +104,11 @@ function MailChoice({ account, domain, host, onHost, onReady }: {
 function Checking() {
   return (
     <div data-deploy-checking className="space-y-5" aria-busy="true">
-      <p className="inline-flex items-center gap-2 t-body"><Loader size="sm" />Looking at your Cloudflare account…</p>
+      <p className="inline-flex items-center gap-2 t-public-body"><Loader size="sm" />Looking at your Cloudflare account…</p>
       {[60, 75, 45].map((width) => (
-        <div key={width} className="grid gap-2 sm:grid-cols-[7rem_1fr] sm:gap-4">
-          <span className="h-3 w-16 rounded-[var(--r-pill)] p-fill" />
-          <span className="h-3 rounded-[var(--r-pill)] p-fill" style={{ width: `${String(width)}%` }} />
+        <div key={width} className="grid gap-2 sm:grid-cols-[var(--layout-plan-line)] sm:gap-4">
+          <Skeleton width="4rem" />
+          <Skeleton width={`${String(width)}%`} />
         </div>
       ))}
     </div>
@@ -132,14 +138,104 @@ interface Choices {
 
 const NO_CHOICES: Choices = { domain: null, computer: false, mail: null };
 
-function costOf(computer: boolean): string {
-  return computer ? "$5 a month, on your Cloudflare bill" : "Free";
+/** What a Kinu costs, whatever the account already had: Workers Paid, which its agents run on. */
+const COST = "Workers Paid, $5 a month, on your Cloudflare bill";
+
+/** The needs the Before deploying card lists: the plan and R2, each met on Cloudflare's dashboard. */
+const LACKS = {
+  plan: { title: "Workers Paid", copy: "$5 a month. Kinu's agents run on it." },
+  r2: { title: "R2", copy: "Cloudflare's file storage, for your files. Free; Cloudflare asks for a card the first time, if it hasn't one." },
+} satisfies Readonly<Record<string, { readonly title: string; readonly copy: string }>>;
+
+type LackId = keyof typeof LACKS;
+
+const isLack = (id: string): id is LackId => id in LACKS;
+
+/**
+ * What the account still lacks before it can take a Kinu, each a row with its one action, ticked here once Cloudflare
+ * reports it met: `seen` is every lack this visit read, so one met since stays as done. An account that had everything
+ * from the first read never shows it.
+ */
+function BeforeDeploying({ preflight, seen, waitingOn, onHandedOff }: {
+  preflight: DeployPreflight; seen: readonly LackId[]; waitingOn: string | null; onHandedOff: (need: string) => void;
+}) {
+  if (seen.length === 0) return null;
+  const open = preflight.needs.filter((need) => isLack(need.id));
+  const left = open.length;
+  const things = left === 1 ? "one thing" : `${String(left)} things`;
+
+  return (
+    <div data-deploy-before>
+      <Card title="Before deploying">
+      <p className="t-public-body">
+        {left === 0 ? "All done. You can deploy." : `Your account needs ${things} first. Each ticks off here as soon as it's done.`}
+      </p>
+      <Group list>
+        {seen.map((id) => {
+          const need = open.find((each) => each.id === id);
+          const href = need?.action.href;
+
+          return (
+            <Lack key={id} name={id} done={need === undefined} title={LACKS[id].title} copy={LACKS[id].copy} waiting={waitingOn === id}
+              action={href === undefined || need === undefined ? null : <HandOff action={{ label: need.action.label, href }} onOpened={() => onHandedOff(id)} />} />
+          );
+        })}
+      </Group>
+      </Card>
+    </div>
+  );
+}
+
+/** Cloudflare's dashboard, where a login with no account behind it makes one. */
+const CREATE_ACCOUNT = { label: "Create an account", href: "https://dash.cloudflare.com/" } satisfies DeployAction;
+
+/** A login with no Cloudflare account behind it: the one row, to make one; the page reads its session again on coming back. */
+function NoAccount() {
+  return (
+    <div data-deploy-before>
+      <Card title="Before deploying">
+        <p className="t-public-body">This Cloudflare login has no account yet. Create one, then come back: this page goes on by itself.</p>
+        <Group list>
+          <Lack name="account" done={false} title="A Cloudflare account" copy="Free to make." waiting={false}
+            action={<HandOff action={CREATE_ACCOUNT} />} />
+        </Group>
+      </Card>
+    </div>
+  );
+}
+
+/** The API Tokens hand-off, said above the button and again on Cloudflare's window: the permission starts unticked. */
+const TICK_TOKENS = "On Cloudflare's screen, tick API Tokens. It starts unticked.";
+
+/** The computer, on: whether this sign-in can make its registry token, and what to do where it cannot. */
+function ApiTokens({ session, actions, onOff }: { session: DeploySession; actions: ReadyActions; onOff: () => void }) {
+  if (actions.signingIn) return <OnCloudflare doing="Sign in there again." tip={TICK_TOKENS} onAgain={actions.onApiTokens} />;
+
+  if (session.apiTokens === "missing") {
+    return (
+      <Callout data-deploy-api-tokens="missing">
+        <p className="t-public-body">The computer needs Cloudflare's API Tokens permission.</p>
+        <p data-deploy-tip className="mt-1 t-public-item">{TICK_TOKENS}</p>
+        <div className="mt-3"><CloudflareButton secondary onClick={actions.onApiTokens}>Sign in again</CloudflareButton></div>
+      </Callout>
+    );
+  }
+
+  return (
+    <Callout data-deploy-api-tokens="refused">
+      <p className="t-public-body">Cloudflare didn't grant API Tokens, so the computer stays off. Sign in again and tick it, or deploy without the computer.</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <CloudflareButton secondary onClick={actions.onApiTokens}>Sign in again</CloudflareButton>
+        <Button variant="ghost" size="sm" onClick={onOff}>Deploy without it</Button>
+      </div>
+    </Callout>
+  );
 }
 
 function AccountLine({ accounts, account, onAccount }: { accounts: readonly DeployChoice[]; account: string; onAccount: (id: string) => void }) {
   const named = accounts.find((each) => each.id === account)?.name ?? account;
 
-  if (accounts.length < 2) return <Line label="Account"><span data-deploy-account className="t-body p-text">{named}</span></Line>;
+  if (accounts.length < 2) return <Line label="Account"><span data-deploy-account className="t-public-body p-text">{named}</span></Line>;
 
   return (
     <Line label="Account">
@@ -152,7 +248,7 @@ function AddressLine({ preflight, name, domain, onDomain }: { preflight: DeployP
   return (
     <Line label="Address">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span data-deploy-address className="t-item">{domain === null ? workersAddress(preflight, name) : domain.host}</span>
+        <span data-deploy-address className="t-public-item">{domain === null ? workersAddress(preflight, name) : domain.host}</span>
         <Button variant="ghost" size="sm" onClick={onDomain}>{domain === null ? "Use your own domain" : "Change"}</Button>
       </div>
       {domain?.zone === null && <p className="mt-1 t-meta">Kinu starts at {workersAddress(preflight, name)} and moves to {domain.host} once you point {domain.name} at Cloudflare.</p>}
@@ -212,6 +308,47 @@ function NewDomain({ account, name, preflight, onPick, onBack }: {
 }
 
 function NewKinu({ session, actions, onDeploy, onBack }: { session: DeploySession; actions: ReadyActions; onDeploy: (asked: DeployRunRequest) => void; onBack: () => void }) {
+  if (session.accounts.length === 0) {
+    return (
+      <DeployShell dot={1} screen="ready" title="Ready to deploy"
+        footer={<Button variant="primary" size="lg" disabled data-deploy-go>Deploy</Button>}>
+        <NoAccount />
+      </DeployShell>
+    );
+  }
+
+  return <ForAccount session={session} actions={actions} onDeploy={onDeploy} onBack={onBack} />;
+}
+
+/** Every lack this account was read with on this visit, in the order first read: one met since is shown done. */
+function useSeenLacks(preflight: DeployPreflight | null): readonly LackId[] {
+  const [seen, setSeen] = useState<readonly LackId[]>([]);
+  // The lacks this read says, as one key, so a read that says the same leaves `seen` as it was.
+  const lacking = (preflight?.needs.map((need) => need.id).filter(isLack) ?? []).join(" ");
+
+  useEffect(() => {
+    const now = lacking.split(" ").filter(isLack);
+
+    setSeen((had) => (now.every((id) => had.includes(id)) ? had : [...had, ...now.filter((id) => !had.includes(id))]));
+  }, [lacking]);
+
+  return seen;
+}
+
+/** The foot of Ready: Back where there are Kinus to go back to, what it costs, and Deploy. */
+function ReadyFoot({ back, cost, deploying, blocked, onDeploy, onBack }: {
+  back: boolean; cost: boolean; deploying: boolean; blocked: boolean; onDeploy: () => void; onBack: () => void;
+}) {
+  return (
+    <>
+      {back && <Button variant="ghost" size="sm" className="mr-auto" onClick={onBack}>Back</Button>}
+      {cost && <span className="hidden t-meta sm:inline">{COST}</span>}
+      <Button variant="primary" size="lg" busy={deploying} disabled={blocked} data-deploy-go onClick={onDeploy}>Deploy</Button>
+    </>
+  );
+}
+
+function ForAccount({ session, actions, onDeploy, onBack }: { session: DeploySession; actions: ReadyActions; onDeploy: (asked: DeployRunRequest) => void; onBack: () => void }) {
   const [account, setAccount] = useState(session.accounts[0]?.id ?? "");
   // The need a hand-off was opened for: the account is read again every few seconds until it is met.
   const [handedOff, setHandedOff] = useState<string | null>(null);
@@ -226,6 +363,9 @@ function NewKinu({ session, actions, onDeploy, onBack }: { session: DeploySessio
   const name = preflight?.suggestedName ?? "";
   const kept = actions.refusal;
   const met = preflight !== null && handedOff !== null && !preflight.needs.some((need) => need.id === handedOff);
+  const seen = useSeenLacks(preflight);
+  const askTokens = choices.computer && session.apiTokens !== "granted";
+  const blocked = preflight === null || preflight.needs.length > 0 || askTokens || name === "" || (choices.mail !== null && !mailReady);
 
   // The need the hand-off was for is met: stop reading the account every few seconds.
   useEffect(() => {
@@ -240,19 +380,14 @@ function NewKinu({ session, actions, onDeploy, onBack }: { session: DeploySessio
 
   return (
     <DeployShell dot={1} screen="ready" title="Ready to deploy"
-      footer={(
-        <>
-          {session.deployments.length > 0 && <Button variant="ghost" size="sm" className="mr-auto" onClick={onBack}>Back</Button>}
-          {preflight !== null && <span className="hidden t-meta sm:inline">{costOf(choices.computer)}</span>}
-          <Button variant="primary" busy={actions.deploying} disabled={preflight === null || preflight.needs.length > 0 || name === "" || (choices.mail !== null && !mailReady)} data-deploy-go
-            onClick={() => onDeploy(requestOf(account, name, choices))}>Deploy</Button>
-        </>
-      )}>
+      footer={<ReadyFoot back={session.deployments.length > 0} cost={preflight !== null} deploying={actions.deploying} blocked={blocked}
+        onDeploy={() => onDeploy(requestOf(account, name, choices))} onBack={onBack} />}>
       <Unreadable session={session} />
       <NotYet checked={checked} actions={{ ...actions, onHandedOff: handOff }} />
       {preflight !== null && (
         <div className="space-y-5">
-          {preflight.needs.map((need) => (
+          <BeforeDeploying preflight={preflight} seen={seen} waitingOn={handedOff} onHandedOff={handOff} />
+          {preflight.needs.filter((need) => !isLack(need.id)).map((need) => (
             <NeedBox key={need.id} need={need} waiting={handedOff === need.id} onHandedOff={() => handOff(need.id)} onSignIn={actions.onSignIn} signingIn={actions.signingIn} />
           ))}
           {kept !== null && <Refused refusal={kept} actions={{ ...actions, onHandedOff: handOff }} />}
@@ -261,11 +396,13 @@ function NewKinu({ session, actions, onDeploy, onBack }: { session: DeploySessio
           <div className="space-y-4 pt-1">
             <p className="t-meta">Optional</p>
             <Extra Icon={CpuIcon} title="Should your agents get their own computers?" on={choices.computer}
-              copy="Each can run code, builds and a browser. Needs Workers Paid, $5 a month; if your account isn't on it, Kinu asks when it gets there."
-              onChange={(computer) => setChoices((held) => ({ ...held, computer }))} />
+              copy="Each can run code, builds and a browser. Part of Workers Paid."
+              onChange={(computer) => setChoices((held) => ({ ...held, computer }))}>
+              {askTokens ? <ApiTokens session={session} actions={actions} onOff={() => setChoices((held) => ({ ...held, computer: false }))} /> : undefined}
+            </Extra>
             <MailExtra account={account} domain={choices.domain} mail={choices.mail} onMail={onMail} onReady={setMailReady} onDomain={() => setChoosingDomain(true)} />
           </div>
-          <div className="sm:hidden"><Line label="Cost"><span className="t-body p-text">{costOf(choices.computer)}</span></Line></div>
+          <div className="sm:hidden"><Line label="Cost"><span className="t-public-body p-text">{COST}</span></Line></div>
           <WhatGetsMade name={name === "" ? DEFAULT_INSTANCE_NAME : name} domain={choices.domain?.name ?? null} computer={choices.computer} mail={choices.mail} />
         </div>
       )}
@@ -281,7 +418,7 @@ function MoveToDomain({ kinu, actions, onChange, onBack }: { kinu: DeployedKinu;
 
   return (
     <DeployShell dot={1} screen="domain" title="Move your Kinu to a domain" footer={<Button variant="ghost" size="sm" className="mr-auto" onClick={onBack}>Back</Button>}>
-      <p className="mb-4 t-body">Your Kinu is live at {new URL(kinu.url).hostname}. Pick a domain and it moves there; the old address keeps working.</p>
+      <p className="mb-4 t-public-body">Your Kinu is live at {new URL(kinu.url).hostname}. Pick a domain and it moves there; the old address keeps working.</p>
       {actions.deploying && <p className="mb-4 inline-flex items-center gap-2 t-meta"><Loader size="sm" />Starting…</p>}
       {actions.refusal !== null && <div className="mb-4"><Refused refusal={actions.refusal} actions={actions} /></div>}
       <DeployDomain account={kinu.account} name={kinu.name} zones={zones}
@@ -308,7 +445,7 @@ function AddMail({ kinu, actions, onChange, onBack }: { kinu: DeployedKinu; acti
       )}>
       <NotYet checked={checked} actions={actions} />
       {checked?.state === "read" && (zone === undefined
-        ? <p className="t-body">{host} is in no zone of this account Kinu can read, so mail can't be added here.</p>
+        ? <p className="t-public-body">{host} is in no zone of this account Kinu can read, so mail can't be added here.</p>
         : <MailChoice account={kinu.account} domain={zone.name} host={mailHost ?? zone.name} onHost={setChosen} onReady={setReady} />)}
       {actions.refusal !== null && <div className="mt-4"><Refused refusal={actions.refusal} actions={actions} /></div>}
     </DeployShell>

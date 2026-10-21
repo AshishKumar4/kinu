@@ -1,4 +1,5 @@
 /** Brand hexes do not theme: marks sit on white unless their hex is unreadable there, then on ink. */
+import { CloudflareLogo } from "@cloudflare/kumo";
 import {
   siAnthropic, siCloudflare, siDeepmind, siDeepseek, siGithub, siGoogle,
   siGooglecloud, siHuggingface, siKimi, siMetaai, siMinimax, siMistralai,
@@ -122,4 +123,10 @@ export function BrandMark({ brand, size = 16, bare = false, className }: {
       {mark}
     </span>
   );
+}
+
+/** Cloudflare's cloud, in its own colours on its white tile: its guidelines keep the full-colour mark on white and rule
+ *  out black on orange, and white alone would vanish on the light amber of the dark theme. */
+export function CloudflareTile() {
+  return <span aria-hidden className="p-brand-tile"><CloudflareLogo variant="glyph" className="w-4" /></span>;
 }

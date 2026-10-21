@@ -76,7 +76,9 @@ const SIGN_IN_AGAIN: DeployAction = { label: 'Sign in again' };
 /** Kinu's agents run in Dynamic Workers, and its computer in Containers: both Workers Paid. */
 const PAID_PLAN = 'Kinu runs on Cloudflare\'s Workers Paid plan, $5 a month.';
 
-const upgradeToPaid = (account: string): DeployAction => ({ label: 'Upgrade to Workers Paid', href: `https://dash.cloudflare.com/${account}/workers/plans` });
+function upgradeToPaid(account: string): DeployAction {
+  return { label: 'Upgrade to Workers Paid', href: `https://dash.cloudflare.com/${account}/workers/plans` };
+}
 
 const RETRY: DeployAction = { label: 'Retry this step' };
 
@@ -137,7 +139,9 @@ export function judgeRefusal(words: CloudflareWords, account: string): DeployJud
 
   if (entry.need === undefined) return { refused: { sentence: entry.sentence, action: entry.action(account), details: words } };
 
-  return { need: { id: entry.need, sentence: entry.sentence, action: entry.action(account), details: words } };
+  const need: DeployNeed = { id: entry.need, sentence: entry.sentence, action: entry.action(account), details: words };
+
+  return { need };
 }
 
 /** The grant is gone (an hour unattended, or a renewal Cloudflare refused): no Cloudflare words to show. */

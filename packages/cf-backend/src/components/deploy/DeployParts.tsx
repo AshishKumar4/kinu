@@ -3,16 +3,21 @@
  * the person, and Cloudflare's own words behind Details. Each says one thing and offers one action.
  */
 import type { ReactNode } from "react";
-import { CloudflareLogo } from "@cloudflare/kumo";
-import { ArrowSquareOutIcon, CaretDownIcon, CheckIcon, type Icon as PhosphorIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon, CaretDownIcon, CheckCircleIcon, CheckIcon, CircleIcon, type Icon as PhosphorIcon } from "@phosphor-icons/react";
 import type { CloudflareWords, DeployAction, DeployChoice, DeployNeed, DeploySession } from "@kinu.run/core/deploy";
-import { Button, buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
+import { InlineAction } from "@/components/ui/InlineAction";
+import { openProviderWindow } from "@/lib/connect-window";
 import { CopyButton } from "@/components/ui/CopyButton";
-import { FlowStep } from "@/components/ui/FlowCard";
 import { Loader } from "@/components/ui/Loader";
 import { Switch } from "@/components/ui/Switch";
 import { ChatMascot } from "@/components/Marks";
 import type { DeployRefused } from "@/lib/deploy-page-api";
+import { CloudflareTile } from "@/components/ui/BrandMark";
+import { Callout } from "@/components/ui/Callout";
+import { IconTile } from "@/components/ui/IconTile";
+import { Preformatted } from "@/components/ui/Preformatted";
+import { FlowPage, FlowStep } from "@/components/ui/FlowCard";
 
 /** Where the page stands, as a dot: Start, Ready (and its Domain step), Deploying, Live. */
 export type DeployDot = 0 | 1 | 2 | 3;
@@ -30,42 +35,81 @@ export function DeployShell({ dot, screen, title, children, footer }: {
   footer?: ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 overflow-y-auto p-bg p-text">
+    <FlowPage>
       <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-4 py-8" data-deploy-screen={screen}>
         <FlowStep title="Your own Kinu" steps={STEPS} at={dot} footer={footer}>
-          <div className="px-5 py-5 sm:px-8 sm:py-7">
+          <div className="px-5 py-5 sm:px-8 sm:py-6">
             {title !== undefined && <h2 className="mb-5 t-title">{title}</h2>}
             {children}
           </div>
         </FlowStep>
       </div>
-    </div>
+    </FlowPage>
+  );
+}
+
+
+/**
+ * A sign-in to Cloudflare with its mark: the flow's one primary wherever it asks for one, at a public page's size; or
+ * `secondary`, small, where it is not the screen's primary (the computer's, again for API Tokens).
+ */
+export function CloudflareButton({ children, busy = false, secondary = false, onClick }: { children: ReactNode; busy?: boolean; secondary?: boolean; onClick: () => void }) {
+  return (
+    <Button variant={secondary ? "secondary" : "primary"} size={secondary ? "sm" : "lg"} busy={busy} icon={busy ? undefined : <CloudflareTile />} onClick={onClick}>
+      {children}
+    </Button>
   );
 }
 
 /**
- * Cloudflare's cloud, in its own colours on a white tile: its guidelines keep the full-colour mark on white and rule
- * out black on orange, and white would vanish on the light amber of the dark theme.
+ * Opens Cloudflare's own page in a window over this one (`openProviderWindow`): Cloudflare will not be framed, so the
+ * card waits here and reads again when the person comes back. A refused window goes there in this tab instead, and the
+ * page reads again when it is loaded back.
  */
-function CloudflareMark() {
+export function openOnCloudflare(name: string, href: string): void {
+  if (openProviderWindow(name, href) === null) window.location.assign(href);
+}
+
+/** A hand-off to Cloudflare's dashboard: the action, opening in Cloudflare's window, after which the page checks again. */
+export function HandOff({ action, onOpened }: { action: DeployAction & { readonly href: string }; onOpened?: () => void }) {
   return (
-    <span aria-hidden className="flex size-5 shrink-0 items-center justify-center rounded-[var(--r-check)] bg-white">
-      <CloudflareLogo variant="glyph" className="w-4" />
-    </span>
+    <Button variant="secondary" size="sm" data-deploy-handoff={action.href}
+      onClick={() => { openOnCloudflare(`kinu-deploy-${action.label}`, action.href); onOpened?.(); }}>
+      {action.label}<ArrowSquareOutIcon size={14} className="p-text-3" />
+    </Button>
   );
 }
 
-/** The sign-in to Cloudflare: the flow's one primary wherever it asks for one. */
-export function CloudflareButton({ children, busy = false, onClick }: { children: ReactNode; busy?: boolean; onClick: () => void }) {
-  return <Button variant="primary" busy={busy} icon={busy ? undefined : <CloudflareMark />} onClick={onClick}>{children}</Button>;
+/** While Cloudflare's window is open: what to do there, and the way to open it again if it went behind this page. */
+export function OnCloudflare({ doing, tip, onAgain }: { doing: string; tip?: string; onAgain: () => void }) {
+  return (
+    <Callout data-deploy-window="">
+      <p className="inline-flex items-center gap-2 t-public-item"><Loader size="sm" />Finish on Cloudflare's window…</p>
+      <p className="mt-1 t-public-body">{doing}</p>
+      {tip !== undefined && <p data-deploy-tip className="mt-2 t-public-item">{tip}</p>}
+      <p className="mt-2 t-meta">Can't see it? It may be behind this page. <InlineAction onClick={onAgain}>Open it again</InlineAction></p>
+    </Callout>
+  );
 }
 
-/** A hand-off to Cloudflare's dashboard: the action, opening beside the page, which then checks again by itself. */
-export function HandOff({ action, onOpened }: { action: DeployAction & { readonly href: string }; onOpened?: () => void }) {
+/** One thing the account lacks before it can take a Kinu: what it is and costs, its one action, ticked once done. */
+export function Lack({ name, done, title, copy, action, waiting }: {
+  name: string; done: boolean; title: string; copy: string; action: ReactNode; waiting: boolean;
+}) {
   return (
-    <a href={action.href} target="_blank" rel="noopener noreferrer" onClick={onOpened} data-deploy-handoff className={buttonClass({ variant: "secondary", size: "sm" })}>
-      {action.label}<ArrowSquareOutIcon size={13} className="p-text-3" />
-    </a>
+    <li data-deploy-lack={name} data-done={done ? "" : undefined} className="flex items-start gap-3 py-3">
+      {done
+        ? <CheckCircleIcon size={20} weight="fill" className="mt-px shrink-0 p-success" aria-label="Done" />
+        : <CircleIcon size={20} className="mt-px shrink-0 p-text-3" aria-hidden />}
+      <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+        <div className="min-w-0">
+          <div className="t-public-item">{title}</div>
+          <div className="t-meta">{done ? "Done" : copy}</div>
+          {!done && waiting && <p className="mt-1 inline-flex items-center gap-2 t-meta"><Loader size="sm" />Waiting for Cloudflare. This ticks off as soon as it's done.</p>}
+        </div>
+        {!done && <div className="shrink-0">{action}</div>}
+      </div>
+    </li>
   );
 }
 
@@ -76,7 +120,7 @@ export function Disclosure({ summary, children }: { summary: string; children: R
       <summary className="inline-flex cursor-pointer list-none items-center gap-1 t-meta hover:p-text [&::-webkit-details-marker]:hidden">
         <CaretDownIcon size={11} className="-rotate-90 transition-transform group-open:rotate-0" />{summary}
       </summary>
-      <div className="mt-2.5">{children}</div>
+      <div className="mt-3">{children}</div>
     </details>
   );
 }
@@ -90,9 +134,9 @@ export function CloudflareSaid({ words }: { words: CloudflareWords }) {
 
   return (
     <Disclosure summary="Details">
-      <div data-deploy-words className="flex items-start gap-2 rounded-[var(--r-control)] p-sunken px-3 py-2.5">
-        <p className="min-w-0 flex-1 t-code p-text-2">Cloudflare said: {words.message}{tail !== "" && <span className="p-text-3"> {tail}</span>}</p>
-        <CopyButton value={copied} what="the details" className="shrink-0 p-text-3 hover:p-text" />
+      <div data-deploy-words className="flex items-start gap-2">
+        <Preformatted className="min-w-0 flex-1">Cloudflare said: {words.message}{tail !== "" && <span className="p-text-3"> {tail}</span>}</Preformatted>
+        <CopyButton value={copied} what="the details" className="shrink-0" />
       </div>
     </Disclosure>
   );
@@ -101,12 +145,12 @@ export function CloudflareSaid({ words }: { words: CloudflareWords }) {
 /** A thing that waits on the person: one sentence, one action, and how the page will know. */
 function Needs({ children, action, waiting, note }: { children: ReactNode; action: ReactNode; waiting: boolean; note: string }) {
   return (
-    <div data-deploy-needs className="rounded-[var(--r-row)] bg-[var(--c-selected)] px-4 py-3.5">
-      <div className="t-body p-text">{children}</div>
+    <Callout data-deploy-needs="">
+      <div className="t-public-body p-text">{children}</div>
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
         {waiting ? <span className="inline-flex items-center gap-2 t-meta p-text-2"><Loader size="sm" />{note}</span> : action}
       </div>
-    </div>
+    </Callout>
   );
 }
 
@@ -135,7 +179,7 @@ export function NeedBox({ need, waiting, onHandedOff, onSignIn, signingIn }: {
 /** One labelled line of the plan: its name on the left at desktop, above at phone width. */
 export function Line({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid gap-1 sm:grid-cols-[7rem_1fr] sm:items-baseline sm:gap-4">
+    <div className="grid gap-1 sm:grid-cols-[var(--layout-plan-line)] sm:items-baseline sm:gap-4">
       <span className="t-meta">{label}</span>
       <div className="min-w-0">{children}</div>
     </div>
@@ -149,10 +193,10 @@ export function Extra({ Icon, title, copy, on, onChange, disabled = false, child
   return (
     <div className={disabled ? "opacity-60" : undefined}>
       <div className="flex items-start gap-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-[var(--r-control)] p-fill"><Icon size={18} className={on ? "p-accent" : "p-text-3"} /></span>
+        <IconTile size="xl"><Icon size={18} className={on ? "p-accent-fg" : "p-text-3"} /></IconTile>
         <div className="min-w-0 flex-1">
-          <div className="t-item">{title}</div>
-          <div className="mt-0.5 t-meta">{copy}</div>
+          <div className="t-public-item">{title}</div>
+          <div className="mt-px t-meta">{copy}</div>
         </div>
         <Switch on={on} onChange={onChange} label={title} disabled={disabled} />
       </div>
@@ -174,10 +218,10 @@ export function WhatGetsMade({ name, domain, computer, mail }: { name: string; d
 
   return (
     <Disclosure summary="What gets made in your account">
-      <ul className="space-y-1.5 t-meta p-text-2">
-        {lines.map((line) => <li key={line} className="flex items-start gap-2"><CheckIcon size={12} className="mt-0.5 shrink-0 p-text-3" />{line}</li>)}
+      <ul className="space-y-2 t-meta p-text-2">
+        {lines.map((line) => <li key={line} className="flex items-start gap-2"><CheckIcon size={12} className="mt-px shrink-0 p-text-3" />{line}</li>)}
       </ul>
-      <p className="mt-2.5 t-meta">Nothing else in your account changes, and you can remove all of it from Cloudflare any time.</p>
+      <p className="mt-3 t-meta">Nothing else in your account changes, and you can remove all of it from Cloudflare any time.</p>
     </Disclosure>
   );
 }
@@ -193,6 +237,8 @@ export function KinuFace({ activity, live = false }: { activity: "working" | "wa
 export interface RefusalActions {
   readonly signingIn: boolean;
   readonly onSignIn: () => void;
+  /** Signs in again for API Tokens, which the computer needs; the screen stays as it is. */
+  readonly onApiTokens: () => void;
   readonly onHandedOff: (need: string) => void;
 }
 
@@ -204,7 +250,7 @@ export function Refused({ refusal, actions }: { refusal: DeployRefused; actions:
 
   return (
     <div data-deploy-refusal className="space-y-2">
-      <p role="alert" className="t-body p-danger">{refused?.sentence ?? refusal.error}</p>
+      <p role="alert" className="t-public-body p-danger">{refused?.sentence ?? refusal.error}</p>
       {refused !== null && <CloudflareSaid words={refused.details} />}
     </div>
   );
@@ -219,7 +265,7 @@ export function accountName(accounts: readonly DeployChoice[], account: string):
 export function Unreadable({ session }: { session: DeploySession }) {
   return session.unreadable.map(({ account, words }) => (
     <div key={account} data-deploy-unreadable className="mb-4 space-y-1">
-      <p className="t-body">Kinu couldn't read the Kinus in {accountName(session.accounts, account)}, so any there aren't listed.</p>
+      <p className="t-public-body">Kinu couldn't read the Kinus in {accountName(session.accounts, account)}, so any there aren't listed.</p>
       <CloudflareSaid words={words} />
     </div>
   ));

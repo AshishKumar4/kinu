@@ -51,9 +51,12 @@ function heard<Schema extends v.GenericSchema>(schema: Schema, path: string, ini
 
 const HandoffSchema = v.object({ location: v.string() });
 
-/** Begins the page's sign-in; the answer is Cloudflare's consent page, which comes back to `/deploy`. */
-export function beginSignIn(): Promise<DeployHeard<v.InferOutput<typeof HandoffSchema>>> {
-  return settle(heard(HandoffSchema, "/signin", { method: "POST", json: { end: "tab" } }));
+/**
+ * Begins the page's sign-in for the connect run `run` (`beginConnect`): the answer is Cloudflare's consent page, whose
+ * end the shared finish page tells this tab. `apiTokens`: asked again for the computer, to tick API Tokens.
+ */
+export function beginSignIn(run: string, apiTokens: boolean): Promise<DeployHeard<v.InferOutput<typeof HandoffSchema>>> {
+  return settle(heard(HandoffSchema, "/signin", { method: "POST", json: { end: "helper", run, for: apiTokens ? "api-tokens" : undefined } }));
 }
 
 export function readSession(): Promise<DeployHeard<DeploySession>> {

@@ -10,6 +10,7 @@ import { Pressable } from "@/components/ui/Pressable";
 import { Loader } from "@/components/ui/Loader";
 import { accountName, DeployShell, Refused, Unreadable, type RefusalActions } from "@/components/deploy/DeployParts";
 import type { DeployRefused } from "@/lib/deploy-page-api";
+import { IconTile } from "@/components/ui/IconTile";
 
 /** What a change asks of the page, for the Kinu it is about. */
 export type KinuChange = "update" | "domain" | "mail" | "link";
@@ -32,11 +33,11 @@ function Change({ Icon, title, copy, onPick, disabled = false, change }: {
 }) {
   return (
     <li>
-      <Pressable onClick={onPick} disabled={disabled} data-deploy-change={change} className="-mx-3 flex w-[calc(100%+1.5rem)] items-center gap-3 px-3 py-3 disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-[var(--r-control)] p-fill"><Icon size={18} className="p-accent" /></span>
+      <Pressable onClick={onPick} disabled={disabled} data-deploy-change={change} className="-mx-3 flex w-auto items-center gap-3 px-3 py-3 disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent">
+        <IconTile size="xl"><Icon size={18} className="p-accent-fg" /></IconTile>
         <span className="min-w-0 flex-1">
-          <span className="block t-item">{title}</span>
-          <span className="mt-0.5 block t-meta">{copy}</span>
+          <span className="block t-public-item">{title}</span>
+          <span className="mt-px block t-meta">{copy}</span>
         </span>
         {!disabled && <CaretRightIcon size={14} className="shrink-0 p-text-3" />}
       </Pressable>
@@ -54,10 +55,10 @@ function UpdateChange({ kinu, onPick }: { kinu: DeployedKinu; onPick: () => void
   if (upToDate) {
     return (
       <li data-deploy-update="current" className="flex items-center gap-3 py-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-[var(--r-control)] p-fill"><CheckIcon size={16} className="p-success" /></span>
+        <IconTile size="xl"><CheckIcon size={16} className="p-success" /></IconTile>
         <span className="min-w-0 flex-1">
-          <span className="block t-item">Up to date</span>
-          {current !== null && <span className="mt-0.5 block t-meta">{current.version}, built {dayOf(current)}</span>}
+          <span className="block t-public-item">Up to date</span>
+          {current !== null && <span className="mt-px block t-meta">{current.version}, built {dayOf(current)}</span>}
         </span>
       </li>
     );
@@ -77,7 +78,7 @@ function KinuChanges({ kinu, accounts, onChange }: { kinu: DeployedKinu; account
 
   return (
     <>
-      <p className="t-body">It's live at <a href={kinu.url} target="_blank" rel="noopener noreferrer" data-deploy-kinu={kinu.name} className="t-item hover:underline">{host}</a>, in {accountName(accounts, kinu.account)}.</p>
+      <p className="t-public-body">It's live at <a href={kinu.url} target="_blank" rel="noopener noreferrer" data-deploy-kinu={kinu.name} className="t-public-item hover:underline">{host}</a>, in {accountName(accounts, kinu.account)}.</p>
       <ul className="mt-4 space-y-1">
         <UpdateChange kinu={kinu} onPick={() => onChange("update")} />
         <Change change="domain" Icon={GlobeHemisphereWestIcon} title={domain ? "Move to another domain" : "Add a domain"}

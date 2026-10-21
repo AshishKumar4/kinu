@@ -184,9 +184,16 @@ describe('the deploy page', () => {
       const page = await opened(gallery, 'r2');
       const r2 = judgeRefusal({ message: 'R2', code: 10_042, status: 403, endpoint: `/accounts/${ACCOUNT}/r2/buckets` }, ACCOUNT);
 
-      await page.waitForSelector('[data-deploy-need="r2"] [data-deploy-handoff]', SOON);
-      expect(await page.$eval('[data-deploy-handoff]', (link) => link.getAttribute('href'))).toBe('need' in r2 ? r2.need.action.href ?? null : null);
+      await page.waitForSelector('[data-deploy-lack="r2"] [data-deploy-handoff]', SOON);
+      expect(await page.$eval('[data-deploy-lack="r2"] [data-deploy-handoff]', (button) => button.getAttribute('data-deploy-handoff'))).toBe('need' in r2 ? r2.need.action.href ?? null : null);
       expect(await page.$('[data-deploy-go][disabled]')).not.toBeNull();
+
+      // Cloudflare will not be framed: the hand-off opens its own window over the page, which waits on it.
+      const window = page.browser().waitForTarget((target) => target.opener() === page.target(), SOON);
+
+      await page.click('[data-deploy-lack="r2"] [data-deploy-handoff]');
+      await (await (await window).page())?.close();
+      await page.waitForSelector('[data-deploy-lack="r2"]:not([data-done])', SOON);
     });
   });
 
@@ -199,8 +206,9 @@ describe('the deploy page', () => {
       expect(await page.$$eval('[data-deploy-need="signin-again"]', (needs) => needs.length)).toBe(1);
       expect((await asked(page)).map((each) => each.route)).toEqual(['runs/current/continue']);
       await pressNamed(page, 'Sign in again');
-      await page.waitForFunction(() => new URLSearchParams(location.search).get('deploy') === 'paused-signin-back', SOON);
-      await page.waitForFunction(() => (document.documentElement.dataset.deployAsked ?? '').includes('"route":"runs/current/continue"'), SOON);
+      // Signed in in Cloudflare's window, whose end the page hears: the run is carried on again, and goes live.
+      await page.waitForFunction(() => (document.documentElement.dataset.deployAsked ?? '').split('runs/current/continue').length > 2, SOON);
+      expect((await asked(page)).map((each) => each.route)).toEqual(['runs/current/continue', 'signin', 'runs/current/continue']);
       await screenBecomes(page, 'live');
     });
   });
@@ -229,7 +237,8 @@ describe('the deploy page', () => {
       await ready.waitForSelector('[data-deploy-pending="ready"]', SOON);
       expect(await ready.$('[data-deploy-refusal], [data-deploy-need]')).toBeNull();
       await pressNamed(ready, 'Sign in again');
-      await ready.waitForFunction(() => new URLSearchParams(location.search).get('deploy') === 'live-pending-back', SOON);
+      // Signed in in Cloudflare's window, whose end the page hears: the run carries on onto the domain.
+      await ready.waitForFunction(() => (document.documentElement.dataset.deployAsked ?? '').includes('"route":"signin"'), SOON);
       await ready.waitForSelector('[data-deploy-live-address]', SOON);
       await ready.waitForFunction(() => document.querySelector('[data-deploy-live-address]')?.textContent === 'kinu.ada.dev', SOON);
     });
@@ -289,6 +298,85 @@ describe('the deploy page', () => {
       expect(await page.$$eval('[data-deploy-change="pick"]', (kinus) => kinus.length)).toBe(2);
       await page.click('[data-deploy-change="pick"]');
       await page.waitForSelector('[data-deploy-kinu="kinu"]', SOON);
+    });
+  });
+
+  test('Start says what Kinu costs and offers a Cloudflare account to someone with none, in Cloudflare\'s own window', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'start');
+
+      await page.waitForSelector('[data-deploy-price]', SOON);
+      expect(await page.$eval('[data-deploy-price]', (price) => price.textContent ?? '')).toContain('Workers Paid');
+      const window = page.browser().waitForTarget((target) => target.opener() === page.target(), SOON);
+
+      await pressNamed(page, 'Create one, free');
+      await (await (await window).page())?.close();
+      await page.waitForSelector('[data-deploy-window]', SOON);
+      expect(await screenOf(page)).toBe('start');
+    });
+  });
+
+  test('a free account lists Workers Paid and R2 before deploying, and Deploy waits for both', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'free');
+
+      await page.waitForSelector('[data-deploy-lack="plan"]', SOON);
+      expect(await page.$$eval('[data-deploy-lack]', (rows) => rows.map((row) => [row.getAttribute('data-deploy-lack'), row.hasAttribute('data-done')])))
+        .toEqual([['plan', false], ['r2', false]]);
+      expect(await page.$('[data-deploy-go][disabled]')).not.toBeNull();
+    });
+  });
+
+  test('a lack met on Cloudflare ticks off when the page reads the account again, and the rest stays', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'upgrading');
+
+      await page.waitForSelector('[data-deploy-lack="plan"]:not([data-done])', SOON);
+      // Back from Cloudflare's window: the page has the focus again, and reads the account.
+      await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+      await page.waitForSelector('[data-deploy-lack="plan"][data-done]', SOON);
+      expect(await page.$('[data-deploy-lack="r2"]:not([data-done])')).not.toBeNull();
+      expect(await page.$('[data-deploy-go][disabled]')).not.toBeNull();
+    });
+  });
+
+  test('a login with no Cloudflare account behind it is asked to make one first', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'no-account');
+
+      await page.waitForSelector('[data-deploy-lack="account"] [data-deploy-handoff]', SOON);
+      expect(await page.$eval('[data-deploy-lack="account"] [data-deploy-handoff]', (button) => button.getAttribute('data-deploy-handoff'))).toBe('https://dash.cloudflare.com/');
+      expect(await page.$('[data-deploy-go][disabled]')).not.toBeNull();
+    });
+  });
+
+  test('the computer without API Tokens asks to sign in again and tick it; given, Deploy can go', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'tokens-missing');
+
+      await page.waitForSelector('[role="switch"]', SOON);
+      await page.click('[role="switch"]');
+      await page.waitForSelector('[data-deploy-api-tokens="missing"] [data-deploy-tip]', SOON);
+      expect(await page.$('[data-deploy-go][disabled]')).not.toBeNull();
+      await pressNamed(page, 'Sign in again');
+      await page.waitForFunction(() => document.querySelector('[data-deploy-api-tokens]') === null, SOON);
+      expect((await asked(page)).find((each) => each.route === 'signin')?.body).toMatchObject({ end: 'helper', for: 'api-tokens' });
+      await page.waitForSelector('[data-deploy-go]:not([disabled])', SOON);
+      expect(await page.$eval('[role="switch"]', (box) => box.getAttribute('aria-checked'))).toBe('true');
+    });
+  });
+
+  test('API Tokens left out again offers the deploy without the computer', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'tokens-refused');
+
+      await page.waitForSelector('[role="switch"]', SOON);
+      await page.click('[role="switch"]');
+      await page.waitForSelector('[data-deploy-api-tokens="refused"]', SOON);
+      await pressNamed(page, 'Deploy without it');
+      await page.waitForSelector('[data-deploy-go]:not([disabled])', SOON);
+      await press(page, '[data-deploy-go]');
+      expect(await runAsked(page)).toMatchObject({ kind: 'new', computer: false });
     });
   });
 });

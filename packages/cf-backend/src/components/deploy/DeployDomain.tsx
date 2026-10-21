@@ -11,6 +11,7 @@ import { Loader } from "@/components/ui/Loader";
 import { HandOff } from "@/components/deploy/DeployParts";
 import { readDomains } from "@/lib/deploy-page-api";
 import { useDeployRead } from "@/components/deploy/use-deploy-read";
+import { Group } from "@/components/ui/Group";
 
 /** The address a domain gives a Kinu named `name`: its own host on it. */
 export interface PickedDomain {
@@ -25,10 +26,10 @@ const SEARCH_REST_MS = 300;
 
 function DomainRow({ name, note, action }: { name: string; note: string; action: ReactNode }) {
   return (
-    <li data-deploy-domain={name} className="flex items-center gap-3 py-2.5">
+    <li data-deploy-domain={name} className="flex items-center gap-3 py-2">
       <GlobeHemisphereWestIcon size={16} className="shrink-0 p-text-3" />
       <span className="min-w-0 flex-1">
-        <span className="block truncate t-item">{name}</span>
+        <span className="block truncate t-public-item">{name}</span>
         <span className="block t-meta">{note}</span>
       </span>
       {action}
@@ -59,21 +60,21 @@ export function DeployDomain({ account, name, zones, onPick }: {
       <label className="relative block">
         <MagnifyingGlassIcon size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 p-text-3" />
         <TextInput aria-label="Find a domain" placeholder="Find a domain in your account, or type one you own" value={query}
-          onChange={(event) => setQuery(event.target.value)} className="pl-9" />
+          onChange={(event) => setQuery(event.target.value)} className="pl-8" />
       </label>
 
       {found?.state === "reading" && <p className="mt-4 inline-flex items-center gap-2 t-meta"><Loader size="sm" />Looking in your account…</p>}
-      {found?.state === "refused" && <p role="alert" className="mt-4 t-body p-danger">{found.refusal.error}</p>}
+      {found?.state === "refused" && <p role="alert" className="mt-4 t-public-body p-danger">{found.refusal.error}</p>}
       {found?.state === "read" && (
         found.answer.length === 0
           ? <p className="mt-4 t-meta">No domain like that in your account. Type a whole domain you own, like example.com, to use it.</p>
           : (
-            <ul className="mt-3 divide-y divide-[var(--c-border)]">
+            <div className="mt-3"><Group list>
               {found.answer.map((domain) => (
                 <DomainRow key={domain.name} name={domain.name} note={noteOf(domain, name)}
                   action={<Button size="sm" onClick={() => pick(domain)}>{domain.state === "elsewhere" ? "Use it" : "Use"}</Button>} />
               ))}
-            </ul>
+            </Group></div>
           )
       )}
 
@@ -82,12 +83,12 @@ export function DeployDomain({ account, name, zones, onPick }: {
           {zones.length > 0 && (
             <>
               <p className="t-meta">In your Cloudflare account</p>
-              <ul className="mt-1 divide-y divide-[var(--c-border)]">
+              <div className="mt-1"><Group list>
                 {zones.map((zone) => (
                   <DomainRow key={zone.id} name={zone.name} note={noteOf({ name: zone.name, state: "yours", zone: zone.id, status: zone.status }, name)}
                     action={<Button size="sm" onClick={() => onPick({ name: zone.name, zone: zone.id, host: `${name}.${zone.name}` })}>Use</Button>} />
                 ))}
-              </ul>
+              </Group></div>
             </>
           )}
           <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2">

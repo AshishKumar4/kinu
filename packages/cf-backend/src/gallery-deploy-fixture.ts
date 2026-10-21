@@ -29,6 +29,11 @@ export const DEPLOY_FIXTURE_STATES = [
   { id: "start", label: "Start" },
   { id: "declined", label: "Start: Cloudflare's consent declined", at: "/deploy?error=access_denied&error_description=The+user+denied+the+request." },
   { id: "unconfigured", label: "Start: no OAuth client on this Kinu" },
+  { id: "no-account", label: "New login: no Cloudflare account behind it" },
+  { id: "free", label: "Free account: Workers Paid and R2 to do" },
+  { id: "upgrading", label: "Free account: upgraded on Cloudflare, ticked off when read again" },
+  { id: "tokens-missing", label: "Ready: the computer, API Tokens not granted" },
+  { id: "tokens-refused", label: "Ready: the computer, API Tokens left out again" },
   { id: "checking", label: "Ready: checking the account" },
   { id: "ready", label: "Ready" },
   { id: "two-accounts", label: "Ready: two accounts" },
@@ -59,10 +64,27 @@ export const DEPLOY_FIXTURE_STATES = [
 
 export type DeployFixtureState = (typeof DEPLOY_FIXTURE_STATES)[number]["id"];
 
+/** Where a sign-in in Cloudflare's window left the review: its end told the page, which reads the door again. */
+let signedInAs: DeployFixtureState | null = null;
+
+/** The API Tokens a sign-in asked again for them gave. */
+let tokensGiven = false;
+
+/** How often the account was read: an upgrade on Cloudflare shows on the read after the first. */
+let preflightReads = 0;
+
 function stateNow(): DeployFixtureState {
   const said = new URLSearchParams(location.search).get("deploy");
 
-  return DEPLOY_FIXTURE_STATES.find((each) => each.id === said)?.id ?? "start";
+  return signedInAs ?? DEPLOY_FIXTURE_STATES.find((each) => each.id === said)?.id ?? "start";
+}
+
+/** The states whose sign-in has not given the computer's API Tokens yet: not ticked, or left out again. */
+const TOKENS: Partial<Record<DeployFixtureState, "missing" | "missing-after-reconsent">> = { "tokens-missing": "missing", "tokens-refused": "missing-after-reconsent" };
+
+/** Cloudflare's consent, in the gallery: given at once, so its window goes straight to the shared finish page. */
+function consentGiven(run: string): string {
+  return `${location.pathname}?${new URLSearchParams({ frame: "connected", run, service: "cloudflare-deploy" }).toString()}`;
 }
 
 /** The gallery's address for `state`: the review's own parameters kept, the page's address set. */
@@ -148,7 +170,11 @@ function needOf(words: CloudflareWords): DeployNeed {
 
 const R2_REFUSED: CloudflareWords = { message: "Please enable R2 through the Cloudflare Dashboard.", code: 10_042, status: 403, endpoint: `/accounts/${ACCOUNT}/r2/buckets` };
 
-const PLAN_REFUSED: CloudflareWords = { message: "Containers are available on the Workers Paid plan.", status: 403, endpoint: `/accounts/${ACCOUNT}/containers/applications` };
+/** As Cloudflare refused it on Workers Free (core's refusals table, measured 2026-10-21). */
+const PLAN_REFUSED: CloudflareWords = {
+  message: "Unauthorized: You do not have access to Cloudflare Containers. Deploying containers requires the Workers Paid plan.",
+  code: 1000, status: 401, endpoint: `/accounts/${ACCOUNT}/containers/applications`,
+};
 
 /** The refusal of the address step: a record already there, which no catalog entry names, so the run says so plainly. */
 const ADDRESS_REFUSED = { detail: "A DNS record with that host already exists.", code: 81_057, status: 400, endpoint: `/zones/${ZONES[0]?.id ?? ""}/dns_records` };
@@ -232,25 +258,30 @@ function sessionOf(state: DeployFixtureState): DeploySession {
   }
 
   const accounts = state === "two-accounts" || state === "manage-two" || state === "unreadable" ? ACCOUNTS : [ACCOUNTS[0]];
+  const tokens = tokensGiven ? "granted" : TOKENS[state] ?? "granted";
   const run = runNow(state);
   const finished = run !== null && run.state === "live" && run.live?.pending === undefined;
   const resume = run === null || finished ? null : { runId: run.runId, account: run.account, phase: run.phase.id, state: run.state };
   const listed = finished && run.live !== undefined ? [kinu(new URL(run.live.url).hostname, LATEST, LATEST)] : LISTED[state] ?? [];
   const unreadable = state === "unreadable" ? [{ account: SECOND_ACCOUNT, words: { message: "Authentication error", code: 10_000, status: 403, endpoint: `/accounts/${SECOND_ACCOUNT}/workers/scripts` } }] : [];
 
-  return { signedIn: true, email: "ada@lovelace.dev", accounts, resume, deployments: listed, unreadable, apiTokens: "granted" };
+  return { signedIn: true, email: "ada@lovelace.dev", accounts: state === "no-account" ? [] : accounts, resume, deployments: listed, unreadable, apiTokens: tokens };
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 function preflightOf(state: DeployFixtureState): DeployPreflight {
+  preflightReads += 1;
+  const free = state === "free" || (state === "upgrading" && preflightReads === 1);
+  const noR2 = state === "r2" || state === "free" || state === "upgrading";
+
   return {
     workersSubdomain: state === "no-subdomain" ? null : "ada",
     suggestedName: state === "name-taken" ? "kinu-2" : "kinu",
-    r2: state === "r2" ? "off" : "on",
-    plan: "unknown",
+    r2: noR2 ? "off" : "on",
+    plan: free ? "free" : "paid",
     zones: ZONES,
-    needs: state === "r2" ? [needOf(R2_REFUSED)] : [],
+    needs: [...free ? [needOf(PLAN_REFUSED)] : [], ...noR2 ? [needOf(R2_REFUSED)] : []],
     checkedAt: "2026-10-21T08:00:00.000Z",
   };
 }
@@ -352,7 +383,12 @@ export function deployFixture(path: string, method: string, body: string | null)
   if (route === "signin" && method === "POST") {
     if (state === "unconfigured") return Promise.resolve(json({ error: "This Kinu has no Cloudflare OAuth client configured, so it cannot deploy to Cloudflare." }, 503));
 
-    return Promise.resolve(json({ location: deployStateHref(signedInFrom(state)) }));
+    const asked = v.parse(v.object({ run: v.string(), for: v.optional(v.literal("api-tokens")) }), JSON.parse(body ?? "{}"));
+
+    if (asked.for === "api-tokens") tokensGiven = true;
+    else signedInAs = signedInFrom(state);
+
+    return Promise.resolve(json({ location: consentGiven(asked.run) }));
   }
 
   if (route === "session") return Promise.resolve(json(sessionOf(state)));

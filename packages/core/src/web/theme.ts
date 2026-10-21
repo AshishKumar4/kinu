@@ -346,6 +346,9 @@ function selectors(theme: ThemeName, mode: Mode): string {
  * are read by someone not yet in the app, at a reading size, not the app chrome's 13. Body 15, lede 17 and the
  * call to action's 14, each with its leading; the public shell's CSS and the app's t-public-* roles read these.
  */
+/** A partner's full-colour mark sits on white in every look, as its guidelines ask (Cloudflare's cloud on a Continue). */
+const BRAND = { '--c-brand-tile': '#FFFFFF' } satisfies Readonly<Record<`--c-${string}`, string>>;
+
 const PUBLIC_TYPE = {
   '--t-public-body': '15px',
   '--t-public-body-leading': '1.7',
@@ -359,7 +362,7 @@ const declarations = (tokens: Readonly<Record<string, string>>): string => Objec
 const ORDERED: readonly ThemeName[] = [DEFAULT_THEME, ...THEME_NAMES.filter((name) => name !== DEFAULT_THEME)];
 
 export const THEME_CSS = [
-  `:root{${declarations(RADII)};${declarations(PUBLIC_TYPE)}}`,
+  `:root{${declarations(RADII)};${declarations(PUBLIC_TYPE)};${declarations(BRAND)}}`,
   ...ORDERED.flatMap((theme) => (['dark', 'light'] as const).map((mode) => `${selectors(theme, mode)}{${declarations(THEME_TOKENS[theme][mode])}}`)),
 ].join('\n');
 
