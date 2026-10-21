@@ -6,7 +6,7 @@ import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
 import { SessionMessages } from '../src/session/messages';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
-import { INLINE_PAYLOAD_BYTES } from './helpers/fork-conversation';
+import { INLINE_PAYLOAD_BYTES } from '../src/session/payload';
 import { SessionPayloads } from '../src/session/payload';
 import { SessionContext, type ContextEntry, type ContextSelection } from '../src/session/context';
 import { SessionProposals } from '../src/session/proposals';

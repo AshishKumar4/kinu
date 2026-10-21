@@ -17,7 +17,7 @@ import { SessionPayloads } from '../../src/session/payload';
 import { SessionTranscript, readSessionTranscript } from '../../src/session/transcript';
 import { writeWorkspaceSoul } from '../../src/vfs/workspace-planes';
 import type { JsonObject } from '../../src/utils/json';
-import { PLATFORM_CATALOG } from '../../src/platform-catalog';
+import { INLINE_PAYLOAD_BYTES } from '../../src/session/payload';
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '../../src/vfs/agent-home';
 import { WORKSPACE_ROOT } from '../../src/vfs/workspace-path';
 
@@ -27,9 +27,6 @@ export const SOURCE_ARTIFACTS = agentArtifactDirectory(agentHome(MAIN_AGENT));
 /** Differs from the source's, so an un-re-rooted payload reference reads a missing file. It is under the target's
  *  own root: the fork sink writes as the session user, and only the kernel makes a home under `/home`. */
 export const TARGET_ARTIFACTS = `${WORKSPACE_ROOT}/.kinu/fork-context`;
-
-/** The inline ceiling: half of `do.sqlite.row_bytes`. */
-export const INLINE_PAYLOAD_BYTES = Math.floor(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 2);
 
 /** Above the inline ceiling, so it spills to a file. */
 export const SPILLED_BYTES = INLINE_PAYLOAD_BYTES + 100_000;

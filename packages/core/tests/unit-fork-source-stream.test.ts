@@ -5,8 +5,9 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { createTestWorkspace, type TestWorkspace } from './helpers';
 import {
-  seedForkSource, SOURCE_ARTIFACTS, SPILLED_BYTES, INLINE_PAYLOAD_BYTES, type ForkConversation,
+  seedForkSource, SOURCE_ARTIFACTS, SPILLED_BYTES, type ForkConversation,
 } from './helpers/fork-conversation';
+import { INLINE_PAYLOAD_BYTES } from '../src/session/payload';
 import { reassemble, sourceFrames } from './helpers/fork-stream';
 import {
   FORK_ROW_SECTIONS, type ForkChunksFrame, type ForkFrame, type ForkPageFrame, type ForkRowFrame,
