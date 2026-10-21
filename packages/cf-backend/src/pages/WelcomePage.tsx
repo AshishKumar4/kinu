@@ -210,7 +210,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
     <div className="fixed inset-0 p-bg overflow-y-auto">
       <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-4 py-8">
         <div className="mb-6 flex justify-center"><KinuLogo /></div>
-        <h1 className="p-display text-[26px] leading-8 text-center">Let's set up your account</h1>
+        <h1 className="p-page-title text-center">Let's set up your account</h1>
 
         <ol aria-label="Setup steps" className="mt-6 mb-5 flex items-center justify-center gap-1.5">
           {steps.map((s, i) => (

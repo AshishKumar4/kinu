@@ -196,13 +196,9 @@ function KinuFace({ activity, live = false }: { activity: "working" | "waiting" 
 // ── Parts ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The one large action a screen has: onboarding's filled button at the size a decision deserves. */
+/** The flow's one primary, as every page's (`Button` md): `wide` fills the column it ends. */
 function PrimaryButton({ children, onClick, disabled = false, wide = false }: { children: ReactNode; onClick: () => void; disabled?: boolean; wide?: boolean }) {
-  return (
-    <button type="button" onClick={onClick} disabled={disabled}
-      className={`p-btn inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold disabled:opacity-50 ${wide ? "w-full" : ""}`}>
-      {children}
-    </button>
-  );
+  return <Button variant="primary" onClick={onClick} disabled={disabled} className={wide ? "w-full" : undefined}>{children}</Button>;
 }
 
 /**
@@ -211,8 +207,8 @@ function PrimaryButton({ children, onClick, disabled = false, wide = false }: { 
  */
 function CloudflareMark() {
   return (
-    <span aria-hidden className="flex h-6 w-8 shrink-0 items-center justify-center rounded-md bg-white">
-      <CloudflareLogo variant="glyph" className="w-[18px]" />
+    <span aria-hidden className="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-white">
+      <CloudflareLogo variant="glyph" className="w-4" />
     </span>
   );
 }
@@ -223,12 +219,7 @@ function CloudflareButton({ children, onClick }: { children: ReactNode; onClick:
 
 /** A hand-off to Cloudflare's dashboard: the one action, opening beside the page. */
 function HandOffButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick}
-      className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border p-border px-3 text-[13px] font-medium p-text transition-colors hover:bg-[var(--c-neutral-tint)]">
-      {label}<ArrowSquareOutIcon size={13} className="p-text-3" />
-    </button>
-  );
+  return <Button variant="secondary" size="sm" onClick={onClick}>{label}<ArrowSquareOutIcon size={13} className="p-text-3" /></Button>;
 }
 
 /** Folded away until asked: what is made, Cloudflare's own words, the CLI. */
@@ -404,7 +395,7 @@ function ManageScreen({ state, go }: { state: FlowState; go: Go }) {
       footer={(
         <>
           <Button variant="ghost" size="sm" onClick={() => go({ screen: "start", entry: "new" })}>Back</Button>
-          <button type="button" onClick={() => go({ screen: "ready", entry: "new", preflight: "checking" })} className="p-btn-ghost inline-flex h-6.5 items-center rounded-md px-2 text-xs">Deploy another Kinu</button>
+          <Button variant="ghost" size="sm" onClick={() => go({ screen: "ready", entry: "new", preflight: "checking" })}>Deploy another Kinu</Button>
         </>
       )}>
       {many ? <KinuList go={go} /> : (
@@ -614,11 +605,7 @@ function DomainRow({ name, note, action }: { name: string; note: string; action:
 }
 
 function UseButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button type="button" onClick={onClick} className="inline-flex h-8 shrink-0 items-center rounded-lg border p-border px-3 text-[13px] font-medium p-text hover:bg-[var(--c-neutral-tint)]">
-      {label}
-    </button>
-  );
+  return <Button variant="secondary" size="sm" onClick={onClick}>{label}</Button>;
 }
 
 function DomainScreen({ state, go }: { state: FlowState; go: Go }) {
@@ -631,14 +618,14 @@ function DomainScreen({ state, go }: { state: FlowState; go: Go }) {
       footer={(
         <>
           <Button variant="ghost" size="sm" onClick={() => go(back)}>Back</Button>
-          {!existing && <button type="button" onClick={() => go({ screen: "ready", domain: "none" })} className="p-btn-ghost inline-flex h-6.5 items-center rounded-md px-2 text-xs">Keep {WORKERS_ADDRESS}</button>}
+          {!existing && <Button variant="ghost" size="sm" onClick={() => go({ screen: "ready", domain: "none" })}>Keep {WORKERS_ADDRESS}</Button>}
         </>
       )}>
       {existing && <p className="mb-4 p-row-text p-text-2">Your Kinu is live at {WORKERS_ADDRESS}. Pick a domain and it moves there; the old address keeps working.</p>}
       <label className="relative block">
         <MagnifyingGlassIcon size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 p-text-3" />
         <input aria-label="Find a domain" placeholder="Find a domain, or type one you own" defaultValue={state.search === "empty" ? "" : "adalovelace"}
-          onChange={(event) => go({ search: event.target.value === "" ? "empty" : "results" })} className={`${inputCls} h-10 pl-9`} />
+          onChange={(event) => go({ search: event.target.value === "" ? "empty" : "results" })} className={`${inputCls} h-8 pl-9`} />
       </label>
 
       {state.search === "buying" && (
@@ -934,7 +921,7 @@ export function SelfDeployFlow() {
     <div className="fixed inset-0 overflow-y-auto p-bg p-text">
       <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-4 py-8" data-deploy-screen={state.screen}>
         <div className="mb-6 flex justify-center"><KinuLogo /></div>
-        <h1 className="p-display text-center text-[26px] leading-8">Your own Kinu</h1>
+        <h1 className="p-page-title text-center">Your own Kinu</h1>
         <ol aria-label="Deploy steps" className="mb-5 mt-6 flex items-center justify-center gap-1.5">
           {["Start", "Ready", "Deploying", "Live"].map((label, at) => (
             <li key={label} aria-current={at === DOT[state.screen] ? "step" : undefined} aria-label={label}>

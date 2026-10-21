@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/Button";
+import { SaveBar } from "@/components/ui/SaveBar";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { CaretRightIcon, CheckIcon, MinusIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
 import {
@@ -115,7 +116,7 @@ function useCatalogEdit() {
   })), [draft, envelope, dirty, saving, publish]);
 
   return {
-    envelope, draft, setDraft, dirty, save, setError,
+    envelope, draft, setDraft, dirty, save, setError, saving,
     menu: lastValue(models.resource) ?? EMPTY_MENU,
     busy: saving || catalog.resource.status === 'loading' || models.resource.status === 'loading',
     error: saveError ?? readFailure(catalog.resource, models.resource),
@@ -124,7 +125,7 @@ function useCatalogEdit() {
 }
 
 export function ProfileCatalogSettings() {
-  const { envelope, draft, setDraft, dirty, save, setError, menu, busy, error, load } = useCatalogEdit();
+  const { envelope, draft, setDraft, dirty, save, setError, saving, menu, busy, error, load } = useCatalogEdit();
 
   const [selectedRole, setSelectedRole] = useState<RoleId>('task');
   const [newRoleId, setNewRoleId] = useState('');
@@ -490,7 +491,7 @@ export function ProfileCatalogSettings() {
               ) : (
                 <button
                   type="button"
-                  className="p-btn-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] p-t-control md:mb-0 md:w-full md:rounded-md md:px-3 md:py-2"
+                  className="p-button-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] p-t-control md:mb-0 md:w-full md:rounded-md md:px-3 md:py-2"
                   onClick={() => setAddingRole(true)}
                 >
                   <PlusIcon size={12} /> New role
@@ -514,28 +515,8 @@ export function ProfileCatalogSettings() {
         </Card>
       )}
 
-      {(draft && envelope) && <SaveBar dirty={dirty} error={error} busy={busy} onDiscard={() => setDraft(envelope.catalog)} onSave={() => void save()} />}
+      {(draft && envelope) && <SaveBar dirty={dirty} saving={saving} error={error} onDiscard={() => setDraft(envelope.catalog)} onSave={() => void save()} />}
     </>
-  );
-}
-
-/** Only while there is something to save: on the page's own ground under a hairline, after the form, never over it. */
-function SaveBar({ dirty, error, busy, onDiscard, onSave }: {
-  dirty: boolean; error: string | null; busy: boolean; onDiscard: () => void; onSave: () => void;
-}) {
-  if (!dirty && error === null) return null;
-
-  return (
-    <div className="sticky bottom-0 z-10 mt-4 border-t p-border p-bg py-3" data-models-save-bar>
-      {error !== null && <div className="mb-3 rounded-md px-3 py-2 text-xs p-notice-danger">{error}</div>}
-      <div className="flex items-center justify-between gap-3">
-        {dirty && <span className="p-meta p-warning">Unsaved changes</span>}
-        <div className="ml-auto flex gap-2">
-          <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={onDiscard}>Discard</Button>
-          <Button variant="primary" size="sm" disabled={!dirty || busy} onClick={onSave}>{busy ? 'Saving…' : 'Save'}</Button>
-        </div>
-      </div>
-    </div>
   );
 }
 

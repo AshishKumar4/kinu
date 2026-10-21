@@ -21,13 +21,14 @@ const TILE_TITLE = "truncate text-sm font-semibold leading-5 p-text";
 
 /**
  * A cover for a thing with no picture: its mark at the top left, and what it is for set large at the bottom left, as a
- * title page would set it. `line` null sets the title itself. `mark` false leaves the corner to what the tile sets there
- * (Explore's kind badge).
+ * title page would set it. `line` null sets the title itself. `mark` is the thing's face where it has one other than its
+ * logo (Home's assistant, by its mascot); false leaves the corner to what the tile sets there (Explore's kind badge). The
+ * ground is one step off the tile's body in every look (`--c-fill`), never darker than the page.
  */
-export function TypesetCover({ title, line, logo = null, mark = true }: { title: string; line: string | null; logo?: string | null; mark?: boolean }) {
+export function TypesetCover({ title, line, logo = null, mark }: { title: string; line: string | null; logo?: string | null; mark?: ReactNode }) {
   return (
-    <span data-typeset-cover className="absolute inset-0 flex flex-col justify-between p-recessed p-5">
-      {mark ? <WorkspaceLogo title={title} logo={logo} size={32} /> : <span />}
+    <span data-typeset-cover className="absolute inset-0 flex flex-col justify-between bg-[var(--c-fill)] p-5">
+      <span className="flex">{mark === undefined ? <WorkspaceLogo title={title} logo={logo} size={32} /> : mark}</span>
       <span className="line-clamp-3 text-[17px] font-medium leading-6 text-[var(--c-text-2)]">{line ?? title}</span>
     </span>
   );

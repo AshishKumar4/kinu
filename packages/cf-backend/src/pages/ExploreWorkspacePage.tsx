@@ -3,11 +3,12 @@
  * and watches, its slates, its layout and soul), what it needs of yours and what it asks you before acting; and Install.
  */
 import { useEffect, useState, type ReactNode } from "react";
-import { Button } from "@/components/ui/Button";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { Page } from "@/components/ui/PageHeader";
 import { Link, useParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Loader } from "@cloudflare/kumo";
-import { CaretRightIcon, ClockIcon, HandPalmIcon, HouseIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
+import { ClockIcon, HandPalmIcon, HouseIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -92,18 +93,18 @@ function BlueprintActions({ workspace, onInstall }: { workspace: WorkspaceCard; 
     showing(setFailure),
   );
 
+  // The page's header actions: Star, then the one primary.
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2">
-      {installed
-        ? <Link to={APP_ROUTES.home} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--c-accent)] px-3 text-[13px] font-semibold text-[var(--c-accent-on)]" data-blueprint-open><HouseIcon size={14} />Open on Home</Link>
-        : <Button variant="primary" size="md" onClick={signedIn ? onInstall : () => signInAndReturn(hereAsking("install"))} data-blueprint-install><DownloadSimpleIcon size={14} />Install</Button>}
-      <button type="button" onClick={() => detach(signedIn ? toggle(!star.on) : Effect.sync(() => signInAndReturn()))} aria-pressed={star.on} data-blueprint-star
-        className={`inline-flex h-8 items-center gap-1.5 rounded-lg border p-border px-3 text-[13px] transition-colors hover:p-text ${star.on ? "p-text" : "p-text-2"}`}>
+    <>
+      {failure !== null && <span role="alert" className="max-w-64 truncate p-meta p-danger" title={failure}>{failure}</span>}
+      <Button onClick={() => detach(signedIn ? toggle(!star.on) : Effect.sync(() => signInAndReturn()))} aria-pressed={star.on} data-blueprint-star>
         <StarIcon size={14} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : undefined} />
         {star.on ? "Starred" : "Star"}<span className="tabular-nums p-text-3">{star.count.toLocaleString("en-US")}</span>
-      </button>
-      {failure !== null && <span className="w-full text-xs p-danger">{failure}</span>}
-    </div>
+      </Button>
+      {installed
+        ? <Link to={APP_ROUTES.home} className={buttonClass({ variant: "primary" })} data-blueprint-open><HouseIcon size={14} />Open on Home</Link>
+        : <Button variant="primary" onClick={signedIn ? onInstall : () => signInAndReturn(hereAsking("install"))} data-blueprint-install><DownloadSimpleIcon size={14} />Install</Button>}
+    </>
   );
 }
 
@@ -145,75 +146,67 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
   const { workspace, inside } = page;
 
   return (
-    <div className="h-full overflow-y-auto" data-blueprint-page={workspace.id}>
-      <div className="mx-auto w-full max-w-[1080px] px-4 pb-16 pt-5 sm:px-8 sm:pt-7">
-        <nav className="flex items-center gap-1 p-meta p-text-3" aria-label="Breadcrumb">
-          <Link to="/explore" className="hover:p-text">Explore</Link><CaretRightIcon size={10} />
-          <Link to="/explore?kind=workspace" className="hover:p-text">Workspaces</Link>
-        </nav>
-
-        <div className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-          <div className="relative aspect-[16/10] overflow-hidden rounded-[18px] border p-border p-recessed">
-            {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
-          </div>
-          <div className="flex min-w-0 flex-col gap-3">
-            <span className="flex flex-wrap items-center gap-2"><KindBadge kind="workspace" /><span className="p-meta p-text-3">{CATEGORY_WORDS[workspace.category]}</span></span>
-            <h1 className="p-display text-[30px] leading-tight p-text">{workspace.title}</h1>
-            <p className="p-row-text p-text-2">{workspace.line}</p>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 p-meta p-text-3">
-              <Maker maker={workspace.maker} size={20} />
-              <span className="inline-flex items-center gap-1"><DownloadSimpleIcon size={13} />{workspace.installs.toLocaleString("en-US")} {workspace.installs === 1 ? "install" : "installs"}</span>
-              <span className="tabular-nums">Version {page.version} · updated {ago(page.updatedAt)}</span>
-            </div>
-            <BlueprintActions workspace={workspace} onInstall={() => setInstalling(true)} />
-          </div>
+    <Page back={{ to: "/explore?kind=workspace", label: "Back to Explore" }} icon={null} title={workspace.title} data-blueprint-page={workspace.id}
+      actions={<BlueprintActions workspace={workspace} onInstall={() => setInstalling(true)} />}>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+        <div className="relative aspect-[16/10] overflow-hidden rounded-[var(--r-card)] border p-border p-recessed">
+          {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
         </div>
-
-        <div className="mt-10 grid gap-10 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-          <div className="space-y-8">
-            <Section title="What it does">
-              <div className="grid gap-3 sm:grid-cols-2">
-                {page.about.map((item) => (
-                  <div key={item.title} className="rounded-[14px] border p-border p-surface px-4 py-3">
-                    <div className="p-row-text font-medium p-text">{item.title}</div>
-                    <div className="mt-1 p-meta p-text-2">{item.body}</div>
-                  </div>
-                ))}
-              </div>
-            </Section>
-
-            <Section title="What a new workspace holds">
-              <ul className="divide-y divide-[var(--c-border)] overflow-hidden rounded-[14px] border p-border p-surface">
-                {inside.agents.map((agent) => <Row key={agent.name} icon={<RobotIcon size={15} />} title={agent.name} meta="agent">{agent.about}</Row>)}
-                {inside.automations.map((automation) => <Row key={automation.label} icon={<ClockIcon size={15} />} title={automation.label} meta={automation.when}>{automation.does}</Row>)}
-                {inside.slates.map((slate) => <Row key={slate.title} icon={<AppWindowIcon size={15} />} title={slate.title} meta="slate">{slate.about}</Row>)}
-                <Row icon={<LayoutIcon size={15} />} title={inside.layout === "focus" ? "Focus layout" : "Workbench layout"} meta="layout">
-                  {inside.layout === "focus" ? "Its chat alone; its agents, tabs and inspector a click away." : "Chats as tabs, beside the inspector."}
-                </Row>
-              </ul>
-              <button type="button" onClick={() => setSoul((shown) => !shown)} aria-expanded={soul} className="p-meta p-accent hover:underline">{soul ? "Hide its soul" : "Read its soul"}</button>
-              {soul && <pre className="max-h-64 overflow-auto rounded-[14px] border p-border p-recessed p-4 p-t-code whitespace-pre-wrap p-text-2" data-blueprint-soul>{inside.soul}</pre>}
-            </Section>
-          </div>
-
-          <div className="space-y-8">
-            <Section title="What it needs of yours">
-              <ul className="divide-y divide-[var(--c-border)] overflow-hidden rounded-[14px] border p-border p-surface">
-                {workspace.needs.map((need) => <NeedRow key={`${need.connection ?? ""}${need.secret ?? ""}`} need={need} connected={has(need.connection)} />)}
-                {workspace.needs.length === 0 && <li className="px-4 py-3 p-meta p-text-3">Nothing: it works with what any workspace has.</li>}
-              </ul>
-            </Section>
-            <Section title="It asks you first">
-              <ul className="space-y-2">
-                {page.asks.map((ask) => (
-                  <li key={ask} className="flex items-start gap-2.5 p-row-text p-text-2"><HandPalmIcon size={14} className="mt-0.5 shrink-0 p-accent" />{ask}</li>
-                ))}
-              </ul>
-            </Section>
+        <div className="flex min-w-0 flex-col gap-3">
+          <span className="flex flex-wrap items-center gap-2"><KindBadge kind="workspace" /><span className="p-meta p-text-3">{CATEGORY_WORDS[workspace.category]}</span></span>
+          <p className="p-row-text p-text-2">{workspace.line}</p>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 p-meta p-text-3">
+            <Maker maker={workspace.maker} size={20} />
+            <span className="inline-flex items-center gap-1"><DownloadSimpleIcon size={13} />{workspace.installs.toLocaleString("en-US")} {workspace.installs === 1 ? "install" : "installs"}</span>
+            <span className="tabular-nums">Version {page.version} · updated {ago(page.updatedAt)}</span>
           </div>
         </div>
       </div>
+
+      <div className="grid gap-10 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+        <div className="space-y-8">
+          <Section title="What it does">
+            <div className="grid gap-3 sm:grid-cols-2">
+              {page.about.map((item) => (
+                <div key={item.title} className="rounded-[var(--r-card)] border p-border p-surface px-4 py-3">
+                  <div className="p-row-text font-medium p-text">{item.title}</div>
+                  <div className="mt-1 p-meta p-text-2">{item.body}</div>
+                </div>
+              ))}
+            </div>
+          </Section>
+
+          <Section title="What a new workspace holds">
+            <ul className="divide-y divide-[var(--c-border)] overflow-hidden rounded-[var(--r-card)] border p-border p-surface">
+              {inside.agents.map((agent) => <Row key={agent.name} icon={<RobotIcon size={15} />} title={agent.name} meta="agent">{agent.about}</Row>)}
+              {inside.automations.map((automation) => <Row key={automation.label} icon={<ClockIcon size={15} />} title={automation.label} meta={automation.when}>{automation.does}</Row>)}
+              {inside.slates.map((slate) => <Row key={slate.title} icon={<AppWindowIcon size={15} />} title={slate.title} meta="slate">{slate.about}</Row>)}
+              <Row icon={<LayoutIcon size={15} />} title={inside.layout === "focus" ? "Focus layout" : "Workbench layout"} meta="layout">
+                {inside.layout === "focus" ? "Its chat alone; its agents, tabs and inspector a click away." : "Chats as tabs, beside the inspector."}
+              </Row>
+            </ul>
+            <button type="button" onClick={() => setSoul((shown) => !shown)} aria-expanded={soul} className="p-meta p-accent hover:underline">{soul ? "Hide its soul" : "Read its soul"}</button>
+            {soul && <pre className="max-h-64 overflow-auto rounded-[var(--r-card)] border p-border p-recessed p-4 p-t-code whitespace-pre-wrap p-text-2" data-blueprint-soul>{inside.soul}</pre>}
+          </Section>
+        </div>
+
+        <div className="space-y-8">
+          <Section title="What it needs of yours">
+            <ul className="divide-y divide-[var(--c-border)] overflow-hidden rounded-[var(--r-card)] border p-border p-surface">
+              {workspace.needs.map((need) => <NeedRow key={`${need.connection ?? ""}${need.secret ?? ""}`} need={need} connected={has(need.connection)} />)}
+              {workspace.needs.length === 0 && <li className="px-4 py-3 p-meta p-text-3">Nothing: it works with what any workspace has.</li>}
+            </ul>
+          </Section>
+          <Section title="It asks you first">
+            <ul className="space-y-2">
+              {page.asks.map((ask) => (
+                <li key={ask} className="flex items-start gap-2.5 p-row-text p-text-2"><HandPalmIcon size={14} className="mt-0.5 shrink-0 p-accent" />{ask}</li>
+              ))}
+            </ul>
+          </Section>
+        </div>
+      </div>
       {installing && <InstallDialog page={page} connected={has} onClose={() => setInstalling(false)} />}
-    </div>
+    </Page>
   );
 }

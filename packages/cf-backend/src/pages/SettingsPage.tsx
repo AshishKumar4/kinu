@@ -1,9 +1,10 @@
 import { Effect, Cause } from 'effect';
+import { SaveBar } from "@/components/ui/SaveBar";
 import { startTransition, useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { Button, buttonClass } from "@/components/ui/Button";
-import { FloppyDiskIcon, CheckIcon, GearSixIcon, KeyIcon, TrashIcon } from "@phosphor-icons/react";
+import { GearSixIcon, KeyIcon, TrashIcon } from "@phosphor-icons/react";
 import { Page } from "@/components/ui/PageHeader";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
@@ -27,7 +28,7 @@ import { showing, detach, settle } from '@kinu.run/core/obs';
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
 const APPROVAL_LABEL: Record<ShellApprovalMode, string> = {
-  strict: "Strict (review)",
+  strict: "Strict",
   allow_all: "Allow all",
   deny_all: "Deny all",
 };
@@ -44,6 +45,8 @@ interface SettingField<T> {
   hydrate: (value: T) => void;
   fail: (thrown: { cause: unknown }) => void;
   markSaved: (value: T) => void;
+  /** Puts the read value back: the edit is dropped. */
+  discard: () => void;
 }
 
 function useSettingField<T>(): SettingField<T> {
@@ -65,7 +68,7 @@ function useSettingField<T>(): SettingField<T> {
     resource,
     value: edited ? edited.value : lastValue(resource),
     dirty: edited !== null,
-    edit, hydrate, fail, markSaved,
+    edit, hydrate, fail, markSaved, discard: () => setEdited(null),
   };
 }
 
@@ -84,14 +87,6 @@ function FieldState<T>({ field, what, onRetry, children }: {
 const LAYOUT_CHOICES: { id: WorkspaceLayout; label: string }[] = [{ id: "workbench", label: "Workbench" }, { id: "focus", label: "Focus" }];
 
 const ADVISOR_SWITCH = [{ id: "off", label: "Off" }, { id: "on", label: "On" }] as const;
-
-function saveLabel(saving: boolean, saved: boolean): string {
-  if (saving) return "Saving…";
-
-  if (saved) return "Saved";
-
-  return "Save";
-}
 
 /** The workspace socket's pieces settings read; the page shares the chat's socket rather than opening its own. */
 interface SettingsSource {
@@ -146,7 +141,6 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   const advisor = useSettingField<AdvisorConfig>();
 
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   // The title is the roster's; the soul rides the workspace snapshot, so it hydrates or fails with it.
@@ -240,8 +234,6 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
       yield* Effect.promise(async () => Promise.all(writes));
 
       for (const commit of commits) commit();
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
     }), showing(setErr)), Effect.sync(() => {
       setSaving(false);
     }));
@@ -260,22 +252,19 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   }
 
   return (
-    <Page fill icon={<GearSixIcon size={22} />} title="Settings" data-workspace-settings>
-      <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 p-row-text p-text-3">
-        <span className="font-mono">{agentId}</span>
-        <CopyButton value={agentId} what="the workspace slug" size={11}
-          className="rounded-sm p-0.5 p-card-hover hover:p-text transition-colors" />
-        <span>·</span>
-        <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
-          <KeyIcon size={11} /> Account settings and credentials
-        </Link>
-      </p>
-
+    <Page fill icon={<GearSixIcon size={22} />} title="Settings" data-workspace-settings
+      actions={<Link to="/user/settings" className={buttonClass({ variant: "ghost" })}><KeyIcon size={14} />Account settings</Link>}>
       {err && <div className="p-notice-danger px-4 py-3 text-xs">{err}</div>}
 
       <div className="space-y-5">
       <Card title="Identity">
         <LogoField title={title} logo={logo} rpc={rpc} />
+        <Field label="Address">
+          <div className="flex items-center gap-2">
+            <input value={agentId} readOnly aria-label="The workspace's address" className={`${inputCls} font-mono p-text-2`} />
+            <CopyButton value={agentId} what="the workspace's address" size={13} className="shrink-0 rounded-[var(--r-control)] p-2 p-text-3 transition-colors hover:p-text" />
+          </div>
+        </Field>
         <Field label="Display name">
           <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
             {(value) => (
@@ -331,14 +320,9 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
       <Card title="Shell-command approval">
         <FieldState field={approval} what="the approval mode" onRetry={loadRpcFields}>
           {(value) => (
-            <div className="grid grid-cols-3 gap-2">
-              {(['strict', 'allow_all', 'deny_all'] satisfies ShellApprovalMode[]).map((m) => (
-                <button
-                  key={m}
-                  onClick={() => approval.edit(m)}
-                  className={`p-2 rounded-md text-xs ${value === m ? 'p-accent-bg p-accent' : 'p-card p-card-hover'}`}
-                >{APPROVAL_LABEL[m]}</button>
-              ))}
+            <div className="flex">
+              <Segmented label="Shell-command approval" value={value} onChange={(chosen) => approval.edit(chosen)}
+                segments={(['strict', 'allow_all', 'deny_all'] satisfies ShellApprovalMode[]).map((mode) => ({ id: mode, label: APPROVAL_LABEL[mode] }))} />
             </div>
           )}
         </FieldState>
@@ -360,16 +344,8 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
         </div>
       </Card>
       </div>
-      {/* Where the edits are: the bar rises from the page's foot once there is something to save. */}
-      {(dirty || saving || saved) && (
-        <div className="sticky bottom-4 z-10 flex items-center justify-between gap-3 rounded-[14px] border p-border p-overlay py-2.5 pl-4 pr-2.5 p-shadow-menu animate-fade-in">
-          <span className="p-row-text p-text-2">{saved && !dirty ? "Changes saved." : "You have unsaved changes."}</span>
-          <Button variant="primary" size="sm" onClick={save} disabled={saving || !dirty} >
-            {saved && !dirty ? <CheckIcon size={14} /> : <FloppyDiskIcon size={14} />}
-            <span>{saveLabel(saving, saved && !dirty)}</span>
-          </Button>
-        </div>
-      )}
+      <SaveBar dirty={dirty} saving={saving} onSave={save}
+        onDiscard={() => { for (const field of [displayName, soul, layout, approval, advisor]) field.discard(); }} />
     </Page>
   );
 }

@@ -10,6 +10,7 @@ import { Effect } from "effect";
 import { Loader } from "@cloudflare/kumo";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { Segmented } from "@/components/ui/Segmented";
+import { Choice } from "@/components/ui/form";
 import { CheckIcon, CompassIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import { GALLERY_CATEGORIES, GALLERY_SORTS, PERSONAL_ASSISTANT_ID, type GalleryCategory, type GallerySort } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
@@ -116,10 +117,10 @@ function Filters({ kind, category, sort, q, choose }: {
         </button>
       ))}
       <span className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
-        <select value={sort} aria-label="Sort" data-explore-sort onChange={(event) => choose("sort", event.target.value === "trending" ? null : event.target.value)}
-          className={`${FIELD_32} px-2.5 p-row-text p-text`}>
-          {GALLERY_SORTS.map((each) => <option key={each} value={each}>{SORT_WORDS[each]}</option>)}
-        </select>
+        <div className="w-40 shrink-0" data-explore-sort>
+          <Choice label="Sort" size="sm" className="!h-8" value={sort} onChange={(chosen) => choose("sort", chosen === "trending" ? null : chosen)}
+            options={GALLERY_SORTS.map((each) => ({ value: each, label: SORT_WORDS[each] }))} />
+        </div>
         <label className={`${FIELD_32} flex min-w-0 flex-1 items-center gap-2 px-3 sm:w-64 sm:flex-none`}>
           <MagnifyingGlassIcon size={14} className="shrink-0 p-text-3" />
           <input value={typed} onChange={(event) => { setTyped(event.target.value); choose("q", event.target.value); }} type="search" placeholder="Search apps and workspaces" aria-label="Search apps and workspaces" data-explore-search

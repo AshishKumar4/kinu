@@ -2,6 +2,8 @@
 import { Link } from "react-router-dom";
 import { APP_ROUTES, rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type RosterEntry } from "@kinu.run/core";
 import { SlatePicture } from "@/components/slates/SlatePicture";
+import { ChatMascot } from "@/components/Marks";
+import { useMascotOf } from "@/hooks/use-chat-mascot";
 import { Status } from "@/components/ui/Status";
 import { TILE, TileShell, TypesetCover } from "@/components/ui/Tiles";
 import { workspaceStatusTone } from "@/components/workspaces/workspace-status-tone";
@@ -32,8 +34,9 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   const mission = missionOf(overview, title);
   const age = shortAge(workspace.lastVisited);
   const pictured = overview?.slates.find((slate) => slate.picture !== null);
-  // The owner's assistant is Home.
+  // The owner's assistant is Home, and wears the face Home's bar shows it in.
   const to = workspace.home === true ? APP_ROUTES.home : `/workspace/${workspace.name}`;
+  const face = useMascotOf(workspace.name)("main", 0);
 
   if (variant === 'line') {
     return (
@@ -53,7 +56,7 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   // Its primary slate's picture; without one, a typeset cover says what it is for, so the body need not say it again.
   const cover = (
     <SlatePicture mat workspace={workspace.name} slate={pictured} className="absolute inset-0 size-full object-cover object-top"
-      fallback={<TypesetCover title={title} line={mission} logo={workspace.logo} />} />
+      fallback={<TypesetCover title={title} line={mission} logo={workspace.logo} mark={workspace.home === true ? <ChatMascot seed={face.seed} colour={face.colour} activity={undefined} size={32} /> : undefined} />} />
   );
 
   return (
