@@ -31,8 +31,8 @@ export interface BlueprintFixture {
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-3">
-      <dt className="t-meta shrink-0 p-text-3 sm:w-24 sm:pt-1.5">{label}</dt>
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
+      <dt className="t-meta shrink-0 p-text-3 sm:w-24 sm:pt-1">{label}</dt>
       <dd className="min-w-0 flex-1">{children}</dd>
     </div>
   );
@@ -169,9 +169,9 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
             </Field>
             {inspection !== null && (
               <Field label="Includes">
-                <span className="flex flex-wrap gap-1.5">
+                <span className="flex flex-wrap gap-2">
                   {topLevel.map((name) => (
-                    <label key={name} className={`t-meta inline-flex items-center gap-1.5 rounded-md border px-2 py-1 ${includes(name) ? "p-border p-text" : "border-dashed p-border p-text-3"}`}>
+                    <label key={name} className={`t-meta inline-flex items-center gap-2 rounded-md border px-2 py-1 ${includes(name) ? "p-border p-text" : "border-dashed p-border p-text-3"}`}>
                       <input type="checkbox" checked={includes(name)} onChange={() => toggle(name)} disabled={busy || name === "package.json"} className="accent-[var(--c-accent)]" />
                       <span className="font-mono">{name}</span>
                     </label>
@@ -181,7 +181,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
             )}
             {inspection !== null && inspection.reaches.length > 0 && (
               <Field label="They connect">
-                <span className="t-meta block pt-1.5 p-text-2" data-blueprint-connect>
+                <span className="t-meta block pt-1 p-text-2" data-blueprint-connect>
                   Their own {inspection.reaches.join(", ")}, when they fork it.
                 </span>
               </Field>
@@ -196,11 +196,11 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
         <EmailsField value={emails} onChange={setEmails} disabled={busy} placeholder="Add people by email (optional)" />
         <p className="t-meta p-text-3">Anyone with the link can read it; a fork needs a Kinu account.</p>
         {shares.length > 0 && (
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <p className="t-status p-text-3">Published</p>
             <ul className="p-group">
               {shares.map((share) => (
-                <li key={share.id} data-blueprint-share={share.id} className="flex items-center gap-3 px-3.5 py-2">
+                <li key={share.id} data-blueprint-share={share.id} className="flex items-center gap-3 px-3 py-2">
                   <span className="t-meta min-w-0 flex-1 truncate p-text-2">
                     {new Date(share.createdAt).toLocaleDateString()}{share.users.length > 0 ? ` · ${share.users.join(", ")}` : ""}
                   </span>

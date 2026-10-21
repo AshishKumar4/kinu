@@ -178,7 +178,7 @@ const PlanBlock = React.memo(({
     const marker = listMarker(block.checked, listIndex);
 
     return (
-      <div data-block-id={block.id} className="t-body my-1.5 flex items-start gap-3" style={{ marginLeft: `${(block.level ?? 0) * 1.25}rem` }}>
+      <div data-block-id={block.id} className="t-body my-2 flex items-start gap-3" style={{ marginLeft: `${(block.level ?? 0) * 1.25}rem` }}>
         <span className="select-none text-muted-foreground">{marker}</span>
         <span className={block.checked ? 'text-muted-foreground line-through' : 'text-foreground/90'}><PlanInlineMarkdown text={block.content} /></span>
       </div>
@@ -313,7 +313,7 @@ const PlanAnnotationToolbar = ({
 
   return createPortal(
     <div
-      className="annotation-toolbar fixed z-[100] flex -translate-x-1/2 items-center gap-0.5 rounded-lg border border-border bg-popover p-1 shadow-2xl"
+      className="annotation-toolbar fixed z-[100] flex -translate-x-1/2 items-center gap-px rounded-lg border border-border bg-popover p-1 shadow-2xl"
       style={position}
       onMouseDown={(event) => event.stopPropagation()}
       role="toolbar"
@@ -471,14 +471,14 @@ const PlanCommentPopover = ({
         <span className="t-meta mr-auto text-muted-foreground">Ctrl/⌘ + Enter</span>
         <button
           type="button"
-          className="t-meta rounded-md px-3 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="t-meta rounded-md px-3 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
           onClick={onClose}
         >
           Cancel
         </button>
         <button
           type="button"
-          className="t-status rounded-md bg-primary px-3 py-1.5 text-primary-foreground disabled:opacity-40"
+          className="t-status rounded-md bg-primary px-3 py-1 text-primary-foreground disabled:opacity-40"
           onClick={submit}
           disabled={!text.trim()}
         >
@@ -550,17 +550,17 @@ export const Viewer = ({
       <article
         ref={containerRef}
         data-print-region="article"
-        className="relative w-full rounded-xl bg-card py-5 md:py-8 lg:py-10 xl:py-12"
+        className="relative w-full rounded-xl bg-card py-5 md:py-8 lg:py-8 xl:py-12"
       >
         {!readOnly && (
           <div
             data-print-hide
-            className="z-30 float-right mt-6 flex items-start gap-1 rounded-lg bg-card/95 p-1 shadow-sm backdrop-blur-sm md:-mt-5 md:gap-2 md:p-2 lg:-mt-7 xl:-mt-9"
+            className="z-30 float-right mt-6 flex items-start gap-1 rounded-lg bg-card/95 p-1 shadow-sm backdrop-blur-sm md:-mt-5 md:gap-2 md:p-2 lg:-mt-8 xl:-mt-8"
           >
             <button
               ref={globalCommentButtonRef}
               type="button"
-              className="t-status rounded-md bg-muted/50 px-2.5 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="t-status rounded-md bg-muted/50 px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={() => setGlobalCommentOpen(true)}
             >
               Global comment

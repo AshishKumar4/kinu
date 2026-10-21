@@ -37,16 +37,16 @@ function PlanCard({ item, onOpen }: { item: OwnedPlan; onOpen: () => void }) {
   return (
     <div className="p-group" data-plan-card={plan.revision}>
       <button type="button" onClick={onOpen}
-        className="w-full rounded-t-md px-3 pt-2.5 pb-2 text-left transition-colors hover:p-hover">
+        className="w-full rounded-t-md px-3 pt-2 pb-2 text-left transition-colors hover:p-hover">
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="t-body p-text min-w-0 truncate">{planTitle(plan.content)}</span>
           <span className="t-meta p-text-3 shrink-0">r{plan.revision} · {plan.status}</span>
         </div>
         {/* The workspace's own plans are its own: the root's registered name is the workspace's slug, never shown. */}
-        {owner.path?.length !== 0 && <div className="t-meta p-text-3 mt-0.5">{owner.name}{owner.retired ? " · retained" : ""}</div>}
+        {owner.path?.length !== 0 && <div className="t-meta p-text-3 mt-px">{owner.name}{owner.retired ? " · retained" : ""}</div>}
       </button>
       {tasks.length > 0 && (
-        <div className="space-y-2 px-3 pb-2.5">
+        <div className="space-y-2 px-3 pb-2">
           <PlanProgress tasks={tasks} />
           {tasks.map((task) => <TaskTree key={task.id} task={task} grouped owner={owner} />)}
         </div>

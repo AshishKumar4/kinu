@@ -60,7 +60,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
   return (
     <div className="space-y-4">
       {dialog}
-      <div className="space-y-0.5">
+      <div className="space-y-px">
         <McpPresetCards servers={servers} availability={lastValue(presets.resource) ?? undefined} onChanged={reload} />
       </div>
 
@@ -102,7 +102,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
           <div className="t-meta p-group">
             {servers.map((s) => (
               <div key={s.id} className="px-4 py-3" data-mcp-server={s.id}>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
                   <span className="t-item p-text">{s.name}</span>
                   <Status tone={mcpServerStatus(s.status).tone}>{mcpServerStatus(s.status).label}</Status>
                   <div className="ml-auto flex items-center gap-2">
@@ -231,7 +231,7 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
         <button
           onClick={save}
           disabled={saving || !name.trim() || !serverUrl.trim()}
-          className="t-status px-3 py-1.5 rounded-md p-accent-bg p-accent disabled:opacity-50 hover:opacity-90"
+          className="t-status px-3 py-1 rounded-md p-accent-bg p-accent disabled:opacity-50 hover:opacity-90"
         >{saving ? 'Adding…' : 'Add server'}</button>
       </div>
     </section>

@@ -70,7 +70,7 @@ export default function ControlPage(): ReactNode {
             <button
               key={key}
               onClick={() => go({ tab: key, user: null, workspace: null })}
-              className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs transition-colors ${
+              className={`flex items-center gap-2 rounded-md px-2 py-1 t-meta transition-colors ${
                 key === tab ? 'p-accent-bg p-accent' : 'p-text-3 hover:p-text'
               }`}
             >
@@ -276,7 +276,7 @@ function WorkspacesView(
         title="Workspaces" hint="Across every account, most recently seen first."
         onRefresh={reload}
         actions={
-          <label className="t-meta flex items-center gap-1.5 p-text-3">
+          <label className="t-meta flex items-center gap-2 p-text-3">
             <input
               type="checkbox" checked={includeRemoved}
               onChange={(e) => { setIncludeRemoved(e.target.checked); first(); }}

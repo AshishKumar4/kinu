@@ -35,7 +35,7 @@ export function MailRow({ thread, open, box, drafts, owner, onOpen }: {
         <span className={`t-body block truncate ${thread.unread ? "p-text" : "p-text-2"}`}>
           {thread.subject || "(No subject)"}{thread.count > 1 && <span className="p-text-3"> · {thread.count}</span>}
         </span>
-        <span className="t-meta flex min-w-0 items-baseline gap-1.5 p-text-3">
+        <span className="t-meta flex min-w-0 items-baseline gap-2 p-text-3">
           {box !== undefined && <span className="max-w-36 shrink-0 truncate rounded-sm bg-[var(--c-hover)] px-1 p-text-2">{mailBoxLabel(box)}</span>}
           {thread.attachments && <PaperclipIcon size={11} className="shrink-0 self-center" aria-label="Attachment" />}
           <span className={`truncate ${drafts ? "p-warning" : ""}`}>{mailExcerpt(thread.snippet)}</span>

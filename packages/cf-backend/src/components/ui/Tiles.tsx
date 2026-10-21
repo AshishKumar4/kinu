@@ -15,7 +15,7 @@ export const TILE = "group flex h-full min-w-0 flex-col overflow-hidden rounded-
 /** The cover's frame: 16:10, over a hairline; a picture or a typeset cover fills it. */
 const TILE_COVER = "relative block aspect-[16/10] w-full shrink-0 overflow-hidden border-b p-border";
 
-const TILE_BODY = "flex min-h-0 flex-1 flex-col gap-1 px-4 pb-3.5 pt-3";
+const TILE_BODY = "flex min-h-0 flex-1 flex-col gap-1 px-4 pb-3 pt-3";
 
 const TILE_TITLE = "t-label truncate p-text";
 

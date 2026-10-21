@@ -57,24 +57,24 @@ export function TileMenu({ name, items, initiallyOpen = false, className, trigge
         <>
           <div aria-hidden="true" className="p-scrim fixed inset-0 z-40 sm:hidden" onClick={close} />
           <div role="menu" aria-label={name}
-            className="fixed inset-x-3 bottom-3 z-50 p-card border p-border p-1.5 p-shadow-overlay animate-fade-in font-sans sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:z-20 sm:mt-1 sm:w-52">
-            <p className="t-status truncate px-2.5 pb-1.5 pt-1 p-text-3 sm:hidden">{name}</p>
+            className="fixed inset-x-3 bottom-3 z-50 p-card border p-border p-1 p-shadow-overlay animate-fade-in font-sans sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:z-20 sm:mt-1 sm:w-52">
+            <p className="t-status truncate px-2 pb-1 pt-1 p-text-3 sm:hidden">{name}</p>
             {items.map((item, index) => {
               const refused = item.refused === undefined ? null : { label: `${id}-${String(index)}-label`, reason: `${id}-${String(index)}-reason` };
 
               return (
                 <div key={item.label}>
-                  {item.apart === true && <div className="mx-1 my-1.5 border-t p-border" />}
+                  {item.apart === true && <div className="mx-1 my-2 border-t p-border" />}
                   <button type="button" role={menuRole(item)} aria-checked={item.checked} aria-disabled={refused === null ? undefined : true}
                     aria-labelledby={refused?.label} aria-describedby={refused?.reason}
                     {...(item.marker === undefined ? {} : { [item.marker]: "" })}
                     onClick={() => { if (refused !== null) return; setOpen(false); item.onSelect(); }}
-                    className={`t-body flex w-full gap-3 rounded-md px-2.5 py-2.5 text-left transition-colors sm:gap-2.5 sm:px-2 sm:py-1.5 ${refused === null ? "items-center hover:bg-[var(--c-hover)]" : "cursor-default items-start"}  ${item.danger === true ? "p-danger" : "p-text"}`}>
-                    <span className={`flex shrink-0 ${item.danger === true ? "" : "p-text-3"} ${refused === null ? "" : "mt-0.5 opacity-45"}`}>{item.icon}</span>
+                    className={`t-body flex w-full gap-3 rounded-md px-2 py-2 text-left transition-colors sm:gap-3 sm:px-2 sm:py-1 ${refused === null ? "items-center hover:bg-[var(--c-hover)]" : "cursor-default items-start"}  ${item.danger === true ? "p-danger" : "p-text"}`}>
+                    <span className={`flex shrink-0 ${item.danger === true ? "" : "p-text-3"} ${refused === null ? "" : "mt-px opacity-45"}`}>{item.icon}</span>
                     {refused === null ? item.label : (
                       <span className="min-w-0">
                         <span id={refused.label} className="block opacity-45">{item.label}</span>
-                        <span id={refused.reason} className="t-meta mt-0.5 block p-text-3">{item.refused}</span>
+                        <span id={refused.reason} className="t-meta mt-px block p-text-3">{item.refused}</span>
                       </span>
                     )}
                     {item.checked === true && <CheckIcon size={14} weight="bold" className="ml-auto shrink-0 p-accent" />}
@@ -126,17 +126,17 @@ export function Tile({ href, onOpen, picture, icon, title, meta, unseen = false,
       <Opener href={href} onOpen={onOpen} label={title} className={TILE}>
         <TileShell cover={picture} title={(
           <span data-drive-tile-name>
-            {unseen && <span className="mb-px mr-1.5 inline-block size-1.5 rounded-full p-dot-accent align-middle" title="New" />}
+            {unseen && <span className="mb-px mr-2 inline-block size-1.5 rounded-full p-dot-accent align-middle" title="New" />}
             {title}
           </span>
         )}>
-          <span className="t-meta flex min-w-0 items-center gap-1.5 pr-8 p-text-3">
+          <span className="t-meta flex min-w-0 items-center gap-2 pr-8 p-text-3">
             <span className="flex shrink-0 [&>svg]:size-3.5">{icon}</span>
-            <span className="flex min-w-0 items-center gap-1.5" data-drive-tile-meta>{meta}</span>
+            <span className="flex min-w-0 items-center gap-2" data-drive-tile-meta>{meta}</span>
           </span>
         </TileShell>
       </Opener>
-      <TileMenu name={title} items={menu} initiallyOpen={menuOpen} className="absolute bottom-2.5 right-2" />
+      <TileMenu name={title} items={menu} initiallyOpen={menuOpen} className="absolute bottom-3 right-2" />
     </li>
   );
 }
@@ -152,11 +152,11 @@ export function FolderTile({ href, name, icon, menu, attributes, row = false }: 
 }) {
   return (
     <li className="relative min-w-0" {...attributes}>
-      <Link to={href} className={`flex h-12 items-center gap-2.5 pl-3.5 pr-10 ${row ? "p-row-hover" : "rounded-lg border p-border p-surface p-card-lift"}`}>
+      <Link to={href} className={`flex h-12 items-center gap-3 pl-3 pr-8 ${row ? "p-row-hover" : "rounded-lg border p-border p-surface p-card-lift"}`}>
         <span className="flex shrink-0">{icon}</span>
         <span className="t-item truncate p-text" data-drive-tile-name>{name}</span>
       </Link>
-      <TileMenu name={name} items={menu} className="absolute right-2 top-2.5" />
+      <TileMenu name={name} items={menu} className="absolute right-2 top-3" />
     </li>
   );
 }

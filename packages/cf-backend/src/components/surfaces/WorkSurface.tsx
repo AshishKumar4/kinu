@@ -292,7 +292,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             data-preview-ready
             title={chip.title}
             aria-label={`Preview ready: ${chip.title}`}
-            className="t-micro inline-flex shrink-0 items-center gap-1.5 rounded-full border p-border p-selected px-2 py-1 p-accent transition-colors hover:p-hover @[28rem]:px-2.5"
+            className="t-micro inline-flex shrink-0 items-center gap-2 rounded-full border p-border p-selected px-2 py-1 p-accent transition-colors hover:p-hover @[28rem]:px-2"
           >
             <StatusDot tone="live" />
             {/* A narrow column keeps the pulse and gives its words to the pages; the name is the control's either way. */}

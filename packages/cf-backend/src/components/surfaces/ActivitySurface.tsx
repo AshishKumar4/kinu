@@ -52,7 +52,7 @@ export function ActivitySurface({ rpc, isStreaming }: ActivitySurfaceProps) {
   if (snap === null) {
     return resource.status === "error"
       ? <LoadFailure what="the activity snapshot" message={resource.message} onRetry={reload} />
-      : <div className="flex justify-center py-10"><Loader size="sm" /></div>;
+      : <div className="flex justify-center py-8"><Loader size="sm" /></div>;
   }
 
   return (
@@ -70,7 +70,7 @@ function BlockHeader(
   { icon: Icon, title, note }: { icon: React.ComponentType<{ size?: number; className?: string }>; title: string; note?: string },
 ) {
   return (
-    <div className="flex items-baseline gap-2 mb-2.5">
+    <div className="flex items-baseline gap-2 mb-3">
       <Icon size={13} className="p-accent self-center" />
       <h3 className="t-title p-text">{title}</h3>
       {note && <span className="t-meta p-text-3 ml-auto text-right">{note}</span>}
@@ -102,7 +102,7 @@ function Empty({ children }: { children: React.ReactNode }) {
 
 function Warning({ children }: { children: React.ReactNode }) {
   return (
-    <p className="t-meta flex items-start gap-1.5 p-warning mt-1.5">
+    <p className="t-meta flex items-start gap-2 p-warning mt-2">
       <WarningCircleIcon size={12} className="shrink-0 mt-px" />
       <span>{children}</span>
     </p>
@@ -211,7 +211,7 @@ function Breakdown({ context }: { context: ContextComposition | null }) {
         </tbody>
       </table>
 
-      <p className="t-meta p-text-3 mt-2.5 pt-2.5 border-t p-border">
+      <p className="t-meta p-text-3 mt-3 pt-2 border-t p-border">
         These rows count characters in the prompt content Kinu composed.
       </p>
     </div>
@@ -234,7 +234,7 @@ function StackedBar(
           />
         ))}
       </div>
-      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
+      <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
         {planes.map((row) => (
           <span key={row.plane} className="t-meta flex items-center gap-1 p-text-3">
             <span className={swatch} style={{ background: planeFill(row.plane) }} />
@@ -256,7 +256,7 @@ function PlaneRows({ plane, measuredChars }: { plane: BreakdownPlane; measuredCh
     <>
       <tr className="border-t p-border">
         <td className={`py-1 ${labelCell}`}>
-          <span className="flex items-center gap-1.5">
+          <span className="flex items-center gap-2">
             <span className={swatch} style={{ background: planeFill(plane.plane) }} />
             <span className="t-item p-text truncate">{PLANE_LABEL[plane.plane]}</span>
           </span>
@@ -347,7 +347,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
   const caveat = spendCaveat(spend);
 
   return (
-    <div className="mt-3 pt-2.5 border-t p-border">
+    <div className="mt-3 pt-2 border-t p-border">
       <div className="flex items-baseline gap-2 mb-2">
         <h4 className="t-title p-text-2">Workspace spend</h4>
         <span
@@ -495,7 +495,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
             )}
           </table>
 
-          <p className="t-meta p-text-3 mt-2.5 pt-2.5 border-t p-border">
+          <p className="t-meta p-text-3 mt-3 pt-2 border-t p-border">
             <Num className="p-text-2">{fmtPct(reported, reported === 1 ? 0 : 1)}</Num> of the{" "}
             {coverage.calls} known call{coverage.calls === 1 ? "" : "s"} reported usage.{" "}
             {reported === 1
@@ -506,14 +506,14 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
           </p>
 
           {spend.offTurnShare !== null && (
-            <p className="t-meta p-text-3 mt-1.5">
+            <p className="t-meta p-text-3 mt-2">
               <Num className="p-text-2">{fmtPct(spend.offTurnShare, 1)}</Num> of the measured tokens
               went on work outside this agent&apos;s turns. The figure above counts none of it.
             </p>
           )}
 
           {neurons && (
-            <p className="t-meta p-text-3 mt-1.5">
+            <p className="t-meta p-text-3 mt-2">
               Neurons are Cloudflare&apos;s billing unit, reported on every Workers AI call. The
               dollar column is priced from the models.dev catalog, so it is an estimate.
             </p>

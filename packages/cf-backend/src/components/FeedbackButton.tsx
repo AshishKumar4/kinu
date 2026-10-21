@@ -15,7 +15,7 @@ export function FeedbackButton({ compact = false }: { compact?: boolean }) {
         data-feedback-open
         className={compact
           ? "flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text"
-          : "t-body flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left p-card-hover"}
+          : "t-body flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left p-card-hover"}
       >
         <MegaphoneIcon size={compact ? 17 : 14} />
         {compact ? null : <span>Feedback</span>}

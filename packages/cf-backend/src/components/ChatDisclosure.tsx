@@ -152,7 +152,7 @@ export function ChatDisclosure({ label, after, live, failed = false, folded, fol
   else if (!open && folded === "hidden") shown = "hidden";
 
   return (
-    <div ref={root} className="t-body py-0.5 p-text-3" {...data}>
+    <div ref={root} className="t-body py-px p-text-3" {...data}>
       {/* The whole line is the control, its chevron turning as it opens: a quiet mark, as a tool row's is. */}
       <button type="button" onClick={() => setOpen(!open)} disabled={!canOpen} aria-expanded={canOpen ? open : undefined}
         className="group/disclosure flex w-full items-center gap-2 text-left enabled:cursor-pointer">
@@ -165,7 +165,7 @@ export function ChatDisclosure({ label, after, live, failed = false, folded, fol
             className={`shrink-0 p-text-3 p-fold-turn group-hover/disclosure:p-text-2 ${open ? "rotate-90" : ""}`} />
         )}
       </button>
-      <div ref={body} className={`mt-1 ml-3.5 ${bodyClass} ${shown}`} data-disclosure-body={bodyState}
+      <div ref={body} className={`mt-1 ml-4 ${bodyClass} ${shown}`} data-disclosure-body={bodyState}
         data-folded={!live && !open && folded === "preview" ? "" : undefined} data-overflows={long ? "" : undefined}>
         {children}
       </div>

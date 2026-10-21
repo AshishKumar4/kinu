@@ -30,16 +30,16 @@ function Swatch({ theme, mode }: { theme: ThemeName; mode: ThemeMode }) {
   return (
     <span data-theme={theme} data-mode={mode} aria-hidden="true"
       className="flex h-[84px] overflow-hidden rounded-[10px] border border-[var(--c-border)] bg-[var(--c-bg)]">
-      <span className="flex w-[26%] flex-col gap-1.5 border-r border-[var(--c-border)] bg-[var(--c-sidebar)] p-2">
+      <span className="flex w-[26%] flex-col gap-2 border-r border-[var(--c-border)] bg-[var(--c-sidebar)] p-2">
         <span className="h-1.5 w-3/4 rounded-full bg-[var(--c-selected)]" />
         <span className="h-1.5 w-1/2 rounded-full bg-[var(--c-hover)]" />
         <span className="h-1.5 w-2/3 rounded-full bg-[var(--c-hover)]" />
       </span>
-      <span className="flex flex-1 flex-col justify-center p-2.5">
-        <span className="flex flex-col gap-1.5 rounded-md border border-[var(--c-border)] bg-[var(--c-surface)] p-2">
+      <span className="flex flex-1 flex-col justify-center p-2">
+        <span className="flex flex-col gap-2 rounded-md border border-[var(--c-border)] bg-[var(--c-surface)] p-2">
           <span className="h-1.5 w-4/5 rounded-full bg-[var(--c-text)]" />
           <span className="h-1.5 w-3/5 rounded-full bg-[var(--c-text-3)]" />
-          <span className="mt-0.5 h-2.5 w-8 self-end rounded-full bg-[var(--c-accent)]" />
+          <span className="mt-px h-2.5 w-8 self-end rounded-full bg-[var(--c-accent)]" />
         </span>
       </span>
     </span>
@@ -108,17 +108,17 @@ export function AppearanceCard() {
                   <span className="t-item p-text">{THEMES[theme].label}</span>
                   {name === theme && <span className="t-meta p-accent">In use</span>}
                 </span>
-                <span className="t-meta mt-0.5 block px-1 pb-1 p-text-3">{THEMES[theme].about}</span>
+                <span className="t-meta mt-px block px-1 pb-1 p-text-3">{THEMES[theme].about}</span>
               </label>
             ))}
           </div>
         </Field>
         <Field label="Mode" inline>
-          <div role="radiogroup" aria-label="Mode" className="flex items-center gap-0.5 rounded-lg p-sunken p-0.5">
+          <div role="radiogroup" aria-label="Mode" className="flex items-center gap-px rounded-lg p-sunken p-px">
             {MODES.map(({ id, label, Icon }) => (
               <label key={id} className="cursor-pointer">
                 <input type="radio" name="mode" value={id} checked={mode === id} onChange={() => setMode(id)} className="peer sr-only" />
-                <span className="t-status flex h-7 items-center gap-1.5 rounded-md px-3 p-text-3 transition-colors peer-checked:bg-[var(--c-surface)] peer-checked:p-text peer-checked:shadow-[0_0_0_1px_var(--c-border)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--c-selected)] hover:p-text">
+                <span className="t-status flex h-7 items-center gap-2 rounded-md px-3 p-text-3 transition-colors peer-checked:bg-[var(--c-surface)] peer-checked:p-text peer-checked:shadow-[0_0_0_1px_var(--c-border)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--c-selected)] hover:p-text">
                   <Icon size={13} />{label}
                 </span>
               </label>

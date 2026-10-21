@@ -69,7 +69,7 @@ export function CodeBlock({ children, className, wrap = false }: { children: str
         </button>
       </div>
       {html === null
-        ? <pre className="t-code p-text p-scroll-x p-code-scroll m-0 px-3 py-2.5"><code>{code}</code></pre>
+        ? <pre className="t-code p-text p-scroll-x p-code-scroll m-0 px-3 py-2"><code>{code}</code></pre>
         : <div className="p-scroll-x p-code-scroll"><div className="p-code-highlight" dangerouslySetInnerHTML={{ __html: html }} /></div>}
       {resource.status === "error" && <button type="button" onClick={reload} className="t-meta px-3 py-1 p-warning" title={resource.message}>Syntax highlighting failed. Retry</button>}
     </div>
@@ -82,7 +82,7 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
 
   if (failed || !src) {
     return (
-      <span data-markdown-image-error role="note" className="t-meta my-1.5 inline-flex max-w-full items-baseline gap-1.5 rounded-lg border p-border px-2.5 py-1.5 p-text-3">
+      <span data-markdown-image-error role="note" className="t-meta my-2 inline-flex max-w-full items-baseline gap-2 rounded-lg border p-border px-2 py-1 p-text-3">
         <ImageBrokenIcon size={13} aria-hidden className="self-center shrink-0" />
         <span className="min-w-0">
           {alt ? `Image failed to load: ${alt}` : "Image failed to load"}
@@ -211,8 +211,8 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
       },
       img({ src, alt, title }) { return <MarkdownImage key={src ?? ""} src={src} alt={alt} title={title} />; },
       table({ children }) { return <div className="p-scroll-x my-2 rounded-lg border p-border"><table className="t-meta p-text-2 w-full border-collapse">{children}</table></div>; },
-      th({ children }) { return <th className="border-b p-border px-2.5 py-1.5 text-left font-medium p-fill whitespace-nowrap">{children}</th>; },
-      td({ children }) { return <td className="border-b p-border px-2.5 py-1.5 align-top">{children}</td>; },
+      th({ children }) { return <th className="border-b p-border px-2 py-1 text-left font-medium p-fill whitespace-nowrap">{children}</th>; },
+      td({ children }) { return <td className="border-b p-border px-2 py-1 align-top">{children}</td>; },
       // Drop the fence's own <pre>: CodeBlock supplies one, and nesting would nest scroll containers.
       pre({ children }) { return <>{children}</>; },
     }}>{content}</Markdown>
@@ -236,7 +236,7 @@ export function EmptyState({ icon, title, hint, children }: {
 
 export function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-md border p-border p-sunken px-2 py-1.5">
+    <div className="rounded-md border p-border p-sunken px-2 py-1">
       <div className="t-label">{label}</div>
       <div className="t-body t-mono p-text tabular-nums">{value}</div>
     </div>
@@ -245,7 +245,7 @@ export function Metric({ label, value }: { label: string; value: React.ReactNode
 
 export function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="space-y-1.5">
+    <section className="space-y-2">
       <div className="t-label">{title}</div>
       {children}
     </section>
@@ -298,7 +298,7 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
         <span className="t-label" data-section-title>{title}</span>
         {badge && <span className="ml-auto inline-flex shrink-0" data-section-badge>{badge}</span>}
       </button>
-      {open && <div className="mt-2.5">{children}</div>}
+      {open && <div className="mt-3">{children}</div>}
     </section>
   );
 }

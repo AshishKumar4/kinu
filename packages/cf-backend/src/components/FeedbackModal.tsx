@@ -327,7 +327,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
           </>
         }
       >
-        <label className="block space-y-1.5">
+        <label className="block space-y-2">
           <span className="t-status p-text-2">What happened?</span>
           <textarea
             autoFocus
@@ -365,7 +365,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
 
           {ready && (
             <div className="space-y-2" data-feedback-shot="ready">
-              <div className="flex flex-wrap items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button type="button" size="sm" variant={tool === "box" ? "secondary" : "ghost"}
                   onClick={() => setTool("box")} data-feedback-tool="box">
                   <RectangleIcon size={14} /> Box

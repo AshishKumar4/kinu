@@ -125,7 +125,7 @@ export function SectionHeader(
     <div className="flex items-start justify-between gap-4">
       <div className="min-w-0">
         <h2 className="t-item">{title}</h2>
-        {hint !== undefined && <p className="t-meta p-text-3 mt-0.5">{hint}</p>}
+        {hint !== undefined && <p className="t-meta p-text-3 mt-px">{hint}</p>}
       </div>
       <div className="flex items-center gap-2 shrink-0">
         {actions}

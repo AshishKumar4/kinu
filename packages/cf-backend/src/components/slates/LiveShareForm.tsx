@@ -84,8 +84,8 @@ function ChoiceCards<T extends string>({ label, marker, options, value, onChange
       {options.map((option) => (
         <button key={option.id} type="button" role="radio" aria-checked={value === option.id} {...{ [marker]: option.id }} onClick={() => onChange(option.id)}
           disabled={disabled || option.disabled === true}
-          className={`flex w-full items-start gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-hover)] ${value === option.id ? "bg-[var(--c-fill)]" : ""}`}>
-          <span className={`mt-0.5 flex shrink-0 ${value === option.id ? "p-accent" : "p-text-3"}`}>{option.icon}</span>
+          className={`flex w-full items-start gap-3 px-3 py-2 text-left transition-colors hover:bg-[var(--c-hover)] ${value === option.id ? "bg-[var(--c-fill)]" : ""}`}>
+          <span className={`mt-px flex shrink-0 ${value === option.id ? "p-accent" : "p-text-3"}`}>{option.icon}</span>
           <span className="min-w-0 flex-1">
             <span className="t-item block p-text">{option.label}</span>
             <span className="t-meta block p-text-3">{option.detail}</span>
@@ -141,7 +141,7 @@ function StartChoice({ value, onChange, disabled }: { value: ShareStart; onChang
 function OwnerWarning() {
   return (
     <p data-share-owner-warning className="t-meta flex gap-2 rounded-lg p-tint-warning px-3 py-2 p-text">
-      <WarningIcon size={14} className="mt-0.5 shrink-0 p-warning" />
+      <WarningIcon size={14} className="mt-px shrink-0 p-warning" />
       <span>Everyone you share it with acts as you, within this reach: what it reads of yours, they see. Any change it makes waits for you to approve it, and a change to its code stops it until you approve the new reach. It can't be listed in the Gallery.</span>
     </p>
   );
@@ -201,7 +201,7 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
   let members: ReactNode;
 
   if (row.problem !== undefined) {
-    members = <p className="t-meta p-badge-danger inline-block rounded px-2 py-0.5">{row.problem}</p>;
+    members = <p className="t-meta p-badge-danger inline-block rounded px-2 py-px">{row.problem}</p>;
   } else if (row.members.length === 0) {
     members = <p className="p-text-3">No members.</p>;
   } else {
@@ -225,14 +225,14 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
           const checked = approved.has(key);
 
           return (
-            <li key={key} className={`-mx-2 rounded-md px-2 py-1.5 ${checked ? "p-tint-warning" : ""}`}>
+            <li key={key} className={`-mx-2 rounded-md px-2 py-1 ${checked ? "p-tint-warning" : ""}`}>
               <label className="flex cursor-pointer items-center gap-2">
                 <span className="font-mono p-text">{member.member}</span>
                 <span className="p-text-3">{IMPACT_WORDS[member.impact]}</span>
                 <input type="checkbox" checked={checked} onChange={() => onToggle(approval)} disabled={disabled}
                   className="ml-auto size-4 accent-[var(--c-accent)]" aria-describedby={`risk-${key}`} data-approve={`${row.namespace}.${member.member}`} />
               </label>
-              <p id={`risk-${key}`} className="mt-0.5 leading-relaxed p-text-3">{risk}</p>
+              <p id={`risk-${key}`} className="mt-px leading-relaxed p-text-3">{risk}</p>
             </li>
           );
         })}
@@ -241,7 +241,7 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
   }
 
   return (
-    <li className="space-y-1.5 py-2">
+    <li className="space-y-2 py-2">
       <div className="flex flex-wrap items-baseline gap-x-2">
         <span className="t-status t-mono p-text">{row.namespace}</span>
         {row.title !== row.namespace && <span className="p-text-3">{row.title}</span>}
@@ -274,7 +274,7 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
   return (
     <div className="p-group">
       <button type="button" aria-expanded={open} data-share-reach onClick={() => setOpen((shown) => !shown)}
-        className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-hover)]">
+        className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-[var(--c-hover)]">
         <span className="t-item w-14 shrink-0 p-text">Reach</span>
         <span className="t-meta flex min-w-0 flex-1 p-text-3">
           <span className="truncate">{names}</span>
@@ -283,7 +283,7 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
         {open ? <CaretDownIcon size={13} className="shrink-0 p-text-3" /> : <CaretRightIcon size={13} className="shrink-0 p-text-3" />}
       </button>
       {open && (
-        <div className="t-meta space-y-2 border-t p-border px-3.5 py-2">
+        <div className="t-meta space-y-2 border-t p-border px-3 py-2">
           <p className="p-text-3">Everything here uses your connections. Reading is on; each change stays off until you tick it.</p>
           {graph.slates.map((slateId) => {
             const rows = graph.namespaces.filter((row) => row.slate === slateId);
@@ -341,18 +341,18 @@ function PeopleRoles({ people, editors, onRole, ownerAccess, disabled }: {
   const anyEditor = people.some((email) => editors.has(email));
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       <ul className="p-group">
         {people.map((email) => (
-          <li key={email} data-share-person={email} className="flex items-center gap-3 px-3.5 py-2">
+          <li key={email} data-share-person={email} className="flex items-center gap-3 px-3 py-2">
             <span className="t-meta min-w-0 flex-1 truncate p-text-2">{email}</span>
-            <div role="radiogroup" aria-label={`What ${email} can do`} className="flex shrink-0 rounded-md p-fill p-0.5">
+            <div role="radiogroup" aria-label={`What ${email} can do`} className="flex shrink-0 rounded-md p-fill p-px">
               {([["use", "Use"], ["edit", "Edit"]] as const).map(([role, label]) => {
                 const on = (role === "edit") === editors.has(email);
 
                 return (
                   <button key={role} type="button" role="radio" aria-checked={on} data-share-person-role={role} disabled={disabled} onClick={() => onRole(email, role === "edit")}
-                    className={`t-meta rounded px-2.5 py-0.5 ${on ? "p-surface font-medium p-text shadow-sm" : "p-text-3"}`}>{label}</button>
+                    className={`t-meta rounded px-2 py-px ${on ? "p-surface font-medium p-text shadow-sm" : "p-text-3"}`}>{label}</button>
                 );
               })}
             </div>
@@ -376,7 +376,7 @@ function PeopleRoles({ people, editors, onRole, ownerAccess, disabled }: {
 function NotRunning({ reason, shared }: { reason: string | null; shared: boolean }) {
   if (reason === null || !shared) return null;
 
-  return <p role="status" data-share-broken className="t-meta flex gap-2 rounded-lg p-tint-warning px-3 py-2 p-text"><WarningIcon size={14} className="mt-0.5 shrink-0 p-warning" /><span>{reason}</span></p>;
+  return <p role="status" data-share-broken className="t-meta flex gap-2 rounded-lg p-tint-warning px-3 py-2 p-text"><WarningIcon size={14} className="mt-px shrink-0 p-warning" /><span>{reason}</span></p>;
 }
 
 /** A share's numbers, as its owner reads them: who opened it through its link, and how often; never who. */
@@ -444,10 +444,10 @@ function SharedRow({ row, actions }: { row: OwnedLiveShare; actions: SharedRowAc
   const who = row.visibility === "public" ? "Anyone with the link" : "People you added";
 
   return (
-    <li data-live-share={row.id} className="space-y-1.5 px-3.5 py-2">
+    <li data-live-share={row.id} className="space-y-2 px-3 py-2">
       <div className="flex items-start gap-3">
-        <span className="flex shrink-0 pt-0.5 p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
-        <span className="min-w-0 flex-1 space-y-0.5">
+        <span className="flex shrink-0 pt-px p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
+        <span className="min-w-0 flex-1 space-y-px">
           <span className="t-meta flex min-w-0 p-text-2"><WhoLine row={row} /></span>
           <span className="t-meta block p-text-3">
             <span data-live-share-mode={row.mode}>{modeWords(row)}</span>
@@ -470,7 +470,7 @@ function SharedRow({ row, actions }: { row: OwnedLiveShare; actions: SharedRowAc
 
 function SharedNow({ shares, actions }: { shares: readonly OwnedLiveShare[]; actions: SharedRowActions }) {
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       <p className="t-status p-text-3">Shared now</p>
       <ul className="p-group">
         {shares.map((row) => <SharedRow key={row.id} row={row} actions={actions} />)}
@@ -500,13 +500,13 @@ function AlwaysAllowed({ standing, graph, onWithdraw, disabled }: {
   const titleOf = (entry: SharePreapproval) => graph?.namespaces.find((row) => row.slate === entry.slate && row.namespace === entry.namespace)?.title ?? entry.namespace;
 
   return (
-    <details data-share-always className="group space-y-1.5">
-      <summary className="t-status flex cursor-pointer list-none items-center gap-1.5 p-text-3">
+    <details data-share-always className="group space-y-2">
+      <summary className="t-status flex cursor-pointer list-none items-center gap-2 p-text-3">
         <CaretRightIcon size={12} className="transition-transform group-open:rotate-90" />Always allowed ({standing.length})
       </summary>
       <ul className="p-group">
         {standing.map((entry) => (
-          <li key={JSON.stringify([standingKey(entry), entry.root])} data-share-always-entry={standingKey(entry)} className="flex items-center gap-3 px-3.5 py-2">
+          <li key={JSON.stringify([standingKey(entry), entry.root])} data-share-always-entry={standingKey(entry)} className="flex items-center gap-3 px-3 py-2">
             <span className="min-w-0 flex-1">
               <span className="t-meta block truncate p-text-2"><span className="font-mono">{entry.member}</span> on {titleOf(entry)}</span>
               {Object.keys(entry.root).length > 0 && <span className="t-meta block truncate p-text-3">{rootWords(entry.root)}</span>}

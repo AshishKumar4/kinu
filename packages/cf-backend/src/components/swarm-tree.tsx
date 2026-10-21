@@ -588,7 +588,7 @@ export function SwarmTree({
 				// Band right edge carried as data: clamping runs later from the zoom handler.
 				el.dataset.x1 = String(region.band.x1 - BAND_PAD);
 				const name = document.createElement("span");
-				name.className = `min-w-0 shrink truncate p-row-text font-medium ${
+				name.className = `min-w-0 shrink truncate t-item ${
 					region.runId === selectedRunId ? "p-text" : "p-text-2"
 				}`;
 				name.textContent = meta?.title ?? "";
@@ -925,11 +925,11 @@ export function SwarmTree({
 			</div>
 
 			<div ref={attachLegend} data-tree-legend
-				className="shrink-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2 pt-1 pb-1.5">
+				className="shrink-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2 pt-1 pb-1">
 				<div className="t-meta min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 p-text-3 select-none">
 					{competedSelected ? (
 						<>
-							<span className="flex items-center gap-1.5">
+							<span className="flex items-center gap-2">
 								<span className="h-2 w-14 rounded-full" style={{ background: "linear-gradient(90deg in oklab, var(--c-danger), var(--c-warning), var(--c-success))" }} />
 								score
 							</span>
@@ -957,10 +957,10 @@ export function SwarmTree({
 						</span>
 					)}
 				</div>
-				<div className="ml-auto shrink-0 flex items-center gap-0.5">
+				<div className="ml-auto shrink-0 flex items-center gap-px">
 					<TreeControl label="Fold abandoned branches" onClick={foldLosing}><ArrowsInSimpleIcon size={13} /></TreeControl>
 					<TreeControl label="Expand every branch" onClick={expandAll}><ArrowsOutSimpleIcon size={13} /></TreeControl>
-					<span aria-hidden className="mx-0.5 h-3.5 w-px" style={{ background: "var(--c-border)" }} />
+					<span aria-hidden className="mx-px h-3.5 w-px" style={{ background: "var(--c-border)" }} />
 					<TreeControl label="Zoom out" onClick={() => scaleBy(1 / 1.5)}><MagnifyingGlassMinusIcon size={13} /></TreeControl>
 					<TreeControl label="Zoom in" onClick={() => scaleBy(1.5)}><MagnifyingGlassPlusIcon size={13} /></TreeControl>
 					<TreeControl label="Fit the selected search to view" onClick={() => fit(true)}><ArrowsOutIcon size={13} /></TreeControl>
@@ -1055,7 +1055,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 				top: tip.y + 12,
 			}}
 		>
-			<div className="font-medium p-text mb-1.5 leading-snug line-clamp-2">
+			<div className="font-medium p-text mb-2 leading-snug line-clamp-2">
 				{cleanNodeLabel(node.action, runName)}
 			</div>
 			<div className="flex items-center gap-2 tabular-nums">
@@ -1078,7 +1078,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 				{node.lifecycle ?? node.status}
 			</div>
 			{fanIn !== null && (
-				<div className="mt-1.5 flex items-baseline gap-1.5 p-accent-fg">
+				<div className="mt-2 flex items-baseline gap-2 p-accent-fg">
 					<span className="t-meta t-mono p-accent-fg">⋈{fanIn}</span>
 					<span className="leading-snug">
 						fan-in vertex, aggregating {fanIn} parents. The edge above it is the
@@ -1087,10 +1087,10 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 				</div>
 			)}
 			{why !== null && (
-				<div className="mt-1.5 p-text-3 leading-snug line-clamp-2">{why}</div>
+				<div className="mt-2 p-text-3 leading-snug line-clamp-2">{why}</div>
 			)}
 			{node.observation && (
-				<div className="mt-1.5 pt-1.5 border-t p-border p-text-2 leading-relaxed line-clamp-3">
+				<div className="mt-2 pt-1 border-t p-border p-text-2 leading-relaxed line-clamp-3">
 					{node.observation}
 				</div>
 			)}

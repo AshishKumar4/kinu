@@ -29,7 +29,7 @@ function PartButton({ children, onClick, ...data }: {
 }) {
   return (
     <button type="button" onClick={onClick} {...data}
-      className="t-status inline-flex min-h-7 items-center gap-1 rounded-md border p-border p-surface px-2.5 py-1 text-left p-text transition-colors hover:bg-[var(--c-hover)]">
+      className="t-status inline-flex min-h-7 items-center gap-1 rounded-md border p-border p-surface px-2 py-1 text-left p-text transition-colors hover:bg-[var(--c-hover)]">
       {children}
     </button>
   );
@@ -44,7 +44,7 @@ function InPlace({ icon, said, action, onAct, ...data }: {
   [attribute: `data-${string}`]: string | boolean | undefined;
 }) {
   return (
-    <div {...data} className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 rounded-lg p-sunken px-4 py-6 text-center">
+    <div {...data} className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-lg p-sunken px-4 py-6 text-center">
       <span className="shrink-0 p-text-3">{icon}</span>
       <p className="t-body max-w-sm p-text-2">{said}</p>
       {action !== null && <Button variant="primary" size="sm" onClick={onAct}>{action}</Button>}
@@ -59,7 +59,7 @@ function ActionControl({ action, onAct }: { action: PartAction; onAct: PartContr
   if (action.input === undefined) return <PartButton data-part-action={action.id} onClick={() => onAct({ id: action.id, input: null })}>{action.label}</PartButton>;
 
   return (
-    <form className="flex items-center gap-1.5" onSubmit={(event) => { event.preventDefault(); onAct({ id: action.id, input: text }); }}>
+    <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); onAct({ id: action.id, input: text }); }}>
       <input value={text} onChange={(event) => setText(event.target.value)} aria-label={action.label} data-part-action-input={action.id}
         className="t-meta h-7 min-w-0 flex-1 rounded-md border p-border p-surface px-2 p-text" />
       <PartButton data-part-action={action.id} onClick={() => onAct({ id: action.id, input: text })}>{action.label}</PartButton>
@@ -90,7 +90,7 @@ export function PartView({ answer, slate, controls }: { answer: PartRunAnswer; s
       if (answer.actions.length === 0 && answer.show === null) return null;
 
       return (
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
           {answer.actions.map((action) => <ActionControl key={action.id} action={action} onAct={controls.act} />)}
           {answer.show !== null && (
             <PartButton data-part-show onClick={() => controls.decide("show")}><EyeIcon size={13} />Show to everyone…</PartButton>

@@ -83,7 +83,7 @@ export default function SwarmExplorer() {
 
   return (
     <div className="h-full flex flex-col p-bg">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3.5 border-b p-border">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 border-b p-border">
         <Link to={`/workspace/${agentId}`} className="shrink-0"><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
         <div className="hidden sm:block h-4 w-px shrink-0 bg-[var(--c-border)]" />
         <GitForkIcon size={16} className="p-accent shrink-0" />
@@ -150,7 +150,7 @@ function ExplorerBody({
 
   return (
     <>
-      <div className="shrink-0 border-b p-border px-5 py-1.5">
+      <div className="shrink-0 border-b p-border px-5 py-1">
         <SwarmConfigDisclosure resolution={resolution}
           paramRows={forkParamRows(params)} judges={judgeEnsembleLabel(params)} />
       </div>
@@ -191,7 +191,7 @@ function ExplorerBody({
             onSelect={setSelectedId} />
         </div>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 px-5 py-2.5 border-t p-border">
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 px-5 py-2 border-t p-border">
         <div className="t-meta flex flex-wrap items-center gap-x-6 gap-y-1">
           <span className="p-text-2">Branches: <span className="p-text font-medium" data-tree-branches>{Math.max(0, (stats?.nodes ?? 1) - 1)}</span></span>
           <span className="p-text-2">Depth: <span className="p-text font-medium" data-tree-depth>{stats?.depth ?? 0}</span></span>

@@ -214,13 +214,13 @@ function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; on
 
   return (
     <div className="space-y-3" data-chatgpt-way="here">
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         <p className="t-meta p-text-2">1. Open ChatGPT and sign in.</p>
         <a href={started.authorizeUrl} target="_blank" rel="noopener noreferrer" className={buttonClass({ size: "sm" })}>
           <ArrowSquareOutIcon size={12} /> Open ChatGPT sign-in
         </a>
       </div>
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         <p className="t-meta p-text-2">2. Your browser then lands on a page that does not load, at an address starting with <code className="font-mono">{started.redirectUri}</code>. Copy that whole address and paste it here.</p>
         <div className="flex flex-col gap-2 sm:flex-row">
           <input value={pasted} onChange={(event) => setPasted(event.target.value)} placeholder={`${started.redirectUri}?code=…`}

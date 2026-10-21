@@ -135,9 +135,9 @@ function ForkModal({
         </Button>
       </>}
     >
-      <div className="t-meta p-text-2 space-y-1.5">
+      <div className="t-meta p-text-2 space-y-2">
         <p>Create a new workspace from <span className="font-mono p-text">{sourceName}</span>, with its own conversation and its own copy of the files.</p>
-        <ul className="list-disc list-inside space-y-0.5 p-text-3">
+        <ul className="list-disc list-inside space-y-px p-text-3">
           <li>Conversation: the {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"} up to this one</li>
           <li>Files: the project, SOUL.md and memory as they are now, not as they were at this message</li>
           <li>Also copied: learned tools and settings</li>
@@ -154,7 +154,7 @@ function ForkModal({
           onChange={(e) => setName(e.target.value)}
           placeholder="a generated address, e.g. quiet-harbor-3f9a2c1d"
           disabled={busy}
-          className="t-body t-mono w-full px-3 py-1.5 border p-border p-card"
+          className="t-body t-mono w-full px-3 py-1 border p-border p-card"
         />
         <p className="t-meta p-text-3">Lowercase letters, digits and hyphens, at most 31 characters</p>
       </div>
@@ -919,12 +919,12 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
     <div className="h-full flex flex-col" data-workbench>
       {/* The chat stays mounted through reconnect so the in-flight turn survives. */}
       {state.connectionStatus === "disconnected" && !state.terminalClose && (
-        <div className="t-meta flex items-center justify-center gap-2 px-3 py-1.5 p-warning border-b p-border" style={{ background: "var(--c-warning-tint)" }}>
+        <div className="t-meta flex items-center justify-center gap-2 px-3 py-1 p-warning border-b p-border" style={{ background: "var(--c-warning-tint)" }}>
           <ArrowsClockwiseIcon size={12} className="animate-spin" />Reconnecting...
         </div>
       )}
       {state.terminalClose && (
-        <div className="t-meta flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 p-danger border-b p-border" style={{ background: "var(--c-danger-tint)" }}>
+        <div className="t-meta flex flex-wrap items-center justify-center gap-2 px-3 py-1 p-danger border-b p-border" style={{ background: "var(--c-danger-tint)" }}>
           <WarningCircleIcon size={12} className="shrink-0" />
           <span className="break-words">
             {state.terminalClose.code === 1008
@@ -964,7 +964,7 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
               placeholder={live ? "Steer the running turn…" : restingPlaceholder(focus)}
               attention={<AttentionStack asks={ownerAsks({ ...state, accountProposals, questions: state.ownerQuestions })} {...attentionCalls} />}
               empty={<EmptyConversation mission={as?.mission ?? ""} />}
-              asked={asked} answerSlates={WORKSPACE_CHAT} layout={{ startFirst: true, padClass: "pt-7 pb-12" }}
+              asked={asked} answerSlates={WORKSPACE_CHAT} layout={{ startFirst: true, padClass: "pt-6 pb-12" }}
               extras={{
                 before: (i) => placed.before.get(i),
                 row: (msg, i) => {

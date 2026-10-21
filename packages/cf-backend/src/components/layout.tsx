@@ -80,7 +80,7 @@ function Shell() {
           >
             <ListIcon size={18} />
           </button>
-          <Link to="/" aria-label="Kinu home" className="flex items-center rounded-md px-2 py-1.5">
+          <Link to="/" aria-label="Kinu home" className="flex items-center rounded-md px-2 py-1">
             <KinuLogo compact />
           </Link>
         </div>

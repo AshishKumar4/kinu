@@ -28,7 +28,7 @@ function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
     <Link
       to={to}
       aria-current={active ? "page" : undefined}
-      className={`t-control flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 transition-colors ${navRowCls(active)}`}
+      className={`t-control flex items-center gap-3 rounded-lg py-[7px] pl-3 pr-3 transition-colors ${navRowCls(active)}`}
     >
       <Icon size={15} className={active ? 'p-accent-mark' : 'p-text-3'} />
       <span>{label}</span>
@@ -69,7 +69,7 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
   const said = error ?? waiting?.text ?? null;
 
   return (
-    <form onSubmit={submit} className="p-card px-1.5 py-1">
+    <form onSubmit={submit} className="p-card px-1 py-1">
       <div className="flex items-center gap-1">
         <input
           autoFocus
@@ -82,7 +82,7 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
             event.preventDefault();
             onDone();
           }}
-          className="t-meta min-w-0 flex-1 rounded-sm px-1.5 py-1 p-fill p-text border p-border"
+          className="t-meta min-w-0 flex-1 rounded-sm px-1 py-1 p-fill p-text border p-border"
           aria-label={label}
         />
         <button
@@ -261,7 +261,7 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
   const [renaming, setRenaming] = useState<string | null>(null);
 
   return (
-    <ul className="p-nest mb-1 ml-[26px] mr-2 mt-0.5 space-y-px" aria-label="Chats">
+    <ul className="p-nest mb-1 ml-[26px] mr-2 mt-px space-y-px" aria-label="Chats">
       {chats.map((chat: PanelAgent) => (
         <li key={chat.key}>
           {renaming === chat.key
@@ -299,7 +299,7 @@ function ChatRow({ chat, panel, onRename }: { chat: PanelAgent; panel: Workspace
     <div className="group/chat relative">
       <button type="button" onClick={() => panel.open(chat)} data-workspace-chat={chat.key} data-status={chat.activity}
         aria-current={panel.shown === chat.key ? "page" : undefined}
-        className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 text-left transition-colors ${remove ? "pr-12 lg:pr-3 lg:group-hover/chat:pr-12 lg:group-focus-within/chat:pr-12" : "pr-7 lg:pr-3 lg:group-hover/chat:pr-7 lg:group-focus-within/chat:pr-7"} ${navRowCls(panel.shown === chat.key)}`}>
+        className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 text-left transition-colors ${remove ? "pr-12 lg:pr-3 lg:group-hover/chat:pr-12 lg:group-focus-within/chat:pr-12" : "pr-6 lg:pr-3 lg:group-hover/chat:pr-6 lg:group-focus-within/chat:pr-6"} ${navRowCls(panel.shown === chat.key)}`}>
         <ChatMascot seed={look.seed} colour={look.colour} activity={chat.activity} />
         <span className="t-body p-status-label min-w-0 flex-1 truncate">{chat.label}</span>
       </button>

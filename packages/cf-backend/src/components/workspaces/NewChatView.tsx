@@ -75,7 +75,7 @@ export function NewChatView({ workspace, title, createChat }: {
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto" data-new-chat>
-      <div className="mx-auto flex min-h-full w-full max-w-[720px] flex-col justify-center gap-7 px-6 py-[clamp(48px,12vh,120px)]">
+      <div className="mx-auto flex min-h-full w-full max-w-[720px] flex-col justify-center gap-8 px-6 py-[clamp(48px,12vh,120px)]">
         <h1 className="t-page-title text-center text-[clamp(28px,3.4vw,40px)] p-text">
           What do you want to work on in <span className="p-accent">{title}</span>?
         </h1>

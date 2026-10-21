@@ -213,14 +213,14 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
             const { mark, tone } = RESTORE_MARK[f.kind];
 
             return (
-              <li key={`${f.kind}:${f.path}`} className="flex gap-2 px-2.5 py-1 border-b p-border last:border-0">
+              <li key={`${f.kind}:${f.path}`} className="flex gap-2 px-2 py-1 border-b p-border last:border-0">
                 <span className={`shrink-0 ${tone}`}>{mark}</span>
                 <span className="p-text-2 truncate" title={f.path}>{f.path}</span>
               </li>
             );
           })}
           {plan.files.length > shown.length && (
-            <li className="px-2.5 py-1 p-text-3">… {plan.files.length - shown.length} more</li>
+            <li className="px-2 py-1 p-text-3">… {plan.files.length - shown.length} more</li>
           )}
         </ul>
       </div>

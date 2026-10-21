@@ -77,7 +77,7 @@ function PluginSection({ title, rows, onRetry, what }: {
       <h2 className="t-label">{title}</h2>
       {rows.status === "loading" && <div className="flex justify-center py-4"><Loader size="sm" /></div>}
       {rows.status === "error" && <LoadFailure what={what} message={rows.message} onRetry={onRetry} />}
-      {rows.status === "ready" && <div className="-mx-2 grid gap-x-6 gap-y-0.5 sm:grid-cols-2">{rows.value}</div>}
+      {rows.status === "ready" && <div className="-mx-2 grid gap-x-6 gap-y-px sm:grid-cols-2">{rows.value}</div>}
     </section>
   );
 }

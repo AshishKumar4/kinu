@@ -76,7 +76,7 @@ function AgentRow({ agent, panel }: { agent: PanelAgent; panel: WorkspaceAgentsP
   return (
     <button type="button" onClick={() => panel.open(agent)} data-agent-row={agent.key} data-status={agent.activity}
       aria-current={shown ? "page" : undefined} title={figures === "" ? undefined : figures}
-      className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2.5 pr-3 text-left transition-colors ${navRowCls(shown)}`}>
+      className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left transition-colors ${navRowCls(shown)}`}>
       {/* A chat and a hire each wear their own mascot; a swarm worker or a background helper, its state mark. */}
       {agent.tab || agent.category === "hired" || agent.category === "user"
         ? <ChatMascot seed={look.seed} colour={look.colour} activity={agent.activity} />
@@ -93,7 +93,7 @@ function AgentGroup({ title, members, panel }: { title: string; members: readonl
   return (
     <section aria-label={title}>
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
-        className={`flex w-full items-center gap-2 rounded-lg py-[6px] pl-2.5 pr-3 text-left transition-colors ${navRowCls(false, "p-text-3")}`}>
+        className={`flex w-full items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left transition-colors ${navRowCls(false, "p-text-3")}`}>
         <CaretRightIcon size={11} className={`w-[13px] shrink-0 transition-transform duration-150 ${open ? "rotate-90" : ""}`} aria-hidden />
         <span className="t-control min-w-0 flex-1 truncate">{title}</span>
         {busy && <AgentStatusMark activity="working" />}

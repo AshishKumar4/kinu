@@ -47,9 +47,9 @@ function TaskHeader({ task }: { task: string }) {
   const long = task.length > TASK_CLAMP;
 
   return (
-    <div className="shrink-0 border-b p-border px-4 py-2.5 p-sunken">
+    <div className="shrink-0 border-b p-border px-4 py-2 p-sunken">
       <div className="flex items-start gap-2">
-        <div className="t-label pt-0.5 shrink-0">Task</div>
+        <div className="t-label pt-px shrink-0">Task</div>
         <div className="min-w-0 flex-1">
           <div className={`t-body p-text-2 whitespace-pre-wrap break-words ${long && !expanded ? "line-clamp-2" : ""}`}>
             {task}
@@ -103,7 +103,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
       {view.errorMessage && (
         <div className="shrink-0 border-b p-border border-l-2 px-4 py-3"
           style={{ background: "var(--c-danger-tint)", borderLeftColor: "var(--c-danger)" }}>
-          <div className="t-status flex items-center gap-1.5 uppercase p-danger">
+          <div className="t-status flex items-center gap-2 uppercase p-danger">
             <WarningCircleIcon size={11} weight="fill" />
             {shownHeadStatus(view.status, view.errorMessage) === "stopped" ? "Stopped" : "Failed"}
           </div>
@@ -113,7 +113,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
       {view.answer && (
         <div className="shrink-0 border-b p-border border-l-2 px-4 py-3 p-fill"
           style={{ borderLeftColor: "var(--c-accent)" }}>
-          <div className="t-status flex items-center gap-1.5 uppercase p-accent">
+          <div className="t-status flex items-center gap-2 uppercase p-accent">
             <CheckCircleIcon size={11} weight="fill" />
             {view.origin === "head" ? "Report" : "Proposal"}
           </div>
@@ -259,8 +259,8 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
                 {view.decisions.map((decision, index) => (
                   <div key={index} className="t-body rounded-md p-fill border p-border p-2">
                     <div className="p-text-2">{decision.question}</div>
-                    <div className="p-accent mt-0.5">→ {decision.choice}</div>
-                    {decision.rationale && <div className="p-text-3 mt-0.5">{decision.rationale}</div>}
+                    <div className="p-accent mt-px">→ {decision.choice}</div>
+                    {decision.rationale && <div className="p-text-3 mt-px">{decision.rationale}</div>}
                   </div>
                 ))}
               </div>

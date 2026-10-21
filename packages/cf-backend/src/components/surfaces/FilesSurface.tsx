@@ -43,9 +43,9 @@ function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: (
       <span className="p-text-3 hidden @[30rem]:inline truncate">A file with this name is already here.</span>
       <span className="ml-auto flex shrink-0 gap-1">
         <button type="button" data-upload-keep onClick={onKeep}
-          className="rounded px-2 py-0.5 p-text-2 hover:p-text p-row-hover">Cancel</button>
+          className="rounded px-2 py-px p-text-2 hover:p-text p-row-hover">Cancel</button>
         <button type="button" data-upload-confirm onClick={onReplace} autoFocus
-          className="rounded px-2 py-0.5 p-accent hover:underline">Replace</button>
+          className="rounded px-2 py-px p-accent hover:underline">Replace</button>
       </span>
     </div>
   );
@@ -57,10 +57,10 @@ const MOUNT_EXECUTOR: Record<string, string> = Object.fromEntries(
 
 /** The list's columns at every width: icon, name, then size and age, one cell below 26rem and a column each from it. A
  *  touch screen keeps a gutter for the row's menu, which a pointer finds on hover over the age. */
-const COLUMNS = "grid-cols-[1rem_minmax(0,1fr)_auto] @[26rem]:grid-cols-[1rem_minmax(0,1fr)_4.5rem_4rem] items-center gap-x-2.5 px-3 pointer-coarse:pr-11";
+const COLUMNS = "grid-cols-[1rem_minmax(0,1fr)_auto] @[26rem]:grid-cols-[1rem_minmax(0,1fr)_4.5rem_4rem] items-center gap-x-3 px-3 pointer-coarse:pr-12";
 
 /** Tiles fill the column's width, as many as fit at their least. */
-const TILE_GRID = "grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-1 px-2 py-1.5";
+const TILE_GRID = "grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-1 px-2 py-1";
 
 /** What the menu covers under a pointer while it shows. */
 const UNDER_MENU = "pointer-fine:group-hover:invisible pointer-fine:group-has-[[data-drive-menu]:focus-visible]:invisible pointer-fine:group-has-[[aria-expanded=true]]:invisible";
@@ -509,7 +509,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
 
               return run(Effect.promise(() => uploadFiles(picked)));
             }))} />
-          <div className="ml-auto flex items-center gap-0.5 shrink-0">
+          <div className="ml-auto flex items-center gap-px shrink-0">
             <button onClick={() => setPath(parentDir(path))} disabled={atRoot}
               className="p-text-3 hover:p-text p-1 disabled:opacity-30 disabled:hover:p-text-3"
               title="Parent directory" aria-label="Parent directory"><ArrowUpIcon size={12} /></button>
@@ -531,7 +531,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           </div>
         </div>
 
-        <div className="px-3 py-1.5 border-b p-border flex items-center gap-1.5 shrink-0">
+        <div className="px-3 py-1 border-b p-border flex items-center gap-2 shrink-0">
           <MagnifyingGlassIcon size={12} className="p-text-3 shrink-0" />
           <input
             data-files-filter
@@ -551,7 +551,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           <LoadFailure what="the environments" message={mountsResource.message} onRetry={reloadMounts} className="px-3 py-2" />
         )}
         {notice && (
-          <div data-files-notice className="t-meta px-3 py-1.5 p-danger border-b p-border flex items-start gap-1.5">
+          <div data-files-notice className="t-meta px-3 py-1 p-danger border-b p-border flex items-start gap-2">
             <WarningIcon size={13} className="shrink-0 mt-px" />
             <span className="break-words min-w-0">{notice}</span>
             <button onClick={() => setNotice(null)} className="ml-auto p-text-3 hover:p-text shrink-0" aria-label="Dismiss">
@@ -571,13 +571,13 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             {...listDrop}
           >
             {columns}
-            {err && <div className="p-danger px-3 py-1.5 break-words">{err}</div>}
+            {err && <div className="p-danger px-3 py-1 break-words">{err}</div>}
             {uploads.map((u) => {
               // Named by its folder too once the owner has browsed away from it.
               const name = parentDir(u.target) === path ? u.target.slice(u.target.lastIndexOf("/") + 1) : u.target;
 
               return (
-                <div key={u.target} className={`flex items-center gap-2.5 px-3  ${ROW_HEIGHT} t-body`} data-upload={u.status} data-upload-target={u.target}>
+                <div key={u.target} className={`flex items-center gap-3 px-3  ${ROW_HEIGHT} t-body`} data-upload={u.status} data-upload-target={u.target}>
                   {u.status === "uploading" && <><Loader size="sm" /><span className="p-text-2 truncate">{name}</span><span className="t-meta ml-auto p-text-3 shrink-0">uploading…</span></>}
                   {u.status === "error" && <><WarningIcon size={16} className="p-danger shrink-0" /><span className="p-text-2 truncate">{name}</span><span className="t-meta p-danger truncate">{u.error}</span></>}
                   {u.status === "exists" && (
@@ -586,7 +586,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
                 </div>
               );
             })}
-            {loading && <div className="p-text-3 px-3 py-1.5">Loading…</div>}
+            {loading && <div className="p-text-3 px-3 py-1">Loading…</div>}
             {!loading && !atRoot && (
               <button
                 data-files-up-row
@@ -626,13 +626,13 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             )}
             {!loading && <MoreRow next={folder.next} more={() => run(Effect.promise(folder.more))} />}
             {!loading && filtered.length === 0 && offline.length === 0 && entries.length > 0 && (
-              <div className="p-text-3 italic px-3 py-1.5">Nothing here matches "{filter}".</div>
+              <div className="p-text-3 italic px-3 py-1">Nothing here matches "{filter}".</div>
             )}
             {!loading && entries.length === 0 && offline.length === 0 && !err && (
-              <div className="p-text-3 italic px-3 py-1.5">This folder is empty. Drop files here to upload.</div>
+              <div className="p-text-3 italic px-3 py-1">This folder is empty. Drop files here to upload.</div>
             )}
             {!loading && filtered.length > 0 && (
-              <div className="t-meta px-3 pt-1.5 pb-1 p-text-3 border-t p-border mt-1">
+              <div className="t-meta px-3 pt-1 pb-1 p-text-3 border-t p-border mt-1">
                 {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount, folder.next !== undefined)}
                 <span className="ml-2 hidden @[44rem]:inline p-text-3">{LAYOUTS[view.layout].moves} move · Enter open · Backspace up · F2 rename · Del delete</span>
               </div>
@@ -681,7 +681,7 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
     <div>
       <div
         data-files-tree-node={dir}
-        className={`t-meta flex items-center gap-1 pr-2 py-0.5 cursor-pointer p-row-hover ${active ? "p-fill p-text font-medium" : "p-text-2"}  ${hidden ? HIDDEN_FACE : ""}`}
+        className={`t-meta flex items-center gap-1 pr-2 py-px cursor-pointer p-row-hover ${active ? "p-fill p-text font-medium" : "p-text-2"}  ${hidden ? HIDDEN_FACE : ""}`}
         style={{ paddingLeft: `${8 + depth * 12}px` }}
         onClick={() => onNavigate(dir)}
       >
@@ -723,7 +723,7 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
             key={child.name}
             data-files-tree-file={full}
             title={child.name}
-            className={`flex items-center gap-1 pr-2 py-0.5 text-xs cursor-pointer p-row-hover ${
+            className={`flex items-center gap-1 pr-2 py-px t-meta cursor-pointer p-row-hover ${
               previewPath === full ? "p-fill p-text font-medium" : "p-text-2"} ${child.hidden === true ? HIDDEN_FACE : ""}`}
             style={{ paddingLeft: `${20 + (depth + 1) * 12}px` }}
             onClick={() => onOpenFile(full)}
@@ -741,7 +741,7 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
 function OfflineTreeRow({ row, depth }: { row: OfflineRow; depth: number }) {
   return (
     <div data-files-tree-offline={row.name} title={`${row.label ?? row.name}: ${row.reason}`}
-      className="t-meta group flex items-center gap-1 pr-2 py-0.5 p-text-3"
+      className="t-meta group flex items-center gap-1 pr-2 py-px p-text-3"
       style={{ paddingLeft: `${22 + depth * 12}px` }}>
       {/* Where a folder's icon stands beside its caret. */}
       <PlugIcon size={13} className="shrink-0" />
@@ -859,7 +859,7 @@ function RenameField({ draft, onRenameDraft, onRenameCommit, onRenameCancel, cla
         if (e.key === "Escape") onRenameCancel();
       }))}
       onBlur={onRenameCancel}
-      className={`t-body min-w-0 bg-transparent border p-border rounded-xs px-1.5 py-0 p-text ${className}`}
+      className={`t-body min-w-0 bg-transparent border p-border rounded-xs px-1 py-0 p-text ${className}`}
     />
   );
 }
@@ -871,7 +871,7 @@ function DeleteChoice({ name, onDelete, onCancelDelete, className }: {
   className: string;
 }) {
   return (
-    <span className={`t-meta flex items-center gap-2.5 ${className}`} onClick={(e) => e.stopPropagation()}>
+    <span className={`t-meta flex items-center gap-3 ${className}`} onClick={(e) => e.stopPropagation()}>
       <button data-files-delete-confirm onClick={() => detach(Effect.promise(onDelete))}
         className="font-medium p-danger hover:underline" aria-label={`Delete ${name}`}>Delete</button>
       <button onClick={onCancelDelete} className="p-text-3 hover:p-text" aria-label="Keep it">Keep</button>
@@ -922,7 +922,7 @@ function EntryRow(props: EntryProps) {
         </>
       )}
       {/* No transform on the way: the menu is a fixed sheet on a phone. */}
-      <EntryMenu props={props} className="absolute inset-y-0 right-1.5 flex items-center" />
+      <EntryMenu props={props} className="absolute inset-y-0 right-2 flex items-center" />
     </div>
   );
 }
@@ -960,7 +960,7 @@ function OfflineMountTile({ row }: { row: OfflineRow }) {
       <PlugIcon size={32} className="p-text-3" />
       <span className="t-body max-w-full truncate p-text-3">{row.name}</span>
       {row.label !== null && <span data-mount-badge className="t-meta max-w-full truncate p-text-3">{row.label}</span>}
-      <span className="t-meta flex items-baseline gap-1.5">
+      <span className="t-meta flex items-baseline gap-2">
         <span className="p-text-3">offline</span>
         {row.onConnect && (
           <button type="button" data-files-connect onClick={row.onConnect} className="font-medium p-accent hover:underline">Connect</button>

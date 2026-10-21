@@ -30,7 +30,7 @@ export function TakesChip({ set, onPick }: {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="t-control inline-flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm border p-border p-card-hover transition-colors"
+        className="t-control inline-flex items-center gap-1 p-text-3 hover:p-text px-1 py-px rounded-sm border p-border p-card-hover transition-colors"
         title="Your mid-turn redirect ran as a parallel branch. Compare both answers and pick one."
       >
         <GitBranchIcon size={11} />
@@ -112,7 +112,7 @@ function TakesComparison({ set, onPick, onClose }: {
 
       <div className="flex items-center justify-between">
         <button type="button" onClick={() => step(-1)} aria-label="Previous take"
-          className="p-1.5 rounded-sm p-text-3 hover:p-text p-card-hover transition-colors cursor-pointer">
+          className="p-1 rounded-sm p-text-3 hover:p-text p-card-hover transition-colors cursor-pointer">
           <ArrowLeftIcon size={14} />
         </button>
         <div className="t-meta flex items-center gap-2 p-text-2">
@@ -124,12 +124,12 @@ function TakesComparison({ set, onPick, onClose }: {
           )}
         </div>
         <button type="button" onClick={() => step(1)} aria-label="Next take"
-          className="p-1.5 rounded-sm p-text-3 hover:p-text p-card-hover transition-colors cursor-pointer">
+          className="p-1 rounded-sm p-text-3 hover:p-text p-card-hover transition-colors cursor-pointer">
           <ArrowRightIcon size={14} />
         </button>
       </div>
 
-      <div className="border p-border p-card px-3 py-2.5 max-h-64 overflow-y-auto">
+      <div className="border p-border p-card px-3 py-2 max-h-64 overflow-y-auto">
         <div className="t-body prose-chat p-text">
           <MarkdownContent content={candidate.text} />
         </div>
@@ -193,8 +193,8 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
   }
 
   return (
-    <div className="flex flex-col items-start gap-1 animate-fade-in py-0.5">
-      <div className="t-body inline-flex items-center gap-2 max-w-full px-3 py-1.5 rounded-full p-fill border p-border p-text-2">
+    <div className="flex flex-col items-start gap-1 animate-fade-in py-px">
+      <div className="t-body inline-flex items-center gap-2 max-w-full px-3 py-1 rounded-full p-fill border p-border p-text-2">
         {run.status === "running" && (
           <>
             <Loader size="sm" />

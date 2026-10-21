@@ -124,13 +124,13 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
         </div>
       </div>
       {saveError && (
-        <div className="t-meta px-3 py-1.5 p-danger border-b p-border flex items-start gap-1.5">
+        <div className="t-meta px-3 py-1 p-danger border-b p-border flex items-start gap-2">
           <WarningIcon size={13} className="shrink-0 mt-px" />
           <span className="break-words min-w-0">{saveError}</span>
         </div>
       )}
       {conflict && (
-        <div data-files-conflict className="t-meta px-3 py-1.5 p-danger border-b p-border flex items-start gap-2">
+        <div data-files-conflict className="t-meta px-3 py-1 p-danger border-b p-border flex items-start gap-2">
           <WarningIcon size={13} className="shrink-0 mt-px" />
           <span className="min-w-0 break-words">This file changed after you opened it. Your draft is still here.</span>
           <button type="button" onClick={() => {
@@ -141,12 +141,12 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
         </div>
       )}
       {kind === "text" && file?.readOnlyReason && draft === null && (
-        <div className="t-status px-3 py-1.5 p-text-3 border-b p-border">
+        <div className="t-status px-3 py-1 p-text-3 border-b p-border">
           {file.readOnlyReason}
         </div>
       )}
       {kind === "text" && file?.truncated && draft === null && (
-        <div className="t-status px-3 py-1.5 p-text-3 border-b p-border">
+        <div className="t-status px-3 py-1 p-text-3 border-b p-border">
           Preview truncated. Download the full file to edit it.
         </div>
       )}

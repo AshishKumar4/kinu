@@ -69,7 +69,7 @@ export function DeviceRow({
       <div data-device-incident={device.id} role="alert"
         className="t-meta p-notice-danger rounded-none border-0 px-4 py-3">
         <div className="flex items-start gap-2">
-          <WarningIcon size={14} className="mt-0.5 shrink-0" />
+          <WarningIcon size={14} className="mt-px shrink-0" />
           <div className="min-w-0 flex-1 space-y-1">
             <div className="font-medium">{device.label}</div>
             {device.reuseDetectedAt !== null && (

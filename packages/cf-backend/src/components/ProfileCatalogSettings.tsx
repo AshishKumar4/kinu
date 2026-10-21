@@ -330,7 +330,7 @@ export function ProfileCatalogSettings() {
                   return (
                     <div key={tierId} data-tier={tierId}
                       className="grid gap-x-4 gap-y-2 border-t p-border py-3 first:border-t-0 md:grid-cols-[11rem_minmax(0,1fr)]">
-                      <div className="flex items-start justify-between gap-2 md:pt-0.5">
+                      <div className="flex items-start justify-between gap-2 md:pt-px">
                         <div className="min-w-0">
                           <div className="t-body p-text">{words.name}</div>
                           <div className="t-meta p-text-3">{words.use}</div>
@@ -378,7 +378,7 @@ export function ProfileCatalogSettings() {
                   hint="When a particular model fails, these run instead of its tier's backups, whichever tier runs it." />
                 {chainedModels.map((model) => (
                   <div key={model} data-model-chain={model}
-                    className="grid gap-x-4 gap-y-1.5 border-t p-border py-2.5 first:border-t-0 md:grid-cols-[11rem_minmax(0,1fr)] md:items-center">
+                    className="grid gap-x-4 gap-y-2 border-t p-border py-2 first:border-t-0 md:grid-cols-[11rem_minmax(0,1fr)] md:items-center">
                     <div className="flex items-center justify-between gap-2">
                       <span className="t-body truncate p-text">{labelOfSpec(menu, model)}</span>
                       <Button variant="ghost" size="sm" icon={<TrashIcon size={12} />} aria-label={`Remove the ${model} chain`}
@@ -432,7 +432,7 @@ export function ProfileCatalogSettings() {
           <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
             {/* A scrolling tab strip below md, the accent-tinted list row at md and up. */}
             <nav ref={roleNav} aria-label="Agent roles"
-              className="p-tabstrip -mx-5 flex border-b p-border [--scroll-ground:var(--c-surface)] md:mx-0 md:flex-col md:gap-0.5 md:border-b-0 md:overflow-visible">
+              className="p-tabstrip -mx-5 flex border-b p-border [--scroll-ground:var(--c-surface)] md:mx-0 md:flex-col md:gap-px md:border-b-0 md:overflow-visible">
               {Object.keys(roles).sort().map((roleId) => {
                 const current = roleId === selectedRole;
                 const entry = roles[roleId];
@@ -450,7 +450,7 @@ export function ProfileCatalogSettings() {
                     onClick={() => { setSelectedRole(roleId); setAddingRole(false); }}
                   >
                     <span className="min-w-0 flex-1 text-left">
-                      <span className="flex items-center gap-1.5">
+                      <span className="flex items-center gap-2">
                         <span className="truncate">{entry?.label ?? deriveRoleLabel(roleId)}</span>
                         {roleId in draft.roles && (
                           <span title="Customized" aria-label="Customized"
@@ -465,7 +465,7 @@ export function ProfileCatalogSettings() {
                 );
               })}
               {addingRole ? (
-                <div className="flex items-center gap-1.5 px-2.5 py-[9px] md:px-3">
+                <div className="flex items-center gap-2 px-2 py-[9px] md:px-3">
                   <input
                     className={`${selectSmCls} min-w-0 flex-1`}
                     placeholder="new-role-id"
@@ -491,7 +491,7 @@ export function ProfileCatalogSettings() {
               ) : (
                 <button
                   type="button"
-                  className="t-control p-button-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] md:mb-0 md:w-full md:rounded-md md:px-3 md:py-2"
+                  className="t-control p-button-ghost flex shrink-0 items-center gap-2 whitespace-nowrap px-2 py-[13px] md:mb-0 md:w-full md:rounded-md md:px-3 md:py-2"
                   onClick={() => setAddingRole(true)}
                 >
                   <PlusIcon size={12} /> New role
@@ -558,7 +558,7 @@ function TierTuning(props: {
   return (
     <div className="space-y-2">
       {efforts.length > 0 && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <span className="t-meta w-16 shrink-0 p-text-3">Thinking</span>
           <Segmented<ReasoningEffort | 'auto'>
             label={`${props.tierId} reasoning effort`}
@@ -591,11 +591,11 @@ function BackupChain(props: {
   const freeVariant = (spec: string) => variants(spec).find((variant) => !taken.has(variant));
 
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5" role="group" aria-label={`${props.label} fallbacks`}>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2" role="group" aria-label={`${props.label} fallbacks`}>
       <span className="t-meta w-16 shrink-0 p-text-3">If it fails</span>
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
         {props.chain.map((spec, index) => (
-          <span key={spec} data-spec={spec} className="t-meta inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 p-text">
+          <span key={spec} data-spec={spec} className="t-meta inline-flex items-center gap-1 rounded-md border p-border px-2 py-px p-text">
             <span className="p-text-3">{index + 1}.</span>
             {labelOfSpec(props.menu, spec)}
             <AccountPicker spec={spec} accounts={accountsOf(spec)} label={`${props.label} fallback ${index + 1} account`}
@@ -763,7 +763,7 @@ function Allowance(props: {
         <CaretRightIcon size={12} className={`shrink-0 p-fold-turn p-text-3 ${open ? 'rotate-90' : ''}`} />
       </button>
       {open && (
-        <div role="group" aria-label={props.label} className="mt-2 flex flex-wrap gap-1.5">
+        <div role="group" aria-label={props.label} className="mt-2 flex flex-wrap gap-2">
           {props.options.map((option) => {
             const on = current.includes(option.id);
 
@@ -771,7 +771,7 @@ function Allowance(props: {
               <button key={option.id} type="button" aria-pressed={on} title={option.about ?? undefined}
                 aria-label={`${props.label}: ${option.id}`}
                 onClick={() => toggle(option.id, !on)}
-                className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs ${
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-px t-meta ${
                   on ? 'border-[var(--c-accent)] p-accent-bg p-accent' : 'p-border p-text-3 hover:p-text'
                 }`}>
                 {on && <CheckIcon size={11} />}

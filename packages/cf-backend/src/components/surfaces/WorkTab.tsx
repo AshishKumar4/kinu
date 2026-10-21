@@ -118,7 +118,7 @@ function NeedsYou({ pendingActions, onOpenAsk, onOpenSurface, onOpenPlan }: {
   };
 
   return (
-    <div className="rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] bg-[var(--c-selected)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
+    <div className="rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] bg-[var(--c-selected)] px-[18px] pt-2 pb-3 [&_.p-label]:!text-[var(--c-accent-fg)]">
       <Section id="work-needs-you" title="Needs you"
         icon={<WarningCircleIcon size={14} className="p-warning" />}
         badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
@@ -212,9 +212,9 @@ function WorkJournal({ journal, rpc, onRefreshJobs, onOpenOwner }: {
     <Section id="work-journal" title="Journal"
       icon={<ClockIcon size={14} className="p-text-2" />}
       badge={<Badge variant="secondary">{journal.length}</Badge>}>
-      <div className="space-y-3.5">
+      <div className="space-y-4">
         {days.map(({ label, rows }) => (
-          <div key={label} className="space-y-1.5">
+          <div key={label} className="space-y-2">
             <p className="t-label">{label}</p>
             <div className="p-group">
               {rows.map((row) => (
@@ -262,15 +262,15 @@ function PendingRow(
     <div className="min-w-0">
       <div className="t-body p-text">{action.title}</div>
       {action.detail && (
-        <div className="t-meta mt-0.5 line-clamp-2 break-words p-text-3">{action.detail}</div>
+        <div className="t-meta mt-px line-clamp-2 break-words p-text-3">{action.detail}</div>
       )}
-      <div className="t-meta mt-0.5 p-text-3">
+      <div className="t-meta mt-px p-text-3">
         {timeAgo(action.at)}{home.cta === null ? "" : ` · ${home.cta}`}
       </div>
     </div>
   );
 
-  const icon = <Icon size={14} className="mt-0.5 shrink-0 p-warning" />;
+  const icon = <Icon size={14} className="mt-px shrink-0 p-warning" />;
   const surface = home.surface;
   const open = onOpen ?? (surface === null ? null : () => onOpenSurface(surface));
 

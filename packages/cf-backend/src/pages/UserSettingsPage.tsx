@@ -72,7 +72,7 @@ export default function UserSettingsPage() {
     return (
       <Page icon={<GearSixIcon size={22} />} title="Settings">
         {profile.resource.status === "loading"
-          ? <div className="flex justify-center py-10"><Loader size="base" /></div>
+          ? <div className="flex justify-center py-8"><Loader size="base" /></div>
           : <LoadFailure what="your account" message={profile.resource.message} onRetry={profile.reload} />}
       </Page>
     );
@@ -81,7 +81,7 @@ export default function UserSettingsPage() {
   return (
     <Page icon={<GearSixIcon size={22} />} title="Settings" rule="wide">
         {/* The rail and the section's column fill the frame: 192 + 48 + 848. The active rail item names the section. */}
-        <div className="flex flex-col gap-7 lg:flex-row lg:gap-12">
+        <div className="flex flex-col gap-8 lg:flex-row lg:gap-12">
           <div className="lg:sticky lg:top-8 lg:w-48 lg:shrink-0 lg:self-start">
             <SettingsRail active={section} />
           </div>

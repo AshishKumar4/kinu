@@ -22,10 +22,10 @@ export function SecretWarning({ warnings, children }: { warnings: BlueprintView[
   if (warnings.length === 0) return null;
 
   return (
-    <div className="t-meta p-notice-warning rounded-md px-3 py-2.5" role="alert">
-      <p className="flex items-center gap-1.5 font-medium"><WarningIcon size={14} /> Possible secrets in the source</p>
+    <div className="t-meta p-notice-warning rounded-md px-3 py-2" role="alert">
+      <p className="flex items-center gap-2 font-medium"><WarningIcon size={14} /> Possible secrets in the source</p>
       <p className="mt-1 opacity-90">{children}</p>
-      <ul className="mt-1.5 space-y-0.5 font-mono">
+      <ul className="mt-2 space-y-px font-mono">
         {warnings.map((warning) => (
           <li key={`${warning.path}:${warning.line}:${warning.pattern}`}>{warning.path}:{warning.line}: {warning.message}</li>
         ))}
@@ -69,7 +69,7 @@ function BlueprintBody({ view }: { view: BlueprintView }) {
             const EntryIcon = ENTRY_ICON[entry.kind];
 
             return (
-              <li key={entry.path} className="flex items-center gap-1.5 py-0.5 p-text-2" style={{ paddingLeft: `${depth * 14}px` }}>
+              <li key={entry.path} className="flex items-center gap-2 py-px p-text-2" style={{ paddingLeft: `${depth * 14}px` }}>
                 <EntryIcon size={12} className="p-text-3" />
                 {entry.path.split("/").at(-1)}
               </li>

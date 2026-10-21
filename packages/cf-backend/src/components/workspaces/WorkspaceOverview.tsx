@@ -130,7 +130,7 @@ function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; wor
 
           return (
             <div key={lane} className="flex min-w-0 flex-col gap-2 rounded-2xl bg-[var(--c-hover)] p-2" data-lane={lane}>
-              <div className="flex items-baseline justify-between px-2 pb-0.5 pt-1.5">
+              <div className="flex items-baseline justify-between px-2 pb-px pt-1">
                 <span className={`t-item ${lane === "waiting" && shown.length > 0 ? "p-accent" : "p-text-2"}`}>{title}</span>
                 <span className="t-meta tabular-nums p-text-3">{shown.length}</span>
               </div>
@@ -143,7 +143,7 @@ function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; wor
   );
 }
 
-const CARD_CLASS = "group flex flex-col gap-2.5 rounded-xl border p-border bg-[var(--c-bg)] px-3 py-2.5 text-left transition-colors hover:border-[var(--c-border-strong)]";
+const CARD_CLASS = "group flex flex-col gap-3 rounded-xl border p-border bg-[var(--c-bg)] px-3 py-2 text-left transition-colors hover:border-[var(--c-border-strong)]";
 
 function TaskCard({ card, workspace, open }: { card: Card; workspace: string; open: (agent: PanelAgent) => void }) {
   const { agent } = card;
@@ -166,7 +166,7 @@ function TaskBody({ card }: { card: Card }) {
         {card.agent && <AgentStatusMark activity={card.agent.activity} />}
         <span className="min-w-0 truncate">{card.agent?.label ?? card.owner.title}</span>
         {card.progress && (
-          <span className="ml-auto flex shrink-0 items-center gap-1.5 tabular-nums" aria-label={`${card.progress.done} of ${card.progress.total} steps done`}>
+          <span className="ml-auto flex shrink-0 items-center gap-2 tabular-nums" aria-label={`${card.progress.done} of ${card.progress.total} steps done`}>
             <span className="relative h-1 w-10 overflow-hidden rounded-full bg-[var(--c-hover)]">
               <span className="absolute inset-y-0 left-0 rounded-full bg-[var(--c-accent-mark)]" style={{ width: `${(100 * card.progress.done) / card.progress.total}%` }} />
             </span>

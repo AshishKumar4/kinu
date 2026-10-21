@@ -45,7 +45,7 @@ export function DefaultModelField() {
               <ModelPicker models={models.models} failures={models.failures} accounts={models.accounts}
                 value={envelope.catalog.tiers.default.model} onChange={(model) => choose(envelope, model)}
                 label="Default model" className="w-full" disabled={saving} />
-              <p className="t-meta p-text-3 flex items-center gap-1.5">
+              <p className="t-meta p-text-3 flex items-center gap-2">
                 {saving && <Loader size="sm" />}
                 {saving ? "Saving…" : "Every new workspace starts on this model. You can change it per workspace, or later in settings."}
               </p>

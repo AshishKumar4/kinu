@@ -28,7 +28,7 @@ function versionStatus(status: string): VersionStatus {
 function DiffView({ diff }: { diff: ScaffoldDiff }) {
   return (
     <div className="rounded-md border p-border overflow-hidden">
-      <div className="t-meta t-mono flex items-center gap-3 px-3 py-1.5 border-b p-border p-text-3">
+      <div className="t-meta t-mono flex items-center gap-3 px-3 py-1 border-b p-border p-text-3">
         <span>v{diff.previousVersion ?? "∅"} → v{diff.version}</span>
         <span className="p-success">+{diff.added}</span>
         <span className="p-danger">−{diff.removed}</span>
@@ -96,7 +96,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   }
 
   return (
-    <section className="space-y-1.5">
+    <section className="space-y-2">
       <div className="flex items-baseline gap-2">
         <span className="t-meta p-text-3">Prompt versions</span>
         <Badge variant="secondary">live v{currentVersion}</Badge>
@@ -106,7 +106,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
           <div className="space-y-1">
             {versions.map((v) => (
               <button key={v.version} onClick={() => select(v.version)}
-                className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${selected === v.version ? "p-fill" : "p-card-hover"}`}>
+                className={`w-full flex items-center gap-2 px-2 py-1 rounded-md text-left transition-colors ${selected === v.version ? "p-fill" : "p-card-hover"}`}>
                 <span className="t-meta t-mono p-text shrink-0">v{v.version}</span>
                 <Status tone={versionStatus(v.status).tone}>{versionStatus(v.status).word}</Status>
                 <span className="t-body p-text-2 truncate flex-1" title={v.rationale}>{v.rationale}</span>
@@ -119,18 +119,18 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
             <div className="space-y-3 pt-1">
               <ScaffoldVersionDiff rpc={rpc} version={selected} />
 
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <div className="flex items-center gap-2">
                   <input value={previewTask} onChange={(e) => setPreviewTask(e.target.value)}
                     placeholder={`Run a task under v${selected} to preview it…`}
-                    className="t-meta flex-1 rounded-md border p-border p-fill px-2.5 py-1.5 p-text" />
+                    className="t-meta flex-1 rounded-md border p-border p-fill px-2 py-1 p-text" />
                   <Button size="sm" variant="secondary" disabled={!previewTask.trim() || busy === "preview"}
                     onClick={runPreview} icon={busy === "preview" ? <Loader size="sm" /> : <PlayIcon size={12} />}>
                     Preview
                   </Button>
                 </div>
                 {previewOut && (
-                  <pre className="t-code p-fill border p-border rounded-md p-2.5 max-h-40 overflow-auto whitespace-pre-wrap p-text-2">{previewOut}</pre>
+                  <pre className="t-code p-fill border p-border rounded-md p-2 max-h-40 overflow-auto whitespace-pre-wrap p-text-2">{previewOut}</pre>
                 )}
               </div>
 

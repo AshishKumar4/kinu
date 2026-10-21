@@ -52,10 +52,10 @@ export function FeedbackCard({ card, sentAt, now, onOpen }: {
           {card.notes.map((note) => (
             <li key={note.id}>
               {onOpen === undefined
-                ? <div className="flex items-start gap-2.5 py-2"><NoteRow note={note} /></div>
+                ? <div className="flex items-start gap-3 py-2"><NoteRow note={note} /></div>
                 : (
                   <button type="button" onClick={() => onOpen(note.anchor)} data-feedback-note={note.id}
-                    className="group flex w-full items-start gap-2.5 py-2 text-left">
+                    className="group flex w-full items-start gap-3 py-2 text-left">
                     <NoteRow note={note} />
                   </button>
                 )}

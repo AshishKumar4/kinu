@@ -77,7 +77,7 @@ function ShowcaseStep({ revealed }: { revealed: boolean }) {
           </div>
           <div>
             <div className="t-label p-text">{title}</div>
-            <p className="t-meta p-text-3 mt-0.5">{copy}</p>
+            <p className="t-meta p-text-3 mt-px">{copy}</p>
           </div>
         </div>
       ))}
@@ -212,7 +212,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
         <div className="mb-6 flex justify-center"><KinuLogo /></div>
         <h1 className="t-page-title text-center">Let's set up your account</h1>
 
-        <ol aria-label="Setup steps" className="mt-6 mb-5 flex items-center justify-center gap-1.5">
+        <ol aria-label="Setup steps" className="mt-6 mb-5 flex items-center justify-center gap-2">
           {steps.map((s, i) => (
             <li key={s.id} aria-current={i === step ? 'step' : undefined}>
               <span className={`block h-1.5 rounded-full transition-all ${stepDotCls(i, step)}`} />
@@ -232,7 +232,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
             {steps.map((s, i) => (
               <div
                 key={s.id}
-                className="w-full shrink-0 max-h-[62vh] overflow-y-auto px-5 py-5 sm:px-8 sm:py-7"
+                className="w-full shrink-0 max-h-[62vh] overflow-y-auto px-5 py-5 sm:px-8 sm:py-6"
                 data-welcome-step={s.id}
                 aria-hidden={i !== step}
                 inert={i !== step}

@@ -95,7 +95,7 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
 // A settled call takes a line's gap, prose and grouped cards a section's. The block carries
 // its own margin because a stack utility cannot be overridden per child.
 const BLOCK_GAP = {
-  row: "mt-1.5 first:mt-0",
+  row: "mt-2 first:mt-0",
   section: "mt-4 first:mt-0",
 } as const;
 
@@ -105,7 +105,7 @@ export function ChatLiveTail({ tail }: { tail: LiveTail | null }) {
   if (tail?.kind !== "thinking") return null;
 
   return (
-    <div data-live-indicator="thinking" className="animate-fade-in py-1.5" aria-live="polite">
+    <div data-live-indicator="thinking" className="animate-fade-in py-1" aria-live="polite">
       {/* A pause and a reasoning block share one "Thinking" label, so the indicator keeps its shape. */}
       <WorkLabel live>Thinking</WorkLabel>
     </div>
@@ -133,7 +133,7 @@ function FailedTurnRow({ message, live, onRetry }: { message: UIMessage; live: b
   const said = provider === null ? words : `${provider}: ${words}`;
 
   return (
-    <div className="py-0.5" role="status" data-turn-failure>
+    <div className="py-px" role="status" data-turn-failure>
       <div className="p-turn-mark">
         <WarningCircleIcon size={14} weight="fill" className="p-danger" aria-hidden />
         <span className="min-w-0 truncate" title={said}><span className="p-text-2">This turn stopped.</span> {said}</span>
@@ -152,8 +152,8 @@ function FailedTurnRow({ message, live, onRetry }: { message: UIMessage; live: b
 /** A turn its owner stopped before its work was done: the failure line's quiet shape, with nothing to act on. */
 function StoppedMidWorkRow() {
   return (
-    <div className="p-turn-mark py-0.5" role="status">
-      <span className="ml-1 mr-0.5 size-1.5 shrink-0 self-center rounded-full p-dot-danger" aria-hidden />
+    <div className="p-turn-mark py-px" role="status">
+      <span className="ml-1 mr-px size-1.5 shrink-0 self-center rounded-full p-dot-danger" aria-hidden />
       <span>Stopped before the work was finished</span>
     </div>
   );
@@ -221,7 +221,7 @@ function HelperChatLink({ output }: { output?: JsonValue }) {
 
   return (
     <Link to={`${base.base}${encodeURIComponent(name)}${base.parent === null ? "" : `?parent=${encodeURIComponent(base.parent)}`}`} aria-label={`Open ${name}'s conversation`}
-      className="t-meta t-mono ml-10 inline-block p-accent hover:underline">{name}</Link>
+      className="t-meta t-mono ml-12 inline-block p-accent hover:underline">{name}</Link>
   );
 }
 
@@ -315,15 +315,15 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
           <span className="t-meta t-mono min-w-0 flex-1 truncate p-text-3" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
           {runtime && <span className="t-meta t-mono shrink-0 p-text-3">{runtime}</span>}
         </span>
-        <span className={`t-status inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 ${stateTone}`}>
+        <span className={`t-status inline-flex min-h-6 shrink-0 items-center gap-2 rounded-full px-2 ${stateTone}`}>
           {stateBadge}
         </span>
         <CaretRightIcon size={11} aria-hidden className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
       </button>
       {toolName === "agents" && <HelperChatLink output={output} />}
       {expanded && provisionErr && (
-        <div className="t-meta p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 p-text-2 flex items-start gap-2">
-          <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />
+        <div className="t-meta p-tint-warning mt-2 ml-5 rounded-lg border px-3 py-2 p-text-2 flex items-start gap-2">
+          <WrenchIcon size={12} className="p-warning mt-px shrink-0" />
           <div className="space-y-1">
             <div>
               The agent asked for <span className="font-medium">{executorLabel(provisionErr.runtime)}</span>, which isn't
@@ -444,7 +444,7 @@ export function SteerBubble({ steer, onFork }: {
         {onFork && steer.state === "landed" && (
           <button
             onClick={() => onFork(steer.id)}
-            className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
+            className="absolute -left-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1 py-px rounded-sm"
             title="Fork the workspace from here"
           >
             <GitBranchIcon size={12} />
@@ -566,7 +566,7 @@ export const MessageView = memo(function MessageView({
       <div className="flex flex-col items-end animate-fade-in group">
         <div className={USER_BUBBLE_CLASS}>
           {fileParts.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mb-1.5">
+            <div className="flex flex-wrap gap-2 mb-2">
               {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}
             </div>
           )}
@@ -574,7 +574,7 @@ export const MessageView = memo(function MessageView({
           {canFork && (
             <button
               onClick={() => onFork(message.id)}
-              className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
+              className="absolute -left-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1 py-px rounded-sm"
               title="Fork the workspace from here"
             >
               <GitBranchIcon size={12} />
@@ -584,7 +584,7 @@ export const MessageView = memo(function MessageView({
             <button
               onClick={() => onRevert(message.id)}
               data-revert-turn={message.id}
-              className="absolute -left-9 top-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
+              className="absolute -left-8 top-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1 py-px rounded-sm"
               title="Revert to before this turn"
             >
               <ClockCounterClockwiseIcon size={12} />
@@ -606,7 +606,7 @@ export const MessageView = memo(function MessageView({
     const isTailPart = (tail?.kind === "text" || tail?.kind === "reasoning") && tail.part === part;
 
     if (part.type === "file") {
-      return <div key={key} className="my-1.5"><FilePartView part={part} /></div>;
+      return <div key={key} className="my-2"><FilePartView part={part} /></div>;
     }
 
     if (part.type === "text") {
@@ -688,7 +688,7 @@ export const MessageView = memo(function MessageView({
               {s === forkSegment && canFork && (
                 <button
                   onClick={() => onFork(message.id)}
-                  className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
+                  className="absolute -right-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1 py-px rounded-sm"
                   title="Fork the workspace from here"
                 >
                   <GitBranchIcon size={12} />

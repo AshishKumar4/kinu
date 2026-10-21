@@ -12,7 +12,7 @@ interface SegmentOption<T extends string> {
 
 /** A segment's box by size, at 13/20 wherever it sits (a workbench's smaller control text included): `md` 32, `sm` 24 for a
  *  28 track inside a 46 bar (a tool's view). */
-const SEGMENT_BOX = { md: "px-2.5 py-[5px]", sm: "px-2 py-px" } as const;
+const SEGMENT_BOX = { md: "px-2 py-[5px]", sm: "px-2 py-px" } as const;
 
 export function Segmented<T extends string>({ label, segments, value, onChange, size = "md" }: {
   label: string;

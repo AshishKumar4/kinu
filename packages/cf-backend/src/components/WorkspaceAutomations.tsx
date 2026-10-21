@@ -100,7 +100,7 @@ function DailyTime({ rpc, trigger, at, onMoved }: { rpc: WorkspaceRpc; trigger: 
   }), showing(setFailure)));
 
   return (
-    <span className="flex shrink-0 items-center gap-1.5" data-schedule-time={trigger.id}>
+    <span className="flex shrink-0 items-center gap-2" data-schedule-time={trigger.id}>
       <span className="p-text-3">each day at</span>
       <input type="time" defaultValue={at} aria-label="Time of day" disabled={trigger.state === "revoked"}
         onBlur={(event) => detach(move(event.target.value))} onKeyDown={(event) => detach(event.key === "Enter" ? move(event.currentTarget.value) : Effect.void)}
@@ -121,7 +121,7 @@ function TriggerLine({ trigger, onRevoke, rpc, onMoved }: {
   const daily = cron === null ? null : dailyTimeOf(cron);
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
+    <div className="flex items-center gap-2 px-3 py-1 border-b p-border last:border-0">
       <StatusDot tone={TRIGGER_TONE.get(trigger.state) ?? "neutral"} />
       <span className="font-medium p-text-2 truncate max-w-40" title={label}>{label}</span>
       <span className="font-mono p-text-3 shrink-0">{trigger.kind}</span>
@@ -212,7 +212,7 @@ export function NewWebhookCard({ result, onDismiss }: {
         <div>
           <div className="t-label mb-1">URL</div>
           <div className="flex items-center gap-2">
-            <code className="t-meta t-mono p-fill px-2 py-1.5 rounded-sm flex-1 break-all">{url}</code>
+            <code className="t-meta t-mono p-fill px-2 py-1 rounded-sm flex-1 break-all">{url}</code>
             <CopyButton value={url} what="the webhook URL" className="p-2 rounded-sm p-card p-card-hover" />
           </div>
         </div>
@@ -221,7 +221,7 @@ export function NewWebhookCard({ result, onDismiss }: {
             <div className="t-label mb-1">Secret <span className="p-danger">(shown once)</span></div>
             <div className="flex items-center gap-2">
               <SecretValue value={result.secret}
-                className="t-meta t-mono p-fill px-2 py-1.5 rounded-sm flex-1 break-all" />
+                className="t-meta t-mono p-fill px-2 py-1 rounded-sm flex-1 break-all" />
               <CopyButton value={result.secret} what="the secret" className="p-2 rounded-sm p-card p-card-hover" />
             </div>
           </div>
@@ -340,8 +340,8 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
           <Button size="sm" variant="secondary" onClick={signInAgain}>Sign in again</Button>
         </div>
       )}
-      <p className="t-meta p-text-3 flex items-start gap-1.5">
-        <WarningIcon size={11} className="mt-0.5 shrink-0" />
+      <p className="t-meta p-text-3 flex items-start gap-2">
+        <WarningIcon size={11} className="mt-px shrink-0" />
         <span>Creating a webhook needs a sign-in from the last five minutes. Sign in again if it fails.</span>
       </p>
     </Modal>

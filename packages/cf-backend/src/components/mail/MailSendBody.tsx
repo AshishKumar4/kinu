@@ -20,8 +20,8 @@ export function MailSendBody({ send, text, onText }: { send: MailEnvelope; text:
         <dt className="p-text-3">Subject</dt><dd className="truncate p-text-2">{send.subject}</dd>
       </dl>
       {onText !== undefined
-        ? <textarea value={text} onChange={(event) => onText(event.target.value)} rows={8} aria-label="The mail" className={`${inputCls} mt-1.5 font-[inherit]`} />
-        : <p className="t-body mt-1.5 max-h-36 overflow-y-auto whitespace-pre-wrap break-words rounded-sm px-2 py-1.5 p-text-2 p-fill" data-mail-send-body>{text}</p>}
+        ? <textarea value={text} onChange={(event) => onText(event.target.value)} rows={8} aria-label="The mail" className={`${inputCls} mt-2 font-[inherit]`} />
+        : <p className="t-body mt-2 max-h-36 overflow-y-auto whitespace-pre-wrap break-words rounded-sm px-2 py-1 p-text-2 p-fill" data-mail-send-body>{text}</p>}
     </>
   );
 }

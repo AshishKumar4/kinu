@@ -121,10 +121,10 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
   return (
     <div className={grouped ? "p-3" : "p-group p-3"}>
       <div className="grid grid-cols-[15px_minmax(0,1fr)_auto] items-start gap-2">
-        <Icon size={15} className={`${m.tone} shrink-0 mt-0.5 ${m.spin ? "animate-spin" : ""}`}
+        <Icon size={15} className={`${m.tone} shrink-0 mt-px ${m.spin ? "animate-spin" : ""}`}
           weight={live ? "bold" : "fill"} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-2">
             <span className="t-item p-text truncate" title={name.title}>{name.title}</span>
             <code className="t-meta t-mono p-text-3 shrink-0">{name.shortId}</code>
           </div>

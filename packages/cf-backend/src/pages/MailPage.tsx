@@ -188,9 +188,9 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
 
   const search = (
     <label className="relative w-60 min-w-0 shrink">
-      <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 p-text-3" aria-hidden />
+      <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 p-text-3" aria-hidden />
       <input value={query} onChange={(event) => { setQuery(event.target.value); at({ q: event.target.value || null }); }} placeholder="Search mail" aria-label="Search mail" data-mail-search
-        className={`${inputCls} h-7 rounded-[var(--r-control)] py-0 pl-7`} />
+        className={`${inputCls} h-7 rounded-[var(--r-control)] py-0 pl-6`} />
     </label>
   );
 
@@ -214,7 +214,7 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
 >
       <section className={`min-w-0 overflow-y-auto p-border lg:w-[400px] lg:shrink-0 lg:border-r ${opened === null ? "flex-1 lg:flex-none" : "hidden lg:block"}`}>
         {navigation.error !== null && <p role="alert" className="t-body px-4 pt-3 p-danger">{navigation.error}</p>}
-        {waiting ? <div data-mail-no-assistant className="flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
+        {waiting ? <div data-mail-no-assistant className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
           <p className="t-body p-text-2">No assistant yet</p><Button variant="primary" size="md" onClick={() => setInstalling(true)}>Set up your assistant</Button>
         </div> : <>
           <ThreadList resource={inbox.resource} view={view} boxes={account.boxes} path={path} owner={owner} reading={reading} onOpen={choose} onRetry={inbox.reload} />

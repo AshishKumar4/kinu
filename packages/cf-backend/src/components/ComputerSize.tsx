@@ -65,14 +65,14 @@ export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSi
   const notice = state === null ? null : (
     <>
       {state.startRefused !== null && (
-        <div data-env-start-refused className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1">
+        <div data-env-start-refused className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-1">
           <span className="t-meta p-danger">{startRefusedNote(state.startRefused)}</span>
           <button type="button" data-env-start-again onClick={() => detach(act("start", "starting the computer", () => rpc("startComputer", [])))}
             disabled={pending !== null} className="p-env-action">{pending === "start" ? "Starting…" : "Start again"}</button>
         </div>
       )}
       {state.stalled !== null && (
-        <div data-env-stalled className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1">
+        <div data-env-stalled className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-1">
           <span className="t-meta p-danger">{stalledNote(state.stalled)}</span>
           <button type="button" data-env-stop-stalled onClick={() => detach(act("stop", "stopping the computer", () => rpc("stopStalledComputer", [])))}
             disabled={pending !== null} className="p-env-action">{pending === "stop" ? "Stopping…" : "Stop"}</button>

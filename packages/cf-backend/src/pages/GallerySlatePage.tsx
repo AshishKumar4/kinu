@@ -47,7 +47,7 @@ function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; o
       )}>
       <p className="t-body p-text-2">Say what is wrong with it. The people who run Kinu read every report.</p>
       <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={3} maxLength={500} aria-label="What is wrong" data-gallery-report-reason
-        className="t-body w-full rounded-md border p-border bg-[var(--c-field)] px-2.5 py-1.5 p-text outline-none placeholder:text-[var(--c-text-3)]" />
+        className="t-body w-full rounded-md border p-border bg-[var(--c-field)] px-2 py-1 p-text outline-none placeholder:text-[var(--c-text-3)]" />
       {failure !== null && <p role="alert" className="t-meta p-danger">{failure}</p>}
     </Modal>
   );
@@ -79,7 +79,7 @@ function UsesYours({ needs }: { needs: readonly RoomService[] }) {
           {needs.map((need) => {
             const Icon = SERVICE_ICON[need.kind];
 
-            return <li key={`${need.kind}:${need.title}`} data-gallery-need={need.kind} className="t-body flex items-center gap-3 px-3.5 py-2.5 p-text"><Icon size={16} className="shrink-0 p-text-3" />{need.title}</li>;
+            return <li key={`${need.kind}:${need.title}`} data-gallery-need={need.kind} className="t-body flex items-center gap-3 px-3 py-2 p-text"><Icon size={16} className="shrink-0 p-text-3" />{need.title}</li>;
           })}
         </ul>
       )}

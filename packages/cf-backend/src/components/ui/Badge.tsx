@@ -10,7 +10,7 @@ export function Badge({ tone = "neutral", icon, children, className, ...data }: 
   tone?: BadgeTone;
   icon?: ReactNode;
   children: ReactNode;
-  /** Placement only (`absolute left-2.5 top-2.5` on a cover). */
+  /** Placement only (`absolute left-3 top-3` on a cover). */
   className?: string;
 } & Readonly<Record<`data-${string}`, string>>) {
   return <span className={`p-badge p-badge-${tone}${className === undefined ? "" : ` ${className}`}`} {...data}>{icon}{children}</span>;

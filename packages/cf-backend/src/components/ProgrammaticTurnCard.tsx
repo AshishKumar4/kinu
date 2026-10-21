@@ -66,24 +66,24 @@ export function EventRow({ icon: Mark, tone, label, source, body, detail, state,
   const who = (
     <span data-event-source className="p-pill-source">
       {label}
-      {source !== undefined && <span className="ml-1.5 font-normal p-text-3">{source}</span>}
+      {source !== undefined && <span className="ml-2 font-normal p-text-3">{source}</span>}
     </span>
   );
 
   return (
-    <div className="flex justify-center py-0.5 animate-fade-in" {...hooks}>
+    <div className="flex justify-center py-px animate-fade-in" {...hooks}>
       {open ? (
         <div className="p-pill" data-history data-open>
           <div className="p-pill-head">
             <span className="p-pill-mark"><Mark size={14} weight="fill" className={tone} aria-hidden /></span>
             <span className="p-pill-body">{who}{badge}</span>
             {tail}
-            <button type="button" className="p-pill-icon -my-1 -mr-1.5" aria-label="Show less" aria-expanded onClick={() => setOpen(false)}>
+            <button type="button" className="p-pill-icon -my-1 -mr-2" aria-label="Show less" aria-expanded onClick={() => setOpen(false)}>
               <CaretUpIcon size={12} weight="bold" />
             </button>
           </div>
-          {body !== undefined && <p data-event-brief className="t-body mt-1.5 ml-6 whitespace-pre-wrap break-words p-text-2">{body}</p>}
-          {detail !== undefined && <p className="t-body mt-1.5 ml-6 whitespace-pre-wrap break-words p-text-3">{detail}</p>}
+          {body !== undefined && <p data-event-brief className="t-body mt-2 ml-6 whitespace-pre-wrap break-words p-text-2">{body}</p>}
+          {detail !== undefined && <p className="t-body mt-2 ml-6 whitespace-pre-wrap break-words p-text-3">{detail}</p>}
           {action !== undefined && <div className="mt-2 ml-6">{action}</div>}
         </div>
       ) : (
@@ -213,7 +213,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
         icon={EyeIcon}
         tone={tone.icon}
         label="Advisor"
-        badge={<span className={`t-meta shrink-0 px-1.5 ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[turn.severity]}</span>}
+        badge={<span className={`t-meta shrink-0 px-1 ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[turn.severity]}</span>}
         body={turn.note ?? keptAdvisorNote(text, turn.severity) ?? undefined}
         state={state}
         count={count}

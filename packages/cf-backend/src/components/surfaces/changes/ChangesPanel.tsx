@@ -57,9 +57,9 @@ function NoLines({ file, onOpenInFiles }: { file: FileDiff; onOpenInFiles: (() =
   if (text === null) return null;
 
   return (
-    <div className="m-3 rounded-lg p-sunken px-3.5 py-3" data-no-lines={body.kind}>
+    <div className="m-3 rounded-lg p-sunken px-3 py-3" data-no-lines={body.kind}>
       <p className="t-body p-text-2">{text}</p>
-      {onOpenInFiles !== null && <button type="button" onClick={onOpenInFiles} className="t-meta mt-1.5 p-accent-fg hover:underline">Open in Files</button>}
+      {onOpenInFiles !== null && <button type="button" onClick={onOpenInFiles} className="t-meta mt-2 p-accent-fg hover:underline">Open in Files</button>}
     </div>
   );
 }
@@ -70,7 +70,7 @@ function CappedNote({ file }: { file: FileDiff }) {
   if (body.kind !== "capped") return null;
 
   return (
-    <p className="t-meta border-t p-border px-4 py-2.5 p-text-3" data-capped>
+    <p className="t-meta border-t p-border px-4 py-2 p-text-3" data-capped>
       The diff stops here{body.hidden > 0 ? `, ${count(body.hidden)} ${body.hidden === 1 ? "change" : "changes"} short` : ""}. The counts above cover the whole file.
     </p>
   );
@@ -104,7 +104,7 @@ function NextFile({ next, reviewable, onOpen, onReviewed, onList }: {
 }) {
   if (next === undefined) {
     return (
-      <div className="mx-3 mb-6 mt-4 flex items-center gap-3 rounded-lg border p-border px-3.5 py-3">
+      <div className="mx-3 mb-6 mt-4 flex items-center gap-3 rounded-lg border p-border px-3 py-3">
         <span className="t-body min-w-0 flex-1 p-text-2">That is every change.</span>
         {reviewable ? <MarkReviewed onClick={onReviewed} /> : <button type="button" onClick={onList} className="t-meta p-accent-fg hover:underline">All files</button>}
       </div>
@@ -113,7 +113,7 @@ function NextFile({ next, reviewable, onOpen, onReviewed, onList }: {
 
   return (
     <button type="button" onClick={() => onOpen(next.path)} data-next-file
-      className="mx-3 mb-6 mt-4 flex w-[calc(100%-1.5rem)] items-center gap-2.5 rounded-lg border p-border px-3.5 py-2.5 text-left transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-hover)]">
+      className="mx-3 mb-6 mt-4 flex w-[calc(100%-1.5rem)] items-center gap-3 rounded-lg border p-border px-3 py-2 text-left transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-hover)]">
       <span className="t-meta shrink-0 p-text-3">Next</span>
       <ChangeMark status={next.status} />
       <span className="t-body min-w-0 flex-1 truncate p-text">{vfsBasename(next.path)}</span>
@@ -153,7 +153,7 @@ function ListHeader({ sets, set, now, menuOpen, reviewable, hint, layout, onPick
   const changed = read && set.files.length > 0;
 
   return (
-    <header className="shrink-0 border-b p-border px-4 pb-3 pt-3.5">
+    <header className="shrink-0 border-b p-border px-4 pb-3 pt-3">
       <div className="flex items-center gap-2">
         {read
           ? <Summary set={set} />
@@ -161,7 +161,7 @@ function ListHeader({ sets, set, now, menuOpen, reviewable, hint, layout, onPick
         {layout !== null && <div className="-my-1 ml-auto">{layout}</div>}
       </div>
       {(sets.length > 1 || read) && (
-        <div className="t-meta mt-1.5 flex min-h-7 items-center gap-1.5 p-text-3">
+        <div className="t-meta mt-2 flex min-h-7 items-center gap-2 p-text-3">
           <SourceMenu sets={sets} source={set.source} initiallyOpen={menuOpen} onPick={onPick} />
           {sets.length > 1 && read && <span aria-hidden="true">·</span>}
           {read && <Since set={set} now={now} />}
@@ -179,9 +179,9 @@ function NotesBar({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   if (notes === null || notes.notes.length === 0) return null;
 
   return (
-    <footer className="flex shrink-0 items-center gap-2 border-t p-border px-3 py-2.5" data-notes-bar>
+    <footer className="flex shrink-0 items-center gap-2 border-t p-border px-3 py-2" data-notes-bar>
       <button type="button" onClick={onToggle} aria-expanded={open}
-        className={`t-meta -ml-1.5 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors ${open ? "bg-[var(--c-fill)] p-text" : "p-text-2 hover:bg-[var(--c-hover)] hover:p-text"}`}>
+        className={`t-meta -ml-2 inline-flex items-center gap-2 rounded-md px-1 py-1 transition-colors ${open ? "bg-[var(--c-fill)] p-text" : "p-text-2 hover:bg-[var(--c-hover)] hover:p-text"}`}>
         <ChatCircleDotsIcon size={14} className="p-info" />
         {notes.notes.length} {notes.notes.length === 1 ? "note" : "notes"} for the agent
       </button>
@@ -201,7 +201,7 @@ function FileHeader({ files, at, onGo }: {
   if (open === undefined) return null;
 
   return (
-    <header className="shrink-0 border-b p-border px-2 pb-2.5 pt-2">
+    <header className="shrink-0 border-b p-border px-2 pb-2 pt-2">
       <div className="flex items-center gap-1">
         <IconButton label="All files" onClick={() => onGo(null)}><CaretLeftIcon size={15} /></IconButton>
         <ChangeMark status={open.status} />
@@ -239,7 +239,7 @@ function FileNotes({ path }: { path: string }) {
     <>
       {onFile.map((note) => (
         <button key={note.id} type="button" onClick={() => notes.select(note.id)} title={note.text} data-file-note={note.id}
-          className="flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 p-info transition-colors hover:bg-[var(--c-hover)]">
+          className="flex h-6 shrink-0 items-center gap-1 rounded-md px-1 p-info transition-colors hover:bg-[var(--c-hover)]">
           <ChatCircleTextIcon size={13} weight="fill" />
         </button>
       ))}
@@ -285,7 +285,7 @@ function Stepper({ files, current, onShow }: { files: readonly FileDiff[]; curre
   const after = files[at + 1];
 
   return (
-    <div className="flex shrink-0 items-center gap-0.5">
+    <div className="flex shrink-0 items-center gap-px">
       <span className="t-meta mr-1 tabular-nums p-text-3">{at + 1} of {files.length}</span>
       <IconButton label="Previous file (k)" onClick={() => { if (before !== undefined) onShow(before.path); }} disabled={before === undefined}><CaretUpIcon size={13} /></IconButton>
       <IconButton label="Next file (j)" onClick={() => { if (after !== undefined) onShow(after.path); }} disabled={after === undefined}><CaretDownIcon size={13} /></IconButton>
@@ -362,7 +362,7 @@ function Expanded({ files, repositories, file, split, tree, notesShown, onNotes,
     <div className="flex min-h-0 flex-1" onKeyDown={onKeyDown}>
       {tree && (
         <nav aria-label="Changed files" style={{ width: COLUMN_PX.tree }} className="flex shrink-0 flex-col border-r p-border">
-          <div className="flex h-10 shrink-0 items-center border-b p-border pl-3.5 pr-1.5">
+          <div className="flex h-10 shrink-0 items-center border-b p-border pl-3 pr-1">
             <span className="t-status min-w-0 flex-1 p-text-2">Files</span>
             <Stepper files={files} current={current} onShow={show} />
           </div>
@@ -372,7 +372,7 @@ function Expanded({ files, repositories, file, split, tree, notesShown, onNotes,
         </nav>
       )}
       <div ref={stack} onScroll={follow} tabIndex={-1} className="min-w-0 flex-1 overflow-y-auto p-bg outline-none" data-review-stack>
-        <div className="space-y-4 px-5 py-4 max-md:px-2.5 max-md:py-3">
+        <div className="space-y-4 px-5 py-4 max-md:px-2 max-md:py-3">
           {files.map((each) => <FileCard key={each.path} file={each} split={split} register={register} onOpenInFiles={onOpenInFiles} />)}
         </div>
       </div>
@@ -398,7 +398,7 @@ function Reviewed({ sets, source, at, now, menuOpen, onSource, onUndo }: {
       </p>
       <p className="t-meta mt-1 pl-[23px] p-text-3">New changes show here as they happen.</p>
       {sets.length > 1 && (
-        <div className="t-meta mt-2.5 flex min-h-7 items-center pl-[23px] p-text-3">
+        <div className="t-meta mt-3 flex min-h-7 items-center pl-[23px] p-text-3">
           <SourceMenu sets={sets} source={source} initiallyOpen={menuOpen} onPick={onSource} />
         </div>
       )}
@@ -426,14 +426,14 @@ function NarrowBody({ set, files, at, path, reviewable, onGo, onReviewed, onOpen
             {path !== null && <p className="t-meta px-4 pt-3 p-text-3" data-changes-gone>{vfsBasename(path)} has no changes now.</p>}
             <FileTree files={files} repositories={set.repositories} current={null} onOpen={onGo} />
           </>
-        ) : <p className="t-body px-4 py-3.5 p-text-2" data-changes-error>{set.error}</p>}
+        ) : <p className="t-body px-4 py-3 p-text-2" data-changes-error>{set.error}</p>}
       </div>
     );
   }
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="pt-1.5">
+      <div className="pt-1">
         <FileBody file={open} stacked={false} onOpenInFiles={onOpenInFiles === null ? null : () => onOpenInFiles(open.path)} />
         <NextFile next={files[at + 1]} reviewable={reviewable} onOpen={onGo} onReviewed={onReviewed} onList={() => onGo(null)} />
       </div>

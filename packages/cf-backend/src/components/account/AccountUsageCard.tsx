@@ -17,15 +17,15 @@ function usedShare(window: LimitWindow): number | undefined {
 
 function LimitRow({ report, now }: { report: LimitReport; now: number }) {
   return (
-    <div className="px-4 py-2.5" title={report.undocumented === true ? "Read from a route the provider does not document; it may change without notice." : undefined}>
+    <div className="px-4 py-2" title={report.undocumented === true ? "Read from a route the provider does not document; it may change without notice." : undefined}>
       <div className="t-item p-text">{limitHeading(report, now)}</div>
       {report.windows.length === 0 && <p className="t-meta p-text-3">No limit reported.</p>}
-      <ul className="mt-1 space-y-1.5">
+      <ul className="mt-1 space-y-2">
         {report.windows.map((window) => {
           const share = usedShare(window);
 
           return (
-            <li key={window.name} className="space-y-0.5">
+            <li key={window.name} className="space-y-px">
               <p className="t-meta p-text-2">{limitWindowText(window, now)}</p>
               {share !== undefined && (
                 <div className="h-1 overflow-hidden rounded-full bg-[var(--c-fill)]" aria-hidden="true">
@@ -44,7 +44,7 @@ function AccountRow({ row, now, live }: { row: AccountSpend; now: number; live: 
   const cost = row.usd === undefined ? "unpriced" : `${fmtUsd(row.usd)}${row.unpricedCalls > 0 ? "+" : ""}`;
 
   return (
-    <div className="px-4 py-2.5">
+    <div className="px-4 py-2">
       <div className="t-body flex items-baseline gap-2">
         <span className="min-w-0 flex-1 break-words font-medium p-text">
           {row.provider === null ? "No account recorded" : `${row.provider} · ${row.account ?? ""}`}
@@ -54,7 +54,7 @@ function AccountRow({ row, now, live }: { row: AccountSpend; now: number; live: 
         <span className="w-20 shrink-0 text-right p-text tabular-nums">{cost}</span>
       </div>
       {row.quota !== undefined && !live && (
-        <ul className="t-meta mt-1 space-y-0.5 p-text-3" title={`As the provider reported it ${timeAgo(row.quota.at)}.`}>
+        <ul className="t-meta mt-1 space-y-px p-text-3" title={`As the provider reported it ${timeAgo(row.quota.at)}.`}>
           {row.quota.windows.map((window) => <li key={window.measure}>{quotaWindowText(window, now)}</li>)}
         </ul>
       )}
@@ -74,7 +74,7 @@ function LimitsTable({ usage, onRefresh }: { usage: AccountUsage; onRefresh: () 
         <div className="p-group">
           {limits.map((report) => <LimitRow key={`${report.provider}@${report.account}`} report={report} now={now} />)}
           {unread.map((entry) => (
-            <p key={`${entry.provider}@${entry.account}`} className="t-body px-4 py-2.5 p-warning">{limitUnreadText(entry)}</p>
+            <p key={`${entry.provider}@${entry.account}`} className="t-body px-4 py-2 p-warning">{limitUnreadText(entry)}</p>
           ))}
         </div>
       )}

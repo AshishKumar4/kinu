@@ -15,7 +15,7 @@ import { NAV_HOVER } from "./nav";
 /** Kinu's source. */
 const KINU_REPOSITORY = "https://github.com/AshishKumar4/kinu";
 
-const MENU_ROW = "t-body flex items-center gap-2 px-2 py-1.5 rounded-sm p-card-hover";
+const MENU_ROW = "t-body flex items-center gap-2 px-2 py-1 rounded-sm p-card-hover";
 
 /** Where the mail the assistant reads lands; Important is its first view. */
 const MAIL_ROUTE = "/mail";
@@ -26,7 +26,7 @@ function CountBadge({ count, label }: { count: number; label: string }) {
 
   return (
     <span aria-label={label} data-count-badge={count}
-      className="t-micro absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--c-accent)] px-1 text-[var(--c-accent-on)] ring-2 ring-[var(--c-sidebar)]">
+      className="t-micro absolute -right-px -top-px flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--c-accent)] px-1 text-[var(--c-accent-on)] ring-2 ring-[var(--c-sidebar)]">
       {count > 9 ? "9+" : count}
     </span>
   );
@@ -43,7 +43,7 @@ export function FooterIcons({ vertical = false }: { vertical?: boolean }) {
   const mailWords = unread > 0 ? `Mail, ${String(unread)} important unread` : "Mail";
 
   return (
-    <div className={`flex items-center gap-0.5 ${vertical ? "flex-col" : ""}`}>
+    <div className={`flex items-center gap-px ${vertical ? "flex-col" : ""}`}>
       {enabled && <Link to={MAIL_ROUTE} aria-label={mailWords} title={mailWords} aria-current={at(MAIL_ROUTE) ? "page" : undefined} data-footer-mail className={cls(at(MAIL_ROUTE))}>
         <EnvelopeSimpleIcon size={17} />
         <CountBadge count={unread} label={`${String(unread)} important unread`} />
@@ -63,8 +63,8 @@ export function AccountMenu({ onClose, className }: { onClose: () => void; class
   const failed = account.profile.status === "error";
 
   return (
-    <div className={`z-30 p-card p-1.5 p-shadow-menu border p-border ${className}`} data-account-panel role="menu">
-      <div className="mb-1 flex items-center gap-2.5 border-b p-border px-2 pb-2 pt-1">
+    <div className={`z-30 p-card p-1 p-shadow-menu border p-border ${className}`} data-account-panel role="menu">
+      <div className="mb-1 flex items-center gap-3 border-b p-border px-2 pb-2 pt-1">
         <Avatar name={profile?.displayName ?? profile?.email ?? "?"} size={28} />
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="t-item truncate p-text">{profile?.displayName ?? profile?.email ?? (failed ? "Could not load your profile" : "Loading…")}</span>
@@ -112,7 +112,7 @@ export function SidebarFooter({ initiallyOpen = false }: { initiallyOpen?: boole
   return (
     <div ref={ref} className="relative flex items-center gap-1 border-t p-border px-2 py-2" data-sidebar-footer>
       <button type="button" onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" data-account-menu
-        className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2 text-left transition-colors ${open ? "bg-[var(--c-hover)]" : "hover:bg-[var(--c-hover)]"}`}>
+        className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1 pl-1 pr-2 text-left transition-colors ${open ? "bg-[var(--c-hover)]" : "hover:bg-[var(--c-hover)]"}`}>
         <Avatar name={name === "" ? "?" : name} size={24} />
         <span className="t-item min-w-0 flex-1 truncate p-text">{name === "" ? "Account" : name}</span>
       </button>

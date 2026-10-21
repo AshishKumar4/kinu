@@ -47,7 +47,7 @@ export function KindBadge({ kind, onPicture = false, className }: { kind: Explor
 /** Who made it: a person by their initial, or Kinu, which keeps its own. */
 export function Maker({ maker, size = 18 }: { maker: { readonly name: string; readonly kinu: boolean }; size?: number }) {
   return (
-    <span className="inline-flex min-w-0 items-center gap-1.5">
+    <span className="inline-flex min-w-0 items-center gap-2">
       {maker.kinu ? <KinuMark size={size - 2} /> : <Avatar name={maker.name} size={size} />}
       <span className="truncate">{maker.name}</span>
       {maker.kinu && <SealCheckIcon size={13} weight="fill" className="shrink-0 p-accent" aria-label="Made by Kinu" />}
@@ -88,7 +88,7 @@ export function ExploreCard({ item }: { item: ExploreItem }) {
             className={ZOOMED} fallback={<TypesetCover title={app.title} line={app.line} mark={false} />} />
         )}
         maker={<Maker maker={{ name: app.owner.name, kinu: false }} />}
-        numbers={<><EyeIcon size={13} className="p-text-3" />{count(app.viewers)}<StarIcon size={13} className="ml-1.5 p-text-3" />{count(app.stars)}</>} />
+        numbers={<><EyeIcon size={13} className="p-text-3" />{count(app.viewers)}<StarIcon size={13} className="ml-2 p-text-3" />{count(app.stars)}</>} />
     );
   }
 
@@ -101,7 +101,7 @@ export function ExploreCard({ item }: { item: ExploreItem }) {
         ? <TypesetCover title={workspace.title} line={workspace.line} mark={false} />
         : <CaptureMat><img src={kinuBlueprintPicture(workspace.picture)} alt="" loading="lazy" className={ZOOMED} /></CaptureMat>}
       maker={<Maker maker={workspace.maker} />}
-      numbers={<><DownloadSimpleIcon size={13} className="p-text-3" />{count(workspace.installs)}<StarIcon size={13} className="ml-1.5 p-text-3" />{count(workspace.stars)}</>} />
+      numbers={<><DownloadSimpleIcon size={13} className="p-text-3" />{count(workspace.installs)}<StarIcon size={13} className="ml-2 p-text-3" />{count(workspace.stars)}</>} />
   );
 }
 
@@ -117,7 +117,7 @@ function Card({ href, kind, id, title, line, typeset, picture, maker, numbers }:
         <TileShell title={title} cover={(
           <>
             {picture}
-            <KindBadge kind={kind} onPicture className="absolute left-2.5 top-2.5" />
+            <KindBadge kind={kind} onPicture className="absolute left-3 top-3" />
           </>
         )}>
           {!typeset && <span className="t-meta line-clamp-1 p-text-2">{line}</span>}

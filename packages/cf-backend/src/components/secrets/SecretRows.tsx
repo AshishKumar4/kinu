@@ -135,7 +135,7 @@ export function SecretRows({ rows, onChange, removable }: {
         const problem = rowProblem(row);
 
         return (
-          <div key={index} className="space-y-1.5" data-secret-row={index}>
+          <div key={index} className="space-y-2" data-secret-row={index}>
             <div className="flex flex-wrap gap-2 [&>input]:h-9">
               <input value={row.name} onChange={(e) => edit(index, { ...row, name: e.target.value })} placeholder="NAME"
                 aria-label="Secret name" spellCheck={false} autoCapitalize="characters" className={`${inputCls} basis-full font-mono sm:basis-auto sm:max-w-56`} />

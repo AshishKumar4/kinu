@@ -78,7 +78,7 @@ export interface AgentSurfaceProps {
 type AgentMail = NonNullable<Awaited<ReturnType<OrchestratorAgent["agentMail"]>>>;
 
 function Chip({ children, mono = false }: { children: React.ReactNode; mono?: boolean }) {
-  return <span className={`t-meta inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-hover)] px-2.5 p-text-2 ${mono ? "font-mono" : ""}`}>{children}</span>;
+  return <span className={`t-meta inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-hover)] px-2 p-text-2 ${mono ? "font-mono" : ""}`}>{children}</span>;
 }
 
 function Quiet({ children }: { children: React.ReactNode }) {
@@ -93,7 +93,7 @@ function Who({ as, workspace, address }: { as: AgentStatus; workspace: string | 
   return (
     <Section id="agent-who" title="Profile" icon={<IdentificationCardIcon size={14} className="p-text-2" />}>
       <div className="space-y-3">
-        <div className="flex items-center gap-3.5">
+        <div className="flex items-center gap-4">
           <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl border p-border p-fill">
             <ChatMascot seed={look.seed} colour={look.colour} activity="idle" size={30} />
           </span>
@@ -104,7 +104,7 @@ function Who({ as, workspace, address }: { as: AgentStatus; workspace: string | 
           </div>
         </div>
         {as.purpose !== "" && <p className="t-body p-text-2">{as.purpose}</p>}
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-2">
           <Chip mono>{as.model}</Chip>
           <Chip>{as.messageCount} {as.messageCount === 1 ? "message" : "messages"}</Chip>
           <Chip>Prompt v{as.scaffoldVersion}</Chip>
@@ -163,7 +163,7 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
     <Section id="memory" title="Memory" icon={<BrainIcon size={14} className="p-text-2" />}
       badge={facts.length + notes.length > 0 ? <Badge variant="secondary">{facts.length + notes.length}</Badge> : undefined}>
       <div className="space-y-3">
-        <label data-focus-box className="flex h-8 items-center gap-2 rounded-lg border p-border p-fill px-2.5">
+        <label data-focus-box className="flex h-8 items-center gap-2 rounded-lg border p-border p-fill px-2">
           <MagnifyingGlassIcon size={13} className="shrink-0 p-text-3" aria-hidden />
           <input value={search} onChange={(event) => { setSearch(event.target.value); onSearchMemory(event.target.value); }}
             placeholder="Search memory" aria-label="Search memory"
@@ -178,13 +178,13 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
         {searching && notes.length === 0 && <Quiet>No matches.</Quiet>}
 
         {notes.length > 0 && (
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <p className="t-meta p-text-3">{searching ? "Notes that match" : "Notes"}</p>
             <div data-learnings className="p-group">
               {notes.map((entry, index) => (
-                <div key={index} data-learning className="px-3 py-2.5">
+                <div key={index} data-learning className="px-3 py-2">
                   <p className="t-body line-clamp-2 p-text">{entry.content.split("\n")[0]}</p>
-                  <p className="t-meta mt-0.5 p-text-3">{entry.updatedAt}{entry.savedBy ? ` · ${entry.savedBy}` : ""}</p>
+                  <p className="t-meta mt-px p-text-3">{entry.updatedAt}{entry.savedBy ? ` · ${entry.savedBy}` : ""}</p>
                 </div>
               ))}
             </div>
@@ -201,14 +201,14 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
         {factsResource.status === "error" && <LoadFailure what="facts" message={factsResource.message} onRetry={reloadFacts} />}
 
         {!searching && facts.length > 0 && (
-          <div className="space-y-1.5">
+          <div className="space-y-2">
             <p className="t-meta p-text-3">Facts</p>
             <div className="p-group">
               {facts.map((fact) => (
-                <div key={fact.key} className="group/fact flex items-start gap-3 px-3 py-2.5" data-world-model-fact={fact.key}>
+                <div key={fact.key} className="group/fact flex items-start gap-3 px-3 py-2" data-world-model-fact={fact.key}>
                   <div className="min-w-0 flex-1">
                     <p className="t-body line-clamp-2 p-text">{v.is(v.string(), fact.value) ? fact.value : JSON.stringify(fact.value)}</p>
-                    <p className="t-meta mt-0.5 flex flex-wrap items-center gap-x-2 p-text-3">
+                    <p className="t-meta mt-px flex flex-wrap items-center gap-x-2 p-text-3">
                       <span className="font-mono">{fact.key}</span>
                       {fact.confidence < 1 && <span className="tabular-nums">{(fact.confidence * 100).toFixed(0)}% sure</span>}
                       {fact.source !== "" && <span>from {fact.source}</span>}

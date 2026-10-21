@@ -42,7 +42,7 @@ export function QualityView({ rpc, moved }: { rpc: WorkspaceRpc; moved: number }
       {week.rated === 0 ? (
         <p className="t-body p-text-3">No rated turns in the last 7 days.</p>
       ) : (
-        <div className="flex items-baseline gap-2.5" title={`95% interval ${week.satisfaction.lo.toFixed(2)}–${week.satisfaction.hi.toFixed(2)}, ${week.from} to ${week.to} (UTC)`}>
+        <div className="flex items-baseline gap-3" title={`95% interval ${week.satisfaction.lo.toFixed(2)}–${week.satisfaction.hi.toFixed(2)}, ${week.from} to ${week.to} (UTC)`}>
           <span className="size-2 shrink-0 self-center rounded-full" style={{ background: toneFill(toneOf(week.satisfaction.mean)) }} aria-hidden />
           <span className="t-title shrink-0 whitespace-nowrap tabular-nums p-text">
             {week.satisfaction.mean.toFixed(1)}<span className="t-body p-text-3"> / 5</span>
@@ -108,7 +108,7 @@ function SatisfactionDays({ days }: { days: readonly QualityDay[] }) {
           </div>
         </div>
       </div>
-      <div className="t-meta t-mono mt-1.5 flex justify-between pl-[22px] p-text-3">
+      <div className="t-meta t-mono mt-2 flex justify-between pl-[22px] p-text-3">
         <span>{label(days[0]?.day ?? "")}</span><span>{label(days.at(-1)?.day ?? "")}</span>
       </div>
     </div>

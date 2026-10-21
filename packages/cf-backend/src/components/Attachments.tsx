@@ -71,7 +71,7 @@ export function AttachmentTray({ attachments }: { attachments: AttachmentsContro
   if (attachments.parts.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap gap-1.5 px-3 pt-3" data-attachments>
+    <div className="flex flex-wrap gap-2 px-3 pt-3" data-attachments>
       {attachments.parts.map((part, i) => (
         <AttachmentChip key={`${part.filename ?? "file"}-${i}`} part={part} onRemove={() => attachments.onRemove(i)} />
       ))}

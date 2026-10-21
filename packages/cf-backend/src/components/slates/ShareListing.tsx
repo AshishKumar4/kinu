@@ -37,7 +37,7 @@ export function ShareListing({ share, onList, disabled }: { share: LiveShareReco
         <Switch on={listed !== null || drafting} label="List in the Gallery" data-share-gallery onChange={turn} disabled={disabled} />
       </div>
       {listed === null && drafting && (
-        <form className="space-y-2 rounded-lg border p-border p-2.5" onSubmit={(event) => {
+        <form className="space-y-2 rounded-lg border p-border p-2" onSubmit={(event) => {
           event.preventDefault();
 
           if (line.trim() === "") return;
@@ -45,11 +45,11 @@ export function ShareListing({ share, onList, disabled }: { share: LiveShareReco
           setDrafting(false);
         }}>
           <input value={line} onChange={(event) => setLine(event.target.value)} placeholder="One line about it" aria-label="One line about it" data-share-gallery-line maxLength={140}
-            className="t-body w-full rounded-md border p-border bg-[var(--c-field)] px-2.5 py-1.5 p-text outline-none placeholder:text-[var(--c-text-3)]" />
-          <div role="radiogroup" aria-label="Category" className="flex flex-wrap gap-1.5">
+            className="t-body w-full rounded-md border p-border bg-[var(--c-field)] px-2 py-1 p-text outline-none placeholder:text-[var(--c-text-3)]" />
+          <div role="radiogroup" aria-label="Category" className="flex flex-wrap gap-2">
             {GALLERY_CATEGORIES.map((each) => (
               <button key={each} type="button" role="radio" aria-checked={each === category} data-share-gallery-category={each} onClick={() => setCategory(each)}
-                className={`t-meta rounded-full px-2.5 py-0.5 ${each === category ? "bg-[var(--c-selected)] p-accent font-medium" : "p-fill p-text-2"}`}>{CATEGORY_WORDS[each]}</button>
+                className={`t-meta rounded-full px-2 py-px ${each === category ? "bg-[var(--c-selected)] p-accent font-medium" : "p-fill p-text-2"}`}>{CATEGORY_WORDS[each]}</button>
             ))}
           </div>
           <div className="flex justify-end"><Button size="sm" variant="secondary" type="submit" data-share-gallery-list disabled={disabled}>List it</Button></div>

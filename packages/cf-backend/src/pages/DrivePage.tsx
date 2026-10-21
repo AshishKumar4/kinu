@@ -76,10 +76,10 @@ function NewDot() {
 /** Below `lg`, the places as a switch in the row under the bar, as `Segmented` draws one at 28. */
 function PlaceSwitch({ tab, places, unseen }: { tab: DriveTab; places: readonly DriveTab[]; unseen: boolean }) {
   return (
-    <nav aria-label="Drive" className="flex w-fit items-center gap-0.5 rounded-[var(--r-control)] p-sunken p-0.5">
+    <nav aria-label="Drive" className="flex w-fit items-center gap-px rounded-[var(--r-control)] p-sunken p-px">
       {PLACES.filter((each) => places.includes(each.id)).map((each) => (
         <Link key={each.id} to={each.to} state={{ chosen: true }} aria-current={each.id === tab ? "page" : undefined} data-drive-tab={each.id}
-          className={`t-item flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-px ${each.id === tab ? "border-[var(--c-button-line)] bg-[var(--c-button-bg)] p-text shadow-[var(--shadow-button)]" : "border-transparent p-text-3 hover:p-text"}`}>
+          className={`t-item flex items-center gap-2 whitespace-nowrap rounded-md border px-2 py-px ${each.id === tab ? "border-[var(--c-button-line)] bg-[var(--c-button-bg)] p-text shadow-[var(--shadow-button)]" : "border-transparent p-text-3 hover:p-text"}`}>
           {each.label}
           {each.id === "shared" && unseen && each.id !== tab && <NewDot />}
         </Link>
@@ -88,7 +88,7 @@ function PlaceSwitch({ tab, places, unseen }: { tab: DriveTab; places: readonly 
   );
 }
 
-const PLACE_ROW = "t-control flex h-8 items-center gap-2.5 rounded-lg px-2 transition-colors";
+const PLACE_ROW = "t-control flex h-8 items-center gap-3 rounded-lg px-2 transition-colors";
 
 /** A folder's own folders, Skills first: the tree draws only what can be walked into. */
 function subfolders(entries: readonly DriveEntry[] | undefined, parent: string): DriveEntry[] {
@@ -124,7 +124,7 @@ function FolderTree({ listings, parent, current, depth }: {
           <li key={path}>
             <Link to={folderHref(path)} aria-current={path === current ? "page" : undefined} data-drive-tree={path}
               style={{ paddingLeft: `${String(10 + depth * 14)}px` }}
-              className={`t-body flex items-center gap-1.5 rounded-lg py-[5px] pr-2 transition-colors ${navRowCls(path === current)}`}>
+              className={`t-body flex items-center gap-2 rounded-lg py-[5px] pr-2 transition-colors ${navRowCls(path === current)}`}>
               <span className="flex w-3 shrink-0 justify-center p-text-3">{caret}</span>
               {skills
                 ? <BookOpenIcon size={15} weight="fill" className="shrink-0 p-success" />
@@ -151,7 +151,7 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
 
   return (
     <aside className="hidden w-[220px] shrink-0 flex-col overflow-y-auto border-r p-border p-2 lg:flex">
-      <nav aria-label="Drive places" className="space-y-0.5">
+      <nav aria-label="Drive places" className="space-y-px">
         {PLACES.filter((each) => places.includes(each.id)).map((each) => {
           const active = each.id === tab;
           const here = active && (each.id !== "mine" || path === "/");
@@ -167,7 +167,7 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
                 {each.id === "shared" && unseen && !active && <NewDot />}
               </Link>
               {each.id === "mine" && active && (
-                <div className="mt-0.5 pl-3"><FolderTree listings={listings} parent="/" current={path} depth={0} /></div>
+                <div className="mt-px pl-3"><FolderTree listings={listings} parent="/" current={path} depth={0} /></div>
               )}
             </div>
           );
@@ -251,10 +251,10 @@ function Crumbs({ path }: { path: string }) {
   const segments = path.slice(1).split("/");
 
   return (
-    <nav aria-label="Folder" className="t-title flex min-w-0 flex-wrap items-center gap-1.5">
+    <nav aria-label="Folder" className="t-title flex min-w-0 flex-wrap items-center gap-2">
       <Link to={APP_ROUTES.drive} state={{ chosen: true }} data-drive-crumb className="shrink-0 p-text-3 transition-colors hover:p-text">My stuff</Link>
       {segments.map((segment, index) => (
-        <span key={index} className="flex min-w-0 items-center gap-1.5">
+        <span key={index} className="flex min-w-0 items-center gap-2">
           <CaretRightIcon size={12} className="shrink-0 p-text-3" />
           <Link to={folderHref(`/${segments.slice(0, index + 1).join("/")}`)} data-drive-crumb
             className={`truncate ${index === segments.length - 1 ? "p-text" : "p-text-3 hover:p-text"}`}>
@@ -267,7 +267,7 @@ function Crumbs({ path }: { path: string }) {
 }
 
 /** A heading that names a kind of thing in a place is quiet; one that names who a share came from or went to leads. */
-const SECTION_HEADING = { quiet: "t-status mb-2.5 p-text-3", lead: "t-title mb-3 p-text" } as const;
+const SECTION_HEADING = { quiet: "t-status mb-3 p-text-3", lead: "t-title mb-3 p-text" } as const;
 
 /** A titled group: tiles in the grid, or `rows` in one `p-group` (things with no picture, docs/APP-CONSISTENCY.md). */
 function Section({ label, titled = true, heading = "quiet", rows = false, children }: {
@@ -370,7 +370,7 @@ function CodeCover({ lines }: { lines: readonly string[] }) {
   return (
     <span className="t-meta t-mono absolute inset-0 overflow-hidden p-sunken px-3 pt-3">
       {lines.map((line, index) => (
-        <span key={index} data-drive-code-line className="flex gap-2.5">
+        <span key={index} data-drive-code-line className="flex gap-3">
           <span className="min-w-3 shrink-0 text-right tabular-nums p-text-3">{index + 1}</span>
           <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre p-text-3">{line === "" ? "\u00a0" : line}</span>
         </span>
@@ -391,10 +391,10 @@ function TextPage({ text, name }: { text: string | null; name: string }) {
 
   return (
     <span className="absolute inset-0 overflow-hidden p-sunken px-[14%] pt-[5%]">
-      <span className="t-meta block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2.5 p-text-3">
+      <span className="t-meta block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2 p-text-3">
         {heading !== null && <span data-drive-page-heading className="t-micro mb-1 block truncate p-text">{heading}</span>}
         {lines.map((line, index) => (
-          <span key={index} data-drive-page-line className={`block truncate ${line.heading ? "mt-0.5 font-semibold p-text-2" : ""}`}>
+          <span key={index} data-drive-page-line className={`block truncate ${line.heading ? "mt-px font-semibold p-text-2" : ""}`}>
             {line.text === "" ? "\u00a0" : line.text}
           </span>
         ))}
@@ -459,7 +459,7 @@ function TransferPicture({ status, progress }: { status: Transfer["status"]; pro
   const percent = Math.round(progress * 100);
 
   return (
-    <span className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 p-sunken">
+    <span className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-sunken">
       <span className="t-meta tabular-nums p-text-2">{percent}%</span>
       <span role="progressbar" aria-label="Uploading" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}
         className="h-1 w-1/2 overflow-hidden rounded-full bg-[var(--c-border-strong)]">
@@ -575,7 +575,7 @@ function SectionList({ groups, titled = false, heading = "quiet" }: {
   const shown = groups.filter((group) => group.tiles.length > 0);
 
   return (
-    <div className={heading === "lead" ? "space-y-10" : "space-y-7"}>
+    <div className={heading === "lead" ? "space-y-12" : "space-y-8"}>
       {shown.map((group) => (
         <Section key={group.label} label={group.label} titled={titled || shown.length > 1} heading={heading} rows={group.rows}>{group.tiles}</Section>
       ))}
@@ -630,7 +630,7 @@ function MineBody({ resource, onRetry, empty, children }: {
   if (!empty) return children;
 
   return (
-    <div data-drive-empty className="flex flex-col items-center px-6 py-16 text-center sm:py-24">
+    <div data-drive-empty className="flex flex-col items-center px-6 py-16 text-center">
       <span className="flex size-14 items-center justify-center rounded-2xl p-text-3 bg-[color-mix(in_srgb,var(--c-text)_7%,transparent)]">
         <FolderSimpleIcon size={26} />
       </span>
@@ -995,7 +995,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     )}>
       <DriveColumn tab={tab} path={path} shown={lastValue(listing.resource)} places={places} unseen={unseen} />
       <div className="min-w-0 flex-1 overflow-y-auto">
-      <div className="p-5 pb-20 sm:p-6 sm:pb-20">
+      <div className="p-5 pb-16 sm:p-6 sm:pb-16">
         <DriveHead tab={tab} path={path} subtitle={subtitle} />
 
         <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} listingPending={listingPending} libraryResource={library.resource} onRetryLibrary={library.reload}

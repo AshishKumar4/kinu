@@ -17,7 +17,7 @@ export function CloudflareAIConnectNotice({
   return (
     <div className="t-meta rounded-md px-3 py-2 p-notice-warning">
       <div className="flex items-start gap-2">
-        <WarningCircleIcon size={14} className="mt-0.5 shrink-0 p-warning" />
+        <WarningCircleIcon size={14} className="mt-px shrink-0 p-warning" />
         <div className="min-w-0 space-y-2">
           <p>{message}</p>
           <a

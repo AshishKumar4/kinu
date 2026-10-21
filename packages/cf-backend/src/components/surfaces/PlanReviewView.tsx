@@ -218,7 +218,7 @@ function PlanHeaderActions({ comments, unread, panelOpen, onToggle, mode, onMode
   busy: boolean;
 }) {
   return (
-    <div data-plan-actions className="flex max-w-full flex-wrap items-center justify-end gap-1.5">
+    <div data-plan-actions className="flex max-w-full flex-wrap items-center justify-end gap-2">
       <Button
         type="button"
         size="sm"
@@ -233,7 +233,7 @@ function PlanHeaderActions({ comments, unread, panelOpen, onToggle, mode, onMode
         {unread && <span data-plan-comments-unread className="size-1.5 rounded-full p-dot-accent" aria-hidden="true" />}
       </Button>
       {mode !== null && (
-        <div className="flex items-center rounded-md border p-border p-sunken p-0.5" aria-label="Annotation mode">
+        <div className="flex items-center rounded-md border p-border p-sunken p-px" aria-label="Annotation mode">
           <Button
             type="button"
             size="sm"
@@ -451,8 +451,8 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="t-label">Plan</span>
-              <span className="t-meta t-mono p-badge-neutral px-2 py-0.5">r{plan.revision}</span>
-              <span data-plan-status className={`${STATUS_TONE[plan.status]} px-2 py-0.5`}>{STATUS_LABEL[plan.status]}</span>
+              <span className="t-meta t-mono p-badge-neutral px-2 py-px">r{plan.revision}</span>
+              <span data-plan-status className={`${STATUS_TONE[plan.status]} px-2 py-px`}>{STATUS_LABEL[plan.status]}</span>
             </div>
             {titleBlock === null ? (
               <h1 id="plan-document-title" data-plan-title className="t-page-title p-text mt-2">
@@ -495,7 +495,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
       </header>
 
       <div data-plan-body className="relative flex flex-1 min-h-0">
-        <div data-plan-scroll className="flex-1 min-w-0 overflow-y-auto px-4 py-8 sm:px-8 sm:py-10">
+        <div data-plan-scroll className="flex-1 min-w-0 overflow-y-auto px-4 py-8 sm:px-8 sm:py-8">
           <div data-plan-document className="plan-review-document mx-auto">
             <Viewer
               blocks={documentBlocks}

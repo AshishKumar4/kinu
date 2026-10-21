@@ -38,7 +38,7 @@ export function PreviewChrome({ url, publicLink }: { url: string; publicLink?: P
 /** The bar alone, naming where a preview is: the landing's sample, whose address serves nothing to open or copy. */
 export function PreviewAddress({ url, children }: { url: string; children?: ReactNode }) {
   return (
-    <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
+    <div className="flex items-center gap-2 px-3 py-1 border-b p-border p-fill shrink-0">
       <code data-preview-address className="t-meta t-mono p-text-3 truncate flex-1">{url}</code>
       {children}
     </div>
@@ -71,7 +71,7 @@ function PublicLinkSwitch({ link }: { link: PublicLink }) {
 
   return (
     <>
-      <label className="t-meta t-mono flex shrink-0 items-center gap-1.5 p-text-3" title={error ?? (open ? "Anyone with this link can open it" : "Opens only for you, signed in")} data-preview-public>
+      <label className="t-meta t-mono flex shrink-0 items-center gap-2 p-text-3" title={error ?? (open ? "Anyone with this link can open it" : "Opens only for you, signed in")} data-preview-public>
         {open ? <span className="p-warning">Public link</span> : "Public link"}
         <Switch on={open} label="Anyone with the link can open this preview" data-preview-public-switch
           onChange={(next) => (next

@@ -294,10 +294,10 @@ function Backups({ backups, chain, stored, disabled, onChange }: {
 
   return (
     <Field label="If it fails" hint="Tried in order when the one before it fails.">
-      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Web search backups">
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Web search backups">
         {backups.map((route, at) => (
           <span key={`${route.provider}|${route.billing}`} data-web-search-backup={`${route.provider}|${route.billing}`}
-            className="t-meta inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 p-text">
+            className="t-meta inline-flex items-center gap-1 rounded-md border p-border px-2 py-px p-text">
             <span className="p-text-3">{at + 1}.</span>
             {routeLabel(route)}
             <button type="button" disabled={disabled} className="p-text-3 hover:p-text" aria-label={`Remove ${routeLabel(route)} from the backups`}
@@ -352,7 +352,7 @@ function SearchTest({ route }: { route: WebSearchRoute }) {
         </Button>
       </Field>
       {outcome?.kind === "answered" && (
-        <div className="flex min-w-0 flex-col gap-0.5" data-web-search-tested="answered">
+        <div className="flex min-w-0 flex-col gap-px" data-web-search-tested="answered">
           <Status tone="success">{outcome.answer.results.length} results from {WEB_SEARCH_PROVIDERS[outcome.answer.source].label} in {(outcome.ms / 1000).toFixed(1)} s</Status>
           {outcome.answer.results[0] !== undefined && <span className="t-meta truncate p-text-3">First: {outcome.answer.results[0].title}</span>}
         </div>

@@ -33,17 +33,17 @@ export function CommentThread({ replies, agentName, seenAt, onReply, onDelete }:
 
         return (
           <div key={reply.id} data-comment-reply={reply.author} className="border-l-2 border-border pl-2">
-            <div className="t-meta flex items-center gap-1.5 text-muted-foreground">
+            <div className="t-meta flex items-center gap-2 text-muted-foreground">
               <span className="font-semibold text-foreground/80">{reply.author === "agent" ? agentName : "You"}</span>
               <time dateTime={new Date(reply.createdA).toISOString()}>
                 {new Date(reply.createdA).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </time>
-              {fresh && <span data-comment-reply-new className="rounded-full bg-primary/10 px-1.5 font-medium text-primary">New</span>}
+              {fresh && <span data-comment-reply-new className="rounded-full bg-primary/10 px-1 font-medium text-primary">New</span>}
               {onDelete !== undefined && reply.author === "owner" && reply.revision === undefined && (
-                <button type="button" className="ml-auto rounded px-1.5 text-destructive hover:bg-destructive/10" onClick={() => onDelete(reply.id)}>Delete</button>
+                <button type="button" className="ml-auto rounded px-1 text-destructive hover:bg-destructive/10" onClick={() => onDelete(reply.id)}>Delete</button>
               )}
             </div>
-            <p className="t-meta mt-0.5 whitespace-pre-wrap text-foreground/90">{reply.text}</p>
+            <p className="t-meta mt-px whitespace-pre-wrap text-foreground/90">{reply.text}</p>
           </div>
         );
       })}
@@ -57,10 +57,10 @@ export function CommentThread({ replies, agentName, seenAt, onReply, onDelete }:
             }}
             aria-label="Reply"
             placeholder="Reply"
-            className="t-meta min-h-16 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-foreground"
+            className="t-meta min-h-16 w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-foreground"
             autoFocus
           />
-          <div className="mt-1.5 flex justify-end gap-2">
+          <div className="mt-2 flex justify-end gap-2">
             <button type="button" className="t-meta rounded px-2 py-1 text-muted-foreground hover:bg-muted" onClick={() => { setText(""); setWriting(false); }}>Cancel</button>
             <button type="button" className="t-micro rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-40" disabled={text.trim() === ""} onClick={send}>Reply</button>
           </div>

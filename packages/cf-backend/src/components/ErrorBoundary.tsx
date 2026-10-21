@@ -71,7 +71,7 @@ export class ErrorBoundary extends Component<Props, State> {
           </div>
           <button
             onClick={this.reset}
-            className="t-meta px-3 py-1.5 rounded-md p-fill border p-border hover:p-text"
+            className="t-meta px-3 py-1 rounded-md p-fill border p-border hover:p-text"
           >
             Try again
           </button>

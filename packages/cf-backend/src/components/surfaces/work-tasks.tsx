@@ -42,13 +42,13 @@ function TaskRow({ task, depth, owner, onOpenOwner }: { task: AgentTask; depth: 
       <Icon
         size={13}
         weight={meta.weight}
-        className={`${meta.tone} shrink-0 mt-0.5`}
+        className={`${meta.tone} shrink-0 mt-px`}
       />
       <code className="t-meta t-mono p-text-3 shrink-0 mt-[3px] w-7">{task.id}</code>
       <span className={`t-body min-w-0 break-words ${meta.text}`} data-task-title>
         {task.title}
         <OwnerMark owner={owner} onOpenOwner={onOpenOwner} />
-        {task.note && <span className="t-meta block p-text-3 mt-0.5">{task.note}</span>}
+        {task.note && <span className="t-meta block p-text-3 mt-px">{task.note}</span>}
       </span>
     </div>
   );
@@ -91,7 +91,7 @@ const HELPER_ACTIVITY: Record<PanelAgent["activity"], string> = {
 export function HelperRow({ agent, onOpen }: { agent: PanelAgent; onOpen?: (agent: PanelAgent) => void }) {
   const text = (
     <>
-      <SparkleIcon size={14} className="mt-0.5 shrink-0 p-text-2" />
+      <SparkleIcon size={14} className="mt-px shrink-0 p-text-2" />
       <span className="t-body">{agent.label} <span className="p-text-3">· {HELPER_ACTIVITY[agent.activity]}</span></span>
     </>
   );

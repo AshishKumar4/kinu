@@ -351,9 +351,9 @@ export function Composer({
             submit?.();
           }}
           placeholder={placeholder} disabled={disabled} rows={1}
-          className="w-full max-h-56 resize-none overflow-y-auto !border-0 px-[18px] pt-3.5 pb-1 !bg-transparent !text-[15px] !leading-6 pointer-coarse:!text-[16px] !shadow-none !outline-none !ring-0 focus:!ring-0" />
+          className="w-full max-h-56 resize-none overflow-y-auto !border-0 px-[18px] pt-3 pb-1 !bg-transparent !text-[15px] !leading-6 pointer-coarse:!text-[16px] !shadow-none !outline-none !ring-0 focus:!ring-0" />
 
-        <div className="flex flex-wrap items-center gap-x-1 gap-y-1.5 px-2.5 pt-1 pb-2.5">
+        <div className="flex flex-wrap items-center gap-x-1 gap-y-2 px-2 pt-1 pb-2">
           {attachments && <AttachButton attachments={attachments} disabled={disabled} />}
 
           {mode && (

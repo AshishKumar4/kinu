@@ -15,7 +15,7 @@ export function composing(event: KeyboardEvent): boolean {
   return event.isComposing || event.keyCode === 229;
 }
 
-export const tabCls = "t-control p-tab -mb-px flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px]";
+export const tabCls = "t-control p-tab -mb-px flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap px-2 py-[13px]";
 
 /** Select under its older name and sizes (`base` is md), until every caller says `Select`. */
 export function Choice<Value extends string>({ size = "base", ...rest }: Omit<Parameters<typeof Select<Value>>[0], "size"> & { size?: "sm" | "base" }) {

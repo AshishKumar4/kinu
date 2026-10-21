@@ -71,7 +71,7 @@ function SecretItem({ secret, onChanged }: { secret: SecretSummary; onChanged: (
         <Caret size={12} className="shrink-0 p-text-3" />
         <span className="t-item t-mono p-text">{secret.name}</span>
         <span className="flex min-w-0 flex-wrap gap-1">
-          {secret.hosts.map((host) => <span key={host} className="t-meta t-mono rounded-sm p-sunken px-1.5 py-0.5 p-text-2">{host}</span>)}
+          {secret.hosts.map((host) => <span key={host} className="t-meta t-mono rounded-sm p-sunken px-1 py-px p-text-2">{host}</span>)}
           {secret.position.kind !== "authorization" && <span className="t-meta self-center p-text-3">in {positionWords(secret.position)}</span>}
         </span>
         <span className="t-meta ml-auto p-text-3">
@@ -127,7 +127,7 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
       <Field label="Workspaces" hint="Only these workspaces' agents can use it. Reading the value is off unless you turn it on for one, and then only on its computer and in eval.">
         <div className="space-y-2">
           {secret.grants.map((grant) => (
-            <div key={grant.workspace} className="flex flex-wrap items-center gap-x-3 gap-y-1.5" data-secret-grant={grant.workspace}>
+            <div key={grant.workspace} className="flex flex-wrap items-center gap-x-3 gap-y-2" data-secret-grant={grant.workspace}>
               <span className="t-body min-w-0 truncate p-text">{grant.title}</span>
               <span className="t-meta t-mono p-text-3">{grant.workspace}</span>
               <label className="t-meta ml-auto flex items-center gap-2 p-text-2">

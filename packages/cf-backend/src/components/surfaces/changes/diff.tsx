@@ -116,7 +116,7 @@ function Code({ row, tints, notes }: { row: ChangeRow; tints: Tints | null; note
   const runs = runsOf(piecesOf(row.text, colours, row.marks, notes));
 
   return (
-    <code data-code className="min-w-0 flex-1 whitespace-pre-wrap py-px pl-2.5 pr-4 [overflow-wrap:anywhere] [tab-size:2]">
+    <code data-code className="min-w-0 flex-1 whitespace-pre-wrap py-px pl-2 pr-4 [overflow-wrap:anywhere] [tab-size:2]">
       {runs.length === 0 && "\u200b"}
       {runs.map((run, index) => {
         const words = run.pieces.map((piece, at) => (
@@ -222,7 +222,7 @@ function Fold({ label, context, gutter, onOpen }: { label: string; context: stri
   const inner = (
     <>
       <span style={{ width: gutter }} className="flex shrink-0 justify-end pr-1 p-text-3">{onOpen !== null && <CaretUpDownIcon size={12} />}</span>
-      <span className="t-meta shrink-0 pl-2.5 font-sans">{label}</span>
+      <span className="t-meta shrink-0 pl-2 font-sans">{label}</span>
       {context !== null && <span className="t-meta min-w-0 truncate pr-4 p-text-3">{context}</span>}
     </>
   );
@@ -252,7 +252,7 @@ function Blocks({ blocks, draw, open, onOpen }: {
             <button key={index} type="button" onClick={() => onOpen(block.id)} data-diff-fold
               className={`flex h-8 w-full items-center gap-2 text-left ${QUIET_ROW} p-text-2 transition-colors hover:p-text`}>
               <span style={{ width: draw.gutter }} className="flex shrink-0 justify-end pr-1 p-text-3"><CaretDownIcon size={12} /></span>
-              <span className="t-meta pl-2.5 font-sans">{block.deleted ? `Show the ${count(block.count)} deleted lines` : `Show ${count(block.count)} more lines`}</span>
+              <span className="t-meta pl-2 font-sans">{block.deleted ? `Show the ${count(block.count)} deleted lines` : `Show ${count(block.count)} more lines`}</span>
             </button>
           );
         }

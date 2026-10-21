@@ -70,8 +70,8 @@ export function MailAddressField({ domain, username, state, onChange, disabled }
   const said = state === "unchecked" ? null : SAID[state];
 
   return (
-    <div data-mail-address className="space-y-1.5">
-      <div className="flex items-center gap-1.5">
+    <div data-mail-address className="space-y-2">
+      <div className="flex items-center gap-2">
         <input value={username} onChange={(event) => onChange(event.target.value.trim().toLowerCase())} aria-label="Username"
           autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={20} disabled={disabled}
           className={`${inputCls} min-w-0 flex-1 font-mono`} />

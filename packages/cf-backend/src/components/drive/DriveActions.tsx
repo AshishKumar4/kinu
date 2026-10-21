@@ -181,12 +181,12 @@ function NewMenu({ onFiles, onFolder, onZip, onNewFolder, onNewSkill }: NewProps
         <PlusIcon size={14} weight="bold" /><span className="max-sm:hidden">New</span>
       </Button>
       {open && (
-        <div role="menu" className="absolute right-0 top-full z-30 mt-1 w-52 p-card border p-border p-1.5 p-shadow-menu animate-fade-in">
+        <div role="menu" className="absolute right-0 top-full z-30 mt-1 w-52 p-card border p-border p-1 p-shadow-menu animate-fade-in">
           {items.map((item) => (
             <div key={item.label}>
-              {item.apart === true && <div className="mx-1 my-1.5 border-t p-border" />}
+              {item.apart === true && <div className="mx-1 my-2 border-t p-border" />}
               <button type="button" role="menuitem" {...{ [item.marker]: "" }} onClick={() => { setOpen(false); item.run(); }}
-                className="t-body flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left p-text transition-colors hover:bg-[var(--c-hover)]">
+                className="t-body flex w-full items-center gap-3 rounded-md px-2 py-1 text-left p-text transition-colors hover:bg-[var(--c-hover)]">
                 <span className="flex shrink-0 p-text-3">{item.icon}</span>{item.label}
               </button>
             </div>

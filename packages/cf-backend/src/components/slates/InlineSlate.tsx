@@ -35,7 +35,7 @@ function refusalWords(id: string, refusal: { readonly reason: string; readonly e
 
 /** Shown over a slate whose latest edit does not build: the version under it is the last that did. */
 function BrokenNotice({ title }: { title: string }) {
-  return <span role="status" data-slate-broken className="t-meta block p-notice-warning px-3 py-1.5">{title} has a build error; showing the last working version.</span>;
+  return <span role="status" data-slate-broken className="t-meta block p-notice-warning px-3 py-1">{title} has a build error; showing the last working version.</span>;
 }
 
 const SavedSlateSchema = v.object({ id: v.string(), title: v.string() });
@@ -186,7 +186,7 @@ function SlateCard({ id, block, measure, save, children }: {
   const name = block ?? id;
 
   const controls = folded
-    ? "flex items-center gap-1 py-0.5"
+    ? "flex items-center gap-1 py-px"
     : "absolute right-1 top-1 z-10 flex items-center gap-1 rounded-md p-fill opacity-0 transition-opacity group-hover/slate:opacity-100 group-focus-within/slate:opacity-100 [@media(hover:none)]:opacity-100";
 
   // Spans only: the card renders inside a markdown <p>, where a <div> trips React's dev validator.
@@ -195,7 +195,7 @@ function SlateCard({ id, block, measure, save, children }: {
       data-fold-still={painted ? undefined : ""} className="group/slate relative block my-2">
       <span ref={register} className={controls}>
         <button type="button" onClick={() => setHand(!folded)} aria-expanded={!folded} aria-controls={body} title={folded ? `Show ${name}` : `Fold ${name}`}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-[var(--c-hover)]">
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-px text-left transition-colors hover:bg-[var(--c-hover)]">
           <CaretRightIcon size={10} weight="bold" className={`shrink-0 p-text-3 p-fold-turn ${folded ? "" : "rotate-90"}`} />
           {folded && <code className="t-meta t-mono p-text-3 truncate">{name}</code>}
           {why !== null && <span className="t-meta ml-auto shrink-0 pl-2 p-text-3">{why}</span>}

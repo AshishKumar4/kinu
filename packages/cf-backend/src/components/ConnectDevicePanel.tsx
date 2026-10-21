@@ -116,8 +116,8 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
           <Loader size="sm" /> Waiting for this machine. This panel closes when it connects.
         </div>
         {/* The prose is one flex item: a `code` sibling would become its own column and split the sentence. */}
-        <p className="t-meta p-text-3 flex items-start gap-1.5">
-          <WarningIcon size={11} className="mt-0.5 shrink-0" />
+        <p className="t-meta p-text-3 flex items-start gap-2">
+          <WarningIcon size={11} className="mt-px shrink-0" />
           <span>
             <code className="font-mono">kinu connect</code> writes the device secrets on that machine.
             You can close this panel. The machine appears on the Devices page when it

@@ -33,7 +33,7 @@ export function ImportantMailRow({ mail, open = false, onOpen }: { mail: Importa
           <span className="t-meta ml-auto shrink-0 tabular-nums p-text-3">{mailTime(mail.at)}</span>
         </span>
         <span className={`t-body block truncate ${mail.unread ? "p-text" : "p-text-2"}`}>{mail.subject}</span>
-        <span className="t-meta mt-0.5 line-clamp-2 p-text-3">{mail.reason}</span>
+        <span className="t-meta mt-px line-clamp-2 p-text-3">{mail.reason}</span>
       </span>
     </button>
   );

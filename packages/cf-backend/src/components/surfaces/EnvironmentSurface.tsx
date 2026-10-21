@@ -332,7 +332,7 @@ function MachineRow({ environments, execByName, selected, chosen, onSelect, onCo
   loading: boolean;
 }) {
   return (
-    <div role="group" aria-label="Environments" className="flex shrink-0 flex-wrap items-center gap-1.5 px-4 pt-3 pb-2.5">
+    <div role="group" aria-label="Environments" className="flex shrink-0 flex-wrap items-center gap-2 px-4 pt-3 pb-2">
       {environments.map((m) => {
         const exec = execByName.get(m.mount.name);
         const { Icon: KindIcon, about } = environmentOf(m.mount.name);
@@ -359,7 +359,7 @@ function MachineRow({ environments, execByName, selected, chosen, onSelect, onCo
       {loading && <Loader size="sm" />}
       {/* The chosen machine's state in words, then what it offers: the chips are named by their machines alone. */}
       {chosen !== null && (
-        <div className="ml-auto flex min-w-0 items-center gap-1.5">
+        <div className="ml-auto flex min-w-0 items-center gap-2">
           <span data-env-status className="t-meta mr-1 shrink-0" data-tone={chosen.status.tone}>{chosen.status.word}</span>
           {chosen.actions}
         </div>
@@ -633,11 +633,11 @@ function DesktopView({ name, src, width, height }: { name: string; src: string; 
     <div data-desktop-view={cover === null ? undefined : "expanded"} style={cover ?? undefined}
       className={`p-terminal-ground flex min-h-0 flex-1 flex-col ${cover === null ? "" : "fixed z-40"}`}>
       <div className={`t-meta flex shrink-0 items-center gap-3 pr-3 pl-4 p-text-3 ${cover === null ? "h-9" : "h-11 border-b p-border"}`}>
-        {cover !== null && <span className="inline-flex min-w-0 items-center gap-1.5 font-medium p-text-2"><DesktopIcon size={13} aria-hidden /><span className="truncate">{title}</span></span>}
+        {cover !== null && <span className="inline-flex min-w-0 items-center gap-2 font-medium p-text-2"><DesktopIcon size={13} aria-hidden /><span className="truncate">{title}</span></span>}
         <span className="shrink-0">{String(width)} × {String(height)}</span>
         {area !== null && cover === null && (
           <button type="button" data-desktop-expand onClick={() => setExpanded(true)} aria-label={`Expand ${title}`} title="Expand over the workspace"
-            className="ml-auto inline-flex items-center gap-1.5 hover:p-text">
+            className="ml-auto inline-flex items-center gap-2 hover:p-text">
             <ArrowsOutIcon size={13} aria-hidden />Expand
           </button>
         )}

@@ -44,7 +44,7 @@ function Build({ label, build }: { label: string; build: UpdateBuild | null }) {
   return (
     <div>
       <p className="t-label">{label}</p>
-      <p className="t-body mt-0.5 p-text">{build === null ? "unknown" : build.version}</p>
+      <p className="t-body mt-px p-text">{build === null ? "unknown" : build.version}</p>
       {build !== null && <p className="t-meta p-text-3">built {build.builtAt}</p>}
     </div>
   );
@@ -126,7 +126,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
               <Build label="Published" build={offer.available} />
               <div>
                 <p className="t-label">Channel</p>
-                <p className="t-meta mt-0.5 p-text-3">
+                <p className="t-meta mt-px p-text-3">
                   {offer.channelOrigin === "" ? "none" : offer.channelOrigin}
                 </p>
               </div>

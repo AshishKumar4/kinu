@@ -52,19 +52,19 @@ function QuestionField({ question, draft, onDraft, busy }: {
 
   return (
     <fieldset className="min-w-0" data-question={question.id} disabled={busy}>
-      <legend className="flex min-w-0 items-baseline gap-1.5">
-        {question.header !== undefined && <span className="t-meta shrink-0 rounded-sm px-1.5 p-badge-neutral" data-question-header>{question.header}</span>}
+      <legend className="flex min-w-0 items-baseline gap-2">
+        {question.header !== undefined && <span className="t-meta shrink-0 rounded-sm px-1 p-badge-neutral" data-question-header>{question.header}</span>}
         <span className="t-body p-text">{question.question}</span>
       </legend>
-      <div className={preview === undefined ? "mt-1.5" : "mt-1.5 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]"}>
+      <div className={preview === undefined ? "mt-2" : "mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]"}>
         <div className="flex min-w-0 flex-col gap-1" role={many ? "group" : "radiogroup"} aria-label={question.question}>
           {question.options.map((option, index) => {
             const checked = draft.selected.includes(option.label);
 
             return (
-              <label key={option.label} className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 hover:p-fill" data-question-option={option.label}
+              <label key={option.label} className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1 hover:p-fill" data-question-option={option.label}
                 onMouseEnter={() => setFocused(index)}>
-                <input type={many ? "checkbox" : "radio"} name={name} className="mt-0.5 shrink-0 accent-[var(--c-accent)]" checked={checked}
+                <input type={many ? "checkbox" : "radio"} name={name} className="mt-px shrink-0 accent-[var(--c-accent)]" checked={checked}
                   onChange={() => choose(option.label, index)} onFocus={() => setFocused(index)} />
                 <span className="min-w-0">
                   <span className="t-body p-text">
@@ -76,8 +76,8 @@ function QuestionField({ question, draft, onDraft, busy }: {
               </label>
             );
           })}
-          <label className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 hover:p-fill" data-question-option={OTHER_OPTION}>
-            <input type={many ? "checkbox" : "radio"} name={name} className="mt-0.5 shrink-0 accent-[var(--c-accent)]" checked={draft.other !== null}
+          <label className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1 hover:p-fill" data-question-option={OTHER_OPTION}>
+            <input type={many ? "checkbox" : "radio"} name={name} className="mt-px shrink-0 accent-[var(--c-accent)]" checked={draft.other !== null}
               onChange={() => onDraft(draft.other === null ? { ...draft, other: "", selected: many ? draft.selected : [] } : { ...draft, other: null })} />
             <span className="min-w-0 flex-1">
               <span className="t-body p-text">{OTHER_OPTION}</span>
@@ -90,7 +90,7 @@ function QuestionField({ question, draft, onDraft, busy }: {
           </label>
         </div>
         {preview !== undefined && (
-          <pre className="t-meta p-code max-h-48 min-w-0 overflow-auto rounded-md px-2.5 py-2 whitespace-pre" data-question-preview>{preview}</pre>
+          <pre className="t-meta p-code max-h-48 min-w-0 overflow-auto rounded-md px-2 py-2 whitespace-pre" data-question-preview>{preview}</pre>
         )}
       </div>
     </fieldset>
@@ -150,7 +150,7 @@ export function QuestionCard({ asking, busy, owed = false, onAnswer, onDismiss }
         ))}
       </div>
       {unsent.note === null ? (
-        <button type="button" disabled={busy} className="t-meta mt-1.5 p-accent hover:underline" onClick={() => keep({ ...unsent, note: "" })}>Add a note</button>
+        <button type="button" disabled={busy} className="t-meta mt-2 p-accent hover:underline" onClick={() => keep({ ...unsent, note: "" })}>Add a note</button>
       ) : (
         <textarea disabled={busy} value={unsent.note} onChange={(event) => keep({ ...unsent, note: event.target.value })} rows={2} placeholder="A note for the agent"
           aria-label="A note for the agent"
@@ -161,7 +161,7 @@ export function QuestionCard({ asking, busy, owed = false, onAnswer, onDismiss }
       ) : (
         <div className="t-meta mt-1 p-text-3">{asking.actor === null ? "Asked" : `${asking.agent} asked`} {timeAgo(asking.asked.askedAt)}. The agent waits for your answer.</div>
       )}
-      <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
         <Button size="sm" variant="ghost" disabled={busy} onClick={dismiss} data-question-dismiss>
           <XIcon size={12} weight="bold" aria-hidden />Dismiss
         </Button>
@@ -202,7 +202,7 @@ export function AskRecord({ callId, input }: { callId: string; input: unknown })
 
   return (
     <div className="rounded-md border p-border px-3 py-2" data-ask-record={asked?.status ?? "asked"}>
-      <div className="t-meta flex items-center gap-1.5 p-text-3">
+      <div className="t-meta flex items-center gap-2 p-text-3">
         <ChatCircleTextIcon size={12} aria-hidden />
         <span>{asked?.status === "open" ? "Asked you, waiting for your answer" : "Asked you"}</span>
       </div>

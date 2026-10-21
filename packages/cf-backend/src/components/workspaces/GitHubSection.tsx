@@ -73,23 +73,23 @@ function Panel({ icon, title, count, children }: { icon: ReactNode; title: strin
         <span className="t-item p-text-2">{title}</span>
         {count !== undefined && count > 0 && <span className="t-meta ml-auto tabular-nums p-text-3">{count}</span>}
       </header>
-      <ul className="flex flex-col pb-1.5">{children}</ul>
+      <ul className="flex flex-col pb-1">{children}</ul>
     </section>
   );
 }
 
 function Empty({ text }: { text: string }) {
-  return <li className="t-meta px-4 pb-2.5 p-text-3">{text}</li>;
+  return <li className="t-meta px-4 pb-2 p-text-3">{text}</li>;
 }
 
 function RepoRow({ repo }: { repo: Repo }) {
   const ci = repo.ci === null || repo.ci.state === "none" ? null : CI[repo.ci.state];
 
   return (
-    <li className="flex min-w-0 items-center gap-3 px-4 py-1.5" data-github-repo={repo.repo}>
+    <li className="flex min-w-0 items-center gap-3 px-4 py-1" data-github-repo={repo.repo}>
       <a href={`https://github.com/${repo.repo}`} target="_blank" rel="noopener noreferrer" className="t-body min-w-0 truncate p-text hover:underline">{repo.repo}</a>
       {repo.branch && <span className="t-meta t-mono min-w-0 truncate p-text-3">{repo.branch}</span>}
-      <span className="t-meta ml-auto flex shrink-0 items-center gap-2.5 p-text-3">
+      <span className="t-meta ml-auto flex shrink-0 items-center gap-3 p-text-3">
         {repo.lastPush && <span title={repo.lastPush.ref}>pushed {shortAge(repo.lastPush.at)} ago</span>}
         {ci && <span className={`inline-flex items-center gap-1 ${ci.tone}`}><ci.Icon size={12} weight="fill" aria-hidden />{ci.word}</span>}
       </span>
@@ -103,7 +103,7 @@ function ItemRow({ item, nameOf }: { item: Item; nameOf: (actorId: string) => st
   const who = [...new Set([...item.actors.map(nameOf), ...(item.unattributed ? ["an agent"] : [])])].join(", ");
 
   return (
-    <li className="flex min-w-0 items-center gap-2.5 px-4 py-1.5" data-github-item={`${item.repo}#${String(item.number)}`}>
+    <li className="flex min-w-0 items-center gap-3 px-4 py-1" data-github-item={`${item.repo}#${String(item.number)}`}>
       {merged
         ? <GitMergeIcon size={14} className="shrink-0 p-accent" aria-label="merged" />
         : <Icon size={14} className={`shrink-0 ${STATE_TONE.get(item.state ?? "") ?? "p-text-3"}`} aria-label={item.state ?? "state unknown"} />}

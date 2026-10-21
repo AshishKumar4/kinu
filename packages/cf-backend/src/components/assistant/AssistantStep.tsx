@@ -41,17 +41,17 @@ export function AssistantStep({ choice, onChange, person }: {
         <ChatMascot seed={look.seed} colour={look.colour} activity="idle" size={48} />
         <div className="min-w-0 flex-1">
           {/* Reads as its name until pressed; an edit is optional, never asked for. */}
-          <label className="group/name flex w-fit max-w-full items-center gap-1.5">
+          <label className="group/name flex w-fit max-w-full items-center gap-2">
             <input value={choice.name} maxLength={40} onChange={(event) => onChange({ ...choice, name: event.target.value })}
               aria-label="Its name" size={Math.max(4, choice.name.length + 1)}
               className="t-title min-w-0 rounded-md border border-transparent bg-transparent px-1 -mx-1 p-text transition-colors hover:border-[var(--c-border)]" />
             <PencilSimpleIcon size={13} aria-hidden className="shrink-0 p-text-3 opacity-60 group-hover/name:opacity-100" />
           </label>
-          <p className="t-body mt-0.5 p-text-2">An assistant that lives on Home: it reads your mail, tells you each morning what needs you, and takes on bigger jobs.</p>
+          <p className="t-body mt-px p-text-2">An assistant that lives on Home: it reads your mail, tells you each morning what needs you, and takes on bigger jobs.</p>
         </div>
       </div>
 
-      <div role="radiogroup" aria-label="A personal assistant" className="grid gap-2.5 sm:grid-cols-2">
+      <div role="radiogroup" aria-label="A personal assistant" className="grid gap-3 sm:grid-cols-2">
         <Answer value="yes" chosen={choice.install} onChoose={() => onChange({ ...choice, install: true })} title="Set it up" badge="Recommended" />
         <Answer value="no" chosen={!choice.install} onChoose={() => onChange({ ...choice, install: false })} title="Not now" />
       </div>

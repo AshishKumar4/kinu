@@ -107,7 +107,7 @@ function PartFrame({ workspace, slate, part, args }: { workspace: string; slate:
 
   // The sealed frame first and always, whatever the state: the slate's page can count this frame's frames.
   return (
-    <div data-part-frame={drawn?.kind} className="flex h-dvh flex-col gap-1.5 p-2 p-text">
+    <div data-part-frame={drawn?.kind} className="flex h-dvh flex-col gap-2 p-2 p-text">
       <SealedContent html={shownMarkup(drawn)} />
       {body}
     </div>

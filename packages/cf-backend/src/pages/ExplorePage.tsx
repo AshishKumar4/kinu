@@ -29,7 +29,7 @@ const KIND_FILTER_WORDS: Record<ExploreKind, string> = { app: "Apps", workspace:
 
 /** The filter row's one grammar: the kind's `Segmented`, 28 px category chips, then a 32 px sort and search, all at the
  *  control radius. */
-const chip = (on: boolean) => `t-status h-7 rounded-[var(--r-control)] border px-2.5 transition-colors ${on ? "border-[var(--c-border-strong)] bg-[var(--c-hover)] p-text" : "p-border p-text-2 hover:bg-[var(--c-hover)]"}`;
+const chip = (on: boolean) => `t-status h-7 rounded-[var(--r-control)] border px-2 transition-colors ${on ? "border-[var(--c-border-strong)] bg-[var(--c-hover)] p-text" : "p-border p-text-2 hover:bg-[var(--c-hover)]"}`;
 
 const FIELD_32 = "h-8 rounded-[var(--r-control)] border border-[var(--c-field-border)] bg-[var(--c-surface)]";
 
@@ -52,9 +52,9 @@ function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights:
         <span className="flex items-center gap-2"><KindBadge kind="workspace" /><span className="t-meta p-text-3">Featured</span></span>
         <span className="t-page-title p-text">{workspace.title}</span>
         <span className="t-body p-text-2">{workspace.line}</span>
-        <ul className="space-y-1.5">
+        <ul className="space-y-2">
           {highlights.map((line) => (
-            <li key={line} className="t-meta flex items-start gap-2 p-text-2"><CheckIcon size={13} weight="bold" className="mt-0.5 shrink-0 p-accent" />{line}</li>
+            <li key={line} className="t-meta flex items-start gap-2 p-text-2"><CheckIcon size={13} weight="bold" className="mt-px shrink-0 p-accent" />{line}</li>
           ))}
         </ul>
         <span className="t-meta mt-auto flex flex-wrap items-center gap-x-3 gap-y-2 pt-2 p-text-3">
@@ -73,7 +73,7 @@ function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights:
 function AlsoFromKinu({ workspaces }: { workspaces: readonly WorkspaceCard[] }) {
   return (
     <div className="flex min-w-0 flex-col overflow-hidden rounded-[var(--r-card)] border p-border p-surface">
-      <span className="t-label border-b p-border px-4 pb-2.5 pt-3.5">Also from Kinu</span>
+      <span className="t-label border-b p-border px-4 pb-2 pt-3">Also from Kinu</span>
       {workspaces.map((workspace) => (
         <Link key={workspace.id} to={exploreWorkspaceHref(workspace.id)} data-explore-also={workspace.id}
           className="flex items-center gap-3 border-b p-border px-4 py-3 transition-colors last:border-b-0 p-card-hover">
@@ -136,7 +136,7 @@ function Feed({ items, next, q, more, below }: { items: readonly ExploreItem[]; 
   return (
     <>
       {items.length === 0 && !below && <p className="py-12 text-center p-text-3" data-explore-no-match>{q === "" ? "Nothing here yet" : `Nothing matches “${q}”`}</p>}
-      {items.length === 0 && below && next === null && <p className="t-meta py-10 text-center p-text-3" data-explore-only-kinu>That's all for now. Apps and workspaces people publish will appear here.</p>}
+      {items.length === 0 && below && next === null && <p className="t-meta py-8 text-center p-text-3" data-explore-only-kinu>That's all for now. Apps and workspaces people publish will appear here.</p>}
       {items.length > 0 && <ul className={`mt-4 ${GRID}`}>{items.map((item) => <ExploreCard key={item.kind === "app" ? `a/${item.app.workspace}/${item.app.slate}` : `w/${item.workspace.id}`} item={item} />)}</ul>}
       {next !== null && (
         <div className="mt-6 flex justify-center">

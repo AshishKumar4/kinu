@@ -152,7 +152,7 @@ export function ModelPicker({
       size={size}
     >
       <Combobox.TriggerValue className={`min-w-0 max-w-full ${className ?? ""}`}>
-        <span className="flex min-w-0 items-center gap-1.5" data-model-picker={label}>
+        <span className="flex min-w-0 items-center gap-2" data-model-picker={label}>
           <span className="sr-only">{label}: </span>
           {selected !== null && <ProviderIcon provider={selected.provider} />}
           <span className={`min-w-0 truncate ${selected === null ? "p-text-3" : ""}`}>{selected?.label ?? (value === '' ? placeholder : listed)}</span>
@@ -183,7 +183,7 @@ export function ModelPicker({
         </Combobox.List>
         <ProviderFailureNotice failures={failures} models={models} />
         {clearable && value !== '' && (
-          <button type="button" className="t-control mx-1.5 mt-1 rounded px-2 py-1.5 text-left p-text-2 hover:bg-[var(--c-hover)]"
+          <button type="button" className="t-control mx-2 mt-1 rounded px-2 py-1 text-left p-text-2 hover:bg-[var(--c-hover)]"
             onClick={() => onChange("")}>
             Use default model
           </button>
@@ -241,7 +241,7 @@ export function ConnectedModelPicker({
 
   if (resource.status === "loading") {
     return (
-      <span className="t-status inline-flex items-center rounded-md border p-border px-1.5 py-1 p-text-3" aria-label="Loading models">
+      <span className="t-status inline-flex items-center rounded-md border p-border px-1 py-1 p-text-3" aria-label="Loading models">
         …
       </span>
     );
@@ -268,7 +268,7 @@ export function ConnectedModelPicker({
         <button
           type="button"
           onClick={reload}
-          className="t-status p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 hover:opacity-80"
+          className="t-status p-tint-warning p-warning inline-flex items-center gap-2 rounded-md border px-2 py-1 hover:opacity-80"
           title={failureTitle(menu.failures)}
         >
           <WarningCircleIcon size={12} />
@@ -283,7 +283,7 @@ export function ConnectedModelPicker({
       <a
         href={cloudflareReconnectPath(window.location.pathname)}
         onClick={(event) => { if (connectCloudflareInHelper(window.location.pathname)) event.preventDefault(); }}
-        className="t-status p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 hover:opacity-80"
+        className="t-status p-tint-warning p-warning inline-flex items-center gap-2 rounded-md border px-2 py-1 hover:opacity-80"
         title="Reconnect Cloudflare with Workers AI permissions"
       >
         <WarningCircleIcon size={12} />
@@ -314,10 +314,10 @@ function ProviderFailureNotice({ failures, models }: { failures?: ProviderFailur
   if (!failures?.length) return null;
 
   return (
-    <div className="border-t p-border px-2 py-1.5">
+    <div className="border-t p-border px-2 py-1">
       {failures.map((failure) => (
-        <p key={failure.provider} className="t-status p-warning flex items-start gap-1.5" title={failure.reason}>
-          <WarningCircleIcon size={12} className="mt-0.5 shrink-0" />
+        <p key={failure.provider} className="t-status p-warning flex items-start gap-2" title={failure.reason}>
+          <WarningCircleIcon size={12} className="mt-px shrink-0" />
           <span className="min-w-0">
             {models.some((model) => model.provider === failure.provider)
               ? `${providerName(failure.provider)}'s model list couldn't load. Showing the built-in list.`
@@ -341,7 +341,7 @@ function ProviderIcon({ provider }: { provider: string }) {
 
 function ProviderLabel({ provider, label }: { provider: string; label: string | undefined }) {
   return (
-    <span className="flex items-center gap-1.5">
+    <span className="flex items-center gap-2">
       <ProviderIcon provider={provider} />
       {label ?? providerName(provider)}
     </span>
@@ -415,7 +415,7 @@ function TestButton({ spec, tests, inMenu }: { spec: string; tests: ModelTests; 
 
   return (
     <button type="button"
-      className="t-status shrink-0 rounded border p-border px-1.5 py-0.5 p-text-2 hover:p-text"
+      className="t-status shrink-0 rounded border p-border px-1 py-px p-text-2 hover:p-text"
       aria-label={running ? `Cancel the test of ${spec}` : `Test ${spec}`}
       title={inMenu ? "Test (Alt+T)" : "Test"}
       {...(inMenu && { tabIndex: -1, "aria-keyshortcuts": "Alt+T" })}
@@ -440,7 +440,7 @@ function ModelPickerItem({ model, unavailable, tests }: {
         <span className={`min-w-0 flex-1 truncate ${unavailable === undefined ? "" : "p-text-3"}`}>{model.label}</span>
         <span className="flex shrink-0 items-center gap-1">
           {unavailable !== undefined && (
-            <span className="t-status inline-flex items-center gap-0.5 p-warning" title={unavailable}><WarningCircleIcon size={11} />unavailable</span>
+            <span className="t-status inline-flex items-center gap-px p-warning" title={unavailable}><WarningCircleIcon size={11} />unavailable</span>
           )}
           {badgeCapabilities(model).map((cap) => {
             const Icon = cap === "vision" ? EyeIcon : BrainIcon;

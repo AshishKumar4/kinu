@@ -114,7 +114,7 @@ function Pending({ pending, busy, act, decide }: Omit<SectionProps, "state"> & {
             {item.proposal.kind === "fact" ? <><span className="font-mono">{item.proposal.key}</span>: {valueText(item.proposal.value)}</> : item.proposal.content}
           </div>
           <div className="t-meta p-text-3">{originText(item.origin)}</div>
-          <div className="flex gap-1.5">
+          <div className="flex gap-2">
             <button type="button" disabled={busy !== null} className="t-control px-2 py-1 rounded-md p-accent-fill"
               onClick={() => detach(act("keeping this for every workspace", () => decide(item.id, "accept")))}>Keep for every workspace</button>
             <button type="button" disabled={busy !== null} className="t-control px-2 py-1 rounded-md p-text-2 p-fill hover:p-text"
@@ -135,12 +135,12 @@ function Facts({ state, busy, act }: SectionProps) {
       <div className="p-t-label p-text-2">Facts</div>
       {state.facts.length === 0 && <div className="t-meta p-text-3">None yet. A fact an agent proposes, or one you promote from a workspace's world model, appears here once kept.</div>}
       {state.facts.map((fact) => (
-        <div key={fact.key} className="py-1.5 space-y-1" data-account-memory-fact={fact.key}>
+        <div key={fact.key} className="py-1 space-y-1" data-account-memory-fact={fact.key}>
           <div className="flex items-start gap-2">
-            <SealCheckIcon size={14} className="p-text-3 shrink-0 mt-0.5" />
+            <SealCheckIcon size={14} className="p-text-3 shrink-0 mt-px" />
             <div className="min-w-0 flex-1">
               {editing?.key === fact.key ? (
-                <form className="flex gap-1.5" onSubmit={(event) => {
+                <form className="flex gap-2" onSubmit={(event) => {
                   event.preventDefault();
                   const value = editedValue(fact.value, editing.text);
 
@@ -154,7 +154,7 @@ function Facts({ state, busy, act }: SectionProps) {
                   setEditing(null);
                 }}>
                   <span className="t-body t-mono">{fact.key}:</span>
-                  <input aria-label={`Value of ${fact.key}`} aria-invalid={editing.invalid} className="t-body flex-1 min-w-0 px-1.5 rounded p-fill" value={editing.text}
+                  <input aria-label={`Value of ${fact.key}`} aria-invalid={editing.invalid} className="t-body flex-1 min-w-0 px-1 rounded p-fill" value={editing.text}
                     title={editing.invalid ? "This fact holds JSON: write a number, true, false, null, a list or an object." : undefined}
                     onChange={(event) => setEditing({ key: fact.key, text: event.target.value, invalid: false })} />
                   <button type="submit" disabled={busy !== null} className="t-control px-2 rounded-md p-accent-fill">Save</button>
@@ -165,18 +165,18 @@ function Facts({ state, busy, act }: SectionProps) {
               <div className="t-meta p-text-3">{originText(fact.origin)}</div>
             </div>
             <div className="flex gap-1 shrink-0">
-              <button type="button" className="t-control px-1.5 rounded p-text-2 hover:p-text" aria-expanded={opened === fact.key}
+              <button type="button" className="t-control px-1 rounded p-text-2 hover:p-text" aria-expanded={opened === fact.key}
                 onClick={() => setOpened(opened === fact.key ? null : fact.key)} title="Every value it held">
                 <ClockCounterClockwiseIcon size={14} />
               </button>
-              <button type="button" className="t-control px-1.5 rounded p-text-2 hover:p-text" disabled={busy !== null}
+              <button type="button" className="t-control px-1 rounded p-text-2 hover:p-text" disabled={busy !== null}
                 onClick={() => setEditing({ key: fact.key, text: valueText(fact.value), invalid: false })}>Edit</button>
-              <button type="button" className="t-control px-1.5 rounded p-danger" disabled={busy !== null}
+              <button type="button" className="t-control px-1 rounded p-danger" disabled={busy !== null}
                 onClick={() => detach(act("forgetting this fact", async () => { await forgetAccountFact(fact.key); }))}>Forget</button>
             </div>
           </div>
           {opened === fact.key && (
-            <ol className="ml-6 space-y-0.5" data-account-memory-history={fact.key}>
+            <ol className="ml-6 space-y-px" data-account-memory-history={fact.key}>
               {fact.history.map((revision) => (
                 <li key={revision.at} className="t-meta p-text-2">
                   {new Date(revision.at).toLocaleString()}: {revisionText(revision)} <span className="p-text-3">({originText(revision.origin)})</span>
@@ -202,7 +202,7 @@ function Notes({ state, busy, act }: SectionProps) {
             <div className="t-body p-text whitespace-pre-wrap break-words">{note.content}</div>
             <div className="t-meta p-text-3">{originText(note.origin)}</div>
           </div>
-          <button type="button" className="t-control px-1.5 rounded p-danger shrink-0" disabled={busy !== null}
+          <button type="button" className="t-control px-1 rounded p-danger shrink-0" disabled={busy !== null}
             onClick={() => detach(act("forgetting this note", async () => { await forgetAccountNote(note.id); }))}>Forget</button>
         </div>
       ))}

@@ -259,12 +259,12 @@ export function SessionDetails({ session, name }: { session: TerminalSession | n
       {name !== undefined && <span className="t-item inline-flex shrink-0 items-center gap-2 p-text"><Dot tone={sessionTone(session).tone} />{name}</span>}
       {/* A narrow pane keeps its ports and state: the branch goes first, then the folder shows its last part. The text
           holds both forms, so the folder itself is named on the element. */}
-      <span data-session-cwd={session.cwd} title={session.cwd} className="inline-flex min-w-0 items-center gap-1.5">
+      <span data-session-cwd={session.cwd} title={session.cwd} className="inline-flex min-w-0 items-center gap-2">
         <FolderOpenIcon size={12} className="shrink-0" aria-hidden />
         <span className="hidden truncate @[34rem]:inline">{session.cwd}</span>
         <span className="truncate @[34rem]:hidden">{folderTail(session.cwd)}</span>
       </span>
-      {session.branch !== null && <span className="hidden min-w-0 items-center gap-1.5 @[38rem]:inline-flex"><GitBranchIcon size={12} className="shrink-0" aria-hidden /><span className="truncate">{session.branch}</span></span>}
+      {session.branch !== null && <span className="hidden min-w-0 items-center gap-2 @[38rem]:inline-flex"><GitBranchIcon size={12} className="shrink-0" aria-hidden /><span className="truncate">{session.branch}</span></span>}
       {session.ports.map((port) => <span key={port} data-session-port className="p-term-port shrink-0">:{port}</span>)}
       {session.needsInput && <span data-session-waiting className="shrink-0 font-medium p-warning">Waiting for input</span>}
       {detail !== null && <span className={`hidden min-w-0 truncate @[42rem]:inline ${failed ? "p-danger" : ""}`}>{detail}</span>}

@@ -120,7 +120,7 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
         <div className="t-body p-text">{asks}</div>
         {action.detail !== null && <code className="t-code mt-1 block max-h-28 overflow-auto rounded-sm px-2 py-1 p-text-2 break-all whitespace-pre-wrap p-fill">{revealMisrepresenting(action.detail)}</code>}
         {action.where !== undefined && <div className="t-meta mt-1 p-text-2 break-all">Runs {revealMisrepresenting(action.where)}</div>}
-        {action.write && <div className="mt-1.5"><ParkedWriteChange id={action.id} rpc={rpc} /></div>}
+        {action.write && <div className="mt-2"><ParkedWriteChange id={action.id} rpc={rpc} /></div>}
         <div className="t-meta mt-1 p-text-3">
           {action.write ? "Approving writes exactly these bytes." : action.title.replace(/^Approve: /u, "")} · asked {timeAgo(action.at)}
         </div>
@@ -132,7 +132,7 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
   return (
     <>
       <div className="t-body p-text">{action.title}</div>
-      <div className="t-meta mt-0.5 p-text-3">{action.detail ?? "Your agent"} · {timeAgo(action.at)} · read it in its review</div>
+      <div className="t-meta mt-px p-text-3">{action.detail ?? "Your agent"} · {timeAgo(action.at)} · read it in its review</div>
     </>
   );
 }
@@ -342,7 +342,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
       <div key={front.key} className="p-attention-card animate-fade-in" data-attention-card={front.key} data-attention-kind={kindOf(front)}
         {...(front.kind === "consent" ? { "data-device-bind": front.consent.consentId } : {})}
         aria-live="polite">
-        <div className="t-meta mb-1 flex items-center gap-1.5 p-text-3">
+        <div className="t-meta mb-1 flex items-center gap-2 p-text-3">
           <FrontIcon size={12} className="shrink-0 p-warning" weight="fill" aria-hidden />
           <span>{answerOwed ? "Answer sent" : "Waiting on you"}</span>
           {cards > 1 && <span className="tabular-nums" data-attention-position>· 1 of {cards}</span>}
@@ -357,9 +357,9 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
             onAnswer={(answers) => detach(answer({ label: "Answer", weight: "primary", run: async () => rpc("answerOwnerQuestions", [front.question.asked.id, answers, front.question.actor]) }))}
             onDismiss={() => detach(answer({ label: "Dismiss", weight: "quiet", run: async () => { await rpc("dismissOwnerQuestions", [front.question.asked.id, front.question.actor]); } }))} />
         )}
-        {error?.key === front.key && <div className="t-status mt-1.5 p-danger" role="alert">{error.message}</div>}
+        {error?.key === front.key && <div className="t-status mt-2 p-danger" role="alert">{error.message}</div>}
         {!batched && (
-          <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+          <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
             {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy === front.key} onAnswer={answer} />)}
           </div>
         )}

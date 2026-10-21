@@ -70,7 +70,7 @@ export function MailMessage({ mail, box, owner, open, onToggle }: {
   const chat = box?.workspace === null || box?.workspace === undefined ? null : `/workspace/${encodeURIComponent(box.workspace)}${box.kind === "agent" ? `/agents/${encodeURIComponent(reader)}` : ""}`;
 
   if (!open) return (
-    <button type="button" onClick={onToggle} data-mail-message={mail.id} data-folded="" className="flex w-full items-center gap-3 px-4 py-2.5 text-left p-row-hover">
+    <button type="button" onClick={onToggle} data-mail-message={mail.id} data-folded="" className="flex w-full items-center gap-3 px-4 py-2 text-left p-row-hover">
       <Avatar name={name} size={22} />
       <span className="t-item shrink-0 p-text-2">{name}</span>
       <span className="t-body min-w-0 flex-1 truncate p-text-3">{mailExcerpt(mail.text)}</span>
@@ -81,11 +81,11 @@ export function MailMessage({ mail, box, owner, open, onToggle }: {
   return (
     <article data-mail-message={mail.id} className="space-y-3 px-4 py-4">
       <MessageHeader mail={mail} name={name} onToggle={onToggle} />
-      {mail.woke !== null && <p data-mail-woke={mail.woke} className="t-meta p-text-3">Woke {reader}{chat !== null && <> · <Link to={chat} className="inline-flex items-center gap-0.5 p-accent-fg hover:underline">Open chat<ArrowUpRightIcon size={11} /></Link></>}</p>}
+      {mail.woke !== null && <p data-mail-woke={mail.woke} className="t-meta p-text-3">Woke {reader}{chat !== null && <> · <Link to={chat} className="inline-flex items-center gap-px p-accent-fg hover:underline">Open chat<ArrowUpRightIcon size={11} /></Link></>}</p>}
       {mail.direction === "out" && mail.writtenBy !== null && <p className="t-meta p-text-3">Written by {mail.writtenBy} · approved by you</p>}
       {mail.sendState !== null && ["queued", "bounced", "failed", "complained"].includes(mail.sendState) && <p className="t-meta p-text-3">{mail.sendState}</p>}
       {mail.html === null ? <MailBody text={mail.text} /> : <SealedMailHtml html={mail.html} />}
-      {mail.attachments.length > 0 && <div className="flex flex-wrap gap-1.5" data-mail-attachments>
+      {mail.attachments.length > 0 && <div className="flex flex-wrap gap-2" data-mail-attachments>
         {mail.attachments.map((file) => <AttachmentChip key={file.id} part={{ type: "file", filename: file.filename, mediaType: "application/octet-stream", url: "about:blank" }} />)}
       </div>}
     </article>

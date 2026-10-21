@@ -42,27 +42,27 @@ export function AccessPicker<Id extends string>({ options, value, onChange, disa
 
   return (
     <div className="relative flex items-start gap-3">
-      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full p-fill p-text-2">{chosen.icon}</span>
+      <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-full p-fill p-text-2">{chosen.icon}</span>
       <span className="min-w-0 flex-1">
         <button type="button" aria-haspopup="listbox" aria-expanded={open} disabled={disabled} data-share-access={chosen.id}
           onClick={() => setOpen((shown) => !shown)}
-          className="t-item -ml-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 p-text transition-colors hover:bg-[var(--c-hover)]">
+          className="t-item -ml-2 inline-flex items-center gap-1 rounded-md px-1 py-px p-text transition-colors hover:bg-[var(--c-hover)]">
           {chosen.label} <CaretDownIcon size={12} className="p-text-3" />
         </button>
         <span className="t-meta block p-text-3">{chosen.detail}</span>
       </span>
       {open && (
-        <div role="listbox" aria-label="Who can open it" className="absolute left-0 top-12 z-10 w-[21rem] max-w-full p-card border p-border p-1.5 p-shadow-menu animate-fade-in">
+        <div role="listbox" aria-label="Who can open it" className="absolute left-0 top-12 z-10 w-[21rem] max-w-full p-card border p-border p-1 p-shadow-menu animate-fade-in">
           {options.map((option) => (
             <button key={option.id} type="button" role="option" aria-selected={option.id === value} data-share-access-option={option.id}
               onClick={() => { onChange(option.id); setOpen(false); }}
-              className="flex w-full items-start gap-2.5 rounded-md px-2 py-2 text-left transition-colors hover:bg-[var(--c-hover)]">
-              <span className="mt-0.5 flex shrink-0 p-text-3">{option.icon}</span>
+              className="flex w-full items-start gap-3 rounded-md px-2 py-2 text-left transition-colors hover:bg-[var(--c-hover)]">
+              <span className="mt-px flex shrink-0 p-text-3">{option.icon}</span>
               <span className="min-w-0 flex-1">
                 <span className="t-item block p-text">{option.label}</span>
                 <span className="t-meta block p-text-3">{option.detail}</span>
               </span>
-              <span className="mt-0.5 flex w-4 shrink-0">{option.id === value && <CheckIcon size={14} weight="bold" className="p-accent" />}</span>
+              <span className="mt-px flex w-4 shrink-0">{option.id === value && <CheckIcon size={14} weight="bold" className="p-accent" />}</span>
             </button>
           ))}
         </div>

@@ -27,8 +27,8 @@ function PanelBlock(
       {panel.status === 'ok'
         ? children ?? <Rows value={panel.value} />
         : (
-          <div className="t-meta p-danger flex items-start gap-1.5">
-            <WarningIcon size={12} className="mt-0.5 shrink-0" />
+          <div className="t-meta p-danger flex items-start gap-2">
+            <WarningIcon size={12} className="mt-px shrink-0" />
             <span className="min-w-0">{panel.reason}</span>
           </div>
         )}
@@ -312,7 +312,7 @@ function JobRows(
           </div>
           {job.label !== null && <div className="t-meta p-text-2">{job.label}</div>}
           {job.error !== null && <div className="t-body p-danger">{job.error}</div>}
-          <div className="flex gap-1.5">
+          <div className="flex gap-2">
             {JOB_CONTROLS.map((control) => (
               <Button
                 key={control.action}
@@ -376,7 +376,7 @@ function ApprovalRow({ approval, busy, userId, workspace, onPick }: {
       <div className="t-meta t-mono p-text whitespace-pre-wrap break-all">{revealMisrepresenting(approval.command)}</div>
       {where !== '' && <div className="t-meta p-text-2 break-all">Runs {revealMisrepresenting(where)}</div>}
       <div className="t-body p-text-3">{approval.reason}</div>
-      <div className="flex gap-1.5">
+      <div className="flex gap-2">
         {APPROVAL_ANSWERS.map(({ decision, label, body }) => (
           <Button
             key={decision}

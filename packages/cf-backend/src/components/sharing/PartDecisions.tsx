@@ -22,9 +22,9 @@ function Payload({ value, ...data }: { value: JsonValue; [attribute: `data-${str
 
 function Lets({ yes, no }: { yes: readonly ReactNode[]; no: readonly ReactNode[] }) {
   return (
-    <ul className="t-body space-y-1.5">
-      {yes.map((line, at) => <li key={`yes-${String(at)}`} className="flex gap-2 p-text"><CheckIcon size={15} weight="bold" className="mt-0.5 shrink-0 p-success" />{line}</li>)}
-      {no.map((line, at) => <li key={`no-${String(at)}`} className="flex gap-2 p-text-2"><XIcon size={15} weight="bold" className="mt-0.5 shrink-0 p-text-3" />{line}</li>)}
+    <ul className="t-body space-y-2">
+      {yes.map((line, at) => <li key={`yes-${String(at)}`} className="flex gap-2 p-text"><CheckIcon size={15} weight="bold" className="mt-px shrink-0 p-success" />{line}</li>)}
+      {no.map((line, at) => <li key={`no-${String(at)}`} className="flex gap-2 p-text-2"><XIcon size={15} weight="bold" className="mt-px shrink-0 p-text-3" />{line}</li>)}
     </ul>
   );
 }
@@ -90,7 +90,7 @@ export function ShowDecision({ label, value, onShow, onClose }: {
       footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose}>Not now</Button><Button variant="primary" size="sm" data-show-confirm onClick={onShow}>Show to everyone</Button></div>}>
       <p className="t-body p-text-2">{label}</p>
       <Payload data-show-payload value={value} />
-      <p data-show-final className="t-body flex gap-2 p-text"><WarningCircleIcon size={15} className="mt-0.5 shrink-0 p-warning" />Everyone who can open this slate sees exactly this. You can't take it back once it's shown.</p>
+      <p data-show-final className="t-body flex gap-2 p-text"><WarningCircleIcon size={15} className="mt-px shrink-0 p-warning" />Everyone who can open this slate sees exactly this. You can't take it back once it's shown.</p>
     </Modal>
   );
 }

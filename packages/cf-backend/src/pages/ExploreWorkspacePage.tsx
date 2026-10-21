@@ -42,7 +42,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function Row({ icon, title, meta, children }: { icon: ReactNode; title: string; meta?: ReactNode; children?: ReactNode }) {
   return (
     <li className="flex items-start gap-3 px-4 py-3">
-      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-hover)] p-text-2">{icon}</span>
+      <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-hover)] p-text-2">{icon}</span>
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-baseline gap-x-2">
           <span className="t-item p-text">{title}</span>
@@ -62,7 +62,7 @@ function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean })
 
   return (
     <li className="flex items-start gap-3 px-4 py-3" data-blueprint-need={need.connection ?? need.secret}>
-      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-hover)]">
+      <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-hover)]">
         {brand !== undefined ? <BrandMark brand={brand} size={14} bare /> : <KeyIcon size={14} className="p-text-2" />}
       </span>
       <span className="min-w-0 flex-1">
@@ -163,7 +163,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
         </div>
       </div>
 
-      <div className="grid gap-10 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+      <div className="grid gap-12 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
         <div className="space-y-8">
           <Section title="What it does">
             <div className="grid gap-3 sm:grid-cols-2">
@@ -200,7 +200,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
           <Section title="It asks you first">
             <ul className="space-y-2">
               {page.asks.map((ask) => (
-                <li key={ask} className="t-body flex items-start gap-2.5 p-text-2"><HandPalmIcon size={14} className="mt-0.5 shrink-0 p-accent" />{ask}</li>
+                <li key={ask} className="t-body flex items-start gap-3 p-text-2"><HandPalmIcon size={14} className="mt-px shrink-0 p-accent" />{ask}</li>
               ))}
             </ul>
           </Section>

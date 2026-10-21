@@ -296,14 +296,14 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
         <FieldState field={advisor} what="the advisor settings" onRetry={loadRpcFields}>
           {(value) => (
             <>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <label className="t-status block p-text-2">Second opinion</label>
                 <div className="flex">
                   <Segmented label="Second opinion" value={value.advisorEnabled ? "on" : "off"} segments={ADVISOR_SWITCH}
                     onChange={(id) => advisor.edit({ ...value, advisorEnabled: id === "on" })} />
                 </div>
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-2">
                 <label className="t-status block p-text-2">Minimum severity</label>
                 <div className="flex">
                   <Segmented label="Minimum severity" value={value.advisorMinSeverity}
@@ -390,7 +390,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
         <div className="space-y-1">
           {grants.map((grant) => (
             <div key={`${grant.rule}@${grant.executor}`}
-              className="t-meta flex items-center gap-2 rounded-md px-2 py-1.5 p-card">
+              className="t-meta flex items-center gap-2 rounded-md px-2 py-1 p-card">
               <code className="font-mono p-text">{grant.rule}</code>
               <span className="p-text-3">on</span>
               <span className="p-text-2">{executorLabel(grant.executor)}</span>
@@ -398,7 +398,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
                 type="button"
                 onClick={() => detach(revoke(grant))}
                 disabled={busy !== null}
-                className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50"
+                className="ml-auto px-2 py-px rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50"
                 title={`Ask again next time a command trips ${grant.rule} on ${executorLabel(grant.executor)}`}
               >{busy === `${grant.rule}@${grant.executor}` ? "…" : "Revoke"}</button>
             </div>
@@ -507,7 +507,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
             const readWord = opened === null ? "Read" : "Hide";
 
             return (
-              <div key={row.path} className="rounded-md px-2 py-1.5 p-card space-y-1">
+              <div key={row.path} className="rounded-md px-2 py-1 p-card space-y-1">
                 <div className="t-meta flex items-center gap-2">
                   <code className="font-mono p-text truncate" title={row.path}>{row.path}</code>
                   <span className="p-text-3 shrink-0">
@@ -519,7 +519,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
                       type="button"
                       onClick={() => detach(read(row))}
                       disabled={busy !== null}
-                      className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0"
+                      className="ml-auto px-2 py-px rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0"
                     >{busy === row.path ? "…" : readWord}</button>
                   )}
                   {followed && (
@@ -527,7 +527,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
                       type="button"
                       onClick={() => detach(decide(row, "revoke"))}
                       disabled={busy !== null}
-                      className={`${row.reason === undefined ? "" : "ml-auto "}px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0`}
+                      className={`${row.reason === undefined ? "" : "ml-auto "}px-2 py-px rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0`}
                       title="Stop following this file as instructions"
                     >Revoke</button>
                   )}
@@ -536,15 +536,15 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
                       type="button"
                       onClick={() => detach(decide(row, "approve"))}
                       disabled={busy !== null}
-                      className="px-2 py-0.5 rounded-sm p-card-hover p-text-2 hover:p-text disabled:opacity-50 shrink-0"
+                      className="px-2 py-px rounded-sm p-card-hover p-text-2 hover:p-text disabled:opacity-50 shrink-0"
                       title="Follow these exact contents as instructions"
                     >Approve</button>
                   )}
                 </div>
                 {opened && (
                   <>
-                    <pre className="p-t-code p-text-2 whitespace-pre-wrap break-words
-                      max-h-64 overflow-auto rounded-sm px-2 py-1.5 p-card-hover">{opened.preview}</pre>
+                    <pre className="t-code p-text-2 whitespace-pre-wrap break-words
+                      max-h-64 overflow-auto rounded-sm px-2 py-1 p-card-hover">{opened.preview}</pre>
                     <div className="t-meta t-mono p-text-3 break-all">{opened.digest}</div>
                   </>
                 )}
@@ -557,11 +557,11 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
         <div className="flex gap-2 pt-1">
           {cursor && (
             <button type="button" onClick={() => { setCursor(undefined); setOpen(null); }}
-              className="t-meta px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text">First page</button>
+              className="t-meta px-2 py-px rounded-sm p-card-hover p-text-3 hover:p-text">First page</button>
           )}
           {page?.status === "more" && (
             <button type="button" onClick={() => { setCursor(page.next); setOpen(null); }}
-              className="t-meta px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text">More</button>
+              className="t-meta px-2 py-px rounded-sm p-card-hover p-text-3 hover:p-text">More</button>
           )}
         </div>
       )}
@@ -683,11 +683,11 @@ function AlwaysActiveSkillsCard({
         Pin a workflow skill, such as <code className="font-mono">audit-implementation</code>, and it runs
         every turn without you typing /name.
       </p>
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-2">
         {names.length === 0
           ? <span className="t-meta p-text-3">No skills pinned.</span>
           : names.map(n => (
-            <span key={n} className="t-meta t-mono inline-flex items-center gap-1 px-2 py-0.5 rounded-sm p-card">
+            <span key={n} className="t-meta t-mono inline-flex items-center gap-1 px-2 py-px rounded-sm p-card">
               {n}
               <button type="button" onClick={() => detach(Effect.promise(async () => { await remove(n); }))} aria-label={`Unpin ${n}`} className="p-text-3 hover:p-text">×</button>
             </span>

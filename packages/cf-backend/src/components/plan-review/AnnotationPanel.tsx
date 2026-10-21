@@ -97,7 +97,7 @@ const AnnotationCard = ({
           <textarea
             value={text}
             onChange={(event) => setText(event.target.value)}
-            className="t-meta min-h-20 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-foreground"
+            className="t-meta min-h-20 w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-foreground"
             autoFocus
           />
           <div className="mt-2 flex justify-end gap-2">
@@ -161,13 +161,13 @@ export const AnnotationPanel = ({
       <div className="flex h-11 items-center justify-between border-b border-border/50 px-3">
         <div className="flex items-center gap-2">
           <h2 className="t-status text-foreground">{title}</h2>
-          <span className="t-meta t-mono rounded-full bg-primary/10 px-1.5 py-0.5 text-primary">{annotations.length}</span>
+          <span className="t-meta t-mono rounded-full bg-primary/10 px-1 py-px text-primary">{annotations.length}</span>
         </div>
         {isMobile && onClose && (
-          <button type="button" className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={onClose} aria-label={`Close ${title.toLowerCase()}`}>×</button>
+          <button type="button" className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={onClose} aria-label={`Close ${title.toLowerCase()}`}>×</button>
         )}
       </div>
-      <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2">
+      <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
         {sorted.length === 0 && !onAddGlobal ? (
           <div className="grid flex-1 place-items-center px-4 text-center">
             <div><p className="t-meta text-muted-foreground">No {title.toLowerCase()} yet</p><p className="t-meta mt-1 text-muted-foreground/70">Select text to annotate</p></div>
@@ -189,7 +189,7 @@ export const AnnotationPanel = ({
           <button
             type="button"
             data-annotation-add-global
-            className="t-meta rounded-lg border border-dashed border-border px-3 py-2.5 text-left text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+            className="t-meta rounded-lg border border-dashed border-border px-3 py-2 text-left text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
             onClick={onAddGlobal}
           >
             {globalLabel}
