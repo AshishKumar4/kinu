@@ -302,6 +302,7 @@ interface CensusPerson {
 
 interface CensusAccountRpc extends Rpc.DurableObjectBranded {
   accountsOf(emails: readonly string[]): Promise<string[]>;
+  seedProfile(person: CensusPerson, displayName: string): Promise<void>;
   runDueWork(): Promise<void>;
   pushStale(priya: CensusPerson): Promise<void>;
   deletedAt(): Promise<number | null>;

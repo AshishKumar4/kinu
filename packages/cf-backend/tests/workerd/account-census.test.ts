@@ -149,18 +149,19 @@ describe("deleting an account on real workerd, every store's census", () => {
 
   // Review of the account deletion, 2026-10-20: a delivery mid-write when the box was deleted wrote its bytes after the
   // sweep. The mailbox's bucket holds one write until this test releases it: the box's own R2 seam, nothing inside it.
+  // Its own account, so nothing of the first case's is in its way: Priya's address at her own domain.
   it('a delivery mid-write when the account is deleted lands nothing after the sweep', async () => {
-    const [priyaId = ''] = await account('census-ids').accountsOf([EMAIL]);
-    const priya = { userId: priyaId, email: EMAIL };
+    const [userId = ''] = await account('census-ids').accountsOf(['priya@raman.dev']);
+    const priya = { userId, email: 'priya@raman.dev' };
     const mailbox = env.CENSUS_MAILBOX.get(env.CENSUS_MAILBOX.idFromName(priya.userId));
-    const name = env.CENSUS_MAILNAME.get(env.CENSUS_MAILNAME.idFromName('priya'));
-    const recipient = parseMailRecipient('priya@kinu.run', 'kinu.run');
+    const name = env.CENSUS_MAILNAME.get(env.CENSUS_MAILNAME.idFromName('praman'));
+    const recipient = parseMailRecipient('praman@kinu.run', 'kinu.run');
 
-    if (recipient === null) throw new Error('priya@kinu.run is no Kinu address');
+    if (recipient === null) throw new Error('praman@kinu.run is no Kinu address');
 
-    await account(priya.userId).seedPriya(priya);
-    await name.claim('priya', priya.userId);
-    await mailbox.open({ userId: priya.userId, email: priya.email, username: 'priya', assistant: null });
+    await account(priya.userId).seedProfile(priya, 'Priya Raman');
+    await name.claim('praman', priya.userId);
+    await mailbox.open({ userId: priya.userId, email: priya.email, username: 'praman', assistant: null });
 
     // Each answer however it ends: the account's object aborts as its delete ends, which its caller reads as an error.
     const ended = async (work: Promise<unknown>): Promise<string> => {
