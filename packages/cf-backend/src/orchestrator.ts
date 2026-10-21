@@ -29,8 +29,7 @@ import {
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
   type SubagentReportLedger, type ActorToolsets,
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type BackgroundJobRunner, type JobAuthority,
-  createTeamToolDeps,
-  agentNamer,
+  teamToolDepsFor,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps, type BuiltinStoreInputs, type ServedStores,
   type BoundActor, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult,
@@ -93,7 +92,7 @@ import {
   actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type CFSeat, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
-  hostedDelegationBudget, hostedRetryTools, hostedSubagentRuntime, relayHostedReport, retireStalledTask,
+  hostedRetryTools, hostedSubagentRuntime, relayHostedReport, retireStalledTask,
   hostedOwedReport, hostedParentReport, hostedAutoTitle, reclaimSettledExplorationActors,
   ownerAnswersWait, type ActorSurface, type HostedActorSeams, type SourcesTurn, type SurfaceTurn, type ToolScope,
 } from "./hosted-actors";
@@ -160,7 +159,6 @@ import {
   measuredAt, readWorkspaceAgents, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, turnTags,
-  ROOT_DELEGATION_BUDGET, type DelegationBudget,
   missionOf, summarizeSoul, workspaceGenesisSignal, isPlaceholderMission, drawWorkspaceLogo,
   // Recovery has no live turn, so the owed answer is read from the transcript.
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
@@ -1933,31 +1931,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Built from this actor's own roster. */
   private hostedTeamToolDeps(actor: BoundActor): TeamToolDeps {
     const seams = this.hostedSeams();
-    const delegation = hostedDelegationBudget(seams, actor);
     const roster = seams.roster(actor);
     roster.ensureSchema();
 
-    return createTeamToolDeps({
-      delegation,
+    return teamToolDepsFor({
+      record: actor.record,
+      directory: this.workspaceActors(),
       roster,
       runtime: hostedSubagentRuntime(seams, () => actor),
       temporary: seams.temporary(actor),
-      now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(actor.handle),
       originContext: () => this.agentStores(actor.handle.actorId).workingContext(),
       // The workspace's purpose, shared by every actor in it.
       ownMission: () => this.ownMission(),
-      createName: agentNamer(this.workspaceActors(), roster),
       rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
       broadcastTask: (event) => this.broadcastSubagentEvent({
         kind: 'task',
         ...event,
       }),
       workspaceAgents: () => this.workspaceAgents(true),
-      treeOwner: actor.handle.actorId,
       events: new EventLog(this.watchedExec, actor.handle),
     });
   }
+
 
   /**
    * The account reads a turn's opening makes, each in flight beside its settings revision read rather than after it:
@@ -3506,11 +3502,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return { agent: agentName, created, ...outcome };
       },
     };
-  }
-
-  /** A constant, not stored: the orchestrator is the root (depth 0), so eviction cannot lose it. */
-  protected delegationBudget(): DelegationBudget {
-    return ROOT_DELEGATION_BUDGET;
   }
 
   /** Reads its deps lazily so a mid-lifetime claimOwner lands without rebuilding eval. */

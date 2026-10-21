@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
-import { ROOT_DELEGATION_BUDGET, JsonObjectSchema, type JsonObject, type PeersToolDeps, type SubagentDelivery, type SubagentHandoff, type SubagentRosterEntry, type TeamToolDeps } from '../src/index';
+import { DELEGATION_MAX_DEPTH, JsonObjectSchema, type DelegationBudget, type JsonObject, type PeersToolDeps, type SubagentDelivery, type SubagentHandoff, type SubagentRosterEntry, type TeamToolDeps } from '../src/index';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
 import { initHeadsTables } from '../src/heads/schema';
 import { initSearchTables } from '../src/mcts/schemas';
@@ -13,6 +13,9 @@ import { readWorkspaceAgents } from '../src/read-models/workspace-agents';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import type { EventLog } from '../src/events/hub/log';
+
+/** The workspace's own agent's budget: the root, with the whole cap below it. */
+export const ROOT_DELEGATION_BUDGET: DelegationBudget = { depth: 0, maxDepth: DELEGATION_MAX_DEPTH };
 
 interface Call { action: string; input: JsonObject }
 
