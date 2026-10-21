@@ -18,10 +18,10 @@ import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
 import { EvolutionEngine, historyTurnPairs, type AgentRuntime, type CompletedTurn, type JsonValue, type LLMProviderConfig } from '../../packages/core/src/index';
-import { createConsoleLogger, setDiagnosticsSink, type Logger } from '../../packages/core/src/obs/index';
+import { createConsoleLogger, renderThrownChain, setDiagnosticsSink, type Logger } from '../../packages/core/src/obs/index';
 import { createWorkspace } from '../../packages/core/src/workspace-birth';
 import { createRefinementStore } from '../../packages/core/src/evolution/refinement';
-import { createLocalModelResolver, LocalAgentHost, openWorkspaceCLI, workspaceHome } from '../../packages/cli-backend/src/index';
+import { createLocalModelResolver, LocalAgentHost, type LocalAgentSession, openWorkspaceCLI, workspaceHome } from '../../packages/cli-backend/src/index';
 import { workspaceDatabase } from '../../packages/test-utils/src/index';
 import { ownerTurnsFrom, type OwnerTurn } from '../src/omp';
 import { freezeHeldOut, FrozenHeldOutSchema, recordedShell, shellFromRecord, type FrozenHeldOut } from '../src/omp-run';
@@ -30,6 +30,9 @@ import { armEvolution } from '../src/reactive';
 
 /** A dream is owed every five rated turns, as the cadence takes them. */
 const DREAM_CADENCE = 5;
+
+/** How often a settling session is asked whether a turn still runs. */
+const SETTLE_POLL_MS = 250;
 
 /** Passes a dream may take to settle, its helpers' turns between them, before the run moves on without it. */
 const DREAM_PASSES = 40;
@@ -131,6 +134,30 @@ function armHost(arm: Arm, boundary: { intended: (call: { readonly name: string;
   });
 }
 
+/** Until the session runs and queues no turn: the request's own, and any its background work woke. */
+async function settled(session: LocalAgentSession): Promise<void> {
+  while (session.turnInFlight()) await Bun.sleep(SETTLE_POLL_MS);
+}
+
+/** Cancels the background jobs still running or serving, and the turns their cancellation wakes, until none runs; says
+ *  which commands they were. */
+async function stopJobs(session: LocalAgentSession): Promise<string[]> {
+  const stopped: string[] = [];
+
+  for (;;) {
+    const live = (await session.listBackgroundJobs(100)).filter((job) => job.status === 'running' || job.status === 'serving');
+
+    if (live.length === 0) return stopped;
+
+    for (const job of live) {
+      await session.cancelBackgroundJob(job.id);
+      stopped.push(job.label ?? job.id);
+    }
+
+    await settled(session);
+  }
+}
+
 async function prepare(arm: Arm, train: readonly OwnerTurn[], last: number): Promise<void> {
   const seedDb = workspaceDatabase(join(arm.space, 'agent.db'));
 
@@ -152,14 +179,20 @@ async function prepare(arm: Arm, train: readonly OwnerTurn[], last: number): Pro
     const engine = new EvolutionEngine(rt, historyTurnPairs(rt.stores.history));
     let dreamPasses = 0;
 
+    // A review the provider fails (a fast-tier call past Workers AI's ten minutes, 2026-10-20) is that turn's alone, as in
+    // a workspace: the arm is prepared from the reviews that answered, and says how many did not.
+    const unreviewed: { readonly turnId: string | null; readonly reason: string }[] = [];
+
     for (const [at, turn] of trained.entries()) {
-      await engine.reviewTurn(turn.turn, turn.followup?.text ?? '');
+      const [review] = await Promise.allSettled([engine.reviewTurn(turn.turn, turn.followup?.text ?? '')]);
+
+      if (review.status === 'rejected') unreviewed.push({ turnId: turn.turn.turnId ?? null, reason: renderThrownChain({ cause: review.reason }).slice(0, 500) });
 
       if ((at + 1) % DREAM_CADENCE === 0) dreamPasses += await dream({ lane: () => session.runRefinementLane(), tick: async () => { await host.tick('root'); }, rt });
     }
 
     const evolution = armEvolution({ refinements: session.listRefinements(200), changelog: session.getEvolutionChangelog(200).entries });
-    writeFileSync(join(arm.space, 'prepared.json'), `${JSON.stringify({ ...arm, llm: undefined, trained: trained.length, dreamPasses, evolution, spent, ms: Date.now() - started }, null, 2)}\n`);
+    writeFileSync(join(arm.space, 'prepared.json'), `${JSON.stringify({ ...arm, llm: undefined, trained: trained.length, unreviewed, dreamPasses, evolution, spent, ms: Date.now() - started }, null, 2)}\n`);
   } finally {
     await host.close();
     restore();
@@ -195,11 +228,16 @@ async function answer(arm: Arm, requests: readonly OwnerTurn[], answers: string)
       ended.length = 0;
       fromRecord = shellFromRecord(recordedShell(turn));
       const askedAt = Date.now();
+      // A send settles once the request is admitted to its turn, not when that turn ends (chat-session.ts landings).
       await session.send(turn.turn.userMessage, { id: crypto.randomUUID() });
+      await settled(session);
+      // What the request left running would wake a turn into the next request's conversation.
+      const leftRunning = await stopJobs(session);
       const ran = ended.at(-1);
 
       appendFileSync(answers, `${JSON.stringify({
-        turnId: turn.turn.turnId, request: turn.turn.userMessage, answer: ran?.assistantResponse ?? null, calls: ran?.toolCalls.map((call) => call.name) ?? [],
+        turnId: turn.turn.turnId, request: turn.turn.userMessage, answer: ran?.assistantResponse ?? null,
+        calls: ended.flatMap((each) => each.toolCalls.map((call) => call.name)), turns: ended.length, leftRunning,
         kept, spent, ms: Date.now() - askedAt,
       })}\n`);
       await session.clearConversation();
