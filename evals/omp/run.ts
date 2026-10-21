@@ -7,21 +7,23 @@
  *
  * `prepare` opens the arm's workspace under `<out>/<model>/<arm>/base`: `dreaming` rates the last `--train-last`
  * training turns from the person's real next messages and dreams over them as the lane would; `off` learns nothing.
- * `answer` copies that workspace (`copy-<i>`) and answers every `--of`-th frozen held-out request from `--copy`, each in a
- * cleared conversation; answering rates nothing, so copies learn nothing from each other. Every call Plan would refuse
+ * `answer` answers every `--of`-th frozen held-out request from `--copy`, each on its own copy of that workspace, removed
+ * once its answer is written: nothing a request leaves running or writes reaches the next. A request's answer is its
+ * root's last turn once the whole tree has settled, its hires' turns and the turns their reports wake included; the jobs
+ * still running then stop without a wake. Answering rates nothing, so no request learns from another. Every call Plan would refuse
  * is kept and recorded, and a kept shell command is answered from the held-out turn's own record where it ran the same
  * one. The only way out is the model's host. No request is cut short: it ends on completion or failure, and where its
  * time went (model calls, rate-limit waits, tool calls) is written beside its answer.
  */
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
-import { EvolutionEngine, historyTurnPairs, type AgentRuntime, type CompletedTurn, type JsonValue, type LLMProviderConfig } from '../../packages/core/src/index';
+import { EvolutionEngine, historyTurnPairs, type AgentRuntime, type CompletedTurn, type JobRetirement, type JsonValue, type LLMProviderConfig } from '../../packages/core/src/index';
 import { createConsoleLogger, renderThrownChain, setDiagnosticsSink, type Logger } from '../../packages/core/src/obs/index';
 import { createWorkspace } from '../../packages/core/src/workspace-birth';
 import { createRefinementStore } from '../../packages/core/src/evolution/refinement';
-import { createLocalModelResolver, LocalAgentHost, type LocalAgentSession, openWorkspaceCLI, workspaceHome } from '../../packages/cli-backend/src/index';
+import { createLocalModelResolver, LocalAgentHost, openWorkspaceCLI, workspaceHome } from '../../packages/cli-backend/src/index';
 import { workspaceDatabase } from '../../packages/test-utils/src/index';
 import { ownerTurnsFrom, type OwnerTurn } from '../src/omp';
 import { freezeHeldOut, FrozenHeldOutSchema, recordedShell, shellFromRecord, type FrozenHeldOut } from '../src/omp-run';
@@ -30,9 +32,6 @@ import { armEvolution } from '../src/reactive';
 
 /** A dream is owed every five rated turns, as the cadence takes them. */
 const DREAM_CADENCE = 5;
-
-/** How often a settling session is asked whether a turn still runs. */
-const SETTLE_POLL_MS = 250;
 
 /** Passes a dream may take to settle, its helpers' turns between them, before the run moves on without it. */
 const DREAM_PASSES = 40;
@@ -134,30 +133,6 @@ function armHost(arm: Arm, boundary: { intended: (call: { readonly name: string;
   });
 }
 
-/** Until the session runs and queues no turn: the request's own, and any its background work woke. */
-async function settled(session: LocalAgentSession): Promise<void> {
-  while (session.turnInFlight()) await Bun.sleep(SETTLE_POLL_MS);
-}
-
-/** Cancels the background jobs still running or serving, and the turns their cancellation wakes, until none runs; says
- *  which commands they were. */
-async function stopJobs(session: LocalAgentSession): Promise<string[]> {
-  const stopped: string[] = [];
-
-  for (;;) {
-    const live = (await session.listBackgroundJobs(100)).filter((job) => job.status === 'running' || job.status === 'serving');
-
-    if (live.length === 0) return stopped;
-
-    for (const job of live) {
-      await session.cancelBackgroundJob(job.id);
-      stopped.push(job.label ?? job.id);
-    }
-
-    await settled(session);
-  }
-}
-
 async function prepare(arm: Arm, train: readonly OwnerTurn[], last: number): Promise<void> {
   const seedDb = workspaceDatabase(join(arm.space, 'agent.db'));
 
@@ -199,53 +174,59 @@ async function prepare(arm: Arm, train: readonly OwnerTurn[], last: number): Pro
   }
 }
 
-async function answer(arm: Arm, requests: readonly OwnerTurn[], answers: string): Promise<void> {
-  // The kept calls of the request being answered, what its own record answers a kept shell command with, and where its
-  // time went.
-  let kept: Kept[] = [];
-  let fromRecord: (name: string, input: JsonValue) => string | null = () => null;
-  let spent = spentNothing();
+/** One request on its own copy of the prepared workspace at `prepared`, as the line its answers file keeps. */
+async function answered(arm: Arm, prepared: string, turn: OwnerTurn) {
+  // The kept calls of the request, what its own record answers a kept shell command with, and where its time went.
+  const kept: Kept[] = [];
+  const fromRecord = shellFromRecord(recordedShell(turn));
+  const spent = spentNothing();
   const restore = setDiagnosticsSink(tallying(() => spent));
+
+  rmSync(arm.space, { recursive: true, force: true });
+  cpSync(prepared, arm.space, { recursive: true });
 
   const host = armHost(arm, {
     intended: (call) => { kept.push({ ...call, answered: fromRecord(call.name, call.input) !== null }); },
     recorded: (name, input) => fromRecord(name, input) ?? KEPT,
   });
 
-  // The turns each request ran, as their ends report them.
+  // The turns the root ran, as their ends report them, and every agent of the tree that ran one.
   const ended: CompletedTurn[] = [];
+  const agents = new Set(['root']);
 
   const unsubscribe = host.subscribe((key, event) => {
+    agents.add(key);
+
     if (key === 'root' && event.type === 'turn-end') ended.push(event.turn);
   });
 
   try {
     const session = await host.acquire('root');
+    const askedAt = Date.now();
 
-    for (const turn of requests) {
-      kept = [];
-      spent = spentNothing();
-      ended.length = 0;
-      fromRecord = shellFromRecord(recordedShell(turn));
-      const askedAt = Date.now();
-      // A send settles once the request is admitted to its turn, not when that turn ends (chat-session.ts landings).
-      await session.send(turn.turn.userMessage, { id: crypto.randomUUID() });
-      await settled(session);
-      // What the request left running would wake a turn into the next request's conversation.
-      const leftRunning = await stopJobs(session);
-      const ran = ended.at(-1);
+    // A send settles once the request is admitted to its turn; the tree settles once nothing runs or is owed.
+    await session.send(turn.turn.userMessage, { id: crypto.randomUUID() });
+    await host.settle();
+    const answeredAt = Date.now();
+    const left: JobRetirement = { stopped: [], refused: [] };
 
-      appendFileSync(answers, `${JSON.stringify({
-        turnId: turn.turn.turnId, request: turn.turn.userMessage, answer: ran?.assistantResponse ?? null,
-        calls: ended.flatMap((each) => each.toolCalls.map((call) => call.name)), turns: ended.length, leftRunning,
-        kept, spent, ms: Date.now() - askedAt,
-      })}\n`);
-      await session.clearConversation();
+    for (const agent of agents) {
+      const retired = await host.peek(agent)?.retireJobs();
+
+      left.stopped.push(...retired?.stopped ?? []);
+      left.refused.push(...retired?.refused ?? []);
     }
+
+    return {
+      turnId: turn.turn.turnId, request: turn.turn.userMessage, answer: ended.at(-1)?.assistantResponse ?? null,
+      calls: ended.flatMap((each) => each.toolCalls.map((call) => call.name)), turns: ended.length, agents: agents.size,
+      leftRunning: left.stopped, refusedStop: left.refused, kept, spent, ms: answeredAt - askedAt,
+    };
   } finally {
     unsubscribe();
     await host.close();
     restore();
+    rmSync(arm.space, { recursive: true, force: true });
   }
 }
 
@@ -278,9 +259,6 @@ if (import.meta.main) {
       const heldOut = ownerTurnsFrom(readFileSync(join(data, 'held-out.jsonl'), 'utf8'));
       const frozen = frozenSet(data, heldOut, Number(values['held-out']), Number(values.seed));
       const [copy, of] = [Number(values.copy), Number(values.of)];
-      const space = join(base, `copy-${String(copy)}`);
-
-      if (!existsSync(space)) cpSync(join(base, 'base'), space, { recursive: true });
 
       const requests = frozen.turnIds.filter((_, at) => at % of === copy).map((id) => {
         const turn = heldOut.find((candidate) => candidate.turn.turnId === id);
@@ -290,7 +268,11 @@ if (import.meta.main) {
         return turn;
       });
 
-      await answer({ arm, spec, snapshot, llm: workersAi(account, token, model), space }, requests, join(base, `answers-${String(copy)}.jsonl`));
+      const answering: Arm = { arm, spec, snapshot, llm: workersAi(account, token, model), space: join(base, `copy-${String(copy)}`) };
+
+      for (const turn of requests) {
+        appendFileSync(join(base, `answers-${String(copy)}.jsonl`), `${JSON.stringify(await answered(answering, join(base, 'base'), turn))}\n`);
+      }
     }
 
     if (egress.refused.length > 0) writeFileSync(join(base, `egress-refused-${phase}-${values.copy}.json`), `${JSON.stringify(egress.refused)}\n`);

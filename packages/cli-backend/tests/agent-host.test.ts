@@ -1161,6 +1161,31 @@ describe('LocalAgentHost', () => {
     await host.close();
   });
 
+  // A run that answers one request and moves on (the OMP runner) reads the request's answer only once the whole tree is
+  // quiet: the hire's turn, and the turn its report then woke in its hirer.
+  test("settle returns once a hire's report has woken its hirer and that turn has ended", async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const gated = gatedFirstModel();
+    const { host } = makeHost(state, gated.model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const ended: string[] = [];
+
+    host.subscribe((agent, event) => {
+      if (event.type === 'turn-end') ended.push(agent);
+    });
+    const team = await host.team('root');
+
+    await team.create({ name: 'researcher', role: 'researcher', mission: 'Investigate the incident.' });
+    await team.assign({ name: 'researcher', task: 'Find the root cause and report it.', mode: 'build' });
+    await gated.started;
+    gated.release();
+    await host.settle();
+
+    expect({ ended, inFlight: ['root', 'root/researcher'].map((key) => host.peek(key)?.turnInFlight()) })
+      .toEqual({ ended: ['root/researcher', 'root'], inFlight: [false, false] });
+    await host.close();
+  });
+
   /** B10, local host: one assignment row, one runner, one turn, driven by the brief rather than a reactor digest. */
   test('a hired child runs its brief once, as its own instruction, under the row\'s mode', async () => {
     const brief = 'Reconcile the ledger and report the variance.';

@@ -238,6 +238,8 @@ export class LocalAgentHost {
   private closed = false;
   /** Passes started outside a turn; close() joins them before ending the sessions they use. */
   private readonly answerPasses = new Set<Promise<void>>();
+  /** Wakes not yet drained: settle() joins them, so a turn one agent's work owes another is not missed. */
+  private readonly wakes = new Set<Promise<void>>();
 
   constructor(private readonly opts: LocalAgentHostOptions) {}
 
@@ -350,6 +352,23 @@ export class LocalAgentHost {
     const entry = await this.resolveEntry(address);
 
     return readWorkspaceWork(entry.ws.rt.storage.sql, entry.ws.rt.actor, describeActors(entry));
+  }
+
+  /**
+   * Until no hosted agent runs, owes or is being woken to a turn: every wake drained and every session's queued turns
+   * and background work joined, each within its surface's settle grace, again while a pass wakes or opens another. A job
+   * past that grace is left running for its owner to retire.
+   */
+  async settle(): Promise<void> {
+    for (;;) {
+      const hosted = this.entries.size;
+
+      await Promise.all([...this.wakes, ...this.answerPasses]);
+
+      for (const entry of this.entries.values()) await entry.session.settleBackgroundWork();
+
+      if (this.wakes.size === 0 && this.answerPasses.size === 0 && this.entries.size === hosted) return;
+    }
   }
 
   async close(): Promise<void> {
@@ -1469,9 +1488,16 @@ export class LocalAgentHost {
   private wake(entry: HostEntry, source: string): void {
     // Wakes can outlive close(); driving after close() would use a closed handle.
     if (this.closed) return;
+    const { promise, resolve } = Promise.withResolvers<void>();
+
+    this.wakes.add(promise);
     queueMicrotask(() => detach(Effect.promise(async () => {
-      if (this.closed) return;
-      await this.drain(entry, source);
+      try {
+        if (!this.closed) await this.drain(entry, source);
+      } finally {
+        this.wakes.delete(promise);
+        resolve();
+      }
     })));
   }
 
