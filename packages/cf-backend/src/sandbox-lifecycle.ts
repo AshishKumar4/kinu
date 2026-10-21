@@ -45,6 +45,10 @@ const STAGE_CONSEQUENCE = {
     + 'cold on its next use, without its in-memory state. Until you answer, the container keeps running.',
   recovered: 'Every computer tool works: the workspace is as it was at that time. Rebuild the folders named above '
     + 'before you rely on them, and redo any edit made after that time that you still need.',
+  'process-ended': 'A process you started on the computer has ended, and nothing starts it again. Read what it wrote '
+    + 'last, above, and start it again yourself if you still need it.',
+  'process-restored': 'The computer restarted and started this process again: it runs, but anything it held in memory '
+    + 'is gone.',
 } satisfies Record<IncidentStage, string>;
 
 function isIncidentStage(name: string): name is IncidentStage {
@@ -67,6 +71,9 @@ const SandboxLifecycleIncidentSchema = v.strictObject({
   reason: v.pipe(v.string(), v.minLength(1), v.maxLength(MAX_REASON_CHARS)),
   processId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(200))),
   port: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65_535))),
+  /** The job a computer's process runs as, on `process-ended` and `process-restored`. */
+  job: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(200))),
+  exitCode: v.optional(v.pipe(v.number(), v.integer())),
 });
 
 export type SandboxLifecycleIncident = v.InferOutput<typeof SandboxLifecycleIncidentSchema>;
@@ -143,6 +150,10 @@ export function lifecycleIncident(incident: DevboxIncident, attempts: number): S
   if (incident.processId !== undefined) report.processId = incident.processId;
 
   if (incident.port !== undefined) report.port = incident.port;
+
+  if (incident.job !== undefined) report.job = incident.job;
+
+  if (incident.exitCode !== undefined) report.exitCode = incident.exitCode;
 
   return report;
 }
