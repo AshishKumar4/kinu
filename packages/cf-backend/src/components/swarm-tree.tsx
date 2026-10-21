@@ -13,6 +13,7 @@ import { useElementSize } from "@/hooks/use-element-size";
 import type { ForkNode } from "@kinu.run/core";
 import { ancestorIds, cleanNodeLabel, clipToWidth, isCompeted, LABEL_MIN_SCALE, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX, NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, viewNoteFor, type ExplorerSelection } from "@kinu.run/core/swarm-view";
 import { scoreBand } from '@kinu.run/core/swarm-view';
+import { Button } from "@/components/ui/Button";
 
 interface SwarmTreeRegion {
 	runId: string;
@@ -998,12 +999,7 @@ function positionBandTitles(
 
 function TreeControl({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
 	return (
-		<button
-			type="button" onClick={onClick} title={label} aria-label={label}
-			className="p-button-ghost inline-flex size-6 items-center justify-center rounded-sm"
-		>
-			{children}
-		</button>
+		<Button variant="ghost" size="sm" icon={children} onClick={onClick} title={label} aria-label={label} />
 	);
 }
 

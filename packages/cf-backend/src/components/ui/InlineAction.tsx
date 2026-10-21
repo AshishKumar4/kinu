@@ -4,6 +4,7 @@
  */
 import type { ComponentProps } from "react";
 
-export function InlineAction({ className, type = "button", ...rest }: ComponentProps<"button">) {
-  return <button type={type} className={`p-inline-action${className === undefined ? "" : ` ${className}`}`} {...rest} />;
+/** `quiet`: the third ink, a dotted underline at rest, as a turn's Details and Retry are. */
+export function InlineAction({ quiet = false, className, type = "button", ...rest }: ComponentProps<"button"> & { quiet?: boolean }) {
+  return <button type={type} className={`p-inline-action${className === undefined ? "" : ` ${className}`}`} data-quiet={quiet ? "" : undefined} {...rest} />;
 }

@@ -7,6 +7,7 @@ import type { AsyncResource } from "@/hooks/use-async-resource";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { PlanPages } from "./use-plan-pages";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { InlineAction } from "@/components/ui/InlineAction";
 
 const PlanReviewView = lazy(() => import("./PlanReviewView"));
 
@@ -61,7 +62,7 @@ function PlanPage({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry,
     <div data-plan-page={`${item.owner.name}:${item.plan.id}`} className="flex h-full min-h-0 flex-col space-y-3 animate-fade-in">
       {!mine && (
         <span className="t-meta flex min-w-0 shrink-0 flex-col items-start gap-px p-text-3">Read-only: {item.owner.name}'s plan
-          {onReviewActor && <button type="button" className="text-left p-accent-fg" onClick={() => void onReviewActor(item.owner.name)}>Review in {item.owner.name}'s conversation</button>}
+          {onReviewActor && <InlineAction className="text-left" onClick={() => void onReviewActor(item.owner.name)}>Review in {item.owner.name}'s conversation</InlineAction>}
         </span>
       )}
       {resource.status === "error" && (

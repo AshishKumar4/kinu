@@ -45,6 +45,7 @@ import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
 import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
 import { Dot } from "@/components/ui/Dot";
+import { InlineAction } from "@/components/ui/InlineAction";
 
 const MessageCreatedAtSchema = v.looseObject({
   createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),
@@ -140,11 +141,11 @@ function FailedTurnRow({ message, live, onRetry }: { message: UIMessage; live: b
       <div className="p-turn-mark">
         <WarningCircleIcon size={14} weight="fill" className="p-danger" aria-hidden />
         <span className="min-w-0 truncate" title={said}><span className="p-text-2">This turn stopped.</span> {said}</span>
-        <button type="button" className="p-turn-mark-link" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide" : "Details"}</button>
+        <InlineAction quiet className="shrink-0" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide" : "Details"}</InlineAction>
         {onRetry !== undefined && (
-          <button type="button" onClick={onRetry} className="p-turn-mark-link inline-flex items-center gap-1">
+          <InlineAction quiet onClick={onRetry} className="inline-flex shrink-0 items-center gap-1">
             <ArrowClockwiseIcon size={11} aria-hidden />Retry
-          </button>
+          </InlineAction>
         )}
       </div>
       {open && <pre className="p-pill-detail !ml-[21px]">{raw}</pre>}

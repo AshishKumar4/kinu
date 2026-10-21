@@ -1,10 +1,9 @@
 import { createContext, memo, useContext, useCallback, useMemo, useState, type ReactNode } from "react";
-import { CaretRightIcon, CopyIcon, ImageBrokenIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { CaretRightIcon, ImageBrokenIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { Loader } from "@/components/ui/Loader";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { findPlaneReferences, isWholeReference, linkProse, MAX_LINES_PER_FILE, promoteSlateLinks, slateLinkId, type ChangelogEntry, type DiffLine, type MarkdownNode } from "@kinu.run/core";
 import { ephemeralSlateId, slateUiSegments, type EphemeralSlateAddress, type SlateUiSegment } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
@@ -13,6 +12,7 @@ import { SlateInlineContext } from "@/components/slates/context";
 import { Pressable } from "@/components/ui/Pressable";
 import { Button } from "@/components/ui/Button";
 import { InlineAction } from "@/components/ui/InlineAction";
+import { CopyText } from "@/components/ui/CopyButton";
 
 const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
   add: { tone: "p-badge-success px-3", mark: "+" },
@@ -48,7 +48,6 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
 
 /** `wrap`: long lines wrap instead of scrolling, for data read rather than code copied (a tool's arguments). */
 export function CodeBlock({ children, className, wrap = false }: { children: string; className?: string; wrap?: boolean }) {
-  const { status, copy } = useCopy();
   const code = children.replace(/\n$/, "");
   const lang = className?.replace(/^language-/, "") ?? "";
 
@@ -66,10 +65,7 @@ export function CodeBlock({ children, className, wrap = false }: { children: str
     <div className={`p-code my-2 rounded-lg overflow-hidden${wrap ? " p-code-wrap" : ""}`}>
       <div className="t-meta t-mono p-code-head flex items-center justify-between gap-2 px-3 py-1">
         <span className="truncate font-mono">{lang || "code"}</span>
-        <button onClick={() => copy(code)} type="button"
-          className={`flex shrink-0 cursor-pointer items-center gap-1 transition-colors ${status === "failed" ? "p-danger" : "hover:p-text"}`}>
-          <CopyIcon size={12} />{copyLabel(status)}
-        </button>
+        <CopyText value={code} />
       </div>
       {html === null
         ? <pre className="t-code p-text p-scroll-x p-code-scroll m-0 px-3 py-2"><code>{code}</code></pre>

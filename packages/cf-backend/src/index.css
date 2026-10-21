@@ -1261,8 +1261,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* A turn's failure, where it happened: one quiet line. Its words open in place; the pill above the prompt acts. */
 .p-turn-mark { display: flex; min-width: 0; align-items: baseline; gap: 7px; color: var(--c-text-3); font-size: 13px; line-height: 20px; }
 .p-turn-mark > svg { flex-shrink: 0; align-self: center; }
-.p-turn-mark-link { flex-shrink: 0; color: var(--c-text-3); text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; cursor: pointer; }
-.p-turn-mark-link:hover { color: var(--c-text); }
+.p-inline-action[data-quiet] { flex-shrink: 0; color: var(--c-text-3); text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; cursor: pointer; }
+.p-inline-action[data-quiet]:hover { color: var(--c-text); }
 
 /* ── Images in the thread ──────────────────────────────────────────
    A picture the agent made or named, shown where it was named: at its own size up to the column, on the recessed

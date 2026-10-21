@@ -4,6 +4,8 @@ import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { changeBody, changeTotals, changeTree, type ChangeSet, type FileDiff } from "@kinu.run/core";
 import { ChangeMark, count, Counts, fullTime, sinceLabel } from "./diff";
 import { Pressable } from "@/components/ui/Pressable";
+import { IconControl } from "@/components/ui/IconControl";
+import { Button } from "@/components/ui/Button";
 
 function Tag({ file }: { file: FileDiff }) {
   const body = changeBody(file);
@@ -133,19 +135,14 @@ export function IconButton({ label, onClick, disabled = false, children, classNa
   className?: string;
 }) {
   return (
-    <button type="button" aria-label={label} title={label} onClick={onClick} disabled={disabled}
-      className={`flex size-7 shrink-0 items-center justify-center rounded-md p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text disabled:opacity-35 disabled:hover:bg-transparent ${className}`}>
+    <IconControl place="bar" aria-label={label} title={label} onClick={onClick} disabled={disabled} className={`shrink-0 disabled:opacity-35 ${className}`}>
       {children}
-    </button>
+    </IconControl>
   );
 }
 
 export function MarkReviewed({ onClick, className = "" }: { onClick: () => void; className?: string }) {
   return (
-    <button type="button" onClick={onClick} data-mark-reviewed
-      className={`t-status inline-flex h-7 shrink-0 items-center gap-2 rounded-md border p-border px-2 p-text-2 transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-hover)] hover:p-text ${className}`}>
-      <CheckIcon size={12} weight="bold" />
-      Mark reviewed
-    </button>
+    <Button size="sm" icon={<CheckIcon size={14} weight="bold" />} onClick={onClick} data-mark-reviewed className={`shrink-0 ${className}`}>Mark reviewed</Button>
   );
 }
