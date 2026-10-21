@@ -48,7 +48,7 @@ export const NONCE_BYTES = 16;
 
 const EndSchema = v.picklist(['helper', 'tab']);
 
-export type DeploySignInEnd = v.InferOutput<typeof EndSchema>;
+type DeploySignInEnd = v.InferOutput<typeof EndSchema>;
 
 /** What the page asked of its sign-in: where it ends, the connect run it ends for, and whether it was for API Tokens. */
 export interface DeploySignInAsk {
