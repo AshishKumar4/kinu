@@ -106,6 +106,20 @@ const PRIOR_VERSION = 'version-0';
 
 const PRIOR_BUILD: UpdateBuild = { version: '0.3.9+old0000', sha: 'old0000', builtAt: '2026-09-10T10:00:00.000Z' };
 
+/** What creating an AI gateway requires, as the reference names it; one missing is refused as f44999 refused it on
+ *  2026-10-21 (code 7001, "Required"), which the fake had accepted until then. */
+const GATEWAY_REQUIRED = ['id', 'cache_invalidate_on_update', 'cache_ttl', 'collect_logs', 'rate_limiting_interval', 'rate_limiting_limit'];
+
+function gatewayRefusal(call: CloudflareCall): CloudflareHttpResponse | null {
+  if (call.method !== 'POST' || !call.path.endsWith('/ai-gateway/gateways')) return null;
+
+  const body = v.parse(v.record(v.string(), v.unknown()), call.body ?? {});
+
+  if (GATEWAY_REQUIRED.every((field) => body[field] !== undefined)) return null;
+
+  return { status: 400, body: { success: false, errors: [{ code: 7001, message: 'Required' }], result: null } };
+}
+
 class FakeCloudflare implements CloudflareTransport {
   readonly calls: Recorded[] = [];
 
@@ -347,6 +361,12 @@ class FakeCloudflare implements CloudflareTransport {
    *  the request goes to the serving version (Cloudflare's version-overrides doc). */
   overridesLag = false;
 
+  /** Asks of the health the staged version's override still misses, as one carried a moment late does. */
+  overrideLateAsks = 0;
+
+  /** Asks a just-bound address still answers 404 to, while Cloudflare brings it up. */
+  addressWarmingAsks = 0;
+
   private uploads = 0;
 
   refuseOnce: { method?: string; path: string; status: number; code: number; message: string } | null = null;
@@ -370,7 +390,10 @@ class FakeCloudflare implements CloudflareTransport {
   answering(headers: Readonly<Record<string, string>> | undefined): string {
     const override = new Headers(headers).get('cloudflare-workers-version-overrides') ?? '';
     const named = /^kinu="(.+)"$/u.exec(override)?.[1];
-    const live = this.overridesLag ? [] : this.deployments.at(-1) ?? [];
+    const late = this.overrideLateAsks > 0;
+
+    if (late) this.overrideLateAsks -= 1;
+    const live = this.overridesLag || late ? [] : this.deployments.at(-1) ?? [];
 
     return live.find((entry) => entry.version_id === named)?.version_id ?? this.serving();
   }
@@ -378,9 +401,15 @@ class FakeCloudflare implements CloudflareTransport {
   async request(call: CloudflareCall): Promise<CloudflareHttpResponse> {
     this.calls.push({ method: call.method, path: call.path, body: call.body, bearer: undefined });
 
-    const refusal = this.refusalFor(call.method, call.path);
+    const refusal = this.refusalFor(call.method, call.path) ?? gatewayRefusal(call);
 
     if (refusal !== null) return refusal;
+
+    // Its errors and messages null, not empty, as f44999 answered it on 2026-10-21.
+    if (call.path.endsWith('/assets-upload-session')) {
+      return { status: 200, body: { result: { jwt: 'session-token', buckets: [['1'.repeat(32), '2'.repeat(32)]] }, success: true, errors: null, messages: null } };
+    }
+
     const read = this.accountCall(call);
 
     if (read !== null) return read;
@@ -619,10 +648,6 @@ class FakeCloudflare implements CloudflareTransport {
       return this.scriptExists ? { logpush: false, bindings: [...this.bindings, ...secrets.map((name) => ({ type: 'secret_text', name }))] } : null;
     }
 
-    if (path.endsWith('/assets-upload-session')) {
-      return { jwt: 'session-token', buckets: [['1'.repeat(32), '2'.repeat(32)]] };
-    }
-
     return { id: 'account-1', name: 'Acme' };
   }
 }
@@ -763,6 +788,9 @@ let freshLink = false;
 /** The tag a run sets on its version; a second run has its own. */
 let runTag = 'run-tag-1';
 
+/** Each wait a step asked of the run, in milliseconds. */
+let waits: number[] = [];
+
 let served: UpdateBuild;
 
 /** The computer's tools parts the channel serves: as many bytes as the release names for each. */
@@ -774,6 +802,12 @@ const healthFetch: HttpGet = async (url, headers) => {
   if (part !== undefined) return toolsBytes.has(part) ? new Response(new Uint8Array(toolsBytes.get(part) ?? 0)) : new Response('missing', { status: 404 });
 
   if (!url.endsWith('/api/health')) throw new Error(`unexpected fetch ${url}`);
+
+  if (cloudflare.addressWarmingAsks > 0) {
+    cloudflare.addressWarmingAsks -= 1;
+
+    return new Response('Not found', { status: 404 });
+  }
 
   const version = cloudflare.answering(headers);
   const prior = version === PRIOR_VERSION;
@@ -799,6 +833,8 @@ async function contextFor(inputs: DeployInputs = INPUTS, manifest: ReleaseManife
     freshSetupLink: freshLink,
     tag: runTag,
     note: () => undefined,
+    // The smoke's patience, counted and never slept: a test runs on no clock of its own.
+    wait: async (ms) => { waits.push(ms); },
   };
 }
 
@@ -823,6 +859,7 @@ beforeEach(async () => {
   updating = false;
   freshLink = false;
   runTag = 'run-tag-1';
+  waits = [];
   served = { version: MANIFEST.version, sha: MANIFEST.sha, builtAt: MANIFEST.builtAt };
   await vault.write(ACCESS_TOKEN_KEY, 'access-token-value');
   await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
@@ -1488,6 +1525,30 @@ describe('what the address and smoke steps check', () => {
     expect(rows.find((row) => row.id === 'smoke')?.state).toBe('failed');
     expect(cloudflare.serving()).toBe(PRIOR_VERSION);
     expect(cloudflare.secrets.has(DEPLOYMENT_RECORD_SECRET)).toBe(false);
+  });
+
+  // f44999, 2026-10-21: an update's smoke ran in the second its 0% deployment was made, and the serving version answered;
+  // the override reached the staged one a moment later.
+  test('a smoke the staged version does not answer yet asks again until it does', async () => {
+    await run();
+    ledger = new ArrayLedger();
+    runTag = 'run-tag-2';
+    await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
+    await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
+    cloudflare.overrideLateAsks = 2;
+
+    const rows = await run();
+
+    expect({ smoke: rows.find((row) => row.id === 'smoke')?.state, waits }).toEqual({ smoke: 'done', waits: [3000, 3000] });
+  });
+
+  // f44999, 2026-10-21: a first deploy's smoke met the workers.dev address it had just bound answering 404.
+  test('a fresh address that answers 404 while it comes up is asked again until the version answers', async () => {
+    cloudflare.addressWarmingAsks = 3;
+
+    const rows = await run();
+
+    expect({ smoke: rows.find((row) => row.id === 'smoke')?.state, waits }).toEqual({ smoke: 'done', waits: [3000, 3000, 3000] });
   });
 
   test('a smoke answered by the serving version fails, though that version carries the same build', async () => {

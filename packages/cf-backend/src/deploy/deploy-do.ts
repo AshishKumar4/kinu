@@ -879,6 +879,7 @@ export class DeployRunDO extends DurableObject<Env> {
           facts: factsFrom(this.rows()),
           http: (url, headers) => fetch(url, { headers }),
           note: () => undefined,
+          wait: async (ms) => { await new Promise<void>((resolve) => { setTimeout(resolve, ms); }); },
         },
         this.ledger(),
         (progress) => this.deliver(run, { type: 'deploy.progress', progress }),

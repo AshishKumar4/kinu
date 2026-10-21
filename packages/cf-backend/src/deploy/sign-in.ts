@@ -1,6 +1,8 @@
 // The deploy page's sign-in, kept in a DeployRunDO of its own (`deploy-session.<sha256(cookie)>`): the PKCE leg, the
 // Cloudflare user it proved, the grant it reads with until a run takes the refresh token, and the account whose run it
 // shows. Its hour starts at the callback; the object's alarm deletes it then (deploy-do.ts `tick`).
+// cf-only by design (scripts/capability-parity.lock.json): it holds a browser's sign-in across a closed tab, which the
+// terminal `kinu deploy` signs in through its own localhost redirect and does not keep, so a CLI copy would be dead code.
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import {

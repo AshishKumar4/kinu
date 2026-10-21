@@ -52,6 +52,8 @@ export interface DeployContext {
   readonly tag: string;
   /** Never a secret: pass resource names, not values. */
   note(message: string): void;
+  /** Resolves after `ms`: a step that waits on Cloudflare to carry a change everywhere waits through this. */
+  wait(ms: number): Promise<void>;
 }
 
 export const FACT_ACCOUNT_NAME = 'account.name';
