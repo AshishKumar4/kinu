@@ -11,7 +11,7 @@ import { runMetadata } from '../orchestrator/chat-queue';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import { authoredTurnMetadata } from '../types/turn-metadata';
 import { runHeadInference, type HeadRun } from './head-inference';
-import type { HeadReport } from './types';
+import type { HeadInput, HeadReport } from './types';
 
 export interface DeliveredRunPorts {
   /** Each round's preparation, under that round's claim: what the host binds its calls to. */
@@ -20,7 +20,8 @@ export interface DeliveredRunPorts {
   readonly ended: (outcome: HeadReport) => Promise<() => void>;
 }
 
-export async function driveDeliveredRun(actor: HostedActor, task: AgentTurnTask, ports: DeliveredRunPorts): Promise<void> {
+/** Its report is what its end kept, handed back too for a host whose caller journals it (`driveSeatedRun`). */
+export async function driveDeliveredRun(actor: HostedActor, task: AgentTurnTask, ports: DeliveredRunPorts): Promise<HeadReport> {
   const { runId, sequenceId: turnId } = task;
   const recorder = actor.stores.eventRecorder;
   const transcript = actor.stores.history.transcript(CHAT_SESSION_ID);
@@ -62,4 +63,17 @@ export async function driveDeliveredRun(actor: HostedActor, task: AgentTurnTask,
     // A round a dead isolate opened and the run, run again, never reached: the run's end is its end too.
     return actor.stores.claims.settleRunIn(runId, 'indeterminate');
   }))();
+
+  return report;
+}
+
+/**
+ * A run on a host whose run actors share its process, driven as a delivered run: its chat holds its brief and its
+ * answer, and its run its end, as a cloud agent's do; its report is handed back to the call that seated it.
+ */
+export async function driveSeatedRun(actor: HostedActor, input: HeadInput, run: Pick<HeadRun, 'prepare'> & { readonly runId: string }): Promise<HeadReport> {
+  // Nothing to keep beside its commit: the report goes back to its caller, which journals it.
+  return await driveDeliveredRun(actor, { sequenceId: input.id, runId: run.runId, body: input.task, mode: input.mode }, {
+    prepare: run.prepare, ended: async () => () => {},
+  });
 }
