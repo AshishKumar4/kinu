@@ -140,6 +140,7 @@ function ServerPage() {
  */
 const VISITOR_ROUTES = (
   <>
+    <Route path={APP_ROUTES.connected} element={<Page label="connected"><ConnectedPage /></Page>} />
     <Route element={<VisitorShell />}>{EXPLORE_ROUTES}</Route>
     <Route element={<GalleryShell />}>{LISTED_SLATE_ROUTE}</Route>
     <Route path="*" element={<Page label="server"><ServerPage /></Page>} />

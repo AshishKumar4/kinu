@@ -1,5 +1,5 @@
 import { describe, expect, setSystemTime, test } from 'bun:test';
-import { asFetchFunction, type JsonValue, type OAuthCredential } from '@kinu.run/core';
+import { asFetchFunction, sha256Hex, type JsonValue, type OAuthCredential } from '@kinu.run/core';
 import * as v from 'valibot';
 import { getOAuthProvider, listConfiguredOAuthProviders } from '../src/auth/providers';
 import {
@@ -21,7 +21,7 @@ import {
   workerContext, workspaceObject,
 } from './helpers/bindings';
 import { authenticateRequest, type AuthIdentity } from '../src/auth/session';
-import { CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
+import { CLI_APPROVAL_CSRF_COOKIE_NAME, oauthStateCookieName, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import { pollCliAuth, startCliAuth } from '../src/cli/auth-store';
 import type { CliRoutesEnv } from '../src/cli/routes';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
@@ -611,8 +611,8 @@ async function cloudflareSignInSteps(
     if (!start) throw new Error('auth route did not handle the sign-in start');
     const state = new URL(start.headers.get('location') ?? '').searchParams.get('state');
 
-    const setCookie = start.headers.getSetCookie()
-      .find((value) => value.startsWith(`${OAUTH_STATE_COOKIE_NAME}=`));
+    const handoffName = oauthStateCookieName(await sha256Hex(state ?? ''));
+    const setCookie = start.headers.getSetCookie().find((value) => value.startsWith(`${handoffName}=`));
 
     if (!state || !setCookie) throw new Error('sign-in start handed out no bound handoff');
     await options.afterStart?.(state);
@@ -695,7 +695,9 @@ async function cloudflareSignInSteps(
       id: 'cf-user-6', email: 'p@example.com',
     });
 
-    for (const [response, name] of [[start, OAUTH_STATE_COOKIE_NAME], [done, SESSION_COOKIE_NAME]] as const) {
+    const handoffName = oauthStateCookieName(await sha256Hex(new URL(start.headers.get('location') ?? '').searchParams.get('state') ?? ''));
+
+    for (const [response, name] of [[start, handoffName], [done, SESSION_COOKIE_NAME]] as const) {
       const cookie = present(setCookieNamed(response, name), name);
       const attributes = cookie.split(';').slice(1).map((part) => part.trim().split('=')[0]?.toLowerCase());
 

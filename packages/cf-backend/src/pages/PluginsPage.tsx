@@ -1,7 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { PlugsConnectedIcon, PuzzlePieceIcon } from "@phosphor-icons/react";
-import { APP_ROUTES } from "@kinu.run/core";
 import type { McpServerSummary } from "@kinu.run/core";
 import { mapResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import { useMcpServers } from "@/hooks/use-mcp-servers";
@@ -109,7 +108,7 @@ export default function PluginsPage() {
             }))}
         />
       </div>
-      {managing && <AccountPanelModal panel="mcp" mcp={mcp} returnTo={APP_ROUTES.plugins} onClose={() => setManaging(false)} />}
+      {managing && <AccountPanelModal panel="mcp" mcp={mcp} onClose={() => setManaging(false)} />}
     </div>
   );
 }
