@@ -37,6 +37,9 @@ const SESSION_SCOPES_KEY = 'session.scopes';
 /** Set when the person signed in again to grant API Tokens (the page's computer row asked them to). */
 const SESSION_ASKED_API_TOKENS_KEY = 'session.asked_api_tokens';
 
+/** The page's connect run (`connect-window.ts`), which the helper window's finish page names so its tab hears the end. */
+const SESSION_CONNECT_RUN_KEY = 'session.connect_run';
+
 /** A grant lasts this long without the person, a sign-in this long from its callback. */
 export const VAULT_TTL_MS = 3_600_000;
 
@@ -46,6 +49,16 @@ export const NONCE_BYTES = 16;
 const EndSchema = v.picklist(['helper', 'tab']);
 
 export type DeploySignInEnd = v.InferOutput<typeof EndSchema>;
+
+/** What the page asked of its sign-in: where it ends, the connect run it ends for, and whether it was for API Tokens. */
+export interface DeploySignInAsk {
+  readonly end: DeploySignInEnd;
+  readonly run: string | null;
+  readonly forApiTokens: boolean;
+}
+
+/** Where a sign-in ends, and the connect run its finish page names; null when the page named none. */
+export type DeploySignInEnding = Pick<DeploySignInAsk, 'end' | 'run'>;
 
 const UserSchema = v.object({ id: v.string(), email: v.string() });
 
@@ -89,13 +102,14 @@ export class DeploySignIn {
     await this.host.arm();
   }
 
-  async hold(verifier: string, end: DeploySignInEnd, forApiTokens = false): Promise<string> {
+  async hold(verifier: string, ask: DeploySignInAsk): Promise<string> {
     const state = `${DEPLOY_SESSION_STATE}.${randomToken(NONCE_BYTES)}`;
 
     await this.host.storage.put(VERIFIER_KEY, verifier);
     await this.host.storage.put(STATE_KEY, state);
-    await this.host.storage.put(SESSION_END_KEY, end);
-    await this.host.storage.put(SESSION_ASKED_API_TOKENS_KEY, forApiTokens);
+    await this.host.storage.put(SESSION_END_KEY, ask.end);
+    await this.host.storage.put(SESSION_CONNECT_RUN_KEY, ask.run);
+    await this.host.storage.put(SESSION_ASKED_API_TOKENS_KEY, ask.forApiTokens);
 
     return state;
   }
@@ -108,8 +122,10 @@ export class DeploySignIn {
     return apiTokensState(scopes, asked);
   }
 
-  async ending(): Promise<DeploySignInEnd> {
-    return await heldValue(this.host.storage, SESSION_END_KEY, EndSchema) ?? 'tab';
+  async ending(): Promise<DeploySignInEnding> {
+    const end = await heldValue(this.host.storage, SESSION_END_KEY, EndSchema) ?? 'tab';
+
+    return { end, run: await heldValue(this.host.storage, SESSION_CONNECT_RUN_KEY, v.string()) };
   }
 
   /** The code exchanged for a grant, and the grant proven against `GET /user`: the user a run of this sign-in is named for. */

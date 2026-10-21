@@ -56,7 +56,7 @@ import { diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/cor
 import * as v from 'valibot';
 import {
   DeploySignIn, NONCE_BYTES, SECRET_PREFIX, SESSION_UNTIL_KEY, STATE_KEY, TOKEN_EXPIRES_KEY, VAULT_TTL_MS, VERIFIER_KEY, heldValue, holdGrant,
-  type DeployGrant, type DeploySignInEnd,
+  type DeployGrant, type DeploySignInAsk, type DeploySignInEnding,
 } from './sign-in';
 import { stepLedger, stepRows } from './step-ledger';
 
@@ -417,15 +417,15 @@ export class DeployRunDO extends DurableObject<Env> {
     return this.signIn.open();
   }
 
-  holdSignIn(verifier: string, end: DeploySignInEnd, forApiTokens: boolean): Promise<string> {
-    return this.signIn.hold(verifier, end, forApiTokens);
+  holdSignIn(verifier: string, ask: DeploySignInAsk): Promise<string> {
+    return this.signIn.hold(verifier, ask);
   }
 
   apiTokens(): Promise<ApiTokensState> {
     return this.signIn.apiTokens();
   }
 
-  ending(): Promise<DeploySignInEnd> {
+  ending(): Promise<DeploySignInEnding> {
     return this.signIn.ending();
   }
 
