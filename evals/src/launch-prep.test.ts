@@ -18,7 +18,7 @@ test('a first brief that names the second file to forbid it is still the first a
   expect(keptFor({ name: 'proofreader-week-durable', status: 'dismissed', runs }, 'announcement.md', 'faq.md')).toBe(true);
 });
 
-test('one run naming both files, or the files given in the wrong order, is not a helper kept on for a second job', () => {
+test('one run naming both files, or the files given in the wrong order, is not a subagent kept on for a second job', () => {
   expect(keptFor({ name: 'p', status: 'dismissed', runs: [run(1, `Fix ${ANN} and then ${FAQ}.`)] }, 'announcement.md', 'faq.md')).toBe(false);
   expect(keptFor({ name: 'p', status: 'dismissed', runs: [run(2, `Fix ${ANN}.`), run(1, `Fix ${FAQ}.`)] }, 'announcement.md', 'faq.md')).toBe(false);
   expect(keptFor({ name: 'p', status: 'dismissed', runs: [{ ...run(2, `Fix ${FAQ}.`), status: 'failed' }, run(1, `Fix ${ANN}.`)] }, 'announcement.md', 'faq.md')).toBe(false);

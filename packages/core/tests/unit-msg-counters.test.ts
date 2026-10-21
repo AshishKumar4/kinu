@@ -11,6 +11,7 @@
 // Delivery itself is pinned next door, in unit-agents-tool.test.ts, and that
 // suite is deliberately untouched: an instrument that changed what it measures
 // would be worse than no instrument.
+import { lonelyTree } from './helpers-agents';
 import { describe, test, expect, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestRuntime, toolExecute, createTestActorsOver, type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
@@ -19,7 +20,7 @@ import {
   type AgentsToolDeps,
   type PeersToolDeps, type TeamToolDeps,
   ROOT_DELEGATION_BUDGET,
-  type SubordinateDelivery, type SubordinateRosterEntry,
+  type SubagentDelivery, type SubagentRosterEntry,
 } from '../src/index';
 import { setDiagnosticsSink } from '../src/obs/index';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
@@ -88,7 +89,7 @@ function makePeers(overrides: Partial<PeersToolDeps> = {}) {
   return { deps, calls };
 }
 
-const rosterEntry: SubordinateRosterEntry = {
+const rosterEntry: SubagentRosterEntry = {
   name: 'researcher', actorReference: null, birth: null, deleteRequested: false,
   origin: 'agent', status: 'idle', currentTask: null, createdAt: 1,
   dismissedAt: null, lifetime: 'durable', taskEventId: null,
@@ -97,7 +98,7 @@ const rosterEntry: SubordinateRosterEntry = {
 /** A roster whose two handoff verbs answer with one delivery, so a test can
  *  say "this transport deferred" and read the counter's word for it. The
  *  non-handoff members are the contract's, unexercised here. */
-function makeTeam(delivery: SubordinateDelivery) {
+function makeTeam(delivery: SubagentDelivery) {
   const calls: Call[] = [];
   const handoff = { eventId: 'ev-1', delivery, phase: { busy: false, lastActivityAt: null, workingOn: null } };
 
@@ -111,10 +112,11 @@ function makeTeam(delivery: SubordinateDelivery) {
   const deps: TeamToolDeps = {
     delegation: ROOT_DELEGATION_BUDGET,
     list: async () => [rosterEntry],
+    tree: lonelyTree,
     snapshot: () => [rosterEntry],
     knows: async (name) => name === rosterEntry.name,
-    create: async () => ({ name: rosterEntry.name, displayName: 'Researcher', subordinate: rosterEntry }),
-    rename: async (input) => ({ ok: true, name: input.name, displayName: input.displayName, subordinate: rosterEntry }),
+    create: async () => ({ name: rosterEntry.name, displayName: 'Researcher', subagent: rosterEntry }),
+    rename: async (input) => ({ ok: true, name: input.name, displayName: input.displayName, subagent: rosterEntry }),
     spawn: async () => ({ name: rosterEntry.name, displayName: 'Researcher' }),
     status: async () => ({ roster: [rosterEntry] }),
     dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true, stoppedJobs: [] }),
@@ -198,8 +200,8 @@ describe('agents.msg.sent', () => {
       // whole turn, and folding it in with an enqueue would put a think time
       // and a hand-off in one distribution.
       ['assign', 'peer', 'agent', 'replied'],
-      ['message', 'subordinate', 'agent', 'queued'],
-      ['assign', 'subordinate', 'agent', 'queued'],
+      ['message', 'subagent', 'agent', 'queued'],
+      ['assign', 'subagent', 'agent', 'queued'],
     ]);
   });
 

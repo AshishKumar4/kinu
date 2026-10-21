@@ -359,6 +359,14 @@ startup_reading() {
   echo "${said:-none}"
 }
 
+# A refused startup in a wrangler upload's <log>, in the platform's words and what its operator does: prints nothing for
+# any other failure. The deploy never asks again by itself (L27); the validator reads one bundle in two modes, so its
+# operator reruns the deploy (platform-catalog `worker.startup_ms`).
+startup_refusal() {
+  [ "$(startup_reading "$1")" = refused ] || return 0
+  echo "Cloudflare refused this build's startup (code 10021): \"Script startup exceeded CPU time limit.\" Its validator reads one bundle in two modes, about 370 and 780-950 ms (platform-catalog worker.startup_ms), so run the same deploy again. "
+}
+
 # Read one dotted JSON field from stdin. Prints nothing when the body is not
 # JSON — which is exactly what a smoke test needs, because "not JSON" is how a
 # missing asset presents itself (the SPA shell under a JSON
@@ -820,7 +828,7 @@ if [ "$KINU_RESET" = "1" ] && [ "${KINU_PENDING_RESET:-none}" = "none" ]; then
   report startup validated "$(startup_reading "$KINU_VALIDATE_LOG")" "${KINU_WITHHELD_CLASSES[@]}"
   if [ "$KINU_VALIDATED" -ne 0 ]; then
     wait "$KINU_ALONGSIDE_PID"
-    publish_red "$KINU_WORKER refused this build's version before the reset, so nothing was deleted and it still serves what it did; the log is $KINU_VALIDATE_LOG"
+    publish_red "$(startup_refusal "$KINU_VALIDATE_LOG")$KINU_WORKER refused this build's version before the reset, so nothing was deleted and it still serves what it did; the log is $KINU_VALIDATE_LOG"
     return 1
   fi
 fi
@@ -869,7 +877,7 @@ if upload "$KINU_DEPLOY_LOG" npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}"; the
 else
   report startup deployed "$(startup_reading "$KINU_DEPLOY_LOG")"
   echo ""
-  publish_red "wrangler deploy failed; its log is $KINU_DEPLOY_LOG"
+  publish_red "$(startup_refusal "$KINU_DEPLOY_LOG")wrangler deploy failed; its log is $KINU_DEPLOY_LOG"
   return 1
 fi
 

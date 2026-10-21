@@ -33,7 +33,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import type { BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Identity } from '../src/types/primitives';
-import type { TemporaryAgentPort } from '../src/types/subordinates';
+import type { TemporaryAgentPort } from '../src/types/subagents';
 import { historyTurnPairs } from '../src/identity/conversation-store';
 
 type FixtureSeat = HostedNodeSeat<HostedActor>;

@@ -62,7 +62,7 @@ test('a workspace\'s turns and tool failures reach the fleet panels, and a bad u
   }).toEqual({
     turns: [{ outcome: 'ok', code: '', turns: 2, avgDurationMs: expect.any(Number), avgSteps: 1.5, avgToolCalls: 0.5 }],
     toolFailures: [{ tool: 'eval', outcome: 'failed', code: expect.any(String), calls: 1, avgDurationMs: expect.any(Number) }],
-    startups: [{ workspace: expect.any(String), hour: expect.any(Number), startups: 1 }],
+    startups: [{ workspace: expect.any(String), hour: expect.any(Number), startups: 1, facets: 1 }],
     ownTurns: [{ outcome: 'ok', code: '', turns: 2, avgDurationMs: expect.any(Number), avgSteps: 1.5, avgToolCalls: 0.5 }],
     otherTurns: [],
   });

@@ -432,15 +432,6 @@ export const listCloudflareGateways = () =>
 
 export const selectCloudflareGateway = (id: string | null) => settle(putCloudflareSelection('/cloudflare/gateway', id));
 
-export function cloudflareReconnectPath(returnTo: string): string {
-  const params = new URLSearchParams({
-    return_to: returnTo || '/',
-    prompt: 'login',
-  });
-
-  return `/auth/cloudflare/start?${params.toString()}`;
-}
-
 export interface McpServerInput {
   name?: string;
   serverUrl?: string;
@@ -458,6 +449,10 @@ export const listMcpPresets = () => settle(api(v.array(McpPresetAvailabilitySche
 
 export const addMcpServer   = (input: McpServerInput) =>
   settle(api(v.object({ id: v.string(), authUrl: v.nullable(v.string()) }), 'POST', '/mcp/servers', input));
+
+/** An MCP server's sign-in begun for `run`: its sign-in address, which its callback ends with that run. */
+export const beginMcpConnect = (id: string, run: string) =>
+  settle(api(v.object({ authUrl: v.string() }), 'POST', `/mcp/servers/${encodeURIComponent(id)}/connect`, { run }));
 
 export const removeMcpServer = (id: string) =>
   settle(api(OkSchema, 'DELETE', `/mcp/servers/${encodeURIComponent(id)}`));

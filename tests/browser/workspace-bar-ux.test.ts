@@ -73,7 +73,7 @@ async function waitForNewChatOpen(page: Page): Promise<void> {
 
 describe('a chat in the workspace, as an ordinary conversation', () => {
   /** Kept equal to the gallery's two-frame refusal, so a chain it stopped chaining fails the equality. */
-  const CREATE_REFUSAL_CHAIN = 'the workspace refused the new agent: subordinate quota exhausted';
+  const CREATE_REFUSAL_CHAIN = 'the workspace refused the new agent: subagent quota exhausted';
 
   test('+ asks the workspace question; the first message opens and names the chat as the current tab and is sent once', async () => {
     await withGallery(async ({ newPage, origin }) => {

@@ -22,8 +22,8 @@ test('each actor reaches its own private table rows: what one saves, another doe
   // An added agent takes the workspace's mission.
   await workspace.agent.setSoul('# Purpose\n\nKeep the drafts.');
   const root = { actorId: workspaceActorId(workspace.db), turnId: null, mode: 'build' as const };
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
-  const hosted = { actorId: v.parse(v.string(), subordinate.actorId), turnId: null, mode: 'build' as const };
+  const { subagent } = await workspace.agent.createSubagentAgent();
+  const hosted = { actorId: v.parse(v.string(), subagent.actorId), turnId: null, mode: 'build' as const };
 
   await workspace.agent.callOperation(root, 'db.createTable', { spec: { name: 'drafts', scope: 'private', columns: [{ name: 'value', type: 'text' }] } }, call());
   await workspace.agent.callOperation(root, 'db.insert', { table: 'drafts', rows: [{ value: 'the root draft' }] }, call());

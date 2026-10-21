@@ -90,17 +90,17 @@ describe('opening an agent shows its live chat in the main chat area', () => {
       });
     });
 
-    test(`from a background helper's row in the Work tab, on a ${viewport}`, async () => {
+    test(`from a background subagent's row in the Work tab, on a ${viewport}`, async () => {
       await withGallery(async (gallery) => {
         const page = await workspace(gallery, viewport);
 
         if (viewport === 'phone') await page.click('.p-bar [data-inspector-toggle]');
 
         await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
-        await page.waitForSelector('[data-helper-row]');
+        await page.waitForSelector('[data-subagent-row]');
         // The refiner works in the background with no tab, so Now lists it; a hired agent has a place of its own and is not listed.
-        expect(await page.$$eval('[data-helper-row]', (rows) => rows.map((row) => row.getAttribute('data-helper-row')))).toEqual(['a-refine']);
-        await page.click('[data-helper-row="a-refine"]');
+        expect(await page.$$eval('[data-subagent-row]', (rows) => rows.map((row) => row.getAttribute('data-subagent-row')))).toEqual(['a-refine']);
+        await page.click('[data-subagent-row="a-refine"]');
         await page.waitForSelector(REFINER_PANE);
 
         expect(await chatShows(page, REFINER_PANE)).toBe(true);

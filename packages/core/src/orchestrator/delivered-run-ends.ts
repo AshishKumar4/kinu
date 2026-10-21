@@ -8,7 +8,7 @@ import { Effect } from 'effect';
 import { attempt, diagnostics, KinuError, settle } from '../obs/index';
 import type { SessionPayload } from '../session/payload';
 import type { SessionTranscript } from '../session/transcript';
-import { refusedRun, type RunEndOutcome, type RunEndReport } from '../subordinates/agent-isolate';
+import { refusedRun, type RunEndOutcome, type RunEndReport } from '../subagents/agent-isolate';
 import { turnTags } from '../types/turn-metadata';
 import { parseJsonObject, type JsonObject } from '../utils/json';
 import type { PendingSendStore } from './inbox';

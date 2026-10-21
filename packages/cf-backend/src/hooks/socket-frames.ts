@@ -27,7 +27,7 @@ export type SocketFrame = v.InferOutput<typeof SocketMessageSchema>;
 
 /** Which actor a pane speaks for: the workspace's own, or one hosted agent once its id is known. */
 interface PaneIdentity {
-  readonly isSubordinate: boolean;
+  readonly isSubagent: boolean;
   readonly ownActorId: string | null;
 }
 
@@ -55,7 +55,7 @@ function admitsActorFrame(msg: SocketFrame, pane: PaneIdentity): boolean {
 
   if (msg.actorId === undefined) return true;
 
-  return pane.isSubordinate && pane.ownActorId === msg.actorId;
+  return pane.isSubagent && pane.ownActorId === msg.actorId;
 }
 
 /** The socket's one reader: one parse per frame, then `paneFrame` only for what the pane may see. Never re-subscribes. */

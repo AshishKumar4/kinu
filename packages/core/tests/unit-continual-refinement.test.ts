@@ -19,7 +19,8 @@ import { initTurnRatingTables, rateTurn } from '../src/evolution/ratings';
 import { dreamChangesFor, renderWatch } from '../src/evolution/watch';
 import { buildChangelog, executeChangelogRevert } from '../src/evolution/changelog';
 import {
-  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, stageArtifact, toolArtifact, turnArtifacts,
+  artifactEditRefusal, artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, stageArtifact, toolArtifact,
+  turnArtifacts,
 } from '../src/evolution/artifacts';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../src/tools/registry';
 import { initArtifactTables } from '../src/evolution/artifact-schema';
@@ -457,6 +458,41 @@ describe('refinement request — durable, and behaviourally inert', () => {
 
     expect(opened.stage).toBe('refused');
     expect(opened.detail).toContain('no outcome-labeled turns');
+  });
+});
+
+// An edit is held to 600 changed characters. What changed is what a diff marks: the OMP pilot's dreams had their
+// section edits refused at 1,421 characters for a 296-character change, two small edits counting the text between them.
+describe("an edit's size is what a diff of it marks", () => {
+  const LONG = present(PROMPT_SECTIONS.find((section) => section.source.length >= 1500), 'a section of 1,500 characters or more');
+  const sentence = (n: number) => ` Say what you checked, plainly, before you say it is done${'.'.repeat(Math.max(1, n - 58))}`;
+
+  function refusal(after: string): string | null {
+    const fx = fixture();
+
+    return artifactEditRefusal(fx.rt.storage.sql, fx.rt.actor, { artifactId: sectionArtifact(LONG.id), before: LONG.source, after });
+  }
+
+  test('two small edits at the two ends of a long section are not refused for their size', () => {
+    const lines = LONG.source.split('\n');
+    const after = [`${lines[0] ?? ''}${sentence(100)}`, ...lines.slice(1, -1), `${lines.at(-1) ?? ''}${sentence(100)}`].join('\n');
+
+    expect(refusal(after) ?? '').not.toContain('characters; at most');
+  });
+
+  test('a real 700-character rewrite is refused for its size', () => {
+    const start = Math.floor((LONG.source.length - 700) / 2);
+    const rewritten = 'Rewrite '.repeat(88).slice(0, 700);
+
+    expect(refusal(`${LONG.source.slice(0, start)}${rewritten}${LONG.source.slice(start + 700)}`)).toContain('characters; at most 600');
+  });
+
+  test('many scattered tiny edits add up, and past 600 are refused', () => {
+    // Every other word of the section gains three letters: no one change is large, together they are.
+    const words = LONG.source.split(/(\s+)/u);
+    const after = words.map((word, at) => (at % 4 === 0 && /\w/u.test(word) ? `${word}xyz` : word)).join('');
+
+    expect(refusal(after)).toContain('characters; at most 600');
   });
 });
 
@@ -1139,7 +1175,7 @@ describe('routing — every typed edit lands in the store that already owns it',
         kind: 'subagent_spec',
         role: 'reviewer',
         spec: 'always answer in one line',
-        rationale: 'the reviewer subordinate produced the long answers the user corrected three times',
+        rationale: 'the reviewer subagent produced the long answers the user corrected three times',
       }],
     }));
 
@@ -1171,7 +1207,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(added).toEqual(['refinement_requests']);
 
     // Names that would betray a second authority for an artifact.
-    for (const forbidden of ['skill', 'prompt_section', 'fact', 'subordinate', 'actor_config']) {
+    for (const forbidden of ['skill', 'prompt_section', 'fact', 'subagent', 'actor_config']) {
       expect(added.some((name) => name.includes(forbidden))).toBe(false);
     }
 

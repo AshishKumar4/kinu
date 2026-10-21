@@ -35,8 +35,8 @@ async function parkedTitle(): Promise<ParkedTitle> {
   }));
 
   await workspace.agent.setSoul('# Purpose\n\nGreet whoever asks.');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
-  const actorId = v.parse(v.string(), subordinate.actorId);
+  const { subagent } = await workspace.agent.createSubagentAgent();
+  const actorId = v.parse(v.string(), subagent.actorId);
   const ledger = ownDatabase(workspace, actorId);
 
   const title = () => ledger.query<{ status: string }, []>(`SELECT status FROM terminal_effects WHERE effect_name = 'auto_title'`)

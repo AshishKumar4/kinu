@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { AGENT_MODE_ENV } from '../src/ambient-env';
 import { present } from '../src/present';
 import { scratchDir } from '../src/scratch';
-import { killAndAwaitExit, recordedIn, runToExit, spawnTest } from '../src/spawn';
+import { killAndAwaitExit, namingFixture, recordedIn, runToExit, spawnTest } from '../src/spawn';
 
 /** Exited: no process holds the pid, or only its zombie does. */
 async function exited(pid: number): Promise<boolean> {
@@ -65,6 +65,23 @@ test('a record whose pid another run holds now kills nothing', async () => {
   expect(await exited(holder.pid)).toBe(false);
   holder.kill('SIGKILL');
   await holder.exited;
+});
+
+// A successor whose handover a test's timeout cut short was in no pidfile, and ran on with its home removed
+// (daemon-update suite, 2026-10-21): a fixture's processes are found by what their command lines name.
+test('every process naming a fixture in its command line is found without a pidfile, and no other is', async () => {
+  const waits = "console.log('ready'); setTimeout(() => {}, 30_000)";
+  const fixture = scratchDir('naming-fixture');
+  const successor = await started([process.execPath, '-e', waits, join(fixture, 'pc-agent.js')]);
+  const stranger = await started([process.execPath, '-e', waits, join(scratchDir('naming-stranger'), 'pc-agent.js')]);
+  const found = await namingFixture(fixture);
+
+  for (const left of found) await killAndAwaitExit(left);
+
+  expect({ found: found.map((each) => each.pid), successor: await exited(successor.pid), stranger: await exited(stranger.pid) })
+    .toEqual({ found: [successor.pid], successor: true, stranger: false });
+  stranger.kill('SIGKILL');
+  await stranger.exited;
 });
 
 test('with group, every process in the recorded group has exited when the call settles', async () => {

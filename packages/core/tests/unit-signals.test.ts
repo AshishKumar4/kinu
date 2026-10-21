@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { Inbox } from '../src/orchestrator/inbox';
-import { DeliveryInbox, deliveredSignal } from '../src/subordinates/deliveries';
+import { DeliveryInbox, deliveredSignal } from '../src/subagents/deliveries';
 import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import { USER_MESSAGE_SIGNAL_KIND, type AgentSignal, type SignalCardEvent } from '../src/types/signals';
 import { JsonObjectSchema } from '../src/utils/json';

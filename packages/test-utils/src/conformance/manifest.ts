@@ -15,7 +15,7 @@ export const CONFORMANCE_PRODUCERS = ['judge'] as const satisfies readonly Spend
 type ConformanceProducer = (typeof CONFORMANCE_PRODUCERS)[number];
 
 /** cf splits by actor profile because the profiles differ (`actorToolDeps`). */
-const CONFORMANCE_ROOTS = ['cf-orchestrator', 'cf-subordinate', 'cli'] as const;
+const CONFORMANCE_ROOTS = ['cf-orchestrator', 'cf-subagent', 'cli'] as const;
 
 export type ConformanceRoot = (typeof CONFORMANCE_ROOTS)[number];
 
@@ -28,7 +28,7 @@ const WIRED: CapabilityStatus = { wired: true };
 
 export type RootStatuses = Readonly<Record<ConformanceRoot, CapabilityStatus>>;
 
-const EVERYWHERE = { 'cf-orchestrator': WIRED, 'cf-subordinate': WIRED, cli: WIRED } satisfies RootStatuses;
+const EVERYWHERE = { 'cf-orchestrator': WIRED, 'cf-subagent': WIRED, cli: WIRED } satisfies RootStatuses;
 
 export const CONFORMANCE_PLANES = ['tool', 'agents-op', 'memory-op', 'producer'] as const;
 
@@ -45,20 +45,20 @@ export interface ConformanceManifest {
   readonly producer: Readonly<Record<ConformanceProducer, RootStatuses>>;
 }
 
-const ORCHESTRATOR_IS_SINK = 'the orchestrator IS the report sink; only subordinate actors report upward';
+const ORCHESTRATOR_IS_SINK = 'the orchestrator IS the report sink; only subagent actors report upward';
 
-/** Subordinates hold the parent's roster surface, bounded by DELEGATION_MAX_DEPTH;
+/** Subagents hold the parent's roster surface, bounded by DELEGATION_MAX_DEPTH;
  *  "wired" means wired wherever depth remains. */
 const TEAM_RECURSES = {
   'cf-orchestrator': WIRED,
-  'cf-subordinate': WIRED,
+  'cf-subagent': WIRED,
   cli: WIRED,
 } satisfies RootStatuses;
 
-/** A subordinate has no peer transport: a workspace hire would let it escape its subtree. Locally every root agent gets PeerHub. */
+/** A subagent has no peer transport: a workspace hire would let it escape its subtree. Locally every root agent gets PeerHub. */
 const PEERS = {
   'cf-orchestrator': WIRED,
-  'cf-subordinate': { absent: 'a subordinate has no peer transport; a workspace hire would escape its subtree' },
+  'cf-subagent': { absent: 'a subagent has no peer transport; a workspace hire would escape its subtree' },
   cli: WIRED,
 } satisfies RootStatuses;
 
@@ -73,19 +73,19 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     web: EVERYWHERE,
     report: {
       'cf-orchestrator': { absent: ORCHESTRATOR_IS_SINK },
-      'cf-subordinate': WIRED,
+      'cf-subagent': WIRED,
       cli: { absent: ORCHESTRATOR_IS_SINK },
     },
     // The owner's own turns, in either mode; a delegated turn reports to its parent instead.
     submit_plan: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: 'a delegated turn answers its parent through report; only the owner\'s own turns submit a plan for review' },
+      'cf-subagent': { absent: 'a delegated turn answers its parent through report; only the owner\'s own turns submit a plan for review' },
       cli: WIRED,
     },
     // Where a person is the conversation partner: the owner's own turns. A delegated turn asks its hirer in its report.
     ask_owner: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: 'a delegated turn answers its hirer through report; only the owner\'s own turns ask the owner' },
+      'cf-subagent': { absent: 'a delegated turn answers its hirer through report; only the owner\'s own turns ask the owner' },
       cli: WIRED,
     },
   },
@@ -117,7 +117,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // On the CLI without a second model, core's same-model fallback runs.
     judge: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
+      'cf-subagent': WIRED,
       cli: WIRED,
     },
   },

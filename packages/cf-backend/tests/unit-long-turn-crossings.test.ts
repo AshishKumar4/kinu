@@ -68,7 +68,7 @@ async function longTurn(task: string, step: Step) {
   const workspace = gatewayWorkspace(gateway, { container: true, box: () => box });
   workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
   await workspace.agent.setSoul('# Purpose\n\nDo what you are asked.');
-  const { name } = await workspace.agent.createSubordinateAgent();
+  const { name } = await workspace.agent.createSubagentAgent();
   const route = await workspace.agent.resolveHostedActorRoute(name);
 
   if ('reason' in route) throw new Error(route.error);

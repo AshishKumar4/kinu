@@ -170,7 +170,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
 });
 
 describe('every facet kind is one home namespace on the owner', () => {
-  test('a subordinate and a head provision, write privately, and release to nothing', async () => {
+  test('a subagent and a head provision, write privately, and release to nothing', async () => {
     const f = await openOwner();
 
     try {

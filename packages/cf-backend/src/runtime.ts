@@ -113,7 +113,7 @@ export function bindAgentSql(agent: AgentSqlSource, holds?: Holds): SqlExecutor 
 export interface ActorRuntimeIdentity {
   actor: ActorHandle;
   /** Stated, never inferred: every hosted actor answers to the root's agent `name`, so a name test would
-     *  hand a subordinate the root's shell-approval authority. */
+     *  hand a subagent the root's shell-approval authority. */
   rootActor: boolean;
   /** Resolved per call, never cached, so a use before owner claim can't bake in null. */
   ownerUserId(): string | null;
@@ -231,7 +231,7 @@ export interface WorkspaceBoxUse {
 
 export interface CFRuntimeHooks {
   /** Read at exec time, as resolving during construction re-enters the runtime getter. Undefined (head,
-     *  subordinate): no queue, so 'strict' refuses. */
+     *  subagent): no queue, so 'strict' refuses. */
   deferrals?: () => DeferredApprovalChannel | undefined;
   slate?: (operation: SlateOperation, turn?: string) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;

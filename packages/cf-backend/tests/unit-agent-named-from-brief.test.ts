@@ -33,8 +33,8 @@ test("an agent whose first turn was stopped is named from its owner's first word
 
   const workspace = gatewayWorkspace(gateway);
   await workspace.agent.setSoul('# Purpose\n\nKeep the coast notes.');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
-  const actorId = v.parse(v.string(), subordinate.actorId);
+  const { subagent } = await workspace.agent.createSubagentAgent();
+  const actorId = v.parse(v.string(), subagent.actorId);
   const pane = [actorConnectionTag(actorId)];
   const name = () => actorOver(workspace.db, actorId).config.getDisplayName();
 

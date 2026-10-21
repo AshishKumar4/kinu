@@ -280,11 +280,38 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     expect(r.note).toMatch(/not.*finish sooner|will not make it finish/i);
   });
 
-  test("jobResult on a null (unknown) job passes null through", async () => {
-    const host = fakeHost();
+  // Staging rc29, GLM-5.3: a model restated the job id startProcess answered with one character dropped, read the null an
+  // unknown id answered as a result already consumed, and told its owner so.
+  test("jobResult on an id no job of the agent's has says so, with its recent job ids to correct a misquoted one", async () => {
+    const recent = (id: string, kind: string, status: BackgroundJob["status"]): BackgroundJob => ({
+      id, kind, label: null, workMode: "build", status, result: null, error: null, createdAt: 1, settledAt: 2, epoch: 0,
+      retriedBy: null, attemptStartedAt: 1, resumeAfter: null, serves: null,
+    });
+
+    const host = fakeHost({
+      listBackgroundJobs: async (limit) => {
+        host.calls.push(`jobs:${limit ?? 'all'}`);
+
+        return [recent("bgjob-xd469opo9mgnesf4lok6x", "startProcess", "completed"), recent("bgjob-htz6wa5tf2djyzuv1zmba", "startProcess", "running")];
+      },
+    });
+
     const p = createAgentSelfProvider(host);
-    expect(await p.tools.jobResult.execute("no-such-job")).toBeNull();
-    expect(host.calls).toEqual(["jobResult:no-such-job"]);
+
+    expect(await called(p, "jobResult")("bgjob-xd46opo9mgnesf4lok6x")).toEqual({
+      success: false, reason: "missing",
+      error: "agent.jobResult: no job bgjob-xd46opo9mgnesf4lok6x is yours. Your recent jobs: "
+        + "bgjob-xd469opo9mgnesf4lok6x (startProcess, completed), bgjob-htz6wa5tf2djyzuv1zmba (startProcess, running).",
+    });
+    expect(host.calls).toEqual(["jobResult:bgjob-xd46opo9mgnesf4lok6x", "jobs:5"]);
+  });
+
+  test("jobResult on an id when the agent has no jobs at all says that too", async () => {
+    const p = createAgentSelfProvider(fakeHost());
+
+    expect(await called(p, "jobResult")("bgjob-none")).toEqual({
+      success: false, reason: "missing", error: "agent.jobResult: no job bgjob-none is yours. You have no background jobs.",
+    });
   });
 
   test("acceptCurriculumTask rejects a non-string id", async () => {

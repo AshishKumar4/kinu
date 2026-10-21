@@ -37,7 +37,7 @@ export function deriveEventTrust(d: IngressDescriptor): TrustLevel {
 
       return settleSync(Effect.die(new IngressRejectedError('peer_async', 'a workspace admits peers of its own owner only')));
 
-    case 'subordinate':
+    case 'subagent':
       return 'authenticated';
 
     case 'mcp_streamable':
@@ -81,8 +81,8 @@ export function derivePriority(trust: TrustLevel, variant: EventVariant): Priori
       ['webhook', 'normal'],
       ['timer', 'normal'],
       ['peer_agent', 'normal'],
-      ['subordinate_task', 'normal'],
-      ['subordinate_report', 'background'],
+      ['subagent_task', 'normal'],
+      ['subagent_report', 'background'],
       ['mcp_third_party', 'normal'],
       ['reply_request', 'normal'],
       ['internal', 'normal'],

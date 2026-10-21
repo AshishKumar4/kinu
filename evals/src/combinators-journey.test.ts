@@ -41,8 +41,8 @@ type Defect = 'board' | 'invented-report' | 'skipped' | 'hardcoded-calculator' |
   | 'export-missing' | 'export-changed' | 'export-duplicate' | 'export-extra' | 'memory-code' | 'memory-coordinator' | 'escaped-preview' | 'reopened-module'
   | 'board-case' | 'relative-review' | 'scratch-after-pack' | 'agent-unused' | 'agent-used-once' | 'empty-memory' | 'memory-note' | 'renamed-export'
   | 'cached-workspace-preview' | 'cached-computer-preview' | 'dot-entrypoint' | 'no-main' | 'no-package-members' | 'review-with-rerun' | 'lagged-use'
-  | 'completed-review-helpers' | 'error-review-helpers' | 'aborted-review-helpers' | 'incomplete-review-helpers'
-  | 'unrelated-review-helpers' | 'serial-review-helpers' | 'unmeasured-review-helpers';
+  | 'completed-review-subagents' | 'error-review-subagents' | 'aborted-review-subagents' | 'incomplete-review-subagents'
+  | 'unrelated-review-subagents' | 'serial-review-subagents' | 'unmeasured-review-subagents';
 
 /** The fixture flattens assertions and counts statuses independently of the grader's loop. */
 function calculate(text: string, defect?: Defect) {
@@ -61,7 +61,7 @@ function desk(defect?: Defect) {
   const encoder = new TextEncoder(), decoder = new TextDecoder();
   const put = (path: string, text: string) => files.set(path, encoder.encode(text));
   const read = (path: string) => decoder.decode(files.get(path));
-  const hiredReview = defect?.endsWith('review-helpers') === true;
+  const hiredReview = defect?.endsWith('review-subagents') === true;
   put(REPORT, defect === 'invented-report' ? JSON.stringify({ testResults: [{ assertionResults: [{ status: 'passed' }] }] }) : INITIAL);
   put(`/computer${CHECKOUT}/vitest-report.json`, read(REPORT));
   put('/computer/workspace/combinators/reports/vitest.json', read(REPORT));
@@ -162,22 +162,22 @@ function desk(defect?: Defect) {
       const actor = 'actor' in request ? request.actor : undefined;
       let startedAt = actor === 'review-a' ? 100 : 101;
 
-      if (actor !== 'review-a' && defect === 'serial-review-helpers') startedAt = 201;
+      if (actor !== 'review-a' && defect === 'serial-review-subagents') startedAt = 201;
       const endedAt = actor === 'review-a' ? 200 : 301;
-      const userMessage = defect === 'unrelated-review-helpers' ? 'Review the newsletter draft.' : `Read ${DESK}/reports/review and implement report_totals.`;
+      const userMessage = defect === 'unrelated-review-subagents' ? 'Review the newsletter draft.' : `Read ${DESK}/reports/review and implement report_totals.`;
 
       let status = 'completed';
 
-      if (defect === 'error-review-helpers') status = 'error';
+      if (defect === 'error-review-subagents') status = 'error';
 
-      if (defect === 'aborted-review-helpers') status = 'aborted';
+      if (defect === 'aborted-review-subagents') status = 'aborted';
 
-      if (defect === 'incomplete-review-helpers') status = 'incomplete';
+      if (defect === 'incomplete-review-subagents') status = 'incomplete';
 
       const runId = `${actor ?? ''}-run`;
 
       if (request.view === 'runs') {
-        const run = { runId, startedAt, status, userMessage, eventCount: defect === 'unmeasured-review-helpers' ? undefined : 2 };
+        const run = { runId, startedAt, status, userMessage, eventCount: defect === 'unmeasured-review-subagents' ? undefined : 2 };
 
         return Promise.resolve({ view: 'runs', page: { status: 'end', items: [run] } });
       }
@@ -307,7 +307,7 @@ async function grade(index: number, defect?: Defect): Promise<EvalCheck[]> {
 }
 
 const defects: readonly { defect: Defect; turn: number; checks: readonly string[] }[] = [
-  ...(['error-review-helpers', 'aborted-review-helpers', 'incomplete-review-helpers', 'unrelated-review-helpers', 'serial-review-helpers', 'unmeasured-review-helpers'] as const)
+  ...(['error-review-subagents', 'aborted-review-subagents', 'incomplete-review-subagents', 'unrelated-review-subagents', 'serial-review-subagents', 'unmeasured-review-subagents'] as const)
     .map((defect) => ({ defect, turn: 1, checks: ['independent-review-branches-finished-this-turn'] })),
   { defect: 'board', turn: 0, checks: ['release-provenance-is-done'] },
   { defect: 'npm-version', turn: 0, checks: ['release-provenance-matches-the-live-registry'] },
@@ -365,7 +365,7 @@ for (const [name, defect, turn] of [
   ['only requested entry points, without package metadata', 'no-package-members', 3],
   ['the correctly checked rerun alongside the three examples', 'review-with-rerun', 1],
   ['this-turn invocation before its counter review', 'lagged-use', 2],
-  ['two completed parallel review helpers', 'completed-review-helpers', 1],
+  ['two completed parallel review subagents', 'completed-review-subagents', 1],
 ] as const) {
   test(`accepts ${name}`, async () => {
     expect((await grade(turn, defect)).filter((check) => !check.pass)).toEqual([]);

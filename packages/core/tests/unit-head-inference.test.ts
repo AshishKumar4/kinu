@@ -545,6 +545,29 @@ describe('head prompt + messages', () => {
   });
 });
 
+// A study read in source (2026-10-21): every head told to `git worktree add` on the workspace failed, its
+// git having no worktrees. Staging measured the workspace's git refusing `worktree` and a local-path clone, and a copy
+// committing; the computer's git did all three.
+describe('a Build head is told to isolate its git checkout as its executor can', () => {
+  const head = (mode: 'build' | 'plan') => buildHeadSystemPrompt({
+    id: 'h1a2b3c4d5', rootId: 'h1a2b3c4d5', parentId: null, depth: 0, task: 'fix the parser', mode, rationale: 'r', inheritedContext: [],
+    budget: { maxDepth: 0, spawnedAt: 0 }, loop: defaultLoopOrigin('swarm'), mergeStrategy: 'synthesize',
+  });
+
+  test('a copy in its own folder where git has no worktrees, a worktree where git is real', () => {
+    const sys = head('build');
+
+    expect(sys).toContain('`cp -r <repo> ~/head-h1a2b3c4`');
+    expect(sys).toContain('`git worktree add ../head-h1a2b3c4 <branch>`');
+    expect(sys).toContain('index lock');
+  });
+
+  test('a Plan head is told to make neither', () => {
+    expect(head('plan')).not.toContain('cp -r');
+    expect(head('plan')).not.toContain('git worktree add');
+  });
+});
+
 describe('buildHeadMessages — a fork inherits real messages, not prose', () => {
   const multiTurn = [
     { id: 'm1', role: 'user', content: 'is the parser sound?', createdAt: 1 },

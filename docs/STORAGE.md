@@ -291,7 +291,7 @@ contract. At `@nimbus-sh/core` 0.14.0 the set is `vfs_state`, `vfs_inodes`,
 `nimbus_facet_storage`. `NimbusWorkspace.destroy()` drops the `vfs_*` tables
 and keeps the `nimbus_*` ones. Kinu adds its own `kinu_workspace_generation`.
 The manifest declares all of them present on every root (`cf-orchestrator`,
-`cf-subordinate`, `cli`). On hosted, `@nimbus-sh/worker` 0.12.0 adds a
+`cf-subagent`, `cli`). On hosted, `@nimbus-sh/worker` 0.12.0 adds a
 transform store in the workspace object, `nimbus_transform_results`,
 `nimbus_transform_result_parts` and `nimbus_transform_store`, created by the
 first hosted node launch that transforms a module, charged to the storage
@@ -536,7 +536,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Swarm leaderboard | `exploration_records` (cumulative across runs), `exploration_objectives` (what each objective measures) | `core/src/strategy/records.ts` |
 | Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
 | Turn lifecycle | `actor_turn_claims` (`preparing` from the claim, `admitted` once bound to its program and context; `withdrawn_through`, the epoch through which a Retry of the turn's answer withdrew its executions' output; the facts it was prepared with and the profile it bound), `agent_sequence` (one sequence an agent, over its chat turns, runs and reports: a claim's epoch is its capability) and the session tables above | `core/src/orchestrator/actor-claims.ts` |
-| Deliveries and fences (D13) | `agent_deliveries` (what each agent is owed, until its isolate answers), `actor_turn_fence` (one row an agent: its newest opening, its run, `ended_at`, a Stop's `cancelled_at`; a call that runs more of a turn holds only while it holds that opening), `actor_executions` (each execution an agent opened here, by turn and run, with its newest opening's epoch: a close runs only if it names that execution under that epoch) | `core/src/subordinates/deliveries.ts`, `core/src/subordinates/turn-fence.ts` |
+| Deliveries and fences (D13) | `agent_deliveries` (what each agent is owed, until its isolate answers), `actor_turn_fence` (one row an agent: its newest opening, its run, `ended_at`, a Stop's `cancelled_at`; a call that runs more of a turn holds only while it holds that opening), `actor_executions` (each execution an agent opened here, by turn and run, with its newest opening's epoch: a close runs only if it names that execution under that epoch) | `core/src/subagents/deliveries.ts`, `core/src/subagents/turn-fence.ts` |
 | Once-only effects | `tool_effect_claims` (a receipt, started until its result is kept, kept where its effect commits and keyed on its run; an agent's isolate keeps none for a call whose effect commits in the workspace, and the workspace prunes a run's receipts as the run settles, a delivered run's as it takes the run's end), `effect_tombstones`, `prepared_outputs` (a model's answer for keyed work, held until its tombstone lands) | `core/src/tools/effect-claim.ts`, `core/src/identity/effect-tombstones.ts` |
 | Facts | `agent_facts`, `agent_fact_history` | `core/src/memory/facts.ts` |
 | Account memory (user object) | `agent_facts`, `agent_fact_history` under `ACCOUNT_FACTS_ACTOR`, `account_notes`, `account_memory_proposals` | `core/src/memory/account.ts`, `cf-backend/src/user/account-memory.ts` |
@@ -557,7 +557,7 @@ These are created outside that pass, by the root that owns each:
 
 | Subsystem | Tables | Owner |
 |---|---|---|
-| Subordinate roster | `actor_subordinates` (every actor that can hire) | `core/src/subordinates/roster.ts` |
+| Subagent roster | `actor_subagents` (every actor that can hire) | `core/src/subagents/roster.ts` |
 | Orchestrator-local | `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
 | Webhook ingress (cf only) | `webhook_rate_windows`, `webhook_replay_claims`, `webhook_secrets` | `core/src/events/ingress/webhook.ts` (`initWebhookIngressTables`), `rate-limit.ts`, `secrets.ts` |
 
@@ -571,7 +571,7 @@ the first queue or drain: `outbox_peer` for the peer transport and
 `core/src/events/outbox.ts` supplies the SQL handle and the alarm.
 
 `test-utils/src/conformance/manifest.ts` declares every table per root
-(`cf-orchestrator`, `cf-subordinate`, `cli`) as wired, lazy, or absent with a
+(`cf-orchestrator`, `cf-subagent`, `cli`) as wired, lazy, or absent with a
 stated reason. The conformance suite compares that declaration with the real
 `sqlite_master`. The manifest is the complete list; this page describes it.
 
@@ -599,7 +599,7 @@ The pass runs in this order:
 
 Then each root adds what only it carries. The orchestrator DO also runs
 `initWebhookIngressTables`,
-`subordinateRoster.ensureSchema()`, and its inline turn tables. An in-memory
+`subagentRoster.ensureSchema()`, and its inline turn tables. An in-memory
 flag makes the whole call run once per activation. No persistent schema
 version is tracked, because a cold activation always re-runs it.
 

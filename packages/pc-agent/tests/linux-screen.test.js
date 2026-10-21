@@ -11,7 +11,7 @@ const fs = require('node:fs');
 
 const path = require('node:path');
 
-const { describe, expect, test } = require('bun:test');
+const { afterEach, describe, expect, test } = require('bun:test');
 
 const { scratchDir } = require('@kinu.run/test-utils');
 
@@ -66,6 +66,25 @@ async function linesOnceExited(helper, log) {
 
   return fs.readFileSync(log, 'utf8').trim().split('\n');
 }
+
+/** What a reader says up to and including `until`, or to its end when `until` is null: `ended` says which. */
+async function readUntil(reader, until, said = '') {
+  const { done, value } = await reader.read();
+
+  if (done) return { said, ended: true };
+  const now = said + new TextDecoder().decode(value);
+
+  return until !== null && now.includes(until) ? { said: now, ended: false } : await readUntil(reader, until, now);
+}
+
+/** Each real helper a test started, by pid: one its daemon left behind is ended after the test. */
+const realHelpers = [];
+
+afterEach(() => {
+  for (const pid of realHelpers.splice(0)) {
+    if (fs.existsSync(`/proc/${String(pid)}`)) process.kill(pid, 'SIGKILL');
+  }
+});
 
 describe("a Linux PC's screen source", () => {
   test('a PC that cannot share reports none and says why; one never shared names the step; a shared one is ready', async () => {
@@ -233,5 +252,44 @@ describe("a Linux PC's screen source", () => {
 
     expect({ desktop: made.desktop(), probed: probed.ok, said: logged.length === 1 && logged[0].startsWith('device.screen_unavailable ') && logged[0].length > 'device.screen_unavailable '.length })
       .toEqual({ desktop: { state: 'none' }, probed: false, said: true });
+  });
+
+  test('the real helper ends with the daemon that started it, killed while the helper waits', async () => {
+    const home = scratchDir('linux-screen-orphan');
+    const logged = [];
+    let command = [];
+
+    const made = createLinuxSource({
+      home,
+      log: (...words) => { logged.push(words.join(' ')); },
+      spawn: (argv, options) => {
+        command = argv;
+
+        return Bun.spawn(['true'], options);
+      },
+    });
+
+    await made.probe();
+    // A `gi` that says it was reached, and by which process, then waits as the real one waits on the portal.
+    const fakes = path.join(home, 'python');
+
+    fs.mkdirSync(path.join(fakes, 'gi'), { recursive: true });
+    fs.writeFileSync(path.join(fakes, 'gi', '__init__.py'), "import os, signal, sys\nsys.stdout.write('waiting %d\\n' % os.getpid())\nsys.stdout.flush()\nsignal.pause()\n");
+
+    // A shell stands in for the daemon and names itself as the daemon does. The helper shares its stdout, so that pipe
+    // ends only once the helper has.
+    const daemon = Bun.spawn(['sh', '-c', '"$@" $$ & wait', 'sh', ...command.slice(0, -1)], {
+      stdin: 'ignore', stdout: 'pipe', stderr: 'inherit', env: { PATH: process.env.PATH ?? '', PYTHONPATH: fakes },
+    });
+
+    const reader = daemon.stdout.getReader();
+    const reached = await readUntil(reader, '\n');
+
+    realHelpers.push(Number(reached.said.split(' ')[1]));
+    daemon.kill('SIGKILL');
+    const after = await readUntil(reader, null);
+
+    expect({ named: command.at(-1), reached: reached.said.startsWith('waiting '), after })
+      .toEqual({ named: String(process.pid), reached: true, after: { said: '', ended: true } });
   });
 });

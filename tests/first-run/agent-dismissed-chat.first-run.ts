@@ -69,7 +69,7 @@ afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE
 
 const CreatedSchema = v.object({
   name: v.string(),
-  subordinate: v.object({ actorReference: v.object({ actorId: v.string() }) }),
+  subagent: v.object({ actorReference: v.object({ actorId: v.string() }) }),
 });
 
 /** A roster row as the tab strip reads it. `actorId` is optional so a build
@@ -92,12 +92,12 @@ function historyEntries(value: JsonValue) {
 }
 
 async function roster(socket: PublicSocket): Promise<{ readonly rows: v.InferOutput<typeof RosterSchema> | null; readonly detail: string }> {
-  const answer = await ask(socket, 'listSubordinates', []);
+  const answer = await ask(socket, 'listSubagents', []);
   const parsed = answer.ok ? v.safeParse(RosterSchema, answer.value) : null;
 
   return parsed !== null && parsed.success
-    ? { rows: parsed.output, detail: `listSubordinates answered ${JSON.stringify(parsed.output).slice(0, 300)}` }
-    : { rows: null, detail: rpcDetail({ rpc: 'listSubordinates', answer, refusal: 'never answered', said: null }) };
+    ? { rows: parsed.output, detail: `listSubagents answered ${JSON.stringify(parsed.output).slice(0, 300)}` }
+    : { rows: null, detail: rpcDetail({ rpc: 'listSubagents', answer, refusal: 'never answered', said: null }) };
 }
 
 describe(SUITE, () => {
@@ -127,22 +127,22 @@ describe(SUITE, () => {
             return announce(subgoals);
           }
 
-          const answer = await ask(workspace, 'createSubordinateAgent', []);
+          const answer = await ask(workspace, 'createSubagentAgent', []);
           const created = answer.ok ? v.safeParse(CreatedSchema, answer.value) : null;
 
           if (created === null || !created.success) {
             subgoals.push({
               what: 'agent-created',
               reached: false,
-              detail: rpcDetail({ rpc: 'createSubordinateAgent', answer, refusal: 'refused', said: null }),
+              detail: rpcDetail({ rpc: 'createSubagentAgent', answer, refusal: 'refused', said: null }),
             });
 
             return announce(subgoals);
           }
 
           const { name } = created.output;
-          const { actorId } = created.output.subordinate.actorReference;
-          subgoals.push({ what: 'agent-created', reached: true, detail: `createSubordinateAgent answered ${name} (${actorId})` });
+          const { actorId } = created.output.subagent.actorReference;
+          subgoals.push({ what: 'agent-created', reached: true, detail: `createSubagentAgent answered ${name} (${actorId})` });
 
           // ── Something said in its own room. ─────────────────────────────
           const ownPath = `${room}/${hostedActorSocketPath(name)}`;
@@ -191,14 +191,14 @@ describe(SUITE, () => {
           const employedRow = employed.rows?.find((row) => row.name === name);
 
           // ── Dismissed the way the dialog dismisses: history kept. ───────
-          const dismissal = await ask(workspace, 'dismissSubordinate', [name]);
+          const dismissal = await ask(workspace, 'dismissSubagent', [name]);
           const kept = dismissal.ok ? v.safeParse(v.object({ historyKept: v.literal(true) }), dismissal.value) : null;
           subgoals.push({
             what: 'dismissed-kept',
             reached: kept !== null && kept.success,
             detail: rpcDetail({
-              rpc: 'dismissSubordinate', answer: dismissal, refusal: 'refused',
-              said: kept !== null && kept.success ? 'dismissSubordinate answered historyKept: true' : null,
+              rpc: 'dismissSubagent', answer: dismissal, refusal: 'refused',
+              said: kept !== null && kept.success ? 'dismissSubagent answered historyKept: true' : null,
             }),
           });
 
