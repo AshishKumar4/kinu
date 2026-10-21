@@ -8,8 +8,16 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   BackgroundJobRunner, BackgroundJobStore, createSandboxExecutor, initBackgroundJobsTable, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS,
-  type ComputerProcessEnd, type SandboxHandle,
+  WORKSPACE_ROOT, type ComputerProcessEnd, type ExecutorProviderSurface, type SandboxHandle,
 } from '../src/index';
+import { executorNamespace, routedByCwd } from '../src/tools/executor-operations';
+import { serveFile } from '../src/tools/file-operations';
+import { hostedToolFiles } from '../src/execution/approval';
+import { standardMounts, withMountTable } from '../src/vfs/mounts';
+import { cloudPlanes } from '../src/vfs/resolve';
+import { TurnFileLedger } from '../src/vfs/file-ledger';
+import { TurnContextBudget } from '../src/context-budget';
+import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils/vfs';
 import type { ProgrammaticTurn } from '../src/types/backend-host';
 import type { Schedule } from '../src/types/primitives';
 import { createTestActors, hostDeliveries } from '@kinu.run/test-utils';
@@ -116,5 +124,41 @@ describe("the computer's startProcess, each process a job of the actor's", () =>
 
     expect(await computer.tools.startProcess.execute('npm run dev')).toEqual({ processId: 'proc-dev' });
     expect(box.starts).toEqual([{ command: 'npm run dev', job: undefined, stamp: undefined }]);
+  });
+});
+
+// Owner decision, 2026-10-20 ("Run where the files live"): a program's `workspace.startProcess` whose cwd is the
+// computer's starts on the computer, through its own member, in its own terms; the workspace's member is not asked.
+describe("a program's workspace.startProcess", () => {
+  test("whose cwd is the computer's starts there, in the computer's terms; any other starts in the workspace", async () => {
+    const box = computerBox();
+    const computerFiles = createMemoryVfs().vfs;
+    await seedFiles(computerFiles, { '/workspace/app/package.json': '{}' });
+    const mounted = withMountTable(createMemoryVfs().vfs, standardMounts((name) => (name === 'computer' ? { files: computerFiles, isAvailable: () => true } : undefined)));
+    const plane = hostedToolFiles(mounted, cloudPlanes(WORKSPACE_ROOT), { mode: () => 'strict' });
+    const files = serveFile(() => ({ vfs: plane, home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), ledger: new TurnFileLedger(), budget: new TurnContextBudget() }));
+    const workspaceStarts: unknown[] = [];
+
+    const workspace = {
+      name: 'workspace', positionalArgs: true, capabilities: new Set(['process_long']), fileRoot: async () => ({ root: '' }),
+      tools: {
+        startProcess: {
+          description: 'start',
+          execute: async (...args: unknown[]) => {
+            workspaceStarts.push(args);
+
+            return { processId: 'nimbus-1' };
+          },
+        },
+      },
+    } satisfies ExecutorProviderSurface;
+
+    const namespaces = routedByCwd([executorNamespace(workspace, files), executorNamespace(createSandboxExecutor(box.handle), files)]);
+    const start = namespaces.find((namespace) => namespace.name === 'workspace')?.tools['startProcess'];
+
+    expect(await start?.execute('npm run dev', { cwd: '/computer/workspace/app' })).toEqual({ processId: 'proc-dev' });
+    expect(await start?.execute('npm run build', { cwd: 'notes' })).toEqual({ processId: 'nimbus-1' });
+    expect(box.starts.map((started) => started.command)).toEqual(['npm run dev']);
+    expect(workspaceStarts).toEqual([['npm run build', { cwd: 'notes' }]]);
   });
 });
