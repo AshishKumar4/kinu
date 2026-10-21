@@ -3,9 +3,11 @@
 // what refuses. After it, the walk: every account the
 // roots and the builtin directory name, each one's workspaces and every object Cloudflare lists, each asked once under
 // a pass this run wrote and then deleted, waiting out an edge still serving the build before; and what it found.
-import { expect, test } from 'bun:test';
-import { sha256Hex, type Repair, type TablesAnswer } from '@kinu.run/core';
-import { censusLines, changedTables, confirmation, derivedIn, planLines, referrersOf, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
+import { Database as SqliteDatabase } from 'bun:sqlite';
+import { describe, expect, test } from 'bun:test';
+import { censusOf, initActivationTable, recordActivation, sha256Hex, type Repair, type TablesAnswer } from '@kinu.run/core';
+import { makeSql, makeSqlExec } from '../packages/core/tests/helpers';
+import { censusDiff, censusLines, changedTables, confirmation, derivedIn, planLines, referrersOf, verdictOf, walk, walkLines, type OpsBody, type Reached, type TablesTarget } from './tables-reset';
 
 const FROM = {
   'device_joins@packages/core/src/state/user-schema.ts': ['device_id TEXT PRIMARY KEY', 'expires_at INTEGER NOT NULL'],
@@ -263,4 +265,123 @@ test('one still on the build before past the propagation bound is a gap in the c
     'UNREACHED, a gap in this census (each repairs at its first request on this build):',
     '  OrchestratorAgent u-builtin-ws: reaching OrchestratorAgent u-builtin-ws: The RPC receiver does not implement the method "opsTables".',
   ]);
+});
+
+// The walk's census after a tables release against one taken before the upload (deploy.sh): the reset dropped what its
+// plan named and nothing else. The rehearsal of 2026-10-21 proved it on staging's 266 databases by hand; this is the
+// ladder's own check, so a row-copying reset, or one that lost a table or an activation, can never pass it.
+describe('census-diff', () => {
+  /** A census line: a database (`<class>\t<label>`), one of its tables, its rows and digest, and its ledger if any. */
+  const line = (row: { readonly database: string; readonly table: string; readonly rows: number; readonly digest: string; readonly ledger?: readonly string[] }) =>
+    [row.database, row.table, String(row.rows), row.digest, ...row.ledger === undefined ? [] : [row.ledger.join(',')]].join('\t');
+
+  const W = 'OrchestratorAgent\tw1';
+
+  const BEFORE = [
+    line({ database: W, table: 'deferred_approvals', rows: 3, digest: 'd1' }),
+    line({ database: W, table: 'notes', rows: 2, digest: 'n1' }),
+    line({ database: W, table: 'workspace_activations', rows: 2, digest: 'a2', ledger: ['1:aaa', '2:bbb'] }),
+    line({ database: W, table: 'kinu_workspace_generation', rows: 1, digest: 'g1' }),
+    line({ database: 'UserDO\tu1', table: 'user_profile', rows: 1, digest: 'p1' }),
+  ].join('\n');
+
+  // What a reset of deferred_approvals leaves: it empty, one activation more, the generation moved, all else alike.
+  const AFTER = [
+    line({ database: W, table: 'deferred_approvals', rows: 0, digest: 'e' }),
+    line({ database: W, table: 'notes', rows: 2, digest: 'n1' }),
+    line({ database: W, table: 'workspace_activations', rows: 3, digest: 'a3', ledger: ['1:aaa', '2:bbb', '3:ccc'] }),
+    line({ database: W, table: 'kinu_workspace_generation', rows: 1, digest: 'g2' }),
+    line({ database: 'UserDO\tu1', table: 'user_profile', rows: 1, digest: 'p1' }),
+  ];
+
+  const PLANNED = new Set(['deferred_approvals']);
+  const diffed = (after: readonly string[], frozen = true, before = BEFORE) => censusDiff(before, after.join('\n'), PLANNED, frozen);
+
+  /** AFTER with `from`'s line replaced by `to`, or dropped. */
+  const swap = (from: string, to: string | null) => AFTER.flatMap((row) => {
+    if (!row.includes(`\t${from}\t`)) return [row];
+
+    return to === null ? [] : [to];
+  });
+
+  const activations = (ledger: readonly string[]) => line({ database: W, table: 'workspace_activations', rows: ledger.length, digest: ledger.join(''), ledger });
+
+  test('passes a reset that emptied its plan\'s table, and names the first open\'s writes as such', () => {
+    const passed = diffed(AFTER);
+
+    expect(passed.failed).toEqual([]);
+    expect(passed.lines).toContain('  OrchestratorAgent\tw1\tworkspace_activations\t2 → 3');
+    expect(passed.lines).toContain('  OrchestratorAgent\tw1\tkinu_workspace_generation\t1 → 1');
+  });
+
+  test('refuses a planned table that kept rows, as a row-copying reset would leave it', () => {
+    expect(diffed(swap('deferred_approvals', line({ database: W, table: 'deferred_approvals', rows: 3, digest: 'd1' }))).failed)
+      .toEqual(['OrchestratorAgent\tw1\tdeferred_approvals\t3 → 3: a planned table kept rows']);
+  });
+
+  test('refuses a table outside the plan that is gone, the generation and the activations among them, on every target', () => {
+    for (const frozen of [true, false]) {
+      expect(diffed(swap('notes', null), frozen).failed).toEqual(['OrchestratorAgent\tw1\tnotes\t2 → gone: a table outside the plan is gone']);
+      expect(diffed(swap('workspace_activations', null), frozen).failed).toEqual(['OrchestratorAgent\tw1\tworkspace_activations\t2 → gone: a table outside the plan is gone']);
+      expect(diffed(swap('kinu_workspace_generation', null), frozen).failed).toEqual(['OrchestratorAgent\tw1\tkinu_workspace_generation\t1 → gone: a table outside the plan is gone']);
+    }
+  });
+
+  test('refuses an activation removed, rewritten or added out of order, and a generation that is not one row, on every target', () => {
+    for (const frozen of [true, false]) {
+      expect(diffed(swap('workspace_activations', activations(['2:bbb', '3:ccc'])), frozen).failed)
+        .toEqual(['OrchestratorAgent\tw1\tworkspace_activations\t2 → 2: row(s) 1 lost']);
+      expect(diffed(swap('workspace_activations', activations(['1:aaa', '2:xxx', '3:ccc'])), frozen).failed)
+        .toEqual(['OrchestratorAgent\tw1\tworkspace_activations\t2 → 3: row(s) 2 rewritten']);
+      expect(diffed(swap('workspace_activations', activations(['1:aaa'])), frozen).failed)
+        .toEqual(['OrchestratorAgent\tw1\tworkspace_activations\t2 → 1: row(s) 2 lost']);
+      expect(diffed(swap('kinu_workspace_generation', line({ database: W, table: 'kinu_workspace_generation', rows: 2, digest: 'g2' })), frozen).failed)
+        .toEqual(['OrchestratorAgent\tw1\tkinu_workspace_generation\t1 → 2: a workspace\'s generation is one row']);
+    }
+  });
+
+  test('refuses a database either census could not read, and activations with no row-by-row proof', () => {
+    const unread = `${W}\t!unreachable\tthe object failed to start`;
+    const noLedger = line({ database: W, table: 'workspace_activations', rows: 3, digest: 'a3' });
+
+    expect(diffed([...AFTER, unread], false).failed).toEqual(['OrchestratorAgent\tw1: not read after the walk, so nothing of it is proven']);
+    expect(diffed(AFTER, false, `${BEFORE}\n${unread}`).failed).toEqual(['OrchestratorAgent\tw1: not read before the upload, so nothing of it is proven']);
+    expect(diffed(swap('workspace_activations', noLedger), false).failed)
+      .toEqual(['OrchestratorAgent\tw1\tworkspace_activations\t2 → 3: no row-by-row proof: a census on either side came from a build before the ledger']);
+  });
+
+  test('on a frozen target refuses any other change, and two activations where the walk opened once; on production names them', () => {
+    const written = swap('user_profile', line({ database: 'UserDO\tu1', table: 'user_profile', rows: 1, digest: 'p2' }));
+    const twice = swap('workspace_activations', activations(['1:aaa', '2:bbb', '3:ccc', '4:ddd']));
+
+    expect(diffed(written).failed).toEqual(['UserDO\tu1\tuser_profile\t1 → 1']);
+    expect(diffed(twice).failed).toEqual(['OrchestratorAgent\tw1\tworkspace_activations\t2 → 4: 2 rows added, where one walk opens it once']);
+    // People's own starts on production, any number of them: the earlier rows are still checked one by one.
+    expect({ written: diffed(written, false).failed, twice: diffed(twice, false).failed }).toEqual({ written: [], twice: [] });
+    expect(diffed(written, false).lines).toContain('  UserDO\tu1\tuser_profile\t1 → 1');
+  });
+
+  // The real writer: workspace_activations keeps 256 rows, the newest replacing the oldest's slot (identity/activations.ts).
+  test('reads the activation ring as its writer keeps it, through the wrap: the oldest let go, every other row kept', () => {
+    const db = new SqliteDatabase(':memory:');
+    const census = () => censusOf(makeSqlExec(db)).map((row) => line({ database: W, ...row })).join('\n');
+
+    const record = (count: number, from: number) => { for (let at = 0; at < count; at += 1) recordActivation(makeSql(db), from + at, 'v'); };
+
+    initActivationTable((ddl) => { db.exec(ddl); });
+    record(255, 1000);
+
+    const before = census();
+
+    record(3, 2000);
+
+    const after = census();
+
+    expect(censusDiff(before, after, new Set(), false).failed).toEqual([]);
+    expect(censusDiff(before, after, new Set(), true).failed).toEqual([`${W}\tworkspace_activations\t255 → 256: 3 rows added, where one walk opens it once`]);
+    db.exec('UPDATE workspace_activations SET started_at = 1 WHERE ordinal = 100');
+    expect(censusDiff(before, census(), new Set(), false).failed).toEqual([`${W}\tworkspace_activations\t255 → 256: row(s) 100 rewritten`]);
+    db.exec('DELETE FROM workspace_activations WHERE ordinal = 101');
+    expect(censusDiff(before, census(), new Set(), false).failed).toEqual([`${W}\tworkspace_activations\t255 → 255: row(s) 100 rewritten`]);
+  });
 });
