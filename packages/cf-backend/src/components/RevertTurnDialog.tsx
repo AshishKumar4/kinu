@@ -208,7 +208,7 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
           This changes files under <span className="font-mono p-text">{plan.dirs.join(", ")}</span> on your
           device: {counts}. Kinu creates a safety snapshot first. Restore again to undo this change.
         </p>
-        <ul className="rounded-md border p-border p-elevated max-h-52 overflow-y-auto p-annotation">
+        <ul className="rounded-md border p-border p-fill max-h-52 overflow-y-auto p-annotation">
           {shown.map((f) => {
             const { mark, tone } = RESTORE_MARK[f.kind];
 

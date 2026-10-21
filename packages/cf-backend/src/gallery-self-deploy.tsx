@@ -240,7 +240,7 @@ function CloudflareSaid({ message, code }: { message: string; code: string }) {
 
   return (
     <Disclosure summary="Details">
-      <div className="flex items-start gap-2 rounded-lg bg-[var(--c-recessed)] px-3 py-2.5">
+      <div className="flex items-start gap-2 rounded-lg bg-[var(--c-sunken)] px-3 py-2.5">
         <p className="min-w-0 flex-1 p-t-code p-text-2">Cloudflare said: {message} <span className="p-text-3">{code}</span></p>
         <CopyButton value={details} what="the details" className="p-text-3 hover:p-text shrink-0" />
       </div>
@@ -251,7 +251,7 @@ function CloudflareSaid({ message, code }: { message: string; code: string }) {
 /** A thing that waits on the person: one sentence, one action, and how the page will know. */
 function Needs({ children, action, waiting, note }: { children: ReactNode; action: ReactNode; waiting: boolean; note: string }) {
   return (
-    <div data-deploy-needs className="rounded-xl bg-[var(--c-accent-subtle)] px-4 py-3.5">
+    <div data-deploy-needs className="rounded-xl bg-[var(--c-selected)] px-4 py-3.5">
       <p className="p-row-text p-text">{children}</p>
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
         {waiting
@@ -324,7 +324,7 @@ function Change({ Icon, title, copy, onPick, disabled = false }: { Icon: Phospho
   return (
     <li>
       <button type="button" onClick={onPick} disabled={disabled}
-        className="-mx-3 flex w-[calc(100%+1.5rem)] items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors enabled:hover:bg-[var(--c-neutral-tint)] disabled:opacity-60">
+        className="-mx-3 flex w-[calc(100%+1.5rem)] items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors enabled:hover:bg-[var(--c-hover)] disabled:opacity-60">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-lg p-fill"><Icon size={18} className="p-accent" /></span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold p-text">{title}</span>
@@ -824,7 +824,7 @@ function LiveScreen({ state, go }: { state: FlowState; go: Go }) {
       </div>
 
       {state.domain === "elsewhere" && (
-        <div data-deploy-pending className="mt-6 rounded-xl bg-[var(--c-accent-subtle)] px-4 py-3.5">
+        <div data-deploy-pending className="mt-6 rounded-xl bg-[var(--c-selected)] px-4 py-3.5">
           <p className="p-row-text p-text">One more step for {ELSEWHERE_DOMAIN}</p>
           <p className="mt-1 p-meta p-text-2">Where you registered it, change its nameservers to these two. Kinu moves to kinu.{ELSEWHERE_DOMAIN} by itself once they change, usually within a few hours.</p>
           <ul className="mt-2.5 space-y-1">
@@ -840,7 +840,7 @@ function LiveScreen({ state, go }: { state: FlowState; go: Go }) {
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t p-border pt-4">
         <Disclosure summary="Use Kinu from your terminal">
-          <div className="flex items-center gap-2 rounded-lg bg-[var(--c-recessed)] px-3 py-2">
+          <div className="flex items-center gap-2 rounded-lg bg-[var(--c-sunken)] px-3 py-2">
             <TerminalWindowIcon size={14} className="shrink-0 p-text-3" />
             <code className="min-w-0 flex-1 truncate p-t-code p-text-2">{CLI_LINE}</code>
             <CopyButton value={CLI_LINE} what="the install command" className="p-text-3 hover:p-text" />

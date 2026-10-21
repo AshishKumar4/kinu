@@ -42,7 +42,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function Row({ icon, title, meta, children }: { icon: ReactNode; title: string; meta?: ReactNode; children?: ReactNode }) {
   return (
     <li className="flex items-start gap-3 px-4 py-3">
-      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-neutral-tint)] p-text-2">{icon}</span>
+      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-hover)] p-text-2">{icon}</span>
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-baseline gap-x-2">
           <span className="p-row-text font-medium p-text">{title}</span>
@@ -62,7 +62,7 @@ function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean })
 
   return (
     <li className="flex items-start gap-3 px-4 py-3" data-blueprint-need={need.connection ?? need.secret}>
-      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-neutral-tint)]">
+      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-hover)]">
         {brand !== undefined ? <BrandMark brand={brand} size={14} bare /> : <KeyIcon size={14} className="p-text-2" />}
       </span>
       <span className="min-w-0 flex-1">
@@ -149,7 +149,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
     <Page back={{ to: "/explore?kind=workspace", label: "Back to Explore" }} icon={null} title={workspace.title} data-blueprint-page={workspace.id}
       actions={<BlueprintActions workspace={workspace} onInstall={() => setInstalling(true)} />}>
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-        <div className="relative aspect-[16/10] overflow-hidden rounded-[var(--r-card)] border p-border p-recessed">
+        <div className="relative aspect-[16/10] overflow-hidden rounded-[var(--r-card)] border p-border p-sunken">
           {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
         </div>
         <div className="flex min-w-0 flex-col gap-3">
@@ -186,7 +186,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
               </Row>
             </ul>
             <button type="button" onClick={() => setSoul((shown) => !shown)} aria-expanded={soul} className="p-meta p-accent hover:underline">{soul ? "Hide its soul" : "Read its soul"}</button>
-            {soul && <pre className="max-h-64 overflow-auto rounded-[var(--r-card)] border p-border p-recessed p-4 p-t-code whitespace-pre-wrap p-text-2" data-blueprint-soul>{inside.soul}</pre>}
+            {soul && <pre className="max-h-64 overflow-auto rounded-[var(--r-card)] border p-border p-sunken p-4 p-t-code whitespace-pre-wrap p-text-2" data-blueprint-soul>{inside.soul}</pre>}
           </Section>
         </div>
 

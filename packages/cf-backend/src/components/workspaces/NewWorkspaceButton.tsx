@@ -22,7 +22,7 @@ export function NewWorkspaceIconButton({ className = "size-8 rounded-full pointe
       onClick={onClick}
       aria-label="New workspace"
       title="New workspace"
-      className={`flex shrink-0 items-center justify-center p-text-2 transition-colors hover:bg-[var(--c-neutral-tint)] hover:p-text ${className}`}
+      className={`flex shrink-0 items-center justify-center p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text ${className}`}
     >
       <NotePencilIcon size={17} />
     </Link>

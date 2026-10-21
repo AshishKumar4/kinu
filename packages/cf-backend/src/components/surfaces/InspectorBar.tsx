@@ -71,7 +71,7 @@ function PagesMenu({ pages, open, choose }: { readonly pages: readonly PageTab[]
     <div className="p-pages-menu p-overlay border p-border animate-fade-in" role="menu">
       {pages.map((page) => (
         <button key={page.key} type="button" role="menuitem" aria-current={page.key === open ? "true" : undefined} onClick={() => choose(page.key)}
-          className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left p-row-text p-text-2 hover:bg-[var(--c-elevated)] hover:p-text">
+          className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left p-row-text p-text-2 hover:bg-[var(--c-hover)] hover:p-text">
           <page.Icon size={14} className="shrink-0 p-text-3" aria-hidden /><span className="min-w-0 flex-1 truncate">{page.title}</span>
           {page.key === open && <CheckIcon size={12} className="shrink-0 p-accent" aria-hidden />}
         </button>

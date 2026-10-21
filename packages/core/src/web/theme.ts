@@ -28,17 +28,17 @@ export function accountTheme(stored: string | null): ThemeName {
 }
 
 export type ColourToken =
-  | '--c-recessed' | '--c-bg' | '--c-sidebar' | '--c-surface' | '--c-elevated' | '--c-fill' | '--c-overlay'
-  | '--c-border' | '--c-border-strong' | '--c-input-border' | '--c-dash'
-  | '--c-text' | '--c-text-2' | '--c-text-3' | '--c-text-4'
-  | '--c-accent' | '--c-accent-fg' | '--c-accent-on' | '--c-accent-subtle' | '--c-accent-mark'
+  | '--c-bg' | '--c-sidebar' | '--c-sunken' | '--c-surface' | '--c-field' | '--c-fill' | '--c-overlay'
+  | '--c-hover' | '--c-pressed' | '--c-selected'
+  | '--c-border' | '--c-border-strong' | '--c-field-border' | '--c-dash'
+  | '--c-text' | '--c-text-2' | '--c-text-3'
+  | '--c-accent' | '--c-accent-fg' | '--c-accent-on' | '--c-accent-mark' | '--c-focus'
   | '--c-success' | '--c-warning' | '--c-danger' | '--c-info'
-  | '--c-success-tint' | '--c-warning-tint' | '--c-danger-tint' | '--c-info-tint' | '--c-neutral-tint'
-  | '--c-code' | '--c-user-bg' | '--c-user-border' | '--c-input-bg'
-  | '--c-composer-bg' | '--c-composer-line' | '--c-composer-line-focus' | '--c-scrim' | '--c-shadow-drop'
-  | '--shadow-overlay' | '--shadow-card' | '--shadow-menu' | '--shadow-composer'
+  | '--c-success-tint' | '--c-warning-tint' | '--c-danger-tint' | '--c-info-tint' | '--c-danger-on'
   | '--c-button-bg' | '--c-button-bg-hover' | '--c-button-bg-active' | '--c-button-line' | '--c-button-line-hover'
-  | '--shadow-button' | '--c-danger-on' | '--c-focus';
+  | '--c-user-bg' | '--c-user-border'
+  | '--c-composer-bg' | '--c-composer-line' | '--c-composer-line-focus' | '--c-scrim' | '--c-shadow-drop'
+  | '--shadow-overlay' | '--shadow-card' | '--shadow-menu' | '--shadow-composer' | '--shadow-button';
 
 /** Every block declares the complete set: an omitted token would resolve by source order. */
 export type TokenSet = Readonly<Record<ColourToken, string>>;
@@ -53,25 +53,23 @@ export type TokenSet = Readonly<Record<ColourToken, string>>;
  * plus a hairline.
  */
 const GRAPHITE_DARK = {
-  '--c-recessed': '#0B0A09',
+  '--c-sunken': '#0B0A09',
   '--c-bg': '#100F0E',
   '--c-sidebar': '#141413',
   '--c-surface': '#1A1918',
-  '--c-elevated': '#252423',
   '--c-fill': '#1F1E1D',
   '--c-overlay': '#252423',
   '--c-border': '#323130',
   '--c-border-strong': '#666664',
-  '--c-input-border': '#666664',
+  '--c-field-border': '#666664',
   '--c-dash': '#292928',
   '--c-text': '#EDEBE8',
   '--c-text-2': '#D2D1CE',
   '--c-text-3': '#9D9C99',
-  '--c-text-4': '#8D8C89',
   '--c-accent': '#E0A458',
   '--c-accent-fg': '#E6D3AC',
   '--c-accent-on': '#1F1306',
-  '--c-accent-subtle': 'rgba(224, 164, 88, 0.12)',
+  '--c-selected': 'rgba(224, 164, 88, 0.12)',
   '--c-accent-mark': 'var(--c-accent)',
   '--c-success': '#7CCD8E',
   '--c-warning': '#E4CE63',
@@ -81,11 +79,11 @@ const GRAPHITE_DARK = {
   '--c-warning-tint': 'rgba(228, 206, 99, 0.14)',
   '--c-danger-tint': 'rgba(239, 127, 114, 0.14)',
   '--c-info-tint': 'rgba(126, 188, 232, 0.14)',
-  '--c-neutral-tint': 'rgba(237, 235, 232, 0.06)',
-  '--c-code': '#E6D3AC',
+  '--c-hover': 'rgba(237, 235, 232, 0.06)',
+  '--c-pressed': 'rgba(237, 235, 232, 0.1)',
   '--c-user-bg': '#302416',
   '--c-user-border': '#4C3922',
-  '--c-input-bg': '#090807',
+  '--c-field': '#090807',
   '--c-composer-bg': '#181716',
   '--c-composer-line': 'rgba(237, 235, 232, 0.09)',
   '--c-composer-line-focus': 'rgba(237, 235, 232, 0.18)',
@@ -108,25 +106,23 @@ const GRAPHITE_DARK = {
 } satisfies TokenSet;
 
 const GRAPHITE_LIGHT = {
-  '--c-recessed': '#EAE9E8',
+  '--c-sunken': '#EAE9E8',
   '--c-bg': '#F9F9F8',
   '--c-sidebar': '#F3F2F1',
   '--c-surface': '#FFFFFF',
-  '--c-elevated': '#EDEDEB',
   '--c-fill': '#EFEEED',
   '--c-overlay': '#FFFFFF',
   '--c-border': '#DAD9D8',
   '--c-border-strong': '#8B8A89',
-  '--c-input-border': '#8B8A89',
+  '--c-field-border': '#8B8A89',
   '--c-dash': '#E4E3E1',
   '--c-text': '#191816',
   '--c-text-2': '#3C3A38',
   '--c-text-3': '#615F5D',
-  '--c-text-4': '#696765',
   '--c-accent': '#BE7D1D',
   '--c-accent-fg': '#865713',
   '--c-accent-on': '#1F1306',
-  '--c-accent-subtle': 'rgba(190, 125, 29, 0.12)',
+  '--c-selected': 'rgba(190, 125, 29, 0.12)',
   '--c-accent-mark': 'var(--c-accent-fg)',
   '--c-success': '#29723E',
   '--c-warning': '#796300',
@@ -136,11 +132,11 @@ const GRAPHITE_LIGHT = {
   '--c-warning-tint': 'rgba(121, 99, 0, 0.1)',
   '--c-danger-tint': 'rgba(171, 67, 53, 0.1)',
   '--c-info-tint': 'rgba(42, 105, 153, 0.1)',
-  '--c-neutral-tint': 'rgba(25, 24, 22, 0.06)',
-  '--c-code': '#865713',
+  '--c-hover': 'rgba(25, 24, 22, 0.06)',
+  '--c-pressed': 'rgba(25, 24, 22, 0.1)',
   '--c-user-bg': '#F5E2C4',
   '--c-user-border': '#DDBF91',
-  '--c-input-bg': '#FFFFFF',
+  '--c-field': '#FFFFFF',
   '--c-composer-bg': '#FFFFFF',
   '--c-composer-line': 'rgba(25, 24, 22, 0.12)',
   '--c-composer-line-focus': 'rgba(25, 24, 22, 0.24)',
@@ -163,25 +159,23 @@ const GRAPHITE_LIGHT = {
 } satisfies TokenSet;
 
 const WARM_DARK = {
-  '--c-recessed': '#131110',
+  '--c-sunken': '#131110',
   '--c-bg': '#0F0D0B',
   '--c-sidebar': '#141110',
   '--c-surface': '#181512',
-  '--c-elevated': '#221C15',
   '--c-fill': '#1B1713',
   '--c-overlay': '#221C15',
-  '--c-border': '#262019',
+  '--c-border': '#302920',
   '--c-border-strong': '#696257',
-  '--c-input-border': '#696257',
+  '--c-field-border': '#696257',
   '--c-dash': '#2A241D',
   '--c-text': '#EDE5D8',
   '--c-text-2': '#D8CFC2',
   '--c-text-3': '#9C9184',
-  '--c-text-4': '#8E8478',
   '--c-accent': '#E0A458',
   '--c-accent-fg': '#E3D2AE',
   '--c-accent-on': '#1A1408',
-  '--c-accent-subtle': 'rgba(224, 164, 88, 0.12)',
+  '--c-selected': 'rgba(224, 164, 88, 0.12)',
   '--c-accent-mark': 'var(--c-accent)',
   '--c-success': '#8FBC8B',
   '--c-warning': '#DAC077',
@@ -191,11 +185,11 @@ const WARM_DARK = {
   '--c-warning-tint': 'rgba(218, 192, 119, 0.14)',
   '--c-danger-tint': 'rgba(201, 123, 107, 0.14)',
   '--c-info-tint': 'rgba(143, 182, 214, 0.14)',
-  '--c-neutral-tint': 'rgba(237, 229, 216, 0.06)',
-  '--c-code': '#E3D2AE',
+  '--c-hover': 'rgba(237, 229, 216, 0.06)',
+  '--c-pressed': 'rgba(237, 229, 216, 0.1)',
   '--c-user-bg': '#241E16',
   '--c-user-border': '#3A3126',
-  '--c-input-bg': '#0B0A09',
+  '--c-field': '#0B0A09',
   '--c-composer-bg': '#1A1714',
   '--c-composer-line': 'rgba(237, 229, 216, 0.08)',
   '--c-composer-line-focus': 'rgba(237, 229, 216, 0.16)',
@@ -218,25 +212,23 @@ const WARM_DARK = {
 } satisfies TokenSet;
 
 const WARM_LIGHT = {
-  '--c-recessed': '#E0D8C5',
+  '--c-sunken': '#E0D8C5',
   '--c-bg': '#E9E2D3',
   '--c-sidebar': '#F1EBDD',
   '--c-surface': '#F7F3E9',
-  '--c-elevated': '#E8E0CE',
   '--c-fill': '#E5DCC8',
   '--c-overlay': '#F7F3E9',
   '--c-border': '#D2C6AE',
   '--c-border-strong': '#8F7F62',
-  '--c-input-border': '#8F7F62',
+  '--c-field-border': '#8F7F62',
   '--c-dash': '#DBD1BE',
   '--c-text': '#1C1710',
   '--c-text-2': '#3D3427',
   '--c-text-3': '#5E5344',
-  '--c-text-4': '#695C4C',
   '--c-accent': '#B17513',
   '--c-accent-fg': '#7A5514',
   '--c-accent-on': '#1F1503',
-  '--c-accent-subtle': 'rgba(216, 154, 68, 0.16)',
+  '--c-selected': 'rgba(216, 154, 68, 0.16)',
   '--c-accent-mark': 'var(--c-accent-fg)',
   '--c-success': '#316530',
   '--c-warning': '#715A00',
@@ -246,11 +238,11 @@ const WARM_LIGHT = {
   '--c-warning-tint': 'rgba(113, 90, 0, 0.1)',
   '--c-danger-tint': 'rgba(150, 65, 44, 0.11)',
   '--c-info-tint': 'rgba(47, 98, 137, 0.08)',
-  '--c-neutral-tint': 'rgba(43, 36, 25, 0.07)',
-  '--c-code': '#7A5514',
+  '--c-hover': 'rgba(43, 36, 25, 0.07)',
+  '--c-pressed': 'rgba(43, 36, 25, 0.11)',
   '--c-user-bg': '#F2D9AC',
   '--c-user-border': '#D9B573',
-  '--c-input-bg': '#F7F3E9',
+  '--c-field': '#F7F3E9',
   '--c-composer-bg': '#F8F4EB',
   '--c-composer-line': 'rgba(43, 36, 25, 0.10)',
   '--c-composer-line-focus': 'rgba(43, 36, 25, 0.20)',
@@ -278,14 +270,27 @@ export const THEME_TOKENS: Readonly<Record<ThemeName, Readonly<Record<Mode, Toke
   warm: { dark: WARM_DARK, light: WARM_LIGHT },
 };
 
-export type RadiusRole = '--r-control' | '--r-row' | '--r-card' | '--r-overlay';
+export type RadiusRole = '--r-check' | '--r-inner' | '--r-control' | '--r-row' | '--r-card' | '--r-pill';
 
+/** The only radii (design system §1.5): a checkbox; an inner piece; a control; a row, menu or notice; a card, tile or
+ *  dialog; and a pill. */
 const RADII = {
+  '--r-check': '4px',
+  '--r-inner': '6px',
   '--r-control': '8px',
-  '--r-row': '8px',
+  '--r-row': '12px',
   '--r-card': '14px',
-  '--r-overlay': '14px',
+  '--r-pill': '999px',
 } satisfies Readonly<Record<RadiusRole, string>>;
+
+/**
+ * The colours the agents' mascots and their accessories are drawn in (components/Marks.tsx): an illustration's own, the
+ * same in every look, so a mascot is the same character on a dark page and a light one.
+ */
+export const ILLUSTRATION = {
+  teal: '#1F7A72', tealLight: '#2FA39A', blue: '#3366B5', ink: '#4A4366', sky: '#4C86E0', lilac: '#8C86A3',
+  berry: '#C94F88', red: '#E0524F', pink: '#EC6FA8', rose: '#F07FAE', gold: '#F2BE45',
+} as const;
 
 /**
  * The default theme is unnamed on `:root`; every theme also answers its own `data-theme`, so a swatch can wear one
@@ -345,7 +350,7 @@ export function terminalPalette(mode: Mode, token: (name: ColourToken) => string
     ...roles,
     brightRed: roles.red, brightGreen: roles.green, brightYellow: roles.yellow, brightBlue: roles.blue,
     brightMagenta: magenta, brightCyan: cyan,
-    black: light ? token('--c-text') : token('--c-recessed'),
+    black: light ? token('--c-text') : token('--c-sunken'),
     white: light ? token('--c-text-2') : token('--c-text'),
     brightBlack: token('--c-text-3'),
     brightWhite: light ? token('--c-text-3') : token('--c-text'),

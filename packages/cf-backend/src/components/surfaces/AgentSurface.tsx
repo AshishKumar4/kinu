@@ -78,7 +78,7 @@ export interface AgentSurfaceProps {
 type AgentMail = NonNullable<Awaited<ReturnType<OrchestratorAgent["agentMail"]>>>;
 
 function Chip({ children, mono = false }: { children: React.ReactNode; mono?: boolean }) {
-  return <span className={`inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-neutral-tint)] px-2.5 p-meta p-text-2 ${mono ? "font-mono" : ""}`}>{children}</span>;
+  return <span className={`inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-hover)] px-2.5 p-meta p-text-2 ${mono ? "font-mono" : ""}`}>{children}</span>;
 }
 
 function Quiet({ children }: { children: React.ReactNode }) {
@@ -163,7 +163,7 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
     <Section id="memory" title="Memory" icon={<BrainIcon size={14} className="p-text-2" />}
       badge={facts.length + notes.length > 0 ? <Badge variant="secondary">{facts.length + notes.length}</Badge> : undefined}>
       <div className="space-y-3">
-        <label className="flex h-8 items-center gap-2 rounded-lg border p-border p-elevated px-2.5 focus-within:ring-1 focus-within:ring-[var(--c-accent)]">
+        <label className="flex h-8 items-center gap-2 rounded-lg border p-border p-fill px-2.5 focus-within:ring-1 focus-within:ring-[var(--c-accent)]">
           <MagnifyingGlassIcon size={13} className="shrink-0 p-text-3" aria-hidden />
           <input value={search} onChange={(event) => { setSearch(event.target.value); onSearchMemory(event.target.value); }}
             placeholder="Search memory" aria-label="Search memory"
@@ -184,7 +184,7 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
               {notes.map((entry, index) => (
                 <div key={index} data-learning className="px-3 py-2.5">
                   <p className="line-clamp-2 p-row-text p-text">{entry.content.split("\n")[0]}</p>
-                  <p className="mt-0.5 p-meta p-text-4">{entry.updatedAt}{entry.savedBy ? ` · ${entry.savedBy}` : ""}</p>
+                  <p className="mt-0.5 p-meta p-text-3">{entry.updatedAt}{entry.savedBy ? ` · ${entry.savedBy}` : ""}</p>
                 </div>
               ))}
             </div>
@@ -208,7 +208,7 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
                 <div key={fact.key} className="group/fact flex items-start gap-3 px-3 py-2.5" data-world-model-fact={fact.key}>
                   <div className="min-w-0 flex-1">
                     <p className="line-clamp-2 p-row-text p-text">{v.is(v.string(), fact.value) ? fact.value : JSON.stringify(fact.value)}</p>
-                    <p className="mt-0.5 flex flex-wrap items-center gap-x-2 p-meta p-text-4">
+                    <p className="mt-0.5 flex flex-wrap items-center gap-x-2 p-meta p-text-3">
                       <span className="font-mono">{fact.key}</span>
                       {fact.confidence < 1 && <span className="tabular-nums">{(fact.confidence * 100).toFixed(0)}% sure</span>}
                       {fact.source !== "" && <span>from {fact.source}</span>}

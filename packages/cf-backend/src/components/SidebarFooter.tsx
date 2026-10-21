@@ -36,7 +36,7 @@ function CountBadge({ count, label }: { count: number; label: string }) {
 export function FooterIcons({ vertical = false }: { vertical?: boolean }) {
   const { pathname, hash } = useLocation();
   const { enabled, unread } = useImportantMail();
-  const cls = (open: boolean) => `relative flex size-8 items-center justify-center rounded-lg transition-colors ${open ? "bg-[var(--c-accent-subtle)] p-accent" : `p-text-3 ${NAV_HOVER}`}`;
+  const cls = (open: boolean) => `relative flex size-8 items-center justify-center rounded-lg transition-colors ${open ? "bg-[var(--c-selected)] p-accent" : `p-text-3 ${NAV_HOVER}`}`;
   const at = (root: string) => pathname === root || pathname.startsWith(`${root}/`);
   // Devices is a Settings section: its icon is the open page while that section is.
   const devicesOpen = at(APP_ROUTES.userSettings) && settingsSection(hash) === "devices";
@@ -112,7 +112,7 @@ export function SidebarFooter({ initiallyOpen = false }: { initiallyOpen?: boole
   return (
     <div ref={ref} className="relative flex items-center gap-1 border-t p-border px-2 py-2" data-sidebar-footer>
       <button type="button" onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" data-account-menu
-        className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2 text-left transition-colors ${open ? "bg-[var(--c-neutral-tint)]" : "hover:bg-[var(--c-neutral-tint)]"}`}>
+        className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2 text-left transition-colors ${open ? "bg-[var(--c-hover)]" : "hover:bg-[var(--c-hover)]"}`}>
         <Avatar name={name === "" ? "?" : name} size={24} />
         <span className="min-w-0 flex-1 truncate p-row-text font-medium p-text">{name === "" ? "Account" : name}</span>
       </button>

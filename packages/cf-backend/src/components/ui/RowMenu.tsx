@@ -24,7 +24,7 @@ export function RowMenu({ label, items }: { label: string; items: readonly RowMe
     <div ref={menu} className="relative shrink-0">
       <button type="button" aria-haspopup="menu" aria-expanded={open} aria-label={label} title={label} data-row-menu
         onClick={() => setOpen((value) => !value)}
-        className="flex size-7 items-center justify-center rounded-[var(--r-control)] p-text-3 transition-colors hover:bg-[var(--c-neutral-tint)] hover:p-text">
+        className="flex size-7 items-center justify-center rounded-[var(--r-control)] p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
         <DotsThreeIcon size={16} weight="bold" />
       </button>
       {open && (

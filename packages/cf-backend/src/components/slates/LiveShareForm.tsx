@@ -84,7 +84,7 @@ function ChoiceCards<T extends string>({ label, marker, options, value, onChange
       {options.map((option) => (
         <button key={option.id} type="button" role="radio" aria-checked={value === option.id} {...{ [marker]: option.id }} onClick={() => onChange(option.id)}
           disabled={disabled || option.disabled === true}
-          className={`flex w-full items-start gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-elevated)] ${value === option.id ? "bg-[var(--c-elevated)]" : ""}`}>
+          className={`flex w-full items-start gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-hover)] ${value === option.id ? "bg-[var(--c-fill)]" : ""}`}>
           <span className={`mt-0.5 flex shrink-0 ${value === option.id ? "p-accent" : "p-text-3"}`}>{option.icon}</span>
           <span className="min-w-0 flex-1">
             <span className="block p-row-text font-medium p-text">{option.label}</span>
@@ -203,7 +203,7 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
   if (row.problem !== undefined) {
     members = <p className="p-badge-danger inline-block rounded px-2 py-0.5 text-[11px]">{row.problem}</p>;
   } else if (row.members.length === 0) {
-    members = <p className="p-text-4">No members.</p>;
+    members = <p className="p-text-3">No members.</p>;
   } else {
     members = (
       <ul className="space-y-1">
@@ -216,8 +216,8 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
             return (
               <li key={key} className="flex items-center gap-2">
                 <span className="font-mono p-text-2">{member.member}</span>
-                <span className="p-text-4">{IMPACT_WORDS[member.impact]}</span>
-                <span className="ml-auto p-text-4">Always on</span>
+                <span className="p-text-3">{IMPACT_WORDS[member.impact]}</span>
+                <span className="ml-auto p-text-3">Always on</span>
               </li>
             );
           }
@@ -244,7 +244,7 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
     <li className="space-y-1.5 py-2">
       <div className="flex flex-wrap items-baseline gap-x-2">
         <span className="font-mono text-xs font-medium p-text">{row.namespace}</span>
-        {row.title !== row.namespace && <span className="p-text-4">{row.title}</span>}
+        {row.title !== row.namespace && <span className="p-text-3">{row.title}</span>}
       </div>
       {members}
     </li>
@@ -274,13 +274,13 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
   return (
     <div className="p-group">
       <button type="button" aria-expanded={open} data-share-reach onClick={() => setOpen((shown) => !shown)}
-        className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-elevated)]">
+        className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-hover)]">
         <span className="w-14 shrink-0 p-row-text font-medium p-text">Reach</span>
         <span className="flex min-w-0 flex-1 p-meta p-text-3">
           <span className="truncate">{names}</span>
           <span className="shrink-0 whitespace-pre"> · {changes}</span>
         </span>
-        {open ? <CaretDownIcon size={13} className="shrink-0 p-text-4" /> : <CaretRightIcon size={13} className="shrink-0 p-text-4" />}
+        {open ? <CaretDownIcon size={13} className="shrink-0 p-text-3" /> : <CaretRightIcon size={13} className="shrink-0 p-text-3" />}
       </button>
       {open && (
         <div className="space-y-2 border-t p-border px-3.5 py-2 text-xs">

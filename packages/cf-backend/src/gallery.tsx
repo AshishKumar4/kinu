@@ -4670,7 +4670,7 @@ function Controls() {
       </div>
       <div className="max-w-md space-y-2">
         <input className="w-full px-3 py-1.5 border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]" placeholder="raw input (fork modal style)" />
-        <textarea rows={2} className="block w-full resize-y rounded-md border p-border p-bg px-3 py-3 text-sm leading-7 p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-accent-subtle)]" placeholder="mission textarea (home page style)" />
+        <textarea rows={2} className="block w-full resize-y rounded-md border p-border p-bg px-3 py-3 text-sm leading-7 p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-selected)]" placeholder="mission textarea (home page style)" />
       </div>
       <EmptyState icon={<BrainIcon size={32} />} title="No exploration trees yet" hint="Exploration trees appear when the agent runs agents.swarm with a depth to investigate subproblems." />
     </div>
@@ -5368,8 +5368,8 @@ function GalleryModal() {
 }
 
 const SURFACE_STEPS = [
-  ["recessed", "--c-recessed"], ["base", "--c-bg"], ["panel", "--c-sidebar"],
-  ["card", "--c-surface"], ["raised", "--c-elevated"], ["overlay", "--c-overlay"],
+  ["sunken", "--c-sunken"], ["base", "--c-bg"], ["panel", "--c-sidebar"],
+  ["card", "--c-surface"], ["fill", "--c-fill"], ["overlay", "--c-overlay"],
 ] as const;
 
 /** Role names only: per-theme contrast ratios are asserted by `scripts/palette-ux`. */
@@ -5414,7 +5414,7 @@ function Palette() {
           <Button>Secondary</Button>
           <Button variant="ghost">Ghost</Button>
           <a className="p-accent p-row-text underline underline-offset-2" href="#top">A link</a>
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full p-accent-subtle">
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full p-selected">
             <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
             <span className="p-meta p-accent font-medium">working</span>
           </span>

@@ -342,7 +342,7 @@ const readerOf = (box: Address): string => (box.id === "ashish" ? ASSISTANT ?? "
 
 /** A quiet fact beside a heading, as the Agent tab's chips are. */
 function Chip({ children, mono = false }: { children: ReactNode; mono?: boolean }) {
-  return <span className={`inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-neutral-tint)] px-2.5 p-meta p-text-2 ${mono ? "font-mono" : ""}`}>{children}</span>;
+  return <span className={`inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-hover)] px-2.5 p-meta p-text-2 ${mono ? "font-mono" : ""}`}>{children}</span>;
 }
 
 function Verified({ mail }: { mail: Mail }) {
@@ -379,7 +379,7 @@ function MailRow({ thread, open, box, draft = false, onOpen }: { thread: Thread;
           {thread.subject}{thread.mail.length > 1 && <span className="p-text-3"> · {thread.mail.length}</span>}
         </span>
         <span className="flex min-w-0 items-baseline gap-1.5 p-meta p-text-3">
-          {box !== null && <span className="shrink-0 rounded-sm bg-[var(--c-neutral-tint)] px-1 p-text-2">{box}</span>}
+          {box !== null && <span className="shrink-0 rounded-sm bg-[var(--c-hover)] px-1 p-text-2">{box}</span>}
           {thread.mail.some((mail) => mail.attachments !== undefined) && <PaperclipIcon size={11} className="shrink-0 self-center" aria-label="Attachment" />}
           <span className={`truncate ${draft ? "p-warning" : ""}`}>{gist}</span>
         </span>
@@ -723,7 +723,7 @@ function MailPill({ thread, mail, onOpen }: { thread: Thread; mail: Mail; onOpen
       hooks={{ "data-mail-pill": owner ? "owner" : "input" }}
       action={(
         <button type="button" onClick={onOpen} title="Open it in the Agent tab" aria-label="Open it in the Agent tab"
-          className="mt-1 mr-1 flex size-6 shrink-0 items-center justify-center rounded-md p-text-4 transition-colors hover:bg-[var(--c-elevated)] hover:p-text-2">
+          className="mt-1 mr-1 flex size-6 shrink-0 items-center justify-center rounded-md p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text-2">
           <ArrowUpRightIcon size={11} />
         </button>
       )} />

@@ -109,7 +109,7 @@ function Pending({ pending, busy, act, decide }: Omit<SectionProps, "state"> & {
     <section className="space-y-2" data-account-memory-pending>
       <div className="p-t-label p-text-2">Waiting for you</div>
       {pending.map((item) => (
-        <div key={item.id} className="rounded-md px-3 py-2 p-elevated space-y-1" data-account-memory-proposal={item.id}>
+        <div key={item.id} className="rounded-md px-3 py-2 p-fill space-y-1" data-account-memory-proposal={item.id}>
           <div className="p-row-text p-text break-words">
             {item.proposal.kind === "fact" ? <><span className="font-mono">{item.proposal.key}</span>: {valueText(item.proposal.value)}</> : item.proposal.content}
           </div>

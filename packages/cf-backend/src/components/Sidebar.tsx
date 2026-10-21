@@ -82,7 +82,7 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
             event.preventDefault();
             onDone();
           }}
-          className="min-w-0 flex-1 rounded-sm px-1.5 py-1 text-xs p-elevated p-text border p-border focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
+          className="min-w-0 flex-1 rounded-sm px-1.5 py-1 text-xs p-fill p-text border p-border focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-selected)]"
           aria-label={label}
         />
         <button
@@ -217,7 +217,7 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
                           <span className="p-logo-badge"><WorkspaceDot entry={a} /></span>
                         </span>
                         <span className={`min-w-0 flex-1 truncate p-row-text font-semibold ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? `italic ${isActive ? '' : 'p-text-3'}` : ''}`}>{shown}</span>
-                        {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-4 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
+                        {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-3 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
                       </NavLink>
                       <button
                         onClick={() => setEditingWorkspace(a.name)}
@@ -281,7 +281,7 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
           <UsersThreeIcon size={13} className="w-[13px] shrink-0" aria-hidden />
           <span className="flex-1">All agents</span>
           {working && <AgentStatusMark activity="working" />}
-          {others > 0 && <span className="p-meta tabular-nums p-text-4">{others}</span>}
+          {others > 0 && <span className="p-meta tabular-nums p-text-3">{others}</span>}
           <CaretRightIcon size={11} aria-hidden />
         </button>
       </li>

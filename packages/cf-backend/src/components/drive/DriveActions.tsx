@@ -186,7 +186,7 @@ function NewMenu({ onFiles, onFolder, onZip, onNewFolder, onNewSkill }: NewProps
             <div key={item.label}>
               {item.apart === true && <div className="mx-1 my-1.5 border-t p-border" />}
               <button type="button" role="menuitem" {...{ [item.marker]: "" }} onClick={() => { setOpen(false); item.run(); }}
-                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm p-text transition-colors hover:bg-[var(--c-elevated)]">
+                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm p-text transition-colors hover:bg-[var(--c-hover)]">
                 <span className="flex shrink-0 p-text-3">{item.icon}</span>{item.label}
               </button>
             </div>

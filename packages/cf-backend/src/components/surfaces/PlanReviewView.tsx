@@ -233,7 +233,7 @@ function PlanHeaderActions({ comments, unread, panelOpen, onToggle, mode, onMode
         {unread && <span data-plan-comments-unread className="size-1.5 rounded-full p-dot-accent" aria-hidden="true" />}
       </Button>
       {mode !== null && (
-        <div className="flex items-center rounded-md border p-border p-recessed p-0.5" aria-label="Annotation mode">
+        <div className="flex items-center rounded-md border p-border p-sunken p-0.5" aria-label="Annotation mode">
           <Button
             type="button"
             size="sm"

@@ -19,7 +19,7 @@ function Answer({ chosen, onChoose, value, title, badge }: {
 }) {
   return (
     <label data-assistant-tile={value}
-      className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border p-border px-4 py-3 transition-colors hover:border-[var(--c-border-strong)] has-[:checked]:border-[var(--c-accent)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--c-accent-subtle)]">
+      className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border p-border px-4 py-3 transition-colors hover:border-[var(--c-border-strong)] has-[:checked]:border-[var(--c-accent)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--c-selected)]">
       <input type="radio" name="assistant" value={value} checked={chosen} onChange={onChoose} className="sr-only" />
       <span className="p-row-text font-medium p-text">{title}</span>
       {badge !== undefined && <span className="p-meta p-text-3">{badge}</span>}

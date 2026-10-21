@@ -25,7 +25,7 @@ export function MailBody({ text }: { text: string }) {
       {quote !== null && (shown
         ? <p data-mail-quote className="whitespace-pre-wrap break-words border-l-2 p-border pl-3 p-row-text p-text-3 [overflow-wrap:anywhere]">{quote}</p>
         : <button type="button" onClick={() => setShown(true)} data-mail-show-quote aria-label="Show the quoted mail" title="Show the quoted mail"
-          className="rounded-full bg-[var(--c-neutral-tint)] px-2 leading-4 p-meta p-text-3 hover:p-text">•••</button>)}
+          className="rounded-full bg-[var(--c-hover)] px-2 leading-4 p-meta p-text-3 hover:p-text">•••</button>)}
     </div>
   );
 }

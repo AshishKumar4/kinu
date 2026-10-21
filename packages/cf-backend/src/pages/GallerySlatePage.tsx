@@ -47,7 +47,7 @@ function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; o
       )}>
       <p className="p-row-text p-text-2">Say what is wrong with it. The people who run Kinu read every report.</p>
       <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={3} maxLength={500} aria-label="What is wrong" data-gallery-report-reason
-        className="w-full rounded-md border p-border bg-[var(--c-input-bg)] px-2.5 py-1.5 p-row-text p-text outline-none placeholder:text-[var(--c-text-4)]" />
+        className="w-full rounded-md border p-border bg-[var(--c-field)] px-2.5 py-1.5 p-row-text p-text outline-none placeholder:text-[var(--c-text-3)]" />
       {failure !== null && <p role="alert" className="p-meta p-danger">{failure}</p>}
     </Modal>
   );

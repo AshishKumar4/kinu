@@ -194,7 +194,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
 
   return (
     <div className="flex flex-col items-start gap-1 animate-fade-in py-0.5">
-      <div className="inline-flex items-center gap-2 max-w-full px-3 py-1.5 rounded-full p-elevated border p-border p-row-text p-text-2">
+      <div className="inline-flex items-center gap-2 max-w-full px-3 py-1.5 rounded-full p-fill border p-border p-row-text p-text-2">
         {run.status === "running" && (
           <>
             <Loader size="sm" />

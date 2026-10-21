@@ -30,7 +30,7 @@ export function Segmented<T extends string>({ label, segments, value, onChange, 
       ref={strip}
       role="tablist"
       aria-label={label}
-      className="flex min-w-0 items-center gap-0.5 rounded-[var(--r-control)] p-recessed p-0.5"
+      className="flex min-w-0 items-center gap-0.5 rounded-[var(--r-control)] p-sunken p-0.5"
       onBlur={(event) => {
         if (!(event.relatedTarget instanceof Node) || !strip.current?.contains(event.relatedTarget)) setFocusId(null);
       }}
@@ -76,7 +76,7 @@ export function Segmented<T extends string>({ label, segments, value, onChange, 
           >
             {segment.icon ?? segment.label}
             {segment.count !== undefined && (
-              <span className={`p-meta tabular-nums ${selected ? "p-text-2" : "p-text-4"}`}>{segment.count}</span>
+              <span className={`p-meta tabular-nums ${selected ? "p-text-2" : "p-text-3"}`}>{segment.count}</span>
             )}
           </button>
         );

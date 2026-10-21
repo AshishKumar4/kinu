@@ -57,7 +57,7 @@ function NoLines({ file, onOpenInFiles }: { file: FileDiff; onOpenInFiles: (() =
   if (text === null) return null;
 
   return (
-    <div className="m-3 rounded-lg p-recessed px-3.5 py-3" data-no-lines={body.kind}>
+    <div className="m-3 rounded-lg p-sunken px-3.5 py-3" data-no-lines={body.kind}>
       <p className="p-row-text p-text-2">{text}</p>
       {onOpenInFiles !== null && <button type="button" onClick={onOpenInFiles} className="mt-1.5 p-meta p-accent-fg hover:underline">Open in Files</button>}
     </div>
@@ -113,7 +113,7 @@ function NextFile({ next, reviewable, onOpen, onReviewed, onList }: {
 
   return (
     <button type="button" onClick={() => onOpen(next.path)} data-next-file
-      className="mx-3 mb-6 mt-4 flex w-[calc(100%-1.5rem)] items-center gap-2.5 rounded-lg border p-border px-3.5 py-2.5 text-left transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-elevated)]">
+      className="mx-3 mb-6 mt-4 flex w-[calc(100%-1.5rem)] items-center gap-2.5 rounded-lg border p-border px-3.5 py-2.5 text-left transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-hover)]">
       <span className="shrink-0 p-meta p-text-3">Next</span>
       <ChangeMark status={next.status} />
       <span className="min-w-0 flex-1 truncate p-row-text p-text">{vfsBasename(next.path)}</span>
@@ -181,7 +181,7 @@ function NotesBar({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   return (
     <footer className="flex shrink-0 items-center gap-2 border-t p-border px-3 py-2.5" data-notes-bar>
       <button type="button" onClick={onToggle} aria-expanded={open}
-        className={`-ml-1.5 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 p-meta transition-colors ${open ? "bg-[var(--c-fill)] p-text" : "p-text-2 hover:bg-[var(--c-elevated)] hover:p-text"}`}>
+        className={`-ml-1.5 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 p-meta transition-colors ${open ? "bg-[var(--c-fill)] p-text" : "p-text-2 hover:bg-[var(--c-hover)] hover:p-text"}`}>
         <ChatCircleDotsIcon size={14} className="p-info" />
         {notes.notes.length} {notes.notes.length === 1 ? "note" : "notes"} for the agent
       </button>
@@ -239,12 +239,12 @@ function FileNotes({ path }: { path: string }) {
     <>
       {onFile.map((note) => (
         <button key={note.id} type="button" onClick={() => notes.select(note.id)} title={note.text} data-file-note={note.id}
-          className="flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 p-info transition-colors hover:bg-[var(--c-elevated)]">
+          className="flex h-6 shrink-0 items-center gap-1 rounded-md px-1.5 p-info transition-colors hover:bg-[var(--c-hover)]">
           <ChatCircleTextIcon size={13} weight="fill" />
         </button>
       ))}
       <button ref={button} type="button" onClick={write} aria-label={`Note on ${vfsBasename(path)}`} title="Note on this file" data-note-file
-        className="flex size-7 shrink-0 items-center justify-center rounded-md p-text-4 transition-colors hover:bg-[var(--c-elevated)] hover:p-text">
+        className="flex size-7 shrink-0 items-center justify-center rounded-md p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
         <ChatCircleTextIcon size={14} />
       </button>
     </>

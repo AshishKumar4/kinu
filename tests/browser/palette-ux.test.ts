@@ -19,11 +19,13 @@ const MODES = ['dark', 'light'] as const;
 /** Grounds a control's edge sits on: a field on the page, in the rail, or inside a card. */
 const CONTROL_GROUNDS = ['--c-bg', '--c-sidebar', '--c-surface'] as const;
 
-/** Surfaces a text role can land on; dim and micro-label roles land anywhere, dialogs included. */
-const SURFACES = ['--c-bg', '--c-sidebar', '--c-surface', '--c-elevated', '--c-overlay', '--c-recessed', '--c-fill'] as const;
+/** Every ground a role can land on; the hover and selected washes are measured over the page. */
+const SURFACES = ['--c-bg', '--c-sidebar', '--c-surface', '--c-fill', '--c-overlay', '--c-sunken'] as const;
+
+const WASHES = ['--c-hover', '--c-selected'] as const;
 
 const TEXT_ROLES = [
-  '--c-text', '--c-text-2', '--c-text-3', '--c-text-4', '--c-accent-fg',
+  '--c-text', '--c-text-2', '--c-text-3', '--c-accent-fg',
   '--c-success', '--c-warning', '--c-danger', '--c-info',
 ] as const;
 
@@ -44,10 +46,26 @@ const AA = TEST_REQUIREMENTS.wcagTextContrast.values.normal;
 /** WCAG's floor for a graphic that carries meaning: the open sidebar row's icon on its wash. */
 const NON_TEXT = TEST_REQUIREMENTS.wcagNonTextContrast.values.minimum;
 
+const FLOOR = TEST_REQUIREMENTS.designContrastFloors.values;
+
+type Ground = (typeof SURFACES)[number] | (typeof WASHES)[number];
+
+/** The palette's own floors (docs/DESIGN-SYSTEM.md §1.1): each role, the grounds it lands on, and its least ratio there. */
+const FLOORS: readonly { readonly role: string; readonly grounds: readonly Ground[]; readonly floor: number }[] = [
+  { role: '--c-text', grounds: ['--c-bg', '--c-surface', '--c-overlay'], floor: FLOOR.text },
+  { role: '--c-text-2', grounds: ['--c-bg', '--c-surface'], floor: FLOOR.text2 },
+  { role: '--c-text-3', grounds: ['--c-bg', '--c-sidebar', '--c-surface', '--c-overlay', '--c-fill', '--c-hover', '--c-sunken'], floor: FLOOR.quiet },
+  { role: '--c-accent-fg', grounds: ['--c-bg', '--c-surface', '--c-selected'], floor: FLOOR.quiet },
+  { role: '--c-accent', grounds: ['--c-bg'], floor: FLOOR.fill },
+  { role: '--c-field-border', grounds: ['--c-bg', '--c-surface'], floor: FLOOR.fill },
+  { role: '--c-focus', grounds: ['--c-bg', '--c-surface'], floor: FLOOR.fill },
+  ...STATUSES.map((status) => ({ role: `--c-${status}`, grounds: ['--c-bg', '--c-surface'] satisfies Ground[], floor: FLOOR.quiet })),
+];
+
 const ASKED = [
-  ...SURFACES, ...TEXT_ROLES, ...FILLS.flatMap(([ink, fill]) => [ink, fill]),
+  ...SURFACES, ...WASHES, ...TEXT_ROLES, ...FILLS.flatMap(([ink, fill]) => [ink, fill]),
   ...STATUSES.flatMap((status) => [`--c-${status}`, `--c-${status}-tint`]),
-  '--c-accent-mark', '--c-accent-subtle', '--c-input-border', '--c-focus',
+  '--c-accent', '--c-accent-mark', '--c-field', '--c-field-border', '--c-focus', '--c-border',
 ];
 
 /** What one theme and mode compute: the mode it landed on, and each asked token as a probe's `color` resolves it. */
@@ -194,6 +212,9 @@ describe.each(LOOKS)('the %s palette, %s', (theme, mode) => {
     return rgba(computed);
   };
 
+  // A wash is drawn over the page, so its ratio is the ink's against the two together.
+  const groundOf = (ground: Ground): Rgba => (ground === '--c-hover' || ground === '--c-selected' ? over(colour(ground), colour('--c-bg')) : colour(ground));
+
   test('the page is on the theme and mode the pass claims, and declares every token the roles need', () => {
     // A renamed token would make the loops below measure a fallback colour and pass.
     expect({ theme: palette.theme, mode: palette.mode }).toEqual({ theme, mode });
@@ -209,11 +230,27 @@ describe.each(LOOKS)('the %s palette, %s', (theme, mode) => {
 
   // A field's edge shows where an empty field is; the focus ring shows where the keyboard is.
   test("a control's edge and the focus ring stand out on every ground beside them", () => {
-    const failures = (['--c-input-border', '--c-focus'] as const).flatMap((line) => CONTROL_GROUNDS.map((ground) => ({
+    const failures = (['--c-field-border', '--c-focus'] as const).flatMap((line) => CONTROL_GROUNDS.map((ground) => ({
       line, ground, ratio: contrast(colour(line), colour(ground)),
     }))).filter((row) => row.ratio < NON_TEXT);
 
     expect(failures).toEqual([]);
+  });
+
+  test('every role clears its own floor on every ground it lands on', () => {
+    const failures = FLOORS.flatMap(({ role, grounds, floor }) => grounds.map((ground) => ({
+      role, ground, floor, ratio: contrast(colour(role), groundOf(ground)),
+    }))).filter((row) => row.ratio < row.floor);
+
+    expect(failures).toEqual([]);
+  });
+
+  test("a field's edge stands out inside the field too, and a hairline is visible but quiet", () => {
+    expect(contrast(colour('--c-field-border'), colour('--c-field'))).toBeGreaterThanOrEqual(NON_TEXT);
+
+    const hairlines = (['--c-bg', '--c-surface'] as const).map((ground) => contrast(colour('--c-border'), colour(ground)));
+
+    expect(hairlines.filter((ratio) => ratio < FLOOR.hairlineLow || ratio > FLOOR.hairlineHigh)).toEqual([]);
   });
 
   test('every text role meets AA on every surface', () => {
@@ -241,7 +278,7 @@ describe.each(LOOKS)('the %s palette, %s', (theme, mode) => {
   });
 
   test('the open sidebar row\'s icon stands out on its wash', () => {
-    expect(contrast(colour('--c-accent-mark'), over(colour('--c-accent-subtle'), colour('--c-sidebar')))).toBeGreaterThanOrEqual(NON_TEXT);
+    expect(contrast(colour('--c-accent-mark'), over(colour('--c-selected'), colour('--c-sidebar')))).toBeGreaterThanOrEqual(NON_TEXT);
   });
 });
 

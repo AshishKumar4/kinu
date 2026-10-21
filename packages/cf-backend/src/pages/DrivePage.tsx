@@ -76,7 +76,7 @@ function NewDot() {
 /** Below `lg`, the places as a switch in the row under the bar, as `Segmented` draws one at 28. */
 function PlaceSwitch({ tab, places, unseen }: { tab: DriveTab; places: readonly DriveTab[]; unseen: boolean }) {
   return (
-    <nav aria-label="Drive" className="flex w-fit items-center gap-0.5 rounded-[var(--r-control)] p-recessed p-0.5">
+    <nav aria-label="Drive" className="flex w-fit items-center gap-0.5 rounded-[var(--r-control)] p-sunken p-0.5">
       {PLACES.filter((each) => places.includes(each.id)).map((each) => (
         <Link key={each.id} to={each.to} state={{ chosen: true }} aria-current={each.id === tab ? "page" : undefined} data-drive-tab={each.id}
           className={`flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-px text-[13px] font-medium leading-5 ${each.id === tab ? "border-[var(--c-button-line)] bg-[var(--c-button-bg)] p-text shadow-[var(--shadow-button)]" : "border-transparent p-text-3 hover:p-text"}`}>
@@ -125,7 +125,7 @@ function FolderTree({ listings, parent, current, depth }: {
             <Link to={folderHref(path)} aria-current={path === current ? "page" : undefined} data-drive-tree={path}
               style={{ paddingLeft: `${String(10 + depth * 14)}px` }}
               className={`flex items-center gap-1.5 rounded-lg py-[5px] pr-2 p-row-text transition-colors ${navRowCls(path === current)}`}>
-              <span className="flex w-3 shrink-0 justify-center p-text-4">{caret}</span>
+              <span className="flex w-3 shrink-0 justify-center p-text-3">{caret}</span>
               {skills
                 ? <BookOpenIcon size={15} weight="fill" className="shrink-0 p-success" />
                 : <FolderSimpleIcon size={15} weight="fill" className="shrink-0 p-info" />}
@@ -255,7 +255,7 @@ function Crumbs({ path }: { path: string }) {
       <Link to={APP_ROUTES.drive} state={{ chosen: true }} data-drive-crumb className="shrink-0 p-text-3 transition-colors hover:p-text">My stuff</Link>
       {segments.map((segment, index) => (
         <span key={index} className="flex min-w-0 items-center gap-1.5">
-          <CaretRightIcon size={12} className="shrink-0 p-text-4" />
+          <CaretRightIcon size={12} className="shrink-0 p-text-3" />
           <Link to={folderHref(`/${segments.slice(0, index + 1).join("/")}`)} data-drive-crumb
             className={`truncate ${index === segments.length - 1 ? "p-text" : "p-text-3 hover:p-text"}`}>
             {index === 0 && `/${segment}` === DRIVE_SKILLS_DIR ? "Skills" : segment}
@@ -358,7 +358,7 @@ function SheetCover({ rows }: { rows: readonly (readonly string[])[] }) {
     <span className="absolute inset-0 overflow-hidden p-surface text-[8.5px] leading-[1.45]">
       {rows.map((row, index) => (
         <span key={index} data-drive-sheet-row style={grid}
-          className={`grid gap-2 px-4 ${index === 0 ? "p-recessed py-2 font-semibold p-text-2" : "border-t p-border py-[5px] font-mono p-text-3"}`}>
+          className={`grid gap-2 px-4 ${index === 0 ? "p-sunken py-2 font-semibold p-text-2" : "border-t p-border py-[5px] font-mono p-text-3"}`}>
           {row.slice(0, columns).map((cell, column) => <span key={column} className={`truncate ${right[column] === true ? "text-right" : ""}`}>{cell}</span>)}
         </span>
       ))}
@@ -368,10 +368,10 @@ function SheetCover({ rows }: { rows: readonly (readonly string[])[] }) {
 
 function CodeCover({ lines }: { lines: readonly string[] }) {
   return (
-    <span className="absolute inset-0 overflow-hidden p-recessed px-3 pt-3 font-mono text-[8.5px] leading-[1.6]">
+    <span className="absolute inset-0 overflow-hidden p-sunken px-3 pt-3 font-mono text-[8.5px] leading-[1.6]">
       {lines.map((line, index) => (
         <span key={index} data-drive-code-line className="flex gap-2.5">
-          <span className="min-w-3 shrink-0 text-right tabular-nums p-text-4">{index + 1}</span>
+          <span className="min-w-3 shrink-0 text-right tabular-nums p-text-3">{index + 1}</span>
           <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre p-text-3">{line === "" ? "\u00a0" : line}</span>
         </span>
       ))}
@@ -390,7 +390,7 @@ function TextPage({ text, name }: { text: string | null; name: string }) {
   if (heading === null && !PROSE.test(name)) return <CodeCover lines={lines.map((line) => line.text)} />;
 
   return (
-    <span className="absolute inset-0 overflow-hidden p-recessed px-[14%] pt-[5%]">
+    <span className="absolute inset-0 overflow-hidden p-sunken px-[14%] pt-[5%]">
       <span className="block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2.5 text-[8.5px] leading-[1.45] p-text-3">
         {heading !== null && <span data-drive-page-heading className="mb-1 block truncate text-[11px] font-semibold p-text">{heading}</span>}
         {lines.map((line, index) => (
@@ -453,13 +453,13 @@ interface Transfer extends Sending {
 
 function TransferPicture({ status, progress }: { status: Transfer["status"]; progress: number }) {
   if (status === "failed") {
-    return <span className="absolute inset-0 flex items-center justify-center p-recessed"><WarningIcon size={24} className="p-danger" /></span>;
+    return <span className="absolute inset-0 flex items-center justify-center p-sunken"><WarningIcon size={24} className="p-danger" /></span>;
   }
 
   const percent = Math.round(progress * 100);
 
   return (
-    <span className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 p-recessed">
+    <span className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 p-sunken">
       <span className="p-meta tabular-nums p-text-2">{percent}%</span>
       <span role="progressbar" aria-label="Uploading" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}
         className="h-1 w-1/2 overflow-hidden rounded-full bg-[var(--c-border-strong)]">
@@ -473,8 +473,8 @@ function VisibilityGlyph({ visibility }: { visibility: LiveShareVisibility | und
   if (visibility === undefined) return null;
 
   return visibility === "public"
-    ? <GlobeIcon size={13} className="shrink-0 p-text-4" aria-label="Anyone with the link" />
-    : <UsersIcon size={13} className="shrink-0 p-text-4" aria-label="Shared with people" />;
+    ? <GlobeIcon size={13} className="shrink-0 p-text-3" aria-label="Anyone with the link" />
+    : <UsersIcon size={13} className="shrink-0 p-text-3" aria-label="Shared with people" />;
 }
 
 function whyUnused(refusal: SkillFileRefusal): string {

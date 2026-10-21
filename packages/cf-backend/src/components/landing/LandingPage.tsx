@@ -20,7 +20,7 @@ const SECTION = 'border-t p-border py-20 lg:py-24';
 
 const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
 
-const NOTE = 'px-1 pt-3 text-[11px] leading-relaxed p-text-4';
+const NOTE = 'px-1 pt-3 text-[11px] leading-relaxed p-text-3';
 
 const TRAILING_LINK = 'mt-6 inline-block text-sm font-semibold p-accent';
 
@@ -58,8 +58,8 @@ function PlatformSection({ install }: { install: string }): ReactElement {
             <li>Each workspace gets its own webhook URL. Point something at it and the agent starts when the event lands.</li>
             <li>The agent gets a computer of its own when a job needs one, with a preview URL you can open.</li>
           </ul>
-          <div className="mb-8 rounded-xl border p-border p-recessed p-4">
-            <span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Give it your devices</span>
+          <div className="mb-8 rounded-xl border p-border p-sunken p-4">
+            <span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-3">Give it your devices</span>
             <p className="mt-2 text-sm leading-[1.7] p-text-3">A cloud agent can reach your own machines. Connect one and it shows up at <code className="font-mono text-xs p-text-2">/pc</code>, and each extra machine gets its own name. It only ever gets the access you grant it.</p>
           </div>
           <div className="mt-auto flex flex-wrap gap-3">
@@ -74,8 +74,8 @@ function PlatformSection({ install }: { install: string }): ReactElement {
           <span className="mb-6 font-mono text-[11px] uppercase tracking-[.14em] p-accent">Local</span>
           <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Your terminal or editor.</h3>
           <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Runs on your own machine, against the provider you configured. The snippet below installs it and opens a full-screen TUI.</p>
-          <div className="rounded-xl border p-border p-recessed p-4">
-            <div className="mb-3 flex items-center justify-between gap-3"><span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Install · Linux</span><Button type="button" variant="ghost" size="sm" aria-label="Copy local setup commands" onClick={() => copy(install + '\n' + localStart)}>{COPY_LABEL[status]}</Button></div>
+          <div className="rounded-xl border p-border p-sunken p-4">
+            <div className="mb-3 flex items-center justify-between gap-3"><span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-3">Install · Linux</span><Button type="button" variant="ghost" size="sm" aria-label="Copy local setup commands" onClick={() => copy(install + '\n' + localStart)}>{COPY_LABEL[status]}</Button></div>
             <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-[1.9] p-text-2"><code>{install + '\n' + localStart}</code></pre>
           </div>
           <dl className="mt-6 space-y-3 text-sm p-text-3">
@@ -122,16 +122,16 @@ function SlatesSection(): ReactElement {
 function SwarmSearch(): ReactElement {
   return (
     <figure className="overflow-hidden rounded-2xl border p-border p-surface">
-      <figcaption className="flex flex-wrap items-center justify-between gap-3 border-b p-border p-recessed px-6 py-4 font-mono text-[11px] p-text-4"><span>Example search · not benchmark results</span><span>Objective: reduce runtime · preserve correctness</span></figcaption>
+      <figcaption className="flex flex-wrap items-center justify-between gap-3 border-b p-border p-sunken px-6 py-4 font-mono text-[11px] p-text-3"><span>Example search · not benchmark results</span><span>Objective: reduce runtime · preserve correctness</span></figcaption>
       <div className="p-6 sm:p-8">
-        <div className="mx-auto max-w-[580px] rounded-xl border border-[var(--c-accent)] p-accent-subtle p-5 text-center"><h3 className="font-semibold p-accent">Say what better means</h3><p className="mt-2 text-sm leading-[1.65] p-text-3">The task, a starting context, and a registered verifier that reports a number in its own unit.</p></div>
+        <div className="mx-auto max-w-[580px] rounded-xl border border-[var(--c-accent)] p-selected p-5 text-center"><h3 className="font-semibold p-accent">Say what better means</h3><p className="mt-2 text-sm leading-[1.65] p-text-3">The task, a starting context, and a registered verifier that reports a number in its own unit.</p></div>
         <div aria-hidden="true" className="mx-auto h-8 w-px bg-[var(--c-border-strong)]" />
         <div className="grid gap-4 md:grid-cols-3">
           {[
             ['Candidate A', 'Change the algorithm'],
             ['Candidate B', 'Change the data structure'],
             ['Candidate C', 'Change the work partition'],
-          ].map(([title, body]) => <div key={title} className="rounded-xl border p-border p-recessed p-5"><h4 className="text-sm font-semibold p-text">{title}</h4><p className="mt-2 text-sm p-text-3">{body}</p><div className="mt-5 border-t border-dashed border-[var(--c-dash)] pt-3 font-mono text-[11px] p-accent">run → verify → compare</div></div>)}
+          ].map(([title, body]) => <div key={title} className="rounded-xl border p-border p-sunken p-5"><h4 className="text-sm font-semibold p-text">{title}</h4><p className="mt-2 text-sm p-text-3">{body}</p><div className="mt-5 border-t border-dashed border-[var(--c-dash)] pt-3 font-mono text-[11px] p-accent">run → verify → compare</div></div>)}
         </div>
         <div aria-hidden="true" className="mx-auto h-8 w-px bg-[var(--c-border-strong)]" />
         <div className="mx-auto max-w-[580px] border-t p-border pt-5 text-center"><h3 className="font-semibold">Expand what measured better</h3><p className="mt-2 text-sm leading-[1.65] p-text-3">Keep every measured result for the same objective, expand the branches that improved, and settle on one. A search can fail to improve on the starting point.</p></div>
@@ -184,22 +184,22 @@ function EvolutionSection(): ReactElement {
               key={stage.title}
               aria-pressed={activeIndex === index}
               onClick={() => setActiveIndex(index)}
-              className={`flex min-h-[88px] items-center justify-between gap-4 p-5 text-left transition-colors ${activeIndex === index ? 'p-accent-subtle' : 'p-recessed hover:p-elevated'}`}
+              className={`flex min-h-[88px] items-center justify-between gap-4 p-5 text-left transition-colors ${activeIndex === index ? 'p-selected' : 'p-sunken hover:p-hover'}`}
             >
               <span><span className="block font-mono text-[10px] uppercase tracking-[.13em] p-accent">{stage.time}</span><strong className="mt-1.5 block text-[13.5px] p-text">{stage.title}</strong></span>
-              <span className={`font-mono text-sm ${activeIndex === index ? 'p-accent' : 'p-text-4'}`}>0{index + 1}</span>
+              <span className={`font-mono text-sm ${activeIndex === index ? 'p-accent' : 'p-text-3'}`}>0{index + 1}</span>
             </button>
           ))}
         </div>
         <div className="flex min-h-[390px] flex-col justify-between p-5 sm:p-8">
           <div>
-            <div className="mb-7 flex flex-wrap items-baseline justify-between gap-3"><div><div className="font-mono text-[10px] uppercase tracking-[.14em] p-accent">{active.time}</div><h3 className="mt-2 text-[24px] font-semibold tracking-[-.02em] p-text">{active.title}</h3></div><span className="rounded-full border p-border p-recessed px-3 py-1 font-mono text-[10px] p-text-4">evidence → durable state</span></div>
+            <div className="mb-7 flex flex-wrap items-baseline justify-between gap-3"><div><div className="font-mono text-[10px] uppercase tracking-[.14em] p-accent">{active.time}</div><h3 className="mt-2 text-[24px] font-semibold tracking-[-.02em] p-text">{active.title}</h3></div><span className="rounded-full border p-border p-sunken px-3 py-1 font-mono text-[10px] p-text-3">evidence → durable state</span></div>
             <div className="grid items-stretch gap-3 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)_auto_minmax(0,1fr)]">
-              <div className="rounded-xl border p-border p-recessed p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-text-4">Evidence</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.evidence}</p></div>
+              <div className="rounded-xl border p-border p-sunken p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-text-3">Evidence</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.evidence}</p></div>
               <span aria-hidden="true" className="hidden self-center font-mono p-accent md:block">→</span>
-              <div className="rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] p-accent-subtle p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-accent">Agent changes</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.change}</p></div>
+              <div className="rounded-xl border border-[color-mix(in_srgb,var(--c-accent)_35%,transparent)] p-selected p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-accent">Agent changes</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.change}</p></div>
               <span aria-hidden="true" className="hidden self-center font-mono p-accent md:block">→</span>
-              <div className="rounded-xl border p-border p-recessed p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-text-4">Persists</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.persists}</p></div>
+              <div className="rounded-xl border p-border p-sunken p-4"><span className="font-mono text-[9.5px] uppercase tracking-[.14em] p-text-3">Persists</span><p className="mt-3 text-[13px] leading-[1.55] p-text">{active.persists}</p></div>
             </div>
           </div>
           <p className="mt-7 border-t border-dashed border-[var(--c-dash)] pt-5 text-sm leading-[1.65] p-text-3">{active.detail}</p>
@@ -230,7 +230,7 @@ function OpenSourceSection(): ReactElement {
       <div className={`${SHELL} grid items-center gap-10 py-20 lg:grid-cols-[1.2fr_1fr] lg:gap-14 lg:py-24`}>
         <div><SectionHead label="07 · Open source" lead="MIT-licensed: the agent, both backends, and the CLI." tight>Open source, <Accent>end to end.</Accent></SectionHead><div className="flex flex-wrap gap-3"><LandingActionLink external primary href={REPOSITORY}>Read the source →</LandingActionLink><LandingActionLink href="/login">Try cloud agents</LandingActionLink></div></div>
         <div className={`${CARD} px-[26px] py-1.5`}>
-          {rows.map(([label, value], index) => <div key={label} className={`grid gap-2 py-[15px] sm:grid-cols-[96px_1fr] sm:gap-4 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-4">{label}</span><div className="min-w-0 [overflow-wrap:anywhere] font-mono text-[12.5px] p-text-2">{value}</div></div>)}
+          {rows.map(([label, value], index) => <div key={label} className={`grid gap-2 py-[15px] sm:grid-cols-[96px_1fr] sm:gap-4 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-3">{label}</span><div className="min-w-0 [overflow-wrap:anywhere] font-mono text-[12.5px] p-text-2">{value}</div></div>)}
         </div>
       </div>
     </section>
@@ -256,8 +256,8 @@ function Header(): ReactElement {
 
 function Footer(): ReactElement {
   return (
-    <footer className="border-t p-border p-recessed">
-      <div className={`${SHELL} flex flex-wrap items-center gap-5 py-7`}><div className="flex items-center gap-2.5"><KinuLogo compact /><span className="text-xs p-text-4">絹 · the self-evolving agent platform</span></div><nav className="ml-auto flex flex-wrap gap-5 text-[13px] p-text-3"><a href={REPOSITORY}>GitHub</a><a href={`${REPOSITORY}/blob/main/QUICKSTART.md`}>Quickstart</a><a href={`${REPOSITORY}/blob/main/docs/USER-GUIDE.md`}>User guide</a><a href="/login">kinu.run</a></nav><span className="text-[12.5px] p-text-4">MIT © 2026</span></div>
+    <footer className="border-t p-border p-sunken">
+      <div className={`${SHELL} flex flex-wrap items-center gap-5 py-7`}><div className="flex items-center gap-2.5"><KinuLogo compact /><span className="text-xs p-text-3">絹 · the self-evolving agent platform</span></div><nav className="ml-auto flex flex-wrap gap-5 text-[13px] p-text-3"><a href={REPOSITORY}>GitHub</a><a href={`${REPOSITORY}/blob/main/QUICKSTART.md`}>Quickstart</a><a href={`${REPOSITORY}/blob/main/docs/USER-GUIDE.md`}>User guide</a><a href="/login">kinu.run</a></nav><span className="text-[12.5px] p-text-3">MIT © 2026</span></div>
     </footer>
   );
 }

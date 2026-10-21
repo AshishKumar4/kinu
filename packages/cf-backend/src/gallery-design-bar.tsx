@@ -230,7 +230,7 @@ export function DesignBar() {
             <ul className="space-y-0.5">
               {SELF_DEPLOY_STATES.map((state) => (
                 <li key={state.label}>
-                  <button type="button" onClick={state.open} className="w-full rounded-md px-2 py-1 text-left text-xs p-text-2 hover:bg-[var(--c-elevated)] hover:p-text">{state.label}</button>
+                  <button type="button" onClick={state.open} className="w-full rounded-md px-2 py-1 text-left text-xs p-text-2 hover:bg-[var(--c-hover)] hover:p-text">{state.label}</button>
                 </li>
               ))}
             </ul>
@@ -274,7 +274,7 @@ export function PhoneWindow({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen items-center justify-center p-bg py-8">
       <iframe key={src} title="The app at phone width" src={src} width={390} height={844}
-        className="rounded-[28px] border-8 border-[var(--c-elevated)] p-shadow-overlay" />
+        className="rounded-[28px] border-8 border-[var(--c-fill)] p-shadow-overlay" />
       {children}
     </div>
   );

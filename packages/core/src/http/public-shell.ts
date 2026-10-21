@@ -63,7 +63,7 @@ body{margin:0;min-height:100vh;background:var(--c-bg);color:var(--c-text);
 font-family:var(--font-ui);font-size:16px;line-height:1.55;
 display:flex;flex-direction:column;align-items:center}
 a{color:inherit;text-decoration:none}
-::selection{background:var(--c-accent-subtle)}
+::selection{background:var(--c-selected)}
 :focus-visible{outline:2px solid var(--c-accent);outline-offset:2px;border-radius:var(--r-control)}
 
 /* One measured column with hairline edges. Every surface on the page is a cell
@@ -122,7 +122,7 @@ text-transform:uppercase;color:var(--c-accent)}
    No radius anywhere on this surface; depth comes from the two background
    steps, never from shadows. */
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;
-min-height:38px;padding:0 15px;border:1px solid var(--c-input-border);border-radius:var(--r-row);
+min-height:38px;padding:0 15px;border:1px solid var(--c-field-border);border-radius:var(--r-row);
 background:transparent;color:var(--c-text);font:inherit;font-size:14px;font-weight:600;
 white-space:nowrap;cursor:pointer;transition:background 150ms var(--ease),border-color 150ms var(--ease)}
 .btn:hover{background:var(--c-fill)}
@@ -186,9 +186,9 @@ padding:18px 24px;align-items:baseline}
 overflow-wrap:anywhere}
 .rows.faint .metric{color:var(--c-text-3)}
 
-code{font-family:var(--font-mono);font-size:13px;color:var(--c-code)}
+code{font-family:var(--font-mono);font-size:13px;color:var(--c-accent-fg)}
 .cmd{display:flex;align-items:center;justify-content:space-between;gap:20px;
-padding:17px 20px;border:1px solid var(--c-border);background:var(--c-recessed);
+padding:17px 20px;border:1px solid var(--c-border);background:var(--c-sunken);
 font-family:var(--font-mono);font-size:13px}
 .cmd code{white-space:nowrap;overflow:hidden;min-width:0;text-overflow:ellipsis}
 .cmd code .dollar{color:var(--c-accent)}

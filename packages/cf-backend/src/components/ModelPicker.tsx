@@ -47,7 +47,7 @@ function EffortPicker({ options, value, onChange, disabled }: {
     <Select
       aria-label="Thinking level"
       size="xs"
-      className="shrink-0 !bg-transparent !shadow-none !ring-0 transition-colors hover:!bg-[var(--c-elevated)] focus-visible:!bg-[var(--c-elevated)]"
+      className="shrink-0 !bg-transparent !shadow-none !ring-0 transition-colors hover:!bg-[var(--c-hover)] focus-visible:!bg-[var(--c-hover)]"
       value={value ?? DEFAULT_EFFORT}
       disabled={disabled}
       onValueChange={(next) => { onChange(isReasoningEffort(next) ? next : null); }}
@@ -80,7 +80,7 @@ export function AccountPicker({ spec, accounts, onChange, disabled, label }: {
     <Select
       aria-label={label}
       size="xs"
-      className="shrink-0 !bg-transparent !shadow-none !ring-0 transition-colors hover:!bg-[var(--c-elevated)] focus-visible:!bg-[var(--c-elevated)]"
+      className="shrink-0 !bg-transparent !shadow-none !ring-0 transition-colors hover:!bg-[var(--c-hover)] focus-visible:!bg-[var(--c-hover)]"
       value={parseModelSpec(spec).account ?? ''}
       disabled={disabled}
       onValueChange={(next) => { onChange(specOnAccount(spec, accounts.find((account) => account === next) ?? '')); }}
@@ -183,7 +183,7 @@ export function ModelPicker({
         </Combobox.List>
         <ProviderFailureNotice failures={failures} models={models} />
         {clearable && value !== '' && (
-          <button type="button" className="mx-1.5 mt-1 rounded px-2 py-1.5 text-left p-t-control p-text-2 hover:bg-[var(--c-elevated)]"
+          <button type="button" className="mx-1.5 mt-1 rounded px-2 py-1.5 text-left p-t-control p-text-2 hover:bg-[var(--c-hover)]"
             onClick={() => onChange("")}>
             Use default model
           </button>

@@ -113,7 +113,7 @@ function SaveControl({ name, save, open }: { name: string; save: () => Promise<S
   const [saved, setSaved] = useState<{ id: string; title: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const control = "p-text-3 hover:p-text p-1 shrink-0 inline-flex rounded-md transition-colors hover:bg-[var(--c-elevated)]";
+  const control = "p-text-3 hover:p-text p-1 shrink-0 inline-flex rounded-md transition-colors hover:bg-[var(--c-hover)]";
 
   const keep = useCallback(() => detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
     setBusy(true);
@@ -187,7 +187,7 @@ function SlateCard({ id, block, measure, save, children }: {
 
   const controls = folded
     ? "flex items-center gap-1 py-0.5"
-    : "absolute right-1 top-1 z-10 flex items-center gap-1 rounded-md p-elevated opacity-0 transition-opacity group-hover/slate:opacity-100 group-focus-within/slate:opacity-100 [@media(hover:none)]:opacity-100";
+    : "absolute right-1 top-1 z-10 flex items-center gap-1 rounded-md p-fill opacity-0 transition-opacity group-hover/slate:opacity-100 group-focus-within/slate:opacity-100 [@media(hover:none)]:opacity-100";
 
   // Spans only: the card renders inside a markdown <p>, where a <div> trips React's dev validator.
   return (
@@ -195,15 +195,15 @@ function SlateCard({ id, block, measure, save, children }: {
       data-fold-still={painted ? undefined : ""} className="group/slate relative block my-2">
       <span ref={register} className={controls}>
         <button type="button" onClick={() => setHand(!folded)} aria-expanded={!folded} aria-controls={body} title={folded ? `Show ${name}` : `Fold ${name}`}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-[var(--c-elevated)]">
-          <CaretRightIcon size={10} weight="bold" className={`shrink-0 p-text-4 p-fold-turn ${folded ? "" : "rotate-90"}`} />
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-[var(--c-hover)]">
+          <CaretRightIcon size={10} weight="bold" className={`shrink-0 p-text-3 p-fold-turn ${folded ? "" : "rotate-90"}`} />
           {folded && <code className="p-annotation p-text-3 truncate">{name}</code>}
-          {why !== null && <span className="ml-auto shrink-0 pl-2 p-meta p-text-4">{why}</span>}
+          {why !== null && <span className="ml-auto shrink-0 pl-2 p-meta p-text-3">{why}</span>}
         </button>
         {save !== undefined && <SaveControl name={name} save={save} open={openSlate} />}
         {openSlate !== undefined && (
           <button type="button" onClick={() => openSlate(id)} aria-label={`Open ${name} in the work surface`} title="Open in the work surface"
-            className="p-text-3 hover:p-text p-1 shrink-0 inline-flex rounded-md transition-colors hover:bg-[var(--c-elevated)]">
+            className="p-text-3 hover:p-text p-1 shrink-0 inline-flex rounded-md transition-colors hover:bg-[var(--c-hover)]">
             <ArrowSquareOutIcon size={11} />
           </button>
         )}

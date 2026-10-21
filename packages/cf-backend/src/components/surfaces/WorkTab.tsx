@@ -118,7 +118,7 @@ function NeedsYou({ pendingActions, onOpenAsk, onOpenSurface, onOpenPlan }: {
   };
 
   return (
-    <div className="rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] bg-[var(--c-accent-subtle)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
+    <div className="rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] bg-[var(--c-selected)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
       <Section id="work-needs-you" title="Needs you"
         icon={<WarningCircleIcon size={14} className="p-warning" />}
         badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
@@ -283,7 +283,7 @@ function PendingRow(
       type="button"
       onClick={open}
       data-pending-action={action.id}
-      className="grid w-full grid-cols-[14px_minmax(0,1fr)_16px] items-start gap-2 rounded-md py-2 text-left transition-colors hover:p-elevated"
+      className="grid w-full grid-cols-[14px_minmax(0,1fr)_16px] items-start gap-2 rounded-md py-2 text-left transition-colors hover:p-hover"
     >
       {icon}
       {content}

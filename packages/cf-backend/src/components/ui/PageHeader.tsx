@@ -47,7 +47,7 @@ export function PageHeader({ icon, back, title, rule = "always", children, class
         ? <span className="flex shrink-0 p-text-3 [&>svg]:size-5" aria-hidden>{icon}</span>
         : (
           <Link to={back.to} aria-label={back.label} title={back.label} data-page-back
-            className="-ml-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--r-control)] p-text-3 transition-colors hover:bg-[var(--c-neutral-tint)] hover:p-text">
+            className="-ml-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--r-control)] p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
             <ArrowLeftIcon size={18} />
           </Link>
         )}

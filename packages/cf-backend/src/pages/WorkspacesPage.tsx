@@ -101,7 +101,7 @@ export default function WorkspacesPage() {
           <Segmented label="Workspace state" value={filter} onChange={setFilter} segments={SEGMENTS} />
           {/* The count says what a filter or search left out; with nothing left out it has nothing to say. */}
           {total > 0 && (matching < total || roster.counts.unreported > 0) && (
-            <span className="p-meta p-text-4 tabular-nums">
+            <span className="p-meta p-text-3 tabular-nums">
               {matching < total ? `${String(matching)} of ${String(total)}` : ""}
               {matching < total && roster.counts.unreported > 0 ? " · " : ""}
               {roster.counts.unreported > 0 && `${String(roster.counts.unreported)} not yet reported`}

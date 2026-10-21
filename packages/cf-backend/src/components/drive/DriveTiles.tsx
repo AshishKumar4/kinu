@@ -50,7 +50,7 @@ export function TileMenu({ name, items, initiallyOpen = false, className, trigge
     <div ref={menu} className={`${open ? "z-50" : "z-10"} ${className}`}>
       <button type="button" aria-haspopup="menu" aria-expanded={open} aria-label={trigger?.label ?? `More for ${name}`} title={trigger?.label}
         data-drive-menu onClick={() => setOpen((value) => !value)}
-        className={`flex items-center justify-center transition-colors hover:p-text ${trigger?.className ?? "size-7 rounded-[var(--r-control)] hover:bg-[var(--c-elevated)]"} ${open ? "bg-[var(--c-elevated)] p-text" : "p-text-3"}`}>
+        className={`flex items-center justify-center transition-colors hover:p-text ${trigger?.className ?? "size-7 rounded-[var(--r-control)] hover:bg-[var(--c-hover)]"} ${open ? "bg-[var(--c-fill)] p-text" : "p-text-3"}`}>
         {trigger?.icon ?? <DotsThreeIcon size={18} weight="bold" />}
       </button>
       {open && (
@@ -69,7 +69,7 @@ export function TileMenu({ name, items, initiallyOpen = false, className, trigge
                     aria-labelledby={refused?.label} aria-describedby={refused?.reason}
                     {...(item.marker === undefined ? {} : { [item.marker]: "" })}
                     onClick={() => { if (refused !== null) return; setOpen(false); item.onSelect(); }}
-                    className={`flex w-full gap-3 rounded-md px-2.5 py-2.5 text-left text-[15px] transition-colors sm:gap-2.5 sm:px-2 sm:py-1.5 sm:text-sm ${refused === null ? "items-center hover:bg-[var(--c-elevated)]" : "cursor-default items-start"} ${item.danger === true ? "p-danger" : "p-text"}`}>
+                    className={`flex w-full gap-3 rounded-md px-2.5 py-2.5 text-left text-[15px] transition-colors sm:gap-2.5 sm:px-2 sm:py-1.5 sm:text-sm ${refused === null ? "items-center hover:bg-[var(--c-hover)]" : "cursor-default items-start"} ${item.danger === true ? "p-danger" : "p-text"}`}>
                     <span className={`flex shrink-0 ${item.danger === true ? "" : "p-text-3"} ${refused === null ? "" : "mt-0.5 opacity-45"}`}>{item.icon}</span>
                     {refused === null ? item.label : (
                       <span className="min-w-0">
@@ -169,8 +169,8 @@ export function FileCover({ name, image }: { name: string; image?: string }) {
   const extension = name.includes(".") ? name.split(".").at(-1) ?? "" : "";
 
   return (
-    <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-recessed">
-      <span className="p-text-4 [&>svg]:size-[34px]">{fileIcon(name)}</span>
+    <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-sunken">
+      <span className="p-text-3 [&>svg]:size-[34px]">{fileIcon(name)}</span>
       {extension !== "" && <span className="p-annotation uppercase p-text-3">{extension}</span>}
     </span>
   );

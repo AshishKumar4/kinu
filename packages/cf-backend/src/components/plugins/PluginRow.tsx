@@ -10,14 +10,14 @@ export interface PluginStatus {
 /** 32 px, `BrandMark` at 18 (its tile is 1.8 times the mark), so a mixed list keeps one left edge. */
 export function PluginTile({ icon: Icon }: { icon: ComponentType<{ size?: number; className?: string }> }) {
   return (
-    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border p-border bg-[var(--c-elevated)] p-text-3">
+    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border p-border bg-[var(--c-fill)] p-text-3">
       <Icon size={18} />
     </span>
   );
 }
 
 /** The `+` of an addable row: a 28 ghost square in the row's last cell, on the x of a connected row's ⋯. */
-export const PLUGIN_ACTION = "flex size-7 shrink-0 items-center justify-center rounded-[var(--r-control)] p-text-3 transition-colors hover:bg-[var(--c-neutral-tint)] hover:p-text disabled:opacity-40 disabled:hover:bg-transparent";
+export const PLUGIN_ACTION = "flex size-7 shrink-0 items-center justify-center rounded-[var(--r-control)] p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text disabled:opacity-40 disabled:hover:bg-transparent";
 
 /**
  * One row grid for everything connected or addable (design review 2026-10-20, A3): Plugins' Connected and Add, and

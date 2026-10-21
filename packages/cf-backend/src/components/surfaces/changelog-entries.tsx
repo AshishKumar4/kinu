@@ -78,7 +78,7 @@ export function ChangelogFailure(
 function EntryField({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-2 text-[11px] leading-relaxed">
-      <span className="p-text-4">{label}</span>
+      <span className="p-text-3">{label}</span>
       <span className="p-text-2 min-w-0 break-words">{children}</span>
     </div>
   );

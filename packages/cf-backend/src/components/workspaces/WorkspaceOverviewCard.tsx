@@ -47,7 +47,7 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
             {mission !== null && <span className="block truncate p-meta p-text-3">{mission}</span>}
           </span>
           <StatusChip workspace={workspace} />
-          {age !== null && <span className="shrink-0 p-meta p-text-4 tabular-nums">{age}</span>}
+          {age !== null && <span className="shrink-0 p-meta p-text-3 tabular-nums">{age}</span>}
         </Link>
       </div>
     );

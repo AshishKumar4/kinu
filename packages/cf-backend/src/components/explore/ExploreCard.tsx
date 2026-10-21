@@ -36,7 +36,7 @@ const KIND_WORDS: Record<ExploreKind, { label: string; verb: string }> = {
 /** What it is, in a word. `onPicture`: solid, so it reads over any picture. */
 export function KindBadge({ kind, onPicture = false, className = "" }: { kind: ExploreKind; onPicture?: boolean; className?: string }) {
   const Icon = kind === "app" ? AppWindowIcon : SquaresFourIcon;
-  let ground = kind === "workspace" ? "bg-[var(--c-accent-subtle)] p-accent" : "bg-[var(--c-neutral-tint)] p-text-2";
+  let ground = kind === "workspace" ? "bg-[var(--c-selected)] p-accent" : "bg-[var(--c-hover)] p-text-2";
 
   if (onPicture) ground = `border p-border bg-[var(--c-surface)] shadow-sm ${kind === "workspace" ? "p-accent" : "p-text"}`;
 
@@ -71,7 +71,7 @@ export function Needs({ needs }: { needs: readonly ExploreNeed[] }) {
         const brand = presetBrand(need.connection);
 
         return (
-          <span key={`${need.connection ?? ""}${need.secret ?? ""}`} className="flex size-5 items-center justify-center rounded-md bg-[var(--c-neutral-tint)]">
+          <span key={`${need.connection ?? ""}${need.secret ?? ""}`} className="flex size-5 items-center justify-center rounded-md bg-[var(--c-hover)]">
             {brand !== undefined ? <BrandMark brand={brand} size={12} bare /> : <KeyIcon size={11} className="p-text-2" />}
           </span>
         );

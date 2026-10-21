@@ -28,7 +28,7 @@ function LimitRow({ report, now }: { report: LimitReport; now: number }) {
             <li key={window.name} className="space-y-0.5">
               <p className="p-meta p-text-2">{limitWindowText(window, now)}</p>
               {share !== undefined && (
-                <div className="h-1 overflow-hidden rounded-full bg-[var(--c-elevated)]" aria-hidden="true">
+                <div className="h-1 overflow-hidden rounded-full bg-[var(--c-fill)]" aria-hidden="true">
                   <div className={`h-full rounded-full ${share >= 0.9 ? "bg-[var(--c-danger)]" : "bg-[var(--c-accent)]"}`} style={{ width: `${String(Math.round(share * 100))}%` }} />
                 </div>
               )}

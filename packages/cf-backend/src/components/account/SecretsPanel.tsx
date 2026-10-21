@@ -67,11 +67,11 @@ function SecretItem({ secret, onChanged }: { secret: SecretSummary; onChanged: (
   return (
     <li data-secret={secret.name}>
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
-        className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-left hover:bg-[var(--c-neutral-tint)]">
+        className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-left hover:bg-[var(--c-hover)]">
         <Caret size={12} className="shrink-0 p-text-3" />
         <span className="font-mono p-row-text font-medium p-text">{secret.name}</span>
         <span className="flex min-w-0 flex-wrap gap-1">
-          {secret.hosts.map((host) => <span key={host} className="rounded-sm p-recessed px-1.5 py-0.5 font-mono p-meta p-text-2">{host}</span>)}
+          {secret.hosts.map((host) => <span key={host} className="rounded-sm p-sunken px-1.5 py-0.5 font-mono p-meta p-text-2">{host}</span>)}
           {secret.position.kind !== "authorization" && <span className="self-center p-meta p-text-3">in {positionWords(secret.position)}</span>}
         </span>
         <span className="ml-auto p-meta p-text-3">

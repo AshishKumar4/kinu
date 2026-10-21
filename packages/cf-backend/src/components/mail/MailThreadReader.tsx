@@ -80,8 +80,8 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
           {busy === null && <TileMenu name="Thread" items={menu} className="relative shrink-0" />}
         </div>
         <div className="flex flex-wrap gap-1.5">
-          <span className="inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-neutral-tint)] px-2.5 p-meta p-text-2 font-mono">{box?.address ?? thread.path}</span>
-          {box !== undefined && <span className="inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-neutral-tint)] px-2.5 p-meta p-text-2">{reader}</span>}
+          <span className="inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-hover)] px-2.5 p-meta p-text-2 font-mono">{box?.address ?? thread.path}</span>
+          {box !== undefined && <span className="inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-hover)] px-2.5 p-meta p-text-2">{reader}</span>}
         </div>
       </header>
       {thread.important !== null && <p data-mail-why className="p-row-text p-text-2">{thread.important}</p>}

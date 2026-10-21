@@ -187,7 +187,7 @@ function Tile({ billing, opened, onPick, disabled, title, badge, about }: {
 }) {
   return (
     <label data-web-search-tile={billing}
-      className="relative block cursor-pointer rounded-[14px] border p-border px-4 py-3 transition-colors hover:border-[var(--c-border-strong)] has-[:checked]:border-[var(--c-accent)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--c-accent-subtle)] has-[:disabled]:cursor-default has-[:disabled]:opacity-60">
+      className="relative block cursor-pointer rounded-[14px] border p-border px-4 py-3 transition-colors hover:border-[var(--c-border-strong)] has-[:checked]:border-[var(--c-accent)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--c-selected)] has-[:disabled]:cursor-default has-[:disabled]:opacity-60">
       <input type="radio" name="web-search-billing" value={billing} checked={opened === billing} disabled={disabled}
         onChange={() => detach(onPick(billing))} className="sr-only" />
       <span className="flex items-baseline justify-between gap-2">

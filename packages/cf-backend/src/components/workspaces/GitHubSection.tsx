@@ -52,7 +52,7 @@ export function GitHubSection({ rpc, readMoves, agents }: { rpc: WorkspaceRpc; r
             : github.items.map((item) => <ItemRow key={`${item.repo}#${String(item.number)}`} item={item} nameOf={nameOf} />))}
         </Panel>
       </div>
-      {github !== null && <p className="p-meta p-text-4" data-github-checked={github.refresh}>{checkedLine(github)}</p>}
+      {github !== null && <p className="p-meta p-text-3" data-github-checked={github.refresh}>{checkedLine(github)}</p>}
     </div>
   );
 }
@@ -71,7 +71,7 @@ function Panel({ icon, title, count, children }: { icon: ReactNode; title: strin
       <header className="flex items-center gap-2 px-4 pb-2 pt-3">
         <span className="p-text-3">{icon}</span>
         <span className="text-[13.5px] font-medium p-text-2">{title}</span>
-        {count !== undefined && count > 0 && <span className="ml-auto p-meta tabular-nums p-text-4">{count}</span>}
+        {count !== undefined && count > 0 && <span className="ml-auto p-meta tabular-nums p-text-3">{count}</span>}
       </header>
       <ul className="flex flex-col pb-1.5">{children}</ul>
     </section>
@@ -110,7 +110,7 @@ function ItemRow({ item, nameOf }: { item: Item; nameOf: (actorId: string) => st
       <a href={item.url} target="_blank" rel="noopener noreferrer" className="min-w-0 truncate text-[13px] p-text hover:underline">
         {item.title ?? `${item.repo}#${String(item.number)}`}
       </a>
-      <span className="ml-auto shrink-0 p-meta p-text-4">{`#${String(item.number)}`}{who && ` · ${who}`}</span>
+      <span className="ml-auto shrink-0 p-meta p-text-3">{`#${String(item.number)}`}{who && ` · ${who}`}</span>
     </li>
   );
 }

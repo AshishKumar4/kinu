@@ -289,11 +289,11 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
 
   if (isRunning) {
     stateName = "running";
-    stateTone = "p-accent-subtle p-accent";
+    stateTone = "p-selected p-accent";
     stateBadge = <><StatusDot tone="live" />Running</>;
   } else if (failed) {
     stateName = "failed";
-    stateTone = "p-fill p-text-4";
+    stateTone = "p-fill p-text-3";
     stateBadge = <><WarningCircleIcon size={11} weight="fill" />Failed</>;
   }
 
@@ -305,15 +305,15 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
         aria-expanded={expanded}
         data-tool-state={stateName}
         data-tool-effect={effect}
-        className="group/tool grid w-full cursor-pointer grid-cols-[20px_minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--c-elevated)]"
+        className="group/tool grid w-full cursor-pointer grid-cols-[20px_minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--c-hover)]"
       >
-        <span className="flex size-5 items-center justify-center p-text-4">
+        <span className="flex size-5 items-center justify-center p-text-3">
           {toolIcon(toolName)}
         </span>
         <span className="flex min-w-0 items-baseline gap-2">
           <strong className="min-w-0 truncate p-row-text font-medium p-text-2">{description || toolLabel(toolName)}</strong>
-          <span className="min-w-0 flex-1 truncate p-annotation p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
-          {runtime && <span className="shrink-0 p-annotation p-text-4">{runtime}</span>}
+          <span className="min-w-0 flex-1 truncate p-annotation p-text-3" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
+          {runtime && <span className="shrink-0 p-annotation p-text-3">{runtime}</span>}
         </span>
         <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 p-t-status ${stateTone}`}>
           {stateBadge}
@@ -337,7 +337,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
         </div>
       )}
       {expanded && (
-        <div className="border-t border-dashed border-[var(--c-dash)] px-4 py-3 space-y-2 animate-scale-in bg-[var(--c-recessed)]">
+        <div className="border-t border-dashed border-[var(--c-dash)] px-4 py-3 space-y-2 animate-scale-in bg-[var(--c-sunken)]">
           {errorText && (
             <div>
               <div className="p-eyebrow mb-1 p-danger">Error</div>

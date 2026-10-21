@@ -72,7 +72,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
 
               return (
                 <li key={`${need.connection ?? ""}${need.secret ?? ""}`} className="flex items-center gap-3 px-3 py-2.5">
-                  <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-[var(--c-neutral-tint)]">
+                  <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-[var(--c-hover)]">
                     {brand !== undefined ? <BrandMark brand={brand} size={12} bare /> : <KeyIcon size={12} className="p-text-2" />}
                   </span>
                   <span className="min-w-0 flex-1">

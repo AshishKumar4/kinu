@@ -14,7 +14,7 @@ import { rootWords, serverWords } from "./words";
 /** What leaves, as it will leave: the payload's own JSON, never a summary of it. */
 function Payload({ value, ...data }: { value: JsonValue; [attribute: `data-${string}`]: string | boolean | undefined }) {
   return (
-    <pre {...data} className="max-h-56 overflow-auto rounded-lg p-recessed px-3 py-2 font-mono text-xs leading-5 p-text whitespace-pre-wrap break-words">
+    <pre {...data} className="max-h-56 overflow-auto rounded-lg p-sunken px-3 py-2 font-mono text-xs leading-5 p-text whitespace-pre-wrap break-words">
       {JSON.stringify(value, null, 2)}
     </pre>
   );

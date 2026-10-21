@@ -29,9 +29,9 @@ const KIND_FILTER_WORDS: Record<ExploreKind, string> = { app: "Apps", workspace:
 
 /** The filter row's one grammar: the kind's `Segmented`, 28 px category chips, then a 32 px sort and search, all at the
  *  control radius. */
-const chip = (on: boolean) => `h-7 rounded-[var(--r-control)] border px-2.5 text-xs font-medium transition-colors ${on ? "border-[var(--c-border-strong)] bg-[var(--c-neutral-tint)] p-text" : "p-border p-text-2 hover:bg-[var(--c-elevated)]"}`;
+const chip = (on: boolean) => `h-7 rounded-[var(--r-control)] border px-2.5 text-xs font-medium transition-colors ${on ? "border-[var(--c-border-strong)] bg-[var(--c-hover)] p-text" : "p-border p-text-2 hover:bg-[var(--c-hover)]"}`;
 
-const FIELD_32 = "h-8 rounded-[var(--r-control)] border border-[var(--c-input-border)] bg-[var(--c-surface)]";
+const FIELD_32 = "h-8 rounded-[var(--r-control)] border border-[var(--c-field-border)] bg-[var(--c-surface)]";
 
 type KindChoice = ExploreKind | "all";
 
@@ -124,7 +124,7 @@ function Filters({ kind, category, sort, q, choose }: {
         <label className={`${FIELD_32} flex min-w-0 flex-1 items-center gap-2 px-3 sm:w-64 sm:flex-none`}>
           <MagnifyingGlassIcon size={14} className="shrink-0 p-text-3" />
           <input value={typed} onChange={(event) => { setTyped(event.target.value); choose("q", event.target.value); }} type="search" placeholder="Search apps and workspaces" aria-label="Search apps and workspaces" data-explore-search
-            className="min-w-0 flex-1 bg-transparent p-row-text p-text outline-none placeholder:text-[var(--c-text-4)]" />
+            className="min-w-0 flex-1 bg-transparent p-row-text p-text outline-none placeholder:text-[var(--c-text-3)]" />
         </label>
       </span>
     </div>

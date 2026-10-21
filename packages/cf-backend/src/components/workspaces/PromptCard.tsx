@@ -41,7 +41,7 @@ export function PromptCard({ id, label, placeholder, action, value, onChange, on
   return (
     <form onSubmit={submit} {...(attachments && handlers)} data-drag-over={dragOver || undefined}
       onPaste={(e) => { if (attachments) pasteAttachments(e, attachments, (text) => onChange(value === "" ? text : `${value}\n${text}`)); }}
-      className="p-focus min-w-0 overflow-hidden rounded-2xl border p-border bg-[var(--c-input-bg)] shadow-[0_18px_55px_-42px_rgba(0,0,0,.75)] transition-[border-color,box-shadow] data-[drag-over]:border-[var(--c-accent)]">
+      className="p-focus min-w-0 overflow-hidden rounded-2xl border p-border bg-[var(--c-field)] shadow-[0_18px_55px_-42px_rgba(0,0,0,.75)] transition-[border-color,box-shadow] data-[drag-over]:border-[var(--c-accent)]">
       <div className="px-6 pt-5">
         <label htmlFor={id} className="block p-t-status p-text-3">{label}</label>
         <textarea

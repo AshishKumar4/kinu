@@ -122,7 +122,7 @@ html, body, #root {
      composer are 14px; the grouped cards INSIDE a surface (tool rows,
      journal, key-value tables) stay at Tailwind's 12px rung; rows and
      fields 8px; controls 6px; actions and chips are pills. `--r-card` and
-     `--r-overlay` alias no Tailwind rung — the mock's two 14px measures sit
+     `--r-card` alias no Tailwind rung — the mock's two 14px measures sit
      between Tailwind's 12 and 16, and a role that means "outer card" should
      not have to negotiate with a library scale to say so. The radii and
      every colour and shadow token, for each theme and mode, are core's
@@ -133,15 +133,15 @@ html, body, #root {
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-glide: cubic-bezier(0.32, 0.72, 0, 1);  /* a selection that travels: quick to leave, soft to land */
   --dur-fast: 120ms;
-  --dur-base: 150ms;
+  --dur-state: 150ms;
   --dur-enter: 220ms;
   --dur-fold: 300ms;  /* a block that folds: longer than a control's change, since it moves a whole block */
 
   /* The code surface: one silk tone on a recessed well rather than
      syntax-coloured — CodeBlock in components/surfaces/shared.tsx sets every
      inline identifier in the bright thread colour. A code block is a well,
-     which is what `--c-recessed` already means. */
-  --c-code-bg:  var(--c-recessed);
+     which is what `--c-sunken` already means. */
+  --c-code-bg:  var(--c-sunken);
 
   /* ── Kumo, retoned ──────────────────────────────────────────────
      Kumo's components are compiled: their utilities (`bg-kumo-brand`,
@@ -162,9 +162,9 @@ html, body, #root {
      `--c-*`, which each theme's blocks re-point. ── */
   --color-kumo-canvas: var(--c-bg);
   --color-kumo-base: var(--c-bg);
-  --color-kumo-elevated: var(--c-elevated);
+  --color-kumo-elevated: var(--c-fill);
   --color-kumo-tint: var(--c-surface);
-  --color-kumo-recessed: var(--c-recessed);
+  --color-kumo-recessed: var(--c-sunken);
   --color-kumo-overlay: var(--c-overlay);
   --color-kumo-control: var(--c-button-bg);
   --color-kumo-contrast: var(--c-text);
@@ -173,10 +173,10 @@ html, body, #root {
      to read as a step above whatever it sits on — a solid surface step
      disappears the moment the container is that same step, which is exactly
      where badges live. An ink alpha composes over any rung of the ladder. */
-  --color-kumo-fill: var(--c-neutral-tint);
+  --color-kumo-fill: var(--c-hover);
   --color-kumo-fill-hover: var(--c-button-bg-hover);
   --color-kumo-line: var(--c-button-line);
-  --color-kumo-hairline: var(--c-input-border);
+  --color-kumo-hairline: var(--c-field-border);
   --color-kumo-brand: var(--c-accent);
   --color-kumo-brand-hover: color-mix(in srgb, var(--c-accent) 92%, #000);
   --color-kumo-danger: var(--c-danger);
@@ -199,14 +199,14 @@ html, body, #root {
      the only cyan and violet on screen. */
   --color-kumo-badge-red: var(--c-danger);
   --color-kumo-badge-orange: var(--c-accent);
-  --color-kumo-badge-orange-subtle: var(--c-accent-subtle);
+  --color-kumo-badge-orange-subtle: var(--c-selected);
   --color-kumo-badge-green: var(--c-success);
   --color-kumo-badge-blue: var(--c-info);
   --color-kumo-badge-teal: var(--c-text-3);
-  --color-kumo-badge-teal-subtle: var(--c-neutral-tint);
+  --color-kumo-badge-teal-subtle: var(--c-hover);
   --color-kumo-badge-purple: var(--c-text-3);
-  --color-kumo-badge-neutral: var(--c-neutral-tint);
-  --color-kumo-badge-inverted: var(--c-accent-subtle);
+  --color-kumo-badge-neutral: var(--c-hover);
+  --color-kumo-badge-inverted: var(--c-selected);
 
   --text-color-kumo-default: var(--c-text);
   --text-color-kumo-strong: var(--c-text);
@@ -261,25 +261,24 @@ body { background: var(--c-bg); color: var(--c-text); }
    These are `@utility` rather than plain rules inside `@layer components`
    for one reason: variants. Tailwind only generates `hover:`/`focus:`
    forms for utilities it knows about, and these were plain classes — so
-   every `hover:p-text`, `hover:p-danger` and `hover:p-elevated` in the app
+   every `hover:p-text`, `hover:p-danger` and `hover:p-hover` in the app
    emitted no CSS whatsoever and silently did nothing. Each sets exactly one
    property, so promoting them out of the components layer cannot re-draw a
    border or a radius the way `.p-card` would. Locked by unit-p-utility-
    variants.test.ts. ── */
 @utility p-bg       { background: var(--c-bg); }
-@utility p-recessed { background: var(--c-recessed); }
+@utility p-sunken   { background: var(--c-sunken); }
 @utility p-sidebar  { background: var(--c-sidebar); }
 @utility p-surface  { background: var(--c-surface); }
-@utility p-elevated { background: var(--c-elevated); }
 @utility p-fill     { background: var(--c-fill); }
+@utility p-hover    { background: var(--c-hover); }
 
 @utility p-text   { color: var(--c-text); }
 @utility p-text-2 { color: var(--c-text-2); }
 @utility p-text-3 { color: var(--c-text-3); }
-@utility p-text-4 { color: var(--c-text-4); }
 @utility p-accent { color: var(--c-accent-fg); }
 @utility p-accent-mark { color: var(--c-accent-mark); }
-@utility p-accent-subtle { background: var(--c-accent-subtle); }
+@utility p-selected { background: var(--c-selected); }
 
 @utility p-success { color: var(--c-success); }
 @utility p-warning { color: var(--c-warning); }
@@ -357,7 +356,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-num      { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
 
 /* ── Surfaces ──────────────────────────────────────────────────────── */
-.p-overlay  { background: var(--c-overlay); box-shadow: var(--shadow-overlay); border-radius: var(--r-overlay); }
+.p-overlay  { background: var(--c-overlay); box-shadow: var(--shadow-overlay); border-radius: var(--r-card); }
 /* For overlays that own their own background (a drawer is a full-height
    panel, not a dialog) but still need the dialog's lift. */
 .p-shadow-overlay { box-shadow: var(--shadow-overlay); }
@@ -365,7 +364,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-scrim { background: var(--c-scrim); backdrop-filter: blur(2px); }
 .p-border   { border-color: var(--c-border); }
 
-.p-accent-bg      { background: var(--c-accent-subtle); }
+.p-accent-bg      { background: var(--c-selected); }
 
 /* ── Status ────────────────────────────────────────────────────────── */
 
@@ -394,7 +393,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-badge-warning { background: var(--c-warning-tint); color: var(--c-warning); }
 .p-badge-danger  { background: var(--c-danger-tint);  color: var(--c-danger); }
 .p-badge-info    { background: var(--c-info-tint);    color: var(--c-info); }
-.p-badge-neutral { background: var(--c-neutral-tint); color: var(--c-text-2); }
+.p-badge-neutral { background: var(--c-hover); color: var(--c-text-2); }
 
 .p-tint-warning { background: var(--c-warning-tint); border-color: color-mix(in srgb, var(--c-warning) 30%, transparent); }
 
@@ -406,7 +405,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-notice-success, .p-notice-warning, .p-notice-danger, .p-notice-info, .p-notice-neutral {
   border-radius: var(--r-card);
 }
-.p-notice-neutral { background: var(--c-neutral-tint); color: var(--c-text-2); border: 1px solid var(--c-border); }
+.p-notice-neutral { background: var(--c-hover); color: var(--c-text-2); border: 1px solid var(--c-border); }
 .p-notice-success { background: var(--c-success-tint); color: var(--c-success); border: 1px solid color-mix(in srgb, var(--c-success) 30%, transparent); }
 .p-notice-warning { background: var(--c-warning-tint); color: var(--c-warning); border: 1px solid color-mix(in srgb, var(--c-warning) 30%, transparent); }
 .p-notice-danger  { background: var(--c-danger-tint);  color: var(--c-danger);  border: 1px solid color-mix(in srgb, var(--c-danger) 30%, transparent); }
@@ -441,9 +440,9 @@ body { background: var(--c-bg); color: var(--c-text); }
   border: 1px solid var(--c-border);
   border-radius: var(--r-card);
   box-shadow: var(--shadow-card);
-  transition: border-color var(--dur-base) ease-out, background-color var(--dur-base) ease-out;
+  transition: border-color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
-.p-card-hover:hover { background: var(--c-elevated); }
+.p-card-hover:hover { background: var(--c-hover); }
 
 /* Code wells retain their surface and scroll behavior. Shiki supplies syntax
    colors from its light/dark themes; inline code keeps its own ink.
@@ -454,7 +453,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-code {
   background: var(--c-code-bg);
   border: 1px solid var(--c-border);
-  color: var(--c-code);
+  color: var(--c-accent-fg);
   font-family: var(--font-mono);
 }
 /* The header shares the block's ground and is separated by the hairline
@@ -518,8 +517,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* Inline code sits IN a sentence: it takes the warm ink and a whisper of
    ground, never a border, and it wraps rather than pushing the column. */
 .p-code-inline {
-  background: var(--c-neutral-tint);
-  color: var(--c-code);
+  background: var(--c-hover);
+  color: var(--c-accent-fg);
   font-family: var(--font-mono);
   font-size: 0.875em;
   padding: 0.1em 0.35em;
@@ -539,7 +538,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 .p-focus:focus-within {
   border-color: var(--c-accent);
-  box-shadow: 0 0 0 3px var(--c-accent-subtle);
+  box-shadow: 0 0 0 3px var(--c-selected);
 }
 
 /* ── Tabs ──────────────────────────────────────────────────────────
@@ -551,7 +550,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-tab {
   border-bottom: 2px solid transparent;
   color: var(--c-text-3);
-  transition: color var(--dur-base) ease-out, border-color var(--dur-base) ease-out;
+  transition: color var(--dur-state) ease-out, border-color var(--dur-state) ease-out;
 }
 .p-tab:hover { color: var(--c-text-2); border-bottom-color: var(--c-border-strong); }
 .p-tab-active {
@@ -627,7 +626,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 [data-mode="dark"] .p-button-primary:active { background: color-mix(in srgb, var(--c-accent) 92%, #000); box-shadow: none; }
 
 .p-button-ghost { background: transparent; color: var(--c-text-2); }
-.p-button-ghost:hover { background: var(--c-neutral-tint); color: var(--c-text); }
+.p-button-ghost:hover { background: var(--c-hover); color: var(--c-text); }
 .p-button-ghost:active, .p-button-ghost[aria-pressed="true"] { background: color-mix(in srgb, var(--c-text) 10%, transparent); color: var(--c-text); }
 
 .p-button-danger { background: var(--c-button-bg); border-color: var(--c-button-line); color: var(--c-danger); box-shadow: var(--shadow-button); }
@@ -637,8 +636,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-button-destructive:hover { background: color-mix(in srgb, var(--c-danger) 90%, #000); }
 
 .p-button:disabled { cursor: default; box-shadow: none; }
-.p-button-secondary:disabled, .p-button-ghost:disabled, .p-button-danger:disabled { color: var(--c-text-4); background: transparent; border-color: var(--c-button-line); }
-.p-button-primary:disabled, .p-button-destructive:disabled { background: var(--c-neutral-tint); color: var(--c-text-3); }
+.p-button-secondary:disabled, .p-button-ghost:disabled, .p-button-danger:disabled { color: var(--c-text-3); background: transparent; border-color: var(--c-button-line); }
+.p-button-primary:disabled, .p-button-destructive:disabled { background: var(--c-hover); color: var(--c-text-3); }
 
 .p-button:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
 
@@ -679,7 +678,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   border-radius: var(--r-row);
   transition: background-color 120ms ease-out;
 }
-.p-plugin-row:hover { background: var(--c-neutral-tint); }
+.p-plugin-row:hover { background: var(--c-hover); }
 .p-plugin-row-control { grid-template-columns: 32px minmax(0, 1fr) 120px auto 28px; }
 .p-plugin-row-state { display: contents; }
 @media (max-width: 639px) {
@@ -694,7 +693,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   border: 1px solid var(--c-composer-line);
   border-radius: 24px;
   box-shadow: var(--shadow-composer);
-  transition: border-color var(--dur-base) ease-out, box-shadow var(--dur-base) ease-out;
+  transition: border-color var(--dur-state) ease-out, box-shadow var(--dur-state) ease-out;
 }
 .p-composer:focus-within { border-color: var(--c-composer-line-focus); }
 
@@ -790,7 +789,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   height: 26px;
   padding: 0 11px;
   border-radius: 999px;
-  background: var(--c-neutral-tint);
+  background: var(--c-hover);
   color: var(--c-text);
   font-size: 12.5px;
   font-weight: 500;
@@ -812,7 +811,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   cursor: pointer;
   transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
 }
-.p-pill-icon:hover { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-pill-icon:hover { color: var(--c-text); background: var(--c-hover); }
 /* Opened, a pill is a card of the same edge: its words wrap, its details below, its actions at the foot. */
 .p-pill[data-open] {
   display: flex;
@@ -849,7 +848,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   overflow: auto;
   border: 1px solid var(--c-border);
   border-radius: 10px;
-  background: var(--c-recessed);
+  background: var(--c-sunken);
   color: var(--c-text-2);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -899,7 +898,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   height: 18px;
   padding: 0 5px;
   border-radius: 999px;
-  background: var(--c-neutral-tint);
+  background: var(--c-hover);
   color: var(--c-text-2);
   font-size: 11px;
   line-height: 18px;
@@ -923,10 +922,10 @@ body { background: var(--c-bg); color: var(--c-text); }
   overflow: hidden;
   border: 1px solid var(--c-border);
   border-radius: var(--r-card);
-  background: var(--c-recessed);
+  background: var(--c-sunken);
   vertical-align: top;
 }
-.p-shot-frame { position: relative; display: flex; justify-content: center; padding: 0; cursor: zoom-in; background: var(--c-recessed); }
+.p-shot-frame { position: relative; display: flex; justify-content: center; padding: 0; cursor: zoom-in; background: var(--c-sunken); }
 .p-shot-frame > img { display: block; max-width: 100%; max-height: 360px; width: auto; height: auto; object-fit: contain; }
 .p-shot[data-size="thumb"] .p-shot-frame > img { max-height: 200px; }
 .p-shot-caption {
@@ -942,7 +941,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   font-size: 12px;
 }
 .p-shot-name { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); color: var(--c-text-2); }
-.p-shot-where { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; height: 20px; border-radius: 999px; background: var(--c-neutral-tint); color: var(--c-text-3); font-size: 11px; }
+.p-shot-where { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; height: 20px; border-radius: 999px; background: var(--c-hover); color: var(--c-text-3); font-size: 11px; }
 .p-shot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 8px; }
 .p-shot-grid > .p-shot-note { margin: 0; }
 .p-shot-grid .p-shot { display: flex; margin: 0; }
@@ -1010,7 +1009,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   cursor: pointer;
   transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
 }
-.p-composer-quiet:hover:not(:disabled) { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-composer-quiet:hover:not(:disabled) { color: var(--c-text); background: var(--c-hover); }
 .p-composer-quiet[aria-pressed="true"] { color: var(--c-text); }
 .p-composer-mode { display: flex; flex-shrink: 0; align-items: center; }
 .p-composer-round, .p-composer-send {
@@ -1025,10 +1024,10 @@ body { background: var(--c-bg); color: var(--c-text); }
   transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out, opacity var(--dur-fast) ease-out;
 }
 .p-composer-round { color: var(--c-text-3); }
-.p-composer-round:hover:not(:disabled) { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-composer-round:hover:not(:disabled) { color: var(--c-text); background: var(--c-hover); }
 .p-composer-send { background: var(--c-accent); color: var(--c-accent-on); }
 .p-composer-send:hover:not(:disabled) { background: color-mix(in srgb, var(--c-accent) 90%, var(--c-text)); }
-.p-composer-send:disabled { background: var(--c-neutral-tint); color: var(--c-text-4); cursor: default; }
+.p-composer-send:disabled { background: var(--c-hover); color: var(--c-text-3); cursor: default; }
 .p-composer-send[data-stop] { background: var(--c-text); color: var(--c-bg); }
 /* Model and effort read as quiet text with a chevron, like the rest of the row. */
 .p-composer-model { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 2px; }
@@ -1045,11 +1044,11 @@ body { background: var(--c-bg); color: var(--c-text); }
   border-radius: 999px !important;
   transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
 }
-.p-composer-model :is(button, [role="combobox"]):hover { color: var(--c-text) !important; background: var(--c-neutral-tint) !important; }
+.p-composer-model :is(button, [role="combobox"]):hover { color: var(--c-text) !important; background: var(--c-hover) !important; }
 .p-composer-model :is(button, [role="combobox"]) > span[aria-hidden="true"]:last-child { right: 8px; }
 .p-composer-model [data-model-picker] svg { display: none; }
 
-.p-row-hover:hover { background: var(--c-elevated); }
+.p-row-hover:hover { background: var(--c-hover); }
 
 /* MCTS tree labels. Below the zoom where an 11px label lands under ~8px on
    screen they are noise rather than text, so the whole layer is gated on one
@@ -1119,9 +1118,8 @@ body { background: var(--c-bg); color: var(--c-text); }
    workspace with nothing in it.
 
    Colour and highlight are SEPARATE properties, not two stops of one gradient.
-   `--c-fill` and `--c-elevated` are the same value in both dark palettes (see
-   the note at the top of the token block), so a tone-to-tone sweep is invisible
-   there; and a bar whose whole surface is the animation disappears the moment
+   Neighbouring grounds sit one small step apart in the dark palettes, so a
+   tone-to-tone sweep is invisible there; and a bar whose whole surface is the animation disappears the moment
    `prefers-reduced-motion` stops it. A solid base plus a travelling highlight
    holds in all four palettes and still reads as a bar when it is standing
    still. */
@@ -1287,7 +1285,7 @@ body > .annotation-toolbar {
   --destructive: var(--c-danger);
   --destructive-foreground: var(--c-text);
   --border: var(--c-border);
-  --input: var(--c-input-border);
+  --input: var(--c-field-border);
   --ring: var(--c-accent);
   --success: var(--c-success);
   --warning: var(--c-warning);
@@ -1383,8 +1381,8 @@ body > .annotation-toolbar {
 [data-plan-title] code {
   padding: 0.05em 0.25em;
   border-radius: var(--r-control);
-  background: var(--c-neutral-tint);
-  color: var(--c-code);
+  background: var(--c-hover);
+  color: var(--c-accent-fg);
   font-family: var(--font-mono);
   font-size: 0.875em;
 }
@@ -1468,8 +1466,8 @@ body > .annotation-toolbar {
 .plan-review-document [data-block-id] :not(pre) > code {
   padding: 0.1em 0.35em;
   border-radius: var(--r-control);
-  background: var(--c-neutral-tint);
-  color: var(--c-code);
+  background: var(--c-hover);
+  color: var(--c-accent-fg);
   font-family: var(--font-mono);
   font-size: 0.875em;
   overflow-wrap: anywhere;
@@ -1486,7 +1484,7 @@ body > .annotation-toolbar {
   border: 1px solid var(--c-border);
   border-radius: var(--radius-lg);
   background: var(--c-code-bg);
-  color: var(--c-code);
+  color: var(--c-accent-fg);
   font-family: var(--font-mono);
   font-size: 0.875rem;
   line-height: 1.5714;
@@ -1680,7 +1678,7 @@ body > .annotation-toolbar {
   width: 28px;
   pointer-events: none;
   opacity: 0;
-  transition: opacity var(--dur-base) ease-out;
+  transition: opacity var(--dur-state) ease-out;
 }
 .p-bar-strip::before { left: 0; background: linear-gradient(to left, transparent, var(--bar-ground)); }
 .p-bar-strip::after { right: 0; background: linear-gradient(to right, transparent, var(--bar-ground)); }
@@ -1743,14 +1741,14 @@ body > .annotation-toolbar {
   width: 1px;
   height: 14px;
   background: var(--bar-line);
-  transition: opacity var(--dur-base) ease-out;
+  transition: opacity var(--dur-state) ease-out;
 }
 .p-bar-tab:is([data-active], [data-after-active])::before { opacity: 0; }
 .p-bar-link {
   position: absolute;
   inset: 0;
   color: var(--c-text-3);
-  transition: color var(--dur-base) ease-out, padding var(--dur-fast) ease-out;
+  transition: color var(--dur-state) ease-out, padding var(--dur-fast) ease-out;
 }
 .p-bar-link:hover { color: var(--c-text-2); }
 .p-bar-link:focus-visible { outline: none; color: var(--c-text); text-decoration: underline; text-underline-offset: 4px; text-decoration-color: var(--c-accent); }
@@ -1788,10 +1786,10 @@ body > .annotation-toolbar {
   width: 22px;
   height: 22px;
   border-radius: 6px;
-  color: var(--c-text-4);
+  color: var(--c-text-3);
   transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
 }
-.p-bar-action:hover, .p-bar-action:focus-visible { outline: none; background: var(--c-neutral-tint); color: var(--c-text); }
+.p-bar-action:hover, .p-bar-action:focus-visible { outline: none; background: var(--c-hover); color: var(--c-text); }
 .p-bar-action[data-danger]:hover, .p-bar-action[data-danger]:focus-visible { color: var(--c-danger); }
 .p-bar-rename { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 calc(var(--flare) + 6px) 2px; }
 .p-bar-rename input {
@@ -1801,11 +1799,11 @@ body > .annotation-toolbar {
   padding: 0 7px;
   border-radius: 7px;
   border: 1px solid var(--c-accent);
-  background: var(--c-input-bg);
+  background: var(--c-field);
   color: var(--c-text);
   font-size: 13px;
   outline: none;
-  box-shadow: 0 0 0 3px var(--c-accent-subtle);
+  box-shadow: 0 0 0 3px var(--c-selected);
 }
 .p-bar-rename-error { font-size: 11px; color: var(--c-danger); white-space: nowrap; }
 .p-bar-new { position: relative; z-index: 1; display: flex; flex-shrink: 0; align-items: center; height: 38px; padding: 0 10px 2px 2px; }
@@ -1819,7 +1817,7 @@ body > .annotation-toolbar {
   color: var(--c-text-3);
   transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
 }
-.p-bar-icon:hover, .p-bar-icon:focus-visible { outline: none; background: var(--c-neutral-tint); color: var(--c-text); }
+.p-bar-icon:hover, .p-bar-icon:focus-visible { outline: none; background: var(--c-hover); color: var(--c-text); }
 /* The header's count of agents at work out of sight: the accent, so it reads in dark and light alike. */
 .p-agents-badge { background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 1.5px var(--c-bg); }
 .p-bar-icon[aria-current="page"], .p-bar-icon[aria-pressed="true"] { color: var(--c-text); }
@@ -1863,7 +1861,7 @@ body > .annotation-toolbar {
   padding: 3px;
   list-style: none;
   border-radius: 10px;
-  background: var(--c-recessed);
+  background: var(--c-sunken);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-border) 70%, transparent);
 }
 .p-tool {
@@ -1883,7 +1881,7 @@ body > .annotation-toolbar {
   white-space: nowrap;
   transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out, box-shadow var(--dur-fast) ease-out;
 }
-.p-tool:hover { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-tool:hover { color: var(--c-text); background: var(--c-hover); }
 .p-tool:focus-visible { outline: 1.5px solid var(--c-accent); outline-offset: 1px; }
 .p-tool[aria-current="true"] {
   padding: 0 9px 0 8px;
@@ -1897,7 +1895,7 @@ body > .annotation-toolbar {
   height: 15px;
   padding: 0 4px;
   border-radius: 8px;
-  background: var(--c-neutral-tint);
+  background: var(--c-hover);
   color: var(--c-text-2);
   font-size: 10px;
   font-weight: 600;
@@ -1944,7 +1942,7 @@ body > .annotation-toolbar {
   color: var(--c-text-3);
   transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
 }
-.p-page:hover { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-page:hover { color: var(--c-text); background: var(--c-hover); }
 .p-page-link { display: flex; min-width: 0; align-items: center; gap: 6px; height: 100%; padding: 0 9px 0 8px; font-size: 12.5px; font-weight: 500; letter-spacing: -0.005em; white-space: nowrap; }
 .p-page-link:focus-visible { border-radius: 7px; outline: 1.5px solid var(--c-accent); outline-offset: 1px; }
 .p-pages-row > .p-page:first-child, .p-page[data-open] { flex-shrink: 1; }
@@ -1968,7 +1966,7 @@ body > .annotation-toolbar {
   font-variant-numeric: tabular-nums;
   transition: color var(--dur-fast) ease-out, background-color var(--dur-fast) ease-out;
 }
-.p-bar-more:hover, .p-bar-more[aria-expanded="true"] { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-bar-more:hover, .p-bar-more[aria-expanded="true"] { color: var(--c-text); background: var(--c-hover); }
 
 /* A page shown in the column sits inset on its ground, framed as a card of its own. */
 .p-pane { display: flex; height: 100%; min-height: 0; flex-direction: column; padding: 12px 12px 14px; }
@@ -2169,7 +2167,7 @@ body > .annotation-toolbar {
 .p-env-chip:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }
 .p-env-chip[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--c-accent) 38%, transparent);
-  background: var(--c-accent-subtle);
+  background: var(--c-selected);
   color: var(--c-text);
 }
 .p-env-chip[aria-pressed="true"] > svg { color: var(--c-accent-mark); }
@@ -2256,7 +2254,7 @@ body > .annotation-toolbar {
   border-radius: 4px;
   color: var(--c-text-3);
 }
-.p-session-close:hover { color: var(--c-text); background: var(--c-neutral-tint); }
+.p-session-close:hover { color: var(--c-text); background: var(--c-hover); }
 .p-session-tab-slot:hover .p-session-close, .p-session-tab-slot:focus-within .p-session-close { display: grid; }
 .p-session-rename {
   align-self: center;
@@ -2277,5 +2275,5 @@ body > .annotation-toolbar {
 .p-desktop-veil {
   background:
     radial-gradient(90% 70% at 50% 115%, color-mix(in srgb, var(--c-accent) 14%, transparent), transparent 70%),
-    var(--c-recessed);
+    var(--c-sunken);
 }

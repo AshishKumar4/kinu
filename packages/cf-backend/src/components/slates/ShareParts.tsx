@@ -46,7 +46,7 @@ export function AccessPicker<Id extends string>({ options, value, onChange, disa
       <span className="min-w-0 flex-1">
         <button type="button" aria-haspopup="listbox" aria-expanded={open} disabled={disabled} data-share-access={chosen.id}
           onClick={() => setOpen((shown) => !shown)}
-          className="-ml-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 p-row-text font-medium p-text transition-colors hover:bg-[var(--c-elevated)]">
+          className="-ml-1.5 inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 p-row-text font-medium p-text transition-colors hover:bg-[var(--c-hover)]">
           {chosen.label} <CaretDownIcon size={12} className="p-text-3" />
         </button>
         <span className="block p-meta p-text-3">{chosen.detail}</span>
@@ -56,7 +56,7 @@ export function AccessPicker<Id extends string>({ options, value, onChange, disa
           {options.map((option) => (
             <button key={option.id} type="button" role="option" aria-selected={option.id === value} data-share-access-option={option.id}
               onClick={() => { onChange(option.id); setOpen(false); }}
-              className="flex w-full items-start gap-2.5 rounded-md px-2 py-2 text-left transition-colors hover:bg-[var(--c-elevated)]">
+              className="flex w-full items-start gap-2.5 rounded-md px-2 py-2 text-left transition-colors hover:bg-[var(--c-hover)]">
               <span className="mt-0.5 flex shrink-0 p-text-3">{option.icon}</span>
               <span className="min-w-0 flex-1">
                 <span className="block text-sm font-medium p-text">{option.label}</span>

@@ -108,7 +108,7 @@ export function subordinateEventRow(event: SubordinateActivityEvent, workspace: 
             to={`/workspace/${workspace}/agents/${event.subordinate}`}
             title={`Open ${event.subordinate}'s chat`}
             aria-label={`Open ${event.subordinate}'s chat`}
-            className="mt-1 mr-1 flex size-6 shrink-0 items-center justify-center rounded-md p-text-4 transition-colors hover:bg-[var(--c-elevated)] hover:p-text-2"
+            className="mt-1 mr-1 flex size-6 shrink-0 items-center justify-center rounded-md p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text-2"
           >
             <ArrowUpRightIcon size={11} />
           </Link>

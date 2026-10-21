@@ -99,7 +99,7 @@ function WayButton({ icon, title, text, onClick }: { icon: ReactNode; title: str
   return (
     <button type="button" onClick={onClick}
       // A row to pick, not a box inside the card (design review 2026-10-20).
-      className="-mx-2 flex flex-col items-start gap-1 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--c-neutral-tint)]">
+      className="-mx-2 flex flex-col items-start gap-1 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--c-hover)]">
       <span className="flex items-center gap-2 text-[13px] font-medium p-text">{icon}{title}</span>
       <span className="p-meta p-text-3">{text}</span>
     </button>

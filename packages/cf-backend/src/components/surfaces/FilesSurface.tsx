@@ -188,7 +188,7 @@ function ViewMenu({ view, onChange }: { view: FilesView; onChange: (view: FilesV
     <TileMenu name="View" className="relative" trigger={{
       label: "View options",
       icon: view.layout === "tiles" ? <SquaresFourIcon size={12} /> : <ListIcon size={12} />,
-      className: "p-1 rounded-sm hover:bg-[var(--c-elevated)]",
+      className: "p-1 rounded-sm hover:bg-[var(--c-hover)]",
     }} items={[
       { label: "List", icon: <ListIcon size={16} />, radio: true, checked: view.layout === "list", marker: "data-files-view-list", onSelect: () => onChange({ ...view, layout: "list" }) },
       { label: "Tiles", icon: <SquaresFourIcon size={16} />, radio: true, checked: view.layout === "tiles", marker: "data-files-view-tiles", onSelect: () => onChange({ ...view, layout: "tiles" }) },
@@ -538,7 +538,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             value={filter}
             onChange={(e) => { setFilter(e.currentTarget.value); setSelected(0); }}
             placeholder="Filter this folder…"
-            className="flex-1 bg-transparent text-xs p-text outline-hidden placeholder:p-text-4"
+            className="flex-1 bg-transparent text-xs p-text outline-hidden placeholder:p-text-3"
           />
           {filter && (
             <button onClick={() => setFilter("")} className="p-text-3 hover:p-text" aria-label="Clear filter">
@@ -634,7 +634,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             {!loading && filtered.length > 0 && (
               <div className="px-3 pt-1.5 pb-1 p-text-3 p-meta border-t p-border mt-1">
                 {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount, folder.next !== undefined)}
-                <span className="ml-2 hidden @[44rem]:inline p-text-4">{LAYOUTS[view.layout].moves} move · Enter open · Backspace up · F2 rename · Del delete</span>
+                <span className="ml-2 hidden @[44rem]:inline p-text-3">{LAYOUTS[view.layout].moves} move · Enter open · Backspace up · F2 rename · Del delete</span>
               </div>
             )}
           </div>
@@ -704,7 +704,7 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
         )}
       </div>
       {isOpen && children === undefined && (
-        <div className="p-text-4 p-meta" style={{ paddingLeft: `${28 + depth * 12}px` }}>loading…</div>
+        <div className="p-text-3 p-meta" style={{ paddingLeft: `${28 + depth * 12}px` }}>loading…</div>
       )}
       {isOpen && children?.map((row) => {
         if (!("entry" in row)) return <OfflineTreeRow key={`offline-${row.name}`} row={row} depth={depth + 1} />;
@@ -741,7 +741,7 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
 function OfflineTreeRow({ row, depth }: { row: OfflineRow; depth: number }) {
   return (
     <div data-files-tree-offline={row.name} title={`${row.label ?? row.name}: ${row.reason}`}
-      className="group flex items-center gap-1 pr-2 py-0.5 text-xs p-text-4"
+      className="group flex items-center gap-1 pr-2 py-0.5 text-xs p-text-3"
       style={{ paddingLeft: `${22 + depth * 12}px` }}>
       {/* Where a folder's icon stands beside its caret. */}
       <PlugIcon size={13} className="shrink-0" />
@@ -761,10 +761,10 @@ function OfflineTreeRow({ row, depth }: { row: OfflineRow; depth: number }) {
 function OfflineMountRow({ row }: { row: OfflineRow }) {
   return (
     <div data-files-offline-mount title={row.reason} className={`grid ${COLUMNS} ${ROW_HEIGHT}`}>
-      <PlugIcon size={16} className="p-text-4" />
+      <PlugIcon size={16} className="p-text-3" />
       <span className="flex min-w-0 items-baseline gap-2">
         <span className="truncate p-row-text p-text-3">{row.name}</span>
-        <span data-mount-badge className="truncate p-meta p-text-4">
+        <span data-mount-badge className="truncate p-meta p-text-3">
           {row.label === null ? "offline" : `${row.label} · offline`}
         </span>
       </span>
@@ -957,11 +957,11 @@ function EntryTile(props: EntryProps) {
 function OfflineMountTile({ row }: { row: OfflineRow }) {
   return (
     <div data-files-offline-mount title={row.reason} className="flex min-w-0 flex-col items-center gap-1 rounded-lg px-2 pb-2 pt-3">
-      <PlugIcon size={32} className="p-text-4" />
+      <PlugIcon size={32} className="p-text-3" />
       <span className="max-w-full truncate p-row-text p-text-3">{row.name}</span>
-      {row.label !== null && <span data-mount-badge className="max-w-full truncate p-meta p-text-4">{row.label}</span>}
+      {row.label !== null && <span data-mount-badge className="max-w-full truncate p-meta p-text-3">{row.label}</span>}
       <span className="flex items-baseline gap-1.5 p-meta">
-        <span className="p-text-4">offline</span>
+        <span className="p-text-3">offline</span>
         {row.onConnect && (
           <button type="button" data-files-connect onClick={row.onConnect} className="font-medium p-accent hover:underline">Connect</button>
         )}

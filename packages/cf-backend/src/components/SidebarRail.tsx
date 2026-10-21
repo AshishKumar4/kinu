@@ -108,7 +108,7 @@ function RailAccount({ name }: { name: string }) {
   return (
     <div ref={ref} className="relative">
       <button type="button" onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" title="Account" data-account-menu
-        className="flex size-9 items-center justify-center rounded-lg transition-colors hover:bg-[var(--c-neutral-tint)]">
+        className="flex size-9 items-center justify-center rounded-lg transition-colors hover:bg-[var(--c-hover)]">
         <Avatar name={name} size={24} />
       </button>
       {open && <AccountMenu onClose={close} className="fixed bottom-3 left-[60px] w-60" />}

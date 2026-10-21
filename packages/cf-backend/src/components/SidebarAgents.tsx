@@ -97,7 +97,7 @@ function AgentGroup({ title, members, panel }: { title: string; members: readonl
         <CaretRightIcon size={11} className={`w-[13px] shrink-0 transition-transform duration-150 ${open ? "rotate-90" : ""}`} aria-hidden />
         <span className="min-w-0 flex-1 truncate p-t-control">{title}</span>
         {busy && <AgentStatusMark activity="working" />}
-        <span className="p-meta tabular-nums p-text-4">{members.length}</span>
+        <span className="p-meta tabular-nums p-text-3">{members.length}</span>
       </button>
       <div className="p-fold" data-folded={open ? undefined : ""}>
         <div inert={!open}>

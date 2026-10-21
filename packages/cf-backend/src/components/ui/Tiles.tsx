@@ -40,7 +40,7 @@ export function TypesetCover({ title, line, logo = null, mark }: { title: string
  */
 export function CaptureMat({ children }: { children: ReactNode }) {
   return (
-    <span className="absolute inset-0 p-recessed" data-capture-mat>
+    <span className="absolute inset-0 p-sunken" data-capture-mat>
       <span className="absolute inset-3 overflow-hidden rounded-[var(--r-control)] border p-border">{children}</span>
     </span>
   );
