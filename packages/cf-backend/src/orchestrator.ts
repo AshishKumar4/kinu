@@ -1953,7 +1953,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         kind: 'task',
         ...event,
       }),
-      workspaceAgents: () => this.listWorkspaceAgents(),
+      workspaceAgents: () => this.workspaceAgents(true),
       treeOwner: actor.handle.actorId,
       events: new EventLog(this.watchedExec, actor.handle),
     });
@@ -4150,15 +4150,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async listWorkspaceAgents(): Promise<PanelAgent[]> {
+    return await this.workspaceAgents(false);
+  }
+
+  protected async workspaceAgents(retained: boolean): Promise<PanelAgent[]> {
     return readWorkspaceAgents({
       sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), queued: (actorId) => this.agentWakes.armed(actorId),
-      actors: this.workspaceActors().list({ retired: true }),
+      actors: this.workspaceActors().list({ retired: true }), retained,
       // Each agent's own isolate reports them at its turns' ends, main's as any other's: its steps are its isolate's (D9).
       figures: (actorIds) => reportedAgentFigures(this.boundSql, actorIds),
       chat: (actorId) => {
         const reported = this.reportedReport(actorId)?.standing;
 
-        return reported === undefined ? null : { planPending: reported.plans.pending, lastFailed: reported.latestRun?.status === 'error' };
+        if (reported === undefined) return null;
+        const stepped = Math.max(Date.parse(reported.measures.provider?.at ?? ''), Date.parse(reported.measures.gate?.at ?? ''));
+
+        return {
+          planPending: reported.plans.pending, lastFailed: reported.latestRun?.status === 'error',
+          ...(Number.isFinite(stepped) && { activeAt: stepped }),
+        };
       },
     });
   }

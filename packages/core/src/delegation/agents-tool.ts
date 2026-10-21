@@ -975,7 +975,8 @@ async function roster(deps: AgentsToolDeps, fields: ListFields): Promise<object>
 
   const view = team ? await team.tree({ retired: fields.retired ?? false, limit: fields.limit ?? AGENT_TREE_LIMIT }) : undefined;
   const peerRoster = peers ? await peers.listPeers() : undefined;
-  const alone = (view?.tree.every((row) => row.you === true) ?? true) && (view?.counts.retired ?? 0) === 0;
+  const counts = view?.counts;
+  const alone = counts === undefined || counts.running + counts.waiting + counts.idle + counts.failed + counts.retired === 0;
   const listed: UnifiedRosterResult = {};
 
   if (view) Object.assign(listed, { tree: view.tree, counts: view.counts });

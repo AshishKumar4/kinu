@@ -73,7 +73,7 @@ export function readModelTree(db: Database, world: { readonly main: ActorHandle;
 
   return {
     workspaceAgents: async () => await readWorkspaceAgents({
-      sql, exec: makeSqlExec(db), root: world.main, actors: world.directory.list({ retired: true }),
+      sql, exec: makeSqlExec(db), root: world.main, actors: world.directory.list({ retired: true }), retained: true,
       figures: (actorIds) => readAgentFigures(sql, actorIds), queued: () => false, chat: () => null,
     }),
     treeOwner: 'main',

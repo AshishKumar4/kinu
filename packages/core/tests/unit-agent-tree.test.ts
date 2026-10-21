@@ -1,7 +1,8 @@
 // Defends: `agents.list` showing a hire more than its own subtree, a retired agent listed unasked, a running agent ranked
 // below an idle one, rows past the cap dropped without being counted, and a report the caller has not read left unsaid.
 import { describe, expect, test } from 'bun:test';
-import { agentTree, AGENT_TREE_LIMIT } from '../src/delegation/agent-tree';
+import { agentTree, AGENT_TREE_LIMIT, unreadReports } from '../src/delegation/agent-tree';
+import type { KinuEvent, PendingFilter } from '../src/events/hub/index';
 import { NO_FIGURES } from '../src/read-models/agent-figures';
 import type { AgentActivity, PanelAgent } from '../src/read-models/workspace-agents';
 
@@ -83,5 +84,20 @@ describe('the agents tree', () => {
     expect(view('main', { unread }).tree.map((row) => [row.name, row.unreadReports])).toEqual([
       ['main', undefined], ['lead', 2], ['ledger', undefined], ['docs', undefined],
     ]);
+  });
+});
+
+describe('the caller\'s unread reports', () => {
+  // `pending` answers a drain's batch unless told otherwise: past it, a child's reports were once not counted.
+  test('are every report pending, past a drain\'s batch', () => {
+    const report = (n: number): KinuEvent => ({
+      id: `e${String(n)}`, trace_id: `e${String(n)}`, caused_by: null, ingress: 'subagent', variant: 'subagent_report', trust: 'authenticated',
+      priority: 'normal', payload_visibility: 'full', received_at: n, reply_channel: null, dedupe_key: null,
+      payload: { from_subagent: n < 60 ? 'lead' : 'docs', status: 'completed', content: 'Done.', sequence_id: `s${String(n)}`, kinu_mode: 'build' },
+    });
+
+    const pending = Array.from({ length: 70 }, (_, n) => report(n));
+
+    expect(unreadReports({ pending: (filter: PendingFilter) => pending.slice(0, filter.limit ?? 50) })).toEqual(new Map([['lead', 60], ['docs', 10]]));
   });
 });

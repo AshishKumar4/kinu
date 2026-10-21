@@ -30,7 +30,7 @@ import { KinuError, renderThrownChain } from '../obs/index';
 import type { SubagentInheritedContext } from '../types/subagents';
 import type { ModelMessage } from 'ai';
 import { inheritedContextFromHistory } from '../orchestrator/heads-support';
-import { agentTree } from '../delegation/agent-tree';
+import { agentTree, unreadReports } from '../delegation/agent-tree';
 import type { PanelAgent } from '../read-models/workspace-agents';
 
 export interface SubagentLiveStatus {
@@ -382,19 +382,6 @@ export function agentNamer(
 
     return (name) => had.has(name) || roster.get(name) !== null;
   });
-}
-
-/** The reports each child sent that no turn of its hirer's has read yet, by the child's name. */
-function unreadReports(events: Pick<EventLog, 'pending'>): ReadonlyMap<string, number> {
-  const unread = new Map<string, number>();
-
-  for (const event of events.pending({ variant: 'subagent_report' })) {
-    if (event.variant === 'subagent_report' && (event.payload_visibility === 'full' || event.payload_visibility === 'redact')) {
-      unread.set(event.payload.from_subagent, (unread.get(event.payload.from_subagent) ?? 0) + 1);
-    }
-  }
-
-  return unread;
 }
 
 /** Roster transitions precede facet admission and are restored exactly if it fails; broadcasts follow both. */

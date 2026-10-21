@@ -728,6 +728,18 @@ describe('agents tool — peer workspace actions', () => {
     });
   });
 
+  // The hint reads the counts, not the rows a limit kept: a caller listing one row is not told it has nobody.
+  test('a list cut to the caller\'s own row says what it left out, never that there is nobody', async () => {
+    const tree: TeamToolDeps['tree'] = async (input) => ({
+      ...await lonelyTree(input),
+      counts: { running: 1, waiting: 0, idle: 1, failed: 0, retired: 0, shown: 1, notShown: 2 },
+      note: '2 not shown: list({limit}) shows up to 200.',
+    });
+
+    expect(await agentsTool({ team: makeTeam({ tree }).deps }).execute({ op: 'list', limit: 1 }))
+      .toMatchObject({ note: '2 not shown: list({limit}) shows up to 200.' });
+  });
+
   test('list shows the tree and the peers beside it', async () => {
     const t = agentsTool({ team: makeTeam().deps, peers: makePeers().deps });
     expect(await t.execute({ op: 'list' })).toMatchObject({

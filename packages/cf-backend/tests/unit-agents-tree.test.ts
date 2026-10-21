@@ -24,7 +24,7 @@ const WireSchema = v.object({
 
 const RowSchema = v.looseObject({ name: v.string(), depth: v.number(), kind: v.string(), status: v.string(), you: v.optional(v.literal(true)) });
 
-const ListedSchema = v.looseObject({ tree: v.array(RowSchema) });
+const ListedSchema = v.looseObject({ tree: v.array(RowSchema), counts: v.optional(v.looseObject({ retired: v.number() })) });
 
 const words = (message: { readonly content?: GatewayRequest['messages'][number]['content'] } | undefined): string =>
   (typeof message?.content === 'string' ? message.content : JSON.stringify(message?.content ?? ''));
@@ -54,6 +54,8 @@ function delegatingGateway() {
 
     if (said.includes('List your tree')) return toolCallCompletion(run, { tool: 'agents', args: { op: 'list' } }, 'list');
 
+    if (said.includes('List the retired too')) return toolCallCompletion(run, { tool: 'agents', args: { op: 'list', retired: true } }, 'list-retired');
+
     // Only on an agent's first turn: a report it is handed later quotes the task that asked for a hire.
     if (first && said.includes('Hire lead-a1')) return toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', name: LEAD.name, role: 'task', message: LEAD.task } }, 'hire-lead');
 
@@ -73,17 +75,19 @@ function delegatingGateway() {
   });
 }
 
-/** The tree `agents.list` answered the agent named `you`, as its model read it next. */
+/** The newest tree `agents.list` answered the agent named `you`, as its model read it next. */
 function listed(runs: readonly RecordedGatewayRun[], you: string) {
-  for (const run of runs) {
-    for (const message of v.parse(WireSchema, run.query).messages) {
-      const answer = message.role === 'tool' ? v.safeParse(ListedSchema, JSON.parse(words(message))) : null;
+  const trees = runs.flatMap((run) => v.parse(WireSchema, run.query).messages.flatMap((message) => {
+    const answer = message.role === 'tool' ? v.safeParse(ListedSchema, JSON.parse(words(message))) : null;
 
-      if (answer?.success === true && answer.output.tree.some((row) => row.you === true && row.name === you)) return answer.output;
-    }
-  }
+    return answer?.success === true && answer.output.tree.some((row) => row.you === true && row.name === you) ? [answer.output] : [];
+  }));
 
-  throw new Error(`no request carried ${you}'s tree`);
+  const newest = trees.at(-1);
+
+  if (newest === undefined) throw new Error(`no request carried ${you}'s tree`);
+
+  return newest;
 }
 
 const positions = (tree: ReadonlyArray<v.InferOutput<typeof RowSchema>>) => tree.map((row) => [row.name, row.depth, row.you === true]);
@@ -112,6 +116,19 @@ describe('agents.list is the caller\'s own subtree', () => {
     expect(positions(listed(gateway.runs, LEAD.name).tree)).toEqual([[LEAD.name, 1, true], [LEDGER.name, 2, false]]);
     expect(positions(listed(gateway.runs, 'main').tree)).toEqual([['main', 0, true], [LEAD.name, 1, false], [LEDGER.name, 2, false]]);
     expect(listed(gateway.runs, 'main').tree[2]).toMatchObject({ kind: 'hired' });
+  });
+
+  test('a hire dismissed with its history kept is listed, dismissed, only when retired agents are asked for', async () => {
+    const gateway = delegatingGateway();
+    const workspace = gatewayWorkspace(gateway);
+
+    await mainTurn(workspace, `Hire ${LEAD.name} to run the migration.`);
+    await workspace.agent.dismissSubagent(LEAD.name);
+    await mainTurn(workspace, 'List your tree.');
+    expect(listed(gateway.runs, 'main')).toMatchObject({ tree: [{ name: 'main' }], counts: { retired: 2 } });
+
+    await mainTurn(workspace, 'List the retired too.');
+    expect(listed(gateway.runs, 'main').tree.map((row) => [row.name, row.status])).toEqual([['main', 'running'], [LEAD.name, 'dismissed'], [LEDGER.name, 'dismissed']]);
   });
 });
 

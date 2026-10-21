@@ -54,6 +54,8 @@ function subagentCategory(entry: SubagentRosterEntry): AgentCategory {
 export interface ChatReport {
   readonly planPending: boolean;
   readonly lastFailed: boolean;
+  /** When its newest step was measured, where its report says so: an isolate's figures arrive only at its turns' ends. */
+  readonly activeAt?: number;
 }
 
 /** A question only the person can answer outranks a running turn; a failed last turn shows until the next one starts. */
@@ -95,12 +97,12 @@ function headActivity(status: string, errorMessage: string | null, runRunning: b
   return shownHeadStatus(status, errorMessage) === 'stopped' ? 'stopped' : 'failed';
 }
 
-/** Parents first: creation times tie. */
-function treeOrder(rootId: string, actors: readonly WorkspaceActor[]): WorkspaceActor[] {
+/** Parents first: creation times tie. A released agent is walked only when `retained` asks for it. */
+function treeOrder(rootId: string, actors: readonly WorkspaceActor[], retained: boolean): WorkspaceActor[] {
   const children = new Map<string, WorkspaceActor[]>();
 
   for (const row of actors) {
-    if (!isSubagentOrigin(row.origin) || row.deletedAt !== null || row.parentActorId === null) continue;
+    if (!isSubagentOrigin(row.origin) || (row.deletedAt !== null && !retained) || row.parentActorId === null) continue;
     children.set(row.parentActorId, [...children.get(row.parentActorId) ?? [], row]);
   }
 
@@ -132,6 +134,7 @@ interface Walk {
   readonly now: number;
   readonly queued: (actorId: string) => boolean;
   readonly chat: (actorId: string) => ChatReport | null;
+  readonly retained: boolean;
 }
 
 /** A running head's run is listed however old. */
@@ -150,7 +153,7 @@ function rosterAgents(walk: Walk): Uncoloured[] {
   const byId = new Map(actors.map((row) => [row.actorId, row]));
   const agents: Uncoloured[] = [];
 
-  for (const row of treeOrder(root.actorId, actors)) {
+  for (const row of treeOrder(root.actorId, actors, walk.retained)) {
     const parentRow = row.parentActorId === root.actorId ? null : byId.get(row.parentActorId ?? '');
     const parentPath = parentRow === null ? '' : paths.get(row.parentActorId ?? '');
 
@@ -179,16 +182,17 @@ function rosterAgents(walk: Walk): Uncoloured[] {
   return agents;
 }
 
-function swarmAgents({ sql, root, actors, paths, handleOf }: Walk): Uncoloured[] {
+function swarmAgents({ sql, root, actors, paths, handleOf, retained }: Walk): Uncoloured[] {
   const agents: Uncoloured[] = [];
 
-  for (const owner of [root, ...actors.filter((row) => isSubagentOrigin(row.origin) && row.deletedAt === null).map(handleOf)]) {
+  for (const owner of [root, ...actors.filter((row) => isSubagentOrigin(row.origin) && (row.deletedAt === null || retained)).map(handleOf)]) {
     const ownerKey = owner.actorId === root.actorId ? 'main' : owner.actorId;
     const ownerPath = paths.get(owner.actorId) ?? null;
 
     // Search-tree branches are model calls, not agents.
     for (const run of swarmRuns(sql, owner)) {
       const running = run.status === 'running';
+      const journalled = new Set(run.heads.map((node) => node.id));
 
       for (const node of run.heads) {
         const label = node.task.trim().split('\n')[0]?.slice(0, 80) || node.id;
@@ -198,7 +202,8 @@ function swarmAgents({ sql, root, actors, paths, handleOf }: Walk): Uncoloured[]
 
         agents.push({
           key: `${run.rootId}/${node.id}`, label, category: 'swarm', activity: headActivity(node.status, node.errorMessage, running),
-          parent: node.parentId === null ? ownerKey : `${run.rootId}/${node.parentId}`,
+          // A search's first workers hang from its root, which is no worker of its own: they are its owner's.
+          parent: node.parentId === null || !journalled.has(node.parentId) ? ownerKey : `${run.rootId}/${node.parentId}`,
           open: { kind: 'node', runId: run.rootId, nodeId: node.id, owner: ownerPath }, tab: false, input: false,
           ...(nodeActor !== undefined && { actorId: nodeActor.actorId }),
           figures: { ...(tokens !== undefined && { tokens }), activeMs: node.wallClockMs, cacheEma: null, lastActiveAt: node.lastStepAt ?? node.spawnedAt },
@@ -257,13 +262,15 @@ export async function readWorkspaceAgents(input: {
   readonly queued: (actorId: string) => boolean;
   /** Its chat as its own isolate last reported it; none before its first report. */
   readonly chat: (actorId: string) => ChatReport | null;
+  /** Released hires whose history is kept, as dismissed: `agents.list` lists them when asked; the sidebar does not. */
+  readonly retained?: boolean;
 }): Promise<PanelAgent[]> {
   const { sql, root } = input;
   root.assertCurrent();
   const handles = new Map<string, ActorHandle>([[root.actorId, root]]);
 
   const walk: Walk = {
-    ...input, paths: new Map(), now: Date.now(),
+    ...input, retained: input.retained ?? false, paths: new Map(), now: Date.now(),
     handleOf: (row) => handles.get(row.actorId) ?? handles.set(row.actorId, actorReadHandle(sql, row)).get(row.actorId) ?? root,
   };
 
@@ -281,6 +288,8 @@ export async function readWorkspaceAgents(input: {
 
   return listed.map((agent) => {
     const logged = (agent.actorId === undefined ? undefined : figures.get(agent.actorId)) ?? NO_FIGURES;
+    const stepped = agent.actorId === undefined ? undefined : input.chat(agent.actorId)?.activeAt;
+    const lastActiveAt = Math.max(logged.lastActiveAt ?? 0, agent.figures.lastActiveAt ?? 0, stepped ?? 0);
 
     return {
       ...agent,
@@ -289,6 +298,7 @@ export async function readWorkspaceAgents(input: {
         ...logged,
         ...(logged.tokens === undefined && agent.figures.tokens !== undefined && { tokens: agent.figures.tokens }),
         activeMs: logged.activeMs || agent.figures.activeMs,
+        ...(lastActiveAt > 0 && { lastActiveAt }),
       },
     };
   });

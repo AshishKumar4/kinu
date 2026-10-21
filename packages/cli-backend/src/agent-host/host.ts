@@ -1138,13 +1138,13 @@ export class LocalAgentHost {
     };
   }
 
-  /** The workspace's agents as the cloud's sidebar reads them (`readWorkspaceAgents`), over this tree's one database:
-   *  an agent hosted here and pumping runs, and its own session reports its chat. */
+  /** The workspace's agents as the cloud's sidebar reads them (`readWorkspaceAgents`), released hires too, over this
+   *  tree's one database: an agent hosted here and pumping runs, and its own session reports its chat. */
   private async workspaceAgents(tree: HostTree): Promise<PanelAgent[]> {
     const sql = makeSql(tree.db);
 
     return await readWorkspaceAgents({
-      sql, exec: makeSqlExec(tree.db), root: tree.root, actors: tree.directory.list({ retired: true }),
+      sql, exec: makeSqlExec(tree.db), root: tree.root, actors: tree.directory.list({ retired: true }), retained: true,
       figures: (actorIds) => readAgentFigures(sql, actorIds),
       queued: (actorId) => this.byActor.get(actorId)?.session.pumping() ?? false,
       chat: (actorId) => this.byActor.get(actorId)?.session.chatReport() ?? null,

@@ -496,8 +496,9 @@ export abstract class ActorAgent extends Agent<Env> {
   protected abstract actorKind(): AgentKind;
   /** The workspace agent's newest answered turns, which a pending scaffold is replayed against. */
   abstract recordedTurns(limit?: number): Promise<RecordedTurn[]>;
-  /** The workspace's agents as the person's sidebar reads them; `agents.list` shows a subtree of it. */
-  abstract listWorkspaceAgents(): Promise<PanelAgent[]>;
+  /** The workspace's agents as the person's sidebar reads them, released hires too when `retained`: `agents.list` shows
+   *  a subtree of it. */
+  protected abstract workspaceAgents(retained: boolean): Promise<PanelAgent[]>;
 
   /** The workspace whose exec planes this actor rides; a facet actor overrides with its parent's. */
   protected workspaceName(): string { return this.name; }
@@ -865,7 +866,7 @@ export abstract class ActorAgent extends Agent<Env> {
         kind: 'task',
         ...event,
       }),
-      workspaceAgents: () => this.listWorkspaceAgents(),
+      workspaceAgents: () => this.workspaceAgents(true),
       treeOwner: 'main',
       events: this.eventLog,
     });

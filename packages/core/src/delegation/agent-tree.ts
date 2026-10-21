@@ -5,6 +5,7 @@
  * retired, each by its last activity, 32 rows unless asked for more, and what is retired only when asked.
  */
 import type { AgentActivity, PanelAgent } from '../read-models/workspace-agents';
+import type { EventLog } from '../events/hub/log';
 import { timeAgo } from '../utils/format';
 
 export const AGENT_TREE_LIMIT = 32;
@@ -51,6 +52,20 @@ export interface AgentTreeView {
     readonly notShown: number;
   };
   readonly note?: string;
+}
+
+/** The reports each child sent that no turn of its hirer's has read yet, by the child's name. */
+export function unreadReports(events: Pick<EventLog, 'pending'>): ReadonlyMap<string, number> {
+  const unread = new Map<string, number>();
+
+  // Every one: the default is a drain's batch, not a count.
+  for (const event of events.pending({ variant: 'subagent_report', limit: Number.MAX_SAFE_INTEGER })) {
+    if (event.variant === 'subagent_report' && (event.payload_visibility === 'full' || event.payload_visibility === 'redact')) {
+      unread.set(event.payload.from_subagent, (unread.get(event.payload.from_subagent) ?? 0) + 1);
+    }
+  }
+
+  return unread;
 }
 
 /** Dismissed, or a swarm worker whose search let it go. */
