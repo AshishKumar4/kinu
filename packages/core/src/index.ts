@@ -74,7 +74,7 @@ export {
 
 export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
 
-export { initActivationTable, listActivations, recordActivation, type Activation } from './identity/activations';
+export { ACTIVATION_SLOTS, initActivationTable, listActivations, recordActivation, type Activation } from './identity/activations';
 
 export { ChatHistoryEntrySchema } from './types/chat';
 

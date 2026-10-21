@@ -9,7 +9,7 @@
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
 /** The rows kept: the newest activation overwrites the slot its ordinal names, so the table never grows past this. */
-const ACTIVATION_SLOTS = 256;
+export const ACTIVATION_SLOTS = 256;
 
 export interface Activation {
   readonly ordinal: number;
