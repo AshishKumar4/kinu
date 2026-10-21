@@ -1,7 +1,7 @@
 /** One search full screen. `?run=<rootId>` names it; with no `run` it opens the newest. */
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { ArrowLeftIcon, GitForkIcon, TreeStructureIcon } from "@phosphor-icons/react";
 import { SwarmTree } from "@/components/swarm-tree";

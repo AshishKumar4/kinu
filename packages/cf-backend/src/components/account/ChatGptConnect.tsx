@@ -2,7 +2,7 @@
  *  the local address the sign-in lands on. */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Button, buttonClass } from "@/components/ui/Button";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Effect } from "effect";
 import { ArrowSquareOutIcon, DesktopTowerIcon, GlobeIcon } from "@phosphor-icons/react";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";

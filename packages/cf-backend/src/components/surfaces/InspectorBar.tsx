@@ -8,7 +8,7 @@ import {
   CaretDownIcon, CheckIcon, FolderSimpleIcon, GaugeIcon, GitDiffIcon, ListChecksIcon, TerminalWindowIcon, TreeStructureIcon,
   type Icon,
 } from "@phosphor-icons/react";
-import { Tooltip } from "@cloudflare/kumo";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { ACTIVITY_SURFACE, type SURFACES, type SurfaceKind } from "@kinu.run/core";
 import { AgentFaceIcon } from "@/components/Marks";
 
@@ -184,12 +184,12 @@ export function InspectorBar({ surface, pages, tools, choose, trailing }: {
 
             return (
               <li key={key}>
-                <Tooltip side="bottom" content={about === undefined ? counted : <><span>{counted}</span><span className="p-text-3">{about}</span></>}
-                  render={<button type="button" className="p-tool" onClick={() => choose(key)} aria-label={name}
-                    aria-current={current ? "true" : undefined} />}>
-                  <ToolIcon size={15} weight={current ? "fill" : "regular"} className="shrink-0" aria-hidden />
-                  {current && <span className="p-tool-name">{name}</span>}
-                  {count !== undefined && <span className="p-tool-count" data-accent={count.accent ? "" : undefined}>{count.value}</span>}
+                <Tooltip side="bottom" content={about === undefined ? counted : <><span>{counted}</span><span className="p-text-3">{about}</span></>}>
+                  <button type="button" className="p-tool" onClick={() => choose(key)} aria-label={name} aria-current={current ? "true" : undefined}>
+                    <ToolIcon size={15} weight={current ? "fill" : "regular"} className="shrink-0" aria-hidden />
+                    {current && <span className="p-tool-name">{name}</span>}
+                    {count !== undefined && <span className="p-tool-count" data-accent={count.accent ? "" : undefined}>{count.value}</span>}
+                  </button>
                 </Tooltip>
               </li>
             );

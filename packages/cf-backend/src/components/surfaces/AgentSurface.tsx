@@ -3,7 +3,8 @@
  * supports: a first day says so instead of drawing empty charts.
  */
 import { useCallback, useState } from "react";
-import { Badge, Loader } from "@cloudflare/kumo";
+import { Badge } from "@/components/ui/Badge";
+import { Loader } from "@/components/ui/Loader";
 import {
   BrainIcon, ChartLineUpIcon, EnvelopeSimpleIcon, GitBranchIcon, GlobeHemisphereWestIcon, IdentificationCardIcon, MagnifyingGlassIcon,
 } from "@phosphor-icons/react";
@@ -120,7 +121,7 @@ function Mail({ mail }: { mail: AgentMail }) {
 
   return (
     <Section id="agent-mail" title="Mail" icon={<EnvelopeSimpleIcon size={14} className="p-text-2" />}
-      badge={mail.unread > 0 ? <Badge variant="secondary">{mail.unread}</Badge> : undefined}>
+      badge={mail.unread > 0 ? <Badge>{mail.unread}</Badge> : undefined}>
       <div className="p-group">
         {mail.threads.map((thread) => (
           <Link key={thread.id} to={`/mail/${encodeURIComponent(thread.id)}`} className={mailRowCls(false)} data-agent-mail-thread={thread.id}>
@@ -161,7 +162,7 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
 
   return (
     <Section id="memory" title="Memory" icon={<BrainIcon size={14} className="p-text-2" />}
-      badge={facts.length + notes.length > 0 ? <Badge variant="secondary">{facts.length + notes.length}</Badge> : undefined}>
+      badge={facts.length + notes.length > 0 ? <Badge>{facts.length + notes.length}</Badge> : undefined}>
       <div className="space-y-3">
         <label data-focus-box className="flex h-8 items-center gap-2 rounded-lg border p-border p-fill px-2">
           <MagnifyingGlassIcon size={13} className="shrink-0 p-text-3" aria-hidden />
@@ -240,7 +241,7 @@ function Changing({ rpc, readMoves, version }: {
 
   return (
     <Section id="evolution" title="Evolution" icon={<GitBranchIcon size={14} className="p-text-2" />}
-      badge={version === null ? undefined : <Badge variant="secondary">v{version}</Badge>}>
+      badge={version === null ? undefined : <Badge>v{version}</Badge>}>
       <div className="space-y-5">
         {(view === null || resource.status === "error") && <ChangelogFailure resource={resource} reload={reload} />}
         {seenError !== null && <p className="t-meta p-warning">Could not mark these as seen: {seenError}</p>}

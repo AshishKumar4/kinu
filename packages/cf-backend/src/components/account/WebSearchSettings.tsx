@@ -5,7 +5,7 @@
  */
 import { useState, type ReactNode } from "react";
 import { Effect } from "effect";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { ArrowSquareOutIcon, XIcon } from "@phosphor-icons/react";
 import {

@@ -1,6 +1,6 @@
 /** A branch rendered through `MessageView`, the main chat's renderer; user affordances are omitted by not passing them. */
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import {
   BrainIcon, CaretDownIcon, CaretRightIcon, CheckCircleIcon, GitForkIcon,
   TreeStructureIcon, WarningCircleIcon,

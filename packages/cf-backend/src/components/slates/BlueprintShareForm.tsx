@@ -1,7 +1,7 @@
 /** The blueprint half of the share dialog; a fork calls its forker's own surface. The live half is `LiveShareForm`. */
 import { Effect } from 'effect';
 import { useCallback, useEffect, useState } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
 import * as v from "valibot";
 import { BlueprintInspectionSchema, SlateShareRecordSchema, blueprintPagePath, type BlueprintInspection, type SlateAnswer, type SlateShareRecord } from "@kinu.run/core";

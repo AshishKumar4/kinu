@@ -2,7 +2,7 @@
 import { Effect } from 'effect';
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { ArrowSquareOutIcon, GearSixIcon } from "@phosphor-icons/react";
 import { setDisplayName, type UserProfile } from "../lib/user-api";

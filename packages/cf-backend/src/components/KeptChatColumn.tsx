@@ -1,7 +1,7 @@
 /** A dismissed agent's read-only chat, paged by its actor id. */
 import { useMemo } from "react";
 import type { UIMessage } from "ai";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { KeptTranscript } from "@/components/KeptTranscript";

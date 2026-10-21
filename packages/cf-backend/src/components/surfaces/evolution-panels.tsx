@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import type { QualityDay } from "@kinu.run/core";
 import { toneFill, type StatusTone } from "@/components/ui/Status";
 import { LoadFailure } from "@/components/ui/LoadFailure";

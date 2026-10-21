@@ -1,4 +1,4 @@
-import { Badge } from '@cloudflare/kumo';
+import { Badge } from '@/components/ui/Badge';
 import { NotePencilIcon } from '@phosphor-icons/react';
 import type { OwnedPlan, WorkspaceWork } from '@kinu.run/core';
 import { planTitle } from '@kinu.run/core';
@@ -22,7 +22,7 @@ export function WorkPlans({ work, onOpen }: {
     <div data-work-plans>
       <Section id="work-plans" title="Plans"
         icon={<NotePencilIcon size={14} className="p-text-2" />}
-        badge={<Badge variant="secondary">{plans.length}</Badge>}>
+        badge={<Badge>{plans.length}</Badge>}>
         <div className="space-y-2">
           {plans.map((item) => <PlanCard key={keyOf(item)} item={item} onOpen={() => onOpen(item)} />)}
         </div>

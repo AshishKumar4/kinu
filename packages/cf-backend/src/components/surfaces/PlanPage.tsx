@@ -1,6 +1,6 @@
 /** A plan's own page in the inspector: its newest revision, reviewed where it is read. */
 import { lazy, Suspense } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import type { OwedOwnerIntent, OwnedPlan, WorkspaceWork } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import type { AsyncResource } from "@/hooks/use-async-resource";

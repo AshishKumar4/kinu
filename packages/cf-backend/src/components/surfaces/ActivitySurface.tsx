@@ -7,7 +7,7 @@ import {
   GaugeIcon, CurrencyDollarIcon, LightningIcon, WarningCircleIcon,
   ClockCounterClockwiseIcon,
 } from "@phosphor-icons/react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useAsyncResource, lastValue } from "@/hooks/use-async-resource";
 import { fmtTokens, fmtUsd, fmtPct, quotaWindowText, timeAgo } from "@kinu.run/core";

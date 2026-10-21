@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/Button";
 import { useEffect, useRef, type FormEvent, type ReactNode } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { composing } from "@/components/ui/form";
 import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl } from "@/components/Attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";

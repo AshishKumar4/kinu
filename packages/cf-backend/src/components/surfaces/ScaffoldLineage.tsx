@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import { useState, useCallback, type ReactNode } from "react";
-import { Badge, Loader } from "@cloudflare/kumo";
+import { Badge } from "@/components/ui/Badge";
+import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { PlayIcon } from "@phosphor-icons/react";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -99,7 +100,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
     <section className="space-y-2">
       <div className="flex items-baseline gap-2">
         <span className="t-meta p-text-3">Prompt versions</span>
-        <Badge variant="secondary">live v{currentVersion}</Badge>
+        <Badge>live v{currentVersion}</Badge>
       </div>
       {notice ?? (
         <div className="space-y-2">

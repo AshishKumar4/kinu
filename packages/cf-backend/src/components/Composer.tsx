@@ -5,7 +5,8 @@
 import { detach } from "@kinu.run/core/obs";
 import { Effect } from "effect";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { InputArea, Loader } from "@cloudflare/kumo";
+import { InputArea } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import {
   StopIcon, GitBranchIcon, ArrowBendUpRightIcon, ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon, CaretRightIcon, CaretUpIcon,
   CheckIcon, CopyIcon, WarningCircleIcon, InfoIcon, CheckCircleIcon, XIcon, type Icon,

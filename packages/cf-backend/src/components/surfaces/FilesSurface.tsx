@@ -5,7 +5,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent, type ReactNode,
 } from "react";
 import { useParams } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import {
   ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon, CaretRightIcon,
   DownloadSimpleIcon, EyeIcon, FileIcon, FolderIcon, FolderOpenIcon, HouseIcon, ListIcon,

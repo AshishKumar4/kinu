@@ -5,7 +5,7 @@ import { executorLabel, executorSortKey, isActiveExecutionDevice, keepUnchanged,
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { readFailureText } from "@kinu.run/core";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { lazyRoute } from "@/lazy-route";
 import type { NotesStore } from "./changes/notes-provider";
 import type { ChangesViewProps } from "./changes/ChangesView";

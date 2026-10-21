@@ -1,6 +1,7 @@
 /** The one model picker for every surface; groups follow server order (connected-provider preference). */
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Combobox, Select } from "@cloudflare/kumo";
+import { Combobox, Select } from "@cloudflare/kumo";
+import { Badge } from "@/components/ui/Badge";
 import { ArrowsClockwiseIcon, BrainIcon, EyeIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import {
   formatContextWindow, formatModelSpec, isReasoningEffort, modelTestText, offeredReasoningEfforts, parseModelSpec, providerName,
@@ -448,7 +449,7 @@ function ModelPickerItem({ model, unavailable, tests }: {
 
             return <Icon key={cap} size={13} className="p-text-3" aria-label={words}><title>{words}</title></Icon>;
           })}
-          {context && <Badge variant="secondary">{context}</Badge>}
+          {context && <Badge>{context}</Badge>}
           {tests.enabled && <TestButton spec={model.spec} tests={tests} inMenu />}
         </span>
       </span>

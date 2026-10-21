@@ -2,7 +2,7 @@
 import { Effect } from 'effect';
 import { Button } from "@/components/ui/Button";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { CloudArrowUpIcon } from "@phosphor-icons/react";
 import {
   DEFAULT_INSTANCE_NAME, DeployFrameSchema, FACT_OWNER_EMAIL,

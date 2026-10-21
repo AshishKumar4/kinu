@@ -10,7 +10,7 @@ import { settingsPath } from "./components/SettingsRail";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { lastValue } from "./hooks/use-async-resource";
 import { lazyRoute } from "./lazy-route";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 
 // Split routes go through `lazyRoute`, not `lazy`, to recover from a chunk gone stale across a deploy.
 

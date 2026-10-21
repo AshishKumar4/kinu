@@ -2,7 +2,7 @@ import { askedBy } from "@/components/QuestionCard";
 import { Effect, Cause } from 'effect';
 import { createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type ReactNode, type RefObject } from "react";
 import { useParams, useLocation, Link, Navigate, useMatch, useNavigate, useSearchParams } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import {
   ArrowsClockwiseIcon, GitBranchIcon, ListIcon,

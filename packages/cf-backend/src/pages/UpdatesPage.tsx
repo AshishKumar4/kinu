@@ -6,7 +6,7 @@ import { showing, detach } from "@kinu.run/core/obs";
 import { Button } from "@/components/ui/Button";
 import { Effect } from "effect";
 import { useCallback, useEffect, useState } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { ArrowUpIcon } from "@phosphor-icons/react";
 import {
   DeploySnapshotSchema, UpdateOfferSchema,

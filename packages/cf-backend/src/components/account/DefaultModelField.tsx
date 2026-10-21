@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { useCallback, useState } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import type { ProfileCatalogEnvelope } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { ModelPicker } from "@/components/ModelPicker";

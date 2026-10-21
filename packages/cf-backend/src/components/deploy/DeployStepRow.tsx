@@ -1,5 +1,5 @@
 /** One deploy ledger row, shared by the guided page and the Updates page. */
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import {
   ArrowClockwiseIcon, CheckCircleIcon, CircleIcon, WarningCircleIcon,

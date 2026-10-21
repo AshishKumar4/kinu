@@ -1,7 +1,7 @@
 /** A control-plane read has five outcomes: value, not operator, stale sign-in, no control plane, failure. */
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { Loader } from '@cloudflare/kumo';
+import { Loader } from '@/components/ui/Loader';
 import { ArrowClockwiseIcon, LockKeyIcon, WarningIcon } from '@phosphor-icons/react';
 import type { ControlAnswer } from '../../lib/control-api';
 

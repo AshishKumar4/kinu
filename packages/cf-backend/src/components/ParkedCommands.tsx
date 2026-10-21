@@ -6,7 +6,7 @@
  */
 import { Cause, Effect } from "effect";
 import { useCallback, useState, useSyncExternalStore } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { revealMisrepresenting, timeAgo, type Omitted, type PendingAction } from "@kinu.run/core";
 import { detach, renderThrownChain, settle } from "@kinu.run/core/obs";

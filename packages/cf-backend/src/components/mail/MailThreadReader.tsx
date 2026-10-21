@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { ArrowSquareOutIcon, CaretLeftIcon, ShieldWarningIcon, TrashIcon, TrayIcon } from "@phosphor-icons/react";
 import type { MailBox, MailThreadSummary, MailThreadView } from "@kinu.run/core";
 import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";

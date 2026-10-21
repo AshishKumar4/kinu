@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import { useState, useCallback } from "react";
-import { Badge, Loader } from "@cloudflare/kumo";
+import { Badge } from "@/components/ui/Badge";
+import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import {
   LightningIcon, CheckIcon,
@@ -55,7 +56,7 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: WorkspaceRpc; wo
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <LightningIcon size={16} className="p-accent" />
         <h2 className="t-label p-text">Automations</h2>
-        {triggers && <Badge variant="secondary">{active}/{triggers.length} active</Badge>}
+        {triggers && <Badge>{active}/{triggers.length} active</Badge>}
         {nextFire && <span className="t-meta p-text-3 tabular-nums">next {new Date(nextFire).toLocaleString()}</span>}
         <Button size="sm" variant="secondary" className="ml-auto" icon={<PlusIcon size={12} />}
           onClick={() => { setShowCreate(true); setCreated(null); }}>New webhook</Button>

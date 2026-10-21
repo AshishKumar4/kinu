@@ -3,7 +3,7 @@ import { Cause, Effect } from 'effect';
 import { startTransition, useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { deviceHistoryNote, summarizeRestorePlan, type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan } from "@kinu.run/core";
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
 import { Modal } from "@/components/ui/Modal";

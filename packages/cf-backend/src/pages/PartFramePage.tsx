@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
 import * as v from "valibot";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { JsonValueSchema, safeJsonParse, type PartRunAnswer } from "@kinu.run/core";
 import { detach } from "@kinu.run/core/obs";
 import { PartOutsideItsSlate, PartView, SealedContent, shownMarkup } from "@/components/sharing/PartView";

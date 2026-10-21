@@ -1,6 +1,6 @@
 /** Text rides the viewer RPC; images, PDFs and saves (PUT) ride the raw-bytes route. */
 import { useCallback, useEffect, useState } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import {
   CheckIcon, DownloadSimpleIcon, FileIcon, PencilSimpleIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";

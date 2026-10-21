@@ -4,7 +4,8 @@
  * `listPendingActions` is host-owned and never a slate data source.
  */
 import { useCallback, useMemo } from "react";
-import { Badge, Loader } from "@cloudflare/kumo";
+import { Badge } from "@/components/ui/Badge";
+import { Loader } from "@/components/ui/Loader";
 import {
   ClockIcon, PulseIcon, WarningCircleIcon,
   CaretRightIcon, ShieldWarningIcon,
@@ -121,7 +122,7 @@ function NeedsYou({ pendingActions, onOpenAsk, onOpenSurface, onOpenPlan }: {
     <div className="rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] bg-[var(--c-selected)] px-[18px] pt-2 pb-3 [&_.p-label]:!text-[var(--c-accent-fg)]">
       <Section id="work-needs-you" title="Needs you"
         icon={<WarningCircleIcon size={14} className="p-warning" />}
-        badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
+        badge={<Badge>{pendingActions.length}</Badge>}>
         <div className="divide-y divide-dashed divide-[var(--c-dash)]">
           {pendingActions.map((action) => (
             <PendingRow key={action.id} action={action} onOpenSurface={onOpenSurface} onOpen={opener(action)} />
@@ -211,7 +212,7 @@ function WorkJournal({ journal, rpc, onRefreshJobs, onOpenOwner }: {
   return (
     <Section id="work-journal" title="Journal"
       icon={<ClockIcon size={14} className="p-text-2" />}
-      badge={<Badge variant="secondary">{journal.length}</Badge>}>
+      badge={<Badge>{journal.length}</Badge>}>
       <div className="space-y-4">
         {days.map(({ label, rows }) => (
           <div key={label} className="space-y-2">

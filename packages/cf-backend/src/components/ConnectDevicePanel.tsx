@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/Button";
 import { Effect } from "effect";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { DesktopTowerIcon, PlugIcon, WarningIcon } from "@phosphor-icons/react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected } from "@kinu.run/core";
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { registerDevice, type UserDevice } from "@/lib/user-api";

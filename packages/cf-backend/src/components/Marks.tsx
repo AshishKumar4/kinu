@@ -1,7 +1,7 @@
 import type { IconWeight } from "@phosphor-icons/react";
 import { ILLUSTRATION } from "@kinu.run/core";
 import { useId, type CSSProperties } from "react";
-import { Tooltip } from "@cloudflare/kumo";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { hueStops, rankHue, type AgentActivity } from "@kinu.run/core";
 
 function hashOf(seed: string): number {
@@ -211,9 +211,8 @@ export function ChatMascot({ seed, colour, activity, size = 16 }: { seed: string
   if (status === undefined) return <span className="p-mascot" data-face={face} data-accessory={accessory ?? undefined} style={style}>{tile}</span>;
 
   return (
-    <Tooltip content={status} side="bottom"
-      render={<span className="p-mascot" data-face={face} data-accessory={accessory ?? undefined} style={style} role="img" aria-label={status} />}>
-      {tile}
+    <Tooltip content={status} side="bottom">
+      <span className="p-mascot" data-face={face} data-accessory={accessory ?? undefined} style={style} role="img" aria-label={status}>{tile}</span>
     </Tooltip>
   );
 }

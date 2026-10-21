@@ -2,7 +2,7 @@ import { Effect, Cause } from 'effect';
 import { SaveBar } from "@/components/ui/SaveBar";
 import { startTransition, useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { GearSixIcon, KeyIcon, TrashIcon } from "@phosphor-icons/react";
 import { Page } from "@/components/ui/PageHeader";

@@ -1,5 +1,5 @@
 /** Read-only: the agent re-reads this plan every step, so an owner edit would swap it under a running turn. */
-import { Badge } from "@cloudflare/kumo";
+import { Badge } from "@/components/ui/Badge";
 import { CircleIcon, CircleDashedIcon, CheckCircleIcon, ProhibitIcon, SparkleIcon } from "@phosphor-icons/react";
 import { taskSettled, type AgentTask, type AgentTaskTree, type PanelAgent, type TaskStatus, type WorkspaceWorkOwner } from "@kinu.run/core";
 import { toneInk } from "@/components/ui/Status";
@@ -73,7 +73,7 @@ export function PlanProgress({ tasks }: { tasks: AgentTaskTree[] }) {
   return (
     <div className="flex items-center gap-2">
       <span className="t-status p-text-2">{remaining.length} of {counted} still to do</span>
-      {active.length > 0 && <Badge variant="secondary">{active.length} active</Badge>}
+      {active.length > 0 && <Badge>{active.length} active</Badge>}
     </div>
   );
 }

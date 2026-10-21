@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { PlugsConnectedIcon, PuzzlePieceIcon, TrashIcon } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";

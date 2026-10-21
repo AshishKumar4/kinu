@@ -9,7 +9,7 @@ import { showing, detach } from "@kinu.run/core/obs";
 import { Effect } from "effect";
 import { useEffect, useState, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { FileIcon, FolderIcon, GitBranchIcon, LinkIcon, WarningIcon, type Icon } from "@phosphor-icons/react";
 import type { BlueprintView } from "@kinu.run/core";
 import { KinuLogo } from "@/components/ui/KinuLogo";
