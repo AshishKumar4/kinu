@@ -1,9 +1,8 @@
 /** One-click MCP preset rows; a row's state is the account's server row tagged with its `preset_id`. */
 import { Effect } from 'effect';
-import { useCallback, useRef, useState, type ReactNode } from "react";
-import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
+import { useState, type ReactNode } from "react";
 import {
-  ArrowSquareOutIcon, CaretDownIcon, PlusIcon, TrashIcon, XIcon,
+  ArrowSquareOutIcon, PlusIcon, TrashIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
   MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId, type McpServerSummary,
@@ -14,12 +13,10 @@ import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
 import { PluginRow, PLUGIN_ACTION } from "@/components/plugins/PluginRow";
-import { StatusDot } from "@/components/ui/Status";
+import { Status } from "@/components/ui/Status";
+import { RowMenu, type RowMenuItem } from "@/components/ui/RowMenu";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
-
-/** The preset's own action, shaped as a status pill so it sits where a connected server's status does. */
-const PRESET_PILL = "flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 p-t-status p-text-3";
 
 const PRESET_MARK: Record<McpPresetId, BrandName> = {
   github: "github",
@@ -34,41 +31,38 @@ export function presetBrand(presetId: string | null): BrandName | undefined {
   return preset === undefined ? undefined : PRESET_MARK[preset.id];
 }
 
-/** A preset card's own words for a server's state; the tone is every view's (`mcpServerStatus`). */
-function PresetMenu({ preset, status, onRemove }: {
-  preset: McpPreset;
-  status: McpServerSummary['status'];
-  onRemove: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const menu = useRef<HTMLDivElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useCloseOnOutsideClick(open, menu, close);
+/** The host a server answers on; null for a URL that does not parse. */
+function hostOf(url: string): string | null {
+  return URL.canParse(url) ? new URL(url).hostname : null;
+}
 
-  const item = "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm p-card-hover";
+/** The catalog's preset a server is: its tag, else the preset whose server it answers on (GitHub's MCP added by URL). */
+export function presetOf(server: McpServerSummary): McpPreset | undefined {
+  if (server.presetId !== null) return mcpPresetById(server.presetId);
+  const host = hostOf(server.serverUrl);
+
+  return host === null ? undefined : MCP_PRESETS.find((preset) => hostOf(preset.serverUrl) === host);
+}
+
+/** Services the catalog has no preset for, by the domain their MCP server answers on. */
+const HOST_BRANDS: readonly (readonly [string, BrandName])[] = [["linear.app", "linear"], ["notion.com", "notion"]];
+
+/** A custom server's brand, when its host is a known service's or under it. */
+export function hostBrand(server: McpServerSummary): BrandName | undefined {
+  const host = hostOf(server.serverUrl);
+
+  return host === null ? undefined : HOST_BRANDS.find(([domain]) => host === domain || host.endsWith(`.${domain}`))?.[1];
+}
+
+/** A connected row's end, the same on every row: its plain status, then what it offers in ⋯. */
+export function ConnectedEnd({ status, name, items }: { status: McpServerSummary['status']; name: string; items: readonly RowMenuItem[] }) {
+  const shown = mcpServerStatus(status);
 
   return (
-    <div ref={menu} className="relative shrink-0">
-      <button type="button" data-plugin-menu aria-haspopup="menu" aria-expanded={open}
-        aria-label={`${preset.title} options`} onClick={() => setOpen((value) => !value)}
-        className={`${PRESET_PILL} transition-colors hover:bg-[var(--c-elevated)] hover:p-text`}>
-        <StatusDot tone={mcpServerStatus(status).tone} />
-        {mcpServerStatus(status).label}
-        <CaretDownIcon size={9} />
-      </button>
-      {open && (
-        <div role="menu" className="absolute right-0 z-10 mt-1 w-40 p-card border p-border p-1.5 p-shadow-menu">
-          <a role="menuitem" href={preset.docsUrl} target="_blank" rel="noopener noreferrer"
-            className={item} onClick={() => setOpen(false)}>
-            <ArrowSquareOutIcon size={14} /> Docs
-          </a>
-          <button type="button" role="menuitem" className={`${item} hover:p-danger`}
-            onClick={() => { setOpen(false); onRemove(); }}>
-            <TrashIcon size={14} /> Remove
-          </button>
-        </div>
-      )}
-    </div>
+    <span className="flex shrink-0 items-center gap-2">
+      <Status tone={shown.tone}>{shown.label}</Status>
+      <RowMenu label={`More for ${name}`} items={items} />
+    </span>
   );
 }
 
@@ -138,7 +132,12 @@ export function PresetRow({ preset, server, appConfigured, onChanged }: {
   let trailing: ReactNode;
 
   if (server !== undefined) {
-    trailing = <PresetMenu preset={preset} status={server.status} onRemove={remove} />;
+    trailing = (
+      <ConnectedEnd status={server.status} name={preset.title} items={[
+        { label: "Docs", icon: ArrowSquareOutIcon, run: () => { window.open(preset.docsUrl, "_blank", "noopener,noreferrer"); } },
+        { label: "Remove", icon: TrashIcon, run: remove, danger: true },
+      ]} />
+    );
   } else if (asking) {
     trailing = (
       <button type="button" data-plugin-cancel onClick={() => setOpenToken(false)}
@@ -197,7 +196,7 @@ export type PresetAvailability = readonly { id: string; appConfigured: boolean }
 /** The catalog's presets the account can still add: not added yet, and offered (its app, or a token fallback). */
 export function addablePresets(servers: readonly McpServerSummary[], availability: PresetAvailability): readonly McpPreset[] {
   return MCP_PRESETS.filter((preset) => {
-    if (servers.some((s) => s.presetId === preset.id)) return false;
+    if (servers.some((s) => presetOf(s)?.id === preset.id)) return false;
 
     const appConfigured = availability?.find((a) => a.id === preset.id)?.appConfigured;
 
@@ -219,7 +218,7 @@ export function McpPresetCards({ servers, availability, onChanged, unadded = fal
   return (
     <>
       {MCP_PRESETS.map((preset) => {
-        const server = servers.find((s) => s.presetId === preset.id);
+        const server = servers.find((s) => presetOf(s)?.id === preset.id);
         const appConfigured = availability?.find((a) => a.id === preset.id)?.appConfigured;
 
         if (!addable.includes(preset) && (server === undefined || unadded)) return null;

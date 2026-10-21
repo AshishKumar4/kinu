@@ -281,13 +281,13 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
     authUrl: null, error: null, presetId: null,
   },
   {
-    id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
+    id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.app/sse",
     transport: "sse", status: "authenticating", toolsCount: 0,
     allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
     error: null, presetId: null,
   },
   {
-    id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.example/sse",
+    id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.com/sse",
     transport: "sse", status: "failed", toolsCount: 0, allowedTools: null,
     authUrl: null, error: "The server refused the connection.", presetId: null,
   },

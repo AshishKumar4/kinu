@@ -239,7 +239,7 @@ export const THEME_TOKENS: Readonly<Record<ThemeName, Readonly<Record<Mode, Toke
 export type RadiusRole = '--r-control' | '--r-row' | '--r-card' | '--r-overlay';
 
 const RADII = {
-  '--r-control': '6px',
+  '--r-control': '8px',
   '--r-row': '8px',
   '--r-card': '14px',
   '--r-overlay': '14px',

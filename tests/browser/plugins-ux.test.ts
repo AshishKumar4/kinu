@@ -305,8 +305,8 @@ describe('MCP presets', () => {
 
             // The row grammar, at this width: the endpoint is gone from every
             // row, a preset's and a server's alike, and each row carries one
-            // trailing control, which is the preset rows' add or menu button
-            // and nobody else's.
+            // control: a connected row's ⋯ after its status, an addable
+            // preset's add.
             const drawn = await drawnRows(plugins);
 
             expect(drawn.filter((row) => row.preset).map((row) => row.name))
@@ -314,16 +314,17 @@ describe('MCP presets', () => {
             // Services only, skills being in the Drive: what the account holds,
             // then what it can add. The failed server is among them, so its line
             // (a failure, where the endpoint used to be) is under the same rule.
-            expect(drawn.map((row) => row.name)).toEqual(['GitHub', 'Cloudflare', 'linear', 'notion', 'Gmail']);
+            // A server of its own on a known service's host takes that service's mark and name.
+            expect(drawn.map((row) => row.name)).toEqual(['GitHub', 'Cloudflare', 'Linear', 'Notion', 'Gmail']);
 
             for (const row of drawn) {
               expect(row.text).not.toContain('http');
-              expect(row.buttons).toBe(row.preset ? 1 : 0);
+              expect(row.buttons).toBe(1);
             }
 
             // What the account holds, once each: both connected presets and both
             // servers of its own; the catalog's last is under Add alone.
-            expect(await connectedList(plugins)).toEqual(['GitHub', 'Cloudflare', 'linear', 'notion']);
+            expect(await connectedList(plugins)).toEqual(['GitHub', 'Cloudflare', 'Linear', 'Notion']);
             expect(await plugins.$$eval('section[aria-label="Add"] [data-plugin]', (nodes) => nodes.map((node) => node.getAttribute('data-plugin')))).toEqual(['Gmail']);
             
           } finally {

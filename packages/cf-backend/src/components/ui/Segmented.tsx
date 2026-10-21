@@ -25,7 +25,7 @@ export function Segmented<T extends string>({ label, segments, value, onChange }
       ref={strip}
       role="tablist"
       aria-label={label}
-      className="flex min-w-0 items-center gap-0.5 rounded-lg p-recessed p-0.5"
+      className="flex min-w-0 items-center gap-0.5 rounded-[var(--r-control)] p-recessed p-0.5"
       onBlur={(event) => {
         if (!(event.relatedTarget instanceof Node) || !strip.current?.contains(event.relatedTarget)) setFocusId(null);
       }}

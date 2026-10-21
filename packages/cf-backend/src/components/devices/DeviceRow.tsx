@@ -10,7 +10,7 @@ import {
   type DeviceConsent, type UserDevice,
 } from "@/lib/user-api";
 import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
-import { describeGpuNodes, effectiveDeviceMode, type DeviceMode } from "@kinu.run/core";
+import { describeGpuNodes, effectiveDeviceMode } from "@kinu.run/core";
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
 import { composing, inputCls } from "@/components/ui/form";
 import { PluginTile } from "@/components/plugins/PluginRow";
@@ -18,13 +18,6 @@ import { RowMenu } from "@/components/ui/RowMenu";
 import { Switch } from "@/components/ui/Switch";
 import { Status } from "@/components/ui/Status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
-
-/** The hub enforces the same `effectiveDeviceMode`, so this word matches what it does. */
-const SANDBOX_WORD = {
-  sandboxed: "Sandboxed",
-  raw: "Sandbox off",
-  files_only: "Files only",
-} satisfies Record<DeviceMode, string>;
 
 const WHOLE_MACHINE_COPY = "Linked from /, so the agent has this whole machine: every file you can open, and its commands "
   + "run as you. The Sandbox switch applies again once you run kinu connect in a narrower folder.";
@@ -153,7 +146,9 @@ export function DeviceRow({
     onDeviceChanged();
   });
 
-  const where = [device.hostname === null ? null : `${device.hostname}${device.os ? ` · ${device.os}` : ""}`, SANDBOX_WORD[mode]];
+  // The switch says whether it is sandboxed; the meta says what the machine is, its GPU included when a sandbox passes one.
+  const gpu = mode === "sandboxed" && sandbox.gpu.length > 0 ? describeGpuNodes(sandbox.gpu) : null;
+  const where = [device.hostname, device.os].filter((part) => part !== null && part !== "").join(" · ");
 
   // A row as Plugins draws a connected server (design review 2026-10-20): its tile, name, one meta line, its status and
   // its controls; what it reaches is under it.
@@ -186,7 +181,8 @@ export function DeviceRow({
             />
           )}
           <div className="truncate p-meta p-text-3" data-sandbox-mode={mode} data-whole-machine={device.wholeMachine || undefined}>
-            {where.filter((part) => part !== null).join(" · ")}
+            {where}
+            {gpu !== null && <>{where === "" ? "" : " · "}<span data-device-gpu>{gpu}</span></>}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-3">
@@ -194,8 +190,12 @@ export function DeviceRow({
             ? <span role="status" data-device-update="required"><Status tone="warning">{DEVICE_UPDATE_COPY.required}</Status></span>
             : <Status tone={device.connected ? "success" : "neutral"}>{device.connected ? "Connected" : "Offline"}</Status>}
           <UpdateBadge device={device} />
-          <Switch on={sandboxOn} label={`Sandbox on ${device.label}`} disabled={switching || device.wholeMachine}
-            onChange={() => detach(sandboxOn ? Effect.sync(sandboxOff) : sandboxOnAgain())} />
+          {/* Named beside it, so it reads as the sandbox and not as the connection the status before it names. */}
+          <span className="flex items-center gap-2">
+            <span className="p-row-text font-medium p-text-2" aria-hidden>Sandbox</span>
+            <Switch on={sandboxOn} label={`Sandbox on ${device.label}`} disabled={switching || device.wholeMachine}
+              onChange={() => detach(sandboxOn ? Effect.sync(sandboxOff) : sandboxOnAgain())} />
+          </span>
           <RowMenu label={`${device.label} options`} items={[
             { label: "Rename", title: "Rename this device", icon: PencilSimpleIcon, run: () => setEditing(device.label) },
             { label: "Revoke", title: "Revoke device", icon: TrashIcon, run: onRevoke, danger: true },
@@ -206,27 +206,22 @@ export function DeviceRow({
         {device.update === "refused" && <p>Update to {device.servedVersion} refused: {device.updateRefusal}</p>}
         {device.wholeMachine && <p>{WHOLE_MACHINE_COPY}</p>}
         {cannotSandbox && <p><Status tone="warning">Cannot sandbox</Status></p>}
-        {mode === "sandboxed" && <p>GPU: {describeGpuNodes(sandbox.gpu)}</p>}
-        <div className="flex flex-wrap items-center gap-1.5">
-          {grants.length === 0 ? (
-            <span>No workspace uses it yet.</span>
-          ) : (
-            <>
-              <span>Workspace access:</span>
-              {grants.map((g) => (
-                <span key={g.agentName} className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 p-fill">
-                  {g.agentName}
-                  <span className={g.policy === "allow" ? "p-text-3" : "p-danger"}>{g.policy === "allow" ? "Allowed" : "Denied"}</span>
-                  <button onClick={() => detach(dropGrant(g.agentName))}
-                    title={g.policy === "allow" ? `Revoke ${g.agentName}'s access` : `Remove the saved denial for ${g.agentName}`}
-                    className="p-text-3 hover:p-danger">
-                    <XIcon size={10} />
-                  </button>
-                </span>
-              ))}
-            </>
-          )}
-        </div>
+        {grants.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span>Workspace access:</span>
+            {grants.map((g) => (
+              <span key={g.agentName} className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 p-fill">
+                {g.agentName}
+                <span className={g.policy === "allow" ? "p-text-3" : "p-danger"}>{g.policy === "allow" ? "Allowed" : "Denied"}</span>
+                <button onClick={() => detach(dropGrant(g.agentName))}
+                  title={g.policy === "allow" ? `Revoke ${g.agentName}'s access` : `Remove the saved denial for ${g.agentName}`}
+                  className="p-text-3 hover:p-danger">
+                  <XIcon size={10} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
       </div>
       {dialog}
     </div>

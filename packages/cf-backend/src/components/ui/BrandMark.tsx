@@ -3,7 +3,7 @@ import {
   siAnthropic, siCloudflare, siDeepmind, siDeepseek, siGithub, siGoogle,
   siGooglecloud, siHuggingface, siKimi, siMetaai, siMinimax, siMistralai,
   siMoonshotai, siNvidia, siOllama, siOpenrouter, siPerplexity, siQwen,
-  siVercel,
+  siVercel, siLinear, siNotion,
 } from "simple-icons";
 
 interface BrandIcon {
@@ -40,11 +40,13 @@ const BRANDS = {
   minimax: { icon: siMinimax },
   mistralai: { icon: siMistralai },
   kimi: { icon: siKimi, theme: true },
+  linear: { icon: siLinear },
   moonshotai: { icon: siMoonshotai, theme: true },
   openai: { icon: siOpenai, theme: true },
   opencode: { icon: siOpencode, theme: true },
   ollama: { icon: siOllama, theme: true },
   openrouter: { icon: siOpenrouter },
+  notion: { icon: siNotion, theme: true },
   nvidia: { icon: siNvidia },
   perplexity: { icon: siPerplexity },
   qwen: { icon: siQwen },
@@ -52,6 +54,11 @@ const BRANDS = {
 } satisfies Record<string, { icon: BrandIcon; ink?: boolean; theme?: boolean }>;
 
 export type BrandName = keyof typeof BRANDS;
+
+/** The brand's own name, as its mark's title spells it ("Linear"). */
+export function brandTitle(brand: BrandName): string {
+  return BRANDS[brand].icon.title;
+}
 
 /** Undefined when no mark is held. */
 export function providerBrand(provider: string): BrandName | undefined {

@@ -1096,7 +1096,7 @@ describe('a machine\'s Sandbox switch on the Devices page', () => {
 
       const row = () => page.$eval(workstation, (button) => ({
         on: button.getAttribute('aria-checked'),
-        gpu: (button.closest('li, [data-device]') ?? button.parentElement?.parentElement?.parentElement)?.textContent?.includes('GPU:') ?? false,
+        gpu: button.closest('[data-device]')?.querySelector('[data-device-gpu]') !== null,
       }));
 
       try {

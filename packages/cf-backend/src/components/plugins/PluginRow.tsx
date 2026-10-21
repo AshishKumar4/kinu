@@ -16,7 +16,7 @@ export function PluginTile({ icon: Icon }: { icon: ComponentType<{ size?: number
   );
 }
 
-export const PLUGIN_ACTION = "flex size-8 shrink-0 items-center justify-center rounded-lg p-text-3 transition-colors hover:bg-[var(--c-elevated)] hover:p-text disabled:opacity-40 disabled:hover:bg-transparent";
+export const PLUGIN_ACTION = "flex size-8 shrink-0 items-center justify-center rounded-[var(--r-control)] p-text-3 transition-colors hover:bg-[var(--c-elevated)] hover:p-text disabled:opacity-40 disabled:hover:bg-transparent";
 
 export function PluginRow({ tile, name, description, trailing, source, state, below }: {
   tile: ReactNode;

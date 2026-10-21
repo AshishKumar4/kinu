@@ -1,16 +1,18 @@
 import { useState, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { Button } from "@/components/ui/Button";
-import { PlugsConnectedIcon, PuzzlePieceIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, mcpPresetById } from "@kinu.run/core";
+import { PlugsConnectedIcon, PuzzlePieceIcon, TrashIcon } from "@phosphor-icons/react";
+import { APP_ROUTES } from "@kinu.run/core";
 import type { McpServerSummary } from "@kinu.run/core";
 import { mapResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import { useMcpServers } from "@/hooks/use-mcp-servers";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
-import { Status } from "@/components/ui/Status";
+import { BrandMark, brandTitle } from "@/components/ui/BrandMark";
+import { useConfirmation } from "@/components/ui/ConfirmDialog";
+import { removeMcpServer } from "@/lib/user-api";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { PluginRow, PluginTile } from "@/components/plugins/PluginRow";
-import { addablePresets, McpPresetCards, PresetRow, type PresetAvailability } from "@/components/plugins/McpPresetCards";
+import { addablePresets, ConnectedEnd, hostBrand, McpPresetCards, presetOf, PresetRow, type PresetAvailability } from "@/components/plugins/McpPresetCards";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
 import { Page } from "@/components/ui/PageHeader";
 
@@ -22,10 +24,32 @@ function serverLine(server: McpServerSummary): string {
   return server.toolsCount === 1 ? '1 tool' : `${String(server.toolsCount)} tools`;
 }
 
-/** Everything the account holds, in the order it added it, each once with its status; a catalog server keeps its row. */
+/** A server of the account's own: a known service's mark and name by its host, else the plug; Remove in ⋯. */
+function CustomServerRow({ server, onChanged }: { server: McpServerSummary; onChanged: () => void }) {
+  const { ask, dialog } = useConfirmation();
+  const brand = hostBrand(server);
+  const name = brand === undefined ? server.name : brandTitle(brand);
+
+  const remove = () => ask({
+    title: `Remove "${name}"?`, body: "All workspaces will lose access to its tools.", action: "Remove", failed: "Could not remove it",
+    run: async () => { await removeMcpServer(server.id); onChanged(); },
+  });
+
+  return (
+    <>
+      {dialog}
+      <PluginRow name={name} description={serverLine(server)} state={mcpServerStatus(server.status).label}
+        tile={brand === undefined ? <PluginTile icon={PlugsConnectedIcon} /> : <BrandMark brand={brand} size={22} />}
+        trailing={<ConnectedEnd status={server.status} name={name} items={[{ label: "Remove", icon: TrashIcon, run: remove, danger: true }]} />} />
+    </>
+  );
+}
+
+/** Everything the account holds, in the order it added it, each once with its status; a catalog server keeps its row,
+ *  one added by its URL included. */
 function connectedRows(servers: readonly McpServerSummary[], availability: PresetAvailability, onChanged: () => void): ReactNode[] {
   return servers.map((server) => {
-    const preset = server.presetId === null ? undefined : mcpPresetById(server.presetId);
+    const preset = presetOf(server);
 
     if (preset !== undefined) {
       const appConfigured = availability?.find((a) => a.id === preset.id)?.appConfigured;
@@ -33,13 +57,7 @@ function connectedRows(servers: readonly McpServerSummary[], availability: Prese
       return <PresetRow key={server.id} preset={preset} server={server} appConfigured={appConfigured} onChanged={onChanged} />;
     }
 
-    const status = mcpServerStatus(server.status);
-
-    return (
-      <PluginRow key={server.id} name={server.name} description={serverLine(server)}
-        state={status.label} tile={<PluginTile icon={PlugsConnectedIcon} />}
-        trailing={<Status tone={status.tone}>{status.label}</Status>} />
-    );
+    return <CustomServerRow key={server.id} server={server} onChanged={onChanged} />;
   });
 }
 
@@ -71,7 +89,7 @@ export default function PluginsPage() {
 
   return (
     <>
-      <Page icon={<PuzzlePieceIcon size={22} />} title="Plugins" actions={<Button variant="secondary" size="sm" onClick={() => setManaging(true)}>Manage</Button>}>
+      <Page icon={<PuzzlePieceIcon size={22} />} title="Plugins" actions={<Button variant="secondary" onClick={() => setManaging(true)}>Manage</Button>}>
         <PluginSection title="Connected" onRetry={servers.reload} what="your MCP servers"
           rows={mapResource(servers.resource, (rows) => connectedRows(rows, availability, servers.reload))} />
 
