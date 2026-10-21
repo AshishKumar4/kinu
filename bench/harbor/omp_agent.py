@@ -37,20 +37,22 @@ INSTALL_PATH = AGENT_DIR / "omp"
 CREDENTIAL_PATH = AGENT_DIR / "credential.json"
 HOME_PATH = AGENT_DIR / "home"
 LOG_NAME = "omp.jsonl"
+
+#: Every model's run is cut at 45 minutes, for parity (Main, 2026-10-21: Argon's hand-run reviews took 18 to 35), and a
+#: login is taken only when its access token outlives that. kinu-envs' review tasks give the agent phase the same 45.
+RUN_LIMIT_SEC = 45 * 60
 STDERR_LOG_NAME = "omp.stderr"
 
 class OmpAgent(BaseInstalledAgent):
     """OMP in print mode, one session, every tool call approved: the model is the variable."""
 
-    def __init__(self, *args: Any, omp_binary: str | None = None, max_time: str = "55m", agent_timeout_sec: float | None = None, **kwargs: Any) -> None:
+    def __init__(self, *args: Any, omp_binary: str | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
-        self._timeout_ms = int((agent_timeout_sec or 3600) * 1000)
 
         if not self.model_name:
             raise ValueError("name the model with -m, as OMP names it (e.g. openai-codex/gpt-6.1-sol)")
 
         self._binary = Path(omp_binary).expanduser() if omp_binary else Path.home() / ".bun" / "bin" / "omp"
-        self._max_time = max_time
         self._provider = provider_of(self.model_name)
 
     @staticmethod
@@ -72,7 +74,7 @@ class OmpAgent(BaseInstalledAgent):
 
     async def _place_credential(self, environment: BaseEnvironment) -> None:
         """The login as a 0600 file the agent user owns, and the empty home it is imported into."""
-        grant = grant_from_store(OMP_STORE, self._provider, self._timeout_ms)
+        grant = grant_from_store(OMP_STORE, self._provider, RUN_LIMIT_SEC * 1000)
         uid = (await self.exec_as_agent(environment, command="id -u")).stdout.strip()
 
         if not uid.isdigit():
@@ -99,7 +101,7 @@ class OmpAgent(BaseInstalledAgent):
             # `</dev/null`: print mode reads a piped stdin into the prompt. stderr apart, so no diagnostic tears a JSON line.
             await self.exec_as_agent(environment, cwd="/repo", command=(
                 f"{omp} -p --mode json --no-session --model {shlex.quote(self.model_name)} --approval-mode yolo "
-                f"--no-extensions --no-skills --no-rules --no-title --no-lsp --max-time {shlex.quote(self._max_time)} "
+                f"--no-extensions --no-skills --no-rules --no-title --no-lsp --max-time {RUN_LIMIT_SEC // 60}m "
                 f"-- {shlex.quote(self.render_instruction(instruction))} </dev/null 2>{logs / STDERR_LOG_NAME} | tee {logs / LOG_NAME}"))
         finally:
             # The login goes with the run, before Harbor collects a thing; an agent-phase timeout still reaches this.
