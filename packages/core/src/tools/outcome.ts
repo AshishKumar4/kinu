@@ -6,6 +6,7 @@ import { FileRefusalError } from '../types/file-edits';
 import { BindingFailureSchema, ToolFailureValueSchema, type BindingFailure, type ToolOutcome } from '../types/tool-outcome';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { McpToolError } from './mcp-error';
+import { EffectLog, withMemberEffects, type ProgramEffectsRecord } from '../execution/call-effects';
 import type { ExecCallContext } from '../execution/signal';
 
 export { ToolOutcomeSchema, type ToolOutcome } from '../types/tool-outcome';
@@ -81,6 +82,8 @@ function failedIndexOf(input: { readonly cause: unknown }) {
 interface ProgramInvocation {
   failures: BindingFailure[];
   pending: Promise<JsonValue | undefined>[];
+  /** What its calls changed, as the executors' seams saw it (`call-effects.ts`). */
+  readonly effects: EffectLog;
   /** The eval's own: stopping the program stops what it called. */
   readonly signal: AbortSignal | undefined;
   /** What the program's shell calls carry beyond their arguments: device-request ownership, the stop signal. */
@@ -114,23 +117,30 @@ class CodemodeProgramError extends Data.TaggedError('CodemodeProgramError')<{ re
   }
 }
 
-/** Capture the invocation before crossing RPC, whose callback has no caller async context. */
+/** Capture the invocation before crossing RPC, whose callback has no caller async context; each call runs under its
+ *  effects (`address` names it as the program wrote it). */
 export function bindProgramCall<Args extends unknown[]>(
-  binding: { tool: string; op: string | null },
+  binding: { tool: string; op: string | null; address: { readonly namespace: string; readonly member: string } },
   invoke: (...args: Args) => Promise<JsonValue | undefined>,
 ): (...args: Args) => Promise<JsonValue | undefined> {
   const active = program.getStore();
 
   return (...args) => {
-    const call = branchableToolCall(() => invoke(...args)).then((value) => {
+    // A native tool called from a program names its operation in its input.
+    const named = v.safeParse(v.object({ op: v.string() }), args[0]);
+
+    const effected = () => withMemberEffects({
+      log: active?.effects, address: { ...binding.address, op: named.success ? named.output.op : null },
+      run: () => invoke(...args), succeeded: (value) => !v.is(ToolFailureValueSchema, value),
+    });
+
+    const call = branchableToolCall(effected).then((value) => {
       const parsed = v.safeParse(ToolFailureValueSchema, value);
 
       const failure = parsed.success ? parsed.output : null;
 
       if (failure === null) return value;
-      // A native tool called from a program names its operation in its input.
-      const input = v.safeParse(v.object({ op: v.string() }), args[0]);
-      const op = binding.op ?? (input.success ? input.output.op : null);
+      const op = binding.op ?? (named.success ? named.output.op : null);
       active?.failures.push({ ...failure, tool: binding.tool, op });
 
       return failure;
@@ -142,28 +152,43 @@ export function bindProgramCall<Args extends unknown[]>(
   };
 }
 
-/** Program recovery is success; returning or throwing a binding refusal propagates it. */
+/** One program's call: its id, which its effects record names, and its stop signal. */
+export interface ProgramCall {
+  readonly call: string;
+  readonly signal?: AbortSignal | undefined;
+}
+
+/**
+ * Program recovery is success; returning or throwing a binding refusal propagates it. What its calls changed is carried
+ * beside its result, failed or not (`call-effects.ts`): a failed program that changed something answers in the host's
+ * envelope, its own error under `error`.
+ */
 export async function withCodemodeProgram<Result extends { result?: unknown; logs?: string[] }>(
   invoke: () => Promise<Result>,
-  signal?: AbortSignal,
+  call: ProgramCall,
   execContext?: ExecCallContext,
-): Promise<Result & { failures?: BindingFailure[] }> {
+): Promise<Result & { failures?: BindingFailure[]; effects?: ProgramEffectsRecord }> {
   if (program.getStore() !== undefined) return invoke();
-  const active: ProgramInvocation = { failures: [], pending: [], signal, execContext };
+  const active: ProgramInvocation = { failures: [], pending: [], effects: new EffectLog(), signal: call.signal, execContext };
 
   const settled = Effect.promise(() => Promise.all(active.pending));
+  const effects = () => active.effects.record(call.call);
+  // A failed program answers in the host's envelope only where it changed something: its own error text is left as it threw it.
+  const changedOnFailure = () => (active.effects.changed ? { effects: effects() } : {});
 
   return program.run(active, () => settle(Effect.gen(function* () {
     const result = yield* Effect.tryPromise({ try: invoke, catch: (cause) => ({ cause }) }).pipe(
       Effect.catch((failed) => Effect.flatMap(settled, () => {
         const cause = failed.cause;
+        const changed = changedOnFailure();
 
-        if (active.failures.length === 0) return Effect.die(cause);
+        if (active.failures.length === 0 && !active.effects.changed) return Effect.die(cause);
         const propagated = v.safeParse(ToolFailureValueSchema, cause);
         const outcome = propagated.success ? propagated.output : failedToolOutcome({ cause });
+        const failures = active.failures.length === 0 ? {} : { failures: active.failures };
 
-        return Effect.die(new CodemodeProgramError({ ...outcome, failures: active.failures },
-          JSON.stringify({ ...outcome, error: renderThrownChain({ cause }), failures: active.failures }), { cause }));
+        return Effect.die(new CodemodeProgramError({ ...outcome, ...failures },
+          JSON.stringify({ ...outcome, error: renderThrownChain({ cause }), ...failures, ...changed }), { cause }));
       })),
     );
 
@@ -173,11 +198,9 @@ export async function withCodemodeProgram<Result extends { result?: unknown; log
     if (propagated.success && active.failures.some((failure) => failure.reason === propagated.output.reason && failure.error === propagated.output.error)) {
       const outcome = { ...propagated.output, failures: active.failures };
 
-      return yield* Effect.die(new CodemodeProgramError(outcome, JSON.stringify({ ...result, ...outcome })));
+      return yield* Effect.die(new CodemodeProgramError(outcome, JSON.stringify({ ...result, ...outcome, ...changedOnFailure() })));
     }
 
-    const answered: Result & { failures?: BindingFailure[] } = active.failures.length === 0 ? result : { ...result, failures: active.failures };
-
-    return answered;
+    return { ...result, ...(active.failures.length > 0 && { failures: active.failures }), effects: effects() };
   })));
 }

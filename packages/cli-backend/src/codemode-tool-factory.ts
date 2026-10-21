@@ -146,7 +146,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           const message = explainSandboxError(renderThrownChain({ cause: error }));
           throw new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error });
         }
-      }, options.abortSignal, execContext({ signal: options.abortSignal, channel: readDeviceRequestChannel({ toolOptions: options }) })),
+      }, { call: options.toolCallId, signal: options.abortSignal }, execContext({ signal: options.abortSignal, channel: readDeviceRequestChannel({ toolOptions: options }) })),
     }), () => surface.craftedTools().map(({ name, description }) => ({ name, description })));
   };
 }

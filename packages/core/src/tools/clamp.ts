@@ -134,6 +134,13 @@ export function clampSerializedToolResult(
   }));
 }
 
+/** An eval's record of what it changed (`execution/call-effects.ts`), as its answer carried it, to carry again. */
+function programRecord(producer: string | undefined, output: JsonValue | undefined): { readonly effects?: JsonValue } {
+  const carried = producer === 'eval' ? v.safeParse(v.object({ effects: JsonValueSchema }), output) : null;
+
+  return carried?.success === true ? { effects: carried.output.effects } : {};
+}
+
 export function withClampedToolResult(
   toolEntry: ToolSet[string],
   opts: ClampToolResultOptions,
@@ -152,17 +159,16 @@ export function withClampedToolResult(
       const clamped = await clampSerializedToolResult({ output }, opts);
       const outcome = successfulToolOutcome(opts.producer ?? '', { output });
       const text = v.safeParse(v.string(), clamped);
+      // A program's census and its record of what it changed stay at the top level, where they are read.
+      const answered = v.safeParse(JsonValueSchema, output);
+      const kept = { ...(outcome.failures !== undefined && { failures: outcome.failures }), ...programRecord(opts.producer, answered.success ? answered.output : undefined) };
 
-      const result = text.success && outcome.failures !== undefined
-        ? { result: text.output, failures: outcome.failures }
-        : clamped;
+      const result = text.success && Object.keys(kept).length > 0 ? { result: text.output, ...kept } : clamped;
 
       if (taken === null || taken.images.length === 0) return result;
-
-      // An eval's failures stay at the top level, where `successfulToolOutcome` reads the program's census.
       const carrier = imageCarrier(result ?? null, taken.images);
 
-      return outcome.failures === undefined ? carrier : { ...carrier, failures: outcome.failures };
+      return Object.keys(kept).length === 0 ? carrier : { ...carrier, ...kept };
     },
   };
 

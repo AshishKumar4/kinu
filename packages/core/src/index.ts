@@ -793,6 +793,8 @@ export {
   type ToolCallEffect,
 } from './tools/tool-call-summary';
 
+export { programEffectsOf, programEffect, type ProgramEffects } from './execution/call-effects';
+
 export { ToolOutcomeSchema, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, type ToolOutcome } from './tools/outcome';
 
 export { repairToolCall } from './tools/repair-tool-call';
@@ -1156,7 +1158,7 @@ export {
 } from './execution/command-call';
 
 export {
-  commandResultAt, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
+  commandAnswer, commandResultAt, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
 } from './execution/exec-result';
 
 export {

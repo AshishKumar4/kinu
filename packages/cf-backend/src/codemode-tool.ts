@@ -182,7 +182,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
           return withCodemodeProgram(async () => (
             v.parse(v.object({ result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())) }), await execute(input, context))
-          ), context.abortSignal);
+          ), { call: context.toolCallId, signal: context.abortSignal });
         },
       }), surface.craftedTools);
     },

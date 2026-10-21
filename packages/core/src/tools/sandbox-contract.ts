@@ -346,7 +346,7 @@ export function codemodeFunction<Result>(namespace: string, member: string, invo
   const owner = Object.entries(TOOL_REACH).find(([name, reach]) => name === namespace && reach.codemode === namespace);
   const tool = accountedTool(namespace, member, owner?.[0]);
 
-  const call = bindProgramCall({ tool, op: owner === undefined ? null : member }, async (...args: unknown[]) => {
+  const call = bindProgramCall({ tool, op: owner === undefined ? null : member, address: { namespace, member } }, async (...args: unknown[]) => {
     const value = await invoke(...args);
 
     return value === undefined ? undefined : decodeJsonValue({ value });

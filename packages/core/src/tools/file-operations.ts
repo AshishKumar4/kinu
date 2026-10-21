@@ -32,6 +32,7 @@ import type { Tool } from 'ai';
 import { FILE, type SlateBuildNoteSchema } from '../operations/file';
 import { SLATES_ROOT, walkedPath } from '../vfs/workspace-path';
 import type { SlateCallResult } from '../slates/rpc';
+import { noteFileChange } from '../execution/call-effects';
 
 /** Most names one `list` returns; matches `tools/db-codemode.ts` SELECT_LIMIT_MAX. */
 const FILE_LIST_MAX_ENTRIES = 1_000;
@@ -447,6 +448,8 @@ function fileOps(deps: FileDeps) {
         return failure(vfsFail.reason, vfsFail.error);
       }
 
+      noteFileChange(path, existing === null ? 'created' : 'replaced');
+
       return {
         path, reference: target.reference, bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const,
         checked: landed.checked, ...undo(landed.report),
@@ -510,6 +513,7 @@ function fileOps(deps: FileDeps) {
       }
 
       ledger.recordEdit(path, null);
+      noteFileChange(path, 'edited');
 
       return {
         path, reference: target.reference,

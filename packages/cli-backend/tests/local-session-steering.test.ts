@@ -1835,7 +1835,8 @@ describe('agents.* codemode namespace — node sandbox', () => {
       return { count: ran.length, branches: ran.map((s) => s.caps.branches.value) };
     `);
 
-    expect(result).toEqual({ result: { count: 2, branches: [2, 2] } });
+    // Each swarm it ran acts, by its declaration: the program's record counts them.
+    expect(result).toEqual({ result: { count: 2, branches: [2, 2] }, effects: { call: 'test-tool-call', operations: { 'agents.swarm': 2 } } });
     const asked = calls.map((call) => call.prompt).join('\n');
     expect(asked).toContain('review auth');
     expect(asked).toContain('review billing');
