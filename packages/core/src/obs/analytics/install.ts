@@ -27,7 +27,7 @@ const PUBLISHABLE_TEXT = [
 ] as const;
 
 const PUBLISHABLE_NUMBERS = [
-  'durationMs', 'ttftMs', 'steps', 'toolCalls', 'affected', 'activation',
+  'durationMs', 'ttftMs', 'steps', 'toolCalls', 'affected', 'activation', 'facets',
 ] as const;
 
 assertPublishableNames('the diagnostics sink allowlist', [
@@ -119,6 +119,7 @@ function eventRow(event: LogEventName, fields: LogFields, reported: ErrorCode | 
     steps: count(fields, 'steps'),
     toolCalls: count(fields, 'toolCalls'),
     activation: count(fields, 'activation'),
+    facets: count(fields, 'facets'),
   });
 }
 

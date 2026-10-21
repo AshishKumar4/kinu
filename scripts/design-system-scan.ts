@@ -4,13 +4,16 @@
  * and the token that broke it. `tests/design-system.test.ts` holds the count at zero; run directly, this prints the
  * findings by file and by rule (`bun scripts/design-system-scan.ts [--files] [path…]`).
  *
- * Out of scope, as the §3 audit set it: the design gallery (`gallery*`, `diff-design/`), the landing page's own frame
- * (`components/landing/`), and tests.
+ * The files are the repository's tracked ones `isDesignSystemSource` keeps (scripts/sources.ts): out of scope, as the §3
+ * audit set it, are the design gallery (`gallery*`, `diff-design/`), the landing page's own frame (`components/landing/`),
+ * and tests.
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Node } from 'oxc-parser';
 import postcss from 'postcss';
+import { REPO_ROOT } from './repo-root';
+import { isDesignSystemSource, trackedFiles } from './sources';
 import { parse, walk } from './syntax';
 import type { SyntaxNode } from './syntax';
 
@@ -25,9 +28,8 @@ export interface DesignFinding {
   readonly token: string;
 }
 
-const ROOT = join(import.meta.dirname, '..', 'packages', 'cf-backend', 'src');
-
-const OUT_OF_SCOPE = [/^gallery/u, /^diff-design\//u, /^components\/landing\//u, /\.test\.tsx?$/u];
+/** Where the governed source sits; a finding names its file from here. */
+const SOURCE = 'packages/cf-backend/src/';
 
 /** Spacing units the scale allows (§1.4); `ui/` may also use 0.5 and 1.5. */
 const SPACING_UNITS = new Set(['0', 'px', '1', '2', '3', '4', '5', '6', '8', '12', '16']);
@@ -81,20 +83,6 @@ function bare(token: string): string {
   const parts = token.split(/:(?![^[]*\])/u);
 
   return (parts.at(-1) ?? token).replace(/^!/u, '');
-}
-
-function inScope(file: string): boolean {
-  return !OUT_OF_SCOPE.some((pattern) => pattern.test(file));
-}
-
-function filesUnder(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const path = join(dir, name);
-
-    if (statSync(path).isDirectory()) return name === 'node_modules' ? [] : filesUnder(path);
-
-    return /\.tsx?$/u.test(name) && !name.endsWith('.d.ts') ? [path] : [];
-  });
 }
 
 /** The rules a class token breaks, in feature code or in `ui/`. */
@@ -276,12 +264,12 @@ function scanCss(text: string): DesignFinding[] {
 }
 
 export function scanDesignSystem(only: readonly string[] = []): DesignFinding[] {
-  const files = filesUnder(ROOT).map((path) => relative(ROOT, path)).filter(inScope)
+  const files = trackedFiles().filter(isDesignSystemSource).map((path) => path.slice(SOURCE.length))
     .filter((file) => only.length === 0 || only.some((prefix) => file.startsWith(prefix)));
 
-  const css = only.length === 0 || only.includes('index.css') ? scanCss(readFileSync(join(ROOT, 'index.css'), 'utf8')) : [];
+  const css = only.length === 0 || only.includes('index.css') ? scanCss(readFileSync(join(REPO_ROOT, SOURCE, 'index.css'), 'utf8')) : [];
 
-  return [...files.flatMap((file) => scanSource(file, readFileSync(join(ROOT, file), 'utf8'))), ...css];
+  return [...files.flatMap((file) => scanSource(file, readFileSync(join(REPO_ROOT, SOURCE, file), 'utf8'))), ...css];
 }
 
 if (import.meta.main) {

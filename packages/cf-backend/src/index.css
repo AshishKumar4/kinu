@@ -2203,6 +2203,10 @@ body > .annotation-toolbar {
    words on a stronger wash, folds and blank sides on a quiet one. Code wraps anywhere at a tab of 2, ligatures off so an
    operator reads as typed; a noted line's number is set heavier. */
 .p-diff { font-variant-ligatures: none; }
+/* An answer's slate open in the chat: its tools float over its top right on the tile. */
+.p-slate-tools { border-radius: var(--r-inner); background: var(--c-fill); }
+/* A computer's desktop expanded over the workspace, letterboxed on the screen's own black as a player does. */
+.p-desktop-stage[data-expanded] { background: var(--c-screen); }
 /* The app's backdrop (AppBackground.tsx), softened a touch and masked by its temperament: today's field lit toward its
    right, quiet's living only at the page's edges. */
 .p-backdrop { filter: blur(0.4px); }

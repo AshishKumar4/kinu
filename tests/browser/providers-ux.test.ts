@@ -1,9 +1,58 @@
 /** The providers list in a real browser: Claude's sign-in, pasted code and all, against the gallery's account. */
 import { describe, expect, test } from 'bun:test';
 
+import type { Page } from 'puppeteer';
+
 import { withGallery } from '../../scripts/gallery-harness';
 
 const CLAUDE = '[data-provider="Claude"]';
+
+const CHATGPT = '[data-provider="ChatGPT"]';
+
+/** Stands in for the browser's windows on `page`: each sign-in window it asks for is recorded, with where it was sent and
+ *  whether the page closed it, or refused when `refused`; a link's own tab is recorded as let or kept, and never opens. */
+async function rigSignInWindows(page: Page, refused = false): Promise<void> {
+  await page.evaluate((refusing) => {
+    const seen = document.documentElement.dataset;
+    const popup = { opener: null, location: { set href(at: string) { seen.signInAt = at; } }, close() { seen.signInClosed = 'yes'; } };
+
+    window.open = (_url, _target, features) => {
+      if (refusing) return null;
+      seen.signInWindow = String(features);
+
+      // SAFETY: constructed above with every member `openProviderWindow` and its callers use of a window: `opener`,
+      // `location.href` and `close`.
+      return popup as Window;
+    };
+
+
+    document.addEventListener('click', (event) => {
+      if (!(event.target instanceof Element) || event.target.closest('a') === null) return;
+      seen.linkOpensTab = String(!event.defaultPrevented);
+      event.preventDefault();
+    });
+  }, refused);
+}
+
+async function signInWindowSeen(page: Page): Promise<{ window: string | null; at: string | null; closed: boolean; linkOpensTab: string | null }> {
+  return await page.evaluate(() => {
+    const seen = document.documentElement.dataset;
+
+    return { window: seen.signInWindow ?? null, at: seen.signInAt ?? null, closed: seen.signInClosed === 'yes', linkOpensTab: seen.linkOpensTab ?? null };
+  });
+}
+
+/** The providers list with ChatGPT's entry read, at `query`'s account. */
+async function chatGptEntry(page: Page, origin: string, query: string): Promise<void> {
+  await page.setViewport({ width: 1280, height: 1100 });
+  await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=providers${query}`, { waitUntil: 'networkidle0' });
+  // The fixture's Codex read fails until healed, for the sibling failure rig.
+  await page.evaluate(() => { window.dispatchEvent(new Event('gallery:settings-heal')); });
+  await page.click('[data-settings-resource="your ChatGPT connection"] button');
+  await page.waitForSelector(`${CHATGPT} button`);
+}
+
+const POPUP = expect.stringContaining('popup,width=520,height=720');
 
 describe('the providers list', () => {
   // Review finding (2026-10-23): a Cloudflare connect that failed ended on the finish page, which closed with the only
@@ -134,6 +183,96 @@ describe('the providers list', () => {
     });
   });
 
+  // The owner's rule (2026-10-21): a sign-in whose end the page learns itself, by its poll or the code pasted back, opens
+  // in its popup at the link's click, and the page closes it at that end.
+  test("ChatGPT's sign-in through a machine opens in its popup, which closes once the machine reports it", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      await chatGptEntry(page, origin, '&chatgpt=device');
+      await rigSignInWindows(page);
+      // Use your PC: the machine opens its sign-in, and the page offers the link to it, still after its next poll.
+      await page.click(`${CHATGPT} button`);
+      await page.waitForSelector(`${CHATGPT} [data-chatgpt-state="open"] a`);
+      const reads = await page.evaluate(() => Number(document.documentElement.dataset.galleryChatgptReads ?? '0'));
+
+      await page.waitForFunction((before: number) => Number(document.documentElement.dataset.galleryChatgptReads ?? '0') > before, {}, reads);
+      await page.click(`${CHATGPT} [data-chatgpt-state="open"] a`);
+      const opened = await signInWindowSeen(page);
+
+      await page.evaluate(() => { window.dispatchEvent(new Event('gallery:chatgpt-signed-in')); });
+      await page.waitForSelector(`${CHATGPT} button[aria-label="Disconnect ChatGPT"]`);
+
+      expect({ opened, ended: await signInWindowSeen(page) }).toEqual({
+        opened: { window: POPUP, at: 'about:blank', closed: false, linkOpensTab: 'false' },
+        ended: { window: POPUP, at: 'about:blank', closed: true, linkOpensTab: 'false' },
+      });
+      await page.close();
+    });
+  });
+
+  test("ChatGPT's sign-in pasted back opens in its popup, which closes once the address signs in", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      await chatGptEntry(page, origin, '');
+      await rigSignInWindows(page);
+      await page.$$eval(`${CHATGPT} button`, (buttons) => buttons.find((button) => button.textContent?.includes('Sign in here'))?.click());
+      await page.waitForSelector(`${CHATGPT} [data-chatgpt-way="here"] a`);
+      await page.click(`${CHATGPT} [data-chatgpt-way="here"] a`);
+      const opened = await signInWindowSeen(page);
+
+      await page.type(`${CHATGPT} input[aria-label="Address the sign-in landed on"]`, 'http://127.0.0.1:1455/auth/callback?code=gallery');
+      await page.$$eval(`${CHATGPT} button`, (buttons) => buttons.find((button) => button.textContent === 'Finish')?.click());
+      await page.waitForSelector(`${CHATGPT} button[aria-label="Disconnect ChatGPT"]`);
+
+      expect({ opened, ended: (await signInWindowSeen(page)).closed }).toEqual({
+        opened: { window: POPUP, at: 'about:blank', closed: false, linkOpensTab: 'false' }, ended: true,
+      });
+      await page.close();
+    });
+  });
+
+  test("Claude's sign-in opens in its popup, which closes once the pasted code connects", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1100 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=providers`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(CLAUDE);
+      await rigSignInWindows(page);
+
+      await page.click(`${CLAUDE} button`);
+      await page.waitForSelector(`${CLAUDE} a[href^="https://claude.ai/oauth/authorize"]`);
+      await page.click(`${CLAUDE} a[href^="https://claude.ai/oauth/authorize"]`);
+      const opened = await signInWindowSeen(page);
+
+      await page.type(`${CLAUDE} input[aria-label="Claude sign-in code"]`, 'good-code');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector(`${CLAUDE} button[aria-label="Disconnect Claude"]`);
+
+      expect({ opened, ended: (await signInWindowSeen(page)).closed }).toEqual({
+        opened: { window: POPUP, at: 'https://claude.ai/oauth/authorize?state=gallery', closed: false, linkOpensTab: 'false' }, ended: true,
+      });
+      await page.close();
+    });
+  });
+
+  // A popup the browser refused: a tab a script opens is refused as one is, so the link opens its own.
+  test('a sign-in whose popup the browser refused is left to its link, which opens a tab', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      await chatGptEntry(page, origin, '');
+      await rigSignInWindows(page, true);
+      await page.$$eval(`${CHATGPT} button`, (buttons) => buttons.find((button) => button.textContent?.includes('Sign in here'))?.click());
+      await page.waitForSelector(`${CHATGPT} [data-chatgpt-way="here"] a`);
+      await page.click(`${CHATGPT} [data-chatgpt-way="here"] a`);
+
+      expect(await signInWindowSeen(page)).toEqual({ window: null, at: null, closed: false, linkOpensTab: 'true' });
+      await page.close();
+    });
+  });
+
   test('a ChatGPT plan connected on the page is in the model menus without a reload', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
@@ -144,8 +283,9 @@ describe('the providers list', () => {
       await page.click('[data-settings-resource="your ChatGPT connection"] button');
       await page.waitForSelector('[data-provider="ChatGPT"] button');
 
-      // The sign-in opens its own tab; the page polls the machine until it reports the plan.
+      // The sign-in opens its own window; the page polls the machine until it reports the plan.
       await page.click('[data-provider="ChatGPT"] button');
+      await page.evaluate(() => { window.dispatchEvent(new Event('gallery:chatgpt-signed-in')); });
       await page.waitForSelector('[data-provider="ChatGPT"] button[aria-label="Disconnect ChatGPT"]');
 
       // The sign-in's own tab took the front; a background tab draws no frames to click through.

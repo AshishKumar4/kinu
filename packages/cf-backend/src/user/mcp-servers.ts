@@ -12,6 +12,7 @@ import { mcpOAuthStorage } from './mcp-oauth-storage';
 import type { UserCredentials } from './credentials';
 import type { SqlRow, UserObjectHost } from './user-host';
 import { ASSISTANT_CONFIG_KEY } from './roster';
+import type { McpSessionHost } from './mcp';
 
 /** The only place these `Env` names exist; messages and the deploy doc take their wording from here. */
 const MCP_APP_ENV = {
@@ -223,6 +224,14 @@ export class UserMcpServers {
 
   private readonly _mcpToolLists = new Map<string, McpToolListing>();
 
+  /** The SDK's manager as a call's session renewal reaches it, its connect one of {@link dials}: one object, since the
+   *  calls that meet one ended session share their renewal by it. */
+  private readonly renewing: McpSessionHost = ((servers: UserMcpServers): McpSessionHost => ({
+    get mcpConnections() { return servers.host.mcp.mcpConnections; },
+    connectToServer: async (id) => servers.dialAlone(id),
+    discoverIfConnected: async (id) => servers.host.mcp.discoverIfConnected(id),
+  }))(this);
+
   /** Servers `redialUnusable` dialled this activation: each once a wake. */
   private readonly redialled = new Set<string>();
 
@@ -326,6 +335,25 @@ export class UserMcpServers {
     })))).then(() => { this.dials.delete(serverId); });
 
     this.dials.set(serverId, dialled);
+  }
+
+  /**
+   * Connects `serverId` as a dial of its own: one in flight is waited out first, and this one holds the place while it
+   * runs, so a warmup that reads the connection closed meanwhile (the vendor's `init` has put a fresh client in place)
+   * joins it rather than start a second `init` on the same client (staging 39a0b3fd5, 2026-10-21).
+   */
+  private async dialAlone(serverId: string): Promise<{ readonly state: string; readonly error?: string }> {
+    for (let held = this.dials.get(serverId); held !== undefined; held = this.dials.get(serverId)) await held;
+    const ended = Promise.withResolvers<void>();
+
+    this.dials.set(serverId, ended.promise);
+
+    try {
+      return await this.host.mcp.connectToServer(serverId);
+    } finally {
+      this.dials.delete(serverId);
+      ended.resolve();
+    }
   }
 
   /** Replace the SDK row with a transport this plane owns; tear down any live connection first,
@@ -899,7 +927,7 @@ export class UserMcpServers {
     try {
       const { callRenewingExpiredSession } = await import('./mcp');
 
-      return await callRenewingExpiredSession(manager, serverId, () => manager.callTool({ serverId, name, arguments: callArgs }, { signal }));
+      return await callRenewingExpiredSession(this.renewing, serverId, () => manager.callTool({ serverId, name, arguments: callArgs }, { signal }));
     } catch (err) {
       await this.convergeMcpAuthState({ serverId, cause: err });
       throw err;

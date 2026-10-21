@@ -1084,6 +1084,7 @@
       "exit": 0
     },
     "bun test --timeout=0 tests/browser/live-app-connect.test.ts": {
+      "machine": "linux x64, AMD EPYC (8 threads)",
       "wallSeconds": 218.97,
       "cpuSeconds": 458.75,
       "peakRssMb": 5667.89,
@@ -1092,8 +1093,7 @@
       "meanThreads": 2.1,
       "samples": 732,
       "loadAtStart": 0.45,
-      "exit": 0,
-      "machine": "linux x64, AMD EPYC (8 threads)"
+      "exit": 0
     },
     "bun test --timeout=0 tests/browser/live-app-slate-ask.test.ts": {
       "machine": "linux x64, AMD EPYC (8 threads)",
@@ -1188,6 +1188,18 @@
       "meanThreads": 0.82,
       "samples": 16,
       "loadAtStart": 4.98,
+      "exit": 0,
+      "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)"
+    },
+    "bun test --timeout=0 tests/design-system.test.ts": {
+      "wallSeconds": 1.84,
+      "cpuSeconds": 1.56,
+      "peakRssMb": 264.17,
+      "peakRunnable": 2,
+      "peakCpuThreads": 1.95,
+      "meanThreads": 0.85,
+      "samples": 31,
+      "loadAtStart": 53.96,
       "exit": 0,
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)"
     }

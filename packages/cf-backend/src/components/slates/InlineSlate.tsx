@@ -20,7 +20,6 @@ import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
 import { IconControl } from "@/components/ui/IconControl";
 import { Pressable } from "@/components/ui/Pressable";
-import { Surface } from "@/components/ui/Surface";
 
 
 /** `sized`: the page reports its own height, as every page kinu:slate serves does; a slate's own server does not. */
@@ -209,14 +208,12 @@ function SlateCard({ id, block, measure, save, children }: {
   return (
     <span ref={measure} data-slate-inline={id} {...(block === undefined ? {} : { [SLATE_UI_ATTRIBUTE]: block })}
       data-fold-still={painted ? undefined : ""} className="group/slate relative block my-2">
-      {folded
-        ? <span ref={register} className="flex items-center gap-1 py-px">{tools}</span>
-        : (
-          <Surface as="span" look="tile" ref={register}
-            className="absolute right-1 top-1 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover/slate:opacity-100 group-focus-within/slate:opacity-100 [@media(hover:none)]:opacity-100">
-            {tools}
-          </Surface>
-        )}
+      {/* One element folded or not: the fold's own top bar is inside it, and a press must find it where it was. */}
+      <span ref={register} className={folded
+        ? "flex items-center gap-1 py-px"
+        : "p-slate-tools absolute right-1 top-1 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover/slate:opacity-100 group-focus-within/slate:opacity-100 [@media(hover:none)]:opacity-100"}>
+        {tools}
+      </span>
       <span id={body} className="p-fold" data-folded={folded ? "" : undefined} inert={folded}>
         <span><span className="block">{children}</span></span>
       </span>

@@ -18,6 +18,7 @@ import { Notice } from "@/components/ui/Notice";
 import { TextInput } from "@/components/ui/Field";
 import { Pressable } from "@/components/ui/Pressable";
 import { CopyField } from "@/components/ui/CopyField";
+import { useProviderWindow } from "@/hooks/use-provider-window";
 
 /** How often a waiting sign-in is read. */
 const SIGN_IN_POLL_MS = 2_000;
@@ -116,6 +117,7 @@ function OnYourPc({ plan, onDone, onGaveUp, onFailed }: {
 }) {
   const [current, setCurrent] = useState(plan);
   const [command, setCommand] = useState<string | null>(null);
+  const signInWindow = useProviderWindow("chatgpt-sign-in");
 
   useEffect(() => {
     detach(attempt({ doing: "starting the ChatGPT sign-in", otherwise: "io" }, startChatGptSignIn).pipe(
@@ -129,7 +131,10 @@ function OnYourPc({ plan, onDone, onGaveUp, onFailed }: {
       Effect.map((now) => {
         const ended = now.status;
 
-        if (ended?.signedIn === true) onDone(ended.firstSignIn);
+        if (ended?.signedIn === true) {
+          signInWindow.close();
+          onDone(ended.firstSignIn);
+        }
         // A sign-in the machine opened and then gave up on ends here, in its own words.
         else if (now.machineSignIn?.state !== "waiting_for_machine" && ended !== null && !ended.pending && ended.lastFailure !== null) onGaveUp(ended.lastFailure);
         else setCurrent(now);
@@ -138,7 +143,7 @@ function OnYourPc({ plan, onDone, onGaveUp, onFailed }: {
     )), SIGN_IN_POLL_MS);
 
     return () => { window.clearInterval(timer); };
-  }, [onDone, onGaveUp, onFailed]);
+  }, [onDone, onGaveUp, onFailed, signInWindow]);
 
   const signIn = current.machineSignIn;
   const needsMachine = signIn?.state === "waiting_for_machine";
@@ -156,7 +161,7 @@ function OnYourPc({ plan, onDone, onGaveUp, onFailed }: {
       <div className="space-y-2" data-chatgpt-way="pc" data-chatgpt-state="open">
         <p className="t-meta p-text-2">Sign in from a browser on <span className="p-text">{signIn.device.label}</span>. The sign-in comes back to that machine.</p>
         <div className="flex flex-wrap items-center gap-2">
-          <a href={signIn.authorizeUrl} target="_blank" rel="noopener noreferrer" className={buttonClass({ size: "sm" })}>
+          <a href={signIn.authorizeUrl} target="_blank" rel="noopener noreferrer" onClick={signInWindow.open} className={buttonClass({ size: "sm" })}>
             <ArrowSquareOutIcon size={12} /> Open ChatGPT sign-in
           </a>
           <CopyButton variant="secondary" value={signIn.authorizeUrl} what="the sign-in link" />
@@ -183,6 +188,7 @@ function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; on
   const [pasted, setPasted] = useState("");
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
+  const signInWindow = useProviderWindow("chatgpt-sign-in");
 
   const begin = useCallback(() => {
     setStarted(null);
@@ -201,13 +207,15 @@ function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; on
     setNote(null);
     detach(attempt({ doing: "finishing the ChatGPT sign-in", otherwise: "io" }, () => finishChatGptPaste(pasted.trim())).pipe(
       Effect.map((answer) => {
-        if (answer.outcome === "signed_in") onDone(true);
-        else setNote(PASTE_OUTCOME[answer.outcome]);
+        if (answer.outcome === "signed_in") {
+          signInWindow.close();
+          onDone(true);
+        } else setNote(PASTE_OUTCOME[answer.outcome]);
       }),
       Effect.catch(onFailed),
       Effect.ensuring(Effect.sync(() => setBusy(false))),
     ));
-  }, [pasted, onDone, onFailed]);
+  }, [pasted, onDone, onFailed, signInWindow]);
 
   if (started === null) return <p className="t-meta flex items-center gap-2 p-text-3" data-chatgpt-way="here"><Loader size="sm" /> Preparing the sign-in…</p>;
 
@@ -215,7 +223,7 @@ function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; on
     <div className="space-y-3" data-chatgpt-way="here">
       <div className="space-y-2">
         <p className="t-meta p-text-2">1. Open ChatGPT and sign in.</p>
-        <a href={started.authorizeUrl} target="_blank" rel="noopener noreferrer" className={buttonClass({ size: "sm" })}>
+        <a href={started.authorizeUrl} target="_blank" rel="noopener noreferrer" onClick={signInWindow.open} className={buttonClass({ size: "sm" })}>
           <ArrowSquareOutIcon size={12} /> Open ChatGPT sign-in
         </a>
       </div>

@@ -654,9 +654,11 @@ function DesktopView({ name, src, width, height }: { name: string; src: string; 
       </div>
       {/* The screen at its own shape, as large as its place allows, so the client draws it edge to edge; expanded, on
           the screen's own black, as a player letterboxes. */}
-      {cover === null
-        ? <div className="flex min-h-0 flex-1 items-start justify-center @container-size">{screen}</div>
-        : <Surface look="screen" className="flex min-h-0 flex-1 items-center justify-center @container-size">{screen}</Surface>}
+      {/* One element expanded or not, so the screen's client is never opened twice. */}
+      <div className={`p-desktop-stage flex min-h-0 flex-1 justify-center @container-size ${cover === null ? "items-start" : "items-center"}`}
+        data-expanded={cover === null ? undefined : ""}>
+        {screen}
+      </div>
     </div>
   );
 }
