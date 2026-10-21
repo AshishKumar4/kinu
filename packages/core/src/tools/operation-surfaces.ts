@@ -307,6 +307,15 @@ function declarationOf(op: Operation): string {
   return `${doc}\n${op.name.split('.').at(-1) ?? op.name}(${params.join(', ')}): Promise<${returnsOf(op)} | Refusal>;`;
 }
 
+/** A member that takes its whole input as one object, as `tools.<name>(input)` does: its declaration, by the schema of
+ *  that input, and its call form. */
+export function objectInputDeclaration(op: Operation): MemberDeclaration {
+  return {
+    full: `/** ${op.help} */\n${op.name}(input: ${oneLine(typeOf(typeJsonSchema(op.input)))}): Promise<${returnsOf(op)} | Refusal>;`,
+    call: `${op.name}(input)`,
+  };
+}
+
 /** Each retired member of `ns` no served operation took back, as a call that refuses naming its successor. */
 function retiredMembers(ns: string, members: readonly Served[]): CodemodeProvider['tools'] {
   const served = new Set(members.map(({ op }) => op.name));
