@@ -3610,7 +3610,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const keys = [`${actorId}:${turnId}`, `${actorId}:carried`];
     const holding = keys.map((key) => this.turnSlates.get(key));
 
-    if (narration === null && slatesToPreview(holding.flatMap((slates) => [...slates?.changed ?? []]), new Set(holding.flatMap((slates) => [...slates?.shown ?? []])), []).length > 0) {
+    if (narration === null && (await slatesToPreview(holding.flatMap((slates) => [...slates?.changed ?? []]), new Set(holding.flatMap((slates) => [...slates?.shown ?? []])), [])).length > 0) {
       return { owesNarration: true, metadata: null };
     }
 
@@ -3624,7 +3624,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const changed = taken.flatMap((held) => [...held?.changed ?? []]);
     const shown = new Set(taken.flatMap((held) => [...held?.shown ?? []]));
-    const reply = this.slatePreviews(slatesToPreview(new Set(changed), shown, narration ?? []));
+    const reply = slatesToPreview(new Set(changed), shown, narration ?? []).then(async (ids) => await this.slatePreviews(ids));
 
     // Answered as it is taken: a slate the turn changes from here is carried, and a take asked again waits on this one.
     this.answeredTurns.set(actorId, [...(this.answeredTurns.get(actorId) ?? []).slice(-(ANSWERED_TURNS_KEPT - 1)), { turnId, reply }]);
