@@ -421,6 +421,7 @@ This means everything outside `components/ui/`, `theme.ts` and `index.css`.
 **May not write:**
 1. A colour literal of any kind: `#…`, `rgb(`, `rgba(`, `hsl(`, `oklch(`, `oklab(`, a named colour, or a Tailwind palette colour (`bg-white`, `text-purple-500`).
 2. An arbitrary value in brackets other than `[var(--layout-*)]`. That covers `text-[…]`, `w-[76px]`, `bg-[var(--c-…)]` and `[mask-image:…]`.
+   A ground utility (`p-bg`, `p-sunken`, `p-sidebar`, `p-surface`, `p-fill`, `p-hover`, `p-selected`, `p-card-hover`, `p-row-hover`, `p-accent-bg`) is rule 2 by another name: a ground comes from the component that draws the box, row or state (`Card`, `Group`, `Pressable`, `Row`, `Choices`).
 3. Any `text-{xs,sm,base,lg,xl,…}`, `font-{weight}`, `leading-*` or `tracking-*` utility.
 4. Any `rounded*`, `shadow*`, `ring*`, `outline-*` (other than `outline-none` inside `ui/`) or `border-{color}` utility.
 5. Spacing units 0.5, 1.5, 2.5, 3.5, 7, 9, 10, 11, 14, or any unit above 16.

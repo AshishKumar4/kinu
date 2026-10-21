@@ -124,7 +124,7 @@ function Filters({ kind, category, sort, q, choose }: {
         <label className={`${FIELD_32} flex min-w-0 flex-1 items-center gap-2 px-3 sm:w-64 sm:flex-none`}>
           <MagnifyingGlassIcon size={14} className="shrink-0 p-text-3" />
           <input value={typed} onChange={(event) => { setTyped(event.target.value); choose("q", event.target.value); }} type="search" placeholder="Search apps and workspaces" aria-label="Search apps and workspaces" data-explore-search
-            className="t-body min-w-0 flex-1 bg-transparent p-text outline-none placeholder:text-[var(--c-text-3)]" />
+            className="t-body min-w-0 flex-1 bg-transparent p-text outline-none placeholder:p-text-3" />
         </label>
       </span>
     </div>

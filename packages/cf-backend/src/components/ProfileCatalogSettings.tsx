@@ -444,8 +444,8 @@ export function ProfileCatalogSettings() {
                     aria-current={current ? 'true' : undefined}
                     className={`${tabCls} ${current ? 'p-tab-active' : ''} md:mb-0 md:w-full md:rounded-md md:border-b-0 md:px-3 md:py-2 ${
                       current
-                        ? 'md:bg-[var(--c-selected)] md:text-[var(--c-accent-fg)]'
-                        : 'md:text-[var(--c-text-2)] md:hover:bg-[var(--c-hover)] md:hover:text-[var(--c-text)]'
+                        ? 'md:bg-[var(--c-selected)] md:p-accent-fg'
+                        : 'md:p-text-2 md:hover:bg-[var(--c-hover)] md:hover:p-text'
                     }`}
                     onClick={() => { setSelectedRole(roleId); setAddingRole(false); }}
                   >

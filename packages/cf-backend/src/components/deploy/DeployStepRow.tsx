@@ -18,8 +18,8 @@ export function StepRow({ row, onRetry }: {
     <li className="p-card px-4 py-3" data-step={row.id} data-state={row.state}>
       <div className="flex items-start gap-3">
         <span className="mt-px shrink-0">
-          {row.state === "done" && <CheckCircleIcon size={16} className="text-[var(--c-success)]" />}
-          {row.state === "failed" && <WarningCircleIcon size={16} className="text-[var(--c-danger)]" />}
+          {row.state === "done" && <CheckCircleIcon size={16} className="p-success" />}
+          {row.state === "failed" && <WarningCircleIcon size={16} className="p-danger" />}
           {row.state === "running" && <Loader size="sm" />}
           {row.state === "pending" && <CircleIcon size={16} className="p-text-3" />}
         </span>

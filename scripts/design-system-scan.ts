@@ -16,7 +16,7 @@ import type { SyntaxNode } from './syntax';
 
 export type DesignRule =
   | 'colour-literal' | 'arbitrary-value' | 'type-utility' | 'box-utility' | 'off-scale-spacing'
-  | 'raw-element' | 'legacy-class' | 'kumo-import' | 'inline-style' | 'css-colour' | 'css-font-size' | 'css-radius';
+  | 'raw-element' | 'legacy-class' | 'ground-utility' | 'kumo-import' | 'inline-style' | 'css-colour' | 'css-font-size' | 'css-radius';
 
 export interface DesignFinding {
   readonly file: string;
@@ -44,6 +44,9 @@ const BOX_UTILITY = /^(?:rounded(?:-.+)?|shadow(?:-.+)?|ring(?:-.+)?|outline-.+|
 const PALETTE = /^(?:bg|text|border|fill|stroke|from|to|via|decoration|accent|caret|divide|placeholder)-(?:white|black|(?:slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose)-\d{2,3})(?:\/\d+)?$/u;
 
 const LEGACY = /^p-(?:card|group|btn(?:-.+)?|notice-.+|button(?:-.+)?|display|heading|eyebrow|label(?:-.+)?|annotation|meta|row-text|title|t-.+)$/u;
+
+/** A ground: feature code gets one from the component that draws the box, row or state, never as a class (§4.1). */
+const GROUND = /^p-(?:bg|sunken|sidebar|surface|fill|hover|selected|card-hover|row-hover|accent-bg)$/u;
 
 const HEX = /#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/u;
 
@@ -108,6 +111,8 @@ function classRules(token: string, ui: boolean): DesignRule[] {
   }
 
   if (!ui && LEGACY.test(name)) broken.push('legacy-class');
+
+  if (!ui && GROUND.test(name)) broken.push('ground-utility');
 
   return broken;
 }

@@ -43,6 +43,6 @@ export function navRowCls(open: boolean, rest = "p-text-2"): string {
  */
 export function navRowClsLg(open: boolean): string {
   return open
-    ? "lg:rounded-lg lg:bg-[var(--c-selected)] lg:text-[var(--c-accent-fg)]"
-    : "lg:rounded-lg lg:text-[var(--c-text-2)] lg:hover:bg-[color-mix(in_srgb,var(--c-text)_6%,transparent)] lg:hover:text-[var(--c-text)]";
+    ? "lg:rounded-lg lg:bg-[var(--c-selected)] lg:p-accent-fg"
+    : "lg:rounded-lg lg:p-text-2 lg:hover:bg-[color-mix(in_srgb,var(--c-text)_6%,transparent)] lg:hover:p-text";
 }
