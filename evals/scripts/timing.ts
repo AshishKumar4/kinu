@@ -3,7 +3,7 @@
 // A directory is searched for trials. Each trial prints its turns and its split; the run prints the
 // split summed over every trial, and with `--steps` every step's first token, generation and tools.
 // Where the deployment recorded its requests (`model_attempt`), each trial and the run also print the
-// split by the product's own clock, the helpers' requests (`descendants.jsonl`) beside the lead's.
+// split by the product's own clock, the subagents' requests (`descendants.jsonl`) beside the lead's.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -85,9 +85,9 @@ let wall = 0;
 for (const root of positionals) {
   for (const dir of trials(root)) {
     const ledger = jsonl(join(dir, 'ledger.jsonl')).map((line) => v.parse(LedgerRowSchema, line));
-    const helpers = existsSync(join(dir, 'descendants.jsonl')) ? jsonl(join(dir, 'descendants.jsonl')).map((line) => v.parse(DescendantSchema, line)) : [];
-    // A helper's runs are its own: its run ids are kept apart from the lead's by its actor.
-    const attempts = attemptTiming([...ledger, ...helpers.map(({ actor, event }) => ({ ...event, runId: `${actor}/${event.runId}` }))]);
+    const subagents = existsSync(join(dir, 'descendants.jsonl')) ? jsonl(join(dir, 'descendants.jsonl')).map((line) => v.parse(DescendantSchema, line)) : [];
+    // A subagent's runs are its own: its run ids are kept apart from the lead's by its actor.
+    const attempts = attemptTiming([...ledger, ...subagents.map(({ actor, event }) => ({ ...event, runId: `${actor}/${event.runId}` }))]);
     const timing = trialTiming(jsonl(join(dir, 'timeline.jsonl')).map((line) => v.parse(TimelineEntrySchema, line)), ledger);
 
     process.stdout.write(`${describe(relative(root, dir) || dir, timing)}\n  requests: ${requestSplit(attempts)}\n`);

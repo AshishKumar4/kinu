@@ -29,7 +29,7 @@ const STREAMING_LINE_MS = 60_000;
 function speakerOf(room: string | null, type: string): string {
   if (type.startsWith('head_')) return 'a head';
 
-  return room === null ? 'a turn the product opened' : `helper ${room}`;
+  return room === null ? 'a turn the product opened' : `subagent ${room}`;
 }
 
 /**

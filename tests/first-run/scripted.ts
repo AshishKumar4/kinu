@@ -5,7 +5,7 @@
  *
  * A case's words are read from `asks.ts`; the calls are made in the ask's order, one per step, and what each answer
  * reports is read back from the results the product returned, never known in advance: a reply that carries a marker
- * carries it because the product delivered it. Helpers a case hires, and a swarm's nodes, are answered by their
+ * carries it because the product delivered it. Subagents a case hires, and a swarm's nodes, are answered by their
  * missions. A request no case owns, a workspace's opening turn included, is left to the fallback answer.
  */
 import * as v from 'valibot';
@@ -38,7 +38,7 @@ function steps(request: ScriptedRequest, calls: readonly ScriptedAnswer[], answe
   return calls[request.askTurn.length] ?? { text: answer(request.askTurn) };
 }
 
-/** The ask the turn answers: never a delivery that landed in it after the ask, as a helper's report can at any step. */
+/** The ask the turn answers: never a delivery that landed in it after the ask, as a subagent's report can at any step. */
 const latest = (request: ScriptedRequest): string => request.ask;
 
 /** Whether `word` reached the turn at work: in the message that opened it, unless that is `own` (the ask, which names
@@ -143,7 +143,7 @@ const capabilityIsolation: Script = (request) => latest(request) !== ISOLATION_A
   hire(INTERNAL_FETCH_MISSION),
 ], (turn) => `DONE ${turn.map((made) => `${made.name}: ${oneLine(made.result).slice(0, 160)}`).join(' | ')}`);
 
-/** A hire returns at once; its helper's answer arrives as the message that opens the hirer's next turn, or lands in the
+/** A hire returns at once; its subagent's answer arrives as the message that opens the hirer's next turn, or lands in the
  *  hiring turn if that is still at work. */
 const delegation: Script = (request) => {
   const ask = latest(request);
@@ -161,7 +161,7 @@ const delegation: Script = (request) => {
     ], ([, roster]) => `ROSTER ${namesIn(roster?.result ?? '').join(' ')}`);
   }
 
-  const dismissed = /^Dismiss the durable helper with your agents tool: op dismiss, agent (".*?")\. /.exec(ask)?.[1];
+  const dismissed = /^Dismiss the durable subagent with your agents tool: op dismiss, agent (".*?")\. /.exec(ask)?.[1];
 
   if (dismissed === undefined) return null;
 
@@ -171,7 +171,7 @@ const delegation: Script = (request) => {
   ], () => 'RETIRED');
 };
 
-/** The root hires both helpers and ends its turn; each answer opens a turn of its own, or lands in one at work, and is
+/** The root hires both subagents and ends its turn; each answer opens a turn of its own, or lands in one at work, and is
  *  answered with the words it carries. */
 const delegationTree: Script = (request) => {
   const words = request.userTexts[0] === TREE_ASK ? [TREE_DEEP_WORD, TREE_SHALLOW_WORD].filter((word) => heard(request, word, TREE_ASK)) : [];
@@ -307,7 +307,7 @@ const helloSlate: Script = (request) => latest(request) !== HELLO_SLATE_ASK ? nu
 ], (turn) => `pong\n${turn.at(-1)?.result.match(/https?:\/\/[^\s"'\\]+/)?.[0] ?? 'no preview URL'}`);
 
 /**
- * agent-nested-chat, the helper the case created: it hires a durable grandchild and ends its turn; the grandchild's
+ * agent-nested-chat, the subagent the case created: it hires a durable grandchild and ends its turn; the grandchild's
  * report arrives later and opens a turn of its own, which answers with the word the report carries.
  */
 const nestedChat: Script = (request) => {
@@ -318,7 +318,7 @@ const nestedChat: Script = (request) => {
   return steps(request, [call('agents', { op: 'hire', role: 'task', message: NESTED_MISSION })], () => 'HIRED');
 };
 
-/** The words every case sends its root agent: a conversation holding one is a case's, never a helper's. */
+/** The words every case sends its root agent: a conversation holding one is a case's, never a subagent's. */
 const CASE_ASKS: readonly string[] = [
   STEER_TURN, SETTLE_ASK, WAKE_ASK, ISOLATION_ASK, DELEGATION_TASK_ASK, DELEGATION_ROSTER_ASK, TREE_ASK, SWARM_ASK,
   CONSENT_ASK, DEVICE_JOB_ASK, MOUNT_ASK, EXEC_OUTPUT_ASK, DESKTOP_ASK, UNNAMED_MACHINE_ASK, NAMED_MACHINE_ASK, SEARCH_ASK, PANES_ASK, TOOLS_LIST_ASK,
@@ -326,9 +326,9 @@ const CASE_ASKS: readonly string[] = [
   CRAFT_ASK, HELLO_SLATE_ASK,
 ];
 
-/** What a hired helper or a swarm node does, by the mission it was given. */
+/** What a hired subagent or a swarm node does, by the mission it was given. */
 const MISSIONS: readonly (readonly [string, Script])[] = [
-  // The relay hires and ends its turn; the answer its helper sends opens its next turn, or lands in this one, and is relayed.
+  // The relay hires and ends its turn; the answer its subagent sends opens its next turn, or lands in this one, and is relayed.
   [RELAY_MISSION, (request) => request.called.includes('agents')
     && ((request.askTurn.length === 0 && latest(request).includes(TREE_DEEP_WORD)) || request.delivered.some((text) => text.includes(TREE_DEEP_WORD)))
     ? { text: TREE_DEEP_WORD }
@@ -340,11 +340,11 @@ const MISSIONS: readonly (readonly [string, Script])[] = [
 ];
 
 /**
- * A helper's own mission: the one its conversation opens with, else the only one its context names at all. A hired
- * helper may also be given a digest of its hirer's messages, which can quote other helpers' missions, so a mission
+ * A subagent's own mission: the one its conversation opens with, else the only one its context names at all. A hired
+ * subagent may also be given a digest of its hirer's messages, which can quote other subagents' missions, so a mission
  * found anywhere in a longer text is trusted only when no other one is.
  */
-const helper: Script = (request) => {
+const subagent: Script = (request) => {
   const [opening = ''] = request.userTexts;
 
   if (CASE_ASKS.includes(opening)) return null;
@@ -366,7 +366,7 @@ const SCRIPTS: readonly Script[] = [
   steerCorrection, backgroundSettle, backgroundWake, capabilityIsolation, delegation, delegationTree, exploration,
   machineConsent, deviceJob, sandboxMountWrite, sandboxExecOutput, computerDesktop, twoMachines, webSearch, workspacePanes, everyTool, codemodeCraft, helloSlate,
   jobWake, tabWorking,
-  nestedChat, helper,
+  nestedChat, subagent,
 ];
 
 /** The first answer a case script gives, or null for a request no case owns. */

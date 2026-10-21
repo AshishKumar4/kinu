@@ -7,16 +7,16 @@ import type { Assertion } from './results';
 const REPORT = '/home/user/reports/signups-by-country.json';
 
 // Delegation fields: staging-f3-launch-prep/launch-prep-trial-1/ledger.jsonl:12,24,33,129.
-function hire(helper: string, message = `write ${REPORT}`): Extract<RunEvent, { type: 'tool_call_end' }> {
-  return { ...base, type: 'tool_call_end', name: 'agents', toolCallId: helper, args: { op: 'hire', message }, result: { name: helper }, outcome: { success: true } };
+function hire(subagent: string, message = `write ${REPORT}`): Extract<RunEvent, { type: 'tool_call_end' }> {
+  return { ...base, type: 'tool_call_end', name: 'agents', toolCallId: subagent, args: { op: 'hire', message }, result: { name: subagent }, outcome: { success: true } };
 }
 
 function facts(rows: readonly (JsonValue | RunEvent)[], result: Assertion = assertion(), extra: Partial<TrialEvidence> = {}): InsightFact[] {
   return extractInsights(result, evidence(rows, extra)).facts;
 }
 
-function helperResult(helpers: JsonValue): Assertion {
-  return assertion([{ part: 'build', turn: 1, outcome: { status: 'completed' }, checks: [{ id: 'helpers-finished', pass: false, evidence: { helpers } }] }]);
+function subagentResult(subagents: JsonValue): Assertion {
+  return assertion([{ part: 'build', turn: 1, outcome: { status: 'completed' }, checks: [{ id: 'subagents-finished', pass: false, evidence: { subagents } }] }]);
 }
 
 describe('deterministic trial insights', () => {
@@ -58,54 +58,54 @@ describe('deterministic trial insights', () => {
     expect(facts([start, first, second, step, end], result).filter((fact) => fact.kind === 'failing-call-loop')).toEqual([]);
   });
 
-  test('successful hires are helpers, while refused hire attempts remain tool errors', () => {
+  test('successful hires are subagents, while refused hire attempts remain tool errors', () => {
     const refused: RunEvent = { ...hire('refused'), error: 'Use message, not mission.', outcome: { success: false, reason: 'bad_input' } };
     const observed = facts([start, refused, hire('counter'), end]);
-    expect(observed.filter((fact) => fact.kind === 'helper-hired').map((fact) => fact.data)).toEqual([expect.objectContaining({ helper: 'counter' })]);
+    expect(observed.filter((fact) => fact.kind === 'subagent-hired').map((fact) => fact.data)).toEqual([expect.objectContaining({ subagent: 'counter' })]);
     expect(observed.find((fact) => fact.kind === 'tool-errors')).toMatchObject({ data: { tool: 'agents', code: 'bad_input', count: 1 } });
   });
 
-  test('records existing-helper messages and the product delivery outcome', () => {
+  test('records existing-subagent messages and the product delivery outcome', () => {
     const message: RunEvent = { ...hire('counter'), args: { op: 'assign', agent: 'counter', message: 'Retry the tally.' }, result: { delivery: 'starts_now' } };
     const observed = facts([start, message, end]);
-    expect(observed.filter((fact) => fact.kind === 'helper-message').map((fact) => fact.data)).toEqual([
-      expect.objectContaining({ helper: 'counter', op: 'assign', delivery: 'starts_now' }),
+    expect(observed.filter((fact) => fact.kind === 'subagent-message').map((fact) => fact.data)).toEqual([
+      expect.objectContaining({ subagent: 'counter', op: 'assign', delivery: 'starts_now' }),
     ]);
   });
 
-  test('each helper keeps the inspector runs and their error outcomes; not recorded does not mean zero runs', () => {
-    // proofs/helpers-check/staging-a4e564ce1.log:4 records two failed runs for this helper.
-    const observed = facts([], helperResult([{ name: 'counter', status: 'awaiting_input', runs: [
+  test('each subagent keeps the inspector runs and their error outcomes; not recorded does not mean zero runs', () => {
+    // proofs/helpers-check/staging-a4e564ce1.log:4 records two failed runs for this subagent.
+    const observed = facts([], subagentResult([{ name: 'counter', status: 'awaiting_input', runs: [
       { status: 'error', asked: 'Please retry the tally' }, { status: 'error', asked: 'Count the waitlist signups' },
     ] }]));
 
-    expect(observed.find((fact) => fact.kind === 'helper-runs')).toMatchObject({ data: { status: 'awaiting_input', runs: [
+    expect(observed.find((fact) => fact.kind === 'subagent-runs')).toMatchObject({ data: { status: 'awaiting_input', runs: [
       { status: 'error', asked: 'Please retry the tally' }, { status: 'error', asked: 'Count the waitlist signups' },
     ] } });
     const unrecorded = facts([start, hire('counter'), end]);
-    expect(unrecorded.find((fact) => fact.kind === 'helper-runs')).toMatchObject({ data: { runs: null } });
-    expect(unrecorded.filter((fact) => fact.kind === 'idle-helper')).toEqual([]);
+    expect(unrecorded.find((fact) => fact.kind === 'subagent-runs')).toMatchObject({ data: { runs: null } });
+    expect(unrecorded.filter((fact) => fact.kind === 'idle-subagent')).toEqual([]);
   });
 
-  test('an observed idle helper with a recorded empty run list is distinguished from an errored helper', () => {
-    const observed = facts([], helperResult([{ name: 'idle', status: 'idle', runs: [] },
+  test('an observed idle subagent with a recorded empty run list is distinguished from an errored subagent', () => {
+    const observed = facts([], subagentResult([{ name: 'idle', status: 'idle', runs: [] },
       { name: 'errored', status: 'awaiting_input', runs: [{ status: 'error', asked: 'Count the waitlist signups' }] }, { name: 'waiting', status: 'awaiting_input', runs: [] }]));
 
-    expect(observed.filter((fact) => fact.kind === 'idle-helper').map((fact) => fact.data)).toEqual([{ helper: 'idle' }]);
+    expect(observed.filter((fact) => fact.kind === 'idle-subagent').map((fact) => fact.data)).toEqual([{ subagent: 'idle' }]);
   });
 
-  test('identical briefs sent to distinct helpers expose duplicated delegation, not a retry to the same helper', () => {
+  test('identical briefs sent to distinct subagents expose duplicated delegation, not a retry to the same subagent', () => {
     const retry: RunEvent = { ...hire('counter'), args: { op: 'assign', agent: 'counter', message: `write ${REPORT}` }, result: { delivery: 'starts_now' } };
     const observed = facts([start, hire('counter'), hire('other-counter'), retry, end]);
     expect(observed.filter((fact) => fact.kind === 'duplicated-delegation').map((fact) => fact.data)).toEqual([
-      expect.objectContaining({ helpers: ['counter', 'other-counter'] }),
+      expect.objectContaining({ subagents: ['counter', 'other-counter'] }),
     ]);
   });
 
   test('records the lead writing a delegated output, without treating a read of that output as delegated work', () => {
     const write: RunEvent = { ...missingFile, name: 'shell', args: { command: `printf '{}' > ${REPORT}` }, error: undefined, outcome: { success: true } };
     expect(facts([start, hire('counter'), write, end]).find((fact) => fact.kind === 'lead-delegated-work')).toMatchObject({
-      data: { helper: 'counter', paths: [REPORT], tool: 'shell' },
+      data: { subagent: 'counter', paths: [REPORT], tool: 'shell' },
     });
     const read = { ...write, args: { command: `cat ${REPORT}` } };
     expect(facts([start, hire('counter'), read, end]).filter((fact) => fact.kind === 'lead-delegated-work')).toEqual([]);
@@ -120,11 +120,11 @@ describe('deterministic trial insights', () => {
     });
   });
 
-  test('a refused swarm call retains its outcome and is not counted as a hired helper', () => {
+  test('a refused swarm call retains its outcome and is not counted as a hired subagent', () => {
     const swarm: RunEvent = { ...hire('swarm'), args: { op: 'swarm', task: 'Build the exchange.' }, error: 'Missing preset.', outcome: { success: false, reason: 'bad_input' } };
     const observed = facts([start, swarm, end]);
     expect(observed.find((fact) => fact.kind === 'swarm-run')).toMatchObject({ data: { outcome: 'failed', code: 'bad_input' } });
-    expect(observed.filter((fact) => fact.kind === 'helper-hired')).toEqual([]);
+    expect(observed.filter((fact) => fact.kind === 'subagent-hired')).toEqual([]);
   });
 
   test('whole turns with no tools remain distinct from the final no-tool step of a turn that did work', () => {

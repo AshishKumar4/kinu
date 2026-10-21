@@ -473,7 +473,7 @@ describe(productFlowTestName('slate-reach', "a slate streams answers as they are
     expect(agentStream.final).toContain(REACH_REPLY.end);
   });
 
-  test("the owner's own slate hires a helper, and the same slate opened from its share link cannot", () => {
+  test("the owner's own slate hires a subagent, and the same slate opened from its share link cannot", () => {
     const reach = verdictOf(observed, 'slate-reach');
 
     expect(reach.ownerHire).toMatch(/^hired /u);

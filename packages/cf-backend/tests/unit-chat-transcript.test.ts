@@ -58,12 +58,12 @@ describe('the CF public transcript over canonical references', () => {
     expect(await t.store.lastUserMetadata()).toMatchObject({ [STEER_STEP_METADATA_KEY]: 2 });
   });
 
-  // rc21 (001f6d749), 2026-10-19: a helper's answer delivered to its hirer read `user` in the seed a tab opens on and
+  // rc21 (001f6d749), 2026-10-19: a subagent's answer delivered to its hirer read `user` in the seed a tab opens on and
   // `system` on every page the eval reader and scroll-back walk, so a reader of one found no row the other showed.
   test("a row the harness wrote reads one role in the seed and on every page, and a Retry still names it", async () => {
     const t = transcript();
 
-    await t.user('ask', 'hire a helper');
+    await t.user('ask', 'hire a subagent');
     await t.user('programmatic:report', '1 event arrived while you were idle.', authoredTurnMetadata({ kind: 'programmatic' }));
 
     const { messages: seed } = await chatSeed(t.store, keptMediaName);

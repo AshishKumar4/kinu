@@ -1,7 +1,7 @@
 /**
  * An agent's settled turn owes effects its own isolate runs after the turn, against its workspace. Once the owner
  * dismisses the agent, the workspace refuses them: staging c595a3e6b failed a dismissed agent's auto_title ("The actor
- * identity is no longer present"), and d763adae4 a retired helper's turn_report ("Agent stand-one-question is retired").
+ * identity is no longer present"), and d763adae4 a retired subagent's turn_report ("Agent stand-one-question is retired").
  * What an agent that no longer acts owed is no one's concern: each stands down, logged as ended, never as a failure.
  */
 import { expect, test } from 'bun:test';
@@ -76,8 +76,8 @@ test("an agent dismissed while its isolate draws its name owes no title: the dra
   expect(drawn).toBe(0);
 });
 
-test("a helper retired as its turn's report is relayed owes its hirer nothing: the report the workspace refuses stands down", async () => {
-  // As on staging d763adae4 (14:04:46.720Z): the helper's report reached a workspace that had retired it.
+test("a subagent retired as its turn's report is relayed owes its hirer nothing: the report the workspace refuses stands down", async () => {
+  // As on staging d763adae4 (14:04:46.720Z): the subagent's report reached a workspace that had retired it.
   const { ended, failed } = await dismissedWhile('turn_report', (port, dismiss) => {
     const report = port.turnReport.bind(port);
 
@@ -92,9 +92,9 @@ test("a helper retired as its turn's report is relayed owes its hirer nothing: t
   expect(ended).toEqual([expect.objectContaining({ effect: expect.stringContaining('turn_report'), standing: 'retired' })]);
 });
 
-// Review of 66938aa25: the isolate read the standing off the refusal's text, so a live helper's failure quoting it
+// Review of 66938aa25: the isolate read the standing off the refusal's text, so a live subagent's failure quoting it
 // ended its report unsent.
-test("a live helper whose report's relay fails quoting an ended refusal's words still owes it: the failure is its own", async () => {
+test("a live subagent whose report's relay fails quoting an ended refusal's words still owes it: the failure is its own", async () => {
   const { ended, failed } = await dismissedWhile('turn_report', (port) => {
     port.turnReport = async () => {
       throw new KinuError('unavailable', 'the relay answered: actor_ended(retired): Agent task is retired and no longer acts in this workspace.');

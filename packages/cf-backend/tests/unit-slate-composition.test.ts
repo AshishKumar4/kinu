@@ -473,7 +473,7 @@ test('a slate never reaches what only the agent does', async () => {
   expect(await call(['memory', 'remember'], ['key', 'value', false])).toMatchObject({ ok: false, reason: 'bad_input' });
 });
 
-test('the owner\'s own slate hires a helper and lists it as the owner does; a hired agent\'s slate does neither', async () => {
+test('the owner\'s own slate hires a subagent and lists it as the owner does; a hired agent\'s slate does neither', async () => {
   const parent = gatewayWorkspace(stubAiBinding((run) => chatCompletion(run, 'Counted 3 files.')));
   const files = workspaceFiles(parent.agent);
   await files.mkdir('/slates/board', { recursive: true });
@@ -489,7 +489,7 @@ test('the owner\'s own slate hires a helper and lists it as the owner does; a hi
   expect(listed).toMatchObject({ ok: true });
   expect(JSON.stringify(listed.ok ? listed.value : null)).toContain('counter');
 
-  // The helper's own slate reaches no helpers: refused where the host routes it, before any actor is asked.
+  // The subagent's own slate reaches no subagents: refused where the host routes it, before any actor is asked.
   const child = await hostedSubagentHarness(parent, { name: 'reader', displayName: 'Reader', nameOrigin: 'user', roleId: 'task', mission: 'Read' });
   const asChild = await childCaller(parent.db, actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }), 'reader');
   const own = child.actor.runtime.storage.vfs;

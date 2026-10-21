@@ -1,6 +1,6 @@
 /**
  * A phase's line in a few words (the owner, 2026-10-19: "even smaller, cuz its about the phase"), read from its calls:
- * what they did, outcome first. A deploy, then the files edited, then the tests' count, then a commit, a helper hired,
+ * what they did, outcome first. A deploy, then the files edited, then the tests' count, then a commit, a subagent hired,
  * the logs and files read, the web: the first of these, and a second only beside a short first. While the phase runs,
  * what is running now follows what it has done so far.
  *

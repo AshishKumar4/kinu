@@ -176,8 +176,8 @@ describe('a dismissed agent keeps its conversation reachable', () => {
   });
 });
 
-/** A task-lifetime helper makes no report card and has no tab; the `agents` call that asked it survives a reload. */
-describe('the call that asked a one-question helper opens its chat', () => {
+/** A task-lifetime subagent makes no report card and has no tab; the `agents` call that asked it survives a reload. */
+describe('the call that asked a one-question subagent opens its chat', () => {
   const asked = (output: JsonValue): UIMessage => ({
     id: 'a1', role: 'assistant',
     parts: [{ type: 'tool-agents', toolCallId: 'agents_0', state: 'output-available', input: { op: 'assign', lifetime: 'task' }, output }],
@@ -186,11 +186,11 @@ describe('the call that asked a one-question helper opens its chat', () => {
   const markup = (base: string | null, output: JsonValue, parent: string | null = null) => renderToStaticMarkup(createElement(MemoryRouter, null,
     createElement(SubagentChatBase.Provider, { value: base === null ? null : { base, parent } }, createElement(MessageView, { message: asked(output) }))));
 
-  test('a task helper\'s name links to its chat below the chat that asked it', () => {
+  test('a task subagent\'s name links to its chat below the chat that asked it', () => {
     const answered = { status: 'completed', agent: 'ask-reviewer-a1', lifetime: 'task', role: 'reviewer', answer: 'Fine.', transcript: 'kept' };
 
     expect(markup('/workspace/ws/agents/', answered)).toContain('href="/workspace/ws/agents/ask-reviewer-a1"');
-    // The asking chat's id rides along: a released parent has no path to walk, but its id still finds the helper.
+    // The asking chat's id rides along: a released parent has no path to walk, but its id still finds the subagent.
     expect(markup('/workspace/ws/agents/auditor/', JSON.stringify(answered), 'actor-auditor')).toContain('href="/workspace/ws/agents/auditor/ask-reviewer-a1?parent=actor-auditor"');
   });
 
@@ -200,9 +200,9 @@ describe('the call that asked a one-question helper opens its chat', () => {
   });
 });
 
-/** A helper below a direct child has no tab; the Work tab opens its chat by the path the TUI walks. */
+/** A subagent below a direct child has no tab; the Work tab opens its chat by the path the TUI walks. */
 describe('a subagent below a direct child is reached by its path', () => {
-  /** The helper's own model hires when its task says so, as a delegated turn does. */
+  /** The subagent's own model hires when its task says so, as a delegated turn does. */
   const hiringGateway = () => stubAiBinding((run) => {
     const asked = requestOf(run).messages.some((message) => message.role === 'user' && JSON.stringify(message.content).includes('Hire ask-checker-a1'));
     const answered = requestOf(run).messages.some((message) => message.role === 'tool');
@@ -217,11 +217,11 @@ describe('a subagent below a direct child is reached by its path', () => {
     await parent.agent.setSoul('# Purpose\n\nAudit the ledger.');
     const { name, subagent } = await parent.agent.createSubagentAgent();
 
-    await runDelegatedTask(parent, present(subagent.actorId, 'the helper id'), 'Hire ask-checker-a1 to check the ledger.');
+    await runDelegatedTask(parent, present(subagent.actorId, 'the subagent id'), 'Hire ask-checker-a1 to check the ledger.');
     const children = await parent.agent.inspectSubagent({ path: [name], view: 'children', page: {} });
     const nested = children.view === 'children' ? children.page.items.find((entry) => entry.name === 'ask-checker-a1') : undefined;
 
-    return { agent: parent.agent, name, parentId: present(subagent.actorId, 'the helper id'), path: `${name}/ask-checker-a1`, id: nested?.actorReference?.actorId };
+    return { agent: parent.agent, name, parentId: present(subagent.actorId, 'the subagent id'), path: `${name}/ask-checker-a1`, id: nested?.actorReference?.actorId };
   }
 
   /** The page's own resolver over this object's RPCs, as its socket answers them. */

@@ -14,7 +14,7 @@ export const NEST_MISSION = 'HIRE-NEST-BRIEF';
 
 export const NEST_RELAY = 'RELAYED';
 
-/** The deepest helper's answer under `chain`: its own hire is refused at the depth cap. */
+/** The deepest subagent's answer under `chain`: its own hire is refused at the depth cap. */
 export const CHAIN_BOTTOM = 'CHAIN-BOTTOM-7';
 
 /** How a hired agent's report reads in the drain turn it opens on its hirer. */

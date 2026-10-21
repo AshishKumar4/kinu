@@ -45,8 +45,8 @@ describe('hire', () => {
     expect(observed.transcript.join(' ')).toContain(CHILD_ANSWER);
   });
 
-  // Owner, 2026-08-18: a hired agent hires its own helpers, to depth 4.
-  it('a helper\'s own task hire answers that helper, and the relayed answer reaches the root', async () => {
+  // Owner, 2026-08-18: a hired agent hires its own subagents, to depth 4.
+  it('a subagent\'s own task hire answers that subagent, and the relayed answer reaches the root', async () => {
     const workspace = 'hire-nested';
 
     await probe(workspace).setup(workspace, 'hire-root', 'nest');
@@ -66,7 +66,7 @@ describe('hire', () => {
     expect(hired.every((row) => row.status === 'dismissed')).toBe(true);
   });
 
-  it('a helper\'s own task child that notes its progress still answers the helper, which answers only then', async () => {
+  it('a subagent\'s own task child that notes its progress still answers the subagent, which answers only then', async () => {
     const workspace = 'hire-nested-progress';
 
     await probe(workspace).setup(workspace, 'hire-root', 'nest-progress');
@@ -76,12 +76,12 @@ describe('hire', () => {
     const observed: HireObservation = await probe(workspace).observe(workspace);
     const toRoot = observed.reports.filter((report) => report.includes(NEST_RELAY));
 
-    // The helper's turn on the progress note is not its answer: its own hire still works.
+    // The subagent's turn on the progress note is not its answer: its own hire still works.
     expect(toRoot.every((report) => report.includes(CHILD_ANSWER))).toBe(true);
     expect(toRoot.length).toBeGreaterThan(0);
   });
 
-  it('a chain of helpers each hiring its own stops at the depth cap and still answers the root', async () => {
+  it('a chain of subagents each hiring its own stops at the depth cap and still answers the root', async () => {
     const workspace = 'hire-chain';
 
     await probe(workspace).setup(workspace, 'hire-root', 'chain');
@@ -92,11 +92,11 @@ describe('hire', () => {
     const hired = observed.actors.filter((row) => row.hired);
 
     expect(hired).toHaveLength(DELEGATION_MAX_DEPTH);
-    // Relayed up every level: the deepest helper's own answer reaches the root.
+    // Relayed up every level: the deepest subagent's own answer reaches the root.
     expect(observed.rootReports.join(' ')).toContain(CHAIN_BOTTOM);
   });
 
-  it('dismissing a helper retires the task agent it hired, mid-turn', async () => {
+  it('dismissing a subagent retires the task agent it hired, mid-turn', async () => {
     const workspace = 'hire-nested-dismiss';
 
     await probe(workspace).setup(workspace, 'hire-root', 'nest-park');

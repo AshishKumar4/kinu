@@ -133,7 +133,7 @@ Finished-step events contain sealed part references and accounting, not a
 second copy of the native response. Owner-authorized `inspectSubagent`
 with `view: 'step'`, `runId`, `eventIndex` and an optional `from` reads those
 references from the actor's canonical payload store, including retained
-helpers. It returns native message projections and `nextFrom`; pages use
+subagents. It returns native message projections and `nextFrom`; pages use
 `run_events.page_bytes`, while one oversized message still ships whole as
 on the request inspector. Eval verification and artifact capture use this
 reader before teardown, so full tool inputs are not inferred from the

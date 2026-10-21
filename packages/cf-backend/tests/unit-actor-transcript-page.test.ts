@@ -15,7 +15,7 @@ import { rowText } from '@kinu.run/core';
 function retainedDatabase() {
   const created = createTestWorkspace();
   const actors = createTestActorsOver(created.db, { name: 'inspection-owner' });
-  const child = actors.directory.create({ parent: actors.main, name: 'helper', creationId: 'helper', origin: 'user', lifetime: 'task' });
+  const child = actors.directory.create({ parent: actors.main, name: 'subagent', creationId: 'subagent', origin: 'user', lifetime: 'task' });
   const refuse = (): never => { throw new Error('a retained inspection invoked a mutating workspace operation'); };
 
   const files: NimbusSandboxFiles = {
@@ -72,7 +72,7 @@ test('a retired actor keeps its spilled history readable without actor reacquisi
   try {
     const content = 'retained payload '.repeat(Math.ceil(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 16));
     await seedTranscriptEntry(f.history, CHAT_SESSION_ID, { id: 'retained', origin: 'input', message: { role: 'user', content } });
-    f.actors.directory.apply(actorReferenceOf(f.actors.main), [], { action: 'retire', name: 'helper', reference: actorReferenceOf(f.child) });
+    f.actors.directory.apply(actorReferenceOf(f.actors.main), [], { action: 'retire', name: 'subagent', reference: actorReferenceOf(f.child) });
     const before = f.sql`SELECT * FROM workspace_actors`;
     const inspected = await f.database.inspect({ view: 'history', path: [], page: {} });
 

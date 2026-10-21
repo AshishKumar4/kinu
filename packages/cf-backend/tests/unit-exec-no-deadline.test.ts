@@ -481,7 +481,7 @@ describe("adaptCloudflareSandbox — the desktop", () => {
   test("an agent's end lets go of the desktop on the box once after it drove, and asks no box when it did not (D56)", async () => {
     const box = desktopBox();
 
-    await box.handle.releaseDesktop('helper');
+    await box.handle.releaseDesktop('subagent');
 
     const stop = new AbortController();
     const looking = box.handle.desktop({ driver: 'main', action: { kind: 'screenshot' } }, { signal: stop.signal });

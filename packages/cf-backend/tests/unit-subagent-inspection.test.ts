@@ -181,7 +181,7 @@ describe('owner reads of retained subagent paths', () => {
     expect(after.filter((row) => row.name === 'child')).toHaveLength(1);
   });
 
-  test('a finished helper\'s kept history reads by its id, where its name no longer resolves', async () => {
+  test('a finished subagent\'s kept history reads by its id, where its name no longer resolves', async () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, 'child');
     const leaf = fixture.child(child, 'leaf');
@@ -200,7 +200,7 @@ describe('owner reads of retained subagent paths', () => {
     expect(await read(fixture, { path: [], view: 'history', page: {}, actor: 'not-an-actor' })).toMatchObject({ view: 'missing' });
   });
 
-  test('a finished helper\'s runs and their events read by its id, where its name no longer resolves', async () => {
+  test('a finished subagent\'s runs and their events read by its id, where its name no longer resolves', async () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, 'child');
     const events = new RunEventRecorder(fixture.sql, child);
@@ -220,7 +220,7 @@ describe('owner reads of retained subagent paths', () => {
     });
   });
 
-  test('a released parent\'s roster reads by its id, so its helpers are still found', async () => {
+  test('a released parent\'s roster reads by its id, so its subagents are still found', async () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, 'child');
     const leaf = fixture.child(child, 'leaf');

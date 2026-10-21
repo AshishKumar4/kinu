@@ -4706,7 +4706,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // hired the advisor, and said to it as a delivery; any other agent's isolate judges its own and says it there.
     if (actorReach(actorPolicy(record)).kind === 'workspace') return await advisor.deliverAnswers();
 
-    return await advisor.deliverAnswers(async (helper, turnId) => await this.agentCall(actorId, (isolate, snapshot) => isolate.deliverAdvice(snapshot, helper, turnId)));
+    return await advisor.deliverAnswers(async (subagent, turnId) => await this.agentCall(actorId, (isolate, snapshot) => isolate.deliverAdvice(snapshot, subagent, turnId)));
   }
 
   async _kinuTimerTick(): Promise<void> {

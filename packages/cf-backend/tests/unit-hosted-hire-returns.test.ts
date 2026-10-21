@@ -49,7 +49,7 @@ function leafHire(answered: Promise<void>, asked: () => void) {
   };
 }
 
-async function helperWorkspace(respond: (run: RecordedGatewayRun) => Response | Promise<Response>) {
+async function subagentWorkspace(respond: (run: RecordedGatewayRun) => Response | Promise<Response>) {
   const gateway = stubAiBinding(respond);
   const workspace = gatewayWorkspace(gateway);
   await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
@@ -73,44 +73,44 @@ async function helperWorkspace(respond: (run: RecordedGatewayRun) => Response | 
   return { gateway, workspace, middleId: middle.actor.handle.actorId, count, hired, retiring };
 }
 
-test("a helper's task hire returns at once, and the answer opens the helper's next turn", async () => {
+test("a subagent's task hire returns at once, and the answer opens the subagent's next turn", async () => {
   const release = Promise.withResolvers<void>();
   let leafAsked = false;
 
-  const { gateway, workspace, middleId, count, hired, retiring } = await helperWorkspace(leafHire(release.promise, () => { leafAsked = true; }));
+  const { gateway, workspace, middleId, count, hired, retiring } = await subagentWorkspace(leafHire(release.promise, () => { leafAsked = true; }));
 
   await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
-  await driveUntil(workspace, 'the helper\'s turn never ended while its task hire worked', () => leafAsked && count(middleId, 'run_end') > 0);
-  // The hire returned while its agent was still working: the helper's turn ended holding no wait.
+  await driveUntil(workspace, 'the subagent\'s turn never ended while its task hire worked', () => leafAsked && count(middleId, 'run_end') > 0);
+  // The hire returned while its agent was still working: the subagent's turn ended holding no wait.
   expect(gateway.unanswered.size).toBe(1);
 
   release.resolve();
-  await driveUntil(workspace, 'the task agent\'s answer never opened the helper\'s next turn', () => count(middleId, 'run_start') >= 2);
-  await driveUntil(workspace, 'the helper never answered on its task agent\'s message', () => count(middleId, 'run_end') >= 2);
+  await driveUntil(workspace, 'the task agent\'s answer never opened the subagent\'s next turn', () => count(middleId, 'run_start') >= 2);
+  await driveUntil(workspace, 'the subagent never answered on its task agent\'s message', () => count(middleId, 'run_end') >= 2);
   expect(gateway.runs.some((run) => openingOf(run).includes('Leaf done.'))).toBe(true);
   // The task agent retires once its answer is held, keeping its history.
   const leaf = hired() ?? '';
   await driveUntil(workspace, 'the answered task agent never retired', () => retiring(leaf));
 });
 
-test("a helper whose turn ends with its hire still working is released, and no drain runs on the released session", async () => {
+test("a subagent whose turn ends with its hire still working is released, and no drain runs on the released session", async () => {
   const release = Promise.withResolvers<void>();
   let leafAsked = false;
 
-  const { workspace, middleId, count } = await helperWorkspace(leafHire(release.promise, () => { leafAsked = true; }));
+  const { workspace, middleId, count } = await subagentWorkspace(leafHire(release.promise, () => { leafAsked = true; }));
 
   const recording = createRecordingLogger();
   const restore = setDiagnosticsSink(recording);
 
   try {
     await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
-    await driveUntil(workspace, 'the helper\'s turn never ended while its task hire worked', () => leafAsked && count(middleId, 'run_end') > 0);
+    await driveUntil(workspace, 'the subagent\'s turn never ended while its task hire worked', () => leafAsked && count(middleId, 'run_end') > 0);
     // A drain armed on the released session fires once its debounce ends, and fails against the release.
     await joinHarnessKeepAlives(workspace.agent);
     expect(recording.emitted.filter((line) => line.event === 'orchestrator.drain_select_failed')).toEqual([]);
 
     release.resolve();
-    await driveUntil(workspace, 'the task agent\'s answer never opened the helper\'s next turn', () => count(middleId, 'run_end') >= 2);
+    await driveUntil(workspace, 'the task agent\'s answer never opened the subagent\'s next turn', () => count(middleId, 'run_end') >= 2);
   } finally {
     restore();
   }
@@ -141,7 +141,7 @@ test('a hire whose facet cannot load reports its named failure to its hirer', as
 });
 
 test("a durable hire whose turn fails delivers its failure to its hirer as a message", async () => {
-  const { gateway, workspace, middleId, count } = await helperWorkspace((run) => {
+  const { gateway, workspace, middleId, count } = await subagentWorkspace((run) => {
     const opening = openingOf(run);
 
     if (opening.includes('Durable task.')) return new Response('', { status: 400 });
@@ -155,7 +155,7 @@ test("a durable hire whose turn fails delivers its failure to its hirer as a mes
 
   await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
   await driveUntil(workspace, 'the failed hire\'s failure never opened its hirer\'s next turn', () => count(middleId, 'run_start') >= 2);
-  await driveUntil(workspace, 'the helper never answered on its hire\'s failure', () => count(middleId, 'run_end') >= 2);
+  await driveUntil(workspace, 'the subagent never answered on its hire\'s failure', () => count(middleId, 'run_end') >= 2);
 
   const told = gateway.runs.filter((run) => openingOf(run).includes('This turn failed before an answer existed'));
 
@@ -164,10 +164,10 @@ test("a durable hire whose turn fails delivers its failure to its hirer as a mes
     .toMatchObject([{ status: 'awaiting_input', currentTask: 'Durable task.' }]);
 });
 
-test("a Stop reaches the agent a stopped helper hired, and wakes no one", async () => {
+test("a Stop reaches the agent a stopped subagent hired, and wakes no one", async () => {
   let durableAsked = false;
 
-  const { workspace, middleId, count, hired } = await helperWorkspace((run) => {
+  const { workspace, middleId, count, hired } = await subagentWorkspace((run) => {
     const opening = openingOf(run);
 
     if (opening.includes('Durable task.')) {
@@ -194,8 +194,8 @@ test("a Stop reaches the agent a stopped helper hired, and wakes no one", async 
   expect(count(middleId, 'run_start')).toBe(1);
 });
 
-// hire.test flaked on this (staging-flows-scripted-569bb6869d run 1; flake-gate 3 of 6): a task helper's progress note
-// and its hire's answer queued as two turns, and the helper settled on the first, with the answer still queued.
+// hire.test flaked on this (staging-flows-scripted-569bb6869d run 1; flake-gate 3 of 6): a task subagent's progress note
+// and its hire's answer queued as two turns, and the subagent settled on the first, with the answer still queued.
 test("a task agent does not settle while more input is queued for it: its answer is its last turn's", async () => {
   const parked = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -205,7 +205,7 @@ test("a task agent does not settle while more input is queued for it: its answer
 
     if (opening.includes('Queued note.')) return chatCompletion(run, 'second answer');
 
-    if (opening.includes('Helper brief.')) {
+    if (opening.includes('Subagent brief.')) {
       parked.resolve();
       await release.promise;
 
@@ -215,7 +215,7 @@ test("a task agent does not settle while more input is queued for it: its answer
     if (opening.includes('answer')) return chatCompletion(run, 'Root noted.');
 
     return toolResults(run) === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', message: 'Helper brief.' } }, 'call_helper')
+      ? toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', message: 'Subagent brief.' } }, 'call_subagent')
       : chatCompletion(run, 'Root waits.');
   });
 
@@ -223,19 +223,19 @@ test("a task agent does not settle while more input is queued for it: its answer
   const sql = wrapDatabase(workspace.db).sql;
   await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
 
-  const turn = catalogTurn(workspace.agent, 'Hire a helper.');
+  const turn = catalogTurn(workspace.agent, 'Hire a subagent.');
 
-  await driveUntil(workspace, 'the task helper never started', () => gateway.runs.some((run) => openingOf(run).includes('Helper brief.')));
-  const helperId = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE origin IN ('user','agent','evolution')`[0]?.id ?? '';
-  // More input queues for the helper while its first turn is still out.
-  await wakeForDelegatedTask(workspace, helperId, 'Queued note.');
+  await driveUntil(workspace, 'the task subagent never started', () => gateway.runs.some((run) => openingOf(run).includes('Subagent brief.')));
+  const subagentId = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE origin IN ('user','agent','evolution')`[0]?.id ?? '';
+  // More input queues for the subagent while its first turn is still out.
+  await wakeForDelegatedTask(workspace, subagentId, 'Queued note.');
   release.resolve();
-  // The root's turn settles once every agent's isolate rests, its helper's included.
+  // The root's turn settles once every agent's isolate rests, its subagent's included.
   await turn;
 
   const rootTold = (): string[] => gateway.runs.map(openingOf).filter((opening) => opening.includes('[subagent_report]'));
 
-  await driveUntil(workspace, 'the task helper\'s answer never reached the root', () => rootTold().length > 0);
+  await driveUntil(workspace, 'the task subagent\'s answer never reached the root', () => rootTold().length > 0);
 
   expect(rootTold().join(' ')).toContain('second answer');
   expect(rootTold().join(' ')).not.toContain('first answer');
@@ -322,7 +322,7 @@ test("a Stop discards the input already queued for a descendant it interrupts", 
   let durableAsked = false;
   let queuedAsked = false;
 
-  const { workspace, middleId, hired } = await helperWorkspace((run) => {
+  const { workspace, middleId, hired } = await subagentWorkspace((run) => {
     const opening = openingOf(run);
 
     if (opening.includes('Queued input.')) {
@@ -351,13 +351,13 @@ test("a Stop discards the input already queued for a descendant it interrupts", 
   await expect(driveUntil(workspace, 'the queued input never ran', () => queuedAsked)).rejects.toThrow('the queued input never ran');
 });
 
-// Owner, 2026-09-26: no limit on helper turns. Two hired agents' admitted turns run at once, neither queued behind the other.
+// Owner, 2026-09-26: no limit on subagent turns. Two hired agents' admitted turns run at once, neither queued behind the other.
 test("two hired agents' admitted turns run at once", async () => {
   const running = new Set<string>();
   let together = false;
   const release = Promise.withResolvers<void>();
 
-  const { workspace, middleId } = await helperWorkspace(async (run) => {
+  const { workspace, middleId } = await subagentWorkspace(async (run) => {
     const opening = openingOf(run);
     const which = ['First brief.', 'Second brief.'].find((brief) => opening.includes(brief));
 
@@ -384,7 +384,7 @@ test("a Stop skips a turn the stopped agent's runner had already picked up", asy
   let secondRan = false;
   let firstHeld = false;
 
-  const { workspace, middleId } = await helperWorkspace((run) => {
+  const { workspace, middleId } = await subagentWorkspace((run) => {
     const opening = openingOf(run);
 
     if (opening.includes('Second queued.')) {
@@ -410,7 +410,7 @@ test("a Stop skips a turn the stopped agent's runner had already picked up", asy
   await wakeForDelegatedTask(workspace, parent, 'Second queued.');
   await driveUntil(workspace, 'the first turn never started', () => firstHeld);
 
-  // The helper is below the root: the root's Stop reaches it.
+  // The subagent is below the root: the root's Stop reaches it.
   await workspace.agent.cancelCurrentWork();
 
   await expect(driveUntil(workspace, 'the second turn never ran', () => secondRan)).rejects.toThrow('the second turn never ran');

@@ -290,7 +290,7 @@ describe('compareEvalResults', () => {
   });
 
   test('a turn that hung fails on the build: counted, compared and named, never infrastructure', () => {
-    const hung = 'the workspace stayed busy with its ledger silent for 361 s: held by working helper task-helper';
+    const hung = 'the workspace stayed busy with its ledger silent for 361 s: held by working subagent task-subagent';
     const hanging = report('t', [...trialsOf(1, 9), { pass: false, hung }], NEXT);
     const comparison = compareEvalResults(report('t', trialsOf(9, 10), BASE), hanging);
 

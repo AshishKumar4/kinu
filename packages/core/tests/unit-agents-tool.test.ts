@@ -141,7 +141,7 @@ function propertyNames(input: { value: unknown }): string[] {
 }
 
 describe('agents tool — registration and dep-gating', () => {
-  test('a new helper takes its birth context; an existing agent is refused one', async () => {
+  test('a new subagent takes its birth context; an existing agent is refused one', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps, profile: testProfile });
 

@@ -1,6 +1,6 @@
 /**
  * The subagent roster (`actor_subagents`): the parent's record of who works for it.
- * Durable and task-lifetime helpers share the table; the lifetime is the actor's, or its birth's before it exists.
+ * Durable and task-lifetime subagents share the table; the lifetime is the actor's, or its birth's before it exists.
  */
 
 import { Cause, Effect } from 'effect';
@@ -19,7 +19,7 @@ import { SUBAGENT_ORIGINS } from '../identity/workspace-actors';
 import { SubagentBirthSchema } from './birth';
 import { parseJsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
-import { EvolutionHelperStore, initEvolutionHelperTable } from '../identity/evolution-helpers';
+import { EvolutionSubagentStore, initEvolutionSubagentTable } from '../identity/evolution-subagents';
 import type { AgentConfigStore } from '../config/store';
 import type { NameOrigin } from '../identity/naming';
 
@@ -142,19 +142,19 @@ export function initSubagentRosterTable(sql: SqlExec): void {
   )`);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_actor_subagents_order
     ON actor_subagents(actor_id, created_at, name)`);
-  initEvolutionHelperTable(sql);
+  initEvolutionSubagentTable(sql);
 }
 
 /** Parent-actor roster; owns all subagent status policy. */
 export class SubagentRosterStore {
   private readonly actorId: string;
 
-  readonly helpers: EvolutionHelperStore;
+  readonly evolution: EvolutionSubagentStore;
 
   /** Scoped to one parent actor: subagent names are unique only per parent. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
-    this.helpers = new EvolutionHelperStore(sql, actor);
+    this.evolution = new EvolutionSubagentStore(sql, actor);
   }
 
   ensureSchema(): void {
@@ -267,7 +267,7 @@ export class SubagentRosterStore {
       this.sql.exec(`DELETE FROM actor_subagents WHERE actor_id = ? AND name = ?
         AND json_extract(actor_reference, '$.actorId') = ? AND json_extract(actor_reference, '$.workspaceId') = ?
         AND json_extract(actor_reference, '$.parentActorId') IS ?`, this.actorId, name, reference.actorId, reference.workspaceId, reference.parentActorId);
-      this.helpers.remove(name);
+      this.evolution.remove(name);
     }));
   }
 
@@ -288,7 +288,7 @@ export class SubagentRosterStore {
   remove(name: string): void {
     this.actor.assertCurrent();
     this.sql.exec(`DELETE FROM actor_subagents WHERE actor_id = ? AND name = ?`, this.actorId, name);
-    this.helpers.remove(name);
+    this.evolution.remove(name);
   }
 
   get(name: string): SubagentRosterEntry | null {
@@ -396,7 +396,7 @@ export class SubagentRosterStore {
   finishTurn(name: string, ending: TaskTurnEnding, now: number): boolean {
     const entry = this.get(name);
 
-    // Task agents may owe a later turn's answer while their own helpers or inbox still hold work.
+    // Task agents may owe a later turn's answer while their own subagents or inbox still hold work.
     if (entry === null || entry.lifetime !== 'durable' || entry.status !== 'working') return false;
     this.applyReport(name, ending === 'answered' || entry.currentTask === null ? 'progress' : 'blocked', 'turn_end', now);
 

@@ -11,7 +11,7 @@ const OpSchema = v.object({
 
 const TaskHireArgsSchema = v.looseObject({ op: v.literal('hire'), lifetime: v.literal('task'), message: v.string() });
 
-/** A task hire as `agents` answers it: at once, its helper still at work (cafab2bfc, SUBAGENTS.md s4). */
+/** A task hire as `agents` answers it: at once, its subagent still at work (cafab2bfc, SUBAGENTS.md s4). */
 const HiredSchema = v.looseObject({ status: v.literal('working'), lifetime: v.literal('task'), agent: v.string() });
 
 const HireSchema = v.object({ name: v.string() });
@@ -37,7 +37,7 @@ function calls(events: readonly RunEvent[], op: string): ToolCallEnd[] {
   });
 }
 
-/** One task hire, by the helper it named and the message it gave. */
+/** One task hire, by the subagent it named and the message it gave. */
 export interface TaskHire {
   readonly call: ToolCallEnd;
   readonly agent: string;
@@ -54,7 +54,7 @@ export function taskHires(events: readonly RunEvent[]): TaskHire[] {
   });
 }
 
-/** How a helper's answer reached its hirer: the message that brought it, and the hirer's reply to that message. */
+/** How a subagent's answer reached its hirer: the message that brought it, and the hirer's reply to that message. */
 export interface Delivery {
   readonly text: string;
   readonly reply: string;

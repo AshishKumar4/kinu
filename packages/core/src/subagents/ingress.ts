@@ -1,6 +1,6 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Report ingress for durable and task-lifetime children: a live waiter consumes its answer;
- *  every other admitted report enters the parent event rail, except an evolution helper's. */
+ *  every other admitted report enters the parent event rail, except an evolution subagent's. */
 
 import type { EventLog } from '../events/hub/log';
 
@@ -80,7 +80,7 @@ export interface SubagentIngressDeps {
   transaction<T>(body: () => T): T;
   announce(report: AdmittedSubagentReport): void;
   onAdmitted(): void;
-  /** Inside the transaction that stores an evolution helper's answer: a host with a durable job queue writes the
+  /** Inside the transaction that stores an evolution subagent's answer: a host with a durable job queue writes the
    *  delivery job here, so the answer and its job land or vanish together; what it returns is awaited after the
    *  commit (the queue's alarm re-arm). A host without one returns nothing: its stored answer is the owed delivery. */
   evolutionAnswerStored(): Promise<void> | undefined;
@@ -111,14 +111,14 @@ export async function receiveSubagentEvent(
 
   const settlesTask = subagent.lifetime === TEMPORARY_LIFETIME && temporaryRunSettles(input);
 
-  // A rail row would wake the parent in the helper's mode, with the lane's proposal in its context.
+  // A rail row would wake the parent in the subagent's mode, with the lane's proposal in its context.
   if (subagent.origin === 'evolution') {
     if (subagent.status === 'dismissed' || !temporaryRunSettles(input)) {
       return { id: '', disposition: 'not_awaited' };
     }
 
     const queued = deps.transaction(() => {
-      deps.roster.helpers.storeAnswer(input.fromSubagent, input.status === 'blocked' ? 'blocked' : 'completed', answer);
+      deps.roster.evolution.storeAnswer(input.fromSubagent, input.status === 'blocked' ? 'blocked' : 'completed', answer);
       deps.roster.applyReport(input.fromSubagent, input.status, input.origin, now);
 
       return deps.evolutionAnswerStored();

@@ -97,7 +97,7 @@ const rows = (listed: readonly PanelAgent[]) => listed.map(({ label, category, a
 }));
 
 describe('the Agents panel lists every agent in the workspace', () => {
-  test('the owner\'s own, one an agent hired, and a background helper, each placed as the design says', async () => {
+  test('the owner\'s own, one an agent hired, and a background subagent, each placed as the design says', async () => {
     const { db, main, hire, read, openTurn } = workspace();
     const alice = hire(main, 'alice', { origin: 'user' });
     openTurn(hire(alice, 'scout-1', {}));
@@ -154,11 +154,11 @@ describe('the Agents panel lists every agent in the workspace', () => {
   });
 
   // Staging f75f06932, 2026-10-01: the eval's settle called five trials quiet on two idle reads a second apart, while
-  // each owed a turn it had not claimed (a helper's admitted task, its report to the lead, a job's wake). From the
+  // each owed a turn it had not claimed (a subagent's admitted task, its report to the lead, a job's wake). From the
   // moment a turn is owed, the agent it is owed to reads working.
   test('an agent owed a turn it has not claimed reads working', async () => {
     const { exec, main, hire, read } = workspace();
-    const helper = hire(main, 'counter-1', { lifetime: 'task' });
+    const subagent = hire(main, 'counter-1', { lifetime: 'task' });
     const activity = async (queued: readonly string[] = []) => Object.fromEntries((await read(queued)).map((agent) => [agent.label, agent.activity]));
 
     expect(await activity()).toEqual({ Main: 'idle', 'counter-1': 'idle' });
@@ -166,8 +166,8 @@ describe('the Agents panel lists every agent in the workspace', () => {
     // The lead's chat queued a turn (a job's wake) it has not claimed.
     expect((await activity([main.actorId])).Main).toBe('working');
 
-    // The helper was handed a task its turn has not claimed: its wake stands until it says it rests.
-    expect((await activity([helper.actorId]))['counter-1']).toBe('working');
+    // The subagent was handed a task its turn has not claimed: its wake stands until it says it rests.
+    expect((await activity([subagent.actorId]))['counter-1']).toBe('working');
 
     // An email reached the lead, and the drain that takes it has not run.
     new EventLog(exec, main).publish({ descriptor: { ingress: 'email_inbound', variant: 'email', sender_class: 'owner', payload: EMAIL }, now: Date.now() });

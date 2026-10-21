@@ -62,10 +62,10 @@ async function ended<T extends WorkspaceHeld>(watching: Promise<unknown>, ending
 
 const hangOf = (watching: Promise<unknown>) => ended(watching, WorkspaceHang);
 
-/** `heard`: the live frames heard so far on every room the session listens to, as `heard()` counts them. `helperJobs`:
- *  each helper's own jobs, by its name. */
+/** `heard`: the live frames heard so far on every room the session listens to, as `heard()` counts them. `subagentJobs`:
+ *  each subagent's own jobs, by its name. */
 type Snapshot = {
-  events: RunEvent[]; jobs?: PublicBackgroundJob[]; helperJobs?: Record<string, PublicBackgroundJob[]>; helpers?: PublicSubagent[];
+  events: RunEvent[]; jobs?: PublicBackgroundJob[]; subagentJobs?: Record<string, PublicBackgroundJob[]>; subagents?: PublicSubagent[];
   agents?: PublicAgent[]; inFlight?: string[]; heard?: number;
 };
 
@@ -78,7 +78,7 @@ const UNANSWERED_MS = 120 * MINUTE;
 /**
  * A workspace whose state at each moment of the watch's clock is `state(elapsed)`. A read two hours in is a watch that
  * never gave a verdict: the read fails, so a settle without the rule under test fails here instead of polling forever.
- * `listened` keeps each set of helper rooms the watch asked to listen to.
+ * `listened` keeps each set of subagent rooms the watch asked to listen to.
  */
 function fixtureWorkspace(clock: FixtureClock, state: (elapsed: number) => Snapshot, listened: string[][] = []): WatchedWorkspace {
   const read = () => {
@@ -89,12 +89,12 @@ function fixtureWorkspace(clock: FixtureClock, state: (elapsed: number) => Snaps
 
   return {
     runEvents: () => Promise.resolve(read().events),
-    backgroundJobs: (of) => Promise.resolve(of === undefined ? read().jobs ?? [] : read().helperJobs?.[of] ?? []),
-    subagents: () => Promise.resolve(read().helpers ?? []),
+    backgroundJobs: (of) => Promise.resolve(of === undefined ? read().jobs ?? [] : read().subagentJobs?.[of] ?? []),
+    subagents: () => Promise.resolve(read().subagents ?? []),
     agents: () => Promise.resolve(read().agents ?? []),
     toolCallsInFlight: () => read().inFlight ?? [],
     heard: () => read().heard ?? 0,
-    listen: (helpers) => { listened.push([...helpers]); },
+    listen: (subagents) => { listened.push([...subagents]); },
     ...SILENT_ROOM,
   };
 }
@@ -126,26 +126,26 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
   });
 
   // Staging f75f06932, order-book (Ling): the turn's own run silent since its last step, eight jobs running beside it.
-  test('the silent run and helper that hold it are named, a job running meanwhile beside them, and nothing that is done', async () => {
+  test('the silent run and subagent that hold it are named, a job running meanwhile beside them, and nothing that is done', async () => {
     const clock = watchClock();
 
     const held = fixtureWorkspace(clock, () => ({
       events: [start('run-1'), step('run-1', 5_000, 1)],
       jobs: [{ id: 'bgjob-ls', kind: 'shell', status: 'running', label: 'workspace: ls -la' },
         { id: 'bgjob-install', kind: 'shell', status: 'completed', label: 'workspace: npm install' }],
-      helpers: [{ name: 'task-helper', status: 'working', lifetime: 'task' }, { name: 'done-helper', status: 'idle', lifetime: 'task' }],
+      subagents: [{ name: 'task-subagent', status: 'working', lifetime: 'task' }, { name: 'done-subagent', status: 'idle', lifetime: 'task' }],
     }));
 
     const hang = await hangOf(settle(new TurnWatch(held, { clock })));
 
-    expect(hang.message).toContain(`held by open run run-1, its last row step_finish at ${at(5_000)}; working helper task-helper, `
+    expect(hang.message).toContain(`held by open run run-1, its last row step_finish at ${at(5_000)}; working subagent task-subagent, `
       + 'with shell job bgjob-ls (workspace: ls -la) running meanwhile');
     expect(hang.message).not.toContain('bgjob-install');
-    expect(hang.message).not.toContain('done-helper');
-    expect(hang.heldBy).toEqual(['open run', 'working helper']);
+    expect(hang.message).not.toContain('done-subagent');
+    expect(hang.heldBy).toEqual(['open run', 'working subagent']);
   });
 
-  // Measured 2026-10-01: a lead's `agents` hire ran 840 s with nothing in the ledger while its helper worked, and the
+  // Measured 2026-10-01: a lead's `agents` hire ran 840 s with nothing in the ledger while its subagent worked, and the
   // call then answered.
   test('a tool call in flight is not silence: a fourteen-minute call that answers lets the turn settle', async () => {
     const clock = watchClock();
@@ -260,18 +260,18 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
     expect(after.elapsed()).toBeGreaterThanOrEqual(answeredAt);
   });
 
-  test("a working helper is heard in its own room, which the watch listens to only while it works", async () => {
+  test("a working subagent is heard in its own room, which the watch listens to only while it works", async () => {
     const clock = watchClock();
     const listened: string[][] = [];
-    const helper = (status: PublicSubagent['status']): PublicSubagent => ({ name: 'task-helper', status, lifetime: 'task' });
+    const subagent = (status: PublicSubagent['status']): PublicSubagent => ({ name: 'task-subagent', status, lifetime: 'task' });
 
-    // The lead's turn has ended; its helper streams for ten minutes in a room of its own, then goes idle.
+    // The lead's turn has ended; its subagent streams for ten minutes in a room of its own, then goes idle.
     const delegated = fixtureWorkspace(clock, (elapsed) => (elapsed < 10 * MINUTE
-      ? { events: [start('run-1'), end('run-1', 1_000, 1)], helpers: [helper('working')], heard: words(elapsed, 10 * MINUTE) }
-      : { events: [start('run-1'), end('run-1', 1_000, 1)], helpers: [helper('idle')], heard: words(elapsed, 10 * MINUTE) }), listened);
+      ? { events: [start('run-1'), end('run-1', 1_000, 1)], subagents: [subagent('working')], heard: words(elapsed, 10 * MINUTE) }
+      : { events: [start('run-1'), end('run-1', 1_000, 1)], subagents: [subagent('idle')], heard: words(elapsed, 10 * MINUTE) }), listened);
 
     expect(await settle(new TurnWatch(delegated, { clock }))).toBeUndefined();
-    expect(listened.at(0)).toEqual(['task-helper']);
+    expect(listened.at(0)).toEqual(['task-subagent']);
     expect(listened.at(-1)).toEqual([]);
   });
 
@@ -440,7 +440,7 @@ function roomWorkspace(
     runEvents: () => ask('ledger', (state) => state.events),
     agents: () => ask('agents', (state) => state.agents),
     subagents: () => ask('roster', () => []),
-    backgroundJobs: (of) => ask(of === undefined ? 'jobs' : 'helper jobs', (state) => (of === undefined ? state.jobs : [])),
+    backgroundJobs: (of) => ask(of === undefined ? 'jobs' : 'subagent jobs', (state) => (of === undefined ? state.jobs : [])),
     toolCallsInFlight: () => [],
     heard: () => 0,
     listen: () => undefined,
@@ -517,20 +517,20 @@ describe('a job is waited on until it settles, never judged by its silence', () 
     expect([9, 10]).toContain(lines.length);
   });
 
-  // A task helper whose turn ended with a job running stays working until the job settles (core `finishTurn`).
-  test('a helper waiting on a job of its own is judged by that job, not its silence', async () => {
+  // A task subagent whose turn ended with a job running stays working until the job settles (core `finishTurn`).
+  test('a subagent waiting on a job of its own is judged by that job, not its silence', async () => {
     const clock = watchClock();
     const lines: string[] = [];
     const tests: PublicBackgroundJob = { id: 'bgjob-tests', kind: 'shell', status: 'running', label: 'workspace: npm test', createdAt: START + MINUTE };
-    const helper = (status: PublicSubagent['status']): PublicSubagent => ({ name: 'task-helper', status, lifetime: 'task' });
+    const subagent = (status: PublicSubagent['status']): PublicSubagent => ({ name: 'task-subagent', status, lifetime: 'task' });
     const lead = [start('run-1'), end('run-1', MINUTE, 1)];
 
     const delegated = fixtureWorkspace(clock, (elapsed) => (elapsed < 12 * MINUTE
-      ? { events: lead, helpers: [helper('working')], helperJobs: { 'task-helper': [tests] } }
-      : { events: lead, helpers: [helper('idle')], helperJobs: { 'task-helper': [{ ...tests, status: 'completed' }] } }));
+      ? { events: lead, subagents: [subagent('working')], subagentJobs: { 'task-subagent': [tests] } }
+      : { events: lead, subagents: [subagent('idle')], subagentJobs: { 'task-subagent': [{ ...tests, status: 'completed' }] } }));
 
     expect(await settle(new TurnWatch(delegated, { clock, waiting: (line) => { lines.push(line); } }))).toBeUndefined();
-    expect(lines[0]).toBe(`waiting on helper task-helper's job bgjob-tests (workspace: npm test) since ${at(MINUTE)}`);
+    expect(lines[0]).toBe(`waiting on subagent task-subagent's job bgjob-tests (workspace: npm test) since ${at(MINUTE)}`);
   });
 });
 
@@ -573,17 +573,17 @@ describe("the run's cancel ends a held turn, naming what held it", () => {
     expect(cancelled.heldBy).toEqual(['open run']);
   });
 
-  test("a working helper's own job is named with the helper, and a helper that only works as itself", async () => {
+  test("a working subagent's own job is named with the subagent, and a subagent that only works as itself", async () => {
     const clock = watchClock();
     const tests: PublicBackgroundJob = { id: 'bgjob-tests', kind: 'shell', status: 'running', label: 'workspace: npm test', createdAt: START + MINUTE };
-    const helper = (name: string): PublicSubagent => ({ name, status: 'working', lifetime: 'task' });
+    const subagent = (name: string): PublicSubagent => ({ name, status: 'working', lifetime: 'task' });
     const run = new AbortController();
 
     // The writer streams the whole time; the tester waits on its tests, which never end.
     const delegated = fixtureWorkspace(clock, (elapsed) => ({
       events: [start('run-1'), end('run-1', MINUTE, 1)],
-      helpers: [helper('task-tester'), helper('task-writer')],
-      helperJobs: { 'task-tester': [tests] },
+      subagents: [subagent('task-tester'), subagent('task-writer')],
+      subagentJobs: { 'task-tester': [tests] },
       heard: words(elapsed, Infinity),
     }));
 
@@ -593,9 +593,9 @@ describe("the run's cancel ends a held turn, naming what held it", () => {
 
     await cancelling;
 
-    expect(cancelled.message).toBe('cancelled by SIGTERM, held by working helper task-writer; '
-      + `running shell job bgjob-tests (workspace: npm test) of helper task-tester for ${String((clock.elapsed() - MINUTE) / 1000)} s`);
-    expect(cancelled.heldBy).toEqual(['working helper', 'running shell job']);
+    expect(cancelled.message).toBe('cancelled by SIGTERM, held by working subagent task-writer; '
+      + `running shell job bgjob-tests (workspace: npm test) of subagent task-tester for ${String((clock.elapsed() - MINUTE) / 1000)} s`);
+    expect(cancelled.heldBy).toEqual(['working subagent', 'running shell job']);
   });
 
   test('a cancel that finds the workspace free says nothing held it, and one that cannot read it says why', async () => {

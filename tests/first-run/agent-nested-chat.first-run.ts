@@ -1,9 +1,9 @@
 /**
- * FIRST RUN: a helper hired by a hired agent opens from the task it owns in the Work tab.
+ * FIRST RUN: a subagent hired by a hired agent opens from the task it owns in the Work tab.
  *
- * THE ASK. Such a helper gets no chat tab; the Work tab names it as the owner of its task, and
+ * THE ASK. Such a subagent gets no chat tab; the Work tab names it as the owner of its task, and
  * activating that owner opens its chat through its path of names, the way the TUI's Agent Hub
- * does. This row creates a helper the way the "+" does, tells it to hire one of its own that
+ * does. This row creates a subagent the way the "+" does, tells it to hire one of its own that
  * adds an open task, then reads what the Work tab reads (`listWorkspaceWork`) and follows the
  * owner's path exactly as the web pane does: the socket at `hostedActorSocketPath(path)`, then
  * the two mount reads over it. Every check reads what the product answered.
@@ -32,7 +32,7 @@ const CASE = firstRunCaseId(import.meta.url);
 
 /** What this case found, and what a red here means (`FirstRunDefect`). */
 const DEFECT: FirstRunDefect = {
-  found: 'A helper hired by a hired agent had no chat tab, and its owner in the Work tab was plain text, '
+  found: 'A subagent hired by a hired agent had no chat tab, and its owner in the Work tab was plain text, '
     + 'so nothing opened its conversation: every chat address resolved one name in the root\'s roster.',
   missedBecause: 'agent-tab opens a direct child only; delegation-tree builds a nested tree but reads the '
     + 'ledger, never the grandchild\'s own socket or its reads.',
@@ -151,7 +151,7 @@ describe(SUITE, () => {
 
         try {
           if (!(await rootSocket.opened)) {
-            subgoals.push({ what: 'helper-created', reached: false, detail: `the workspace room ${rootSocket.path} refused the upgrade` });
+            subgoals.push({ what: 'subagent-created', reached: false, detail: `the workspace room ${rootSocket.path} refused the upgrade` });
 
             return announce(subgoals);
           }
@@ -160,7 +160,7 @@ describe(SUITE, () => {
           const created = createdAnswer.ok ? v.safeParse(CreatedSchema, createdAnswer.value) : null;
 
           subgoals.push({
-            what: 'helper-created',
+            what: 'subagent-created',
             reached: created?.success === true,
             detail: rpcDetail({
               rpc: 'createSubagentAgent', answer: createdAnswer, refusal: 'refused',
@@ -169,16 +169,16 @@ describe(SUITE, () => {
           });
 
           if (created?.success !== true) return announce(subgoals);
-          const helper = open(created.output.name);
+          const subagent = open(created.output.name);
           let reply = '';
 
-          // A durable hire answers after the helper's turn: its report opens the helper's next turn, which relays it.
+          // A durable hire answers after the subagent's turn: its report opens the subagent's next turn, which relays it.
           try {
-            const result = (await helper.opened) ? await helper.chat(NESTED_HIRE_ASK) : null;
+            const result = (await subagent.opened) ? await subagent.chat(NESTED_HIRE_ASK) : null;
 
-            if (result?.landed === 'turn' && await helper.turnClosed()) reply = await lastAnswer(helper, created.output.name);
+            if (result?.landed === 'turn' && await subagent.turnClosed()) reply = await lastAnswer(subagent, created.output.name);
           } catch (error) {
-            subgoals.push({ what: 'grandchild-answered', reached: false, detail: `the helper's turn failed: ${String(error).slice(0, 300)}` });
+            subgoals.push({ what: 'grandchild-answered', reached: false, detail: `the subagent's turn failed: ${String(error).slice(0, 300)}` });
 
             return announce(subgoals);
           }
@@ -186,7 +186,7 @@ describe(SUITE, () => {
           subgoals.push({
             what: 'grandchild-answered',
             reached: reply.includes(NESTED_WORD),
-            detail: `the helper relayed: ${JSON.stringify(reply.slice(0, 240))}`,
+            detail: `the subagent relayed: ${JSON.stringify(reply.slice(0, 240))}`,
           });
 
           // ── What the Work tab reads, and the owner it names. ─────────────

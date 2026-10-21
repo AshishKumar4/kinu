@@ -1605,7 +1605,7 @@ export const LADDER: readonly Gate[] = [
       + 'turn is checked black-box: the checker calls the slates the agent built over the slate '
       + 'RPC and compares every answer with its own reference implementation of the contract, so '
       + 'any correct build passes, and reads what a person would: the files, the task board, each '
-      + 'helper\'s runs, and each preview address fetched with no credential. Five trials per '
+      + 'subagent\'s runs, and each preview address fetched with no credential. Five trials per '
       + 'task, each trial its own armada map task, the candidate on staging and the '
       + 'promoted build on kinu.run measured at once under the candidate\'s definitions, compared by a '
       + 'two-sided Fisher exact test (evals/src/comparison.ts), with infrastructure failures and '

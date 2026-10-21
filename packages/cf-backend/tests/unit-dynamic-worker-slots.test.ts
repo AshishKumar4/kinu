@@ -9,7 +9,7 @@ import { catalogTurn, gatewayWorkspace, orchestratorHarness, type ActorHarness, 
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
-const HELPERS = 12;
+const SUBAGENTS = 12;
 
 /** Agents the owner adds, as the browser adds them: each is listed and has an isolate of its own. */
 async function hire(workspace: ActorHarness<HarnessOrchestratorAgent>, count: number): Promise<string[]> {
@@ -22,7 +22,7 @@ async function hire(workspace: ActorHarness<HarnessOrchestratorAgent>, count: nu
   return labels;
 }
 
-/** Main hires one helper, which answers one task in two priced steps. */
+/** Main hires one subagent, which answers one task in two priced steps. */
 /** Each turn of the event loop is one RPC round trip of the platform's, a refusal included. */
 async function roundTrips(count: number): Promise<void> {
   for (let turn = 0; turn < count; turn += 1) await new Promise<void>((resolve) => { setImmediate(resolve); });
@@ -44,9 +44,9 @@ function hiringGateway() {
 }
 
 describe('the roster', () => {
-  test(`of ${String(HELPERS)} helpers is read with no call to any agent's isolate`, async () => {
+  test(`of ${String(SUBAGENTS)} subagents is read with no call to any agent's isolate`, async () => {
     const workspace = orchestratorHarness();
-    const labels = await hire(workspace, HELPERS);
+    const labels = await hire(workspace, SUBAGENTS);
     const before = workspace.agent.harnessDynamicWorkers.calls.length;
 
     const roster = await workspace.agent.listWorkspaceAgents();
@@ -55,14 +55,14 @@ describe('the roster', () => {
     expect(roster.map((agent) => agent.label)).toEqual(expect.arrayContaining(['Main', ...labels]));
   });
 
-  test("shows a helper's figures as its isolate reported them at its turn's end, and reads on once it is dismissed", async () => {
+  test("shows a subagent's figures as its isolate reported them at its turn's end, and reads on once it is dismissed", async () => {
     const workspace = gatewayWorkspace(hiringGateway());
 
     await workspace.agent.setSoul('# Purpose\n\nCount the paths.');
     await catalogTurn(workspace.agent, 'Delegate counting the paths.');
     await workspace.agent.terminalRetryPass();
     await joinHarnessFibers();
-    // The helper's turn runs in its own isolate, which tells the workspace once it rests.
+    // The subagent's turn runs in its own isolate, which tells the workspace once it rests.
     await workspace.agent.harnessAgentsIdle();
     const before = workspace.agent.harnessDynamicWorkers.calls.length;
     const hired = (await workspace.agent.listWorkspaceAgents()).find((agent) => agent.category === 'hired');
@@ -76,10 +76,10 @@ describe('the roster', () => {
 });
 
 describe("a read across every agent's isolate", () => {
-  test(`waits for a slot, so spend across ${String(HELPERS)} helpers is read with ten calls in flight at most`, async () => {
+  test(`waits for a slot, so spend across ${String(SUBAGENTS)} subagents is read with ten calls in flight at most`, async () => {
     const workspace = orchestratorHarness();
 
-    await hire(workspace, HELPERS);
+    await hire(workspace, SUBAGENTS);
     const workers = workspace.agent.harnessDynamicWorkers;
 
     workers.peak = 0;

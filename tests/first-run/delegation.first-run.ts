@@ -1,28 +1,28 @@
 /**
- * FIRST RUN: delegation settles — a hired helper answers, reports back, and retires.
+ * FIRST RUN: delegation settles — a hired subagent answers, reports back, and retires.
  *
- * THE ASK. Turn one hires a task-lifetime helper to say one specific word, and
- * the turn its answer opens relays it; turn two hires a durable helper and lists
+ * THE ASK. Turn one hires a task-lifetime subagent to say one specific word, and
+ * the turn its answer opens relays it; turn two hires a durable subagent and lists
  * the roster; turn three dismisses it and lists again. Every check reads durable
- * state — the ledger's rows, the helper's own ledger, the stored transcript —
+ * state — the ledger's rows, the subagent's own ledger, the stored transcript —
  * never the model's own account of what it did.
  *
  * WHY EVERY GATE STAYED GREEN. `every-tool` deliberately EXCLUDES `hire` and
  * asserts `agents` was never called; unit proofs drive the agents tool against
  * fixtures the test author wrote. Nothing asked the deployed agent to hire a
- * helper and then read back whether the hire settled, whether the helper's
+ * subagent and then read back whether the hire settled, whether the subagent's
  * answer reached the parent, and whether the roster retired the row.
  *
  * THE ANSWER ARRIVES AS A MESSAGE. A hire returns at once (cafab2bfc): the
- * helper's answer opens the hirer's next turn. The row waits on the turns the
+ * subagent's answer opens the hirer's next turn. The row waits on the turns the
  * workspace room broadcasts closing (`hirerHeard`) until that message is in the
- * hirer's history, and reads what the helper answered from its own ledger, so it
+ * hirer's history, and reads what the subagent answered from its own ledger, so it
  * needs no poll loop and no wall clock of its own. The durable hire, list and
  * dismiss all settle in-turn.
  *
  * SYSTEM-CARD CEILING. The conversation must gain no "system, to be shown to
  * the agent" cards beyond SYSTEM_CARD_CEILING, counted over history rows whose
- * role is `system`: every row the harness wrote, a helper's delivered answer
+ * role is `system`: every row the harness wrote, a subagent's delivered answer
  * among them, which the chat shows as an event card and every reader of it
  * reads as `system` (the transcript's one projection, since rc21's red: the
  * seed read them `user`, the pages `system`).
@@ -35,8 +35,8 @@ import {
   DELEGATION_ROSTER_ASK as ROSTER_ASK, DELEGATION_TASK_ASK as TASK_ASK, DELEGATION_WORD as WORD, delegationDismissAsk,
 } from './asks';
 import { delivered, observeDelegationRetirement, observeDurableHire, taskHires } from './delegation-observation';
-import { ROOT } from '../../evals/src/helper-address';
-import { helperAnswer, hirerHeard } from './hires';
+import { ROOT } from '../../evals/src/subagent-address';
+import { subagentAnswer, hirerHeard } from './hires';
 import { openPublicSocket } from './public-socket';
 import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
@@ -47,7 +47,7 @@ const CASE = firstRunCaseId(import.meta.url);
 
 /** What this case found, and what a red here means (`FirstRunDefect`). */
 const DEFECT: FirstRunDefect = {
-  found: 'A lead was asked for a helper that says one word and reports back. The owner saw the '
+  found: 'A lead was asked for a subagent that says one word and reports back. The owner saw the '
     + 'conversation keep gaining "system, to be shown to the agent" cards as delegation ran — '
     + 'growth with no bound anyone could name.',
   missedBecause: 'every-tool deliberately EXCLUDES hire and asserts the agents tool was never '
@@ -119,7 +119,7 @@ describe(SUITE, () => {
       defect: DEFECT,
       genesis: false,
       modelCalls: 'expected',
-      purpose: 'A lead that has one helper answer one word, shows a second on the roster, and retires it.',
+      purpose: 'A lead that has one subagent answer one word, shows a second on the roster, and retires it.',
       budgetMs: 20 * 60_000,
       async run({ session, plan, budget }) {
         const subgoals: EvalSubgoal[] = [];
@@ -128,7 +128,7 @@ describe(SUITE, () => {
         if (!(await room.opened)) throw new Error(`the workspace room ${room.path} refused the upgrade`);
 
         try {
-          // Registered before the hire is sent, so the turn the helper's answer opens cannot close unseen.
+          // Registered before the hire is sent, so the turn the subagent's answer opens cannot close unseen.
           const closed = room.turnClosed();
           const taskEvents = await promptEvidence(session, TASK_ASK);
           const [hire] = taskHires(taskEvents);
@@ -137,7 +137,7 @@ describe(SUITE, () => {
             && await hirerHeard(room, closed, async () => delivered(await session.history(), TASK_ASK, hire.agent) !== null);
 
           const delivery = hire === undefined ? null : delivered(await session.history(), TASK_ASK, hire.agent);
-          const answer = hire === undefined || !heard ? '' : await helperAnswer(room, ROOT, hire.agent);
+          const answer = hire === undefined || !heard ? '' : await subagentAnswer(room, ROOT, hire.agent);
 
           let settled = `no task hire answered at once in the requested turn's ${String(taskEvents.length)} events`;
 
@@ -169,7 +169,7 @@ describe(SUITE, () => {
           reached: durableName !== null && shown && retirement.retired,
           detail: durableName === null
             ? 'no durable hired name on any settled hire result, so the roster cannot be read for it'
-            : `helper ${JSON.stringify(durableName)}: roster ${shown ? 'showed' : 'never showed'} it; `
+            : `subagent ${JSON.stringify(durableName)}: roster ${shown ? 'showed' : 'never showed'} it; `
               + `${String(retirement.dismisses)} settled dismiss call(s); a later roster `
               + `${retirement.retired ? 'no longer names' : 'still names or never re-read'} it`,
         });
