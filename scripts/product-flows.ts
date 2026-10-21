@@ -1011,25 +1011,35 @@ const WELCOME_FORWARD = `(() => {
   return 'none';
 })()`;
 
+/**
+ * Home as drawn at `/`: the Personal assistant's chat once the account has one, its bar in `focus` and its composer
+ * live, else a new workspace's mission (HomePage).
+ */
+const HOME_DRAWN = `location.pathname === '/' && (document.querySelector('#workspace-mission') !== null
+  || (document.querySelector('[data-workspace-bar][data-layout="focus"]') !== null && ${CHAT_COMPOSER_LIVE}))`;
+
 export interface WelcomeVerdict {
   /** Whether the product first showed its setup. */
   readonly welcomed: boolean;
-  /** Where the reader stood once the home page's mission field was there. */
+  /** Where the reader stood once Home was drawn. */
   readonly landedAt: string;
+  /** Home is the Personal assistant's chat, which setup's default choice installs, rather than a new workspace's mission. */
+  readonly assistantHome: boolean;
 }
 
 /**
  * Row: the product reaches its home page, through setup when the account has
  * not done it. Setup stands in front of every route until it is finished, so
  * this row runs first; an account that finished it long ago goes straight home.
+ * Setup's choices are left as they open, so a new account's Home is its
+ * Personal assistant's chat.
  */
 export async function reachesHome(target: FlowTarget): Promise<WelcomeVerdict> {
   const page = await signedInPage(target.browser, target);
 
   try {
     await page.goto(`${target.origin}/`, { waitUntil: 'load' });
-    await until(page, 'the home page or its setup',
-      `location.pathname === '/welcome' || document.querySelector('#workspace-mission') !== null`);
+    await until(page, 'the home page or its setup', `location.pathname === '/welcome' || (${HOME_DRAWN})`);
 
     const welcomed = v.parse(v.boolean(), await page.evaluate(`location.pathname === '/welcome'`));
 
@@ -1041,9 +1051,12 @@ export async function reachesHome(target: FlowTarget): Promise<WelcomeVerdict> {
       if (pressed === 'none') throw new Error('the welcome page offers neither Next nor Finish setup');
     }
 
-    await until(page, "the home page's mission field", `document.querySelector('#workspace-mission') !== null`);
+    await until(page, 'the home page', HOME_DRAWN);
 
-    return { welcomed, landedAt: v.parse(v.string(), await page.evaluate('location.pathname')) };
+    const landedAt = v.parse(v.string(), await page.evaluate('location.pathname'));
+    const assistantHome = v.parse(v.boolean(), await page.evaluate(`document.querySelector('#workspace-mission') === null`));
+
+    return { welcomed, landedAt, assistantHome };
   } finally {
     await page.close();
   }
