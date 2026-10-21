@@ -586,6 +586,19 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* A strip inside a card scrolls over the card's ground. */
 .p-card-body .p-tabstrip { --scroll-ground: var(--c-surface); }
 
+/* NavRow (ui/NavRow.tsx): the nav role on the row radius; the open row on the selected ground in the accent's ink,
+   any other neutral under the pointer. */
+.p-nav-row {
+  display: flex; width: 100%; min-width: 0; align-items: center; gap: 8px; border: 0; border-radius: var(--r-row);
+  background: none; color: var(--c-text-2); text-align: left; cursor: pointer;
+  transition: background-color var(--dur-state) ease-out, color var(--dur-state) ease-out;
+}
+.p-nav-row-md { padding: 6px 12px; font: 500 14px/20px var(--font-ui); }
+.p-nav-row-sm { padding: 6px 12px 6px calc(8px + var(--nav-depth, 0) * 14px); }
+.p-nav-row-quiet { color: var(--c-text-3); }
+.p-nav-row:hover { background: color-mix(in srgb, var(--c-text) 6%, transparent); color: var(--c-text); }
+.p-nav-row[data-current] { background: var(--c-selected); color: var(--c-accent-fg); }
+
 /* Rail (ui/Rail.tsx): a strip of the tabs above below its breakpoint, fading at its scrolling edge; a column of rows
    from it up, the open row on the selected ground. */
 .p-rail { display: flex; border-bottom: 1px solid var(--c-border); mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }

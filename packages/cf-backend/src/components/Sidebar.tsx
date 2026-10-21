@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type RefObject } from "react";
-import { Link, NavLink, useLocation, useMatch } from "react-router-dom";
+import { useLocation, useMatch } from "react-router-dom";
 import { TrashIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon,
   UsersThreeIcon, CaretRightIcon, EraserIcon,
 } from "@phosphor-icons/react";
@@ -15,27 +15,24 @@ import { useMascotOf } from "@/hooks/use-chat-mascot";
 import { AgentStatusMark } from "./AgentStatus";
 import { RemoveWorkspaceDialog } from "./RemoveWorkspaceDialog";
 import { useAgentsNav, useOpenAgentsPanel, type WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
-import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
+import { navActive, PRIMARY_NAV } from "./nav";
 import { composing } from "@/components/ui/form";
 import { StatusDot } from "@/components/ui/Status";
 import { workspaceStatusTone } from "@/components/workspaces/workspace-status-tone";
 import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
 import { TextInput } from "@/components/ui/Field";
+import { NavRow, NavRowButton } from "@/components/ui/NavRow";
 
 function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
   const { to, label, Icon } = item;
   const active = navActive(item, useLocation().pathname);
 
   return (
-    <Link
-      to={to}
-      aria-current={active ? "page" : undefined}
-      className={`t-control flex items-center gap-3 rounded-lg py-[7px] pl-3 pr-3 transition-colors ${navRowCls(active)}`}
-    >
-      <Icon size={15} className={active ? 'p-accent-mark' : 'p-text-3'} />
+    <NavRow to={to} current={active} className="gap-3">
+      <Icon size={16} className={active ? 'p-accent-mark' : 'p-text-3'} />
       <span>{label}</span>
-    </Link>
+    </NavRow>
   );
 }
 
@@ -121,6 +118,7 @@ function WorkspaceDot({ entry }: { entry: RosterEntry }) {
 export default function Sidebar({ onCollapse, accountOpen = false }: { onCollapse?: () => void; accountOpen?: boolean } = {}) {
   // Sidebar renders outside the route's Outlet, so useParams cannot see :agentId.
   const sectionMatch = useMatch({ path: "/:section/:agentId/*", end: false });
+  const { pathname } = useLocation();
 
   const agentId = sectionMatch && WORKSPACE_SCOPED_SECTIONS.includes(sectionMatch.params.section ?? "")
     ? sectionMatch.params.agentId
@@ -185,20 +183,15 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
                       onDone={() => setEditingWorkspace(null)} />
                   ) : (
                     <>
-                      <NavLink
-                        to={`/workspace/${a.name}`}
-                        end
-                        className={({ isActive: linkActive }) =>
-                          `flex items-center gap-2 rounded-lg py-[7px] pl-3 pr-12 lg:pr-3 lg:group-hover:pr-12 lg:group-focus-within:pr-12 transition-colors ${navRowCls(linkActive && panel === null)}`
-                        }
-                      >
+                      <NavRow to={`/workspace/${a.name}`} current={pathname === `/workspace/${a.name}` && panel === null}
+                        className="pr-12 lg:pr-3 lg:group-hover:pr-12 lg:group-focus-within:pr-12">
                         <span className="relative flex shrink-0">
                           <WorkspaceLogo title={shown} logo={a.logo} />
                           <span className="p-logo-badge"><WorkspaceDot entry={a} /></span>
                         </span>
                         <span className={`t-label min-w-0 flex-1 truncate ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? `italic ${isActive ? '' : 'p-text-3'}` : ''}`}>{shown}</span>
-                        {age && <span className="t-meta w-[30px] shrink-0 text-right tabular-nums p-text-3 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
-                      </NavLink>
+                        {age && <span className="t-meta w-8 shrink-0 text-right tabular-nums p-text-3 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
+                      </NavRow>
                       <Button variant="ghost" size="sm" icon={<PencilSimpleIcon size={14} />} className="absolute right-6 top-1/2 -translate-y-1/2 opacity-60 transition-opacity focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-70" onClick={() => setEditingWorkspace(a.name)} title="Rename" aria-label={`Rename workspace ${shown}`} />
                       <Button variant="danger" size="sm" icon={<TrashIcon size={14} />} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-60 transition-opacity focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-70" onClick={() => setDeleteTarget(a)} title="Remove" aria-label={`Remove workspace ${shown}`} />
                     </>
@@ -231,7 +224,7 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
   const [renaming, setRenaming] = useState<string | null>(null);
 
   return (
-    <ul className="p-nest mb-1 ml-[26px] mr-2 mt-px space-y-px" aria-label="Chats">
+    <ul className="p-nest mb-1 ml-6 mr-2 mt-px space-y-px" aria-label="Chats">
       {chats.map((chat: PanelAgent) => (
         <li key={chat.key}>
           {renaming === chat.key
@@ -241,19 +234,18 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
         </li>
       ))}
       <li>
-        <Link to={`/workspace/${panel.workspace}/new`} className={`t-body flex items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 transition-colors ${navRowCls(false, "p-text-3")}`}>
-          <PlusIcon size={12} className="w-[13px] shrink-0" aria-hidden /> New agent
-        </Link>
+        <NavRow to={`/workspace/${panel.workspace}/new`} size="sm" quiet>
+          <PlusIcon size={14} className="shrink-0" aria-hidden /> <span className="t-body">New agent</span>
+        </NavRow>
       </li>
       <li>
-        <button ref={trigger} type="button" onClick={onAgents} data-agents-counter
-          className={`t-body flex w-full items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left transition-colors ${navRowCls(false, "p-text-3")}`}>
-          <UsersThreeIcon size={13} className="w-[13px] shrink-0" aria-hidden />
-          <span className="flex-1">All agents</span>
+        <NavRowButton ref={trigger} size="sm" quiet onClick={onAgents} data-agents-counter>
+          <UsersThreeIcon size={14} className="shrink-0" aria-hidden />
+          <span className="t-body flex-1">All agents</span>
           {working && <AgentStatusMark activity="working" />}
           {others > 0 && <span className="t-meta tabular-nums p-text-3">{others}</span>}
-          <CaretRightIcon size={11} aria-hidden />
-        </button>
+          <CaretRightIcon size={14} aria-hidden />
+        </NavRowButton>
       </li>
     </ul>
   );
@@ -267,21 +259,17 @@ function ChatRow({ chat, panel, onRename }: { chat: PanelAgent; panel: Workspace
 
   return (
     <div className="group/chat relative">
-      <button type="button" onClick={() => panel.open(chat)} data-workspace-chat={chat.key} data-status={chat.activity}
+      <NavRowButton size="sm" current={panel.shown === chat.key} onClick={() => panel.open(chat)} data-workspace-chat={chat.key} data-status={chat.activity}
         aria-current={panel.shown === chat.key ? "page" : undefined}
-        className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 text-left transition-colors ${remove ? "pr-12 lg:pr-3 lg:group-hover/chat:pr-12 lg:group-focus-within/chat:pr-12" : "pr-6 lg:pr-3 lg:group-hover/chat:pr-6 lg:group-focus-within/chat:pr-6"} ${navRowCls(panel.shown === chat.key)}`}>
+        className={`p-halo relative ${remove ? "pr-12 lg:pr-3 lg:group-hover/chat:pr-12 lg:group-focus-within/chat:pr-12" : "pr-8 lg:pr-3 lg:group-hover/chat:pr-8 lg:group-focus-within/chat:pr-8"}`}>
         <ChatMascot seed={look.seed} colour={look.colour} activity={chat.activity} />
         <span className="t-body p-status-label min-w-0 flex-1 truncate">{chat.label}</span>
-      </button>
-      <button type="button" onClick={onRename} title="Rename" aria-label={`Rename chat ${chat.label}`}
-        className={`absolute top-1/2 -translate-y-1/2 p-1 p-text-3 hover:p-text ${remove ? "right-6" : "right-1"} ${reveal}`}>
-        <PencilSimpleIcon size={11} />
-      </button>
+      </NavRowButton>
+      <Button variant="ghost" size="sm" icon={<PencilSimpleIcon size={14} />} onClick={onRename} title="Rename" aria-label={`Rename chat ${chat.label}`}
+        className={`absolute top-1/2 -translate-y-1/2 ${remove ? "right-6" : "right-1"} ${reveal}`} />
       {remove && (
-        <button type="button" onClick={remove} title={clears ? "Clear" : "Delete"} aria-label={`${clears ? "Clear" : "Delete"} chat ${chat.label}`}
-          className={`absolute right-1 top-1/2 -translate-y-1/2 p-1 p-text-3 hover:p-danger ${reveal}`}>
-          {clears ? <EraserIcon size={11} /> : <TrashIcon size={11} />}
-        </button>
+        <Button variant="danger" size="sm" icon={clears ? <EraserIcon size={14} /> : <TrashIcon size={14} />} onClick={remove} title={clears ? "Clear" : "Delete"}
+          aria-label={`${clears ? "Clear" : "Delete"} chat ${chat.label}`} className={`absolute right-1 top-1/2 -translate-y-1/2 ${reveal}`} />
       )}
     </div>
   );

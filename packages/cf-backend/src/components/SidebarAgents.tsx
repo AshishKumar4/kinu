@@ -5,7 +5,7 @@ import type { WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
 import { AgentStatusMark } from "./AgentStatus";
 import { ChatMascot } from "./Marks";
 import { useMascotOf } from "@/hooks/use-chat-mascot";
-import { navRowCls } from "./nav";
+import { NavRowButton } from "@/components/ui/NavRow";
 
 /** Agents nobody talks to: listed apart, folded until asked for. */
 const GROUPS: readonly { readonly category: PanelAgent["category"]; readonly title: string }[] = [
@@ -32,10 +32,9 @@ export function SidebarAgents({ panel, onBack }: { panel: WorkspaceAgentsPanel; 
   return (
     <div className="flex h-full min-h-0 flex-col" data-sidebar-agents={panel.workspace}>
       <div className="px-2 pb-1 pt-2">
-        <button ref={back} type="button" onClick={onBack} data-agents-back
-          className={`t-body flex w-full items-center gap-2 rounded-lg px-3 py-[7px] transition-colors ${navRowCls(false, "p-text-3")}`}>
+        <NavRowButton ref={back} quiet onClick={onBack} data-agents-back>
           <ArrowLeftIcon size={14} aria-hidden="true" /> Workspaces
-        </button>
+        </NavRowButton>
       </div>
       <nav aria-label="Agents in this workspace" className="min-h-0 flex-1 overflow-y-auto px-2 pb-3 pt-1">
         <ul className="space-y-px">
@@ -74,15 +73,14 @@ function AgentRow({ agent, panel }: { agent: PanelAgent; panel: WorkspaceAgentsP
   const look = useMascotOf(panel.workspace)(agent.key, agent.colour);
 
   return (
-    <button type="button" onClick={() => panel.open(agent)} data-agent-row={agent.key} data-status={agent.activity}
-      aria-current={shown ? "page" : undefined} title={figures === "" ? undefined : figures}
-      className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left transition-colors ${navRowCls(shown)}`}>
+    <NavRowButton size="sm" current={shown} onClick={() => panel.open(agent)} data-agent-row={agent.key} data-status={agent.activity}
+      aria-current={shown ? "page" : undefined} title={figures === "" ? undefined : figures} className="p-halo relative">
       {/* A chat and a hire each wear their own mascot; a swarm worker or a background helper, its state mark. */}
       {agent.tab || agent.category === "hired" || agent.category === "user"
         ? <ChatMascot seed={look.seed} colour={look.colour} activity={agent.activity} />
         : <span className="flex w-4 shrink-0 justify-center"><AgentStatusMark activity={agent.activity} /></span>}
       <span className="t-body p-status-label min-w-0 flex-1 truncate">{agent.label}</span>
-    </button>
+    </NavRowButton>
   );
 }
 
@@ -92,16 +90,15 @@ function AgentGroup({ title, members, panel }: { title: string; members: readonl
 
   return (
     <section aria-label={title}>
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
-        className={`flex w-full items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left transition-colors ${navRowCls(false, "p-text-3")}`}>
-        <CaretRightIcon size={11} className={`w-[13px] shrink-0 transition-transform duration-150 ${open ? "rotate-90" : ""}`} aria-hidden />
+      <NavRowButton size="sm" quiet onClick={() => setOpen(!open)} aria-expanded={open}>
+        <CaretRightIcon size={14} className={`shrink-0 p-fold-turn ${open ? "rotate-90" : ""}`} aria-hidden />
         <span className="t-control min-w-0 flex-1 truncate">{title}</span>
         {busy && <AgentStatusMark activity="working" />}
         <span className="t-meta tabular-nums p-text-3">{members.length}</span>
-      </button>
+      </NavRowButton>
       <div className="p-fold" data-folded={open ? undefined : ""}>
         <div inert={!open}>
-          <ul className="p-nest ml-4 max-h-[40vh] overflow-y-auto">
+          <ul className="p-nest ml-4 max-h-96 overflow-y-auto">
             {members.map((agent) => <AgentBranch key={agent.key} agent={agent} panel={panel} />)}
           </ul>
         </div>

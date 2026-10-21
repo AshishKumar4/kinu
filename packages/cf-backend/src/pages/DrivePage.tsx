@@ -21,7 +21,7 @@ import {
 import { detach, diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ToolPage } from "@/components/ui/PageHeader";
-import { navRowCls } from "@/components/nav";
+import { NavRow } from "@/components/ui/NavRow";
 import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip, type PickedFile, type UploadWatch,
 } from "@/lib/drive-api";
@@ -42,6 +42,7 @@ import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
 import { Dot } from "@/components/ui/Dot";
 import { TextInput } from "@/components/ui/Field";
+import { SegmentedNav } from "@/components/ui/Segmented";
 
 export type DriveTab = "slates" | "mine" | "shared";
 
@@ -80,19 +81,13 @@ function NewDot() {
 /** Below `lg`, the places as a switch in the row under the bar, as `Segmented` draws one at 28. */
 function PlaceSwitch({ tab, places, unseen }: { tab: DriveTab; places: readonly DriveTab[]; unseen: boolean }) {
   return (
-    <nav aria-label="Drive" className="flex w-fit items-center gap-px rounded-[var(--r-control)] p-sunken p-px">
-      {PLACES.filter((each) => places.includes(each.id)).map((each) => (
-        <Link key={each.id} to={each.to} state={{ chosen: true }} aria-current={each.id === tab ? "page" : undefined} data-drive-tab={each.id}
-          className={`t-item flex items-center gap-2 whitespace-nowrap rounded-md border px-2 py-px ${each.id === tab ? "border-[var(--c-button-line)] bg-[var(--c-button-bg)] p-text shadow-[var(--shadow-button)]" : "border-transparent p-text-3 hover:p-text"}`}>
-          {each.label}
-          {each.id === "shared" && unseen && each.id !== tab && <NewDot />}
-        </Link>
-      ))}
-    </nav>
+    <SegmentedNav label="Drive" size="sm" current={tab}
+      segments={PLACES.filter((each) => places.includes(each.id)).map((each) => ({
+        id: each.id, label: each.label, to: each.to, state: { chosen: true }, data: { "data-drive-tab": each.id },
+        mark: each.id === "shared" && unseen && each.id !== tab ? <NewDot /> : undefined,
+      }))} />
   );
 }
-
-const PLACE_ROW = "t-control flex h-8 items-center gap-3 rounded-lg px-2 transition-colors";
 
 /** A folder's own folders, Skills first: the tree draws only what can be walked into. */
 function subfolders(entries: readonly DriveEntry[] | undefined, parent: string): DriveEntry[] {
@@ -126,15 +121,13 @@ function FolderTree({ listings, parent, current, depth }: {
 
         return (
           <li key={path}>
-            <Link to={folderHref(path)} aria-current={path === current ? "page" : undefined} data-drive-tree={path}
-              style={{ paddingLeft: `${String(10 + depth * 14)}px` }}
-              className={`t-body flex items-center gap-2 rounded-lg py-[5px] pr-2 transition-colors ${navRowCls(path === current)}`}>
+            <NavRow to={folderHref(path)} size="sm" depth={depth} current={path === current} data-drive-tree={path}>
               <span className="flex w-3 shrink-0 justify-center p-text-3">{caret}</span>
               {skills
                 ? <BookOpenIcon size={15} weight="fill" className="shrink-0 p-success" />
                 : <FolderSimpleIcon size={15} weight="fill" className="shrink-0 p-info" />}
-              <span className="truncate">{path === DRIVE_SKILLS_DIR ? "Skills" : child.name}</span>
-            </Link>
+              <span className="t-body truncate">{path === DRIVE_SKILLS_DIR ? "Skills" : child.name}</span>
+            </NavRow>
             {open && <FolderTree listings={listings} parent={path} current={current} depth={depth + 1} />}
           </li>
         );
@@ -154,22 +147,20 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
   if (!drawn) return null;
 
   return (
-    <aside className="hidden w-[220px] shrink-0 flex-col overflow-y-auto border-r p-border p-2 lg:flex">
+    <aside className="hidden w-[var(--layout-tool-places)] shrink-0 flex-col overflow-y-auto border-r p-border p-2 lg:flex">
       <nav aria-label="Drive places" className="space-y-px">
         {PLACES.filter((each) => places.includes(each.id)).map((each) => {
           const active = each.id === tab;
           const here = active && (each.id !== "mine" || path === "/");
-          // The sidebar's recipe; the place a folder is open under keeps its ink but not the fill.
-          const tone = navRowCls(here, active ? "p-text" : "p-text-2");
 
           return (
             <div key={each.id}>
-              <Link to={each.to} state={{ chosen: true }} aria-current={here ? "page" : undefined} data-drive-place={each.id}
-                className={`${PLACE_ROW} ${tone}`}>
+              {/* The place a folder is open under keeps its ink but not the fill. */}
+              <NavRow to={each.to} state={{ chosen: true }} current={here} data-drive-place={each.id} className={active && !here ? "gap-3 p-text" : "gap-3"}>
                 <span className={`flex shrink-0 ${active ? "p-accent-fg" : "p-text-3"}`}>{each.icon}</span>
                 <span className="flex-1">{each.label}</span>
                 {each.id === "shared" && unseen && !active && <NewDot />}
-              </Link>
+              </NavRow>
               {each.id === "mine" && active && (
                 <div className="mt-px pl-3"><FolderTree listings={listings} parent="/" current={path} depth={0} /></div>
               )}
