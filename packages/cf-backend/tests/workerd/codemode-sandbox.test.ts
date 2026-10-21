@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
-import { admitCraftedSource, cloudPlanes, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, JsonValueSchema, WORKSPACE_ROOT, workspacePath, type ToolOutcome, type JsonValue } from '@kinu.run/core';
+import { admitCraftedSource, cloudPlanes, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, programSurface, narrowToolSurface, nativeToolFunctions, JsonValueSchema, WORKSPACE_ROOT, workspacePath, type ToolOutcome, type JsonValue } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createCodeTool } from '@cloudflare/codemode/ai';
 import { generateText, isStepCount, tool, jsonSchema } from 'ai';
@@ -75,11 +75,18 @@ const workspace = {
   },
 };
 
+/** `tools.*` as a program's surface holds it with nothing else reached: each crafted tool's failure census. */
+function craftedSurface(crafted: ReadonlyArray<{ name: string; code: string; description: string }>) {
+  const { providers } = programSurface({ surface: { native: {}, external: () => ({}) }, namespaces: [], reach: narrowToolSurface(undefined), mode: 'build', signal: undefined, crafted });
+
+  return providers.find((provider) => provider.name === 'tools')?.tools ?? {};
+}
+
 function toolsProvider(crafted: Array<{ name: string; code: string; description: string }>, cwd = WORKSPACE_ROOT) {
   return {
     name: 'tools',
     fns: {
-      ...Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute])),
+      ...Object.fromEntries(Object.entries(craftedSurface(crafted)).map(([name, entry]) => [name, entry.execute])),
       file: async (...args: unknown[]) => ({ echoed: decodeJsonValue({ value: args[0] }) }),
     },
     prelude: renderToolsPrelude(crafted, { cwd, workspace: 'probe' }),

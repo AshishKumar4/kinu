@@ -427,6 +427,19 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
     expect(seen).toEqual(['ls']);
   });
 
+  // Duplication audit, 2026-10-20 (InternalFish #12): the local factory declared only the namespaces it was given, so a
+  // program's describe('tools.shell') threw where the cloud's, describing what the call reaches, answered.
+  test("a program's describe answers for tools.* as the cloud's does", async () => {
+    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
+      cwd: WORKSPACE_ROOT, stores: freshServedStores(), native: surfaceWith(async () => 'ran'), external: () => ({}), craftedTools: () => [],
+    });
+
+    const out = await toolExecute<{ code: string }, ExecuteToolResult>(built)({ code: "return describe('tools.shell');" });
+
+    expect(out.error).toBeUndefined();
+    expect(out.result).toEqual(expect.stringContaining('shell('));
+  });
+
   test('the sandbox does not bind its own entry', async () => {
     let calls = 0;
     const native = surfaceWith(async () => '');

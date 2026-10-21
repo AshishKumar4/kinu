@@ -8,7 +8,7 @@ import { nanoid } from '../utils/nanoid';
 import { hasPlanPermission, providersInWorkMode, toolsInWorkMode, workModeRefusal } from '../execution/work-mode';
 import type { WorkMode } from '../types/turn';
 import { branchableToolCall, bindProgramCall } from './outcome';
-import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from './registry';
+import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, describeProgramSource, programDeclarations, type ToolSurfaceNarrowing } from './registry';
 import { MACHINE_FILES } from '../operations/executors';
 import { slateReaches } from '../slates/surface';
 import { KinuError, settle, settleSync } from '../obs';
@@ -257,7 +257,7 @@ export function toolsNamespace(tools: ToolSet, signal: AbortSignal | undefined):
  * What a program reaches, the same on every backend: `tools.*` (the turn's external tools in this mode, then its native
  * tools over them), then each namespace, every one held to the role's reach and the mode. A backend only runs it.
  */
-export function programProviders(input: {
+function programProviders(input: {
   readonly surface: { readonly native: ToolSet; readonly external: () => ToolSet };
   readonly namespaces: readonly CodemodeProvider[];
   readonly reach: ToolSurfaceNarrowing;
@@ -270,6 +270,29 @@ export function programProviders(input: {
   const tools = toolsNamespace({ ...toolsInWorkMode(mode, reached(input.surface.external())), ...reached(input.surface.native) }, input.signal);
 
   return [...reach.narrowProviders([tools]), ...providersInWorkMode(mode, reach.narrowProviders(input.namespaces))];
+}
+
+/**
+ * One program as its call reaches it, the same on every backend: what it reaches (`programProviders`), `tools.*` holding
+ * each crafted tool's failure census under its name (the body the program defines replaces it), and the `describe` the
+ * program reads, declaring every namespace it reaches, `tools.*` among them. A backend binds and runs it.
+ */
+export function programSurface(input: Parameters<typeof programProviders>[0] & { readonly crafted: readonly CraftedDeclaration[] }) {
+  // A crafted tool's census: what its body threw, thrown again as the host's failure under the tool's own name.
+  const failures: CodemodeProvider['tools'] = Object.fromEntries(input.crafted.map((entry) => [entry.name, {
+    description: entry.description,
+    execute: async (...args: unknown[]) => {
+      const failure = v.parse(v.object({ message: v.string(), name: v.string(), code: v.nullable(v.string()) }), args[0]);
+
+      return settle(Effect.die(Object.assign(new Error(failure.message), { name: failure.name, code: failure.code })));
+    },
+  }]));
+
+  const providers = programProviders(input).map((provider) => (provider.name === CRAFTED_TOOL_NAMESPACE
+    ? { ...provider, tools: { ...provider.tools, ...failures } }
+    : provider));
+
+  return { providers, describe: describeProgramSource(programDeclarations(providers)) };
 }
 
 /** `tools.*` members, as `toolsNamespace` builds them. */
@@ -322,23 +345,6 @@ export function renderCraftedDefinitions(crafted: readonly CraftedToolSource[]):
   });
 
   return ['Object.assign(tools, {', ...definitions, '});'].join('\n');
-}
-
-export function craftedFailureFunctions(crafted: readonly CraftedDeclaration[]): CodemodeProvider['tools'] {
-  const functions: CodemodeProvider['tools'] = {};
-
-  for (const entry of crafted) {
-    functions[entry.name] = {
-      description: entry.description,
-      execute: async (...args) => {
-        const failure = v.parse(v.object({ message: v.string(), name: v.string(), code: v.nullable(v.string()) }), args[0]);
-
-        return settle(Effect.die(Object.assign(new Error(failure.message), { name: failure.name, code: failure.code })));
-      },
-    };
-  }
-
-  return functions;
 }
 
 /**

@@ -12,9 +12,9 @@ import type {
 import { renderThrownChain } from '@kinu.run/core/obs';
 import {
   CRAFTED_TOOL_NAMESPACE,
-  decodeJsonValue, explainSandboxError, programProviders,
-  renderCodemodeDescription, programDeclarations, describeProgramSource, codemodeInputSchema,
-  withCraftedToolDeclarations, craftedFailureFunctions, renderCraftedDefinitions,
+  decodeJsonValue, explainSandboxError, programSurface,
+  renderCodemodeDescription, codemodeInputSchema,
+  withCraftedToolDeclarations, renderCraftedDefinitions,
   codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel, shownConsoleValue, createToolArguments, nestedMembers,
 } from '@kinu.run/core';
 import { tool, type ToolSet } from 'ai';
@@ -64,12 +64,14 @@ interface ExecuteSuccess {
 /** `eval` over a surface, reaching what `deps.reach` allows; a confined builder passes the reach it is handed. */
 export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps): (surface: CodemodeSurface) => ToolSet[string] {
   return (surface) => {
-    const providers = deps.reach.narrowProviders(deps.namespaces ?? []);
-    const describe = describeProgramSource(programDeclarations(providers));
+    // `requireBuild` refuses Plan, so a program reaches what Build does: the program's surface, as the cloud's builds it.
+    const reaching = (signal: AbortSignal | undefined) => programSurface({
+      surface, namespaces: deps.namespaces ?? [], reach: deps.reach, mode: 'build', signal, crafted: surface.craftedTools(),
+    });
 
     return withCraftedToolDeclarations(tool({
       // Every namespace is listed, and `describe` answers its declarations, or the model gets callables it was never told about.
-      description: renderCodemodeDescription(providers, 'local'),
+      description: renderCodemodeDescription(reaching(undefined).providers, 'local'),
       inputSchema: codemodeInputSchema(),
       execute: (args, options) => withCodemodeProgram(async () => {
         requireBuild('Native JavaScript execution without a constrained runtime');
@@ -89,12 +91,9 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           const toolBindings: Record<string, CodemodeExecute> = {};
           // Read per call so a tool crafted a step ago is callable now; each body is defined in the program below.
           const crafted = surface.craftedTools();
-          // `requireBuild` above refused Plan, so the program reaches what Build does.
-          const reached = programProviders({ surface, namespaces: deps.namespaces ?? [], reach: deps.reach, mode: 'build', signal });
-          const tools = reached.find((p) => p.name === CRAFTED_TOOL_NAMESPACE)?.tools ?? {};
+          const { providers: reached, describe } = reaching(signal);
 
-          // A crafted name shadows the rest, as in the CF prelude.
-          for (const [name, entry] of Object.entries({ ...tools, ...craftedFailureFunctions(crafted) })) {
+          for (const [name, entry] of Object.entries(reached.find((p) => p.name === CRAFTED_TOOL_NAMESPACE)?.tools ?? {})) {
             toolBindings[name] = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute);
           }
 
