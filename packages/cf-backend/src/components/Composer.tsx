@@ -5,7 +5,6 @@
 import { detach } from "@kinu.run/core/obs";
 import { Effect } from "effect";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { InputArea } from "@cloudflare/kumo";
 import { Loader } from "@/components/ui/Loader";
 import {
   StopIcon, GitBranchIcon, ArrowBendUpRightIcon, ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon, CaretRightIcon, CaretUpIcon,
@@ -17,6 +16,7 @@ import type { WorkspaceNotice } from "@kinu.run/core";
 import { composing } from "@/components/ui/form";
 import type { ProviderWaitShown } from "@/hooks/use-chat-owner";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
+import { TextArea } from "@/components/ui/Field";
 
 const CHAT_MODES: readonly WorkMode[] = ["build", "plan"];
 
@@ -318,7 +318,7 @@ export function Composer({
 
   return (
     // @container: the action row collapses to icons in a narrow chat column.
-    <div data-composer-root className="@container mx-auto w-full max-w-[820px] px-3 pb-3 sm:px-5 sm:pb-4"
+    <div data-composer-root className="@container mx-auto w-full max-w-[var(--layout-composer)] px-3 pb-3 sm:px-5 sm:pb-4"
       onPaste={(e) => {
         if (attachments) pasteAttachments(e, attachments, (text) => onValueChange(value === "" ? text : `${value}\n${text}`));
       }}>
@@ -329,30 +329,15 @@ export function Composer({
       <div className="p-composer">
         {attachments && <AttachmentTray attachments={attachments} />}
 
-        <InputArea ref={textareaRef} value={value} onValueChange={onValueChange}
+        {/* Shift+Enter is the field's own line break; Enter alone sends. */}
+        <TextArea bare data-composer-field ref={textareaRef} value={value} onChange={(e) => onValueChange(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key !== "Enter") return;
-
-            if (composing(e.nativeEvent)) return;
-
-            if (e.shiftKey) {
-              // Kumo's controlled InputArea drops the native line break; insert it
-              // and restore the caret after React commits.
-              e.preventDefault();
-              const input = e.currentTarget;
-              const start = input.selectionStart;
-              const end = input.selectionEnd;
-              onValueChange(`${value.slice(0, start)}\n${value.slice(end)}`);
-              requestAnimationFrame(() => input.setSelectionRange(start + 1, start + 1));
-
-              return;
-            }
+            if (e.key !== "Enter" || e.shiftKey || composing(e.nativeEvent)) return;
 
             e.preventDefault();
             submit?.();
           }}
-          placeholder={placeholder} disabled={disabled} rows={1}
-          className="w-full max-h-56 resize-none overflow-y-auto !border-0 px-[18px] pt-3 pb-1 !bg-transparent !text-[15px] !leading-6 pointer-coarse:!text-[16px] !shadow-none !outline-none !ring-0 focus:!ring-0" />
+          placeholder={placeholder} disabled={disabled} rows={1} className="t-composer max-h-56 overflow-y-auto" />
 
         <div className="flex flex-wrap items-center gap-x-1 gap-y-2 px-2 pt-1 pb-2">
           {attachments && <AttachButton attachments={attachments} disabled={disabled} />}

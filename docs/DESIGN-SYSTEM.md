@@ -175,7 +175,7 @@ Define every role for all four looks in `theme.ts`. Each value below is today's 
 | status | `t-status` | 12 / 16 | 500 | 0 | tone | `Status`, `Chip` |
 | micro | `t-micro` | 11 / 14 | 600 | 0.01em | per use | `Badge` and counters only |
 | chat | `prose-chat` | 15.5 / 26 (workbench 14 / 24) | 400 | 0 | text | assistant prose, the person's bubble |
-| composer | `t-composer` | 15.5 / 24 | 400 | 0 | text | composer input |
+| composer | `t-composer` | 15 / 24 (16 on a touch screen, the field floor) | 400 | 0 | text | composer input, as the approved composer ships |
 | code | `t-code` | Fragment Mono 13 / 20; inline 0.92em | 400 | 0 | accent-fg | code, paths, keys, env names |
 
 - **Font sizes:** 14 roles replace today's spread. That spread is 15 role classes, 317 Tailwind size utilities, 71 `text-[…]` literals in 16 sizes (8.5, 9, 9.5, 10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14, 15, 16, 17, 22 px), and 25 distinct `font-size` values in `index.css`.

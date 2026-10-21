@@ -138,6 +138,8 @@ html, body, #root {
   --layout-sidebar: 240px;
   --layout-tile-min: 300px;
   --layout-chat-column: 780px;
+  /* The composer: the chat column and its 20 of gutter each side, so its text lines up with the answers'. */
+  --layout-composer: calc(var(--layout-chat-column) + 40px);
   --layout-tool-list: 400px;
   --layout-tool-places: 220px;
   --layout-reader: 760px;
@@ -380,7 +382,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .t-meta       { font: 400 12px/16px var(--font-ui); color: var(--c-text-3); font-variant-numeric: tabular-nums; }
 .t-status     { font: 500 12px/16px var(--font-ui); }
 .t-micro      { font: 600 11px/14px var(--font-ui); letter-spacing: 0.01em; }
-.t-composer   { font: 400 15.5px/24px var(--font-ui); color: var(--c-text); }
+.t-composer   { font: 400 15px/24px var(--font-ui); color: var(--c-text); }
 .t-code       { font: 400 13px/20px var(--font-mono); color: var(--c-accent-fg); }
 /* Code inside running text sits a step under the words around it. */
 :is(p, li, .t-body, .t-item, .prose-chat) > .t-code { font-size: 0.92em; }
@@ -1044,6 +1046,8 @@ body { background: var(--c-bg); color: var(--c-text); }
   transition: border-color var(--dur-state) ease-out, box-shadow var(--dur-state) ease-out;
 }
 .p-composer:focus-within { border-color: var(--c-composer-line-focus); }
+/* The approved composer's field: its text 18 in from the edge, the action row close under it. */
+.p-composer [data-composer-field] { padding: 12px 18px 4px; }
 
 /* The attention stack: what waits on the owner, attached to the composer's top
    edge. The open card is the composer's own surface, inset so it reads as a
@@ -2016,10 +2020,11 @@ body > .annotation-toolbar {
 }
 }
 
-/* iOS zooms the page when a text field under 16px takes focus. Unlayered, so it outranks each field's size utility. */
+/* iOS zooms the page when a text field under 16px takes focus. Unlayered, so it outranks each field's size utility; one
+   `:is()` at an attribute's weight, so it outranks a field's type role (`t-meta`, `t-composer`) as well. */
 @media (pointer: coarse) {
-  input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"]),
-  textarea, select { font-size: var(--t-field-touch); }
+  :is(input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"]),
+  textarea, select) { font-size: var(--t-field-touch); }
 }
 
 /* ── Workspace bar ─────────────────────────────────────────────────
