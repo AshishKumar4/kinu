@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, isProcessLive, nameBox, CONTAINER_ENV, END_TREE } from "./processes";
+import { Processes, isProcessLive, nameBox, CONTAINER_ENV, END_TREE, type ProcessRecord } from "./processes";
 import { launched } from './exec-launcher';
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
@@ -81,7 +81,7 @@ import {
 } from './restoration';
 import type { DevboxReport, HeartbeatTick, IncidentReasonRow, SupervisedProcessRow } from './report';
 import {
-  deliverIncidents, INCIDENT_PREFIX, incidentTotals, recordIncident,
+  deliverIncidents, INCIDENT_PREFIX, INCIDENT_REASON_MAX_CHARS, incidentTotals, recordIncident,
   type IncidentRow,
 } from './incidents';
 import {
@@ -1768,7 +1768,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         logLate(`process ${spec.processId}`),
       );
 
-      if (started.kind === 'done') continue;
+      if (started.kind === 'done') {
+        // The box went away and came back: that is the change that makes a start again right, and its job is told so.
+        if (spec.job !== undefined) await this.#record('process-restored', 'the computer restarted, and started this process again', { processId: spec.processId, job: spec.job });
+        continue;
+      }
+
       down.push(`process ${spec.processId} did not restart`);
       // The reservation stays whether the start threw or outran its allowance, so a later
       // attempt can retry it.
@@ -2454,7 +2459,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       // A supervised command seen to finish is done: its spec goes, so the next start does not run it again (staging
       // rc27, 2026-10-20: a three-hour job ran again from its first line on the next wake). One that failed keeps its
-      // spec and restarts cold (D35). Here, with admissions fenced, no start of the same command can race the forget.
+      // spec and restarts cold (D35), unless it runs as a job, whose end is told. Here, with admissions fenced, no start
+      // of the same command can race the forget.
+      await this.#ended(listed);
+
       for (const process of listed) if (process.status === 'completed' && residents.has(process.id)) await this.#supervised().forget(process.id);
 
       if (!ending && listed.some(process => isProcessLive(process.status) && !residents.has(process.id))) {
@@ -2551,11 +2559,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Durable spec row is written before the process starts and is idempotent on (command, cwd):
    *  a re-issue restarts under the same id; a failed start keeps the row for `stopSupervised`. `reveal`: the
-   *  workspace's owner started it, so each of its launches reads the values its agents may read (`revealedEnv`). */
-  async startSupervised(command: string, cwd?: string, env: Readonly<Record<string, string>> = {}, reveal = false): Promise<{ processId: string }> {
+   *  workspace's owner started it, so each of its launches reads the values its agents may read (`revealedEnv`). `job`:
+   *  the background job it runs as, which the box tells of its end and its restores (`SupervisedProcessSpec.job`). */
+  async startSupervised(command: string, cwd?: string, env: Readonly<Record<string, string>> = {}, as: { readonly reveal?: boolean; readonly job?: string } = {}): Promise<{ processId: string }> {
     return await settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
       yield* attempt('io', () => this.ensureReady());
-      const result = yield* attempt('process', () => this.#supervised().run({ kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR, env, reveal }));
+
+      const result = yield* attempt('process', () => this.#supervised().run({
+        kind: 'start', command, cwd: cwd ?? DEVBOX_WORKDIR, env, reveal: as.reveal === true, ...(as.job !== undefined && { job: as.job }),
+      }));
 
       if (result.kind !== 'started') return yield* Effect.fail(new DevboxError('cancelled', 'supervised start was superseded'));
       // Its session is listed beside the person's own, by what it runs (D95).
@@ -2975,6 +2987,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           return beat;
         }
 
+        // A process that runs as a job and has ended is told now, on this beat: no other arm watches it. A store or box
+        // that cannot answer is asked again on the next beat; the beat itself goes on.
+        await settle(attempt('io', async () => {
+          if ((await this.#procSpecs()).some((spec) => spec.job !== undefined)) await this.#ended(await this.#processes().list());
+        }).pipe(Effect.catch((failed) => Effect.sync(() => { console.error(`[devbox] telling ended jobs failed: ${describe({ cause: failed })}`); }))));
+
         const now = Date.now();
 
         // Each lane covers its own tail; shell commands and supervised starts count via `#activeCallers`.
@@ -3147,10 +3165,30 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     };
   }
 
+  /**
+   * Each process in `listed` that runs as a job and has ended: its end is recorded for the workspace (its exit code, and
+   * the tail of what it wrote, which says why), then its spec goes, so nothing restarts it and its end is told once. A
+   * crash is not restarted on a clock: the job ends, and its agent decides.
+   */
+  async #ended(listed: readonly ProcessRecord[]): Promise<void> {
+    const jobs = new Map((await this.#procSpecs()).filter((spec) => spec.job !== undefined).map((spec) => [spec.processId, spec.job]));
+
+    for (const process of listed) {
+      const job = jobs.get(process.id);
+
+      if (job === undefined || isProcessLive(process.status)) continue;
+      // A tail the box cannot read is no reason to keep the end untold.
+      const tail = await settle(attempt('io', () => this.#processes().logs(process.id, { bytes: INCIDENT_REASON_MAX_CHARS })).pipe(Effect.catch((failed) => Effect.succeed(`(what it wrote could not be read: ${describe({ cause: failed })})`))));
+
+      await this.#record('process-ended', tail, { processId: process.id, job, ...(process.exitCode !== undefined && { exitCode: process.exitCode }) });
+      await this.#supervised().forget(process.id);
+    }
+  }
+
   async #record(
     stage: IncidentStage,
     reason: string,
-    extra?: { readonly processId?: string; readonly port?: number },
+    extra?: { readonly processId?: string; readonly port?: number; readonly job?: string; readonly exitCode?: number },
   ): Promise<void> {
     await recordIncident(this.ctx.storage, stage, reason, extra);
     await this.armAlarm(INCIDENT_CALLBACK, Math.ceil(incidentRetryDelayMs(0) / 1000));

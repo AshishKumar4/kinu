@@ -9,7 +9,7 @@ import { attempt, settle, type DevboxError } from './errors';
 const SUPERVISED_SPEC_PREFIX = 'devbox:proc:';
 
 export type SupervisedStart =
-  | { readonly kind: 'start'; readonly command: string; readonly cwd: string; readonly env: Readonly<Record<string, string>>; readonly reveal: boolean }
+  | { readonly kind: 'start'; readonly command: string; readonly cwd: string; readonly env: Readonly<Record<string, string>>; readonly reveal: boolean; readonly job?: string }
   | { readonly kind: 'restore'; readonly spec: SupervisedProcessSpec }
   | { readonly kind: 'native-start'; readonly processId: string; readonly command: string; readonly cwd: string };
 
@@ -127,6 +127,7 @@ export class SupervisedProcesses {
         // restart after.
         const reserved: SupervisedProcessSpec = {
           processId: crypto.randomUUID(), createdAt: Date.now(), ...owner, command: request.command, cwd: request.cwd, env: request.env, reveal: request.reveal,
+          ...(request.job !== undefined && { job: request.job }),
         };
 
         owner = reserved;

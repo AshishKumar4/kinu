@@ -54,7 +54,7 @@ export function gate(): Gate {
 export const HARNESS_IMAGE = 'registry.cloudflare.com/test/kinu-devbox@sha256:0000';
 
 /** The process manager's scripts, named by their `$0` (`src/processes.ts`). */
-const PROCESS_SCRIPTS = new Set(['devbox-process', 'devbox-unlaunch', 'devbox-status', 'devbox-kill']);
+const PROCESS_SCRIPTS = new Set(['devbox-process', 'devbox-unlaunch', 'devbox-status', 'devbox-kill', 'devbox-logs']);
 
 /** Uses the SDK's own status vocabulary: `isProcessLive` reads `status`. */
 export interface FakeProcessRow {
@@ -1167,6 +1167,15 @@ export class FakeSandbox {
 
   /** The process scripts' file protocol: `launch` stands for the claim symlink and holds its target. */
   async #processScript(args: string[], pid: number): Promise<ExecProcess> {
+    // What it wrote, both streams, the last `bytes` of it when asked (`processes.ts` LOGS).
+    if (args[3] === 'devbox-logs') {
+      const dir = args[4] ?? '';
+      const bytes = Number(args[6] ?? '0');
+      const text = `${this.files.get(`${dir}/stdout.log`) ?? ''}${this.files.get(`${dir}/stderr.log`) ?? ''}`;
+
+      return processResult(Promise.resolve({ stdout: bytes > 0 ? text.slice(-bytes) : text, stderr: '', exitCode: 0 }), pid);
+    }
+
     if (args[3] === 'devbox-process') {
       const dir = args[4] ?? '';
       const cwd = args[5] ?? '';
