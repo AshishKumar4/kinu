@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
-import { admitCraftedSource, cloudPlanes, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, programSurface, narrowToolSurface, nativeToolFunctions, JsonValueSchema, WORKSPACE_ROOT, workspacePath, type ToolOutcome, type JsonValue } from '@kinu.run/core';
+import { admitCraftedSource, cloudPlanes, commandAnswer, decodeJsonValue, failedToolOutcome, programEffectsOf, successfulToolOutcome, withCodemodeProgram, programSurface, narrowToolSurface, nativeToolFunctions, JsonValueSchema, WORKSPACE_ROOT, workspacePath, type ToolOutcome, type JsonValue } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createCodeTool } from '@cloudflare/codemode/ai';
 import { generateText, isStepCount, tool, jsonSchema } from 'ai';
@@ -322,6 +322,20 @@ describe('the eval sandbox under workerd', () => {
     expect(failed.result).toEqual({ success: false, reason: null, error: 'ENOENT: no such file: absent.md' });
   });
 
+  // WEB-3: a program's member calls arrive over RPC with no async context of their caller's; the record it makes is
+  // still the program's, entered where its call was bound.
+  test("a command a program's member answers over RPC is recorded for that program, with its exit code", async () => {
+    const providers = [{ name: 'workspace', fns: {
+      exec: async (...args: unknown[]) => commandAnswer({ exitCode: 2, stderr: 'no such file' }, false, false, { machine: 'workspace', command: String(args[0]) }),
+    } }];
+
+    const ran = await withCodemodeProgram(() => executor.execute("await workspace.exec('cat missing.txt').catch(() => null); return 'done';", providers), { call: 'call-rpc' });
+
+    expect(programEffectsOf('call-rpc', v.parse(JsonValueSchema, ran))).toEqual({
+      call: 'call-rpc', files: [], commands: [{ machine: 'workspace', command: 'cat missing.txt', exitCode: 2 }], operations: {},
+    });
+  });
+
   test('host rejections and native refusals use one value; recovery and propagation keep their binding census', async () => {
     const native = nativeToolFunctions({ file: tool({
       inputSchema: jsonSchema<{ action: string }>({ type: 'object' }),
@@ -329,7 +343,7 @@ describe('the eval sandbox under workerd', () => {
     }) }, undefined);
 
     const providers = [{ name: 'tools', fns: Object.fromEntries(Object.entries(native).map(([name, entry]) => [name, entry.execute])) }];
-    const run = (code: string) => withCodemodeProgram(() => executor.execute(code, providers));
+    const run = (code: string) => withCodemodeProgram(() => executor.execute(code, providers), { call: 'call-test' });
     const recovered = await run('const failure = await tools.file({op:"read"}); if (failure.success === false) return failure.reason; throw new Error("missing failure shape");');
     expect(recovered.result).toBe('unavailable');
     expect(successfulToolOutcome('eval', { output: recovered })).toEqual({ success: true, failures: [
@@ -398,7 +412,7 @@ describe('the eval sandbox under workerd', () => {
       "// reach a browser this agent did not open, then list tools on something that is no page\n"
       + "const browser = await web.connectBrowser('not-mine'); const tools = await web.pageTools({}); return { browser, tools };",
       [{ name: 'web', fns, prelude: web.prelude }],
-    ));
+    ), { call: 'call-test' });
 
     expect(ran.result).toMatchObject({
       browser: { success: false, reason: 'denied' },

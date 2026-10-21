@@ -709,10 +709,10 @@ describe('the two hire targets are decided by `role`', () => {
       await codemodeFunction('agents', 'hire', hire)('auditor', '   ', { lifetime: 'task' });
 
       return { result: null };
-    });
+    }, { call: 'call-test' });
 
     expect(successfulToolOutcome('eval', { output: recovered })).toEqual({ success: true, failures: census });
-    expect(await thrownOutcome(withCodemodeProgram(async () => ({ result: await codemodeFunction('agents', 'hire', hire)('auditor', '   ', { lifetime: 'task' }) }))))
+    expect(await thrownOutcome(withCodemodeProgram(async () => ({ result: await codemodeFunction('agents', 'hire', hire)('auditor', '   ', { lifetime: 'task' }) }), { call: 'call-test' })))
       .toMatchObject({ success: false, reason: 'bad_input', failures: census });
     // The port refuses a brief with no role the same way, for the hirers that are not this tool.
     await expect(scene.temporary.start({ role: 'auditor', roleLabel: ' ', task: 'Survey auth', mode: 'build' })).rejects.toMatchObject({ code: 'bad_input' });

@@ -74,6 +74,16 @@ function namespaceMemberImpact(namespace: string, member: string): Impact | null
   return op?.slate === true || op?.slate === 'owner' ? op.impact : null;
 }
 
+/**
+ * What a program's member call does, by its catalog entry, whether or not a slate reaches it; `null` for one the catalog
+ * does not declare. Native tools (`tools.*`) say per operation (`NATIVE_ACTION_EFFECTS`), so they are not read here.
+ */
+export function declaredImpact(address: { readonly namespace: string; readonly member: string }): Impact | null {
+  const sandboxWeb = address.namespace === 'web' ? SANDBOX_WEB.get(address.member) : undefined;
+
+  return sandboxWeb ?? WIRED.get(address.namespace)?.impacts.get(address.member) ?? DECLARED.get(address.namespace)?.get(address.member)?.impact ?? null;
+}
+
 /** A member only the owner's own slate reaches, as the owner: a share never grants it, a hosted actor's slate never holds it. */
 export function slateOwnerOnly(address: { readonly namespace: string; readonly member: string }): boolean {
   // A reply is the owner's agent speaking to the owner: no share's viewer is handed it.

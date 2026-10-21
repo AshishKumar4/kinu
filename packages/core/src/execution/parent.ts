@@ -93,7 +93,7 @@ export function createParentExecutor(deps: {
               () => deps.handle.exec(words),
               signal,
               'parent exec aborted: the command may still finish in the parent workspace',
-            ), v.is(ExecPartsSchema, args[1]), false),
+            ), v.is(ExecPartsSchema, args[1]), false, { machine: 'parent', command }),
           };
         },
       ),
