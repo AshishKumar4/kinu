@@ -11,7 +11,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { CompletedTurn } from './types';
 import type { TurnSteeringTrigger } from '../events/types';
 import type { ShownLesson } from '../types/dynamic-context';
-import { sqlCheckList } from '../identity/schema';
+import { sqlCheckList } from '../utils/sql';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { parseJsonValue } from '../utils/json';
 import { nowMs } from '../utils/date';

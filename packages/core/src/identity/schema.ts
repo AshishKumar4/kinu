@@ -1,6 +1,6 @@
 /** Identity and actor DDL; `state/workspace-schema.ts` composes every table. */
 
-import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { RawSqlExec } from '../types/primitives';
 
 export const WORKSPACE_IDENTITY_DDL =
   `CREATE TABLE IF NOT EXISTS workspace_identity (
@@ -130,17 +130,5 @@ export function initFiberTable(execRaw: RawSqlExec): void {
     PRIMARY KEY (actor_id, id)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_fibers_actor_name ON fibers(actor_id, name)`);
-}
-
-/** Absence as a value: a catch cannot tell a missing table from other SQL errors. */
-export function tableExists(sql: SqlExecutor, table: string): boolean {
-  return sql<{ name: string }>`
-    SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${table}
-  `.length > 0;
-}
-
-/** A vocabulary quoted for a DDL CHECK, so the CHECK derives from the same list as the type. */
-export function sqlCheckList(values: readonly string[]): string {
-  return values.map((value) => `'${value}'`).join(',');
 }
 

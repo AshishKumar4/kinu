@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { scratchPath } from '@kinu.run/test-utils';
+import { join } from 'node:path';
+import { childEnv, scratchDir, scratchPath } from '@kinu.run/test-utils';
 import { holdsCheckoutResource, readCosts, writeCosts } from './gate-cost';
 
 const CHECKOUT = '/home/dev/Kinu-wt-lane/';
@@ -12,6 +13,20 @@ test('rewriting a cost table preserves a local row\'s own machine beside remote 
   writeCosts({ measuredAt: 'fixture', machine: 'armada machine', method: 'fixture', rows }, path);
   writeCosts(readCosts(path), path);
   expect(readCosts(path).rows).toEqual(rows);
+});
+
+// Main (2026-10-21): the home disk filled, so every script's cache moves with the one name, a row's measured resources
+// with the rest.
+test("a row's measured resources keep under the scripts' cache root", async () => {
+  const cache = scratchDir('gate-cost-cache');
+
+  const child = Bun.spawn([process.execPath, '-e', `console.log((await import(${JSON.stringify(join(import.meta.dir, 'gate-cost.ts'))})).resourceCostFile('bun run gate:x'))`], {
+    env: childEnv({ XDG_CACHE_HOME: cache }), stdout: 'pipe', stderr: 'pipe',
+  });
+
+  const printed = (await new Response(child.stdout).text()).trim();
+
+  expect({ exit: await child.exited, under: printed.startsWith(join(cache, 'kinu-ladder', 'resources') + '/') }).toEqual({ exit: 0, under: true });
 });
 
 // `/proc/<pid>/cmdline` separates arguments with NUL.

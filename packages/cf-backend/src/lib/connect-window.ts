@@ -9,6 +9,31 @@ const RETURN_KEY = "kinu-connect-return";
 
 const ReturnSchema = v.object({ run: v.string(), back: v.string() });
 
+/** A provider's window: the size its sign-in pages are laid out for. */
+const PROVIDER_WINDOW = { width: 520, height: 720 } as const;
+
+/**
+ * Opens a provider's page (a sign-in, an account's plans or storage) in a popup of its own, sized for it and centred
+ * over this window so it reads as part of the flow; at `url` if given, else blank until the caller sends it on. Called
+ * at the person's click, before any await a popup blocker would count against it. Its opener is cut while it is still
+ * this origin's blank page, so the provider's pages cannot reach this tab. Null when the browser refused it: a tab a
+ * script opens is refused exactly as a popup is, so there is no second `window.open` to try, and the fallback is the
+ * caller's.
+ */
+function openProviderWindow(name: string, url?: string): Window | null {
+  const { width, height } = PROVIDER_WINDOW;
+  const left = Math.round(window.screenX + (window.outerWidth - width) / 2);
+  const top = Math.round(window.screenY + (window.outerHeight - height) / 2);
+  const opened = window.open("", name, `popup,width=${width},height=${height},left=${left},top=${top}`);
+
+  if (opened === null) return null;
+  opened.opener = null;
+
+  if (url !== undefined) opened.location.href = url;
+
+  return opened;
+}
+
 /** One connect from a person's click: its own unpredictable run, where it runs, and how its end reaches this page. */
 export interface ConnectRun {
   /** Carried with the connect's start to the server, which binds it to the sign-in and names it to the finish page. */
@@ -21,13 +46,13 @@ export interface ConnectRun {
 
 /**
  * Begins a connect, at the person's click: every service's sign-in to connect it (Cloudflare, an MCP server) runs here.
- * It opens a helper tab now, before any await a popup blocker would count against it, and cuts its opener before it
- * leaves this origin, so the provider's pages cannot reach this tab. The helper ends on the finish page
- * (`APP_ROUTES.connected`), which broadcasts its run's end on `CONNECT_CHANNEL` and closes itself; this page takes only
- * its own run's end, and closes the helper too. Measured 2026-10-20 (Chrome 151, Firefox 158, headless;
- * /mnt/local/kinu/tmp/close-measure/measure.ts): after a round trip through another origin, a tab a script or a
- * `target=_blank` link opened, opener kept, cut or never given, closed itself every time. With no helper (a blocked
- * popup) the connect runs in this tab, and the finish page brings it back to the view it left, address and all.
+ * It opens its helper window now (`openProviderWindow`), and sends it to the connect's start once that is had. The
+ * helper ends on the finish page (`APP_ROUTES.connected`), which broadcasts its run's end on `CONNECT_CHANNEL` and closes
+ * itself; this page takes only its own run's end, and closes the helper too. Measured 2026-10-20 (Chrome 151, Firefox
+ * 158, headless; /mnt/local/kinu/tmp/close-measure/measure.ts): after a round trip through another origin, a tab a script
+ * or a `target=_blank` link opened, opener kept, cut or never given, closed itself every time. With no helper (a refused
+ * popup) the connect runs in this tab, and the finish page brings it back to the view it left, address and all: a tab
+ * the script opened instead would be refused as the popup was.
  */
 export function beginConnect(): ConnectRun {
   const id = crypto.randomUUID();
@@ -35,7 +60,7 @@ export function beginConnect(): ConnectRun {
   // Cleared first: a helper starts with a copy of this tab's session storage, and must not take a stale return home.
   sessionStorage.removeItem(RETURN_KEY);
   // Named by its run: one name would hand two connects begun together the same window, each sending it elsewhere.
-  const helper = window.open("", `kinu-connect-${id}`, "popup,width=520,height=720");
+  const helper = openProviderWindow(`kinu-connect-${id}`);
 
   if (helper === null) {
     return {
@@ -49,8 +74,6 @@ export function beginConnect(): ConnectRun {
       cancel() {},
     };
   }
-
-  helper.opener = null;
 
   return {
     id,

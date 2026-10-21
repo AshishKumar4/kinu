@@ -15,7 +15,7 @@ import {
   type ControlFeedbackRow, FEEDBACK_KINDS, FEEDBACK_MAX_NOTE_CHARS, FEEDBACK_MAX_ROUTE_CHARS,
   type FeedbackRecord,
 } from '../feedback/contract';
-import { sqlCheckList } from '../identity/schema';
+import { sqlCheckList } from '../utils/sql';
 import { sha256Hex } from '../safety/argument-digest';
 import { galleryPagePath } from '../slates/gallery-api';
 

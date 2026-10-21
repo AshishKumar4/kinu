@@ -157,7 +157,7 @@ import {
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   readWorkspaceWork, hasWorkspaceWork, WORK_TAB_JOBS, type WorkspaceWork, inspectWork, type InspectedWork, addressedBlock, type EphemeralSlateAddress,
-  readWorkspaceAgents, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
+  measuredAt, readWorkspaceAgents, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, turnTags,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
@@ -1889,8 +1889,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * An agent's delegation: swarms over its own runtime and working context, its subtree's team, and the owner's other
-   * workspaces where its reach is external. Rungs are bounded by its own depth; at the cap the team deps are absent, so
-   * hire/ask/send/list/dismiss vanish from the enum rather than refusing.
+   * workspaces where its reach is external. Rungs are bounded by its own depth; at the cap the team and the search are
+   * not offered, so hire/swarm/assign/message/list/dismiss vanish from the enum rather than refusing.
    */
   protected actorAgentsToolDeps(actor: CFSeat, reach: ActorReach, mode: WorkMode, operation: () => OperationProfile | null): AgentsToolDeps {
     const { runtime } = actor;
@@ -1953,6 +1953,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         kind: 'task',
         ...event,
       }),
+      workspaceAgents: () => this.workspaceAgents(true),
+      treeOwner: actor.handle.actorId,
+      events: new EventLog(this.watchedExec, actor.handle),
     });
   }
 
@@ -4147,15 +4150,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable()
   async listWorkspaceAgents(): Promise<PanelAgent[]> {
+    return await this.workspaceAgents(false);
+  }
+
+  protected async workspaceAgents(retained: boolean): Promise<PanelAgent[]> {
     return readWorkspaceAgents({
       sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), queued: (actorId) => this.agentWakes.armed(actorId),
-      actors: this.workspaceActors().list({ retired: true }),
+      actors: this.workspaceActors().list({ retired: true }), retained,
       // Each agent's own isolate reports them at its turns' ends, main's as any other's: its steps are its isolate's (D9).
       figures: (actorIds) => reportedAgentFigures(this.boundSql, actorIds),
       chat: (actorId) => {
         const reported = this.reportedReport(actorId)?.standing;
 
-        return reported === undefined ? null : { planPending: reported.plans.pending, lastFailed: reported.latestRun?.status === 'error' };
+        if (reported === undefined) return null;
+        const stepped = measuredAt(reported.measures);
+
+        return {
+          planPending: reported.plans.pending, lastFailed: reported.latestRun?.status === 'error',
+          ...(stepped !== undefined && { activeAt: stepped }),
+        };
       },
     });
   }

@@ -38,6 +38,41 @@ describe('the providers list', () => {
     });
   });
 
+  // The owner's rule (2026-10-21): a sign-in opens in a popup first, centred over the page that began it, so it reads as
+  // part of the flow.
+  test("a connect's window opens sized for its sign-in, centred over the page that began it", async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      const entry = '[data-provider="Cloudflare AI"]';
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=providers&cloudflare=off`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(`${entry} [data-connect-cloudflare]`);
+      // The page's window placed off the screen's corner, with room around it for a popup centred over it.
+      const cdp = await page.createCDPSession();
+      const { windowId } = await cdp.send('Browser.getWindowForTarget');
+      await cdp.send('Browser.setWindowBounds', { windowId, bounds: { left: 300, top: 100, width: 1100, height: 900 } });
+
+      const opened = page.browser().waitForTarget((target) => target.opener() === page.target());
+      await page.click(`${entry} [data-connect-cloudflare]`);
+      const helper = await (await opened).page();
+
+      if (helper === null) throw new Error('the connect opened no window');
+      // The windows' own bounds: Puppeteer lays each page out at a size of its own, so `innerHeight` is not the window's.
+      const bounds = () => ({ x: screenX, y: screenY, width: outerWidth, height: outerHeight });
+      const [began, popup] = [await page.evaluate(bounds), await helper.evaluate(bounds)];
+      const across = Math.abs(popup.x + popup.width / 2 - (began.x + began.width / 2));
+      const down = Math.abs(popup.y + popup.height / 2 - (began.y + began.height / 2));
+
+      // Its page 520 by 720, under a title and address bar the size it asks for leaves out (34px here, and under 100 on
+      // any browser); the window centred to the pixel across, and down within half that bar.
+      const bar = popup.height - 720;
+
+      expect({ width: popup.width, bar: bar >= 0 && bar < 100, across: across <= 1, down: down <= bar / 2 + 1 })
+        .toEqual({ width: 520, bar: true, across: true, down: true });
+      await helper.close();
+      await page.close();
+    }, { browserArgs: ['--screen-info={0,0 1920x1200}'] });
+  });
+
   // Review finding (2026-10-23): with its popup blocked, a connect run in the tab itself came back without the address's
   // hash, so `/user/settings#search` returned to the account section.
   test('a Cloudflare connect run in the tab itself comes back to the address it left, hash and all', async () => {

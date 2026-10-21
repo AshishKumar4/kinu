@@ -32,6 +32,7 @@ import type { Tool } from 'ai';
 import { FILE, type SlateBuildNoteSchema } from '../operations/file';
 import { SLATES_ROOT, walkedPath } from '../vfs/workspace-path';
 import type { SlateCallResult } from '../slates/rpc';
+import { noteFileChange } from '../execution/call-effects';
 
 /** Most names one `list` returns; matches `tools/db-codemode.ts` SELECT_LIMIT_MAX. */
 const FILE_LIST_MAX_ENTRIES = 1_000;
@@ -440,7 +441,10 @@ function fileOps(deps: FileDeps) {
       let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        landed = await persist(target, content, (revision) => ledger.observeWhole(path, shown, revision), observed);
+        landed = await persist(target, content, (revision) => {
+          ledger.observeWhole(path, shown, revision);
+          noteFileChange(path, existing === null ? 'created' : 'replaced');
+        }, observed);
       } catch (err) {
         const vfsFail = vfsFailure(deps.planes, { error: err }, 'write', path);
 
@@ -501,7 +505,10 @@ function fileOps(deps: FileDeps) {
       let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        landed = await persist(target, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome, writtenRevision), observed);
+        landed = await persist(target, outcome.content, (writtenRevision) => {
+          ledger.observeEdited(path, current, outcome, writtenRevision);
+          noteFileChange(path, 'edited');
+        }, observed);
       } catch (err) {
         const vfsFail = vfsFailure(deps.planes, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);

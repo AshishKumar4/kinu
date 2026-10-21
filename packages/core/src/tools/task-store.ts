@@ -5,7 +5,7 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
 import type { ActiveRoster } from '../types/dynamic-context';
-import { sqlCheckList } from '../identity/schema';
+import { sqlCheckList } from '../utils/sql';
 import { taskPlanScope, type TaskPlan } from './task-plan-scope';
 import { TASK_STATUSES } from '../operations/tasks';
 

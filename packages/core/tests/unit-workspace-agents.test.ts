@@ -11,7 +11,7 @@ import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
 import { SubagentRosterStore } from '../src/subagents/roster';
 import { actorReferenceOf, type ActorHandle } from '../src/identity/actor-handle';
 import type { SubagentRosterEntry } from '../src/delegation/agents-tool';
-import { readWorkspaceAgents, type ChatReport, type PanelAgent } from '../src/read-models/workspace-agents';
+import { measuredAt, readWorkspaceAgents, type ChatReport, type PanelAgent } from '../src/read-models/workspace-agents';
 import { OWNER_STOPPED } from '../src/heads/types';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { initAgentFiguresTable, readAgentFigures } from '../src/read-models/agent-figures';
@@ -57,8 +57,8 @@ function workspace() {
   const running = new Set<string>();
 
   /** `queued`: the agents whose wake stands, each holding work it has not said it rests from. */
-  const read = (queued: readonly string[] = []): Promise<PanelAgent[]> => readWorkspaceAgents({
-    sql, exec, root: actors.main, actors: actors.directory.list({ retired: true }),
+  const read = (queued: readonly string[] = [], retained = false): Promise<PanelAgent[]> => readWorkspaceAgents({
+    sql, exec, root: actors.main, actors: actors.directory.list({ retired: true }), retained,
     figures: (actorIds) => readAgentFigures(sql, actorIds), queued: (actorId) => queued.includes(actorId) || running.has(actorId),
     chat: (actorId) => reports.get(actorId) ?? null,
   });
@@ -133,6 +133,30 @@ describe('the Agents panel lists every agent in the workspace', () => {
       { label: 'Try the PEG parser', category: 'swarm', activity: 'working', parent: 'Main', tab: false, input: false, open: { kind: 'node', runId: 'run-1', nodeId: 'h-a', owner: null } },
       { label: 'Try the Pratt parser', category: 'swarm', activity: 'done', parent: 'Main', tab: false, input: false, open: { kind: 'node', runId: 'run-1', nodeId: 'h-b', owner: null } },
     ]);
+  });
+
+  // A search journals its first workers under its root, which is no worker of its own (swarm-expansion's `expandChild`).
+  test('a search\'s first workers, journalled under its root, hang from the agent that started it and wear its colour', async () => {
+    const { db, main, hire, read } = workspace();
+    const alice = hire(main, 'alice', {});
+    db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)').run(alice.actorId, 'run-2', 'compare two parsers', 10);
+
+    db.query(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+      VALUES (?, 'n-a', 'run-2', 'run-2', 1, 'Try the PEG parser', 'r', 'running', 11, 'synthesize')`).run(alice.actorId);
+
+    const listed = await read();
+    const worker = listed.find((agent) => agent.label === 'Try the PEG parser');
+
+    expect({ parent: worker?.parent, colour: worker?.colour }).toEqual({ parent: alice.actorId, colour: listed.find((agent) => agent.key === alice.actorId)?.colour });
+  });
+
+  test('a hire released with its history kept is read, dismissed, only when released hires are asked for', async () => {
+    const { db, main, hire, read } = workspace();
+    const old = hire(main, 'old', { status: 'dismissed', dismissedAt: 5 });
+    db.query('UPDATE workspace_actors SET deleted_at = 6 WHERE actor_id = ?').run(old.actorId);
+
+    expect((await read()).some((agent) => agent.key === old.actorId)).toBe(false);
+    expect((await read([], true)).find((agent) => agent.key === old.actorId)?.activity).toBe('dismissed');
   });
 
   test('only a worker its owner stopped reads stopped; one cut off with its search or that errored reads failed', async () => {
@@ -245,9 +269,32 @@ describe('the Agents panel lists every agent in the workspace', () => {
     const listed = await read();
     const figures = (label: string) => listed.find((agent) => agent.label === label)?.figures;
 
-    // The EMA seeds on the first rate (0) and moves α = 0.2 toward the second (0.9).
-    expect(figures('alice')).toEqual({ tokens: 3300, usd: 0.03, activeMs: 180_000, cacheEma: 0.2 * 0.9 });
-    expect(figures('Main')).toEqual({ tokens: 550, usd: 0.005, activeMs: 60_000, cacheEma: 0.8 });
+    // The EMA seeds on the first rate (0) and moves α = 0.2 toward the second (0.9); each was last active at its turn's end.
+    const start = Date.parse('2026-09-30T10:00:00.000Z');
+    expect(figures('alice')).toEqual({ tokens: 3300, usd: 0.03, activeMs: 180_000, cacheEma: 0.2 * 0.9, lastActiveAt: start + 180_000 });
+    expect(figures('Main')).toEqual({ tokens: 550, usd: 0.005, activeMs: 60_000, cacheEma: 0.8, lastActiveAt: start + 60_000 });
+  });
+
+  // A cloud agent's figures arrive at its turn's end; its report of its newest step can be later, and is.
+  test('an agent was last active at its newest step its isolate reported, past its figures', async () => {
+    const { main, hire, read, rests, turn } = workspace();
+    const alice = hire(main, 'alice', { origin: 'user' });
+    turn(alice, 'run-a', 3, [{ input: 1, output: 1, cacheRead: 0, usd: 0 }]);
+    const stepped = Date.parse('2026-09-30T11:00:00.000Z');
+    rests(alice, { activeAt: stepped });
+
+    expect((await read()).find((agent) => agent.label === 'alice')?.figures.lastActiveAt).toBe(stepped);
+  });
+
+  // A report may carry one measure and not the other: the step a gate admitted is a step all the same.
+  test('a report dates its agent by whichever measure it carries, and by none when it carries neither', () => {
+    const at = '2026-09-30T11:00:00.000Z';
+
+    expect([
+      measuredAt({ provider: null, gate: { at } }),
+      measuredAt({ provider: { at }, gate: { at: '2026-09-30T10:00:00.000Z' } }),
+      measuredAt({ provider: null, gate: null }),
+    ]).toEqual([Date.parse(at), Date.parse(at), undefined]);
   });
 
   test('an agent that has not run shows no figures, not zeros', async () => {

@@ -42,8 +42,9 @@ import { rowNotices } from './row-verdicts';
 import { recordMarkAt, recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
 import { openDeployLive } from './deploy-live';
 import {
-  CACHE_BLIND_SPOTS, cacheEnabled, defaultStoreDirectory, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
+  CACHE_BLIND_SPOTS, cacheEnabled, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
 } from './ladder-cache';
+import { ladderCacheDirectory } from './cache-root';
 import type { GateCacheRequest, Plan, Store, ToolVersions } from './ladder-cache';
 import { fromEnvironment, type RemoteProofs } from './ladder-proofs';
 import { auditClosure } from './ladder-audit';
@@ -4436,7 +4437,7 @@ if (import.meta.main) {
   const caching = cacheEnabled({ hammer: rowGate?.phase === 'hammer', noCache: cli['no-cache'] === true });
   const remote = caching ? remoteStore : undefined;
   const tools = toolVersions(root, await pathNodeVersion());
-  const store = storeAt(defaultStoreDirectory());
+  const store = storeAt(ladderCacheDirectory());
   const revision = fullRevision();
   const ciRows: CIVerdict[] = [];
 

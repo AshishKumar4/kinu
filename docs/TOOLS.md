@@ -229,10 +229,17 @@ prompt's `## Delegation` section, and the `agents.*` namespace:
 
 | Operation | The deps that put it on the surface |
 |---|---|
-| `swarm` | `swarm` (a model to expand with and a workspace to measure in), and the account's swarms beta on |
+| `swarm` | `swarm` (a model to expand with and a workspace to measure in), the account's swarms beta on, and below the delegation depth cap: a search's nodes are agents a level below it |
 | `hire`, `dismiss` | `team`, below the delegation depth cap |
 | `assign`, `message`, `list` | `team` below the cap, or `peers` |
 | `hireWorkspace`, `reply` | `peers` |
+
+`list` shows the caller's subtree as a tree, from the read model the person's sidebar draws (`readWorkspaceAgents`;
+`delegation/agent-tree.ts`): Main sees the whole workspace, a hire itself and what it started, and peers are listed
+beside it. Each row is an agent after the one that started it, with its kind, status, what it works on, depth, last
+activity and the reports to the caller it has not read; siblings run first, then wait, rest and fail, by their last
+activity. It shows 32 rows unless `limit` asks for up to 200, counts the rest, and lists dismissed agents and settled
+swarm workers only with `retired:true`. `list({agent})` is one agent's status in detail.
 
 `lifetime` is gated one level finer, on `team.temporary`. With no port to run a
 task hire on, the field is in neither the JSON Schema nor the program

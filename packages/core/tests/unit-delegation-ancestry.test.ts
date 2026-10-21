@@ -11,6 +11,10 @@ import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { actorReferenceOf } from '../src/identity/actor-handle';
 import { hireLifecycle } from '../src/subagents/hire-lifecycle';
 import { KinuError } from '../src/obs/error';
+import { delegationBudgetOf } from '../src/subagents/depth';
+import { agentsActionsFor, dispatchAgentsCall, type AgentsToolDeps } from '../src/delegation/agents-tool';
+import { makeTeam } from './helpers-agents';
+import * as v from 'valibot';
 
 const unused = async (): Promise<never> => { throw new KinuError('unsupported', 'A refused hire asks nothing else.'); };
 
@@ -41,7 +45,7 @@ function hirerWith(corrupt: (sql: ReturnType<typeof createTestSql>, ids: { reado
     born: unused, asHire: unused, deliver: unused, hirerName: () => 'second', announce: () => {}, retireJobs: unused, roster: () => { throw new Error('no roster is read'); }, retire: unused,
   });
 
-  return { directory, lifecycle };
+  return { directory, lifecycle, record };
 }
 
 const seed = { name: 'third', displayName: 'Third', nameOrigin: 'auto', role: 'general', mission: 'Go one deeper.', lifetime: 'durable', origin: 'agent', creationId: 'c-third' } as const;
@@ -63,5 +67,30 @@ describe('a hirer whose line of hirers cannot be walked', () => {
 
     expect(lifecycle.spawn(seed)).rejects.toThrow(/lead back to one another.*unknown/u);
     expect(directory.list().some((actor) => actor.name === 'third')).toBe(false);
+  });
+});
+
+// The public surface: the `agents` tool a hirer is handed reads the same walk, so it offers nothing to start an agent
+// with, and a call a toolset served before the line broke still offers is refused, saying the depth is unknown.
+describe('the agents tool of a hirer whose line of hirers cannot be walked', () => {
+  test('offers no hire and no search, and refuses either as an unknown depth', async () => {
+    const { directory, record } = hirerWith((database, { subagent }) => {
+      void database.sql`UPDATE workspace_actors SET parent_actor_id = 'actor-gone' WHERE actor_id = ${subagent}`;
+    });
+
+    const team = makeTeam({ delegation: delegationBudgetOf((actorId) => directory.retained(actorId), record) });
+    const deps: AgentsToolDeps = { mode: 'build', swarms: true, team: team.deps };
+
+    expect(agentsActionsFor(deps)).toEqual([]);
+
+    const refusals = await Promise.allSettled([
+      dispatchAgentsCall(deps, { op: 'hire', fields: { role: 'task', message: 'Go one deeper.' } }),
+      dispatchAgentsCall(deps, { op: 'swarm', fields: { task: 'Three ways to go deeper', preset: 'ideate' } }),
+    ]);
+
+    const reasons = refusals.map((settled) => (settled.status === 'rejected' ? v.parse(v.object({ code: v.string(), message: v.string() }), settled.reason) : null));
+
+    expect(reasons.map((reason) => [reason?.code, reason?.message.includes('no longer recorded')])).toEqual([['denied', true], ['denied', true]]);
+    expect(team.calls).toEqual([]);
   });
 });

@@ -325,7 +325,7 @@ describe('a program driving the desktop', () => {
 
     const all = withCodemodeProgram(async () => ({
       result: await Promise.all([call(computer, 'type', 'a'.repeat(60)), call(computer, 'type', 'b'.repeat(60)), call(computer, 'click', [1, 2])]),
-    }));
+    }), { call: 'call-test' });
 
     // Each typed run is held on the screen until let go; whatever else was called waits behind it.
     for (let count = 1; count <= 4; count += 1) {
@@ -366,7 +366,7 @@ describe('a program driving the desktop', () => {
 
     const all = withCodemodeProgram(async () => ({
       result: await Promise.all([call(computer, 'key', ['w'], { hold: 10_000 }), call(computer, 'click', [1, 2])]),
-    }), stop.signal);
+    }), { call: 'call-test', signal: stop.signal });
 
     await asked.promise;
     stop.abort();
@@ -392,11 +392,11 @@ describe('a program driving the desktop', () => {
     });
 
     const computer = computerOf(box);
-    const look = withCodemodeProgram(async () => ({ result: [await call(computer, 'screenshot')] }));
+    const look = withCodemodeProgram(async () => ({ result: [await call(computer, 'screenshot')] }), { call: 'call-test' });
 
     await looking.promise;
     const stop = new AbortController();
-    const queued = withCodemodeProgram(async () => ({ result: [await call(computer, 'click', [1, 2])] }), stop.signal);
+    const queued = withCodemodeProgram(async () => ({ result: [await call(computer, 'click', [1, 2])] }), { call: 'call-test', signal: stop.signal });
 
     stop.abort();
     // Answered while the other program's look still holds the screen, which is let go only after.
@@ -420,7 +420,7 @@ describe('a program driving the desktop', () => {
       job.drain('job-1');
 
       return { result: [before, await call(computer, 'click', [3, 4]), await call(computer, 'key', 'w', { hold: 500 }), await call(computer, 'screenshot'), await call(computer, 'watch', 1)] };
-    }, undefined, execContext({ channel: job }));
+    }, { call: 'call-test' }, execContext({ channel: job }));
 
     expect(result).toEqual([null, expect.objectContaining({ success: false, reason: 'denied' }), expect.objectContaining({ success: false, reason: 'denied' }), SHOWN, SHOWN]);
     expect(actions().map((action) => action.kind)).toEqual(['click', 'screenshot', 'watch']);

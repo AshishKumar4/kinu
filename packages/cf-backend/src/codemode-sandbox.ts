@@ -7,7 +7,7 @@ import { DynamicWorkerExecutor, sanitizeToolName } from '@cloudflare/codemode';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import {
   CRAFTED_TOOL_NAMESPACE, explainSandboxError, nestedMembers, renderCraftedDefinitions, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
-  NO_TIMER_DEADLINE_MS, bindTaskPlan, launched, codemodeFunction, decodeJsonValue, relayedAnswer,
+  NO_TIMER_DEADLINE_MS, bindTaskPlan, launched, codemodeFunction, type MemberImpacts, decodeJsonValue, relayedAnswer,
   type CraftedToolSource, type ExecuteResult, type Executor, type ProgramStop, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -50,13 +50,13 @@ export function renderToolsPrelude(crafted: readonly CraftedToolSource[], identi
 /**
  * Capture the invocation's task plan and failure census before the RPC hop.
  */
-function attributeProviders(providers: ResolvedProvider[]): ResolvedProvider[] {
+function attributeProviders(providers: ResolvedProvider[], impacts: MemberImpacts): ResolvedProvider[] {
   return providers.map((provider) => {
     const fns: ResolvedProvider['fns'] = {};
 
     for (const [name, fn] of Object.entries(provider.fns)) {
       const invoke = bindTaskPlan(fn);
-      fns[name] = codemodeFunction(provider.name, name, invoke);
+      fns[name] = codemodeFunction(provider.name, name, invoke, impacts(provider.name, name));
     }
 
     const attributed: ResolvedProvider = { name: provider.name, fns };
@@ -175,10 +175,13 @@ export class KinuSandboxExecutor {
   readonly #inner: ProgramLaunch;
   /** Source run before each program, in its scope: `describe` (`describeProgramSource`). */
   readonly #prelude: string;
+  /** What each member's served operation declares, from the providers it was built over (`servedImpacts`). */
+  readonly #impacts: MemberImpacts;
 
-  constructor(launch: ProgramLaunch, prelude = '') {
+  constructor(launch: ProgramLaunch, prelude = '', impacts: MemberImpacts = () => null) {
     this.#inner = launch;
     this.#prelude = prelude;
+    this.#impacts = impacts;
   }
 
   async execute(code: string, providers: DynamicProviderInput) {
@@ -191,7 +194,7 @@ export class KinuSandboxExecutor {
       // as a result so the shared completion mapper retains its classification.
       const callable = normalizeCode(code);
       const source = `async () => { ${this.#prelude}\n try { return await (${callable})(); } catch (cause) { if (cause && cause.success === false && typeof cause.error === 'string') return cause; throw cause; } }`;
-      const result = await this.#inner.run(source, attributeProviders(providerArr));
+      const result = await this.#inner.run(source, attributeProviders(providerArr, this.#impacts));
 
       // DWE returns sandbox-internal failures as strings; only the native-tool ReferenceError is
       // rewritten into the correction.

@@ -31,6 +31,9 @@ export const SCRATCH_PREFIXES = [
   'harness-wiring-',
   // Not ours: the `opencode` CLI creates `$TMPDIR/opencode` when the local-session suites resolve models; listed so preflight ages it out.
   'opencode',
+  // Not ours: miniflare's per-instance `$TMPDIR/miniflare-<hash>`, which the vite dev server's workerd leaves when it is
+  // killed; listed so preflight ages it out.
+  'miniflare-',
   'mutation-gate-',
   'nimbus-probe-',
   // pc-agent supervisor suites, one coarse family entry.

@@ -107,11 +107,12 @@ one decision, `surfaceReach` (`packages/core/src/delegation/turn-reach.ts`):
 what the agent reaches by what it is (`actorReach`) and by the lane its turn was
 admitted in (`turnReach`). The `agents` actions derive from the deps the factory
 wires (`actorAgentsToolDeps`, read by core's `agentsActionsFor`,
-`packages/core/src/delegation/agents-tool.ts`). Every actor has `swarm`.
-`hire`, `msg`, and `list` need a roster or the peer transport. `dismiss` needs
-the roster. `msg`'s `event_id` target answers an inbound agent message. At the
-depth cap `teamProfile()` returns nothing, so the roster and the `hire` rung
-vanish together. `report` exists only on a hirer's lane. `release` is not a
+`packages/core/src/delegation/agents-tool.ts`). Every actor below the depth
+cap has `swarm`. `hire`, `msg`, and `list` need a roster or the peer transport.
+`dismiss` needs the roster. `msg`'s `event_id` target answers an inbound agent
+message. At the depth cap the team and the search substrate are not offered, so
+the roster, the `hire` rung and `swarm` vanish together: a search's nodes are
+agents a level below it. `report` exists only on a hirer's lane. `release` is not a
 native tool: it is an orchestrator-only codemode provider, left out of the
 Plan-mode set. The owner's lane is `submit_plan` (an owner turn in Plan mode),
 `reply_to_comment` (while a plan the owner sent back awaits answers) and
