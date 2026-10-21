@@ -657,6 +657,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-button[aria-busy="true"] { cursor: progress; }
 /* One disabled look for every variant: a flat muted fill, muted ink, no edge and no lift. */
 .p-button:disabled:not([aria-busy]) { background: var(--c-hover); color: var(--c-text-3); border-color: transparent; box-shadow: none; }
+/* Disabled is the variant's own shape, muted: a ghost stays unfilled, so no disabled control reads as pressed. */
+.p-button-ghost:disabled:not([aria-busy]) { background: transparent; }
 
 /* `data-force` draws a state at rest for the system frame (?frame=system), in place of the pointer and the keyboard. */
 
