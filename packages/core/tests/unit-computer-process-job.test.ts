@@ -155,6 +155,43 @@ describe("the computer's startProcess, each process a job of the actor's", () =>
     expect(jobs.store.list(20).filter((job) => job.kind === 'startProcess').map((job) => job.id)).toEqual(['bgjob-earlier']);
   });
 
+  // Third review, 2026-10-21: a start whose reply came after a second start of the same command had made its job made it
+  // again; with the second start in the actor's last job slot, it was refused, and stopped the process.
+  test("a start whose reply comes after a second start made its job answers that job, and stops nothing", async () => {
+    const jobs = actorJobs();
+    const box = computerBox(jobs);
+    const reached = Promise.withResolvers<void>();
+    const replied = Promise.withResolvers<void>();
+    let first: string | undefined;
+
+    const handle: SandboxHandle = {
+      ...box.handle,
+      startSupervisedProcess: async (_command, opts) => {
+        if (first !== undefined) return { processId: 'proc-dev', job: first };
+        first = opts?.job;
+        reached.resolve();
+        await replied.promise;
+
+        return { processId: 'proc-dev', ...(first !== undefined && { job: first }) };
+      },
+    };
+
+    for (let n = 1; n < MAX_CONCURRENT_DETACHED_JOBS; n += 1) jobs.runner.create('shell', { command: 'sleep' }, 'build', new AbortController());
+    const computer = createSandboxExecutor(handle, { processJobs: box.processJobs });
+    const earlier = computer.tools.startProcess.execute('npm run dev');
+
+    await reached.promise;
+    const later = await computer.tools.startProcess.execute('npm run dev');
+
+    replied.resolve();
+    const made = v.parse(Started, later).jobId;
+
+    expect(first).toBe(made);
+    expect(await earlier).toEqual({ processId: 'proc-dev', jobId: made });
+    expect(box.stopped).toEqual([]);
+    expect(jobs.store.list(20).filter((job) => job.kind === 'startProcess').map((job) => job.id)).toEqual([made]);
+  });
+
   // Second review, 2026-10-21: a first start whose reply was lost left its process running under a job never made; a
   // start after it answered that job, and its end met no row.
   test("a start of a command whose first start lost its reply makes that start's job, under the id its process carries", async () => {

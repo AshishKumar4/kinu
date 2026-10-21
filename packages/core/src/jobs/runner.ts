@@ -745,7 +745,8 @@ export class BackgroundJobRunner {
   async complete(jobId: string, result: JsonValue): Promise<void> {
     // A cancel in flight decides first, as it does for a settle by the job's own promise: a cancel that stops the work
     // leaves nothing to complete, and one refused leaves the job running, which this completes. Its failure is its own.
-    await Promise.allSettled([this.deciding.get(jobId)]);
+    // A cancel asked again once one is refused decides in turn, so each in flight is waited on.
+    for (let pending = this.deciding.get(jobId); pending !== undefined; pending = this.deciding.get(jobId)) await Promise.allSettled([pending]);
     const job = this.deps.store.get(jobId);
 
     if (job?.status !== 'running' || !this.deps.store.settle(jobId, job.epoch, serializeJobResult({ value: result }), Date.now())) return;
@@ -820,7 +821,8 @@ export class BackgroundJobRunner {
     try {
       return await deciding;
     } finally {
-      this.deciding.delete(jobId);
+      // A cancel asked again once this one was refused may hold the entry now: it is that one's to remove.
+      if (this.deciding.get(jobId) === deciding) this.deciding.delete(jobId);
     }
   }
 

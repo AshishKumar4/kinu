@@ -207,6 +207,47 @@ describe('BackgroundJobRunner.complete: an outside end waits for a cancel in fli
     });
   }
 
+  // Third review, 2026-10-21: a cancel refused at once let one asked again take its place, then removed that one's
+  // entry, so an end told meanwhile completed the job its cancel was stopping.
+  test('a cancel asked again once one is refused is waited on too', async () => {
+    const { gate, entered } = held();
+    let asked = 0;
+
+    const { runner, store, enqueued } = setup({
+      onCancelled: (): Promise<void> | undefined => {
+        asked += 1;
+
+        if (asked === 1) throw new Error('the computer did not answer');
+        entered.resolve();
+
+        return gate.promise;
+      },
+    });
+
+    const jobId = 'bgjob-cancel-again';
+
+    await runner.adopt({
+      jobId, kind: 'startProcess', mode: 'build', controller: new AbortController(), promise: new Promise<never>(() => undefined),
+      input: { command: 'npm run dev', processId: 'proc-dev', machine: 'computer', job: jobId },
+    });
+
+    const refused = runner.cancel(jobId);
+    const again = runner.cancel(jobId);
+
+    expect(await refused).toBe(false);
+    await entered.promise;
+    const completing = runner.complete(jobId, { processId: 'proc-dev', exitCode: 143, tail: 'killed' });
+
+    await Promise.resolve();
+    expect(store.get(jobId)?.status).toBe('running');
+    gate.resolve();
+
+    expect(await again).toBe(true);
+    await completing;
+    expect(store.get(jobId)?.status).toBe('cancelled');
+    expect(enqueued.map((turn) => turn.metadata?.status)).toEqual(['cancelled']);
+  });
+
   test('a retire that stops the work wakes no one, for an end told meanwhile too', async () => {
     const { gate, entered } = held();
 

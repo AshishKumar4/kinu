@@ -451,11 +451,12 @@ function startProcessMember({ handle, touch, environment, processJobs }: Compute
 
           if (processJobs === undefined || jobId === undefined) return { processId: started.processId };
 
-          // The same command still runs as an earlier start's job: it is that job's, and no second is made of it. One
-          // whose start lost its reply before its job was made is made now, under the id its process carries.
+          // The process is its job's, made once, by whichever start's reply comes first: a later one answers it. One whose
+          // start lost its reply before its job was made is made now, under the id its process carries. Nothing awaits
+          // between the look and the making.
           const job = started.job ?? jobId;
 
-          if (job !== jobId && processJobs.state(job) !== 'missing') return { processId: started.processId, jobId: job };
+          if (processJobs.state(job) !== 'missing') return { processId: started.processId, jobId: job };
 
           return await adoptedProcess({ handle, touch, jobs: processJobs, jobId: job, command, cwd, processId: started.processId });
         } catch (err) {
