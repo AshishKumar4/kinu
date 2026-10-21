@@ -29,10 +29,7 @@ function PartButton({ children, onClick, ...data }: {
   [attribute: `data-${string}`]: string | boolean | undefined;
 }) {
   return (
-    <button type="button" onClick={onClick} {...data}
-      className="t-status inline-flex min-h-7 items-center gap-1 rounded-md border p-border p-surface px-2 py-1 text-left p-text transition-colors hover:bg-[var(--c-hover)]">
-      {children}
-    </button>
+    <Button size="sm" onClick={onClick} {...data} className="text-left">{children}</Button>
   );
 }
 

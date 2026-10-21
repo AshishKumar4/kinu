@@ -13,6 +13,7 @@ import { KinuMark } from "@/components/ui/KinuLogo";
 import { CaptureMat, TILE, TileShell, TypesetCover } from "@/components/ui/Tiles";
 import { SlatePicture } from "@/components/slates/SlatePicture";
 import type { ExploreItem, ExploreKind, ExploreNeed } from "@/lib/explore-api";
+import { IconTile } from "@/components/ui/IconTile";
 
 /** A workspace blueprint's page. */
 export const exploreWorkspaceHref = (id: string) => `/explore/workspaces/${encodeURIComponent(id)}`;
@@ -68,9 +69,9 @@ export function Needs({ needs }: { needs: readonly ExploreNeed[] }) {
         const brand = presetBrand(need.connection);
 
         return (
-          <span key={`${need.connection ?? ""}${need.secret ?? ""}`} className="flex size-5 items-center justify-center rounded-md bg-[var(--c-hover)]">
+          <IconTile key={`${need.connection ?? ""}${need.secret ?? ""}`} size="sm">
             {brand !== undefined ? <BrandMark brand={brand} size={12} bare /> : <KeyIcon size={11} className="p-text-2" />}
-          </span>
+          </IconTile>
         );
       })}
     </span>

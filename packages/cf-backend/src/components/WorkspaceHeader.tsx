@@ -12,6 +12,7 @@ import { useMascotOf } from "@/hooks/use-chat-mascot";
 import type { ChatActions } from "@/hooks/use-agents-nav";
 import { InspectorToggle, type InspectorControl } from "@/components/WorkbenchPanels";
 import { IconControl, IconLink } from "@/components/ui/IconControl";
+import { PressableLink } from "@/components/ui/Pressable";
 
 type Rename = (name: string) => Promise<void>;
 
@@ -186,14 +187,14 @@ export function FocusBar({ workspace, agent, line, leading, trailing, tabs }: {
     <header className="p-bar" data-workspace-bar data-layout="focus">
       {leading && <div className="p-bar-menu">{leading}</div>}
       <div className="flex min-w-0 flex-1 items-center gap-3 pl-4">
-        <Link to={workspace.to} className="flex min-w-0 items-center gap-3 rounded-lg py-1 pr-2 transition-colors hover:bg-[var(--c-hover)]"
+        <PressableLink to={workspace.to} className="flex w-auto min-w-0 items-center gap-3 py-1 pr-2"
           title={`${workspace.title}: its agents, slates and plan`} data-focus-identity>
           <ChatMascot seed={agent.seed} colour={agent.colour} activity={agent.activity} size={24} />
           <span className="flex min-w-0 flex-col leading-tight">
             <span className="t-label truncate p-text">{agent.label}</span>
             <span className="t-meta truncate p-text-3" data-focus-line>{line}</span>
           </span>
-        </Link>
+        </PressableLink>
       </div>
       <div className="p-bar-trailing">
         {tabs !== undefined && (

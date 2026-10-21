@@ -12,6 +12,7 @@ import { ReplyBox } from "./MailEditor";
 import { mailBoxLabel } from "./MailRow";
 import { SendToWorkspace } from "./SendToWorkspace";
 import { Button } from "@/components/ui/Button";
+import { Chip } from "@/components/ui/Chip";
 
 export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }: {
   id: string; boxes: readonly MailBox[]; owner: string; drafts: boolean; onBack: () => void; onChanged: () => void;
@@ -81,8 +82,8 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
           {busy === null && <Menu name="Thread" items={menu} className="relative shrink-0" />}
         </div>
         <div className="flex flex-wrap gap-2">
-          <span className="t-meta t-mono inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-hover)] px-2 p-text-2">{box?.address ?? thread.path}</span>
-          {box !== undefined && <span className="t-meta inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-hover)] px-2 p-text-2">{reader}</span>}
+          <Chip><span className="truncate t-mono">{box?.address ?? thread.path}</span></Chip>
+          {box !== undefined && <Chip><span className="truncate">{reader}</span></Chip>}
         </div>
       </header>
       {thread.important !== null && <p data-mail-why className="t-body p-text-2">{thread.important}</p>}

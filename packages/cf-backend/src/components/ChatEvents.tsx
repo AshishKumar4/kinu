@@ -3,12 +3,12 @@
  * message written after it, not after everything since (production, 2026-10-08: they all collected at the bottom).
  */
 import { Fragment, type ReactNode } from "react";
-import { Link } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { ArrowUpRightIcon, CheckCircleIcon, ClockIcon, UserPlusIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import type { SubordinateActivityEvent } from "@kinu.run/core";
 import { EventRow, foldRepeats } from "@/components/ProgrammaticTurnCard";
 import { eventTurnKey, messageTime } from "@/components/MessageView";
+import { IconLink } from "@/components/ui/IconControl";
 
 /** One event to place: when it happened, what makes a repeat of it, and how it draws `count` times in a row. */
 export interface PlacedEvent {
@@ -104,14 +104,10 @@ export function subordinateEventRow(event: SubordinateActivityEvent, workspace: 
         count={count}
         hooks={{ "data-subordinate-event": event.kind }}
         action={(
-          <Link
-            to={`/workspace/${workspace}/agents/${event.subordinate}`}
-            title={`Open ${event.subordinate}'s chat`}
-            aria-label={`Open ${event.subordinate}'s chat`}
-            className="mt-1 mr-1 flex size-6 shrink-0 items-center justify-center rounded-md p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text-2"
-          >
+          <IconLink place="pill" to={`/workspace/${workspace}/agents/${event.subordinate}`} title={`Open ${event.subordinate}'s chat`}
+            aria-label={`Open ${event.subordinate}'s chat`} className="mt-1 mr-1">
             <ArrowUpRightIcon size={11} />
-          </Link>
+          </IconLink>
         )}
       />
     ),

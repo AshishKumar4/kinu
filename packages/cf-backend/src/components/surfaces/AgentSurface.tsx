@@ -30,6 +30,7 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import type { OrchestratorAgent } from "@/orchestrator";
 import { Group } from "@/components/ui/Group";
 import { IconControl } from "@/components/ui/IconControl";
+import { Chip } from "@/components/ui/Chip";
 
 type Fact = Awaited<ReturnType<OrchestratorAgent["getFacts"]>>[number];
 
@@ -79,8 +80,8 @@ export interface AgentSurfaceProps {
 
 type AgentMail = NonNullable<Awaited<ReturnType<OrchestratorAgent["agentMail"]>>>;
 
-function Chip({ children, mono = false }: { children: React.ReactNode; mono?: boolean }) {
-  return <span className={`t-meta inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-hover)] px-2 p-text-2 ${mono ? "font-mono" : ""}`}>{children}</span>;
+function Label({ children, mono = false }: { children: React.ReactNode; mono?: boolean }) {
+  return <Chip><span className={`truncate${mono ? " t-mono" : ""}`}>{children}</span></Chip>;
 }
 
 function Quiet({ children }: { children: React.ReactNode }) {
@@ -107,9 +108,9 @@ function Who({ as, workspace, address }: { as: AgentStatus; workspace: string | 
         </div>
         {as.purpose !== "" && <p className="t-body p-text-2">{as.purpose}</p>}
         <div className="flex flex-wrap gap-2">
-          <Chip mono>{as.model}</Chip>
-          <Chip>{as.messageCount} {as.messageCount === 1 ? "message" : "messages"}</Chip>
-          <Chip>Prompt v{as.scaffoldVersion}</Chip>
+          <Label mono>{as.model}</Label>
+          <Label>{as.messageCount} {as.messageCount === 1 ? "message" : "messages"}</Label>
+          <Label>Prompt v{as.scaffoldVersion}</Label>
         </div>
       </div>
     </Section>

@@ -11,6 +11,7 @@ import { Avatar } from "./ui/Avatar";
 import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
 import { NAV_HOVER } from "./nav";
+import { Pressable } from "@/components/ui/Pressable";
 
 /** Kinu's source. */
 const KINU_REPOSITORY = "https://github.com/AshishKumar4/kinu";
@@ -111,11 +112,11 @@ export function SidebarFooter({ initiallyOpen = false }: { initiallyOpen?: boole
 
   return (
     <div ref={ref} className="relative flex items-center gap-1 border-t p-border px-2 py-2" data-sidebar-footer>
-      <button type="button" onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" data-account-menu
-        className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1 pl-1 pr-2 text-left transition-colors ${open ? "bg-[var(--c-hover)]" : "hover:bg-[var(--c-hover)]"}`}>
+      <Pressable onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" data-account-menu
+        selected={open} className="flex min-w-0 flex-1 items-center gap-2 py-1 pl-1 pr-2">
         <Avatar name={name === "" ? "?" : name} size={24} />
         <span className="t-item min-w-0 flex-1 truncate p-text">{name === "" ? "Account" : name}</span>
-      </button>
+      </Pressable>
       <FooterIcons />
       {open && <AccountMenu onClose={close} className="absolute bottom-full left-2 right-2 mb-1" />}
     </div>

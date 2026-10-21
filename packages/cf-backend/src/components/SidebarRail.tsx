@@ -16,6 +16,7 @@ import Sidebar from "./Sidebar";
 import { AccountMenu, FooterIcons } from "./SidebarFooter";
 import { Avatar } from "./ui/Avatar";
 import { navActive, NAV_HOVER, navRowCls, PRIMARY_NAV } from "./nav";
+import { Pressable } from "@/components/ui/Pressable";
 
 const RAIL_KEY = "kinu:rail-open";
 
@@ -107,10 +108,10 @@ function RailAccount({ name }: { name: string }) {
 
   return (
     <div ref={ref} className="relative">
-      <button type="button" onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" title="Account" data-account-menu
-        className="flex size-9 items-center justify-center rounded-lg transition-colors hover:bg-[var(--c-hover)]">
+      <Pressable onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" title="Account" data-account-menu
+        className="flex size-9 items-center justify-center">
         <Avatar name={name} size={24} />
-      </button>
+      </Pressable>
       {open && <AccountMenu onClose={close} className="fixed bottom-3 left-[60px] w-60" />}
     </div>
   );

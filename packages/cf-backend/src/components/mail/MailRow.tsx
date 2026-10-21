@@ -4,6 +4,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { mailRowCls, mailTime } from "./ImportantMailRow";
 import { mailExcerpt } from "./MailMessage";
 import { Dot } from "@/components/ui/Dot";
+import { Chip } from "@/components/ui/Chip";
 
 /** Each view's name, as the page's views and lists say it. */
 export const MAIL_VIEW_LABEL: Record<MailView, string> = { important: "Important", all: "All", sent: "Sent", drafts: "Drafts", trash: "Trash" };
@@ -37,7 +38,7 @@ export function MailRow({ thread, open, box, drafts, owner, onOpen }: {
           {thread.subject || "(No subject)"}{thread.count > 1 && <span className="p-text-3"> · {thread.count}</span>}
         </span>
         <span className="t-meta flex min-w-0 items-baseline gap-2 p-text-3">
-          {box !== undefined && <span className="max-w-36 shrink-0 truncate rounded-sm bg-[var(--c-hover)] px-1 p-text-2">{mailBoxLabel(box)}</span>}
+          {box !== undefined && <span className="max-w-36 shrink-0"><Chip><span className="truncate">{mailBoxLabel(box)}</span></Chip></span>}
           {thread.attachments && <PaperclipIcon size={11} className="shrink-0 self-center" aria-label="Attachment" />}
           <span className={`truncate ${drafts ? "p-warning" : ""}`}>{mailExcerpt(thread.snippet)}</span>
         </span>
