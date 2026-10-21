@@ -21,19 +21,32 @@ const TILE_TITLE = "truncate text-sm font-semibold leading-5 p-text";
 
 /**
  * A cover for a thing with no picture: its mark at the top left, and what it is for set large at the bottom left, as a
- * title page would set it. `line` null sets the title itself.
+ * title page would set it. `line` null sets the title itself. `mark` false leaves the corner to what the tile sets there
+ * (Explore's kind badge).
  */
-export function TypesetCover({ title, line, logo = null }: { title: string; line: string | null; logo?: string | null }) {
+export function TypesetCover({ title, line, logo = null, mark = true }: { title: string; line: string | null; logo?: string | null; mark?: boolean }) {
   return (
     <span data-typeset-cover className="absolute inset-0 flex flex-col justify-between p-recessed p-5">
-      <WorkspaceLogo title={title} logo={logo} size={32} />
+      {mark ? <WorkspaceLogo title={title} logo={logo} size={32} /> : <span />}
       <span className="line-clamp-3 text-[17px] font-medium leading-6 text-[var(--c-text-2)]">{line ?? title}</span>
     </span>
   );
 }
 
+/**
+ * A capture of a page, set on the cover's recessed ground at a 12 px inset with the control radius: a light page and a
+ * dark one sit in the same frame, so no tile in a grid is the odd one out by its page's mode.
+ */
+export function CaptureMat({ children }: { children: ReactNode }) {
+  return (
+    <span className="absolute inset-0 p-recessed" data-capture-mat>
+      <span className="absolute inset-3 overflow-hidden rounded-[var(--r-control)] border p-border">{children}</span>
+    </span>
+  );
+}
+
 /** A tile: the cover, then its body. `children` is the body's lines under the title. */
-export function TileShell({ cover, title, children }: { cover: ReactNode; title: string; children?: ReactNode }) {
+export function TileShell({ cover, title, children }: { cover: ReactNode; title: ReactNode; children?: ReactNode }) {
   return (
     <>
       <span className={TILE_COVER}>{cover}</span>

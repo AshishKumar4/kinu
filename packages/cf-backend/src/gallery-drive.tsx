@@ -11,6 +11,7 @@ import {
   type MossaicVfs, type SharedLibrary,
 } from "@kinu.run/core";
 import { Effect } from "effect";
+import { GALLERY_PICTURE } from "@/gallery-pictures";
 import { detach, KinuError, renderThrownChain, showing, type ErrorCode } from "@kinu.run/core/obs";
 import { fakeMossaic } from "@kinu.run/test-utils/mossaic";
 
@@ -175,9 +176,10 @@ const NOW = Date.now();
 
 const DESCRIPTION = "Reads the open issues of a repository, groups them by area, and writes a triage note every morning.";
 
-/** A capture's digest; the gallery serves no pictures, so a browser test answers these. */
+/** A capture's digest: Issue triage's is one the gallery holds (gallery-pictures.ts), so the page shows it; Landing perf
+ *  report's is one nothing answers, so its tile keeps its cover. */
 const SLATE_PICTURES = {
-  "issue-triage": "3f1c7a0d9e5b28c4a6f0e1d2b3c4a5968778695a4b3c2d1e0f9e8d7c6b5a4938",
+  "issue-triage": GALLERY_PICTURE.prBoard,
   lighthouse: "a9b8c7d6e5f4031928374655647382910abcdef0123456789abcdef012345678",
 } as const;
 

@@ -53,8 +53,9 @@ const entry = (name: string, displayName: string, visited: number, o: WorkspaceO
 
 /** The owner's workspaces as the assistant sees them on a Monday morning: two it runs, one waiting on a deploy. */
 export const ASSISTANT_ROSTER: RosterEntry[] = [
-  // Home's own workspace, as the roster lists it once installed: the rail leaves it out, and it wears the owner's face.
-  { ...entry(ASSISTANT_WORKSPACE, "Personal assistant", 0, null), home: true },
+  // Home's own workspace, as the roster lists it once installed and its first turn has reported: named as its assistant
+  // is, since setup names both; the rail leaves it out.
+  { ...entry(ASSISTANT_WORKSPACE, "Kinu", 0, overview({ activity: "idle" })), home: true },
   // Started by the assistant a few minutes ago, when Ashish asked for it in Home's chat.
   ...(MOMENT === "firstrun" ? [] : [entry("api-worker-v2", "API Worker v2 release", 2 * MIN, overview({
     activity: "working", latestRun: { status: "running", task: "Cut release/v2 from main and write the notes", run: null },
@@ -180,7 +181,7 @@ function assistantSnapshot(snapshot: JsonObject): JsonObject {
 
   return {
     ...snapshot,
-    status: { ...status, name: ASSISTANT_WORKSPACE, displayName: "Personal assistant", purpose: mission, soul: `# Kinu\n\n## Mission\n${mission}\n`, layout: "focus" },
+    status: { ...status, name: ASSISTANT_WORKSPACE, displayName: "Kinu", purpose: mission, soul: `# Kinu\n\n## Mission\n${mission}\n`, layout: "focus" },
     chat: { ...chat, name: ASSISTANT_WORKSPACE, displayName: "Kinu", mission, activePlan: null, messageCount: MOMENT === "firstrun" ? 2 : 41 },
   };
 }

@@ -9,7 +9,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { presetBrand } from "@/components/plugins/McpPresetCards";
 import { KinuMark } from "@/components/ui/KinuLogo";
-import { TILE, TileShell, TypesetCover } from "@/components/ui/Tiles";
+import { CaptureMat, TILE, TileShell, TypesetCover } from "@/components/ui/Tiles";
 import { SlatePicture } from "@/components/slates/SlatePicture";
 import type { ExploreItem, ExploreKind, ExploreNeed } from "@/lib/explore-api";
 
@@ -85,10 +85,10 @@ export function ExploreCard({ item }: { item: ExploreItem }) {
     const { app } = item;
 
     return (
-      <Card href={appHref(app.workspace, app.slate)} kind="app" title={app.title} line={app.line} id={app.slate}
+      <Card href={appHref(app.workspace, app.slate)} kind="app" title={app.title} line={app.line} id={app.slate} typeset={app.picture === undefined}
         picture={(
-          <SlatePicture workspace={app.workspace} slate={{ id: app.slate, title: app.title, picture: app.picture }} at={galleryPicturePath}
-            className={ZOOMED} fallback={<TypesetCover title={app.title} line={app.line} />} />
+          <SlatePicture mat workspace={app.workspace} slate={{ id: app.slate, title: app.title, picture: app.picture }} at={galleryPicturePath}
+            className={ZOOMED} fallback={<TypesetCover title={app.title} line={app.line} mark={false} />} />
         )}
         maker={<Maker maker={{ name: app.owner.name, kinu: false }} />}
         numbers={<><EyeIcon size={13} className="p-text-3" />{count(app.viewers)}<StarIcon size={13} className="ml-1.5 p-text-3" />{count(app.stars)}</>} />
@@ -99,16 +99,18 @@ export function ExploreCard({ item }: { item: ExploreItem }) {
 
   return (
     <Card href={exploreWorkspaceHref(workspace.id)} kind="workspace" title={workspace.title} line={workspace.line} id={workspace.id}
+      typeset={workspace.picture === null}
       picture={workspace.picture === null
-        ? <TypesetCover title={workspace.title} line={workspace.line} />
-        : <img src={kinuBlueprintPicture(workspace.picture)} alt="" loading="lazy" className={ZOOMED} />}
+        ? <TypesetCover title={workspace.title} line={workspace.line} mark={false} />
+        : <CaptureMat><img src={kinuBlueprintPicture(workspace.picture)} alt="" loading="lazy" className={ZOOMED} /></CaptureMat>}
       maker={<Maker maker={workspace.maker} />}
       numbers={<><DownloadSimpleIcon size={13} className="p-text-3" />{count(workspace.installs)}<StarIcon size={13} className="ml-1.5 p-text-3" />{count(workspace.stars)}</>} />
   );
 }
 
-function Card({ href, kind, id, title, line, picture, maker, numbers }: {
-  href: string; kind: ExploreKind; id: string; title: string; line: string;
+/** `typeset`: the cover sets `line` itself, so the body does not say it again (as `WorkspaceOverviewCard` does). */
+function Card({ href, kind, id, title, line, typeset, picture, maker, numbers }: {
+  href: string; kind: ExploreKind; id: string; title: string; line: string; typeset: boolean;
   picture: React.ReactNode; maker: React.ReactNode; numbers: React.ReactNode;
 }) {
   return (
@@ -121,7 +123,7 @@ function Card({ href, kind, id, title, line, picture, maker, numbers }: {
             <KindBadge kind={kind} onPicture className="absolute left-2.5 top-2.5" />
           </>
         )}>
-          <span className="line-clamp-1 p-meta p-text-2">{line}</span>
+          {!typeset && <span className="line-clamp-1 p-meta p-text-2">{line}</span>}
           <span className="flex min-w-0 items-center gap-2 p-meta p-text-3">
             {maker}
             <span className="ml-auto inline-flex shrink-0 items-center gap-1 tabular-nums">{numbers}</span>

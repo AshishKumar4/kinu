@@ -184,7 +184,7 @@ export function installExploreFixture(): void {
 }
 
 const ASSISTANT: RosterEntry = {
-  name: "personal-assistant-4f2a", displayName: "Personal assistant", createdAt: NOW - DAY, lastVisited: NOW, overview: null, decisions: 0, logo: null, home: true,
+  name: "personal-assistant-4f2a", displayName: "Kinu", createdAt: NOW - DAY, lastVisited: NOW, overview: null, decisions: 0, logo: null, home: true,
 };
 
 const loading = (node: React.ReactNode) => <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>{node}</Suspense>;

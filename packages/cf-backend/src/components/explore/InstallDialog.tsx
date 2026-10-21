@@ -35,7 +35,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
   const install = () => Effect.catchCause(Effect.gen(function* () {
     setBusy(true);
     setFailure(null);
-    const workspace = yield* Effect.promise(() => installBlueprint(page.workspace.id, assistant ? { agent: name, brief, home } : { displayName: name }));
+    const workspace = yield* Effect.promise(() => installBlueprint(page.workspace.id, assistant ? { displayName: name, agent: name, brief, home } : { displayName: name }));
 
     yield* Effect.promise(async () => navigate(assistant && home ? APP_ROUTES.home : `/workspace/${encodeURIComponent(workspace)}`));
   }), showing((chain) => { setFailure(chain); setBusy(false); }));

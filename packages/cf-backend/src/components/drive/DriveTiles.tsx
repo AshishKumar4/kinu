@@ -6,8 +6,7 @@ import {
   FilePdfIcon, FileTextIcon, FileZipIcon, FolderSimpleIcon, GitForkIcon, LinkSimpleIcon, SquaresFourIcon,
 } from "@phosphor-icons/react";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
-import { WorkspaceLogo } from "@/components/Marks";
-import { TILE_GRID } from "@/components/ui/Tiles";
+import { TILE, TILE_GRID, TileShell } from "@/components/ui/Tiles";
 
 export const GRID = TILE_GRID;
 
@@ -51,7 +50,7 @@ export function TileMenu({ name, items, initiallyOpen = false, className, trigge
     <div ref={menu} className={`${open ? "z-50" : "z-10"} ${className}`}>
       <button type="button" aria-haspopup="menu" aria-expanded={open} aria-label={trigger?.label ?? `More for ${name}`} title={trigger?.label}
         data-drive-menu onClick={() => setOpen((value) => !value)}
-        className={`flex items-center justify-center transition-colors hover:p-text ${trigger?.className ?? "size-7 rounded-md hover:bg-[var(--c-elevated)]"} ${open ? "bg-[var(--c-elevated)] p-text" : "p-text-3"}`}>
+        className={`flex items-center justify-center transition-colors hover:p-text ${trigger?.className ?? "size-7 rounded-[var(--r-control)] hover:bg-[var(--c-elevated)]"} ${open ? "bg-[var(--c-elevated)] p-text" : "p-text-3"}`}>
         {trigger?.icon ?? <DotsThreeIcon size={18} weight="bold" />}
       </button>
       {open && (
@@ -124,21 +123,20 @@ export function Tile({ href, onOpen, picture, icon, title, meta, unseen = false,
 }) {
   return (
     <li className="relative min-w-0" {...attributes}>
-      <Opener href={href} onOpen={onOpen} label={title}
-        className="flex h-full flex-col overflow-hidden rounded-[14px] border p-border p-surface p-card-lift focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--c-accent)]">
-        <span className="relative block aspect-[2/1] shrink-0 overflow-hidden border-b p-border">{picture}</span>
-        <span className="flex flex-1 items-start gap-2.5 py-2.5 pl-3 pr-9 sm:pr-10">
-          <span className="mt-0.5 hidden size-5 shrink-0 items-center justify-center p-text-3 sm:flex">{icon}</span>
-          <span className="min-w-0 flex-1">
-            <span className="line-clamp-2 break-words p-row-text font-medium p-text" data-drive-tile-name>
-              {unseen && <span className="mb-px mr-1.5 inline-block size-1.5 rounded-full p-dot-accent align-middle" title="New" />}
-              {title}
-            </span>
-            <span className="mt-px flex min-w-0 items-center gap-1.5 p-meta p-text-3" data-drive-tile-meta>{meta}</span>
+      <Opener href={href} onOpen={onOpen} label={title} className={TILE}>
+        <TileShell cover={picture} title={(
+          <span data-drive-tile-name>
+            {unseen && <span className="mb-px mr-1.5 inline-block size-1.5 rounded-full p-dot-accent align-middle" title="New" />}
+            {title}
           </span>
-        </span>
+        )}>
+          <span className="flex min-w-0 items-center gap-1.5 pr-8 p-meta p-text-3">
+            <span className="flex shrink-0 [&>svg]:size-3.5">{icon}</span>
+            <span className="flex min-w-0 items-center gap-1.5" data-drive-tile-meta>{meta}</span>
+          </span>
+        </TileShell>
       </Opener>
-      <TileMenu name={title} items={menu} initiallyOpen={menuOpen} className="absolute bottom-2.5 right-1.5 sm:bottom-3 sm:right-2" />
+      <TileMenu name={title} items={menu} initiallyOpen={menuOpen} className="absolute bottom-2.5 right-2" />
     </li>
   );
 }
@@ -160,15 +158,6 @@ export function FolderTile({ href, name, icon, menu, attributes, row = false }: 
       </Link>
       <TileMenu name={name} items={menu} className="absolute right-2 top-2.5" />
     </li>
-  );
-}
-
-/** The picture of a slate or share until it has one of its own: its letter, as the sidebar marks a workspace. */
-export function Cover({ title }: { title: string }) {
-  return (
-    <span className="absolute inset-0 flex items-center justify-center p-recessed">
-      <WorkspaceLogo title={title} logo={null} size={36} />
-    </span>
   );
 }
 

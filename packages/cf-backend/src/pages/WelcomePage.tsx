@@ -149,7 +149,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
     return yield* Effect.catchCause(Effect.gen(function* () {
       // The assistant first: Home is its chat the moment setup ends.
       // Its brief keeps the blueprint's 08:00 in the person's own time zone; the time is changed in its settings.
-      if (assistant.install) yield* Effect.promise(async () => installBlueprint(PERSONAL_ASSISTANT_ID, { agent: assistant.name, home: true }));
+      if (assistant.install) yield* Effect.promise(async () => installBlueprint(PERSONAL_ASSISTANT_ID, { displayName: assistant.name, agent: assistant.name, home: true }));
       const { onboardedAt } = yield* Effect.promise(async () => completeOnboarding());
       const current = lastValue(account.profile);
 

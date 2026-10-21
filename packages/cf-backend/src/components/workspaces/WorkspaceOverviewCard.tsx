@@ -52,7 +52,7 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
 
   // Its primary slate's picture; without one, a typeset cover says what it is for, so the body need not say it again.
   const cover = (
-    <SlatePicture workspace={workspace.name} slate={pictured} className="absolute inset-0 size-full object-cover object-top"
+    <SlatePicture mat workspace={workspace.name} slate={pictured} className="absolute inset-0 size-full object-cover object-top"
       fallback={<TypesetCover title={title} line={mission} logo={workspace.logo} />} />
   );
 
