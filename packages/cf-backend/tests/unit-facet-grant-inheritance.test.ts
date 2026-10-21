@@ -8,7 +8,7 @@ import {
   type ApprovalGrant, type ShellApprovalMode, wordsOnly,
 } from '@kinu.run/core';
 import { ORCHESTRATOR_RPC_SURFACE } from '../src/rpc-surface';
-import { agentSql, hostedAgain, hostedMainActor, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
+import { agentSql, hostedAgain, hostedMainActor, hostedSubagentHarness, orchestratorHarness, workspaceMainActor } from './helpers/actor-harness';
 
 /** A force-push reaches out, so the agent's own `computer` does not exempt it. */
 const GATED = 'git push --force origin main';
@@ -32,7 +32,7 @@ describe('reachability of the root policy read', () => {
 
   /**
    * Which actor reaches the root is decided by registered kind: every hosted actor shares the container and
-   * answers to the workspace name, so a name comparison would hand a subordinate the root's authority.
+   * answers to the workspace name, so a name comparison would hand a subagent the root's authority.
    */
   test('a hosted actor reaches the root for its policy; the main actor never does', async () => {
     // The root's own namespace hands out workerd's stub: a policy read off the RPC surface is refused, not served.
@@ -50,7 +50,7 @@ describe('reachability of the root policy read', () => {
     expect((await mainShell.exec(GATED)).refusal).toBeUndefined();
     expect(rootReads()).toBe(0);
 
-    const child = await hostedSubordinateHarness(workspace, {
+    const child = await hostedSubagentHarness(workspace, {
       name: 'grantee-1', displayName: 'Grantee', nameOrigin: 'user',
       mission: 'inherit the workspace policy', roleId: 'task',
     });
@@ -58,7 +58,7 @@ describe('reachability of the root policy read', () => {
     expect(child.actor.handle.config.getShellApprovalGrants()).toEqual([]);
     const childShell = child.actor.runtime.shell;
 
-    if (!childShell) throw new Error('a hosted subordinate carries a shell');
+    if (!childShell) throw new Error('a hosted subagent carries a shell');
     // Counted after the hire, so the hop is attributed to the child's own gate.
     const beforeExec = rootReads();
     expect((await childShell.exec(GATED)).refusal).toBeUndefined();
@@ -73,14 +73,14 @@ describe('reachability of the root policy read', () => {
     // Read, not assumed: a harness seeding a grant here would duplicate the case above.
     expect(workspaceMainActor(workspace.db).config.getShellApprovalGrants()).toEqual([]);
 
-    const child = await hostedSubordinateHarness(workspace, {
+    const child = await hostedSubagentHarness(workspace, {
       name: 'grantee-2', displayName: 'Grantee', nameOrigin: 'user',
       mission: 'inherit an empty policy', roleId: 'task',
     });
 
     const shell = child.actor.runtime.shell;
 
-    if (!shell) throw new Error('a hosted subordinate carries a shell');
+    if (!shell) throw new Error('a hosted subagent carries a shell');
 
     const refused = await shell.exec(GATED);
 
@@ -107,7 +107,7 @@ describe('reachability of the root policy read', () => {
     // Its re-issue, from the same agent hosted again: the turn that woke it released the workspace's hold once it rested.
     const again = (await hostedAgain(child)).runtime.shell;
 
-    if (!again) throw new Error('a hosted subordinate carries a shell');
+    if (!again) throw new Error('a hosted subagent carries a shell');
     expect((await again.exec(GATED)).refusal).toBeUndefined();
   });
 });

@@ -21,10 +21,10 @@ const heldUntilStopped = (run: RecordedGatewayRun): Promise<Response> => new Pro
 /** An agent the owner added from the sidebar, as its chat pane names it. */
 async function ownersAgent(workspace: StartedHarness) {
   await workspace.agent.setSoul('# Purpose\n\nKeep the parser notes.');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
-  const actorId = subordinate.actorId ?? '';
+  const { subagent } = await workspace.agent.createSubagentAgent();
+  const actorId = subagent.actorId ?? '';
 
-  return { name: subordinate.name, actorId, pane: [actorConnectionTag(actorId)] };
+  return { name: subagent.name, actorId, pane: [actorConnectionTag(actorId)] };
 }
 
 /** The agent's turns that have ended, from its own run log. */

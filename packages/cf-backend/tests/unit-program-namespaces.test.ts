@@ -10,12 +10,12 @@ import { workerContext } from './helpers/bindings';
 import { inProcessWorkerLoader } from './helpers/worker-loader';
 
 /** `agents`, with the one member a program here calls. */
-const AGENTS = [{ name: 'agents', fns: { list: async () => ['helper'] } }];
+const AGENTS = [{ name: 'agents', fns: { list: async () => ['subagent'] } }];
 
 /** Each program awaits a namespace itself, or hands one back from its async body, which adopts it the same way. */
 const PROGRAMS: ReadonlyArray<readonly [string, JsonValue]> = [
   ['return await agents ? "awaited" : "never";', 'awaited'],
-  ['const ns = await agents;\nreturn await ns.list();', ['helper']],
+  ['const ns = await agents;\nreturn await ns.list();', ['subagent']],
   ['return typeof (await Promise.resolve(agents)).list;', 'function'],
 ];
 

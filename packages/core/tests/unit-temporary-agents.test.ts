@@ -1,11 +1,12 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // `lifetime:'task'` hires through the public surfaces (native dispatch and sandbox namespace). A hire returns at once;
-// its answer is one `subordinate_report` on the hirer's rail, which wakes it, and the child retires after its turn.
+// its answer is one `subagent_report` on the hirer's rail, which wakes it, and the child retires after its turn.
+import { readModelTree } from './helpers-agents';
 import { Database } from 'bun:sqlite';
 import { asSchema, type ModelMessage } from 'ai';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { DELEGATION_MAX_DEPTH, ROOT_DELEGATION_BUDGET, delegationExhausted, SubordinateRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, delegationDepthRefusal, receiveSubordinateEvent, type SubordinateEventResult, type SubordinateReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubordinateHandoff, type SubordinateRuntime, type TemporaryAgentPort, type WorkMode, type AgentsOp, type CodemodeResult, callOperation, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles, codemodeFunction, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/index';
+import { DELEGATION_MAX_DEPTH, ROOT_DELEGATION_BUDGET, delegationExhausted, SubagentRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, delegationDepthRefusal, receiveSubagentEvent, type SubagentEventResult, type SubagentReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubagentHandoff, type SubagentRuntime, type TemporaryAgentPort, type WorkMode, type AgentsOp, type CodemodeResult, callOperation, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubagentLifecycles, codemodeFunction, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/index';
 import { createAgentsTool } from '../src/delegation/agents-operations';
 import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
@@ -48,7 +49,7 @@ type SandboxMember = (...args: unknown[]) => Promise<CodemodeResult>;
 
 type SandboxNamespace = Partial<Record<string, SandboxMember>>;
 
-const HANDOFF: SubordinateHandoff = {
+const HANDOFF: SubagentHandoff = {
   eventId: 'evt-1',
   delivery: 'starts_now',
   phase: { busy: false, lastActivityAt: null, workingOn: null },
@@ -56,7 +57,7 @@ const HANDOFF: SubordinateHandoff = {
 
 const TEMP_NAME = 'ask-auditor-a1b2c3';
 
-/** A `subordinate_report` row's payload, as its hirer reads it. */
+/** A `subagent_report` row's payload, as its hirer reads it. */
 const ReportRowSchema = v.looseObject({
   status: v.string(), content: v.string(), concerns: v.optional(v.array(v.string())),
 });
@@ -64,19 +65,19 @@ const ReportRowSchema = v.looseObject({
 interface Scene {
   deps: AgentsToolDeps;
   temporary: TemporaryAgentPort;
-  roster: SubordinateRosterStore;
+  roster: SubagentRosterStore;
   /** The hirer's own rail. */
   log: EventLog;
   recover(clearFailure?: boolean): Promise<boolean>;
   /** Every child-substrate operation, in order. */
   calls: string[];
   briefs: string[];
-  assignments: Array<Parameters<SubordinateRuntime['assign']>[1]>;
+  assignments: Array<Parameters<SubagentRuntime['assign']>[1]>;
   /** Each child as it was born. */
-  births: Array<Parameters<SubordinateRuntime['spawn']>[0]>;
-  /** Counts `subordinate_report` rows on the real event log. */
+  births: Array<Parameters<SubagentRuntime['spawn']>[0]>;
+  /** Counts `subagent_report` rows on the real event log. */
   published(): number;
-  /** The newest `subordinate_report` row's payload. */
+  /** The newest `subagent_report` row's payload. */
   lastReport(): v.InferOutput<typeof ReportRowSchema> | undefined;
   /** Every retire the port scheduled for after a child's turn, run. */
   released(): Promise<void>;
@@ -86,9 +87,9 @@ interface Scene {
     status?: 'progress' | 'completed' | 'blocked';
     content: string;
     origin?: 'report_tool' | 'turn_end';
-    handoff?: SubordinateReportHandoff;
+    handoff?: SubagentReportHandoff;
     quiet?: true;
-  }): Promise<SubordinateEventResult>;
+  }): Promise<SubagentEventResult>;
   /** One served `agents` operation, as a program calls it. */
   call(op: AgentsOp, fields: JsonObject, signal?: AbortSignal): Promise<JsonValue>;
   sandbox(): SandboxNamespace;
@@ -97,16 +98,16 @@ interface Scene {
   hired(name: string): ActorReference;
 }
 
-/** `actor_subordinates` is keyed by parent so one actor cannot touch another's child by name. */
+/** `actor_subagents` is keyed by parent so one actor cannot touch another's child by name. */
 /** The roster and the actor directory over one database: a hire's origin is read from its actor row. */
 function rosterWorld(db: Database) {
   const actors = createTestActors(makeSql(db), makeExecRaw(db));
 
-  return { roster: new SubordinateRosterStore(makeSqlExec(db), actors.main), directory: actors.directory };
+  return { roster: new SubagentRosterStore(makeSqlExec(db), actors.main), directory: actors.directory, main: actors.main };
 }
 
 function makeScene(options: {
-  fail?: keyof SubordinateRuntime;
+  fail?: keyof SubagentRuntime;
   failRelease?: boolean;
   delegation?: { depth: number };
   duringAssignment?: () => Promise<void>;
@@ -114,13 +115,14 @@ function makeScene(options: {
   originContext?: ModelMessage[];
 } = {}): Scene {
   const eventDb = new Database(':memory:');
-  const { roster, directory } = rosterWorld(eventDb);
+  const world = rosterWorld(eventDb);
+  const { roster, directory } = world;
   roster.ensureSchema();
   const { vfs: files } = createMemoryVfs();
   const calls: string[] = [];
   const briefs: string[] = [];
-  const assignments: Array<Parameters<SubordinateRuntime['assign']>[1]> = [];
-  const births: Array<Parameters<SubordinateRuntime['spawn']>[0]> = [];
+  const assignments: Array<Parameters<SubagentRuntime['assign']>[1]> = [];
+  const births: Array<Parameters<SubagentRuntime['spawn']>[0]> = [];
   let sequence = 0;
   let callSequence = 0;
   const wakes: number[] = [];
@@ -128,7 +130,7 @@ function makeScene(options: {
   initEventsHubTables(eventSql);
   const log = new EventLog(eventSql, directory.main());
 
-  const runtime: SubordinateRuntime = {
+  const runtime: SubagentRuntime = {
     async spawn(input) {
       calls.push(`spawn:${input.name}`);
       births.push(input);
@@ -192,6 +194,7 @@ function makeScene(options: {
     originContext: async () => options.originContext ?? [],
     ownMission: () => 'Keep the release train moving.',
     rosterMoved: () => { /* no listeners in this scene */ },
+    ...readModelTree(eventDb, world, log),
     broadcastTask: () => { /* no listeners in this scene */ },
   };
 
@@ -210,7 +213,7 @@ function makeScene(options: {
     recover: async (clearFailure) => {
       if (clearFailure) { delete options.fail; delete options.failRelease; }
 
-      return recoverSubordinateLifecycles(roster, runtime);
+      return recoverSubagentLifecycles(roster, runtime);
     },
     deps,
     temporary,
@@ -228,15 +231,15 @@ function makeScene(options: {
         ? directory.apply(directory.main(), [], { action: 'register', name, creationId: `fixture-${name}`, origin: 'agent', lifetime: 'task' }).reference
         : { actorId: live.actorId, workspaceId: live.workspaceId, parentActorId: live.parentActorId };
     },
-    published: () => log.pending().filter((event) => event.variant === 'subordinate_report').length,
+    published: () => log.pending().filter((event) => event.variant === 'subagent_report').length,
     lastReport: () => {
-      const last = log.pending().filter((event) => event.variant === 'subordinate_report').at(-1);
+      const last = log.pending().filter((event) => event.variant === 'subagent_report').at(-1);
 
       return last === undefined ? undefined : v.parse(ReportRowSchema, last.payload);
     },
     released: async () => { await Promise.all(retires); },
     wakes,
-    report: (input) => receiveSubordinateEvent({
+    report: (input) => receiveSubagentEvent({
       log,
       roster,
       vfs: files,
@@ -247,7 +250,7 @@ function makeScene(options: {
       onEvolutionAnswer: () => undefined,
       temporary,
     }, {
-      fromSubordinate: input.from ?? TEMP_NAME,
+      fromSubagent: input.from ?? TEMP_NAME,
       status: input.status ?? 'completed',
       content: input.content,
       origin: input.origin ?? 'report_tool',
@@ -361,8 +364,8 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
   });
 
   // The schema offers `name` on every hire; on staging 5c522f12d a task hire refused it 6 times, Luna naming 3 parallel
-  // helpers to tell their answers apart.
-  test('a task hire takes the name it is given, as the helper it shows', async () => {
+  // subagents to tell their answers apart.
+  test('a task hire takes the name it is given, as the subagent it shows', async () => {
     const scene = makeScene();
     const started = await startRun(scene, { role: 'auditor', message: 'Count signups by country.', name: 'signup-country-tally' });
 
@@ -417,7 +420,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
     expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(true);
 
     // Read by the turn that takes it up: nothing is owed any more.
-    for (const row of scene.log.pending({ variant: 'subordinate_report' })) scene.log.markConsumed(row.id, 'turn-read', 0, NOW);
+    for (const row of scene.log.pending({ variant: 'subagent_report' })) scene.log.markConsumed(row.id, 'turn-read', 0, NOW);
     expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(false);
   });
 
@@ -452,7 +455,7 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
     await scene.report({ status: 'progress', content: 'Reading the March export.', origin: 'report_tool' });
     expect(scene.published()).toBe(1);
     expect(await scene.call('list', {})).toMatchObject({
-      subordinates: [{ name: TEMP_NAME, lifetime: 'task', status: 'working' }],
+      tree: [{ name: 'main', you: true }, { name: TEMP_NAME, kind: 'hired', depth: 1, doing: 'Audit the ledger.' }],
     });
     await scene.report({ content: 'Totals reconcile.' });
     expect(scene.published()).toBe(2);
@@ -492,37 +495,29 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     expect(await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' })).toMatchObject({ status: 'working' });
     expect(scene.lastReport()).toMatchObject({ content: 'The answer reaches the parent before its assignment acknowledgement.' });
     expect(scene.wakes).toEqual([1]);
-    expect(await scene.call('list', {})).toMatchObject({ subordinates: [] });
+    expect(await scene.call('list', {})).toMatchObject({ tree: [{ name: 'main' }], counts: { retired: 1 } });
   });
 
-  test('running under lifetime task, released into history, never a subordinate', async () => {
+  test('running under lifetime task, released into history, listed only when retired agents are asked for', async () => {
     const scene = makeScene();
-    expect(await scene.call('list', {})).toEqual({
-      subordinates: [],
-      note: 'No helper agents yet: create one with op:"hire".',
+    expect(await scene.call('list', {})).toMatchObject({
+      tree: [{ name: 'main', you: true }],
+      note: 'No subagents yet: create one with op:"hire".',
     });
 
     await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
     const running = await scene.call('list', {});
     expect(running).toMatchObject({
-      subordinates: [{
-        name: TEMP_NAME,
-        lifetime: 'task',
-        status: 'working',
-        currentTask: 'Audit the ledger.',
-        createdAt: NOW,
-        dismissedAt: null,
-        taskEventId: 'evt-1',
-      }],
+      tree: [{ name: 'main' }, { name: TEMP_NAME, kind: 'hired', depth: 1, doing: 'Audit the ledger.' }],
+      counts: { retired: 0 },
     });
-    expect(running).not.toHaveProperty('temporary');
     expect(running).not.toHaveProperty('note');
 
     await scene.report({ content: 'Totals reconcile.' });
 
     const after = await scene.call('list', {});
-    expect(after).toMatchObject({ subordinates: [] });
-    expect(after).not.toHaveProperty('temporary_history');
+    expect(after).toMatchObject({ tree: [{ name: 'main' }], counts: { idle: 0, retired: 1 } });
+    expect(await scene.call('list', { retired: true })).toMatchObject({ tree: [{ name: 'main' }, { name: TEMP_NAME, status: 'dismissed' }] });
     expect(scene.roster.listAll()).toMatchObject([{
       name: TEMP_NAME, lifetime: 'task', status: 'dismissed', dismissedAt: NOW,
     }]);
@@ -534,7 +529,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     await startRun(scene, { role: 'auditor', message: 'Audit the ledger.' });
     await scene.report({ content: 'Totals reconcile.' });
 
-    expect(await scene.call('list', {})).toMatchObject({ subordinates: [] });
+    expect(await scene.call('list', {})).toMatchObject({ tree: [{ name: 'main' }], counts: { retired: 1 } });
     expect(await scene.call('list', { agent: TEMP_NAME })).toMatchObject({
       roster: { name: TEMP_NAME, lifetime: 'task', status: 'dismissed' },
     });
@@ -632,7 +627,7 @@ describe('a task answer finds its row wherever its hire started', () => {
     }]);
   });
 
-  test('a durable subordinate is left in the roster by the very report that releases a task one', async () => {
+  test('a durable subagent is left in the roster by the very report that releases a task one', async () => {
     const scene = makeScene();
     await present(scene.deps.team, 'the scene\'s team port').spawn({
       name: 'researcher', role: 'researcher',
@@ -714,10 +709,10 @@ describe('the two hire targets are decided by `role`', () => {
       await codemodeFunction('agents', 'hire', hire)('auditor', '   ', { lifetime: 'task' });
 
       return { result: null };
-    });
+    }, { call: 'call-test' });
 
     expect(successfulToolOutcome('eval', { output: recovered })).toEqual({ success: true, failures: census });
-    expect(await thrownOutcome(withCodemodeProgram(async () => ({ result: await codemodeFunction('agents', 'hire', hire)('auditor', '   ', { lifetime: 'task' }) }))))
+    expect(await thrownOutcome(withCodemodeProgram(async () => ({ result: await codemodeFunction('agents', 'hire', hire)('auditor', '   ', { lifetime: 'task' }) }), { call: 'call-test' })))
       .toMatchObject({ success: false, reason: 'bad_input', failures: census });
     // The port refuses a brief with no role the same way, for the hirers that are not this tool.
     await expect(scene.temporary.start({ role: 'auditor', roleLabel: ' ', task: 'Survey auth', mode: 'build' })).rejects.toMatchObject({ code: 'bad_input' });
@@ -811,11 +806,12 @@ describe('the rung is structural, and so is its absence', () => {
     expect(capped.roster.listAll()).toEqual([]);
   });
 
-  test('the depth refusal suggests only calls the surface accepts', () => {
-    // The refusal teaches only a retry the capped surface can take, or it teaches an unwinnable one.
+  test('the depth refusal suggests no call the capped surface refuses', () => {
+    // The refusal teaches only what the capped agent can do, or it teaches an unwinnable retry: at the cap it has no
+    // team and no search, so it names neither and says to do the work itself.
     const remedy = delegationDepthRefusal({ depth: DELEGATION_MAX_DEPTH, maxDepth: 0 }).error;
-    expect(remedy).toContain('config:{context:"inherit"}');
-    // An agent at the cap has no team, so the refusal names no call to one.
+    expect(remedy).toContain('do the work yourself');
+    expect(remedy).not.toContain('op:"swarm"');
     expect(remedy).not.toContain('op:"assign"');
     expect(remedy).not.toContain('ask by');
   });

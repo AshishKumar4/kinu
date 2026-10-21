@@ -330,7 +330,7 @@ describe('a minted agent name', () => {
     expect(mintAgentName({ brief: 'Fix the coupon expiry check', role: 'task' }, () => (name) => had.has(name))).toBe('fix-coupon-expiry-3');
   });
 
-  test('satisfies the name contract spawnSubordinate enforces', () => {
+  test('satisfies the name contract spawnSubagent enforces', () => {
     const contract = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 
     for (const brief of ['Fix the coupon expiry check', 'A'.repeat(40), '--- ## Notes ---', null]) {

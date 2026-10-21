@@ -664,7 +664,7 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     await page.keyboard.press('Enter');
     await until(page, 'the name field to close', `document.querySelector('input[aria-label="Chat name"]') === null`);
     // The rename reply can close the editor before the deferred reads_changed notice refreshes the sidebar.
-    await settledAfter(page, renameLedger, 'renameSubordinateAgent', 'listWorkspaceAgents');
+    await settledAfter(page, renameLedger, 'renameSubagentAgent', 'listWorkspaceAgents');
     await renameLedger.stop();
     // The counter is the sidebar's, drawn once its workspaces have arrived, as the return below waits for them too.
     await until(page, "the sidebar's workspace list", SIDEBAR_LISTED);
@@ -831,7 +831,7 @@ export async function rightPanelKeepsItsState(target: FlowTarget): Promise<Panel
     await page.evaluate(ClickScripts.lastAgentTab);
     await until(page, 'an agent tab after Main, current', `${ACTIVE_TAB_INDEX} > 0`);
 
-    // The '+' flow: the subordinate column mounts a composer its own socket has
+    // The '+' flow: the subagent column mounts a composer its own socket has
     // enabled. The hosted-actor socket defect left that pane connecting forever,
     // so this row's number is the frames that socket answered with. The composer
     // turns live on the socket's open, before its first frame, so the row waits
@@ -1576,6 +1576,12 @@ export interface DriveVerdict {
   readonly file: string;
   /** The Drive's entries once the folder was made and the file uploaded. */
   readonly afterCreate: readonly string[];
+  /** A second file, dropped on the Drive's list as a person drags one in (MA-020). */
+  readonly dropped: string;
+  /** The entries once the dropped file landed. */
+  readonly afterDrop: readonly string[];
+  /** What the Drive holds under the dropped file's name, read back through its own route. */
+  readonly droppedText: string;
   /** The entries after the folder's rename and a reload. */
   readonly afterRename: readonly string[];
   /** The entries once both were deleted through their rows' own controls. */
@@ -1585,15 +1591,20 @@ export interface DriveVerdict {
 /**
  * Row: what a person does in the Drive page is kept.
  *
- * Make a folder through New and upload a file, rename the folder, reload, then
- * delete both through their tiles' own menus. The Drive is the account's, not a
+ * Make a folder through New and upload a file through its picker, drop a second
+ * file on the list as a person drags one in, rename the folder, reload, then
+ * delete each through its tile's own menu. The Drive is the account's, not a
  * workspace's, so the entries carry names no other run shares and are removed
  * through the Drive's own route if the row stops early.
  */
+/** What the dropped file holds: read back, it shows the drop's bytes arrived, not only its name. */
+export const DROPPED_TEXT = 'dropped on the Drive by the browser flow\n';
+
 export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVerdict> {
   const folder = evalWorkspaceName('browser-drive');
   const renamed = `${folder}-renamed`;
   const file = `${folder}.txt`;
+  const dropped = `${folder}-dropped.txt`;
   const upload = join(scratchDir('drive-upload'), file);
   const page = await signedInPage(target.browser, target);
 
@@ -1615,6 +1626,20 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
 
     const afterCreate = await relisted(page, () => picker.uploadFile(upload));
 
+    // A drag from the desktop arrives as a drop whose DataTransfer carries the file: the same event a person's makes.
+    const afterDrop = await relisted(page, async () => {
+      await page.evaluate(`(() => {
+        const list = document.querySelector('[data-drive-list]');
+        if (list === null) throw new Error('the Drive page has no list to drop on');
+        const files = new DataTransfer();
+        files.items.add(new File([${JSON.stringify(DROPPED_TEXT)}], ${JSON.stringify(dropped)}, { type: 'text/plain' }));
+        for (const type of ['dragenter', 'dragover', 'drop']) list.dispatchEvent(new DragEvent(type, { dataTransfer: files, bubbles: true, cancelable: true }));
+      })()`);
+    });
+
+    const read = await fetch(`${target.origin}/api/drive/files?path=${encodeURIComponent(`/${dropped}`)}`, { headers: webHeaders(target.identity) });
+    const droppedText = read.ok ? await read.text() : `(the Drive answered ${String(read.status)})`;
+
     await relisted(page, async () => {
       await page.click(`[data-drive-entry="${folder}"] [data-drive-menu]`);
       await page.click(`[data-drive-entry="${folder}"] [data-drive-rename]`);
@@ -1629,7 +1654,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
 
     // Deleted through the page only where the page lists it; a missed rename is
     // the verdict's finding, and the `finally` below removes what is left.
-    for (const entry of [renamed, file].filter((listed) => afterRename.includes(listed))) {
+    for (const entry of [renamed, file, dropped].filter((listed) => afterRename.includes(listed))) {
       await relisted(page, async () => {
         await page.click(`[data-drive-entry="${entry}"] [data-drive-menu]`);
         await page.click(`[data-drive-entry="${entry}"] [data-drive-delete]`);
@@ -1640,11 +1665,11 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
 
     const afterDelete = v.parse(v.array(v.string()), await page.evaluate(DRIVE_LISTED));
 
-    return { folder, renamed, file, afterCreate, afterRename, afterDelete };
+    return { folder, renamed, file, afterCreate, dropped, afterDrop, droppedText, afterRename, afterDelete };
   } finally {
     await page.close();
 
-    for (const entry of [folder, renamed, file]) {
+    for (const entry of [folder, renamed, file, dropped]) {
       const left = await fetch(`${target.origin}/api/drive?path=${encodeURIComponent(`/${entry}`)}`, {
         method: 'DELETE',
         headers: webHeaders(target.identity),

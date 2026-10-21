@@ -801,6 +801,11 @@ export interface RecordedMcpConnection {
 /** `restored` / `waited` are call counts: they prove a read did not touch the connection machinery. */
 export interface RecordedMcpLifecycle {
   established: readonly string[];
+  /** Each server `connectToServer` dialled, in order: a sign-in begun, or a dial on its own. */
+  dialled: readonly string[];
+  /** Each server `connectToServer` dialled while a connect of it was still running: the vendor's two `init`s then share
+   *  one client, and the first one's handshake goes out on the second one's transport. */
+  overlapped: readonly string[];
   discovered: readonly string[];
   restored: number;
   waited: number;
@@ -809,6 +814,16 @@ export interface RecordedMcpLifecycle {
 const mcpServers = new Map<string, RecordedMcpServer>();
 
 const mcpEstablished: string[] = [];
+
+const mcpDialled: string[] = [];
+
+const mcpOverlapped: string[] = [];
+
+/** Servers a `connectToServer` is running for. */
+const mcpConnecting = new Set<string>();
+
+/** The next `connectToServer`'s hold, once {@link hangNextMcpConnect} planted it. */
+let mcpConnectGate: { readonly entered: () => void; readonly released: Promise<void> } | null = null;
 
 const mcpDiscovered: string[] = [];
 
@@ -917,7 +932,20 @@ export function liveMcpFetch(id: string): McpCredentialTransport['fetch'] | null
 }
 
 export function recordedMcpLifecycle(): RecordedMcpLifecycle {
-  return { established: mcpEstablished, discovered: mcpDiscovered, restored: mcpRestored, waited: mcpWaited };
+  return { established: mcpEstablished, dialled: mcpDialled, overlapped: mcpOverlapped, discovered: mcpDiscovered, restored: mcpRestored, waited: mcpWaited };
+}
+
+/**
+ * Holds the next `connectToServer` until `release`, as the vendor's `init` holds while its handshake is out: it has put
+ * a fresh client in place of the closed one, so the connection reads `closed` (ready, its client with no transport)
+ * until the connect lands (`client-BnYbNT3z.js:585-592`).
+ */
+export function hangNextMcpConnect(): McpEstablishGate {
+  const gate = Promise.withResolvers<void>();
+  const arrival = Promise.withResolvers<void>();
+  mcpConnectGate = { entered: () => { arrival.resolve(); }, released: gate.promise };
+
+  return { entered: arrival.promise, release: () => { gate.resolve(); } };
 }
 
 export interface McpEstablishGate {
@@ -1060,6 +1088,10 @@ export function resetRecordedMcp(): void {
   mcpToolCalls.length = 0;
   mcpServers.clear();
   mcpEstablished.length = 0;
+  mcpDialled.length = 0;
+  mcpOverlapped.length = 0;
+  mcpConnecting.clear();
+  mcpConnectGate = null;
   mcpDiscovered.length = 0;
   mcpCallToolFailure = null;
   mcpDiscoveryFailure = null;
@@ -1299,6 +1331,34 @@ class FakeMCPClientManager {
     await Promise.allSettled(this.pending);
   }
 
+  /**
+   * A sign-in's callback, answered as the vendor answers it at the depth the account reads: the server its state names
+   * (`{nonce}.{serverId}`), whether or not the state was one it minted (`client-fyQrLGkD.js:1582,2034`); a provider's
+   * refusal as its error, the connection failed; a server with no connection as a failure; anything else as signed in.
+   */
+  async handleCallbackRequest(req: Request): Promise<{ serverId?: string; authSuccess: boolean; authError?: string }> {
+    const url = new URL(req.url);
+    const serverId = (url.searchParams.get('state') ?? '').split('.')[1];
+
+    if (serverId === undefined || serverId === '') return { authSuccess: false, authError: 'No serverId found in state parameter.' };
+    const error = url.searchParams.get('error');
+    const connection = this.mcpConnections[serverId];
+
+    // A provider's refusal fails the connection and spends its link, as the vendor's `failConnection` does for a state it
+    // can still redeem. Every state is redeemable here: an expired one, which the vendor ignores, is not modelled.
+    if (error !== null && connection !== undefined) {
+      connection.connectionState = 'failed';
+      connection.connectionError = url.searchParams.get('error_description') ?? error;
+      this.changed();
+    }
+
+    if (error !== null) return { serverId, authSuccess: false, authError: url.searchParams.get('error_description') ?? error };
+
+    return this.mcpConnections[serverId] === undefined
+      ? { serverId, authSuccess: false, authError: `no connection for ${serverId}` }
+      : { serverId, authSuccess: true };
+  }
+
   /** A provider with no queued `authUrl` models a server that needed no sign-in. */
   async connectToServer(id: string): Promise<
     | { state: 'failed'; error: string }
@@ -1308,6 +1368,31 @@ class FakeMCPClientManager {
     const connection = this.mcpConnections[id];
 
     if (!connection) return { state: 'failed', error: `no registered server ${id}` };
+    mcpDialled.push(id);
+
+    if (mcpConnecting.has(id)) mcpOverlapped.push(id);
+    mcpConnecting.add(id);
+
+    try {
+      return await this.connectedOrSigningIn(id, connection);
+    } finally {
+      mcpConnecting.delete(id);
+    }
+  }
+
+  private async connectedOrSigningIn(id: string, connection: RecordedMcpConnection): Promise<
+    | { state: 'failed'; error: string }
+    | { state: 'authenticating'; authUrl: string; clientId?: string }
+    | { state: 'connected' }
+  > {
+    const gate = mcpConnectGate;
+
+    if (gate !== null) {
+      mcpConnectGate = null;
+      connection.client = { request: async () => { throw new SdkError(SdkErrorCode.NotConnected, 'Not connected'); }, transport: undefined };
+      gate.entered();
+      await gate.released;
+    }
 
     const provider = connection.options.transport.authProvider;
     const signIn = mcpSignInRequired.get(id) ?? pendingMcpAuthUrl;

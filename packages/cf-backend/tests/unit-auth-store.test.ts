@@ -170,28 +170,50 @@ describe('OAuth handoff state', () => {
 
     const consumed = await consumeOAuthState(kv, state, 'cloudflare', binding);
     expect(consumed).toMatchObject({
-      provider: 'cloudflare',
-      codeVerifier: 'verifier',
-      returnTo: '/workspaces/jarvis',
+      record: { provider: 'cloudflare', codeVerifier: 'verifier', returnTo: '/workspaces/jarvis' },
+      refusal: null,
     });
 
     await expect(consumeOAuthState(kv, state, 'cloudflare', binding))
       .rejects.toThrow();
   });
 
-  test('a callback from another provider cannot spend this state', async () => {
+  test('a browser holding none of its bindings is refused without the record: it learns no connect or run', async () => {
     const kv = makeKv();
-    const { state, binding } = await started(kv);
+    const { state } = await started(kv, { connectFor: 'account-a', connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' });
 
-    await expect(consumeOAuthState(kv, state, 'github', binding))
-      .rejects.toThrow(/provider mismatch/);
+    await expect(consumeOAuthState(kv, state, 'cloudflare', 'another-browser'))
+      .rejects.toThrow(/not issued to this browser/);
+  });
+
+  test('a callback from another provider cannot spend this state, and the record still says whose connect it was', async () => {
+    const kv = makeKv();
+    const { state, binding } = await started(kv, { connectFor: 'account-a', connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' });
+
+    expect(await consumeOAuthState(kv, state, 'github', binding))
+      .toMatchObject({ refusal: expect.stringMatching(/provider mismatch/), record: { connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' } });
+  });
+
+  // A record kept as long as its state is redeemable, and no longer: a late callback's run is named by its own browser's
+  // cookie (the login test's late connect), not by a record kept past its use.
+  test('a callback after the state expired is refused as expired', async () => {
+    const kv = makeKv();
+    const { state, binding } = await started(kv, { connectFor: 'account-a', connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' });
+
+    setSystemTime(new Date(Date.now() + 11 * 60_000));
+
+    try {
+      await expect(consumeOAuthState(kv, state, 'cloudflare', binding)).rejects.toThrow(/expired/);
+    } finally {
+      setSystemTime();
+    }
   });
 
   test('a hostile return_to is neutralised on the way in, not just on the way out', async () => {
     const kv = makeKv();
     const { state, binding } = await started(kv, { returnTo: '//evil.example.com/steal' });
 
-    expect((await consumeOAuthState(kv, state, 'cloudflare', binding)).returnTo).toBe('/');
+    expect((await consumeOAuthState(kv, state, 'cloudflare', binding)).record.returnTo).toBe('/');
   });
 
   test('neither half of the handoff is stored, so a KV dump replays nothing', async () => {

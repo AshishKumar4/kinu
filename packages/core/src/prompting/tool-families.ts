@@ -11,16 +11,16 @@ type FamilyNotes = Readonly<Partial<Record<BuiltinToolName, readonly string[]>>>
 const FAMILY_TOOL_NOTES: Readonly<Partial<Record<PromptModelFamily, FamilyNotes>>> = {
   claude: {
     agents: [
-      'Use a helper only for large, separable work that clearly costs more to do than to brief and check: tasks that can run in parallel, need isolated context, or are independent workstreams. For simple tasks, sequential steps, single-file edits, or tightly coupled work, work directly rather than delegating.',
-      'A helper costs more than it looks: you write its brief, you see only its report, and trusting that report means reading what it touched. Once you have delegated something, do not also do it yourself.',
+      'Use a subagent only for large, separable work that clearly costs more to do than to brief and check: tasks that can run in parallel, need isolated context, or are independent workstreams. For simple tasks, sequential steps, single-file edits, or tightly coupled work, work directly rather than delegating.',
+      'A subagent costs more than it looks: you write its brief, you see only its report, and trusting that report means reading what it touched. Once you have delegated something, do not also do it yourself.',
     ],
   },
   gpt: {
     agents: [
       'Only hire for a concrete, bounded subtask that can run independently alongside useful local work; otherwise continue locally.',
       'First form a short plan: decide which step is on the critical path and do it yourself now; delegate only sidecar work your next step does not wait on. Keep work local when it is tightly coupled, urgent, or too hard to brief well.',
-      'Make each delegated task concrete, self-contained and narrowed to the output you need, and give parallel writers disjoint files. Do not duplicate work between yourself and a helper, and do not redo a helper\'s task.',
-      'While a helper runs, do meaningful non-overlapping work; when its report arrives, review its changes, then integrate or refine them.',
+      'Make each delegated task concrete, self-contained and narrowed to the output you need, and give parallel writers disjoint files. Do not duplicate work between yourself and a subagent, and do not redo a subagent\'s task.',
+      'While a subagent runs, do meaningful non-overlapping work; when its report arrives, review its changes, then integrate or refine them.',
     ],
   },
 };

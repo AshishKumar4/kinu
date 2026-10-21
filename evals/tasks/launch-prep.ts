@@ -1,13 +1,13 @@
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue, WORKSPACE_ROOT } from '@kinu.run/core';
 import type { EvalPart, SeedFile } from '../src/task';
-import { finishedWork, matchesReference, type EvalVerifier, type HelperWork, type Script, type SlateClient } from '../src/verifier';
+import { finishedWork, matchesReference, type EvalVerifier, type SubagentWork, type Script, type SlateClient } from '../src/verifier';
 import { Seeded } from './seeded';
 
-// A studio's launch week, worked the way its lead would: two tallies handed to helpers, launch day
-// planned on the task board from a checklist, and two slates built while the helpers work; then a
-// question answered from what the helpers wrote; then a proofreader kept on for two jobs and let go.
-// The product's own machinery at once: hiring, delegation and a helper's whole life, the task board,
+// A studio's launch week, worked the way its lead would: two tallies handed to subagents, launch day
+// planned on the task board from a checklist, and two slates built while the subagents work; then a
+// question answered from what the subagents wrote; then a proofreader kept on for two jobs and let go.
+// The product's own machinery at once: hiring, delegation and a subagent's whole life, the task board,
 // slates and their storage across an eviction. Every answer is the checker's own, computed from the
 // files it seeds.
 
@@ -58,7 +58,7 @@ const SEEDS: readonly SeedFile[] = [
   { path: `${LAUNCH_DIR}/checklist.md`, content: `# Launch day\n\n${CHECKLIST.map((item) => `- ${item}`).join('\n')}\n` },
 ];
 
-// ── What the helpers must write, and the question's answer ───────────
+// ── What the subagents must write, and the question's answer ───────────
 
 const SIGNUPS_BY_COUNTRY: Readonly<Record<string, number>> = Object.fromEntries(COUNTRIES
   .map((country) => [country, SIGNUPS.filter((row) => row.country === country).length])
@@ -231,7 +231,7 @@ const fillTheWaitlist: Script<WaitlistMethod> = async (slate) => {
 
 // ── Checker helpers ──────────────────────────────────────────────────
 
-/** A report the helpers wrote, as parsed JSON, or its text when it is not JSON. */
+/** A report the subagents wrote, as parsed JSON, or its text when it is not JSON. */
 async function report(verifier: EvalVerifier, path: string): Promise<JsonValue> {
   const text = await verifier.readFile(path);
   const parsed = v.safeParse(v.pipe(v.string(), v.parseJson()), text);
@@ -253,12 +253,12 @@ const plainTitle = (title: string): string => title.trim().replace(/\.$/, '').to
 const plainText = (text: string): string => text.split('\n').map((line) => line.trimEnd()).join('\n').trimEnd();
 
 /**
- * Whether `helper` was given `first` and then, in a later run of its own, `second`: two distinct completed runs, one
+ * Whether `subagent` was given `first` and then, in a later run of its own, `second`: two distinct completed runs, one
  * naming each file, the second started after the first. Briefs mention the other file too ("as with announcement.md",
  * "Do NOT touch faq.md yet", delegation trials 1, 2 and 4 of rc22), so the first run naming a file is no witness.
  */
-export function keptFor(helper: HelperWork, first: string, second: string): boolean {
-  const done = helper.runs.filter((run) => run.status === 'completed');
+export function keptFor(subagent: SubagentWork, first: string, second: string): boolean {
+  const done = subagent.runs.filter((run) => run.status === 'completed');
 
   return done.some((one) => (one.userMessage ?? '').includes(first)
     && done.some((two) => two !== one && two.startedAt > one.startedAt && (two.userMessage ?? '').includes(second)));
@@ -269,15 +269,15 @@ export function keptFor(helper: HelperWork, first: string, second: string): bool
 export const launchPrep: EvalPart = {
   id: 'launch',
   objectives: [
-    'Hire two helpers that each tally one file into its report at once, while the lead puts the launch checklist on the task board.',
+    'Hire two subagents that each tally one file into its report at once, while the lead puts the launch checklist on the task board.',
     'Build the countdown and waitlist slates to their contracts, and both keep their data across an eviction.',
-    'Name the leading signup country from the report the helper wrote.',
+    'Name the leading signup country from the report the subagent wrote.',
   ],
   turns: [{
     seed: SEEDS,
     prompt: `Three things at once, please.
 
-1. Hire two helpers and give each one a tally, so they run while you do the rest:
+1. Hire two subagents and give each one a tally, so they run while you do the rest:
    - one counts the waitlist signups in ${LAUNCH_DIR}/signups.csv per country and writes
      ${COUNTRY_REPORT}: an object from each country code to its number of signups, like {"DE": 12};
    - the other averages the beta ratings in ${LAUNCH_DIR}/feedback.csv per theme and writes
@@ -304,17 +304,17 @@ export const launchPrep: EvalPart = {
 
 Tell me when all three are done.`,
     verify: async (verifier) => {
-      await verifier.check('two-helpers-each-finished-a-tally', async () => {
-        const worked = await verifier.helperWork();
+      await verifier.check('two-subagents-each-finished-a-tally', async () => {
+        const worked = await verifier.subagentWork();
         const counters = finishedWork(worked, 'signups-by-country.json');
         const averagers = finishedWork(worked, 'ratings-by-theme.json');
 
         return {
           pass: counters.some((counter) => averagers.some((averager) => averager !== counter)),
           evidence: {
-            helpers: worked.map((helper) => ({
-              name: helper.name, status: helper.status,
-              runs: helper.runs.map((run) => ({ status: run.status, asked: (run.userMessage ?? '').slice(0, 160) })),
+            subagents: worked.map((subagent) => ({
+              name: subagent.name, status: subagent.status,
+              runs: subagent.runs.map((run) => ({ status: run.status, asked: (run.userMessage ?? '').slice(0, 160) })),
             })),
             counters, averagers,
           },
@@ -367,7 +367,7 @@ Tell me when all three are done.`,
       });
     },
   }, {
-    prompt: 'Going by the report your helper wrote, which country has the most waitlist signups? Reply with just its two-letter code.',
+    prompt: 'Going by the report your subagent wrote, which country has the most waitlist signups? Reply with just its two-letter code.',
     verify: async (verifier) => {
       await verifier.check('names-the-leading-country', async () => {
         const answer = verifier.bareAnswer(/^([A-Z]{2})$/);
@@ -394,14 +394,14 @@ export const proofreading: EvalPart = {
 ${LAUNCH_DIR}/${ANNOUNCEMENT.file} in place, spelling only. When it has, give that same proofreader
 ${LAUNCH_DIR}/${FAQ.file} to fix the same way; don't hire another. Once both are done, dismiss it and tell me.`,
     verify: async (verifier) => {
-      const worked = await verifier.helperWork();
+      const worked = await verifier.subagentWork();
 
-      // Two runs of one helper, each started by its own draft: kept on and given a second job, not hired twice.
-      const kept = worked.filter((helper) => keptFor(helper, ANNOUNCEMENT.file, FAQ.file));
+      // Two runs of one subagent, each started by its own draft: kept on and given a second job, not hired twice.
+      const kept = worked.filter((subagent) => keptFor(subagent, ANNOUNCEMENT.file, FAQ.file));
 
       await verifier.check('one-proofreader-fixed-both-drafts', async () => ({
         pass: kept.length === 1,
-        evidence: { kept: kept.map((helper) => helper.name), helpers: worked.map((helper) => ({ name: helper.name, status: helper.status, runs: helper.runs.length })) },
+        evidence: { kept: kept.map((subagent) => subagent.name), subagents: worked.map((subagent) => ({ name: subagent.name, status: subagent.status, runs: subagent.runs.length })) },
       }));
 
       for (const item of [ANNOUNCEMENT, FAQ]) {
@@ -414,7 +414,7 @@ ${LAUNCH_DIR}/${FAQ.file} to fix the same way; don't hire another. Once both are
 
       await verifier.check('the-proofreader-is-dismissed', async () => ({
         pass: kept.length === 1 && kept[0]?.status === 'dismissed',
-        evidence: { kept: kept.map((helper) => ({ name: helper.name, status: helper.status })) },
+        evidence: { kept: kept.map((subagent) => ({ name: subagent.name, status: subagent.status })) },
       }));
     },
   }],

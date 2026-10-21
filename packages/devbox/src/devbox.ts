@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, isProcessLive, nameBox, containerExec, seamedContainer, boxEnv, END_TREE, type ProcessRecord } from "./processes";
+import { Processes, isProcessLive, nameBox, containerExec, seamedContainer, boxEnv, endEveryProcess, END_TREE, type ProcessRecord } from "./processes";
 import { launched } from './exec-launcher';
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
@@ -3679,11 +3679,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (!container.running) return;
     const ending = container.monitor();
+
     // PID 1 is tini, which catches no signal, so the kernel drops a TERM sent it from inside: every other process gets
     // one, and tini exits with its child, the container with it (staging, 2026-10-21: a new boot id after). Through
     // the seam, as the platform's `signal()` is a task nobody can await (`containerExec`). Its exec may end with the
-    // container it ends, which is no failure.
-    const sending = containerExec(container, ['kill', '-TERM', '-1']).then(async (sent) => { await sent.output(); });
+    // container it ends, which is no failure; a kill that refuses fails the stop (`endEveryProcess`).
+    const sending = endEveryProcess(container);
 
     try { await Promise.all([sending, ending]); }
     catch (cause) { if (container.running) throw cause; }

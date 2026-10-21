@@ -10,11 +10,11 @@
  *   bun scripts/credential-checkpoint.ts capture|owed|restore <origin>
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { DEV_IDENTITY_HEADER } from '@kinu.run/core';
 import { evalTargetVerdict, evalWebIdentityEnv } from '@kinu.run/test-utils';
+import { cacheRoot } from './cache-root';
 
 const CheckpointSchema = v.array(v.object({ key: v.string(), sealed: v.string() }));
 
@@ -57,7 +57,7 @@ if (import.meta.main) {
 
   try {
     const service = evalService(asked);
-    const file = join(homedir(), '.cache', 'kinu', 'credential-checkpoint', `${new URL(service.origin).host}.json`);
+    const file = join(cacheRoot(), 'kinu', 'credential-checkpoint', `${new URL(service.origin).host}.json`);
     const owes = existsSync(file) ? v.parse(CheckpointSchema, JSON.parse(readFileSync(file, 'utf8'))) : [];
 
     if (step === 'capture') {

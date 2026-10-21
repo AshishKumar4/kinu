@@ -102,7 +102,7 @@ it('a share is granted what its graph observes, across the app hop and its cycle
   ]);
   expect(await granted('users', [{ slate: 'issues', namespace: 'agent', member: 'send' }])).toContain('issues:agent.send');
 
-  // What only the agent does is refused where the host routes it, so it never enters a graph or a grant. Helpers the
+  // What only the agent does is refused where the host routes it, so it never enters a graph or a grant. Subagents the
   // owner's own slate hired are in its graph, as delegating, and no share carries them or may be approved them.
   const overreach = v.parse(GraphSchema, answer(await probe.operationAs('root', { op: 'graph', id: 'overreach' })));
 

@@ -111,7 +111,7 @@ test("a deletion ends every agent's wake as it begins, and its agents arm none a
   await agent.activateActor();
   await joinHarnessFibers();
   await agent.setSoul('# Purpose\n\nDo each task asked.');
-  const { subordinate: hired } = await agent.createSubordinateAgent();
+  const { subagent: hired } = await agent.createSubagentAgent();
 
   if (hired.actorId === null) throw new Error('the added agent has no actor');
   // Its crossing dies before the agent takes it: owed, with the agent's wake armed to cross it again.

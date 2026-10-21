@@ -21,7 +21,7 @@ import {
   type AgentsSwarmDeps,
   type AgentsToolDeps,
 } from '../src/index';
-import { makeTeam, makePeers, rosterEntry } from './helpers-agents';
+import { makeTeam, makePeers } from './helpers-agents';
 
 const ErrorResultSchema = v.object({ error: v.string() });
 
@@ -113,7 +113,7 @@ describe('agents.* codemode namespace — dispatch', () => {
   });
 
   test('Plan mode does not narrow the search surface', async () => {
-    // Plan mode constrains what a helper may do, never which members exist.
+    // Plan mode constrains what a subagent may do, never which members exist.
     const provider = createAgentsCodemodeProvider(() => ({ mode: 'plan', swarms: true, swarm: swarmDeps() }));
     expect(await member(provider.tools, 'swarm').execute('research')).toMatchObject({ reason: 'bad_input' });
     expect(Object.keys(provider.tools))
@@ -158,7 +158,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(await member(ns, 'message').execute('researcher', 'also check the CLI'))
       .toMatchObject({ status: 'delivered', agent: 'researcher', delivery: 'starts_now', event_id: 'evt-starts_now' });
     expect(await member(ns, 'reply').execute('pe1', 'here you go')).toEqual({ ok: true });
-    expect(await member(ns, 'list').execute()).toEqual({ subordinates: [rosterEntry], peers: [{ name: 'scout', displayName: 'Scout' }] });
+    expect(await member(ns, 'list').execute()).toMatchObject({ tree: [{ name: 'main', you: true }], peers: [{ name: 'scout', displayName: 'Scout' }] });
     expect(await member(ns, 'dismiss').execute('researcher'))
       .toEqual({ ok: true, name: 'researcher', historyKept: true, stoppedJobs: [] });
 

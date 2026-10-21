@@ -216,7 +216,7 @@ describe('one workspace actor directory', () => {
     expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM workspace_identity`[0]?.n).toBe(1);
   });
 
-  test.each(['node', 'head', 'run', 'subordinate'])('an actor of origin %s cannot be stored or registered', (origin) => {
+  test.each(['node', 'head', 'run', 'subagent'])('an actor of origin %s cannot be stored or registered', (origin) => {
     const { directory, sql } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
     const actorId = crypto.randomUUID();
@@ -293,7 +293,7 @@ describe('one workspace actor directory', () => {
     expect(profile('evolution', 'task')).toEqual({ origin: 'evolution', tab: false, input: false, lifetime: 'task', evolves: false });
   });
 
-  test('a run actor creates only run actors, and a subordinate names no tool profile', () => {
+  test('a run actor creates only run actors, and a subagent names no tool profile', () => {
     const { directory } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
 

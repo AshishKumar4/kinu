@@ -70,8 +70,8 @@ test('a hosted chat refused as too long compacts its earlier turns and answers o
   workspace.agent.harnessCatalogModels({ [GATEWAY_MODEL]: { contextWindow: WINDOW } });
   await workspace.agent.setSoul('# Purpose\n\nExplain the parser.');
   // Added as the owner adds one, and chatted with in its own pane.
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
-  const pane = [actorConnectionTag(subordinate.actorId ?? '')];
+  const { subagent } = await workspace.agent.createSubagentAgent();
+  const pane = [actorConnectionTag(subagent.actorId ?? '')];
 
   for (const question of QUESTIONS) {
     await asPane(pane, () => workspace.agent.send(question, crypto.randomUUID()));
@@ -125,7 +125,7 @@ test("an added agent's chat compacts, hires, starts a search, and keeps answerin
       return chatCompletion(run, 'Use a lookup table for single-byte tokens.');
     }
 
-    if (text.includes('[subordinate_report]')) asked.report += 1;
+    if (text.includes('[subagent_report]')) asked.report += 1;
 
     if (text.includes(STILL)) {
       asked.still += 1;
@@ -156,8 +156,8 @@ test("an added agent's chat compacts, hires, starts a search, and keeps answerin
 
   workspace.agent.harnessCatalogModels({ [GATEWAY_MODEL]: { contextWindow: WINDOW } });
   await workspace.agent.setSoul('# Purpose\n\nExplain and improve the parser.');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
-  const pane = [actorConnectionTag(subordinate.actorId ?? '')];
+  const { subagent } = await workspace.agent.createSubagentAgent();
+  const pane = [actorConnectionTag(subagent.actorId ?? '')];
 
   const say = async (text: string): Promise<void> => {
     await asPane(pane, () => workspace.agent.send(text, crypto.randomUUID()));

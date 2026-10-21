@@ -58,8 +58,8 @@ import {
 } from '../src/experience/imports';
 import { MissionBudgetLedger, listMissionSpend } from '../src/mission-budget';
 import { initWorkspaceActorTable } from '../src/identity/workspace-actors';
-import { SubordinateRosterStore } from '../src/subordinates/roster';
-import { readSubordinateLiveStatus } from '../src/subordinates/support';
+import { SubagentRosterStore } from '../src/subagents/roster';
+import { readSubagentLiveStatus } from '../src/subagents/support';
 import { initEventsHubTables } from '../src/events/hub/schema';
 import { EventLog } from '../src/events/hub/log';
 import { ReplyChannelStore } from '../src/events/hub/reply-channel';
@@ -322,8 +322,8 @@ describe('two actors, one database: fibers, evolution_events, executor_output, a
       WHERE actor_id = ${w.a.actorId} AND id = ${'out-1'}`[0]?.stdout).toBe('a');
 
     // The real reader over `activity_log`.
-    expect(readSubordinateLiveStatus(w.exec, w.a).recentSteps.map((s) => s.summary)).toEqual(['a']);
-    expect(readSubordinateLiveStatus(w.exec, w.b).recentSteps.map((s) => s.summary)).toEqual(['b']);
+    expect(readSubagentLiveStatus(w.exec, w.a).recentSteps.map((s) => s.summary)).toEqual(['a']);
+    expect(readSubagentLiveStatus(w.exec, w.b).recentSteps.map((s) => s.summary)).toEqual(['b']);
     w.close();
   });
 });
@@ -674,13 +674,13 @@ describe('two actors, one database: mission_budget', () => {
   });
 });
 
-describe('two actors, one database: actor_subordinates', () => {
+describe('two actors, one database: actor_subagents', () => {
   test('two parents each hire a "reviewer" and neither can dismiss the other\'s', () => {
     const w = world();
     // A roster row reads its hire's origin from the actor directory, so the table exists.
     initWorkspaceActorTable(w.execRaw);
-    const a = new SubordinateRosterStore(w.exec, w.a);
-    const b = new SubordinateRosterStore(w.exec, w.b);
+    const a = new SubagentRosterStore(w.exec, w.a);
+    const b = new SubagentRosterStore(w.exec, w.b);
     a.ensureSchema();
     b.ensureSchema();
 
@@ -694,7 +694,7 @@ describe('two actors, one database: actor_subordinates', () => {
 
     a.create(entry);
     b.create(entry);
-    expect(w.count('actor_subordinates')).toBe(2);
+    expect(w.count('actor_subagents')).toBe(2);
 
     a.assign('reviewer', 'review the diff');
     expect(a.get('reviewer')?.status).toBe('working');
@@ -704,7 +704,7 @@ describe('two actors, one database: actor_subordinates', () => {
     expect(a.list()).toHaveLength(0);
     expect(b.list().map((r) => r.name)).toEqual(['reviewer']);
     a.remove('reviewer');
-    expect(w.count('actor_subordinates')).toBe(1);
+    expect(w.count('actor_subagents')).toBe(1);
     w.close();
   });
 });

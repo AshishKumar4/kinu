@@ -131,7 +131,7 @@ function startMockAgentServer(options: ({
 
         if (method === 'setReasoningEffort') return Response.json({ result: { ok: true, effort: args[0] ?? null } });
 
-        if (method === 'renameSubordinateAgent') {
+        if (method === 'renameSubagentAgent') {
           const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
 
           return Response.json({
@@ -139,7 +139,7 @@ function startMockAgentServer(options: ({
               ok: true,
               name,
               displayName,
-              subordinate: {
+              subagent: {
                 name,
                 displayName,
                 nameOrigin: 'user',
@@ -393,7 +393,7 @@ describe('CloudAgentClient protocol', () => {
     const creating = parent.createAdditionalAgent();
 
     const createRpc = await waitFor(
-      () => mock.frames.find((frame) => frame.type === 'rpc' && frame.method === 'createSubordinateAgent'),
+      () => mock.frames.find((frame) => frame.type === 'rpc' && frame.method === 'createSubagentAgent'),
       'create additional-agent rpc',
     );
 
@@ -405,7 +405,7 @@ describe('CloudAgentClient protocol', () => {
       result: {
         name: 'researcher-a1b2c3',
         displayName: '',
-        subordinate: {
+        subagent: {
           name: 'researcher-a1b2c3',
           displayName: '',
           nameOrigin: 'auto',
@@ -427,7 +427,7 @@ describe('CloudAgentClient protocol', () => {
       displayName: 'Research partner',
     });
     expect(mock.rpcRequests).toContainEqual({
-      method: 'renameSubordinateAgent',
+      method: 'renameSubagentAgent',
       args: ['researcher-a1b2c3', 'Research partner'],
     });
 
@@ -1009,7 +1009,7 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
   // 2026-10-01: a cloud workspace's reads_changed frames were dropped here, so the TUI's agents hub went stale on cloud too.
   // 26244c765: the cloud client's own broadcast decoder had no plan_updated, so a cloud plan never reached the TUI.
   const broadcasts: Array<[string, JsonObject & { type: string }]> = [
-    ['the reads a write moved', { type: 'reads_changed', reads: ['listWorkspaceAgents', 'listSubordinates'] }],
+    ['the reads a write moved', { type: 'reads_changed', reads: ['listWorkspaceAgents', 'listSubagents'] }],
     ['a plan the workspace updated', { type: 'plan_updated', plan: PENDING_PLAN }],
   ];
 

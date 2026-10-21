@@ -735,8 +735,9 @@ describe("deploy gate", () => {
       });
 
       expect(run.status).not.toBe(0);
-      // A refusal is the build's verdict, never asked again (L27).
+      // Never asked again by the deploy (L27): its operator reruns it, told so in the platform's words.
       expect(run.events.filter((event) => VALIDATE.test(event))).toHaveLength(1);
+      expect(run.stdout).toContain('Cloudflare refused this build\'s startup (code 10021): "Script startup exceeded CPU time limit." Its validator reads one bundle in two modes');
       expect(wipe(run.events)).toBe(-1);
       expect(run.uploads).toEqual([]);
       expect(run.report).toContain('startup validated refused');
@@ -748,6 +749,7 @@ describe("deploy gate", () => {
       expect(run.uploads, run.stdout).toHaveLength(1);
       expect(run.status).not.toBe(0);
       expect(run.report).toContain('startup deployed refused');
+      expect(run.stdout).toContain('so run the same deploy again. wrangler deploy failed; its log is');
       expect(run.events).not.toContain('bun scripts/infra-verify.ts --phase=post-deploy');
     });
 

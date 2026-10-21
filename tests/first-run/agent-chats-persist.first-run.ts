@@ -8,14 +8,14 @@
  * each child's own room must still serve back the words that were said in it.
  *
  * WHY EVERY GATE STAYED GREEN. The roster read a chat surface makes was
- * `SubordinateRosterStore.list()`, which filters `status != 'dismissed'`, so
+ * `SubagentRosterStore.list()`, which filters `status != 'dismissed'`, so
  * reachability was derived from employability and a dismissed child's tab went
  * with its employment — while the dismiss copy promises "Its conversation is
  * kept, not deleted". The second half is `conversation_heads`: `newestId()`
  * returned a stored head without asking whether it still named a row, so a head
  * that did not resolve took every read down an anonymous ancestry failure and
  * handed `record` a parent that re-roots the next message. The first is unit-tested
- * (`packages/cf-backend/tests/unit-subordinates.test.ts`); the second went with the head
+ * (`packages/cf-backend/tests/unit-subagents.test.ts`); the second went with the head
  * table when the chat became a list (cbadfe1b72). Neither unit can see
  * what a DEPLOYED workspace serves a browser that comes back to it.
  *
@@ -106,12 +106,12 @@ function announce(subgoals: readonly EvalSubgoal[]): readonly EvalSubgoal[] {
 
 afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
 
-/** What `createSubordinateAgent` answers with, read for the two identities
+/** What `createSubagentAgent` answers with, read for the two identities
  *  the pane uses: the name its socket is addressed by, the actor id its
  *  history is paged by. */
 const CreatedSchema = v.object({
   name: v.string(),
-  subordinate: v.object({ actorReference: v.object({ actorId: v.string() }) }),
+  subagent: v.object({ actorReference: v.object({ actorId: v.string() }) }),
 });
 
 const RosterSchema = v.array(v.object({ name: v.string(), status: v.optional(v.string()) }));
@@ -124,7 +124,7 @@ const OWNER_NAME = 'Jarvis';
 
 /** Each created agent's shown name and its origin, by its name; empty when the roster read failed. */
 async function namesOn(socket: PublicSocket): Promise<Map<string, { shown: string; origin: string }>> {
-  const answer = await ask(socket, 'listSubordinates', []);
+  const answer = await ask(socket, 'listSubagents', []);
   const roster = answer.ok ? v.safeParse(NamedRosterSchema, answer.value) : null;
 
   return new Map(roster?.success === true ? roster.output.map((entry) => [entry.name, { shown: entry.displayName, origin: entry.nameOrigin }]) : []);
@@ -136,7 +136,7 @@ async function renamedAtBirth(socket: PublicSocket, names: readonly string[]): P
   const born = await namesOn(socket);
   const renamed = names[1] ?? '';
 
-  await ask(socket, 'renameSubordinateAgent', [renamed, OWNER_NAME]);
+  await ask(socket, 'renameSubagentAgent', [renamed, OWNER_NAME]);
   const after = await namesOn(socket);
 
   const systemNamed = names.every((name) => {
@@ -321,27 +321,27 @@ describe(SUITE, () => {
           const actorIds: string[] = [];
 
           for (let index = 0; index < SAID.length; index += 1) {
-            const answer = await ask(first, 'createSubordinateAgent', []);
+            const answer = await ask(first, 'createSubagentAgent', []);
             const created = answer.ok ? v.safeParse(CreatedSchema, answer.value) : null;
 
             if (created === null || !created.success) {
               subgoals.push({
                 what: 'agents-created',
                 reached: false,
-                detail: rpcDetail({ rpc: 'createSubordinateAgent', answer, refusal: 'refused', said: null }),
+                detail: rpcDetail({ rpc: 'createSubagentAgent', answer, refusal: 'refused', said: null }),
               });
 
               return announce(subgoals);
             }
 
             names.push(created.output.name);
-            actorIds.push(created.output.subordinate.actorReference.actorId);
+            actorIds.push(created.output.subagent.actorReference.actorId);
           }
 
           subgoals.push({
             what: 'agents-created',
             reached: names.length === SAID.length,
-            detail: `createSubordinateAgent answered twice: ${JSON.stringify(names)}`,
+            detail: `createSubagentAgent answered twice: ${JSON.stringify(names)}`,
           });
 
           // ── Named by the system, then one renamed by its owner. ─────────
@@ -409,7 +409,7 @@ describe(SUITE, () => {
             return announce(subgoals);
           }
 
-          const rosterAnswer = await ask(back, 'listSubordinates', []);
+          const rosterAnswer = await ask(back, 'listSubagents', []);
           const roster = rosterAnswer.ok ? v.safeParse(RosterSchema, rosterAnswer.value) : null;
           const listed = roster !== null && roster.success ? roster.output.map((entry) => entry.name) : [];
 
@@ -417,9 +417,9 @@ describe(SUITE, () => {
             what: 'roster-survives',
             reached: names.every((name) => listed.includes(name)),
             detail: rpcDetail({
-              rpc: 'listSubordinates', answer: rosterAnswer, refusal: 'never answered',
+              rpc: 'listSubagents', answer: rosterAnswer, refusal: 'never answered',
               said: roster !== null && roster.success
-                ? `listSubordinates answered ${JSON.stringify(listed)} for created ${JSON.stringify(names)}`
+                ? `listSubagents answered ${JSON.stringify(listed)} for created ${JSON.stringify(names)}`
                 : null,
             }),
           });

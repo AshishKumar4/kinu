@@ -8,7 +8,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
-import { mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
+import { connectedPath, connectEndedOf, mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 import {
   COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
@@ -29,7 +29,7 @@ import {
 import "virtual:kinu-theme.css";
 import "./index.css";
 import { markDocument, codenameFor, mintAgentName, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
+import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, type McpPreset, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, OwnerAnswersSchema, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
 import type { AlternateTakeSet, AskingAgent, OwedOwnerIntent, OwnerAnswer, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
 import { OwedOwnerIntentSchema } from "@kinu.run/core";
@@ -102,10 +102,10 @@ import {
   ADVISOR_HEADER, ADVISOR_NOTE_METADATA_KEY, ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, inspectWork, TURN_CLAIM_FRAME, workspaceGenesisSignal,
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
-  missingSubordinateHistory, ownerAsks,
-  DEFAULT_FILES_VIEW, FILES_PAGE_ENTRIES, FILES_VIEW_CONFIG_KEY, parseDeviceTier, seekPage, shownEntries, sortDirEntries, SubordinateInspectionRequestSchema,
+  missingSubagentHistory, ownerAsks,
+  DEFAULT_FILES_VIEW, FILES_PAGE_ENTRIES, FILES_VIEW_CONFIG_KEY, parseDeviceTier, seekPage, shownEntries, sortDirEntries, SubagentInspectionRequestSchema,
   type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
-  type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
+  type ProfileCatalogEnvelope, type SubagentInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry } from "@kinu.run/core";
 import { workspaceRpc, type SocketCall } from "@/lib/workspace-rpc";
@@ -271,18 +271,18 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
   {
     id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
     transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
-    authUrl: null, error: null, presetId: null,
+    signIn: false, error: null, presetId: null,
   },
   {
     id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
     transport: "sse", status: "authenticating", toolsCount: 0,
-    allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
+    allowedTools: ["create_issue"], signIn: true,
     error: null, presetId: null,
   },
   {
     id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.example/sse",
     transport: "sse", status: "failed", toolsCount: 0, allowedTools: null,
-    authUrl: null, error: "The server refused the connection.", presetId: null,
+    signIn: false, error: "The server refused the connection.", presetId: null,
   },
 ];
 
@@ -294,23 +294,36 @@ let galleryMcpRows: McpServerSummary[] = [...GALLERY_CUSTOM_MCP];
 
 const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset");
 
+/** `&mcp-sign-in=refused`: a custom server's add needs a sign-in, and the account refuses to begin it. */
+const MCP_SIGN_IN_REFUSED = new URLSearchParams(location.search).get("mcp-sign-in") === "refused";
+
 if (mcpPresetVariant === "connected") {
   galleryMcpRows = [
     {
       id: "srv-preset-github", name: "GitHub", serverUrl: "https://api.githubcopilot.com/mcp/",
       transport: "streamable-http", status: "ready", toolsCount: 21, allowedTools: null,
-      authUrl: null, error: null, presetId: "github",
+      signIn: false, error: null, presetId: "github",
     },
     {
       id: "srv-preset-cloudflare", name: "Cloudflare", serverUrl: "https://mcp.cloudflare.com/mcp",
       transport: "streamable-http", status: "authenticating", toolsCount: 0, allowedTools: null,
-      authUrl: "https://mcp.cloudflare.com/authorize?srv-preset-cloudflare", error: null,
+      signIn: true, error: null,
       presetId: "cloudflare",
     },
     ...GALLERY_UNCLAIMED_MCP,
   ];
 } else if (mcpPresetVariant === "open") {
   galleryMcpRows = [...GALLERY_UNCLAIMED_MCP];
+} else if (mcpPresetVariant === "token-failed") {
+  // GitHub added with a personal access token, which the server refused: it authenticates by its token, never a sign-in.
+  galleryMcpRows = [
+    {
+      id: "srv-preset-github", name: "GitHub", serverUrl: "https://api.githubcopilot.com/mcp/",
+      transport: "streamable-http", status: "failed", toolsCount: 0, allowedTools: null,
+      signIn: false, error: "The server refused the token.", presetId: "github",
+    },
+    ...GALLERY_UNCLAIMED_MCP,
+  ];
 }
 
 /** `mcp-secrets=github` means GitHub alone; absent means every oauth-app preset is configured (production-shaped). */
@@ -432,8 +445,9 @@ const WORKERS_AI_MODELS = CLOUDFLARE_OFF ? [] : [{ spec: "workers-ai/llama-4", l
 /** `&route=` is the app's own address for the wizard (`/welcome?step=providers`), as a sign-in returns to it. */
 const WELCOME_ROUTE = new URLSearchParams(location.search).get("route") ?? "/welcome";
 
-/** Where a sign-in ending on the connected page began (`&next=`). */
-const CONNECTED_NEXT = new URLSearchParams(location.search).get("next") ?? "/";
+/** The finish page's own address (`&run=`, `&service=`, `&error=`), as a connect's callback writes it. A visual fixture:
+ *  the connects themselves run through the Worker's own callbacks, in the live-app rows. */
+const CONNECTED_AT = connectedPath(connectEndedOf(new URLSearchParams(location.search)));
 
 const WORKSPACE_GONE = new URLSearchParams(location.search).get("gone") === "1";
 
@@ -447,6 +461,15 @@ const GALLERY_DEVICE = { id: "dev-1", label: "Owner's laptop" };
 
 /** `&chatgpt=signed-in`: the account holds a ChatGPT sign-in, so its entry offers the disconnect; OpenAI refuses the revoke. */
 let settingsChatGptSignedIn = new URLSearchParams(location.search).get("chatgpt") === "signed-in";
+
+/** `&chatgpt=device`: the sign-in the machine opened, read on every poll until `gallery:chatgpt-signed-in` ends it, as one
+ *  waits on its person, or a cancel does. */
+let settingsChatGptMachineSignIn: { state: "open"; authorizeUrl: string; device: typeof GALLERY_DEVICE } | null = null;
+
+window.addEventListener("gallery:chatgpt-signed-in", () => {
+  settingsChatGptSignedIn = true;
+  settingsChatGptMachineSignIn = null;
+});
 
 function galleryChatGptStatus() {
   return {
@@ -474,19 +497,26 @@ function chatgptFixture(path: string, method: string, body: BodyInit | null | un
   }
 
   if (path === "/api/user/chatgpt") {
+    const root = document.documentElement;
+    root.dataset.galleryChatgptReads = String(Number(root.dataset.galleryChatgptReads ?? "0") + 1);
+
     return fixtureJson(CHATGPT_DEVICE
-      ? { device: GALLERY_DEVICE, status: galleryChatGptStatus(), account: null, machineSignIn: null }
+      ? { device: GALLERY_DEVICE, status: galleryChatGptStatus(), account: null, machineSignIn: settingsChatGptMachineSignIn }
       : { device: null, status: null, account: settingsChatGptSignedIn ? { email: "owner@example.com" } : null, machineSignIn: null });
   }
 
   if (path === "/api/user/chatgpt/sign-in" && method === "POST") {
     if (!CHATGPT_DEVICE) return fixtureJson({ state: "waiting_for_machine" });
-    settingsChatGptSignedIn = true;
+    settingsChatGptMachineSignIn = { state: "open", authorizeUrl: "about:blank", device: GALLERY_DEVICE };
 
-    return fixtureJson({ state: "open", authorizeUrl: "about:blank", device: GALLERY_DEVICE });
+    return fixtureJson(settingsChatGptMachineSignIn);
   }
 
-  if (path === "/api/user/chatgpt/sign-in" && method === "DELETE") return fixtureJson({ cancelled: true });
+  if (path === "/api/user/chatgpt/sign-in" && method === "DELETE") {
+    settingsChatGptMachineSignIn = null;
+
+    return fixtureJson({ cancelled: true });
+  }
 
   if (path === "/api/user/chatgpt/paste/start" && method === "POST") {
     const root = document.documentElement;
@@ -658,6 +688,30 @@ function mcpPresetsFixture(): Response {
   ]);
 }
 
+/** A sign-in begun from a page: the row's own sign-in address, as the account answers it. Each begin's body is exposed so
+ *  the gate can check which run it was begun for, newest last. */
+function mcpConnectFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  const connecting = /^\/api\/user\/mcp\/servers\/([^/]+)\/connect$/u.exec(path);
+
+  if (connecting === null || method !== "POST") return null;
+  const row = galleryMcpRows.find((each) => each.id === decodeURIComponent(connecting[1] ?? ""));
+
+  localStorage.setItem("gallery-mcp-connects", `${localStorage.getItem("gallery-mcp-connects") ?? ""}${typeof body === "string" ? body : ""}\n`);
+
+  if (MCP_SIGN_IN_REFUSED) return fixtureJson({ error: "The MCP server's sign-in could not begin." }, 502);
+
+  // On this origin, so a tab sent to the sign-in loads nothing from a provider.
+  return row?.signIn === true ? fixtureJson({ authUrl: `${location.origin}/gallery-sign-in/${row.id}` }) : fixtureJson({ error: "waits for no sign-in" }, 400);
+}
+
+/** Whether an add signs in: only where an authorize URL exists, DCR always, oauth-app only while the frame claims the app;
+ *  a custom server only where the frame refuses its sign-in. */
+function gallerySignsIn(preset: McpPreset | undefined): boolean {
+  if (preset === undefined) return MCP_SIGN_IN_REFUSED;
+
+  return preset.auth === 'oauth' || (preset.auth === 'oauth-app' && mcpSecrets.has(preset.id));
+}
+
 function mcpServersFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/mcp/presets") return mcpPresetsFixture();
 
@@ -677,9 +731,7 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
       return fixtureJson({ error: `An MCP server named '${name}' already exists.` }, 400);
     }
 
-    // Sign-in only where an authorize URL exists: DCR always, oauth-app only while the frame claims the app.
-    const signIn = preset?.auth === 'oauth'
-      || (preset?.auth === 'oauth-app' && mcpSecrets.has(preset.id));
+    const signIn = gallerySignsIn(preset);
 
     if (preset?.auth === 'oauth-app' && !signIn && addBody.output.headers === undefined) {
       return fixtureJson({ error: `'${preset.title}' needs either the deployment's OAuth app or a token in \`headers\`.` }, 400);
@@ -687,9 +739,8 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
 
     const id = `srv-add-${String(galleryMcpRows.length + 1)}`;
 
-    const authUrl = signIn
-      ? `${new URL(preset.serverUrl).origin}/authorize?${id}`
-      : null;
+    // On this origin, so a tab sent to the sign-in loads nothing from a provider.
+    const authUrl = signIn ? `${location.origin}/gallery-sign-in/${id}` : null;
 
     // Exposed so the gate can check the posted payload.
     localStorage.setItem("gallery-mcp-add", JSON.stringify(addBody.output));
@@ -701,7 +752,7 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
       status: authUrl === null ? "ready" : "authenticating",
       toolsCount: authUrl === null ? 21 : 0,
       allowedTools: addBody.output.allowedTools ?? null,
-      authUrl, error: null,
+      signIn: authUrl !== null, error: null,
       presetId: preset?.id ?? null,
     }];
 
@@ -893,6 +944,7 @@ const SETTINGS_SLICES: readonly SettingsSlice[] = [
   accountProfileFixture,
   settingsSectionsFixture,
   workspaceRosterFixture,
+  mcpConnectFixture,
   mcpServersFixture,
   deviceRowsFixture,
   pluginsFixture,
@@ -1815,7 +1867,7 @@ window.WebSocket = new Proxy(RealWebSocket, {
 
 /** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo; `turn_claim` is the root's claim as it changes; `head_stream` and `head_activity` are a swarm head's live paint and landed step. */
 const GalleryPushFrameSchema = v.object({
-  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity", "subordinate_event", "model_fallback", "provider_wait"]),
+  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity", "subagent_event", "model_fallback", "provider_wait"]),
   reads: v.optional(v.array(v.string())),
   claim: v.optional(JsonObjectSchema),
   headId: v.optional(v.string()),
@@ -1829,8 +1881,8 @@ const GalleryPushFrameSchema = v.object({
   steerId: v.optional(v.string()),
   status: v.optional(v.string()),
   atStep: v.optional(v.number()),
-  // An agent given work or reporting on it (`subordinate_event`), at the time it happened.
-  subordinate: v.optional(v.string()),
+  // An agent given work or reporting on it (`subagent_event`), at the time it happened.
+  subagent: v.optional(v.string()),
   content: v.optional(v.string()),
   task: v.optional(v.string()),
   timestamp: v.optional(v.number()),
@@ -1896,7 +1948,7 @@ const MESSAGES: UIMessage[] = [
   msg({
     id: "d1", role: "user",
     metadata: { kinuEvent: "event_drain" },
-    parts: [{ type: "text", text: "While you were idle:\n- [subordinate_report] from subordinate (binding-tester): All 14 of the Worker's regression tests green after the binding fix. [the sender awaits your answer]\n- [webhook] from github (AshishKumar4/api-worker): PR #212 review requested" }],
+    parts: [{ type: "text", text: "While you were idle:\n- [subagent_report] from subagent (binding-tester): All 14 of the Worker's regression tests green after the binding fix. [the sender awaits your answer]\n- [webhook] from github (AshishKumar4/api-worker): PR #212 review requested" }],
   }),
   // Copied from production: written before the author stamp, so a bare UUID id and the event name are its only markers.
   msg({
@@ -1949,7 +2001,7 @@ const MESSAGES: UIMessage[] = [
 ];
 
 
-function galleryPlanInspection(request: SubordinateInspectionRequest, plans: readonly PlanReview[]) {
+function galleryPlanInspection(request: SubagentInspectionRequest, plans: readonly PlanReview[]) {
   if (request.view === 'plans') return { view: 'plans', path: request.path, page: { status: 'end', items: plans } };
 
   if (request.view === 'children') {
@@ -1968,15 +2020,15 @@ function galleryPlanInspection(request: SubordinateInspectionRequest, plans: rea
 
     return plan
       ? { view: 'plan', path: request.path, plan }
-      : missingSubordinateHistory(request.path);
+      : missingSubagentHistory(request.path);
   }
 
   throw new Error('Unexpected gallery plan inspection');
 }
 
 const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === 'inspectSubordinate') {
-    const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
+  if (method === 'inspectSubagent') {
+    const request = v.parse(SubagentInspectionRequestSchema, args?.[0]);
 
     return rpcResult(v.parse(JsonValueSchema, galleryPlanInspection(request, []))).json<T>();
   }
@@ -2096,7 +2148,7 @@ function maybeRefuseCreate(): void {
   if (!CREATE_FAILS || createRefused) return;
   createRefused = true;
   throw new Error("the workspace refused the new agent", {
-    cause: new Error("subordinate quota exhausted"),
+    cause: new Error("subagent quota exhausted"),
   });
 }
 
@@ -2807,8 +2859,8 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
 type GalleryAnswer = { readonly value: unknown } | null;
 
 function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
-  if (method === "inspectSubordinate") {
-    return { value: galleryPlanInspection(v.parse(SubordinateInspectionRequestSchema, args?.[0]), [galleryAgentPlan]) };
+  if (method === "inspectSubagent") {
+    return { value: galleryPlanInspection(v.parse(SubagentInspectionRequestSchema, args?.[0]), [galleryAgentPlan]) };
   }
 
   if (method === "dismissPlanReview") {
@@ -2846,7 +2898,7 @@ function galleryChatName(opening: string | null): string {
 }
 
 function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
-  if (method === "listSubordinates") return { value: [...GALLERY_SUBS] };
+  if (method === "listSubagents") return { value: [...GALLERY_SUBS] };
 
   // Recorded so a gate can read which actor a pick wrote.
   if (method === "setModel" || method === "setReasoningEffort") {
@@ -2859,7 +2911,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     return { value: method === "setModel" ? { ok: true, spec: args?.[0] } : { ok: true, effort: args?.[0] ?? null } };
   }
 
-  if (method === "createSubordinateAgent") {
+  if (method === "createSubagentAgent") {
     maybeRefuseCreate();
     const name = galleryChatName(v.is(v.string(), args?.[0]) ? args[0] : null);
 
@@ -2879,23 +2931,23 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
       updatedAt: NOW,
     };
 
-    return { value: { name, displayName: "", subordinate: entry } };
+    return { value: { name, displayName: "", subagent: entry } };
   }
 
-  if (method === "renameSubordinateAgent") {
+  if (method === "renameSubagentAgent") {
     const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
     const entry = GALLERY_SUBS.find((sub) => sub.name === name);
 
     if (RENAME_FAILS) throw new Error("Connection closed");
 
-    if (!entry) throw new Error(`gallery: no subordinate "${name}"`);
+    if (!entry) throw new Error(`gallery: no subagent "${name}"`);
     entry.displayName = displayName;
     rosterMoved();
 
-    return { value: { ok: true, name, displayName, subordinate: { ...entry } } };
+    return { value: { ok: true, name, displayName, subagent: { ...entry } } };
   }
 
-  if (method === "dismissSubordinate") {
+  if (method === "dismissSubagent") {
     const [name, keepHistory] = v.parse(v.tuple([v.string(), v.optional(v.boolean())]), args);
     const index = GALLERY_SUBS.findIndex((sub) => sub.name === name);
 
@@ -3016,7 +3068,7 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
   return from === 0 ? { status: "end", items } : { status: "more", items, next: { before: from } };
 }
 
-/** `&agents=panel`: chats, hires nested two deep, a swarm and a helper. */
+/** `&agents=panel`: chats, hires nested two deep, a swarm and a subagent. */
 const GALLERY_GITHUB: WorkspaceGitHubView = {
   repos: [
     { repo: "acme/api-worker", remote: true, lastPush: { ref: "refs/heads/fix/sessions-binding", at: NOW - 2 * 36e5 }, fetchedAt: NOW - 3 * 36e5,
@@ -3081,7 +3133,7 @@ function galleryWorkspaceAgents(): PanelAgent[] {
 const GALLERY_MAIN_TITLE = { value: "Main" };
 
 function rosterMoved(): void {
-  queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents", "listSubordinates"] })); });
+  queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents", "listSubagents"] })); });
 }
 
 async function galleryRevert(args?: unknown[]): Promise<JsonValue> {
@@ -3958,7 +4010,7 @@ const STOPPED_RUN: HeadRunView = {
     }),
     swarmNode("root-merge-0-h4", "packages/cli/src/commands/agents.ts", "the fan-out path", {
       status: "aborted", wallClockMs: 4_300, spawnedAt: NOW - 9 * 36e5, lastStepAt: NOW - 86 * 36e4,
-      errorMessage: "The workspace was evicted while this head was listing subordinates.",
+      errorMessage: "The workspace was evicted while this head was listing subagents.",
     }),
     swarmNode("root-merge-0-h5", "packages/cli/src/commands/files.ts", "the drive path", {
       status: "errored", wallClockMs: 3_100, spawnedAt: NOW - 9 * 36e5, lastStepAt: null,
@@ -5641,7 +5693,7 @@ const AGENT_TASKS = [
   },
 ];
 
-/** Root plan and tasks plus one subordinate's plan, so both owners' rows draw. */
+/** Root plan and tasks plus one subagent's plan, so both owners' rows draw. */
 const WORKSPACE_WORK = {
   plans: [
     {
@@ -6944,8 +6996,8 @@ const DRAINED_EVENT = {
 const DRAIN_BATCHES = {
   delegated: [
     {
-      ...DRAINED_EVENT, id: "ev-report", ingress: "subordinate", variant: "subordinate_report",
-      payload: { from_subordinate: "cli-auditor", status: "completed", content: "Report line one.\nReport line two.", sequence_id: "seq-1", kinu_mode: "build" },
+      ...DRAINED_EVENT, id: "ev-report", ingress: "subagent", variant: "subagent_report",
+      payload: { from_subagent: "cli-auditor", status: "completed", content: "Report line one.\nReport line two.", sequence_id: "seq-1", kinu_mode: "build" },
     },
     {
       ...DRAINED_EVENT, id: "ev-ask", ingress: "peer_async", variant: "peer_agent",
@@ -7277,7 +7329,8 @@ function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
               onDismiss={() => { /* the card stays up for the capture */ }}
             />
             <AddServerCard onCancel={() => { /* the form stays up for the capture */ }}
-              onAdded={() => { /* nothing is added; the gate never submits */ }} />
+              onAdded={() => { /* nothing is added; the gate never submits */ }}
+              onConnected={() => { /* nothing connects; the gate never submits */ }} />
           </>
         )}
       </div>
@@ -8029,8 +8082,8 @@ async function mount() {
     ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
     // `&step=0..3` picks the wizard panel.
     ["welcome", { node: <WelcomeFrame />, entries: [WELCOME_ROUTE] }],
-    // Where a sign-in ends in its helper window.
-    ["connected", { node: <ConnectedPage />, entries: [`${APP_ROUTES.connected}?${new URLSearchParams({ next: CONNECTED_NEXT }).toString()}`] }],
+    // Where every connect ends, as a server's callback sends its tab there.
+    ["connected", { node: <ConnectedPage />, entries: [CONNECTED_AT] }],
     // `&view=list` seeds the workspaces page's stored choice.
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],

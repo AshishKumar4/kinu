@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { AccountPanelModal, type AccountPanel } from "@/components/account/AccountPanelModal";
 
-export function SetupCard({ returnTo }: { returnTo: string }) {
+export function SetupCard() {
   const [open, setOpen] = useState<AccountPanel | null>(null);
 
   return (
@@ -23,7 +23,7 @@ export function SetupCard({ returnTo }: { returnTo: string }) {
         </button>
       </div>
       {open !== null && (
-        <AccountPanelModal panel={open} returnTo={returnTo} onClose={() => setOpen(null)} />
+        <AccountPanelModal panel={open} onClose={() => setOpen(null)} />
       )}
     </>
   );

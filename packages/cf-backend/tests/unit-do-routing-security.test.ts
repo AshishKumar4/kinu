@@ -47,12 +47,12 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/actor/researcher/get-messages')).toBe(false);
 
     // The root serves hosted actors under `/actor/<name>`; any `sub` segment or unnamed tail stays foreign.
-    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher')).toBe(true);
-    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/websocket')).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subagent/researcher')).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subagent/researcher/websocket')).toBe(true);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/actor/researcher/websocket')).toBe(true);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/exploration-agent/head-1')).toBe(true);
-    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/sub/exploration-agent/head-1')).toBe(true);
-    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/sub/subordinate-agent/nested')).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subagent/researcher/sub/exploration-agent/head-1')).toBe(true);
+    expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/subagent/researcher/sub/subagent/nested')).toBe(true);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub/user-d-o/victim')).toBe(true);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/sub')).toBe(true);
     expect(isForeignAgentNamespacePath('/agents/orchestrator-agent/my-workspace/arbitrary')).toBe(true);
@@ -106,9 +106,9 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace')).toBe('my-workspace');
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/actor/researcher')).toBe('my-workspace');
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/actor/researcher/get-messages')).toBe('my-workspace');
-    expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/websocket')).toBeNull();
+    expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subagent/researcher/websocket')).toBeNull();
     expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/exploration-agent/head-1')).toBeNull();
-    expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subordinate-agent/researcher/sub/exploration-agent/head-1')).toBeNull();
+    expect(extractOrchestratorAgentName('/agents/orchestrator-agent/my-workspace/sub/subagent/researcher/sub/exploration-agent/head-1')).toBeNull();
     expect(extractOrchestratorAgentName('/agents/user-d-o/victim')).toBeNull();
 
     expect(extractTicketOrchestratorAgentName('/agents/orchestrator-agent/my-workspace')).toBe('my-workspace');

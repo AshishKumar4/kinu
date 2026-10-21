@@ -6,7 +6,7 @@ import { readSources } from './sources';
 import { auditAlarmWork, auditConstructors, auditFile, MODEL_SINKS } from './do-init-gate';
 
 /**
- * The fixture is not invented. This is `SubordinateAgent.onStart` exactly as it
+ * The fixture is not invented. This is `SubagentAgent.onStart` exactly as it
  * stood before `RpcTimeout`'s fix, recovered from the diff:
  *
  *   async onStart(): Promise<void> {
@@ -21,7 +21,7 @@ import { auditAlarmWork, auditConstructors, auditFile, MODEL_SINKS } from './do-
  * defect, at full size, in its own words.
  */
 const SHIPPED = `
-export class SubordinateAgent extends ActorAgent {
+export class SubagentAgent extends ActorAgent {
   async onStart(): Promise<void> {
     this.ensureSchema();
     if (this.identity.read()) {
@@ -33,7 +33,7 @@ export class SubordinateAgent extends ActorAgent {
 
 /** The landed fix. */
 const FIXED = `
-export class SubordinateAgent extends ActorAgent {
+export class SubagentAgent extends ActorAgent {
   onStart(): void {
     this.ensureSchema();
   }
@@ -41,7 +41,7 @@ export class SubordinateAgent extends ActorAgent {
 `;
 
 const reasons = (src: string): string[] =>
-  auditFile('subordinate-agent.ts', src).violations.map((v) => v.reason);
+  auditFile('subagent.ts', src).violations.map((v) => v.reason);
 
 describe('DO init-gate purity', () => {
   test('the shipped defect is reported: both scaffold awaits fail by name', () => {

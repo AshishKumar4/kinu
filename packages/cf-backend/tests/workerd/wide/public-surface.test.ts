@@ -318,7 +318,7 @@ describe('two panes on one workspace object are two chat rooms', () => {
     expect((await root.rpc('pin', SetModelSchema)).spec).toContain(FIXTURE_MODEL);
 
     // The `+` tab's own call, so the actor exists exactly as the product makes it.
-    root.send(rpcRequest('hire', 'createSubordinateAgent', []));
+    root.send(rpcRequest('hire', 'createSubagentAgent', []));
     const actorName = (await root.rpc('hire', CreatedActorSchema)).name;
 
     root.send(chatRequest(ROOT_MARKER, ROOT_MARKER));
@@ -361,7 +361,7 @@ async function workspaceWithTwoChats(name: string): Promise<{ rootPath: string; 
 
   root.send(rpcRequest('pin', 'setModel', [FIXTURE_MODEL]));
   expect((await root.rpc('pin', SetModelSchema)).spec).toContain(FIXTURE_MODEL);
-  root.send(rpcRequest('hire', 'createSubordinateAgent', []));
+  root.send(rpcRequest('hire', 'createSubagentAgent', []));
   const actorName = (await root.rpc('hire', CreatedActorSchema)).name;
   const actorPath = `${rootPath}/${hostedActorSocketPath(actorName)}`;
 
@@ -425,15 +425,15 @@ describe('a hosted actor pane reads its own chat back from nothing', () => {
     const workspace = await openPane(rootPath);
     const RowSchema = v.object({ name: v.string(), actorId: v.nullable(v.string()), displayName: v.string(), role: v.string(), status: v.string() });
 
-    workspace.send(rpcRequest('rename', 'renameSubordinateAgent', [actorName, 'Kept Title']));
-    const { subordinate: employed } = await workspace.rpc('rename', v.object({ subordinate: RowSchema }));
+    workspace.send(rpcRequest('rename', 'renameSubagentAgent', [actorName, 'Kept Title']));
+    const { subagent: employed } = await workspace.rpc('rename', v.object({ subagent: RowSchema }));
 
     // No `keepHistory`: the conversation is kept.
-    workspace.send(rpcRequest('dismiss', 'dismissSubordinate', [actorName]));
+    workspace.send(rpcRequest('dismiss', 'dismissSubagent', [actorName]));
     await workspace.rpc('dismiss', v.object({ historyKept: v.literal(true) }));
 
     // Dismissal changes the row's status and nothing else.
-    workspace.send(rpcRequest('roster', 'listSubordinates', []));
+    workspace.send(rpcRequest('roster', 'listSubagents', []));
     const kept = (await workspace.rpc('roster', v.array(RowSchema))).find((row) => row.name === actorName);
 
     expect(kept).toEqual({ ...employed, status: 'dismissed' });
@@ -580,9 +580,9 @@ describe('a chat longer than one page', () => {
     expect(rootWhole.some((id) => whole.includes(id))).toBe(false);
 
     // An actor that never spoke is an empty chat, whose walk ends at once.
-    root.send(rpcRequest('quiet', 'createSubordinateAgent', []));
+    root.send(rpcRequest('quiet', 'createSubagentAgent', []));
     const quietName = (await root.rpc('quiet', CreatedActorSchema)).name;
-    root.send(rpcRequest('quiet-id', 'listSubordinates', []));
+    root.send(rpcRequest('quiet-id', 'listSubagents', []));
     const quiet = (await root.rpc('quiet-id', v.array(v.object({ name: v.string(), actorId: v.nullable(v.string()) })))).find((row) => row.name === quietName);
     root.send(rpcRequest('quiet-page', 'getChatHistoryPage', [{ actor: quiet?.actorId ?? '', limit: 10 }]));
 
@@ -674,7 +674,7 @@ describe('a hosted actor\'s window acts only on its own actor', () => {
     const { rootPath, actorName, actorPath } = await workspaceWithTwoChats('pool-window-reads');
     const root = await openPane(rootPath);
 
-    root.send(rpcRequest('sibling', 'createSubordinateAgent', []));
+    root.send(rpcRequest('sibling', 'createSubagentAgent', []));
     const siblingName = (await root.rpc('sibling', CreatedActorSchema)).name;
     const sibling = await openPane(`${rootPath}/${hostedActorSocketPath(siblingName)}`);
 
@@ -730,7 +730,7 @@ describe('a hosted actor\'s window acts only on its own actor', () => {
     const { rootPath, actorName, actorPath } = await workspaceWithTwoChats('pool-window-workspace');
     const root = await openPane(rootPath);
 
-    root.send(rpcRequest('sibling', 'createSubordinateAgent', []));
+    root.send(rpcRequest('sibling', 'createSubagentAgent', []));
     const siblingName = (await root.rpc('sibling', CreatedActorSchema)).name;
 
     root.close();

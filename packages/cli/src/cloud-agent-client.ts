@@ -45,7 +45,7 @@ import {
 import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import { cloudFileLinks, JOB_OUTPUT_EVENT, READS_CHANGED_EVENT, TERMINAL_TURN_KEY, WorkspaceBroadcastSchema, type WorkspaceBroadcast, type AgentModelMenu, type AgentRpcMethod, type FileLinks } from '@kinu.run/core';
-import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
+import { hostedWindowCalls, positionPageSchema, SubagentInspectionRequestSchema, SubagentInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubagentInspectionRequest, type SubagentInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, SendMetadata, ChangelogRevertResult, RefinementListing, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
   createUserUiMessage,
@@ -84,7 +84,7 @@ const CloudChatPageSchema = positionPageSchema(ChatHistoryEntrySchema);
 const AdditionalAgentSchema = v.object({ name: v.string(), displayName: v.string() });
 
 const AdditionalAgentEnvelopeSchema = v.object({
-  subordinate: AdditionalAgentSchema,
+  subagent: AdditionalAgentSchema,
 });
 
 /** A write of an effort answers that effort; only a write of none clears it, which this client never asks. */
@@ -144,8 +144,8 @@ interface CloudAgentClientOptions {
   token: string;
   agentName: string;
   cloudName: string;
-  /** A hosted actor beneath `cloudName`, not a store of its own: the subordinate tree lives in the root's database. */
-  subordinateName?: string;
+  /** A hosted actor beneath `cloudName`, not a store of its own: the subagent tree lives in the root's database. */
+  subagentName?: string;
   transcript?: CliSessionOptions;
   /** Stamped on each chat request so the DO never grades the previous turn from this prompt. */
   oneShot?: boolean;
@@ -171,7 +171,7 @@ export class CloudAgentClient implements AgentClient {
   private readonly origin: string;
   private readonly token: string;
   private readonly cloudName: string;
-  private readonly subordinateName: string | null;
+  private readonly subagentName: string | null;
   private readonly oneShot: boolean;
   private readonly transcriptOptions: CliSessionOptions;
   private readonly activeCliSession: CliSession;
@@ -199,11 +199,11 @@ export class CloudAgentClient implements AgentClient {
     this.token = opts.token;
     this.agentName = opts.agentName;
     this.cloudName = opts.cloudName;
-    this.subordinateName = opts.subordinateName ?? null;
-    const subordinateName = this.subordinateName;
+    this.subagentName = opts.subagentName ?? null;
+    const subagentName = this.subagentName;
 
-    if (subordinateName) {
-      this.rename = (displayName) => this.renameAdditionalAgent(subordinateName, displayName);
+    if (subagentName) {
+      this.rename = (displayName) => this.renameAdditionalAgent(subagentName, displayName);
     }
 
     this.oneShot = opts.oneShot === true;
@@ -215,7 +215,7 @@ export class CloudAgentClient implements AgentClient {
         'resolveDeviceConsent', ResolvedDeviceConsentSchema, [consentId, decision],
       ),
     };
-    this.checkpoints = subordinateName ? null : {
+    this.checkpoints = subagentName ? null : {
       list: async (limit, turnId) => v.parse(
         FileCheckpointListingSchema,
         await this.callRpc('listFileCheckpoints', [limit ?? 50, turnId ?? null]),
@@ -225,21 +225,21 @@ export class CloudAgentClient implements AgentClient {
         FileRestoreResultSchema, await this.callRpc('restoreFileCheckpoint', [dir, id]),
       ),
     };
-    // The agent's questions, the workspace agent's: a window on a subordinate answers its hirer, not the owner.
-    this.questions = subordinateName ? null : {
+    // The agent's questions, the workspace agent's: a window on a subagent answers its hirer, not the owner.
+    this.questions = subagentName ? null : {
       // A hosted agent's questions are answered from the web app's stack, where its window is.
       list: async () => v.parse(v.array(AskingAgentSchema), await this.callRpc('listOwnerQuestions', [])).filter((asking) => asking.actor === null),
       answer: async (id, answers) => v.parse(v.nullable(OwedIntentSchema), await this.callRpc('answerOwnerQuestions', [id, v.parse(JsonValueSchema, answers)])),
     };
     // The workspace's one queue, its hosted agents' commands included, as the web's main stack shows it.
-    this.approvals = subordinateName ? null : {
+    this.approvals = subagentName ? null : {
       list: async () => v.parse(v.array(DeferredApprovalSchema), await this.callRpc('listDeferredApprovals', [])),
       decide: async (ids, decision) => v.parse(
         v.object({ decided: v.array(v.string()) }), await this.callRpc('decideDeferredApprovals', [ids, decision]),
       ),
     };
     // The sealed plan RPCs (`agent-rpc-access.ts`).
-    this.plans = subordinateName ? null : {
+    this.plans = subagentName ? null : {
       active: async () => v.parse(CloudPlanReviewSchema, await this.callRpc('getActivePlanReview', [])),
       saveAnnotations: async (id, revision, annotations) => v.parse(
         PlanReviewResultSchema,
@@ -406,7 +406,7 @@ export class CloudAgentClient implements AgentClient {
 
   /** For surfaces that must not force a websocket open; live-session ops use callRpc. */
   private callHttp<T>(method: AgentRpcMethod, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
-    if (this.subordinateName) {
+    if (this.subagentName) {
       return this.callRpc(method, args).then((result) => v.parse(schema, result));
     }
 
@@ -414,7 +414,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   private mayCall(method: AgentRpcMethod): boolean {
-    return this.subordinateName === null || hostedWindowCalls(method);
+    return this.subagentName === null || hostedWindowCalls(method);
   }
 
   private callParentHttp<Input, T = Input>(method: AgentRpcMethod, schema: v.GenericSchema<Input, T>, args: JsonValue[] = []): Promise<T> {
@@ -503,13 +503,13 @@ export class CloudAgentClient implements AgentClient {
   }
 
   private async historyPage(request: Parameters<Parameters<typeof readConversation>[0]>[0]): Promise<v.InferOutput<typeof CloudChatPageSchema>> {
-    const name = this.subordinateName;
+    const name = this.subagentName;
 
     if (name === null) {
       return await this.callHttp('getChatHistoryPage', CloudChatPageSchema, [request.cursor === undefined ? {} : { cursor: { before: request.cursor.before } }]);
     }
 
-    const read = await this.inspectSubordinate({ path: [name], view: 'history', page: request });
+    const read = await this.inspectSubagent({ path: [name], view: 'history', page: request });
 
     if (read.view !== 'history') throw new Error(read.view === 'missing' ? read.error : `the conversation read answered "${read.view}"`);
 
@@ -521,8 +521,8 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async status(): Promise<AgentClientStatus> {
-    if (this.subordinateName !== null) {
-      const own = await this.ownSnapshot(this.subordinateName);
+    if (this.subagentName !== null) {
+      const own = await this.ownSnapshot(this.subagentName);
 
       return { name: own.displayName, purpose: own.mission, model: own.model.model, reasoningEffort: own.reasoningEffort, roleId: own.role };
     }
@@ -587,10 +587,10 @@ export class CloudAgentClient implements AgentClient {
     ]));
   }
 
-  async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
-    const input = v.parse(SubordinateInspectionRequestSchema, request);
+  async inspectSubagent(request: SubagentInspectionRequest): Promise<SubagentInspectionResult> {
+    const input = v.parse(SubagentInspectionRequestSchema, request);
 
-    return this.callParentHttp('inspectSubordinate', SubordinateInspectionResultSchema, [decodeJsonValue({ value: input })]);
+    return this.callParentHttp('inspectSubagent', SubagentInspectionResultSchema, [decodeJsonValue({ value: input })]);
   }
 
   async workspaceWork(): Promise<WorkspaceWork> {
@@ -613,9 +613,9 @@ export class CloudAgentClient implements AgentClient {
 
   /** Inherits the workspace mission with a blank `displayName`; `name` is the slug to open it by. */
   async createAdditionalAgent(): Promise<{ name: string; displayName: string }> {
-    const result = this.subordinateName
-      ? await this.callParentHttp('createSubordinateAgent', AdditionalAgentSchema)
-      : v.parse(AdditionalAgentSchema, await this.callRpc('createSubordinateAgent', []));
+    const result = this.subagentName
+      ? await this.callParentHttp('createSubagentAgent', AdditionalAgentSchema)
+      : v.parse(AdditionalAgentSchema, await this.callRpc('createSubagentAgent', []));
 
     return result;
   }
@@ -627,19 +627,19 @@ export class CloudAgentClient implements AgentClient {
       token: this.token,
       agentName: name,
       cloudName: this.cloudName,
-      subordinateName: name,
+      subagentName: name,
       transcript: this.transcriptOptions,
     });
   }
 
   async renameAdditionalAgent(name: string, displayName: string): Promise<{ name: string; displayName: string }> {
     const result = await this.callParentHttp(
-      'renameSubordinateAgent',
+      'renameSubagentAgent',
       AdditionalAgentEnvelopeSchema,
       [name, displayName],
     );
 
-    return result.subordinate;
+    return result.subagent;
   }
 
   async searchNodes(): Promise<AgentSearchNode[]> {
@@ -655,7 +655,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async listJobs(limit = 20, actor?: string): Promise<AgentJobSummary[]> {
-    const owner = actor ?? this.subordinateName;
+    const owner = actor ?? this.subagentName;
     const args: JsonValue[] = owner === null ? [limit] : [limit, owner];
     const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), args);
 
@@ -663,17 +663,17 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async cancelJob(jobId: string): Promise<{ ok: boolean }> {
-    return await this.callHttp('cancelBackgroundJob', CancelJobSchema, this.subordinateName === null ? [jobId] : [jobId, this.subordinateName]);
+    return await this.callHttp('cancelBackgroundJob', CancelJobSchema, this.subagentName === null ? [jobId] : [jobId, this.subagentName]);
   }
 
   async getModelSpec(): Promise<string | null> {
-    if (this.subordinateName !== null) return (await this.ownSnapshot(this.subordinateName)).model.model;
+    if (this.subagentName !== null) return (await this.ownSnapshot(this.subagentName)).model.model;
 
     return (await this.callHttp('getStoredModelSpec', StoredModelSpecSchema)).spec;
   }
 
   async setModel(spec: string): Promise<{ spec: string }> {
-    const name = this.subordinateName;
+    const name = this.subagentName;
 
     if (name !== null) return { spec: v.parse(SetModelResultSchema, await this.callRpc('setModel', [spec, name])).spec };
 
@@ -681,13 +681,13 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async getReasoningEffort(): Promise<ReasoningEffort | null> {
-    if (this.subordinateName !== null) return (await this.ownSnapshot(this.subordinateName)).reasoningEffort;
+    if (this.subagentName !== null) return (await this.ownSnapshot(this.subagentName)).reasoningEffort;
 
     return (await this.callHttp('getReasoningEffort', ReasoningEffortViewSchema)).effort;
   }
 
   async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
-    const args: JsonValue[] = this.subordinateName === null ? [effort] : [effort, this.subordinateName];
+    const args: JsonValue[] = this.subagentName === null ? [effort] : [effort, this.subagentName];
 
     return { effort: (await this.callHttp('setReasoningEffort', SetEffortAnswerSchema, args)).effort };
   }
@@ -769,8 +769,8 @@ export class CloudAgentClient implements AgentClient {
     // Durable Object, so the SDK's facet hop answers not-found.
     const room = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`;
 
-    const actorPath = this.subordinateName
-      ? `${room}/${hostedActorSocketPath(this.subordinateName)}`
+    const actorPath = this.subagentName
+      ? `${room}/${hostedActorSocketPath(this.subagentName)}`
       : room;
 
     const url = new URL(actorPath, this.origin.replace(/\/+$/, ''));

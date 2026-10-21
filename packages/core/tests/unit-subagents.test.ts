@@ -1,0 +1,1369 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { unlistedTree } from './helpers-agents';
+import { Database } from 'bun:sqlite';
+import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
+import {
+  buildDrainBatch,
+  EventLog,
+  eventContentPath,
+  initEventsHubTables,
+  renderForLLM,
+  spillEventContent,
+  SubagentRosterStore,
+  DELEGATION_MAX_DEPTH,
+  ROOT_DELEGATION_BUDGET,
+  delegationBudgetOf,
+  delegationDepthRefusal,
+  delegationExhausted,
+  admitSubagentReport,
+  admitSubagentTask,
+  agentNamer,
+  createTeamToolDeps,
+  describeSubagentHandoff,
+  subagentDescriptorSource,
+  normalizeReportContent,
+  parentAdmitsSubagentReport,
+  readSubagentLiveStatus,
+  receiveSubagentEvent,
+  SUBAGENT_REPORT_HANDOFF_MAX_CHARS,
+  type ReportDeps,
+  type SubagentIngressDeps,
+  owedSubagentTurnReport,
+  type SerializedMessage,
+  type SqlExec,
+  type SubagentDelivery,
+  type SubagentHandoff,
+  type SubagentReportOrigin,
+  type SubagentReportPayload,
+  type SubagentReportStatus,
+  type SubagentRosterEntry,
+  type SubagentRuntime,
+  type KinuEvent,
+  WorkspaceActorDirectory, actorReferenceOf, recoverSubagentLifecycles, type ActorReference,
+  type ActorHandle,
+  type AgentConfigStore,
+  initSubagentRosterTable,
+} from '../src/index';
+import { CODE_IS_REFUSAL, KinuError } from '../src/obs/index';
+import { codenameFor } from '../src/identity/naming';
+import { createMemoryVfs, createTestActors, filesIn, type MemoryVfs } from '@kinu.run/test-utils';
+import {
+  makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor, createTestWorkspace,
+} from './helpers';
+import { serveReport } from '../src/tools/report-operations';
+import type { JsonObject, JsonValue } from '../src/utils/json';
+
+/** A hire chain `depth` levels below the root. */
+const budgetAt = (depth: number) => ({ depth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - depth) });
+
+const NOW = 1_700_000_000_000;
+
+/** Port and actor over ONE Database: stores key on actor_id, so handles from two databases read an empty roster. */
+function makeWorld(db: Database = new Database(':memory:')) {
+  return {
+    sql: makeSqlExec(db),
+    actor: createTestActor(makeTagged(db), makeExecRaw(db), 'subagents-workspace', 'main'),
+  } satisfies { sql: SqlExec; actor: ActorHandle };
+}
+
+function makeRosterStore(db: Database = new Database(':memory:')): SubagentRosterStore {
+  const { sql, actor } = makeWorld(db);
+
+  return new SubagentRosterStore(sql, actor);
+}
+
+function reportPayload(event: KinuEvent | undefined): SubagentReportPayload {
+  if (!event) throw new Error('expected subagent report event');
+
+  if (event.variant !== 'subagent_report') throw new Error('expected subagent report payload');
+
+  return v.parse(v.object({
+    from_subagent: v.string(),
+    status: v.picklist(['progress', 'completed', 'blocked']),
+    content: v.string(),
+    sequence_id: v.string(),
+    task: v.optional(v.string()),
+    content_path: v.optional(v.string()),
+    // Both schemas strip unlisted fields, so a handoff field missing from either reads back undefined.
+    concerns: v.optional(v.array(v.string())),
+    deviations: v.optional(v.array(v.string())),
+    findings: v.optional(v.array(v.string())),
+    open_work: v.optional(v.array(v.string())),
+    kinu_mode: v.picklist(['build', 'plan']),
+  }), event.payload);
+}
+
+describe('the child descriptor authority', () => {
+  // S2: presentation fields live only in the child's actor_config and must survive a cold reopen.
+  function makeConfig(db: Database): AgentConfigStore {
+    return createTestActor(makeTagged(db), makeExecRaw(db), crypto.randomUUID(), 'descriptor-test').config;
+  }
+
+  test('rename and role switch read back from actor_config after a cold reopen', () => {
+    const db = new Database(':memory:');
+    const config = makeConfig(db);
+    config.setDisplayNameOrigin('Jarvis', 'user');
+    config.setRoleSelection('researcher');
+    config.setAssignedTier('deep');
+
+    const cold = makeConfig(db);
+    expect(subagentDescriptorSource(cold).read()).toEqual({
+      displayName: 'Jarvis',
+      nameOrigin: 'user',
+      role: 'researcher',
+      tier: 'deep',
+    });
+  });
+
+  test('an unset config reads as a blank auto-titled general-hire descriptor', () => {
+    const source = subagentDescriptorSource(makeConfig(new Database(':memory:')));
+    expect(source.read()).toEqual({
+      displayName: '',
+      nameOrigin: 'auto',
+      role: 'task',
+      tier: null,
+    });
+  });
+
+});
+
+describe('the delegation depth cap', () => {
+  test('the refusal names the depth reached and classifies as a refusal, not a defect', () => {
+    const atCap = budgetAt(4);
+    const refusal = delegationDepthRefusal(atCap);
+    expect(refusal.reason).toBe('denied');
+    expect(CODE_IS_REFUSAL[refusal.reason]).toBe(true);
+    expect(refusal.error).toContain('depth 4');
+    expect(refusal.error).toContain('depth 5');
+    expect(refusal.error).toContain('swarm');
+  });
+
+  test('an actor\'s depth is walked off its directory row; a missing hirer or a cycle grants no room, and says why', () => {
+    const rows = new Map<string, { parentActorId: string | null }>([
+      ['root', { parentActorId: null }],
+      ['d1', { parentActorId: 'root' }],
+      ['d2', { parentActorId: 'd1' }],
+      ['orphan', { parentActorId: 'gone' }],
+      // A line of hirers that returns to itself: the walk ends, refusing.
+      ['loop-a', { parentActorId: 'loop-b' }],
+      ['loop-b', { parentActorId: 'loop-a' }],
+    ]);
+
+    const row = (actorId: string) => {
+      const found = rows.get(actorId);
+
+      if (!found) throw new Error(`no fixture row ${actorId}`);
+
+      return found;
+    };
+
+    const describeActor = (actorId: string) => rows.get(actorId) ?? null;
+    expect(delegationBudgetOf(describeActor, row('root'))).toEqual(ROOT_DELEGATION_BUDGET);
+    expect(delegationBudgetOf(describeActor, row('d1'))).toEqual({ depth: 1, maxDepth: 3 });
+    expect(delegationBudgetOf(describeActor, row('d2'))).toEqual({ depth: 2, maxDepth: 2 });
+    expect(delegationBudgetOf(describeActor, row('orphan'))).toEqual({ depth: 0, maxDepth: 0, ancestry: 'missing' });
+    expect(delegationBudgetOf(describeActor, row('loop-a'))).toEqual({ depth: 2, maxDepth: 0, ancestry: 'cycle' });
+
+    for (const unknown of ['orphan', 'loop-a']) {
+      const budget = delegationBudgetOf(describeActor, row(unknown));
+
+      expect(delegationExhausted(budget)).toBe(true);
+      expect(delegationDepthRefusal(budget).error).toContain('unknown');
+    }
+  });
+});
+
+/** Unborn: until birth confirms an actor, the seed says who asked for the hire. */
+const initialRosterEntry = { name: 'researcher', actorReference: null, birth: { creationId: 'c-researcher', seed: { name: 'researcher', displayName: 'Researcher', nameOrigin: 'user', role: 'researcher', mission: 'Map the market.', lifetime: 'durable', origin: 'agent' }, assignment: null }, deleteRequested: false, status: 'working', currentTask: 'Map the market.', createdAt: 100, dismissedAt: null, lifetime: 'durable', taskEventId: null } satisfies Omit<SubagentRosterEntry, 'origin'>;
+
+describe('workspace subagent roster', () => {
+  test('owns closed status transitions and can restore an exact snapshot', () => {
+    const roster = makeRosterStore();
+    roster.ensureSchema();
+    roster.create(initialRosterEntry);
+
+    roster.applyReport('researcher', 'blocked', 'report_tool', NOW);
+    expect(roster.requireActive('researcher')).toMatchObject({
+      status: 'awaiting_input', currentTask: 'Map the market.',
+    });
+
+    roster.resumeAfterMessage('researcher');
+    expect(roster.requireActive('researcher').status).toBe('working');
+
+    roster.applyReport('researcher', 'completed', 'report_tool', NOW);
+    expect(roster.requireActive('researcher')).toMatchObject({ status: 'idle', currentTask: null });
+
+    roster.applyReport('researcher', 'progress', 'report_tool', NOW);
+    expect(roster.requireActive('researcher').status).toBe('idle');
+
+    roster.assign('researcher', 'Compare vendors');
+    roster.applyReport('researcher', 'progress', 'report_tool', NOW);
+    expect(roster.requireActive('researcher')).toMatchObject({
+      status: 'working', currentTask: 'Compare vendors',
+    });
+
+    const beforeDismiss = roster.requireActive('researcher');
+    roster.dismiss('researcher', 200);
+    roster.dismiss('researcher', 300);
+    expect(roster.list()).toEqual([]);
+    expect(roster.listAll()).toEqual([
+      { ...beforeDismiss, status: 'dismissed', currentTask: null, dismissedAt: 200 },
+    ]);
+    expect(() => roster.requireActive('researcher')).toThrow('dismissed');
+
+    roster.restore(beforeDismiss);
+    expect(roster.get('researcher')).toEqual(beforeDismiss);
+    expect(() => roster.requireExisting('missing')).toThrow('unknown subagent');
+  });
+
+  test('a roster read works on tables the workspace object made at construction, before any store existed', () => {
+    const { sql, actor } = makeWorld();
+    initSubagentRosterTable(sql);
+
+    // No `ensureSchema`: a read that reaches the object first finds only what the constructor made.
+    const roster = new SubagentRosterStore(sql, actor);
+
+    expect(roster.list()).toEqual([]);
+  });
+
+  test('a durable hire whose turn ended reads idle, and keeps the assignment it may still answer', () => {
+    const roster = makeRosterStore();
+    roster.ensureSchema();
+    roster.create({ ...initialRosterEntry, name: 'hello', status: 'idle', currentTask: null });
+
+    roster.assign('hello', 'Say hello to the team.');
+    roster.applyReport('hello', 'progress', 'report_tool', NOW);
+    expect(roster.requireActive('hello').status).toBe('working');
+
+    roster.finishTurn('hello', 'answered', NOW);
+    expect(roster.requireActive('hello')).toMatchObject({ status: 'idle', currentTask: 'Say hello to the team.' });
+
+    roster.assign('hello', 'And again.');
+    roster.applyReport('hello', 'blocked', 'report_tool', NOW);
+    roster.finishTurn('hello', 'answered', NOW);
+    expect(roster.requireActive('hello')).toMatchObject({ status: 'awaiting_input', currentTask: 'And again.' });
+
+    for (const ending of ['errored', 'interrupted'] as const) {
+      roster.assign('hello', ending);
+      roster.finishTurn('hello', ending, NOW);
+      expect(roster.requireActive('hello')).toMatchObject({ status: 'awaiting_input', currentTask: ending });
+    }
+  });
+});
+
+describe('subagent live status', () => {
+  test('returns the latest activity and bounded recent step summaries', () => {
+    // The production activity_log, keyed by (actor_id, id).
+    const workspace = createTestWorkspace();
+    const sql = makeSqlExec(workspace.db);
+    const actors = createTestActors(workspace.sql, workspace.execRaw);
+
+    const insert = (owner: string, index: number, detail: string): void => {
+      sql.exec(
+        `INSERT INTO activity_log (actor_id, id, event, detail, elapsed_ms, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        owner,
+        `id-${index}`,
+        `step-${index}`,
+        detail,
+        index * 10,
+        index * 100,
+      );
+    };
+
+    for (let index = 1; index <= 7; index++) {
+      insert(actors.main.actorId, index, index === 7 ? 'Integrated auth findings' : `detail-${index}`);
+    }
+
+    // A sibling's newer step in the same table: an unscoped read would report it as this child's.
+    insert(actors.sibling('other').actorId, 9, 'someone else entirely');
+
+    expect(readSubagentLiveStatus(sql, actors.main)).toEqual({
+      lastActivity: 700,
+      recentSteps: [
+        { event: 'step-7', summary: 'Integrated auth findings', elapsedMs: 70, createdAt: 700 },
+        { event: 'step-6', summary: 'detail-6', elapsedMs: 60, createdAt: 600 },
+        { event: 'step-5', summary: 'detail-5', elapsedMs: 50, createdAt: 500 },
+        { event: 'step-4', summary: 'detail-4', elapsedMs: 40, createdAt: 400 },
+        { event: 'step-3', summary: 'detail-3', elapsedMs: 30, createdAt: 300 },
+      ],
+    });
+  });
+});
+
+const fakeHandoff = (delivery: SubagentDelivery): SubagentHandoff => ({
+  eventId: `evt-${delivery}`,
+  delivery,
+  phase: { busy: delivery === 'queued', lastActivityAt: null, workingOn: null },
+});
+
+interface TeamHarness {
+  roster: SubagentRosterStore;
+  runtime: SubagentRuntime;
+  actorReference(): ActorReference;
+  team: ReturnType<typeof createTeamToolDeps>;
+  calls: string[];
+  assignments: Array<Parameters<SubagentRuntime['assign']>[1]>;
+  seeds: Array<Parameters<SubagentRuntime['spawn']>[0]>;
+  broadcasts: number[];
+  tasks: Array<{ subagent: string; content: string; timestamp: number }>;
+  failures: Set<keyof SubagentRuntime>;
+}
+
+const HARNESS_OWN_MISSION = 'Keep the release train moving.';
+
+/** `namedFromBriefs`: names minted as the backends mint them, not one fixed name. */
+function makeTeamHarness(inheritedContext: SerializedMessage[] = [], { namedFromBriefs = false } = {}): TeamHarness {
+  // One database: a hire's origin is read from its actor row, beside the roster.
+  const actorDb = new Database(':memory:');
+  const roster = makeRosterStore(actorDb);
+  roster.ensureSchema();
+  const calls: string[] = [];
+  const assignments: Array<Parameters<SubagentRuntime['assign']>[1]> = [];
+  const seeds: Array<Parameters<SubagentRuntime['spawn']>[0]> = [];
+  const broadcasts: number[] = [];
+  const tasks: Array<{ subagent: string; content: string; timestamp: number }> = [];
+  const failures = new Set<keyof SubagentRuntime>();
+
+  const fail = (operation: keyof SubagentRuntime) => {
+    if (failures.has(operation)) throw new KinuError('unavailable', `${operation} failed`);
+  };
+
+  const directory = new WorkspaceActorDirectory(makeTagged(actorDb), { workspaceId: 'subagents-workspace', ownerUserId: '' });
+
+  const runtime: SubagentRuntime = {
+    async spawn(input) {
+      seeds.push(input);
+      calls.push(`spawn:${input.name}:${input.mission}`);
+      fail('spawn');
+
+      return directory.apply(directory.main(), [], { action: 'register', creationId: input.creationId, name: input.name, origin: input.origin, lifetime: input.lifetime }).reference;
+    },
+    async cancelBirth(input) {
+      const entry = directory.apply(directory.main(), [], { action: 'cancelCreation', creationId: input.creationId, name: input.name, origin: input.origin, lifetime: input.lifetime });
+
+      if (entry.state !== 'deleted') directory.apply(directory.main(), [], { action: 'release', name: input.name, reference: entry.reference });
+
+      return entry.reference;
+    },
+    async assign(name, input) {
+      calls.push(`assign:${name}:${input.body}`);
+      assignments.push(input);
+      fail('assign');
+
+      return fakeHandoff('starts_now');
+    },
+    async status(name) {
+      fail('status');
+
+      return {
+        lastActivity: name.length,
+        recentSteps: [{ event: 'beforeturn', summary: 'streamText() called next', elapsedMs: 12, createdAt: 34 }],
+      };
+    },
+    async message(name, content) {
+      calls.push(`message:${name}:${content}`);
+      fail('message');
+
+      return fakeHandoff('queued');
+    },
+    async rename(name, displayName, nameOrigin) {
+      calls.push(`rename:${name}:${displayName}:${nameOrigin}`);
+      fail('rename');
+    },
+    async dismiss(name, { keepHistory }, reference) {
+      calls.push(`dismiss:${name}:${keepHistory}`); fail('dismiss');
+
+      if (!keepHistory) {
+        directory.apply(directory.main(), [], { action: 'retire', name, reference });
+        directory.apply(directory.main(), [], { action: 'release', name, reference });
+      }
+
+      return { stoppedJobs: [] };
+    },
+  };
+
+  const team = createTeamToolDeps({
+    delegation: ROOT_DELEGATION_BUDGET,
+    roster,
+    runtime,
+    createName: namedFromBriefs ? agentNamer(directory, roster) : () => 'researcher-a1b2c3',
+    now: () => 1_700_000_000_000,
+    inheritedContext: async () => inheritedContext,
+    ownMission: () => HARNESS_OWN_MISSION,
+    rosterMoved: () => { broadcasts.push(Date.now()); },
+    ...unlistedTree,
+    broadcastTask: (event) => { tasks.push(event); },
+  });
+
+  return { roster, runtime, team, calls, seeds, assignments, broadcasts, tasks, failures,
+    actorReference: () => {
+      const actor = directory.resolveChild(directory.main(), 'researcher-a1b2c3');
+
+      if (!actor) throw new Error('The admitted actor is missing.');
+
+      return actorReferenceOf(actor);
+    } };
+}
+
+describe('a hire\'s name', () => {
+  test('is its mission\'s first telling words, an owner\'s agent\'s those it was opened with, numbered past every name had', async () => {
+    const h = makeTeamHarness([], { namedFromBriefs: true });
+    const hired = await h.team.spawn({ role: 'researcher', mission: 'Audit every coupon rule for expiry handling.', mode: 'build' });
+    const again = await h.team.spawn({ role: 'researcher', mission: 'Audit each coupon rule, once more.', mode: 'build' });
+    const opened = await h.team.create({ brief: 'Fix the coupon expiry check' });
+    // Opened with no words: named for its role, and its mission is still the workspace's.
+    const silent = await h.team.create({});
+
+    expect([hired.name, again.name, opened.name, silent.name]).toEqual(['audit-coupon-rule', 'audit-coupon-rule-2', 'fix-coupon-expiry', 'task']);
+    expect(h.seeds.map((seed) => seed.mission).slice(2)).toEqual([HARNESS_OWN_MISSION, HARNESS_OWN_MISSION]);
+  });
+});
+
+describe('team action routing', () => {
+  test('owner creation seeds an idle identity without starting work or mirroring a task', async () => {
+    const h = makeTeamHarness();
+
+    expect(await h.team.create({ role: 'researcher', mission: 'Understand the domain.' })).toEqual({
+      name: 'researcher-a1b2c3', displayName: 'Researcher',
+      subagent: { name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+    });
+    expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
+      origin: 'user', status: 'idle', currentTask: null,
+    });
+    expect(h.seeds[0]).toMatchObject({
+      displayName: 'Researcher', nameOrigin: 'auto',
+      role: 'researcher',
+      // A hire seeds a durable child, which keeps selective relay; only task children always report.
+      lifetime: 'durable',
+    });
+    expect(h.calls).toEqual(['spawn:researcher-a1b2c3:Understand the domain.']);
+    expect(h.assignments).toEqual([]);
+    expect(h.tasks).toEqual([]);
+    expect(h.broadcasts).toHaveLength(1);
+  });
+
+  test('an owner-created agent with nothing said about it inherits the mission and the general catalog role', async () => {
+    const h = makeTeamHarness();
+
+    const created = await h.team.create({});
+
+    expect(created.subagent).toEqual({ name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null });
+    expect(created.displayName).toBe(codenameFor('researcher-a1b2c3'));
+    expect(h.seeds).toEqual([{
+      creationId: expect.any(String), name: 'researcher-a1b2c3',
+      displayName: codenameFor('researcher-a1b2c3'),
+      nameOrigin: 'auto',
+      mission: HARNESS_OWN_MISSION,
+      role: 'task',
+      lifetime: 'durable',
+      origin: 'user',
+    }]);
+    expect(h.assignments).toEqual([]);
+    expect(h.tasks).toEqual([]);
+  });
+
+  test('an owner who names the agent owns that name; a role alone is only a derived one', async () => {
+    const named = makeTeamHarness();
+    await named.team.create({ displayName: 'Jarvis' });
+    expect(named.seeds[0]).toMatchObject({ displayName: 'Jarvis', nameOrigin: 'user' });
+
+    const byRole = makeTeamHarness();
+    await byRole.team.create({ role: 'auditor' });
+    expect(byRole.seeds[0]).toMatchObject({ displayName: 'Auditor', nameOrigin: 'auto' });
+  });
+
+  test('a hire that names its agent shows that name, and no title policy takes it', async () => {
+    const h = makeTeamHarness();
+    await h.team.spawn({ name: 'tidepool', role: 'planner', mission: 'Plan a three-step study of tide pools.', mode: 'plan' });
+
+    expect(h.seeds[0]).toMatchObject({ name: 'tidepool', displayName: 'tidepool', nameOrigin: 'user' });
+  });
+
+  test('a model hire still refuses to invent a role or a mission', async () => {
+    const h = makeTeamHarness();
+
+    // A model's hire arrives as JSON, so this omits `role` to reach the runtime refusal.
+    await expect(h.team.spawn(JSON.parse(JSON.stringify({ mission: 'Do the thing.', mode: 'build' }))))
+      .rejects.toThrow('role must be non-empty');
+    await expect(h.team.spawn({ role: 'auditor', mission: '   ', mode: 'build' }))
+      .rejects.toThrow('mission must be non-empty');
+    expect(h.seeds).toEqual([]);
+    expect(h.roster.list()).toEqual([]);
+  });
+
+  test('a rename delegates to the child and refreshes the roster once', async () => {
+    const h = makeTeamHarness();
+    await h.team.create({});
+
+    const renamed = await h.team.rename({ name: 'researcher-a1b2c3', displayName: '  Release Warden  ' });
+
+    expect(renamed).toMatchObject({ ok: true, displayName: 'Release Warden' });
+    expect(h.calls).toContain('rename:researcher-a1b2c3:Release Warden:user');
+    expect(h.broadcasts).toHaveLength(2);
+    expect('displayName' in h.roster.requireActive('researcher-a1b2c3')).toBe(false);
+  });
+
+  test('a rename the child refuses broadcasts nothing and writes nothing locally', async () => {
+    const h = makeTeamHarness();
+    await h.team.create({ displayName: 'Before' });
+    h.failures.add('rename');
+
+    await expect(h.team.rename({ name: 'researcher-a1b2c3', displayName: 'After' }))
+      .rejects.toThrow('rename failed');
+    expect(h.broadcasts).toHaveLength(1);
+  });
+
+  test('an empty rename is refused rather than blanking a name somebody chose', async () => {
+    const h = makeTeamHarness();
+    await h.team.create({ displayName: 'Jarvis' });
+
+    await expect(h.team.rename({ name: 'researcher-a1b2c3', displayName: '  ' }))
+      .rejects.toThrow('displayName must be non-empty');
+    expect(h.calls).not.toContain(expect.stringContaining('rename:'));
+  });
+
+
+  test('only the owner can dismiss an owner-created subagent', async () => {
+    const h = makeTeamHarness();
+    await h.team.create({ role: 'researcher', mission: 'Own this role.' });
+
+    await expect(h.team.dismiss({ name: 'researcher-a1b2c3' }))
+      .rejects.toThrow('only the owner can dismiss it');
+    expect(h.roster.requireActive('researcher-a1b2c3').status).toBe('idle');
+    expect(h.calls).not.toContain('dismiss:researcher-a1b2c3:true');
+
+    await expect(h.team.dismiss({ name: 'researcher-a1b2c3', requestedBy: 'user' }))
+      .resolves.toMatchObject({ ok: true, historyKept: true });
+  });
+
+  test('a fresh hire is born from its mission alone, and its row wakes no reactor', async () => {
+    const inheritedContext: SerializedMessage[] = [
+      { id: 's1', role: 'system', content: 'Internal system policy', createdAt: 1 },
+      { id: 'u1', role: 'user', content: 'Fix auth and billing in parallel.', createdAt: 2 },
+      { id: 't1', role: 'tool', content: 'Very noisy tool output', createdAt: 3 },
+      { id: 'a1', role: 'assistant', content: 'I will split the independent workstreams.', createdAt: 4 },
+    ];
+
+    const h = makeTeamHarness(inheritedContext);
+
+    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Repair the auth flow.' });
+
+    // The cf pin (`unit-hire-fork.test.ts`) requires a fresh hire's first message to be its mission.
+    expect(h.assignments[0]?.inheritedContext).toBeUndefined();
+    expect(h.assignments[0]?.body).toBe('Repair the auth flow.');
+
+    // `wakesADrain` excludes assignment rows, so no reactor hands the child a summary of its own brief.
+    const { sql, actor } = makeWorld();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql, actor);
+    admitSubagentTask(log, {
+      fromWorkspace: 'kinu-main',
+      kind: 'task',
+      body: 'Repair the auth flow.',
+      mode: 'build',
+      now: 10,
+    });
+
+    expect(log.pending({ variant: 'subagent_task' })).toHaveLength(1);
+    expect(buildDrainBatch(log.pending({ variant: 'subagent_task' }))).toBeNull();
+  });
+
+  // S22: an assignment fires exactly one roster refresh and one task event.
+  test('an assignment fires exactly one roster refresh and one task event', async () => {
+    const h = makeTeamHarness();
+    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Map the market.' });
+    expect(h.broadcasts).toHaveLength(1);
+    expect(h.tasks).toHaveLength(1);
+
+    await h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Compare vendors' });
+    expect(h.broadcasts).toHaveLength(2);
+    expect(h.tasks).toHaveLength(2);
+  });
+
+  test('successful actions expose one canonical roster and nested live status', async () => {
+    const h = makeTeamHarness();
+
+    expect(await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Map the market.' })).toEqual({
+      name: 'researcher-a1b2c3', displayName: 'Researcher',
+    });
+    expect(await h.team.list()).toEqual([{
+      name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false,
+      origin: 'agent', status: 'working', currentTask: 'Map the market.',
+      createdAt: 1_700_000_000_000, dismissedAt: null,
+      // A durable hire's row names its mission's event id, which its report will cite.
+      lifetime: 'durable', taskEventId: 'evt-starts_now',
+    }]);
+    expect(h.calls.slice(0, 2)).toEqual([
+      'spawn:researcher-a1b2c3:Map the market.',
+      'assign:researcher-a1b2c3:Map the market.',
+    ]);
+    expect(h.tasks).toEqual([{
+      subagent: 'researcher-a1b2c3', content: 'Map the market.', timestamp: 1_700_000_000_000,
+    }]);
+
+    await h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Compare vendors' });
+    expect(h.tasks.at(-1)).toEqual({
+      subagent: 'researcher-a1b2c3', content: 'Compare vendors', timestamp: 1_700_000_000_000,
+    });
+    expect(await h.team.status({ name: 'researcher-a1b2c3' })).toEqual({
+      roster: h.roster.requireActive('researcher-a1b2c3'),
+      live: {
+        lastActivity: 'researcher-a1b2c3'.length,
+        recentSteps: [{ event: 'beforeturn', summary: 'streamText() called next', elapsedMs: 12, createdAt: 34 }],
+      },
+    });
+
+    h.roster.applyReport('researcher-a1b2c3', 'blocked', 'report_tool', NOW);
+    await h.team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Include pricing.' });
+    expect(h.roster.requireActive('researcher-a1b2c3').status).toBe('working');
+
+    await h.team.dismiss({ name: 'researcher-a1b2c3', keepHistory: false });
+    expect(await h.team.list()).toEqual([]);
+    expect(h.roster.get('researcher-a1b2c3')).toBeNull();
+    expect(h.broadcasts).toHaveLength(4);
+  });
+
+  test('runtime failures roll the roster back and never broadcast partial state', async () => {
+    const operations: Array<keyof Pick<SubagentRuntime, 'spawn' | 'assign' | 'message' | 'dismiss'>> = [
+      'spawn', 'assign', 'message', 'dismiss',
+    ];
+
+    for (const operation of operations) {
+      const h = makeTeamHarness();
+
+      if (operation !== 'spawn') await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Initial mission' });
+
+      if (operation === 'message') h.roster.applyReport('researcher-a1b2c3', 'blocked', 'report_tool', NOW);
+      const before = h.roster.get('researcher-a1b2c3');
+      const broadcastsBefore = h.broadcasts.length;
+      h.failures.add(operation);
+
+      const actions = {
+        spawn: () => h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' }),
+        assign: () => h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' }),
+        message: () => h.team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Continue' }),
+        dismiss: () => h.team.dismiss({ name: 'researcher-a1b2c3' }),
+      };
+
+      const action = actions[operation]();
+
+      await expect(action).rejects.toMatchObject({ code: 'unavailable' });
+
+      if (operation === 'spawn') expect(h.roster.requireExisting('researcher-a1b2c3').birth?.seed.mission).toBe('Mission');
+      else expect(h.roster.get('researcher-a1b2c3')).toEqual(before);
+      expect(h.broadcasts).toHaveLength(broadcastsBefore);
+      expect(h.tasks).toHaveLength(operation === 'spawn' ? 0 : 1);
+    }
+  });
+
+  test('an event write after admission still rolls the roster back to before', async () => {
+    const h = makeTeamHarness();
+    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Initial mission' });
+    const before = h.roster.get('researcher-a1b2c3');
+    const broadcastsBefore = h.broadcasts.length;
+    // Forcing this write to throw proves the rollback scope covers it.
+    const recordAssignmentEvent = h.roster.recordAssignmentEvent.bind(h.roster);
+    h.roster.recordAssignmentEvent = () => { throw new Error('event write failed'); };
+
+    try {
+      await expect(h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' }))
+        .rejects.toThrow('event write failed');
+    } finally {
+      h.roster.recordAssignmentEvent = recordAssignmentEvent;
+    }
+
+    expect(h.roster.get('researcher-a1b2c3')).toEqual(before);
+    expect(h.broadcasts).toHaveLength(broadcastsBefore);
+    expect(h.tasks).toHaveLength(1);
+  });
+
+  test('assign and message refuse a task-lifetime row before trying anything', async () => {
+    const h = makeTeamHarness();
+    // A task agent answers its one brief and retires; more work belongs to a durable hire.
+    h.roster.create({ name: 'ask-auditor-a1b2c3', actorReference: null, birth: { creationId: 'c-auditor', seed: { name: 'ask-auditor-a1b2c3', displayName: 'Auditor', nameOrigin: 'auto', role: 'auditor', mission: 'Is the migration reversible?', lifetime: 'task', origin: 'agent' }, assignment: null }, deleteRequested: false, status: 'working', currentTask: 'Is the migration reversible?', createdAt: 1_700_000_000_000, dismissedAt: null, taskEventId: 'evt-1' });
+    const before = h.roster.get('ask-auditor-a1b2c3');
+
+    const attempts: Array<() => Promise<object>> = [
+      () => h.team.assign({ mode: 'build', name: 'ask-auditor-a1b2c3', task: 'Other work' }),
+      () => h.team.message({ mode: 'build', name: 'ask-auditor-a1b2c3', content: 'More context' }),
+    ];
+
+    for (const attempt of attempts) {
+      const attempted = attempt();
+      await expect(attempted).rejects.toBeInstanceOf(KinuError);
+      await expect(attempted).rejects.toMatchObject({ code: 'bad_input' });
+    }
+
+    expect(h.roster.get('ask-auditor-a1b2c3')).toEqual(before);
+    expect(h.calls).toEqual([]);
+    expect(h.broadcasts).toEqual([]);
+    expect(h.tasks).toEqual([]);
+  });
+
+  test('a lost initial admission remains recoverable under the same actor identity', async () => {
+    const h = makeTeamHarness();
+    h.failures.add('assign');
+    await expect(h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' })).rejects.toMatchObject({ code: 'unavailable' });
+    const before = h.roster.requireExisting('researcher-a1b2c3');
+    expect(before.birth?.assignment?.body).toBe('Mission');
+    h.failures.clear();
+    await recoverSubagentLifecycles(h.roster, h.runtime);
+    const after = h.roster.requireExisting('researcher-a1b2c3');
+    expect(after.actorReference).toEqual(before.actorReference);
+    expect(after.birth).toBeNull();
+    expect(after.taskEventId).toBe('evt-starts_now');
+  });
+
+  test('a failed physical deletion retains the exact row for retry', async () => {
+    const h = makeTeamHarness();
+    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' });
+    const reference = h.actorReference();
+    h.failures.add('dismiss');
+    await expect(h.team.dismiss({ name: 'researcher-a1b2c3', keepHistory: false })).rejects.toMatchObject({ code: 'unavailable' });
+    expect(h.roster.requireExisting('researcher-a1b2c3').actorReference).toEqual(reference);
+    expect(h.roster.requireExisting('researcher-a1b2c3').deleteRequested).toBe(true);
+    h.failures.clear();
+    await recoverSubagentLifecycles(h.roster, h.runtime);
+    expect(h.roster.get('researcher-a1b2c3')).toBeNull();
+  });
+
+  test('publishes roster transitions before invoking the corresponding facet action', async () => {
+    // One database: the hire's origin is read from the actor the spawn returns.
+    const actorDb = new Database(':memory:');
+    const roster = makeRosterStore(actorDb);
+    roster.ensureSchema();
+    const observed: Array<{ operation: string; roster: SubagentRosterEntry | null }> = [];
+    const directory = new WorkspaceActorDirectory(makeTagged(actorDb), { workspaceId: 'subagents-workspace', ownerUserId: '' });
+    const actor = directory.create({ parent: directory.main(), name: 'researcher-a1b2c3', creationId: 'c-transition', origin: 'agent', lifetime: 'durable' });
+
+    const observe = (operation: 'assign' | 'message', name: string) => {
+      observed.push({ operation, roster: roster.get(name) });
+
+      return fakeHandoff('starts_now');
+    };
+
+    const runtime: SubagentRuntime = {
+      async spawn() { return actorReferenceOf(actor); },
+      async cancelBirth() { return actorReferenceOf(actor); },
+      async assign(name) { return observe('assign', name); },
+      async status() { return { lastActivity: null, recentSteps: [] }; },
+      async message(name) { return observe('message', name); },
+      async rename(name) { observed.push({ operation: 'rename', roster: roster.get(name) }); },
+      async dismiss(name) {
+        observed.push({ operation: 'dismiss', roster: roster.get(name) });
+
+        return { stoppedJobs: [] };
+      },
+    };
+
+    const team = createTeamToolDeps({
+      delegation: ROOT_DELEGATION_BUDGET,
+      roster,
+      runtime,
+      createName: () => 'researcher-a1b2c3',
+      now: () => 123,
+      inheritedContext: async () => [],
+      ownMission: () => HARNESS_OWN_MISSION,
+      rosterMoved: () => {},
+      ...unlistedTree,
+      broadcastTask: () => {},
+    });
+
+    await team.spawn({ mode: 'build', role: 'researcher', mission: 'Initial mission' });
+    await team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' });
+    roster.applyReport('researcher-a1b2c3', 'blocked', 'report_tool', NOW);
+    await team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Continue' });
+    await team.dismiss({ name: 'researcher-a1b2c3' });
+
+    expect(observed).toEqual([
+      { operation: 'assign', roster: expect.objectContaining({ status: 'working', currentTask: 'Initial mission' }) },
+      { operation: 'assign', roster: expect.objectContaining({ status: 'working', currentTask: 'Replacement' }) },
+      { operation: 'message', roster: expect.objectContaining({ status: 'working', currentTask: 'Replacement' }) },
+      { operation: 'dismiss', roster: expect.objectContaining({ status: 'dismissed', currentTask: null }) },
+    ]);
+  });
+
+  test('status preserves roster authority and isolates an unavailable facet', async () => {
+    const h = makeTeamHarness();
+    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' });
+    h.failures.add('status');
+
+    expect(await h.team.status({})).toEqual([{
+      roster: h.roster.requireActive('researcher-a1b2c3'),
+      live: null,
+      liveError: 'status failed',
+    }]);
+  });
+
+  test('EVICTION FIX: a completed subagent stays in the roster and answers a follow-up task', async () => {
+    const h = makeTeamHarness();
+    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Map the market.' });
+
+    h.roster.applyReport('researcher-a1b2c3', 'completed', 'report_tool', NOW);
+    const afterCompletion = await h.team.list();
+    expect(afterCompletion).toHaveLength(1);
+    expect(afterCompletion[0]).toMatchObject({ name: 'researcher-a1b2c3', status: 'idle', currentTask: null });
+
+    await h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'One more comparison' });
+    expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
+      status: 'working', currentTask: 'One more comparison',
+    });
+    expect(h.calls).toEqual([
+      'spawn:researcher-a1b2c3:Map the market.',
+      'assign:researcher-a1b2c3:Map the market.',
+      'assign:researcher-a1b2c3:One more comparison',
+    ]);
+  });
+
+  test('EVICTION FIX: dismissal archives by default — storage wipe only on explicit keepHistory=false', async () => {
+    const h = makeTeamHarness();
+    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' });
+
+    expect(await h.team.dismiss({ name: 'researcher-a1b2c3' }))
+      .toEqual({ ok: true, name: 'researcher-a1b2c3', historyKept: true, stoppedJobs: [] });
+    // keepHistory=true skips the orchestrator's deleteSubAgent storage wipe.
+    expect(h.calls.at(-1)).toBe('dismiss:researcher-a1b2c3:true');
+  });
+});
+
+describe('subagent event admission', () => {
+  test('canonical tasks and reports enter the standard drain rail', () => {
+    const { sql, actor } = makeWorld();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql, actor);
+
+    const task = admitSubagentTask(log, {
+      fromWorkspace: 'kinu-main', kind: 'task', body: 'Investigate',
+      deliverable: 'Report', mode: 'build', now: 10,
+    });
+
+    const report = admitSubagentReport(log, {
+      fromSubagent: 'researcher', status: 'completed', content: 'Done', task: 'Investigate',
+      sequenceId: 'settle:msg-1', mode: 'build', now: 11,
+    });
+
+    expect(task.admitted).toBe(true);
+    expect(report.admitted).toBe(true);
+    expect(log.pending({ variant: 'subagent_task' })[0]).toMatchObject({
+      trust: 'authenticated', priority: 'normal',
+      payload: {
+        from_workspace: 'kinu-main', kind: 'task', body: 'Investigate',
+        deliverable: 'Report', kinu_mode: 'build',
+      },
+    });
+    expect(log.pending({ variant: 'subagent_report' })[0]).toMatchObject({
+      trust: 'authenticated', priority: 'background',
+      payload: {
+        from_subagent: 'researcher', status: 'completed', content: 'Done', task: 'Investigate',
+        sequence_id: 'settle:msg-1', kinu_mode: 'build',
+      },
+    });
+  });
+
+  // Review of 4028013fc, 2026-10-03: a hire's job wake was admitted again on each restart's re-delivery, and with its key
+  // passed as an owner's message id, so the turn opened on no row and the hire never read what woke it.
+  test("a queued signal's repeat and an owner's resent message each land once; neither stands for the other", () => {
+    const { sql, actor } = makeWorld();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql, actor);
+
+    const wake = (now: number) => admitSubagentTask(log, {
+      fromWorkspace: 'kinu-main', kind: 'message', body: 'Background shell job bgjob-1 completed.', mode: 'build',
+      idempotencyKey: 'background-job-wake:bgjob-1', now,
+    });
+
+    const owner = (now: number) => admitSubagentTask(log, {
+      fromWorkspace: 'kinu-main', kind: 'message', body: 'Look at the logs.', mode: 'build', messageId: 'msg-1', now,
+    });
+
+    expect([wake(10).admitted, wake(11).admitted]).toEqual([true, false]);
+    expect([owner(12).admitted, owner(13).admitted]).toEqual([true, false]);
+
+    // The wake opens its own turn on its text: it carries no message id, which says the owner's row is already open.
+    const pending = log.pending({ variant: 'subagent_task' });
+
+    const messageIds = pending.map((event) => (event.variant === 'subagent_task'
+      && (event.payload_visibility === 'full' || event.payload_visibility === 'redact') ? event.payload.message_id ?? null : 'unreadable'));
+
+    expect(messageIds).toEqual([null, 'msg-1']);
+  });
+
+  test('the sender is told the event id its report will cite', () => {
+    const { sql, actor } = makeWorld();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql, actor);
+
+    const admission = admitSubagentTask(log, {
+      fromWorkspace: 'kinu-main', kind: 'task', body: 'Investigate', mode: 'build', now: 10,
+    });
+
+    const handoff = describeSubagentHandoff({
+      admission,
+      turnInFlight: false,
+      live: { lastActivity: null, recentSteps: [] },
+    });
+
+    expect(handoff.eventId).toBe(admission.id);
+  });
+
+  test('a busy subagent queues a mode-homogeneous turn, while an idle one starts now', () => {
+    const live = { lastActivity: 34, recentSteps: [{ event: 'beforeturn', summary: 'reading src/auth.ts', elapsedMs: 12, createdAt: 34 }] };
+    const admission = { id: 'evt-1', admitted: true };
+
+    expect(describeSubagentHandoff({ admission, turnInFlight: true, live })).toEqual({
+      eventId: 'evt-1',
+      delivery: 'queued',
+      phase: { busy: true, lastActivityAt: 34, workingOn: 'reading src/auth.ts' },
+    });
+    expect(describeSubagentHandoff({ admission, turnInFlight: false, live }).delivery).toBe('starts_now');
+  });
+
+  test('an admission the log rejected as a duplicate is queued, not claimed as a fresh start', () => {
+    // `admitted: false`: the event was already logged, so this publish scheduled no drain.
+    for (const turnInFlight of [true, false]) {
+      expect(describeSubagentHandoff({
+        admission: { id: 'evt-existing', admitted: false },
+        turnInFlight,
+        live: { lastActivity: null, recentSteps: [] },
+      })).toMatchObject({ eventId: 'evt-existing', delivery: 'queued' });
+    }
+  });
+
+  test('a subagent that has done nothing yet reports no work in progress', () => {
+    const handoff = describeSubagentHandoff({
+      admission: { id: 'evt-1', admitted: true },
+      turnInFlight: false,
+      live: { lastActivity: null, recentSteps: [] },
+    });
+
+    expect(handoff.phase).toEqual({ busy: false, lastActivityAt: null, workingOn: null });
+  });
+
+  test('empty actor identities and bodies are rejected before EventLog admission', () => {
+    const { sql, actor } = makeWorld();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql, actor);
+
+    expect(() => admitSubagentTask(log, {
+      fromWorkspace: ' ', kind: 'task', body: 'work', mode: 'build', now: 1,
+    })).toThrow('fromWorkspace');
+    expect(() => admitSubagentTask(log, {
+      fromWorkspace: 'main', kind: 'task', body: ' ', mode: 'build', now: 1,
+    })).toThrow('body');
+
+    for (const blank of [
+      { content: ' ', sequenceId: 'settle:msg-1', names: 'content' },
+      { content: 'work', sequenceId: ' ', names: 'sequenceId' },
+    ]) {
+      expect(() => admitSubagentReport(log, {
+        fromSubagent: 'researcher', status: 'progress', content: blank.content,
+        sequenceId: blank.sequenceId, mode: 'build', now: 1,
+      })).toThrow(blank.names);
+    }
+
+    expect(log.pending()).toEqual([]);
+  });
+});
+
+describe('the owner talking to a subagent does not wake its parent', () => {
+  /** Both hops in production order; assertions read the parent's event log because that log is the wake. */
+  function scenario() {
+    const { sql, actor } = makeWorld();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql, actor);
+    const roster = makeRosterStore();
+    roster.ensureSchema();
+    roster.create(initialRosterEntry);
+
+    let sequence = 0;
+
+    const arrivesAtParent = (
+      origin: SubagentReportOrigin,
+      content: string,
+      status: SubagentReportStatus,
+    ) => {
+      const entry = roster.requireActive('researcher');
+
+      if (!parentAdmitsSubagentReport({ entry })) return;
+      admitSubagentReport(log, {
+        fromSubagent: 'researcher', status, content,
+        sequenceId: `settle:msg-${++sequence}`, mode: 'build', now: 1,
+      });
+      roster.applyReport('researcher', status, origin, NOW);
+    };
+
+    return {
+      roster,
+      async turnEnds(input: { ownerDriven: boolean; assistantText: string; reportedThisTurn?: boolean }) {
+        // A durable hire's answered turn, as either backend ends one.
+        const owed = await owedSubagentTurnReport({
+          lifetime: 'durable', ending: 'answered', assistantText: input.assistantText, narration: async () => [],
+          reports: { spoke: input.reportedThisTurn ?? false, settled: false }, ownerDriven: input.ownerDriven, delegating: false,
+        });
+
+        if (owed !== null) arrivesAtParent('turn_end', owed.content, owed.status);
+      },
+      reportTool: (content: string, status: SubagentReportStatus = 'completed') =>
+        arrivesAtParent('report_tool', content, status),
+      jobSettles: (content: string) => arrivesAtParent('turn_end', content, 'progress'),
+      woken: () => log.pending({ variant: 'subagent_report' })
+        .map((event) => reportPayload(event).content),
+    };
+  }
+
+  test('the owner’s own conversation reaches the parent never, however long it runs', async () => {
+    const scene = scenario();
+
+    for (const reply of ['Hi — what do you need?', 'Here are three angles.', 'Done.']) {
+      await scene.turnEnds({ ownerDriven: true, assistantText: reply });
+    }
+
+    expect(scene.woken()).toEqual([]);
+  });
+
+  test('the answer to the parent’s own assignment still arrives automatically', async () => {
+    const scene = scenario();
+
+    await scene.turnEnds({ ownerDriven: false, assistantText: 'Mapped 14 competitors.' });
+    await scene.turnEnds({ ownerDriven: false, assistantText: '   ' });
+
+    expect(scene.woken()).toEqual(['Mapped 14 competitors.']);
+  });
+
+  test('a report tool cannot wake the parent after the assignment is complete', async () => {
+    const scene = scenario();
+    scene.reportTool('Market mapped.', 'completed');
+    expect(scene.roster.requireActive('researcher').currentTask).toBeNull();
+
+    await scene.turnEnds({ ownerDriven: true, assistantText: 'Sure, I can dig into pricing.' });
+    scene.reportTool('You should see this: incumbent pricing just moved.');
+
+    expect(scene.woken()).toEqual(['Market mapped.']);
+  });
+
+  test('work the owner’s conversation detached cannot smuggle it upward one hop later', async () => {
+    const scene = scenario();
+    scene.reportTool('Market mapped.', 'completed');
+
+    // A detached >30s tool job's wake is programmatic; only the roster knows it was the owner's.
+    scene.jobSettles('Background run job completed.');
+    await scene.turnEnds({ ownerDriven: false, assistantText: 'The crawl finished: 402 pages.' });
+
+    expect(scene.woken()).toEqual(['Market mapped.']);
+  });
+
+  test('the same job settling under a live assignment does reach the parent', () => {
+    const scene = scenario();
+
+    scene.jobSettles('Background run job completed.');
+
+    expect(scene.woken()).toEqual(['Background run job completed.']);
+  });
+
+  test('a turn the report tool already spoke for is not relayed twice', async () => {
+    const scene = scenario();
+
+    scene.reportTool('Done — 14 competitors.', 'completed');
+    await scene.turnEnds({
+      ownerDriven: false,
+      assistantText: 'Done — 14 competitors.',
+      reportedThisTurn: true,
+    });
+
+    expect(scene.woken()).toEqual(['Done — 14 competitors.']);
+  });
+});
+
+describe('oversize subagent reports stay reachable', () => {
+  /** Parent ingress in orchestrator.receiveSubagentEvent order: normalize, spill, admit. */
+  async function admitFromSubagent(log: EventLog, vfs: Parameters<typeof spillEventContent>[0], raw: string) {
+    const content = normalizeReportContent(raw);
+    const spilled = await spillEventContent(vfs, content);
+
+    const input = {
+      fromSubagent: 'researcher', status: 'completed', content,
+      sequenceId: 'settle:msg-1', task: 'Survey auth', mode: 'build', now: 11,
+    } satisfies Parameters<typeof admitSubagentReport>[1];
+
+    if (spilled) Object.assign(input, { spilled });
+
+    return admitSubagentReport(log, input);
+  }
+
+  function freshLog(): EventLog {
+    const { sql, actor } = makeWorld();
+    initEventsHubTables(sql);
+
+    return new EventLog(sql, actor);
+  }
+
+  test('a report past the brief budget spills whole and the parent brief cites it', async () => {
+    const log = freshLog();
+    const { vfs } = createMemoryVfs();
+    const content = 'seam found in the auth module; '.repeat(60).trim();
+
+    expect((await admitFromSubagent(log, vfs, `${content}\n`)).admitted).toBe(true);
+
+    const event = log.pending({ variant: 'subagent_report' })[0];
+    const path = reportPayload(event).content_path;
+    expect(path).toBe(eventContentPath(content));
+
+    if (!path) throw new Error('expected spilled report path');
+    expect(await readText(vfs, path)).toBe(content);
+
+    expect(renderForLLM(event).brief).toEndWith(`: full report: ${path}`);
+    const batch = buildDrainBatch([event]);
+
+    if (!batch) throw new Error('expected subagent report drain batch');
+    expect(batch.text).toContain(path);
+  });
+
+  test('a report within the brief budget writes nothing and renders exactly as before', async () => {
+    const log = freshLog();
+    const { vfs } = createMemoryVfs();
+
+    await admitFromSubagent(log, vfs, 'Survey done — three seams found; note written.');
+
+    const event = log.pending({ variant: 'subagent_report' })[0];
+    expect(reportPayload(event).content_path).toBeUndefined();
+    expect(await filesIn(vfs)).toEqual([]);
+    expect(renderForLLM(event).brief)
+      .toBe('completed [re: Survey auth]: Survey done — three seams found; note written.');
+  });
+});
+
+interface ParentScene {
+  log: EventLog;
+  roster: SubagentRosterStore;
+  vfs: MemoryVfs['vfs'];
+  seen: string[];
+  announced: Array<{ id: string; content: string }>;
+  deps: SubagentIngressDeps;
+}
+
+function parentScene(): ParentScene {
+  const { sql, actor } = makeWorld();
+  initEventsHubTables(sql);
+  const log = new EventLog(sql, actor);
+  const roster = makeRosterStore();
+  roster.ensureSchema();
+  roster.create(initialRosterEntry);
+  const { vfs } = createMemoryVfs();
+  const seen: string[] = [];
+  const announced: Array<{ id: string; content: string }> = [];
+
+  return {
+    log, roster, vfs, seen, announced,
+    deps: {
+      log,
+      roster,
+      vfs,
+      transaction: <T,>(body: () => T): T => {
+        seen.push('transaction');
+
+        return body();
+      },
+      announce: (report) => {
+        seen.push('announce');
+        announced.push({ id: report.id, content: report.content });
+      },
+      onAdmitted: () => { seen.push('drain'); },
+      evolutionAnswerStored: () => undefined,
+      onEvolutionAnswer: () => { seen.push('evolution'); },
+    },
+  };
+}
+
+describe('the parent ingress, in the order it runs', () => {
+  test('spills before opening the storage transaction, so the async write is never inside it', async () => {
+    const scene = parentScene();
+    const content = 'seam found in the auth module; '.repeat(60).trim();
+    const spilled = eventContentPath(content);
+    // The VFS write is async and the transaction body is not: the file must exist when the transaction opens.
+    const transaction = scene.deps.transaction.bind(scene.deps);
+    scene.deps.transaction = <T,>(body: () => T): T => {
+      // The test plane answers in the same turn, so a file the write left is there to stat.
+      expect(scene.vfs.stat(spilled)).toMatchObject({ type: 'file' });
+
+      return transaction(body);
+    };
+
+    const result = await receiveSubagentEvent(scene.deps, {
+      fromSubagent: 'researcher', status: 'completed', content: `${content}\n`,
+      origin: 'report_tool', sequenceId: 'settle:msg-1', mode: 'build',
+    }, 11);
+
+    expect(result.disposition).toBe('admitted');
+    expect(await readText(scene.vfs, spilled)).toBe(content);
+    const event = scene.log.pending({ variant: 'subagent_report' })[0];
+    expect(reportPayload(event).content_path).toBe(spilled);
+    expect(scene.seen).toEqual(['transaction', 'announce', 'drain']);
+    expect(scene.roster.requireActive('researcher')).toMatchObject({ status: 'idle', currentTask: null });
+  });
+
+  test('drops what the parent is not waiting on before the spill, leaving no file behind', async () => {
+    const scene = parentScene();
+    scene.roster.applyReport('researcher', 'completed', 'report_tool', NOW);
+
+    const result = await receiveSubagentEvent(scene.deps, {
+      fromSubagent: 'researcher', status: 'progress', content: 'x'.repeat(4000),
+      origin: 'turn_end', sequenceId: 'settle:msg-1', mode: 'build',
+    }, 12);
+
+    expect(result).toEqual({ id: '', disposition: 'not_awaited' });
+    expect(await filesIn(scene.vfs)).toEqual([]);
+    expect(scene.seen).toEqual([]);
+    expect(scene.log.pending({ variant: 'subagent_report' })).toEqual([]);
+  });
+
+  test('a report from a subagent this parent does not have is not awaited, not admitted', async () => {
+    const scene = parentScene();
+    // An unknown name is a forgotten decision, not a delivery failure: throwing made the child retry forever.
+    expect(await receiveSubagentEvent(scene.deps, {
+      fromSubagent: 'ghost', status: 'progress', content: 'hello',
+      origin: 'report_tool', sequenceId: 'settle:msg-1', mode: 'build',
+    }, 13)).toEqual({ id: '', disposition: 'not_awaited' });
+    expect(await filesIn(scene.vfs)).toEqual([]);
+    expect(scene.log.pending({ variant: 'subagent_report' })).toEqual([]);
+  });
+
+  // A report is replayed until the parent holds it; the sequence is the dedupe key.
+  test('one sequence delivered twice wakes the parent once, and says the second was already held', async () => {
+    const scene = parentScene();
+
+    const deliver = () => receiveSubagentEvent(scene.deps, {
+      fromSubagent: 'researcher', status: 'completed', content: 'Market mapped.',
+      origin: 'turn_end', sequenceId: 'settle:msg-1', mode: 'build',
+    }, 20);
+
+    const first = await deliver();
+    const replay = await deliver();
+
+    expect(first.disposition).toBe('admitted');
+    expect(replay).toEqual({ id: first.id, disposition: 'already_held' });
+    expect(scene.log.pending({ variant: 'subagent_report' })).toHaveLength(1);
+    expect(scene.seen).toEqual(['transaction', 'announce', 'drain']);
+    expect(scene.announced).toHaveLength(1);
+  });
+
+  test('two sequences from one subagent are two parent events', async () => {
+    const scene = parentScene();
+
+    const deliver = (sequenceId: string, content: string) =>
+      receiveSubagentEvent(scene.deps, {
+        fromSubagent: 'researcher', status: 'progress', content,
+        origin: 'turn_end', sequenceId, mode: 'build',
+      }, 20);
+
+    expect((await deliver('settle:msg-1', 'Mapped 8 so far.')).disposition).toBe('admitted');
+    expect((await deliver('settle:msg-2', 'Mapped 14 now.')).disposition).toBe('admitted');
+
+    expect(scene.log.pending({ variant: 'subagent_report' }).map((e) => reportPayload(e).content))
+      .toEqual(['Mapped 8 so far.', 'Mapped 14 now.']);
+  });
+
+  // The mode travels with the report: a cold replay outlives the child's turn metadata.
+  test('the report carries the mode its sender stated', async () => {
+    const scene = parentScene();
+    await receiveSubagentEvent(scene.deps, {
+      fromSubagent: 'researcher', status: 'progress', content: 'Three options, no code yet.',
+      origin: 'turn_end', sequenceId: 'settle:msg-1', mode: 'plan',
+    }, 20);
+
+    const event = scene.log.pending({ variant: 'subagent_report' })[0];
+    expect(reportPayload(event).kinu_mode).toBe('plan');
+    expect(reportPayload(event).sequence_id).toBe('settle:msg-1');
+  });
+});
+
+/** The full report spine in production order: the tool's schema strips unnamed fields, so a dropped handoff only shows end to end. */
+describe('the structured handoff a report carries', () => {
+  function childReportingTo(scene: ParentScene): ReportDeps {
+    return {
+      report: async ({ status, content, handoff }) => {
+        const relayed = await receiveSubagentEvent(scene.deps, {
+          fromSubagent: 'researcher', status, content, handoff,
+          origin: 'report_tool', sequenceId: `settle:${content.length}`, mode: 'build',
+        }, 30);
+
+        return { disposition: relayed.disposition };
+      },
+    };
+  }
+
+  /** Checked by the operation's own schema, as every caller's input is. */
+  async function send(deps: ReportDeps, input: JsonObject): Promise<JsonValue> {
+    return (await serveReport(() => deps).run(input, { callId: 'report-1' })).value;
+  }
+
+  function reportOn(scene: ParentScene): SubagentReportPayload {
+    return reportPayload(scene.log.pending({ variant: 'subagent_report' })[0]);
+  }
+
+  test('what the child stated is on the parent’s event AND in the brief the parent reads', async () => {
+    const scene = parentScene();
+
+    await send(childReportingTo(scene), {
+      status: 'completed',
+      content: 'Rate limiter landed behind the existing flag.',
+      concerns: ['  the 429 budget is a guess — no production trace to size it from ', '  '],
+      findings: ['the gateway already limits per-account, so per-IP double-counts'],
+    });
+
+    expect(reportOn(scene)).toMatchObject({
+      concerns: ['the 429 budget is a guess — no production trace to size it from'],
+      findings: ['the gateway already limits per-account, so per-IP double-counts'],
+    });
+    expect(renderForLLM(scene.log.pending({ variant: 'subagent_report' })[0]).brief).toBe(
+      'completed [re: Map the market.]: Rate limiter landed behind the existing flag.'
+      + '\nconcerns:\n  - the 429 budget is a guess — no production trace to size it from'
+      + '\nfindings:\n  - the gateway already limits per-account, so per-IP double-counts',
+    );
+  });
+
+  test('a report that states only status and content delivers exactly what it always did', async () => {
+    const scene = parentScene();
+
+    await send(childReportingTo(scene), {
+      status: 'progress', content: 'Mapped 8 of the 14 so far.',
+    });
+
+    const payload = reportOn(scene);
+    // An optional field is absent when unused, not an empty list.
+    expect(payload.concerns).toBeUndefined();
+    expect(payload.open_work).toBeUndefined();
+    expect(renderForLLM(scene.log.pending({ variant: 'subagent_report' })[0]).brief)
+      .toBe('progress [re: Map the market.]: Mapped 8 of the 14 so far.');
+  });
+
+  test('a handoff over the shared budget is refused in words, and nothing reaches the parent', async () => {
+    const scene = parentScene();
+
+    // Refused rather than truncated: the handoff has no spill file.
+    const oversize = send(childReportingTo(scene), {
+      status: 'completed',
+      content: 'Done.',
+      open_work: [`x`.repeat(SUBAGENT_REPORT_HANDOFF_MAX_CHARS + 1)],
+    });
+
+    await expect(oversize).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(oversize).rejects.toThrow(`${SUBAGENT_REPORT_HANDOFF_MAX_CHARS}-character budget`);
+    expect(scene.log.pending({ variant: 'subagent_report' })).toEqual([]);
+  });
+
+  test('a destination that reads only the body is offered no handoff, and is handed none', async () => {
+    const scene = parentScene();
+    const bodyOnlyDestination = { ...childReportingTo(scene), bodyOnly: true } satisfies ReportDeps;
+
+    await send(bodyOnlyDestination, {
+      status: 'completed', content: 'Candidate submitted.',
+      concerns: ['this should not travel to a destination that never declared it'],
+    });
+
+    expect(reportOn(scene).concerns).toBeUndefined();
+  });
+});
+
+/** The delegation runner. B10: one assignment row, one runner, one turn. */

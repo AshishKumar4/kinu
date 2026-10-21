@@ -1,6 +1,6 @@
 import { jsonSchema, tool } from 'ai';
 import {
-  CRAFTED_TOOL_NAMESPACE, KINU_NODE_MODULE_SOURCE, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
+  CRAFTED_TOOL_NAMESPACE, KINU_NODE_MODULE_SOURCE, codemodeFunction, programSurface, renderCraftedDefinitions,
   type CodemodeBuilder,
 } from '../src/index';
 import { renderThrownChain } from '../src/obs';
@@ -13,14 +13,15 @@ const kinuNode: Promise<unknown> = import(`data:text/javascript;base64,${Buffer.
  * surface's crafted tools are defined in the program's own scope.
  */
 export function programCodemode(): CodemodeBuilder {
-  return (surface) => tool({
+  return (surface, reach) => tool({
     description: 'a program over the surface',
     inputSchema: jsonSchema<{ code: string }>({ type: 'object', properties: { code: { type: 'string' } }, required: ['code'] }),
     execute: async ({ code }) => {
       try {
         const crafted = surface.craftedTools();
+        const { providers } = programSurface({ surface, namespaces: [], reach, mode: 'build', signal: undefined, crafted });
 
-        const tools = Object.fromEntries(Object.entries(craftedFailureFunctions(crafted))
+        const tools = Object.fromEntries(Object.entries(providers.find((provider) => provider.name === CRAFTED_TOOL_NAMESPACE)?.tools ?? {})
           .map(([name, entry]) => [name, codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, entry.execute)]));
 
         const run = new Function('__kinu', CRAFTED_TOOL_NAMESPACE, 'workspace', `${renderCraftedDefinitions(crafted)}\nreturn (async () => {\n${code}\n})();`);

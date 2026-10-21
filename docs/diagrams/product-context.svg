@@ -75,7 +75,7 @@
 </text>
 <text x="68" y="875" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
 <tspan x="68" dy="0">Context, history and loop revisions</tspan>
-<tspan x="68" dy="30">Main and authorized subordinate views</tspan>
+<tspan x="68" dy="30">Main and authorized subagent views</tspan>
 </text>
 </g>
 <path d="M320 940 V974" fill="none" stroke="#8A7B66" stroke-width="2" marker-end="url(#context-arrow)" />

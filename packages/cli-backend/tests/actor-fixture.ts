@@ -73,7 +73,7 @@ export function fixtureRunSources(
       runtime: { backend: 'cli-local', model: { id: profile.tier.model }, date: '2026-01-01' },
       memoryTail,
       missingCapabilities: [],
-      subordinateDelegates: () => [],
+      subagentDelegates: () => [],
       approvals: () => ({ items: [], total: 0 }),
     }),
     operation: (profile, profileInputs) => captureOperationProfile({ actor: actor.handle, profile, inputs: profileInputs, runId, turnId: null }),

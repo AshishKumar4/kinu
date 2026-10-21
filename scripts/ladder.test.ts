@@ -428,6 +428,7 @@ describe('the ladder measures something', () => {
       'Eval framework logic',
       'Gate self-tests: secrets, corpus, preflight',
       'Live and first-run suites, credential-free',
+      'Live app in a browser: a connect through the Worker',
       'Live app in a browser: a long chat and its plans',
       'Live app in a browser: a page that loses the turn',
       'Live app in a browser: a running turn',

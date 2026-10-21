@@ -1,6 +1,6 @@
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * Every facet kind (subordinate, head, swarm node) gets a home: owned inodes, a private `/tmp`,
+ * Every facet kind (subagent, head, swarm node) gets a home: owned inodes, a private `/tmp`,
  * and a readable window for grading and merge-back, on both the file and shell planes.
  */
 import { describe, expect, test } from 'bun:test';
@@ -72,7 +72,7 @@ describe('facet agent names share one namespace without colliding', () => {
   });
 });
 
-describe('a subordinate and a head provision like a node', () => {
+describe('a subagent and a head provision like a node', () => {
   test('own-home writes pass, siblings are refused, hardcoded /tmp stays private', async () => {
     const database = new Database(':memory:');
 

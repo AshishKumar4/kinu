@@ -226,7 +226,9 @@ export function partInput(part: AnyToolPart): JsonObject | undefined {
 }
 
 export function partEffect(part: AnyToolPart) {
-  return toolCallEffect(getToolName(part), partInput(part));
+  const answered = part.state === 'output-error' ? part.errorText : partOutput(part);
+
+  return toolCallEffect(getToolName(part), partInput(part), part.state === 'output-available' || part.state === 'output-error' ? { toolCallId: part.toolCallId, output: answered } : undefined);
 }
 
 function partFailed(part: AnyToolPart): boolean {
