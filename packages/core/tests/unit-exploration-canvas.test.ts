@@ -71,7 +71,7 @@ function seedSplit(db: Database, actorId: string, run: {
   }
 
   if (run.merged) {
-    db.query(`INSERT INTO head_merge_results (actor_id, root_id, merged_narrative) VALUES (?, ?, 'merged')`)
+    db.query(`UPDATE head_runs SET merged_narrative = 'merged' WHERE actor_id = ? AND root_id = ?`)
       .run(actorId, run.rootId);
   }
 }

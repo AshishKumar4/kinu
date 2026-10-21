@@ -116,7 +116,6 @@ export function writeSlateBatch(input: {
   readonly marks: SlateLiveShareStore;
   readonly slate: string;
   readonly editor: string;
-  readonly revision: string | null;
 }): SlateFileBatch {
   const change = Effect.gen(function* () {
     const parsed = v.safeParse(SlateFileChangeSchema, input.files);
@@ -154,7 +153,7 @@ export function writeSlateBatch(input: {
     }
 
     const tree = yield* treeFingerprint(files, input.root);
-    input.marks.markEdit(input.slate, input.editor, input.revision);
+    input.marks.markEdit(input.slate, input.editor);
 
     return { paths, wrote, before, markBefore, tree };
   });

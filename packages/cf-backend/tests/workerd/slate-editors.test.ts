@@ -118,7 +118,6 @@ it('the latest editor batch fences approval of the first build while the second 
   const seen = await probe.editorFence(true);
 
   expect(seen.pending).toContain("sam's change is still building; approve once it has built");
-  expect(seen.revisionBefore).toBe('r1');
   expect(seen.afterPendingMode).toBe('own');
   expect(seen.approved).toBe(true);
   expect(seen.cleared).toBe(true);

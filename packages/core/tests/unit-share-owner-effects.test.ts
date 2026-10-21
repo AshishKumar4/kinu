@@ -9,7 +9,7 @@ import { createTestActors } from '@kinu.run/test-utils';
 import { initSlateLiveShareTables, SlateLiveShareStore } from '../src/slates/live-shares';
 import { SlateShareViewers } from '../src/slates/share-viewers';
 import { SharedServers, type SharedServerDeps } from '../src/slates/shared-server';
-import { approvalKindOf, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable } from '../src/index';
+import { approvalKindOf, DeferredApprovalQueue, DeferredApprovalStore, initOwnerRequestsTable } from '../src/index';
 import { preapproveSlateEffect } from '../src/slates/live-sharing';
 import { settle } from '../src/obs/effect';
 import type { ShareGrant } from '../src/slates/sharing';
@@ -36,7 +36,7 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
   const execRaw = makeExecRaw(db);
 
   initSlateLiveShareTables(execRaw);
-  initDeferredApprovalsTable(execRaw);
+  initOwnerRequestsTable(execRaw);
   const live = new SlateLiveShareStore(makeSqlExec(db));
   const sql = makeSql(db);
 
@@ -369,7 +369,7 @@ test("'Always' on a call another slate made names that caller, on the shared sla
 test("R3-P1 pending edit. while an editor's change awaits review, the owner share lends nothing and says whose change it is", async () => {
   const { live, servers, call } = world('owner');
 
-  live.markEdit('board', 'pat@example.test', 'rev-1');
+  live.markEdit('board', 'pat@example.test');
   expect(live.authoritiesOf('board')).toMatchObject([{ mode: 'owner', grantRevision: null, editedBy: 'pat@example.test' }]);
   expect(servers.authorityOf('board')).toEqual({ kind: 'none' });
   await expect(call('fs.text')).rejects.toThrow("pat@example.test's change to slate board is awaiting Sam's review");

@@ -16,7 +16,7 @@ it('a workspace behind its stamp resets itself as it constructs, and serves', as
 
   expect(await probe.plantOlderWorkspace(workspace, 'stale')).toContain('the older stamp is planted');
   expect((await probe.seed(workspace)).status).toBe(200);
-  expect(await probe.walked(workspace)).toMatchObject({ refused: null, dropped: expect.arrayContaining(['turn_struggles']) });
+  expect(await probe.walked(workspace)).toMatchObject({ refused: null, dropped: expect.arrayContaining(['tool_lessons']) });
   expect(await probe.exported(workspace)).toMatch(/^\d+ line\(s\)$/u);
 });
 
@@ -34,10 +34,10 @@ it('a workspace whose reset refuses answers every call with one message that say
   const chat = await probe.chat(workspace);
 
   expect(JSON.parse(chat.connected)).toMatchObject({ reason: 'unavailable', body: expect.stringContaining(REFUSED) });
-  expect(JSON.parse(chat.answered)).toMatchObject({ id: 'refused-send', body: expect.stringContaining('idx_turn_struggles_actor') });
+  expect(JSON.parse(chat.answered)).toMatchObject({ id: 'refused-send', body: expect.stringContaining('idx_tool_lessons_actor') });
   expect(await probe.wake(workspace)).toBe('returned');
   expect(await probe.exported(workspace)).toContain(REFUSED);
-  expect(await probe.walked(workspace)).toMatchObject({ refused: expect.stringContaining('idx_turn_struggles_actor'), agents: [] });
+  expect(await probe.walked(workspace)).toMatchObject({ refused: expect.stringContaining('idx_tool_lessons_actor'), agents: [] });
 });
 
 it('a changed table is dropped on a Durable Object with what refers to it, and every other table kept byte for byte', async () => {

@@ -1091,7 +1091,7 @@ test("a slate's standing approvals are its owner's to list and take back, from e
 
   // As an owner's "Always for this slate" leaves its owner shares (the decision is the queue's): seeded in their rows.
   for (const { share } of made) {
-    world.owner.db.query("UPDATE slate_live_shares SET mode = 'owner', grant_revision = 'rev-1', grant_json = ? WHERE id = ?")
+    world.owner.db.query("UPDATE slate_shares SET mode = 'owner', grant_revision = 'rev-1', grant_json = ? WHERE id = ?")
       .run(JSON.stringify({ ...share.grant, preapproved: [{ ...create, revision: 'rev-1' }] }), share.id);
   }
 

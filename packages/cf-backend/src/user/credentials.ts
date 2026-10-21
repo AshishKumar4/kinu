@@ -305,7 +305,7 @@ export class UserCredentials {
 
   private credentialsRevision(): number {
     const row = v.safeParse(v.object({ revision: v.number() }), this.host.sqlx(
-      `SELECT revision FROM user_credentials_revision WHERE id = 1`,
+      `SELECT COALESCE(credentials_revision, 0) AS revision FROM account_epochs WHERE id = 1`,
     )[0]);
 
     return row.success ? row.output.revision : 0;
@@ -342,7 +342,8 @@ export class UserCredentials {
   }
 
   bumpCredentialsRevision(): void {
-    this.host.sqlx(`INSERT INTO user_credentials_revision (id, revision) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET revision = revision + 1`);
+    this.host.sqlx(`INSERT INTO account_epochs (id, credentials_revision) VALUES (1, 1)
+      ON CONFLICT(id) DO UPDATE SET credentials_revision = COALESCE(credentials_revision, 0) + 1`);
   }
 
   /**

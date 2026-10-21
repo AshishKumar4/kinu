@@ -92,7 +92,7 @@ function workspace(): Workspace {
     EMAIL_DOMAIN,
     MAILNAME: {
       idFromName: (label: string) => label,
-      get: () => ({ lookup: () => Promise.resolve({ label: 'owner', user_id: 'u-owner', kind: 'username', target_path: null, state: 'active' }) }),
+      get: () => ({ lookup: () => Promise.resolve({ label: 'owner', user_id: 'u-owner', kind: 'username', target_path: null }) }),
     },
     MAILBOX: { idFromName: (userId: string) => userId, get: () => ({ deliver: (input: Parameters<MailStore['deliver']>[0]) => mailbox.deliver(input) }) },
     WEBHOOK_ROUTE_SECRET: ROUTE_SECRET,

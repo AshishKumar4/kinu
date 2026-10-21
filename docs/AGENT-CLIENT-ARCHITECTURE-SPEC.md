@@ -105,7 +105,7 @@ wss://origin/agents/orchestrator-agent/:name?ticket=pat_...
 `UserDO.issueCliAgentConnectTicket` mints the ticket and
 `UserDO.verifyCliAgentConnectTicket` consumes it
 (`packages/cf-backend/src/user/user-do.ts`). The ticket is stored as a SHA-256
-hash in `cli_agent_connect_tickets` (`packages/core/src/state/user-schema.ts`).
+hash in `connection_tickets`, purpose `cli_agent_connect` (`packages/core/src/state/user-schema.ts`).
 It lives 60 seconds (`TICKET_TTL_MS`, `single-use-tickets.ts`), works once, and is
 scoped to user id, agent class, agent name and the `agent.websocket`
 capability. Reuse, a wrong user or a wrong agent fails. Minting needs the

@@ -253,7 +253,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     expect(turn.feedback).toBeNull();
     expect(listTurnRatings(headless.rt.storage.sql, headless.rt.actor)).toEqual([]);
     expect(headless.rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM crafted_tools`[0]?.n).toBe(0);
-    expect(headless.rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM pattern_extractions`[0]?.n).toBe(0);
+    expect(headless.rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM prepared_outputs`[0]?.n).toBe(0);
 
     const asked = createTestRuntime({ llmResponses: { 'Extract a reusable pattern': pattern } });
     ratedAs(asked.rt, 'accepted');

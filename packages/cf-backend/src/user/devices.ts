@@ -206,8 +206,8 @@ export class UserDevices {
   private readonly joinTickets: SingleUseTickets<DeviceJoin>;
 
   constructor(private readonly host: UserDevicesHost) {
-    this.connectTickets = new SingleUseTickets(host.sqlx.bind(host), 'device_connect_tickets', ['device_id', 'token_was_current']);
-    this.joinTickets = new SingleUseTickets(host.sqlx.bind(host), 'device_joins', ['device_id', 'workspace'], DEVICE_JOIN_TTL_MS);
+    this.connectTickets = new SingleUseTickets(host.sqlx.bind(host), 'device_connect', ['device_id', 'token_was_current']);
+    this.joinTickets = new SingleUseTickets(host.sqlx.bind(host), 'device_join', ['device_id', 'workspace'], DEVICE_JOIN_TTL_MS);
     this._devices = new DeviceSocketHub(host.ctx);
     this._inflight = new DeviceRequestLedger(host.ctx.storage.sql);
   }
@@ -341,7 +341,7 @@ export class UserDevices {
           SET os = ?, hostname = ?, last_seen_at = ?,
               consented_root = ?, device_home = ?, agent_root = ?,
               sandbox_capability = ?, sandbox_reason = ?, sandbox_detail = ?, sandbox_gpu = ?,
-              version = ?, update_check = ?
+              version = ?, update_check = ?, protocol_refused = 0
         WHERE id = ?`,
       hello.os,
       hello.hostname.length <= HOSTNAME_MAX_LENGTH ? hello.hostname : null,
@@ -359,9 +359,11 @@ export class UserDevices {
       deviceId,
     );
     this._devices.holdDesktop(deviceId, desktopFromHello(deviceId, hello.desktop));
-    this.host.sqlx(`DELETE FROM user_device_update_refusals WHERE device_id = ? AND runtime <> ?`, deviceId, hello.runtime);
-
-    this.host.sqlx(`DELETE FROM user_device_protocol_refusals WHERE device_id = ?`, deviceId);
+    this.host.sqlx(
+      `UPDATE user_devices SET update_refused_version = NULL, update_refused_runtime = NULL, update_refusal_reason = NULL
+        WHERE id = ? AND update_refused_runtime <> ?`,
+      deviceId, hello.runtime,
+    );
   }
 
   /** Null when the deploy published no stamp or names no public origin. Read per call: the stamp changes with every
@@ -396,12 +398,12 @@ export class UserDevices {
     const stamp = remembered.success ? remembered.output : null;
     const served = stamp?.version ?? null;
 
-    const [refusal] = this.host.sqlx<{ version: string }>(
-      `SELECT version FROM user_device_update_refusals WHERE device_id = ?`, deviceId,
+    const [refusal] = this.host.sqlx<{ update_refused_version: string | null }>(
+      `SELECT update_refused_version FROM user_devices WHERE id = ?`, deviceId,
     );
 
     const state = deviceUpdateState({
-      version: hello.version ?? null, updateCheck: hello.updateCheck, refusedVersion: refusal?.version,
+      version: hello.version ?? null, updateCheck: hello.updateCheck, refusedVersion: refusal?.update_refused_version ?? undefined,
     }, served);
 
     if (state !== 'behind' || served === null || stamp === null) return null;
@@ -494,7 +496,8 @@ export class UserDevices {
   private claimDeviceJoin(deviceId: string): Effect.Effect<DeviceJoin, KinuError> {
     return Effect.suspend(() => {
       const [claimed] = this.host.sqlx<{ device_id: string; workspace: string | null }>(
-        `DELETE FROM device_joins WHERE device_id = ? AND expires_at > ? RETURNING device_id, workspace`, deviceId, Date.now(),
+        `DELETE FROM connection_tickets WHERE purpose = 'device_join' AND device_id = ? AND expires_at > ? RETURNING device_id, workspace`,
+        deviceId, Date.now(),
       );
 
       return claimed === undefined ? Effect.fail(new KinuError('bad_input', DEVICE_JOIN_SPENT)) : Effect.succeed(claimed);
@@ -584,14 +587,8 @@ export class UserDevices {
 
     if (!verified.ok || !verified.deviceId) return false;
     this.host.sqlx(
-      `INSERT INTO user_device_update_refusals (device_id, version, runtime, reason, refused_at)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(device_id) DO UPDATE SET
-           version = excluded.version,
-           runtime = excluded.runtime,
-           reason = excluded.reason,
-           refused_at = excluded.refused_at`,
-      verified.deviceId, refusal.version, refusal.runtime, refusal.reason, Date.now(),
+      `UPDATE user_devices SET update_refused_version = ?, update_refused_runtime = ?, update_refusal_reason = ? WHERE id = ?`,
+      refusal.version, refusal.runtime, refusal.reason, verified.deviceId,
     );
     diagnostics.event('device.update_refused', {
       device: verified.deviceId, version: refusal.version, runtime: refusal.runtime, reason: refusal.reason,
@@ -1243,16 +1240,13 @@ export class UserDevices {
       replaced_at: number | null;
       revoked_at: number | null; unstopped_at: number | null; reuse_detected_at: number | null;
       tier: string | null; version: string | null; update_check: number | null; consented_root: string | null;
-      refused_version: string | null; refusal_reason: string | null; protocol_refused: string | null;
+      update_refused_version: string | null; update_refusal_reason: string | null; protocol_refused: number;
     }>(`SELECT d.id, d.label, d.os, d.hostname, d.created_at, d.last_seen_at, d.expires_at,
                d.replaced_at, d.revoked_at, d.unstopped_at, x.reuse_detected_at,
                d.consented_root,
                d.tier, d.sandbox_capability, d.sandbox_reason, d.sandbox_detail, d.sandbox_gpu,
-               d.version, d.update_check, f.version AS refused_version, f.reason AS refusal_reason,
-               p.device_id AS protocol_refused
+               d.version, d.update_check, d.update_refused_version, d.update_refusal_reason, d.protocol_refused
           FROM user_devices d
-          LEFT JOIN user_device_update_refusals f ON f.device_id = d.id
-          LEFT JOIN user_device_protocol_refusals p ON p.device_id = d.id
           LEFT JOIN (SELECT device_id, MAX(reuse_detected_at) AS reuse_detected_at
                        FROM user_device_retired_tokens WHERE reuse_detected_at IS NOT NULL
                       GROUP BY device_id) x ON x.device_id = d.id
@@ -1260,7 +1254,7 @@ export class UserDevices {
          ORDER BY d.created_at DESC`)
       .map((r) => {
         const update = deviceUpdateState({
-          version: r.version, updateCheck: r.update_check !== 0, refusedVersion: r.refused_version, protocolRefused: r.protocol_refused !== null,
+          version: r.version, updateCheck: r.update_check !== 0, refusedVersion: r.update_refused_version, protocolRefused: r.protocol_refused === 1,
         }, served);
 
         return {
@@ -1275,7 +1269,7 @@ export class UserDevices {
           version: r.version,
           servedVersion: served,
           update,
-          updateRefusal: update === 'refused' ? r.refusal_reason : null,
+          updateRefusal: update === 'refused' ? r.update_refusal_reason : null,
         };
       });
   }

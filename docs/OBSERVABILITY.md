@@ -154,7 +154,7 @@ partial-snapshot ledger readers are not supported.
   every read.
 
 Retention, measured in source on 2026-09-26: nothing prunes `run_events`,
-`session_messages`, `request_renders` or the turn claims by age. They are
+`session_messages`, `actor_requests` or the turn claims by age. They are
 removed when the workspace is removed (`destroyAgent`, then `deleteAll`) or
 when an actor is retired with `destroy` (`purgeActorRows`). Clearing a chat
 removes the visible conversation only, not the model's history. This read

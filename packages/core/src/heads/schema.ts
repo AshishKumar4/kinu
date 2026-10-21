@@ -53,21 +53,15 @@ const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal (
   PRIMARY KEY (actor_id, id)
 )`;
 
-/** The merged narrative of a settled top-level run, keyed by root_id. */
-const HEAD_MERGE_RESULTS_DDL = `CREATE TABLE IF NOT EXISTS head_merge_results (
-  actor_id TEXT NOT NULL,
-  root_id TEXT NOT NULL,
-  merged_narrative TEXT NOT NULL,
-  PRIMARY KEY (actor_id, root_id)
-)`;
-
 export function initHeadsTables(execRaw: RawSqlExec): void {
-  // One row per split, anchoring top-level runs whose heads all have a NULL parent_id.
+  // One row per split, anchoring top-level runs whose heads all have a NULL parent_id. `merged_narrative` is the run's
+  // cached merge, which settles it: null until then, and an empty narrative is a merge.
   execRaw(`CREATE TABLE IF NOT EXISTS head_runs (
     actor_id TEXT NOT NULL,
     root_id TEXT NOT NULL,
     rationale TEXT,
     spawned_at INTEGER NOT NULL,
+    merged_narrative TEXT,
     PRIMARY KEY (actor_id, root_id)
   )`);
 
@@ -88,7 +82,4 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
     created_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, head_id, seq)
   )`);
-
-  execRaw(HEAD_MERGE_RESULTS_DDL);
-
 }

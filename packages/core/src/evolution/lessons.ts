@@ -36,14 +36,6 @@ export function initLessonTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS lessons ${LESSONS_DDL}`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_lessons_actor
              ON lessons(actor_id, created_at DESC)`);
-  // The generated pattern, held so a replay applies what was decided rather than
-  // re-asking a model. Retired once its tombstone lands.
-  execRaw(`CREATE TABLE IF NOT EXISTS pattern_extractions (
-    actor_id   TEXT NOT NULL,
-    effect_key TEXT NOT NULL,
-    answer     TEXT NOT NULL,
-    PRIMARY KEY (actor_id, effect_key)
-  )`);
 }
 
 export interface LessonRow {

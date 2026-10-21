@@ -1,26 +1,48 @@
 import { markStoreChanged } from '@kinu.run/agent-utils';
-/** A blueprint exists exactly while its row stands unrevoked; every read asks this table again (S6). */
+/** A share exists exactly while its row stands unrevoked; every read asks this table again (S6). */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
-import type { SlateShareRecord } from './sharing';
+import { SHARE_KINDS, type ShareKind, type SlateShareRecord } from './sharing';
+import { sqlCheckList } from '../identity/schema';
 
 export function initSlateShareTables(execRaw: RawSqlExec): void {
+  // One id for every share of either kind, so a revoke, a card or a job that names a share by id names one. A blueprint
+  // holds its `publication_id`, whose materialization is what it includes. A live share holds the rest:
+  // - `mode` is whose access a viewer's calls act with (docs/SLATE-SHARING-NIMBUS.md §2): `own`, their own; `owner`, the
+  //   owner's, approved for the one revision `grant_revision` names.
+  // - `listing_*` are the Gallery card's words its owner wrote, while it is listed: the Gallery's index is their copy
+  //   (gallery.ts), and only an `own` share is ever listed. The categories are gallery-api.ts `GALLERY_CATEGORIES`.
   execRaw(`CREATE TABLE IF NOT EXISTS slate_shares (
-    id TEXT PRIMARY KEY, slate_id TEXT NOT NULL, publication_id TEXT NOT NULL, included_paths TEXT NOT NULL,
-    created_at INTEGER NOT NULL, revoked_at INTEGER
+    id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN (${sqlCheckList(SHARE_KINDS)})), slate_id TEXT NOT NULL,
+    created_at INTEGER NOT NULL, revoked_at INTEGER,
+    publication_id TEXT,
+    visibility TEXT CHECK (visibility IN ('users', 'public')), handle TEXT UNIQUE, grant_json TEXT,
+    mode TEXT CHECK (mode IN ('own', 'owner')), grant_revision TEXT,
+    listing_line TEXT,
+    listing_category TEXT CHECK (listing_category IS NULL OR listing_category IN ('work', 'money', 'home', 'developer', 'fun')),
+    CHECK ((kind = 'blueprint' AND publication_id IS NOT NULL AND visibility IS NULL AND handle IS NULL AND grant_json IS NULL
+        AND mode IS NULL AND grant_revision IS NULL AND listing_line IS NULL AND listing_category IS NULL)
+      OR (kind = 'live' AND publication_id IS NULL AND visibility IS NOT NULL AND handle IS NOT NULL AND grant_json IS NOT NULL
+        AND mode IS NOT NULL)),
+    CHECK ((mode = 'owner') = (grant_revision IS NOT NULL)),
+    CHECK ((listing_line IS NULL) = (listing_category IS NULL)),
+    CHECK (listing_line IS NULL OR mode = 'own')
   )`);
+  // The people a share is given to. `role`, a live share's: `use`, the slate as it is; `edit`, its files too
+  // (docs/SLATE-SHARING-NIMBUS.md §2), written in this workspace and built from the slate's own tree. A blueprint's
+  // people use it.
   execRaw(`CREATE TABLE IF NOT EXISTS slate_share_users (
-    share_id TEXT NOT NULL REFERENCES slate_shares(id), user_id TEXT NOT NULL, email TEXT NOT NULL,
-    created_at INTEGER NOT NULL, PRIMARY KEY (share_id, user_id)
+    share_id TEXT NOT NULL REFERENCES slate_shares(id), user_id TEXT NOT NULL, email TEXT NOT NULL, created_at INTEGER NOT NULL,
+    role TEXT NOT NULL DEFAULT 'use' CHECK (role IN ('use', 'edit')),
+    PRIMARY KEY (share_id, user_id)
   )`);
 }
 
 const ShareRow = v.object({
-  id: v.string(), slate_id: v.string(), publication_id: v.string(),
-  included_paths: v.string(), created_at: v.number(), revoked_at: v.nullable(v.number()),
+  id: v.string(), slate_id: v.string(), publication_id: v.string(), created_at: v.number(), revoked_at: v.nullable(v.number()),
 });
 
 const UserRow = v.object({ share_id: v.string(), email: v.string() });
@@ -28,8 +50,7 @@ const UserRow = v.object({ share_id: v.string(), email: v.string() });
 type UserRowOf = v.InferOutput<typeof UserRow>;
 
 export interface ShareTable<Row, Rec> {
-  readonly shares: string;
-  readonly users: string;
+  readonly kind: ShareKind;
   readonly row: v.GenericSchema<unknown, Row>;
   readonly missing: string;
   readonly revoked: string;
@@ -45,7 +66,7 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
 
   /** The row, revoked or not. Callers that serve a viewer use `live`. */
   get(id: string): Rec | undefined {
-    const row = this.db.exec(`SELECT * FROM ${this.table.shares} WHERE id = ?`, id).toArray()[0];
+    const row = this.db.exec('SELECT * FROM slate_shares WHERE id = ? AND kind = ?', id, this.table.kind).toArray()[0];
 
     return row === undefined ? undefined : this.record(v.parse(this.table.row, row), this.users([id]));
   }
@@ -62,7 +83,7 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
   }
 
   list(): Rec[] {
-    const rows = this.db.exec(`SELECT * FROM ${this.table.shares} ORDER BY created_at DESC, id`).toArray()
+    const rows = this.db.exec('SELECT * FROM slate_shares WHERE kind = ? ORDER BY created_at DESC, id', this.table.kind).toArray()
       .map((row) => v.parse(this.table.row, row));
 
     const users = this.users(rows.map((row) => row.id));
@@ -78,7 +99,7 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
 
       if (share.revokedAt !== null) return Effect.succeed(share);
       const revokedAt = this.now();
-      this.db.exec(`UPDATE ${this.table.shares} SET revoked_at = ? WHERE id = ?`, revokedAt, id);
+      this.db.exec('UPDATE slate_shares SET revoked_at = ? WHERE id = ?', revokedAt, id);
       markStoreChanged(this.db);
 
       // Read back, as every record is: what a revoke ends (a live share's listing) is the row's to say.
@@ -92,7 +113,7 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
 
     for (const user of users) {
       this.db.exec(
-        `INSERT INTO ${this.table.users} (share_id, user_id, email, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (share_id, user_id) DO NOTHING`,
+        'INSERT INTO slate_share_users (share_id, user_id, email, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (share_id, user_id) DO NOTHING',
         id, user.userId, user.email, createdAt,
       );
       markStoreChanged(this.db);
@@ -105,7 +126,7 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
     if (ids.length === 0) return [];
     const placeholders = ids.map(() => '?').join(', ');
 
-    return this.db.exec(`SELECT share_id, email FROM ${this.table.users} WHERE share_id IN (${placeholders}) ORDER BY created_at, email`, ...ids)
+    return this.db.exec(`SELECT share_id, email FROM slate_share_users WHERE share_id IN (${placeholders}) ORDER BY created_at, email`, ...ids)
       .toArray().map((row) => v.parse(UserRow, row));
   }
 
@@ -115,15 +136,12 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
 }
 
 const BLUEPRINT_SHARES: ShareTable<v.InferOutput<typeof ShareRow>, SlateShareRecord> = {
-  shares: 'slate_shares',
-  users: 'slate_share_users',
+  kind: 'blueprint',
   row: ShareRow,
   missing: 'No such blueprint',
   revoked: 'This blueprint is no longer shared',
   record: (row, users) => ({
-    id: row.id, slate: row.slate_id, publication: row.publication_id,
-    included: v.parse(v.array(v.string()), JSON.parse(row.included_paths)),
-    createdAt: row.created_at, revokedAt: row.revoked_at, users,
+    id: row.id, slate: row.slate_id, publication: row.publication_id, createdAt: row.created_at, revokedAt: row.revoked_at, users,
   }),
 };
 
@@ -138,7 +156,6 @@ export interface NewSlateShare {
   readonly id: string;
   readonly slate: string;
   readonly publication: string;
-  readonly included: readonly string[];
 }
 
 export class SlateShareStore extends ShareStore<v.InferOutput<typeof ShareRow>, SlateShareRecord> {
@@ -149,11 +166,11 @@ export class SlateShareStore extends ShareStore<v.InferOutput<typeof ShareRow>, 
   add(share: NewSlateShare): SlateShareRecord {
     const createdAt = this.now();
     this.db.exec(
-      'INSERT INTO slate_shares (id, slate_id, publication_id, included_paths, created_at, revoked_at) VALUES (?, ?, ?, ?, ?, NULL)',
-      share.id, share.slate, share.publication, JSON.stringify(share.included), createdAt,
+      "INSERT INTO slate_shares (id, kind, slate_id, publication_id, created_at) VALUES (?, 'blueprint', ?, ?, ?)",
+      share.id, share.slate, share.publication, createdAt,
     );
     markStoreChanged(this.db);
 
-    return { id: share.id, slate: share.slate, publication: share.publication, included: [...share.included], createdAt, revokedAt: null, users: [] };
+    return { id: share.id, slate: share.slate, publication: share.publication, createdAt, revokedAt: null, users: [] };
   }
 }

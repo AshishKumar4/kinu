@@ -2,7 +2,7 @@
 import * as v from "valibot";
 import { Effect } from "effect";
 import { KinuError, settle } from "@kinu.run/core/obs";
-import { MAIL_BOX_KINDS, MAIL_WAKES, type MailBox, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing, type MailThreadSummary, type MailThreadView } from "@kinu.run/core";
+import { MAIL_BOX_KINDS, MAIL_SEND_STATES, MAIL_WAKES, type MailBox, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing, type MailThreadSummary, type MailThreadView } from "@kinu.run/core";
 import { request } from "./http";
 
 const ImportantMailSchema = v.object({
@@ -56,7 +56,7 @@ const MessageSchema = v.object({
   to: v.array(PartySchema), cc: v.array(PartySchema), deliveredTo: v.nullable(v.string()), subject: v.string(), at: v.number(),
   verified: v.boolean(), auth: v.nullable(v.string()), woke: v.nullable(v.picklist(["owner", "input"])), text: v.string(), html: v.nullable(v.string()),
   attachments: v.array(v.object({ id: v.string(), filename: v.string(), contentType: v.string(), size: v.number() })),
-  writtenBy: v.nullable(v.string()), sendState: v.nullable(v.picklist(["draft", "queued", "sent", "delivered", "bounced", "failed", "complained"])), read: v.boolean(),
+  writtenBy: v.nullable(v.string()), sendState: v.nullable(v.picklist(MAIL_SEND_STATES)), read: v.boolean(),
 }) satisfies v.GenericSchema<unknown, MailMessageView>;
 
 const ThreadSchema = v.object({ thread: SummarySchema, messages: v.array(MessageSchema) }) satisfies v.GenericSchema<unknown, MailThreadView>;

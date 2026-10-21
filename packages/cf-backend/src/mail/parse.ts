@@ -36,7 +36,7 @@ export async function parseMail(raw: Uint8Array): Promise<ParsedMail> {
     ownWords: stripQuotedReply(text),
     html: parsed.html ?? null,
     attachments: parsed.attachments.map((file) => ({
-      filename: file.filename ?? 'unnamed', contentType: file.mimeType, content: bytes(file.content), contentId: file.contentId ?? null,
+      filename: file.filename ?? 'unnamed', contentType: file.mimeType, content: bytes(file.content),
     })),
   };
 }

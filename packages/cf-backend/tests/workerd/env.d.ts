@@ -359,7 +359,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   sharedHtmlScope(input: { owner: string; workspace: string; manifestLink?: boolean }): Promise<{ before: string; shared: string }>;
   editorFence(latest?: boolean): Promise<{
     pending: string; afterPendingMode: string | null; approved: boolean; cleared: boolean; lending: string;
-    afterOwnerBuild: { grantRevision: string | null; editedBy: string | null } | null; stopped: string; revisionBefore: string | null;
+    afterOwnerBuild: { grantRevision: string | null; editedBy: string | null } | null; stopped: string;
   }>;
   editorsEdit(input: { owner: string; workspace: string; editor: string; user: string }): Promise<{
     files: string; edited: string; runs: string; afterEdit: string | null; afterOwnBuild: string | null; reapproved: string | null;
