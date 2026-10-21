@@ -798,7 +798,7 @@ const DROP_SOCKETS = `(() => {
   return dropped;
 })()`;
 
-const ANSWER_BLOCKS = `[...document.querySelectorAll('#chat .prose-chat, #chat [data-tool-state]')].map((node) =>
+const ANSWER_BLOCKS = `[...document.querySelectorAll('#chat [data-said], #chat [data-tool-state]')].map((node) =>
   node.matches('[data-tool-state]')
     ? 'T:' + (node.querySelector('strong')?.textContent ?? '').trim()
     : 'P:' + (node.textContent ?? '').trim().slice(0, 40))`;

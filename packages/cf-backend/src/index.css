@@ -908,7 +908,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-attention-card {
   padding: 11px 14px 12px;
   border: 1px solid color-mix(in srgb, var(--c-warning) 26%, var(--c-composer-line));
-  border-radius: 18px;
+  border-radius: var(--r-card);
   background: var(--c-composer-bg);
   box-shadow: var(--shadow-menu);
   animation: fade-in var(--dur-enter) var(--ease-out-strong);
@@ -994,7 +994,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   border-radius: var(--r-pill);
   background: var(--c-hover);
   color: var(--c-text);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   transition: background-color var(--dur-state) ease-out;
@@ -1023,7 +1023,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   align-items: stretch;
   gap: 0;
   padding: 10px 12px 10px 14px;
-  border-radius: 16px;
+  border-radius: var(--r-card);
 }
 .p-pill[data-open] :is(.p-pill-text, .p-pill-dim) { overflow: visible; white-space: normal; }
 /* Opened, a long label or source wraps, rather than running under the controls beside it. */
@@ -1033,7 +1033,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-pill-head { display: flex; min-width: 0; align-items: flex-start; gap: 8px; }
 .p-pill-controls { display: flex; flex-shrink: 0; align-items: center; gap: 2px; margin: -3px -4px -3px 0; }
 /* What the provider's body said, when it parses: a few facts, label beside value. */
-.p-pill-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; margin: 8px 0 0 24px; font-size: 12.5px; line-height: 18px; }
+.p-pill-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 3px 14px; margin: 8px 0 0 24px; font-size: 12px; line-height: 18px; }
 .p-pill-facts > dt { color: var(--c-text-3); }
 .p-pill-facts > dd { min-width: 0; margin: 0; color: var(--c-text-2); overflow-wrap: anywhere; }
 .p-pill-raw { margin: 8px 0 0 24px; }
@@ -1050,7 +1050,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   max-height: 120px;
   overflow: auto;
   border: 1px solid var(--c-border);
-  border-radius: 10px;
+  border-radius: var(--r-control);
   background: var(--c-sunken);
   color: var(--c-text-2);
   font-family: var(--font-mono);
@@ -1084,7 +1084,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   background: var(--c-surface);
   box-shadow: none;
   color: var(--c-text-3);
-  font-size: 12.5px;
+  font-size: 12px;
   cursor: pointer;
   transition: border-color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
@@ -1094,7 +1094,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-pill[data-history] .p-pill-source { color: var(--c-text-2); font-weight: 500; }
 /* Opened, it is as wide as the thread's column, so it never narrows as its words wrap. */
 .p-pill[data-history][data-open] { padding: 9px 14px 11px; cursor: default; }
-.p-pill-said { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; font-size: 11.5px; white-space: nowrap; }
+.p-pill-said { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; }
 .p-pill-count {
   flex-shrink: 0;
   min-width: 20px;
@@ -1163,7 +1163,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   border: 1px dashed var(--c-border-strong);
   border-radius: var(--r-row);
   color: var(--c-text-3);
-  font-size: 12.5px;
+  font-size: 12px;
 }
 .p-lightbox {
   position: fixed;
@@ -1177,7 +1177,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-lightbox-bar { display: flex; align-items: center; gap: 10px; height: 52px; padding: 0 12px 0 18px; color: var(--c-text-2); font-size: 13px; }
 .p-lightbox-stage { display: flex; min-height: 0; flex: 1; align-items: center; justify-content: center; padding: 8px 56px 40px; }
-.p-lightbox-stage > img { max-width: 100%; max-height: 100%; border-radius: 10px; box-shadow: var(--shadow-overlay); }
+.p-lightbox-stage > img { max-width: 100%; max-height: 100%; border-radius: var(--r-row); box-shadow: var(--shadow-overlay); }
 .p-lightbox-step {
   position: absolute;
   top: 50%;
@@ -1525,7 +1525,7 @@ body > .annotation-toolbar {
 }
 
 @layer components {
-  :is([data-kinu-plan-review], [data-kinu-annotations]) .annotation-highlight { border-radius: var(--radius-xs); padding: 0 2px; margin: 0 -2px; }
+  :is([data-kinu-plan-review], [data-kinu-annotations]) .annotation-highlight { border-radius: var(--r-check); padding: 0 2px; margin: 0 -2px; }
   [data-kinu-plan-review] .annotation-highlight.math-inline-annotation { display: inline-flex; align-items: center; line-height: 1; }
   [data-kinu-plan-review] .annotation-highlight.math-block-annotation { display: block; }
   :is([data-kinu-plan-review], [data-kinu-annotations]) .annotation-highlight.deletion {
@@ -1633,7 +1633,7 @@ body > .annotation-toolbar {
 .plan-review-document [data-print-region="article"] > p[data-block-id] {
   margin-block: 0 1rem;
   color: var(--c-text-2);
-  font-size: 1rem;
+  font-size: 15.5px;
   line-height: 1.75;
   letter-spacing: -0.006em;
 }
@@ -1644,7 +1644,7 @@ body > .annotation-toolbar {
   border-bottom: 1px solid var(--c-border);
   color: var(--c-text);
   font-family: var(--font-display);
-  font-size: 1.25rem;
+  font-size: var(--t-chat-heading-2);
   font-weight: 600;
   line-height: 1.35;
   letter-spacing: -0.015em;
@@ -1653,7 +1653,7 @@ body > .annotation-toolbar {
 .plan-review-document [data-print-region="article"] > :is(h3, h4, h5, h6)[data-block-id] {
   margin-block: 2rem 0.75rem;
   color: var(--c-text);
-  font-size: 1rem;
+  font-size: 15.5px;
   font-weight: 600;
   line-height: 1.45;
   letter-spacing: -0.01em;
@@ -1663,7 +1663,7 @@ body > .annotation-toolbar {
   margin-block: 0.5rem;
   gap: 0.75rem;
   color: var(--c-text-2);
-  font-size: 1rem;
+  font-size: 15.5px;
   line-height: 1.65;
 }
 
@@ -1712,7 +1712,7 @@ body > .annotation-toolbar {
   border-bottom: 1px solid var(--c-border);
   color: var(--c-text-3);
   font-family: var(--font-mono);
-  font-size: 0.625rem;
+  font-size: 11px;
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1727,7 +1727,7 @@ body > .annotation-toolbar {
   padding: 0.75rem 0 0.75rem 1rem;
   border-left-width: 2px;
   color: var(--c-text-2);
-  font-size: 1rem;
+  font-size: 15.5px;
   line-height: 1.65;
 }
 
@@ -2064,7 +2064,7 @@ body > .annotation-toolbar {
   margin: 0;
   padding: 3px;
   list-style: none;
-  border-radius: 10px;
+  border-radius: var(--r-control);
   background: var(--c-sunken);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-border) 70%, transparent);
 }
@@ -2077,9 +2077,9 @@ body > .annotation-toolbar {
   height: 26px;
   min-width: 30px;
   padding: 0 7px;
-  border-radius: 7px;
+  border-radius: var(--r-inner);
   color: var(--c-text-3);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.005em;
   white-space: nowrap;
@@ -2100,7 +2100,7 @@ body > .annotation-toolbar {
   border-radius: var(--r-control);
   background: var(--c-hover);
   color: var(--c-text-2);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   line-height: 15px;
   text-align: center;
@@ -2141,19 +2141,19 @@ body > .annotation-toolbar {
   max-width: 168px;
   align-items: center;
   height: 26px;
-  border-radius: 7px;
+  border-radius: var(--r-inner);
   color: var(--c-text-3);
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
 .p-page:hover { color: var(--c-text); background: var(--c-hover); }
-.p-page-link { display: flex; min-width: 0; align-items: center; gap: 6px; height: 100%; padding: 0 9px 0 8px; font-size: 12.5px; font-weight: 500; letter-spacing: -0.005em; white-space: nowrap; }
-.p-page-link:focus-visible { border-radius: 7px; }
+.p-page-link { display: flex; min-width: 0; align-items: center; gap: 6px; height: 100%; padding: 0 9px 0 8px; font-size: 13px; font-weight: 500; letter-spacing: -0.005em; white-space: nowrap; }
+.p-page-link:focus-visible { border-radius: var(--r-inner); }
 .p-pages-row > .p-page:first-child, .p-page[data-open] { flex-shrink: 1; }
 .p-page[data-open] { color: var(--c-text); background: var(--c-surface); box-shadow: 0 0 0 1px var(--c-border), var(--shadow-tab); }
 .p-page[data-open] > .p-page-link > svg, .p-page-picker > svg:first-child { color: var(--c-accent-mark); }
 .p-page[data-open]:has(.p-bar-action) .p-page-link { padding-right: 2px; }
 .p-page > .p-bar-action { width: 20px; height: 20px; margin-right: 3px; }
-.p-page-picker { gap: 6px; max-width: 100%; padding: 0 8px; font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+.p-page-picker { gap: 6px; max-width: 100%; padding: 0 8px; font-size: 13px; font-weight: 500; white-space: nowrap; }
 .p-page-picker > .p-tool-count { flex-shrink: 0; }
 .p-pages-menu { position: absolute; top: calc(100% + 8px); left: 0; z-index: 40; width: 240px; padding: 4px; }
 .p-bar-more {
@@ -2162,7 +2162,7 @@ body > .annotation-toolbar {
   gap: 5px;
   height: 24px;
   padding: 0 8px;
-  border-radius: 7px;
+  border-radius: var(--r-control);
   color: var(--c-text-3);
   font-size: 12px;
   font-weight: 500;
@@ -2184,7 +2184,7 @@ body > .annotation-toolbar {
   background: var(--c-surface);
 }
 .p-pane-head { display: flex; flex-shrink: 0; align-items: center; gap: 2px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--c-border); }
-.p-pane-url { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 11.5px; color: var(--c-text-3); }
+.p-pane-url { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; color: var(--c-text-3); }
 .p-pane-body { min-height: 0; flex: 1; overflow: hidden; }
 
 /* An agent's status, read by shape as well as hue: a turning arc while it
@@ -2303,7 +2303,7 @@ body > .annotation-toolbar {
   top: 3px;
   bottom: 3px;
   width: 1px;
-  border-radius: 1px;
+  border-radius: var(--r-pill);
   background: var(--c-border);
 }
 
@@ -2358,7 +2358,7 @@ body > .annotation-toolbar {
   height: 30px;
   padding: 0 11px 0 10px;
   border: 1px solid var(--c-border);
-  border-radius: 9px;
+  border-radius: var(--r-control);
   background: var(--c-surface);
   color: var(--c-text-2);
   font-size: 13px;
@@ -2395,7 +2395,7 @@ body > .annotation-toolbar {
   border-radius: var(--r-control);
   background: var(--c-surface);
   color: var(--c-text-2);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
 }
 .p-env-action:hover { color: var(--c-text); border-color: var(--c-border-strong); }
@@ -2440,7 +2440,7 @@ body > .annotation-toolbar {
   bottom: 0;
   left: 10px;
   height: 2px;
-  border-radius: 2px;
+  border-radius: var(--r-pill);
   background: var(--c-accent);
 }
 .p-session-tabs > :first-child .p-session-tab[aria-selected="true"]::after,
@@ -2469,7 +2469,7 @@ body > .annotation-toolbar {
   color: var(--c-text);
   font-size: 13px;
 }
-.p-term-port { display: inline-flex; align-items: center; gap: 3px; color: var(--c-accent-fg); font-family: var(--font-mono); font-size: 11.5px; }
+.p-term-port { display: inline-flex; align-items: center; gap: 3px; color: var(--c-accent-fg); font-family: var(--font-mono); font-size: 12px; }
 /* The terminal's own ground, under its padding as under its text. */
 .p-terminal-ground { background: var(--c-bg); }
 

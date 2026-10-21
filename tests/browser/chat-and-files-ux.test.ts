@@ -729,7 +729,7 @@ describe("a turn's runs of tool calls, in the real chat", () => {
         { calls: '2', state: 'settled', failed: null, span: false, rowsShown: 0 },
       ]);
       expect(await page.evaluate(() => ({
-        answers: [...document.querySelectorAll('.p-thread-column .prose-chat')].filter((answer) => answer.closest('[data-tool-run]') === null && answer.getClientRects().length > 0).length,
+        answers: [...document.querySelectorAll('.p-thread-column [data-said]')].filter((answer) => answer.closest('[data-tool-run]') === null && answer.getClientRects().length > 0).length,
         previewOutside: document.querySelector('.p-thread-column iframe') !== null && document.querySelector('[data-tool-run] iframe') === null,
         askOutside: document.querySelector('.p-thread-column [data-ask-record]') !== null && document.querySelector('[data-tool-run] [data-ask-record]') === null,
       }))).toEqual({ answers: 3, previewOutside: true, askOutside: true });
@@ -777,7 +777,7 @@ describe("a turn's runs of tool calls, in the real chat", () => {
       await runSoFar(page, { calls: 22, failAt: 4, answer: true });
       await page.waitForFunction(() => document.querySelector('[data-tool-run="live"]') === null);
       expect((await chatRuns(page)).at(-1)).toEqual({ calls: '22', state: 'settled', failed: '1', span: true, rowsShown: 0 });
-      expect(await page.evaluate(() => [...document.querySelectorAll('.p-thread-column .prose-chat')].at(-1)?.closest('[data-tool-run]') === null)).toBe(true);
+      expect(await page.evaluate(() => [...document.querySelectorAll('.p-thread-column [data-said]')].at(-1)?.closest('[data-tool-run]') === null)).toBe(true);
       await page.close();
     });
   });

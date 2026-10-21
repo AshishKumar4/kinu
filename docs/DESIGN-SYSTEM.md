@@ -174,7 +174,7 @@ Define every role for all four looks in `theme.ts`. Each value below is today's 
 | meta | `t-meta` | 12 / 16 | 400 | 0 | text-3 | time, count, hint, caption (`tabular-nums` included) |
 | status | `t-status` | 12 / 16 | 500 | 0 | tone | `Status`, `Chip` |
 | micro | `t-micro` | 11 / 14 | 600 | 0.01em | per use | `Badge` and counters only |
-| chat | `prose-chat` | 15.5 / 26 (workbench 14 / 24) | 400 | 0 | text | assistant prose |
+| chat | `prose-chat` | 15.5 / 26 (workbench 14 / 24) | 400 | 0 | text | assistant prose, the person's bubble |
 | composer | `t-composer` | 15.5 / 24 | 400 | 0 | text | composer input |
 | code | `t-code` | Fragment Mono 13 / 20; inline 0.92em | 400 | 0 | accent-fg | code, paths, keys, env names |
 
@@ -185,7 +185,7 @@ Define every role for all four looks in `theme.ts`. Each value below is today's 
 
 | variant | property | size | for |
 |---|---|---|---|
-| `role.chat-heading` | `--t-chat-heading-1/2/3` | 22, 19, 17 (workbench 1.1, 1.05, 1 em of its 14) | a report's headings in assistant prose (approved) |
+| `role.chat-heading` | `--t-chat-heading-1/2/3` | 22, 19, 17 (workbench 1.1, 1.05, 1 em of its 14) | a report's headings: assistant prose (approved), and the plan document's h2 |
 | `role.code-workbench` | `--t-code-workbench` | 12.5 | the code block inside the workbench (approved) |
 | `role.workspace-tab` | `--t-workspace-tab` | 13.5 | the workspace tab's title (settled) |
 | `role.field-touch` | `--t-field-touch` | `max(16px, 1em)` | a field's value on a touch screen: iOS Safari zooms the page into any field under 16 px |

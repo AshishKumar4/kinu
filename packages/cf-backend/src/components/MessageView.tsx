@@ -617,7 +617,7 @@ export const MessageView = memo(function MessageView({
       // `p-streaming` draws the caret inside the last markdown block; a sibling element would land on its own line.
       return (
         <Fragment key={key}>
-          <div {...(isTailPart ? { "data-live-indicator": "text" } : {})}
+          <div data-said {...(isTailPart ? { "data-live-indicator": "text" } : {})}
             className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
             <AnswerText text={t} place={{ messageId: message.id, stored: tail === null, chat: answerSlates }} />
           </div>
