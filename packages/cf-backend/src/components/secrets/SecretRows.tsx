@@ -11,6 +11,7 @@ import { Cause, Effect } from "effect";
 import { Choice, inputCls } from "@/components/ui/form";
 import { listWorkspaces, type SecretEntry } from "@/lib/user-api";
 import { isSecretName, positionWords, type SecretPosition } from "@kinu.run/core";
+import { Button } from "@/components/ui/Button";
 
 /** A row being written: its hosts as typed, one or several, split on spaces and commas. */
 export interface SecretDraft {
@@ -145,10 +146,7 @@ export function SecretRows({ rows, onChange, removable }: {
               <input value={row.hosts} onChange={(e) => edit(index, { ...row, hosts: e.target.value })} placeholder="api.example.com"
                 aria-label={`Hosts ${row.name || "this secret"} may be sent to`} spellCheck={false} className={`${inputCls} basis-full sm:basis-auto sm:max-w-64`} />
               {removable && (
-                <button type="button" onClick={() => onChange(rows.filter((_, at) => at !== index))} aria-label={`Leave out ${row.name || "this row"}`}
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-text-3 hover:p-danger">
-                  <TrashIcon size={14} />
-                </button>
+                <Button variant="danger" size="sm" icon={<TrashIcon size={14} />} className="shrink-0" onClick={() => onChange(rows.filter((_, at) => at !== index))} aria-label={`Leave out ${row.name || "this row"}`} />
               )}
             </div>
             {advanced.has(index) || row.position.kind !== "authorization"

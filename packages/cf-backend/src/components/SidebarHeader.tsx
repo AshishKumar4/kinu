@@ -3,6 +3,7 @@ import { SidebarSimpleIcon } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
 import { KinuMark } from "./ui/KinuLogo";
 import { NewWorkspaceIconButton } from "./workspaces/NewWorkspaceButton";
+import { Button } from "@/components/ui/Button";
 
 /**
  * The sidebar's head: the mark and Kinu, which go Home; beside them, New workspace and, on the desktop rail, the way to
@@ -18,16 +19,7 @@ export function SidebarHeader({ onCollapse }: { onCollapse?: () => void }) {
       </Link>
       <span className="flex-1" />
       {onCollapse && (
-        <button
-          type="button"
-          onClick={onCollapse}
-          aria-label="Hide sidebar"
-          title="Hide sidebar"
-          data-rail-collapse
-          className="flex size-8 items-center justify-center rounded-full p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text"
-        >
-          <SidebarSimpleIcon size={17} />
-        </button>
+        <Button variant="ghost" size="sm" icon={<SidebarSimpleIcon size={14} />} onClick={onCollapse} aria-label="Hide sidebar" title="Hide sidebar" data-rail-collapse />
       )}
       <NewWorkspaceIconButton />
     </div>

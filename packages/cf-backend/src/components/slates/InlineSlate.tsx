@@ -17,6 +17,7 @@ import { detach, showing } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { WorkspacePartHost } from "@/hooks/use-part-host";
 import { Notice } from "@/components/ui/Notice";
+import { Button } from "@/components/ui/Button";
 
 
 /** `sized`: the page reports its own height, as every page kinu:slate serves does; a slate's own server does not. */
@@ -203,10 +204,7 @@ function SlateCard({ id, block, measure, save, children }: {
         </button>
         {save !== undefined && <SaveControl name={name} save={save} open={openSlate} />}
         {openSlate !== undefined && (
-          <button type="button" onClick={() => openSlate(id)} aria-label={`Open ${name} in the work surface`} title="Open in the work surface"
-            className="p-text-3 hover:p-text p-1 shrink-0 inline-flex rounded-md transition-colors hover:bg-[var(--c-hover)]">
-            <ArrowSquareOutIcon size={11} />
-          </button>
+          <Button variant="ghost" size="sm" icon={<ArrowSquareOutIcon size={14} />} className="shrink-0" onClick={() => openSlate(id)} aria-label={`Open ${name} in the work surface`} title="Open in the work surface" />
         )}
       </span>
       <span id={body} className="p-fold" data-folded={folded ? "" : undefined} inert={folded}>

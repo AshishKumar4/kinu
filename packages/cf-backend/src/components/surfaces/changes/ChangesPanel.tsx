@@ -11,6 +11,7 @@ import {
 import { ChangeMark, count, Counts, DiffBody, sinceLabel } from "./diff";
 import { FileTree, IconButton, MarkReviewed, Since, SourceMenu, Summary, typing } from "./parts";
 import { NotesFailure, SendFeedback, useNotes } from "./notes";
+import { Button } from "@/components/ui/Button";
 
 // Lazy: plannotator's panel loads only with the first note.
 const NotesPanel = lazy(() => import("./notes-panel"));
@@ -238,15 +239,9 @@ function FileNotes({ path }: { path: string }) {
   return (
     <>
       {onFile.map((note) => (
-        <button key={note.id} type="button" onClick={() => notes.select(note.id)} title={note.text} data-file-note={note.id}
-          className="flex h-6 shrink-0 items-center gap-1 rounded-md px-1 p-info transition-colors hover:bg-[var(--c-hover)]">
-          <ChatCircleTextIcon size={13} weight="fill" />
-        </button>
+        <Button variant="ghost" size="sm" icon={<ChatCircleTextIcon size={14} weight="fill" />} className="shrink-0" key={note.id} onClick={() => notes.select(note.id)} title={note.text} data-file-note={note.id} aria-label={note.text} />
       ))}
-      <button ref={button} type="button" onClick={write} aria-label={`Note on ${vfsBasename(path)}`} title="Note on this file" data-note-file
-        className="flex size-7 shrink-0 items-center justify-center rounded-md p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
-        <ChatCircleTextIcon size={14} />
-      </button>
+      <Button variant="ghost" size="sm" icon={<ChatCircleTextIcon size={14} />} className="shrink-0" ref={button} onClick={write} aria-label={`Note on ${vfsBasename(path)}`} title="Note on this file" data-note-file />
     </>
   );
 }

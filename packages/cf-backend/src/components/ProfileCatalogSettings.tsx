@@ -482,11 +482,7 @@ export function ProfileCatalogSettings() {
                     }}
                   />
                   <Button size="sm" variant="secondary" disabled={!newRoleId.trim()} onClick={addRole}>Add</Button>
-                  <button type="button" aria-label="Cancel new role"
-                    className="p-text-3 hover:p-text"
-                    onClick={() => { setAddingRole(false); setNewRoleId(''); }}>
-                    <XIcon size={12} />
-                  </button>
+                  <Button variant="ghost" size="sm" icon={<XIcon size={14} />} aria-label="Cancel new role" onClick={() => { setAddingRole(false); setNewRoleId(''); }} />
                 </div>
               ) : (
                 <button
@@ -600,10 +596,7 @@ function BackupChain(props: {
             {labelOfSpec(props.menu, spec)}
             <AccountPicker spec={spec} accounts={accountsOf(spec)} label={`${props.label} fallback ${index + 1} account`}
               onChange={(next) => props.onChange(props.chain.map((entry, at) => (at === index ? next : entry)))} />
-            <button type="button" className="p-text-3 hover:p-text" aria-label={`Remove ${spec} from the ${props.label} fallbacks`}
-              onClick={() => props.onChange(props.chain.filter((entry) => entry !== spec))}>
-              <XIcon size={11} />
-            </button>
+            <Button variant="ghost" size="sm" icon={<XIcon size={14} />} aria-label={`Remove ${spec} from the ${props.label} fallbacks`} onClick={() => props.onChange(props.chain.filter((entry) => entry !== spec))} />
           </span>
         ))}
         <ModelPicker

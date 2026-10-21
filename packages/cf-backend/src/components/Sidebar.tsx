@@ -19,6 +19,7 @@ import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
 import { composing } from "@/components/ui/form";
 import { StatusDot } from "@/components/ui/Status";
 import { workspaceStatusTone } from "@/components/workspaces/workspace-status-tone";
+import { Button } from "@/components/ui/Button";
 
 function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
   const { to, label, Icon } = item;
@@ -85,19 +86,8 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
           className="t-meta min-w-0 flex-1 rounded-sm px-1 py-1 p-fill p-text border p-border"
           aria-label={label}
         />
-        <button
-          type="submit"
-          disabled={!draft.trim() || saving || waiting !== null}
-          className="rounded-sm p-1 p-text-3 hover:p-text p-card-hover disabled:opacity-40"
-          aria-label={saveLabel}
-        ><CheckIcon size={12} /></button>
-        <button
-          type="button"
-          onClick={onDone}
-          disabled={saving}
-          className="rounded-sm p-1 p-text-3 hover:p-text p-card-hover"
-          aria-label="Cancel rename"
-        ><XIcon size={12} /></button>
+        <Button variant="ghost" size="sm" icon={<CheckIcon size={14} />} type="submit" disabled={!draft.trim() || saving || waiting !== null} aria-label={saveLabel} />
+        <Button variant="ghost" size="sm" icon={<XIcon size={14} />} onClick={onDone} disabled={saving} aria-label="Cancel rename" />
       </div>
       {said !== null && (
         <div role={error !== null || waiting?.failed === true ? "alert" : "status"} title={error ?? undefined}
@@ -219,18 +209,8 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
                         <span className={`t-label min-w-0 flex-1 truncate ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? `italic ${isActive ? '' : 'p-text-3'}` : ''}`}>{shown}</span>
                         {age && <span className="t-meta w-[30px] shrink-0 text-right tabular-nums p-text-3 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
                       </NavLink>
-                      <button
-                        onClick={() => setEditingWorkspace(a.name)}
-                        className="absolute right-6 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-opacity p-text-3 hover:p-text focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-70"
-                        title="Rename"
-                        aria-label={`Rename workspace ${shown}`}
-                      ><PencilSimpleIcon size={11} /></button>
-                      <button
-                        onClick={() => setDeleteTarget(a)}
-                        className="absolute right-1 top-1/2 -translate-y-1/2 p-1 opacity-60 transition-opacity p-text-3 hover:p-danger focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-70"
-                        title="Remove"
-                        aria-label={`Remove workspace ${shown}`}
-                      ><TrashIcon size={11} /></button>
+                      <Button variant="ghost" size="sm" icon={<PencilSimpleIcon size={14} />} className="absolute right-6 top-1/2 -translate-y-1/2 opacity-60 transition-opacity focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-70" onClick={() => setEditingWorkspace(a.name)} title="Rename" aria-label={`Rename workspace ${shown}`} />
+                      <Button variant="danger" size="sm" icon={<TrashIcon size={14} />} className="absolute right-1 top-1/2 -translate-y-1/2 opacity-60 transition-opacity focus-visible:opacity-100 lg:opacity-0 lg:group-hover:opacity-70" onClick={() => setDeleteTarget(a)} title="Remove" aria-label={`Remove workspace ${shown}`} />
                     </>
                   )}
                 </div>

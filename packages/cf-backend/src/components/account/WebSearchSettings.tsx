@@ -301,10 +301,7 @@ function Backups({ backups, chain, stored, disabled, onChange }: {
             className="t-meta inline-flex items-center gap-1 rounded-md border p-border px-2 py-px p-text">
             <span className="p-text-3">{at + 1}.</span>
             {routeLabel(route)}
-            <button type="button" disabled={disabled} className="p-text-3 hover:p-text" aria-label={`Remove ${routeLabel(route)} from the backups`}
-              onClick={() => onChange(backups.filter((entry) => !sameRoute(route)(entry)))}>
-              <XIcon size={11} />
-            </button>
+            <Button variant="ghost" size="sm" icon={<XIcon size={14} />} disabled={disabled} aria-label={`Remove ${routeLabel(route)} from the backups`} onClick={() => onChange(backups.filter((entry) => !sameRoute(route)(entry)))} />
           </span>
         ))}
         {candidates.length > 0 && (

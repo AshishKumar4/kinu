@@ -12,6 +12,7 @@ import {
   forgetAccountFact, forgetAccountNote, getAccountMemory, putAccountFact,
   type AccountMemoryState, type MemoryOrigin,
 } from "../../lib/user-api";
+import { Button } from "@/components/ui/Button";
 
 /** "Said in Research, kept by Kinu" / "You, in Settings": where a value came from, in the owner's words. */
 function originText(origin: MemoryOrigin): string {
@@ -165,10 +166,7 @@ function Facts({ state, busy, act }: SectionProps) {
               <div className="t-meta p-text-3">{originText(fact.origin)}</div>
             </div>
             <div className="flex gap-1 shrink-0">
-              <button type="button" className="t-control px-1 rounded p-text-2 hover:p-text" aria-expanded={opened === fact.key}
-                onClick={() => setOpened(opened === fact.key ? null : fact.key)} title="Every value it held">
-                <ClockCounterClockwiseIcon size={14} />
-              </button>
+              <Button variant="ghost" size="sm" icon={<ClockCounterClockwiseIcon size={14} />} aria-expanded={opened === fact.key} onClick={() => setOpened(opened === fact.key ? null : fact.key)} title="Every value it held" aria-label="Every value it held" />
               <button type="button" className="t-control px-1 rounded p-text-2 hover:p-text" disabled={busy !== null}
                 onClick={() => setEditing({ key: fact.key, text: valueText(fact.value), invalid: false })}>Edit</button>
               <button type="button" className="t-control px-1 rounded p-danger" disabled={busy !== null}

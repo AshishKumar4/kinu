@@ -112,10 +112,7 @@ function TakesComparison({ set, onPick, onClose }: {
       </p>
 
       <div className="flex items-center justify-between">
-        <button type="button" onClick={() => step(-1)} aria-label="Previous take"
-          className="p-1 rounded-sm p-text-3 hover:p-text p-card-hover transition-colors cursor-pointer">
-          <ArrowLeftIcon size={14} />
-        </button>
+        <Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />} onClick={() => step(-1)} aria-label="Previous take" />
         <div className="t-meta flex items-center gap-2 p-text-2">
           <span className="font-medium p-text">Take {index + 1} of {count}</span>
           {isCurrent && (
@@ -124,10 +121,7 @@ function TakesComparison({ set, onPick, onClose }: {
             </span>
           )}
         </div>
-        <button type="button" onClick={() => step(1)} aria-label="Next take"
-          className="p-1 rounded-sm p-text-3 hover:p-text p-card-hover transition-colors cursor-pointer">
-          <ArrowRightIcon size={14} />
-        </button>
+        <Button variant="ghost" size="sm" icon={<ArrowRightIcon size={14} />} onClick={() => step(1)} aria-label="Next take" />
       </div>
 
       <div className="border p-border p-card px-3 py-2 max-h-64 overflow-y-auto">
@@ -223,9 +217,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
           {open ? "Hide" : "Show what it did"}
         </button>
         {run.status !== "running" && (
-          <button onClick={onDismiss} className="p-text-3 hover:p-text cursor-pointer shrink-0" aria-label="Dismiss branch chip">
-            <XIcon size={11} />
-          </button>
+          <Button variant="ghost" size="sm" icon={<XIcon size={14} />} className="shrink-0" onClick={onDismiss} aria-label="Dismiss branch chip" />
         )}
       </div>
       {open && (

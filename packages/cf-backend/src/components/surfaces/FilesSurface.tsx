@@ -33,6 +33,7 @@ import type { VfsRevision } from "@nimbus-sh/core/vfs/vfs.js";
 import { composing } from "@/components/ui/form";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { getFilesView, setFilesView } from "@/lib/user-api";
+import { Button } from "@/components/ui/Button";
 
 /** An upload over a file already there: replaced only on the owner's word. */
 function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: () => void; onKeep: () => void }) {
@@ -510,24 +511,18 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               return run(Effect.promise(() => uploadFiles(picked)));
             }))} />
           <div className="ml-auto flex items-center gap-px shrink-0">
-            <button onClick={() => setPath(parentDir(path))} disabled={atRoot}
-              className="p-text-3 hover:p-text p-1 disabled:opacity-30 disabled:hover:p-text-3"
-              title="Parent directory" aria-label="Parent directory"><ArrowUpIcon size={12} /></button>
-            <button onClick={() => setPath("/")} disabled={atRoot}
-              className="p-text-3 hover:p-text p-1 disabled:opacity-30 disabled:hover:p-text-3"
-              title="Workspace root" aria-label="Workspace root"><HouseIcon size={12} /></button>
+            <Button variant="ghost" size="sm" icon={<ArrowUpIcon size={14} />} onClick={() => setPath(parentDir(path))} disabled={atRoot} title="Parent directory" aria-label="Parent directory" />
+            <Button variant="ghost" size="sm" icon={<HouseIcon size={14} />} onClick={() => setPath("/")} disabled={atRoot} title="Workspace root" aria-label="Workspace root" />
             <button onClick={() => uploadInputRef.current?.click()}
               className="flex items-center gap-1 p-text-3 hover:p-text p-1"
               title={`Upload files to ${path}`}><UploadSimpleIcon size={11} />Upload</button>
             <ViewMenu view={view} onChange={chooseView} />
             {/* Drops every cached listing: a plane without mtime gives `nextTreeCache` nothing to compare. */}
-            <button onClick={() => detach(Effect.promise(() => run(Effect.sync(() => {
+            <Button variant="ghost" size="sm" icon={<ArrowsClockwiseIcon size={14} />} onClick={() => detach(Effect.promise(() => run(Effect.sync(() => {
               setTreeCache(new Map());
               reloadListing();
               reloadMounts();
-            }))))}
-              className="p-text-3 hover:p-text p-1"
-              title="Refresh" aria-label="Refresh"><ArrowsClockwiseIcon size={11} /></button>
+            }))))} title="Refresh" aria-label="Refresh" />
           </div>
         </div>
 
@@ -541,9 +536,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             className="t-meta flex-1 bg-transparent p-text outline-hidden placeholder:p-text-3"
           />
           {filter && (
-            <button onClick={() => setFilter("")} className="p-text-3 hover:p-text" aria-label="Clear filter">
-              <XIcon size={12} />
-            </button>
+            <Button variant="ghost" size="sm" icon={<XIcon size={14} />} onClick={() => setFilter("")} aria-label="Clear filter" />
           )}
         </div>
 
@@ -554,9 +547,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           <div data-files-notice className="t-meta px-3 py-1 p-danger border-b p-border flex items-start gap-2">
             <WarningIcon size={13} className="shrink-0 mt-px" />
             <span className="break-words min-w-0">{notice}</span>
-            <button onClick={() => setNotice(null)} className="ml-auto p-text-3 hover:p-text shrink-0" aria-label="Dismiss">
-              <XIcon size={12} />
-            </button>
+            <Button variant="ghost" size="sm" icon={<XIcon size={14} />} className="ml-auto shrink-0" onClick={() => setNotice(null)} aria-label="Dismiss" />
           </div>
         )}
 

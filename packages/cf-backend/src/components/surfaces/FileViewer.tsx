@@ -11,6 +11,7 @@ import {
   FileWriteConflict, fileTextEditable, MarkdownFrontmatterError, parseMarkdownFrontmatter, putFileBytes, sandboxedHtml, textRenderOf,
   viewerKindOf, type FileText, type TextRender,
 } from "@kinu.run/core";
+import { Button } from "@/components/ui/Button";
 
 export function FileViewer({ path, read, revision, rawHref, downloadHref, onSaved, onClose }: {
   path: string;
@@ -118,9 +119,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
           <a data-files-download href={downloadHref} download={name} className="t-control flex items-center gap-1 p-text-2 hover:p-text p-1" title={`Download ${name}`}>
             <DownloadSimpleIcon size={12} />Download
           </a>
-          <button onClick={onClose} className="p-text-3 hover:p-text p-1" title="Close preview" aria-label="Close preview">
-            <XIcon size={13} />
-          </button>
+          <Button variant="ghost" size="sm" icon={<XIcon size={14} />} onClick={onClose} title="Close preview" aria-label="Close preview" />
         </div>
       </div>
       {saveError && (

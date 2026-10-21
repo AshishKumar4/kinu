@@ -12,6 +12,7 @@ import { OwnerAlerts } from "@/hooks/use-owner-alerts";
 import { AgentsNavProvider, useAgentsNav } from "@/hooks/use-agents-nav";
 import { DESKTOP_QUERY } from "@/hooks/use-media-query";
 import { AppBackground } from "./AppBackground";
+import { Button } from "@/components/ui/Button";
 
 /** The root isolates its stacking so the negative-z canvas paints above its ground and under in-flow children. */
 
@@ -72,14 +73,7 @@ function Shell() {
       <AppBackground />
       <header className={`h-14 shrink-0 items-center justify-between border-b p-border p-sidebar px-3 md:hidden ${ownBar ? "hidden" : "flex"}`}>
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            aria-label="Open menu"
-            onClick={() => setDrawerOpen(true)}
-            className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text"
-          >
-            <ListIcon size={18} />
-          </button>
+          <Button variant="ghost" size="sm" icon={<ListIcon size={14} />} aria-label="Open menu" onClick={() => setDrawerOpen(true)} />
           <Link to="/" aria-label="Kinu home" className="flex items-center rounded-md px-2 py-1">
             <KinuLogo compact />
           </Link>

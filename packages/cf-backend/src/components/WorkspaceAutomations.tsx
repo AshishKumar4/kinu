@@ -141,12 +141,7 @@ function TriggerLine({ trigger, onRevoke, rpc, onMoved }: {
           no URL
         </span>
       )}
-      <button
-        onClick={onRevoke}
-        disabled={trigger.state === "revoked"}
-        className="p-text-3 hover:p-danger disabled:opacity-30 p-1 shrink-0"
-        title="Revoke" aria-label="Revoke"
-      ><TrashIcon size={11} /></button>
+      <Button variant="danger" size="sm" icon={<TrashIcon size={14} />} className="shrink-0" onClick={onRevoke} disabled={trigger.state === "revoked"} title="Revoke" aria-label="Revoke" />
     </div>
   );
 }

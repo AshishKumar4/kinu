@@ -4,7 +4,7 @@
  * `primary` (brass, one per view), `secondary` (surface with an edge), `ghost` (ink only) and `danger` (the secondary
  * shape in danger ink); `destructive` (filled danger) is the confirm dialog's alone. A call site never sizes the box.
  */
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "destructive";
 
@@ -29,7 +29,7 @@ export function Button({ variant = "secondary", size = "md", icon, busy = false,
   icon?: ReactNode;
   /** Working: a spinner takes the icon's place and the button holds its width, pressed no more until it is done. */
   busy?: boolean;
-} & ButtonHTMLAttributes<HTMLButtonElement>) {
+} & ComponentProps<"button">) {
   const iconOnly = children === undefined || children === null || children === false;
   // Layout only (a margin, `shrink-0`, `max-sm:` collapse); the box itself is the variant's and the size's.
   const extra = className === undefined ? "" : ` ${className}`;

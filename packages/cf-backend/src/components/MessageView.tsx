@@ -42,6 +42,7 @@ import { useToggledSet } from "@/hooks/use-toggled-set";
 import { StatusDot } from "@/components/ui/Status";
 import { ChatDisclosure, ToolRun, TurnRollup, usePhaseLinesOnSeen, useSeenRunning, WorkLabel } from "@/components/ChatDisclosure";
 import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
+import { Button } from "@/components/ui/Button";
 
 const MessageCreatedAtSchema = v.looseObject({
   createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),
@@ -442,13 +443,7 @@ export function SteerBubble({ steer, onFork }: {
       <div className={USER_BUBBLE_CLASS}>
         {steer.text}
         {onFork && steer.state === "landed" && (
-          <button
-            onClick={() => onFork(steer.id)}
-            className="absolute -left-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1 py-px rounded-sm"
-            title="Fork the workspace from here"
-          >
-            <GitBranchIcon size={12} />
-          </button>
+          <Button variant="ghost" size="sm" icon={<GitBranchIcon size={14} />} className="absolute -left-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onClick={() => onFork(steer.id)} title="Fork the workspace from here" aria-label="Fork the workspace from here" />
         )}
       </div>
       <SteeredMark state={steer.state === "queued" ? "queued" : "landed"} />
@@ -572,23 +567,10 @@ export const MessageView = memo(function MessageView({
           )}
           {rowText(message)}
           {canFork && (
-            <button
-              onClick={() => onFork(message.id)}
-              className="absolute -left-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1 py-px rounded-sm"
-              title="Fork the workspace from here"
-            >
-              <GitBranchIcon size={12} />
-            </button>
+            <Button variant="ghost" size="sm" icon={<GitBranchIcon size={14} />} className="absolute -left-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onClick={() => onFork(message.id)} title="Fork the workspace from here" aria-label="Fork the workspace from here" />
           )}
           {!isLive && onRevert && message.id && (
-            <button
-              onClick={() => onRevert(message.id)}
-              data-revert-turn={message.id}
-              className="absolute -left-8 top-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1 py-px rounded-sm"
-              title="Revert to before this turn"
-            >
-              <ClockCounterClockwiseIcon size={12} />
-            </button>
+            <Button variant="ghost" size="sm" icon={<ClockCounterClockwiseIcon size={14} />} className="absolute -left-8 top-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onClick={() => onRevert(message.id)} data-revert-turn={message.id} title="Revert to before this turn" aria-label="Revert to before this turn" />
           )}
         </div>
         {isSteeredMessage({ metadata: message.metadata }) && <SteeredMark state="landed" />}
@@ -686,13 +668,7 @@ export const MessageView = memo(function MessageView({
           {segment.parts.length > 0 && (
             <div className="group relative flex w-full flex-col">
               {s === forkSegment && canFork && (
-                <button
-                  onClick={() => onFork(message.id)}
-                  className="absolute -right-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1 py-px rounded-sm"
-                  title="Fork the workspace from here"
-                >
-                  <GitBranchIcon size={12} />
-                </button>
+                <Button variant="ghost" size="sm" icon={<GitBranchIcon size={14} />} className="absolute -right-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onClick={() => onFork(message.id)} title="Fork the workspace from here" aria-label="Fork the workspace from here" />
               )}
               {rollUpTurn(groupMessageParts(segment.parts), isLive && s === segments.length - 1).map((block, i, blocks) => {
                 if (block.kind !== "turn") {
