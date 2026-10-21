@@ -10,7 +10,7 @@ import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import { toolExecute, createRecordingLogger, present } from '@kinu.run/test-utils';
 import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils/vfs';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
-import { withApprovalGatedFiles } from '../src/execution/approval';
+import { hostedToolFiles } from '../src/execution/approval';
 import { cloudPlanes } from '../src/vfs/resolve';
 import { WORKSPACE_ROOT } from '../src/index';
 import { asSchema, jsonSchema, tool } from 'ai';
@@ -445,10 +445,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const mounted = withMountTable(rt.toolFiles, standardMounts((name) => (name === 'computer' ? { files: computerFiles, isAvailable: () => true } : undefined)));
 
     // Gated, as the hosted runtime hands it to the tools (staging rc29: the gate passed `resolve` on and not `owner`).
-    const toolFiles = withApprovalGatedFiles(mounted, 'workspace', {
-      planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => mounted.resolve(path, { follow, creating }), owner: (path) => mounted.owner(path),
-      userRoots: () => mounted.userRoots(), locate: null, parksWrites: true,
-    }, { mode: () => 'strict' });
+    const toolFiles = hostedToolFiles(mounted, cloudPlanes(WORKSPACE_ROOT), { mode: () => 'strict' });
 
     const shellTool = { execute: toolExecute<{ command: string; runtime?: string; cwd?: string }, string>(tools({ ...rt, toolFiles, executionRouter: router }).shell) };
 

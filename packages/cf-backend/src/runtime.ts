@@ -12,7 +12,7 @@ import {
   DefaultExecutionRouter, createNimbusWorkspaceExecutor, processRetryTool,
   workspaceFilePlane, standardMounts, contextMount, skillsMount, type WorkspacePrincipal,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
-  withApprovalGatedShell, withApprovalGatedFiles, createInheritedApprovalPolicy, holdsGrant,
+  withApprovalGatedShell, hostedToolFiles, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   createSandboxExecutor, createDeviceTunnelExecutor, soleLiveDevice, type DeviceTransport,
   type WorkspaceFiles,
@@ -396,10 +396,7 @@ export function createCFRuntime(
     mounts, principal, home, ...(hooks.workspaceObserver !== undefined && { observer: hooks.workspaceObserver }),
   });
 
-  const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
-    planes, resolve: (path, follow, creating) => agentFileVfs.resolve(path, { follow, creating }), owner: (path) => agentFileVfs.owner(path),
-    userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
-  }, approvalPolicy);
+  const toolFiles = hostedToolFiles(agentFileVfs, planes, approvalPolicy);
 
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,

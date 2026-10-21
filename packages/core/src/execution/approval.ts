@@ -109,6 +109,23 @@ export interface FileReach {
 
 type Approve = (op: FileAccess['op'], path: string, bytes?: string | Uint8Array) => Effect.Effect<void, KinuError>;
 
+/**
+ * The hosted workspace's tool files: its mounted plane behind the approval gate, every lookup the plane's own. The
+ * runtime's, and its tests': a seam assembled apart from the runtime is how a lookup went missing (staging rc29).
+ */
+export function hostedToolFiles(
+  plane: VFS & CheckpointFiles & Pick<VfsMountRouting, 'resolve' | 'owner' | 'userRoots'>, planes: PathPlanes, policy: ShellApprovalPolicy,
+): VFS & CheckpointFiles & Pick<VfsMountRouting, 'resolve' | 'owner'> {
+  return withApprovalGatedFiles(plane, 'workspace', {
+    planes,
+    resolve: (path, follow, creating) => plane.resolve(path, { follow, creating }),
+    owner: (path) => plane.owner(path),
+    userRoots: () => plane.userRoots(),
+    locate: null,
+    parksWrites: true,
+  }, policy);
+}
+
 /** A change past the agent's own files is asked; a secret-looking read follows `cat`'s rule. */
 export function withApprovalGatedFiles(
   vfs: VFS & CheckpointFiles, executor: string, reach: FileReach, policy: ShellApprovalPolicy,
