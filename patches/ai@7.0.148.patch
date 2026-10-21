@@ -1,8 +1,8 @@
 diff --git a/dist/index.js b/dist/index.js
-index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..3ecf6e7d26776852f5a58e6b20315118d10e72e5 100644
+index a24196f055058f612deae424e881115d733e7783..8b30a099b6f4bd87458ae4d77e4969fc7547c16d 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1342,11 +1342,7 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
+@@ -1403,11 +1403,7 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
  		role: "system",
  		content: message.content,
  		providerOptions: message.providerOptions
@@ -15,14 +15,14 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..3ecf6e7d26776852f5a58e6b20315118
  	const combinedMessages = [];
  	for (const message of messages) {
  		if (message.role !== "tool") {
-@@ -1355,10 +1351,18 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
+@@ -1416,10 +1412,18 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
  		}
  		const lastCombinedMessage = combinedMessages.at(-1);
  		if (lastCombinedMessage?.role === "tool") {
 -			const lastContentPart = lastCombinedMessage.content.at(-1);
 -			if (lastContentPart != null && lastCombinedMessage.providerOptions != null) lastContentPart.providerOptions = mergeObjects(lastCombinedMessage.providerOptions, lastContentPart.providerOptions);
 -			lastCombinedMessage.content.push(...message.content);
--			lastCombinedMessage.providerOptions = message.providerOptions;
+-			lastCombinedMessage.providerOptions = lastContentPart == null ? mergeObjects(lastCombinedMessage.providerOptions, message.providerOptions) : message.providerOptions;
 +			const content = [...lastCombinedMessage.content];
 +			const lastContentPart = content.at(-1);
 +			if (lastContentPart != null && lastCombinedMessage.providerOptions != null) content[content.length - 1] = {
@@ -33,12 +33,12 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..3ecf6e7d26776852f5a58e6b20315118
 +			combinedMessages[combinedMessages.length - 1] = {
 +				...lastCombinedMessage,
 +				content,
-+				providerOptions: message.providerOptions
++				providerOptions: lastContentPart == null ? mergeObjects(lastCombinedMessage.providerOptions, message.providerOptions) : message.providerOptions
 +			};
  		} else combinedMessages.push(message);
  	}
  	const toolCallIds = /* @__PURE__ */ new Set();
-@@ -1379,6 +1383,67 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
+@@ -1437,6 +1441,67 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
  	return combinedMessages.filter((message) => message.role !== "tool" || message.content.length > 0);
  }
  /**
@@ -106,11 +106,11 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..3ecf6e7d26776852f5a58e6b20315118
  * Convert a ModelMessage to a LanguageModelV4Message.
  *
  * @param message - The ModelMessage to convert.
-@@ -8034,10 +8099,27 @@ const originalGenerateCallId$8 = createIdGenerator$1({
+@@ -8300,10 +8365,27 @@ const originalGenerateCallId$8 = createIdGenerator$1({
  *
  * @returns A stream of model call parts together with request and response metadata when available.
  */
--async function streamLanguageModelCall({ model, tools, toolOrder, output, toolChoice, prompt, system, instructions, messages, allowSystemInMessages, download, abortSignal, headers, includeRawChunks, providerOptions, repairToolCall, refineToolInput, executeLanguageModelCallInTelemetryContext = async ({ execute }) => await execute(), callId, toolsContext, experimental_sandbox: sandbox, _internal: { generateId = originalGenerateId$3, generateCallId = originalGenerateCallId$8, now: now$3 = now } = {}, onStart, onLanguageModelCallStart, onLanguageModelCallEnd, ...callSettings }) {
+-async function streamLanguageModelCall({ model, tools, toolOrder, output, toolChoice, prompt, system, instructions, messages, allowSystemInMessages, download, abortSignal, headers, includeRawChunks, providerOptions, repairToolCall, refineToolInput, executeLanguageModelCallInTelemetryContext = async ({ execute }) => await execute(), callId, toolsContext, experimental_sandbox: sandbox, _internal: { generateId = originalGenerateId$3, generateCallId = originalGenerateCallId$8, now: now$3 = now, collectContent = true } = {}, onStart, onLanguageModelCallStart, onLanguageModelCallEnd, ...callSettings }) {
 +/** Kinu patch: a step reuses streamText's messages without the full schema walk; the shape and role checks a caller's prepareStep replacement must pass still run. */
 +function checkedPreparedPrompt(prepared, allowSystemInMessages = false) {
 +	const { instructions, messages } = prepared;
@@ -128,7 +128,7 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..3ecf6e7d26776852f5a58e6b20315118
 +	});
 +	return prepared;
 +}
-+async function streamLanguageModelCall({ model, tools, toolOrder, output, toolChoice, prompt, system, instructions, messages, allowSystemInMessages, download, abortSignal, headers, includeRawChunks, providerOptions, repairToolCall, refineToolInput, executeLanguageModelCallInTelemetryContext = async ({ execute }) => await execute(), callId, toolsContext, experimental_sandbox: sandbox, _internal: { generateId = originalGenerateId$3, generateCallId = originalGenerateCallId$8, now: now$3 = now, standardizedPrompt: preparedPrompt, preparedTools } = {}, onStart, onLanguageModelCallStart, onLanguageModelCallEnd, ...callSettings }) {
++async function streamLanguageModelCall({ model, tools, toolOrder, output, toolChoice, prompt, system, instructions, messages, allowSystemInMessages, download, abortSignal, headers, includeRawChunks, providerOptions, repairToolCall, refineToolInput, executeLanguageModelCallInTelemetryContext = async ({ execute }) => await execute(), callId, toolsContext, experimental_sandbox: sandbox, _internal: { generateId = originalGenerateId$3, generateCallId = originalGenerateCallId$8, now: now$3 = now, collectContent = true, standardizedPrompt: preparedPrompt, preparedTools } = {}, onStart, onLanguageModelCallStart, onLanguageModelCallEnd, ...callSettings }) {
  	const resolvedModel = resolveLanguageModel(model);
  	const effectiveCallId = callId ?? generateCallId();
 -	const standardizedPrompt = await standardizePrompt({
@@ -136,7 +136,7 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..3ecf6e7d26776852f5a58e6b20315118
  		instructions,
  		system,
  		prompt,
-@@ -8054,7 +8136,7 @@ async function streamLanguageModelCall({ model, tools, toolOrder, output, toolCh
+@@ -8320,7 +8402,7 @@ async function streamLanguageModelCall({ model, tools, toolOrder, output, toolCh
  		abortSignal,
  		provider: resolvedModel.provider.split(".")[0]
  	});
@@ -145,20 +145,22 @@ index 1b15fa8a497a88bfe1a5cee5d331bdbb56a22532..3ecf6e7d26776852f5a58e6b20315118
  		tools,
  		toolOrder,
  		toolsContext,
-@@ -9555,7 +9637,10 @@ var DefaultStreamTextResult = class {
- 								callbacks: [onStepStart, telemetryDispatcher.onStepStart]
- 							});
+@@ -9867,7 +9949,12 @@ var DefaultStreamTextResult = class {
  						},
--						_internal: { now },
-+						_internal: { now, standardizedPrompt: {
-+							instructions: stepInstructions,
-+							messages: stepMessages
-+						}, preparedTools: stepTools },
+ 						_internal: {
+ 							now,
+-							collectContent: retention.collectContent
++							collectContent: retention.collectContent,
++							standardizedPrompt: {
++								instructions: stepInstructions,
++								messages: stepMessages
++							},
++							preparedTools: stepTools
+ 						},
  						...stepCallSettings
  					})));
- 					const initialLanguageModelCall = await callLanguageModel();
 diff --git a/src/generate-text/stream-language-model-call.ts b/src/generate-text/stream-language-model-call.ts
-index 4fddcb597256d9b54bbfa9680afe269a6cdd95ab..de7415114d9a644dbc3baa80eacc1eee61b402d5 100644
+index f9c537fb4827da4d567e13ae020dbab4962974d2..584a71f3b75e5b9fed504a1f77b4d5e534d3f994 100644
 --- a/src/generate-text/stream-language-model-call.ts
 +++ b/src/generate-text/stream-language-model-call.ts
 @@ -1,3 +1,12 @@
@@ -242,25 +244,25 @@ index 4fddcb597256d9b54bbfa9680afe269a6cdd95ab..de7415114d9a644dbc3baa80eacc1eee
  export async function streamLanguageModelCall<
    TOOLS extends ToolSet,
    OUTPUT extends Output = Output,
-@@ -225,6 +272,8 @@ export async function streamLanguageModelCall<
-     generateId = originalGenerateId,
+@@ -226,6 +273,8 @@ export async function streamLanguageModelCall<
      generateCallId = originalGenerateCallId,
      now = originalNow,
+     collectContent = true,
 +    standardizedPrompt: preparedPrompt,
 +    preparedTools,
    } = {},
    onStart,
    onLanguageModelCallStart,
-@@ -258,6 +307,8 @@ export async function streamLanguageModelCall<
-     generateId?: IdGenerator;
-     generateCallId?: IdGenerator;
+@@ -261,6 +310,8 @@ export async function streamLanguageModelCall<
      now?: () => number;
+     /** Internal: content is only needed by collectors and full-content callbacks. */
+     collectContent?: boolean;
 +    standardizedPrompt?: StandardizedPrompt;
 +    preparedTools?: Awaited<ReturnType<typeof prepareTools>>;
    };
    onLanguageModelCallStart?: Arrayable<OnLanguageModelCallStartCallback>;
    onLanguageModelCallEnd?: Arrayable<OnLanguageModelCallEndCallback<TOOLS>>;
-@@ -292,7 +343,9 @@ export async function streamLanguageModelCall<
+@@ -295,7 +346,9 @@ export async function streamLanguageModelCall<
    const resolvedModel = resolveLanguageModel(model);
    const effectiveCallId = callId ?? generateCallId();
  
@@ -271,7 +273,7 @@ index 4fddcb597256d9b54bbfa9680afe269a6cdd95ab..de7415114d9a644dbc3baa80eacc1eee
      instructions,
      system,
      prompt,
-@@ -311,7 +364,7 @@ export async function streamLanguageModelCall<
+@@ -314,7 +367,7 @@ export async function streamLanguageModelCall<
      provider: resolvedModel.provider.split('.')[0],
    });
  
@@ -281,13 +283,13 @@ index 4fddcb597256d9b54bbfa9680afe269a6cdd95ab..de7415114d9a644dbc3baa80eacc1eee
      toolOrder,
      toolsContext,
 diff --git a/src/generate-text/stream-text.ts b/src/generate-text/stream-text.ts
-index 2bf235b0ab729d7b66619bd1f18c3482dd1728d9..5c665e5c32f195791ac33a174ae0082b2f7f179c 100644
+index 8b0aa33b38cd02e4a8c6fc592932378d6ea3c280..f76758466f0d69ede8644269187436e8badb16b8 100644
 --- a/src/generate-text/stream-text.ts
 +++ b/src/generate-text/stream-text.ts
-@@ -2478,6 +2478,11 @@ class DefaultStreamTextResult<
-                   },
+@@ -2592,6 +2592,11 @@ class DefaultStreamTextResult<
                    _internal: {
                      now,
+                     collectContent: retention.collectContent,
 +                    standardizedPrompt: {
 +                      instructions: stepInstructions,
 +                      messages: stepMessages,
