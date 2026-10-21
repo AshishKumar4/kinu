@@ -27,9 +27,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { arch, cpus, homedir, platform as osPlatform } from 'node:os';
+import { arch, cpus, platform as osPlatform } from 'node:os';
 import * as v from 'valibot';
 import { REPO_ROOT as root } from './repo-root';
+import { ladderCacheDirectory } from './cache-root';
 
 
 export const COST_TABLE = `${root}scripts/gate-cost.json`;
@@ -127,7 +128,7 @@ export function writeCosts(table: CostTable, path = COST_TABLE): number {
 /** Live rows measure their process tree on every deploy, red or green. This is resource evidence, not a verdict or
  *  a tracked-tree edit: it survives disposable deploy checkouts and never changes the SHA being verified. */
 export function resourceCostFile(run: string): string {
-  return join(homedir(), '.cache', 'kinu-ladder', 'resources', createHash('sha256').update(run).digest('hex') + '.json');
+  return join(ladderCacheDirectory(), 'resources', createHash('sha256').update(run).digest('hex') + '.json');
 }
 
 export function withResourceCosts(table: CostTable, runs: readonly string[]): CostTable {

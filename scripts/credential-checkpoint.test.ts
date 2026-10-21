@@ -53,7 +53,11 @@ const ORIGIN = `http://127.0.0.1:${String(deployment.port)}`;
 
 const home = scratchDir('credential-checkpoint');
 
-const file = join(home, '.cache', 'kinu', 'credential-checkpoint', `127.0.0.1:${String(deployment.port)}.json`);
+// The scripts' cache root, named apart from the home: the checkpoint keeps under it, never under `~/.cache` (Main,
+// 2026-10-21: the home disk filled, and every script's cache moves with the one name).
+const cache = scratchDir('credential-checkpoint-cache');
+
+const file = join(cache, 'kinu', 'credential-checkpoint', `127.0.0.1:${String(deployment.port)}.json`);
 
 beforeEach(() => {
   captures = 0;
@@ -70,7 +74,7 @@ afterAll(async () => {
 
 async function run(step: 'capture' | 'owed' | 'restore', origin = ORIGIN) {
   const child = Bun.spawn([process.execPath, join(import.meta.dir, 'credential-checkpoint.ts'), step, origin], {
-    env: childEnv({ HOME: home, KINU_EVAL_WEB_IDENTITY: 'the-deployment-dev-identity-secret' }), stdout: 'pipe', stderr: 'pipe',
+    env: childEnv({ HOME: home, XDG_CACHE_HOME: cache, KINU_EVAL_WEB_IDENTITY: 'the-deployment-dev-identity-secret' }), stdout: 'pipe', stderr: 'pipe',
   });
 
   return child.exited;
