@@ -214,8 +214,8 @@ export function DeviceRow({
         )}
         action={(
           <Menu label={`${device.label} options`} items={[
-            { label: "Rename", title: "Rename this device", icon: PencilSimpleIcon, run: () => setEditing(device.label) },
-            { label: "Revoke", title: "Revoke device", icon: TrashIcon, run: onRevoke, danger: true },
+            { label: "Rename", marker: "data-device-rename", title: "Rename this device", icon: PencilSimpleIcon, run: () => setEditing(device.label) },
+            { label: "Revoke", marker: "data-device-revoke", title: "Revoke device", icon: TrashIcon, run: onRevoke, danger: true },
           ]} />
         )}
         below={notes.length === 0 ? undefined : <div className="space-y-1 p-meta p-text-3">{notes}</div>} />

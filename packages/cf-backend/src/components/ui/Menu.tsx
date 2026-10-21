@@ -8,6 +8,8 @@ import { DotsThreeIcon } from "@phosphor-icons/react";
 
 export interface MenuItem {
   readonly label: string;
+  /** The item's own attribute, which a test finds it by wherever the menu opens (`data-device-revoke`). */
+  readonly marker: `data-${string}`;
   /** Its tooltip and accessible name where the label alone is ambiguous ("Revoke device"). */
   readonly title?: string;
   readonly icon: ComponentType<{ size?: number }>;
@@ -30,10 +32,10 @@ export function Menu({ label, items, trigger }: {
       </DropdownMenu.Trigger>
       {/* Its positioner over a dialog's scrim (z-50) and under the design bar: a row's ⋯ opens inside Plugins' modal too. */}
       <DropdownMenu.Content align="end" className="p-menu" style={{ zIndex: 60 }}>
-        {items.map(({ label: itemLabel, title, icon: Icon, run, danger = false, apart = false }) => (
+        {items.map(({ label: itemLabel, marker, title, icon: Icon, run, danger = false, apart = false }) => (
           <div key={itemLabel} className="contents">
             {apart && <DropdownMenu.Separator />}
-            <DropdownMenu.Item title={title} aria-label={title} variant={danger ? "danger" : "default"} icon={<Icon size={16} />} onClick={run}>
+            <DropdownMenu.Item {...{ [marker]: "" }} title={title} aria-label={title} variant={danger ? "danger" : "default"} icon={<Icon size={16} />} onClick={run}>
               {itemLabel}
             </DropdownMenu.Item>
           </div>

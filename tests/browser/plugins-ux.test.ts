@@ -188,8 +188,10 @@ describe('MCP presets', () => {
         );
 
         // Not connected, the card keeps its way to the sign-in, begun again for a run of its own.
-        await page.click('[data-plugin-source="github"] [data-plugin-menu]');
-        const again = await signInTab(page, '[data-plugin-source="github"] [data-plugin-sign-in]');
+        await page.click('[data-plugin-source="github"] [data-row-menu]');
+        // The menu opens over the page, not inside the row: its item is found by its own attribute.
+        await page.waitForSelector('[data-plugin-sign-in]');
+        const again = await signInTab(page, '[data-plugin-sign-in]');
         const runs = await begunRuns(page);
 
         expect({ again, runs: runs.length, distinct: new Set(runs).size }).toEqual({ again: sentTo, runs: 2, distinct: 2 });
@@ -338,8 +340,9 @@ describe('MCP presets', () => {
         const signInAgain = async (runs: number) => {
           const retryTarget = page.browser().waitForTarget((target) => target.opener() === page.target());
 
-          await page.click(`${row} [data-plugin-menu]`);
-          await page.click(`${row} [data-plugin-sign-in]`);
+          await page.click(`${row} [data-row-menu]`);
+          await page.waitForSelector('[data-plugin-sign-in]');
+          await page.click('[data-plugin-sign-in]');
           const tab = await (await retryTarget).page();
 
           if (tab === null) throw new Error('the sign-in opened no tab');
@@ -379,11 +382,11 @@ describe('MCP presets', () => {
       const row = '[data-plugin-source="github"]';
 
       try {
-        await page.waitForSelector(`${row} [data-plugin-menu]`);
-        await page.click(`${row} [data-plugin-menu]`);
-        await page.waitForSelector('[role="menu"]');
+        await page.waitForSelector(`${row} [data-row-menu]`);
+        await page.click(`${row} [data-row-menu]`);
+        await page.waitForSelector('[role="menu"] [data-plugin-docs]');
 
-        expect(await page.$(`${row} [data-plugin-sign-in]`)).toBeNull();
+        expect(await page.$('[data-plugin-sign-in]')).toBeNull();
       } finally {
         await page.close();
       }

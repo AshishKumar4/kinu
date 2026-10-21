@@ -343,7 +343,7 @@ function Measures() {
           </div>
           <div className="grid gap-3">
             <Group><Row tile={<RowTile icon={SquaresFourIcon} />} title="Hover me" meta="A row's wash comes in over --dur-state" action={null} attributes={{}} /></Group>
-            <div className="flex items-center gap-2 t-meta"><Menu label="Open the menu" items={[{ label: "Rename", icon: PencilSimpleIcon, run: () => undefined }, { label: "Delete", icon: TrashIcon, run: () => undefined, danger: true, apart: true }]} />--dur-enter</div>
+            <div className="flex items-center gap-2 t-meta"><Menu label="Open the menu" items={[{ label: "Rename", marker: "data-system-rename", icon: PencilSimpleIcon, run: () => undefined }, { label: "Delete", marker: "data-system-delete", icon: TrashIcon, run: () => undefined, danger: true, apart: true }]} />--dur-enter</div>
             <Fold />
           </div>
         </div>
@@ -471,12 +471,12 @@ function Rows() {
       {() => (
         <div className="space-y-3">
           <Row tile={<BrandMark brand="github" size={18} />} title="GitHub" meta="Issues, pull requests and code" status={<Status tone="success">Connected</Status>}
-            action={<Menu label="More for GitHub" items={[{ label: "Docs", icon: ArrowSquareOutIcon, run: () => undefined }, { label: "Remove", icon: TrashIcon, run: () => undefined, danger: true, apart: true }]} />} attributes={{}} />
+            action={<Menu label="More for GitHub" items={[{ label: "Docs", marker: "data-system-docs", icon: ArrowSquareOutIcon, run: () => undefined }, { label: "Remove", marker: "data-system-remove", icon: TrashIcon, run: () => undefined, danger: true, apart: true }]} />} attributes={{}} />
           <Row tile={<BrandMark brand="google" size={18} />} title="Gmail" meta="Read and search your mail"
             action={<button type="button" aria-label="Add Gmail" className={ROW_ACTION}><PlusIcon size={16} /></button>} attributes={{}} />
           <Row tile={<RowTile icon={DesktopTowerIcon} />} title="Workstation" meta="workstation · linux · nvidia0" status={<Status tone="success">Connected</Status>}
             control={<><span className="t-item p-text-2">Sandbox</span><Switch on onChange={() => undefined} label="Sandbox on Workstation" /></>}
-            action={<Menu label="Workstation options" items={[{ label: "Rename", icon: PencilSimpleIcon, run: () => undefined }]} />}
+            action={<Menu label="Workstation options" items={[{ label: "Rename", marker: "data-system-rename", icon: PencilSimpleIcon, run: () => undefined }]} />}
             below={<div className="flex flex-wrap gap-2"><Chip onRemove={() => undefined} removeLabel="Revoke">api-worker</Chip><Chip tone="danger" onRemove={() => undefined} removeLabel="Remove">landing-page · denied</Chip></div>} attributes={{}} />
           <Row selected tile={<RowTile icon={PlugsConnectedIcon} />} title="Linear" meta="Selected" status={<Status tone="warning">Needs sign-in</Status>} action={null} attributes={{}} />
           <Group>
@@ -656,7 +656,7 @@ function PhoneRow() {
     <div className="p-bg p-4">
       <Row tile={<RowTile icon={DesktopTowerIcon} />} title="Workstation" meta="workstation · linux · nvidia0" status={<Status tone="success">Connected</Status>}
         control={<><span className="t-item p-text-2">Sandbox</span><Switch on onChange={() => undefined} label="Sandbox on Workstation" /></>}
-        action={<Menu label="Workstation options" items={[{ label: "Rename", icon: PencilSimpleIcon, run: () => undefined }]} />} attributes={{}} />
+        action={<Menu label="Workstation options" items={[{ label: "Rename", marker: "data-system-rename", icon: PencilSimpleIcon, run: () => undefined }]} />} attributes={{}} />
     </div>
   );
 }

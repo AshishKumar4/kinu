@@ -1,6 +1,6 @@
 /** One-click MCP preset rows; a row's state is the account's server row tagged with its `preset_id`. */
 import { Effect } from 'effect';
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
   ArrowSquareOutIcon, PlusIcon, SignInIcon, TrashIcon, XIcon,
 } from "@phosphor-icons/react";
@@ -62,6 +62,32 @@ export function ServerStatus({ status }: { status: McpServerSummary['status'] })
   return <Status tone={shown.tone}>{shown.label}</Status>;
 }
 
+/**
+ * Each preset's last sign-in failure, kept by the preset rather than by the row that began the sign-in: adding a preset
+ * moves it from Add to Connected, so the row that hears how its sign-in ended is not the one that started it, and the
+ * finish page closed with the only copy of why it failed. A later sign-in that connects clears it.
+ */
+const presetFailures = new Map<string, string>();
+
+const failureListeners = new Set<() => void>();
+
+function setPresetFailure(preset: string, failure: string | null): void {
+  if (failure === null) presetFailures.delete(preset);
+  else presetFailures.set(preset, failure);
+
+  for (const listener of failureListeners) listener();
+}
+
+function heardFailures(changed: () => void): () => void {
+  failureListeners.add(changed);
+
+  return () => { failureListeners.delete(changed); };
+}
+
+function usePresetFailure(preset: string): string | null {
+  return useSyncExternalStore(heardFailures, () => presetFailures.get(preset) ?? null);
+}
+
 export function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
   preset: McpPreset;
   server: McpServerSummary | undefined;
@@ -73,7 +99,8 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
   const [openToken, setOpenToken] = useState(false);
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const err = usePresetFailure(preset.id);
+  const setErr = (failure: string | null) => setPresetFailure(preset.id, failure);
 
   // A sign-in's end: the list read again, and its outcome kept on this row, its finish page having closed with the only
   // copy of a failure. A later success clears an earlier failure.
@@ -142,22 +169,26 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
 
   const asking = openToken && !added;
 
+  // An added server offers its sign-in where the account says it does (`server.signIn`): begun again for a run of its
+  // own, in a tab opened now. An earlier failure stays until a sign-in connects (`ended`), not while one is pending.
+  const signInAgain = useCallback(() => detach(Effect.gen(function* () {
+    if (server === undefined) return;
+
+    const failed = yield* Effect.promise(async () => signInMcpServer(beginConnect(), server.id, ended));
+
+    if (failed !== null) setErr(failed);
+  })), [server, ended]);
+
   let trailing: ReactNode;
 
   if (server !== undefined) {
     // An added server offers its sign-in where the account says it does (`server.signIn`): begun again for a run of its
     // own, in a tab opened now. An earlier failure stays until a sign-in connects (`ended`), not while one is pending.
-    const signInAgain = !server.signIn ? null : async () => {
-      const failed = await signInMcpServer(beginConnect(), server.id, ended);
-
-      if (failed !== null) setErr(failed);
-    };
-
     trailing = (
       <Menu label={`More for ${preset.title}`} items={[
-        ...(signInAgain === null ? [] : [{ label: "Sign in", icon: SignInIcon, run: () => detach(Effect.promise(signInAgain)) }]),
-        { label: "Docs", icon: ArrowSquareOutIcon, run: () => { window.open(preset.docsUrl, "_blank", "noopener,noreferrer"); } },
-        { label: "Remove", icon: TrashIcon, run: remove, danger: true, apart: true },
+        ...(server.signIn ? [{ label: "Sign in", marker: "data-plugin-sign-in" as const, icon: SignInIcon, run: signInAgain }] : []),
+        { label: "Docs", marker: "data-plugin-docs", icon: ArrowSquareOutIcon, run: () => { window.open(preset.docsUrl, "_blank", "noopener,noreferrer"); } },
+        { label: "Remove", marker: "data-plugin-remove", icon: TrashIcon, run: remove, danger: true, apart: true },
       ]} />
     );
   } else if (asking) {
