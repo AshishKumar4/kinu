@@ -31,7 +31,7 @@ import {
   type DesktopAction, type DesktopAnswer, type DesktopRequest, type DesktopScreen,
 } from './desktop-input';
 import { LABEL_LIMIT, LABEL_NAME, ZoneSchema, previewAddress, type PreviewAddress } from './preview';
-import { Deferred, Effect, Exit, Result, Semaphore } from 'effect';
+import { Cause, Deferred, Effect, Exit, Result, Semaphore } from 'effect';
 
 import {
   DEFAULT_DEVBOX_POLICY,
@@ -70,7 +70,7 @@ import {
 } from './lifecycle';
 import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, type ResourceScope } from './operation-lanes';
 import { SupervisedProcesses } from './supervised-processes';
-import { DevboxError, attempt, attemptSync, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
+import { DevboxError, attempt, attemptSync, hold, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
@@ -2996,9 +2996,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         // A process that runs as a job and has ended is told now, on this beat: no other arm watches it. A store or box
         // that cannot answer is asked again on the next beat; the beat itself goes on.
-        await settle(attempt('io', async () => {
+        const told = await hold(attempt('io', async () => {
           if ((await this.#procSpecs()).some((spec) => spec.job !== undefined)) await this.#ended(await this.#processes().list());
-        }).pipe(Effect.catch((failed) => Effect.sync(() => { console.error(`[devbox] telling ended jobs failed: ${describe({ cause: failed })}`); }))));
+        }));
+
+        if (Exit.isFailure(told)) console.error(`[devbox] telling ended jobs failed: ${describe({ cause: Cause.squash(told.cause) })}`);
 
         const now = Date.now();
 
@@ -3185,7 +3187,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       if (job === undefined || isProcessLive(process.status)) continue;
       // A tail the box cannot read is no reason to keep the end untold.
-      const tail = await settle(attempt('io', () => this.#processes().logs(process.id, { bytes: INCIDENT_REASON_MAX_CHARS })).pipe(Effect.catch((failed) => Effect.succeed(`(what it wrote could not be read: ${describe({ cause: failed })})`))));
+      const read = await hold(attempt('io', () => this.#processes().logs(process.id, { bytes: INCIDENT_REASON_MAX_CHARS })));
+      const tail = Exit.isSuccess(read) ? read.value : `(what it wrote could not be read: ${describe({ cause: Cause.squash(read.cause) })})`;
 
       await this.#record('process-ended', tail, { processId: process.id, job, ...(process.exitCode !== undefined && { exitCode: process.exitCode }) });
       await this.#supervised().forget(process.id);

@@ -1,5 +1,5 @@
 import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
-import type { ComputerProcessEnds } from './computer-process-ends';
+import type { ComputerProcessEnds } from '@kinu.run/core';
 import type { ToolSet } from 'ai';
 /**
  * CF runtime adapter: bridges the Agents DO context to core's AgentRuntime. One Durable Object per

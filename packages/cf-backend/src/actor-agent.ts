@@ -1,5 +1,5 @@
 import { Cause, Effect, Exit } from 'effect';
-import { ComputerProcessEnds } from './computer-process-ends';
+import { ComputerProcessEnds } from '@kinu.run/core';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
 /**
@@ -105,10 +105,10 @@ import {
   type SqlExecutor,
   betaSwarms,
   // Background-job system (#173: auto-background past the surface threshold)
-  BackgroundJobRunner, JobNotResumable, type JobResumer, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
+  BackgroundJobRunner, type JobResumer, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
   invocationBackgroundPolicy,
   type BackgroundJobStore, type TaskListStore,
-  resumeBackgroundJob, resumableBackgroundJob, computerProcessJob, harvestBackgroundJob, type ActorToolsets,
+  resumeBackgroundJob, resumableBackgroundJob, computerProcessResume, stopComputerProcessJob, harvestBackgroundJob, type ActorToolsets,
   cancelCurrentWork, getStoredModelSpec,
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
@@ -2090,35 +2090,17 @@ export abstract class ActorAgent extends Agent<Env> {
    * `terminated` and `unknown` count as settled; any `failed` (command may still run) throws,
    * keeping the job `running` so the cancel can be retried.
    */
-  /**
-   * A computer's process runs on in its box across this object's restart: its job is resumed by waiting for the end its
-   * box tells, starting nothing.
-   */
-  private readonly computerProcessResume: JobResumer = {
-    resumes: (kind, input) => computerProcessJob(kind, input) !== null,
-    redrive: async (kind, input) => {
-      const process = computerProcessJob(kind, input);
+  /** A computer's process runs on across this object's restart: its job resumes waiting for the end its box tells. */
+  private get computerProcessResume(): JobResumer {
+    return computerProcessResume((jobId) => this.processEnds.ended(jobId));
+  }
 
-      if (process === null) throw new JobNotResumable(kind);
-
-      return { processId: process.processId, ...await this.processEnds.ended(process.job) };
-    },
-  };
-
-  /**
-   * A cancelled job that is a computer's process: its box stops it, or the cancel fails and the job keeps running. Read
-   * from the workspace's one job table, whichever actor's it is.
-   */
+  /** A cancelled job that is a computer's process, read from the workspace's one job table, whichever actor's it is. */
   private async stopComputerProcessJob(jobId: string): Promise<void> {
     const [row] = this.ctx.storage.sql.exec('SELECT kind, input_json FROM background_jobs WHERE id = ?', jobId).toArray();
     const job = v.safeParse(v.object({ kind: v.string(), input_json: v.string() }), row);
-    const process = job.success ? computerProcessJob(job.output.kind, v.parse(JsonValueSchema, JSON.parse(job.output.input_json))) : null;
-    const box = this.rt.sandboxHandle;
 
-    if (process === null || box === null) return;
-    const { stopped } = await box.stopSupervisedProcess(process.processId);
-
-    if (!stopped) throw new KinuError('unavailable', `the computer did not stop process ${process.processId} of background job ${jobId}`);
+    await stopComputerProcessJob(job.success ? { kind: job.output.kind, input: v.parse(JsonValueSchema, JSON.parse(job.output.input_json)) } : null, this.rt.sandboxHandle, jobId);
   }
 
   private async cancelBackgroundDeviceRequests(jobId: string): Promise<void> {

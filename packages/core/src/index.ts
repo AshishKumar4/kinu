@@ -1077,6 +1077,10 @@ export {
   sandboxSizeLabel, WORKSPACE_BACKUP_DIR, sandboxFiles,
 } from './execution/sandbox';
 
+export { computerProcessResume, stopComputerProcessJob } from './jobs/computer-process';
+
+export { ComputerProcessEnds } from './execution/computer-process-ends';
+
 export {
   DESKTOP_MEMBERS,
 } from './execution/desktop';

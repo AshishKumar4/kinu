@@ -4,13 +4,13 @@
  * not yet resumed), it is kept until the job's resume asks; told of a job that no longer runs, nothing is kept.
  */
 import * as v from 'valibot';
-import type { ComputerProcessEnd } from '@kinu.run/core';
+import type { ComputerProcessEnd } from './sandbox';
 
 const EndRow = v.object({ exit_code: v.nullable(v.number()), tail: v.string() });
 
 /** The workspace object's SQL, as its own `ctx.storage.sql`: rows as stored values, read through `EndRow`. */
 interface EndsSql {
-  exec(query: string, ...bindings: (string | number | null)[]): { toArray(): Record<string, SqlStorageValue>[] };
+  exec(query: string, ...bindings: (string | number | null)[]): { toArray(): Record<string, string | number | null | ArrayBuffer>[] };
 }
 
 /** A job's promise waiting for its process's end. */

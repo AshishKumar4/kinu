@@ -5,7 +5,7 @@
  */
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { ComputerProcessEnds } from '../src/computer-process-ends';
+import { ComputerProcessEnds } from '@kinu.run/core';
 
 function ends(running: (jobId: string) => boolean) {
   const db = new Database(':memory:');

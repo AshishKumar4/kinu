@@ -342,48 +342,37 @@ describe("a computer's process run as a job", () => {
     reason: 'Error: listen EADDRINUSE: address already in use :::3000',
   });
 
-  test('its end settles the job with the code and what it wrote, and is told once, as the job', async () => {
+  // An eviction leaves the job's row running and its lane's fiber orphaned; the box's process runs on. The next
+  // activation's recovery resumes the job, waiting for the end its box tells.
+  const evicted = async (jobId: string): Promise<Harness> => {
     const harness = orchestratorHarness();
-    const { agent } = harness;
+    await harness.started;
+    jobsOver(harness.db).create({
+      id: jobId, kind: 'startProcess', workMode: 'build', now: Date.now(), label: 'npm run dev',
+      input: JSON.stringify({ command: 'npm run dev', cwd: '/workspace/app', processId: 'proc-dev', machine: 'computer', job: jobId }),
+    });
+    seedOrphanFiber(harness.db, `${BACKGROUND_FIBER_PREFIX}startProcess`, { phase: 'running', jobId, kind: 'startProcess' });
 
-    await agent.harnessComputerProcessJob('bgjob-dev', 'proc-dev');
-    expect(await agent.acceptSandboxLifecycleIncident(ended('bgjob-dev', 'inc-end'))).toMatchObject({ status: 'queued', duplicate: false });
-    expect(await agent.acceptSandboxLifecycleIncident(ended('bgjob-dev', 'inc-end'))).toMatchObject({ status: 'queued', duplicate: true });
+    return harness;
+  };
+
+  test("across the workspace's restart its end settles the job with the code and what it wrote, told once, as the job", async () => {
+    const harness = await evicted('bgjob-dev');
+    const next = await nextActivation(harness);
+
+    expect(jobsOver(harness.db).get('bgjob-dev')).toMatchObject({ status: 'running' });
+    expect(await next.agent.acceptSandboxLifecycleIncident(ended('bgjob-dev', 'inc-end'))).toMatchObject({ status: 'queued', duplicate: false });
+    expect(await next.agent.acceptSandboxLifecycleIncident(ended('bgjob-dev', 'inc-end'))).toMatchObject({ status: 'queued', duplicate: true });
     await joinHarnessFibers();
 
-    expect(agent.harnessJob('bgjob-dev')).toEqual({ status: 'completed', result: expect.stringContaining('EADDRINUSE') });
-    const texts = (await programmaticTurns(harness)).map((turn) => turn.text);
+    expect(jobsOver(harness.db).get('bgjob-dev')).toMatchObject({ status: 'completed', result: expect.stringContaining('EADDRINUSE') });
+    const texts = (await programmaticTurns(next)).map((turn) => turn.text);
     expect(texts).toEqual([expect.stringContaining('Background startProcess job bgjob-dev completed')]);
   });
 
-  // An eviction leaves the job's row running and its lane's fiber orphaned; the box's process runs on.
-  const evicted = (harness: Harness, jobId: string) => {
-    jobsOver(harness.db).create({
-      id: jobId, kind: 'startProcess', workMode: 'build', now: Date.now(), label: 'npm run dev',
-      input: JSON.stringify({ command: 'npm run dev', cwd: '/workspace/app', processId: 'proc-api', machine: 'computer', job: jobId }),
-    });
-    seedOrphanFiber(harness.db, `${BACKGROUND_FIBER_PREFIX}startProcess`, { phase: 'running', jobId, kind: 'startProcess' });
-  };
-
-  test("across the workspace's restart the job runs on, waiting for the end its box tells, and that end settles it", async () => {
-    const harness = orchestratorHarness();
-    await harness.started;
-    evicted(harness, 'bgjob-api');
-
-    const next = await nextActivation(harness);
-
-    expect(jobsOver(harness.db).get('bgjob-api')).toMatchObject({ status: 'running' });
-    await next.agent.acceptSandboxLifecycleIncident(ended('bgjob-api', 'inc-after'));
-    await joinHarnessFibers();
-
-    expect(jobsOver(harness.db).get('bgjob-api')).toMatchObject({ status: 'completed', result: expect.stringContaining('EADDRINUSE') });
-  });
-
   test('an end the box told before the restart resumed the job settles it as the job resumes', async () => {
-    const harness = orchestratorHarness();
-    await harness.started;
-    evicted(harness, 'bgjob-early');
-    // Told to the workspace before its next activation resumed the job: nothing waited, so the end was kept.
+    const harness = await evicted('bgjob-early');
+    // Told before the next activation resumed the job: nothing waited, so the end was kept.
     await harness.agent.acceptSandboxLifecycleIncident(ended('bgjob-early', 'inc-early'));
 
     await nextActivation(harness);
@@ -393,17 +382,16 @@ describe("a computer's process run as a job", () => {
   });
 
   test('a restore is noted to the running job, and is no incident', async () => {
-    const harness = orchestratorHarness();
-    const { agent } = harness;
+    const harness = await evicted('bgjob-dev');
+    const next = await nextActivation(harness);
 
-    await agent.harnessComputerProcessJob('bgjob-dev', 'proc-dev');
-    await agent.acceptSandboxLifecycleIncident({
+    await next.agent.acceptSandboxLifecycleIncident({
       version: ENVELOPE_VERSION, incidentId: 'inc-restore', stage: 'process-restored', attempts: 1, processId: 'proc-dev', job: 'bgjob-dev',
       reason: 'the computer restarted, and started this process again',
     });
 
-    expect(agent.harnessJob('bgjob-dev')).toMatchObject({ status: 'running' });
-    const texts = (await programmaticTurns(harness)).map((turn) => turn.text);
+    expect(jobsOver(harness.db).get('bgjob-dev')).toMatchObject({ status: 'running' });
+    const texts = (await programmaticTurns(next)).map((turn) => turn.text);
     expect(texts).toEqual([expect.stringContaining('Background startProcess job bgjob-dev is still running')]);
   });
 });

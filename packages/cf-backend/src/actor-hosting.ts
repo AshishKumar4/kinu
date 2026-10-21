@@ -7,7 +7,7 @@
  * Not facets: `do.facet.cpu_shared` means a facet wave serialises like one isolate.
  */
 
-import type { ComputerProcessEnds } from './computer-process-ends';
+import type { ComputerProcessEnds } from '@kinu.run/core';
 import type { Agent, AgentContext } from 'agents';
 import {
   childContextResolver, localContextTree, type ContextEditor, type ContextTree, createSeatHost, defaultLoopOrigin,

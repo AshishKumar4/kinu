@@ -119,7 +119,7 @@ export class ParkedWritesProbeDO extends DurableObject<Cloudflare.Env> {
 
     const asked = pattern(size, 2);
 
-    const files = withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), resolve: null, userRoots: () => ['/pc'], locate: null, parksWrites: true }, {
+    const files = withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), resolve: null, owner: null, userRoots: () => ['/pc'], locate: null, parksWrites: true }, {
       mode: () => 'strict', deferrals: queue.channel,
     });
 
