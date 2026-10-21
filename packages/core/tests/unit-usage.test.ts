@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import type { LanguageModelV2 } from '@ai-sdk/provider';
 import type { FetchFunction } from '@ai-sdk/provider-utils';
 import { generateText } from 'ai';
 import * as v from 'valibot';
@@ -205,6 +206,14 @@ describe('normalizeUsage over the OpenAI-compatible family (Workers AI)', () => 
     expect(u.input).toBe(88);
   });
 
+  // Review finding (2026-10-21): a provider's payload naming no count still witnesses that none was reported; the SDK's
+  // zeros for it are its own.
+  test('a report naming no count, or only the total, reports nothing, not the zeros the SDK fills in', async () => {
+    const reports = await Promise.all([usageFromOpenAICompat({}), usageFromOpenAICompat({ total_tokens: 12 })]);
+
+    expect(reports.map((u) => ({ u, total: usageTotal(u) }))).toEqual([{ u: {}, total: undefined }, { u: {}, total: undefined }]);
+  });
+
   test('no neuron figure from a provider that does not bill in them', async () => {
     const u = await usageFromOpenAICompat({ prompt_tokens: 5, completion_tokens: 1 });
     expect('neurons' in u).toBe(false);
@@ -324,19 +333,21 @@ describe('normalizeUsage without a provider report', () => {
     expect(u).toEqual({ input: 10, output: 4 });
   });
 
-  // ai 7.0.148's adapter for a V2-spec model sets `raw` to `{ totalTokens }` itself: no provider's payload, and naming
-  // none of the counts, so it witnessed none of them and the report read as unmeasured.
-  test("a report whose raw names no count, as the SDK's V2 adapter writes it, is taken at its word", () => {
-    const u = normalizeUsage({
-      inputTokens: 5,
-      outputTokens: 7,
-      inputTokenDetails: { noCacheTokens: undefined, cacheReadTokens: undefined, cacheWriteTokens: undefined },
-      outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
-      totalTokens: 12,
-      raw: { totalTokens: 12 },
-    });
+  // ai 7.0.148's adapter for a V2-spec model writes `raw` as `{ totalTokens }` itself: no provider's payload, and naming
+  // none of the counts, it read as a report of nothing.
+  test("a V2-spec model's report, through the SDK's own adapter, is taken at its word", async () => {
+    const model: LanguageModelV2 = {
+      specificationVersion: 'v2', provider: 'test', modelId: 'm', supportedUrls: {},
+      doGenerate: async () => ({
+        content: [{ type: 'text', text: 'ok' }], finishReason: 'stop', warnings: [],
+        usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 },
+      }),
+      doStream: async () => { throw new Error('generate only'); },
+    };
 
-    expect(u).toEqual({ input: 5, output: 7 });
+    const r = await generateText({ model, prompt: 'hi' });
+
+    expect({ raw: r.finalStep.usage.raw, usage: normalizeUsage(r.finalStep.usage) }).toEqual({ raw: { totalTokens: 12 }, usage: { input: 5, output: 7 } });
   });
 
   test('an all-undefined report reports nothing', () => {

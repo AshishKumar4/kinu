@@ -9,10 +9,9 @@ import type { LanguageModel } from 'ai';
 import { AwaitedList, scriptedTurnModel } from '@kinu.run/test-utils';
 import { fleetEnvForTest } from './helpers/analytics-plane';
 import {
-  driveUntil, gatewayWorkspace, GATEWAY_CATALOG, makeEnv, orchestratorHarness, ownDatabase, reactivateOrchestratorHarness, storedChat,
+  driveUntil, gatewayWorkspace, GATEWAY_CATALOG, makeEnv, orchestratorHarness, reactivateOrchestratorHarness, storedChat,
   workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
-import type { Database } from 'bun:sqlite';
 import { chatCompletion, GATEWAY_MODEL, requestOf, stubAiBinding } from './helpers/platform-gateway';
 import { actorConnectionTag, RunEventRecorder, WORKSPACE_TITLE_SYSTEM_PROMPT, type SendMetadata } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
@@ -82,11 +81,6 @@ function doneFrames(sent: readonly string[]): Array<{ id: string; error?: string
 
     return [{ id: parsed.output.id, ...(parsed.output.error === true && { error: parsed.output.body }), ...(parsed.output.landed !== undefined && { landed: parsed.output.landed }) }];
   });
-}
-
-/** Whether an agent's own store holds `id`'s words: a send records them before it steers or queues them. */
-function sentWords(database: Database, id: string): boolean {
-  return database.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM pending_steers WHERE id = ?').get(id)?.n === 1;
 }
 
 /** `turn` for the loop's own seal; anything else is the harness plane's notices. */
@@ -261,11 +255,13 @@ describe('a chat request through the production gate', () => {
   });
 
   // The tab offers Send as soon as Stop is pressed (titled-chat, 1008-e): Continue reaches the agent while the turn the
-  // Stop cut is still ending. It is owed to no turn being stopped, but runs as one of its own, after the brief.
-  test('Continue sent while a stopped turn is still ending runs as a turn of its own, after the brief', async () => {
+  // Stop cut is still ending. It is owed to no turn being stopped, but runs as one of its own, after the brief. Since ai
+  // 7.0.148 a stopped stream ends at the abort (its reader is cancelled), so the stopped turn no longer waits on a model
+  // call still out, as one over staging's network is: Continue runs before that call ends.
+  test('Continue sent with Stop runs as a turn of its own, after the brief, while the stopped call is still out', async () => {
     const harness = orchestratorHarness();
     const { agent } = harness;
-    const { wire, sent, frame } = connection(agent);
+    const { wire, sent } = connection(agent);
     const asked: string[] = [];
     const opened = Promise.withResolvers<void>();
     const unwound = Promise.withResolvers<void>();
@@ -286,10 +282,7 @@ describe('a chat request through the production gate', () => {
         asked.push('brief');
         opened.resolve();
 
-        // The brief's turn holds at its model until it is stopped, and its call ends only once Continue reached the
-        // agent: the stopped call is still out when the next words come, as over staging's network. Since ai 7.0.148 a
-        // stopped stream ends at the abort, not when its call settles, so the turn may be settling by then rather than
-        // streaming, and Continue is queued rather than steered; either way it runs as a turn of its own.
+        // The brief's turn holds at its model until it is stopped, and its call ends only once Continue has run.
         return new Promise((_resolve, reject) => {
           options.abortSignal?.addEventListener('abort', () => { unwound.promise.then(() => { reject(options.abortSignal?.reason); }, reject); });
         });
@@ -307,10 +300,8 @@ describe('a chat request through the production gate', () => {
       gate(wire, chatRequest('req-continue', 'Continue')),
     ];
 
-    await driveUntil(harness, "Continue's words never reached the agent", () => sentWords(ownDatabase(harness, workspaceMainActor(harness.db).actorId), 'input-req-continue') || asked.includes('continue after the brief'));
+    await driveUntil(harness, 'Continue did not run while the stopped call was out', () => doneFrames(sent).some((done) => done.id === 'req-continue'));
     unwound.resolve();
-
-    await frame((frames) => doneFrames(frames).some((done) => done.id === 'req-continue'));
     await Promise.all([opening, ...handled]);
 
     expect(doneFrames(sent).find((done) => done.id === 'req-continue')).toEqual({ id: 'req-continue' });
@@ -319,7 +310,7 @@ describe('a chat request through the production gate', () => {
   });
 
   // The same, in a new chat: an agent of its own, whose room calls into its isolate, as staging's titled-chat did.
-  test("an agent's Continue sent while its stopped turn is still ending runs as a turn of its own, after the brief", async () => {
+  test("an agent's Continue sent with Stop runs as a turn of its own, after the brief, while the stopped call is still out", async () => {
     const BRIEF = 'Log every lamp tonight.';
     const asked: string[] = [];
     const opened = Promise.withResolvers<void>();
@@ -339,8 +330,7 @@ describe('a chat request through the production gate', () => {
       asked.push('brief');
       opened.resolve();
 
-      // The brief's turn holds at its model until it is stopped, and its call ends only once Continue reached the agent,
-      // as a steer of the stopped turn or as its own turn (the first test says why either).
+      // The brief's turn holds at its model until it is stopped, and its call ends only once Continue has run.
       return new Promise<Response>((_resolve, reject) => {
         run.signal?.addEventListener('abort', () => { unwound.promise.then(() => { reject(run.signal?.reason); }, reject); });
       });
@@ -351,7 +341,7 @@ describe('a chat request through the production gate', () => {
     await workspace.agent.setSoul('# Purpose\n\nKeep the lamp log.');
     const { subagent } = await workspace.agent.createSubagentAgent();
     const actorId = v.parse(v.string(), subagent.actorId);
-    const { wire, sent, frame } = connection(workspace.agent, [actorConnectionTag(actorId)]);
+    const { wire, sent } = connection(workspace.agent, [actorConnectionTag(actorId)]);
     const gate = workspace.agent.harnessChatGate();
     const opening = gate(wire, chatRequest('req-opening', BRIEF));
 
@@ -364,9 +354,8 @@ describe('a chat request through the production gate', () => {
       gate(wire, chatRequest('req-continue', 'Continue')),
     ];
 
-    await driveUntil(workspace, "Continue's words never reached the agent", () => sentWords(ownDatabase(workspace, actorId), 'input-req-continue') || asked.includes('continue after the brief'));
+    await driveUntil(workspace, 'Continue did not run while the stopped call was out', () => doneFrames(sent).some((done) => done.id === 'req-continue'));
     unwound.resolve();
-    await frame((frames) => doneFrames(frames).some((done) => done.id === 'req-continue'));
     await Promise.all([opening, ...handled]);
 
     expect(doneFrames(sent).find((done) => done.id === 'req-continue')).toEqual({ id: 'req-continue' });
