@@ -11,7 +11,7 @@ import { asFetchFunction } from '../src/providers/fetch-shim';
 import { createWorkersAIProvider } from '../src/providers/workers-ai-provider';
 import { withModelStack } from '../src/providers/wire-model';
 import { describeProviderError, toProviderError } from '../src/providers/util';
-import { classifyErrorCode } from '../src/obs/index';
+import { classifyErrorCode, KinuError } from '../src/obs/index';
 import type { JsonValue } from '../src/utils/json';
 import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { ModelStreamPart } from '@kinu.run/test-utils';
@@ -696,13 +696,15 @@ describe('a generate read from its stream', () => {
   const USAGE = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 2, text: 2, reasoning: 0 } };
   const FINISH: ModelStreamPart = { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: USAGE };
 
-  function byStream(answers: readonly (readonly ModelStreamPart[])[]) {
+  /** A model answering each ask with the next of `answers`; `asked` runs as each ask opens. */
+  function byStream(answers: readonly (readonly ModelStreamPart[])[], asked: () => void = () => {}) {
     let opened = 0;
 
     const inner = new MockLanguageModelV4({
       doStream: async () => {
         const parts = answers[Math.min(opened, answers.length - 1)] ?? [];
         opened += 1;
+        asked();
 
         return { stream: convertArrayToReadableStream<ModelStreamPart>([...parts]) };
       },
@@ -741,5 +743,30 @@ describe('a generate read from its stream', () => {
     const result = await generateText({ model, prompt: 'hi', maxRetries: 0, providerOptions: callRetries(1) });
 
     expect({ text: result.text, opened: opened() }).toEqual({ text: 'whole', opened: 2 });
+  });
+
+  test.each([
+    { failure: 'a spent allowance', error: new KinuError('budget', 'the allowance is spent') },
+    { failure: "the provider's final refusal", error: new APICallError({ message: 'bad request', url: 'https://api.example.com/v1/chat/completions', requestBodyValues: undefined, statusCode: 400, isRetryable: false }) },
+  ])('is not asked again when $failure ends its stream part way', async ({ error }) => {
+    const { model, opened } = byStream([
+      [{ type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }, { type: 'error', error }],
+      [{ type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'whole' }, { type: 'text-end', id: 't' }, FINISH],
+    ]);
+
+    await expect(generateText({ model, prompt: 'hi', maxRetries: 0, providerOptions: callRetries(1) })).rejects.toThrow();
+    expect(opened()).toBe(1);
+  });
+
+  test('is not asked again once its caller has let go', async () => {
+    const caller = new AbortController();
+    const dropped = new Error('the connection dropped');
+
+    const { model, opened } = byStream([
+      [{ type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }, { type: 'error', error: dropped }],
+    ], () => caller.abort());
+
+    await expect(generateText({ model, prompt: 'hi', maxRetries: 0, abortSignal: caller.signal, providerOptions: callRetries(1) })).rejects.toThrow();
+    expect(opened()).toBe(1);
   });
 });
