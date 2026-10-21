@@ -179,7 +179,7 @@ describe('OAuth handoff state', () => {
       .rejects.toThrow();
   });
 
-  test('a browser holding none of its bindings cannot spend the state, and learns nothing of it', async () => {
+  test('a browser holding none of its bindings is refused without the record: it learns no connect or run', async () => {
     const kv = makeKv();
     const { state } = await started(kv, { connectFor: 'account-a', connectRun: '5f0c3a8e-2b1d-4c7e-9a64-1d2e3f405162' });
 

@@ -128,7 +128,7 @@ authPageRoutes.get('/auth/:provider/start', noHead<AuthPagesEnv>((c) => Effect.s
   startOAuth(c.req.raw, c.env, decodeURIComponent(rawParam(c, 'provider'))))));
 
 authPageRoutes.get('/auth/:provider/callback', noHead<AuthPagesEnv>((c) => Effect.suspend(() =>
-  finishOAuth(c.req.raw, c.env, c.executionCtx, decodeURIComponent(rawParam(c, 'provider'))))));
+  completeOAuth(c.req.raw, c.env, c.executionCtx, decodeURIComponent(rawParam(c, 'provider'))))));
 
 function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Effect.Effect<Response, KinuError> {
   return Effect.gen(function* () {
@@ -270,40 +270,12 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
   });
 }
 
-/** Burns this callback's binding from the handoff cookie whatever the outcome (its state record is already spent), and
- *  keeps the bindings of the browser's other starts; the cookie goes with its last one. */
-function finishOAuth<Id>(
+/** A provider's callback. The binding it spends leaves the handoff cookie whatever the outcome (its state record is
+ *  spent), and the browser's other starts keep theirs; the cookie goes with its last one. */
+function completeOAuth<Id>(
   request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'>, providerId: string,
 ): Effect.Effect<Response, KinuError> {
   return Effect.gen(function* () {
-    const held = heldBindings(readCookie(request, OAUTH_STATE_COOKIE_NAME));
-    const spent: SpentBinding = { binding: null };
-    const response = yield* completeOAuth(request, env, ctx, { providerId, held, spent });
-    const kept = spent.binding === null ? held.join('.') : bindingsCookie(held, { spent: spent.binding });
-
-    response.headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, kept, kept === '' ? 0 : OAUTH_HANDOFF_LIFETIME_MS));
-
-    return response;
-  });
-}
-
-/** Where a callback notes the binding it spent, for the cookie to drop: none until a handoff is consumed. */
-interface SpentBinding {
-  binding: string | null;
-}
-
-/** A provider's callback: the provider, the bindings this browser holds, and where the one it spends is noted. */
-interface OAuthCallback {
-  readonly providerId: string;
-  readonly held: readonly string[];
-  readonly spent: SpentBinding;
-}
-
-function completeOAuth<Id>(
-  request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'>, handoff: OAuthCallback,
-): Effect.Effect<Response, KinuError> {
-  return Effect.gen(function* () {
-    const { providerId } = handoff;
     const provider = getOAuthProvider(env, providerId);
 
     if (!provider) return html('Sign in unavailable', '<p>This deployment has no sign-in set up for that provider. Go back and choose another one.</p>', { status: 404 });
@@ -319,12 +291,14 @@ function completeOAuth<Id>(
     // A connect whose handoff this browser holds ends on the finish page, naming its run, whatever fails after: its
     // state expired or another provider's included.
     let connecting: { readonly run: string | null } | null = null;
+    const held = heldBindings(readCookie(request, OAUTH_STATE_COOKIE_NAME));
+    let spent: string | null = null;
 
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      const consumed = yield* Effect.promise(async () => consumeOAuthState(env.AUTH_KV, state, provider.id, handoff.held));
+    const response = yield* Effect.catchCause(Effect.gen(function* () {
+      const consumed = yield* Effect.promise(async () => consumeOAuthState(env.AUTH_KV, state, provider.id, held));
       const savedState = consumed.record;
 
-      handoff.spent.binding = consumed.binding;
+      spent = consumed.binding;
       connecting = savedState.connectFor === null ? null : { run: savedState.connectRun };
 
       if (consumed.refusal !== null) return yield* Effect.die(new Error(consumed.refusal));
@@ -395,6 +369,12 @@ function completeOAuth<Id>(
       <div class="actions"><a class="provider" href="/login?prompt=login">Return to sign in</a></div>
     `, { status: 400 });
     }));
+
+    const kept = spent === null ? held.join('.') : bindingsCookie(held, { spent });
+
+    response.headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, kept, kept === '' ? 0 : OAUTH_HANDOFF_LIFETIME_MS));
+
+    return response;
   });
 }
 

@@ -169,9 +169,10 @@ export async function createOAuthState(
   return { state, binding, lifetimeMs: OAUTH_HANDOFF_LIFETIME_MS };
 }
 
-/** Deleted before it is judged, so a concurrent second callback finds nothing. A callback with none of the `bindings`
- *  it was issued to is refused before anything in the record is read back; one that holds it is answered with its
- *  record, refused or not, so a connect that is refused still names its run. */
+/** Deleted before it is judged, so a concurrent second callback finds nothing, and a planted link spends its own state
+ *  (the planted-link test). A callback with none of the `bindings` it was issued to is refused before anything in the
+ *  record is read back; one that holds it is answered with its record, refused or not, so a connect that is refused
+ *  still names its run. */
 export function consumeOAuthState(
   kv: KvStore,
   state: string,

@@ -328,18 +328,22 @@ describe('connecting Cloudflare attaches to the account that asked, and signs no
 // Second review (2026-10-23): the handoff cookie held one binding, so a second sign-in or connect begun in the same
 // browser, in any tab, replaced the first one's, whose callback was then refused as not this browser's.
 describe('two starts in one browser each finish', () => {
-  test('the first start\'s callback, arriving after a second start, signs in', async () => {
+  test('the first start\'s callback, arriving after a second start, signs in, and leaves the second its binding', async () => {
     const { env } = setupEnv();
     const originalFetch = globalThis.fetch;
+    const handoffCookie = (response: Response | null | undefined) => response?.headers.getSetCookie().find((value) => value.startsWith(`${OAUTH_STATE_COOKIE_NAME}=`)) ?? '';
 
     try {
       globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-a', refresh_token: 'cf-a-refresh' }, 'a@example.com').fetchFake;
       const first = await startCloudflareLogin(env);
       const again = await authPages(new Request(`${ORIGIN}/auth/cloudflare/start`, { headers: { cookie: first.setCookie.split(';')[0] ?? '' } }), env);
-      const held = again?.headers.getSetCookie().find((value) => value.startsWith(`${OAUTH_STATE_COOKIE_NAME}=`)) ?? '';
-      const done = await completeCloudflareLogin(env, { state: first.state, setCookie: held });
+      const second = new URL(again?.headers.get('location') ?? '').searchParams.get('state') ?? '';
+      const firstDone = await completeCloudflareLogin(env, { state: first.state, setCookie: handoffCookie(again) });
+      // The browser's cookie as the first callback left it.
+      const secondDone = await completeCloudflareLogin(env, { state: second, setCookie: handoffCookie(firstDone) });
 
-      expect({ status: done.status, signedIn: sessionCookieIn(done) !== undefined }).toEqual({ status: 302, signedIn: true });
+      expect([firstDone, secondDone].map((done) => ({ status: done.status, signedIn: sessionCookieIn(done) !== undefined, cookie: /Max-Age=\d+/u.exec(handoffCookie(done))?.[0] })))
+        .toEqual([{ status: 302, signedIn: true, cookie: `Max-Age=${String(60 * 60)}` }, { status: 302, signedIn: true, cookie: 'Max-Age=0' }]);
     } finally {
       globalThis.fetch = originalFetch;
     }
