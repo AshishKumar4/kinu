@@ -124,8 +124,9 @@ describe('AgentProviderRegistry composition', () => {
     const streamed = streamText({ model, prompt: 'reply again' });
     expect(await streamed.text).toBe('direct binding');
     expect(await streamed.usage).toMatchObject({ inputTokens: 2, outputTokens: 2 });
+    // A generate is read from the binding's stream, as every Workers AI call is (`WORKERS_AI_STREAMS_GENERATE`).
     expect(calls).toEqual([
-      { model: '@cf/moonshotai/kimi-k2.6', stream: false },
+      { model: '@cf/moonshotai/kimi-k2.6', stream: true },
       { model: '@cf/moonshotai/kimi-k2.6', stream: true },
     ]);
   });

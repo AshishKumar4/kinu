@@ -1281,10 +1281,15 @@ export class LocalAgentSession {
   /** Run pending drains now, bypassing debounce; the daemon's tick calls this before end(). */
   /** Its due events handed to its chat, and the turns that opened run, before the caller (a daemon's tick, a pass) moves
    *  on: outside the crossing, so no turn's own close waits on one queued behind it. */
-  async flushPendingDrains(): Promise<void> {
+  async flushPendingDrains(admitted?: () => Promise<void>): Promise<void> {
     await this.chat.flushPendingDrains();
+    // Its events are queued as turns now: `admitted` is told before they are joined, since one may wait on the owner.
+    await admitted?.();
 
-    for (const id of this.deliveries.takenSince()) await this.deliveredTurnSettled(id);
+    for (const id of this.deliveries.takenSince()) {
+      // One held behind an open question to the owner runs once they answer: this pass, which holds the actor, ends.
+      if (await this.chat.announcementSettledOrHeld(id) === 'held') return;
+    }
   }
 
   /** What this agent is owed and has been handed, as its orchestration commits it. */
@@ -1645,10 +1650,15 @@ export class LocalAgentSession {
       // A queued turn always has a live pump, so awaiting it drains the queue.
       if (this.chat.pumpPromise) { await this.chat.pumpPromise; continue; }
 
-      if (this.backgroundFibers.size === 0) return;
-
-      if (!await this.joinBackgroundFibers(deadline)) return;
+      // The grace bounds the jobs, not a turn one of them woke while they were joined: that turn is joined too.
+      if ((this.backgroundFibers.size === 0 || !await this.joinBackgroundFibers(deadline)) && !this.pumping()) return;
     }
+  }
+
+  /** Whether a turn runs here or is queued to run: the pump settleBackgroundWork() joins. A turn held behind an open
+   *  question to the owner is neither until the question closes. */
+  pumping(): boolean {
+    return this.chat.pumpPromise !== null;
   }
 
   /** Append to the run-event log, scoped to the in-flight run unless `runId` is given. Never throws. */
