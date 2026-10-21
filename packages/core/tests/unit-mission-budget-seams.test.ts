@@ -28,7 +28,7 @@ function handoff(): SubagentHandoff {
 
 import { buildDrainBatch } from '../src/events/hub/drain';
 import type { KinuEvent } from '../src/events/hub/types';
-import { temporaryPortStub } from './helpers-agents';
+import { temporaryPortStub, lonelyTree } from './helpers-agents';
 
 function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   const db = new Database(':memory:');
@@ -111,6 +111,7 @@ function searchableDeps(opts: {
       delegation: ROOT_DELEGATION_BUDGET,
       snapshot: () => [],
       list: async () => [],
+      tree: lonelyTree,
       create: async (input) => ({
         name: input.name ?? 'subagent',
         displayName: 'Subagent',
@@ -235,7 +236,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     governor.debit(1);
 
     const ns = sandbox(searchableDeps({ budget: governor }));
-    expect(await ns.list({})).toMatchObject({ subagents: [] });
+    expect(await ns.list({})).toMatchObject({ tree: [{ name: 'main', you: true }] });
     expect(await ns.dismiss('subagent')).toMatchObject({ ok: true });
   });
 

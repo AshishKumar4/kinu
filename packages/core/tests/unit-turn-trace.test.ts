@@ -4,6 +4,7 @@
  * object starts another invocation is force-closed with its attributes dropped (11 of 59 turns on
  * staging, 2026-09-26), and a detached turn's work straddles alarms and messages.
  */
+import { lonelyTree } from './helpers-agents';
 import { expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import { scriptedTurnModel, type ScriptedTurnResult, admitTestClaim, createRecordingTracer } from '@kinu.run/test-utils';
@@ -38,6 +39,7 @@ function team() {
   const deps: TeamToolDeps = {
     delegation: ROOT_DELEGATION_BUDGET,
     list: async () => [roster],
+    tree: lonelyTree,
     snapshot: () => [roster],
     knows: async (name) => name === roster.name,
     create: async () => ({ name: roster.name, displayName: 'Researcher', subagent: roster }),
