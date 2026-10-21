@@ -386,6 +386,8 @@ export class FakeSandbox {
   readonly sequence: string[] = [];
   /** Each exec the box sent with no stdin of its own, whose end the platform would make a task nobody awaits. */
   readonly unownedStdin: string[] = [];
+  /** Each signal the box asked the platform to send, a task nobody awaits too. */
+  readonly platformSignals: number[] = [];
   /** Stands in for what `/proc/mounts` reports for paths the box's `mountBucket` holds mounted. */
   readonly s3fsMounts = new Set<string>();
   /** Hosts the box bound to a named outbound handler (`setOutboundByHost`). */
@@ -925,7 +927,11 @@ export class FakeSandbox {
       },
       monitor: () => this.#ended.promise,
       destroy: async () => { await this.destroy(); this.#ended.resolve(); },
-      signal: () => { void this.stop().then(this.#ended.resolve, this.#ended.reject); },
+      // The platform's signal ends the container as tini forwards it, but as a task the box cannot await.
+      signal: (signo) => {
+        this.platformSignals.push(signo);
+        void this.stop().then(this.#ended.resolve, this.#ended.reject);
+      },
       getTcpPort: port => ({
         fetch: async (request: Request) => await this.portAnswer?.(port, request) ?? new Response('', { status: this.listening.has(port) ? 200 : 503 }),
         connect: () => unreached('port.connect'),
@@ -1095,16 +1101,20 @@ export class FakeSandbox {
     return undefined;
   }
 
+  /** An exec of kill: the process it names ends as a SIGKILL ends it (`endProcess`), or, sent to every process but
+   *  tini (PID 1) as a TERM, its child ends and tini and the container with it (a stop). */
+  #killCommand(args: readonly string[], pid: number): ExecProcess {
+    if (args[1] === '-TERM' && args[2] === '-1') void this.stop().then(this.#ended.resolve, this.#ended.reject);
+    else if (args[1] === '-KILL') this.#live.get(Number(args[2]))?.kill(9);
+
+    return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
+  }
+
   async #nativeCommand(launched: string[], options: ContainerExecOptions, pid: number): Promise<ExecProcess> {
     // A caller's run is in its own group, `setsid -w` (D69): what it runs follows.
     const args = launched[0] === 'setsid' && launched[1] === '-w' ? launched.slice(2) : launched;
 
-    // The box ends a process with an exec of kill (`endProcess`): the process it names ends as a SIGKILL ends it.
-    if (args[0] === 'kill' && args[1] === '-KILL') {
-      this.#live.get(Number(args[2]))?.kill(9);
-
-      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
-    }
+    if (args[0] === 'kill') return this.#killCommand(args, pid);
 
     // The restore deadline's process ends only when it is killed: a test that needs the deadline to
     // fall hands the box a hand clock rather than waiting out a duration.
