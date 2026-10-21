@@ -12,12 +12,12 @@ import { TOOL_REACH, CODEMODE_CODE_DESCRIPTION, type ToolSurfaceNarrowing } from
 import { MACHINE_FILES } from '../operations/executors';
 import { slateReaches } from '../slates/surface';
 import { KinuError, settle, settleSync } from '../obs';
-import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
+import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type MemberDeclaration } from '../types/codemode';
 import { parsesAsExpression } from '../craft/source';
 import type { CraftedToolSource } from './crafted-executor';
 import { toolDescription } from '../utils/tool-description';
 import { allowedInPlan, defineOperation, serve, statedInput, type Served } from '../operations/operation';
-import { operationInputSchema } from './operation-surfaces';
+import { objectInputDeclaration, operationInputSchema } from './operation-surfaces';
 import { mcpDiscoveryProvider } from './mcp-discovery';
 import { isMcpToolKey } from './mcp-naming';
 
@@ -138,12 +138,17 @@ export function externalToolDeclarations(
     });
 }
 
+/** One crafted tool's declaration: its body takes what its author wrote, so its arguments are its own. */
+function craftedMemberDeclaration(entry: CraftedDeclaration): MemberDeclaration {
+  return {
+    full: `/** ${craftedToolDescription(entry.name, entry.description).replace(/\*\//g, '* /')} */\n${entry.name}(...args: unknown[]): Promise<unknown>;`,
+    call: `${entry.name}(...args)`,
+  };
+}
+
 /** The `tools.*` declaration of crafted tools; each native tool is declared by its own schema. */
 export function renderCraftedToolsDeclaration(crafted: readonly CraftedDeclaration[]): string {
-  const lines = crafted.flatMap((entry) => [
-    `  /** ${craftedToolDescription(entry.name, entry.description).replace(/\*\//g, '* /')} */`,
-    `  ${entry.name}(...args: unknown[]): Promise<unknown>;`,
-  ]);
+  const lines = crafted.flatMap((entry) => craftedMemberDeclaration(entry).full.split('\n').map((line) => `  ${line}`));
 
   return `export declare const ${CRAFTED_TOOL_NAMESPACE}: {\n${lines.join('\n')}\n};\n`;
 }
@@ -175,18 +180,25 @@ function toolOperation(name: string, entry: ToolSet[string]): Served | null {
 
 const CraftedDeclarationsSchema = v.object({ craftedDeclarations: v.function() });
 
+/** The crafted tools `eval` holds now, by name and what each is for; none where it holds no crafted set. */
+function craftedSet(sandbox: ToolSet[string] | undefined): readonly CraftedDeclaration[] {
+  const declared = v.safeParse(CraftedDeclarationsSchema, sandbox);
+
+  if (!declared.success) return [];
+
+  return v.parse(v.array(v.object({ name: v.string(), description: v.string() })), declared.output.craftedDeclarations());
+}
+
 const ProgramResultSchema = v.object({ result: v.optional(v.unknown()) });
 
 /**
  * Each crafted tool `eval` holds, as a record that runs its body as a program through that `eval`: a body is defined
  * only in a program, so a caller outside one reaches it the way a program does.
  */
-function craftedOperations(sandbox: ToolSet[string] | undefined): Served[] {
-  const declared = v.safeParse(CraftedDeclarationsSchema, sandbox);
+function craftedOperations(sandbox: ToolSet[string] | undefined, crafted: readonly CraftedDeclaration[]): Served[] {
   const execute = sandbox?.execute;
 
-  if (!declared.success || execute === undefined) return [];
-  const crafted = v.parse(v.array(v.object({ name: v.string(), description: v.string() })), declared.output.craftedDeclarations());
+  if (execute === undefined) return [];
 
   return crafted.map(({ name, description }) => serve(defineOperation({
     ns: CRAFTED_TOOL_NAMESPACE, name, help: craftedToolDescription(name, description), slate: false,
@@ -202,16 +214,24 @@ function craftedOperations(sandbox: ToolSet[string] | undefined): Served[] {
 
 /** `tools.*`: each tool as its record; `signal` is the calling program's, so a tool it reaches stops with its eval. */
 export function toolsNamespace(tools: ToolSet, signal: AbortSignal | undefined): CodemodeProvider {
+  const crafted = craftedSet(tools[SANDBOX_TOOL]);
+
   // A crafted name shadows a native one, as a program's own definition does.
-  const named = new Map([...Object.entries(tools).flatMap(([name, entry]) => toolOperation(name, entry) ?? []), ...craftedOperations(tools[SANDBOX_TOOL])]
+  const named = new Map([...Object.entries(tools).flatMap(([name, entry]) => toolOperation(name, entry) ?? []), ...craftedOperations(tools[SANDBOX_TOOL], crafted)]
     .map((record) => [record.op.name, record]));
 
   const records = [...named.values()];
+  const craftedByName = new Map(crafted.map((entry) => [entry.name, entry]));
 
   return {
     name: CRAFTED_TOOL_NAMESPACE,
-    // Declared by each tool's own schema, never here.
-    types: '',
+    // What `describe` answers for each: a native tool by its own input schema, a crafted one as the turn's prompt
+    // declares it. The eval docstring lists none: they are the model's own tools, already in its tool list and prompt.
+    declarations: Object.fromEntries(records.map(({ op }) => {
+      const craftedEntry = craftedByName.get(op.name);
+
+      return [op.name, craftedEntry === undefined ? objectInputDeclaration(op) : craftedMemberDeclaration(craftedEntry)];
+    })),
     positionalArgs: true,
     operations: records,
     tools: Object.fromEntries(records.map((record) => [record.op.name, {

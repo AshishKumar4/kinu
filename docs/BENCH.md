@@ -368,11 +368,28 @@ harbor run \
   --jobs-dir bench-artifacts/harbor-jobs -n 1 -k 1 -r 0 -y
 ```
 
+`bench.harbor.omp_agent:OmpAgent` runs OMP headless, so a comparison of models keeps one harness and varies only `-m`.
+It is built for the private kinu-envs review tasks: OMP runs inside the task's container, never on this host, and
+takes the operator's own OMP binary. Its login is read from OMP's store, read-only. Only the access token and the
+account ids leave the store, never a refresh token, and a token that would expire within the run's 45-minute limit
+(every model's, for parity) is refused, not renewed. The token enters the container as a 0600 file, is imported into a home that belongs to the run, and
+that home is deleted before Harbor collects artifacts. Allow egress only to the provider's API host:
+
+```bash
+PYTHONPATH=<this repo> harbor run \
+  --agent bench.harbor.omp_agent:OmpAgent -m openai-codex/gpt-6.1-sol \
+  -p <kinu-envs>/tasks/<task> --allow-agent-host chatgpt.com \
+  --jobs-dir <dir> -n 1 -y
+```
+
 Two launcher scripts sit around the harness:
 
 - `scripts/tbench-arm.sh`: one Terminal-Bench 2.1 arm.
 - `bun scripts/bench-external.ts compare|gain`: pairs retained Harbor trials
   through this repo's one statistics path, with no credential.
+  `review --jobs <dir>` prints kinu-envs review trials as a table: each model's
+  recall, precision, F1 and reward per case, with wall time and OMP's list-price
+  cost. A trial whose harness failed is reported as a failure, not as a score.
 
 The environment variables that matter are `BENCH_RUN_ROOT`, `BENCH_ARTIFACTS`,
 `BENCH_PANEL_SIZE` (default 3, range 2 to 6) and `BENCH_PANEL`. The adapter's

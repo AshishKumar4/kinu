@@ -3,15 +3,12 @@
  * kinu CLI — create, chat with, and evolve persistent AI agents.
  */
 
+import '../src/trusted-roots';
 import { buildProgram } from '../src/program';
 import { chatCommand } from '../src/commands/chat';
 import { printHelp, printFailure, DIM } from '../src/display';
 import { runStartupUpdateCheck } from '../src/version-check';
 import { installTurnDiagnostics } from '../src/turn-log';
-import { installTrustedRoots } from '../../pc-agent/src/daemon/trust.js';
-
-// Before any command connects: every fetch and socket this process opens trusts the roots trust.js keeps.
-installTrustedRoots();
 
 const program = buildProgram();
 

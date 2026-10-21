@@ -1,4 +1,5 @@
 // Preset adds on the real UserDO; `queueMcpAuthUrl` stands in for the authorization redirect the harness cannot perform.
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import { asFetchFunction, createCredentialCipher, mcpPresetById, type JsonObject, type JsonValue } from '@kinu.run/core';
@@ -8,12 +9,11 @@ import {
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  lastOAuthStorage, liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedMcpAnswer, seedMcpTools, seedSdkMcpServer,
+  inheritedMcpManager, lastOAuthStorage, liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedMcpAnswer, seedMcpTools, seedSdkMcpServer,
 } from './helpers/agents-sdk';
-import { kvOf } from './helpers/platform-context';
+import { kvOf, makeCtx } from './helpers/platform-context';
 import { auth } from '@modelcontextprotocol/client';
 
-import { durableObjectStorage } from './helpers/programmatic-host';
 
 // Imported after `mockAgentsSdk` registers: mcp.ts binds the provider class at load.
 const { RegisteredAppOAuthClientProvider } = await import('../src/user/user-do');
@@ -69,7 +69,25 @@ describe('an MCP preset add', () => {
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.presetId).toBe('cloudflare');
     expect(listed?.status).toBe('authenticating');
-    expect(listed?.authUrl).toBe('https://mcp.cloudflare.com/authorize?test');
+    expect(listed?.signIn).toBe(true);
+    h.close();
+  });
+
+  // Sol-round review (2026-10-23): a token preset holds the deployment's app client id too, and a failed connection then
+  // offered Authorize, which its token never needs.
+  test('a token preset whose connection is refused offers no sign-in, though the deployment holds its app', async () => {
+    const h = harness({ mcpAppCredentials: ['github'] });
+    const owner = await testOwner();
+    const added = await h.userDO.userMcp_add(owner, { presetId: 'github', headers: { Authorization: 'Bearer ghp_test' } }, 'https://kinu.example');
+
+    const connection = inheritedMcpManager(h.userDO).mcpConnections[added.id];
+
+    // Its token refused: the connection fails, as the vendor fails it, holding the app's client all the same.
+    if (connection === undefined) throw new Error('the token preset holds no connection');
+    connection.connectionState = 'failed';
+    const listed = (await h.userDO.userMcp_list(owner)).find((server) => server.id === added.id);
+
+    expect({ status: listed?.status, signIn: listed?.signIn }).toEqual({ status: 'failed', signIn: false });
     h.close();
   });
 
@@ -410,7 +428,7 @@ describe('the registered-app provider against the real SDK auth flow', () => {
     };
 
     const provider = new RegisteredAppOAuthClientProvider({
-      storage: durableObjectStorage({}),
+      storage: makeCtx(new Database(':memory:')).storage,
       clientName: 'test-client',
       baseRedirectUrl: 'https://kinu.example/api/user/mcp/callback',
       clientId: 'test-github-client-id',
@@ -470,7 +488,7 @@ describe('the registered-app provider against the real SDK auth flow', () => {
     const preset = present(mcpPresetById('github'), 'the GitHub preset');
 
     const provider = new RegisteredAppOAuthClientProvider({
-      storage: durableObjectStorage({}), clientName: 'test-client', baseRedirectUrl: 'https://kinu.example/api/user/mcp/callback',
+      storage: makeCtx(new Database(':memory:')).storage, clientName: 'test-client', baseRedirectUrl: 'https://kinu.example/api/user/mcp/callback',
       clientId: 'test-github-client-id', clientSecret: 'test-github-client-secret', scope: preset.scope,
     });
 

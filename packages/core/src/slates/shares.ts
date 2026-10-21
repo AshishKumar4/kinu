@@ -117,19 +117,22 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
     }));
   }
 
+  /** People added to the share; one added again keeps their row and takes the role named now (a live share's). */
   addUsers(id: string, users: readonly ShareUser[]): Rec {
-    const share = this.live(id);
+    this.live(id);
     const createdAt = this.now();
 
     for (const user of users) {
       this.db.exec(
-        'INSERT INTO slate_share_users (share_id, user_id, email, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (share_id, user_id) DO NOTHING',
-        id, user.userId, user.email, createdAt,
+        `INSERT INTO slate_share_users (share_id, user_id, email, role, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (share_id, user_id) DO UPDATE SET role = excluded.role`,
+        id, user.userId, user.email, this.table.kind === 'live' ? user.role ?? 'use' : 'use', createdAt,
       );
       markStoreChanged(this.db);
     }
 
-    return { ...share, users: this.users([id]).filter((row) => row.share_id === id).map((row) => row.email) };
+    // Read back, as every record is: who it is given to, and in what role, is the rows' to say.
+    return this.live(id);
   }
 
   protected users(ids: readonly string[]): UserRowOf[] {

@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { present } from '@kinu.run/test-utils';
 import { HeadJournal, UNREPORTED_AT_MERGE_REASON } from '../src/heads/journal';
+import { KinuError } from '../src/obs/index';
 import { initHeadsTables } from '../src/heads/schema';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
@@ -155,6 +156,17 @@ describe('a run that settles closes every head it did not hear from', () => {
     const { journal } = seeded();
 
     expect(() => journal.cacheMerge('no-such-run', MERGE)).toThrow('has no header to keep its merge on');
+  });
+
+  // A reset that empties `head_runs` keeps `head_journal`: a run's heads can outlive its header.
+  test('a run whose header is gone is refused before any of its heads is settled', () => {
+    const { db, sql, journal, actor } = seeded();
+    const before = statuses(sql, actor.actorId);
+
+    db.run('DELETE FROM head_runs WHERE root_id = ?', [RUN]);
+
+    expect(() => journal.cacheMerge(RUN, MERGE)).toThrow(KinuError);
+    expect(statuses(sql, actor.actorId)).toEqual(before);
   });
 
   test('a recursive split keeps its parent head, which IS the run and is still working', () => {

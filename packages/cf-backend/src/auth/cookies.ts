@@ -9,8 +9,14 @@ import { VIEWER_COOKIE_NAME } from '../viewer-pass';
 export const SESSION_COOKIE_NAME = '__Host-kinu_session';
 
 /** Binds one OAuth sign-in to the browser that started it; without it a
- *  callback URL is bearer authority (login CSRF). */
-export const OAUTH_STATE_COOKIE_NAME = '__Host-kinu_oauth_state';
+ *  callback URL is bearer authority (login CSRF). Each handoff has its own cookie, this name and a digest of its state
+ *  (`oauthStateCookieName`), so the sign-ins and connects one browser starts never replace each other's. */
+const OAUTH_STATE_COOKIE_NAME = '__Host-kinu_oauth_state';
+
+/** One handoff's binding cookie, named by the hex digest of its state. */
+export function oauthStateCookieName(stateDigest: string): string {
+  return `${OAUTH_STATE_COOKIE_NAME}_${stateDigest.slice(0, 16)}`;
+}
 
 /** Same binding for the deploy door (`deploy/routes.ts`): the digest of the
  *  OAuth `state`, so `/deploy/callback` proves it is the starting browser. */
@@ -23,11 +29,40 @@ export const CLI_APPROVAL_CSRF_COOKIE_NAME = 'kinu_cli_auth_csrf';
  *  strips exactly this set before guest code; register new cookies here only. */
 export const KINU_COOKIE_NAMES: readonly string[] = [
   SESSION_COOKIE_NAME,
-  OAUTH_STATE_COOKIE_NAME,
   CLI_APPROVAL_CSRF_COOKIE_NAME,
   DEPLOY_STATE_COOKIE_NAME,
   VIEWER_COOKIE_NAME,
 ];
+
+/** The cookies this app sets as `<family>_<digest>`, one per handoff (`oauthStateCookieName`): the preview edge strips
+ *  each family whole. */
+export const KINU_COOKIE_FAMILIES: readonly string[] = [OAUTH_STATE_COOKIE_NAME];
+
+/** Whether `request` began at Kinu itself: a navigation or fetch from this origin, or one the person made (a typed
+ *  address, a bookmark). A browser names where a request began (`Sec-Fetch-Site`); a sibling origin on the same site,
+ *  a guest's preview among them, sends `same-site`, and another site `cross-site`. A client that names none (a
+ *  browser too old to, or no browser) is let through: it cannot plant a cookie in anyone else's browser. */
+export function startedHere(request: Request): boolean {
+  const site = request.headers.get('sec-fetch-site');
+
+  return site === null || site === 'same-origin' || site === 'none';
+}
+
+/** One handoff's cookie: its binding and, for a connect, the run its page began, so a callback the record no longer
+ *  names still ends that run. Until its callback clears it, or the browser's session ends: no lifetime of its own. */
+export function handoffCookie(name: string, handoff: { readonly binding: string; readonly run: string | null }): string {
+  const value = handoff.run === null ? handoff.binding : `${handoff.binding}.${handoff.run}`;
+
+  return `${name}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Lax`;
+}
+
+/** A handoff cookie's binding and run, as `handoffCookie` wrote them; a binding is base64url, so `.` ends it. */
+export function readHandoff(raw: string | null): { readonly binding: string; readonly run: string | null } | null {
+  if (raw === null || raw === '') return null;
+  const [binding = '', run] = raw.split('.', 2);
+
+  return { binding, run: run ?? null };
+}
 
 export function readCookie(request: Request, name: string): string | null {
   const cookie = request.headers.get('cookie');

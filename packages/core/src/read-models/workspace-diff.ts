@@ -18,16 +18,20 @@ import { shellQuote } from '../utils/shell';
 import { SHARED_ROOTS, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 /**
- * A side past one SQLite row is listed as large, without a body (a write's preview too). Nimbus's diff does not say
- * whether it was the content or only the metadata that moved, so a large file whose mode alone changed is listed too
- * (ASK: `VfsDiffEntry` names a content change). This bound and the next are read on call: the browser reaches this
- * module, and a module-scope catalog read ships the whole catalog to it.
+ * A side past this is listed as large, without a body (a write's preview too). Nimbus's diff does not say whether it
+ * was the content or only the metadata that moved, so a large file whose mode alone changed is listed too (ASK:
+ * `VfsDiffEntry` names a content change). It was one SQLite row (2 MB) until the row rose to 8 MiB (2026-10-21), and
+ * stays: what it bounds is the minimal line diff the request computes of two sides and the page that shows it, which
+ * the row did not change.
  */
+const DIFF_BODY_MAX_BYTES = 2 * 1000 * 1000;
+
 export function bodyMaxBytes(): number {
-  return PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value - 64;
+  return DIFF_BODY_MAX_BYTES;
 }
 
-/** Quarter of the facet RPC ceiling: the reply is UTF-16 in the isolate plus per-line overhead.
+/** Quarter of the facet RPC ceiling: the reply is UTF-16 in the isolate plus per-line overhead. Read on call: the browser
+ *  reaches this module, and a module-scope catalog read ships the whole catalog to it.
  *  Files past it are listed with +/- counts and no body. */
 function maxChangesetBodyChars(): number {
   return PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;

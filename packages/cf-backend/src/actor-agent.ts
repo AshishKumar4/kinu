@@ -1,4 +1,5 @@
 import { Cause, Effect, Exit } from 'effect';
+import { ComputerProcessEnds, jobState } from '@kinu.run/core';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
 /**
@@ -104,10 +105,10 @@ import {
   type SqlExecutor,
   betaSwarms,
   // Background-job system (#173: auto-background past the surface threshold)
-  BackgroundJobRunner, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
+  BackgroundJobRunner, type JobResumer, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
   invocationBackgroundPolicy,
   type BackgroundJobStore, type TaskListStore,
-  resumeBackgroundJob, resumableBackgroundJob, harvestBackgroundJob, type ActorToolsets,
+  resumeBackgroundJob, resumableBackgroundJob, computerProcessJob, computerProcessResume, stopComputerProcessJob, harvestBackgroundJob, type ActorToolsets,
   cancelCurrentWork, getStoredModelSpec,
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
@@ -1893,6 +1894,40 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   // Work auto-detached past the 30s threshold (#173).
+  private _processEnds: ComputerProcessEnds | undefined;
+
+  /** Where this object's actors' computer processes run as jobs end (`ComputerProcessEnds`). */
+  protected get processEnds(): ComputerProcessEnds {
+    return this._processEnds ??= new ComputerProcessEnds({
+      state: (jobId) => jobState(this.jobRow(jobId)?.status),
+      // The end is the job's own outcome: its row settles with it, through the runner that holds the job.
+      complete: async (jobId, end) => {
+        const row = this.jobRow(jobId);
+        const process = row === null ? null : computerProcessJob(row.kind, row.input);
+
+        if (row !== null && process !== null) await this.jobRunnerHolding(row.actorId)?.complete(jobId, { processId: process.processId, ...end });
+      },
+    });
+  }
+
+  /** A job's row in the workspace's one job table, whichever actor's it is. */
+  protected jobRow(jobId: string): { readonly actorId: string; readonly kind: string; readonly status: string; readonly input: JsonValue } | null {
+    const [row] = this.ctx.storage.sql.exec('SELECT actor_id, kind, status, input_json FROM background_jobs WHERE id = ?', jobId).toArray();
+    const parsed = v.safeParse(v.object({ actor_id: v.string(), kind: v.string(), status: v.string(), input_json: v.nullable(v.string()) }), row);
+
+    if (!parsed.success) return null;
+    const { actor_id: actorId, kind, status, input_json: input } = parsed.output;
+
+    return { actorId, kind, status, input: input === null ? null : v.parse(JsonValueSchema, JSON.parse(input)) };
+  }
+
+  /** The runner that holds `actorId`'s jobs: the workspace agent's, or a hire's own, revived if it is not hosted now. */
+  protected jobRunnerHolding(actorId: string): BackgroundJobRunner | null {
+    if (actorId === this.actorHandle().actorId) return this.jobRunner;
+
+    return (this.jobAuthorities.live(actorId) ?? this.reviveJobAuthority(actorId))?.runner ?? null;
+  }
+
   protected get jobs(): BackgroundJobStore {
     return this.stores.jobs;
   }
@@ -1969,8 +2004,14 @@ export abstract class ActorAgent extends Agent<Env> {
 
       },
       // Evict-resume (B6): re-drive from the durable checkpoint. Side-effecting kinds (eval / run)
-      // decline and fall back to the eviction failure.
-      resume: { resumes: resumableBackgroundJob, redrive: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, input, mode, signal) },
+      // decline and fall back to the eviction failure. A computer's process runs on in its box across this object's
+      // restart: its job is resumed by waiting for the end its box tells, starting nothing.
+      resume: {
+        resumes: (kind, input) => resumableBackgroundJob(kind, input) || this.computerProcessResume.resumes(kind, input),
+        redrive: (kind, input, mode, signal) => (this.computerProcessResume.resumes(kind, input)
+          ? this.computerProcessResume.redrive(kind, input, mode, signal)
+          : this.resumeBackgroundJob(kind, input, mode, signal)),
+      },
       // Same predicate as `resume`: a kind that cannot be re-driven has no harvestable partial.
       harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
         { sql: this.boundSql, actor: this.actorHandle(), ledger: this.mctsSearchStore }, kind, input,
@@ -2011,6 +2052,8 @@ export abstract class ActorAgent extends Agent<Env> {
     const { notifySettled, ...own } = actor;
 
     return new BackgroundJobRunner({
+      // A hire's computer processes resume as the workspace agent's do; one that re-drives more brings its own.
+      resume: this.computerProcessResume,
       ...own,
       ...this.workspaceJobPorts(owner),
       logActivity: (event, detail) => this.logActivity(event, detail),
@@ -2034,8 +2077,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
         return this.transferDeviceRequests(jobId, requestIds);
       },
-      // A refused device cancel leaves the job running and retryable.
-      onCancelled: (jobId) => this.cancelBackgroundDeviceRequests(jobId),
+      // A refused device cancel, or a computer's process its box would not stop, leaves the job running and retryable.
+      onCancelled: async (jobId) => {
+        await this.stopComputerProcessJob(jobId);
+        await this.cancelBackgroundDeviceRequests(jobId);
+      },
       onSettled: () => { this.detachOwned(Effect.promise(() => this.servingMoved())); },
       // A command on the computer runs in the box's container, which a restart of this object leaves running: its
       // processes carry its job's id (`sandbox.ts`), and the box is asked for them without being started.
@@ -2070,6 +2116,16 @@ export abstract class ActorAgent extends Agent<Env> {
    * `terminated` and `unknown` count as settled; any `failed` (command may still run) throws,
    * keeping the job `running` so the cancel can be retried.
    */
+  /** A computer's process runs on across this object's restart: its job resumes waiting for the end its box tells. */
+  private get computerProcessResume(): JobResumer {
+    return computerProcessResume((jobId) => this.processEnds.ended(jobId));
+  }
+
+  /** A cancelled job that is a computer's process, read from the workspace's one job table, whichever actor's it is. */
+  private async stopComputerProcessJob(jobId: string): Promise<void> {
+    await stopComputerProcessJob(this.jobRow(jobId), this.rt.sandboxHandle, jobId);
+  }
+
   private async cancelBackgroundDeviceRequests(jobId: string): Promise<void> {
     const { stub, caller } = await this.userHub();
     const outcomes = await stub.cancelDeviceRequestsForBackgroundJob(caller, jobId);
@@ -2292,6 +2348,7 @@ export abstract class ActorAgent extends Agent<Env> {
         accounts: () => this.providerAccounts(),
         refusals: this.tierRefusals,
         jobs: () => this.jobRunner,
+        processEnds: () => this.processEnds,
         contextPlane: {
           actorId: this.actorHandle().actorId,
           // Main's context is its own isolate's, as every agent's is.

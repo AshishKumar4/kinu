@@ -1,83 +1,107 @@
 // Kinu PC agent — the roots this process's TLS no longer trusts, for the daemon and the CLI that embeds it.
 'use strict';
 
-const { getCACertificates } = require('node:tls');
+const { getCACertificates, setDefaultCACertificates } = require('node:tls');
 
 const { X509Certificate } = require('node:crypto');
 
 /**
- * The roots that eMudhra's eight compromised intermediates chain to (Mozilla bug 2083449, 2026-10-17: their private
- * keys were recoverable, so anyone could sign for any name through them), by SHA-256 fingerprint, as the incident's
- * record lists them (https://emudhra.we-have-a-problem.com/roots.json). Bun 1.4.3 still trusts the chain (it answered
- * a test host chained through G3B), so this process does not, on every connection it makes: the daemon and the CLI
- * talk only to a Kinu origin and the hosts a model provider serves, none of which chains to these.
+ * The roots eMudhra's compromised intermediates chain to (distrusted-roots.json, the one list; the computer reads it
+ * too, devbox/src/processes.ts). Bun 1.4.3 still trusts the chain (it answered a test host chained through G3B), so
+ * this process does not: the daemon and the CLI talk only to a Kinu origin and the hosts a model provider serves.
  *
  * Deleted when KINU_BUN_VERSION (core/src/cli/bun-runtime.ts) names a Bun that ships the distrust
- * (https://github.com/oven-sh/bun/pull/46159). The computer deselects the same roots (devbox/src/processes.ts).
+ * (https://github.com/oven-sh/bun/pull/46159); trust.test.js goes red that day.
  */
-const DISTRUSTED_ROOTS = [
-  { name: 'emSign Root TLS CA - G3', sha256: '7DD78D5F4F13459A83DFF9ABBBA62EDBAF6F2D102BF257FD712F4D9F2746ED8D' },
-  { name: 'emSign Root CS CA - G3', sha256: 'F2EDAAFF3D9B701FB4D14C9F285F8C0BAD90FC3BCC1FA07D47F4718EDABA34A5' },
-  { name: 'AAA Certificate Services', sha256: 'D7A7A0FB5D7E2731D771E9484EBCDEF71D5F0C3E0A2948782BC83EE0EA699EF4' },
-  { name: 'emSign ECC Root CA - G3', sha256: '86A1ECBA089C4A8D3BBE2734C612BA341D813E043CF9E8A862CD5C57A36BBE6B' },
-];
+const DISTRUSTED_ROOTS = require('./distrusted-roots.json').roots.map((/** @type {{ name: string, sha256: string }} */ root) => ({ name: root.name, sha256: root.sha256 }));
+
+const PEM = /-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/gu;
 
 /** @param {string} pem */
 function fingerprint(pem) {
   return new X509Certificate(pem).fingerprint256.replaceAll(':', '');
 }
 
-/** @type {string[] | null} */
-let trusted = null;
+/**
+ * Each certificate `ca` holds whose fingerprint `distrusted` does not name: `ca` as TLS options take it, a PEM (one
+ * certificate or several), its bytes, or a list of either.
+ * @param {unknown} ca @param {ReadonlySet<string>} distrusted
+ */
+function without(ca, distrusted) {
+  const each = Array.isArray(ca) ? ca : [ca];
+  const pems = each.flatMap((entry) => [...String(entry).matchAll(PEM)].map((match) => match[0]));
 
-/** This process's roots, `NODE_EXTRA_CA_CERTS` among them, without the distrusted: read once. */
-function trustedRoots() {
-  if (trusted !== null) return trusted;
-  const distrusted = new Set(DISTRUSTED_ROOTS.map((root) => root.sha256));
+  return pems.filter((pem) => !distrusted.has(fingerprint(pem)));
+}
 
-  trusted = getCACertificates('default').filter((pem) => !distrusted.has(fingerprint(pem)));
+/** @type {Map<string, string[]>} */
+const trusted = new Map();
 
-  return trusted;
+/**
+ * This process's roots, `NODE_EXTRA_CA_CERTS` among them, without the distrusted: read once.
+ * @param {readonly string[]} [distrusted] the fingerprints left out; the incident's, unless a test names its own
+ */
+function trustedRoots(distrusted = DISTRUSTED_ROOTS.map((root) => root.sha256)) {
+  const key = distrusted.join(',');
+  const held = trusted.get(key) ?? without(getCACertificates('default'), new Set(distrusted));
+
+  trusted.set(key, held);
+
+  return held;
 }
 
 /**
+ * Options whose TLS trusts `roots`: a caller's own `ca` stands, but for any distrusted root it names; one that names
+ * none (null, an empty list or string) is the default store, as Bun reads it.
  * @template {{ tls?: { ca?: unknown } } | undefined} T
- * @param {T} options
- * Options whose TLS trusts `trustedRoots()`, unless the caller named roots of its own.
+ * @param {T} options @param {string[]} roots @param {ReadonlySet<string>} distrusted
  */
-function withTrustedRoots(options) {
-  if (options?.tls?.ca !== undefined) return options;
+function withTrustedRoots(options, roots, distrusted) {
+  const ca = options?.tls?.ca;
+  const own = ca === undefined || ca === null ? [] : without(ca, distrusted);
 
-  return { ...options, tls: { ...options?.tls, ca: trustedRoots() } };
+  return { ...options, tls: { ...options?.tls, ca: own.length === 0 ? roots : own } };
 }
 
 /**
- * Every `fetch` and `WebSocket` this process makes from here on trusts `trustedRoots()`: one place, at the process's
- * start, so no connection a module opens later (the device socket, a deploy's door, an update's download) is missed.
- * Bun hands TLS options to both; its `checkServerIdentity` sees only the leaf, and its WebSocket none, so the roots are
- * the one place a chain is judged.
- * @param {{ fetch: typeof fetch, WebSocket: typeof WebSocket }} scope
+ * A socket's second argument as Bun's options, where it reads `tls`: a protocol, or a list of them, goes inside as
+ * `protocols`, which Bun takes only as a sequence (a lone string there threw "Value is not a sequence", Bun 1.4.3).
+ * @param {string | string[] | Record<string, unknown> | undefined} options
  */
-function installTrustedRoots(scope = globalThis) {
+function socketOptions(options) {
+  if (typeof options === 'string') return { protocols: [options] };
+
+  return Array.isArray(options) ? { protocols: options } : options;
+}
+
+/**
+ * Every connection this process makes from here on trusts `trustedRoots()`: one place, at the process's start, so no
+ * connection a module opens later (the device socket, a deploy's door, an update's download) is missed. `fetch` and
+ * `WebSocket` take the roots in their TLS options (Bun's `checkServerIdentity` sees only the leaf, and its WebSocket
+ * none); `node:https` and `node:tls` take them as the process's default store, which Bun's own fetch never reads.
+ * @param {{ fetch: typeof fetch, WebSocket: typeof WebSocket }} [scope]
+ * @param {readonly string[]} [distrusted]
+ */
+function installTrustedRoots(scope = globalThis, distrusted = DISTRUSTED_ROOTS.map((root) => root.sha256)) {
+  const roots = trustedRoots(distrusted);
+  const left = new Set(distrusted);
   const fetchOf = scope.fetch;
   const Socket = scope.WebSocket;
 
   /** @type {typeof fetch} */
   const trustedFetch = Object.assign(
-    (/** @type {Parameters<typeof fetch>[0]} */ input, /** @type {RequestInit | undefined} */ init) => fetchOf(input, withTrustedRoots(init)),
+    (/** @type {Parameters<typeof fetch>[0]} */ input, /** @type {RequestInit | undefined} */ init) => fetchOf(input, withTrustedRoots(init, roots, left)),
     fetchOf,
   );
 
-  // A protocol list given as the second argument goes inside the options, where Bun reads it beside `tls`.
   class TrustedSocket extends Socket {
     /** @param {string | URL} url @param {string | string[] | Record<string, unknown>} [options] */
     constructor(url, options) {
-      const given = typeof options === 'string' || Array.isArray(options) ? { protocols: options } : options;
-
-      super(url, /** @type {never} */ (withTrustedRoots(given)));
+      super(url, /** @type {never} */ (withTrustedRoots(socketOptions(options), roots, left)));
     }
   }
 
+  setDefaultCACertificates(roots);
   scope.fetch = trustedFetch;
   scope.WebSocket = TrustedSocket;
 }

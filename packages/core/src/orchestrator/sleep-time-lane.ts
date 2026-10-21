@@ -26,7 +26,7 @@ const CLOSED_AT = 'closed';
 /** One answer past the cadence, plus steers: decides as the whole transcript would. */
 const READ_ROWS = (SLEEP_TIME_CADENCE.everyTurns + 1) * 8;
 
-export function initSleepTimeUpdatesTable(execRaw: RawSqlExec): void {
+export function initSleepTimeTables(execRaw: RawSqlExec): void {
   // Account proposals a commit owes the user object, kept until it takes each: `delivery` is the proposal's identity
   // there, so a delivery repeated after a crash or a refusal files nothing new.
   execRaw(`CREATE TABLE IF NOT EXISTS account_proposal_outbox (

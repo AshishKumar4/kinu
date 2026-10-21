@@ -320,6 +320,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** Main's chat, in its own isolate (D9): a turn is open there. */
   harnessMainTurnInFlight(): boolean { return this.mainChatTurn() !== null; }
+
   /** The owner's Stop of main's chat, as its window sends it. */
   async harnessStopMain(): Promise<void> { await this.cancelCurrentWork(); }
   /** The owner's words to main, admitted as its window admits them; resolves once reserved. */
@@ -1675,6 +1676,9 @@ export interface HarnessActorWorld {
   versionId?: string | null;
   /** The `send_email` binding at `env.EMAIL`; unset, the workspace has no mail route. */
   email?: SendEmail;
+  /** The deployment's mail: its domain at `env.EMAIL_DOMAIN`, and the owner's Mailbox object at `env.MAILBOX`.
+   *  Unset, the deployment has no mail. */
+  mailbox?: { readonly domain: string; readonly owner: object };
   /** The Analytics Engine datasets the object's turns, tools and jobs write rows to (`helpers/analytics-engine.ts`). */
   analytics?: Pick<Env, 'AGENT_METRICS' | 'CONTROL_PLANE_OPS'>;
   /** The container binding at `env.KinuDevbox`: the runtime registers the sandbox executor over it.
@@ -1732,6 +1736,10 @@ export function makeEnv(
     ...platformGatewayEnv(world?.aiGateway),
     ...(world?.versionId !== null && { CF_VERSION_METADATA: { id: world?.versionId ?? HARNESS_BUILD, tag: '', timestamp: '' } }),
     ...(world?.email !== undefined && { EMAIL: world.email }),
+    ...(world?.mailbox !== undefined && {
+      EMAIL_DOMAIN: world.mailbox.domain,
+      MAILBOX: { idFromName: (userId: string) => userId, get: () => world.mailbox?.owner },
+    }),
     ...world?.analytics,
     ...(world?.previewHostSuffix !== undefined && { PREVIEW_HOST_SUFFIX: world.previewHostSuffix }),
     ...(world?.container === true && {

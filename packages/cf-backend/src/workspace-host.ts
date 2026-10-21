@@ -6,7 +6,7 @@
 
 import { createWorkspace, storeFiles, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle, WorkspaceFiles, WorkspaceOptions } from '@kinu.run/core/workspace';
-import { jsonResultOrVoid, sha256Hex } from '@kinu.run/core';
+import { jsonResultOrVoid, sha256Hex, type JsonObject } from '@kinu.run/core';
 import type {
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, PreviewRouteCheck, WorkspacePreviewUrl,
 } from '@kinu.run/core';
@@ -56,6 +56,29 @@ export interface HostedWorkspaceEnv<Id> extends Pick<Env, 'LOADER' | 'NIMBUS_RUN
 }
 
 type HostedRuntimeBindings<Id> = HostedRuntimeOptions['env'] & { readonly OrchestratorAgent: WorkspaceHostNamespace<Id> };
+
+type ProcessLogs = Awaited<ReturnType<HostedRuntime['processLogs']>>;
+
+/**
+ * A process's logs as JSON, in Nimbus's declared shape, each optional field carried where it is set, as JSON carries
+ * it. Nimbus records an exit with no reason as `reason: undefined` (`markExit(pid, code)`), which no JSON value holds:
+ * staging rc29 refused every read of an ended process as `Invalid JSON value: Received Object`.
+ */
+function processLogsJson(logs: ProcessLogs): JsonObject {
+  const chunks = logs.chunks.map(({ seq, ts, stream, data, binary }) => {
+    const chunk: JsonObject = { seq, ts, stream, data };
+
+    if (binary !== undefined) chunk['binary'] = binary;
+
+    return chunk;
+  });
+
+  const exit: JsonObject | null = logs.exit === null ? null : { code: logs.exit.code, at: logs.exit.at };
+
+  if (exit !== null && logs.exit?.reason !== undefined) exit['reason'] = logs.exit.reason;
+
+  return { pid: logs.pid, chunks, text: logs.text, cursor: logs.cursor, truncated: logs.truncated, exit };
+}
 
 /** Loaded on first composition, not at module eval, to keep cold start and the test pool loader clean. */
 interface HostedRuntimeModule {
@@ -550,7 +573,7 @@ function workspaceBox(deps: {
     processes: {
       list: async () => await jsonResultOrVoid((await runtime()).listProcesses()),
       kill: async (pid) => await jsonResultOrVoid((await runtime()).killProcess(pid)),
-      logs: async (pid, options) => await jsonResultOrVoid((await runtime()).processLogs(pid, options)),
+      logs: async (pid, options) => processLogsJson(await (await runtime()).processLogs(pid, options)),
       whenEnded: async (pid) => await (await runtime()).workspace.processes.whenEnded(pid),
     },
     ports: {

@@ -256,6 +256,8 @@ export class BackgroundJobRunner {
    */
   private readonly cancelling = new Set<string>();
   private readonly fenced = new Map<string, () => Promise<void>>();
+  /** Each cancel in flight, settled once it has decided the job's row: what an outside completion waits on. */
+  private readonly deciding = new Map<string, Promise<unknown>>();
 
   /** Each watched job's context: when it last answered, the probe it has not answered yet, and how to stop asking. */
   private readonly heard = new Map<string, WatchedJob>();
@@ -735,6 +737,44 @@ export class BackgroundJobRunner {
     } satisfies AgentSignal);
   }
 
+  /**
+   * A running job's work answered where its own promise cannot hear it (its object restarted before the job was resumed):
+   * its row settles with `result`, as its promise's would, and the agent is woken as for any settle. A job no longer
+   * running has nothing to complete.
+   */
+  async complete(jobId: string, result: JsonValue): Promise<void> {
+    // A cancel in flight decides first, as it does for a settle by the job's own promise: a cancel that stops the work
+    // leaves nothing to complete, and one refused leaves the job running, which this completes. Its failure is its own.
+    // A cancel asked again once one is refused decides in turn, so each in flight is waited on.
+    for (let pending = this.deciding.get(jobId); pending !== undefined; pending = this.deciding.get(jobId)) await Promise.allSettled([pending]);
+    const job = this.deps.store.get(jobId);
+
+    if (job?.status !== 'running' || !this.deps.store.settle(jobId, job.epoch, serializeJobResult({ value: result }), Date.now())) return;
+    // As a settle by its own promise: its work is accounted, and its agent woken once.
+    this.interrupted.delete(jobId);
+    this.deps.logActivity?.('bg_job_settled', `${jobId} completed`);
+    this.notifySettled(jobId);
+    await this.wake(jobId);
+  }
+
+  /**
+   * Tells the agent something of a job that is still running, which it still waits on: a running job's wake would read
+   * as its end. Once per `note`: a re-delivery of the same note lands as one message. A job no longer running has
+   * nothing to note.
+   */
+  async note(jobId: string, note: { readonly id: string; readonly text: string }): Promise<void> {
+    const job = this.deps.store.get(jobId);
+
+    if (job?.status !== 'running') return;
+
+    await this.deps.inbox.send({
+      kind: 'background_job',
+      text: `Background ${job.kind} job ${jobId} is still running: ${note.text}`,
+      idempotencyKey: `${backgroundJobWakeTrigger(jobId)}:note:${note.id}`,
+      metadata: { kinuMode: job.workMode, jobId, kind: job.kind, status: job.status },
+    } satisfies AgentSignal);
+  }
+
   /** Abort, mark cancelled, and wake the agent, which was told to wait for this result. */
   async cancel(jobId: string): Promise<boolean> {
     if (await this.stop(jobId) !== 'stopped') return false;
@@ -774,6 +814,19 @@ export class BackgroundJobRunner {
     if (this.deps.store.get(jobId)?.status !== 'running') return 'settled';
 
     if (this.cancelling.has(jobId)) return 'refused';
+    const deciding = this.decide(jobId);
+
+    this.deciding.set(jobId, deciding);
+
+    try {
+      return await deciding;
+    } finally {
+      // A cancel asked again once this one was refused may hold the entry now: it is that one's to remove.
+      if (this.deciding.get(jobId) === deciding) this.deciding.delete(jobId);
+    }
+  }
+
+  private async decide(jobId: string): Promise<'stopped' | 'refused' | 'settled'> {
     this.cancelling.add(jobId);
     let refusal: { readonly error: unknown } | undefined;
 

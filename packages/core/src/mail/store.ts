@@ -68,14 +68,17 @@ const BoxRow = v.object({
 
 const IdentityRow = v.object({ user_id: v.string(), email: v.string(), username: v.string() });
 
-const MessageRow = v.object({
-  rowid: v.number(), id: v.string(), thread_id: v.string(), direction: v.picklist(['in', 'out']), header_id: v.nullable(v.string()),
+const MessageColumns = v.object({
+  rowid: v.number(), id: v.string(), thread_id: v.string(), header_id: v.nullable(v.string()),
   from_addr: v.string(), from_name: v.nullable(v.string()), to_json: v.string(), cc_json: v.string(), delivered_to: v.nullable(v.string()),
   subject: v.string(), at: v.number(), verdict: v.picklist(['verified', 'unverified', 'ours']), auth: v.nullable(v.string()),
   woke: v.nullable(v.picklist(MAIL_WOKE)), snippet: v.string(), text_body: v.nullable(v.string()), text_key: v.nullable(v.string()),
   html_key: v.nullable(v.string()), raw_key: v.nullable(v.string()), read: v.number(), written_by: v.nullable(v.string()),
   send_state: v.nullable(v.picklist(MAIL_SEND_STATES)),
 });
+
+/** A message as stored, with its direction: received where it has no send state. */
+const MessageRow = v.pipe(MessageColumns, v.transform((row) => ({ ...row, direction: row.send_state === null ? 'in' as const : 'out' as const })));
 
 type Message = v.InferOutput<typeof MessageRow>;
 
@@ -386,7 +389,7 @@ export class MailStore {
     const from: MailParty = { name: parsed.from?.name ?? null, address: verdict.from ?? parsed.from?.address ?? input.envelopeFrom.toLowerCase() };
     const headerId = parsed.messageId === null ? null : bare(parsed.messageId);
 
-    const [seen] = headerId === null ? [] : rows(v.pick(MessageRow, ['id', 'thread_id', 'verdict', 'woke']), this.deps.sql.exec(
+    const [seen] = headerId === null ? [] : rows(v.pick(MessageColumns, ['id', 'thread_id', 'verdict', 'woke']), this.deps.sql.exec(
       'SELECT m.id, m.thread_id, m.verdict, m.woke FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ?', headerId, box.path,
     ));
 
@@ -406,9 +409,9 @@ export class MailStore {
     const tag = input.recipient.tag === null ? '' : `+${input.recipient.tag}`;
 
     this.deps.sql.exec(
-      `INSERT INTO mail_messages (id, thread_id, direction, header_id, from_addr, from_name, to_json, cc_json, delivered_to,
+      `INSERT INTO mail_messages (id, thread_id, header_id, from_addr, from_name, to_json, cc_json, delivered_to,
         subject, at, verdict, auth, woke, snippet, text_body, text_key, html_key, raw_key)
-       VALUES (?, ?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       messageId, threadId, headerId,
       from.address, from.name, JSON.stringify(parsed.to), JSON.stringify(parsed.cc),
       `${(input.recipient.path === '' ? '' : `${input.recipient.path}.`)}${input.recipient.username}${tag}@${this.deps.domain}`,
@@ -495,7 +498,7 @@ export class MailStore {
 
     if (query.view === 'important') where.push("t.important IS NOT NULL AND t.path = ''");
 
-    if (query.view === 'sent') where.push("EXISTS (SELECT 1 FROM mail_messages s WHERE s.thread_id = t.id AND s.direction = 'out' AND s.send_state <> 'draft')");
+    if (query.view === 'sent') where.push("EXISTS (SELECT 1 FROM mail_messages s WHERE s.thread_id = t.id AND s.send_state = 'queued')");
 
     if (query.view === 'drafts') where.push("EXISTS (SELECT 1 FROM mail_messages d WHERE d.thread_id = t.id AND d.send_state = 'draft')");
 
@@ -516,7 +519,7 @@ export class MailStore {
 
     const ids = rows(v.object({ id: v.string(), latest: v.number(), unread: v.number() }), this.deps.sql.exec(
       `SELECT t.id, (SELECT MAX(at) FROM mail_messages m WHERE m.thread_id = t.id) AS latest,
-         EXISTS (SELECT 1 FROM mail_messages u WHERE u.thread_id = t.id AND u.direction = 'in' AND u.read = 0) AS unread
+         EXISTS (SELECT 1 FROM mail_messages u WHERE u.thread_id = t.id AND u.send_state IS NULL AND u.read = 0) AS unread
        FROM mail_threads t WHERE ${where.join(' AND ')} ORDER BY latest DESC`, ...bindings,
     )).filter((row) => query.before === undefined || row.latest < query.before);
 
@@ -579,7 +582,7 @@ export class MailStore {
 
     if (thread === undefined) return settleSync(Effect.fail(new KinuError('missing', `No thread "${id}".`)));
 
-    if (change.read !== undefined) this.deps.sql.exec("UPDATE mail_messages SET read = ? WHERE thread_id = ? AND direction = 'in'", change.read ? 1 : 0, id);
+    if (change.read !== undefined) this.deps.sql.exec("UPDATE mail_messages SET read = ? WHERE thread_id = ? AND send_state IS NULL", change.read ? 1 : 0, id);
 
     if (change.trashed !== undefined) this.deps.sql.exec('UPDATE mail_threads SET trashed_at = ? WHERE id = ?', change.trashed ? this.deps.now() : null, id);
 
@@ -615,8 +618,8 @@ export class MailStore {
     const party = (address: string): MailParty => ({ name: null, address: mailAddress(address) });
 
     this.deps.sql.exec(
-      `INSERT INTO mail_messages (id, thread_id, direction, header_id, from_addr, to_json, cc_json, subject, at, verdict, snippet,
-        text_body, read, written_by, send_state) VALUES (?, ?, 'out', ?, ?, ?, ?, ?, ?, 'ours', ?, ?, 1, ?, ?)`,
+      `INSERT INTO mail_messages (id, thread_id, header_id, from_addr, to_json, cc_json, subject, at, verdict, snippet,
+        text_body, read, written_by, send_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ours', ?, ?, 1, ?, ?)`,
       id, threadId, headerId, box.address,
       JSON.stringify(outgoing.to.map(party)), JSON.stringify((outgoing.cc ?? []).map(party)), outgoing.subject, at, snippetOf(outgoing.text),
       outgoing.text, outgoing.writtenBy ?? null, state,
@@ -663,7 +666,7 @@ export class MailStore {
   /** Sends sent from this account in the last day, against its cap (none for operators, 100 otherwise). */
   sentToday(): number {
     return rows(v.object({ n: v.number() }), this.deps.sql.exec(
-      "SELECT COUNT(*) AS n FROM mail_messages WHERE direction = 'out' AND send_state <> 'draft' AND at >= ?", this.deps.now() - DAY,
+      "SELECT COUNT(*) AS n FROM mail_messages WHERE send_state = 'queued' AND at >= ?", this.deps.now() - DAY,
     ))[0]?.n ?? 0;
   }
 

@@ -214,6 +214,41 @@ describe('LocalAgentSession: asking the owner', () => {
     }
   });
 
+  // A drained event held behind an open question is the queued turn's alone: a process that dies before it runs leaves
+  // both its held turn and its events' binding, and the next process must restore one delivery of it, not two.
+  test('an event held behind an open question is delivered once by the next process', async () => {
+    const db = workspaceDatabase(scratchPath('owner-questions-held-event', 'agent.db'));
+    const first = session([{ call: 'ask_owner', input: ASK }], db);
+    const firesAt = Date.now() + 60_000;
+
+    await first.agent.send('Migrate the ledger.', { id: crypto.randomUUID(), mode: 'build' });
+    await first.agent.createTimerTrigger({ atMs: firesAt, label: 'nightly ledger report', trust: 'owner' });
+    await first.agent.fireDueTriggers(firesAt);
+    await first.agent.flushPendingDrains();
+    expect(first.requests).toHaveLength(1);
+    await first.agent.end();
+
+    const second = session([{ answer: 'Integer cents it is.' }, { answer: 'Read the report.' }, { answer: 'Read it again.' }], db);
+
+    try {
+      second.agent.reclaimStrandedEventDeliveries();
+      await second.agent.flushPendingDrains();
+      const [open] = (await second.agent.listOwnerQuestions()).filter((asking) => asking.asked.status === 'open');
+
+      if (open === undefined) throw new Error('the question did not survive the restart');
+      await second.agent.answerOwnerQuestions(open.asked.id, ANSWER);
+      await second.agent.settleBackgroundWork();
+
+      // The answer's own turn, then the report's one turn.
+      const reports = second.requests.filter((request) => JSON.stringify(request.at(-1)).includes('nightly ledger report'));
+
+      expect({ requests: second.requests.length, reports: reports.length }).toEqual({ requests: 2, reports: 1 });
+    } finally {
+      await second.agent.end();
+      db.close();
+    }
+  });
+
   test('Stop closes the question unanswered, and the next message reads that in the call\'s place', async () => {
     const { db, agent, requests } = session([
       { call: 'ask_owner', input: ASK },

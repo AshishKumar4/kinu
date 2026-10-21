@@ -11,7 +11,6 @@ import type { SignalCardEvent, SignalCardState } from '../types/signals';
 import { TURN_AUTHOR_METADATA_KEY, turnTags } from '../types/turn-metadata';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import * as v from 'valibot';
-import { promotedSlateIds } from './markdown-links';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import { summarizeSystemEvent, type EventSummary } from './event-summary';
 import { DELIVERED_RUN_EVENT } from '../orchestrator/chat-queue';
@@ -147,15 +146,20 @@ export function slatesChanged(row: { metadata: unknown }): readonly string[] {
   return metadataField(row, SLATES_CHANGED_METADATA_KEY, v.array(v.string())) ?? [];
 }
 
-export function slatesToPreview(changed: Iterable<string>, shown: ReadonlySet<string>, texts: readonly string[]): string[] {
+/** The changed slates no answer showed or linked; the Markdown grammar loads only when there are words to read. */
+export async function slatesToPreview(changed: Iterable<string>, shown: ReadonlySet<string>, texts: readonly string[]): Promise<string[]> {
   const pending = new Set(changed);
 
   for (const id of shown) pending.delete(id);
 
-  for (const text of texts) {
-    if (pending.size === 0) break;
+  if (pending.size > 0 && texts.length > 0) {
+    const { promotedSlateIds } = await import('./slate-promotions');
 
-    for (const id of promotedSlateIds(text)) pending.delete(id);
+    for (const text of texts) {
+      if (pending.size === 0) break;
+
+      for (const id of promotedSlateIds(text)) pending.delete(id);
+    }
   }
 
   return [...pending].sort();

@@ -319,8 +319,9 @@ describe('the descriptor read is off the connection critical path', () => {
   });
 
   // The SDK restores a server awaiting sign-in as authenticating with a new provider, which holds no link, and the
-  // settings page draws the Authorize link only from it: the account's one way back was to remove the server and add it.
-  test('a server awaiting sign-in when the object wakes lists a fresh Authorize link', async () => {
+  // settings page drew Authorize only from that link: the account's one way back was to remove the server and add it.
+  // A sign-in is begun for its own address now; the row offers it.
+  test('a server awaiting sign-in when the object wakes still offers its sign-in', async () => {
     const first = harness();
     const owner = await testOwner();
     await first.userDO.userMcp_list(owner);
@@ -333,7 +334,7 @@ describe('the descriptor read is off the connection critical path', () => {
     requireMcpSignIn('srv1', 'https://auth.example/authorize?state=fresh');
     const [listed] = await woken.userDO.userMcp_list(owner);
 
-    expect(listed).toMatchObject({ status: 'authenticating', authUrl: 'https://auth.example/authorize?state=fresh' });
+    expect(listed).toMatchObject({ status: 'authenticating', signIn: true });
     woken.close();
     first.close();
   });
@@ -614,7 +615,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
     // The `authUrl` the SDK reads back while AUTHENTICATING (`client-zqKcsyFa.js:1704-1706`).
-    seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
+    await seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
     // A POST 401 with no auth provider to retry through.
     failNextMcpToolCall(await refusedToolCall({ status: 401, body: 'nope' }));
     // In production the dispatch and the `discoverIfConnected` probe are two failing requests.
@@ -623,11 +624,11 @@ describe('an authorization failure converges to the reconnect state', () => {
     await expect(h.userDO.userMcp_callTool(await testOwner(), { serverId: 'srv1', name: 'do_thing', args: {}, id: crypto.randomUUID() }))
       .rejects.toThrow('Error POSTing to endpoint: nope');
 
-    // Observe the persisted `authenticating` status and `authUrl`, not merely that a re-probe was attempted.
+    // Observe the persisted `authenticating` status and the sign-in it offers, not merely that a re-probe was attempted.
     expect(recordedMcpLifecycle().discovered).toContain('srv1');
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.status).toBe('authenticating');
-    expect(listed?.authUrl).toBe('https://auth.example/authorize?srv1');
+    expect(listed?.signIn).toBe(true);
     h.close();
   });
 
@@ -635,7 +636,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
-    seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
+    await seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
     // An auth provider that cannot recover the token.
     failNextMcpToolCall(await refusedToolCall({ status: 401, body: 'nope', authProvider: { token: () => Promise.resolve('stale') } }));
     failNextMcpDiscovery(await refusedToolCall({ status: 401, body: 'nope' }));
@@ -646,7 +647,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     expect(recordedMcpLifecycle().discovered).toContain('srv1');
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.status).toBe('authenticating');
-    expect(listed?.authUrl).toBe('https://auth.example/authorize?srv1');
+    expect(listed?.signIn).toBe(true);
     h.close();
   });
 
@@ -654,7 +655,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
-    seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
+    await seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
     // An auth provider that re-authenticated, and the retry answered 401 again.
     const reauthenticated = { token: () => Promise.resolve('stale'), onUnauthorized: () => Promise.resolve() };
     failNextMcpToolCall(new Error('MCP request failed', {
@@ -668,7 +669,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     expect(recordedMcpLifecycle().discovered).toContain('srv1');
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.status).toBe('authenticating');
-    expect(listed?.authUrl).toBe('https://auth.example/authorize?srv1');
+    expect(listed?.signIn).toBe(true);
     h.close();
   });
 
@@ -695,7 +696,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
-    seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
+    await seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
     failNextMcpToolCall(await refusedSseConnect({ status: 401 }));
     failNextMcpDiscovery(await refusedSseConnect({ status: 401 }));
 

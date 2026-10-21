@@ -27,7 +27,7 @@ export {
   type HandedOffTurn, type SettledRun, type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts, type TurnEnd,
 } from './orchestrator/terminal-roster';
 
-export { SleepTimeLane, initSleepTimeUpdatesTable } from './orchestrator/sleep-time-lane';
+export { SleepTimeLane, initSleepTimeTables } from './orchestrator/sleep-time-lane';
 
 export {
   assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle,
@@ -74,7 +74,7 @@ export {
 
 export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
 
-export { initActivationTable, listActivations, recordActivation, type Activation } from './identity/activations';
+export { ACTIVATION_SLOTS, initActivationTable, listActivations, recordActivation, type Activation } from './identity/activations';
 
 export { ChatHistoryEntrySchema } from './types/chat';
 
@@ -1073,9 +1073,13 @@ export {
 } from './execution/shell-session';
 
 export {
-  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
+  createSandboxExecutor, computerProcessJob, type ComputerProcessEnd, type ComputerProcessJobs, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
   sandboxSizeLabel, WORKSPACE_BACKUP_DIR, sandboxFiles,
 } from './execution/sandbox';
+
+export { computerProcessResume, stopComputerProcessJob } from './jobs/computer-process';
+
+export { ComputerProcessEnds, jobState, type ComputerProcessJobRows, type ComputerProcessJobState } from './execution/computer-process-ends';
 
 export {
   DESKTOP_MEMBERS,
@@ -2418,7 +2422,7 @@ export {
   gatewayWireModel,
 } from './providers/my-gateway';
 
-export { createWorkersAIProvider } from './providers/workers-ai-provider';
+export { WORKERS_AI_STREAMS_GENERATE, createWorkersAIProvider } from './providers/workers-ai-provider';
 
 export { createWireModel, deferredModel, sdkWire, withModelStack, type WireProtocol } from './providers/wire-model';
 
@@ -2569,6 +2573,13 @@ export {
 
 export {
   APP_ROUTES,
+  cloudflareConnectPath,
+  CONNECT_CHANNEL,
+  connectedPath,
+  connectEndedOf,
+  type ConnectEnded,
+  ConnectEndedSchema,
+  ConnectRunSchema,
   type ReportedRoute,
   REPORTED_ROUTES,
   routeTemplateOf,

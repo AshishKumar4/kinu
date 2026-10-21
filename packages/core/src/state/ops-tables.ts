@@ -18,7 +18,17 @@ export interface TableRows {
   readonly table: string;
   readonly rows: number;
   readonly digest: string;
+  /** For a table whose rows are written once and only ever added (`LEDGERS`), each row as `<ordinal>:<digest>`, oldest
+   *  first: a later census tells rows added, and the oldest a full ring let go, from any earlier row lost or rewritten. */
+  readonly ledger?: readonly string[];
 }
+
+/** Tables whose rows are written once, by the column that orders them. `workspace_activations` keeps 256 rows: the
+ *  newest replaces the oldest slot (identity/activations.ts), so its rowids are no order; its ordinal is. */
+const LEDGERS = new Map([['workspace_activations', 'ordinal']]);
+
+/** Hex digits of each ledger row's digest: 48 bits, one table's few hundred rows never collide by chance. */
+const LEDGER_DIGEST = 12;
 
 /** One database as the walk found it: every table and its rows, what this activation's repair did (null where it found
  *  the database at this build, or an earlier activation repaired it), and why it is refused, if it is. */
@@ -95,7 +105,24 @@ export function requireOps(env: OpsSecretEnv, caller: Partial<OpsCaller> | null 
 export function censusOf(sql: SqlExec): TableRows[] {
   const keyed = new Set(sql.exec('PRAGMA table_list').toArray().map((row) => v.parse(ListedSchema, row)).filter((row) => row.wr === 1).map((row) => row.name));
 
-  return tableNames(sql).map((table) => ({ table, rows: rowsOf(sql, table), digest: digestOf(sql, table, !keyed.has(table)) }));
+  return tableNames(sql).map((table) => {
+    const rows = rowsOf(sql, table);
+    const digest = digestOf(sql, table, !keyed.has(table));
+    const order = LEDGERS.get(table);
+
+    return order === undefined ? { table, rows, digest } : { table, rows, digest, ledger: ledgerOf(sql, table, order) };
+  });
+}
+
+/** Each row of `table` by `order`, as `<order>:<digest of its values>`; a row without a whole-number order is no ledger
+ *  row, and reads as `?`, which no later census matches. */
+function ledgerOf(sql: SqlExec, table: string, order: string): string[] {
+  return sql.exec(`SELECT * FROM "${table}" ORDER BY "${order}"`).toArray().map((row) => {
+    const at = row[order];
+    const digest = createHash('sha256').update(JSON.stringify(Object.values(row).map(cellText))).digest('hex').slice(0, LEDGER_DIGEST);
+
+    return `${typeof at === 'number' && Number.isInteger(at) ? String(at) : '?'}:${digest}`;
+  });
 }
 
 const ListedSchema = v.object({ name: v.string(), wr: v.number() });
