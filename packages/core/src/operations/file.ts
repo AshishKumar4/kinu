@@ -47,7 +47,7 @@ export const FILE = {
     output: v.union([v.string(), ImageCarrierSchema]),
   }),
   text: fileOp({
-    name: 'text',
+    name: 'text', tool: false,
     help: 'A file whole, as a string, with no line numbers and nothing cut; a later write or edit counts it as read in full. For a program, which holds the value: the file tool reads a window.',
     impact: 'observe',
     input: v.strictObject({ path: Path, encoding: Encoding }),
@@ -89,7 +89,7 @@ export const FILE = {
     output: v.strictObject({ path: v.string(), matches: v.array(v.strictObject({ line: v.number(), text: v.string() })), truncated: Truncated }),
   }),
   machine: fileOp({
-    name: 'machine',
+    name: 'machine', tool: false,
     help: 'Which machine a path is on, and the path there: a command whose cwd it is runs on that machine.',
     impact: 'observe',
     input: v.strictObject({ path: Path }),

@@ -32,6 +32,9 @@ export interface Operation<I extends OperationInput = OperationInput, O extends 
    * share's viewer nor a hosted actor's slate; shares cannot grant it.
    */
   readonly slate: boolean | 'owner';
+  /** `false`: a program's alone, never on its capability's native tool (a whole file a program holds, a browser session
+   *  a program drives). The native tool, and what evolution edits of its fields, offer every other operation. */
+  readonly tool?: false;
   readonly input: I;
   readonly output: O;
   /** How the model reads a result where text reads better than its JSON, a page's Markdown above all; a program gets the value. */
@@ -77,7 +80,7 @@ export const described = <S extends v.GenericSchema>(schema: S, text: string) =>
 
 /** The fields each operation of a namespace names for itself; where and when it runs defaults to its namespace's. */
 type OwnFields<I extends OperationInput, O extends v.GenericSchema> = Pick<Operation<I, O>, 'name' | 'help' | 'impact' | 'input' | 'output'>
-  & Partial<Pick<Operation<I, O>, 'plan' | 'slate'>>;
+  & Partial<Pick<Operation<I, O>, 'plan' | 'slate' | 'tool'>>;
 
 /** The declarer of namespace `ns`'s operations: each names its own fields over `defaults`, which it may override. */
 export function namespace(ns: string, defaults: Partial<Pick<Operation, 'plan'>> & Pick<Operation, 'slate'>) {
