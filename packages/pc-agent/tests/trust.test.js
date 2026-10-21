@@ -111,6 +111,34 @@ test('after the install, fetch, WebSocket and node:https refuse a chain through 
   }
 });
 
+// A lone protocol in Bun's options threw "Value is not a sequence" (Bun 1.4.3): asked of a real server, as a caller would.
+test('a socket given one protocol, or a list of them, opens on a real server with that protocol agreed', async () => {
+  const server = Bun.serve({
+    port: 0, hostname: '127.0.0.1',
+    fetch: (request, served) => (served.upgrade(request, { headers: { 'Sec-WebSocket-Protocol': 'kinu-deploy.v1' } }) ? undefined : new Response('ok')),
+    websocket: { message: () => undefined },
+  });
+
+  const scope = { fetch: globalThis.fetch, WebSocket: globalThis.WebSocket };
+
+  installTrustedRoots(scope);
+
+  /** @param {string | string[]} protocols @returns {Promise<string>} */
+  const agreed = (protocols) => new Promise((resolve, reject) => {
+    const ws = new scope.WebSocket(`ws://127.0.0.1:${String(server.port)}/`, protocols);
+
+    ws.onopen = () => { resolve(ws.protocol); ws.close(); };
+
+    ws.onerror = () => { reject(new Error('the socket did not open')); };
+  });
+
+  try {
+    expect({ one: await agreed('kinu-deploy.v1'), list: await agreed(['kinu-deploy.v1']) }).toEqual({ one: 'kinu-deploy.v1', list: 'kinu-deploy.v1' });
+  } finally {
+    await server.stop(true);
+  }
+});
+
 test('a caller\'s own roots stand, and a protocol list rides the socket\'s options beside them', async () => {
   /** @type {unknown[]} */
   const fetched = [];
