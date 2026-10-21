@@ -23,6 +23,7 @@ import { hereAsking, signInAndReturn } from "@/lib/sign-in";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { readExplore, type ExploreItem } from "@/lib/explore-api";
 import { readGallerySlate, reportListing, starListing } from "@/lib/gallery-api";
+import { Group } from "@/components/ui/Group";
 
 function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; onClose: () => void; onSent: () => void }) {
   const [reason, setReason] = useState("");
@@ -75,13 +76,13 @@ function UsesYours({ needs }: { needs: readonly RoomService[] }) {
       {needs.length === 0 ? (
         <p className="t-body p-text-2">Nothing of yours.</p>
       ) : (
-        <ul className="p-group">
+        <Group list>
           {needs.map((need) => {
             const Icon = SERVICE_ICON[need.kind];
 
             return <li key={`${need.kind}:${need.title}`} data-gallery-need={need.kind} className="t-body flex items-center gap-3 px-3 py-2 p-text"><Icon size={16} className="shrink-0 p-text-3" />{need.title}</li>;
           })}
-        </ul>
+        </Group>
       )}
     </div>
   );

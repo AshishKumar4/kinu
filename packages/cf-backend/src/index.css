@@ -461,7 +461,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-group > * + * { border-top: 1px dashed var(--c-dash); }
 /* Inside a card (a Settings group, the mail reader), a group is its rows under that rule alone, never a second box
    (design review 2026-10-20, "no nested cards"): the card's own edge and padding are the group's. */
-.p-card .p-group { border: 0; border-radius: 0; background: transparent; overflow: visible; }
+.p-card .p-group, .p-card-body .p-group { border: 0; border-radius: 0; background: transparent; overflow: visible; }
 /* A `contents` wrapper (a CardSlot) draws no box, so its rows take the rule themselves. */
 .p-group > * + .contents > :first-child,
 .p-group > .contents > * + * { border-top: 1px dashed var(--c-dash); }

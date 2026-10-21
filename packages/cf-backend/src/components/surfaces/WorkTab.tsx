@@ -23,6 +23,7 @@ import type { SurfaceKind } from "@kinu.run/core";
 import { WorkPlans } from "./WorkPlans";
 import type { WorkspaceWorkRead } from "./use-workspace-work";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Group } from "@/components/ui/Group";
 
 /** Kinds the attention stack decides: their rows open its card. */
 const STACKED: ReadonlySet<PendingActionKind> = new Set(["deferred_action"]);
@@ -217,14 +218,14 @@ function WorkJournal({ journal, rpc, onRefreshJobs, onOpenOwner }: {
         {days.map(({ label, rows }) => (
           <div key={label} className="space-y-2">
             <p className="t-label">{label}</p>
-            <div className="p-group">
+            <Group>
               {rows.map((row) => (
                 <div key={row.key} data-journal-row={row.kind}>
                   {row.kind === "job" && <JobCard grouped job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
                   {row.kind === "task" && <TaskTree grouped task={row.task} owner={row.owner} onOpenOwner={onOpenOwner} />}
                 </div>
               ))}
-            </div>
+            </Group>
           </div>
         ))}
       </div>

@@ -18,6 +18,7 @@ import { AccessPicker, EmailsField, emailsOf, Failure, Lead, type AccessOption }
 import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
+import { Group } from "@/components/ui/Group";
 
 export interface LiveShareFixture {
   graph: SlateReach;
@@ -273,7 +274,7 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
   if (approved.size > 0) changes = `${String(approved.size)} ${approved.size === 1 ? "change" : "changes"} allowed`;
 
   return (
-    <div className="p-group">
+    <Group>
       <button type="button" aria-expanded={open} data-share-reach onClick={() => setOpen((shown) => !shown)}
         className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-[var(--c-hover)]">
         <span className="t-item w-14 shrink-0 p-text">Reach</span>
@@ -310,7 +311,7 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
           </p>
         </div>
       )}
-    </div>
+    </Group>
   );
 }
 
@@ -343,7 +344,7 @@ function PeopleRoles({ people, editors, onRole, ownerAccess, disabled }: {
 
   return (
     <div className="space-y-2">
-      <ul className="p-group">
+      <Group list>
         {people.map((email) => (
           <li key={email} data-share-person={email} className="flex items-center gap-3 px-3 py-2">
             <span className="t-meta min-w-0 flex-1 truncate p-text-2">{email}</span>
@@ -359,7 +360,7 @@ function PeopleRoles({ people, editors, onRole, ownerAccess, disabled }: {
             </div>
           </li>
         ))}
-      </ul>
+      </Group>
       {anyEditor && (
         <p data-share-editors-note className="t-meta p-text-3">
           People who edit change it from their own workspace&apos;s agent, here in yours.
@@ -473,9 +474,9 @@ function SharedNow({ shares, actions }: { shares: readonly OwnedLiveShare[]; act
   return (
     <div className="space-y-2">
       <p className="t-status p-text-3">Shared now</p>
-      <ul className="p-group">
+      <Group list>
         {shares.map((row) => <SharedRow key={row.id} row={row} actions={actions} />)}
-      </ul>
+      </Group>
     </div>
   );
 }
@@ -505,7 +506,7 @@ function AlwaysAllowed({ standing, graph, onWithdraw, disabled }: {
       <summary className="t-status flex cursor-pointer list-none items-center gap-2 p-text-3">
         <CaretRightIcon size={12} className="transition-transform group-open:rotate-90" />Always allowed ({standing.length})
       </summary>
-      <ul className="p-group">
+      <Group list>
         {standing.map((entry) => (
           <li key={JSON.stringify([standingKey(entry), entry.root])} data-share-always-entry={standingKey(entry)} className="flex items-center gap-3 px-3 py-2">
             <span className="min-w-0 flex-1">
@@ -515,7 +516,7 @@ function AlwaysAllowed({ standing, graph, onWithdraw, disabled }: {
             <Button size="sm" variant="ghost" data-share-always-withdraw onClick={() => onWithdraw(entry)} disabled={disabled}>Revoke</Button>
           </li>
         ))}
-      </ul>
+      </Group>
       <p className="t-meta p-text-3">These go ahead without asking you, on every share of it on your access, until its code changes.</p>
     </details>
   );

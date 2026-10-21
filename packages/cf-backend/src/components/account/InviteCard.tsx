@@ -8,6 +8,7 @@ import { useAsyncResource } from "@/hooks/use-async-resource";
 import { Card, Field, inputCls } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { Group } from "@/components/ui/Group";
 
 export function InviteCard() {
   const status = useAsyncResource(builtinAuthStatus);
@@ -70,7 +71,7 @@ function Accounts({ busy, onReset }: { busy: boolean; onReset: (email: string) =
     <CardSlot resource={accounts.resource} what="this deployment's accounts" onRetry={accounts.reload}>
       {({ accounts: list }) => (
         <Field label="Accounts" hint="A reset link replaces that account's password and passkeys, once, within 7 days, and signs it out everywhere.">
-          <ul className="p-group">
+          <Group list>
             {list.map((account) => (
               <li key={account.email} className="flex items-center gap-3 px-3 py-2" data-account={account.email}>
                 <span className="t-body min-w-0 flex-1 truncate p-text">{account.email}</span>
@@ -79,7 +80,7 @@ function Accounts({ busy, onReset }: { busy: boolean; onReset: (email: string) =
                   aria-label={`Create a reset link for ${account.email}`}>Reset link</Button>
               </li>
             ))}
-          </ul>
+          </Group>
         </Field>
       )}
     </CardSlot>

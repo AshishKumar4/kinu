@@ -13,6 +13,7 @@ import { publishBlueprint, revokeShare, type Published } from "@/lib/shared-api"
 import { EmailsField, emailsOf, Failure, Lead, StopButton } from "./ShareParts";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
+import { Group } from "@/components/ui/Group";
 
 const HistorySchema = v.object({ versions: v.array(v.object({ id: v.string() })), next: v.nullable(v.string()) });
 
@@ -199,7 +200,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
         {shares.length > 0 && (
           <div className="space-y-2">
             <p className="t-status p-text-3">Published</p>
-            <ul className="p-group">
+            <Group list>
               {shares.map((share) => (
                 <li key={share.id} data-blueprint-share={share.id} className="flex items-center gap-3 px-3 py-2">
                   <span className="t-meta min-w-0 flex-1 truncate p-text-2">
@@ -208,7 +209,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
                   <StopButton onStop={() => unshare(share.id)} disabled={busy} />
                 </li>
               ))}
-            </ul>
+            </Group>
           </div>
         )}
         <Failure message={err} />

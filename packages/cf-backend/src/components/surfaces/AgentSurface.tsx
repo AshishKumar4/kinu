@@ -28,6 +28,7 @@ import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-asy
 import * as v from "valibot";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import type { OrchestratorAgent } from "@/orchestrator";
+import { Group } from "@/components/ui/Group";
 
 type Fact = Awaited<ReturnType<OrchestratorAgent["getFacts"]>>[number];
 
@@ -122,7 +123,7 @@ function Mail({ mail }: { mail: AgentMail }) {
   return (
     <Section id="agent-mail" title="Mail" icon={<EnvelopeSimpleIcon size={14} className="p-text-2" />}
       badge={mail.unread > 0 ? <Badge>{mail.unread}</Badge> : undefined}>
-      <div className="p-group">
+      <Group>
         {mail.threads.map((thread) => (
           <Link key={thread.id} to={`/mail/${encodeURIComponent(thread.id)}`} className={mailRowCls(false)} data-agent-mail-thread={thread.id}>
             <span className="flex min-w-0 items-baseline gap-2">
@@ -135,7 +136,7 @@ function Mail({ mail }: { mail: AgentMail }) {
             <span className="t-meta block truncate p-text-3">{thread.verified ? thread.snippet : `Not verified · ${thread.snippet}`}</span>
           </Link>
         ))}
-      </div>
+      </Group>
     </Section>
   );
 }
@@ -181,14 +182,14 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
         {notes.length > 0 && (
           <div className="space-y-2">
             <p className="t-meta p-text-3">{searching ? "Notes that match" : "Notes"}</p>
-            <div data-learnings className="p-group">
+            <Group data-learnings="">
               {notes.map((entry, index) => (
                 <div key={index} data-learning className="px-3 py-2">
                   <p className="t-body line-clamp-2 p-text">{entry.content.split("\n")[0]}</p>
                   <p className="t-meta mt-px p-text-3">{entry.updatedAt}{entry.savedBy ? ` · ${entry.savedBy}` : ""}</p>
                 </div>
               ))}
-            </div>
+            </Group>
           </div>
         )}
 
@@ -204,7 +205,7 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
         {!searching && facts.length > 0 && (
           <div className="space-y-2">
             <p className="t-meta p-text-3">Facts</p>
-            <div className="p-group">
+            <Group>
               {facts.map((fact) => (
                 <div key={fact.key} className="group/fact flex items-start gap-3 px-3 py-2" data-world-model-fact={fact.key}>
                   <div className="min-w-0 flex-1">
@@ -219,7 +220,7 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
                   {workspace !== null && <PromoteFact fact={fact} workspace={workspace} />}
                 </div>
               ))}
-            </div>
+            </Group>
           </div>
         )}
       </div>
@@ -249,9 +250,9 @@ function Changing({ rpc, readMoves, version }: {
           <Quiet>No changes yet.</Quiet>
         )}
         {entries.length > 0 && (
-          <div className="p-group" data-changelog>
+          <Group data-changelog="">
             {entries.map((entry) => <ChangelogEntryCard key={entry.id} grouped entry={entry} seenAt={seenAt} rpc={rpc} onReverted={reload} />)}
-          </div>
+          </Group>
         )}
         {version !== null && <ScaffoldLineage rpc={rpc} currentVersion={version} />}
       </div>

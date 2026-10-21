@@ -15,6 +15,7 @@ import { ConnectDevicePanel, DeviceConnectFlow } from "@/components/ConnectDevic
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { showing, settle } from "@kinu.run/core/obs";
+import { Group } from "@/components/ui/Group";
 
 /** Grants share the roster's cadence: a revoke changes both, so one clock keeps them consistent. */
 const keepPollingGrants: Revalidate<DeviceConsent[]> = () => DEVICE_ROSTER_POLL_MS;
@@ -73,7 +74,7 @@ export function DevicesCard() {
     <>
       <Card title="Connected devices" actions={<Button variant="secondary" size="sm" data-connect-open onClick={() => setConnecting(true)}>Connect a machine</Button>}>
         {devices.length > 0 ? (
-          <div className="-my-3 p-group">
+          <Group>
             {devices.map((d) => (
               <DeviceRow
                 key={d.id}
@@ -87,7 +88,7 @@ export function DevicesCard() {
                 onAcknowledge={() => acknowledgeIncident(d.id)}
               />
             ))}
-          </div>
+          </Group>
         ) : roster.resource.status === "ready" && (
           <p data-devices-empty className="t-body p-text-3">
             No machine yet. Run <code className="font-mono p-text">kinu connect</code> in the folder the agent may use.

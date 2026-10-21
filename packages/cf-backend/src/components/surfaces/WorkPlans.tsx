@@ -4,6 +4,7 @@ import type { OwnedPlan, WorkspaceWork } from '@kinu.run/core';
 import { planTitle } from '@kinu.run/core';
 import { Section } from './shared';
 import { PlanProgress, TaskTree } from './work-tasks';
+import { Group } from "@/components/ui/Group";
 
 const keyOf = ({ owner, plan }: OwnedPlan) => `${owner.name}:${plan.id}:${plan.revision}`;
 
@@ -35,7 +36,7 @@ function PlanCard({ item, onOpen }: { item: OwnedPlan; onOpen: () => void }) {
   const { owner, plan, tasks } = item;
 
   return (
-    <div className="p-group" data-plan-card={plan.revision}>
+    <Group data-plan-card={plan.revision}>
       <button type="button" onClick={onOpen}
         className="w-full rounded-t-md px-3 pt-2 pb-2 text-left transition-colors hover:p-hover">
         <div className="flex min-w-0 items-baseline gap-2">
@@ -51,6 +52,6 @@ function PlanCard({ item, onOpen }: { item: OwnedPlan; onOpen: () => void }) {
           {tasks.map((task) => <TaskTree key={task.id} task={task} grouped owner={owner} />)}
         </div>
       )}
-    </div>
+    </Group>
   );
 }

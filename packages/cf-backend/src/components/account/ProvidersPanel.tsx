@@ -31,6 +31,7 @@ import { showing, detach } from '@kinu.run/core/obs';
 import {
   CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, revokingProviderOf, storedAccounts, type CredentialSummary, type ProviderCatalogEntry,
 } from '@kinu.run/core';
+import { Group } from "@/components/ui/Group";
 
 function ConnectedBadge({ detail }: { detail?: ReactNode }) {
   return (
@@ -88,7 +89,7 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
 
             return (
               <div className="space-y-5">
-                <div className="p-group">
+                <Group>
                   {models.resource.status === "error" && (
                     <CardSlot resource={models.resource} what="your connected models" onRetry={models.reload}>{() => null}</CardSlot>
                   )}
@@ -152,7 +153,7 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
                         onChanged={reloadAll} />
                     ))}
                   </CardSlot>
-                </div>
+                </Group>
                 <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
                   {(providers) => (
                     <>

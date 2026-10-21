@@ -8,6 +8,7 @@ import { getAccountUsage } from "@/lib/user-api";
 import { Card } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { useAsyncResource } from "@/hooks/use-async-resource";
+import { Group } from "@/components/ui/Group";
 
 function usedShare(window: LimitWindow): number | undefined {
   if (window.usedPercent !== undefined) return Math.min(1, Math.max(0, window.usedPercent / 100));
@@ -71,12 +72,12 @@ function LimitsTable({ usage, onRefresh }: { usage: AccountUsage; onRefresh: () 
     <div className="space-y-3">
       {limits.length === 0 && unread.length === 0 && <p className="t-body p-text-3">No connected account reports its limits.</p>}
       {(limits.length > 0 || unread.length > 0) && (
-        <div className="p-group">
+        <Group>
           {limits.map((report) => <LimitRow key={`${report.provider}@${report.account}`} report={report} now={now} />)}
           {unread.map((entry) => (
             <p key={`${entry.provider}@${entry.account}`} className="t-body px-4 py-2 p-warning">{limitUnreadText(entry)}</p>
           ))}
-        </div>
+        </Group>
       )}
       <button type="button" onClick={onRefresh} className="t-meta inline-flex items-center gap-1 p-text-3 hover:p-text-2">
         <ArrowsClockwiseIcon size={11} /> Read again
@@ -94,11 +95,11 @@ function SpendTable({ usage }: { usage: AccountUsage }) {
       {usage.accounts.length === 0
         ? <p className="t-body p-text-3">No model call has been recorded yet.</p>
         : (
-          <div className="p-group">
+          <Group>
             {usage.accounts.map((row) => (
               <AccountRow key={`${row.provider ?? ""}@${row.account ?? ""}`} row={row} now={now} live={live.has(`${row.provider ?? ""}@${row.account ?? ""}`)} />
             ))}
-          </div>
+          </Group>
         )}
       <p className="t-meta p-text-3">
         Across {usage.workspaces} workspace{usage.workspaces === 1 ? "" : "s"}, at API rates from the models.dev catalog;
