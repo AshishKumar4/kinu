@@ -3,8 +3,9 @@
  * underlined on hover. A button, for a place in the app or an act; a link to a page stays an `<a>`.
  */
 import type { ComponentProps } from "react";
+import { Pressable } from "@/components/ui/Pressable";
 
 /** `quiet`: the third ink, a dotted underline at rest, as a turn's Details and Retry are. */
-export function InlineAction({ quiet = false, className, type = "button", ...rest }: ComponentProps<"button"> & { quiet?: boolean }) {
-  return <button type={type} className={`p-inline-action${className === undefined ? "" : ` ${className}`}`} data-quiet={quiet ? "" : undefined} {...rest} />;
+export function InlineAction({ quiet = false, ...rest }: ComponentProps<"button"> & { quiet?: boolean }) {
+  return <Pressable look="inline" data-quiet={quiet ? "" : undefined} {...rest} />;
 }

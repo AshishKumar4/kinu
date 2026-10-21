@@ -6,8 +6,14 @@
 import type { ComponentProps } from "react";
 import { Link } from "react-router-dom";
 
-export function Pressable({ className, type = "button", selected = false, ...rest }: ComponentProps<"button"> & { selected?: boolean }) {
-  return <button type={type} className={`p-pressable${className === undefined ? "" : ` ${className}`}`} data-selected={selected ? "" : undefined} {...rest} />;
+/** `inline`: an action inside running text (ui/InlineAction.tsx); `selected` is a row's. */
+export function Pressable({ look = "row", className, type = "button", selected = false, ...rest }: ComponentProps<"button"> & {
+  look?: "row" | "inline";
+  selected?: boolean;
+}) {
+  const base = look === "row" ? "p-pressable" : "p-inline-action";
+
+  return <button type={type} className={`${base}${className === undefined ? "" : ` ${className}`}`} data-selected={selected ? "" : undefined} {...rest} />;
 }
 
 /** The same, to somewhere: a whole row or tile that is a link. */
