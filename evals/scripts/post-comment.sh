@@ -2,9 +2,12 @@
 # Post a comment about a deployed build: on the pull request that merged it, else on the commit.
 # This run's earlier comments there that start with the marker, or with any further marker
 # named (comments the new one supersedes), are deleted first, so the latest is the only one.
-# Uses the operator's gh session, or GH_TOKEN; GH_REPO defaults to this checkout's repository.
+# Uses the operator's gh session, or GH_TOKEN; GH_REPO defaults to this checkout's repository. GH names the gh to run,
+# as scripts/evals-map.ts resolves it in its caller's environment; a scope's PATH need not hold it.
 #   evals/scripts/post-comment.sh <sha> <body-file> <marker> [<superseded-marker>...]
 set -euo pipefail
+
+gh() { command "${GH:-gh}" "$@"; }
 
 : "${GH_REPO:=$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
 author=$(gh api user --jq .login)
