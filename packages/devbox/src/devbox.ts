@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, isProcessLive, nameBox, containerExec, CONTAINER_ENV, END_TREE } from "./processes";
+import { Processes, isProcessLive, nameBox, containerExec, boxEnv, END_TREE } from "./processes";
 import { launched } from './exec-launcher';
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
@@ -3990,7 +3990,7 @@ const UTF8 = { LC_ALL: 'C.UTF-8' };
 
 function launch(container: Container, argv: readonly string[], options: DevboxExecOptions): Promise<ExecProcess> {
   return containerExec(container, [...argv], {
-    cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_ENV, ...options.env },
+    cwd: options.cwd ?? DEVBOX_WORKDIR, env: boxEnv(options.env ?? {}),
   });
 }
 

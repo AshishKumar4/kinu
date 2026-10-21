@@ -12,6 +12,8 @@ const path = require('node:path');
 
 const { getCACertificates } = require('node:tls');
 
+const { spawnSync } = require('node:child_process');
+
 const { X509Certificate } = require('node:crypto');
 
 const { expect, test } = require('bun:test');
@@ -38,7 +40,78 @@ test('its roots are the process\'s own but for the distrusted, which Bun\'s own 
   expect(trustedRoots()).toEqual(all.filter((pem) => !distrusted.has(fingerprint(pem))));
 });
 
-test('every fetch and socket after the install carries those roots, and a caller\'s own roots stand', async () => {
+/** A root of this test's own and a localhost leaf it signs, in `dir`: the root's PEM path and fingerprint, the leaf. */
+function rootAndLeaf(/** @type {string} */ dir, /** @type {string} */ name) {
+  const run = (/** @type {string[]} */ args) => {
+    const ran = spawnSync('openssl', args, { encoding: 'utf8' });
+
+    if (ran.status !== 0) throw new Error(ran.stderr);
+  };
+
+  const at = (/** @type {string} */ file) => path.join(dir, `${name}-${file}`);
+
+  run(['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-days', '1', '-subj', `/CN=${name}`, '-addext', 'basicConstraints=critical,CA:TRUE',
+    '-addext', 'keyUsage=critical,keyCertSign,cRLSign', '-keyout', at('ca.key'), '-out', at('ca.pem')]);
+  run(['req', '-new', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-subj', '/CN=localhost', '-keyout', at('leaf.key'), '-out', at('leaf.csr')]);
+  fs.writeFileSync(at('leaf.ext'), 'subjectAltName=DNS:localhost\nbasicConstraints=CA:FALSE\nextendedKeyUsage=serverAuth\n');
+  run(['x509', '-req', '-in', at('leaf.csr'), '-CA', at('ca.pem'), '-CAkey', at('ca.key'), '-CAcreateserial', '-days', '1', '-extfile', at('leaf.ext'), '-out', at('leaf.pem')]);
+
+  return { ca: at('ca.pem'), print: fingerprint(fs.readFileSync(at('ca.pem'), 'utf8')), leaf: { cert: fs.readFileSync(at('leaf.pem'), 'utf8'), key: fs.readFileSync(at('leaf.key'), 'utf8') } };
+}
+
+// A process as the daemon and the CLI are: a root in its default store (`NODE_EXTRA_CA_CERTS`, as Bun's own holds emSign
+// ECC G3), asked through the real clients before and after the install leaves that root out.
+const ASK = `
+const https = require('node:https');
+const [trust, url, socket, print, own] = process.argv.slice(1);
+const ownPem = require('node:fs').readFileSync(own, 'utf8');
+const fetched = (init) => fetch(url, init).then((res) => String(res.status), () => 'refused');
+const asks = async () => ({
+  fetch: await fetched(),
+  nullCa: await fetched({ tls: { ca: null } }),
+  emptyCa: await fetched({ tls: { ca: [] } }),
+  ownCaNamingIt: await fetched({ tls: { ca: [ownPem] } }),
+  socket: await new Promise((resolve) => {
+    const ws = new WebSocket(socket, ['kinu-deploy.v1']);
+    ws.onopen = () => { resolve('open'); ws.close(); };
+    ws.onerror = () => resolve('refused');
+  }),
+  // A connection of its own each time: the default agent keeps one alive, which would carry the earlier handshake.
+  https: await new Promise((resolve) => { https.get(url, { agent: false }, (res) => { res.resume(); resolve(String(res.statusCode)); }).on('error', () => resolve('refused')); }),
+});
+const before = await asks();
+require(trust).installTrustedRoots(globalThis, [print]);
+console.log(JSON.stringify({ before, after: await asks() }));
+`;
+
+test('after the install, fetch, WebSocket and node:https refuse a chain through a root it leaves out, however the caller names its roots', async () => {
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'kinu-scratch-trust-'));
+  const { ca, print, leaf } = rootAndLeaf(dir, 'left-out');
+
+  const server = Bun.serve({
+    port: 0, hostname: '127.0.0.1', tls: leaf,
+    fetch: (request, served) => (served.upgrade(request, { headers: { 'Sec-WebSocket-Protocol': 'kinu-deploy.v1' } }) ? undefined : new Response('ok')),
+    websocket: { message: () => undefined },
+  });
+
+  try {
+    const child = Bun.spawn(['bun', '-e', ASK, path.join(__dirname, '../src/daemon/trust.js'), `https://localhost:${String(server.port)}/`, `wss://localhost:${String(server.port)}/`, print, ca], {
+      env: { PATH: process.env['PATH'] ?? '', HOME: dir, NODE_EXTRA_CA_CERTS: ca }, stdout: 'pipe', stderr: 'pipe',
+    });
+
+    const said = await new Response(child.stdout).text();
+
+    expect(JSON.parse(said)).toEqual({
+      before: { fetch: '200', nullCa: '200', emptyCa: '200', ownCaNamingIt: '200', socket: 'open', https: '200' },
+      after: { fetch: 'refused', nullCa: 'refused', emptyCa: 'refused', ownCaNamingIt: 'refused', socket: 'refused', https: 'refused' },
+    });
+  } finally {
+    await server.stop(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}, 60_000);
+
+test('a caller\'s own roots stand, and a protocol list rides the socket\'s options beside them', async () => {
   /** @type {unknown[]} */
   const fetched = [];
 
@@ -61,20 +134,18 @@ test('every fetch and socket after the install carries those roots, and a caller
     WebSocket: Socket,
   };
 
-  installTrustedRoots(/** @type {never} */ (scope));
-  const ca = trustedRoots();
+  const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'kinu-scratch-trust-'));
 
-  await scope.fetch('https://kinu.run/api/health', { method: 'POST', tls: { serverName: 'kinu.run' } });
-  await scope.fetch('https://own.example/', { tls: { ca: ['mine'] } });
-  new scope.WebSocket('wss://kinu.run/pc/connect');
-  new scope.WebSocket('wss://kinu.run/api/deploy/runs/r/socket', ['kinu-deploy.v1', 'key']);
+  try {
+    const mine = fs.readFileSync(rootAndLeaf(dir, 'private').ca, 'utf8');
 
-  expect(fetched).toEqual([
-    ['https://kinu.run/api/health', { method: 'POST', tls: { serverName: 'kinu.run', ca } }],
-    ['https://own.example/', { tls: { ca: ['mine'] } }],
-  ]);
-  expect(opened).toEqual([
-    ['wss://kinu.run/pc/connect', { tls: { ca } }],
-    ['wss://kinu.run/api/deploy/runs/r/socket', { protocols: ['kinu-deploy.v1', 'key'], tls: { ca } }],
-  ]);
+    installTrustedRoots(/** @type {never} */ (scope));
+    await scope.fetch('https://own.example/', { tls: { ca: [mine] } });
+    new scope.WebSocket('wss://kinu.run/api/deploy/runs/r/socket', ['kinu-deploy.v1', 'key']);
+
+    expect(fetched).toEqual([['https://own.example/', { tls: { ca: [mine.trim()] } }]]);
+    expect(opened).toEqual([['wss://kinu.run/api/deploy/runs/r/socket', { protocols: ['kinu-deploy.v1', 'key'], tls: { ca: trustedRoots() } }]]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

@@ -1,0 +1,9 @@
+{
+  "source": "Mozilla bug 2083449 (2026-10-17): the private keys of eight eMudhra intermediates were recoverable, so anyone could sign for any name through them. The roots they chain to, by SHA-256 fingerprint, as the incident's record lists them: https://emudhra.we-have-a-problem.com/roots.json. `debian` names the file of Debian's ca-certificates that carries the root, where it does (20250419, the computer's pinned snapshot).",
+  "roots": [
+    { "name": "emSign Root TLS CA - G3", "sha256": "7DD78D5F4F13459A83DFF9ABBBA62EDBAF6F2D102BF257FD712F4D9F2746ED8D", "debian": null },
+    { "name": "emSign Root CS CA - G3", "sha256": "F2EDAAFF3D9B701FB4D14C9F285F8C0BAD90FC3BCC1FA07D47F4718EDABA34A5", "debian": null },
+    { "name": "AAA Certificate Services", "sha256": "D7A7A0FB5D7E2731D771E9484EBCDEF71D5F0C3E0A2948782BC83EE0EA699EF4", "debian": "mozilla/Comodo_AAA_Services_root.crt" },
+    { "name": "emSign ECC Root CA - G3", "sha256": "86A1ECBA089C4A8D3BBE2734C612BA341D813E043CF9E8A862CD5C57A36BBE6B", "debian": "mozilla/emSign_ECC_Root_CA_-_G3.crt" }
+  ]
+}

@@ -1,11 +1,11 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
-import { CONTAINER_ENV, containerExec, endProcess } from './processes';
+import { boxEnv, containerExec, endProcess } from './processes';
 import { INSTALL_SESSION_FILES, SAVED_SESSIONS, SESSIONS_FORGET, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE, type SessionRecord } from './sessions';
 import { DEVBOX_WORKDIR } from './storage';
 
-const ENV = { ...CONTAINER_ENV, ...SESSION_FILES, TERM: 'xterm-256color' };
+const ENV = boxEnv({ ...SESSION_FILES, TERM: 'xterm-256color' });
 
 /**
  * `$1` the session's id, `$2` its folder: joins the session, or opens it there, first showing what it had before a
