@@ -7,7 +7,6 @@ import { KinuError, toKinuError } from '../obs/error';
 import { publishContent } from '../utils/vfs-helpers';
 import { sha256Hex } from '../safety/argument-digest';
 import { JsonObjectSchema, type JsonValue, type JsonObject } from '../utils/json';
-import { PLATFORM_CATALOG } from '../platform-catalog';
 import { SPILL_DIRS } from '../context-budget';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { BinaryEnvelopeSchema } from './message-codec';
@@ -41,8 +40,13 @@ export function storedPayload(json: string | null, path: string | null): Effect.
   return payload === null ? Effect.fail(new KinuError('io', 'invalid session payload reference')) : Effect.succeed(payload);
 }
 
-// Payload leaves half the platform row bound for keys/metadata; independent of model token policy.
-const INLINE_BYTES = Math.floor(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 2);
+/**
+ * Past this a payload is a file its row names; under it the payload is read with its row, so a drawn page holds it live.
+ * It was half the 2 MB row until the row rose to 8 MiB (2026-10-21), and stays: at half of 8 MiB a hire's drawn pages
+ * held 20.8 MB, past the heap gate's 19.0 MB (`CONCURRENT_AGENT_LIVE_BOUND_BYTES`), red on 3 runs of 3; at 1 MB green on
+ * 2 of 2 (armada heap-branch, heap-inline1mb). Independent of model token policy; well inside the row, beside its keys.
+ */
+const INLINE_PAYLOAD_BYTES = 1_000_000;
 
 const StringAttachmentReference = v.object({ $sessionStringAttachment: v.object({ path: v.string(), digest: v.string() }) });
 
@@ -140,10 +144,10 @@ export class SessionPayloads extends SessionPayloadReader {
     const json = JSON.stringify(value);
 
     // Most payloads are inline: they need no file and no runner, nor an encoding, as a UTF-16 unit is three bytes at most.
-    if (json.length * 3 <= INLINE_BYTES) return Promise.resolve({ json, path: null });
+    if (json.length * 3 <= INLINE_PAYLOAD_BYTES) return Promise.resolve({ json, path: null });
     const bytes = new TextEncoder().encode(json);
 
-    if (bytes.byteLength <= INLINE_BYTES) return Promise.resolve({ json, path: null });
+    if (bytes.byteLength <= INLINE_PAYLOAD_BYTES) return Promise.resolve({ json, path: null });
 
     return settle(Effect.gen({ self: this }, function* () {
       const digest = sha256Hex(bytes);

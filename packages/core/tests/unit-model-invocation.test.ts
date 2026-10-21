@@ -6,7 +6,8 @@
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { simulateReadableStream } from 'ai';
+import { simulateReadableStream, wrapLanguageModel } from 'ai';
+import { InvalidResponseDataError } from '@ai-sdk/provider';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { createTestActors, unpricedLedger } from '@kinu.run/test-utils';
@@ -23,6 +24,9 @@ import type { ModelCallSink } from '../src/events/model-call';
 import type { Usage } from '../src/usage';
 import { renderThrownChain } from '../src/obs/error';
 import { sha256Hex } from '../src/safety/argument-digest';
+import { retryMiddleware } from '../src/providers/middleware/retry';
+import { ProviderPacer } from '../src/providers/pacing';
+import { WORKERS_AI_STREAMS_GENERATE } from '../src/providers/workers-ai-provider';
 
 interface Spent {
   readonly calls: number;
@@ -128,8 +132,11 @@ describe('a structured call', () => {
     return { stream: simulateReadableStream({ chunks: parts, chunkDelayInMs: opts.delay ?? null }) };
   };
 
-  /** A model that answers `text`, stopping as `finish` says, having read 9 tokens and written 2. */
-  const answering = (text: string, finish: 'stop' | 'length' = 'stop') => new MockLanguageModelV3({ doStream: async () => streamed(text, { finish }) });
+  /** A model that answers `text`, stopping as `finish` says, having read 9 tokens and written 2, in the form asked. */
+  const answering = (text: string, finish: 'stop' | 'length' = 'stop') => new MockLanguageModelV3({
+    doGenerate: async () => ({ content: [{ type: 'text', text }], finishReason: { unified: finish, raw: undefined }, usage: USAGE, warnings: [] }),
+    doStream: async () => streamed(text, { finish }),
+  });
 
   test('an answer off the schema is refused as wrong, and was billed like any answer', async () => {
     const { report, producers } = ledger();
@@ -189,18 +196,46 @@ describe('a structured call', () => {
       .rejects.toMatchObject({ code: 'unavailable' });
   });
 
+  /** `inner` as Workers AI's provider stack serves it: every generate read from a stream (`WORKERS_AI_STREAMS_GENERATE`). */
+  const onWorkersAI = (inner: MockLanguageModelV3) => wrapLanguageModel({ model: inner, middleware: retryMiddleware({
+    provider: 'workers-ai', lane: 'workers-ai@main', generateByStream: WORKERS_AI_STREAMS_GENERATE, warn: () => {}, sleep: async () => {}, pacer: new ProviderPacer(),
+  }) });
+
   // Workers AI ended a 14k-token dreamer brief's non-streamed request at 10 minutes (408, 3046) while the same call
   // streamed answered in 7 (2026-10-20): a provider ends a request that sends nothing for that long.
   test('a call that reasons longer than a provider holds a silent request is answered, as it streams', async () => {
     const { report, producers } = ledger();
 
-    const model = new MockLanguageModelV3({
+    const model = onWorkersAI(new MockLanguageModelV3({
       doGenerate: async () => { throw new Error('Request timeout (HTTP 408, 3046)'); },
       doStream: async () => streamed('{"key":"build.dir","value":"dist"}', { piece: 4, delay: 5 }),
-    });
+    }));
 
     expect(await generateObjectReported({ model, prompt: 'p', maxRetries: 0 }, Fact, { spend: { source: 'judge', report } })).toEqual({ key: 'build.dir', value: 'dist' });
     expect(producers()).toEqual({ judge: { calls: 1, unmeasured: 0, usage: { input: 9, output: 2 } } });
+  });
+
+  // The OMP pilot's dreamer, 2026-10-21: kimi-k2.6's stream closed part way, the OpenAI-compatible adapter ended it
+  // "without a finish reason", and the dream was refused. Nothing of a structured answer is read until it is whole.
+  test('a stream cut part way is asked again, as nothing of the answer was read', async () => {
+    let opened = 0;
+
+    const model = onWorkersAI(new MockLanguageModelV3({
+      doStream: async () => {
+        opened += 1;
+
+        if (opened > 1) return streamed('{"key":"build.dir","value":"dist"}');
+
+        return { stream: simulateReadableStream<LanguageModelV3StreamPart>({ chunks: [
+          { type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: '{"key":"bui' },
+          { type: 'error', error: new InvalidResponseDataError({ data: undefined, message: 'Response stream ended without a finish reason.' }) },
+        ] }) };
+      },
+    }));
+
+    const answer = await generateObjectReported({ model, prompt: 'p', maxRetries: 0 }, Fact, { spend: { source: 'judge', report: () => {} } });
+
+    expect({ answer, opened }).toEqual({ answer: { key: 'build.dir', value: 'dist' }, opened: 2 });
   });
 
   // OpenAI's strict mode refuses a schema with an optional field or an open value before answering.

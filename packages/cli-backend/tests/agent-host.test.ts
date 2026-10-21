@@ -1161,6 +1161,93 @@ describe('LocalAgentHost', () => {
     await host.close();
   });
 
+  // A run that answers one request and moves on (the OMP runner) reads the request's answer only once the whole tree is
+  // quiet: the hire's turn, and the turn its report then woke in its hirer.
+  test("settle returns once a hire's report has woken its hirer and that turn has ended", async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const gated = gatedFirstModel();
+    const { host } = makeHost(state, gated.model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const ended: string[] = [];
+
+    host.subscribe((agent, event) => {
+      if (event.type === 'turn-end') ended.push(agent);
+    });
+    const team = await host.team('root');
+
+    await team.create({ name: 'researcher', role: 'researcher', mission: 'Investigate the incident.' });
+    await team.assign({ name: 'researcher', task: 'Find the root cause and report it.', mode: 'build' });
+    await gated.started;
+    gated.release();
+    await host.settle();
+
+    expect({ ended, inFlight: ['root', 'root/researcher'].map((key) => host.peek(key)?.turnInFlight()) })
+      .toEqual({ ended: ['root/researcher', 'root'], inFlight: [false, false] });
+    await host.close();
+  });
+
+  // An owner who never answers (a measured run has none) leaves the reports its hirer was sent queued: settle is done
+  // once nothing can run, not once those reports' turns have, and a report held so holds no later one from arriving.
+  test("settle returns while hires' reports wait behind their hirer's open question to the owner, one after another", async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    const ask = { questions: [{ id: 'units', question: 'Which unit should the ledger store?', header: 'Units', options: [{ label: 'Cents', description: 'Exact.' }, { label: 'Dollars', description: 'Readable.' }], recommended: 0 }] };
+    // Whose calls the model answers now: the root's until it has asked, then the hires'.
+    let asking = true;
+    let rootCalls = 0;
+    let reports = 0;
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async () => {
+        if (!asking) {
+          reports += 1;
+
+          return { stream: textStream(`report ${String(reports)}`, usage), response: { headers: {} } };
+        }
+
+        rootCalls += 1;
+
+        if (rootCalls > 1) return { stream: textStream('ok', usage), response: { headers: {} } };
+
+        return {
+          stream: new ReadableStream<LanguageModelV2StreamPart>({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'tool-call', toolCallId: 'call_ask', toolName: 'ask_owner', input: JSON.stringify(ask) });
+              controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    });
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
+    const team = await host.team('root');
+    const root = await host.acquire('root');
+
+    await root.send('Ask me which unit the ledger stores, then wait.', { id: crypto.randomUUID() });
+    await host.settle();
+    asking = false;
+
+    for (const [at, name] of ['researcher', 'auditor'].entries()) {
+      await team.create({ name, role: 'researcher', mission: 'Investigate the incident.' });
+      await team.assign({ name, task: `Find the root cause, part ${String(at + 1)}, and report it.`, mode: 'build' });
+      await host.settle();
+    }
+
+    const open = (await root.listOwnerQuestions()).filter((question) => question.asked.status === 'open');
+    const pumping = ['root', 'root/researcher', 'root/auditor'].map((key) => host.peek(key)?.pumping());
+
+    // The root asked once and has read no report: both wait behind the question.
+    expect({ open: open.length, rootCalls, reports, pumping }).toEqual({ open: 1, rootCalls: 1, reports: 2, pumping: [false, false, false] });
+    await host.close();
+  });
+
   /** B10, local host: one assignment row, one runner, one turn, driven by the brief rather than a reactor digest. */
   test('a hired child runs its brief once, as its own instruction, under the row\'s mode', async () => {
     const brief = 'Reconcile the ledger and report the variance.';

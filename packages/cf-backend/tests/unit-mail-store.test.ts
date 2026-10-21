@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import { initMailboxTables, mailInContext, type SqlExec } from '@kinu.run/core';
 import { makeSqlExec } from '../../core/tests/helpers';
 import type { MailDelivery } from '@kinu.run/core';
@@ -301,6 +302,42 @@ describe('threads, views and search', () => {
     expect(store.list({ view: 'all', query: 'kinu-probe-b@ashishkumarsingh.com' }).threads).toHaveLength(1);
     expect(store.list({ view: 'all', query: 'NEAR( "x' }).threads).toEqual([]);
   });
+});
+
+// What the store asks often is answered from the rows it asks about: a thread's draft (each new draft replaces it) and
+// the day's sends against the cap are each read through an index of their own, never a scan of every message.
+test("a thread's draft and the day's sends are read through their own indexes", async () => {
+  const asked: string[] = [];
+
+  const watched: SqlExec = {
+    exec: (query, ...bindings) => {
+      asked.push(query);
+
+      return db.exec(query, ...bindings);
+    },
+  };
+
+  const watching = new MailStore({
+    sql: watched, blobs, domain: 'kinu.run', now: () => clock, id: () => { next += 1;
+
+ return `id-${String(next)}`; }, parse: parseMail,
+    digest: (bytes) => Promise.resolve(createHash('sha256').update(bytes).digest('hex')),
+  });
+
+  watching.open({ userId: 'u-ashish', email: 'ashish@kinu.run', username: 'ashish', assistant: null });
+  const arrived = await watching.deliver({ raw: stranger('Status', 'Is it done?'), envelopeFrom: 'dana@northwind.io', recipient: toPerson });
+
+  if (arrived === null) throw new Error('the arrival was not filed');
+  await watching.draft({ path: '', threadId: arrived.threadId, to: ['dana@northwind.io'], subject: 'Re: Status', text: 'Nearly.' });
+  watching.sentToday();
+
+  const plans = asked.filter((query) => /^SELECT.*FROM mail_messages WHERE (thread_id = \? AND send_state = 'draft'|send_state = 'queued')/su.test(query))
+    .map((query) => db.exec(`EXPLAIN QUERY PLAN ${query}`, ...query.split('?').slice(1).map(() => null)).toArray().map((row) => v.parse(v.string(), row.detail)).join(' '));
+
+  expect(plans).toEqual([
+    expect.stringContaining('INDEX mail_messages_drafts (thread_id=?)'),
+    expect.stringContaining('INDEX mail_messages_sent (at>?)'),
+  ]);
 });
 
 describe('Trash', () => {

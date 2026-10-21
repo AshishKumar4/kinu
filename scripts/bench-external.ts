@@ -16,6 +16,11 @@
 //   bun scripts/bench-external.ts gain --stateful <job-dir> --stateless <job-dir>
 //       The stateful-minus-stateless primitive, through computeGain.
 //
+//   bun scripts/bench-external.ts review --jobs <dir>
+//       kinu-envs' review tasks (its DESIGN.md), run through bench/harbor/omp_agent.py: each model's recall,
+//       precision, F1 and reward on each case, with the run's wall time and its list-price cost, as a table. The
+//       numbers are the verifier's own (reward.json); nothing here rescores.
+//
 // Both write their analysis into the artifact root, because an analysis of
 // retained evidence is itself evidence.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
@@ -742,7 +747,90 @@ Usage:
 A Harbor job directory is the one holding per-trial subdirectories, each with a
 result.json — for example bench-artifacts/tb21-main-374ff97.`;
 
-const COMMANDS = { compare: cmdCompare, gain: cmdGain };
+/** A review trial: what its verifier scored, which model, how long its agent ran and what OMP priced its calls at. */
+const ReviewTrialSchema = v.object({
+  task_name: v.pipe(v.string(), v.minLength(1)),
+  config: v.object({ agent: v.object({ model_name: v.optional(v.nullable(v.string())) }) }),
+  agent_result: v.nullable(v.object({ cost_usd: v.optional(v.nullable(v.number())) })),
+  agent_execution: v.optional(v.nullable(v.object({ started_at: v.string(), finished_at: v.nullable(v.string()) }))),
+  verifier_result: v.nullable(v.object({ rewards: v.record(v.string(), v.number()) })),
+  exception_info: v.optional(v.nullable(v.object({ exception_type: v.optional(v.string()) }))),
+});
+
+/** One table row a review trial gives. A trial whose harness failed (Harbor recorded an exception) is the harness's
+ *  failure, not the model's score: it shows its exception and stays out of the model's mean. */
+export interface ReviewRow {
+  readonly model: string;
+  readonly task: string;
+  readonly rewards: Readonly<Record<string, number>> | null;
+  readonly failure: string | null;
+  readonly wallSeconds: number | null;
+  readonly costUsd: number | null;
+}
+
+/** Every review trial's row under `dir`, at any depth (a job per model and task), model then task order. */
+export function readReviewTrials(dir: string): ReviewRow[] {
+  const rows: ReviewRow[] = [];
+
+  for (const entry of readdirSync(dir, { withFileTypes: true, recursive: true })) {
+    if (!entry.isFile() || entry.name !== 'result.json') continue;
+    const parsed = v.safeParse(ReviewTrialSchema, parseJsonValue(readFileSync(join(entry.parentPath, entry.name), 'utf8')));
+
+    // A job's own result.json has no task: it is the summary of the trials beside it.
+    if (!parsed.success) continue;
+    const trial = parsed.output;
+    const started = trial.agent_execution?.started_at;
+    const finished = trial.agent_execution?.finished_at;
+
+    rows.push({
+      model: trial.config.agent.model_name ?? 'unknown', task: trial.task_name,
+      failure: trial.exception_info ? (trial.exception_info.exception_type ?? 'exception') : null,
+      rewards: trial.exception_info ? null : (trial.verifier_result?.rewards ?? null),
+      wallSeconds: started && finished ? (Date.parse(finished) - Date.parse(started)) / 1000 : null,
+      costUsd: trial.agent_result?.cost_usd ?? null,
+    });
+  }
+
+  return rows.sort((a, b) => a.model.localeCompare(b.model) || a.task.localeCompare(b.task));
+}
+
+/** The rows as a markdown table, each model's mean beneath its cases. */
+export function reviewTable(rows: readonly ReviewRow[]): string {
+  const cell = (value: number | undefined | null, digits = 2): string => (value === undefined || value === null ? '—' : value.toFixed(digits));
+  const lines = ['| model | case | recall | precision | F1 | reward | FP | wall (min) | cost (USD, list) |', '|---|---|---|---|---|---|---|---|---|'];
+
+  for (const model of new Set(rows.map((row) => row.model))) {
+    const own = rows.filter((row) => row.model === model);
+
+    for (const row of own) {
+      const r = row.rewards;
+
+      if (row.failure !== null) {
+        lines.push(`| ${model} | ${row.task} | harness failure: ${row.failure} | | | | | ${cell(row.wallSeconds === null ? null : row.wallSeconds / 60, 1)} | |`);
+        continue;
+      }
+
+      lines.push(`| ${model} | ${row.task} | ${cell(r?.recall)} | ${cell(r?.precision)} | ${cell(r?.f1)} | ${cell(r?.reward)} | ${cell(r?.false_positives, 0)} | ${cell(row.wallSeconds === null ? null : row.wallSeconds / 60, 1)} | ${cell(row.costUsd)} |`);
+    }
+
+    const scored = own.filter((row) => row.rewards !== null);
+    const mean = (name: string): number | null => (scored.length === 0 ? null : scored.reduce((sum, row) => sum + (row.rewards?.[name] ?? 0), 0) / scored.length);
+    lines.push(`| ${model} | mean of ${String(scored.length)} | ${cell(mean('recall'))} | ${cell(mean('precision'))} | ${cell(mean('f1'))} | ${cell(mean('reward'))} | | | |`);
+  }
+
+  return lines.join('\n');
+}
+
+function cmdReview(args: Map<string, string>): number {
+  const dir = args.get('jobs');
+
+  if (dir === undefined) throw new Error('review needs --jobs <dir>');
+  console.log(reviewTable(readReviewTrials(resolve(dir))));
+
+  return 0;
+}
+
+const COMMANDS = { compare: cmdCompare, gain: cmdGain, review: cmdReview };
 
 function isCommand(name: string): name is keyof typeof COMMANDS {
   return Object.hasOwn(COMMANDS, name);
@@ -757,7 +845,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (!isCommand(command)) throw new Error(`unknown command "${command}" (expected compare | gain)`);
+  if (!isCommand(command)) throw new Error(`unknown command "${command}" (expected compare | gain | review)`);
 
   process.exit(COMMANDS[command](args));
 }

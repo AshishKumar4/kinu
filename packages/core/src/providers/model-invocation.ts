@@ -95,13 +95,14 @@ const NON_STRICT: ProviderOptions = { openai: { strictJsonSchema: false }, opena
 /**
  * One answer of `schema`'s shape, through the model's structured output: the provider is sent the schema as JSON
  * Schema (`toJsonSchema`; a value it cannot express, as a JSON value, is any value there), and the answer is read back
- * through `schema` itself. Streamed, and filed as {@link streamTextReported} files a drained stream: a model that
- * reasons for minutes keeps its connection, where a provider ends a request that answers nothing for as long (Workers
- * AI's 408 at 10 minutes, 2026-10-20). An answer off the schema was billed and is no answer: it fails `bad_input`, as a
- * wrong answer does, and is not asked of another model; an answer stopped at the output limit fails `unavailable`.
+ * through `schema` itself. A generate, filed as {@link generateReported} files one: nothing of it is read until it is
+ * whole, so a provider that streams its generates (Workers AI, whose silent requests end at 10 minutes with a 408,
+ * `WORKERS_AI_STREAMS_GENERATE`) asks again for one its stream cut part way. An answer off the schema was billed and is
+ * no answer: it fails `bad_input`, as a wrong answer does, and is not asked of another model; an answer stopped at the
+ * output limit fails `unavailable`.
  */
 export function generateObjectReported<S extends v.GenericSchema>(request: ObjectRequest, schema: S, call: ReportedCall): Promise<v.InferOutput<S>> {
-  const streamed: StreamRequest = {
+  const asked: GenerateRequest = {
     ...request,
     output: Output.object({ schema: jsonSchema(toJsonSchema(schema, { errorMode: 'ignore' })) }),
     providerOptions: mergeProviderOptions(request.providerOptions, NON_STRICT),
@@ -113,30 +114,20 @@ export function generateObjectReported<S extends v.GenericSchema>(request: Objec
     `${call.spec ?? 'the model'} answered off its schema (${String(text.length)} characters, sha256 ${sha256Hex(text, 12)})`, { cause });
 
   return settle(Effect.gen(function* () {
-    // Drained before anything is read, so the call is filed whatever its answer; a provider's failure is kept as it came
-    // for the route walk to read.
-    // Read part by part, which raises a provider's failure as it came: the text stream ends on one with no cause.
-    const result = yield* Effect.promise(() => drained(streamTextReported(streamed, call, () => {})));
+    const result = yield* Effect.tryPromise({ try: () => generateReported(asked, call), catch: (cause) => cause }).pipe(Effect.catch((cause) => {
+      if (!NoObjectGeneratedError.isInstance(cause)) return Effect.die(cause);
 
-    // Read to its end, a stream returns its result: only a reader's `return` ends one without.
-    if (result === undefined) return yield* Effect.fail(new KinuError('unavailable', 'the model\'s stream ended without its result'));
-    const finishReason = yield* Effect.promise(async () => await result.finishReason);
-    const modelId = (yield* Effect.promise(async () => await result.response)).modelId;
-
-    if (finishReason === 'length') return yield* Effect.fail(outputLimitFailure(modelId, 'length'));
-
-    const output = yield* Effect.tryPromise({ try: async () => await result.output, catch: (cause) => cause }).pipe(
-      Effect.catch((cause) => (NoObjectGeneratedError.isInstance(cause) ? Effect.fail(offSchema(cause.text ?? '', noObject(cause))) : Effect.die(cause))),
-    );
+      // A partial object at the output limit is no answer yet, not a wrong one.
+      return Effect.fail(cause.finishReason === 'length' ? outputLimitFailure(cause.response?.modelId ?? call.spec ?? 'the model', 'length', cause) : offSchema(cause.text ?? '', noObject(cause)));
+    }));
 
     // Fail-fast: the refusal names the first path it got wrong and nothing more, so an answer of ten thousand wrong
     // items makes one line, not ten thousand.
-    const parsed = v.safeParse(schema, output, { abortEarly: true });
+    const parsed = v.safeParse(schema, result.output, { abortEarly: true });
 
     if (parsed.success) return parsed.output;
-    const text = yield* Effect.promise(async () => await result.text);
 
-    return yield* Effect.fail(offSchema(text, new KinuError('bad_input', renderIssuesUnquoted(parsed.issues))));
+    return yield* Effect.fail(offSchema(result.text, new KinuError('bad_input', renderIssuesUnquoted(parsed.issues))));
   }));
 }
 
@@ -146,15 +137,6 @@ function noObject(refused: NoObjectGeneratedError): KinuError {
   if (JSONParseError.isInstance(refused.cause)) return new KinuError('bad_input', 'its answer is not JSON');
 
   return new KinuError('bad_input', TypeValidationError.isInstance(refused.cause) ? 'its answer does not fit the schema sent' : 'it answered no object');
-}
-
-/** A reported stream read to its end; what it returned, its result with every promise settled. */
-async function drained(parts: AsyncGenerator<string, StreamResult | undefined>): Promise<StreamResult | undefined> {
-  for (;;) {
-    const step = await parts.next();
-
-    if (step.done === true) return step.value;
-  }
 }
 
 /**

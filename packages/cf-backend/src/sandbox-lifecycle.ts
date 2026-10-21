@@ -7,6 +7,7 @@
 
 import { Effect } from 'effect';
 import * as v from 'valibot';
+import type { ComputerProcessEnd } from '@kinu.run/core';
 import type { DevboxIncident, IncidentStage, RestoreClockPhase } from '@kinu.run/devbox';
 // Pure subpath: the barrel loads `cloudflare:workers`, which exists only under workerd.
 import { INCIDENT_REASON_MAX_CHARS } from '@kinu.run/devbox/incidents';
@@ -45,6 +46,10 @@ const STAGE_CONSEQUENCE = {
     + 'cold on its next use, without its in-memory state. Until you answer, the container keeps running.',
   recovered: 'Every computer tool works: the workspace is as it was at that time. Rebuild the folders named above '
     + 'before you rely on them, and redo any edit made after that time that you still need.',
+  'process-ended': 'A process you started on the computer has ended, and nothing starts it again. Read what it wrote '
+    + 'last, above, and start it again yourself if you still need it.',
+  'process-restored': 'The computer restarted and started this process again: it runs, but anything it held in memory '
+    + 'is gone.',
 } satisfies Record<IncidentStage, string>;
 
 function isIncidentStage(name: string): name is IncidentStage {
@@ -67,6 +72,9 @@ const SandboxLifecycleIncidentSchema = v.strictObject({
   reason: v.pipe(v.string(), v.minLength(1), v.maxLength(MAX_REASON_CHARS)),
   processId: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(200))),
   port: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65_535))),
+  /** The job a computer's process runs as, on `process-ended` and `process-restored`. */
+  job: v.optional(v.pipe(v.string(), v.minLength(1), v.maxLength(200))),
+  exitCode: v.optional(v.pipe(v.number(), v.integer())),
 });
 
 export type SandboxLifecycleIncident = v.InferOutput<typeof SandboxLifecycleIncidentSchema>;
@@ -129,6 +137,14 @@ function readDeliveryState(
 export interface SandboxLifecycleDeps {
   readonly sql: SqlExecutor;
   readonly inbox: AgentInbox;
+  /**
+   * A computer's process run as a job: its end settles the job (`ComputerProcessEnds`), its restore is noted to it
+   * (`runner.note`). The job's own wake tells the agent, so no incident text does.
+   */
+  readonly jobs?: {
+    readonly ended: (jobId: string, end: ComputerProcessEnd) => Promise<void>;
+    readonly restored: (jobId: string, note: { readonly id: string; readonly text: string }) => Promise<void>;
+  };
   /** Required: an absent instrument looks exactly like a quiet fleet. */
   readonly recordRecovery: (row: Omit<RecoveryRowInput, 'workspace'>) => void;
   readonly logActivity?: (event: string, detail?: string) => void;
@@ -143,6 +159,10 @@ export function lifecycleIncident(incident: DevboxIncident, attempts: number): S
   if (incident.processId !== undefined) report.processId = incident.processId;
 
   if (incident.port !== undefined) report.port = incident.port;
+
+  if (incident.job !== undefined) report.job = incident.job;
+
+  if (incident.exitCode !== undefined) report.exitCode = incident.exitCode;
 
   return report;
 }
@@ -206,6 +226,23 @@ export function acceptSandboxLifecycleIncident(
       (incident_id, first_seen_at, outcome)
     VALUES (${incident.incidentId}, ${now}, NULL)
     ON CONFLICT(incident_id) DO NOTHING`;
+
+    // A job's process: the job tells its agent, and the incident is announced as the job's.
+    const { job } = incident;
+
+    if (job !== undefined && deps.jobs !== undefined && (incident.stage === 'process-ended' || incident.stage === 'process-restored')) {
+      const { jobs } = deps;
+      const end = { ...(incident.exitCode !== undefined && { exitCode: incident.exitCode }), tail: incident.reason };
+
+      yield* incident.stage === 'process-ended'
+        ? attempt({ doing: "settling a computer process's job with its end", otherwise: 'io' }, () => jobs.ended(job, end))
+        : attempt({ doing: "noting a computer process's restore to its job", otherwise: 'io' }, () => jobs.restored(job, { id: incident.incidentId, text: incidentText(incident) }));
+
+      void deps.sql`UPDATE sandbox_lifecycle_incidents SET outcome = ${'queued'} WHERE incident_id = ${incident.incidentId}`;
+      recordSettlement('ok', '');
+
+      return { status: 'queued', incidentId: incident.incidentId, duplicate: false };
+    }
 
     const metadata: JsonObject = {
       incidentId: incident.incidentId,

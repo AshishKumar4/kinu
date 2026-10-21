@@ -201,6 +201,79 @@ test('a retired table is dropped, unless rows a kept table holds refer to it', (
   expect(rows(held.sql, 'SELECT COUNT(*) AS n FROM stays')).toEqual([{ n: 1 }]);
 });
 
+// Review of the consolidation (2026-10-21): a retired table that refers to a stale one went with its group, was made again
+// from its old statement, and was then retired: reported dropped and retired, with two rows in `tables`.
+test('a retired table that refers to a changed one goes with it once, as retired, and is not made again', () => {
+  const { sql, writes } = world(`
+    CREATE TABLE actor_requests (id TEXT PRIMARY KEY, old TEXT);
+    CREATE TABLE request_renders (request TEXT NOT NULL REFERENCES actor_requests(id), body TEXT);
+    CREATE INDEX request_renders_request ON request_renders(request);
+    INSERT INTO actor_requests VALUES ('r', 'x');
+    INSERT INTO request_renders VALUES ('r', 'shown');`, 'CREATE TABLE IF NOT EXISTS actor_requests (id TEXT PRIMARY KEY, render TEXT);', ['actor_requests']);
+
+  const repair = repairSchema(sql, writes, 'requests');
+
+  expect({ dropped: repair?.dropped, retired: repair?.retired, tables: repair?.tables, refused: repair?.refused }).toEqual({
+    dropped: ['actor_requests'], retired: ['request_renders'], refused: null,
+    tables: [{ table: 'actor_requests', before: 1, after: 0 }, { table: 'request_renders', before: 1, after: null }],
+  });
+  expect(rows(sql, "SELECT name FROM sqlite_master WHERE name LIKE 'request_renders%'")).toEqual([]);
+});
+
+// Review of the consolidation (2026-10-21): a contentless FTS index keyed by a dropped table's rowids outlived it, and a
+// message delivered after the reset took rowid 1, and with it the old message's tokens.
+test('a virtual table derived from a dropped one, by the mark in its own statement, is dropped and made anew with it', () => {
+  const before = `
+    CREATE TABLE messages (id TEXT PRIMARY KEY, subject TEXT, old TEXT);
+    CREATE VIRTUAL TABLE messages_fts USING fts5 (subject, content = '', contentless_delete = 1);
+    INSERT INTO messages (rowid, id, subject) VALUES (1, 'm1', 'oldsecretword');
+    INSERT INTO messages_fts (rowid, subject) VALUES (1, 'oldsecretword');`;
+
+  const init = (mark: string) => `
+    CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, subject TEXT);
+    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5 ( ${mark}
+      subject, content = '', contentless_delete = 1
+    );`;
+
+  const deliver = (sql: SqlExec) => {
+    sql.exec("INSERT INTO messages (id, subject) VALUES ('m2', 'new subject')");
+    sql.exec("INSERT INTO messages_fts (rowid, subject) SELECT rowid, subject FROM messages WHERE id = 'm2'");
+
+    return rows(sql, "SELECT m.id FROM messages m WHERE m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'oldsecretword')");
+  };
+
+  const marked = world(before, init('/* derived from messages: its rowids are theirs */'), ['messages']);
+  const repair = repairSchema(marked.sql, marked.writes, 'mail');
+
+  expect({ dropped: repair?.dropped, tables: repair?.tables }).toEqual({
+    dropped: ['messages', 'messages_fts'], tables: [{ table: 'messages', before: 1, after: 0 }, { table: 'messages_fts', before: 1, after: 0 }],
+  });
+  expect(deliver(marked.sql)).toEqual([]);
+
+  // Unmarked, the index is left over rowids that are gone: what the mark exists to prevent.
+  const unmarked = world(before, init(''), ['messages']);
+
+  expect(repairSchema(unmarked.sql, unmarked.writes, 'mail')?.dropped).toEqual(['messages']);
+  expect(deliver(unmarked.sql)).toEqual([{ id: 'm2' }]);
+});
+
+test('a virtual table its first use makes, derived from a dropped table, is dropped and left to that use', () => {
+  const index = 'CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5( /* derived from entries: their text, indexed */ content)';
+
+  const read = world(`
+    CREATE TABLE entries (id TEXT PRIMARY KEY, old TEXT);
+    CREATE VIRTUAL TABLE entries_fts USING fts5(content);
+    INSERT INTO entries VALUES ('e', 'x');
+    INSERT INTO entries_fts (rowid, content) VALUES (1, 'hello');`, 'CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY);', ['entries']);
+
+  const repair = repairSchema(read.sql, { ...read.writes, later: () => { read.sql.exec(index); } }, 'search');
+
+  expect({ dropped: repair?.dropped, tables: repair?.tables }).toEqual({
+    dropped: ['entries', 'entries_fts'], tables: [{ table: 'entries', before: 1, after: 0 }, { table: 'entries_fts', before: 1, after: 0 }],
+  });
+  expect(rows(read.sql, "SELECT name FROM sqlite_master WHERE name LIKE 'entries_fts%'")).toEqual([]);
+});
+
 test('a database at this build, or one nothing made, is not repaired', () => {
   const { sql, writes } = world('CREATE TABLE notes (id TEXT, old TEXT);', 'CREATE TABLE IF NOT EXISTS notes (id TEXT);', ['notes']);
 
@@ -222,6 +295,19 @@ test('a census names every table, its rows and a digest of what they hold, sorte
   const second = censusOf(sql);
 
   expect(second.map(({ digest }, at) => digest === first[at]?.digest)).toEqual([false, true, true]);
+});
+
+test('a census reads the activations row by row, by ordinal, so a later one tells rows added from rows lost or rewritten', () => {
+  const { sql } = world(`CREATE TABLE workspace_activations (slot INTEGER PRIMARY KEY, ordinal INTEGER NOT NULL, started_at INTEGER NOT NULL, version TEXT);
+    INSERT INTO workspace_activations VALUES (2, 258, 5, 'v'), (0, 256, 3, 'v'), (1, 257, 4, NULL);`, '', []);
+
+  const ledger = censusOf(sql).find(({ table }) => table === 'workspace_activations')?.ledger ?? [];
+
+  // By ordinal, not by slot: a full ring's newest row sits in its oldest slot.
+  expect(ledger.map((entry) => entry.split(':')[0])).toEqual(['256', '257', '258']);
+  expect(new Set(ledger.map((entry) => entry.split(':')[1])).size).toBe(3);
+  // Any other table carries none.
+  expect(censusOf(world('CREATE TABLE notes (id TEXT);', '', []).sql)[0]?.ledger).toBeUndefined();
 });
 
 test('only the capability /ops/tables mints is admitted', async () => {

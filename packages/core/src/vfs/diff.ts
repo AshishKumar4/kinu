@@ -12,18 +12,36 @@ export interface LineDiff {
 /** Max rows carried per file; alignment and +/- counts cover both full texts. */
 export const MAX_LINES_PER_FILE = 1000;
 
-export function diffLines(before: string, after: string): LineDiff {
-  const a = before === '' ? [] : before.split('\n');
-  const b = after === '' ? [] : after.split('\n');
-
+/** The minimal alignment of two row lists: each change, where its rows start in `a` and in `b` and how many it deletes
+ *  and inserts. Rows are compared whole; JSON keeps lone surrogates distinct through UTF-8. */
+function align(a: readonly string[], b: readonly string[]) {
   const encoder = new TextEncoder();
 
-  // Each split item, including a final empty one, is a line. JSON keeps lone surrogates distinct through UTF-8.
   const asText = (rows: readonly string[]) => diffText(encoder.encode(
     rows.length === 0 ? '' : `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`,
   ));
 
-  const changes = compareTexts(asText(a), asText(b), { ignoreCase: false, whiteSpace: 'none', minimal: true, horizon: 0 });
+  return compareTexts(asText(a), asText(b), { ignoreCase: false, whiteSpace: 'none', minimal: true, horizon: 0 });
+}
+
+/** The rows of `a` a minimal diff deletes and the rows of `b` it inserts, by the alignment {@link diffLines} shows. */
+export function changedRows(a: readonly string[], b: readonly string[]) {
+  const removed: string[] = [];
+  const added: string[] = [];
+
+  for (const change of align(a, b)) {
+    removed.push(...a.slice(change.line0, change.line0 + change.deleted));
+    added.push(...b.slice(change.line1, change.line1 + change.inserted));
+  }
+
+  return { removed, added };
+}
+
+export function diffLines(before: string, after: string): LineDiff {
+  // Each split item, including a final empty one, is a line.
+  const a = before === '' ? [] : before.split('\n');
+  const b = after === '' ? [] : after.split('\n');
+  const changes = align(a, b);
 
   const lines: DiffLine[] = [];
   let added = 0, removed = 0, dropped = false;

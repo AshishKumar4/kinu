@@ -730,6 +730,28 @@ export class ChatSession {
     await this.joinAnnounced(identity);
   }
 
+  /**
+   * Once the turn announced under `identity` has settled, or is held: queued behind an open question to the owner,
+   * which only their answer lets run (`runnable`). The pump is joined too, so a question opened while it waits is seen.
+   */
+  async announcementSettledOrHeld(identity: string): Promise<'settled' | 'held'> {
+    for (;;) {
+      if (!this.announcementInFlight(identity)) return 'settled';
+
+      if (this.heldByOwner(identity)) return 'held';
+      const pump = this.activePump;
+
+      // With no pump yet, the join is the only wait, as `announcementSettled`'s is.
+      await (pump === null ? this.joinAnnounced(identity) : Promise.race([this.joinAnnounced(identity), pump]));
+    }
+  }
+
+  private heldByOwner(identity: string): boolean {
+    const queued = this.runningAnnouncement === identity ? undefined : this.queue.find((item) => item.idempotencyKey === identity);
+
+    return queued !== undefined && !this.runnable()(queued);
+  }
+
   announcementInFlight(identity: string): boolean {
     return this.runningAnnouncement === identity
       || this.queue.some((item) => item.idempotencyKey === identity);
@@ -1462,9 +1484,14 @@ export class ChatSession {
     await this.actorSession.orchestrator.drainPendingEvents();
   }
 
-  /** Once at startup, before the recovery drain; see {@link NO_STRANDED_DELIVERY_GRACE}. Answered deliveries' leases are already closed. */
+  /**
+   * Once at startup, before the recovery drain; see {@link NO_STRANDED_DELIVERY_GRACE}. Answered deliveries' leases are
+   * already closed. A drained turn this process restored (`restoreChat`) still owes its events: one held behind an open
+   * question, or the one the last process left open. Re-pending theirs would deliver them again with the next drain.
+   */
   reclaimStrandedEventDeliveries(): void {
-    const reclaimed = this.eventLog.unbindStale(NO_STRANDED_DELIVERY_GRACE);
+    const restored = new Set(this.queue.flatMap((item) => (item.idempotencyKey === undefined ? [] : [item.idempotencyKey])));
+    const reclaimed = this.eventLog.unbindStale(NO_STRANDED_DELIVERY_GRACE, Date.now(), restored);
 
     if (reclaimed.length === 0) return;
     diagnostics.event('event.deliveries_reclaimed', { count: reclaimed.length });

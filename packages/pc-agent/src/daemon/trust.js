@@ -64,6 +64,17 @@ function withTrustedRoots(options, roots, distrusted) {
 }
 
 /**
+ * A socket's second argument as Bun's options, where it reads `tls`: a protocol, or a list of them, goes inside as
+ * `protocols`, which Bun takes only as a sequence (a lone string there threw "Value is not a sequence", Bun 1.4.3).
+ * @param {string | string[] | Record<string, unknown> | undefined} options
+ */
+function socketOptions(options) {
+  if (typeof options === 'string') return { protocols: [options] };
+
+  return Array.isArray(options) ? { protocols: options } : options;
+}
+
+/**
  * Every connection this process makes from here on trusts `trustedRoots()`: one place, at the process's start, so no
  * connection a module opens later (the device socket, a deploy's door, an update's download) is missed. `fetch` and
  * `WebSocket` take the roots in their TLS options (Bun's `checkServerIdentity` sees only the leaf, and its WebSocket
@@ -83,13 +94,10 @@ function installTrustedRoots(scope = globalThis, distrusted = DISTRUSTED_ROOTS.m
     fetchOf,
   );
 
-  // A protocol list given as the second argument goes inside the options, where Bun reads it beside `tls`.
   class TrustedSocket extends Socket {
     /** @param {string | URL} url @param {string | string[] | Record<string, unknown>} [options] */
     constructor(url, options) {
-      const given = typeof options === 'string' || Array.isArray(options) ? { protocols: options } : options;
-
-      super(url, /** @type {never} */ (withTrustedRoots(given, roots, left)));
+      super(url, /** @type {never} */ (withTrustedRoots(socketOptions(options), roots, left)));
     }
   }
 

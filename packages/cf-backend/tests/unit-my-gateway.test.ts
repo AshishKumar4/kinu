@@ -15,7 +15,7 @@ import {
 } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
 
-import { present } from '@kinu.run/test-utils';
+import { answerChat, OK_CHAT_ANSWER, present } from '@kinu.run/test-utils';
 
 const ACCOUNT_ROOT = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1';
 
@@ -46,15 +46,8 @@ function gatewayStub(opts: {
   });
 }
 
-function chatCompletionResponse(model: string): Response {
-  return new Response(JSON.stringify({
-    id: 'chatcmpl-1',
-    object: 'chat.completion',
-    created: 0,
-    model,
-    choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-  }), { headers: { 'content-type': 'application/json' } });
+function chatCompletionResponse(model: string, init?: RequestInit): Response {
+  return answerChat({ ...OK_CHAT_ANSWER, model }, init);
 }
 
 /** models.dev knows none of these authors, so each is sent on the gateway's unified chat API. */
@@ -85,7 +78,7 @@ describe('my-gateway request shape', () => {
           model: body.model,
         });
 
-        return chatCompletionResponse(wireModel);
+        return chatCompletionResponse(wireModel, init);
       })),
     });
 
@@ -111,7 +104,7 @@ describe('my-gateway request shape', () => {
           });
         }
 
-        return chatCompletionResponse('xai/grok-4.7');
+        return chatCompletionResponse('xai/grok-4.7', init);
       })),
     });
 
@@ -414,10 +407,10 @@ describe('my-gateway registry precedence', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub(),
-      fetch: asFetchFunction(async (input: RequestInfo | URL) => {
+      fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
         wire.push(requestUrl(input));
 
-        return chatCompletionResponse('@cf/moonshotai/kimi-k2.6');
+        return chatCompletionResponse('@cf/moonshotai/kimi-k2.6', init);
       }),
     });
 

@@ -238,6 +238,9 @@ export class LocalAgentHost {
   private closed = false;
   /** Passes started outside a turn; close() joins them before ending the sessions they use. */
   private readonly answerPasses = new Set<Promise<void>>();
+  /** Wakes whose events are not yet queued as turns: settle() joins them, so a turn one agent's work owes another is not
+   *  missed. A wake leaves the set once its turns are queued, not run: one may wait on the owner, who may never answer. */
+  private readonly wakes = new Set<Promise<void>>();
 
   constructor(private readonly opts: LocalAgentHostOptions) {}
 
@@ -350,6 +353,28 @@ export class LocalAgentHost {
     const entry = await this.resolveEntry(address);
 
     return readWorkspaceWork(entry.ws.rt.storage.sql, entry.ws.rt.actor, describeActors(entry));
+  }
+
+  /**
+   * Until no hosted agent runs, or is being woken to, a turn that can run: every wake's turns queued and every session's
+   * queued turns and background work joined, each within its surface's settle grace, again while a pass wakes, opens
+   * or restarts another. A job past that grace is left running for its owner to retire; a turn held behind an open
+   * question to the owner is left queued.
+   */
+  async settle(): Promise<void> {
+    for (;;) {
+      const hosted = this.entries.size;
+
+      await Promise.all(this.wakes);
+
+      for (const entry of this.entries.values()) await entry.session.settleBackgroundWork();
+
+      // Read at once, with nothing awaited between: a session settled early in the pass may have been woken since.
+      const quiet = this.wakes.size === 0 && this.entries.size === hosted
+        && ![...this.entries.values()].some((entry) => entry.session.pumping());
+
+      if (quiet) return;
+    }
   }
 
   async close(): Promise<void> {
@@ -1448,6 +1473,11 @@ export class LocalAgentHost {
   /** What the agent is owed and has not taken, handed to its chat and run under the driver lease. The root's pass cancels
    *  what agents that are gone were owed: no pass of theirs will take it. */
   private async drainAssignedWork(entry: HostEntry): Promise<void> {
+    await this.joinAssignedWork(entry, await this.crossAssignedWork(entry));
+  }
+
+  /** The actor's assigned work handed to its chat as turns, once deliveries for actors gone are cancelled: what it took. */
+  private async crossAssignedWork(entry: HostEntry): Promise<Awaited<ReturnType<HostEntry['deliveries']['crossOwed']>>> {
     if (entry.parentKey === null) {
       const live = new Set(entry.tree.directory.list().map((record) => record.actorId));
       const owed = new AgentDeliveries(entry.ws.rt.storage.sql);
@@ -1457,11 +1487,15 @@ export class LocalAgentHost {
       }
     }
 
-    // Each handed over is run in this pass, as its chat takes it, before the pass lets the actor go; its turn's end, however
-    // it ended, closes what it answered.
-    for (const taken of await entry.deliveries.crossOwed()) {
-      await entry.session.deliveredTurnSettled(taken.id);
-      entry.eventLog.markTurnCompleted(taken.id);
+    return await entry.deliveries.crossOwed();
+  }
+
+  /** Each handed over is run in this pass, as its chat takes it, before the pass lets the actor go; its turn's end, however
+   *  it ended, closes what it answered. */
+  private async joinAssignedWork(entry: HostEntry, taken: Awaited<ReturnType<HostEntry['deliveries']['crossOwed']>>): Promise<void> {
+    for (const { id } of taken) {
+      await entry.session.deliveredTurnSettled(id);
+      entry.eventLog.markTurnCompleted(id);
     }
   }
 
@@ -1469,25 +1503,54 @@ export class LocalAgentHost {
   private wake(entry: HostEntry, source: string): void {
     // Wakes can outlive close(); driving after close() would use a closed handle.
     if (this.closed) return;
+    const admitted = this.admission();
+
     queueMicrotask(() => detach(Effect.promise(async () => {
-      if (this.closed) return;
-      await this.drain(entry, source);
+      try {
+        if (!this.closed) await this.drain(entry, source, admitted);
+      } finally {
+        admitted();
+      }
     })));
+  }
+
+  /** A wake settle() joins until its turns are queued: told once, then gone. */
+  private admission(): () => void {
+    const { promise, resolve } = Promise.withResolvers<void>();
+
+    this.wakes.add(promise);
+
+    return () => {
+      this.wakes.delete(promise);
+      resolve();
+    };
   }
 
   private answerWake(entry: HostEntry): void {
     if (this.closed) return;
-    const pass = this.drain(entry, 'refiner answer').then(() => { this.answerPasses.delete(pass); });
+    const admitted = this.admission();
+
+    const pass = this.drain(entry, 'refiner answer', admitted).then(() => {
+      admitted();
+      this.answerPasses.delete(pass);
+    });
 
     this.answerPasses.add(pass);
   }
 
-  private async drain(entry: HostEntry, source: string): Promise<void> {
+  private async drain(entry: HostEntry, source: string, admitted: () => void): Promise<void> {
     await settleLogged('host.event_drain_failed', { doing: 'draining hosted local events', otherwise: 'io' }, async () => {
       // A pass another process holds is reported by `drive`; its own pass drains and routes the same work.
       await this.drive(entry, async () => {
-        await entry.session.flushPendingDrains();
-        await this.drainAssignedWork(entry);
+        let crossed: Awaited<ReturnType<HostEntry['deliveries']['crossOwed']>> = [];
+
+        // Its events and its assigned work are all queued as turns before any is joined, and the wake is admitted then:
+        // a turn held behind an open question to the owner holds this pass, not settle().
+        await entry.session.flushPendingDrains(async () => {
+          crossed = await this.crossAssignedWork(entry);
+          admitted();
+        });
+        await this.joinAssignedWork(entry, crossed);
       });
     }, { agent: entry.key, source });
   }

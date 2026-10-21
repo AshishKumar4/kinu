@@ -21,6 +21,10 @@
  *   bun scripts/reset.ts served <environment>         the build the deployment serves, which a tables plan diffs from
  *   bun scripts/reset.ts stamps <environment>         the classes whose stamp the candidate moves; exit 3 if any
  *   bun scripts/reset.ts census <environment> <out>   every table's rows and their digest on every object, for a diff
+ *   bun scripts/reset.ts census-diff <environment> <before> <after> <record>
+ *                                                     a census before a tables release against the walk's after it:
+ *                                                     fails on the reset's structure, and on a frozen target (all
+ *                                                     but production) on any change outside the record's plan
  *   bun scripts/reset.ts tables-plan <environment> <record> [--from <sha>]
  *                                                     before the upload: every table each class drops (those the
  *                                                     release changed, and what refers to them), and what refuses
@@ -50,7 +54,7 @@ import {
 import { servedHealth } from './served-health';
 import { readGenesisLockText } from './schema-drift';
 import {
-  censusLines, changedTables, confirmation, derivedIn, listedObjects, planLines, referrersOf, verdictOf, walk, walkLines, writeLines, type TablesTarget,
+  censusDiff, censusLines, changedTables, confirmation, derivedIn, listedObjects, planLines, referrersOf, verdictOf, walk, walkLines, writeLines, type TablesTarget,
 } from './tables-reset';
 import { OPS_PASS_PREFIX } from '@kinu.run/core';
 
@@ -517,6 +521,25 @@ async function confirmedAtTerminal(words = PRODUCTION_CONFIRMATION, what = 'dele
 /** A tables release's commands (scripts/tables-reset.ts). */
 const TABLES_COMMANDS = ['served', 'stamps', 'census', 'tables-plan', 'tables-record', 'tables'] as const;
 
+/** `census-diff <environment> <before> <after> <record>`: the proof a tables release keeps, its plan's tables read from
+ *  its record. Staging holds still while a release's eval runs on it; production's people write all along. */
+function censusDiffCommand(environment: InfraEnvironment, args: readonly string[]): number {
+  const [before, after, recordFile] = args;
+
+  if (before === undefined || after === undefined || recordFile === undefined) {
+    console.error('usage: bun scripts/reset.ts census-diff <environment> <before> <after> <record>');
+
+    return 2;
+  }
+
+  const planned = v.parse(v.object({ tables: v.array(v.object({ table: v.string() })) }), JSON.parse(readFileSync(recordFile, 'utf8')));
+  const diff = censusDiff(readFileSync(before, 'utf8'), readFileSync(after, 'utf8'), new Set(planned.tables.map(({ table }) => table)), environment !== 'production');
+
+  for (const line of diff.lines) console.log(line);
+
+  return diff.failed.length === 0 ? 0 : 1;
+}
+
 /** `served`, `stamps`, `census`, `tables-plan`, `tables-record` and `tables`: a tables release's commands. */
 async function tablesCommand(command: (typeof TABLES_COMMANDS)[number], environment: InfraEnvironment, args: readonly string[]): Promise<number> {
   const [recordFile, flag, from] = args;
@@ -764,6 +787,20 @@ function validationCommand(environment: InfraEnvironment, [built, out, ...extra]
   return 0;
 }
 
+/** `pending <environment> <record>`: the tag of a reset this worker began and did not finish, or `none`; its record
+ *  written to `recordFile` when the newest is this worker's. */
+function pendingCommand(environment: InfraEnvironment, recordFile: string, scratch: string): number {
+  const { config } = plan(environment);
+  const worker = config.name ?? '';
+  const target = cloudflareTarget(environment, config, scratch);
+  const latest = target.latest();
+
+  if (latest?.worker === worker) writeFileSync(recordFile, JSON.stringify(latest));
+  console.log(pendingReset(worker, target.serving(), latest)?.tag ?? 'none');
+
+  return 0;
+}
+
 async function main(argv: readonly string[], scratch: string): Promise<number> {
   const [command, environment, recordFile] = argv;
   const known = v.is(v.picklist(INFRA_ENVIRONMENTS), environment);
@@ -798,19 +835,11 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  if (known && command === 'pending' && recordFile !== undefined) {
-    const { config } = plan(environment);
-    const worker = config.name ?? '';
-    const target = cloudflareTarget(environment, config, scratch);
-    const latest = target.latest();
-
-    if (latest?.worker === worker) writeFileSync(recordFile, JSON.stringify(latest));
-    console.log(pendingReset(worker, target.serving(), latest)?.tag ?? 'none');
-
-    return 0;
-  }
+  if (known && command === 'pending' && recordFile !== undefined) return pendingCommand(environment, recordFile, scratch);
 
   if (known && command === 'validation') return validationCommand(environment, argv.slice(2), scratch);
+
+  if (known && command === 'census-diff') return censusDiffCommand(environment, argv.slice(2));
 
   const tables = TABLES_COMMANDS.find((name) => name === command);
 
@@ -818,8 +847,8 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
 
   console.error('usage: bun scripts/reset.ts plan <environment> | wipe <environment> <record> | pending <environment> <record> '
     + '| validation <environment> <built-config> <out> '
-    + '| served <environment> | stamps <environment> | census <environment> <out> | tables-plan <environment> <record> [--from <sha>] '
-    + '| tables-record <environment> <record> | tables <environment> <record>');
+    + '| served <environment> | stamps <environment> | census <environment> <out> | census-diff <environment> <before> <after> <record> '
+    + '| tables-plan <environment> <record> [--from <sha>] | tables-record <environment> <record> | tables <environment> <record>');
 
   return 2;
 }

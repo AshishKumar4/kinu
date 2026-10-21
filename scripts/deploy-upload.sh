@@ -11,7 +11,8 @@ WRANGLER_RUN_AGAIN='The Worker version was deployed, but Wrangler could not fini
 
 # `upload <log> <command…>`: runs the command, its output on the terminal and in <log>. When it fails asking to be run
 # again, it runs once more, writing <log> afresh. Its status is the last run's. A startup Cloudflare refuses (code
-# 10021) is the build's verdict: the Worker's startup is cut until the validator takes every upload with room (L27).
+# 10021) is never asked again here (L27): the deploy fails in the platform's words, and its operator reruns it
+# (deploy.sh `startup_refusal`, platform-catalog `worker.startup_ms`).
 upload() {
   local log="$1"
   shift

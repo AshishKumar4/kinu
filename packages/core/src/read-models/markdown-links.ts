@@ -1,8 +1,4 @@
-import { fromMarkdown } from 'mdast-util-from-markdown';
-import { gfmFromMarkdown } from 'mdast-util-gfm';
-import { gfm } from 'micromark-extension-gfm';
 import { slateLinkId } from '../slates/host-context';
-import { slateUiSegments } from '../slates/ui-blocks';
 
 /** The mdast fields the reference pass uses, shared with the Markdown renderer. */
 export interface MarkdownNode {
@@ -103,18 +99,4 @@ export function promoteSlateLinks(tree: MarkdownNode, linked?: (id: string) => v
 
       if (id !== null) linked(id);
     });
-}
-
-/** Parse each answer segment with the renderer's CommonMark/GFM grammar, never joining separate text parts. */
-export function promotedSlateIds(text: string): ReadonlySet<string> {
-  const ids = new Set<string>();
-
-  for (const segment of slateUiSegments(text)) {
-    if (segment.kind === 'slate') continue;
-    const tree = fromMarkdown(segment.text, { extensions: [gfm()], mdastExtensions: [gfmFromMarkdown()] });
-
-    promoteSlateLinks(tree, (id) => { ids.add(id); });
-  }
-
-  return ids;
 }
