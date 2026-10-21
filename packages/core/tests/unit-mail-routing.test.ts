@@ -126,6 +126,16 @@ describe('the rules a subdomain routes its addresses by', () => {
     expect(zone.rules.size).toBe(200);
   });
 
+  // Last review, 2026-10-21: a listing refused (429, 401, 403) read as a denial, which a box takes for proof no rule was
+  // made, though one made before the listing may stand.
+  test('a listing Cloudflare refuses leaves what exists unknown: never a denial', async () => {
+    const zone = rulesZone();
+
+    zone.refuseAll(429);
+
+    await expect(settle(zone.routes().routed(['dana@mail.northwind.dev']))).rejects.toMatchObject({ code: 'unavailable' });
+  });
+
   test('a rule of its own that is off is turned on, not made twice', async () => {
     const zone = rulesZone();
 

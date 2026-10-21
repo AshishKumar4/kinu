@@ -66,6 +66,11 @@ export class MailRulesFakeControl extends WorkerEntrypoint {
     return this.hit('/state');
   }
 
+  /** The next listing of rules answered with `status`, once. */
+  async refuseList(status: number): Promise<MailRulesState> {
+    return this.hit(`/refuse-list?status=${String(status)}`);
+  }
+
   /** Cloudflare's 200 rules a domain, lowered so a test reaches it. */
   async cap(rules: number): Promise<MailRulesState> {
     return this.hit(`/cap?n=${String(rules)}`);

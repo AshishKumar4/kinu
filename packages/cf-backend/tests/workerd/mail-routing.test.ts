@@ -163,6 +163,17 @@ describe('mail on a subdomain of its zone, each address by a rule of its own', (
     expect(await name('lostrouted1').lookup()).toBeNull();
   });
 
+  it('a claim retried while its rules cannot be listed keeps the rows, so deletion still finds the rule', async () => {
+    expect(await refusalOf(async () => mailbox('u-routed-2').open({ userId: 'u-routed-2', email: 'priya.raman@example.com', username: 'lostrouted2', assistant: null })))
+      .toMatchObject({ code: 'io', message: 'claiming lostrouted2' });
+    await env.MAIL_RULES_FAKE.refuseList(429);
+
+    expect(await refusalOf(async () => mailbox('u-routed-2').boxes())).toMatchObject({ code: 'unavailable' });
+    await mailbox('u-routed-2').deleteBox('u-routed-2');
+
+    expect((await env.MAIL_RULES_FAKE.state()).addresses).toEqual([]);
+  });
+
   it("deletes every rule under the account's root as the account is, and never disables the zone's routing", async () => {
     await priyaOpened('praman', 'u-priya-3');
     await mailbox('u-priya-3').readableBy(caller('triage'));

@@ -50,13 +50,15 @@ function literalTo(rule: Rule): string | null {
 const workerOf = (rule: Rule): string | undefined => rule.actions.find((action) => action.type === 'worker')?.value?.[0];
 
 /** Cloudflare's refusal as the call's, in its words: the 201st rule on a domain is refused this way. */
-function refused<A>(doing: string, work: Effect.Effect<A, KinuError>): Effect.Effect<A, KinuError> {
+function refused<A>(doing: string, work: Effect.Effect<A, KinuError>, making = false): Effect.Effect<A, KinuError> {
   return work.pipe(Effect.catchCause((failed) => {
     const cause = Cause.squash(failed);
 
     if (!(cause instanceof CloudflareApiError)) return Effect.failCause(failed);
 
-    return Effect.fail(new KinuError(cause.status >= 500 ? 'unavailable' : 'denied', `${doing}: Cloudflare answered: ${cause.detail}`, { cause }));
+    // Only a rule refused its making, after the listing showed none, proves none exists: the 201st among them. Any
+    // other refusal (the listing, a rule turned on, the platform down) leaves what exists unknown.
+    return Effect.fail(new KinuError(making && cause.status < 500 ? 'denied' : 'unavailable', `${doing}: Cloudflare answered: ${cause.detail}`, { cause }));
   }));
 }
 
@@ -78,7 +80,7 @@ function routingRules(grant: MailRoutingGrant, transport: CloudflareTransport): 
   const rules = Effect.promise(async () => cloudflarePages(transport, path, RuleSchema));
   const rule = (to: string) => ({ name: `Kinu ${to}`, enabled: true, matchers: [{ type: 'literal', field: 'to', value: to }], actions: [{ type: 'worker', value: [grant.worker] }] });
 
-  const routedOne = (listed: readonly Rule[], address: string) => refused(`routing ${address}`, Effect.gen(function* () {
+  const routedOne = (listed: readonly Rule[], address: string) => Effect.gen(function* () {
     const wanted = address.toLowerCase();
     const held = listed.find((each) => literalTo(each) === wanted);
 
@@ -89,10 +91,10 @@ function routingRules(grant: MailRoutingGrant, transport: CloudflareTransport): 
     if (held?.enabled !== false && held !== undefined) return;
 
     // A rule of this Worker's that is off routes nothing: it is turned on, never made twice.
-    yield* Effect.promise(async () => cloudflareResult(transport, held === undefined
-      ? { method: 'POST', path, body: rule(wanted) }
-      : { method: 'PUT', path: `${path}/${held.id}`, body: rule(wanted) }, v.unknown()));
-  }));
+    yield* held === undefined
+      ? refused(`routing ${address}`, Effect.promise(async () => cloudflareResult(transport, { method: 'POST', path, body: rule(wanted) }, v.unknown())), true)
+      : refused(`routing ${address}`, Effect.promise(async () => cloudflareResult(transport, { method: 'PUT', path: `${path}/${held.id}`, body: rule(wanted) }, v.unknown())));
+  });
 
   return {
     under: `${grant.zone} ${grant.domain}`,

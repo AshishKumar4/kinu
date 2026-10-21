@@ -35,6 +35,9 @@ let cap = 200;
 
 let made = 0;
 
+/** A status the next listing is answered with, once, as Cloudflare rate-limits or refuses a token. */
+let listRefused: number | null = null;
+
 const answer = (result: JsonValue, status = 200) => Response.json({ success: status < 300, errors: status < 300 ? [] : [result], result: status < 300 ? result : null }, { status });
 
 function control(url: URL): Response {
@@ -43,9 +46,12 @@ function control(url: URL): Response {
     calls.length = 0;
     cap = 200;
     made = 0;
+    listRefused = null;
   }
 
   if (url.pathname === '/cap') cap = Number(url.searchParams.get('n'));
+
+  if (url.pathname === '/refuse-list') listRefused = Number(url.searchParams.get('status'));
 
   return Response.json({ addresses: [...rules.values()].map((rule) => rule.to), calls: [...calls] } satisfies MailRulesState);
 }
@@ -58,6 +64,14 @@ export async function mailRulesOutbound(request: Request): Promise<Response> {
 
   if (request.headers.get('authorization') !== `Bearer ${MAIL_RULES_TOKEN}` || !request.url.startsWith(RULES)) {
     throw new Error(`Unmatched test egress is disabled: ${request.method} ${request.url}`);
+  }
+
+  if (request.method === 'GET' && listRefused !== null) {
+    const status = listRefused;
+
+    listRefused = null;
+
+    return answer({ code: 971, message: 'Please wait and consider throttling your request speed' }, status);
   }
 
   if (request.method === 'GET') {

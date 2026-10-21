@@ -358,6 +358,7 @@ interface MailRulesFakeControlRpc extends Rpc.WorkerEntrypointBranded {
   reset(): Promise<import('./mail-rules-fake').MailRulesState>;
   state(): Promise<import('./mail-rules-fake').MailRulesState>;
   cap(rules: number): Promise<import('./mail-rules-fake').MailRulesState>;
+  refuseList(status: number): Promise<import('./mail-rules-fake').MailRulesState>;
 }
 
 interface CensusStorageRpc extends Rpc.DurableObjectBranded {
