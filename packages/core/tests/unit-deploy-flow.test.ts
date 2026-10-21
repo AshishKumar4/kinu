@@ -7,7 +7,7 @@ import {
   CLOUDFLARE_DEPLOY_SCOPES, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET,
   HeldBytes, LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS, promptedSecrets,
   FACT_VERSION_ID, REFRESH_TOKEN_KEY, deployDoor, deployPlan, deployRunView, domainsMatching, factsFrom,
-  judgeRefusal, localLayout, mailPreview, parseReleaseManifest, plannedRun, preflight, releaseDir,
+  judgeRefusal, localLayout, mailHostPreview, parseReleaseManifest, plannedRun, preflight, releaseDir,
   renderLocalConfig, renderWorkerdConfig, runDeployPlan, unhostedBindings, workerdDirectories,
 } from '../src/deploy/index';
 import type {
@@ -1939,7 +1939,7 @@ describe('what the page reads of an account', () => {
     cloudflare.zones.set('raman.dev', 'zone-raman');
     cloudflare.refuseOnce = { path: '/zones/zone-raman/email/routing/dns', status: 403, code: 10_000, message: 'Authentication error' };
 
-    await expect(settle(mailPreview(cloudflare, { id: 'zone-raman', name: 'raman.dev' }))).rejects.toThrow('Authentication error');
+    await expect(settle(mailHostPreview(cloudflare, ACCOUNT, 'raman.dev'))).rejects.toThrow('Authentication error');
   });
 
   test('a domain search names the account\'s zones, and a domain registered elsewhere as such', async () => {
@@ -1963,7 +1963,7 @@ describe('what the page reads of an account', () => {
       { zone: 'zone-raman', type: 'TXT', name: '_dmarc.raman.dev', content: '"v=DMARC1; p=quarantine"' },
     );
 
-    const preview = await settle(mailPreview(cloudflare, { id: 'zone-raman', name: 'raman.dev' }));
+    const preview = await settle(mailHostPreview(cloudflare, ACCOUNT, 'raman.dev'));
 
     expect(preview).toEqual({
       host: 'raman.dev',
@@ -1985,7 +1985,7 @@ describe('what the page reads of an account', () => {
   test("a subdomain's preview lists routing's records under its own name, and its own sending and DMARC", async () => {
     cloudflare.zones.set('raman.dev', 'zone-raman');
 
-    const preview = await settle(mailPreview(cloudflare, { id: 'zone-raman', name: 'raman.dev' }, 'mail.raman.dev'));
+    const preview = await settle(mailHostPreview(cloudflare, ACCOUNT, 'mail.raman.dev'));
 
     expect(preview).toEqual({
       host: 'mail.raman.dev',

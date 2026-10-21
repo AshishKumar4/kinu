@@ -2,6 +2,9 @@
 import * as v from 'valibot';
 import type { ReleaseManifest } from './manifest';
 
+/** A host a person can pick: lowercase labels and a top-level domain of letters. */
+export const HOSTNAME = /^[a-z0-9.-]+\.[a-z]{2,}$/u;
+
 export type DeployAddressKind = 'workers-dev' | 'zone';
 
 export interface DeployAddress {
@@ -41,7 +44,7 @@ export const DeployInputsSchema: v.GenericSchema<DeployInputs> = v.object({
     }),
     v.object({
       kind: v.literal('zone'),
-      hostname: v.pipe(v.string(), v.regex(/^[a-z0-9.-]+\.[a-z]{2,}$/u)),
+      hostname: v.pipe(v.string(), v.regex(HOSTNAME)),
       zoneId: v.pipe(v.string(), v.regex(/^[0-9a-f]{32}$/u)),
     }),
   ]),

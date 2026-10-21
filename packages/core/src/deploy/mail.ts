@@ -8,10 +8,10 @@
 // deprecated; the apex with no name, as kinu.run's was refused one), and a sending subdomain is named by its `tag`.
 import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
-import type { KinuError } from '../obs/index';
+import { KinuError } from '../obs/index';
 import { CloudflareApiError, cloudflareResult, readEnvelope, type CloudflareCall, type CloudflareTransport } from './cloudflare';
 import type { DeployContext } from './context';
-import { MAIL_ROUTING_SECRET, type DeployInputs } from './inputs';
+import { HOSTNAME, MAIL_ROUTING_SECRET, type DeployInputs } from './inputs';
 import { instanceToken } from './instance-token';
 import { scriptBindings, varsOf } from './account';
 import type { DeployStep } from './steps';
@@ -434,12 +434,24 @@ function purposeOf(record: Pick<DnsRecord, 'type' | 'content'>, routing: boolean
 }
 
 /**
+ * The preview for the mail host a person picked, in the nearest zone of `account` at or above it: the apex's own, or a
+ * subdomain's. Refused in words where no zone this token can read holds it.
+ */
+export function mailHostPreview(transport: CloudflareTransport, account: string, host: string): Effect.Effect<MailPreview, KinuError> {
+  if (!HOSTNAME.test(host)) return Effect.fail(new KinuError('bad_input', 'That is not a hostname.'));
+
+  return Effect.flatMap(Effect.promise(async () => zoneOf(transport, account, host)), (zone) => (zone === null
+    ? Effect.fail(new KinuError('missing', `${host} is in no zone of this account that the deploy's token can read.`))
+    : mailPreview(transport, zone, host)));
+}
+
+/**
  * The same records the step reaches for `host`, the zone's apex unless it names a subdomain under it: Email Routing's
  * (`GET …/email/routing/dns`, the records it needs), the sending domain's when it exists (Cloudflare makes them with
  * it, so a domain not sending yet lists none), and DMARC where the domain has none. A read Cloudflare refuses fails the
  * preview in its words: a record it could not read is not absent.
  */
-export function mailPreview(transport: CloudflareTransport, zone: MailZone, host = zone.name): Effect.Effect<MailPreview> {
+function mailPreview(transport: CloudflareTransport, zone: MailZone, host = zone.name): Effect.Effect<MailPreview> {
   return Effect.promise(async () => {
     const read = async (type: string, name: string) => await cloudflareResult(transport, {
       method: 'GET', path: `/zones/${zone.id}/dns_records?type=${type}&name=${encodeURIComponent(name)}&per_page=100`,

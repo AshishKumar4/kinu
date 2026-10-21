@@ -19,7 +19,7 @@ import {
   DEPLOY_SOCKET_PROTOCOL, DeployDomainsSchema, DeployInputsSchema, DeployPreflightSchema, DeployRunRequestSchema, DeployRunViewSchema,
   DeploySessionSchema, MailPreviewSchema, RELEASE_MANIFEST_PATH, SIGN_IN_AGAIN_NEED,
   accountChoices, authorizeUrl, bearerTransport, buildOf, causeWords, deployedKinus, domainsMatching, fetchReleaseManifest, heard,
-  judgeRefusal, mailPreview, mintDeployRun, parseReleaseManifest, plannedRun, preflight, promptedSecrets, runKeyDigest, zoneHeld,
+  judgeRefusal, mailHostPreview, mintDeployRun, parseReleaseManifest, plannedRun, preflight, promptedSecrets, runKeyDigest,
   type CloudflareTransport, type CloudflareUser, type CloudflareWords, type DeployChoice, type DeployOptions, type DeployRunView,
   type DeploySession,
   type UpdateBuild,
@@ -130,13 +130,10 @@ deployRoutes.get(`${DEPLOY_API}/preflight`, noHead<FamilyEnv<Env, DeployVariable
 
 deployRoutes.get(`${DEPLOY_API}/domains`, noHead<FamilyEnv<Env, DeployVariables>>((c) => accountRead(c.req.raw, c.env, c.req.query('account') ?? '', (transport, account) => Effect.map(domainsMatching(transport, account, c.req.query('q') ?? ''), (body) => v.parse(DeployDomainsSchema, body)))));
 
-deployRoutes.get(`${DEPLOY_API}/mail`, noHead<FamilyEnv<Env, DeployVariables>>((c) => pageRead(c.req.raw, c.env, (transport) => {
-  const zone = c.req.query('zone') ?? '';
-
-  return v.is(CloudflareIdSchema, zone)
-    ? Effect.map(Effect.flatMap(zoneHeld(transport, zone), (held) => mailPreview(transport, held)), (body) => v.parse(MailPreviewSchema, body))
-    : Effect.fail(new KinuError('bad_input', 'That is not a zone id.'));
-})));
+// The host the person picked, the apex or a subdomain under it: its preview in the nearest zone of the account.
+deployRoutes.get(`${DEPLOY_API}/mail`, noHead<FamilyEnv<Env, DeployVariables>>((c) => accountRead(c.req.raw, c.env, c.req.query('account') ?? '', (transport, account) => (
+  Effect.map(mailHostPreview(transport, account, (c.req.query('host') ?? '').toLowerCase()), (body) => v.parse(MailPreviewSchema, body))
+))));
 
 // A JSON body is the page's run; the CLI's mint carries none and is answered a run key, as before.
 deployRoutes.post(`${DEPLOY_API}/runs`, noHead<FamilyEnv<Env, DeployVariables>>((c) => (

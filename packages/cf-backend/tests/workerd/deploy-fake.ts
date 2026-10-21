@@ -662,7 +662,7 @@ async function api(url: URL, request: Request): Promise<Response> {
 
   if (path === '/user') return envelope(held.user);
 
-  const zoned = zoneApi(path, request, named);
+  const zoned = mailReads(path, request) ?? zoneApi(path, request, named);
 
   if (zoned !== undefined) return zoned;
 
@@ -745,6 +745,30 @@ function zoneOf(id: string): JsonValue {
   const zone = held.zones.get(id);
 
   return { id, name: zone?.name ?? '', status: zone?.status ?? 'pending', name_servers: NAMESERVERS };
+}
+
+/**
+ * What the page's mail preview reads of a zone, before anything is written: the records Email Routing needs (the apex's,
+ * as Cloudflare lists them), no sending domain yet, and no DMARC record.
+ */
+function mailReads(path: string, request: Request): Response | undefined {
+  const zone = /^\/zones\/([^/?]+)\//u.exec(path)?.[1];
+
+  if (zone === undefined || request.method !== 'GET' || !held.zones.has(zone)) return undefined;
+  const apex = held.zones.get(zone)?.name ?? '';
+
+  if (path.endsWith('/email/routing/dns')) {
+    return envelope([
+      { type: 'MX', name: apex, content: 'route1.mx.cloudflare.net', priority: 13 },
+      { type: 'TXT', name: apex, content: 'v=spf1 include:_spf.mx.cloudflare.net ~all' },
+    ]);
+  }
+
+  if (path.endsWith('/email/sending/subdomains')) return envelope([]);
+
+  if (path.includes('/dns_records?')) return envelope([]);
+
+  return undefined;
 }
 
 /** The account's zones as the page and the address step reach them; a zone added here waits on its nameservers. */

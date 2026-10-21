@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
 import { sha256Hex } from '@kinu.run/core';
 import {
-  DEPLOY_SOCKET_PROTOCOL, DeployPreflightSchema, DeployRunFrameSchema, DeployRunViewSchema, DeploySessionSchema, DeploySnapshotSchema,
+  DEPLOY_SOCKET_PROTOCOL, DeployPreflightSchema, DeployRunFrameSchema, MailPreviewSchema, DeployRunViewSchema, DeploySessionSchema, DeploySnapshotSchema,
   DeploymentRecordSchema, FACT_UPLOAD_PEAK, SELF_UPDATE_RUN_ID, UpdateOfferSchema, runKeyDigest,
   type DeployInputs, type DeploySnapshot,
 } from '@kinu.run/core/deploy';
@@ -382,6 +382,41 @@ it('refuses the page\'s routes to a request from a sibling host, which carries t
 const pageRun = (user = DEPLOY_FAKE_USER.id) => runStub(`deploy-run.${user}.${DEPLOY_FAKE_ACCOUNT}`);
 
 const signInObject = (cookie: string) => runStub(`deploy-session.${sha256Hex(cookie.slice(DEPLOY_SESSION_COOKIE.length + 1))}`);
+
+// The contract the page's mail step calls, 2026-10-21: the host the person picked, the apex or a subdomain under it,
+// previewed in the nearest zone of the account before anything is written; refused in words where none holds it.
+describe("the deploy page's mail preview", () => {
+  it('previews a subdomain in the zone above it, under its own name, writing nothing', async () => {
+    await env.DEPLOY_FAKE.reset();
+    await env.DEPLOY_FAKE.zone({ id: deployFakeZoneId('northwind.dev'), name: 'northwind.dev' });
+
+    const cookie = await signedInPage();
+    const answer = await page(cookie, 'GET', `/api/deploy/mail?account=${DEPLOY_FAKE_ACCOUNT}&host=mail.northwind.dev`);
+
+    expect(answer.status).toBe(200);
+    expect(v.parse(MailPreviewSchema, JSON.parse(answer.body))).toEqual({
+      host: 'mail.northwind.dev',
+      conflict: null,
+      writes: [
+        { type: 'MX', name: 'mail.northwind.dev', content: 'route1.mx.cloudflare.net', purpose: 'receive' },
+        { type: 'TXT', name: 'mail.northwind.dev', content: 'v=spf1 include:_spf.mx.cloudflare.net ~all', purpose: 'send' },
+        { type: 'TXT', name: '_dmarc.mail.northwind.dev', content: 'v=DMARC1; p=none; rua=mailto:dmarc@mail.northwind.dev', purpose: 'report' },
+      ],
+      kept: [],
+    });
+  });
+
+  it('refuses a host in no zone of the account, and one that is no hostname, in words', async () => {
+    await env.DEPLOY_FAKE.reset();
+
+    const cookie = await signedInPage();
+    const unheld = await page(cookie, 'GET', `/api/deploy/mail?account=${DEPLOY_FAKE_ACCOUNT}&host=mail.raman.dev`);
+    const malformed = await page(cookie, 'GET', `/api/deploy/mail?account=${DEPLOY_FAKE_ACCOUNT}&host=not%20a%20host`);
+
+    expect([unheld.status, unheld.body]).toEqual([404, expect.stringContaining("mail.raman.dev is in no zone of this account that the deploy's token can read.")]);
+    expect([malformed.status, malformed.body]).toEqual([400, expect.stringContaining('That is not a hostname.')]);
+  });
+});
 
 describe('the deploy page', () => {
   it('signs in with Cloudflare, pauses a run on R2 and carries on once it is on, and goes live with its setup link', async () => {
