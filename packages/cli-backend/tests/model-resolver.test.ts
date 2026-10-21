@@ -11,29 +11,17 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { asFetchFunction, callRetries, requestUrl } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, WORKERS_AI_MODELS_DEV, workspaceDatabase } from '@kinu.run/test-utils';
+import { chatResponse, createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, WORKERS_AI_MODELS_DEV, workspaceDatabase, type ChatUsage } from '@kinu.run/test-utils';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
 
-/** A Workers AI endpoint served on `port`, as `--base-url` hands one to the CLI. */
-const ONE_TOKEN_EACH: JsonObject = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
+const ONE_TOKEN_EACH: ChatUsage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
 
-/** A chat completion answering `content`, as the request asked for it: a stream when it streamed, as every Workers AI
- *  generate does (`WORKERS_AI_STREAMS_GENERATE`); `usage` null for an answer with none, as Workers AI's can be. */
-function chatAnswer(body: JsonObject, content: string, usage: JsonObject | null = ONE_TOKEN_EACH): Response {
-  const model = typeof body.model === 'string' ? body.model : 'echo';
-  const billed = usage === null ? {} : { usage };
-
-  if (body.stream !== true) {
-    return Response.json({ id: 'chatcmpl-1', object: 'chat.completion', created: 0, model, choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], ...billed });
-  }
-
-  const chunk = (delta: JsonObject, finish: JsonValue): string => `data: ${JSON.stringify({
-    id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 0, model, choices: [{ index: 0, delta, finish_reason: finish }], ...billed,
-  })}\n\n`;
-
-  return new Response(`${chunk({ content }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+/** A chat completion answering `content` as the request asked for it; `usage` null for an answer with none, as Workers
+ *  AI's can be. */
+function chatAnswer(body: JsonObject, content: string, usage: ChatUsage | null = ONE_TOKEN_EACH): Response {
+  return chatResponse({ model: typeof body.model === 'string' ? body.model : 'echo', text: content, ...(usage !== null && { usage }) }, body.stream === true);
 }
 
 /** An endpoint that answers every chat call `ok` and keeps each request's body. */
@@ -54,6 +42,7 @@ function recordingEndpoint() {
   return { bodies, server };
 }
 
+/** A Workers AI endpoint served on `port`, as `--base-url` hands one to the CLI. */
 function servedWorkersAi(port: number | undefined): LLMProviderConfig {
   return { name: 'workers-ai', baseURL: `http://127.0.0.1:${port}/v1`, headers: { Authorization: 'Bearer test' }, model: '@cf/test/model' };
 }

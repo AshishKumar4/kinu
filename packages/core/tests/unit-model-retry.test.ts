@@ -689,3 +689,57 @@ describe('the model stack retries every call once, in one place', () => {
     expect(toProviderError({ doing: 'calling the model', cause: failure }).code).toBe('budget');
   });
 });
+
+// Every Workers AI generate is read from its stream (`WORKERS_AI_STREAMS_GENERATE`): what a generate asked by stream
+// answers, and how often, must be what one asked whole answered.
+describe('a generate read from its stream', () => {
+  const USAGE = { inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 }, outputTokens: { total: 2, text: 2, reasoning: 0 } };
+  const FINISH: ModelStreamPart = { type: 'finish', finishReason: { unified: 'stop', raw: 'stop' }, usage: USAGE };
+
+  function byStream(answers: readonly (readonly ModelStreamPart[])[]) {
+    let opened = 0;
+
+    const inner = new MockLanguageModelV4({
+      doStream: async () => {
+        const parts = answers[Math.min(opened, answers.length - 1)] ?? [];
+        opened += 1;
+
+        return { stream: convertArrayToReadableStream<ModelStreamPart>([...parts]) };
+      },
+    });
+
+    const model = wrapLanguageModel({ model: inner, middleware: retryMiddleware({
+      provider: 'example', lane: LANE, generateByStream: true, warn: () => {}, sleep: async () => {}, pacer: new ProviderPacer(),
+    }) });
+
+    return { model, opened: () => opened };
+  }
+
+  test('keeps each block a reused id opens, as text and reasoning alternate', async () => {
+    const { model } = byStream([[
+      { type: 'stream-start', warnings: [] },
+      { type: 'text-start', id: 'txt-0' }, { type: 'text-delta', id: 'txt-0', delta: 'A' }, { type: 'text-end', id: 'txt-0' },
+      { type: 'reasoning-start', id: 'reasoning-0' }, { type: 'reasoning-delta', id: 'reasoning-0', delta: 'R' }, { type: 'reasoning-end', id: 'reasoning-0' },
+      { type: 'text-start', id: 'txt-0' }, { type: 'text-delta', id: 'txt-0', delta: 'B' }, { type: 'text-end', id: 'txt-0' },
+      FINISH,
+    ]]);
+
+    const result = await generateText({ model, prompt: 'hi', maxRetries: 0 });
+
+    expect({ text: result.text, reasoning: result.reasoningText }).toEqual({ text: 'AB', reasoning: 'R' });
+  });
+
+  test('is asked again when its stream fails part way, since nothing of it reached its caller', async () => {
+    const busy = new APICallError({ message: 'busy', url: 'https://api.example.com/v1/chat/completions', requestBodyValues: undefined, statusCode: 503, isRetryable: true });
+
+    const { model, opened } = byStream([
+      [{ type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }, { type: 'error', error: busy }],
+      [{ type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'whole' }, { type: 'text-end', id: 't' }, FINISH],
+    ]);
+
+    // The SDK retries nothing here, so a second ask is the stack's own.
+    const result = await generateText({ model, prompt: 'hi', maxRetries: 0, providerOptions: callRetries(1) });
+
+    expect({ text: result.text, opened: opened() }).toEqual({ text: 'whole', opened: 2 });
+  });
+});

@@ -180,7 +180,9 @@ export function retryMiddleware(policy: RetryPolicy): LanguageModelMiddleware {
         if (opened.kind !== 'answer') return opened;
         const [collected] = await Promise.allSettled([generateFromStream(opened.value)]);
 
-        return collected.status === 'fulfilled' ? { kind: 'answer', value: collected.value } : { kind: 'failed', error: collected.reason };
+        // Until it is collected whole, nothing of a generate has reached its caller: a stream that fails part way is
+        // retried as one cut before its first part is, not given up as an answer a reader already holds is.
+        return collected.status === 'fulfilled' ? { kind: 'answer', value: collected.value } : { kind: 'cut', error: collected.reason };
       }
       : async (_last, clock) => {
         const value = await doGenerate();

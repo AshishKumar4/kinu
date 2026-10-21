@@ -1,6 +1,7 @@
 // Signed in with zero BYO keys, a local agent lists the worker's models and runs inference through
 // /api/user/ai/v1 with the CLI bearer and affinity pin. Subprocess: config.ts binds KINU_HOME at import.
 import { scratchDir } from '../../test-utils/src/scratch';
+import { chatResponse, OK_CHAT_ANSWER } from '../../test-utils/src/chat-completions';
 import { writeFileSync } from "node:fs";
 
 import { join, resolve } from "node:path";
@@ -47,11 +48,7 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
           const model = v.parse(v.string(), body.model);
           requests.push({ ...entry, model });
 
-          return Response.json({
-            id: "chatcmpl-1", object: "chat.completion", created: 0, model,
-            choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
-            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-          });
+          return chatResponse({ ...OK_CHAT_ANSWER, model }, body.stream === true);
         }
 
         return new Response("unexpected", { status: 500 });
@@ -102,7 +99,9 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
         proc.exited,
       ]);
 
-      expect(stderr).toBe("");
+      // Nothing but the stack's diagnostic events, which a bare script with no sink prints: the generate now streams, and
+      // its opening is one.
+      expect(stderr.split("\n").filter((line) => line !== "" && !line.startsWith('{"event":"provider.'))).toEqual([]);
       expect(exitCode).toBe(0);
       expect(JSON.parse(stdout)).toEqual({
         givenEndpoint: null,

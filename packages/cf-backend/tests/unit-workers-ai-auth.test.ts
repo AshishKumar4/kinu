@@ -10,23 +10,14 @@ import * as v from 'valibot';
 import { bindingModel } from './helpers/workers-ai-model';
 import { requestUrl } from '@kinu.run/core';
 
-import { present } from '@kinu.run/test-utils';
+import { answerChat, chatResponse, OK_CHAT_ANSWER, present } from '@kinu.run/test-utils';
 
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 
-function chatCompletionResponse(): Response {
-  return new Response(JSON.stringify({
-    id: 'chatcmpl-1',
-    object: 'chat.completion',
-    created: 0,
-    model: '@cf/moonshotai/kimi-k2.6',
-    choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-  }), { headers: { 'content-type': 'application/json' } });
-}
+const OK_ANSWER = { ...OK_CHAT_ANSWER, id: 'chatcmpl-1', model: '@cf/moonshotai/kimi-k2.6' };
 
 test('configured effort reaches the native Workers AI binding through its SDK transport', async () => {
-  const { model, runs } = bindingModel(() => chatCompletionResponse());
+  const { model, runs } = bindingModel((run) => chatResponse(OK_ANSWER, run.inputs.stream === true));
 
   await generateText({ model, prompt: 'probe', maxRetries: 0, providerOptions: reasoningEffortOptions('high', 'workers-ai/@cf/zai-org/glm-5.3') });
   expect(runs[0]?.inputs.reasoning_effort).toBe('high');
@@ -138,7 +129,7 @@ describe('Workers AI credential refresh', () => {
           });
         }
 
-        return chatCompletionResponse();
+        return answerChat(OK_ANSWER, init);
       }),
     });
 

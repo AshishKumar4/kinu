@@ -18,7 +18,8 @@ type WorkersAIChatBinding = NonNullable<WorkersAISettings['binding']>;
 
 /** Workers AI ends a request that has answered nothing for ten minutes (HTTP 408, its error 3046; 2026-10-20), so a model
  *  that reasons longer must stream: every Workers AI route collects a generate from its stream, under the stack's silence
- *  bound, as the turn's own steps are read. */
+ *  bound, as the turn's own steps are read. Its REST stream reports usage unasked (glm-5.3, kimi-k2.6 and
+ *  llama-3.3-70b, 2026-10-21), so a collected generate keeps the usage a whole one had. */
 export const WORKERS_AI_STREAMS_GENERATE = true;
 
 export function createWorkersAIProvider(deploymentBinding?: WorkersAIChatBinding): ModelProvider {
