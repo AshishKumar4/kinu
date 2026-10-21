@@ -5567,11 +5567,14 @@ const slateRpc: SocketCall = async <T,>(method: string, args?: Parameters<Socket
   return stubRpc<T>(method, args);
 };
 
+/** One transport for the frame's life: a new one reads as a reconnect, and the slate's frame reloads on it. */
+const SLATE_RPC = workspaceRpc(slateRpc);
+
 function SlatePreviewFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] min-h-screen border-x p-border p-5">
-        <SlateFrame id={GALLERY_SLATE_ID} rpc={workspaceRpc(slateRpc)} />
+        <SlateFrame id={GALLERY_SLATE_ID} rpc={SLATE_RPC} />
       </div>
     </div>
   );
