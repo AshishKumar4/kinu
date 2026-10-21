@@ -104,6 +104,12 @@ const CATALOG: readonly CatalogEntry[] = [
     code: 10_215, sentence: 'Cloudflare refused a secret while a newer version of the Worker was not serving yet.',
     action: () => RETRY,
   },
+  // Its check reads one bundle in two modes, and the same release passed when asked again (platform-catalog
+  // `worker.startup_ms`, f44999 2026-10-21): the person retries, the run never asks again by itself.
+  {
+    code: 10_021, sentence: 'Cloudflare\'s check of how fast Kinu starts ran slow this time. The same release usually passes when checked again.',
+    action: () => RETRY,
+  },
 ];
 
 /** What a refusal means for the run: a prerequisite to pause on, or a refusal to stop on. */

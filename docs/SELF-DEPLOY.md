@@ -198,6 +198,33 @@ instance serves `http://127.0.0.1` on the port the command prints, 8787 by
 default; TLS is the host's concern. Step 5 below lists which of these parts
 exist today.
 
+## Live runs
+
+### f44999, 2026-10-21
+
+**What was run:** the plan engine, run locally as the run object runs it, with a scoped token as its bearer.
+- Release 0.2.0+62b6c90c6 from kinu.run's channel, then rc30's (b04fac742) from a local channel.
+- Instances `kinu-sdtest-10210741`, `-10210754` and `-before-0802`.
+- Address on workers.dev; no computer and no mail.
+- The handover was left out, since it needs an OAuth grant.
+
+Each instance had a fresh deploy and then an update. Both serve the new version, and each instance is torn down. The
+account census afterwards equals the census before.
+
+**What it met:**
+- **AI gateway create** was refused with 7001 "Required" without `cache_invalidate_on_update`.
+- **The assets upload session** answers `errors: null, messages: null`, which the envelope used to reject.
+- **A fresh workers.dev address** answered HTTP 404 after its route was enabled.
+  - `-10210741`: enabled at 07:49:23, answered 404 then, served by 07:49:52 (up to 29 s).
+  - `-before-0802`: served after one 3 s wait.
+  - The smoke asks again for four times the longest seen (platform-catalog `workers_dev.fresh_route_404`).
+- **The override reached the serving version, not the staged one.** An update's smoke ran in the second its 0%
+  deployment was made, and the override still answered with the old version. Asked again, it reached the new one.
+- **Startup refusals:** 4 of 7 uploads of 62b6c90c6, and 1 of 8 of b04fac742, were refused with 10021
+  "Script startup exceeded CPU time limit." Each passed when asked again. The validator's readings fell in two modes:
+  363–377 ms and 777–949 ms (platform-catalog `worker.startup_ms`). The page names the refusal and offers a retry the
+  person presses.
+
 ## Not in this design
 
 The CLI and TUI stay standalone agents with no local server (decided

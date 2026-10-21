@@ -1876,6 +1876,16 @@ describe('the page\'s view of a run', () => {
       ['signin-again', { label: 'Sign in again' }],
     ]);
   });
+
+  // f44999, 2026-10-21: one of eight uploads of one rc30 bundle refused, the same bundle passing when asked again.
+  test('a startup Cloudflare refuses is a refusal in its own words, with a retry the person presses', () => {
+    const words = { message: 'Error: Script startup exceeded CPU time limit.\n', code: 10_021, status: 400, endpoint: `/accounts/${ACCOUNT}/workers/scripts/kinu/versions` };
+
+    expect(judgeRefusal(words, ACCOUNT)).toEqual({ refused: {
+      sentence: 'Cloudflare\'s check of how fast Kinu starts ran slow this time. The same release usually passes when checked again.',
+      action: { label: 'Retry this step' }, details: words,
+    } });
+  });
 });
 
 describe('what the page reads of an account', () => {

@@ -2102,6 +2102,29 @@ export const PLATFORM_CATALOG = {
       + 'until somebody captures it.',
   },
 
+  'workers_dev.fresh_route_404': {
+    subject: 'A workers.dev address just bound to a script answering 404 before it serves the script',
+    limit: null,
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'proven-by-probe',
+    provenance: 'docs/SELF-DEPLOY.md#f44999-2026-10-21',
+    date: '2026-10-21',
+    trigger: 'a request to <script>.<subdomain>.workers.dev in the seconds after the script\'s workers.dev route is enabled',
+    onBreach: 'the address answers HTTP 404, though the script is deployed and the route enabled',
+    observable: [{ context: 'a request to the address', message: 'HTTP 404' }],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: 'kinu-sdtest-before-0802: bound, then answered after one 3 s wait', value: 3_000, unit: 'ms' },
+      { scenario: 'kinu-sdtest-10210741: bound 07:49:23, 404 then, answering by 07:49:52', value: 29_000, unit: 'ms' },
+    ],
+    notes:
+      'Cloudflare publishes no figure for it. A change to a deployment is carried everywhere within a couple of seconds '
+      + '(the docs\' "Version overrides"); a workers.dev route newly enabled took up to the longest measured here. The '
+      + 'self-deploy smoke asks again while it lasts (core deploy/steps.ts SMOKE_PATIENCE_MS), never reading a 404 then '
+      + 'as the version\'s own answer.',
+  },
+
   'edge.websocket_idle_reap_ms': {
     subject: 'Cloudflare\'s edge closing a WebSocket that has been idle too long',
     limit: { value: 100_000, unit: 'ms' },

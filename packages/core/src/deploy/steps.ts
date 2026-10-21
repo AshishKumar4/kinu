@@ -21,6 +21,7 @@ import type { ArtifactMember, HeldBytes } from './artifact';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { bytesToBase64 } from '../utils/base64';
 import { randomToken } from '../utils/crypto';
+import { PLATFORM_CATALOG } from '../platform-catalog';
 import { firstOwnerLinkSecret } from '../identity/builtin-sign-in';
 import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
 import { mailRoutingRetiredStep, mailRoutingStep, mailStep, mailZoneVar } from './mail';
@@ -537,9 +538,10 @@ function addressStep(inputs: DeployInputs): DeployStep {
 
 /** How long the smoke asks again while the address does not answer as the version under test yet, and how often.
  *  Cloudflare carries a deployment everywhere within a couple of seconds (docs, "Version overrides"), and a workers.dev
- *  address bound a moment before answered 404 for about 30 s (f44999, 2026-10-21): both are a change still arriving,
- *  never the version's own answer. Past this the step fails in the last answer's words, and the run can be retried. */
-const SMOKE_PATIENCE_MS = 120_000;
+ *  address bound a moment before answers 404 for a while (platform-catalog `workers_dev.fresh_route_404`): both are a
+ *  change still arriving, never the version's own answer. Four times the longest measured, as Cloudflare names no
+ *  bound; past it the step fails in the last answer's words, and the run can be retried. */
+const SMOKE_PATIENCE_MS = 4 * Math.max(...PLATFORM_CATALOG['workers_dev.fresh_route_404'].measurements.map((measured) => measured.value));
 
 const SMOKE_INTERVAL_MS = 3_000;
 
