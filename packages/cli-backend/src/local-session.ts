@@ -1286,7 +1286,10 @@ export class LocalAgentSession {
     // Its events are queued as turns now: `admitted` is told before they are joined, since one may wait on the owner.
     await admitted?.();
 
-    for (const id of this.deliveries.takenSince()) await this.deliveredTurnSettled(id);
+    for (const id of this.deliveries.takenSince()) {
+      // One held behind an open question to the owner runs once they answer: this pass, which holds the actor, ends.
+      if (await this.chat.announcementSettledOrHeld(id) === 'held') return;
+    }
   }
 
   /** What this agent is owed and has been handed, as its orchestration commits it. */

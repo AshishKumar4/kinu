@@ -1186,36 +1186,31 @@ describe('LocalAgentHost', () => {
     await host.close();
   });
 
-  // An owner who never answers (a measured run has none) leaves the report its hirer was sent queued: settle is done
-  // once nothing can run, not once that report's turn has.
-  test("settle returns while a hire's report waits behind its hirer's open question to the owner", async () => {
+  // An owner who never answers (a measured run has none) leaves the reports its hirer was sent queued: settle is done
+  // once nothing can run, not once those reports' turns have, and a report held so holds no later one from arriving.
+  test("settle returns while hires' reports wait behind their hirer's open question to the owner, one after another", async () => {
     const { state, project } = makeRoots();
     await seedAgent(state, 'root');
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     const ask = { questions: [{ id: 'units', question: 'Which unit should the ledger store?', header: 'Units', options: [{ label: 'Cents', description: 'Exact.' }, { label: 'Dollars', description: 'Readable.' }], recommended: 0 }] };
-    const childStarted = Promise.withResolvers<void>();
-    const childGate = Promise.withResolvers<void>();
-    const rootAsked = Promise.withResolvers<void>();
-    const rootPrompts: string[] = [];
-    let calls = 0;
+    // Whose calls the model answers now: the root's until it has asked, then the hires'.
+    let asking = true;
+    let rootCalls = 0;
+    let reports = 0;
 
     const model = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
-      doStream: async (options) => {
-        calls += 1;
+      doStream: async () => {
+        if (!asking) {
+          reports += 1;
 
-        if (calls === 1) {
-          childStarted.resolve();
-          await childGate.promise;
-
-          return { stream: textStream('child report', usage), response: { headers: {} } };
+          return { stream: textStream(`report ${String(reports)}`, usage), response: { headers: {} } };
         }
 
-        const prompt = JSON.stringify(options.prompt);
-        rootPrompts.push(prompt);
+        rootCalls += 1;
 
-        if (prompt.includes('ask_owner')) return { stream: textStream('ok', usage), response: { headers: {} } };
+        if (rootCalls > 1) return { stream: textStream('ok', usage), response: { headers: {} } };
 
         return {
           stream: new ReadableStream<LanguageModelV2StreamPart>({
@@ -1232,26 +1227,24 @@ describe('LocalAgentHost', () => {
     });
 
     const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }]);
-
-    host.subscribe((agent, event) => {
-      if (agent === 'root' && event.type === 'turn-end') rootAsked.resolve();
-    });
     const team = await host.team('root');
-
-    await team.create({ name: 'researcher', role: 'researcher', mission: 'Investigate the incident.' });
-    await team.assign({ name: 'researcher', task: 'Find the root cause and report it.', mode: 'build' });
-    await childStarted.promise;
     const root = await host.acquire('root');
 
     await root.send('Ask me which unit the ledger stores, then wait.', { id: crypto.randomUUID() });
-    await rootAsked.promise;
-    childGate.resolve();
     await host.settle();
+    asking = false;
 
-    const open = (await root.listOwnerQuestions()).filter((asking) => asking.asked.status === 'open');
+    for (const [at, name] of ['researcher', 'auditor'].entries()) {
+      await team.create({ name, role: 'researcher', mission: 'Investigate the incident.' });
+      await team.assign({ name, task: `Find the root cause, part ${String(at + 1)}, and report it.`, mode: 'build' });
+      await host.settle();
+    }
 
-    expect({ open: open.length, reportRead: rootPrompts.some((prompt) => prompt.includes('child report')), pumping: ['root', 'root/researcher'].map((key) => host.peek(key)?.pumping()) })
-      .toEqual({ open: 1, reportRead: false, pumping: [false, false] });
+    const open = (await root.listOwnerQuestions()).filter((question) => question.asked.status === 'open');
+    const pumping = ['root', 'root/researcher', 'root/auditor'].map((key) => host.peek(key)?.pumping());
+
+    // The root asked once and has read no report: both wait behind the question.
+    expect({ open: open.length, rootCalls, reports, pumping }).toEqual({ open: 1, rootCalls: 1, reports: 2, pumping: [false, false, false] });
     await host.close();
   });
 

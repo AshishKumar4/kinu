@@ -730,6 +730,20 @@ export class ChatSession {
     await this.joinAnnounced(identity);
   }
 
+  /**
+   * Once the turn announced under `identity` has settled, or is held: queued while nothing runs, which only a question to
+   * the owner does (a queued turn that may run always has a live pump), so only their answer can let it run.
+   */
+  async announcementSettledOrHeld(identity: string): Promise<'settled' | 'held'> {
+    for (;;) {
+      if (!this.announcementInFlight(identity)) return 'settled';
+      const pump = this.activePump;
+
+      if (pump === null) return 'held';
+      await Promise.race([this.joinAnnounced(identity), pump]);
+    }
+  }
+
   announcementInFlight(identity: string): boolean {
     return this.runningAnnouncement === identity
       || this.queue.some((item) => item.idempotencyKey === identity);
