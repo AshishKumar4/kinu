@@ -381,6 +381,11 @@ type AssembledSurfaceParts = Omit<ActorSurface, 'surface' | 'descriptors' | 'dig
   readonly codemodeCapabilities: ActorSurface['sources']['codemodeCapabilities'];
 };
 
+/** A turn's program namespaces, but `mail` where its owner holds no address to read. */
+function withoutMailIf<P extends { readonly name: string }>(scope: Pick<ToolScope, 'withoutMail'>, namespaces: readonly P[]): P[] {
+  return scope.withoutMail === true ? namespaces.filter((namespace) => namespace.name !== 'mail') : [...namespaces];
+}
+
 interface SourcePlanes {
   /** The owner's MCP descriptors, settled; null where no turn reaches them. */
   readonly descriptors: Promise<PromiseSettledResult<McpToolSurface>> | null;
@@ -390,7 +395,7 @@ interface SourcePlanes {
    *  no turn, whose every read asks. */
   readonly facts: Promise<readonly Fact[]> | null;
   /** Whether the owner holds a mail address, read once for its turn, which never rejects: null with no turn, on a
-   *  deployment with no mail, or where the read failed (logged), each leaving the last answer standing. */
+   *  deployment with no mail, or where the read failed (logged), each of which offers mail as before. */
   readonly mail: Promise<boolean | null> | null;
 }
 
@@ -1681,9 +1686,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const reports: SubordinateReportLedger = { spoke: false, settled: false };
     const report = reach.turn.report ? this.hirerReport(actor, lane.mode, reports, key.turnId) : undefined;
 
+    // Read as the turn opened, beside its settings: an owner with no mail address is offered no `mail` this turn
+    // (rc29 F7: the assistant offered mail help to an account that had none). Decided before its tools are built.
+    const ownerMail = await (planes.mail ?? Promise.resolve(null));
+
     const scope: ToolScope = {
       execution: () => surface.key, ledgers: surface.ledgers, external: () => surface.declared, profile: () => surface.operation, driving: lane.driving,
-      ...(report !== undefined && { report }),
+      ...(report !== undefined && { report }), ...(ownerMail === false && { withoutMail: true }),
     };
 
     // A role imposing another mode (a planner on a Build message) runs that mode's tools.
@@ -1702,7 +1711,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const assembled = await this.assembledSurface(actor, surface, {
       resolved, tools, stores: built.stores, raw: this.turnTools(built.raw, held), capture: null, reports, ownerLane, offered: { ...tools, ...ownerLaneDeclarations(ownerLane) }, sources,
       // `agent` / `llm` are reachable only inside `eval`: derived from the namespaces its programs reach.
-      codemodeCapabilities: (asked) => (reach.actor.kind === 'workspace' ? codemodeCapabilitiesFor(this.ownNamespaces(asked)) : []),
+      codemodeCapabilities: (asked) => (reach.actor.kind === 'workspace' ? codemodeCapabilitiesFor(withoutMailIf(scope, this.ownNamespaces(asked))) : []),
     });
 
     // Last, once its surface stands: a turn whose tools could not be described opened nothing.
@@ -1821,7 +1830,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       return factory.toolFor(finished, {
         // The role's own list, which no live resolution has intersected yet: the sandbox cannot bypass the role.
         reach: narrowToolSurface(operation?.inputs === null || operation === null ? undefined : effectiveRoleCatalog(operation.inputs.envelope.catalog)[operation.profile.role.id]?.allowedTools),
-        namespaces: (executor) => (confined === null
+        namespaces: (executor) => withoutMailIf(scope, confined === null
           ? actorNamespaces(this.surfaceActor(mode, 'owner', finished.stores), SURFACE_POLICY.program, { executor })
           : actorNamespaces(confined, SURFACE_POLICY.program, { executor, ...(reported !== undefined && { report: () => reported }) })),
       });
@@ -2047,16 +2056,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // The remote catalog is admitted against the context budget left after the turn's own tools; a failed read answers
     // no tools and the turn runs on its own. The hub's device check refreshes the workspace's executors.
-    const [mcp, , mailHeld] = await Promise.all([
+    const [mcp, ownerMail] = await Promise.all([
       planes.descriptors !== null && turn !== null
         ? this.buildUserMcpTools(turn.tools, Promise.resolve(this.modelCatalog.at(providers.normalizeSpecSync(turn.resolved.profile.tier.model))), planes.descriptors)
         : Promise.resolve({}),
+      planes.mail ?? Promise.resolve(null),
       planes.device,
-      planes.mail,
     ]);
-
-    // Before the turn's surface is built: its agents hold `mail` only while the owner holds an address to read.
-    if (mailHeld !== null && mailHeld !== undefined) this.ownerHoldsMail = mailHeld;
 
     const external: ToolSet = reach.kind === 'workspace' ? { ...this.extensions.tools(), ...mcp } : {};
 
@@ -2103,7 +2109,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       extensions: () => (reach.kind === 'workspace' ? this.extensions.list() : []),
       accountFacts: () => planes.facts ?? this.account.factsForTurn(this.actorHandle().name),
       mail: async () => {
-        const mail = this.mailFor(actor.handle.actorId, actor.record.name);
+        const mail = ownerMail === false ? null : this.mailFor(actor.handle.actorId, actor.record.name);
 
         return mail === null ? undefined : unreadMailForTurn(mail, this.name);
       },
@@ -2641,15 +2647,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._replyChannels;
   }
 
-  /** Whether the owner held a mail address at the last turn's read; null before any read answered. */
-  private ownerHoldsMail: boolean | null = null;
-
-  /** An agent's mail, where the deployment has mail and the owner holds an address: an account with none has no mail
-   *  to read, so its agents are offered none (rc29 F7: the assistant offered mail help to an account that had none). */
   protected override mailFor(actorId: string, name: string): MailDeps | null {
     const owner = this.getOwnerUserId();
 
-    if ((this.env.EMAIL_DOMAIN ?? '') === '' || owner === null || this.ownerHoldsMail === false) return null;
+    if ((this.env.EMAIL_DOMAIN ?? '') === '' || owner === null) return null;
 
     return {
       caller: () => ({ workspace: this.name, title: this.safeDisplayName(), mainActorId: this.actorHandle().actorId, actorId, name }),
