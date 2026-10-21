@@ -35,9 +35,8 @@ export interface SeatedHire {
 export interface HireLifecyclePorts<Seat extends SeatedHire = SeatedHire> {
   /** The hiring actor as it is at this call. */
   readonly parent: () => { readonly reference: ActorReference; readonly record: WorkspaceActor };
+  /** Its rows: the hirer's delegation depth walks `retained` (an `ActorHost`'s `describe` is the same read). */
   readonly directory: Pick<WorkspaceActorDirectory, 'apply' | 'storagePath' | 'retained' | 'list'>;
-  /** An actor's row, for the hirer's delegation depth. */
-  readonly describe: (actorId: string) => Pick<WorkspaceActor, 'parentActorId'> | null;
   /** A hire just registered, written by `seed` (its name, role and tier) before anything runs it. */
   readonly born: (reference: ActorReference, name: string, seed: (config: AgentConfigStore) => void) => Promise<void>;
   /** Runs `body` as the hire `reference` names. */
@@ -145,7 +144,7 @@ export function hireLifecycle<Seat extends SeatedHire>(ports: HireLifecyclePorts
 
   return {
     spawn: (input) => settle(Effect.gen(function* () {
-      const budget = delegationBudgetOf(ports.describe, ports.parent().record);
+      const budget = delegationBudgetOf((actorId) => ports.directory.retained(actorId), ports.parent().record);
 
       yield* refusal(delegationExhausted(budget), () => new KinuError('denied', delegationDepthRefusal(budget).error));
       const reference = inDirectory('register', input);

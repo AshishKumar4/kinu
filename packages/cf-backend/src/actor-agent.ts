@@ -123,11 +123,8 @@ import {
   type TeamToolDeps,
   type SubagentRuntime, type TemporaryAgentPort,
   SubagentRosterStore, subagentTitle,
-  createTeamToolDeps, createTemporaryAgentPort,
-  // One minting rule for every subagent, on either backend
-  agentNamer,
-  // Subagent tree depth cap: derived per child, never stated by one
-  type DelegationBudget,
+  // One minting rule, depth walk and clock for every subagent, on either backend
+  teamToolDepsFor, temporaryPortFor,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
   parseModelSpec, specModelInfo, assembleActorTurn,
@@ -705,10 +702,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return { closed };
   }
 
-  /** The orchestrator answers with the root budget; a facet actor answers from durable storage,
-   * so an eviction cannot reset it. */
-  protected abstract delegationBudget(): DelegationBudget;
-
   /** The workspace's one actor host; every logical actor is acquired from it over this object's SQL.
    * Abstract because it is built from root state this base class does not hold. */
   protected abstract actorHost(): ActorHost<CFSeat>;
@@ -837,8 +830,8 @@ export abstract class ActorAgent extends Agent<Env> {
       const roster = seams.roster(bound);
       roster.ensureSchema();
 
-      return createTemporaryAgentPort({
-        roster, runtime: hostedSubagentRuntime(seams, () => bound), now: () => Date.now(), createName: agentNamer(this.actorDirectoryStore(), roster),
+      return temporaryPortFor({
+        roster, runtime: hostedSubagentRuntime(seams, () => bound), directory: this.actorDirectoryStore(),
         afterTurn: (child, work) => {
           this.detachOwned(Effect.promise(async () => {
             await this.agentTurnSettled(child);
@@ -851,23 +844,21 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected getTeamToolDeps(): TeamToolDeps {
-    return createTeamToolDeps({
-      delegation: this.delegationBudget(),
+    return teamToolDepsFor({
+      record: this.rootBound().record,
+      directory: this.actorDirectoryStore(),
       roster: this.subagentRoster,
       runtime: this.subagentRuntime(),
       temporary: this.temporaryAgentPort(),
-      now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(),
       originContext: () => this.mainWorkingContext(),
       ownMission: () => this.ownMission(),
-      createName: agentNamer(this.actorDirectoryStore(), this.subagentRoster),
       rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
       broadcastTask: (event) => this.broadcastSubagentEvent({
         kind: 'task',
         ...event,
       }),
       workspaceAgents: () => this.workspaceAgents(true),
-      treeOwner: 'main',
       events: this.eventLog,
     });
   }

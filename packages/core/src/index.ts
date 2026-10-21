@@ -682,6 +682,8 @@ export { agentSelfHost } from './orchestrator/agent-self-host';
 // Platform-neutral: a backend supplies only SubagentRuntime.
 export { SubagentRosterStore, initSubagentRosterTable, subagentTitle } from './subagents/roster';
 
+export { teamToolDepsFor, temporaryPortFor } from './subagents/team-wiring';
+
 export {
   admitSubagentReport,
   admitSubagentTask,
@@ -718,7 +720,6 @@ export {
 // The depth cap is derived per child, never stated by one.
 export {
   DELEGATION_MAX_DEPTH,
-  ROOT_DELEGATION_BUDGET,
   delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,

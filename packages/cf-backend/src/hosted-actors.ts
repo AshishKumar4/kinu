@@ -3,7 +3,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { actorPolicy, hireLifecycle, type HireLifecyclePorts, type SeatedHire, publishSubagentReport, type OwedAdmission, type ConversationRecall, type HeadReport, type SubagentReportLedger, type CodemodeBuilder, type SeatedActor, type ServedStores, type TierId } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
-import { EventLog, titleActorFromMessage, spawnSeatedHead, receiveSubagentEvent, subagentForkContext, type SubagentInheritedContext, inheritedAsModelMessage, explorationActorKey, reclaimSettledRunActors, actorReferenceOf, registeredParent, terminalTaskReport, owedSubagentTurnReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubagentEventResult, type SubagentReportOrigin, type SubagentReportHandoff, type SubagentReportStatus, type SubagentRosterStore, type SubagentRuntime, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
+import { EventLog, titleActorFromMessage, spawnSeatedHead, receiveSubagentEvent, subagentForkContext, type SubagentInheritedContext, inheritedAsModelMessage, explorationActorKey, reclaimSettledRunActors, actorReferenceOf, registeredParent, terminalTaskReport, owedSubagentTurnReport, taskAnswerIsLater, defaultLoopOrigin, type ActorHost, type ActorReference, type BoundActor, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubagentEventResult, type SubagentReportOrigin, type SubagentReportHandoff, type SubagentReportStatus, type SubagentRosterStore, type SubagentRuntime, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
   AgentToolDescriptor, ArtifactOverrides, DiscoverOpts, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
@@ -173,12 +173,6 @@ export interface HostedActorSeams {
   oweAdvice(actor: BoundActor): Promise<void>;
 }
 
-export function hostedDelegationBudget(
-  seams: Pick<HostedActorSeams, 'host'>, actor: BoundActor,
-): DelegationBudget {
-  return delegationBudgetOf((actorId) => seams.host.describe(actorId), actor.record);
-}
-
 /**
  * One builder: recovery verifies the claim, so the runner and `taskTools` must share one `HeadInput`.
  * `maxDepth: 0` is containment (delegation is via `hire`/`ask`); a hire starts on the builtin loop.
@@ -224,7 +218,6 @@ function hostedLifecyclePorts(seams: HostedActorSeams, parent: () => BoundActor)
   return {
     parent: () => parent(),
     directory: seams.directory,
-    describe: (actorId) => seams.host.describe(actorId),
     born: async (reference, _name, seed) => {
       await seams.host.run(reference, { kind: 'actor' }, (actor) => {
         seed(actor.stores.config);
