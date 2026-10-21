@@ -52,13 +52,14 @@ export function openWorkspaceCLI(
     waitOnSharedWrites(db);
     const sql = makeSql(db);
 
+    // A facet is the root's database bound to one of its agents: the root's check, before either's schema runs.
+    requireSchemaGenesis(db, name);
     let identity: OpenedWorkspaceIdentity;
 
     if (config.facet !== undefined) {
       initActorStateSchema(makeWorkspaceSchemaSql(db));
       identity = { id: config.actorBinding.reference.actorId, name: config.actorBinding.name, created_at: config.actorBinding.createdAt };
     } else {
-      requireSchemaGenesis(db, name);
       initWorkspaceSchema(makeWorkspaceSchemaSql(db));
       const stored = sql<OpenedWorkspaceIdentity>`SELECT id, name, created_at FROM workspace_identity LIMIT 1`[0];
 
