@@ -117,7 +117,7 @@ export function initMailboxTables(sql: SqlExec): void {
   // Search: regenerable from the messages and their R2 parts; rowid is mail_messages' rowid. contentless_delete and
   // long MATCH queries were measured in workerd and on a deployed object (tests/workerd/mail-search.test.ts).
   sql.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS mail_fts USING fts5 (
+    CREATE VIRTUAL TABLE IF NOT EXISTS mail_fts USING fts5 ( /* derived from mail_messages: its rowids are theirs */
       subject, sender, body, content = '', contentless_delete = 1, tokenize = 'unicode61 remove_diacritics 2'
     )
   `);

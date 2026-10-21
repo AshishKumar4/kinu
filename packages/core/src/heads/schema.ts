@@ -26,7 +26,7 @@ export type StoredHeadUsage = { readonly [C in HeadUsageColumn]: number | null }
 /** `neurons` is REAL because it is billed in a fractional unit. */
 
 /** Usage columns are NULLable with no default: NULL means never reported, and `insertSpawn` names no usage column. */
-const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal (
+const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal ( /* derived from head_runs: a head belongs to its run */
   actor_id TEXT NOT NULL,
   id TEXT NOT NULL,
   parent_id TEXT,
@@ -73,7 +73,7 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_status ON head_journal(actor_id, status, root_id)`);
 
   // A step is named by its id, which its head and seq generate; its key is the two.
-  execRaw(`CREATE TABLE IF NOT EXISTS head_steps (
+  execRaw(`CREATE TABLE IF NOT EXISTS head_steps ( /* derived from head_journal: a step is its head's */
     actor_id TEXT NOT NULL,
     head_id TEXT NOT NULL,
     seq INTEGER NOT NULL,
