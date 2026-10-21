@@ -89,7 +89,7 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
           {src && (
             <>
               {" ("}
-              <a href={src} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline break-all">{src}</a>
+              <a href={src} target="_blank" rel="noopener noreferrer" className="p-accent-fg hover:underline break-all">{src}</a>
               {")"}
             </>
           )}
@@ -204,10 +204,10 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
         if (id !== null) return <SlateLink id={id} />;
 
         if (files !== null && href !== undefined && isWholeReference(href, roots)) {
-          return <button type="button" data-file-link={href} className="p-accent hover:underline" onClick={() => files.open(href)}>{children}</button>;
+          return <button type="button" data-file-link={href} className="p-accent-fg hover:underline" onClick={() => files.open(href)}>{children}</button>;
         }
 
-        return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline">{children}</a>;
+        return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent-fg hover:underline">{children}</a>;
       },
       img({ src, alt, title }) { return <MarkdownImage key={src ?? ""} src={src} alt={alt} title={title} />; },
       table({ children }) { return <div className="p-scroll-x my-2 rounded-lg border p-border"><table className="t-meta p-text-2 w-full border-collapse">{children}</table></div>; },
@@ -317,7 +317,7 @@ function HistoryBoundaryNotice({ loading, error, exhausted, onRetry }: HistoryBo
       <>
         <WarningCircleIcon size={13} className="p-danger shrink-0" />
         <span className="p-text-3">Could not load earlier messages.</span>
-        <button onClick={() => { onRetry(); }} className="p-accent hover:underline">Retry</button>
+        <button onClick={() => { onRetry(); }} className="p-accent-fg hover:underline">Retry</button>
       </>
     );
   }

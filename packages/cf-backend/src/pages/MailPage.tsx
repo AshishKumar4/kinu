@@ -44,7 +44,7 @@ function CreateAddress({ domain, suggested, onCreated }: { domain: string; sugge
 
 function InstallAssistant({ address, onClose }: { address: string; onClose: () => void }) {
   return (
-    <Modal title="Your personal assistant" icon={<SparkleIcon size={18} weight="fill" className="p-accent" />} onClose={onClose}
+    <Modal title="Your personal assistant" icon={<SparkleIcon size={18} weight="fill" className="p-accent-fg" />} onClose={onClose}
       footer={<><Button variant="ghost" size="sm" onClick={onClose}>Not now</Button><Link to={APP_ROUTES.explore} className={buttonClass({ variant: "primary", size: "sm" })}>Install</Link></>}>
       <p data-mail-install className="t-body p-text-2">Kinu reads <span className="font-mono p-text">{address}</span>, picks what's important, and drafts your replies.</p>
     </Modal>

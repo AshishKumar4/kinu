@@ -77,7 +77,7 @@ export function TileMenu({ name, items, initiallyOpen = false, className, trigge
                         <span id={refused.reason} className="t-meta mt-px block p-text-3">{item.refused}</span>
                       </span>
                     )}
-                    {item.checked === true && <CheckIcon size={14} weight="bold" className="ml-auto shrink-0 p-accent" />}
+                    {item.checked === true && <CheckIcon size={14} weight="bold" className="ml-auto shrink-0 p-accent-fg" />}
                   </button>
                 </div>
               );

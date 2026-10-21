@@ -169,7 +169,7 @@ function DropOverlay() {
     <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center rounded-lg border-2 border-dashed"
       style={{ borderColor: "var(--c-accent)", background: "var(--c-selected)" }}>
       <div className="t-body flex items-center gap-2 p-text px-3 py-1 rounded-lg p-fill border p-border">
-        <PaperclipIcon size={16} className="p-accent" />Drop files to attach
+        <PaperclipIcon size={16} className="p-accent-fg" />Drop files to attach
       </div>
     </div>
   );

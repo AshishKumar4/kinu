@@ -221,7 +221,7 @@ function HelperChatLink({ output }: { output?: JsonValue }) {
 
   return (
     <Link to={`${base.base}${encodeURIComponent(name)}${base.parent === null ? "" : `?parent=${encodeURIComponent(base.parent)}`}`} aria-label={`Open ${name}'s conversation`}
-      className="t-meta t-mono ml-12 inline-block p-accent hover:underline">{name}</Link>
+      className="t-meta t-mono ml-12 inline-block p-accent-fg hover:underline">{name}</Link>
   );
 }
 
@@ -289,7 +289,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
 
   if (isRunning) {
     stateName = "running";
-    stateTone = "p-selected p-accent";
+    stateTone = "p-selected p-accent-fg";
     stateBadge = <><StatusDot tone="live" />Running</>;
   } else if (failed) {
     stateName = "failed";
@@ -415,7 +415,7 @@ export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<Unavailab
       tone="p-warning"
       label="Machine"
       body={offline}
-      action={devices.length === 0 ? <Link to={settingsPath("devices")} className="t-body mt-1 mr-2 shrink-0 p-accent hover:underline">Connect</Link> : undefined}
+      action={devices.length === 0 ? <Link to={settingsPath("devices")} className="t-body mt-1 mr-2 shrink-0 p-accent-fg hover:underline">Connect</Link> : undefined}
       hooks={{ "data-device-offline": String(devices.length) }}
     />
   );

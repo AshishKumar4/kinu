@@ -24,7 +24,7 @@ function OwnerMark({ owner, onOpenOwner }: TaskOwnership) {
   if (onOpenOwner === undefined || path.length === 0) return <span className="t-meta p-text-3"> · {owner.title}</span>;
 
   return (
-    <> · <button type="button" className="t-meta p-accent hover:underline" aria-label={`Open ${owner.title}'s conversation`}
+    <> · <button type="button" className="t-meta p-accent-fg hover:underline" aria-label={`Open ${owner.title}'s conversation`}
       onClick={() => void onOpenOwner(path.join("/"), owner.actorId)}>{owner.title}</button></>
   );
 }

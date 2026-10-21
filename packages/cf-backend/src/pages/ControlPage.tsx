@@ -71,7 +71,7 @@ export default function ControlPage(): ReactNode {
               key={key}
               onClick={() => go({ tab: key, user: null, workspace: null })}
               className={`flex items-center gap-2 rounded-md px-2 py-1 t-meta transition-colors ${
-                key === tab ? 'p-accent-bg p-accent' : 'p-text-3 hover:p-text'
+                key === tab ? 'p-accent-bg p-accent-fg' : 'p-text-3 hover:p-text'
               }`}
             >
               <Icon size={13} /> {label}
@@ -336,7 +336,7 @@ function IncidentsView(): ReactNode {
                 when(i.openedAt),
                 <span className="tabular-nums">{i.failures}</span>,
                 i.alertedAt === null
-                  ? <span className="t-status p-accent">alert owed</span>
+                  ? <span className="t-status p-accent-fg">alert owed</span>
                   : when(i.alertedAt),
                 <span className="t-meta p-text-2">{i.detail}</span>,
               ],
@@ -471,7 +471,7 @@ function MetricTable({ rows }: { rows: Extract<AnalyticsResult, { status: 'ok' }
 /** `pending` is a never-recorded settlement and reads as a failure. */
 const AUDIT_TONE: Record<ControlAuditRow['outcome'], string> = {
   ok: 't-status p-success',
-  denied: 't-status p-accent',
+  denied: 't-status p-accent-fg',
   failed: 't-status p-danger',
   pending: 't-status p-danger',
 };

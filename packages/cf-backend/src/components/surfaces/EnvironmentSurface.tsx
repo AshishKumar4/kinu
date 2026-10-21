@@ -687,7 +687,7 @@ function useCover(area: WorkspaceArea | null, expanded: boolean): CSSProperties 
 function Restarting({ to }: { to: string | null }) {
   return (
     <div role="status" className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-      <span className="p-dot-pulse"><DesktopIcon size={24} className="p-accent" aria-hidden /></span>
+      <span className="p-dot-pulse"><DesktopIcon size={24} className="p-accent-fg" aria-hidden /></span>
       <div className="space-y-1">
         <p className="t-label p-text">{to === null ? "Restarting" : `Restarting at ${to}`}</p>
         <p className="t-meta p-text-3">Your files stay and services start again; open terminals start fresh.</p>
@@ -751,7 +751,7 @@ function UnavailableMount({ mount, exec }: { mount: EnvironmentInfo; exec: Execu
 
   return (
     <Absence icon={PlugIcon} title={`${executorLabel(mount.name)} is not available here`}>
-      {text}{" "}<a href={EXECUTION_DOCS} target="_blank" rel="noreferrer" className="p-accent hover:underline">Learn more</a>
+      {text}{" "}<a href={EXECUTION_DOCS} target="_blank" rel="noreferrer" className="p-accent-fg hover:underline">Learn more</a>
     </Absence>
   );
 }

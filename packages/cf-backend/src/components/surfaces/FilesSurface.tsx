@@ -45,7 +45,7 @@ function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: (
         <button type="button" data-upload-keep onClick={onKeep}
           className="rounded px-2 py-px p-text-2 hover:p-text p-row-hover">Cancel</button>
         <button type="button" data-upload-confirm onClick={onReplace} autoFocus
-          className="rounded px-2 py-px p-accent hover:underline">Replace</button>
+          className="rounded px-2 py-px p-accent-fg hover:underline">Replace</button>
       </span>
     </div>
   );
@@ -749,7 +749,7 @@ function OfflineTreeRow({ row, depth }: { row: OfflineRow; depth: number }) {
       <span className="t-meta ml-1 truncate">offline</span>
       {row.onConnect && (
         <button type="button" data-files-tree-connect onClick={row.onConnect}
-          className="t-status ml-auto shrink-0 p-accent hover:underline opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100">
+          className="t-status ml-auto shrink-0 p-accent-fg hover:underline opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100">
           Connect
         </button>
       )}
@@ -771,7 +771,7 @@ function OfflineMountRow({ row }: { row: OfflineRow }) {
       <span className="text-right @[26rem]:col-span-2">
         {row.onConnect && (
           <button type="button" data-files-connect onClick={row.onConnect}
-            className="t-status p-accent hover:underline">Connect</button>
+            className="t-status p-accent-fg hover:underline">Connect</button>
         )}
       </span>
     </div>
@@ -963,7 +963,7 @@ function OfflineMountTile({ row }: { row: OfflineRow }) {
       <span className="t-meta flex items-baseline gap-2">
         <span className="p-text-3">offline</span>
         {row.onConnect && (
-          <button type="button" data-files-connect onClick={row.onConnect} className="font-medium p-accent hover:underline">Connect</button>
+          <button type="button" data-files-connect onClick={row.onConnect} className="font-medium p-accent-fg hover:underline">Connect</button>
         )}
       </span>
     </div>

@@ -135,7 +135,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
             <div className="t-status p-warning">{interrupted}</div>
           )}
           {job.retriedBy && (
-            <div className="t-meta t-mono mt-1 p-accent">
+            <div className="t-meta t-mono mt-1 p-accent-fg">
               Retried as {shortJobId(job.retriedBy)}
             </div>
           )}

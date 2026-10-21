@@ -347,7 +347,7 @@ function Chip({ children, mono = false }: { children: ReactNode; mono?: boolean 
 
 function Verified({ mail }: { mail: Mail }) {
   return mail.verified
-    ? <span data-mail-verified title={mail.auth} className="inline-flex shrink-0 items-center gap-1 p-meta p-text-3"><SealCheckIcon size={13} weight="fill" className="p-accent" />Verified</span>
+    ? <span data-mail-verified title={mail.auth} className="inline-flex shrink-0 items-center gap-1 p-meta p-text-3"><SealCheckIcon size={13} weight="fill" className="p-accent-fg" />Verified</span>
     : <span data-mail-unverified title={mail.auth} className="inline-flex shrink-0 items-center gap-1 p-meta p-warning"><ShieldWarningIcon size={13} weight="fill" />Not verified</span>;
 }
 
@@ -548,7 +548,7 @@ function Compose({ onClose }: { onClose: () => void }) {
 /** With no assistant, what needs one offers it: the Personal assistant blueprint, installed as a workspace. */
 function InstallAssistant({ onClose }: { onClose: () => void }) {
   return (
-    <Modal title="Your personal assistant" icon={<SparkleIcon size={18} weight="fill" className="p-accent" />} onClose={onClose}
+    <Modal title="Your personal assistant" icon={<SparkleIcon size={18} weight="fill" className="p-accent-fg" />} onClose={onClose}
       footer={<div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={onClose}>Not now</Button><Button variant="primary" size="md" onClick={onClose}>Install</Button></div>}>
       <p data-mail-install className="p-row-text p-text-2">Kinu reads <span className="font-mono p-text">ashish@kinu.run</span>, picks what's important, and drafts your replies.</p>
     </Modal>
@@ -717,7 +717,7 @@ function MailPill({ thread, mail, onOpen }: { thread: Thread; mail: Mail; onOpen
   const owner = isOwner(mail);
 
   return (
-    <EventRow icon={EnvelopeSimpleIcon} tone={owner ? "p-accent" : "p-text-3"} label={owner ? "Your mail" : "Mail"}
+    <EventRow icon={EnvelopeSimpleIcon} tone={owner ? "p-accent-fg" : "p-text-3"} label={owner ? "Your mail" : "Mail"}
       source={owner ? undefined : mail.from.name}
       body={owner ? firstLine(mail.text) : thread.subject} detail={cardWords(splitQuotedReply(mail.text).own)} state="seen"
       hooks={{ "data-mail-pill": owner ? "owner" : "input" }}

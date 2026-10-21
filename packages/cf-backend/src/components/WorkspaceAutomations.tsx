@@ -54,7 +54,7 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: WorkspaceRpc; wo
     <section className="min-w-0">
       {dialog}
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <LightningIcon size={16} className="p-accent" />
+        <LightningIcon size={16} className="p-accent-fg" />
         <h2 className="t-label p-text">Automations</h2>
         {triggers && <Badge>{active}/{triggers.length} active</Badge>}
         {nextFire && <span className="t-meta p-text-3 tabular-nums">next {new Date(nextFire).toLocaleString()}</span>}
@@ -296,7 +296,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
   return (
     <Modal
       title="New webhook"
-      icon={<PlugIcon size={16} className="p-accent" />}
+      icon={<PlugIcon size={16} className="p-accent-fg" />}
       onClose={onClose}
       busy={submitting}
       footer={<>

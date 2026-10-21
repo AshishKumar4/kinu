@@ -27,7 +27,7 @@ function LandingMovieReplay(): ReactElement | null {
     <button
       type="button"
       onClick={() => window.__kinuLandingMovie?.play()}
-      className="font-sans text-xs font-semibold p-accent"
+      className="font-sans text-xs font-semibold p-accent-fg"
     >
       Replay the walkthrough →
     </button>

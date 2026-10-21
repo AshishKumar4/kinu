@@ -111,7 +111,7 @@ export function SourceMenu({ sets, source, initiallyOpen = false, onPick }: {
             <button key={set.source} type="button" role="menuitemradio" aria-checked={set.source === source}
               onClick={() => { setOpen(false); onPick(set.source); }}
               className="t-body flex w-full items-center gap-2 rounded-md px-2 py-1 text-left p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
-              <span className="flex size-3.5 shrink-0 items-center justify-center p-accent">{set.source === source && <CheckIcon size={12} weight="bold" />}</span>
+              <span className="flex size-3.5 shrink-0 items-center justify-center p-accent-fg">{set.source === source && <CheckIcon size={12} weight="bold" />}</span>
               <span className="min-w-0 flex-1 truncate">{set.label}</span>
               <span className={`t-meta shrink-0 ${set.error === undefined ? "p-text-3" : "p-warning"}`}>{sourceNote(set)}</span>
             </button>

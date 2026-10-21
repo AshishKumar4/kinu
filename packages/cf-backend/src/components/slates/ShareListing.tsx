@@ -49,7 +49,7 @@ export function ShareListing({ share, onList, disabled }: { share: LiveShareReco
           <div role="radiogroup" aria-label="Category" className="flex flex-wrap gap-2">
             {GALLERY_CATEGORIES.map((each) => (
               <button key={each} type="button" role="radio" aria-checked={each === category} data-share-gallery-category={each} onClick={() => setCategory(each)}
-                className={`t-meta rounded-full px-2 py-px ${each === category ? "bg-[var(--c-selected)] p-accent font-medium" : "p-fill p-text-2"}`}>{CATEGORY_WORDS[each]}</button>
+                className={`t-meta rounded-full px-2 py-px ${each === category ? "bg-[var(--c-selected)] p-accent-fg font-medium" : "p-fill p-text-2"}`}>{CATEGORY_WORDS[each]}</button>
             ))}
           </div>
           <div className="flex justify-end"><Button size="sm" variant="secondary" type="submit" data-share-gallery-list disabled={disabled}>List it</Button></div>

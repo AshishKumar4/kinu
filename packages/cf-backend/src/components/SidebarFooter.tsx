@@ -36,7 +36,7 @@ function CountBadge({ count, label }: { count: number; label: string }) {
 export function FooterIcons({ vertical = false }: { vertical?: boolean }) {
   const { pathname, hash } = useLocation();
   const { enabled, unread } = useImportantMail();
-  const cls = (open: boolean) => `relative flex size-8 items-center justify-center rounded-lg transition-colors ${open ? "bg-[var(--c-selected)] p-accent" : `p-text-3 ${NAV_HOVER}`}`;
+  const cls = (open: boolean) => `relative flex size-8 items-center justify-center rounded-lg transition-colors ${open ? "bg-[var(--c-selected)] p-accent-fg" : `p-text-3 ${NAV_HOVER}`}`;
   const at = (root: string) => pathname === root || pathname.startsWith(`${root}/`);
   // Devices is a Settings section: its icon is the open page while that section is.
   const devicesOpen = at(APP_ROUTES.userSettings) && settingsSection(hash) === "devices";

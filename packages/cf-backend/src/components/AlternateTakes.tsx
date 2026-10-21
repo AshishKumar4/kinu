@@ -94,7 +94,7 @@ function TakesComparison({ set, onPick, onClose }: {
   return (
     <Modal
       title="Alternate takes"
-      icon={<GitBranchIcon size={18} className="p-accent" />}
+      icon={<GitBranchIcon size={18} className="p-accent-fg" />}
       onClose={onClose}
       maxWidthClass="max-w-xl"
       footer={<>
@@ -199,7 +199,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
         {run.status === "running" && (
           <>
             <Loader size="sm" />
-            <GitBranchIcon size={12} className="p-accent shrink-0" />
+            <GitBranchIcon size={12} className="p-accent-fg shrink-0" />
             <span className="truncate">Branching: <span className="p-text">{task}</span> · the live turn continues</span>
           </>
         )}

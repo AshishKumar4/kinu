@@ -102,7 +102,7 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
   };
 
   return (
-    <Modal title="New skill" icon={<BookOpenIcon size={18} className="p-accent" />} onClose={onClose} busy={busy} maxWidthClass="max-w-lg"
+    <Modal title="New skill" icon={<BookOpenIcon size={18} className="p-accent-fg" />} onClose={onClose} busy={busy} maxWidthClass="max-w-lg"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
         <Button variant="primary" size="md" data-drive-add-skill-commit onClick={() => run(() => addSkillText(text))} disabled={busy || text.trim() === ""}>

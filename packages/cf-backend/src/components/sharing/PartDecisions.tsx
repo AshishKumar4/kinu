@@ -43,7 +43,7 @@ export function ConsentDecision({ slate, ask, changed, onAllow, onClose }: {
   const server = serverWords(ask);
 
   return (
-    <Modal title={changed ? `${slate} changed since you allowed it` : `Let ${slate} use your ${server}?`} icon={<PlugIcon size={18} className="p-accent" />} onClose={onClose}
+    <Modal title={changed ? `${slate} changed since you allowed it` : `Let ${slate} use your ${server}?`} icon={<PlugIcon size={18} className="p-accent-fg" />} onClose={onClose}
       footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose} data-consent-dismiss>Not now</Button><Button variant="primary" size="sm" data-consent-allow onClick={onAllow}>{changed ? "Allow again" : "Allow"}</Button></div>}>
       {changed && <p data-consent-changed className="t-body p-text-2">Its code changed after you allowed it to use your {server}. Allow it again to keep seeing your part.</p>}
       <Lets
@@ -86,7 +86,7 @@ export function ShowDecision({ label, value, onShow, onClose }: {
   onClose: () => void;
 }) {
   return (
-    <Modal title="Show to everyone?" icon={<EyeIcon size={18} className="p-accent" />} onClose={onClose}
+    <Modal title="Show to everyone?" icon={<EyeIcon size={18} className="p-accent-fg" />} onClose={onClose}
       footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose}>Not now</Button><Button variant="primary" size="sm" data-show-confirm onClick={onShow}>Show to everyone</Button></div>}>
       <p className="t-body p-text-2">{label}</p>
       <Payload data-show-payload value={value} />

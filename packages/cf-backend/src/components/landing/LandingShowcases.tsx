@@ -14,7 +14,7 @@ export function SectionHead({ label, lead, tight = false, children }: {
 }): ReactElement {
   return (
     <div className={tight ? 'mb-9' : 'mb-10 lg:mb-12'}>
-      {label && <div className="mb-4 flex items-center gap-3 text-[13px] font-semibold p-accent"><span className="h-px w-[22px] shrink-0 bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />{label}</div>}
+      {label && <div className="mb-4 flex items-center gap-3 text-[13px] font-semibold p-accent-fg"><span className="h-px w-[22px] shrink-0 bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />{label}</div>}
       <h2 className="max-w-[780px] text-[clamp(30px,3.4vw,44px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">{children}</h2>
       <p className="mt-4 max-w-[620px] text-[17px] leading-[1.65] p-text-3">{lead}</p>
     </div>
@@ -88,8 +88,8 @@ function TuiPreview(): ReactElement {
     ids.filter((id) => !filtered || drawerMatches(id)).map((id) => (
       <div key={id}>
         <button type="button" onClick={() => onChoose(id)} className={`block w-full whitespace-pre px-2 text-left leading-6 ${id === agentId ? 'p-fill p-text' : 'p-text-2 hover:p-text'}`}>
-          <span className={id === agentId ? 'p-accent' : 'p-text-3'}>{id === agentId ? '› ' : '  '}</span>
-          <span className={agents[id].status === 'running' ? 'p-accent' : 'p-text-3'}>{agents[id].status === 'running' ? TUI_MARKS.activity.running : TUI_MARKS.activity.idle} </span>
+          <span className={id === agentId ? 'p-accent-fg' : 'p-text-3'}>{id === agentId ? '› ' : '  '}</span>
+          <span className={agents[id].status === 'running' ? 'p-accent-fg' : 'p-text-3'}>{agents[id].status === 'running' ? TUI_MARKS.activity.running : TUI_MARKS.activity.idle} </span>
           {agents[id].label}
         </button>
         {agents[id].subordinate !== null && (
@@ -124,7 +124,7 @@ function TuiPreview(): ReactElement {
         <span className="justify-self-end uppercase tracking-[.1em]">terminal</span>
       </div>
       <div className="flex min-h-8 items-center justify-between gap-4 whitespace-pre px-2 p-text-2">
-        <div className="min-w-0 truncate">kinu <span className="p-accent">{TUI_MARKS.prompt}</span> <strong className="font-semibold p-text">{agent.label}</strong> <span className="p-text-3">{agent.location}</span></div>
+        <div className="min-w-0 truncate">kinu <span className="p-accent-fg">{TUI_MARKS.prompt}</span> <strong className="font-semibold p-text">{agent.label}</strong> <span className="p-text-3">{agent.location}</span></div>
         <div className="flex items-center gap-3">
           <div className="hidden truncate p-text-3 sm:block">Muse Spark 1.3 <span className="p-text-3">[Ctrl+L]</span>  ctx ~68/1.1M  effort medium <span className="p-success">●</span></div>
           <button ref={drawerTriggerRef} type="button" aria-expanded={drawerOpen} aria-controls="landing-tui-workspaces" onClick={() => setDrawerOpen((open) => !open)} className="rounded-md border p-border px-2 leading-5 p-text-3 hover:p-text lg:hidden">{hint.keys} {hint.label}</button>
@@ -169,13 +169,13 @@ function TuiPreview(): ReactElement {
           <div className="flex-1 overflow-hidden px-2 py-2 sm:px-3">
             <p className="p-text-3">Connected to {agent.label}. Type a message or /help for commands.</p>
             <div data-tui-role="user" className="mt-6 grid grid-cols-[3ch_minmax(0,1fr)] gap-2">
-              <span className="p-accent">{TUI_MARKS.userGutter}</span>
+              <span className="p-accent-fg">{TUI_MARKS.userGutter}</span>
               <p className="p-text">{agent.prompt}</p>
             </div>
             <div className="mt-6 min-w-0">
               {agent.tools.map(([tool, args, result]) => (
                 <div key={`${tool}-${args}`}>
-                  <p className="truncate"><span className="p-accent">{TUI_MARKS.toolCall}</span> <span className="p-text">{tool}</span> <span className="p-text-3">{args}</span></p>
+                  <p className="truncate"><span className="p-accent-fg">{TUI_MARKS.toolCall}</span> <span className="p-text">{tool}</span> <span className="p-text-3">{args}</span></p>
                   <p className="pl-[2ch] p-text-3">{TUI_MARKS.toolResult} <span className="p-success">{result}</span></p>
                 </div>
               ))}
@@ -209,7 +209,7 @@ function CliPreview(): ReactElement {
       </div>
       <div className="grid gap-8 p-6 sm:p-8 lg:grid-cols-[1.15fr_1fr]">
         <div className="min-w-0">
-          <div className="mb-4 flex items-center justify-between gap-3"><span className="font-mono text-[11px] uppercase tracking-[.1em] p-accent">{mode === 'run' ? 'One task' : 'Non-interactive runner'}</span><Button type="button" variant="ghost" size="sm" aria-label="Copy task command" onClick={() => copy(command)}>{COPY_LABEL[status]}</Button></div>
+          <div className="mb-4 flex items-center justify-between gap-3"><span className="font-mono text-[11px] uppercase tracking-[.1em] p-accent-fg">{mode === 'run' ? 'One task' : 'Non-interactive runner'}</span><Button type="button" variant="ghost" size="sm" aria-label="Copy task command" onClick={() => copy(command)}>{COPY_LABEL[status]}</Button></div>
           <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.9] p-text"><code>{command}</code></pre>
           <p className="mt-5 text-xs leading-[1.7] p-text-3">Needs a configured workspace, a checkout its executor can reach, and provider credentials.</p>
         </div>
@@ -228,7 +228,7 @@ export function LandingShowcases(): ReactElement {
     <div className="landing-shell">
       <section data-showcase="tui" className="border-t p-border py-20 lg:py-24">
         <SectionHead lead="Interactive TUI demo. Select an agent to see its work.">
-          Control everything <span className="p-accent">from your terminal.</span>
+          Control everything <span className="p-accent-fg">from your terminal.</span>
         </SectionHead>
         <TuiPreview />
       </section>

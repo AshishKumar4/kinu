@@ -74,7 +74,7 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces, create
   return (
     <Modal
       title="Fork into a workspace"
-      icon={<GitBranchIcon size={18} className="p-accent" />}
+      icon={<GitBranchIcon size={18} className="p-accent-fg" />}
       onClose={onClose}
       busy={busy}
       footer={<>

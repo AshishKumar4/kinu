@@ -71,7 +71,7 @@ function BlockHeader(
 ) {
   return (
     <div className="flex items-baseline gap-2 mb-3">
-      <Icon size={13} className="p-accent self-center" />
+      <Icon size={13} className="p-accent-fg self-center" />
       <h3 className="t-title p-text">{title}</h3>
       {note && <span className="t-meta p-text-3 ml-auto text-right">{note}</span>}
     </div>

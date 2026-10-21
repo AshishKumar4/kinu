@@ -146,7 +146,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
             Published. Anyone with the link can read it and fork a copy.{published.listing === "pending" && " The list will catch up."}
           </Notice>
           <div className="flex items-center gap-2">
-            <a href={blueprintPagePath(published.id)} className="min-w-0 flex-1 break-all font-mono p-accent" target="_blank" rel="noopener noreferrer">{link}</a>
+            <a href={blueprintPagePath(published.id)} className="min-w-0 flex-1 break-all font-mono p-accent-fg" target="_blank" rel="noopener noreferrer">{link}</a>
             <CopyButton value={link} what="the blueprint link" className={buttonClass({ size: "sm", iconOnly: true })} />
           </div>
           {published.users.length > 0 && <p className="p-text-3">It is in the Drive of {published.users.join(", ")}.</p>}

@@ -90,8 +90,8 @@ function TerminalCloseBoundary({ close, onRetry }: {
       </p>
       <p className="t-meta p-text-3 max-w-sm break-words">{close.reason || close.message}</p>
       <div className="flex items-center gap-3">
-        <button type="button" onClick={onRetry} className="t-meta p-accent hover:underline">Try again</button>
-        <Link to="/" className="t-meta p-accent hover:underline">Back to your workspaces</Link>
+        <button type="button" onClick={onRetry} className="t-meta p-accent-fg hover:underline">Try again</button>
+        <Link to="/" className="t-meta p-accent-fg hover:underline">Back to your workspaces</Link>
       </div>
     </div>
   );
@@ -126,7 +126,7 @@ function ForkModal({
   return (
     <Modal
       title="Fork the workspace from here"
-      icon={<GitBranchIcon size={18} className="p-accent" />}
+      icon={<GitBranchIcon size={18} className="p-accent-fg" />}
       onClose={onCancel}
       busy={busy}
       footer={<>
@@ -597,7 +597,7 @@ function GoneWorkspace() {
     <div className="h-full flex flex-col items-center justify-center gap-2 px-6 text-center" data-workspace-gone>
       <p className="t-body p-text">This workspace no longer exists</p>
       <p className="t-meta p-text-3">It was deleted, here or somewhere else.</p>
-      <Link to="/" className="t-meta mt-1 p-accent hover:underline">Back to your workspaces</Link>
+      <Link to="/" className="t-meta mt-1 p-accent-fg hover:underline">Back to your workspaces</Link>
     </div>
   );
 }
@@ -933,8 +933,8 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
               : "This workspace is unavailable."}
             {" "}{state.terminalClose.reason || state.terminalClose.message}
           </span>
-          <button type="button" onClick={state.retryLoad} className="p-accent hover:underline">Try again</button>
-          <Link to="/" className="p-accent hover:underline">Back to your workspaces</Link>
+          <button type="button" onClick={state.retryLoad} className="p-accent-fg hover:underline">Try again</button>
+          <Link to="/" className="p-accent-fg hover:underline">Back to your workspaces</Link>
         </div>
       )}
 

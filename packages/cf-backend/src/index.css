@@ -293,7 +293,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 @utility p-text   { color: var(--c-text); }
 @utility p-text-2 { color: var(--c-text-2); }
 @utility p-text-3 { color: var(--c-text-3); }
-@utility p-accent { color: var(--c-accent-fg); }
+@utility p-accent-fg { color: var(--c-accent-fg); }
 @utility p-accent-mark { color: var(--c-accent-mark); }
 @utility p-selected { background: var(--c-selected); }
 

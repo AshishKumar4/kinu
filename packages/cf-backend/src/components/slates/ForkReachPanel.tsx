@@ -54,7 +54,7 @@ export function ForkReachPanel({ title, reaches, onOpen }: {
     <div className="h-full overflow-y-auto px-[18px] py-[18px]" data-fork-reach>
       <div className="mx-auto max-w-xl space-y-4">
         <header className="flex items-start gap-3">
-          <PlugsConnectedIcon size={20} className="mt-px shrink-0 p-accent" />
+          <PlugsConnectedIcon size={20} className="mt-px shrink-0 p-accent-fg" />
           <div>
             <h2 className="t-title p-text">{title} runs as you here</h2>
             <p className="t-meta mt-px p-text-3">This slate was forked. It calls your own workspace, as you, and nothing has run yet.</p>

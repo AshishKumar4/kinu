@@ -39,7 +39,7 @@ function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; o
   }, [listing, reason, onSent]);
 
   return (
-    <Modal title={`Report ${listing.title}`} icon={<FlagIcon size={18} className="p-accent" />} onClose={onClose} busy={busy}
+    <Modal title={`Report ${listing.title}`} icon={<FlagIcon size={18} className="p-accent-fg" />} onClose={onClose} busy={busy}
       footer={(
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
@@ -146,7 +146,7 @@ export default function GallerySlatePage() {
       actions={(
         <>
           <Button variant="secondary" aria-pressed={star.on} data-gallery-star data-gallery-stars={star.count} onClick={signedIn ? toggleStar : () => signInAndReturn()}>
-            <StarIcon size={15} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : ""} />{star.on ? "Starred" : "Star"} · {star.count.toLocaleString("en-US")}
+            <StarIcon size={15} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent-fg" : ""} />{star.on ? "Starred" : "Star"} · {star.count.toLocaleString("en-US")}
           </Button>
           <Button variant="secondary" data-gallery-fork onClick={() => (signedIn ? setDialog("fork") : signInAndReturn(hereAsking("fork")))}>
             <GitForkIcon size={15} />Fork

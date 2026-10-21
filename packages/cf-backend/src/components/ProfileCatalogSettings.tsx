@@ -772,7 +772,7 @@ function Allowance(props: {
                 aria-label={`${props.label}: ${option.id}`}
                 onClick={() => toggle(option.id, !on)}
                 className={`inline-flex items-center gap-1 rounded-md border px-2 py-px t-meta ${
-                  on ? 'border-[var(--c-accent)] p-accent-bg p-accent' : 'p-border p-text-3 hover:p-text'
+                  on ? 'border-[var(--c-accent)] p-accent-bg p-accent-fg' : 'p-border p-text-3 hover:p-text'
                 }`}>
                 {on && <CheckIcon size={11} />}
                 {option.id}

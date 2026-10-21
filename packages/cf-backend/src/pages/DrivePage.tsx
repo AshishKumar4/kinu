@@ -164,7 +164,7 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
             <div key={each.id}>
               <Link to={each.to} state={{ chosen: true }} aria-current={here ? "page" : undefined} data-drive-place={each.id}
                 className={`${PLACE_ROW} ${tone}`}>
-                <span className={`flex shrink-0 ${active ? "p-accent" : "p-text-3"}`}>{each.icon}</span>
+                <span className={`flex shrink-0 ${active ? "p-accent-fg" : "p-text-3"}`}>{each.icon}</span>
                 <span className="flex-1">{each.label}</span>
                 {each.id === "shared" && unseen && !active && <NewDot />}
               </Link>

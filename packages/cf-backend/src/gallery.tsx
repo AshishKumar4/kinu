@@ -5414,10 +5414,10 @@ function Palette() {
           <Button variant="primary">Primary action</Button>
           <Button>Secondary</Button>
           <Button variant="ghost">Ghost</Button>
-          <a className="p-accent p-row-text underline underline-offset-2" href="#top">A link</a>
+          <a className="p-accent-fg p-row-text underline underline-offset-2" href="#top">A link</a>
           <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full p-selected">
             <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
-            <span className="p-meta p-accent font-medium">working</span>
+            <span className="p-meta p-accent-fg font-medium">working</span>
           </span>
         </div>
       </div>

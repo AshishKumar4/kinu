@@ -231,7 +231,7 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
         <button
           onClick={save}
           disabled={saving || !name.trim() || !serverUrl.trim()}
-          className="t-status px-3 py-1 rounded-md p-accent-bg p-accent disabled:opacity-50 hover:opacity-90"
+          className="t-status px-3 py-1 rounded-md p-accent-bg p-accent-fg disabled:opacity-50 hover:opacity-90"
         >{saving ? 'Adding…' : 'Add server'}</button>
       </div>
     </section>

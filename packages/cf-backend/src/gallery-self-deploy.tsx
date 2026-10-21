@@ -311,7 +311,7 @@ function StartScreen({ state, go }: { state: FlowState; go: Go }) {
       )}
       <div className="mt-5"><WhatGetsMade state={state} /></div>
       <p data-deploy-local className="mt-6 border-t p-border pt-4 p-meta p-text-3">
-        Or run Kinu on your own computer, with nothing else to set up. <a href={LOCAL_INSTALL} className="p-accent hover:underline">How to install it</a>
+        Or run Kinu on your own computer, with nothing else to set up. <a href={LOCAL_INSTALL} className="p-accent-fg hover:underline">How to install it</a>
       </p>
     </Card>
   );
@@ -325,7 +325,7 @@ function Change({ Icon, title, copy, onPick, disabled = false }: { Icon: Phospho
     <li>
       <button type="button" onClick={onPick} disabled={disabled}
         className="-mx-3 flex w-[calc(100%+1.5rem)] items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors enabled:hover:bg-[var(--c-hover)] disabled:opacity-60">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg p-fill"><Icon size={18} className="p-accent" /></span>
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg p-fill"><Icon size={18} className="p-accent-fg" /></span>
         <span className="min-w-0 flex-1">
           <span className="block text-sm font-semibold p-text">{title}</span>
           <span className="mt-0.5 block p-meta p-text-3">{copy}</span>
@@ -446,7 +446,7 @@ function AddressLine({ state, go }: { state: FlowState; go: Go }) {
     <Line label="Address">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <span data-deploy-address className="p-row-text font-medium p-text">{domain === null ? workersAddressOf(state) : `${nameOf(state)}.${domain}`}</span>
-        <button type="button" onClick={() => go({ screen: "domain", search: "empty" })} className="p-meta p-accent hover:underline">
+        <button type="button" onClick={() => go({ screen: "domain", search: "empty" })} className="p-meta p-accent-fg hover:underline">
           {domain === null ? "Use your own domain" : "Change"}
         </button>
       </div>
@@ -467,7 +467,7 @@ function Extra({ Icon, title, copy, on, onChange, disabled = false, children }: 
   return (
     <div className={disabled ? "opacity-60" : undefined}>
       <div className="flex items-start gap-3">
-        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg p-fill"><Icon size={18} className={on ? "p-accent" : "p-text-3"} /></span>
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-lg p-fill"><Icon size={18} className={on ? "p-accent-fg" : "p-text-3"} /></span>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold p-text">{title}</div>
           <div className="mt-0.5 p-meta p-text-3">{copy}</div>
@@ -502,7 +502,7 @@ function MailExtra({ state, go }: { state: FlowState; go: Go }) {
   if (domain === null) {
     return (
       <Extra Icon={EnvelopeSimpleIcon} title="Mail at your domain" on={false} onChange={() => go({ screen: "domain" })} disabled
-        copy={<>Needs your own domain. <button type="button" onClick={() => go({ screen: "domain" })} className="p-accent hover:underline">Add one</button></>} />
+        copy={<>Needs your own domain. <button type="button" onClick={() => go({ screen: "domain" })} className="p-accent-fg hover:underline">Add one</button></>} />
     );
   }
 
@@ -633,7 +633,7 @@ function DomainScreen({ state, go }: { state: FlowState; go: Go }) {
           <Needs waiting note={`Finish buying ${BOUGHT_DOMAIN} on Cloudflare, then come back. This page checks for it.`} action={null}>
             Cloudflare's own checkout is open in a new tab. Kinu doesn't see or take any payment.
           </Needs>
-          <button type="button" onClick={() => chose("bought")} className="mt-2 p-meta p-accent hover:underline">It's bought (wireframe: as if Cloudflare said so)</button>
+          <button type="button" onClick={() => chose("bought")} className="mt-2 p-meta p-accent-fg hover:underline">It's bought (wireframe: as if Cloudflare said so)</button>
         </div>
       )}
 
@@ -667,7 +667,7 @@ function PhaseMark({ at, reached, refused }: { at: number; reached: number; refu
 
   if (at > reached) return <CircleIcon size={13} className="p-text-3" />;
 
-  return refused ? <WarningCircleIcon size={14} className="p-accent" /> : <Loader size="sm" />;
+  return refused ? <WarningCircleIcon size={14} className="p-accent-fg" /> : <Loader size="sm" />;
 }
 
 function Phases({ reached, refused, mail }: { reached: number; refused: boolean; mail: boolean }) {
@@ -761,7 +761,7 @@ function DeployingScreen({ state, go }: { state: FlowState; go: Go }) {
           <Phases reached={reached} refused={state.run === "refused"} mail={mail} />
         </Disclosure>
         {/* Wireframe only: the run's end, as the page would move to it. */}
-        {state.run === "running" && <button type="button" onClick={() => go({ screen: "live" })} className="p-meta p-accent hover:underline">Skip to the end (wireframe)</button>}
+        {state.run === "running" && <button type="button" onClick={() => go({ screen: "live" })} className="p-meta p-accent-fg hover:underline">Skip to the end (wireframe)</button>}
       </div>
     </Card>
   );
@@ -847,7 +847,7 @@ function LiveScreen({ state, go }: { state: FlowState; go: Go }) {
           </div>
         </Disclosure>
         {domainOf(state) === null && (
-          <button type="button" onClick={() => go({ screen: "domain", entry: "existing", search: "empty" })} className="p-meta p-accent hover:underline">Add a domain</button>
+          <button type="button" onClick={() => go({ screen: "domain", entry: "existing", search: "empty" })} className="p-meta p-accent-fg hover:underline">Add a domain</button>
         )}
       </div>
     </Card>

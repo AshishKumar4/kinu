@@ -106,7 +106,7 @@ export function AppearanceCard() {
                 <Swatch theme={theme} mode={mode} />
                 <span className="mt-2 flex items-baseline justify-between gap-2 px-1">
                   <span className="t-item p-text">{THEMES[theme].label}</span>
-                  {name === theme && <span className="t-meta p-accent">In use</span>}
+                  {name === theme && <span className="t-meta p-accent-fg">In use</span>}
                 </span>
                 <span className="t-meta mt-px block px-1 pb-1 p-text-3">{THEMES[theme].about}</span>
               </label>

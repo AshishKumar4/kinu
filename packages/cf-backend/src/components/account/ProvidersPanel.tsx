@@ -372,7 +372,7 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
       {authorizeUrl === null ? (
         <Button variant="primary" size="sm" onClick={() => detach(start())} disabled={busy}>Sign in with Claude</Button>
       ) : (
-        <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
+        <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-accent-fg underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
           hint="The code Claude shows, or the address your browser ended on if the page did not load.">
           <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); detach(finish()); }}>
             <input

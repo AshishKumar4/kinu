@@ -586,8 +586,8 @@ function Workspace({ wide, chatPane, inspector, chat, panel }: { wide: boolean; 
         newChat={`/workspace/${WORKSPACE}/new`}
       />
       <div className="flex shrink-0 items-center gap-1 border-b p-border p-sidebar px-3 py-2 md:hidden">
-        <button type="button" aria-pressed={chatPane} className={`rounded-full px-3 py-1.5 text-xs ${chatPane ? "p-selected p-accent" : "p-text-3"}`}>Chat</button>
-        <button type="button" aria-pressed={!chatPane} className={`rounded-full px-3 py-1.5 text-xs ${chatPane ? "p-text-3" : "p-selected p-accent"}`}>Workspace</button>
+        <button type="button" aria-pressed={chatPane} className={`rounded-full px-3 py-1.5 text-xs ${chatPane ? "p-selected p-accent-fg" : "p-text-3"}`}>Chat</button>
+        <button type="button" aria-pressed={!chatPane} className={`rounded-full px-3 py-1.5 text-xs ${chatPane ? "p-text-3" : "p-selected p-accent-fg"}`}>Workspace</button>
       </div>
       <div className="flex min-h-0 flex-1">
         {(wide || chatPane) && chat}

@@ -7,8 +7,8 @@ export type StatusTone = "success" | "live" | "accent" | "warning" | "danger" | 
 
 const TONE = {
   success: { dot: "p-dot-success", ink: "p-success", fill: "var(--c-success)" },
-  live: { dot: "p-dot-accent p-dot-pulse", ink: "p-accent", fill: "var(--c-accent)" },
-  accent: { dot: "p-dot-accent", ink: "p-accent", fill: "var(--c-accent)" },
+  live: { dot: "p-dot-accent p-dot-pulse", ink: "p-accent-fg", fill: "var(--c-accent)" },
+  accent: { dot: "p-dot-accent", ink: "p-accent-fg", fill: "var(--c-accent)" },
   warning: { dot: "p-dot-warning", ink: "p-warning", fill: "var(--c-warning)" },
   danger: { dot: "p-dot-danger", ink: "p-danger", fill: "var(--c-danger)" },
   info: { dot: "p-dot-info", ink: "p-info", fill: "var(--c-info)" },

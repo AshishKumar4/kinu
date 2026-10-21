@@ -173,7 +173,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged }: {
                   headers: { Authorization: `Bearer ${token}` },
                 }); }))}
                 disabled={busy || !token.trim()}
-                className="t-status px-2 py-1 rounded-md p-accent-bg p-accent disabled:opacity-50">
+                className="t-status px-2 py-1 rounded-md p-accent-bg p-accent-fg disabled:opacity-50">
                 {busy ? 'Connecting…' : 'Connect'}
               </button>
             </div>

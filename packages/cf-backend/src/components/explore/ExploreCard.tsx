@@ -50,7 +50,7 @@ export function Maker({ maker, size = 18 }: { maker: { readonly name: string; re
     <span className="inline-flex min-w-0 items-center gap-2">
       {maker.kinu ? <KinuMark size={size - 2} /> : <Avatar name={maker.name} size={size} />}
       <span className="truncate">{maker.name}</span>
-      {maker.kinu && <SealCheckIcon size={13} weight="fill" className="shrink-0 p-accent" aria-label="Made by Kinu" />}
+      {maker.kinu && <SealCheckIcon size={13} weight="fill" className="shrink-0 p-accent-fg" aria-label="Made by Kinu" />}
     </span>
   );
 }

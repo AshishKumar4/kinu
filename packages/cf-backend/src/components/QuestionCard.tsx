@@ -69,7 +69,7 @@ function QuestionField({ question, draft, onDraft, busy }: {
                 <span className="min-w-0">
                   <span className="t-body p-text">
                     {option.label}
-                    {question.recommended === index && <span className="t-meta ml-1 p-accent" data-question-recommended> (Recommended)</span>}
+                    {question.recommended === index && <span className="t-meta ml-1 p-accent-fg" data-question-recommended> (Recommended)</span>}
                   </span>
                   {option.description !== undefined && <span className="t-meta block p-text-2">{option.description}</span>}
                 </span>
@@ -150,7 +150,7 @@ export function QuestionCard({ asking, busy, owed = false, onAnswer, onDismiss }
         ))}
       </div>
       {unsent.note === null ? (
-        <button type="button" disabled={busy} className="t-meta mt-2 p-accent hover:underline" onClick={() => keep({ ...unsent, note: "" })}>Add a note</button>
+        <button type="button" disabled={busy} className="t-meta mt-2 p-accent-fg hover:underline" onClick={() => keep({ ...unsent, note: "" })}>Add a note</button>
       ) : (
         <textarea disabled={busy} value={unsent.note} onChange={(event) => keep({ ...unsent, note: event.target.value })} rows={2} placeholder="A note for the agent"
           aria-label="A note for the agent"

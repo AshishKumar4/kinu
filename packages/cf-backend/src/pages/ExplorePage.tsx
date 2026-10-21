@@ -54,7 +54,7 @@ function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights:
         <span className="t-body p-text-2">{workspace.line}</span>
         <ul className="space-y-2">
           {highlights.map((line) => (
-            <li key={line} className="t-meta flex items-start gap-2 p-text-2"><CheckIcon size={13} weight="bold" className="mt-px shrink-0 p-accent" />{line}</li>
+            <li key={line} className="t-meta flex items-start gap-2 p-text-2"><CheckIcon size={13} weight="bold" className="mt-px shrink-0 p-accent-fg" />{line}</li>
           ))}
         </ul>
         <span className="t-meta mt-auto flex flex-wrap items-center gap-x-3 gap-y-2 pt-2 p-text-3">

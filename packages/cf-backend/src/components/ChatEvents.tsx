@@ -97,7 +97,7 @@ export function subordinateEventRow(event: SubordinateActivityEvent, workspace: 
     draw: (count) => (
       <EventRow
         icon={assigned ? UserPlusIcon : outcome.icon}
-        tone={assigned ? "p-accent" : outcome.tone}
+        tone={assigned ? "p-accent-fg" : outcome.tone}
         label={event.subordinate}
         source={assigned ? "assigned" : outcome.verb}
         body={detail}

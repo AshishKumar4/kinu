@@ -87,7 +87,7 @@ export function Panel<Value>(
 
 const NOTICE_TONE = {
   muted: 'p-text-3',
-  warn: 'p-accent',
+  warn: 'p-accent-fg',
   danger: 'p-danger',
   ok: 'p-success',
 } as const;

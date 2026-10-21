@@ -128,7 +128,7 @@ function SaveControl({ name, save, open }: { name: string; save: () => Promise<S
   if (saved !== null) {
     return (
       <button type="button" data-slate-saved={saved.id} onClick={() => open?.(saved.id)} disabled={open === undefined}
-        aria-label={`Saved as ${saved.title}; open it in the work surface`} title={`Saved as ${saved.title}`} className={`${control} p-accent`}>
+        aria-label={`Saved as ${saved.title}; open it in the work surface`} title={`Saved as ${saved.title}`} className={`${control} p-accent-fg`}>
         <CheckIcon size={11} weight="bold" />
       </button>
     );

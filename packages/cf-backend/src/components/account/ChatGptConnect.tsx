@@ -43,7 +43,7 @@ export function ChatGptWelcome({ onClose }: { onClose: () => void }) {
       footer={<Button variant="primary" size="sm" onClick={onClose}>Got it</Button>}>
       <p className="t-body p-text-2">
         Eligible requests in Kinu now use your ChatGPT plan. You can review and limit that usage in{" "}
-        <a href={CHATGPT_USAGE_URL} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">ChatGPT settings</a>.
+        <a href={CHATGPT_USAGE_URL} target="_blank" rel="noopener noreferrer" className="p-accent-fg underline underline-offset-2">ChatGPT settings</a>.
       </p>
     </Modal>
   );

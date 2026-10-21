@@ -86,7 +86,7 @@ export default function SwarmExplorer() {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 border-b p-border">
         <Link to={`/workspace/${agentId}`} className="shrink-0"><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
         <div className="hidden sm:block h-4 w-px shrink-0 bg-[var(--c-border)]" />
-        <GitForkIcon size={16} className="p-accent shrink-0" />
+        <GitForkIcon size={16} className="p-accent-fg shrink-0" />
         <span className="t-label p-text shrink-0">Swarm explorer</span>
         {run && <span className="t-meta min-w-0 flex-1 p-text-2 truncate" title={run.task} data-explorer-run>{run.name}</span>}
       </div>
@@ -202,7 +202,7 @@ function ExplorerBody({
             <span className="p-text-2">Front: <span className="p-text font-medium">{frontier.candidates.length} {frontier.candidates.length === 1 ? "candidate" : "candidates"}</span></span>
           )}
           {run.status === "running" && (
-            <span className="flex items-center gap-1 p-accent">
+            <span className="flex items-center gap-1 p-accent-fg">
               <span className="size-1.5 rounded-full bg-current p-dot-pulse" />still running
             </span>
           )}

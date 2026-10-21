@@ -270,7 +270,7 @@ function KeyEntry({ primary, stored, disabled, onSaved, onRemoved }: {
           <button type="button" disabled={saving || disabled} onClick={() => detach(remove())} className="p-danger hover:underline">Remove key</button>
         )}
         {direct !== null && (
-          <a href={direct.keyPage} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 p-accent hover:underline">
+          <a href={direct.keyPage} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 p-accent-fg hover:underline">
             Get a {WEB_SEARCH_PROVIDERS[provider].label} key <ArrowSquareOutIcon size={11} />
           </a>
         )}

@@ -34,7 +34,7 @@ export const NAV_HOVER = "hover:bg-[color-mix(in_srgb,var(--c-text)_6%,transpare
 
 /** A sidebar row's ground and ink: the open one in the accent, any other in `rest` until hovered. */
 export function navRowCls(open: boolean, rest = "p-text-2"): string {
-  return open ? "bg-[var(--c-selected)] p-accent" : `${rest} ${NAV_HOVER}`;
+  return open ? "bg-[var(--c-selected)] p-accent-fg" : `${rest} ${NAV_HOVER}`;
 }
 
 /**

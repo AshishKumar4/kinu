@@ -17,7 +17,7 @@ const CI = {
   pending: { Icon: CircleDashedIcon, word: "running", tone: "p-text-3" },
 } as const;
 
-const STATE_TONE = new Map([["open", "p-success"], ["merged", "p-accent"], ["closed", "p-text-3"]]);
+const STATE_TONE = new Map([["open", "p-success"], ["merged", "p-accent-fg"], ["closed", "p-text-3"]]);
 
 export function GitHubSection({ rpc, readMoves, agents }: { rpc: WorkspaceRpc; readMoves: ReadMoves; agents: readonly PanelAgent[] }) {
   const asked = useRef(false);
@@ -105,7 +105,7 @@ function ItemRow({ item, nameOf }: { item: Item; nameOf: (actorId: string) => st
   return (
     <li className="flex min-w-0 items-center gap-3 px-4 py-1" data-github-item={`${item.repo}#${String(item.number)}`}>
       {merged
-        ? <GitMergeIcon size={14} className="shrink-0 p-accent" aria-label="merged" />
+        ? <GitMergeIcon size={14} className="shrink-0 p-accent-fg" aria-label="merged" />
         : <Icon size={14} className={`shrink-0 ${STATE_TONE.get(item.state ?? "") ?? "p-text-3"}`} aria-label={item.state ?? "state unknown"} />}
       <a href={item.url} target="_blank" rel="noopener noreferrer" className="t-body min-w-0 truncate p-text hover:underline">
         {item.title ?? `${item.repo}#${String(item.number)}`}

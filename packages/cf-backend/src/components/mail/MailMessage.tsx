@@ -49,7 +49,7 @@ function MessageHeader({ mail, name, onToggle }: { mail: MailMessageView; name: 
             <span className="t-item p-text">{name}</span>
             <span className="t-meta min-w-0 truncate p-text-3">{mail.from.address}</span>
             {mail.verified
-              ? <span data-mail-verified title={mail.auth ?? undefined} className="t-meta inline-flex shrink-0 items-center gap-1 p-text-3"><SealCheckIcon size={13} weight="fill" className="p-accent" />Verified</span>
+              ? <span data-mail-verified title={mail.auth ?? undefined} className="t-meta inline-flex shrink-0 items-center gap-1 p-text-3"><SealCheckIcon size={13} weight="fill" className="p-accent-fg" />Verified</span>
               : <span data-mail-unverified title={mail.auth ?? undefined} className="t-meta inline-flex shrink-0 items-center gap-1 p-warning"><ShieldWarningIcon size={13} weight="fill" />Not verified</span>}
           </span>
           <span className="t-meta block truncate p-text-3">to {mail.to.map((party) => party.address).join(", ")}</span>

@@ -179,7 +179,7 @@ export function ConnectDeviceDialog({ workspace, onClose }: { workspace: string 
   }));
 
   return (
-    <Modal title="Connect a machine" onClose={onClose} icon={<PlugIcon size={16} className="p-accent" />} maxWidthClass="max-w-lg">
+    <Modal title="Connect a machine" onClose={onClose} icon={<PlugIcon size={16} className="p-accent-fg" />} maxWidthClass="max-w-lg">
       {resource.status === "error" && (
         <LoadFailure what="your devices" message={resource.message} onRetry={reload} />
       )}

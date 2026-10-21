@@ -113,7 +113,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
       {view.answer && (
         <div className="shrink-0 border-b p-border border-l-2 px-4 py-3 p-fill"
           style={{ borderLeftColor: "var(--c-accent)" }}>
-          <div className="t-status flex items-center gap-2 uppercase p-accent">
+          <div className="t-status flex items-center gap-2 uppercase p-accent-fg">
             <CheckCircleIcon size={11} weight="fill" />
             {view.origin === "head" ? "Report" : "Proposal"}
           </div>
@@ -259,7 +259,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
                 {view.decisions.map((decision, index) => (
                   <div key={index} className="t-body rounded-md p-fill border p-border p-2">
                     <div className="p-text-2">{decision.question}</div>
-                    <div className="p-accent mt-px">→ {decision.choice}</div>
+                    <div className="p-accent-fg mt-px">→ {decision.choice}</div>
                     {decision.rationale && <div className="p-text-3 mt-px">{decision.rationale}</div>}
                   </div>
                 ))}

@@ -98,7 +98,7 @@ export function WorkspaceOverview({ workspace, title, logo, rpc, readMoves, plan
     <Page fill icon={<WorkspaceLogo title={title} logo={logo} size={20} />} title={title} data-workspace-overview>
       <p className="t-body p-text-3" data-overview-summary>
         {work === null ? "Reading the workspace…" : summaryOf(agents, cards)}
-        {lineage && <> · forked from <Link to={`/workspace/${lineage.sourceWorkspaceName}`} className="p-accent hover:underline">its parent</Link></>}
+        {lineage && <> · forked from <Link to={`/workspace/${lineage.sourceWorkspaceName}`} className="p-accent-fg hover:underline">its parent</Link></>}
       </p>
 
       <section aria-labelledby="overview-github" className="flex flex-col gap-3">
@@ -131,7 +131,7 @@ function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; wor
           return (
             <div key={lane} className="flex min-w-0 flex-col gap-2 rounded-2xl bg-[var(--c-hover)] p-2" data-lane={lane}>
               <div className="flex items-baseline justify-between px-2 pb-px pt-1">
-                <span className={`t-item ${lane === "waiting" && shown.length > 0 ? "p-accent" : "p-text-2"}`}>{title}</span>
+                <span className={`t-item ${lane === "waiting" && shown.length > 0 ? "p-accent-fg" : "p-text-2"}`}>{title}</span>
                 <span className="t-meta tabular-nums p-text-3">{shown.length}</span>
               </div>
               {shown.map((card) => <TaskCard key={card.id} card={card} workspace={workspace} open={open} />)}

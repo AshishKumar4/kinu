@@ -162,7 +162,7 @@ function EntryDetails({ entry, id, expanded, rpc, onReverted }: {
       {entry.kind === 'fact' && <div className="mb-2"><EntryFacts entry={entry} /></div>}
       {evidence && <div className="t-meta t-mono p-text-3 whitespace-pre-wrap break-words">{entry.evidence}</div>}
       {entry.workspace !== undefined && (
-        <Link to={`/workspace/${encodeURIComponent(entry.workspace)}`} className="t-meta mt-2 inline-block p-accent hover:underline" data-changelog-workspace={entry.workspace}>
+        <Link to={`/workspace/${encodeURIComponent(entry.workspace)}`} className="t-meta mt-2 inline-block p-accent-fg hover:underline" data-changelog-workspace={entry.workspace}>
           Open the workspace
         </Link>
       )}
@@ -209,7 +209,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   return (
     <div className={`${grouped ? "p-3" : "p-group p-3"} ${kept ? "opacity-70" : ""}`}>
       <div className="grid grid-cols-[14px_minmax(0,1fr)_auto] items-start gap-2">
-        <Icon size={14} className={`mt-px shrink-0 ${fresh ? "p-accent" : "p-text-3"}`} />
+        <Icon size={14} className={`mt-px shrink-0 ${fresh ? "p-accent-fg" : "p-text-3"}`} />
         {hasDetails ? (
           <button
             type="button"

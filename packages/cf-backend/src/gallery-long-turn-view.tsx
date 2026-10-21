@@ -357,7 +357,7 @@ export function LongTurnNotes() {
   const state = turnState();
 
   const option = (label: string, href: string, on: boolean) => (
-    <a href={href} className={`rounded-full px-2 py-0.5 ${on ? "p-selected p-accent" : "p-text-3 hover:p-text"}`}>{label}</a>
+    <a href={href} className={`rounded-full px-2 py-0.5 ${on ? "p-selected p-accent-fg" : "p-text-3 hover:p-text"}`}>{label}</a>
   );
 
   // Open beside the chat; on a phone it would cover it, so it waits behind its summary there, under the header.

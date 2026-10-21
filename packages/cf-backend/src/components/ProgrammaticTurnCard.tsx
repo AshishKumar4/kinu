@@ -135,7 +135,7 @@ function DrainedEvents({ text, state, count }: { text: string; state: CardState;
 
   // Format drift: what the agent was given is its own to read, so the person is told only that events came.
   if (events.length === 0) {
-    return <EventRow icon={LightningIcon} tone="p-accent" label="Events" state={state} count={count} />;
+    return <EventRow icon={LightningIcon} tone="p-accent-fg" label="Events" state={state} count={count} />;
   }
 
   return foldRepeats(events, drainedKey).map(({ item: event, count: repeats }, index) => (
@@ -227,7 +227,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
   if (turn.kind === "delegated_task") {
     const from = `from ${turn.from === MAIN_AGENT ? "Main" : turn.from}`;
 
-    return <EventRow icon={GearSixIcon} tone="p-accent" label="Task" source={from} body={text} state={state} count={count} hooks={{ "data-system-event": from }} />;
+    return <EventRow icon={GearSixIcon} tone="p-accent-fg" label="Task" source={from} body={text} state={state} count={count} hooks={{ "data-system-event": from }} />;
   }
 
   if (turn.kind === "system_event") {
@@ -236,7 +236,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
     return (
       <EventRow
         icon={turn.event === MAIL_HANDED_EVENT ? EnvelopeSimpleIcon : GearSixIcon}
-        tone="p-accent"
+        tone="p-accent-fg"
         label={label}
         source={about}
         body={line}

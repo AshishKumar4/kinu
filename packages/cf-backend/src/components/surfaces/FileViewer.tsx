@@ -107,7 +107,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
           ) : (
             <>
               <button data-files-save disabled={saving} onClick={() => void save(draft)}
-                className="t-control flex items-center gap-1 p-accent hover:underline p-1 disabled:opacity-50"
+                className="t-control flex items-center gap-1 p-accent-fg hover:underline p-1 disabled:opacity-50"
                 title={`Save ${name}`}>
                 <CheckIcon size={12} />{saving ? "Saving…" : "Save"}
               </button>
@@ -137,7 +137,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
             setDraft(null);
             setConflict(false);
             reload();
-          }} className="ml-auto shrink-0 p-accent hover:underline">Reload newer content</button>
+          }} className="ml-auto shrink-0 p-accent-fg hover:underline">Reload newer content</button>
         </div>
       )}
       {kind === "text" && file?.readOnlyReason && draft === null && (
@@ -206,7 +206,7 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
     return (
       <div className="t-meta p-4 space-y-2">
         <div className="p-danger break-words">{file.error}</div>
-        <a href={downloadHref} download={name} className="inline-flex items-center gap-1 p-accent hover:underline">
+        <a href={downloadHref} download={name} className="inline-flex items-center gap-1 p-accent-fg hover:underline">
           <DownloadSimpleIcon size={12} />Download instead
         </a>
       </div>

@@ -296,7 +296,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
   if (send.phase === "sent") {
     return (
       <div {...{ [FEEDBACK_OMIT_ATTR]: "1" }}>
-        <Modal title="Feedback sent" onClose={onClose} icon={<MegaphoneIcon size={16} className="p-accent" />}
+        <Modal title="Feedback sent" onClose={onClose} icon={<MegaphoneIcon size={16} className="p-accent-fg" />}
           footer={<Button variant="primary" size="md" onClick={onClose} data-feedback-done>Done</Button>}>
           <p className="t-body p-text-2" data-feedback-sent={send.id}>
             Thank you. Your report is with us{send.id.length > 0 ? ` as ${send.id.slice(0, 8)}` : ""}.
@@ -313,7 +313,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
         onClose={onClose}
         busy={sending}
         maxWidthClass="max-w-2xl"
-        icon={<MegaphoneIcon size={16} className="p-accent" />}
+        icon={<MegaphoneIcon size={16} className="p-accent-fg" />}
         footer={
           <>
             {/* Never disabled: aborts the POST in flight, otherwise closes the dialog. */}

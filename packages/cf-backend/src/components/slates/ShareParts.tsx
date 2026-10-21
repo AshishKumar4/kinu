@@ -63,7 +63,7 @@ export function AccessPicker<Id extends string>({ options, value, onChange, disa
                 <span className="t-item block p-text">{option.label}</span>
                 <span className="t-meta block p-text-3">{option.detail}</span>
               </span>
-              <span className="mt-px flex w-4 shrink-0">{option.id === value && <CheckIcon size={14} weight="bold" className="p-accent" />}</span>
+              <span className="mt-px flex w-4 shrink-0">{option.id === value && <CheckIcon size={14} weight="bold" className="p-accent-fg" />}</span>
             </button>
           ))}
         </div>

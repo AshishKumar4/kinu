@@ -73,7 +73,7 @@ function ShowcaseStep({ revealed }: { revealed: boolean }) {
           style={{ transitionDelay: `${i * 90}ms` }}
         >
           <div className="size-9 shrink-0 rounded-lg p-fill flex items-center justify-center">
-            <Icon size={18} className="p-accent" />
+            <Icon size={18} className="p-accent-fg" />
           </div>
           <div>
             <div className="t-label p-text">{title}</div>

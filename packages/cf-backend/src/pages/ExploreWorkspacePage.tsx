@@ -98,7 +98,7 @@ function BlueprintActions({ workspace, onInstall }: { workspace: WorkspaceCard; 
     <>
       {failure !== null && <span role="alert" className="t-meta max-w-64 truncate p-danger" title={failure}>{failure}</span>}
       <Button onClick={() => detach(signedIn ? toggle(!star.on) : Effect.sync(() => signInAndReturn()))} aria-pressed={star.on} data-blueprint-star>
-        <StarIcon size={14} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : undefined} />
+        <StarIcon size={14} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent-fg" : undefined} />
         {star.on ? "Starred" : "Star"}<span className="tabular-nums p-text-3">{star.count.toLocaleString("en-US")}</span>
       </Button>
       {installed
@@ -185,7 +185,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
                 {inside.layout === "focus" ? "Its chat alone; its agents, tabs and inspector a click away." : "Chats as tabs, beside the inspector."}
               </Row>
             </ul>
-            <button type="button" onClick={() => setSoul((shown) => !shown)} aria-expanded={soul} className="t-meta p-accent hover:underline">{soul ? "Hide its soul" : "Read its soul"}</button>
+            <button type="button" onClick={() => setSoul((shown) => !shown)} aria-expanded={soul} className="t-meta p-accent-fg hover:underline">{soul ? "Hide its soul" : "Read its soul"}</button>
             {soul && <pre className="t-code max-h-64 overflow-auto rounded-[var(--r-card)] border p-border p-sunken p-4 whitespace-pre-wrap p-text-2" data-blueprint-soul>{inside.soul}</pre>}
           </Section>
         </div>
@@ -200,7 +200,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
           <Section title="It asks you first">
             <ul className="space-y-2">
               {page.asks.map((ask) => (
-                <li key={ask} className="t-body flex items-start gap-3 p-text-2"><HandPalmIcon size={14} className="mt-px shrink-0 p-accent" />{ask}</li>
+                <li key={ask} className="t-body flex items-start gap-3 p-text-2"><HandPalmIcon size={14} className="mt-px shrink-0 p-accent-fg" />{ask}</li>
               ))}
             </ul>
           </Section>

@@ -41,7 +41,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
   }), showing((chain) => { setFailure(chain); setBusy(false); }));
 
   return (
-    <Modal title={`Install ${page.workspace.title}`} icon={<DownloadSimpleIcon size={16} className="p-accent" />} onClose={onClose} busy={busy} maxWidthClass="max-w-lg"
+    <Modal title={`Install ${page.workspace.title}`} icon={<DownloadSimpleIcon size={16} className="p-accent-fg" />} onClose={onClose} busy={busy} maxWidthClass="max-w-lg"
       footer={(
         <>
           <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
@@ -80,7 +80,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
                   </span>
                   {has
                     ? <Status tone="success">Connected</Status>
-                    : <a href={`${APP_ROUTES.plugins}?add=${need.connection ?? ""}`} className="t-meta shrink-0 p-accent hover:underline">Connect</a>}
+                    : <a href={`${APP_ROUTES.plugins}?add=${need.connection ?? ""}`} className="t-meta shrink-0 p-accent-fg hover:underline">Connect</a>}
                 </li>
               );
             })}

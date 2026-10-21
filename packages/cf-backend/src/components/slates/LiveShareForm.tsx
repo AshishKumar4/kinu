@@ -87,7 +87,7 @@ function ChoiceCards<T extends string>({ label, marker, options, value, onChange
         <button key={option.id} type="button" role="radio" aria-checked={value === option.id} {...{ [marker]: option.id }} onClick={() => onChange(option.id)}
           disabled={disabled || option.disabled === true}
           className={`flex w-full items-start gap-3 px-3 py-2 text-left transition-colors hover:bg-[var(--c-hover)] ${value === option.id ? "bg-[var(--c-fill)]" : ""}`}>
-          <span className={`mt-px flex shrink-0 ${value === option.id ? "p-accent" : "p-text-3"}`}>{option.icon}</span>
+          <span className={`mt-px flex shrink-0 ${value === option.id ? "p-accent-fg" : "p-text-3"}`}>{option.icon}</span>
           <span className="min-w-0 flex-1">
             <span className="t-item block p-text">{option.label}</span>
             <span className="t-meta block p-text-3">{option.detail}</span>
@@ -404,7 +404,7 @@ function WhoLine({ row }: { row: OwnedLiveShare }) {
 
         return (
           <span key={email} data-live-share-person={email} data-live-share-role={edits ? "edit" : "use"} className="min-w-0 truncate">
-            {email}{edits && <span className="p-accent"> (edits)</span>}{index < row.users.length - 1 && ","}
+            {email}{edits && <span className="p-accent-fg"> (edits)</span>}{index < row.users.length - 1 && ","}
           </span>
         );
       })}
@@ -613,7 +613,7 @@ function ChoicesSummary({ words, open, onToggle, disabled }: { words: string; op
   return (
     <p data-share-summary className="t-meta flex flex-wrap items-baseline gap-x-2 p-text-3">
       <span>{words}</span>
-      <button type="button" data-share-options aria-expanded={open} onClick={onToggle} disabled={disabled} className="font-medium p-accent hover:underline">
+      <button type="button" data-share-options aria-expanded={open} onClick={onToggle} disabled={disabled} className="font-medium p-accent-fg hover:underline">
         {open ? "Done" : "Change"}
       </button>
     </p>
@@ -808,7 +808,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
             <p className="t-meta p-text-3">This deployment cannot make share links: it has no preview host or signing secret.</p>
           ) : (
             <div className="flex items-center gap-2">
-              <a href={created.url} className="min-w-0 flex-1 break-all font-mono p-accent" target="_blank" rel="noopener noreferrer">{created.url}</a>
+              <a href={created.url} className="min-w-0 flex-1 break-all font-mono p-accent-fg" target="_blank" rel="noopener noreferrer">{created.url}</a>
               <CopyButton value={created.url} what="the share link" className={buttonClass({ size: "sm", iconOnly: true })} />
             </div>
           )}
