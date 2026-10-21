@@ -59,7 +59,7 @@ export function PromptCard({ id, label, placeholder, action, value, onChange, on
           rows={4}
           ref={field}
           disabled={busy}
-          className="block min-h-[128px] w-full resize-none bg-transparent pb-4 pt-3 p-t-composer p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
+          className="block min-h-[128px] w-full resize-none bg-transparent pb-4 pt-3 t-composer p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
         />
       </div>
       {attachments && <div className="px-3 pb-3 [&>[data-attachments]]:pt-0"><AttachmentTray attachments={attachments} /></div>}

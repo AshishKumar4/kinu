@@ -215,8 +215,21 @@ function scanSource(file: string, text: string): DesignFinding[] {
 /** A `font` shorthand's size: the one length before its `/` line height. */
 const FONT_SIZE = /^([\d.]+(?:px|em|rem))(?:\/|$)/u;
 
-/** A radius that is only tokens, or none. */
-const RADIUS_TOKENS = /^(?:var\(--r-[\w-]+\)\s*)+$|^(?:0|inherit)$/u;
+/** A radius that is only tokens and square corners, or none. */
+const RADIUS_TOKENS = /^(?:(?:var\(--r-[\w-]+\)|0)\s*)+$|^inherit$/u;
+
+/** A named size variant (§1.3) and the one value the role table gives it. */
+const SIZE_VARIANTS: ReadonlyMap<string, string> = new Map([
+  ['--t-chat-heading-1', '22px'], ['--t-chat-heading-2', '19px'], ['--t-chat-heading-3', '17px'],
+  ['--t-chat-heading-workbench-1', '1.1em'], ['--t-chat-heading-workbench-2', '1.05em'], ['--t-chat-heading-workbench-3', '1em'],
+  ['--t-code-workbench', '12.5px'], ['--t-workspace-tab', '13.5px'], ['--t-field-touch', 'max(16px, 1em)'],
+]);
+
+/** A size that is a variant's name. */
+const SIZE_VARIANT = /^var\((--t-[\w-]+)\)$/u;
+
+/** A colour made from a token, `oklch(from var(--c-…) …)`: relative to the system's own value, not a literal. */
+const FROM_TOKEN = /\b(?:rgba?|hsla?|oklch|oklab)\(from var\(--[\w-]+\)/gu;
 
 /** `index.css` (§4.3), read by postcss: no colour literal, no font size outside the role table, no radius but a token. */
 function scanCss(text: string): DesignFinding[] {
@@ -227,9 +240,15 @@ function scanCss(text: string): DesignFinding[] {
 
     for (const match of decl.value.match(new RegExp(HEX, 'gu')) ?? []) add('css-colour', match);
 
-    if (FUNCTION_COLOUR.test(decl.value)) add('css-colour', FUNCTION_COLOUR.exec(decl.value)?.[0] ?? '');
+    const literal = decl.value.replace(FROM_TOKEN, '');
 
-    if (decl.prop === 'font-size' && !ROLE_FONT_SIZES.has(decl.value)) add('css-font-size', decl.value);
+    if (FUNCTION_COLOUR.test(literal)) add('css-colour', FUNCTION_COLOUR.exec(literal)?.[0] ?? '');
+
+    if (decl.prop.startsWith('--t-') && SIZE_VARIANTS.get(decl.prop) !== decl.value) add('css-font-size', `${decl.prop}: ${decl.value}`);
+
+    const variant = SIZE_VARIANT.exec(decl.value)?.[1];
+
+    if (decl.prop === 'font-size' && !ROLE_FONT_SIZES.has(decl.value) && (variant === undefined || !SIZE_VARIANTS.has(variant))) add('css-font-size', decl.value);
 
     if (decl.prop === 'font') {
       const size = decl.value.split(/\s+/u).map((part) => FONT_SIZE.exec(part)?.[1]).find((found) => found !== undefined);

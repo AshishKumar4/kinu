@@ -226,7 +226,7 @@ function HandOffButton({ label, onClick }: { label: string; onClick: () => void 
 function Disclosure({ summary, children }: { summary: string; children: ReactNode }) {
   return (
     <details className="group">
-      <summary className="inline-flex cursor-pointer list-none items-center gap-1 p-meta p-text-3 hover:p-text [&::-webkit-details-marker]:hidden">
+      <summary className="inline-flex cursor-pointer list-none items-center gap-1 t-meta p-text-3 hover:p-text [&::-webkit-details-marker]:hidden">
         <CaretDownIcon size={11} className="-rotate-90 transition-transform group-open:rotate-0" />{summary}
       </summary>
       <div className="mt-2.5">{children}</div>
@@ -241,7 +241,7 @@ function CloudflareSaid({ message, code }: { message: string; code: string }) {
   return (
     <Disclosure summary="Details">
       <div className="flex items-start gap-2 rounded-lg bg-[var(--c-sunken)] px-3 py-2.5">
-        <p className="min-w-0 flex-1 p-t-code p-text-2">Cloudflare said: {message} <span className="p-text-3">{code}</span></p>
+        <p className="min-w-0 flex-1 t-code p-text-2">Cloudflare said: {message} <span className="p-text-3">{code}</span></p>
         <CopyButton value={details} what="the details" className="p-text-3 hover:p-text shrink-0" />
       </div>
     </Disclosure>
@@ -252,10 +252,10 @@ function CloudflareSaid({ message, code }: { message: string; code: string }) {
 function Needs({ children, action, waiting, note }: { children: ReactNode; action: ReactNode; waiting: boolean; note: string }) {
   return (
     <div data-deploy-needs className="rounded-xl bg-[var(--c-selected)] px-4 py-3.5">
-      <p className="p-row-text p-text">{children}</p>
+      <p className="t-body p-text">{children}</p>
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
         {waiting
-          ? <span className="inline-flex items-center gap-2 p-meta p-text-2"><Loader size="sm" />{note}</span>
+          ? <span className="inline-flex items-center gap-2 t-meta p-text-2"><Loader size="sm" />{note}</span>
           : action}
       </div>
     </div>
@@ -275,10 +275,10 @@ function WhatGetsMade({ state }: { state: FlowState }) {
 
   return (
     <Disclosure summary="What gets made in your account">
-      <ul className="space-y-1.5 p-meta p-text-2">
+      <ul className="space-y-1.5 t-meta p-text-2">
         {lines.map((line) => <li key={line} className="flex items-start gap-2"><CheckIcon size={12} className="mt-0.5 shrink-0 p-text-3" />{line}</li>)}
       </ul>
-      <p className="mt-2.5 p-meta p-text-3">Nothing else in your account changes, and you can remove all of it from Cloudflare any time.</p>
+      <p className="mt-2.5 t-meta p-text-3">Nothing else in your account changes, and you can remove all of it from Cloudflare any time.</p>
     </Disclosure>
   );
 }
@@ -299,18 +299,18 @@ function StartScreen({ state, go }: { state: FlowState; go: Go }) {
           </CloudflareButton>
         </>
       )}>
-      <div className="space-y-3 p-row-text p-text-2">
+      <div className="space-y-3 t-body p-text-2">
         <p>Kinu on the web runs on Cloudflare. This sets up a Kinu of your own on your own Cloudflare account, private to you, and takes you through it one step at a time.</p>
         <p>It runs on Cloudflare's free plan. Computers for your agents are $5 a month, and only if you want them.</p>
       </div>
       {state.consent === "declined" && (
         <div data-deploy-refusal className="mt-5 space-y-2">
-          <p className="p-row-text p-text">Cloudflare didn't give Kinu access, so nothing was made.</p>
+          <p className="t-body p-text">Cloudflare didn't give Kinu access, so nothing was made.</p>
           <CloudflareSaid message="The user denied the request." code="access_denied" />
         </div>
       )}
       <div className="mt-5"><WhatGetsMade state={state} /></div>
-      <p data-deploy-local className="mt-6 border-t p-border pt-4 p-meta p-text-3">
+      <p data-deploy-local className="mt-6 border-t p-border pt-4 t-meta p-text-3">
         Or run Kinu on your own computer, with nothing else to set up. <a href={LOCAL_INSTALL} className="p-accent-fg hover:underline">How to install it</a>
       </p>
     </Card>
@@ -327,8 +327,8 @@ function Change({ Icon, title, copy, onPick, disabled = false }: { Icon: Phospho
         className="-mx-3 flex w-[calc(100%+1.5rem)] items-center gap-3 rounded-xl px-3 py-3 text-left transition-colors enabled:hover:bg-[var(--c-hover)] disabled:opacity-60">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-lg p-fill"><Icon size={18} className="p-accent-fg" /></span>
         <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold p-text">{title}</span>
-          <span className="mt-0.5 block p-meta p-text-3">{copy}</span>
+          <span className="block t-label p-text">{title}</span>
+          <span className="mt-0.5 block t-meta p-text-3">{copy}</span>
         </span>
         {!disabled && <CaretRightIcon size={14} className="shrink-0 p-text-3" />}
       </button>
@@ -357,8 +357,8 @@ function UpdateChange({ state, go }: { state: FlowState; go: Go }) {
       <li data-deploy-update="current" className="flex items-center gap-3 py-3">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-lg p-fill"><CheckIcon size={16} className="text-[var(--c-success)]" /></span>
         <span className="min-w-0 flex-1">
-          <span className="block text-sm font-semibold p-text">Up to date</span>
-          <span className="mt-0.5 block p-meta p-text-3">{LATEST_BUILD.version}, built {LATEST_BUILD.builtAt}</span>
+          <span className="block t-label p-text">Up to date</span>
+          <span className="mt-0.5 block t-meta p-text-3">{LATEST_BUILD.version}, built {LATEST_BUILD.builtAt}</span>
         </span>
       </li>
     );
@@ -400,7 +400,7 @@ function ManageScreen({ state, go }: { state: FlowState; go: Go }) {
       )}>
       {many ? <KinuList go={go} /> : (
         <>
-          <p className="p-row-text p-text-2">It's live at <a href={`https://${WORKERS_ADDRESS}`} className="font-medium p-text hover:underline">{WORKERS_ADDRESS}</a>, in {ACCOUNTS[0].name}.</p>
+          <p className="t-body p-text-2">It's live at <a href={`https://${WORKERS_ADDRESS}`} className="font-medium p-text hover:underline">{WORKERS_ADDRESS}</a>, in {ACCOUNTS[0].name}.</p>
           <ul className="mt-4 space-y-1">
             <UpdateChange state={state} go={go} />
             <Change Icon={GlobeHemisphereWestIcon} title="Add a domain" copy="Move it to an address of your own. This one keeps working."
@@ -421,14 +421,14 @@ function ManageScreen({ state, go }: { state: FlowState; go: Go }) {
 function Line({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid gap-1 sm:grid-cols-[7rem_1fr] sm:items-baseline sm:gap-4">
-      <span className="p-meta p-text-3">{label}</span>
+      <span className="t-meta p-text-3">{label}</span>
       <div className="min-w-0">{children}</div>
     </div>
   );
 }
 
 function AccountLine({ state }: { state: FlowState }) {
-  if (state.accounts === "one") return <Line label="Account"><span className="p-row-text p-text">{ACCOUNTS[0].name}</span></Line>;
+  if (state.accounts === "one") return <Line label="Account"><span className="t-body p-text">{ACCOUNTS[0].name}</span></Line>;
 
   return (
     <Line label="Account">
@@ -445,16 +445,16 @@ function AddressLine({ state, go }: { state: FlowState; go: Go }) {
   return (
     <Line label="Address">
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span data-deploy-address className="p-row-text font-medium p-text">{domain === null ? workersAddressOf(state) : `${nameOf(state)}.${domain}`}</span>
-        <button type="button" onClick={() => go({ screen: "domain", search: "empty" })} className="p-meta p-accent-fg hover:underline">
+        <span data-deploy-address className="t-item p-text">{domain === null ? workersAddressOf(state) : `${nameOf(state)}.${domain}`}</span>
+        <button type="button" onClick={() => go({ screen: "domain", search: "empty" })} className="t-meta p-accent-fg hover:underline">
           {domain === null ? "Use your own domain" : "Change"}
         </button>
       </div>
       {state.domain === "elsewhere" && (
-        <p className="mt-1 p-meta p-text-3">Kinu starts at {WORKERS_ADDRESS} and moves to kinu.{ELSEWHERE_DOMAIN} once you point the domain at Cloudflare.</p>
+        <p className="mt-1 t-meta p-text-3">Kinu starts at {WORKERS_ADDRESS} and moves to kinu.{ELSEWHERE_DOMAIN} once you point the domain at Cloudflare.</p>
       )}
       {state.preflight === "name-taken" && domain === null && (
-        <p className="mt-1 p-meta p-text-3">Your account already has a Worker called kinu, so this one is kinu-2.</p>
+        <p className="mt-1 t-meta p-text-3">Your account already has a Worker called kinu, so this one is kinu-2.</p>
       )}
     </Line>
   );
@@ -469,8 +469,8 @@ function Extra({ Icon, title, copy, on, onChange, disabled = false, children }: 
       <div className="flex items-start gap-3">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-lg p-fill"><Icon size={18} className={on ? "p-accent-fg" : "p-text-3"} /></span>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold p-text">{title}</div>
-          <div className="mt-0.5 p-meta p-text-3">{copy}</div>
+          <div className="t-label p-text">{title}</div>
+          <div className="mt-0.5 t-meta p-text-3">{copy}</div>
         </div>
         <Switch on={on} onChange={onChange} label={title} disabled={disabled} />
       </div>
@@ -512,9 +512,9 @@ function MailExtra({ state, go }: { state: FlowState; go: Go }) {
       onChange={(on) => go({ mail: on ? "on" : "off" })}>
       {state.mail !== "off" && (
         <div className="space-y-2">
-          {state.mail === "conflict" && <p className="p-meta p-text-2">{domain} already gets mail somewhere else, so Kinu's mail uses mail.{domain} and leaves yours as it is.</p>}
+          {state.mail === "conflict" && <p className="t-meta p-text-2">{domain} already gets mail somewhere else, so Kinu's mail uses mail.{domain} and leaves yours as it is.</p>}
           <Disclosure summary={`What it adds to ${state.mail === "conflict" ? `mail.${domain}` : domain}`}>
-            <ul className="space-y-1 p-meta p-text-2">{MAIL_WRITES.map((line) => <li key={line}>{line}</li>)}</ul>
+            <ul className="space-y-1 t-meta p-text-2">{MAIL_WRITES.map((line) => <li key={line}>{line}</li>)}</ul>
           </Disclosure>
         </div>
       )}
@@ -544,7 +544,7 @@ function ReadyScreen({ state, go }: { state: FlowState; go: Go }) {
         <>
           <Button variant="ghost" size="sm" onClick={() => go({ screen: "start" })}>Back</Button>
           <span className="flex items-center gap-3">
-            {!checking && <span className="hidden p-meta p-text-3 sm:inline">{costOf(state)}</span>}
+            {!checking && <span className="hidden t-meta p-text-3 sm:inline">{costOf(state)}</span>}
             <PrimaryButton disabled={checking || blocked} onClick={() => go({ screen: "deploying", run: "running" })}>Deploy</PrimaryButton>
           </span>
         </>
@@ -562,11 +562,11 @@ function ReadyScreen({ state, go }: { state: FlowState; go: Go }) {
             <AccountLine state={state} />
             <AddressLine state={state} go={go} />
             <div className="space-y-4 pt-1">
-              <p className="p-meta p-text-3">Optional</p>
+              <p className="t-meta p-text-3">Optional</p>
               <ComputerExtra state={state} go={go} />
               <MailExtra state={state} go={go} />
             </div>
-            <div className="sm:hidden"><Line label="Cost"><span className="p-row-text p-text">{costOf(state)}</span></Line></div>
+            <div className="sm:hidden"><Line label="Cost"><span className="t-body p-text">{costOf(state)}</span></Line></div>
             <WhatGetsMade state={state} />
           </div>
         )}
@@ -578,7 +578,7 @@ function ReadyScreen({ state, go }: { state: FlowState; go: Go }) {
 function Checking() {
   return (
     <div data-deploy-checking className="space-y-5" aria-busy="true">
-      <p className="inline-flex items-center gap-2 p-row-text p-text-2"><Loader size="sm" />Looking at your Cloudflare account…</p>
+      <p className="inline-flex items-center gap-2 t-body p-text-2"><Loader size="sm" />Looking at your Cloudflare account…</p>
       {[60, 75, 45].map((width) => (
         <div key={width} className="grid gap-2 sm:grid-cols-[7rem_1fr] sm:gap-4">
           <span className="h-3 w-16 rounded p-fill" />
@@ -596,8 +596,8 @@ function DomainRow({ name, note, action }: { name: string; note: string; action:
     <li className="flex items-center gap-3 py-2.5">
       <GlobeHemisphereWestIcon size={16} className="shrink-0 p-text-3" />
       <span className="min-w-0 flex-1">
-        <span className="block truncate p-row-text p-text">{name}</span>
-        <span className="block p-meta p-text-3">{note}</span>
+        <span className="block truncate t-body p-text">{name}</span>
+        <span className="block t-meta p-text-3">{note}</span>
       </span>
       {action}
     </li>
@@ -621,7 +621,7 @@ function DomainScreen({ state, go }: { state: FlowState; go: Go }) {
           {!existing && <Button variant="ghost" size="sm" onClick={() => go({ screen: "ready", domain: "none" })}>Keep {WORKERS_ADDRESS}</Button>}
         </>
       )}>
-      {existing && <p className="mb-4 p-row-text p-text-2">Your Kinu is live at {WORKERS_ADDRESS}. Pick a domain and it moves there; the old address keeps working.</p>}
+      {existing && <p className="mb-4 t-body p-text-2">Your Kinu is live at {WORKERS_ADDRESS}. Pick a domain and it moves there; the old address keeps working.</p>}
       <label className="relative block">
         <MagnifyingGlassIcon size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 p-text-3" />
         <input aria-label="Find a domain" placeholder="Find a domain, or type one you own" defaultValue={state.search === "empty" ? "" : "adalovelace"}
@@ -633,7 +633,7 @@ function DomainScreen({ state, go }: { state: FlowState; go: Go }) {
           <Needs waiting note={`Finish buying ${BOUGHT_DOMAIN} on Cloudflare, then come back. This page checks for it.`} action={null}>
             Cloudflare's own checkout is open in a new tab. Kinu doesn't see or take any payment.
           </Needs>
-          <button type="button" onClick={() => chose("bought")} className="mt-2 p-meta p-accent-fg hover:underline">It's bought (wireframe: as if Cloudflare said so)</button>
+          <button type="button" onClick={() => chose("bought")} className="mt-2 t-meta p-accent-fg hover:underline">It's bought (wireframe: as if Cloudflare said so)</button>
         </div>
       )}
 
@@ -649,11 +649,11 @@ function DomainScreen({ state, go }: { state: FlowState; go: Go }) {
 
       {state.search === "empty" && (
         <div className="mt-5">
-          <p className="p-meta p-text-3">In your Cloudflare account</p>
+          <p className="t-meta p-text-3">In your Cloudflare account</p>
           <ul className="mt-1 divide-y divide-[var(--c-border)]">
             <DomainRow name={YOUR_DOMAIN} note={`Kinu would live at kinu.${YOUR_DOMAIN}`} action={<UseButton label="Use" onClick={() => chose("yours")} />} />
           </ul>
-          <p className="mt-4 p-meta p-text-3">Search to buy a new one through Cloudflare, at cost, or type a domain you already own elsewhere.</p>
+          <p className="mt-4 t-meta p-text-3">Search to buy a new one through Cloudflare, at cost, or type a domain you already own elsewhere.</p>
         </div>
       )}
     </Card>
@@ -674,7 +674,7 @@ function Phases({ reached, refused, mail }: { reached: number; refused: boolean;
   return (
     <ol className="space-y-2">
       {PHASES.map((phase, at) => (mail || at !== 4) && (
-        <li key={phase} className={`flex items-center gap-2.5 p-meta ${at <= reached ? "p-text-2" : "p-text-3"}`}>
+        <li key={phase} className={`flex items-center gap-2.5 t-meta ${at <= reached ? "p-text-2": "p-text-3"}`}>
           <span className="flex size-4 items-center justify-center"><PhaseMark at={at} reached={reached} refused={refused} /></span>{phase}
         </li>
       ))}
@@ -748,12 +748,12 @@ function DeployingScreen({ state, go }: { state: FlowState; go: Go }) {
     <Card title={null}>
       <div className="flex flex-col items-center text-center">
         <KinuFace activity={idle ? "idle" : face} />
-        <h2 className="mt-4 p-display text-[22px] leading-7 p-text">{words.title}</h2>
-        <p data-deploy-now className="mt-1.5 max-w-md p-row-text p-text-2">{words.sentence}</p>
+        <h2 className="mt-4 t-page-title p-text">{words.title}</h2>
+        <p data-deploy-now className="mt-1.5 max-w-md t-body p-text-2">{words.sentence}</p>
         {(state.run === "running" || state.run === "resume") && <div className="mt-5 w-full max-w-sm"><Progress reached={reached} total={total} /></div>}
         {words.action !== null && <div className="mt-5">{words.action}</div>}
-        {state.run === "running" && <p className="mt-5 p-meta p-text-3">A few minutes. You can close this page; it carries on, and opening it again shows where it is.</p>}
-        {state.run === "paused" && <p className="mt-3 p-meta p-text-3">Once it's on, Kinu carries on by itself.</p>}
+        {state.run === "running" && <p className="mt-5 t-meta p-text-3">A few minutes. You can close this page; it carries on, and opening it again shows where it is.</p>}
+        {state.run === "paused" && <p className="mt-3 t-meta p-text-3">Once it's on, Kinu carries on by itself.</p>}
       </div>
       <div className="mt-6 space-y-3 border-t p-border pt-4">
         {state.run === "refused" && <CloudflareSaid message={`A DNS record for kinu.${YOUR_DOMAIN} already exists.`} code="81057" />}
@@ -761,7 +761,7 @@ function DeployingScreen({ state, go }: { state: FlowState; go: Go }) {
           <Phases reached={reached} refused={state.run === "refused"} mail={mail} />
         </Disclosure>
         {/* Wireframe only: the run's end, as the page would move to it. */}
-        {state.run === "running" && <button type="button" onClick={() => go({ screen: "live" })} className="p-meta p-accent-fg hover:underline">Skip to the end (wireframe)</button>}
+        {state.run === "running" && <button type="button" onClick={() => go({ screen: "live" })} className="t-meta p-accent-fg hover:underline">Skip to the end (wireframe)</button>}
       </div>
     </Card>
   );
@@ -814,23 +814,23 @@ function LiveScreen({ state, go }: { state: FlowState; go: Go }) {
     <Card title={null}>
       <div data-deploy-live className="flex flex-col items-center pt-1 text-center">
         {relinked ? <KinuFace activity="idle" /> : <LiveMark />}
-        <h2 className="mt-3 p-display text-[22px] leading-7 p-text">{relinked ? "A new setup link" : "Your Kinu is live"}</h2>
+        <h2 className="mt-3 t-page-title p-text">{relinked ? "A new setup link" : "Your Kinu is live"}</h2>
         <div className="mt-2 inline-flex max-w-full items-center gap-1.5">
-          <span data-deploy-live-address className="truncate text-[17px] font-medium p-text">{address}</span>
+          <span data-deploy-live-address className="truncate t-title p-text">{address}</span>
           <CopyButton value={`https://${address}`} what="the address" size={13} className="p-text-3 hover:p-text p-1" />
         </div>
         <div className="mt-6 w-full max-w-xs"><PrimaryButton wide onClick={() => {}}>Open and set up<ArrowSquareOutIcon size={15} /></PrimaryButton></div>
-        <p className="mt-2.5 max-w-sm p-meta p-text-3">{relinked ? "The old link no longer works. This one makes you the owner, once, within 7 days." : "This link makes you the owner, once, and works for 7 days. If you lose it, come back here for a new one."}</p>
+        <p className="mt-2.5 max-w-sm t-meta p-text-3">{relinked ? "The old link no longer works. This one makes you the owner, once, within 7 days." : "This link makes you the owner, once, and works for 7 days. If you lose it, come back here for a new one."}</p>
       </div>
 
       {state.domain === "elsewhere" && (
         <div data-deploy-pending className="mt-6 rounded-xl bg-[var(--c-selected)] px-4 py-3.5">
-          <p className="p-row-text p-text">One more step for {ELSEWHERE_DOMAIN}</p>
-          <p className="mt-1 p-meta p-text-2">Where you registered it, change its nameservers to these two. Kinu moves to kinu.{ELSEWHERE_DOMAIN} by itself once they change, usually within a few hours.</p>
+          <p className="t-body p-text">One more step for {ELSEWHERE_DOMAIN}</p>
+          <p className="mt-1 t-meta p-text-2">Where you registered it, change its nameservers to these two. Kinu moves to kinu.{ELSEWHERE_DOMAIN} by itself once they change, usually within a few hours.</p>
           <ul className="mt-2.5 space-y-1">
             {NAMESERVERS.map((server) => (
               <li key={server} className="flex items-center gap-2 rounded-md bg-[var(--c-surface)] px-2.5 py-1.5">
-                <span className="min-w-0 flex-1 truncate p-t-code p-text">{server}</span>
+                <span className="min-w-0 flex-1 truncate t-code p-text">{server}</span>
                 <CopyButton value={server} what="the nameserver" className="p-text-3 hover:p-text" />
               </li>
             ))}
@@ -842,12 +842,12 @@ function LiveScreen({ state, go }: { state: FlowState; go: Go }) {
         <Disclosure summary="Use Kinu from your terminal">
           <div className="flex items-center gap-2 rounded-lg bg-[var(--c-sunken)] px-3 py-2">
             <TerminalWindowIcon size={14} className="shrink-0 p-text-3" />
-            <code className="min-w-0 flex-1 truncate p-t-code p-text-2">{CLI_LINE}</code>
+            <code className="min-w-0 flex-1 truncate t-code p-text-2">{CLI_LINE}</code>
             <CopyButton value={CLI_LINE} what="the install command" className="p-text-3 hover:p-text" />
           </div>
         </Disclosure>
         {domainOf(state) === null && (
-          <button type="button" onClick={() => go({ screen: "domain", entry: "existing", search: "empty" })} className="p-meta p-accent-fg hover:underline">Add a domain</button>
+          <button type="button" onClick={() => go({ screen: "domain", entry: "existing", search: "empty" })} className="t-meta p-accent-fg hover:underline">Add a domain</button>
         )}
       </div>
     </Card>
@@ -860,8 +860,8 @@ function UpdatedScreen({ address }: { address: string }) {
     <Card title={null}>
       <div data-deploy-updated className="flex flex-col items-center pt-1 text-center">
         <KinuFace activity="done" />
-        <h2 className="mt-3 p-display text-[22px] leading-7 p-text">Your Kinu is up to date</h2>
-        <p className="mt-1.5 p-row-text p-text-2">{address} now runs {LATEST_BUILD.version}, built {LATEST_BUILD.builtAt}.</p>
+        <h2 className="mt-3 t-page-title p-text">Your Kinu is up to date</h2>
+        <p className="mt-1.5 t-body p-text-2">{address} now runs {LATEST_BUILD.version}, built {LATEST_BUILD.builtAt}.</p>
         <div className="mt-6 w-full max-w-xs"><PrimaryButton wide onClick={() => {}}>Open your Kinu<ArrowSquareOutIcon size={15} /></PrimaryButton></div>
       </div>
     </Card>
@@ -875,7 +875,7 @@ function Card({ title, children, footer }: { title: string | null; children: Rea
   return (
     <section className="p-card overflow-hidden">
       <div className="px-5 py-5 sm:px-8 sm:py-7">
-        {title !== null && <h2 className="mb-5 p-title p-text">{title}</h2>}
+        {title !== null && <h2 className="mb-5 t-title p-text">{title}</h2>}
         {children}
       </div>
       {footer !== undefined && <div className="flex items-center justify-between gap-3 border-t p-border px-5 py-4 sm:px-8">{footer}</div>}
@@ -921,7 +921,7 @@ export function SelfDeployFlow() {
     <div className="fixed inset-0 overflow-y-auto p-bg p-text">
       <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-4 py-8" data-deploy-screen={state.screen}>
         <div className="mb-6 flex justify-center"><KinuLogo /></div>
-        <h1 className="p-page-title text-center">Your own Kinu</h1>
+        <h1 className="t-page-title text-center">Your own Kinu</h1>
         <ol aria-label="Deploy steps" className="mb-5 mt-6 flex items-center justify-center gap-1.5">
           {["Start", "Ready", "Deploying", "Live"].map((label, at) => (
             <li key={label} aria-current={at === DOT[state.screen] ? "step" : undefined} aria-label={label}>

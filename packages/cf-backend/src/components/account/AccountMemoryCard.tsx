@@ -107,7 +107,7 @@ function Pending({ pending, busy, act, decide }: Omit<SectionProps, "state"> & {
 
   return (
     <section className="space-y-2" data-account-memory-pending>
-      <div className="p-t-label p-text-2">Waiting for you</div>
+      <div className="t-label">Waiting for you</div>
       {pending.map((item) => (
         <div key={item.id} className="rounded-md px-3 py-2 p-fill space-y-1" data-account-memory-proposal={item.id}>
           <div className="t-body p-text break-words">
@@ -132,7 +132,7 @@ function Facts({ state, busy, act }: SectionProps) {
 
   return (
     <section className="space-y-1" data-account-memory-facts>
-      <div className="p-t-label p-text-2">Facts</div>
+      <div className="t-label">Facts</div>
       {state.facts.length === 0 && <div className="t-meta p-text-3">None yet. A fact an agent proposes, or one you promote from a workspace's world model, appears here once kept.</div>}
       {state.facts.map((fact) => (
         <div key={fact.key} className="py-1 space-y-1" data-account-memory-fact={fact.key}>
@@ -195,7 +195,7 @@ function Notes({ state, busy, act }: SectionProps) {
 
   return (
     <section className="space-y-1" data-account-memory-notes>
-      <div className="p-t-label p-text-2">Notes</div>
+      <div className="t-label">Notes</div>
       {state.notes.map((note) => (
         <div key={note.id} className="flex items-start gap-2 py-1">
           <div className="min-w-0 flex-1">

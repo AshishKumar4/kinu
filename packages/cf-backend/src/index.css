@@ -256,7 +256,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   *:hover, *:focus-within { scrollbar-color: var(--c-border-strong) transparent; }
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
+  ::-webkit-scrollbar-thumb { background: transparent; border-radius: var(--r-pill); }
   *:hover::-webkit-scrollbar-thumb { background: var(--c-border-strong); }
 }
 
@@ -304,11 +304,30 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 @layer components {
 
+/* ── Named variants (docs/DESIGN-SYSTEM.md §1.3) ─────────────────────
+   Approved and settled parts keep their own sizes, each under the name of what it is; nothing else writes them. */
+:root {
+  /* role.chat-heading: a report's headings in assistant prose, in px so they hold wherever they sit; the workbench's
+     follow its 14px prose in em. */
+  --t-chat-heading-1: 22px;
+  --t-chat-heading-2: 19px;
+  --t-chat-heading-3: 17px;
+  --t-chat-heading-workbench-1: 1.1em;
+  --t-chat-heading-workbench-2: 1.05em;
+  --t-chat-heading-workbench-3: 1em;
+  /* role.code-workbench: the approved code block inside the workbench. */
+  --t-code-workbench: 12.5px;
+  /* role.workspace-tab: the settled workspace tab's title. */
+  --t-workspace-tab: 13.5px;
+  /* role.field-touch: a field's value on a touch screen. iOS Safari zooms the page into any field under 16px. */
+  --t-field-touch: max(16px, 1em);
+}
+
 /* ── Chat markdown ─────────────────────────────────────────────────── */
 /* The `chat` role — agent response prose: Inter at 15.5px/26px, the x-height Schibsted's 16px had
    (docs/DESIGN-SYSTEM.md §1.3). */
 .prose-chat {
-  font-size: 0.96875rem; line-height: 1.68; color: var(--c-text-2);
+  font-size: 15.5px; line-height: 1.68; color: var(--c-text-2);
   letter-spacing: 0;
   p { margin: 0.45em 0; }
   p:first-child { margin-top: 0; }
@@ -317,20 +336,19 @@ body { background: var(--c-bg); color: var(--c-text); }
   ul, ol { margin: 0.45em 0; padding-left: 1.25rem; }
   ul { list-style: disc; } ol { list-style: decimal; }
   h1, h2, h3 { font-weight: 600; margin: 0.7em 0 0.3em; letter-spacing: -0.01em; line-height: 1.3; }
-  /* Response headings hold their own hierarchy in rem: a report's h1 stays
-     22px whether it leads a message or follows a code block. */
-  h1 { font-size: 1.375rem; } h2 { font-size: 1.1875rem; } h3 { font-size: 1.0625rem; }
+  /* A report's h1 stays 22px whether it leads a message or follows a code block. */
+  h1 { font-size: var(--t-chat-heading-1); } h2 { font-size: var(--t-chat-heading-2); } h3 { font-size: var(--t-chat-heading-3); }
 }
 
 .prose-thinking {
-  font-size: 0.8125rem; line-height: 1.55; color: var(--c-text-3);
+  font-size: 13px; line-height: 1.55; color: var(--c-text-3);
   p { margin: 0.35em 0; }
   p:first-child { margin-top: 0; }
   p:last-child { margin-bottom: 0; }
   strong { font-weight: 600; color: var(--c-text-2); }
   ul, ol { margin: 0.35em 0; padding-left: 1.1rem; }
   ul { list-style: disc; } ol { list-style: decimal; }
-  h1, h2, h3 { font-size: 1em; font-weight: 600; margin: 0.5em 0 0.2em; color: var(--c-text-2); }
+  h1, h2, h3 { font-size: inherit; font-weight: 600; margin: 0.5em 0 0.2em; color: var(--c-text-2); }
   &[data-folded] { max-height: 3lh; overflow: hidden; }
   &[data-folded][data-overflows] { mask-image: linear-gradient(to bottom, var(--c-text) 45%, transparent); }
 }
@@ -355,39 +373,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 :is(p, li, .t-body, .t-item, .prose-chat) > .t-code { font-size: 0.92em; }
 .t-mono       { font-family: var(--font-mono); }
 
-/* ── Type roles — the scale lives here, not in per-component literals ─ */
-/* One name per role, in rem at a 16px root; the comment carries the pixel
-   a default root renders. A `text-[…]` literal beside one of these is an
-   exception and says why on its own line. */
-.p-t-chat     { font-size: 0.96875rem; line-height: 1.68; }                              /* chat prose — 15.5/26 */
-.p-t-composer { font-size: 1rem; line-height: 1.5; }                                     /* composer input — 16/24 */
-.p-t-control  { font-size: 0.875rem; line-height: 1.4286; font-weight: 500; }            /* navigation & controls — 14/20 */
-.p-t-status   { font-family: var(--font-ui); font-size: 0.75rem; line-height: 1.5; font-weight: 500; } /* status labels — 12/18, sans */
-.p-t-code     { font-family: var(--font-mono); font-size: 0.875rem; line-height: 1.5714; } /* code — 14/22 Fragment Mono */
-
-/* A page title, and nothing smaller. The display face at UI sizes is a
-   heading pretending to be an interface; at 24px and up it is the product's
-   voice, and it is the same voice the signed-out pages speak in. */
-.p-display  { font-family: var(--font-display); font-weight: 500; letter-spacing: -0.02em; }
-/* Every page's title, flows' included: 24/32 at 600 (design review 2026-10-20). */
-.p-page-title { font-family: var(--font-display); font-size: 1.5rem; line-height: 2rem; font-weight: 600; letter-spacing: -0.011em; color: var(--c-text); }
-/* The section label's look under its older name (design review 2026-10-20):
-   one label role, sentence case; mono is for code alone. */
-.p-eyebrow  { font-family: var(--font-ui); font-size: 0.8125rem; line-height: 20px; font-weight: 600; letter-spacing: 0; color: var(--c-text-2); }
-/* The section label at the sidebar's size: the rail's group names ("Workspaces"). */
-.p-label-sm { font-size: 0.75rem; line-height: 16px; }
-/* The annotation register — mono captions beside code and other identifiers
-   a name is written about. Ordinary metadata and status moved to `.p-meta`
-   and `.p-t-status`; what stays here names a technical object. */
-.p-annotation { font-family: var(--font-mono); font-size: 10px; line-height: 14px; letter-spacing: 0.045em; font-variant-numeric: tabular-nums; }
-.p-meta     { font-family: var(--font-ui); font-size: 0.75rem; line-height: 18px; letter-spacing: -0.005em; } /* supporting metadata — 12/18 */
-.p-row-text { font-size: 0.8125rem; line-height: 20px; letter-spacing: -0.008em; }        /* dense rows — 13/20 */
-.p-title    { font-size: 0.9375rem; line-height: 22px; font-weight: 600; letter-spacing: -0.01em; } /* panel heading — 15/22 */
-/* A panel heading — the display face at UI weight. `.p-display` is rationed
-   to page titles at 24px+; this is the same voice for the headings inside a
-   working surface (workspace name, section heads), where 15-17px of the
-   display face reads as the product speaking rather than a dashboard label. */
-.p-heading  { font-family: var(--font-display); font-weight: 500; letter-spacing: -0.015em; }
 /* A numeral *treatment*, not a type role — size comes from the role next to
    it. (These classes are unlayered and so outrank Tailwind's utilities: a
    font-size here silently overrides the `text-[11px]` it is written beside.) */
@@ -424,7 +409,7 @@ body { background: var(--c-bg); color: var(--c-text); }
    Set in the mono annotation face: a badge is a status ANNOTATION on the
    thing beside it, the same register the banner writes its captions in. */
 .p-badge-success, .p-badge-warning, .p-badge-danger, .p-badge-info, .p-badge-neutral {
-  font-size: 0.75rem; line-height: 18px; font-weight: 500; border-radius: 999px;
+  font-size: 12px; line-height: 18px; font-weight: 500; border-radius: var(--r-pill);
   font-family: var(--font-mono); letter-spacing: 0.01em;
 }
 .p-badge-success { background: var(--c-success-tint); color: var(--c-success); }
@@ -466,10 +451,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-group > * + .contents > :first-child,
 .p-group > .contents > * + * { border-top: 1px dashed var(--c-dash); }
 
-/* The one section label (design review 2026-10-20): names a group ("Profile",
-   "Installed", "Identity") in sentence case, no icon, 8 px above it. Every
-   page's groups and every Card take it; mono eyebrows stay off page bodies. */
-.p-label { font-family: var(--font-ui); font-size: 0.8125rem; line-height: 20px; font-weight: 600; letter-spacing: 0; color: var(--c-text-2); }
 
 /* ── Cards — quiet at rest; only cards that are actually interactive
       react (`p-card-hover`), and with a surface step, never an accent flood. ── */
@@ -504,7 +485,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 @layer utilities {
   .p-code .p-code-highlight pre {
     margin: 0; padding: 0.625rem 0.75rem; background: transparent !important;
-    font-size: 0.875rem; line-height: 1.5714;
+    font-size: 14px; line-height: 1.5714;
     font-family: var(--font-mono);
   }
   [data-mode="dark"] .p-code-highlight .shiki { color: var(--shiki-dark) !important; }
@@ -558,7 +539,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   background: var(--c-hover);
   color: var(--c-accent-fg);
   font-family: var(--font-mono);
-  font-size: 0.875em;
+  font-size: 0.92em;
   padding: 0.1em 0.35em;
   border-radius: var(--r-control);
   overflow-wrap: anywhere;
@@ -913,7 +894,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-composer {
   background: var(--c-composer-bg);
   border: 1px solid var(--c-composer-line);
-  border-radius: 24px;
+  border-radius: var(--r-composer);
   box-shadow: var(--shadow-composer);
   transition: border-color var(--dur-state) ease-out, box-shadow var(--dur-state) ease-out;
 }
@@ -941,7 +922,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   height: 26px;
   padding: 0 11px;
   border: 1px solid var(--c-composer-line);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--c-composer-bg);
   color: var(--c-text-3);
   font-size: 12px;
@@ -975,7 +956,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   min-height: 34px;
   padding: 4px 5px 4px 12px;
   border: 1px solid var(--c-composer-line);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--c-composer-bg);
   box-shadow: var(--shadow-menu);
   color: var(--c-text-2);
@@ -1010,7 +991,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   gap: 5px;
   height: 26px;
   padding: 0 11px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--c-hover);
   color: var(--c-text);
   font-size: 12.5px;
@@ -1028,7 +1009,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--c-text-3);
   cursor: pointer;
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
@@ -1087,7 +1068,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   height: 26px;
   padding: 0 11px;
   border: 1px solid var(--c-composer-line);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--c-composer-bg);
   color: var(--c-text-3);
   font-size: 12px;
@@ -1119,7 +1100,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   min-width: 20px;
   height: 18px;
   padding: 0 5px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--c-hover);
   color: var(--c-text-2);
   font-size: 11px;
@@ -1163,7 +1144,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   font-size: 12px;
 }
 .p-shot-name { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); color: var(--c-text-2); }
-.p-shot-where { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; height: 20px; border-radius: 999px; background: var(--c-hover); color: var(--c-text-3); font-size: 11px; }
+.p-shot-where { flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px; height: 20px; border-radius: var(--r-pill); background: var(--c-hover); color: var(--c-text-3); font-size: 11px; }
 .p-shot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 8px; }
 .p-shot-grid > .p-shot-note { margin: 0; }
 .p-shot-grid .p-shot { display: flex; margin: 0; }
@@ -1180,7 +1161,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   min-height: 34px;
   padding: 6px 8px 6px 11px;
   border: 1px dashed var(--c-border-strong);
-  border-radius: 12px;
+  border-radius: var(--r-row);
   color: var(--c-text-3);
   font-size: 12.5px;
 }
@@ -1206,7 +1187,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   width: 36px;
   height: 36px;
   border: 1px solid var(--c-border);
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   background: var(--c-surface);
   color: var(--c-text-2);
   transform: translateY(-50%);
@@ -1225,7 +1206,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   gap: 5px;
   height: 32px;
   padding: 0 10px;
-  border-radius: 999px;
+  border-radius: var(--r-pill);
   color: var(--c-text-3);
   font-size: 13px;
   cursor: pointer;
@@ -1241,7 +1222,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   justify-content: center;
   width: 32px;
   height: 32px;
-  border-radius: 50%;
+  border-radius: var(--r-pill);
   cursor: pointer;
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out, opacity var(--dur-state) ease-out;
 }
@@ -1263,7 +1244,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   box-shadow: none !important;
   color: var(--c-text-3) !important;
   font-size: 13px !important;
-  border-radius: 999px !important;
+  border-radius: var(--r-pill) !important;
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
 .p-composer-model :is(button, [role="combobox"]):hover { color: var(--c-text) !important; background: var(--c-hover) !important; }
@@ -1356,7 +1337,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-busy-bar {
   position: relative;
   overflow: hidden;
-  border-radius: 9999px;
+  border-radius: var(--r-pill);
   background-color: var(--c-border-strong);
 }
 .p-busy-bar::after {
@@ -1614,7 +1595,7 @@ body > .annotation-toolbar {
   background: var(--c-hover);
   color: var(--c-accent-fg);
   font-family: var(--font-mono);
-  font-size: 0.875em;
+  font-size: 0.92em;
 }
 
 .plan-review-document {
@@ -1699,7 +1680,7 @@ body > .annotation-toolbar {
   background: var(--c-hover);
   color: var(--c-accent-fg);
   font-family: var(--font-mono);
-  font-size: 0.875em;
+  font-size: 0.92em;
   overflow-wrap: anywhere;
 }
 
@@ -1712,11 +1693,11 @@ body > .annotation-toolbar {
   overflow-y: hidden;
   overscroll-behavior-x: contain;
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--r-row);
   background: var(--c-code-bg);
   color: var(--c-accent-fg);
   font-family: var(--font-mono);
-  font-size: 0.875rem;
+  font-size: 14px;
   line-height: 1.5714;
 }
 
@@ -1753,7 +1734,7 @@ body > .annotation-toolbar {
 .plan-review-document [data-print-region="article"] > div[data-block-id]:has(table) {
   margin-block: 2rem;
   border: 1px solid var(--c-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--r-row);
 }
 
 /* Shown only where the rail OVERLAYS the document — the container query below.
@@ -1794,7 +1775,7 @@ body > .annotation-toolbar {
   }
 
   [data-plan-title] {
-    font-size: 1.5rem;
+    font-size: 24px;
   }
 
   [data-plan-actions] {
@@ -1820,31 +1801,27 @@ body > .annotation-toolbar {
 :is([data-workbench], .p-workbench) {
   .prose-chat {
     /* 14px on 1.72: Inter at the x-height of the 14.5px Schibsted the owner approved for assistant prose. */
-    font-size: 0.875rem;
+    font-size: 14px;
     line-height: 1.72;
 
     /* Headings were em-scaled off the prose size before d04: they keep that
        hierarchy rather than rem rungs. */
     h1, h2, h3 { line-height: 1.72; }
-    h1 { font-size: 1.1em; } h2 { font-size: 1.05em; } h3 { font-size: 1em; }
+    h1 { font-size: var(--t-chat-heading-workbench-1); } h2 { font-size: var(--t-chat-heading-workbench-2); } h3 { font-size: var(--t-chat-heading-workbench-3); }
   }
-  .p-t-chat    { font-size: 0.84375rem; line-height: 1.6; }  /* user bubble — 13.5px, 14px Schibsted's x-height */
-  .p-t-control { font-size: 0.6875rem; }                     /* navigation & controls — 11px */
-  .p-t-status  { font-size: 0.6875rem; }                     /* status labels — 11px */
-  .p-t-code    { font-size: 0.78125rem; line-height: 1.55; } /* code — 12.5px */
 
   .p-badge-success, .p-badge-warning, .p-badge-danger, .p-badge-info, .p-badge-neutral {
     font-size: 11px; line-height: 16px;
   }
 
-  .p-code .p-code-highlight pre { font-size: 0.78125rem; line-height: 1.55; } /* 12.5px */
+  .p-code .p-code-highlight pre { font-size: var(--t-code-workbench); line-height: 1.55; }
 
   /* Inline code read slightly under its sentence before d04. */
-  .p-code-inline { font-size: 0.9em; }
-  [data-plan-title] code { font-size: 0.82em; }
-  .plan-review-document [data-block-id] :not(pre) > code { font-size: 0.9em; }
-  .plan-review-document pre[data-block-id] { font-size: 0.8125rem; line-height: 1.65; } /* 13px */
-  .plan-review-document pre[data-block-id]::before { font-size: 0.6875rem; } /* 11px */
+  .p-code-inline { font-size: 0.92em; }
+  [data-plan-title] code { font-size: 0.92em; }
+  .plan-review-document [data-block-id] :not(pre) > code { font-size: 0.92em; }
+  .plan-review-document pre[data-block-id] { font-size: 13px; line-height: 1.65; } /* 13px */
+  .plan-review-document pre[data-block-id]::before { font-size: 11px; } /* 11px */
 }
 
 /* ── Pages redesign ──────────────────────────────────────────────────
@@ -1867,7 +1844,7 @@ body > .annotation-toolbar {
 /* iOS zooms the page when a text field under 16px takes focus. Unlayered, so it outranks each field's size utility. */
 @media (pointer: coarse) {
   input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"], [type="reset"], [type="image"]),
-  textarea, select { font-size: max(16px, 1em); }
+  textarea, select { font-size: var(--t-field-touch); }
 }
 
 /* ── Workspace bar ─────────────────────────────────────────────────
@@ -1879,7 +1856,7 @@ body > .annotation-toolbar {
 .p-bar {
   --bar-line: var(--c-border-strong);
   --bar-ground: var(--c-bg);
-  --flare: 8px;
+  --flare: var(--r-workspace-tab-flare);
   position: relative;
   display: flex;
   flex-shrink: 0;
@@ -1957,7 +1934,7 @@ body > .annotation-toolbar {
   white-space: nowrap;
 }
 .p-bar-sizer { visibility: hidden; overflow: hidden; height: 100%; }
-.p-bar-tab[data-title] :is(.p-bar-sizer, .p-bar-link) { font-weight: 600; font-size: 13.5px; letter-spacing: -0.01em; }
+.p-bar-tab[data-title] :is(.p-bar-sizer, .p-bar-link) { font-weight: 600; font-size: var(--t-workspace-tab); letter-spacing: -0.01em; }
 .p-bar-tab[data-active] .p-bar-sizer { font-weight: 500; }
 @media (max-width: 767px) {
   .p-bar-tab { min-width: 96px; }
@@ -2014,7 +1991,7 @@ body > .annotation-toolbar {
   justify-content: center;
   width: 22px;
   height: 22px;
-  border-radius: 6px;
+  border-radius: var(--r-inner);
   color: var(--c-text-3);
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
@@ -2026,7 +2003,7 @@ body > .annotation-toolbar {
   max-width: 200px;
   height: 26px;
   padding: 0 7px;
-  border-radius: 7px;
+  border-radius: var(--r-workspace-tab);
   border: 1px solid var(--c-field-border);
   background: var(--c-field);
   color: var(--c-text);
@@ -2040,7 +2017,7 @@ body > .annotation-toolbar {
   justify-content: center;
   width: 28px;
   height: 28px;
-  border-radius: 8px;
+  border-radius: var(--r-control);
   color: var(--c-text-3);
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
@@ -2057,15 +2034,15 @@ body > .annotation-toolbar {
   height: var(--flare);
   border-right-width: 1px;
   border-bottom-width: 1px;
-  border-bottom-right-radius: var(--flare);
+  border-bottom-right-radius: var(--r-workspace-tab-flare);
 }
-.p-bar-outline > [data-part="body"] { top: 0; bottom: var(--flare); border-width: 1px 1px 0; border-radius: 10px 10px 0 0; }
+.p-bar-outline > [data-part="body"] { top: 0; bottom: var(--flare); border-width: 1px 1px 0; border-radius: var(--r-workspace-tab-outline) var(--r-workspace-tab-outline) 0 0; }
 .p-bar-outline > [data-part="flare-end"] {
   width: var(--flare);
   height: var(--flare);
   border-left-width: 1px;
   border-bottom-width: 1px;
-  border-bottom-left-radius: var(--flare);
+  border-bottom-left-radius: var(--r-workspace-tab-flare);
 }
 .p-bar-outline > [data-part="arm-end"] { right: 0; border-bottom-width: 1px; }
 .p-bar-outline[data-glide] > span { transition: left var(--dur-fold) var(--ease-glide), width var(--dur-fold) var(--ease-glide); }
@@ -2120,7 +2097,7 @@ body > .annotation-toolbar {
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
-  border-radius: 8px;
+  border-radius: var(--r-control);
   background: var(--c-hover);
   color: var(--c-text-2);
   font-size: 10px;
@@ -2146,7 +2123,7 @@ body > .annotation-toolbar {
     height: 6px;
     padding: 0;
     overflow: hidden;
-    border-radius: 50%;
+    border-radius: var(--r-pill);
     background: var(--c-text-3);
     color: transparent;
   }
@@ -2203,7 +2180,7 @@ body > .annotation-toolbar {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--c-border);
-  border-radius: 12px;
+  border-radius: var(--r-row);
   background: var(--c-surface);
 }
 .p-pane-head { display: flex; flex-shrink: 0; align-items: center; gap: 2px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--c-border); }
@@ -2218,7 +2195,7 @@ body > .annotation-toolbar {
   content: "";
   width: 10px;
   height: 10px;
-  border-radius: 50%;
+  border-radius: var(--r-pill);
   border: 2px solid color-mix(in srgb, var(--c-accent-mark) 32%, transparent);
   border-top-color: var(--c-accent-mark);
   animation: p-status-turn 1.15s linear infinite;
@@ -2227,7 +2204,7 @@ body > .annotation-toolbar {
   content: "";
   width: 7px;
   height: 7px;
-  border-radius: 50%;
+  border-radius: var(--r-pill);
   background: var(--c-danger);
   animation: p-status-halo 2.4s ease-out infinite;
 }
@@ -2365,7 +2342,7 @@ body > .annotation-toolbar {
   right: 5px;
   width: 6px;
   height: 6px;
-  border-radius: 50%;
+  border-radius: var(--r-pill);
   background: var(--c-accent-mark);
   box-shadow: 0 0 0 2px var(--c-bg);
 }
@@ -2397,7 +2374,7 @@ body > .annotation-toolbar {
 }
 .p-env-chip[aria-pressed="true"] > svg { color: var(--c-accent-mark); }
 /* One status language for machines and terminals: the dot's colour says the state, its motion says work. */
-.p-env-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--c-success); }
+.p-env-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: var(--r-pill); background: var(--c-success); }
 .p-env-dot[data-tone="working"] { background: var(--c-accent-mark); animation: dot-pulse 1.4s ease-in-out infinite; }
 .p-env-dot[data-tone="attention"] { background: var(--c-warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c-warning) 28%, transparent); }
 .p-env-dot[data-tone="danger"] { background: var(--c-danger); }
@@ -2415,7 +2392,7 @@ body > .annotation-toolbar {
   gap: 6px;
   padding: 0 10px;
   border: 1px solid var(--c-border);
-  border-radius: 8px;
+  border-radius: var(--r-control);
   background: var(--c-surface);
   color: var(--c-text-2);
   font-size: 12.5px;
@@ -2476,7 +2453,7 @@ body > .annotation-toolbar {
   height: 16px;
   margin: 0 2px 0 -6px;
   place-items: center;
-  border-radius: 4px;
+  border-radius: var(--r-check);
   color: var(--c-text-3);
 }
 .p-session-close:hover { color: var(--c-text); background: var(--c-hover); }
@@ -2487,7 +2464,7 @@ body > .annotation-toolbar {
   height: 26px;
   padding: 0 8px;
   border: 1px solid var(--c-accent);
-  border-radius: 6px;
+  border-radius: var(--r-inner);
   background: var(--c-surface);
   color: var(--c-text);
   font-size: 13px;

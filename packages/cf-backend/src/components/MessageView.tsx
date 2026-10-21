@@ -431,7 +431,7 @@ export function ModelFallbackRows({ notices }: { notices: readonly string[] }) {
 
 /** `wrap-anywhere`: a long unbroken token must break inside the bubble, not widen the column. */
 const USER_BUBBLE_CLASS =
-  "relative max-w-[min(80%,42rem)] rounded-t-2xl rounded-br-[4px] rounded-bl-2xl border p-user-border px-[18px] py-3 p-user-bubble p-t-chat whitespace-pre-wrap wrap-anywhere";
+  "relative max-w-[min(80%,42rem)] rounded-t-2xl rounded-br-[4px] rounded-bl-2xl border p-user-border px-[18px] py-3 p-user-bubble prose-chat whitespace-pre-wrap wrap-anywhere";
 
 export function SteerBubble({ steer, onFork }: {
   steer: InlineSteer;

@@ -46,8 +46,8 @@ export const FACE_SCOPES = ["chat", "everywhere"] as const;
 
 export type FaceScope = (typeof FACE_SCOPES)[number];
 
-/** The prose and bubble sizes the chat ships at, in rem: the workbench's (WorkspacePage) and the default's. */
-const SHIPPED = { workbench: { prose: 0.875, bubble: 0.84375 }, page: { prose: 0.96875, bubble: 0.96875 } } as const;
+/** The chat role's sizes, in rem, the person's bubble's too: the workbench's (WorkspacePage) and the default's. */
+const SHIPPED = { workbench: { prose: 0.875 }, page: { prose: 0.96875 } } as const;
 
 function faceCss(name: ChatFaceName): string {
   const face: ChatFace = CHAT_FACES[name];
@@ -66,10 +66,8 @@ function faceCss(name: ChatFaceName): string {
     `@font-face{font-family:"${face.family}";${source}}`,
     `@font-face{font-family:"${face.family} Chat";${source};size-adjust:${(adjust * 100).toFixed(1)}%}`,
     `${on} .prose-chat{font-family:${chatStack};font-size:${rem(SHIPPED.page.prose)};letter-spacing:${face.tracking}}`,
-    `${on} .p-t-chat{font-family:${chatStack};font-size:${rem(SHIPPED.page.bubble)}}`,
     `${on} :is([data-workbench],.p-workbench) .prose-chat{font-size:${rem(SHIPPED.workbench.prose)};line-height:${String(face.leading)}}`,
     `${on} :is([data-workbench],.p-workbench) .prose-chat :is(h1,h2,h3){line-height:${String(face.leading)}}`,
-    `${on} :is([data-workbench],.p-workbench) .p-t-chat{font-size:${rem(SHIPPED.workbench.bubble)}}`,
     // Everywhere: the UI's and display's stacks are the face's; every role that names them follows, at its own tracking.
     `${on}[data-face-scope="everywhere"]{--font-ui:${stack};--font-display:${stack}}`,
     ...Object.entries(face.roles ?? {}).map(([roles, tracking]) => `${on}[data-face-scope="everywhere"] :is(${roles}){letter-spacing:${tracking}}`),

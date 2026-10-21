@@ -314,7 +314,7 @@ function Type() {
             </Measured>
           ))}
           <p className="prose-chat">Production is fixed. <code>/api/health</code> has answered 200 since 14:32, and p95 is back to 38 ms.</p>
-          <pre className="p-code p-t-code overflow-x-auto rounded-[var(--r-control)] p-3">{"export default {\n  fetch: () => new Response(\"ok\"),\n};"}</pre>
+          <pre className="p-code t-code overflow-x-auto rounded-[var(--r-control)] p-3">{"export default {\n  fetch: () => new Response(\"ok\"),\n};"}</pre>
         </div>
       )}
     </Section>

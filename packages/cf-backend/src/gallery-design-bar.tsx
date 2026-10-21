@@ -136,11 +136,11 @@ function Choice<T extends string>({ label, value, options, name, onPick }: {
 }) {
   return (
     <div className="space-y-1.5">
-      <div className="p-meta p-text-3">{label}</div>
+      <div className="t-meta p-text-3">{label}</div>
       <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-1">
         {options.map((option) => (
           <button key={option} type="button" role="radio" aria-checked={option === value} onClick={() => onPick(option)} data-design-choice={`${label}:${option}`}
-            className={`rounded-md border px-2 py-1 text-xs transition-colors ${option === value ? "border-[var(--c-accent)] p-text" : "p-border p-text-2 hover:p-text"}`}>
+            className={`rounded-md border px-2 py-1 t-meta transition-colors ${option === value ? "border-[var(--c-accent)] p-text": "p-border p-text-2 hover:p-text"}`}>
             {name(option)}
           </button>
         ))}
@@ -171,7 +171,7 @@ function summary(design: Design): string {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-2.5 border-t p-border pt-3 first:border-t-0 first:pt-0">
-      <h2 className="p-meta font-medium p-text-2">{title}</h2>
+      <h2 className="t-status p-text-2">{title}</h2>
       {children}
     </section>
   );
@@ -194,7 +194,7 @@ export function DesignBar() {
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)} data-design-bar="closed" title={summary(design)}
-        className="group fixed bottom-4 right-4 z-[80] flex items-center gap-2 rounded-full p-card border p-border px-3 py-2 text-xs p-shadow-overlay p-text">
+        className="group fixed bottom-4 right-4 z-[80] flex items-center gap-2 rounded-full p-card border p-border px-3 py-2 t-meta p-shadow-overlay p-text">
         <PaletteIcon size={15} className="p-accent-fg" />
         <span className="font-semibold">Design</span>
         <span className="hidden p-text-3 group-hover:inline">{summary(design)}</span>
@@ -205,7 +205,7 @@ export function DesignBar() {
   return (
     <aside data-design-bar aria-label="Design" className="fixed bottom-4 right-4 z-[80] max-h-[calc(100vh-2rem)] w-72 overflow-y-auto p-card border p-border p-4 p-shadow-overlay">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <span className="min-w-0"><span className="block text-sm font-semibold p-text">Design</span><span className="block truncate p-meta p-text-3">{summary(design)}</span></span>
+        <span className="min-w-0"><span className="block t-label p-text">Design</span><span className="block truncate t-meta p-text-3">{summary(design)}</span></span>
         <button type="button" onClick={() => setOpen(false)} aria-label="Hide the design bar" className="p-text-3 hover:p-text"><XIcon size={14} /></button>
       </div>
       <div className="space-y-3">
@@ -215,13 +215,13 @@ export function DesignBar() {
           <Choice label="Font" value={design.font} options={CHAT_FACE_NAMES} name={(font) => CHAT_FACES[font].label} onPick={(font) => setDesign({ font })} />
           <Choice label="Font reaches" value={design.scope} options={FACE_SCOPES} name={(scope) => SCOPE_NAMES[scope]} onPick={(scope) => setDesign({ scope })} />
           <Choice label="Background on New workspace" value={design.background} options={BACKGROUNDS} name={(background) => BACKGROUND_NAMES[background]} onPick={(background) => detach(switchTo({ background }, pathname.startsWith(APP_ROUTES.newWorkspace) ? null : APP_ROUTES.newWorkspace))} />
-          <p className="p-meta p-text-3" data-design-why="background">{BACKGROUND_WHY[design.background]}</p>
+          <p className="t-meta p-text-3" data-design-why="background">{BACKGROUND_WHY[design.background]}</p>
           <Choice label="Device" value={design.device} options={DEVICES} name={(device) => (device === "phone" ? "Phone" : "Desktop")} onPick={(device) => setDesign({ device })} />
         </Section>
         <Section title="Go to">
           <div className="flex flex-wrap gap-1">
             {ELSEWHERE.map(([label, path]) => (
-              <button key={path} type="button" onClick={() => detach(Effect.promise(async () => navigate(path)))} className="rounded-md border p-border px-2 py-1 text-xs p-text-2 hover:p-text">{label}</button>
+              <button key={path} type="button" onClick={() => detach(Effect.promise(async () => navigate(path)))} className="rounded-md border p-border px-2 py-1 t-meta p-text-2 hover:p-text">{label}</button>
             ))}
           </div>
         </Section>
@@ -230,7 +230,7 @@ export function DesignBar() {
             <ul className="space-y-0.5">
               {SELF_DEPLOY_STATES.map((state) => (
                 <li key={state.label}>
-                  <button type="button" onClick={state.open} className="w-full rounded-md px-2 py-1 text-left text-xs p-text-2 hover:bg-[var(--c-hover)] hover:p-text">{state.label}</button>
+                  <button type="button" onClick={state.open} className="w-full rounded-md px-2 py-1 text-left t-meta p-text-2 hover:bg-[var(--c-hover)] hover:p-text">{state.label}</button>
                 </li>
               ))}
             </ul>

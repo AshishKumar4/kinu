@@ -173,7 +173,7 @@ export function PreviewTabsGallery() {
   }, [rpc, workerPlan]);
 
   return <div className="h-screen p-bg flex flex-col">
-    <div className="flex gap-2 p-2 text-xs shrink-0 flex-wrap" data-plan-owner={owner}>
+    <div className="flex gap-2 p-2 t-meta shrink-0 flex-wrap" data-plan-owner={owner}>
       <button data-break-plans onClick={() => setFailHistory(value => !value)}>Toggle history failure</button>
       <button data-worker-plan onClick={() => setWorkerPlan({ ...workerPlan, revision: 2, createdAt: 20, status: "pending", handoffAccepted: false, content: "# Worker revision two" })}>Submit worker plan</button>
       <button data-open-workspace onClick={() => setOwner('main')}>Back to workspace conversation</button>

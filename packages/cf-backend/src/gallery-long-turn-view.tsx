@@ -363,7 +363,7 @@ export function LongTurnNotes() {
   // Open beside the chat; on a phone it would cover it, so it waits behind its summary there, under the header.
   return (
     <details data-long-turn-notes open={window.matchMedia("(min-width: 1024px)").matches}
-      className="fixed bottom-3 right-3 z-50 w-[22rem] max-w-[calc(100vw-1.5rem)] max-md:bottom-auto max-md:top-14 rounded-xl border p-border p-fill p-3 text-[11.5px] leading-snug p-text-2 shadow-lg">
+      className="fixed bottom-3 right-3 z-50 w-[22rem] max-w-[calc(100vw-1.5rem)] max-md:bottom-auto max-md:top-14 rounded-xl border p-border p-fill p-3 t-meta p-text-2 shadow-lg">
       <summary className="cursor-pointer font-medium p-text">Review: the phases' lines</summary>
       <div className="mt-2 flex flex-wrap items-center gap-1">
         <span className="mr-1 font-medium p-text">Lines</span>

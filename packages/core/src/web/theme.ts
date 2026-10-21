@@ -300,10 +300,12 @@ export const THEME_TOKENS: Readonly<Record<ThemeName, Readonly<Record<Mode, Toke
   warm: { dark: WARM_DARK, light: WARM_LIGHT },
 };
 
-export type RadiusRole = '--r-check' | '--r-inner' | '--r-control' | '--r-row' | '--r-card' | '--r-pill';
+export type RadiusRole = '--r-check' | '--r-inner' | '--r-control' | '--r-row' | '--r-card' | '--r-pill'
+  | '--r-composer' | '--r-workspace-tab' | '--r-workspace-tab-outline' | '--r-workspace-tab-flare';
 
 /** The only radii (design system §1.5): a checkbox; an inner piece; a control; a row, menu or notice; a card, tile or
- *  dialog; and a pill. */
+ *  dialog; and a pill. Then the named variants of the approved composer and the settled workspace tab: its rename
+ *  field, the outline's top corners and its flared feet. */
 const RADII = {
   '--r-check': '4px',
   '--r-inner': '6px',
@@ -311,6 +313,10 @@ const RADII = {
   '--r-row': '12px',
   '--r-card': '14px',
   '--r-pill': '999px',
+  '--r-composer': '24px',
+  '--r-workspace-tab': '7px',
+  '--r-workspace-tab-outline': '10px',
+  '--r-workspace-tab-flare': '8px',
 } satisfies Readonly<Record<RadiusRole, string>>;
 
 /**
