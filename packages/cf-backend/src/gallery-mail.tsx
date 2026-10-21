@@ -31,7 +31,7 @@ import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Segmented } from "@/components/ui/Segmented";
 import { Choice, inputCls } from "@/components/ui/form";
-import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
+import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ImportantMailRow, mailRowCls, mailTime } from "@/components/mail/ImportantMailRow";
 import { MailSendBody } from "@/components/mail/MailSendBody";
@@ -499,7 +499,7 @@ function Reader({ thread, panel, draft = false, onBack, onChange }: {
       <header className="space-y-2">
         <div className="flex items-start gap-2">
           <h2 data-mail-subject className={`min-w-0 flex-1 t-title p-text ${panel ? "text-[15px] leading-[22px]": "text-[19px] leading-7"}`}>{thread.subject}</h2>
-          <TileMenu name="Thread" items={menu} className="relative shrink-0" />
+          <Menu name="Thread" items={menu} className="relative shrink-0" />
         </div>
         {!panel && <div className="flex flex-wrap gap-1.5"><Chip mono>{box.address}</Chip><Chip>{readerOf(box)}</Chip></div>}
       </header>

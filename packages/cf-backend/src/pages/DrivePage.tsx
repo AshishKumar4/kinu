@@ -31,8 +31,9 @@ import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useCopy } from "@/hooks/use-copy";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import {
-  FileCover, FOLDER_ICON, FolderTile, GRID, LINK_ICON, SHARE_ICON, SKILLS_ICON, SLATE_ICON, Tile, fileIcon, type MenuItem,
+  FileCover, FOLDER_ICON, FolderTile, GRID, LINK_ICON, SHARE_ICON, SKILLS_ICON, SLATE_ICON, Tile, fileIcon,
 } from "@/components/drive/DriveTiles";
+import type { MenuItem } from "@/components/ui/Menu";
 import { TypesetCover } from "@/components/ui/Tiles";
 import { DriveDialog, pickedFolderName, PrimaryAction, type DriveDialogState } from "@/components/drive/DriveActions";
 import { FileViewer } from "@/components/surfaces/FileViewer";

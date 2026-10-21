@@ -19,7 +19,7 @@ import {
 import { renderThrownChain, showing, settle, detach } from "@kinu.run/core/obs";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
+import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useMounts } from "@/hooks/use-mounts";
 import { useToggledSet } from "@/hooks/use-toggled-set";
@@ -34,6 +34,7 @@ import { composing } from "@/components/ui/form";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { getFilesView, setFilesView } from "@/lib/user-api";
 import { Button } from "@/components/ui/Button";
+import { FilePicker } from "@/components/ui/FilePicker";
 
 /** An upload over a file already there: replaced only on the owner's word. */
 function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: () => void; onKeep: () => void }) {
@@ -185,10 +186,9 @@ function useFilesView(): readonly [FilesView, (view: FilesView) => void] {
 /** How the folder is drawn, and whether its hidden items are among the rest: the account's, wherever it opens Files. */
 function ViewMenu({ view, onChange }: { view: FilesView; onChange: (view: FilesView) => void }) {
   return (
-    <TileMenu name="View" className="relative" trigger={{
+    <Menu name="View" trigger={{
       label: "View options",
-      icon: view.layout === "tiles" ? <SquaresFourIcon size={12} /> : <ListIcon size={12} />,
-      className: "p-1 rounded-sm hover:bg-[var(--c-hover)]",
+      icon: view.layout === "tiles" ? <SquaresFourIcon size={14} /> : <ListIcon size={14} />,
     }} items={[
       { label: "List", icon: <ListIcon size={16} />, radio: true, checked: view.layout === "list", marker: "data-files-view-list", onSelect: () => onChange({ ...view, layout: "list" }) },
       { label: "Tiles", icon: <SquaresFourIcon size={16} />, radio: true, checked: view.layout === "tiles", marker: "data-files-view-tiles", onSelect: () => onChange({ ...view, layout: "tiles" }) },
@@ -502,8 +502,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               </span>
             ))}
           </div>
-          <input ref={uploadInputRef} type="file" multiple className="hidden"
-            onChange={(e) => detach(Effect.promise(async () => {
+          <FilePicker ref={uploadInputRef} multiple onChange={(e) => detach(Effect.promise(async () => {
               const picked = [...(e.currentTarget.files ?? [])];
               e.currentTarget.value = "";
 
@@ -872,7 +871,7 @@ function EntryMenu({ props, className }: { props: EntryProps; className: string 
     <span className={`opacity-0 group-hover:opacity-100 focus-within:opacity-100 has-[[aria-expanded=true]]:opacity-100 pointer-coarse:opacity-100 ${className}`}
       onClick={(e) => e.stopPropagation()}>
       <span className="relative block size-7">
-        <TileMenu name={props.entry.name} items={entryMenu(props)} className="absolute inset-0" />
+        <Menu name={props.entry.name} items={entryMenu(props)} className="absolute inset-0" />
       </span>
     </span>
   );

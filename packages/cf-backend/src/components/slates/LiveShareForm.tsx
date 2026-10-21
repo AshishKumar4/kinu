@@ -15,7 +15,7 @@ import { listShare, readPreapprovals, revokeShare, setShareMode, shareLive, with
 import { ShareListing, type ListShare } from "./ShareListing";
 import { answered } from "./BlueprintShareForm";
 import { AccessPicker, EmailsField, emailsOf, Failure, Lead, type AccessOption } from "./ShareParts";
-import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
+import { Menu, type MenuItem } from "@/components/ui/Menu";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
 import { Group } from "@/components/ui/Group";
@@ -419,7 +419,7 @@ function SharedRow({ row, actions }: { row: OwnedLiveShare; actions: SharedRowAc
         )}
         {listing && row.mode === "own" && <ShareListing share={row} onList={(next) => actions.onList(row.id, next)} disabled={actions.disabled} />}
       </div>
-      <TileMenu name={who} items={rowMenu(row, actions, () => setListing((open) => !open))} className="relative shrink-0" />
+      <Menu name={who} items={rowMenu(row, actions, () => setListing((open) => !open))} className="relative shrink-0" />
     </li>
   );
 }

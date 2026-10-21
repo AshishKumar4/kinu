@@ -42,7 +42,7 @@ function CustomServerRow({ server, onChanged }: { server: McpServerSummary; onCh
       <Row attributes={{ "data-plugin": name, "data-plugin-state": mcpServerStatus(server.status).label }} title={name} meta={serverLine(server)}
         tile={brand === undefined ? <RowTile icon={PlugsConnectedIcon} /> : <BrandMark brand={brand} size={18} />}
         status={<ServerStatus status={server.status} />}
-        action={<Menu label={`More for ${name}`} items={[{ label: "Remove", icon: TrashIcon, run: remove, danger: true }]} />} />
+        action={<Menu name={name} items={[{ label: "Remove", icon: <TrashIcon size={16} />, onSelect: remove, danger: true }]} />} />
     </>
   );
 }

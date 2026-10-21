@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { ArrowSquareOutIcon, CaretLeftIcon, ShieldWarningIcon, TrashIcon, TrayIcon } from "@phosphor-icons/react";
 import type { MailBox, MailThreadSummary, MailThreadView } from "@kinu.run/core";
-import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
+import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -77,7 +77,7 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
       <header className="space-y-2">
         <div className="flex items-start gap-2">
           <h2 data-mail-subject className="t-title min-w-0 flex-1 p-text [overflow-wrap:anywhere]">{thread.subject || "(No subject)"}</h2>
-          {busy === null && <TileMenu name="Thread" items={menu} className="relative shrink-0" />}
+          {busy === null && <Menu name="Thread" items={menu} className="relative shrink-0" />}
         </div>
         <div className="flex flex-wrap gap-2">
           <span className="t-meta t-mono inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-hover)] px-2 p-text-2">{box?.address ?? thread.path}</span>

@@ -760,9 +760,32 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-row-action:is(:hover, [data-force="hover"]), .p-menu-trigger:is(:hover, [data-force="hover"]), .p-menu-trigger[data-popup-open] { background: var(--c-hover); color: var(--c-text); }
 .p-row-action:disabled { opacity: 0.4; }
 
-/* Menu: Kumo's dropdown at the row radius, items 32 (ui/Menu.tsx). */
-.p-menu { min-width: 180px !important; padding: 4px !important; border-radius: var(--r-row) !important; box-shadow: var(--shadow-menu) !important; }
-.p-menu [role="menuitem"] { min-height: 32px; border-radius: var(--r-control); font: 500 13px/20px var(--font-ui); }
+/* Menu (ui/Menu.tsx): Base UI's menu on the overlay at the row radius, items 32. On a phone it is a sheet from the
+   bottom edge over a scrim, its items 40 for a finger. */
+.p-menu-positioner { z-index: 60; }
+.p-menu-scrim { position: fixed; inset: 0; z-index: 59; background: var(--c-scrim); backdrop-filter: blur(2px); }
+.p-menu {
+  min-width: 180px; padding: 4px; outline: none; background: var(--c-overlay); border: 1px solid var(--c-border);
+  border-radius: var(--r-row); box-shadow: var(--shadow-menu); transform-origin: var(--transform-origin);
+  transition: opacity var(--dur-enter) var(--ease-out-strong), transform var(--dur-enter) var(--ease-out-strong);
+}
+.p-menu:is([data-starting-style], [data-ending-style]) { opacity: 0; transform: scale(0.98); }
+.p-menu[data-sheet] { width: calc(100vw - 24px); max-height: 70vh; overflow-y: auto; border-radius: var(--r-card); box-shadow: var(--shadow-overlay); }
+.p-menu-name { padding: 4px 8px 8px; color: var(--c-text-3); }
+.p-menu-item {
+  display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 6px 8px; border-radius: var(--r-control);
+  font: 500 13px/20px var(--font-ui); color: var(--c-text); cursor: pointer; outline: none; user-select: none;
+}
+.p-menu[data-sheet] .p-menu-item { min-height: 40px; }
+.p-menu-item[data-highlighted] { background: var(--c-hover); }
+.p-menu-item[data-disabled] { cursor: default; color: var(--c-text-3); }
+.p-menu-item[data-disabled] .p-menu-icon { opacity: 0.45; }
+.p-menu-icon { display: flex; flex-shrink: 0; color: var(--c-text-3); }
+.p-menu-danger, .p-menu-danger .p-menu-icon { color: var(--c-danger); }
+.p-menu-danger[data-highlighted] { background: var(--c-danger-tint); }
+.p-menu-check { display: flex; margin-left: auto; color: var(--c-accent-fg); }
+.p-menu-rule { height: 1px; margin: 4px; background: var(--c-border); }
+@media (prefers-reduced-motion: reduce) { .p-menu { transition: none; } }
 
 /* Pressable: a whole row or tile to press, its wash and its ring and nothing else (ui/Pressable.tsx). */
 .p-pressable {

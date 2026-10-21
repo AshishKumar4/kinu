@@ -32,11 +32,12 @@ describe('slate sharing surfaces', () => {
 
             // A received row names who shared it; forking one picks a workspace, or a new one.
             expect(text).toContain('sam@example.com');
-            await shared.click('[data-drive-share="live-mail-9"] [data-drive-menu]');
+            await shared.click('[data-drive-share="live-mail-9"] [data-row-menu]');
+            await shared.waitForSelector('[role="menu"][data-open] [role="menuitem"]');
             await shared.evaluate(() => {
               const item = [...document.querySelectorAll('[role="menuitem"]')].find((candidate) => candidate.textContent?.trim() === 'Fork…');
 
-              if (!(item instanceof HTMLButtonElement)) throw new Error('no Fork… item');
+              if (!(item instanceof HTMLElement)) throw new Error('no Fork… item');
               item.click();
             });
             await shared.waitForSelector('[role="dialog"]');
@@ -172,19 +173,21 @@ describe('slate sharing surfaces', () => {
             expect(await live.$('[data-share-submit]')).not.toBeNull();
 
             // On the owner's access it is never listed, and its menu says why.
-            await live.click('[data-live-share="live-board-1"] [data-drive-menu]');
-            expect(await live.$eval('[data-live-share="live-board-1"] [data-live-share-listing]', (item) => item.getAttribute('aria-disabled'))).toBe('true');
-            expect(await live.$eval('[data-live-share="live-board-1"] [role="menu"]', (menu) => menu.textContent ?? '')).toContain('Use their own access to list it.');
+            await live.click('[data-live-share="live-board-1"] [data-row-menu]');
+            await live.waitForSelector('[role="menu"][data-open] [role="menuitem"]');
+            expect(await live.$eval('[role="menu"][data-open] [data-live-share-listing]', (item) => item.getAttribute('aria-disabled'))).toBe('true');
+            expect(await live.$eval('[role="menu"][data-open]', (menu) => menu.textContent ?? '')).toContain('Use their own access to list it.');
             expect(await live.$('[data-share-gallery]')).toBeNull();
 
             // And it moves to each person's own access in one press from its menu: nothing of the owner's is used.
-            await live.click('[data-live-share="live-board-1"] [data-live-share-own]');
+            await live.click('[role="menu"][data-open] [data-live-share-own]');
             await live.waitForSelector('[data-live-share="live-board-1"] [data-live-share-mode="own"]');
-            await live.click('[data-live-share="live-board-1"] [data-drive-menu]');
-            expect(await live.$('[data-live-share="live-board-1"] [data-live-share-own]')).toBeNull();
+            await live.click('[data-live-share="live-board-1"] [data-row-menu]');
+            await live.waitForSelector('[role="menu"][data-open] [role="menuitem"]');
+            expect(await live.$('[role="menu"][data-open] [data-live-share-own]')).toBeNull();
 
             // Then it can be listed, by a line and a category asked for first.
-            await live.click('[data-live-share="live-board-1"] [data-live-share-listing]');
+            await live.click('[role="menu"][data-open] [data-live-share-listing]');
             await live.click('[data-share-gallery]');
             await live.type('[data-share-gallery-line]', 'Triage issues by label');
             await live.click('[data-share-gallery-for] [data-segment="developer"]');

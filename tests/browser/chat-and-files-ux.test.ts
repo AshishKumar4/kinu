@@ -491,8 +491,9 @@ async function run(): Promise<Observed> {
     );
 
     // Rename rides the real RPC against the frame's stateful fixture, from the row's menu.
-    await files.click(`${rowSelector('SOUL.md')} [data-drive-menu]`);
-    await files.click(`${rowSelector('SOUL.md')} [data-files-rename]`);
+    await files.click(`${rowSelector('SOUL.md')} [data-row-menu]`);
+    await files.waitForSelector('[role="menu"][data-open] [data-files-rename]');
+    await files.click('[role="menu"][data-open] [data-files-rename]');
     await files.waitForSelector('[data-files-rename-input]');
     const renameInput = present(await files.$('[data-files-rename-input]'), 'the rename input');
 
@@ -503,8 +504,9 @@ async function run(): Promise<Observed> {
     const filesAfterRename = await rowNames();
 
     // Delete asks inline, then the row is gone.
-    await files.click(`${rowSelector('AGENTS.md')} [data-drive-menu]`);
-    await files.click(`${rowSelector('AGENTS.md')} [data-files-delete]`);
+    await files.click(`${rowSelector('AGENTS.md')} [data-row-menu]`);
+    await files.waitForSelector('[role="menu"][data-open] [data-files-delete]');
+    await files.click('[role="menu"][data-open] [data-files-delete]');
     await files.click(`${rowSelector('AGENTS.md')} [data-files-delete-confirm]`);
     await waitForRowGone('AGENTS.md');
     const filesAfterDelete = await rowNames();
@@ -2131,8 +2133,9 @@ describe('a rename while an IME composes', () => {
       await page.waitForSelector(row('main'));
       await page.click(row('main'));
       await page.waitForSelector(row('SOUL.md'));
-      await page.click(`${row('SOUL.md')} [data-drive-menu]`);
-      await page.click(`${row('SOUL.md')} [data-files-rename]`);
+      await page.click(`${row('SOUL.md')} [data-row-menu]`);
+      await page.waitForSelector('[role="menu"][data-open] [data-files-rename]');
+      await page.click('[role="menu"][data-open] [data-files-rename]');
       await page.waitForSelector('[data-files-rename-input]');
       await page.$eval('[data-files-rename-input]', (el) => { if (el instanceof HTMLInputElement) el.value = ''; });
       await page.type('[data-files-rename-input]', '魂');
@@ -2631,7 +2634,9 @@ describe('Files at every width it is drawn', () => {
 
       const pick = async (item: string) => {
         await page.click('[aria-label="View options"]');
-        await page.click(`[role="menu"] [${item}]`);
+        await page.waitForSelector(`[role="menu"][data-open] [${item}]`);
+        await page.click(`[role="menu"][data-open] [${item}]`);
+        await page.waitForFunction(() => document.querySelector('[role="menu"][data-open]') === null);
       };
 
       await page.setViewport({ width: 1280, height: 900 });
@@ -2654,7 +2659,8 @@ describe('Files at every width it is drawn', () => {
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-files-layout="list"] [data-files-entry][title="usr"]');
       await page.click('[aria-label="View options"]');
-      const checked = await page.$$eval('[role="menu"] [aria-checked="true"]', (items) => items.map((item) => (item.textContent ?? '').trim()));
+      await page.waitForSelector('[role="menu"][data-open] [role="menuitemradio"]');
+      const checked = await page.$$eval('[role="menu"][data-open] [aria-checked="true"]', (items) => items.map((item) => (item.textContent ?? '').trim()));
 
       expect(checked.sort()).toEqual(['List', 'Show hidden items']);
       await page.close();
@@ -2693,7 +2699,7 @@ describe('Files at every width it is drawn', () => {
   test("a row's menu waits for the pointer, and a touch screen shows it on every row", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const menuShown = (page: Page, name: string) => page.$eval(
-        `[data-files-entry][title="${name}"] [data-drive-menu]`, (button) => button.checkVisibility({ opacityProperty: true }),
+        `[data-files-entry][title="${name}"] [data-row-menu]`, (button) => button.checkVisibility({ opacityProperty: true }),
       );
 
       const pointer = await newPage();

@@ -1,6 +1,6 @@
 /** What adds to or changes the Drive: New, and the dialogs its menus open. */
 import { Effect } from 'effect';
-import { startTransition, useCallback, useRef, useState, type ReactNode } from "react";
+import { startTransition, useRef, useState, type ReactNode } from "react";
 import { Button, ICON_ON_PHONE } from "@/components/ui/Button";
 import {
   BookOpenIcon, FileArchiveIcon, FolderPlusIcon, FolderSimpleIcon, PencilSimpleIcon, PlusIcon, UploadSimpleIcon,
@@ -11,7 +11,7 @@ import {
   addSkillArchive, addSkillFolder, addSkillText, deleteEntry, makeFolder, renameEntry, type PickedFile,
 } from "@/lib/drive-api";
 import { revokeShare } from "@/lib/shared-api";
-import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
+import { Menu } from "@/components/ui/Menu";
 import { useWorkspaceRpc } from "@/hooks/use-chat-owner";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -19,8 +19,8 @@ import { ForkDialog } from "@/components/shared/ForkDialog";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { Notice } from "@/components/ui/Notice";
-import { Pressable } from "@/components/ui/Pressable";
 import { TextArea, TextInput } from "@/components/ui/Field";
+import { FilePicker } from "@/components/ui/FilePicker";
 
 function relativePathOf(file: File): string {
   return file.webkitRelativePath === "" ? file.name : file.webkitRelativePath;
@@ -120,14 +120,14 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
             onClick={() => folderInput.current?.click()}><FolderSimpleIcon size={13} /> a folder</Button>
           <Button size="sm" disabled={busy}
             onClick={() => zipInput.current?.click()}><FileArchiveIcon size={13} /> a zip</Button>
-          <input ref={folderInput} type="file" className="hidden" {...{ webkitdirectory: "" }} data-drive-skill-folder
+          <FilePicker ref={folderInput} folder data-drive-skill-folder
             onChange={(event) => {
               const files = picked(event.currentTarget.files);
               event.currentTarget.value = "";
 
               if (files.length > 0) run(() => addSkillFolder(files, pickedFolderName(files)));
             }} />
-          <input ref={zipInput} type="file" accept=".zip,application/zip" className="hidden" data-drive-skill-zip
+          <FilePicker ref={zipInput} accept=".zip,application/zip" data-drive-skill-zip
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
               event.currentTarget.value = "";
@@ -157,13 +157,9 @@ interface NewProps {
 }
 
 function NewMenu({ onFiles, onFolder, onZip, onNewFolder, onNewSkill }: NewProps) {
-  const [open, setOpen] = useState(false);
-  const menu = useRef<HTMLDivElement>(null);
   const filesInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const zipInput = useRef<HTMLInputElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useCloseOnOutsideClick(open, menu, close);
 
   const items: readonly { label: string; icon: ReactNode; marker: `data-${string}`; run: () => void; apart?: boolean }[] = [
     { label: "Upload files", icon: <UploadSimpleIcon size={15} />, marker: "data-drive-upload-files", run: () => filesInput.current?.click() },
@@ -174,28 +170,16 @@ function NewMenu({ onFiles, onFolder, onZip, onNewFolder, onNewSkill }: NewProps
   ];
 
   return (
-    <div ref={menu} className="relative">
-      <Button variant="primary" size="sm" className={ICON_ON_PHONE} aria-label="New" aria-haspopup="menu" aria-expanded={open}
-        data-drive-new onClick={() => setOpen((value) => !value)}>
-        <PlusIcon size={14} weight="bold" /><span className="max-sm:hidden">New</span>
-      </Button>
-      {open && (
-        <div role="menu" className="absolute right-0 top-full z-30 mt-1 w-52 p-card border p-border p-1 p-shadow-menu animate-fade-in">
-          {items.map((item) => (
-            <div key={item.label}>
-              {item.apart === true && <div className="mx-1 my-2 border-t p-border" />}
-              <Pressable className="t-body flex items-center gap-3 px-2 py-1 p-text" role="menuitem" {...{ [item.marker]: "" }} onClick={() => { setOpen(false); item.run(); }}>
-                <span className="flex shrink-0 p-text-3">{item.icon}</span>{item.label}
-              </Pressable>
-            </div>
-          ))}
-        </div>
-      )}
-      <input ref={filesInput} type="file" multiple className="hidden" data-drive-files-input
+    <div>
+      <Menu name="New" items={items.map(({ run, ...item }) => ({ ...item, onSelect: run }))} trigger={{
+        label: "New",
+        control: <Button variant="primary" size="sm" className={ICON_ON_PHONE} data-drive-new><PlusIcon size={14} weight="bold" /><span className="max-sm:hidden">New</span></Button>,
+      }} />
+      <FilePicker ref={filesInput} multiple data-drive-files-input
         onChange={(event) => { const files = [...(event.currentTarget.files ?? [])]; event.currentTarget.value = ""; onFiles(files); }} />
-      <input ref={folderInput} type="file" className="hidden" {...{ webkitdirectory: "" }} data-drive-folder-input
+      <FilePicker ref={folderInput} folder data-drive-folder-input
         onChange={(event) => { const files = picked(event.currentTarget.files); event.currentTarget.value = ""; onFolder(files); }} />
-      <input ref={zipInput} type="file" accept=".zip,application/zip" className="hidden" data-drive-zip-input
+      <FilePicker ref={zipInput} accept=".zip,application/zip" data-drive-zip-input
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
           event.currentTarget.value = "";

@@ -202,9 +202,9 @@ export function DeviceRow({
           </>
         )}
         action={(
-          <Menu label={`${device.label} options`} items={[
-            { label: "Rename", title: "Rename this device", icon: PencilSimpleIcon, run: () => setEditing(device.label) },
-            { label: "Revoke", title: "Revoke device", icon: TrashIcon, run: onRevoke, danger: true },
+          <Menu name={device.label} items={[
+            { label: "Rename", title: "Rename this device", icon: <PencilSimpleIcon size={16} />, onSelect: () => setEditing(device.label) },
+            { label: "Revoke", title: "Revoke device", icon: <TrashIcon size={16} />, onSelect: onRevoke, danger: true },
           ]} />
         )}
         below={notes.length === 0 ? undefined : <div className="t-meta space-y-1 p-text-3">{notes}</div>} />

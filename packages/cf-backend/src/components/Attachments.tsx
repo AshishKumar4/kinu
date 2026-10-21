@@ -3,6 +3,7 @@ import { useRef, type ClipboardEvent } from "react";
 import type { FileUIPart } from "ai";
 import { PaperclipIcon } from "@phosphor-icons/react";
 import { AttachmentChip } from "@/components/AttachmentChip";
+import { FilePicker } from "@/components/ui/FilePicker";
 
 export interface AttachmentsControl {
   readonly parts: readonly FileUIPart[];
@@ -84,8 +85,7 @@ export function AttachButton({ attachments, disabled }: { attachments: Attachmen
 
   return (
     <>
-      <input ref={input} type="file" multiple className="hidden"
-        onChange={(e) => { attachments.onAdd(e.currentTarget.files); e.currentTarget.value = ""; }} />
+      <FilePicker ref={input} multiple onChange={(e) => { attachments.onAdd(e.currentTarget.files); e.currentTarget.value = ""; }} />
       <button type="button" onClick={() => input.current?.click()} disabled={disabled}
         className="p-composer-round" aria-label="Attach files" title="Attach files">
         <PaperclipIcon size={17} />

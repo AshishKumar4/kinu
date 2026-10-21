@@ -1,100 +1,17 @@
 /** One tile for every kind of thing in the Drive; folders are the one exception, a short chip in the same columns. */
-import { useCallback, useId, useRef, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import {
-  AppWindowIcon, BookOpenIcon, BroadcastIcon, CheckIcon, DotsThreeIcon, FileCodeIcon, FileCsvIcon, FileIcon, FileImageIcon,
+  AppWindowIcon, BookOpenIcon, BroadcastIcon, FileCodeIcon, FileCsvIcon, FileIcon, FileImageIcon,
   FilePdfIcon, FileTextIcon, FileZipIcon, FolderSimpleIcon, GitForkIcon, LinkSimpleIcon, SquaresFourIcon,
 } from "@phosphor-icons/react";
-import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { TILE, TILE_GRID, TileShell } from "@/components/ui/Tiles";
 import { Dot } from "@/components/ui/Dot";
+import { Menu, type MenuItem } from "@/components/ui/Menu";
 
 export const GRID = TILE_GRID;
 
 type DataAttributes = Readonly<Record<`data-${string}`, string>>;
-
-export interface MenuItem {
-  readonly label: string;
-  readonly icon: ReactNode;
-  readonly onSelect: () => void;
-  readonly danger?: boolean;
-  /** A rule above the item: the destructive end of the menu. */
-  readonly apart?: boolean;
-  /** Offered but refused: it stays reachable, with the reason under its label. */
-  readonly refused?: string;
-  readonly marker?: `data-${string}`;
-  /** A choice the menu shows as made or not: a box, or one of a set (`radio`). */
-  readonly checked?: boolean;
-  readonly radio?: true;
-}
-
-/** What opens a menu: `More for <name>` behind ⋯ unless another is named; `className` sizes it among other controls. */
-interface MenuTrigger { readonly icon: ReactNode; readonly label: string; readonly className?: string }
-
-/** `className` places it: the caller's position (`absolute …`, or `relative` in a row of controls). */
-export function TileMenu({ name, items, initiallyOpen = false, className, trigger }: {
-  name: string;
-  items: readonly MenuItem[];
-  initiallyOpen?: boolean;
-  className: string;
-  trigger?: MenuTrigger;
-}) {
-  const [open, setOpen] = useState(initiallyOpen);
-  const menu = useRef<HTMLDivElement>(null);
-  const id = useId();
-  const close = useCallback(() => setOpen(false), []);
-  useCloseOnOutsideClick(open, menu, close);
-
-  if (items.length === 0) return null;
-
-  return (
-    <div ref={menu} className={`${open ? "z-50" : "z-10"} ${className}`}>
-      <button type="button" aria-haspopup="menu" aria-expanded={open} aria-label={trigger?.label ?? `More for ${name}`} title={trigger?.label}
-        data-drive-menu onClick={() => setOpen((value) => !value)}
-        className={`flex items-center justify-center transition-colors hover:p-text ${trigger?.className ?? "size-7 rounded-[var(--r-control)] hover:bg-[var(--c-hover)]"} ${open ? "bg-[var(--c-fill)] p-text" : "p-text-3"}`}>
-        {trigger?.icon ?? <DotsThreeIcon size={18} weight="bold" />}
-      </button>
-      {open && (
-        <>
-          <div aria-hidden="true" className="p-scrim fixed inset-0 z-40 sm:hidden" onClick={close} />
-          <div role="menu" aria-label={name}
-            className="fixed inset-x-3 bottom-3 z-50 p-card border p-border p-1 p-shadow-overlay animate-fade-in font-sans sm:absolute sm:inset-x-auto sm:bottom-auto sm:right-0 sm:top-full sm:z-20 sm:mt-1 sm:w-52">
-            <p className="t-status truncate px-2 pb-1 pt-1 p-text-3 sm:hidden">{name}</p>
-            {items.map((item, index) => {
-              const refused = item.refused === undefined ? null : { label: `${id}-${String(index)}-label`, reason: `${id}-${String(index)}-reason` };
-
-              return (
-                <div key={item.label}>
-                  {item.apart === true && <div className="mx-1 my-2 border-t p-border" />}
-                  <button type="button" role={menuRole(item)} aria-checked={item.checked} aria-disabled={refused === null ? undefined : true}
-                    aria-labelledby={refused?.label} aria-describedby={refused?.reason}
-                    {...(item.marker === undefined ? {} : { [item.marker]: "" })}
-                    onClick={() => { if (refused !== null) return; setOpen(false); item.onSelect(); }}
-                    className={`t-body flex w-full gap-3 rounded-md px-2 py-2 text-left transition-colors sm:gap-3 sm:px-2 sm:py-1 ${refused === null ? "items-center hover:bg-[var(--c-hover)]" : "cursor-default items-start"}  ${item.danger === true ? "p-danger" : "p-text"}`}>
-                    <span className={`flex shrink-0 ${item.danger === true ? "" : "p-text-3"} ${refused === null ? "" : "mt-px opacity-45"}`}>{item.icon}</span>
-                    {refused === null ? item.label : (
-                      <span className="min-w-0">
-                        <span id={refused.label} className="block opacity-45">{item.label}</span>
-                        <span id={refused.reason} className="t-meta mt-px block p-text-3">{item.refused}</span>
-                      </span>
-                    )}
-                    {item.checked === true && <CheckIcon size={14} weight="bold" className="ml-auto shrink-0 p-accent-fg" />}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function menuRole(item: MenuItem): "menuitem" | "menuitemcheckbox" | "menuitemradio" {
-  if (item.checked === undefined) return "menuitem";
-
-  return item.radio === true ? "menuitemradio" : "menuitemcheckbox";
-}
 
 function Opener({ href, onOpen, className, label, children }: {
   href?: string;
@@ -137,7 +54,7 @@ export function Tile({ href, onOpen, picture, icon, title, meta, unseen = false,
           </span>
         </TileShell>
       </Opener>
-      <TileMenu name={title} items={menu} initiallyOpen={menuOpen} className="absolute bottom-3 right-2" />
+      <Menu name={title} items={menu} initiallyOpen={menuOpen} className="absolute bottom-3 right-2" />
     </li>
   );
 }
@@ -157,7 +74,7 @@ export function FolderTile({ href, name, icon, menu, attributes, row = false }: 
         <span className="flex shrink-0">{icon}</span>
         <span className="t-item truncate p-text" data-drive-tile-name>{name}</span>
       </Link>
-      <TileMenu name={name} items={menu} className="absolute right-2 top-3" />
+      <Menu name={name} items={menu} className="absolute right-2 top-3" />
     </li>
   );
 }

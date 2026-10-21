@@ -128,9 +128,9 @@ export function PresetRow({ preset, server, appConfigured, onChanged }: {
 
   if (server !== undefined) {
     trailing = (
-      <Menu label={`More for ${preset.title}`} items={[
-        { label: "Docs", icon: ArrowSquareOutIcon, run: () => { window.open(preset.docsUrl, "_blank", "noopener,noreferrer"); } },
-        { label: "Remove", icon: TrashIcon, run: remove, danger: true },
+      <Menu name={preset.title} items={[
+        { label: "Docs", icon: <ArrowSquareOutIcon size={16} />, onSelect: () => { window.open(preset.docsUrl, "_blank", "noopener,noreferrer"); } },
+        { label: "Remove", icon: <TrashIcon size={16} />, onSelect: remove, danger: true },
       ]} />
     );
   } else if (asking) {
