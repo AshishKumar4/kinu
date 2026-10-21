@@ -19,7 +19,7 @@ import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { TextArea } from "@/components/ui/Field";
 import { IconControl } from "@/components/ui/IconControl";
 import { PillButton } from "@/components/ui/Pill";
-import { ComposerButton } from "@/components/ui/ComposerControls";
+import { ChromeButton } from "@/components/ui/ChromeButton";
 
 const CHAT_MODES: readonly WorkMode[] = ["build", "plan"];
 
@@ -261,9 +261,9 @@ function ModeSegment({ value, onChange, disabled }: {
         const title = MODE_TITLE[mode];
 
         return (
-          <ComposerButton look="word" key={mode} onClick={() => onChange(mode)} disabled={disabled} aria-pressed={selected} title={title} className="disabled:opacity-40">
+          <ChromeButton part="word" key={mode} onClick={() => onChange(mode)} disabled={disabled} aria-pressed={selected} title={title} className="disabled:opacity-40">
             {build ? "Auto" : "Plan"}
-          </ComposerButton>
+          </ChromeButton>
         );
       })}
     </div>
@@ -343,7 +343,7 @@ export function Composer({
           <div className="ml-auto flex min-w-0 items-center gap-1">
             {modelPicker && <div className="p-composer-model">{modelPicker}</div>}
             {stranded && onRecover && (
-              <ComposerButton look="word" disabled={recovering}
+              <ChromeButton part="word" disabled={recovering}
                 onClick={() => detach(Effect.promise(async () => {
                   setRecovering(true);
                   // The outcome is the workspace notice's to report; the button only waits.
@@ -355,15 +355,15 @@ export function Composer({
                 title="This turn's worker stopped without finishing. Settle it so the agent takes work again.">
                 <ArrowsClockwiseIcon size={14} />
                 <span className="t-meta hidden @[30rem]:inline">{recoverLabel}</span>
-              </ComposerButton>
+              </ChromeButton>
             )}
             {canBranch && (
-              <ComposerButton look="word" onClick={onBranch}
+              <ChromeButton part="word" onClick={onBranch}
                 aria-label="Run the draft as a parallel branch"
                 title="Answer beside the live turn, then compare. Neither turn interrupts the other.">
                 <GitBranchIcon size={15} />
                 <span className="t-meta hidden @[30rem]:inline">Branch</span>
-              </ComposerButton>
+              </ChromeButton>
             )}
             <SendControls streaming={streaming} empty={empty} blocked={disabled} stopping={stopping}
               onSend={onSend} onStop={() => { setStopping(true); onStop(); }} />
@@ -380,9 +380,9 @@ function SendControls({ streaming, empty, blocked, stopping, onSend, onStop }: {
 }) {
   if (!streaming) {
     return (
-      <ComposerButton look="send" onClick={onSend} disabled={empty || blocked} aria-label="Send" title="Send">
+      <ChromeButton part="send" onClick={onSend} disabled={empty || blocked} aria-label="Send" title="Send">
         <ArrowUpIcon size={16} weight="bold" />
-      </ComposerButton>
+      </ChromeButton>
     );
   }
 
@@ -390,19 +390,19 @@ function SendControls({ streaming, empty, blocked, stopping, onSend, onStop }: {
     <>
       {/* With nothing drafted Stop is the one filled circle; beside a draft, Steer is, and Stop steps back. */}
       {empty ? (
-        <ComposerButton look="send" onClick={onStop} data-stop disabled={stopping} aria-label="Stop this turn" title={stopping ? "Stopping…" : "Stop this turn. Queued messages run next."}>
+        <ChromeButton part="send" onClick={onStop} data-stop disabled={stopping} aria-label="Stop this turn" title={stopping ? "Stopping…" : "Stop this turn. Queued messages run next."}>
           <StopIcon size={13} weight="fill" />
-        </ComposerButton>
+        </ChromeButton>
       ) : (
         <IconControl place="composer" onClick={onStop} data-stop disabled={stopping} aria-label="Stop this turn" title={stopping ? "Stopping…" : "Stop this turn. Queued messages run next."}>
           <StopIcon size={13} weight="fill" />
         </IconControl>
       )}
       {!empty && (
-        <ComposerButton look="send" onClick={onSend} disabled={blocked}
+        <ChromeButton part="send" onClick={onSend} disabled={blocked}
           aria-label="Steer the running turn" title="Send this to the running turn. It arrives at the agent's next step.">
           <ArrowBendUpRightIcon size={16} weight="bold" />
-        </ComposerButton>
+        </ChromeButton>
       )}
     </>
   );

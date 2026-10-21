@@ -12,7 +12,7 @@ import { Tooltip } from "@/components/ui/Tooltip";
 import { ACTIVITY_SURFACE, type SURFACES, type SurfaceKind } from "@kinu.run/core";
 import { AgentFaceIcon } from "@/components/Marks";
 import { Pressable } from "@/components/ui/Pressable";
-import { BarButton } from "@/components/ui/BarButton";
+import { ChromeButton } from "@/components/ui/ChromeButton";
 
 interface ToolSpec { readonly name: string; readonly Icon: Icon | typeof AgentFaceIcon; readonly about?: string }
 
@@ -128,12 +128,12 @@ function Pages({ surface, pages, choose }: { readonly surface: SurfaceKind | nul
       </span>
       {picked ? (
         <span className="relative flex min-w-0">
-          <BarButton part="picker" aria-expanded={menu} aria-haspopup="menu" aria-label={current.title} title={titles(pages)}
+          <ChromeButton part="picker" aria-expanded={menu} aria-haspopup="menu" aria-label={current.title} title={titles(pages)}
             data-open="" aria-current="true" onClick={() => setMenu(!menu)}>
             <current.Icon size={14} weight="fill" className="shrink-0" aria-hidden />
             <span className="truncate">{current.title}</span>
             <CaretDownIcon size={10} weight="bold" className="shrink-0 p-text-3" aria-hidden />
-          </BarButton>
+          </ChromeButton>
           {current.action}
           {menu && <PagesMenu pages={pages} open={surface} choose={choose} />}
         </span>
@@ -141,11 +141,11 @@ function Pages({ surface, pages, choose }: { readonly surface: SurfaceKind | nul
         <ul className="p-pages-row">
           {pages.map((page, index) => shown.has(index) && (
             <li key={page.key} className="p-page" data-open={page.key === surface ? "" : undefined}>
-              <BarButton part="page" onClick={() => choose(page.key)} title={page.title} aria-label={page.title}
+              <ChromeButton part="page" onClick={() => choose(page.key)} title={page.title} aria-label={page.title}
                 aria-current={page.key === surface ? "true" : undefined}>
                 <page.Icon size={14} weight={page.key === surface ? "fill" : "regular"} className="shrink-0" aria-hidden />
                 <span className="truncate">{page.title}</span>
-              </BarButton>
+              </ChromeButton>
               {page.key === surface && page.action}
             </li>
           ))}
@@ -154,10 +154,10 @@ function Pages({ surface, pages, choose }: { readonly surface: SurfaceKind | nul
       {!picked && hidden.length > 0 && (
         <span className="relative flex shrink-0">
           {/* With none beside the tools, the count says what it counts. */}
-          <BarButton part="more" aria-expanded={menu} aria-haspopup="menu" aria-label={`${String(hidden.length)} more ${hidden.length === 1 ? "page" : "pages"}`}
+          <ChromeButton part="more" aria-expanded={menu} aria-haspopup="menu" aria-label={`${String(hidden.length)} more ${hidden.length === 1 ? "page" : "pages"}`}
             title={titles(hidden)} onClick={() => setMenu(!menu)}>
             {shown.size === 0 ? <>{hidden.length} {hidden.length === 1 ? "page" : "pages"}<CaretDownIcon size={10} weight="bold" aria-hidden /></> : `+${String(hidden.length)}`}
-          </BarButton>
+          </ChromeButton>
           {menu && <PagesMenu pages={hidden} open={surface} choose={choose} />}
         </span>
       )}
@@ -186,11 +186,11 @@ export function InspectorBar({ surface, pages, tools, choose, trailing }: {
             return (
               <li key={key}>
                 <Tooltip side="bottom" content={about === undefined ? counted : <><span>{counted}</span><span className="p-text-3">{about}</span></>}>
-                  <BarButton part="tool" onClick={() => choose(key)} aria-label={name} aria-current={current ? "true" : undefined}>
+                  <ChromeButton part="tool" onClick={() => choose(key)} aria-label={name} aria-current={current ? "true" : undefined}>
                     <ToolIcon size={15} weight={current ? "fill" : "regular"} className="shrink-0" aria-hidden />
                     {current && <span className="p-tool-name">{name}</span>}
                     {count !== undefined && <span className="p-tool-count" data-accent={count.accent ? "" : undefined}>{count.value}</span>}
-                  </BarButton>
+                  </ChromeButton>
                 </Tooltip>
               </li>
             );
