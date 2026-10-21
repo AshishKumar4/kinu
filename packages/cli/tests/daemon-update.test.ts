@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
-import { createMemoryVfs, killAndAwaitExit, oneMachine, present, recordedIn, runOk, scratchDir } from '@kinu.run/test-utils';
+import { createMemoryVfs, killAndAwaitExit, namingFixture, oneMachine, present, recordedIn, runOk, scratchDir } from '@kinu.run/test-utils';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
@@ -74,6 +74,9 @@ afterEach(async () => {
     const daemon = recordedIn(join(home, 'pc-agent.pid'), home);
 
     if (daemon !== null) await killAndAwaitExit(daemon);
+
+    // A successor whose handover a timeout cut short is in no pidfile yet; its command line names its home.
+    for (const left of await namingFixture(home)) await killAndAwaitExit(left);
   }
 
   await Promise.all(hubs.splice(0).map((started) => started.close()));
