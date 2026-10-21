@@ -25,7 +25,7 @@ import { Preformatted } from "@/components/ui/Preformatted";
 import { Segmented } from "@/components/ui/Segmented";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { CardSlot } from "@/components/ui/CardSlot";
-import { WorkspaceLogo } from "@/components/Marks";
+import { WorkspaceLogo } from "@/components/ui/Marks";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { showing, detach, settle } from '@kinu.run/core/obs';
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";

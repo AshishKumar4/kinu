@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader } from "@/components/ui/Loader";
-import { ArrowSquareOutIcon, CaretLeftIcon, ShieldWarningIcon, TrashIcon, TrayIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon, CaretLeftIcon, TrashIcon, TrayIcon } from "@phosphor-icons/react";
 import type { MailBox, MailThreadSummary, MailThreadView } from "@kinu.run/core";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -13,6 +13,7 @@ import { mailBoxLabel } from "./MailRow";
 import { SendToWorkspace } from "./SendToWorkspace";
 import { Button } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
+import { Notice } from "@/components/ui/Notice";
 
 export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }: {
   id: string; boxes: readonly MailBox[]; owner: string; drafts: boolean; onBack: () => void; onChanged: () => void;
@@ -74,11 +75,11 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
   if (box?.kind === "person") reader = box.workspace === null ? "no assistant yet" : "Kinu";
 
   return (
-    <article data-mail-reader={thread.id} aria-busy={busy !== null} className="min-w-0 max-w-[760px] space-y-4">
+    <article data-mail-reader={thread.id} aria-busy={busy !== null} className="min-w-0 max-w-[var(--layout-reader)] space-y-4">
       <Button variant="ghost" size="sm" className="lg:hidden" data-mail-back onClick={onBack} icon={<CaretLeftIcon size={14} />}>Mail</Button>
       <header className="space-y-2">
         <div className="flex items-start gap-2">
-          <h2 data-mail-subject className="t-title min-w-0 flex-1 p-text [overflow-wrap:anywhere]">{thread.subject || "(No subject)"}</h2>
+          <h2 data-mail-subject className="t-title min-w-0 flex-1 p-text wrap-anywhere">{thread.subject || "(No subject)"}</h2>
           {busy === null && <Menu name="Thread" items={menu} className="relative shrink-0" />}
         </div>
         <div className="flex flex-wrap gap-2">
@@ -87,11 +88,10 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
         </div>
       </header>
       {thread.important !== null && <p data-mail-why className="t-body p-text-2">{thread.important}</p>}
-      {last !== undefined && !last.verified && <p data-mail-unverified-banner className="t-body flex items-center gap-2 rounded-lg bg-[var(--c-warning-tint)] px-3 py-2 p-text">
-        <ShieldWarningIcon size={15} weight="fill" className="shrink-0 p-warning" />
+      {last !== undefined && !last.verified && <Notice tone="warning" data-mail-unverified-banner>
         {last.from.address.toLowerCase() === owner.toLowerCase() ? "Not verified · claims to be you" : "Not verified"}
-      </p>}
-      {messages.length > 0 && <div className="divide-y divide-dashed divide-[var(--c-dash)] border-y border-dashed border-[var(--c-dash)]">
+      </Notice>}
+      {messages.length > 0 && <div className="p-rows-dashed border-y border-dashed p-border-dash">
         {messages.map((message) => <MailMessage key={message.id} mail={message} box={box} owner={owner} open={opened.get(message.id) ?? message.id === last?.id} onToggle={() => toggle(message.id)} />)}
       </div>}
       {error !== null && <p role="alert" className="t-body p-danger">{error}</p>}

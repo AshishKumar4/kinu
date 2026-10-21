@@ -4,7 +4,7 @@ import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { ActorReferenceSchema, bindActorHandle, type ActorHandle, type ActorReference } from './actor-handle';
-import { tableExists } from './schema';
+import { tableExists } from '../utils/sql';
 import { isExplorationActorKey, requireSubagentActorName } from './actor-key';
 
 export interface WorkspaceActorAuthority {

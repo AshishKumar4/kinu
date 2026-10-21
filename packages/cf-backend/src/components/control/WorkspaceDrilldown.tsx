@@ -16,13 +16,14 @@ import {
 } from '../../lib/control-api';
 import { Notice, Panel, SectionHeader, useControlRead, when } from './panels';
 import { TextInput } from "@/components/ui/Field";
+import { Surface } from "@/components/ui/Surface";
 
 /** Every panel arrives in this shape so one down surface never blanks the page. */
 function PanelBlock(
   { title, panel, children }: { title: string; panel: PanelValue; children?: ReactNode },
 ): ReactNode {
   return (
-    <section className="p-card p-4 space-y-2">
+    <Surface look="panel" as="section" className="p-4 space-y-2">
       <div className="t-label">{title}</div>
       {panel.status === 'ok'
         ? children ?? <Rows value={panel.value} />
@@ -32,7 +33,7 @@ function PanelBlock(
             <span className="min-w-0">{panel.reason}</span>
           </div>
         )}
-    </section>
+    </Surface>
   );
 }
 

@@ -5,6 +5,7 @@
  */
 import type { ReactNode } from "react";
 import { WarningIcon } from "@phosphor-icons/react";
+import { ProgressBar } from "@/components/ui/Meter";
 
 /** A picture as itself, else the kind's glyph large with its extension under it. */
 export function GlyphCover({ icon, extension, image }: { icon: ReactNode; extension: string; image?: string }) {
@@ -72,10 +73,7 @@ export function TransferCover({ failed, percent }: { failed: boolean; percent: n
   return (
     <span className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-sunken">
       <span className="t-meta tabular-nums p-text-2">{percent}%</span>
-      <span role="progressbar" aria-label="Uploading" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}
-        className="h-1 w-1/2 overflow-hidden rounded-[var(--r-pill)] bg-[var(--c-border-strong)]">
-        <span className="block h-full rounded-[var(--r-pill)] bg-[var(--c-accent-mark)] transition-[width] duration-[var(--dur-state)]" style={{ width: `${String(percent)}%` }} />
-      </span>
+      <span className="w-1/2"><ProgressBar value={percent} max={100} label="Uploading" onCover /></span>
     </span>
   );
 }

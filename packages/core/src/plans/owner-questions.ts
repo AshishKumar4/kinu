@@ -12,7 +12,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
 import { argumentDigest } from '../safety/argument-digest';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import { TurnReasonSchema, type TurnReason, type WorkMode } from '../types/turn';
+import { TurnReasonSchema, WorkModeSchema, type TurnReason, type WorkMode } from '../types/turn';
 import { AskOwnerInputSchema, OWNER_ANSWER_SIGNAL, OwnerQuestionSchema, type OwnerQuestion } from '../types/owner-questions';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
@@ -39,7 +39,7 @@ const AskedQuestionsSchema = v.object({
   callId: v.string(),
   turnId: v.string(),
   /** The asking turn's mode, which the turn its answer starts runs in. */
-  mode: v.picklist(['plan', 'build']),
+  mode: WorkModeSchema,
   questions: v.array(OwnerQuestionSchema),
   status: StatusSchema,
   answers: v.nullable(OwnerAnswersSchema),

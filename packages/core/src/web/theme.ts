@@ -301,11 +301,13 @@ export const THEME_TOKENS: Readonly<Record<ThemeName, Readonly<Record<Mode, Toke
 };
 
 export type RadiusRole = '--r-check' | '--r-inner' | '--r-control' | '--r-row' | '--r-card' | '--r-pill'
-  | '--r-composer' | '--r-workspace-tab' | '--r-workspace-tab-outline' | '--r-workspace-tab-flare';
+  | '--r-composer' | '--r-workspace-tab' | '--r-workspace-tab-outline' | '--r-workspace-tab-flare'
+  | '--r-bubble' | '--r-bubble-tail' | '--r-prompt';
 
 /** The only radii (design system §1.5): a checkbox; an inner piece; a control; a row, menu or notice; a card, tile or
  *  dialog; and a pill. Then the named variants of the approved composer and the settled workspace tab: its rename
- *  field, the outline's top corners and its flared feet. */
+ *  field, the outline's top corners and its flared feet; the person's chat bubble, round but for the corner that
+ *  points at them; and the prompt card that opens a workspace or a chat. */
 const RADII = {
   '--r-check': '4px',
   '--r-inner': '6px',
@@ -317,6 +319,9 @@ const RADII = {
   '--r-workspace-tab': '7px',
   '--r-workspace-tab-outline': '10px',
   '--r-workspace-tab-flare': '8px',
+  '--r-bubble': '16px',
+  '--r-bubble-tail': '4px',
+  '--r-prompt': '16px',
 } satisfies Readonly<Record<RadiusRole, string>>;
 
 /**
@@ -341,14 +346,31 @@ function selectors(theme: ThemeName, mode: Mode): string {
   return `${mode === 'dark' ? ':root' : '[data-mode="light"]'},${named}`;
 }
 
+/** Colours the same in every look: a partner's full-colour mark sits on white, as its guidelines ask, and a mark drawn
+ *  in white (GitHub's) on near-black; an avatar's initial is white on its name's hue; someone else's HTML is drawn on
+ *  white paper as its author drew it, and a remote screen in black; the prompt card's long soft drop. */
+const FIXED = {
+  '--c-brand-tile': '#FFFFFF',
+  '--c-brand-tile-ink': '#111318',
+  '--c-avatar-ink': '#FFFFFF',
+  '--c-paper': '#FFFFFF',
+  '--c-screen': '#000000',
+  '--shadow-prompt': '0 18px 55px -42px rgba(0, 0, 0, 0.75)',
+} satisfies Readonly<Record<`--c-${string}` | `--shadow-${string}`, string>>;
+
+/** What a feedback screenshot draws over a field it blocks out: opaque near-black, read as removed in either look. */
+export const REDACTION_FILL = '#111111';
+
+/** An avatar's ground (ui/Avatar.tsx): its name's hue at a middle lightness, so the white initial reads in every look. */
+export function avatarGround(hue: number): string {
+  return `hsl(${String(hue)} 45% 45%)`;
+}
+
 /**
  * The public pages' type (design system §1.3, the public variants): the landing, /privacy, /terms and the deploy flow
  * are read by someone not yet in the app, at a reading size, not the app chrome's 13. Body 15, lede 17 and the
  * call to action's 14, each with its leading; the public shell's CSS and the app's t-public-* roles read these.
  */
-/** A partner's full-colour mark sits on white in every look, as its guidelines ask (Cloudflare's cloud on a Continue). */
-const BRAND = { '--c-brand-tile': '#FFFFFF' } satisfies Readonly<Record<`--c-${string}`, string>>;
-
 const PUBLIC_TYPE = {
   '--t-public-body': '15px',
   '--t-public-body-leading': '1.7',
@@ -362,7 +384,7 @@ const declarations = (tokens: Readonly<Record<string, string>>): string => Objec
 const ORDERED: readonly ThemeName[] = [DEFAULT_THEME, ...THEME_NAMES.filter((name) => name !== DEFAULT_THEME)];
 
 export const THEME_CSS = [
-  `:root{${declarations(RADII)};${declarations(PUBLIC_TYPE)};${declarations(BRAND)}}`,
+  `:root{${declarations(RADII)};${declarations(PUBLIC_TYPE)};${declarations(FIXED)}}`,
   ...ORDERED.flatMap((theme) => (['dark', 'light'] as const).map((mode) => `${selectors(theme, mode)}{${declarations(THEME_TOKENS[theme][mode])}}`)),
 ].join('\n');
 

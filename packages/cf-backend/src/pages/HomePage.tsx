@@ -14,6 +14,7 @@ import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from "@kinu.run/core";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 import WorkspacePage from "./WorkspacePage";
+import { Surface } from "@/components/ui/Surface";
 
 /** Home: the owner's Personal assistant's chat once they have one; until then, a new workspace's mission, which is also
  *  its own page (`NewWorkspacePage`). A read that fails shows the mission too, so Home never waits on it. */
@@ -53,9 +54,9 @@ function MissionHome() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:content-center md:px-8 lg:grid-cols-[minmax(0,680px)_300px]">
+      <main className="mx-auto grid min-h-full w-full max-w-[var(--layout-home-frame)] grid-cols-1 content-start gap-6 px-6 py-[var(--layout-home-pad)] md:content-center md:px-8 lg:grid-cols-[var(--layout-home)]">
         <header className="col-span-full mb-3">
-          <h1 className="t-page-title text-[clamp(38px,4vw,46px)] p-text">
+          <h1 className="t-page-title t-hero p-text">
             What do you wanna work on?
           </h1>
         </header>
@@ -84,11 +85,11 @@ function MissionHome() {
               <span className="t-label">Recent</span>
               {listFailed && <span className="t-status p-warning">could not load</span>}
             </div>
-            <div className="overflow-hidden rounded-[14px] border p-border p-surface">
+            <Surface look="panel" className="overflow-hidden">
               {workspaces.slice(0, RECENT_WORKSPACES).map((agent, index) => (
                 <WorkspaceOverviewCard key={agent.name} workspace={agent} variant="line" first={index === 0} />
               ))}
-            </div>
+            </Surface>
           </section>
         )}
       </main>

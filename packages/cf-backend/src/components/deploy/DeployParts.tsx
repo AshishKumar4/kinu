@@ -11,7 +11,7 @@ import { openProviderWindow } from "@/lib/connect-window";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Loader } from "@/components/ui/Loader";
 import { Switch } from "@/components/ui/Switch";
-import { ChatMascot } from "@/components/Marks";
+import { ChatMascot } from "@/components/ui/Marks";
 import type { DeployRefused } from "@/lib/deploy-page-api";
 import { CloudflareTile } from "@/components/ui/BrandMark";
 import { Callout } from "@/components/ui/Callout";

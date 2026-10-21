@@ -8,6 +8,7 @@ import { PREVIEW_SANDBOX, isPreviewUrl, type PinnedPreviewPort } from "@kinu.run
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { detach, showing } from "@kinu.run/core/obs";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
+import { Surface } from "@/components/ui/Surface";
 
 /** Whether a computer preview is a public link, and the owner's way to change it. */
 export interface PublicLink {
@@ -38,10 +39,10 @@ export function PreviewChrome({ url, publicLink }: { url: string; publicLink?: P
 /** The bar alone, naming where a preview is: the landing's sample, whose address serves nothing to open or copy. */
 export function PreviewAddress({ url, children }: { url: string; children?: ReactNode }) {
   return (
-    <div className="flex items-center gap-2 px-3 py-1 border-b p-border p-fill shrink-0">
+    <Surface look="tile" className="flex items-center gap-2 px-3 py-1 border-b p-border shrink-0">
       <code data-preview-address className="t-meta t-mono p-text-3 truncate flex-1">{url}</code>
       {children}
-    </div>
+    </Surface>
   );
 }
 
@@ -107,12 +108,7 @@ export function PreviewFrame({ url, label, publicLink }: {
   return (
     <div className="h-full flex flex-col">
       <PreviewChrome url={url} publicLink={publicLink} />
-      <iframe
-        src={url}
-        title={label ?? url}
-        className="p-bg flex-1 min-h-0 w-full border-0"
-        sandbox={PREVIEW_SANDBOX}
-      />
+      <Surface look="page" as="iframe" className="flex-1 min-h-0 w-full border-0" src={url} title={label ?? url} sandbox={PREVIEW_SANDBOX} />
     </div>
   );
 }

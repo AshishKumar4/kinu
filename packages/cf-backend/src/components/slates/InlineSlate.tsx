@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useEffectEvent, useId, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode, type Ref, type RefObject } from "react";
-import { Loader } from "@cloudflare/kumo/components/loader";
+import { Loader } from "@/components/ui/Loader";
 import { ArrowSquareOutIcon, CaretRightIcon, CheckIcon, PushPinIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
 import type { SlateCallResult } from "@kinu.run/core";
@@ -18,6 +18,9 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { WorkspacePartHost } from "@/hooks/use-part-host";
 import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
+import { IconControl } from "@/components/ui/IconControl";
+import { Pressable } from "@/components/ui/Pressable";
+import { Surface } from "@/components/ui/Surface";
 
 
 /** `sized`: the page reports its own height, as every page kinu:slate serves does; a slate's own server does not. */
@@ -115,7 +118,6 @@ function SaveControl({ name, save, open }: { name: string; save: () => Promise<S
   const [saved, setSaved] = useState<{ id: string; title: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const control = "p-text-3 hover:p-text p-1 shrink-0 inline-flex rounded-md transition-colors hover:bg-[var(--c-hover)]";
 
   const keep = useCallback(() => detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
     setBusy(true);
@@ -128,18 +130,18 @@ function SaveControl({ name, save, open }: { name: string; save: () => Promise<S
 
   if (saved !== null) {
     return (
-      <button type="button" data-slate-saved={saved.id} onClick={() => open?.(saved.id)} disabled={open === undefined}
-        aria-label={`Saved as ${saved.title}; open it in the work surface`} title={`Saved as ${saved.title}`} className={`${control} p-accent-fg`}>
+      <IconControl place="inline" data-slate-saved={saved.id} onClick={() => open?.(saved.id)} disabled={open === undefined}
+        aria-label={`Saved as ${saved.title}; open it in the work surface`} title={`Saved as ${saved.title}`} className="p-accent-fg">
         <CheckIcon size={11} weight="bold" />
-      </button>
+      </IconControl>
     );
   }
 
   return (
-    <button type="button" data-slate-save onClick={keep} disabled={busy} aria-label={`Save ${name} as a slate`}
-      title={failed === null ? "Save as a slate of this workspace" : `Could not save: ${failed}`} className={`${control} ${failed === null ? "" : "p-danger"}`}>
+    <IconControl place="inline" data-slate-save onClick={keep} disabled={busy} aria-label={`Save ${name} as a slate`}
+      title={failed === null ? "Save as a slate of this workspace" : `Could not save: ${failed}`} className={failed === null ? undefined : "p-danger"}>
       <PushPinIcon size={11} />
-    </button>
+    </IconControl>
   );
 }
 
@@ -187,26 +189,34 @@ function SlateCard({ id, block, measure, save, children }: {
 
   const name = block ?? id;
 
-  const controls = folded
-    ? "flex items-center gap-1 py-px"
-    : "absolute right-1 top-1 z-10 flex items-center gap-1 rounded-md p-fill opacity-0 transition-opacity group-hover/slate:opacity-100 group-focus-within/slate:opacity-100 [@media(hover:none)]:opacity-100";
+
+  const tools = (
+    <>
+      <Pressable look="compact" onClick={() => setHand(!folded)} aria-expanded={!folded} aria-controls={body} title={folded ? `Show ${name}` : `Fold ${name}`}
+        className="flex min-w-0 flex-1 items-center gap-2 px-1 py-px">
+        <CaretRightIcon size={10} weight="bold" className={`shrink-0 p-text-3 p-fold-turn ${folded ? "" : "rotate-90"}`} />
+        {folded && <code className="t-meta t-mono p-text-3 truncate">{name}</code>}
+        {why !== null && <span className="t-meta ml-auto shrink-0 pl-2 p-text-3">{why}</span>}
+      </Pressable>
+      {save !== undefined && <SaveControl name={name} save={save} open={openSlate} />}
+      {openSlate !== undefined && (
+        <Button variant="ghost" size="sm" icon={<ArrowSquareOutIcon size={14} />} className="shrink-0" onClick={() => openSlate(id)} aria-label={`Open ${name} in the work surface`} title="Open in the work surface" />
+      )}
+    </>
+  );
 
   // Spans only: the card renders inside a markdown <p>, where a <div> trips React's dev validator.
   return (
     <span ref={measure} data-slate-inline={id} {...(block === undefined ? {} : { [SLATE_UI_ATTRIBUTE]: block })}
       data-fold-still={painted ? undefined : ""} className="group/slate relative block my-2">
-      <span ref={register} className={controls}>
-        <button type="button" onClick={() => setHand(!folded)} aria-expanded={!folded} aria-controls={body} title={folded ? `Show ${name}` : `Fold ${name}`}
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-px text-left transition-colors hover:bg-[var(--c-hover)]">
-          <CaretRightIcon size={10} weight="bold" className={`shrink-0 p-text-3 p-fold-turn ${folded ? "" : "rotate-90"}`} />
-          {folded && <code className="t-meta t-mono p-text-3 truncate">{name}</code>}
-          {why !== null && <span className="t-meta ml-auto shrink-0 pl-2 p-text-3">{why}</span>}
-        </button>
-        {save !== undefined && <SaveControl name={name} save={save} open={openSlate} />}
-        {openSlate !== undefined && (
-          <Button variant="ghost" size="sm" icon={<ArrowSquareOutIcon size={14} />} className="shrink-0" onClick={() => openSlate(id)} aria-label={`Open ${name} in the work surface`} title="Open in the work surface" />
+      {folded
+        ? <span ref={register} className="flex items-center gap-1 py-px">{tools}</span>
+        : (
+          <Surface as="span" look="tile" ref={register}
+            className="absolute right-1 top-1 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover/slate:opacity-100 group-focus-within/slate:opacity-100 [@media(hover:none)]:opacity-100">
+            {tools}
+          </Surface>
         )}
-      </span>
       <span id={body} className="p-fold" data-folded={folded ? "" : undefined} inert={folded}>
         <span><span className="block">{children}</span></span>
       </span>
@@ -366,7 +376,8 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
         src={src}
         title={id}
         onLoad={() => setLoaded(true)}
-        className={pane ? 'p-bg flex-1 min-h-0 w-full border-0' : 'block w-full border-0 rounded-xl p-fold-frame'}
+        className="p-slate-frame"
+        data-pane={pane ? '' : undefined}
         style={frameStyle}
         sandbox={PREVIEW_SANDBOX}
       />

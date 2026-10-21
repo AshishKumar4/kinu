@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/Button";
 import { ChatCircleTextIcon, CheckIcon, XIcon } from "@phosphor-icons/react";
 import { AskOwnerInputSchema, OTHER_OPTION, timeAgo, type AskedQuestions, type AskingAgent, type OwnerAnswer, type OwnerQuestion } from "@kinu.run/core";
 import { TextArea } from "@/components/ui/Field";
+import { ChoiceOption } from "@/components/ui/Check";
+import { Surface } from "@/components/ui/Surface";
 
 interface AnswerDraft {
   readonly selected: readonly string[];
@@ -54,19 +56,17 @@ function QuestionField({ question, draft, onDraft, busy }: {
   return (
     <fieldset className="min-w-0" data-question={question.id} disabled={busy}>
       <legend className="flex min-w-0 items-baseline gap-2">
-        {question.header !== undefined && <span className="t-meta shrink-0 rounded-sm px-1 p-badge-neutral" data-question-header>{question.header}</span>}
+        {question.header !== undefined && <Surface look="clip" as="span" className="t-meta shrink-0 px-1 p-badge-neutral" data-question-header>{question.header}</Surface>}
         <span className="t-body p-text">{question.question}</span>
       </legend>
-      <div className={preview === undefined ? "mt-2" : "mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]"}>
+      <div className={preview === undefined ? "mt-2" : "mt-2 grid gap-2 sm:grid-cols-[var(--layout-question)]"}>
         <div className="flex min-w-0 flex-col gap-1" role={many ? "group" : "radiogroup"} aria-label={question.question}>
           {question.options.map((option, index) => {
             const checked = draft.selected.includes(option.label);
 
             return (
-              <label key={option.label} className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1 hover:p-fill" data-question-option={option.label}
-                onMouseEnter={() => setFocused(index)}>
-                <input type={many ? "checkbox" : "radio"} name={name} className="mt-px shrink-0 accent-[var(--c-accent)]" checked={checked}
-                  onChange={() => choose(option.label, index)} onFocus={() => setFocused(index)} />
+              <ChoiceOption many={many} name={name} checked={checked} onChange={() => choose(option.label, index)} onFocus={() => setFocused(index)}
+                key={option.label} data-question-option={option.label} onMouseEnter={() => setFocused(index)}>
                 <span className="min-w-0">
                   <span className="t-body p-text">
                     {option.label}
@@ -74,22 +74,21 @@ function QuestionField({ question, draft, onDraft, busy }: {
                   </span>
                   {option.description !== undefined && <span className="t-meta block p-text-2">{option.description}</span>}
                 </span>
-              </label>
+              </ChoiceOption>
             );
           })}
-          <label className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1 hover:p-fill" data-question-option={OTHER_OPTION}>
-            <input type={many ? "checkbox" : "radio"} name={name} className="mt-px shrink-0 accent-[var(--c-accent)]" checked={draft.other !== null}
-              onChange={() => onDraft(draft.other === null ? { ...draft, other: "", selected: many ? draft.selected : [] } : { ...draft, other: null })} />
+          <ChoiceOption many={many} name={name} checked={draft.other !== null} data-question-option={OTHER_OPTION}
+            onChange={() => onDraft(draft.other === null ? { ...draft, other: "", selected: many ? draft.selected : [] } : { ...draft, other: null })}>
             <span className="min-w-0 flex-1">
               <span className="t-body p-text">{OTHER_OPTION}</span>
               {draft.other !== null && (
                 <TextArea className="mt-1 w-full resize-y" value={draft.other} onChange={(event) => onDraft({ ...draft, other: event.target.value })} aria-label={`Your answer to: ${question.question}`} placeholder="Write your answer" rows={2} autoFocus data-question-other />
               )}
             </span>
-          </label>
+          </ChoiceOption>
         </div>
         {preview !== undefined && (
-          <pre className="t-meta p-code max-h-48 min-w-0 overflow-auto rounded-md px-2 py-2 whitespace-pre" data-question-preview>{preview}</pre>
+          <Surface look="clip" as="pre" className="t-meta p-code max-h-48 min-w-0 overflow-auto px-2 py-2 whitespace-pre" data-question-preview>{preview}</Surface>
         )}
       </div>
     </fieldset>
@@ -142,7 +141,7 @@ export function QuestionCard({ asking, busy, owed = false, onAnswer, onDismiss }
 
   return (
     <div data-question-card={id}>
-      <div className="-mx-1 flex max-h-[min(45vh,32rem)] flex-col gap-3 overflow-y-auto px-1 sm:max-h-[min(55vh,32rem)]">
+      <div className="-mx-1 flex max-h-[var(--layout-questions)] flex-col gap-3 overflow-y-auto px-1 sm:max-h-[var(--layout-questions-wide)]">
         {questions.map((question) => (
           <QuestionField key={question.id} question={question} draft={draftOf(question.id)} busy={busy}
             onDraft={(draft) => keep({ ...unsent, drafts: new Map([...unsent.drafts, [question.id, draft]]) })} />
@@ -198,7 +197,7 @@ export function AskRecord({ callId, input }: { callId: string; input: unknown })
   const questions = asked?.questions ?? (parsed.success ? parsed.output.questions : []);
 
   return (
-    <div className="rounded-md border p-border px-3 py-2" data-ask-record={asked?.status ?? "asked"}>
+    <Surface look="outlined" className="px-3 py-2" data-ask-record={asked?.status ?? "asked"}>
       <div className="t-meta flex items-center gap-2 p-text-3">
         <ChatCircleTextIcon size={12} aria-hidden />
         <span>{asked?.status === "open" ? "Asked you, waiting for your answer" : "Asked you"}</span>
@@ -217,6 +216,6 @@ export function AskRecord({ callId, input }: { callId: string; input: unknown })
         })}
       </ul>
       {(asked?.status === "dismissed" || asked?.status === "in_chat") && <div className="t-meta mt-1 p-text-3">{CLOSED_AS[asked.status]}</div>}
-    </div>
+    </Surface>
   );
 }

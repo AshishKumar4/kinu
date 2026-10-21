@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/Button";
 import { useState } from "react";
 import { StopIcon } from "@phosphor-icons/react";
+import { Surface } from "@/components/ui/Surface";
 
 /** Stop stays: control is not input. */
 export function ViewOnlyBar({ running, onStop }: { running: boolean; onStop: () => void }) {
@@ -14,7 +15,7 @@ export function ViewOnlyBar({ running, onStop }: { running: boolean; onStop: () 
   }
 
   return (
-    <div className="border-t p-border p-sidebar flex min-h-12 items-center gap-2 px-4 py-2" data-view-only>
+    <Surface look="chrome" className="border-t p-border flex min-h-12 items-center gap-2 px-4 py-2" data-view-only>
       <span className="t-meta flex-1 p-text-3">This agent takes no messages.</span>
       {running && (
         <Button disabled={stopping} onClick={() => { setStopping(true); onStop(); }}
@@ -23,6 +24,6 @@ export function ViewOnlyBar({ running, onStop }: { running: boolean; onStop: () 
           <span className="t-meta">{stopping ? "Stopping…" : "Stop"}</span>
         </Button>
       )}
-    </div>
+    </Surface>
   );
 }

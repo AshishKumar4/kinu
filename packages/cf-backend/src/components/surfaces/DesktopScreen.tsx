@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import * as v from "valibot";
 import { KinuMark } from "@/components/ui/KinuLogo";
+import { Surface } from "@/components/ui/Surface";
 
 const ConnectionStateSchema = v.object({ action: v.literal("connection_state"), value: v.string() });
 
@@ -73,7 +74,7 @@ export function DesktopScreen({ src, title }: { src: string; title: string }) {
   }, [unanswered, phase]);
 
   return (
-    <div data-desktop-frame className="relative h-full overflow-hidden bg-black">
+    <Surface look="screen" data-desktop-frame className="relative h-full overflow-hidden">
       <iframe key={opened} ref={frame} data-desktop title={title} src={src} className="block h-full w-full border-0" />
       {phase !== "connected" && (
         <div role="status" className="p-desktop-veil absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
@@ -89,6 +90,6 @@ export function DesktopScreen({ src, title }: { src: string; title: string }) {
           )}
         </div>
       )}
-    </div>
+    </Surface>
   );
 }

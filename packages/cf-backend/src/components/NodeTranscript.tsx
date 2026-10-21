@@ -17,6 +17,7 @@ import {
 } from "@kinu.run/core";
 import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { InlineAction } from "@/components/ui/InlineAction";
 import { cleanNodeLabel, findForkNode } from "@kinu.run/core/swarm-view";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
@@ -26,6 +27,7 @@ import { fmtTokens, timeAgo } from "@kinu.run/core";
 import type { ForkNode } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Button } from "@/components/ui/Button";
+import { Surface } from "@/components/ui/Surface";
 
 
 /** Shared by this panel and the run pane's node list; covers head-journal and search-node statuses. An unknown status gets the quiet dot. */
@@ -48,7 +50,7 @@ function TaskHeader({ task }: { task: string }) {
   const long = task.length > TASK_CLAMP;
 
   return (
-    <div className="shrink-0 border-b p-border px-4 py-2 p-sunken">
+    <Surface look="well" className="shrink-0 border-b p-border px-4 py-2">
       <div className="flex items-start gap-2">
         <div className="t-label pt-px shrink-0">Task</div>
         <div className="min-w-0 flex-1">
@@ -63,7 +65,7 @@ function TaskHeader({ task }: { task: string }) {
           )}
         </div>
       </div>
-    </div>
+    </Surface>
   );
 }
 
@@ -83,12 +85,11 @@ function SearchPath({ view, onSelect }: {
           <span key={crumb.id} className="flex items-center gap-1 shrink-0">
             {index > 0 && <span className="t-meta p-text-3">/</span>}
             {here ? (
-              <span className="t-control p-text max-w-[14rem] truncate" title={label}>{label}</span>
+              <span className="t-control p-text max-w-56 truncate" title={label}>{label}</span>
             ) : (
-              <button onClick={() => onSelect(crumb.id)} title={label}
-                className="t-control p-text-3 hover:p-text transition-colors max-w-[10rem] truncate cursor-pointer">
+              <InlineAction quiet onClick={() => onSelect(crumb.id)} title={label} className="t-control block max-w-40 truncate">
                 {label}
-              </button>
+              </InlineAction>
             )}
           </span>
         );
@@ -101,8 +102,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
   return (
     <>
       {view.errorMessage && (
-        <div className="shrink-0 border-b p-border border-l-2 px-4 py-3"
-          style={{ background: "var(--c-danger-tint)", borderLeftColor: "var(--c-danger)" }}>
+        <div className="p-outcome shrink-0 border-b p-border border-l-2 px-4 py-3" data-tone="danger">
           <div className="t-status flex items-center gap-2 uppercase p-danger">
             <WarningCircleIcon size={11} weight="fill" />
             {shownHeadStatus(view.status, view.errorMessage) === "stopped" ? "Stopped" : "Failed"}
@@ -111,8 +111,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
         </div>
       )}
       {view.answer && (
-        <div className="shrink-0 border-b p-border border-l-2 px-4 py-3 p-fill"
-          style={{ borderLeftColor: "var(--c-accent)" }}>
+        <Surface look="tile" className="p-outcome shrink-0 border-b p-border border-l-2 px-4 py-3" data-tone="accent">
           <div className="t-status flex items-center gap-2 uppercase p-accent-fg">
             <CheckCircleIcon size={11} weight="fill" />
             {view.origin === "head" ? "Report" : "Proposal"}
@@ -120,7 +119,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
           <div className="mt-1 prose-chat p-text max-h-64 overflow-y-auto">
             <MarkdownContent content={view.answer} />
           </div>
-        </div>
+        </Surface>
       )}
     </>
   );
@@ -216,7 +215,7 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
       <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b p-border">
         <StatusDot tone={statusTone(shownHeadStatus(view.status, view.errorMessage))} />
         <span className="t-status uppercase p-text-3 shrink-0">{shownHeadStatus(view.status, view.errorMessage)}</span>
-        <div className="h-3 w-px bg-[var(--c-border)] shrink-0" />
+        <div className="h-3 shrink-0 border-l p-border" />
         <SearchPath view={view} onSelect={onSelect} />
       </div>
 
@@ -257,11 +256,11 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
             <DetailSection title="Decisions">
               <div className="space-y-1">
                 {view.decisions.map((decision, index) => (
-                  <div key={index} className="t-body rounded-md p-fill border p-border p-2">
+                  <Surface look="tile" className="t-body border p-border p-2" key={index}>
                     <div className="p-text-2">{decision.question}</div>
                     <div className="p-accent-fg mt-px">→ {decision.choice}</div>
                     {decision.rationale && <div className="p-text-3 mt-px">{decision.rationale}</div>}
-                  </div>
+                  </Surface>
                 ))}
               </div>
             </DetailSection>
@@ -392,10 +391,10 @@ export function NodeTranscript({ selection, ownerPath = null, trees, rpc, headAc
 
   if (selection === null) {
     return (
-      <div className="min-h-0 flex-1 flex items-center justify-center rounded-lg border p-border p-surface">
+      <Surface look="panel" className="min-h-0 flex-1 flex items-center justify-center">
         <EmptyState icon={<TreeStructureIcon size={28} />} title="Pick a branch"
           hint="Select one in the tree to read its input, every step, and its answer." />
-      </div>
+      </Surface>
     );
   }
 
@@ -423,14 +422,14 @@ export function NodeTranscript({ selection, ownerPath = null, trees, rpc, headAc
   }
 
   return (
-    <div className="min-h-0 flex-1 flex flex-col rounded-lg border p-border p-surface overflow-hidden">
+    <Surface look="panel" className="min-h-0 flex-1 flex flex-col overflow-hidden">
       {/* Keeps the last loaded transcript underneath the error. */}
       {resource.status === "error" && (
         <LoadFailure what="this branch's transcript" message={resource.message} onRetry={reload}
           className="shrink-0 border-b p-border px-4 py-2" />
       )}
       {body}
-    </div>
+    </Surface>
   );
 }
 

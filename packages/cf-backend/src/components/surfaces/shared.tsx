@@ -13,6 +13,7 @@ import { Pressable } from "@/components/ui/Pressable";
 import { Button } from "@/components/ui/Button";
 import { InlineAction } from "@/components/ui/InlineAction";
 import { CopyText } from "@/components/ui/CopyButton";
+import { Surface } from "@/components/ui/Surface";
 
 const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
   add: { tone: "p-badge-success px-3", mark: "+" },
@@ -24,7 +25,7 @@ const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
 /** An empty truncated body (file too long to align) must read differently from one clipped at {@link MAX_LINES_PER_FILE}. */
 export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?: boolean }) {
   return (
-    <pre className="t-code overflow-x-auto max-h-[360px] overflow-y-auto m-0">
+    <pre className="t-code overflow-x-auto max-h-90 overflow-y-auto m-0">
       {lines.map((l, i) => {
         const { tone, mark } = DIFF_LINE[l.kind];
 
@@ -62,7 +63,7 @@ export function CodeBlock({ children, className, wrap = false }: { children: str
     ? resource.value.html : null;
 
   return (
-    <div className={`p-code my-2 rounded-lg overflow-hidden${wrap ? " p-code-wrap" : ""}`}>
+    <div className={`p-code p-code-block my-2${wrap ? " p-code-wrap" : ""}`}>
       <div className="t-meta t-mono p-code-head flex items-center justify-between gap-2 px-3 py-1">
         <span className="truncate font-mono">{lang || "code"}</span>
         <CopyText value={code} />
@@ -81,7 +82,7 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
 
   if (failed || !src) {
     return (
-      <span data-markdown-image-error role="note" className="t-meta my-2 inline-flex max-w-full items-baseline gap-2 rounded-lg border p-border px-2 py-1 p-text-3">
+      <Surface look="outlined" as="span" className="t-meta my-2 inline-flex max-w-full items-baseline gap-2 px-2 py-1 p-text-3" data-markdown-image-error role="note">
         <ImageBrokenIcon size={13} aria-hidden className="self-center shrink-0" />
         <span className="min-w-0">
           {alt ? `Image failed to load: ${alt}` : "Image failed to load"}
@@ -93,13 +94,12 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
             </>
           )}
         </span>
-      </span>
+      </Surface>
     );
   }
 
   return (
-    <img data-markdown-image src={src} alt={alt ?? ""} title={title} loading="lazy"
-      className="max-w-full rounded-lg" onError={() => setFailed(true)} />
+    <Surface look="clip" as="img" className="max-w-full" data-markdown-image src={src} alt={alt ?? ""} title={title} loading="lazy" onError={() => setFailed(true)} />
   );
 }
 
@@ -152,7 +152,7 @@ function AnswerSegment({ segment, place }: { segment: SlateUiSegment; place: Ans
 
   // Its page is read from the stored answer, so until the answer is stored it is a quiet line.
   if (segment.kind === "open" || (drawn && !place.stored)) {
-    return <div data-slate-ui-pending={segment.name} aria-label={`Drawing ${segment.name}`} className="my-2 h-8 rounded-md p-sunken animate-pulse" />;
+    return <Surface look="well" className="my-2 h-8 animate-pulse" data-slate-ui-pending={segment.name} aria-label={`Drawing ${segment.name}`} />;
   }
 
   const address = place.chat === undefined ? null : { actorId: place.chat.actorId, messageId: place.messageId, name: segment.name };
@@ -209,8 +209,8 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
         return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent-fg hover:underline">{children}</a>;
       },
       img({ src, alt, title }) { return <MarkdownImage key={src ?? ""} src={src} alt={alt} title={title} />; },
-      table({ children }) { return <div className="p-scroll-x my-2 rounded-lg border p-border"><table className="t-meta p-text-2 w-full border-collapse">{children}</table></div>; },
-      th({ children }) { return <th className="border-b p-border px-2 py-1 text-left font-medium p-fill whitespace-nowrap">{children}</th>; },
+      table({ children }) { return <Surface look="outlined" className="p-scroll-x my-2"><table className="t-meta p-text-2 w-full border-collapse">{children}</table></Surface>; },
+      th({ children }) { return <th className="p-table-head border-b p-border px-2 py-1 text-left whitespace-nowrap">{children}</th>; },
       td({ children }) { return <td className="border-b p-border px-2 py-1 align-top">{children}</td>; },
       // Drop the fence's own <pre>: CodeBlock supplies one, and nesting would nest scroll containers.
       pre({ children }) { return <>{children}</>; },
@@ -223,7 +223,7 @@ export function EmptyState({ icon, title, hint, children }: {
 }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center" data-empty>
-      <div className={`mb-3 ${icon ? "p-text-3 opacity-60" : "text-[var(--c-accent)] opacity-55"}`}>
+      <div className={`mb-3 ${icon ? "p-text-3 opacity-60" : "p-accent opacity-55"}`}>
         {icon ?? <KinuMark size={30} />}
       </div>
       <p className="t-label p-text-2">{title}</p>
@@ -235,10 +235,10 @@ export function EmptyState({ icon, title, hint, children }: {
 
 export function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-md border p-border p-sunken px-2 py-1">
+    <Surface look="well" className="border p-border px-2 py-1">
       <div className="t-label">{label}</div>
       <div className="t-body t-mono p-text tabular-nums">{value}</div>
-    </div>
+    </Surface>
   );
 }
 

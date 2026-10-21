@@ -13,7 +13,7 @@ import type { CompletedTurn, ToolCallRecord } from './types';
 import type { DecisionPort, DecisionQuestion } from '../providers/decision-model';
 import { evidenceWindow } from '../utils/evidence-window';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
-import { sqlCheckList } from '../identity/schema';
+import { sqlCheckList } from '../utils/sql';
 import { nanoid } from '../utils/nanoid';
 import { nowMs, isoDate } from '../utils/date';
 import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stats';

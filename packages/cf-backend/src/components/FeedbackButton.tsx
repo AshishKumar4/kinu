@@ -2,24 +2,21 @@
 import { useState } from "react";
 import { MegaphoneIcon } from "@phosphor-icons/react";
 import { FeedbackModal } from "./FeedbackModal";
+import { Button } from "@/components/ui/Button";
+import { Pressable } from "@/components/ui/Pressable";
 
 export function FeedbackButton({ compact = false }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        aria-label="Send feedback"
-        data-feedback-open
-        className={compact
-          ? "flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text"
-          : "t-body flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left p-card-hover"}
-      >
-        <MegaphoneIcon size={compact ? 17 : 14} />
-        {compact ? null : <span>Feedback</span>}
-      </button>
+      {compact
+        ? <Button variant="ghost" icon={<MegaphoneIcon size={17} />} onClick={() => setOpen(true)} aria-label="Send feedback" data-feedback-open className="size-9" />
+        : (
+          <Pressable onClick={() => setOpen(true)} aria-label="Send feedback" data-feedback-open className="t-body flex items-center gap-2 px-2 py-1">
+            <MegaphoneIcon size={14} /><span>Feedback</span>
+          </Pressable>
+        )}
       {open && <FeedbackModal onClose={() => setOpen(false)} />}
     </>
   );

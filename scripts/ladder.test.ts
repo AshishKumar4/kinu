@@ -539,7 +539,9 @@ describe('the ladder measures something', () => {
       .sort();
 
     expect(bunSuitesUnderTests.length).toBeGreaterThan(0);
-    expect(claims('bun test ./tests/live-model/ ./tests/first-run/', tracked).sort()).toEqual(bunSuitesUnderTests);
+    // The design system's gate sits beside them at the root, its own row's.
+    expect([...claims('bun test ./tests/live-model/ ./tests/first-run/', tracked), ...claims('bun test --timeout=0 tests/design-system.test.ts', tracked)].sort())
+      .toEqual(bunSuitesUnderTests);
 
     // The other half of the partition: every runnable suite no `bun test` can
     // select is an eval task, and `bun run evals` claims exactly those.

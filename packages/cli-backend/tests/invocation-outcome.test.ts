@@ -60,7 +60,7 @@ async function invoke(code: string, providers: CodemodeProvider[] = []) {
 test('arbitrary error-shaped program values remain successful data through SDK and evolution', async () => {
   const { result, accumulator } = await invoke('return { reason: "denied", error: "historical incident", exitCode: 7 };');
   expect(result).toMatchObject({ success: true });
-  expect(JSON.parse(result.result)).toEqual({ result: { reason: 'denied', error: 'historical incident', exitCode: 7 } });
+  expect(JSON.parse(result.result)).toEqual({ result: { reason: 'denied', error: 'historical incident', exitCode: 7 }, effects: { call: expect.any(String) } });
   expect(accumulator.toolCalls.at(-1)?.outcome?.success).toBe(true);
 });
 
@@ -81,6 +81,8 @@ test('a handled nested command refusal does not fail its enclosing program', asy
   expect(JSON.parse(result.result)).toEqual({
     result: { handled: 'denied' },
     failures: [{ tool: 'shell', op: null, success: false, reason: 'denied', error: 'not run' }],
+    // A refused call changed nothing.
+    effects: { call: expect.any(String) },
   });
   expect(calls).toBe(1);
   expect(accumulator.toolCalls.at(-1)?.outcome?.success).toBe(true);

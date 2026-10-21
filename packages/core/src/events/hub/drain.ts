@@ -2,7 +2,7 @@
  *  (markConsumed) before injecting so a concurrent drain cannot double-process them. */
 import * as v from 'valibot';
 import type { KinuEvent } from './types';
-import type { WorkMode } from '../../types/turn';
+import { WorkModeSchema, type WorkMode } from '../../types/turn';
 import { renderForLLM } from './visibility';
 import { JsonObjectSchema } from '../../utils/json';
 import { MID_TURN_DELIVERY_OPENING } from '../../utils/prompt-sections';
@@ -34,7 +34,7 @@ function delegatedEventMode(event: KinuEvent): WorkMode | null {
   const payload = v.safeParse(JsonObjectSchema, event.payload);
 
   if (!payload.success) return null;
-  const mode = v.safeParse(v.picklist(['plan', 'build']), payload.output.kinu_mode);
+  const mode = v.safeParse(WorkModeSchema, payload.output.kinu_mode);
 
   return mode.success ? mode.output : null;
 }

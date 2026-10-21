@@ -179,7 +179,7 @@ function Shot({ picture, size, onOpen }: { readonly picture: Picture; readonly s
   return (
     <figure className="p-shot my-2" data-size={size} data-chat-image={picture.kind}>
       <ShotFrame aria-label={`Open ${name}`} onClick={onOpen}>
-        {state === "loading" && <span className="p-shot-wait p-skeleton-bar !rounded-none" aria-hidden />}
+        {state === "loading" && <span className="p-shot-wait p-skeleton-bar" aria-hidden />}
         <img src={src} alt={name} loading="lazy" decoding="async" {...(picture.kind === "web" && { referrerPolicy: "no-referrer" as const })}
           className={state === "loading" ? "absolute size-px opacity-0" : undefined}
           onLoad={() => setState("shown")} onError={() => setState("missing")} />

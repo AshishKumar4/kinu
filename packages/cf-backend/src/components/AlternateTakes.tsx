@@ -18,6 +18,8 @@ import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "@kinu.run/core"
 import { showing, detach } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
+import { Surface } from "@/components/ui/Surface";
+import { Pressable } from "@/components/ui/Pressable";
 
 export function TakesChip({ set, onPick }: {
   set: AlternateTakeSet;
@@ -28,15 +30,14 @@ export function TakesChip({ set, onPick }: {
 
   return (
     <>
-      <button
-        type="button"
+      <Pressable look="compact"
         onClick={() => setOpen(true)}
-        className="t-control inline-flex items-center gap-1 p-text-3 hover:p-text px-1 py-px rounded-sm border p-border p-card-hover transition-colors"
+        className="t-control inline-flex items-center gap-1 p-text-3 hover:p-text px-1 py-px border p-border"
         title="Your mid-turn redirect ran as a parallel branch. Compare both answers and pick one."
       >
         <GitBranchIcon size={11} />
         {takeChipLabel(set)}
-      </button>
+      </Pressable>
       {open && <TakesComparison set={set} onPick={onPick} onClose={() => setOpen(false)} />}
     </>
   );
@@ -114,7 +115,7 @@ function TakesComparison({ set, onPick, onClose }: {
       <div className="flex items-center justify-between">
         <Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />} onClick={() => step(-1)} aria-label="Previous take" />
         <div className="t-meta flex items-center gap-2 p-text-2">
-          <span className="font-medium p-text">Take {index + 1} of {count}</span>
+          <strong className="p-text">Take {index + 1} of {count}</strong>
           {isCurrent && (
             <span className="t-status inline-flex items-center gap-1 p-success">
               <CheckCircleIcon size={11} weight="fill" />current answer
@@ -124,11 +125,11 @@ function TakesComparison({ set, onPick, onClose }: {
         <Button variant="ghost" size="sm" icon={<ArrowRightIcon size={14} />} onClick={() => step(1)} aria-label="Next take" />
       </div>
 
-      <div className="border p-border p-card px-3 py-2 max-h-64 overflow-y-auto">
+      <Surface look="panel" className="px-3 py-2 max-h-64 overflow-y-auto">
         <div className="t-body prose-chat p-text">
           <MarkdownContent content={candidate.text} />
         </div>
-      </div>
+      </Surface>
 
       <div className="t-meta p-text-3">{takeEvidence(candidate)}</div>
 
@@ -189,7 +190,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
 
   return (
     <div className="flex flex-col items-start gap-1 animate-fade-in py-px">
-      <div className="t-body inline-flex items-center gap-2 max-w-full px-3 py-1 rounded-full p-fill border p-border p-text-2">
+      <Surface round look="tile" className="t-body inline-flex items-center gap-2 max-w-full px-3 py-1 border p-border p-text-2">
         {run.status === "running" && (
           <>
             <Loader size="sm" />
@@ -217,15 +218,15 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
         {run.status !== "running" && (
           <Button variant="ghost" size="sm" icon={<XIcon size={14} />} className="shrink-0" onClick={onDismiss} aria-label="Dismiss branch chip" />
         )}
-      </div>
+      </Surface>
       {open && (
-        <div className="w-full max-h-96 flex flex-col rounded-lg border p-border p-surface overflow-hidden">
+        <Surface look="panel" className="w-full max-h-96 flex flex-col overflow-hidden">
           {resource.status === "error" && (
             <LoadFailure what="this branch's transcript" message={resource.message} onRetry={reload}
               className="shrink-0 border-b p-border px-4 py-2" />
           )}
           {branchBody}
-        </div>
+        </Surface>
       )}
     </div>
   );

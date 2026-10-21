@@ -13,7 +13,7 @@ interface SegmentOption<T extends string> {
 
 /** A segment's box by size, at 13/20 wherever it sits (a workbench's smaller control text included): `md` 32, `sm` 24 for a
  *  28 track inside a 46 bar (a tool's view). */
-const SEGMENT_BOX = { md: "px-2 py-[5px]", sm: "px-2 py-px" } as const;
+const SEGMENT_BOX = { md: "h-8 px-2", sm: "h-6 px-2" } satisfies Record<"md" | "sm", string>;
 
 /** The track, and a segment on it: the thumb raised on the button's ground and edge, the rest flat in the third ink. */
 const TRACK = "flex w-fit min-w-0 items-center gap-0.5 rounded-[var(--r-control)] p-sunken p-0.5";

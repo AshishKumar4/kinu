@@ -68,12 +68,8 @@ export function HistoryReserve({ range, rowPx, history }: {
         [RESERVE_START_ATTRIBUTE]: String(range.start), [RESERVE_END_ATTRIBUTE]: String(range.end),
       }}
       aria-hidden={failed ? undefined : true}
-      style={{
-        height: (range.end - range.start) * rowPx,
-        backgroundImage: "repeating-linear-gradient(to bottom, transparent 0 12px, color-mix(in srgb, currentColor 5%, transparent) 12px 20px, transparent 20px 28px)",
-        backgroundSize: "60% 28px",
-        backgroundRepeat: "repeat-y",
-      }}
+      className="p-history-reserve"
+      style={{ height: (range.end - range.start) * rowPx }}
     >
       {failed && <div className="sticky top-0">
         <HistoryBoundary loading={history.loading} error={history.error} exhausted={false} onRetry={history.retry} />

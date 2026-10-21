@@ -7,6 +7,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { KeptTranscript } from "@/components/KeptTranscript";
 import { TranscriptViewport } from "@/components/TranscriptViewport";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
 
 /** Hoisted, so the thread memos hold. */
 const NO_LIVE: readonly UIMessage[] = [];
@@ -33,9 +34,9 @@ export function KeptChatColumn({ workspace, subName, title, rpc, actorId }: {
           empty={<p className="t-body text-center p-text-3">{title} said nothing before it was dismissed.</p>}
           rows={(before) => <KeptTranscript entries={chat.thread.entries} unavailable={unavailable} before={before} />} />
       </ErrorBoundary>
-      <p role="note" className="t-meta border-t p-border p-sidebar px-4 py-3 p-text-3">
+      <Surface look="chrome" as="p" className="t-meta border-t p-border px-4 py-3 p-text-3" role="note">
         {title} was dismissed. Its conversation is kept and read-only.
-      </p>
+      </Surface>
     </div>
   );
 }

@@ -16,6 +16,7 @@ import * as v from "valibot";
 import { StepRow } from "@/components/deploy/DeployStepRow";
 import { Notice } from "@/components/ui/Notice";
 import { Group } from "@/components/ui/Group";
+import { Surface } from "@/components/ui/Surface";
 
 const RUN_POLL_MS = 2000;
 
@@ -122,7 +123,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
       {offer === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
       {offer !== null && (
         <section className="space-y-4" aria-label="This deployment's build">
-          <div className="p-card space-y-4 px-5 py-4">
+          <Surface look="panel" className="space-y-4 px-5 py-4">
             <div className="flex flex-wrap items-start justify-between gap-6">
               <Build label="Running" build={offer.current} />
               <Build label="Published" build={offer.available} />
@@ -140,7 +141,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
                 <ArrowUpIcon size={15} /> Install {offer.available?.version ?? ""}
               </Button>
             )}
-          </div>
+          </Surface>
         </section>
       )}
       {run !== null && run.steps.length > 0 && (

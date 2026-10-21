@@ -12,6 +12,7 @@ import { useDeviceRoster } from "@/hooks/use-device-roster";
 import { lastValue } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { TextInput } from "@/components/ui/Field";
+import { Surface } from "@/components/ui/Surface";
 
 type ConnectState =
   | { readonly kind: "ready" }
@@ -106,12 +107,12 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
           Run this on the machine you want to connect. It installs the CLI, signs you in, and starts
           the daemon:
         </p>
-        <div className="flex items-start gap-2 rounded-md p-fill border p-border p-3">
+        <Surface look="tile" className="flex items-start gap-2 border p-border p-3">
           <code data-connect-command className="t-code p-text flex-1 break-all select-all">
             {state.command}
           </code>
           <CopyButton value={state.command} what="the connect command" className="shrink-0" />
-        </div>
+        </Surface>
         <div data-connect-waiting className="t-meta flex items-center gap-2 p-text-3">
           <Loader size="sm" /> Waiting for this machine. This panel closes when it connects.
         </div>
@@ -135,7 +136,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
       {/* Said before the command is made (L111 #6): a machine connected from a workspace is that workspace's at once. */}
       {workspace !== null && (
         <p data-connect-grant className="t-meta p-text-1">
-          Connected from here, it is <span className="font-medium">{workspace}</span>'s at once: its agents use this machine
+          Connected from here, it is <strong>{workspace}</strong>'s at once: its agents use this machine
           without asking, until you take it back under Account settings → Devices. Before it links, the command shows the folder it shares.
         </p>
       )}

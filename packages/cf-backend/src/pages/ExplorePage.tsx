@@ -5,7 +5,6 @@
  * (ui/PageHeader.tsx).
  */
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
@@ -19,19 +18,18 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ExploreCard, exploreWorkspaceHref, KindBadge, Maker, Needs, kinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { EXPLORE_KINDS, readExplore, type ExploreItem, type ExploreKind, type ExplorePage, type WorkspaceCard } from "@/lib/explore-api";
 import { Page } from "@/components/ui/PageHeader";
-import { TILE_GRID } from "@/components/ui/Tiles";
+import { FeaturedTile, TILE_GRID } from "@/components/ui/Tiles";
 import { useSearchChoice } from "@/hooks/use-search-choice";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
+import { Surface } from "@/components/ui/Surface";
+import { ChipToggle } from "@/components/ui/Chip";
+import { TextInput } from "@/components/ui/Field";
+import { PressableLink } from "@/components/ui/Pressable";
 
 const SORT_WORDS: Record<GallerySort, string> = { trending: "Trending", new: "New", stars: "Most starred" };
 
 const KIND_FILTER_WORDS: Record<ExploreKind, string> = { app: "Apps", workspace: "Workspaces" };
 
-/** The filter row's one grammar: the kind's `Segmented`, 28 px category chips, then a 32 px sort and search, all at the
- *  control radius. */
-const chip = (on: boolean) => `t-status h-7 rounded-[var(--r-control)] border px-2 transition-colors ${on ? "border-[var(--c-border-strong)] bg-[var(--c-hover)] p-text" : "p-border p-text-2 hover:bg-[var(--c-hover)]"}`;
-
-const FIELD_32 = "h-8 rounded-[var(--r-control)] border border-[var(--c-field-border)] bg-[var(--c-surface)]";
 
 type KindChoice = ExploreKind | "all";
 
@@ -43,11 +41,8 @@ function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights:
   const installed = workspace.id === PERSONAL_ASSISTANT_ID && assistant.status === "ready" && assistant.value !== null;
 
   return (
-    <Link to={exploreWorkspaceHref(workspace.id)} data-explore-hero={workspace.id}
-      className="group flex min-w-0 flex-col overflow-hidden rounded-[var(--r-card)] border p-border p-surface p-card-lift md:flex-row">
-      <span className="relative block aspect-[16/10] shrink-0 overflow-hidden border-b p-border md:aspect-auto md:w-[56%] md:border-b-0 md:border-r">
-        {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt="" className="absolute inset-0 size-full object-cover object-left-top" />}
-      </span>
+    <FeaturedTile to={exploreWorkspaceHref(workspace.id)} data-explore-hero={workspace.id}
+      cover={workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt="" className="absolute inset-0 size-full object-cover object-left-top" />}>
       <span className="flex min-w-0 flex-1 flex-col gap-3 p-5">
         <span className="flex items-center gap-2"><KindBadge kind="workspace" /><span className="t-meta p-text-3">Featured</span></span>
         <span className="t-page-title p-text">{workspace.title}</span>
@@ -65,28 +60,28 @@ function Hero({ workspace, highlights }: { workspace: WorkspaceCard; highlights:
             : <span className={`ml-auto ${buttonClass({ variant: "primary" })}`}>Install</span>}
         </span>
       </span>
-    </Link>
+    </FeaturedTile>
   );
 }
 
 /** The rest of Kinu's own, as rows beside the lead. */
 function AlsoFromKinu({ workspaces }: { workspaces: readonly WorkspaceCard[] }) {
   return (
-    <div className="flex min-w-0 flex-col overflow-hidden rounded-[var(--r-card)] border p-border p-surface">
+    <Surface look="panel" className="flex min-w-0 flex-col overflow-hidden">
       <span className="t-label border-b p-border px-4 pb-2 pt-3">Also from Kinu</span>
       {workspaces.map((workspace) => (
-        <Link key={workspace.id} to={exploreWorkspaceHref(workspace.id)} data-explore-also={workspace.id}
-          className="flex items-center gap-3 border-b p-border px-4 py-3 transition-colors last:border-b-0 p-card-hover">
-          <span className="relative block h-12 w-[76px] shrink-0 overflow-hidden rounded-lg border p-border">
+        <PressableLink look="flush" key={workspace.id} to={exploreWorkspaceHref(workspace.id)} data-explore-also={workspace.id}
+          className="flex items-center gap-3 border-b p-border px-4 py-3 last:border-b-0">
+          <Surface look="outlined" as="span" className="relative block h-12 w-19 shrink-0 overflow-hidden">
             {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt="" className="absolute inset-0 size-full object-cover object-left-top" />}
-          </span>
+          </Surface>
           <span className="min-w-0 flex-1">
             <span className="t-item block truncate p-text">{workspace.title}</span>
             <span className="t-meta line-clamp-2 p-text-3">{workspace.line}</span>
           </span>
-        </Link>
+        </PressableLink>
       ))}
-    </div>
+    </Surface>
   );
 }
 
@@ -112,20 +107,17 @@ function Filters({ kind, category, sort, q, choose }: {
       <Segmented<KindChoice> label="Kind" value={kind ?? "all"} onChange={(chosen) => choose("kind", chosen === "all" ? null : chosen)}
         segments={[{ id: "all", label: "All" }, ...EXPLORE_KINDS.map((each) => ({ id: each, label: KIND_FILTER_WORDS[each] }))]} />
       {GALLERY_CATEGORIES.map((each) => (
-        <button key={each} type="button" aria-pressed={each === category} data-explore-category={each} onClick={() => choose("category", each === category ? null : each)} className={chip(each === category)}>
+        <ChipToggle key={each} size="sm" aria-pressed={each === category} data-explore-category={each} onClick={() => choose("category", each === category ? null : each)}>
           {CATEGORY_WORDS[each]}
-        </button>
+        </ChipToggle>
       ))}
       <span className="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
         <div className="w-40 shrink-0" data-explore-sort>
           <Choice label="Sort" size="sm" className="!h-8" value={sort} onChange={(chosen) => choose("sort", chosen === "trending" ? null : chosen)}
             options={GALLERY_SORTS.map((each) => ({ value: each, label: SORT_WORDS[each] }))} />
         </div>
-        <label className={`${FIELD_32} flex min-w-0 flex-1 items-center gap-2 px-3 sm:w-64 sm:flex-none`}>
-          <MagnifyingGlassIcon size={14} className="shrink-0 p-text-3" />
-          <input value={typed} onChange={(event) => { setTyped(event.target.value); choose("q", event.target.value); }} type="search" placeholder="Search apps and workspaces" aria-label="Search apps and workspaces" data-explore-search
-            className="t-body min-w-0 flex-1 bg-transparent p-text outline-none placeholder:p-text-3" />
-        </label>
+        <TextInput value={typed} onChange={(event) => { setTyped(event.target.value); choose("q", event.target.value); }} type="search" placeholder="Search apps and workspaces" aria-label="Search apps and workspaces" data-explore-search
+          before={<MagnifyingGlassIcon size={14} className="block" />} className="min-w-0 flex-1 sm:w-64 sm:flex-none" />
       </span>
     </div>
   );
@@ -185,7 +177,7 @@ export default function ExplorePage() {
   return (
     <Page icon={<CompassIcon size={22} />} title="Explore">
         {lead !== undefined && (
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+          <div className="grid gap-4 lg:grid-cols-[var(--layout-lead)]">
             <Hero workspace={lead} highlights={HERO_HIGHLIGHTS.get(lead.id) ?? []} />
             {also.length > 0 && <AlsoFromKinu workspaces={also} />}
           </div>

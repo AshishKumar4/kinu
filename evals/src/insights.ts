@@ -363,12 +363,11 @@ function recordDelegations(calls: readonly Call[], add: RecordFact) {
     if (assignment !== null) assignments.push(assignment);
 
     if (op === 'list') {
-      const roster = v.safeParse(v.object({ subagents: v.array(Subagent) }), call.event.result);
+      // The caller's subtree: every agent below it, the caller itself aside.
+      const listed = v.safeParse(v.object({ tree: v.array(v.object({ name: v.string(), status: v.string(), you: v.optional(v.literal(true)) })) }), call.event.result);
 
-      for (const subagent of roster.success ? roster.output.subagents : []) {
-        subagents.set(subagent.name, recordedSubagent({
-          status: subagent.status, runs: subagent.runs?.map((run) => ({ status: run.status, asked: run.userMessage })),
-        }, subagents.get(subagent.name), call.evidence));
+      for (const row of listed.success ? listed.output.tree.filter((agent) => agent.you !== true) : []) {
+        subagents.set(row.name, recordedSubagent({ status: row.status }, subagents.get(row.name), call.evidence));
       }
     }
   }

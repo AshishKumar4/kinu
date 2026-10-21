@@ -3,7 +3,7 @@ import { ArrowLeftIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { fmtPct, fmtSpan, fmtTokens, fmtUsd, type PanelAgent } from "@kinu.run/core";
 import type { WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
 import { AgentStatusMark } from "./AgentStatus";
-import { ChatMascot } from "./Marks";
+import { ChatMascot } from "@/components/ui/Marks";
 import { useMascotOf } from "@/hooks/use-chat-mascot";
 import { NavRowButton } from "@/components/ui/NavRow";
 

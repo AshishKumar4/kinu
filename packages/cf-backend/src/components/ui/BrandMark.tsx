@@ -117,7 +117,7 @@ export function BrandMark({ brand, size = 16, bare = false, className }: {
   return (
     <span
       aria-hidden="true"
-      className={`inline-flex shrink-0 items-center justify-center rounded-lg ${ink ? "bg-[#111318]" : "bg-white border p-border"}`}
+      className={`inline-flex shrink-0 items-center justify-center rounded-[var(--r-row)] ${ink ? "bg-[var(--c-brand-tile-ink)]" : "border p-border bg-[var(--c-brand-tile)]"}`}
       style={{ width: tile, height: tile }}
     >
       {mark}

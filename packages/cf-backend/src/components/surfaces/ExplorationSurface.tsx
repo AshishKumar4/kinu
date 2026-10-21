@@ -5,7 +5,7 @@
 import { useState, useCallback, useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
-import { Button } from "@/components/ui/Button";
+import { Button, buttonClass } from "@/components/ui/Button";
 import {
   GitForkIcon, TreeStructureIcon, ArrowsOutIcon, ArrowLeftIcon, CaretRightIcon, CaretDownIcon,
   XIcon,
@@ -35,6 +35,7 @@ import { fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRef
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Pressable } from "@/components/ui/Pressable";
 import { Dot } from "@/components/ui/Dot";
+import { Surface } from "@/components/ui/Surface";
 
 export interface ExplorationSurfaceProps {
   /** Live trees from `mcts-progress`, keyed by search; they replace polled rows so a
@@ -90,9 +91,8 @@ export function ExplorationSurface({
       )}
       {/* Three panes at `@6xl`. Narrower, the detail pane replaces the canvas while open;
           stacked, the list is height-capped. */}
-      <div className="flex-1 min-h-0 grid gap-3 grid-rows-[auto_minmax(0,1fr)] @3xl:grid-rows-1 @3xl:grid-cols-[minmax(220px,280px)_minmax(0,1fr)] @6xl:grid-cols-[minmax(200px,250px)_minmax(0,1fr)_minmax(330px,400px)]">
-        <div ref={listRef}
-          className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto rounded-xl border p-border p-surface p-1 space-y-px">
+      <div className="flex-1 min-h-0 grid gap-3 grid-rows-[var(--layout-head-body)] @3xl:grid-rows-1 @3xl:grid-cols-[var(--layout-exploration)] @6xl:grid-cols-[var(--layout-exploration-wide)]">
+        <Surface look="panel" className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto p-1 space-y-px" ref={listRef}>
           {runs.map((run) => (
             <ForkRunRow key={run.id} run={run}
               kind={runKind(resolutions.get(run.id))}
@@ -103,7 +103,7 @@ export function ExplorationSurface({
           ))}
           <ScrollBoundary what="forks" count={runs.length}
             loading={loadingMore} exhausted={exhausted} error={pageError} onRetry={loadMore} />
-        </div>
+        </Surface>
         <div className={`min-h-0 ${inspect === null ? "" : "hidden @6xl:block"}`}>
           <ForkCanvas
             runs={runs} trees={trees} journals={journals}
@@ -312,7 +312,7 @@ function RunDetailView({
   const refusal = runRefusal(run, journal);
 
   return (
-    <div className="h-full min-h-0 flex flex-col rounded-xl border p-border p-surface overflow-hidden">
+    <Surface look="panel" className="h-full min-h-0 flex flex-col overflow-hidden">
       <div className="shrink-0 flex items-start gap-2 border-b p-border px-3 py-2">
         <StatusDot className="mt-2" tone={RUN_TONE[run.status]} />
         <div className="min-w-0 flex-1">
@@ -345,7 +345,7 @@ function RunDetailView({
         : <ForkBranchView run={run} branchId={branchId} trees={trees} rpc={rpc}
             headActivity={headActivity} headDeltas={headDeltas} nodeCount={journal?.heads.length ?? run.branches}
             onBack={() => onOpenBranch(null)} onOpenBranch={onOpenBranch} />}
-    </div>
+    </Surface>
   );
 }
 
@@ -416,7 +416,7 @@ export function FrontierPanel({ frontier, onOpen }: {
       <div className="mt-1 space-y-px">
         {frontier.candidates.map((candidate) => (
           <Pressable className="t-meta t-mono flex flex-wrap items-baseline gap-x-3 gap-y-px px-1 py-px" key={candidate.nodeId} onClick={() => onOpen(candidate.nodeId)}>
-            <span className="p-text-2 truncate max-w-[10rem]" title={candidate.nodeId}>{candidate.nodeId}</span>
+            <span className="p-text-2 truncate max-w-40" title={candidate.nodeId}>{candidate.nodeId}</span>
             {frontier.axes.map((axis) => (
               <span key={axis.id} className="whitespace-nowrap p-text-3" title={`${axis.id}: ${axis.direction}`}>
                 {axis.id} <span className="p-text-2">{formatEvidenceValue(candidate.evidence[axis.id])}</span>
@@ -611,7 +611,7 @@ function ForkCanvas({
   return (
     // The outer box is the measured budget; the inner card hugs its content.
     <div ref={attachCell} className="h-full min-h-0">
-      <div data-tree-card className="flex max-h-full flex-col rounded-xl border p-border p-surface overflow-hidden">
+      <Surface look="panel" className="flex max-h-full flex-col overflow-hidden" data-tree-card>
         <div ref={attachChrome} className="shrink-0">
           {refusal !== null && <RunRefusalNote refusal={refusal} />}
         </div>
@@ -638,12 +638,12 @@ function ForkCanvas({
           ))}
           {expandTo && (
             <Link to={expandTo} title="Open the selected search full-screen"
-              className="t-control absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border p-border p-surface px-2 py-px p-text-3 hover:p-text transition-colors">
+              className={`${buttonClass({ variant: "secondary", size: "sm" })} absolute right-2 top-2 z-10 gap-1`}>
               <ArrowsOutIcon size={11} />Expand
             </Link>
           )}
         </div>
-      </div>
+      </Surface>
     </div>
   );
 }
@@ -664,10 +664,10 @@ export function SwarmConfigDisclosure(
   return (
     <details data-swarm-config className="group shrink-0 min-w-0">
       <summary
-        className="t-control flex cursor-pointer list-none items-center gap-1 rounded-md px-1 py-px p-text-3 hover:p-text transition-colors [&::-webkit-details-marker]:hidden"
+        className="t-control flex cursor-pointer list-none items-center gap-1 px-1 py-px p-text-3 hover:p-text transition-colors [&::-webkit-details-marker]:hidden"
         title="The preset this run resolved, its axes, and its dispatch arguments.">
         <CaretRightIcon size={9} className="shrink-0 transition-transform group-open:rotate-90" />
-        <span className="font-mono p-text-2 truncate max-w-[10rem]">{name}</span>
+        <span className="font-mono p-text-2 truncate max-w-40">{name}</span>
         <span className="shrink-0">config</span>
       </summary>
       <SwarmResolutionBody resolution={resolution} paramRows={paramRows} judges={judges} />
@@ -695,8 +695,7 @@ function SwarmResolutionBody(
   }
 
   return (
-    <div data-swarm-resolution={resolution?.kind ?? "none"}
-      className="mt-1 rounded-md border p-border p-sunken px-3 py-2">
+    <Surface look="well" className="mt-1 border p-border px-3 py-2" data-swarm-resolution={resolution?.kind ?? "none"}>
       {resolution !== undefined && (
         <>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -707,16 +706,15 @@ function SwarmResolutionBody(
           {resolution.kind === "custom" ? resolution.label : resolution.preset}
         </span>
         {resolution.kind === "preset" && (
-          <span className="ml-auto shrink-0 rounded-sm px-1 py-px p-badge-neutral"
-            title="Derived from the score and advance axes.">
+          <Surface look="clip" as="span" className="ml-auto shrink-0 px-1 py-px p-badge-neutral" title="Derived from the score and advance axes.">
               settle {resolution.settle}
-          </span>
+          </Surface>
         )}
       </div>
 
       {/* `auto-fit` grid so each axis value wraps rather than truncates. */}
       {resolution.kind === "preset" && (
-        <dl className="mt-2 grid gap-x-3 gap-y-2 [grid-template-columns:repeat(auto-fit,minmax(5.25rem,1fr))]">
+        <dl className="mt-2 grid gap-x-3 gap-y-2 grid-cols-[var(--layout-stats)]">
           {swarmAxisRows(resolution.config).map((row) => (
             <div key={row.axis} className="min-w-0" title={`${row.axis}: ${AXIS_MEANING[row.axis]}`}>
               <dt className="t-label">{row.axis}</dt>
@@ -759,7 +757,7 @@ function SwarmResolutionBody(
           ))}
         </div>
       )}
-    </div>
+    </Surface>
   );
 }
 
@@ -783,7 +781,7 @@ export function RunRefusalNote({ refusal }: { refusal: RunRefusal }) {
       className="t-meta shrink-0 flex items-baseline gap-2 px-3 py-1 border-b p-border">
       <Dot tone="danger" className="mt-1" />
       <span className="font-mono p-danger shrink-0">{refusal.reason}</span>
-      <span className="p-text-2 leading-snug min-w-0">{refusal.error}</span>
+      <span className="p-text-2 min-w-0">{refusal.error}</span>
     </div>
   );
 }

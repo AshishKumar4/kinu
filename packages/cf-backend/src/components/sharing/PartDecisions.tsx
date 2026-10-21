@@ -10,13 +10,14 @@ import { Button } from "@/components/ui/Button";
 import { type ConsentAsk, type EffectAsk, type JsonValue } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { rootWords, serverWords } from "./words";
+import { Surface } from "@/components/ui/Surface";
 
 /** What leaves, as it will leave: the payload's own JSON, never a summary of it. */
 function Payload({ value, ...data }: { value: JsonValue; [attribute: `data-${string}`]: string | boolean | undefined }) {
   return (
-    <pre {...data} className="t-meta t-mono max-h-56 overflow-auto rounded-lg p-sunken px-3 py-2 p-text whitespace-pre-wrap break-words">
+    <Surface look="well" as="pre" className="t-meta t-mono max-h-56 overflow-auto px-3 py-2 p-text whitespace-pre-wrap break-words" {...data}>
       {JSON.stringify(value, null, 2)}
-    </pre>
+    </Surface>
   );
 }
 
@@ -71,7 +72,7 @@ export function ApprovalDecision({ slate, ask, onApprove, onDecline }: {
   return (
     <Modal title={`${slate} wants to make a change`} icon={<WarningCircleIcon size={18} className="p-warning" />} onClose={onDecline}
       footer={<div className="flex justify-end gap-2"><Button size="sm" variant="secondary" data-approval-decline onClick={onDecline}>Decline</Button><Button variant="primary" size="sm" data-approval-approve onClick={onApprove}>Approve once</Button></div>}>
-      <p className="t-body p-text-2"><strong data-approval-tool className="font-medium p-text">{ask.toolTitle ?? ask.tool}</strong> on your {serverWords(ask)}, within {rootWords(ask.root)}, with:</p>
+      <p className="t-body p-text-2"><strong data-approval-tool className="p-text">{ask.toolTitle ?? ask.tool}</strong> on your {serverWords(ask)}, within {rootWords(ask.root)}, with:</p>
       <Payload data-approval-payload value={ask.payload} />
       <p className="t-meta p-text-3">Only this change, with exactly this. It asks again for any other.</p>
     </Modal>

@@ -4,6 +4,7 @@ import { Component, type ReactNode, type ErrorInfo } from "react";
 import { pageDeployedBuildSha, reportRenderFailure, routeTemplateOf } from "@kinu.run/core";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { Button } from "@/components/ui/Button";
+import { Surface } from "@/components/ui/Surface";
 
 interface Props {
   label?: string;
@@ -64,12 +65,12 @@ export class ErrorBoundary extends Component<Props, State> {
           <div data-failure className="t-item p-text">
             This view crashed{this.props.label ? ` (${this.props.label})` : ''}. Try again, or reload the page.
           </div>
-          <div className="t-meta t-mono p-text-3 break-words p-fill rounded-sm p-3 border p-border text-left">
-            <div className="font-bold mb-2">{this.state.error.message || String(this.state.error)}</div>
+          <Surface look="tile" className="t-meta t-mono p-text-3 break-words p-3 border p-border text-left">
+            <strong className="block mb-2">{this.state.error.message || String(this.state.error)}</strong>
             {this.state.error.stack && (
               <pre className="t-meta t-mono whitespace-pre-wrap opacity-70">{this.state.error.stack}</pre>
             )}
-          </div>
+          </Surface>
           <Button variant="secondary" size="sm" onClick={this.reset}>
             Try again
           </Button>

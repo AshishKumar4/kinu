@@ -42,8 +42,9 @@ import { rowNotices } from './row-verdicts';
 import { recordMarkAt, recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
 import { openDeployLive } from './deploy-live';
 import {
-  CACHE_BLIND_SPOTS, cacheEnabled, defaultStoreDirectory, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
+  CACHE_BLIND_SPOTS, cacheEnabled, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
 } from './ladder-cache';
+import { ladderCacheDirectory } from './cache-root';
 import type { GateCacheRequest, Plan, Store, ToolVersions } from './ladder-cache';
 import { fromEnvironment, type RemoteProofs } from './ladder-proofs';
 import { auditClosure } from './ladder-audit';
@@ -312,6 +313,17 @@ export const LADDER: readonly Gate[] = [
       + 'kept alive after its caller drops it',
     blind: 'semantic quality of a reviewed parser candidate',
     inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun test --timeout=0 tests/design-system.test.ts',
+    label: 'Design system scan',
+    tier: 'push',
+    seconds: 0.45, // Measured 2026-10-21 on the 24-thread workstation: 0.45 s.
+    catches: 'a page or feature component that draws its own ground, edge, radius, type or raw control instead of '
+      + "taking it from ui/, an arbitrary value other than a --layout-* constant, and a colour, font size or radius in "
+      + "index.css outside theme.ts and the role table",
+    blind: 'class names built at run time from parts, and what a component computes in the browser (computed-style.ts)',
+    inputs: { kind: 'derived', imports: CF_BACKEND_SOURCES },
   },
   {
     run: 'bun scripts/pattern-inventory.ts',
@@ -4440,7 +4452,7 @@ if (import.meta.main) {
   const caching = cacheEnabled({ hammer: rowGate?.phase === 'hammer', noCache: cli['no-cache'] === true });
   const remote = caching ? remoteStore : undefined;
   const tools = toolVersions(root, await pathNodeVersion());
-  const store = storeAt(defaultStoreDirectory());
+  const store = storeAt(ladderCacheDirectory());
   const revision = fullRevision();
   const ciRows: CIVerdict[] = [];
 

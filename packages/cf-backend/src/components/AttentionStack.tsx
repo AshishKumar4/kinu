@@ -13,6 +13,8 @@ import { MailSendBody } from "@/components/mail/MailSendBody";
 import { AlwaysLine, alwaysLabel, ParkedCommands, ParkedDecisionFlow, ParkedWriteChange } from "@/components/ParkedCommands";
 import { QuestionCard } from "@/components/QuestionCard";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
+import { ChromeButton } from "@/components/ui/ChromeButton";
 
 type ConsentChoice = "once" | "always" | "deny";
 
@@ -118,7 +120,7 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
     return (
       <>
         <div className="t-body p-text">{asks}</div>
-        {action.detail !== null && <code className="t-code mt-1 block max-h-28 overflow-auto rounded-sm px-2 py-1 p-text-2 break-all whitespace-pre-wrap p-fill">{revealMisrepresenting(action.detail)}</code>}
+        {action.detail !== null && <Surface look="tile" as="code" className="t-code mt-1 block max-h-28 overflow-auto px-2 py-1 p-text-2 break-all whitespace-pre-wrap">{revealMisrepresenting(action.detail)}</Surface>}
         {action.where !== undefined && <div className="t-meta mt-1 p-text-2 break-all">Runs {revealMisrepresenting(action.where)}</div>}
         {action.write && <div className="mt-2"><ParkedWriteChange id={action.id} rpc={rpc} /></div>}
         <div className="t-meta mt-1 p-text-3">
@@ -142,8 +144,8 @@ function ConsentBody({ consent }: { consent: PendingConsent }) {
 
   return (
     <>
-      <div className="t-body p-text">Use <span className="font-medium">{consent.deviceLabel}</span> for {forWhom}?</div>
-      <code className="t-code mt-1 block rounded-sm px-2 py-1 p-text-2 break-all p-fill">{revealMisrepresenting(consent.command || "(command)")}</code>
+      <div className="t-body p-text">Use <strong>{consent.deviceLabel}</strong> for {forWhom}?</div>
+      <Surface look="tile" as="code" className="t-code mt-1 block px-2 py-1 p-text-2 break-all">{revealMisrepresenting(consent.command || "(command)")}</Surface>
       <div className="t-meta mt-1 p-text-3">Commands use {consent.deviceLabel}'s Sandbox setting. Revoke access on the Devices page.</div>
     </>
   );
@@ -157,7 +159,7 @@ function MemoryBody({ memory }: { memory: AccountMemoryProposal }) {
   return (
     <>
       <div className="t-body p-text">Remember this for every workspace?</div>
-      <code className="t-code mt-1 block max-h-28 overflow-auto rounded-sm px-2 py-1 p-text-2 break-all whitespace-pre-wrap p-fill">{remembered(memory)}</code>
+      <Surface look="tile" as="code" className="t-code mt-1 block max-h-28 overflow-auto px-2 py-1 p-text-2 break-all whitespace-pre-wrap">{remembered(memory)}</Surface>
       <div className="t-meta mt-1 p-text-3">{by}{where} asked {timeAgo(memory.createdAt)}. Forget it any time under Settings → Memory.</div>
     </>
   );
@@ -331,12 +333,12 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
         const BehindIcon = KIND_ICON[kindOf(ask)];
 
         return (
-          <button key={ask.key} type="button" data-attention-behind={ask.key} onClick={() => { setError(null); setChosen(ask.key); }}
-            className="p-attention-behind" title="Answer this one first">
+          <ChromeButton part="behind" key={ask.key} data-attention-behind={ask.key} onClick={() => { setError(null); setChosen(ask.key); }}
+            title="Answer this one first">
             <BehindIcon size={11} className="shrink-0 p-text-3" aria-hidden />
             <span className="min-w-0 flex-1 truncate">{headline(ask)}</span>
             {depth === 0 && unshown > 0 && <span className="shrink-0 tabular-nums p-text-3">+{unshown}</span>}
-          </button>
+          </ChromeButton>
         );
       })}
       <div key={front.key} className="p-attention-card animate-fade-in" data-attention-card={front.key} data-attention-kind={kindOf(front)}

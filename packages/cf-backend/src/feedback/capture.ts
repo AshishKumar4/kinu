@@ -12,10 +12,10 @@ import {
   FEEDBACK_OMIT_ATTR,
   FEEDBACK_REDACT_ATTR,
   FEEDBACK_SCREENSHOT_TYPE,
+  DEFAULT_THEME,
+  REDACTION_FILL,
+  THEME_TOKENS,
 } from '@kinu.run/core';
-
-/** Opaque, so a blocked-out field reads as deliberately removed in both themes. */
-const REDACTION_FILL = '#111111';
 
 const REDACTED_MARKER = 'data-feedback-redacted';
 
@@ -131,7 +131,7 @@ export interface Annotation {
 function accent(): string {
   const token = getComputedStyle(document.documentElement).getPropertyValue('--c-accent').trim();
 
-  return token.length > 0 ? token : '#E0A458';
+  return token.length > 0 ? token : THEME_TOKENS[DEFAULT_THEME].dark['--c-accent'];
 }
 
 /** `hide` paints an opaque block (manual redaction); `box` outlines without covering. */

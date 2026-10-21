@@ -13,6 +13,7 @@ import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverview
 import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
 import { TextInput } from "@/components/ui/Field";
+import { Surface } from "@/components/ui/Surface";
 
 const VIEW_KEY = "kinu:workspaces-view";
 
@@ -117,10 +118,10 @@ export default function WorkspacesPage() {
         )}
 
         {!roster.loading && entries.length === 0 && error === null && (
-          <div className="p-card px-5 py-8 text-center">
+          <Surface look="panel" className="px-5 py-8 text-center">
             <p className="t-body p-text-3">No workspaces yet.</p>
             <Link to={APP_ROUTES.newWorkspace} className="t-control mt-2 inline-block p-accent-fg">Create one →</Link>
-          </div>
+          </Surface>
         )}
 
         {!loading && entries.length > 0 && shown.length === 0 && (
@@ -132,11 +133,11 @@ export default function WorkspacesPage() {
         {shown.length > 0 && (
           <section aria-label="Workspaces" data-workspaces-view={view}>
             {view === "list" ? (
-              <div className="overflow-hidden rounded-[14px] border p-border p-surface">
+              <Surface look="panel" className="overflow-hidden">
                 {shown.map((workspace, index) => (
                   <WorkspaceOverviewCard key={workspace.name} workspace={workspace} variant="line" first={index === 0} />
                 ))}
-              </div>
+              </Surface>
             ) : (
               <div className={TILE_GRID}>
                 {shown.map((workspace) => (

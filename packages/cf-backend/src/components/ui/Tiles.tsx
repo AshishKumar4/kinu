@@ -6,18 +6,18 @@
  */
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { WorkspaceLogo } from "@/components/Marks";
+import { WorkspaceLogo } from "@/components/ui/Marks";
 
-export const TILE_GRID = "grid gap-5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))]";
+export const TILE_GRID = "grid gap-5 grid-cols-[var(--layout-tiles)]";
 
 /** The tile's own box: the card radius and edge, its border darkening on hover. */
-export const TILE = "group flex h-full min-w-0 flex-col overflow-hidden rounded-[var(--r-card)] border p-border p-surface transition-[border-color] duration-[var(--dur-state)] ease-out hover:border-[var(--c-border-strong)] data-[force=hover]:border-[var(--c-border-strong)]";
+export const TILE = "group flex h-full min-w-0 flex-col overflow-hidden p-tile";
 
 /** A folder among the tiles: the tile's edge and ground, one 48 line high, its name beside its glyph. */
-export const FOLDER_TILE = "flex h-12 min-w-0 items-center gap-3 rounded-[var(--r-card)] border p-border p-surface pl-3 pr-8 transition-[border-color] duration-[var(--dur-state)] ease-out hover:border-[var(--c-border-strong)]";
+export const FOLDER_TILE = "flex h-12 min-w-0 items-center gap-3 p-tile pl-3 pr-8";
 
 /** The cover's frame: 16:10, over a hairline; a picture or a typeset cover fills it. */
-const TILE_COVER = "relative block aspect-[16/10] w-full shrink-0 overflow-hidden border-b p-border";
+const TILE_COVER = "p-tile-cover relative block w-full shrink-0 overflow-hidden border-b p-border";
 
 const TILE_BODY = "flex min-h-0 flex-1 flex-col gap-1 px-4 pb-3 pt-3";
 
@@ -31,9 +31,9 @@ const TILE_TITLE = "t-label truncate p-text";
  */
 export function TypesetCover({ title, line, logo = null, mark }: { title: string; line: string | null; logo?: string | null; mark?: ReactNode }) {
   return (
-    <span data-typeset-cover className="absolute inset-0 flex flex-col justify-between bg-[var(--c-fill)] p-5">
+    <span data-typeset-cover className="absolute inset-0 flex flex-col justify-between p-fill p-5">
       <span className="flex">{mark === undefined ? <WorkspaceLogo title={title} logo={logo} size={32} /> : mark}</span>
-      <span className="t-title line-clamp-3 text-[var(--c-text-2)]">{line ?? title}</span>
+      <span className="t-title line-clamp-3 p-text-2">{line ?? title}</span>
     </span>
   );
 }
@@ -45,7 +45,7 @@ export function TypesetCover({ title, line, logo = null, mark }: { title: string
 export function CaptureMat({ children }: { children: ReactNode }) {
   return (
     <span className="absolute inset-0 p-sunken" data-capture-mat>
-      <span className="absolute inset-3 overflow-hidden rounded-[var(--r-inner)] border p-border">{children}</span>
+      <span className="p-capture absolute inset-3 overflow-hidden border p-border">{children}</span>
     </span>
   );
 }
@@ -60,6 +60,17 @@ export function TileShell({ cover, title, children }: { cover: ReactNode; title:
         {children}
       </span>
     </>
+  );
+}
+
+/** The lead among the tiles (Explore's featured blueprint): the tile wide, its cover beside its body from `md` up, lifting
+ *  toward the accent when the pointer is on it. */
+export function FeaturedTile({ to, cover, children, ...data }: { to: string; cover: ReactNode; children: ReactNode } & Readonly<Record<`data-${string}`, string>>) {
+  return (
+    <Link to={to} className="p-tile p-tile-featured group flex min-w-0 flex-col overflow-hidden md:flex-row" {...data}>
+      <span className="p-tile-featured-cover relative block shrink-0 overflow-hidden border-b p-border md:border-b-0 md:border-r">{cover}</span>
+      {children}
+    </Link>
   );
 }
 

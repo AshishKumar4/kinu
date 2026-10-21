@@ -52,15 +52,23 @@ const HEX = /#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})\b/
 
 const FUNCTION_COLOUR = /\b(?:rgba?|hsla?|oklch|oklab)\(/u;
 
+const RELATIVE_COLOUR = /\b(?:rgba?|hsla?|oklch|oklab)\(from\b/gu;
+
 /** What an arbitrary value may name: a layout constant anywhere; in `ui/`, any token. */
 const LAYOUT_VALUE = /^\[var\(--layout-[\w-]+\)\]$/u;
 
 const TOKEN_VALUE = /^\[var\(--(?:layout|c|r|shadow|dur)-[\w-]+\)\]$/u;
 
+/** An attribute selector alone (`[data-note-row]`, a string handed to `closest`): no class at all. */
+const SELECTOR = /^\[[\w-]+(?:="[^"]*")?\]$/u;
+
+/** What `ui/` may write of the box utilities: the focus outline off a control it rings itself, an edge with no colour. */
+const UI_BOX = new Set(['outline-none', 'border-transparent']);
+
 const RAW_ELEMENTS = new Set(['button', 'input', 'select', 'textarea', 'dialog']);
 
 /** `style` keys feature code may set, from data (§4.1). */
-const STYLE_KEYS = new Set(['width', 'height', 'left', 'top', 'right', 'bottom', 'transform', 'gridTemplateColumns', 'maxHeight', 'minWidth', 'minHeight', 'maxWidth']);
+const STYLE_KEYS = new Set(['width', 'height', 'left', 'top', 'right', 'bottom', 'transform', 'gridTemplateColumns', 'maxHeight', 'minWidth', 'minHeight', 'maxWidth', 'aspectRatio']);
 
 /** The role table's sizes (§1.3), in px. */
 const ROLE_FONT_SIZES = new Set(['36px', '24px', '17px', '15.5px', '15px', '14px', '13px', '12px', '11px', '0.92em', 'inherit']);
@@ -98,11 +106,11 @@ function classRules(token: string, ui: boolean): DesignRule[] {
 
   const bracket = /\[[^\]]*\]/u.exec(name);
 
-  if (bracket !== null && !(ui ? TOKEN_VALUE : LAYOUT_VALUE).test(bracket[0])) broken.push('arbitrary-value');
+  if (bracket !== null && !SELECTOR.test(name) && !(ui ? TOKEN_VALUE : LAYOUT_VALUE).test(bracket[0])) broken.push('arbitrary-value');
 
   if (bracket === null && TYPE_UTILITY.test(name)) broken.push('type-utility');
 
-  if (bracket === null && BOX_UTILITY.test(name) && !(ui && name === 'outline-none')) broken.push('box-utility');
+  if (bracket === null && BOX_UTILITY.test(name) && !(ui && UI_BOX.has(name))) broken.push('box-utility');
 
   const spacing = SPACING.exec(name);
 
@@ -188,7 +196,10 @@ function scanSource(file: string, text: string): DesignFinding[] {
     // A hex with a digit, or six or eight long: `#add` is an anchor's word, `#1a1a1a` a colour.
     for (const match of value.match(new RegExp(HEX, 'gu')) ?? []) if (/[0-9]/u.test(match) || match.length >= 7) add(node.start, 'colour-literal', match);
 
-    if (FUNCTION_COLOUR.test(value)) add(node.start, 'colour-literal', FUNCTION_COLOUR.exec(value)?.[0] ?? '');
+    // `oklch(from …)` makes a colour out of another one (a syntax theme's, a token's): relative, not a literal.
+    const literal = value.replace(RELATIVE_COLOUR, '');
+
+    if (FUNCTION_COLOUR.test(literal)) add(node.start, 'colour-literal', FUNCTION_COLOUR.exec(literal)?.[0] ?? '');
 
     if (!looksLikeClasses(value, namedAsClasses(node))) return;
 
@@ -223,7 +234,8 @@ const SIZE_VARIANTS: ReadonlyMap<string, string> = new Map([
   ['--t-chat-heading-1', '22px'], ['--t-chat-heading-2', '19px'], ['--t-chat-heading-3', '17px'],
   ['--t-chat-heading-workbench-1', '1.1em'], ['--t-chat-heading-workbench-2', '1.05em'], ['--t-chat-heading-workbench-3', '1em'],
   ['--t-code-workbench', '12.5px'], ['--t-workspace-tab', '13.5px'], ['--t-field-touch', 'max(16px, 1em)'],
-  ['--t-public-body', '15px'], ['--t-public-lede', '17px'], ['--t-public-control', '14px'],
+  ['--t-public-body', '15px'], ['--t-public-lede', '17px'], ['--t-public-control', '14px'], ['--t-wordmark', '18px'],
+  ['--t-hero', 'clamp(38px, 4vw, 46px)'], ['--t-hero-chat', 'clamp(28px, 3.4vw, 40px)'],
 ]);
 
 /** A size that is a variant's name. */
@@ -275,7 +287,14 @@ export function scanDesignSystem(only: readonly string[] = []): DesignFinding[] 
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const findings = scanDesignSystem(args.filter((arg) => !arg.startsWith('--')));
-  const count = (key: (finding: DesignFinding) => string) => [...Map.groupBy(findings, key)].map(([name, group]) => [name, group.length] as const).sort((a, b) => b[1] - a[1]);
+
+  const count = (key: (finding: DesignFinding) => string): [string, number][] => {
+    const tally = new Map<string, number>();
+
+    for (const finding of findings) tally.set(key(finding), (tally.get(key(finding)) ?? 0) + 1);
+
+    return [...tally].sort((a, b) => b[1] - a[1]);
+  };
 
   if (args.includes('--list')) for (const finding of findings) console.log(`${finding.file}:${String(finding.line)} ${finding.rule} ${finding.token}`);
 

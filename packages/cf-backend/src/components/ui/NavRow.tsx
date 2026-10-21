@@ -3,13 +3,14 @@
  * selected ground in the accent's ink, any other neutral under the pointer, so a row under it never reads as open.
  * `NavRow` is a link to somewhere; `NavRowButton` a press that is the page's own act. `sm` is a nested row (a
  * workspace's chats, a folder's folders); `quiet` is a row of the list's own (New agent, All agents) in the third ink.
+ * `icon` is a place as its icon alone, a 36 square in the folded rail; `icon-sm` the 32 of the sidebar's foot.
  */
 import type { ComponentProps, CSSProperties, ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 interface Look {
   current?: boolean;
-  size?: "md" | "sm";
+  size?: "md" | "sm" | "icon" | "icon-sm";
   quiet?: boolean;
   /** How deep a row sits in a tree (a folder's folders): each step indents it by 14. */
   depth?: number;

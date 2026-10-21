@@ -12,6 +12,8 @@ import {
   viewerKindOf, type FileText, type TextRender,
 } from "@kinu.run/core";
 import { Button } from "@/components/ui/Button";
+import { Surface } from "@/components/ui/Surface";
+import { TextArea } from "@/components/ui/Field";
 
 export function FileViewer({ path, read, revision, rawHref, downloadHref, onSaved, onClose }: {
   path: string;
@@ -84,10 +86,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
   const editable = kind === "text" && fileTextEditable(file);
 
   return (
-    <div
-      data-files-preview
-      className="absolute inset-0 z-10 p-bg flex flex-col border-l p-border @[64rem]:static @[64rem]:w-[42%] @[64rem]:shrink-0"
-    >
+    <Surface look="page" className="absolute inset-0 z-10 flex flex-col border-l p-border @[64rem]:static @[64rem]:w-[var(--layout-preview-pane)] @[64rem]:shrink-0" data-files-preview>
       <div className="px-3 py-2 border-b p-border flex items-center gap-2 shrink-0">
         <FileIcon size={13} className="p-text-3 shrink-0" />
         <span className="t-meta t-mono p-text truncate" title={path}>{name}</span>
@@ -144,7 +143,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
       <div data-files-preview-body className="flex-1 min-h-0 overflow-auto">
         {kind === "image" && (
           <div className="h-full flex items-center justify-center p-4">
-            <img src={rawHref} alt={name} className="max-w-full max-h-full object-contain rounded-sm border p-border" />
+            <Surface look="outlined" as="img" className="max-w-full max-h-full object-contain" src={rawHref} alt={name} />
           </div>
         )}
         {kind === "pdf" && (
@@ -162,7 +161,7 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
           />
         )}
       </div>
-    </div>
+    </Surface>
   );
 }
 
@@ -206,13 +205,13 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
 
   if (body === "edit") {
     return (
-      <textarea
+      <TextArea bare
         data-files-editor
         autoFocus
         value={draft ?? ""}
         onChange={(e) => onDraft(e.currentTarget.value)}
         spellCheck={false}
-        className="t-code w-full h-full resize-none bg-transparent p-3 p-text outline-hidden"
+        className="t-code h-full p-3 p-text"
       />
     );
   }
@@ -221,13 +220,13 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
 
   if (body === "html") {
     return (
-      <iframe
+      <Surface look="paper" as="iframe"
         data-files-html-preview
         title={name}
         sandbox=""
         referrerPolicy="no-referrer"
         srcDoc={sandboxedHtml(content)}
-        className="w-full h-full border-0 bg-white"
+        className="w-full h-full border-0"
       />
     );
   }

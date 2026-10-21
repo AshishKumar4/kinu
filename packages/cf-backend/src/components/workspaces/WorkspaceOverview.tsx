@@ -9,8 +9,11 @@ import { useWorkspaceWork } from "@/components/surfaces/use-workspace-work";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { AgentStatusMark } from "@/components/AgentStatus";
 import { GitHubSection } from "@/components/workspaces/GitHubSection";
-import { WorkspaceLogo } from "@/components/Marks";
+import { WorkspaceLogo } from "@/components/ui/Marks";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
+import { Pressable } from "@/components/ui/Pressable";
+import { ProgressBar } from "@/components/ui/Meter";
 
 type Lane = "todo" | "doing" | "waiting" | "done";
 
@@ -118,7 +121,7 @@ export function WorkspaceOverview({ workspace, title, logo, rpc, readMoves, plan
 
 function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; workspace: string; loaded: boolean; open: (agent: PanelAgent) => void }) {
   if (loaded && cards.length === 0) {
-    return <p className="t-meta rounded-xl border border-dashed p-border px-4 py-6 text-center p-text-3">No tasks yet. When an agent plans its work with the tasks tool, each task lands here.</p>;
+    return <Surface look="clip" as="p" className="t-meta border border-dashed p-border px-4 py-6 text-center p-text-3">No tasks yet. When an agent plans its work with the tasks tool, each task lands here.</Surface>;
   }
 
   // The lanes reflow with the page's width, never past it: four abreast, two by two, then one under another on a phone.
@@ -129,13 +132,13 @@ function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; wor
           const shown = cards.filter((card) => card.lane === lane);
 
           return (
-            <div key={lane} className="flex min-w-0 flex-col gap-2 rounded-2xl bg-[var(--c-hover)] p-2" data-lane={lane}>
+            <Surface look="wash" className="flex min-w-0 flex-col gap-2 p-2" key={lane} data-lane={lane}>
               <div className="flex items-baseline justify-between px-2 pb-px pt-1">
                 <span className={`t-item ${lane === "waiting" && shown.length > 0 ? "p-accent-fg" : "p-text-2"}`}>{title}</span>
                 <span className="t-meta tabular-nums p-text-3">{shown.length}</span>
               </div>
               {shown.map((card) => <TaskCard key={card.id} card={card} workspace={workspace} open={open} />)}
-            </div>
+            </Surface>
           );
         })}
       </div>
@@ -143,13 +146,13 @@ function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; wor
   );
 }
 
-const CARD_CLASS = "group flex flex-col gap-3 rounded-xl border p-border bg-[var(--c-bg)] px-3 py-2 text-left transition-colors hover:border-[var(--c-border-strong)]";
+const CARD_CLASS = "p-task-card group flex flex-col gap-3 px-3 py-2";
 
 function TaskCard({ card, workspace, open }: { card: Card; workspace: string; open: (agent: PanelAgent) => void }) {
   const { agent } = card;
 
   if (agent !== undefined) {
-    return <button type="button" data-task-card onClick={() => open(agent)} className={CARD_CLASS}><TaskBody card={card} /></button>;
+    return <Pressable data-task-card onClick={() => open(agent)} className={CARD_CLASS}><TaskBody card={card} /></Pressable>;
   }
 
   const path = card.owner.path;
@@ -161,15 +164,13 @@ function TaskCard({ card, workspace, open }: { card: Card; workspace: string; op
 function TaskBody({ card }: { card: Card }) {
   return (
     <>
-      <span className={`t-body ${card.lane === "done" ? "p-text-3 line-through decoration-[var(--c-border-strong)]" : "p-text"}`}>{card.title}</span>
+      <span className={`t-body ${card.lane === "done" ? "p-text-3 p-struck" : "p-text"}`}>{card.title}</span>
       <span className="t-meta flex items-center gap-2 p-text-3">
         {card.agent && <AgentStatusMark activity={card.agent.activity} />}
         <span className="min-w-0 truncate">{card.agent?.label ?? card.owner.title}</span>
         {card.progress && (
           <span className="ml-auto flex shrink-0 items-center gap-2 tabular-nums" aria-label={`${card.progress.done} of ${card.progress.total} steps done`}>
-            <span className="relative h-1 w-10 overflow-hidden rounded-full bg-[var(--c-hover)]">
-              <span className="absolute inset-y-0 left-0 rounded-full bg-[var(--c-accent-mark)]" style={{ width: `${(100 * card.progress.done) / card.progress.total}%` }} />
-            </span>
+            <span className="w-10"><ProgressBar value={card.progress.done} max={card.progress.total} /></span>
             {card.progress.done}/{card.progress.total}
           </span>
         )}

@@ -25,6 +25,7 @@ import type { WorkspaceWorkRead } from "./use-workspace-work";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Group } from "@/components/ui/Group";
 import { Pressable } from "@/components/ui/Pressable";
+import { Surface } from "@/components/ui/Surface";
 
 /** Kinds the attention stack decides: their rows open its card. */
 const STACKED: ReadonlySet<PendingActionKind> = new Set(["deferred_action"]);
@@ -121,17 +122,17 @@ function NeedsYou({ pendingActions, onOpenAsk, onOpenSurface, onOpenPlan }: {
   };
 
   return (
-    <div className="rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] bg-[var(--c-selected)] px-[18px] pt-2 pb-3 [&_.p-label]:!text-[var(--c-accent-fg)]">
+    <Surface look="selected" className="p-needs-you px-[var(--layout-inset)] pt-2 pb-3">
       <Section id="work-needs-you" title="Needs you"
         icon={<WarningCircleIcon size={14} className="p-warning" />}
         badge={<Badge>{pendingActions.length}</Badge>}>
-        <div className="divide-y divide-dashed divide-[var(--c-dash)]">
+        <div className="p-rows-dashed">
           {pendingActions.map((action) => (
             <PendingRow key={action.id} action={action} onOpenSurface={onOpenSurface} onOpen={opener(action)} />
           ))}
         </div>
       </Section>
-    </div>
+    </Surface>
   );
 }
 
@@ -278,11 +279,11 @@ function PendingRow(
   const open = onOpen ?? (surface === null ? null : () => onOpenSurface(surface));
 
   if (open === null) {
-    return <div className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-2 py-2" data-pending-action={action.id}>{icon}{content}</div>;
+    return <div className="grid grid-cols-[var(--layout-mark-row)] items-start gap-2 py-2" data-pending-action={action.id}>{icon}{content}</div>;
   }
 
   return (
-    <Pressable className="grid grid-cols-[14px_minmax(0,1fr)_16px] items-start gap-2 py-2" onClick={open} data-pending-action={action.id}>
+    <Pressable className="grid grid-cols-[var(--layout-mark-row-mark)] items-start gap-2 py-2" onClick={open} data-pending-action={action.id}>
       {icon}
       {content}
       <CaretRightIcon size={12} className="mt-1 shrink-0 justify-self-end p-text-3" />

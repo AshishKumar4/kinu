@@ -38,7 +38,7 @@ import { Table } from "@/components/ui/Table";
 import { Tabs } from "@/components/ui/Tabs";
 import { CaptureMat, TILE, TILE_GRID, TileShell, TypesetCover } from "@/components/ui/Tiles";
 import { Tooltip } from "@/components/ui/Tooltip";
-import { ChatMascot, personMascot, WorkspaceLogo } from "@/components/Marks";
+import { ChatMascot, personMascot, WorkspaceLogo } from "@/components/ui/Marks";
 import { KumoPortalProvider } from "@cloudflare/kumo";
 import { THEME_NAMES, type ThemeName } from "@kinu.run/core";
 import { GALLERY_PICTURE, galleryPicture } from "@/gallery-pictures";

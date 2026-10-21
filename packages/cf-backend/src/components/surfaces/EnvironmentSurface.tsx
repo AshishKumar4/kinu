@@ -39,6 +39,7 @@ import {
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { IconControl } from "@/components/ui/IconControl";
 import { ChipToggle } from "@/components/ui/Chip";
+import { Surface } from "@/components/ui/Surface";
 
 /** The terminal (xterm, 333 KB of the workspace's first chunk on 2026-10-08) loads with a command lane's first view. */
 const TerminalPane = lazyRoute<TerminalPaneProps>(async () => {
@@ -272,7 +273,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
         />
       )}
       {resource.status === "error" && (
-        <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="mx-4 mb-3 p-card px-3 py-2" />
+        <Surface look="panel" className="mx-4 mb-3 px-3 py-2"><LoadFailure what="the environments" message={resource.message} onRetry={reload} /></Surface>
       )}
       {account.failure !== null && <p data-failure className="t-meta mx-4 mb-3 p-danger">Could not read your machines: {account.failure}</p>}
     </div>
@@ -630,11 +631,17 @@ function DesktopView({ name, src, width, height }: { name: string; src: string; 
   const [expanded, setExpanded] = useState(false);
   const cover = useCover(area, expanded);
 
+  const screen = (
+    <div style={{ aspectRatio: `${String(width)} / ${String(height)}`, width: `min(100cqw, 100cqh * ${String(width)} / ${String(height)})` }}>
+      <DesktopScreen src={src} title={title} />
+    </div>
+  );
+
   return (
     <div data-desktop-view={cover === null ? undefined : "expanded"} style={cover ?? undefined}
       className={`p-terminal-ground flex min-h-0 flex-1 flex-col ${cover === null ? "" : "fixed z-40"}`}>
       <div className={`t-meta flex shrink-0 items-center gap-3 pr-3 pl-4 p-text-3 ${cover === null ? "h-9" : "h-11 border-b p-border"}`}>
-        {cover !== null && <span className="inline-flex min-w-0 items-center gap-2 font-medium p-text-2"><DesktopIcon size={13} aria-hidden /><span className="truncate">{title}</span></span>}
+        {cover !== null && <strong className="inline-flex min-w-0 items-center gap-2 p-text-2"><DesktopIcon size={13} aria-hidden /><span className="truncate">{title}</span></strong>}
         <span className="shrink-0">{String(width)} × {String(height)}</span>
         {area !== null && cover === null && (
           <Button variant="ghost" size="sm" icon={<ArrowsOutIcon size={14} aria-hidden />} data-desktop-expand onClick={() => setExpanded(true)} aria-label={`Expand ${title}`}
@@ -647,11 +654,9 @@ function DesktopView({ name, src, width, height }: { name: string; src: string; 
       </div>
       {/* The screen at its own shape, as large as its place allows, so the client draws it edge to edge; expanded, on
           the screen's own black, as a player letterboxes. */}
-      <div className={`flex min-h-0 flex-1 justify-center ${cover === null ? "items-start" : "items-center bg-black"}`} style={{ containerType: "size" }}>
-        <div style={{ aspectRatio: `${String(width)} / ${String(height)}`, width: `min(100cqw, 100cqh * ${String(width)} / ${String(height)})` }}>
-          <DesktopScreen src={src} title={title} />
-        </div>
-      </div>
+      {cover === null
+        ? <div className="flex min-h-0 flex-1 items-start justify-center @container-size">{screen}</div>
+        : <Surface look="screen" className="flex min-h-0 flex-1 items-center justify-center @container-size">{screen}</Surface>}
     </div>
   );
 }

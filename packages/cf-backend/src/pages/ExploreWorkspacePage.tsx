@@ -23,6 +23,7 @@ import { readBlueprint, starBlueprint, type BlueprintPage, type ExploreNeed, typ
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 import { useGallerySignedIn } from "@/hooks/use-gallery-signed-in";
 import { hereAsking, signInAndReturn } from "@/lib/sign-in";
+import { Surface } from "@/components/ui/Surface";
 
 const ago = (at: number) => {
   const days = Math.round((Date.now() - at) / 864e5);
@@ -42,7 +43,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function Row({ icon, title, meta, children }: { icon: ReactNode; title: string; meta?: ReactNode; children?: ReactNode }) {
   return (
     <li className="flex items-start gap-3 px-4 py-3">
-      <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-hover)] p-text-2">{icon}</span>
+      <Surface look="wash" as="span" className="mt-px flex size-7 shrink-0 items-center justify-center p-text-2">{icon}</Surface>
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-baseline gap-x-2">
           <span className="t-item p-text">{title}</span>
@@ -62,9 +63,9 @@ function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean })
 
   return (
     <li className="flex items-start gap-3 px-4 py-3" data-blueprint-need={need.connection ?? need.secret}>
-      <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-hover)]">
+      <Surface look="wash" as="span" className="mt-px flex size-7 shrink-0 items-center justify-center">
         {brand !== undefined ? <BrandMark brand={brand} size={14} bare /> : <KeyIcon size={14} className="p-text-2" />}
-      </span>
+      </Surface>
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-x-2">
           <span className="t-item p-text">{name}</span>
@@ -148,10 +149,10 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
   return (
     <Page back={{ to: "/explore?kind=workspace", label: "Back to Explore" }} icon={null} title={workspace.title} data-blueprint-page={workspace.id}
       actions={<BlueprintActions workspace={workspace} onInstall={() => setInstalling(true)} />}>
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-        <div className="relative aspect-[16/10] overflow-hidden rounded-[var(--r-card)] border p-border p-sunken">
+      <div className="grid gap-6 lg:grid-cols-[var(--layout-detail)]">
+        <Surface look="well" className="relative aspect-16/10 overflow-hidden border p-border">
           {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
-        </div>
+        </Surface>
         <div className="flex min-w-0 flex-col gap-3">
           <span className="flex flex-wrap items-center gap-2"><KindBadge kind="workspace" /><span className="t-meta p-text-3">{CATEGORY_WORDS[workspace.category]}</span></span>
           <p className="t-body p-text-2">{workspace.line}</p>
@@ -163,39 +164,39 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
         </div>
       </div>
 
-      <div className="grid gap-12 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+      <div className="grid gap-12 lg:grid-cols-[var(--layout-detail)]">
         <div className="space-y-8">
           <Section title="What it does">
             <div className="grid gap-3 sm:grid-cols-2">
               {page.about.map((item) => (
-                <div key={item.title} className="rounded-[var(--r-card)] border p-border p-surface px-4 py-3">
+                <Surface look="panel" className="px-4 py-3" key={item.title}>
                   <div className="t-item p-text">{item.title}</div>
                   <div className="t-meta mt-1 p-text-2">{item.body}</div>
-                </div>
+                </Surface>
               ))}
             </div>
           </Section>
 
           <Section title="What a new workspace holds">
-            <ul className="divide-y divide-[var(--c-border)] overflow-hidden rounded-[var(--r-card)] border p-border p-surface">
+            <Surface look="panel" as="ul" className="p-rows-ruled overflow-hidden">
               {inside.agents.map((agent) => <Row key={agent.name} icon={<RobotIcon size={15} />} title={agent.name} meta="agent">{agent.about}</Row>)}
               {inside.automations.map((automation) => <Row key={automation.label} icon={<ClockIcon size={15} />} title={automation.label} meta={automation.when}>{automation.does}</Row>)}
               {inside.slates.map((slate) => <Row key={slate.title} icon={<AppWindowIcon size={15} />} title={slate.title} meta="slate">{slate.about}</Row>)}
               <Row icon={<LayoutIcon size={15} />} title={inside.layout === "focus" ? "Focus layout" : "Workbench layout"} meta="layout">
                 {inside.layout === "focus" ? "Its chat alone; its agents, tabs and inspector a click away." : "Chats as tabs, beside the inspector."}
               </Row>
-            </ul>
+            </Surface>
             <Button variant="ghost" size="sm" onClick={() => setSoul((shown) => !shown)} aria-expanded={soul}>{soul ? "Hide its soul" : "Read its soul"}</Button>
-            {soul && <pre className="t-code max-h-64 overflow-auto rounded-[var(--r-card)] border p-border p-sunken p-4 whitespace-pre-wrap p-text-2" data-blueprint-soul>{inside.soul}</pre>}
+            {soul && <Surface look="well" as="pre" className="t-code max-h-64 overflow-auto border p-border p-4 whitespace-pre-wrap p-text-2" data-blueprint-soul>{inside.soul}</Surface>}
           </Section>
         </div>
 
         <div className="space-y-8">
           <Section title="What it needs of yours">
-            <ul className="divide-y divide-[var(--c-border)] overflow-hidden rounded-[var(--r-card)] border p-border p-surface">
+            <Surface look="panel" as="ul" className="p-rows-ruled overflow-hidden">
               {workspace.needs.map((need) => <NeedRow key={`${need.connection ?? ""}${need.secret ?? ""}`} need={need} connected={has(need.connection)} />)}
               {workspace.needs.length === 0 && <li className="t-meta px-4 py-3 p-text-3">Nothing: it works with what any workspace has.</li>}
-            </ul>
+            </Surface>
           </Section>
           <Section title="It asks you first">
             <ul className="space-y-2">

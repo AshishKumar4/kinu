@@ -23,7 +23,7 @@ import { Composer } from "@/components/Composer";
 import { ModelPicker } from "@/components/ModelPicker";
 import { EventRow } from "@/components/ProgrammaticTurnCard";
 import { AttachmentChip } from "@/components/AttachmentChip";
-import { AgentFaceIcon, ChatMascot, mascotColour, mascotSeed } from "@/components/Marks";
+import { AgentFaceIcon, ChatMascot, mascotColour, mascotSeed } from "@/components/ui/Marks";
 import { InspectorBar } from "@/components/surfaces/InspectorBar";
 import { Section } from "@/components/surfaces/shared";
 import { Avatar } from "@/components/ui/Avatar";
@@ -33,7 +33,8 @@ import { Segmented } from "@/components/ui/Segmented";
 import { Choice, inputCls } from "@/components/ui/form";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { useMediaQuery } from "@/hooks/use-media-query";
-import { ImportantMailRow, mailRowCls, mailTime } from "@/components/mail/ImportantMailRow";
+import { ImportantMailRow, MAIL_ROW, mailTime } from "@/components/mail/ImportantMailRow";
+import { Pressable } from "@/components/ui/Pressable";
 import { MailSendBody } from "@/components/mail/MailSendBody";
 import { MAIL_VIEW_LABEL } from "@/components/mail/MailRow";
 import { mailExcerpt as firstLine, MailBody as Body, SealedMailHtml as SealedHtml } from "@/components/mail/MailMessage";
@@ -366,7 +367,7 @@ function MailRow({ thread, open, box, draft = false, onOpen }: { thread: Thread;
   if (draft && thread.draft !== undefined) gist = `${thread.draft.by === "you" ? "Your draft" : `${ASSISTANT ?? "Kinu"}'s draft`}: ${firstLine(thread.draft.text)}`;
 
   return (
-    <button type="button" onClick={onOpen} data-mail-thread={thread.id} aria-current={open ? "true" : undefined} className={mailRowCls(open)}>
+    <Pressable look="flush" onClick={onOpen} data-mail-thread={thread.id} aria-current={open ? "true" : undefined} className={MAIL_ROW}>
       <Avatar name={outgoing || draft ? "Ashish" : sender(thread).name} size={26} />
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-baseline gap-2">
@@ -384,7 +385,7 @@ function MailRow({ thread, open, box, draft = false, onOpen }: { thread: Thread;
           <span className={`truncate ${draft ? "p-warning" : ""}`}>{gist}</span>
         </span>
       </span>
-    </button>
+    </Pressable>
   );
 }
 

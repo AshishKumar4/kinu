@@ -27,6 +27,8 @@ import { usePlanRepliesSeen } from "@/hooks/use-plan-replies-seen";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
 import { Dot } from "@/components/ui/Dot";
+import { Surface } from "@/components/ui/Surface";
+import { Scrim } from "@/components/ui/Drawer";
 
 type RootNote = PassageNote | GeneralNote;
 
@@ -235,7 +237,7 @@ function PlanHeaderActions({ comments, unread, panelOpen, onToggle, mode, onMode
         {unread && <Dot tone="accent" data-plan-comments-unread="" />}
       </Button>
       {mode !== null && (
-        <div className="flex items-center rounded-md border p-border p-sunken p-px" aria-label="Annotation mode">
+        <Surface look="well" className="flex items-center border p-border p-px" aria-label="Annotation mode">
           <Button
             type="button"
             size="sm"
@@ -258,7 +260,7 @@ function PlanHeaderActions({ comments, unread, panelOpen, onToggle, mode, onMode
           >
             Remove
           </Button>
-        </div>
+        </Surface>
       )}
     </div>
   );
@@ -448,7 +450,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
       aria-labelledby="plan-document-title"
       className="relative h-full min-h-0 flex flex-col"
     >
-      <header data-plan-header className="p-surface shrink-0 border-b p-border px-4 py-4 sm:px-6 sm:py-5">
+      <Surface look="sheet" as="header" className="shrink-0 border-b p-border px-4 py-4 sm:px-6 sm:py-5" data-plan-header>
         <div className="mx-auto flex max-w-6xl flex-wrap items-start gap-4">
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
@@ -494,7 +496,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
             busy={held}
           />
         </div>
-      </header>
+      </Surface>
 
       <div data-plan-body className="relative flex flex-1 min-h-0">
         <div data-plan-scroll className="flex-1 min-w-0 overflow-y-auto px-4 py-8 sm:px-8 sm:py-8">
@@ -512,13 +514,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
           </div>
         </div>
         {panelOpen && (
-          <button
-            type="button"
-            data-plan-scrim
-            aria-label="Close comments"
-            className="p-scrim"
-            onClick={closePanel}
-          />
+          <Scrim data-plan-scrim label="Close comments" onClose={closePanel} />
         )}
         <AnnotationPanel
           isOpen={panelOpen}
@@ -557,7 +553,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
 
       {/* Laid out by its own width, not the window's: a plan reads in a column as narrow as a phone. Where the two
           decisions do not fit side by side, Approve wraps above Request changes, each whole, rather than squeeze. */}
-      <footer data-plan-footer className="@container p-surface shrink-0 border-t p-border px-4 py-3">
+      <Surface look="sheet" as="footer" className="@container shrink-0 border-t p-border px-4 py-3" data-plan-footer>
         <div className="flex flex-col gap-2 @[36rem]:flex-row @[36rem]:items-center">
           <PlanFooterNote error={error} owed={decisionOwed} note={footerNote({ readOnly, editable, handoffPending, status: plan.status })} />
           <DismissPlan plan={plan} rpc={rpc} readOnly={readOnly} deciding={decisionBusy} saving={saving} owed={decisionOwed} onError={setError} />
@@ -592,7 +588,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
             </Button>
           )}
         </div>
-      </footer>
+      </Surface>
     </section>
   );
 }

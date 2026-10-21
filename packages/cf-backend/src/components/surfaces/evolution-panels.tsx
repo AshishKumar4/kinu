@@ -1,10 +1,11 @@
 import { useCallback } from "react";
 import { Loader } from "@/components/ui/Loader";
 import type { QualityDay } from "@kinu.run/core";
-import { toneFill, type StatusTone } from "@/components/ui/Status";
+import { toneInk, type StatusTone } from "@/components/ui/Status";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
 
 /** A trend needs this many rated days to say anything. */
 const TREND_DAYS = 3;
@@ -43,7 +44,7 @@ export function QualityView({ rpc, moved }: { rpc: WorkspaceRpc; moved: number }
         <p className="t-body p-text-3">No rated turns in the last 7 days.</p>
       ) : (
         <div className="flex items-baseline gap-3" title={`95% interval ${week.satisfaction.lo.toFixed(2)}–${week.satisfaction.hi.toFixed(2)}, ${week.from} to ${week.to} (UTC)`}>
-          <span className="size-2 shrink-0 self-center rounded-full" style={{ background: toneFill(toneOf(week.satisfaction.mean)) }} aria-hidden />
+          <Surface look="round" as="span" className={`size-2 shrink-0 self-center bg-current ${toneInk(toneOf(week.satisfaction.mean))}`} aria-hidden />
           <span className="t-title shrink-0 whitespace-nowrap tabular-nums p-text">
             {week.satisfaction.mean.toFixed(1)}<span className="t-body p-text-3"> / 5</span>
           </span>
@@ -79,28 +80,27 @@ function SatisfactionDays({ days }: { days: readonly QualityDay[] }) {
   const label = (day: string): string => new Date(`${day}T12:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" });
 
   return (
-    <div className="p-card px-3 pt-3 pb-2">
-      <div className="grid grid-cols-[14px_minmax(0,1fr)] gap-2">
+    <Surface look="panel" className="px-3 pt-3 pb-2">
+      <div className="grid grid-cols-[var(--layout-mark-row)] gap-2">
         <div className="t-meta t-mono relative h-24 p-text-3" aria-hidden>
           <span className="absolute top-0 -translate-y-1/2">5</span>
           <span className="absolute top-1/2 -translate-y-1/2">3</span>
           <span className="absolute bottom-0 translate-y-1/2">1</span>
         </div>
         <div className="relative h-24">
-          <div className="absolute inset-x-0 top-1/2 border-t border-dashed border-[var(--c-dash)]" />
+          <div className="absolute inset-x-0 top-1/2 p-rule-dashed" />
           <div className="absolute inset-x-0 bottom-0 border-t p-border" />
           <div className="absolute inset-0 grid" style={{ gridTemplateColumns: `repeat(${String(days.length)}, minmax(0, 1fr))` }}>
             {days.map((day) => (
               <div key={day.day} className="relative"
                 title={day.rated === 0 ? `${day.day}: no rated turns` : `${day.day}: ${day.satisfaction.mean.toFixed(2)} / 5 (95% interval ${day.satisfaction.lo.toFixed(2)}–${day.satisfaction.hi.toFixed(2)}) · ${String(day.rated)} of ${String(day.turns)} rated`}>
                 {day.rated === 0 ? (
-                  <span className="absolute bottom-0 left-1/2 h-1 w-px -translate-x-1/2 bg-[var(--c-border-strong)]" />
+                  <span className="absolute bottom-0 left-1/2 h-1 -translate-x-1/2 border-l p-border-strong" />
                 ) : (
                   <>
-                    <span className="absolute left-1/2 w-px -translate-x-1/2 opacity-50"
-                      style={{ top: at(day.satisfaction.hi), bottom: `calc(100% - ${at(day.satisfaction.lo)})`, background: toneFill(toneOf(day.satisfaction.mean)) }} />
-                    <span className="absolute left-1/2 size-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full"
-                      style={{ top: at(day.satisfaction.mean), background: toneFill(toneOf(day.satisfaction.mean)) }} />
+                    <span className={`absolute left-1/2 w-px -translate-x-1/2 bg-current opacity-50 ${toneInk(toneOf(day.satisfaction.mean))}`}
+                      style={{ top: at(day.satisfaction.hi), bottom: `calc(100% - ${at(day.satisfaction.lo)})` }} />
+                    <Surface look="round" as="span" className={`absolute left-1/2 size-1.75 -translate-x-1/2 -translate-y-1/2 bg-current ${toneInk(toneOf(day.satisfaction.mean))}`} style={{ top: at(day.satisfaction.mean) }} />
                   </>
                 )}
               </div>
@@ -108,9 +108,9 @@ function SatisfactionDays({ days }: { days: readonly QualityDay[] }) {
           </div>
         </div>
       </div>
-      <div className="t-meta t-mono mt-2 flex justify-between pl-[22px] p-text-3">
+      <div className="t-meta t-mono mt-2 flex justify-between pl-[var(--layout-mark-row-inset)] p-text-3">
         <span>{label(days[0]?.day ?? "")}</span><span>{label(days.at(-1)?.day ?? "")}</span>
       </div>
-    </div>
+    </Surface>
   );
 }

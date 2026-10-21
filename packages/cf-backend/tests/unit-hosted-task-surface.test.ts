@@ -93,7 +93,7 @@ test('a hired subagent saves and searches memory and lists its roster in its ass
   expect(results[0]).toContain('saved');
   expect(results[1]).toContain('streaming parser');
   // An empty roster is right for a child that has hired nobody; what matters is that the rung answers.
-  expect(results[2]).toContain('subagents');
+  expect(results[2]).toContain('tree');
 });
 
 /** Defends: a delegated turn falling to the runner's default head prompt instead of the agent prompt that names a hire. */

@@ -10,7 +10,7 @@ import {
 } from "@phosphor-icons/react";
 import { Tooltip } from "@/components/ui/Tooltip";
 import { ACTIVITY_SURFACE, type SURFACES, type SurfaceKind } from "@kinu.run/core";
-import { AgentFaceIcon } from "@/components/Marks";
+import { AgentFaceIcon } from "@/components/ui/Marks";
 import { Pressable } from "@/components/ui/Pressable";
 import { ChromeButton } from "@/components/ui/ChromeButton";
 

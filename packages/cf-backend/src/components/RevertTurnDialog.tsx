@@ -8,6 +8,7 @@ import { deviceHistoryNote, summarizeRestorePlan, type FileCheckpointEntry, type
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
 import { Modal } from "@/components/ui/Modal";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
 
 interface DeviceRestorePlan {
   entries: FileCheckpointEntry[];
@@ -208,7 +209,7 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
           This changes files under <span className="font-mono p-text">{plan.dirs.join(", ")}</span> on your
           device: {counts}. Kinu creates a safety snapshot first. Restore again to undo this change.
         </p>
-        <ul className="t-meta t-mono rounded-md border p-border p-fill max-h-52 overflow-y-auto">
+        <Surface look="tile" as="ul" className="t-meta t-mono border p-border max-h-52 overflow-y-auto">
           {shown.map((f) => {
             const { mark, tone } = RESTORE_MARK[f.kind];
 
@@ -222,7 +223,7 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
           {plan.files.length > shown.length && (
             <li className="px-2 py-1 p-text-3">… {plan.files.length - shown.length} more</li>
           )}
-        </ul>
+        </Surface>
       </div>
     </Modal>
   );

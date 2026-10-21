@@ -38,7 +38,8 @@ export function Chip({ tone = "neutral", icon, children, onRemove, removeLabel, 
   );
 }
 
-/** A chip that is a choice, pressed while chosen: a machine to work on. A dashed one offers to add another. */
-export function ChipToggle({ className, type = "button", ...rest }: ComponentProps<"button">) {
-  return <button type={type} className={`p-chip-toggle${className === undefined ? "" : ` ${className}`}`} {...rest} />;
+/** A chip that is a choice, pressed while chosen: a machine to work on. A dashed one offers to add another. `sm` is 28
+ *  tall in the status role, a filter among filters (Explore's categories). */
+export function ChipToggle({ size = "md", className, type = "button", ...rest }: ComponentProps<"button"> & { size?: "md" | "sm" }) {
+  return <button type={type} className={`p-chip-toggle${className === undefined ? "" : ` ${className}`}`} data-size={size} {...rest} />;
 }

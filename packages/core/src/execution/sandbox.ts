@@ -390,7 +390,7 @@ function execMember({ handle, names, shells, touch, environment }: Computer): Ex
             // The container's answer, as every transport settles a command.
             const outcome: ExecOutcome = { ...call.settle(res) };
 
-            return commandAnswer(outcome, v.is(ExecPartsSchema, args[1]), reportCwd);
+            return commandAnswer(outcome, v.is(ExecPartsSchema, args[1]), reportCwd, { machine: 'computer', command });
           }, refusalOf), (message) => refusalOf(new KinuError('unavailable', message)));
         } catch (err) {
           const own = classifyErrorCode({ cause: err }) === 'cancelled';

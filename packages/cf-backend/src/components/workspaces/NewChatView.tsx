@@ -75,8 +75,8 @@ export function NewChatView({ workspace, title, createChat }: {
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto" data-new-chat>
-      <div className="mx-auto flex min-h-full w-full max-w-[720px] flex-col justify-center gap-8 px-6 py-[clamp(48px,12vh,120px)]">
-        <h1 className="t-page-title text-center text-[clamp(28px,3.4vw,40px)] p-text">
+      <div className="mx-auto flex min-h-full w-full max-w-[var(--layout-new-chat)] flex-col justify-center gap-8 px-6 py-[var(--layout-new-chat-pad)]">
+        <h1 className="t-page-title t-hero-chat text-center p-text">
           What do you want to work on in <span className="p-accent-fg">{title}</span>?
         </h1>
         <PromptCard id="new-chat-opening" label="New chat" placeholder="Ask a question, plan a change, or hand over a task…"

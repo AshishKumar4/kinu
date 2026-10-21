@@ -23,7 +23,7 @@ import { renderThrownChain } from '../src/obs/index';
 import { inWorkMode } from '../src/execution/work-mode';
 import { buildToolSurface } from '../src/tools/builtins';
 import { conversationsFor } from './helpers';
-import { handoff, makeTeam, makePeers, rosterEntry, temporaryPortStub } from './helpers-agents';
+import { handoff, lonelyTree, makeTeam, makePeers, rosterEntry, temporaryPortStub } from './helpers-agents';
 import type { JsonObject } from '../src/utils/json';
 
 /** A call to the native `agents` tool: its `op` and that operation's fields. */
@@ -295,13 +295,34 @@ describe('agents tool — delegation depth', () => {
       .toEqual({ below: ['hire', 'assign', 'message', 'list', 'dismiss'], atCap: [] });
   });
 
-  // A tool with nothing to take and nothing to explain is no tool: a capped agent with no search has no `agents` at all.
-  test('a capped agent has the agents tool only for a search: offered, or withheld by the beta it names', () => {
+  // A search's nodes are agents a level below it: at the cap a capped agent with no peers has no `agents` at all, and no
+  // beta is named, since turning it on would start nothing.
+  test('a capped agent is offered no search either, and its search is never put down to the beta', () => {
     expect({
       noSearch: agentsWired(depthDeps(4).deps),
       searchesOff: agentsWired(depthDeps(4, { swarm: swarmDeps(), swarms: false }).deps),
       searchesOn: agentsWired(depthDeps(4, { swarm: swarmDeps() }).deps),
-    }).toEqual({ noSearch: false, searchesOff: true, searchesOn: true });
+      below: agentsActionsFor(depthDeps(3, { swarm: swarmDeps() }).deps).includes('swarm'),
+    }).toEqual({ noSearch: false, searchesOff: false, searchesOn: false, below: true });
+  });
+
+  // A toolset served below the cap still offers a search there, which the cap refuses, saying to do the work itself.
+  test('a search a toolset served below the cap still offers is refused as the cap, before any node starts', async () => {
+    let depth = 3;
+    const swarm = swarmDeps();
+    const team = makeTeam();
+    const deps = withBuildMode({ team: { ...team.deps, get delegation() { return budgetAt(depth); } }, swarm, profile: () => testProfile() });
+    const served = agentsTool(deps);
+
+    depth = 4;
+    const args = { op: 'swarm', preset: 'ideate', task: 'Three ways to stop staging 502ing' } satisfies AgentsCall;
+    const [refused] = await Promise.allSettled([served.execute(args)]);
+    const reason = refused?.status === 'rejected' ? v.parse(v.object({ code: v.string(), message: v.string() }), refused.reason) : null;
+
+    expect(reason?.code).toBe('denied');
+    expect(reason?.message).toContain('do the work yourself');
+    expect(reason?.message).not.toContain('op:"swarm"');
+    expect(team.calls).toEqual([]);
   });
 
   // A toolset is cached across turns, and a facet's identity is seeded after it is built: one served below the cap
@@ -567,18 +588,25 @@ describe('agents tool — subagent actions', () => {
     expect(calls[0].action).toBe('assign');
   });
 
-  test('list returns the unified roster; empty roster hints hire', async () => {
-    const { deps } = makeTeam();
-    const t = agentsTool({ team: deps });
-    expect(await t.execute({ op: 'list' })).toEqual({ subagents: [rosterEntry] });
+  test('list is the team\'s tree, read as asked; a caller alone in it is told to hire', async () => {
+    const asked: Array<{ readonly retired: boolean; readonly limit: number }> = [];
 
-    const empty = agentsTool({ team: makeTeam({ list: async () => [] }).deps });
+    const tree: TeamToolDeps['tree'] = async (input) => {
+      asked.push(input);
 
-    const emptyResult = v.parse(v.object({
-      subagents: v.array(v.unknown()), note: v.optional(v.string()),
-    }), await empty.execute({ op: 'list' }));
+      return await lonelyTree(input);
+    };
 
-    expect(emptyResult.subagents).toEqual([]);
+    const t = agentsTool({ team: makeTeam({ tree }).deps });
+
+    expect(await t.execute({ op: 'list' })).toEqual({
+      tree: [{ name: 'main', kind: 'main', status: 'running', depth: 0, active: 'now', you: true }],
+      counts: { running: 0, waiting: 0, idle: 0, failed: 0, retired: 0, shown: 1, notShown: 0 },
+      note: 'No subagents yet: create one with op:"hire".',
+    });
+
+    await t.execute({ op: 'list', retired: true, limit: 5 });
+    expect(asked).toEqual([{ retired: false, limit: 32 }, { retired: true, limit: 5 }]);
   });
 
   test('list with a subagent name returns its live status view', async () => {
@@ -700,10 +728,22 @@ describe('agents tool — peer workspace actions', () => {
     });
   });
 
-  test('list merges subagents and peers into one roster', async () => {
+  // The hint reads the counts, not the rows a limit kept: a caller listing one row is not told it has nobody.
+  test('a list cut to the caller\'s own row says what it left out, never that there is nobody', async () => {
+    const tree: TeamToolDeps['tree'] = async (input) => ({
+      ...await lonelyTree(input),
+      counts: { running: 1, waiting: 0, idle: 1, failed: 0, retired: 0, shown: 1, notShown: 2 },
+      note: '2 not shown: list({limit}) shows up to 200.',
+    });
+
+    expect(await agentsTool({ team: makeTeam({ tree }).deps }).execute({ op: 'list', limit: 1 }))
+      .toMatchObject({ note: '2 not shown: list({limit}) shows up to 200.' });
+  });
+
+  test('list shows the tree and the peers beside it', async () => {
     const t = agentsTool({ team: makeTeam().deps, peers: makePeers().deps });
-    expect(await t.execute({ op: 'list' })).toEqual({
-      subagents: [rosterEntry],
+    expect(await t.execute({ op: 'list' })).toMatchObject({
+      tree: [{ name: 'main', you: true }],
       peers: [{ name: 'scout', displayName: 'Scout' }],
     });
   });

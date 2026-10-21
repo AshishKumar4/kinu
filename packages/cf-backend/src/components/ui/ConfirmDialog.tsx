@@ -71,7 +71,7 @@ export function ConfirmDialog({ title, icon, children, action, failed, onConfirm
       </>}>
       {children}
       {error !== null && (
-        <div role="alert" className="t-meta p-notice-danger rounded-md px-3 py-2">{failed === undefined ? error : `${failed}: ${error}`}</div>
+        <div role="alert" className="t-meta p-notice-danger rounded-[var(--r-control)] px-3 py-2">{failed === undefined ? error : `${failed}: ${error}`}</div>
       )}
     </Modal>
   );

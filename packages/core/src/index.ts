@@ -5,7 +5,9 @@ export {
 
 export { AskOwnerInputSchema, OTHER_OPTION, OWNER_ANSWER_SIGNAL, type OwnerQuestion } from './types/owner-questions';
 
-export { initFiberTable, tableExists } from './identity/schema';
+export { initFiberTable } from './identity/schema';
+
+export { tableExists } from './utils/sql';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubagentInspectionRequestSchema, SubagentInspectionResultSchema, readSubagentInspection, missingSubagentHistory, type SubagentInspectionRequest, type SubagentInspectionResult, type SubagentChild } from './subagents/inspection';
 
@@ -579,7 +581,7 @@ export {
 export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, codemodeInputSchema,
-  renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, programSurface, codemodeFunction, renderCraftedDefinitions,
+  renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, programSurface, servedImpacts, codemodeFunction, renderCraftedDefinitions,
   slateToolReach, callCodemodeMember, requireCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   shownConsoleValue, programNamespace, type ProgramMember, type ProgramNamespace, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
@@ -792,6 +794,8 @@ export {
   toolCallEffect,
   type ToolCallEffect,
 } from './tools/tool-call-summary';
+
+export { programEffectsOf, programEffect, type MemberImpacts, type ProgramEffects } from './execution/call-effects';
 
 export { ToolOutcomeSchema, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, type ToolOutcome } from './tools/outcome';
 
@@ -1156,7 +1160,7 @@ export {
 } from './execution/command-call';
 
 export {
-  commandResultAt, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
+  commandAnswer, commandResultAt, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
 } from './execution/exec-result';
 
 export {
@@ -1744,8 +1748,8 @@ export {
 export { readGitHubRemotes } from './github/remotes';
 
 export {
-  mainPanelAgent, readWorkspaceAgents,
-  type PanelAgent, type AgentActivity,
+  mainPanelAgent, measuredAt, readWorkspaceAgents,
+  type PanelAgent, type AgentActivity, type ChatReport,
 } from './read-models/workspace-agents';
 
 export { readAgentFigures, recordAgentFigures, reportedAgentFigures, NO_FIGURES, type AgentFigures } from './read-models/agent-figures';
@@ -2316,7 +2320,7 @@ export {
 } from './http/public-shell';
 
 export {
-  accountTheme, DEFAULT_THEME, ILLUSTRATION, terminalPalette, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed,
+  accountTheme, avatarGround, DEFAULT_THEME, ILLUSTRATION, REDACTION_FILL, terminalPalette, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed,
   type ColourToken, type Mode, type TerminalPalette, type ThemeName,
 } from './web/theme';
 

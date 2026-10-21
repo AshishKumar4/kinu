@@ -781,7 +781,7 @@
       "file": "scripts/design-system-scan.ts",
       "kind": "hand-parser",
       "owner": "scanSource",
-      "sourceSha256": "5351e1c2b9d63c41f6574d397c710ba391b0bb6963a69a8ab3ad99cc69099d42",
+      "sourceSha256": "e5125bba93a66efb1bccd699e679efd286351fceff47653349a7a8fec3831ae4",
       "decision": "traversal"
     },
     {

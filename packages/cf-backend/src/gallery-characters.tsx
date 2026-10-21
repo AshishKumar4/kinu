@@ -3,7 +3,7 @@
  * app draws them. The first is Main, in the crown; then one agent in each accessory, then agents as their seeds fall.
  */
 import type { AgentActivity } from "@kinu.run/core";
-import { ChatMascot, mascotAccessory, mascotColour, mascotSeed, type MascotAccessory } from "@/components/Marks";
+import { ChatMascot, mascotAccessory, mascotColour, mascotSeed, type MascotAccessory } from "@/components/ui/Marks";
 
 /** The first agents of a workspace in birth order, past where a palette of twelve repeated: none shares a colour. */
 const RANKS = 24;
