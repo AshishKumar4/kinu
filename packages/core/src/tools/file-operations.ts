@@ -441,14 +441,15 @@ function fileOps(deps: FileDeps) {
       let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        landed = await persist(target, content, (revision) => ledger.observeWhole(path, shown, revision), observed);
+        landed = await persist(target, content, (revision) => {
+          ledger.observeWhole(path, shown, revision);
+          noteFileChange(path, existing === null ? 'created' : 'replaced');
+        }, observed);
       } catch (err) {
         const vfsFail = vfsFailure(deps.planes, { error: err }, 'write', path);
 
         return failure(vfsFail.reason, vfsFail.error);
       }
-
-      noteFileChange(path, existing === null ? 'created' : 'replaced');
 
       return {
         path, reference: target.reference, bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const,
@@ -504,7 +505,10 @@ function fileOps(deps: FileDeps) {
       let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
 
       try {
-        landed = await persist(target, outcome.content, (writtenRevision) => ledger.observeEdited(path, current, outcome, writtenRevision), observed);
+        landed = await persist(target, outcome.content, (writtenRevision) => {
+          ledger.observeEdited(path, current, outcome, writtenRevision);
+          noteFileChange(path, 'edited');
+        }, observed);
       } catch (err) {
         const vfsFail = vfsFailure(deps.planes, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);
@@ -513,7 +517,6 @@ function fileOps(deps: FileDeps) {
       }
 
       ledger.recordEdit(path, null);
-      noteFileChange(path, 'edited');
 
       return {
         path, reference: target.reference,

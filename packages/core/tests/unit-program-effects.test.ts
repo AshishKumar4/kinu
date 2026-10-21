@@ -10,16 +10,15 @@ import {
   codemodeFunction, programEffect, programEffectsOf, toolCallEffect, withClampedToolResult, withCodemodeProgram, type ProgramEffects,
 } from '../src/index';
 import { imageCarrier } from '../src/types/tool-images';
+import { imageModelOutput } from '../src/tools/image-results';
+import { commandAnswer } from '../src/execution/exec-result';
+import { computerDesktop } from '../src/operations/executors';
+import { servedImpacts } from '../src/tools/sandbox-contract';
+import { toolErrorOutput } from '../src/tools/outcome';
+import { KinuError } from '../src/obs/index';
 import { rewoundWork } from '../src/orchestrator/rewind-notice';
 import { EffectLog, noteFileChange } from '../src/execution/call-effects';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '../src/utils/json';
-
-/** What a program that failed threw, as its call fails. */
-async function thrownMessage(ran: Promise<object>): Promise<string> {
-  const [settled] = await Promise.allSettled([ran]);
-
-  return settled?.status === 'rejected' ? v.parse(v.instance(Error), settled.reason).message : '';
-}
 
 /** A program's record, as the host writes it. */
 const recorded = (call: string, fields: Partial<ProgramEffects> = {}): ProgramEffects => ({ call, files: [], commands: [], operations: {}, ...fields });
@@ -52,31 +51,15 @@ describe('a program is recorded as it runs, at the seams its calls pass', () => 
     }));
   });
 
-  test('a program that only looked is recorded as having changed nothing', async () => {
+  // Review, 2026-10-21: a program's own fetch reaches no seam, so a record with nothing in it does not say the program
+  // changed nothing.
+  test('a program that only looked has a record with nothing in it, which certifies nothing', async () => {
     const answered = await withCodemodeProgram(async () => ({ result: await codemodeFunction('db', 'select', async () => [])() }), { call: 'call-2' });
 
     expect(answered.effects).toEqual({ call: 'call-2' });
-    expect(toolCallEffect('eval', { code: '' }, { toolCallId: 'call-2', output: { result: [], effects: { call: 'call-2' } } })).toBe('read');
+    expect(toolCallEffect('eval', { code: '' }, { toolCallId: 'call-2', output: { result: [], effects: { call: 'call-2' } } })).toBe('unknown');
   });
 
-  test("a failed program's record is in the host's envelope, beside its own error; one that changed nothing keeps its words", async () => {
-    const thrown = await thrownMessage(withCodemodeProgram(async () => {
-      await codemodeFunction('workspace', 'fs.write', async () => {
-        noteFileChange('notes/plan.md', 'replaced');
-
-        return null;
-      })();
-
-      throw new Error('half done');
-    }, { call: 'call-3' }));
-
-    expect(programEffectsOf('call-3', thrown)?.files).toEqual([{ path: 'notes/plan.md', change: 'replaced' }]);
-    expect(thrown).toContain('half done');
-
-    const plain = await thrownMessage(withCodemodeProgram(async () => { throw new Error('nothing done'); }, { call: 'call-4' }));
-
-    expect(plain).toBe('nothing done');
-  });
 });
 
 describe("a program's record survives its answer being cut to fit", () => {
@@ -117,7 +100,7 @@ describe('a record says what the chip shows', () => {
     expect(programEffect(recorded('c', { operations: { 'mail.draft': 1 } }))).toBe('mutate');
     expect(programEffect(recorded('c', { commands: [{ machine: 'computer', command: 'ls', exitCode: 0 }] }))).toBe('unknown');
     expect(programEffect(recorded('c', { unclassified: 1 }))).toBe('unknown');
-    expect(programEffect(recorded('c'))).toBe('read');
+    expect(programEffect(recorded('c'))).toBe('unknown');
   });
 
   test('a program that writes thousands of files stays one bounded record, counting the rest', () => {
@@ -126,11 +109,15 @@ describe('a record says what the chip shows', () => {
     for (let n = 0; n < 60; n += 1) log.file(`out/${String(n)}.txt`, 'created');
     log.file('out/0.txt', 'edited');
 
+    for (let n = 0; n < 30; n += 1) log.command('computer', `bun run build:${String(n)} ${'x'.repeat(300)}`, 0);
+
     const record = log.record('c');
 
-    expect(record.files).toHaveLength(50);
+    // An eighth of a program's answer at most, its first file kept, and every entry it dropped counted.
+    expect(JSON.stringify(record).length).toBeLessThanOrEqual(1_000);
     expect(record.files?.[0]).toEqual({ path: 'out/0.txt', change: 'created' });
-    expect(record.more).toBe(10);
+    expect(record.commands).toBeUndefined();
+    expect((record.files?.length ?? 0) + (record.more ?? 0)).toBe(50 + 10 + 30);
   });
 });
 
@@ -152,5 +139,97 @@ describe("a rewind's notice reads what a rewound program did from its record", (
     expect(work.commands).toEqual([{ command: 'bun test', exitCode: 1, machine: 'computer' }]);
     expect({ ran: work.programs.ran, unrecorded: work.programs.unrecorded, operations: [...work.programs.operations] })
       .toEqual({ ran: 3, unrecorded: 2, operations: [['db.insert', 2]] });
+  });
+});
+
+// Second review, 2026-10-21 (74babc416): the record was lost where an answer is kept in another shape, a failed
+// program's above all, and some calls were misread or missed.
+describe("a program's record survives every shape its answer is kept in", () => {
+  const failing = (thrown: () => never) => withCodemodeProgram(async () => {
+    await codemodeFunction('workspace', 'fs.write', async () => {
+      noteFileChange('notes/plan.md', 'replaced');
+
+      return null;
+    })();
+
+    return thrown();
+  }, { call: 'call-failed' });
+
+  const stored = async (ran: Promise<object>) => {
+    const [settled] = await Promise.allSettled([ran]);
+
+    return toolErrorOutput({ cause: settled?.status === 'rejected' ? settled.reason : null });
+  };
+
+  test("a failed program's record is stored beside its error, and its words stand", async () => {
+    const output = await stored(failing(() => { throw new Error('half done', { cause: new Error('disk full') }); }));
+
+    expect(output).toEqual({ type: 'error-json', value: { error: 'half done: disk full', effects: { call: 'call-failed', files: [{ path: 'notes/plan.md', change: 'replaced' }] } } });
+    // Read back as the chat shows it, its error as text, and as rewind reads it.
+    expect(programEffectsOf('call-failed', JSON.stringify(output.value))?.files).toEqual([{ path: 'notes/plan.md', change: 'replaced' }]);
+    expect(programEffectsOf('call-failed', output.value)?.files).toHaveLength(1);
+  });
+
+  test('one that failed with a classified refusal keeps its reason, and its record beside it', async () => {
+    const output = await stored(failing(() => { throw new KinuError('denied', 'not yours'); }));
+
+    expect(output).toMatchObject({ type: 'error-json', value: { reason: 'denied', error: 'not yours', effects: { call: 'call-failed' } } });
+  });
+
+  test('one that changed nothing fails in its own words alone', async () => {
+    expect(await stored(withCodemodeProgram(async () => { throw new Error('nothing done'); }, { call: 'call-plain' })))
+      .toEqual({ type: 'error-text', value: 'nothing done' });
+  });
+
+  test('an answer with an image keeps its record as the model was sent it, and as the chat rebuilds it', async () => {
+    const record = recorded('call-image', { files: [{ path: 'shot.png', change: 'created' }] });
+    const shot = imageCarrier('Screenshot', [{ mediaType: 'image/png', data: 'iVBORw0KGgo=' }]);
+    const program = tool({ inputSchema: jsonSchema<{ code: string }>({ type: 'object' }), execute: async () => ({ result: { shot }, logs: [], effects: record }) });
+    const live = await toolExecute<{ code: string }, JsonValue>(withClampedToolResult(program, { producer: 'eval', images: true }))({ code: '' });
+    const sent = v.parse(v.object({ type: v.literal('content'), value: v.array(JsonValueSchema) }), imageModelOutput({ output: live }));
+    const text = v.parse(v.object({ text: v.string() }), sent.value[0]).text;
+
+    expect(programEffectsOf('call-image', live)).toEqual(record);
+    expect(programEffectsOf('call-image', sent.value)).toEqual(record);
+    expect(programEffectsOf('call-image', imageCarrier(text, []))).toEqual(record);
+  });
+});
+
+describe("a program's calls are read by what each serves", () => {
+  test('a member is classified by the operation it serves: a desktop screenshot looks, a click acts', async () => {
+    const desktop = computerDesktop({ width: 1280, height: 768, sheet: { percent: 50, columns: [1, 2, 2, 2, 4, 4, 4, 4] } });
+    const impacts = servedImpacts([{ name: 'computer', tools: {}, operations: Object.values(desktop).map((op) => ({ op, run: async () => ({ value: null }) })) }]);
+
+    const answered = await withCodemodeProgram(async () => {
+      await codemodeFunction('computer', desktop.screenshot.name, async () => 'data:image/png;base64,AA==', impacts('computer', desktop.screenshot.name))();
+      await codemodeFunction('computer', desktop.click.name, async () => null, impacts('computer', desktop.click.name))();
+
+      return { result: null };
+    }, { call: 'call-desk' });
+
+    expect(answered.effects).toEqual({ call: 'call-desk', operations: { [`computer.${desktop.click.name}`]: 1 } });
+  });
+
+  test('a command refused before it ran is not recorded as having run', async () => {
+    const answered = await withCodemodeProgram(async () => {
+      await codemodeFunction('workspace', 'exec', async () => commandAnswer({ refusal: { success: false, reason: 'denied', error: 'not approved' } }, false, false, { machine: 'workspace', command: 'rm -rf build' }))();
+
+      return { result: null };
+    }, { call: 'call-refused' });
+
+    expect(answered.effects).toEqual({ call: 'call-refused' });
+  });
+});
+
+describe("a program's record keeps its answer within its bound", () => {
+  test('an answer cut to text carries its record once, and the whole fits the bound', async () => {
+    const record = recorded('call-cut', { files: [{ path: 'notes/plan.md', change: 'edited' }] });
+    const program = tool({ inputSchema: jsonSchema<{ code: string }>({ type: 'object' }), execute: async () => ({ result: 'x'.repeat(5000), logs: [], effects: record }) });
+    const output = await toolExecute<{ code: string }, JsonValue>(withClampedToolResult(program, { producer: 'eval', maxChars: 600 }))({ code: '' });
+    const answer = v.parse(v.object({ result: v.string(), effects: JsonValueSchema }), output);
+
+    expect(answer.result).not.toContain('effects');
+    expect(answer.effects).toEqual(record);
+    expect(JSON.stringify(output).length).toBeLessThanOrEqual(600 + 40);
   });
 });

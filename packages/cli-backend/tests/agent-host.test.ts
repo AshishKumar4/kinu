@@ -1393,6 +1393,8 @@ describe('LocalAgentHost', () => {
       "await workspace.fs.write('notes/plan.md', 'step one');",
       "await workspace.fs.edit('notes/plan.md', [{ old_text: 'one', new_text: 'two' }]);",
       "await workspace.exec('exit 3');",
+      // The shell tool a program calls runs its command as the tool does, and is recorded the same.
+      "await tools.shell({ command: 'exit 4' }).catch(() => null);",
       "await workspace.fs.read('notes/plan.md');",
       'return 1;',
     ].join('\n');
@@ -1426,7 +1428,7 @@ describe('LocalAgentHost', () => {
       expect(effects).toEqual({
         call: 'eval-0',
         files: [{ path: 'notes/plan.md', change: 'created' }],
-        commands: [{ machine: 'workspace', command: 'exit 3', exitCode: 3 }],
+        commands: [{ machine: 'workspace', command: 'exit 3', exitCode: 3 }, { machine: 'workspace', command: 'exit 4', exitCode: 4 }],
         operations: {},
       });
       // A program's chip says what its record says: it changed a file.

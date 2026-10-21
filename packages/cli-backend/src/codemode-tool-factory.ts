@@ -15,7 +15,7 @@ import {
   decodeJsonValue, explainSandboxError, programSurface,
   renderCodemodeDescription, codemodeInputSchema,
   withCraftedToolDeclarations, renderCraftedDefinitions,
-  codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel, shownConsoleValue, programNamespace, type ProgramMember, type ProgramNamespace,
+  codemodeFunction, withCodemodeProgram, execContext, readDeviceRequestChannel, shownConsoleValue, programNamespace, servedImpacts, type ProgramMember, type ProgramNamespace,
 } from '@kinu.run/core';
 import { tool, type ToolSet } from 'ai';
 import { programBody } from './executor';
@@ -98,6 +98,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           }
 
           const providerBindings: Record<string, ProgramNamespace> = {};
+          const impacts = servedImpacts(reached);
 
           for (const p of reached.filter((reachedProvider) => reachedProvider.name !== CRAFTED_TOOL_NAMESPACE)) {
             const nsp: Record<string, ProgramMember> = {};
@@ -106,7 +107,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
               // An operation namespace reads the program's signal and shell context from its scope; its arguments are the program's own.
               const call = (toolArgs: unknown[]) => (p.declarations === undefined ? [...toolArgs, context] : toolArgs);
 
-              nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...call(toolArgs)));
+              nsp[toolName] = codemodeFunction(p.name, toolName, (...toolArgs) => t.execute(...call(toolArgs)), impacts(p.name, toolName));
             }
 
             // As the cloud's sandbox holds it: member groups, createTool's function as its source, a missing member refused.

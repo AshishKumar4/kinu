@@ -579,7 +579,7 @@ export {
 export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, codemodeInputSchema,
-  renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, programSurface, codemodeFunction, renderCraftedDefinitions,
+  renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, programSurface, servedImpacts, codemodeFunction, renderCraftedDefinitions,
   slateToolReach, callCodemodeMember, requireCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
   shownConsoleValue, programNamespace, type ProgramMember, type ProgramNamespace, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
@@ -793,7 +793,7 @@ export {
   type ToolCallEffect,
 } from './tools/tool-call-summary';
 
-export { programEffectsOf, programEffect, type ProgramEffects } from './execution/call-effects';
+export { programEffectsOf, programEffect, type MemberImpacts, type ProgramEffects } from './execution/call-effects';
 
 export { ToolOutcomeSchema, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, type ToolOutcome } from './tools/outcome';
 

@@ -13,7 +13,7 @@ import { admissionBytes } from '../token-estimate';
 import { headEnd, tailStart } from '../utils/text';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
 import type { Storage } from '../types/primitives';
-import { assertJsonValue, JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
+import { assertJsonValue, JsonObjectSchema, JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { imageModelOutput, takeImages } from './image-results';
 import { imageCarrier } from '../types/tool-images';
 import { diagnostics, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
@@ -134,11 +134,17 @@ export function clampSerializedToolResult(
   }));
 }
 
-/** An eval's record of what it changed (`execution/call-effects.ts`), as its answer carried it, to carry again. */
-function programRecord(producer: string | undefined, output: JsonValue | undefined): { readonly effects?: JsonValue } {
-  const carried = producer === 'eval' ? v.safeParse(v.object({ effects: JsonValueSchema }), output) : null;
+/**
+ * An eval's answer with its record of what it changed (`execution/call-effects.ts`) set aside: the record is carried
+ * whole beside whatever of the rest fits, never cut, and the room it takes is the answer's own.
+ */
+function setAside(producer: string | undefined, output: JsonValue | undefined) {
+  const answer = producer === 'eval' ? v.safeParse(v.looseObject({ effects: JsonValueSchema }), output) : null;
 
-  return carried?.success === true ? { effects: carried.output.effects } : {};
+  if (answer?.success !== true) return { rest: output, effects: undefined };
+  const { effects, ...rest } = answer.output;
+
+  return { rest: v.parse(JsonValueSchema, rest), effects };
 }
 
 export function withClampedToolResult(
@@ -156,19 +162,28 @@ export function withClampedToolResult(
       const json = opts.images === true ? v.safeParse(JsonValueSchema, produced) : null;
       const taken = json?.success === true ? takeImages(json.output) : null;
       const output = taken?.value ?? produced;
-      const clamped = await clampSerializedToolResult({ output }, opts);
+      const answered = v.safeParse(JsonValueSchema, output);
+      const { rest, effects } = answered.success ? setAside(opts.producer, answered.output) : { rest: output, effects: undefined };
+      const room = effects === undefined ? 0 : JSON.stringify(effects).length;
+
+      opts.budget?.admit(room);
+      const clamped = await clampSerializedToolResult({ output: rest }, { ...opts, maxChars: Math.max(1, (opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS) - room) });
       const outcome = successfulToolOutcome(opts.producer ?? '', { output });
       const text = v.safeParse(v.string(), clamped);
-      // A program's census and its record of what it changed stay at the top level, where they are read.
-      const answered = v.safeParse(JsonValueSchema, output);
-      const kept = { ...(outcome.failures !== undefined && { failures: outcome.failures }), ...programRecord(opts.producer, answered.success ? answered.output : undefined) };
+      // A program's census and its record stay at the top level, where they are read; the record once.
+      const kept: JsonObject = {};
 
-      const result = text.success && Object.keys(kept).length > 0 ? { result: text.output, ...kept } : clamped;
+      if (outcome.failures !== undefined) kept['failures'] = outcome.failures;
+
+      if (effects !== undefined) kept['effects'] = effects;
+      const fitted = text.success && Object.keys(kept).length > 0 ? { result: text.output, ...kept } : clamped;
+      const object = v.safeParse(JsonObjectSchema, fitted);
+      const result = !text.success && effects !== undefined && object.success ? { ...object.output, effects } : fitted;
 
       if (taken === null || taken.images.length === 0) return result;
       const carrier = imageCarrier(result ?? null, taken.images);
 
-      return Object.keys(kept).length === 0 ? carrier : { ...carrier, ...kept };
+      return outcome.failures === undefined ? carrier : { ...carrier, failures: outcome.failures };
     },
   };
 

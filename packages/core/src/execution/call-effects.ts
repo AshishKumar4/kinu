@@ -3,14 +3,16 @@
  * commands it ran with how each exited, and the other operations it called that change something, each by its declared
  * impact. Recorded at the executors' own seams (`file-operations.ts` writes, `commandAnswer`) while its member call runs,
  * and written by the host into the program's envelope, bound to its call's id: a program cannot know that id, so no
- * value it returns or throws can claim an effect for it. A command's own file writes are not traced, no plane attributes
- * them to the command yet; it is listed as a command, as the shell tool's are.
+ * value it returns or throws can claim an effect for it. Not traced yet: a command's own file writes (no plane
+ * attributes them to the command; it is listed as a command, as the shell tool's are) and a program's own network
+ * requests (its `fetch` reaches the egress, which no program owns). So no record certifies a program changed nothing.
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import * as v from 'valibot';
 import type { Impact } from '@agent-core/core/facets';
 import { declaredImpact, NATIVE_ACTION_EFFECTS } from '../slates/members';
-import { JsonObjectSchema, safeJsonParse, type JsonValue } from '../utils/json';
+import { ImageCarrierSchema } from '../types/tool-images';
+import { JsonObjectSchema, safeJsonParse, type JsonObject, type JsonValue } from '../utils/json';
 import { oneLineClip } from '../utils/text';
 
 /** The most of each a record carries; past them it counts the rest, so a program that writes thousands stays one line. */
@@ -19,6 +21,11 @@ const FILES_MAX = 50;
 const COMMANDS_MAX = 20;
 
 const COMMAND_CHARS = 200;
+
+const PATH_CHARS = 300;
+
+/** The most a record takes of its answer's room, an eighth of a program's default bound (`tools/clamp.ts`). */
+const RECORD_CHARS = 1_000;
 
 const OPERATIONS_MAX = 20;
 
@@ -33,10 +40,11 @@ const ProgramEffectsSchema = v.object({
   call: v.string(),
   /** Each file by the name the program gave it, as the file tool's own calls name theirs. */
   files: v.optional(v.array(v.object({ path: v.string(), change: FileChangeSchema })), []),
-  commands: v.optional(v.array(v.object({ machine: v.string(), command: v.string(), exitCode: v.nullable(v.number()) })), []),
+  /** Each command that ran; one refused before running is none. */
+  commands: v.optional(v.array(v.object({ machine: v.string(), command: v.string(), exitCode: v.number() })), []),
   /** Other operations that change something, by `namespace.member`, with how many times each ran. */
   operations: v.optional(v.record(v.string(), v.number()), {}),
-  /** Calls whose impact the catalog does not declare: they may have changed something. */
+  /** Calls whose impact no declaration says: they may have changed something. */
   unclassified: v.optional(v.number()),
   /** Files, commands and operations past the record's bounds. */
   more: v.optional(v.number()),
@@ -56,19 +64,19 @@ export class EffectLog {
   private more = 0;
 
   file(path: string, change: v.InferOutput<typeof FileChangeSchema>): void {
-    const was = this.files.get(path);
+    const named = oneLineClip(path, PATH_CHARS);
 
-    if (was === undefined && this.files.size >= FILES_MAX) {
+    if (!this.files.has(named) && this.files.size >= FILES_MAX) {
       this.more += 1;
 
       return;
     }
 
     // A file the program made, then edited, it made.
-    this.files.set(path, was === 'created' ? 'created' : change);
+    this.files.set(named, this.files.get(named) === 'created' ? 'created' : change);
   }
 
-  command(machine: string, command: string, exitCode: number | null): void {
+  command(machine: string, command: string, exitCode: number): void {
     if (this.commands.length >= COMMANDS_MAX) {
       this.more += 1;
 
@@ -99,16 +107,35 @@ export class EffectLog {
     return this.files.size > 0 || this.commands.length > 0 || this.operations.size > 0 || this.unclassified > 0;
   }
 
-  /** The record for call `call`, each list only where it holds something. */
+  /**
+   * The record for call `call`, each list only where it holds something, within `RECORD_CHARS`: past it, commands go
+   * first, then files and operations past their first, each counted in `more`, so a change is never what is dropped.
+   */
   record(call: string): ProgramEffectsRecord {
-    return {
+    const files = [...this.files].map(([path, change]) => ({ path, change }));
+    const commands = [...this.commands];
+    const operations = [...this.operations];
+    let more = this.more;
+
+    const built = (): ProgramEffectsRecord => ({
       call,
-      ...(this.files.size > 0 && { files: [...this.files].map(([path, change]) => ({ path, change })) }),
-      ...(this.commands.length > 0 && { commands: [...this.commands] }),
-      ...(this.operations.size > 0 && { operations: Object.fromEntries(this.operations) }),
+      ...(files.length > 0 && { files }),
+      ...(commands.length > 0 && { commands }),
+      ...(operations.length > 0 && { operations: Object.fromEntries(operations) }),
       ...(this.unclassified > 0 && { unclassified: this.unclassified }),
-      ...(this.more > 0 && { more: this.more }),
-    };
+      ...(more > 0 && { more }),
+    });
+
+    for (const list of [commands, files, operations]) {
+      const keep = list === commands ? 0 : 1;
+
+      while (list.length > keep && JSON.stringify(built()).length > RECORD_CHARS) {
+        list.pop();
+        more += 1;
+      }
+    }
+
+    return built();
   }
 }
 
@@ -129,8 +156,8 @@ export function noteFileChange(path: string, change: v.InferOutput<typeof FileCh
   scope.log.file(path, change);
 }
 
-/** A command a machine ran for the running member call, with its exit code; null where it never ran. */
-export function noteCommand(machine: string, command: string, exitCode: number | null): void {
+/** A command a machine ran for the running member call, with its exit code: only one that ran, a refused one never did. */
+export function noteCommand(machine: string, command: string, exitCode: number): void {
   const scope = member.getStore();
 
   if (scope === undefined) return;
@@ -138,25 +165,34 @@ export function noteCommand(machine: string, command: string, exitCode: number |
   scope.log.command(machine, command, exitCode);
 }
 
-/** A member call as its program made it: where, and the operation its input names where it is a native tool's. */
+/** A member call as its program made it: where, the operation its input names where it is a native tool's, and what
+ *  the operation it serves declares, where it serves one. */
 export interface MemberCall {
   readonly namespace: string;
   readonly member: string;
   readonly op: string | null;
+  readonly impact: Impact | null;
 }
 
-/** Whether a call changes anything, by its declaration: false for one that only observes or computes, null unknown. */
-function changes(address: MemberCall): boolean | null {
-  if (address.namespace === NATIVE_NAMESPACE) {
-    const ops: Readonly<Record<string, 'read' | 'mutate'>> | undefined = Object.entries(NATIVE_ACTION_EFFECTS).find(([name]) => name === address.member)?.[1];
-    const effect = ops !== undefined && address.op !== null && Object.hasOwn(ops, address.op) ? ops[address.op] : undefined;
+/** Each member's declared impact, by the namespace and member a program calls it as; null where it serves no operation. */
+export type MemberImpacts = (namespace: string, member: string) => Impact | null;
 
-    return effect === undefined ? null : effect === 'mutate';
-  }
+/**
+ * Whether a call changes anything, by its declaration: false for one that only observes or computes, null unknown. A
+ * native tool's operation says it per call; any other member, the operation it serves; one serving none, the catalog.
+ */
+function changes(address: MemberCall): boolean | null {
+  const ops: Readonly<Record<string, 'read' | 'mutate'>> | undefined = address.namespace === NATIVE_NAMESPACE
+    ? Object.entries(NATIVE_ACTION_EFFECTS).find(([name]) => name === address.member)?.[1]
+    : undefined;
+
+  const effect = ops !== undefined && address.op !== null && Object.hasOwn(ops, address.op) ? ops[address.op] : undefined;
+
+  if (effect !== undefined) return effect === 'mutate';
 
   // A model call computes; it changes nothing it is not then told to.
   if (address.namespace === 'ai') return false;
-  const impact: Impact | null = declaredImpact(address);
+  const impact: Impact | null = address.impact ?? declaredImpact(address);
 
   return impact === null ? null : impact !== 'observe';
 }
@@ -187,20 +223,47 @@ export async function withMemberEffects<A>(call: {
   return answer;
 }
 
-/**
- * A program's effects as its call's stored output carries them: the envelope's value when it settled, the host's
- * envelope text when it failed. Trusted only when the record names this call.
- */
-export function programEffectsOf(toolCallId: string, output: JsonValue | undefined): ProgramEffects | null {
-  const envelope = v.safeParse(JsonObjectSchema, v.is(v.string(), output) ? safeJsonParse(output) : output);
-  const record = v.safeParse(ProgramEffectsSchema, envelope.success ? envelope.output['effects'] : undefined);
+const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
 
-  return record.success && record.output.call === toolCallId ? record.output : null;
+/**
+ * The host envelopes an answer holds, however it is kept: as the program answered, as its JSON text, as an image
+ * result's carrier, or as the content parts the model was sent (a carrier's text and its images). Only an envelope's
+ * own top level is read: never the program's result inside it.
+ */
+function envelopes(output: JsonValue | undefined): JsonObject[] {
+  if (v.is(v.string(), output)) {
+    const parsed = safeJsonParse(output);
+
+    return v.is(v.string(), parsed) ? [] : envelopes(parsed);
+  }
+
+  if (Array.isArray(output)) return output.flatMap((part) => (v.is(TextPartSchema, part) ? envelopes(part.text) : []));
+  const object = v.safeParse(JsonObjectSchema, output);
+
+  if (!object.success) return [];
+  const carrier = v.safeParse(ImageCarrierSchema, object.output);
+
+  return carrier.success ? [object.output, ...envelopes(carrier.output.output)] : [object.output];
 }
 
-/** What a program did, as its chip says it: it changed something, it only looked, or it ran what no record traces. */
-export function programEffect(effects: ProgramEffects): 'read' | 'mutate' | 'unknown' {
-  if (effects.files.length > 0 || Object.keys(effects.operations).length > 0) return 'mutate';
+/**
+ * A program's effects as its call's answer carries them, settled or failed, live or stored. Trusted only when the
+ * record names this call.
+ */
+export function programEffectsOf(toolCallId: string, output: JsonValue | undefined): ProgramEffects | null {
+  for (const envelope of envelopes(output)) {
+    const record = v.safeParse(ProgramEffectsSchema, envelope['effects']);
 
-  return effects.commands.length > 0 || (effects.unclassified ?? 0) > 0 ? 'unknown' : 'read';
+    if (record.success && record.output.call === toolCallId) return record.output;
+  }
+
+  return null;
+}
+
+/**
+ * What a program did, as its chip says it: it changed something, or what it did is not known. Never that it changed
+ * nothing: its own network requests are not traced.
+ */
+export function programEffect(effects: ProgramEffects): 'mutate' | 'unknown' {
+  return effects.files.length > 0 || Object.keys(effects.operations).length > 0 ? 'mutate' : 'unknown';
 }

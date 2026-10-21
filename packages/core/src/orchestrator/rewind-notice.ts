@@ -205,7 +205,8 @@ function ranText(work: RewoundWork): string {
   const programs = ran === 0
     ? []
     : [
-      `Programs (eval) your rewound turns ran: ${String(ran)}${failed === 0 ? '' : `, ${String(failed)} of them failed`}. Their file writes and commands are listed above.`,
+      `Programs (eval) your rewound turns ran: ${String(ran)}${failed === 0 ? '' : `, ${String(failed)} of them failed`}. `
+        + 'Their file writes and commands are listed above; what they sent over the network, and files their commands wrote, are not.',
       ...(changed.length === 0 ? [] : [`What else they changed: ${changed.join(', ')}.`]),
       ...(untold === 0 ? [] : [`${String(untold)} more of their calls are not listed: they may have changed something.`]),
       ...(unrecorded === 0 ? [] : [`${String(unrecorded)} of them left no record of what they did: read what they touched.`]),

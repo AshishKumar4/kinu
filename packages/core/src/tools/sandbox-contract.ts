@@ -18,6 +18,8 @@ import type { CraftedToolSource } from './crafted-executor';
 import { toolDescription } from '../utils/tool-description';
 import { allowedInPlan, defineOperation, serve, statedInput, type Served } from '../operations/operation';
 import { nestedMembers, objectInputDeclaration, operationInputSchema, type NestedMembers } from './operation-surfaces';
+import type { Impact } from '@agent-core/core/facets';
+import type { MemberImpacts } from '../execution/call-effects';
 
 export {
   CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type CodemodeResult,
@@ -326,6 +328,13 @@ export function programSurface(input: Parameters<typeof programProviders>[0] & {
   return { providers, describe: describeProgramSource(programDeclarations(providers)) };
 }
 
+/** Each member's declared impact, by the operation it serves in `providers`, for its binding (`codemodeFunction`). */
+export function servedImpacts(providers: readonly CodemodeProvider[]): MemberImpacts {
+  const declared = new Map(providers.flatMap((provider) => (provider.operations ?? []).map((served) => [`${provider.name}/${served.op.name}`, served.op.impact] as const)));
+
+  return (namespace, member) => declared.get(`${namespace}/${member}`) ?? null;
+}
+
 /** `tools.*` members, as `toolsNamespace` builds them. */
 export function nativeToolFunctions(tools: ToolSet, signal: AbortSignal | undefined): CodemodeProvider['tools'] {
   return toolsNamespace(tools, signal).tools;
@@ -342,11 +351,12 @@ function accountedTool(namespace: string, member: string, owner: string | undefi
   return member.startsWith(`${MACHINE_FILES}.`) ? 'file' : `${namespace}.${member}`;
 }
 
-export function codemodeFunction<Result>(namespace: string, member: string, invoke: (...args: unknown[]) => Promise<Result>) {
+export function codemodeFunction<Result>(namespace: string, member: string, invoke: (...args: unknown[]) => Promise<Result>, impact: Impact | null = null) {
   const owner = Object.entries(TOOL_REACH).find(([name, reach]) => name === namespace && reach.codemode === namespace);
   const tool = accountedTool(namespace, member, owner?.[0]);
 
-  const call = bindProgramCall({ tool, op: owner === undefined ? null : member, address: { namespace, member } }, async (...args: unknown[]) => {
+  // `impact`: what the operation it serves declares, so a program's record says what the call does (`call-effects.ts`).
+  const call = bindProgramCall({ tool, op: owner === undefined ? null : member, address: { namespace, member }, impact }, async (...args: unknown[]) => {
     const value = await invoke(...args);
 
     return value === undefined ? undefined : decodeJsonValue({ value });

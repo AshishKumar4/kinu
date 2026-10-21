@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool } from 'ai';
 import { DESKTOP_MEMBERS, execCallArgs, execContext, readDeviceRequestChannel, scopedTurnSurface, SlateProgramSchema, type CodemodeSurface, type DeviceRequestChannel, type ExecutorProviderSurface } from "@kinu.run/core";
-import { renderCodemodeDescription, nativeToolFunctions, programSurface, CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
+import { renderCodemodeDescription, nativeToolFunctions, programSurface, servedImpacts, CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
   KinuSandboxExecutor, renderToolsPrelude, type ProgramLaunch,
@@ -140,7 +140,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         const { providers: reached, describe } = programSurface({ surface, namespaces: scope.namespaces(programExecutor(program)), reach: scope.reach, mode, signal, crafted });
         const { nested } = scope;
         const bound = nested === undefined ? reached : reached.map((provider) => guarded(provider, nested));
-        const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'), describe);
+        const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'), describe, servedImpacts(bound));
 
         const built = createCodeTool({
           // Composed here: the vendor's `{{types}}` replace reads `$` as a pattern.

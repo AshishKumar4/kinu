@@ -71,12 +71,12 @@ export const ExecPartsSchema = v.object({ parts: v.literal(true) });
 /**
  * A command's answer as its caller asked: with `parts`, `{ stdout, stderr, exitCode }` as the command wrote them, which a
  * program reads and never parses back from the text; else the text (`commandResultAt`). What ran, on which machine, is
- * recorded for the program that ran it, with its exit code (`call-effects.ts`); one refused never ran.
+ * recorded for the program that ran it, with its exit code (`call-effects.ts`); one refused never ran, and is not.
  */
 export function commandAnswer(
   outcome: ExecOutcome, parts: boolean, reportCwd: boolean, ran: { readonly machine: string; readonly command: string },
 ): CommandResult | { stdout: string; stderr: string; exitCode: number } {
-  noteCommand(ran.machine, ran.command, outcome.refusal === undefined ? outcome.exitCode ?? 0 : null);
+  if (outcome.refusal === undefined) noteCommand(ran.machine, ran.command, outcome.exitCode ?? 0);
 
   return parts && outcome.refusal === undefined
     ? { stdout: outcome.stdout ?? '', stderr: outcome.stderr ?? '', exitCode: outcome.exitCode ?? 0 }
