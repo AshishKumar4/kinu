@@ -297,6 +297,22 @@ describe('census-diff', () => {
   const PLANNED = new Set(['deferred_approvals']);
   const diffed = (after: readonly string[], frozen = true, before = BEFORE) => censusDiff(before, after.join('\n'), PLANNED, frozen);
 
+  // A planned FTS index (a virtual table, named by its mark) is made anew with the tables it keeps itself in, whose
+  // rows its creation writes: those are the index's, never a change outside the plan.
+  test('an FTS index the plan drops is made anew with its own tables, which are not changes outside the plan', () => {
+    const M = 'MailboxDO\tm1';
+    const index = (rows: readonly [string, number, string][]) => rows.map(([table, count, digest]) => line({ database: M, table, rows: count, digest }));
+    const before = [...BEFORE.split('\n'), ...index([['mail_messages', 3, 'm3'], ['mail_fts', 3, 'f3'], ['mail_fts_data', 7, 'x7'], ['mail_fts_idx', 2, 'i2'], ['mail_fts_docsize', 3, 's3'], ['mail_fts_config', 1, 'c1'], ['mail_box_config', 1, 'b1']])];
+    const after = [...AFTER, ...index([['mail_messages', 0, 'e'], ['mail_fts', 0, 'e'], ['mail_fts_data', 2, 'x2'], ['mail_fts_idx', 0, 'e'], ['mail_fts_config', 1, 'c1'], ['mail_box_config', 1, 'b2']])];
+    const diff = censusDiff(before.join('\n'), after.join('\n'), new Set([...PLANNED, 'mail_messages', 'mail_fts']), true);
+
+    // A table that only looks like one of an index's, in a database without the index's own, is judged as any other.
+    expect(diff.failed).toEqual([`${M}\tmail_box_config\t1 → 1`]);
+    expect(diff.lines.filter((said) => said.includes('made anew with'))).toEqual(
+      ['data', 'idx', 'docsize', 'config'].map((suffix) => `  ${M}\tmail_fts_${suffix}\tmade anew with mail_fts`),
+    );
+  });
+
   /** AFTER with `from`'s line replaced by `to`, or dropped. */
   const swap = (from: string, to: string | null) => AFTER.flatMap((row) => {
     if (!row.includes(`\t${from}\t`)) return [row];
@@ -348,6 +364,19 @@ describe('census-diff', () => {
     expect(diffed(AFTER, false, `${BEFORE}\n${unread}`).failed).toEqual(['OrchestratorAgent\tw1: not read before the upload, so nothing of it is proven']);
     expect(diffed(swap('workspace_activations', noLedger), false).failed)
       .toEqual(['OrchestratorAgent\tw1\tworkspace_activations\t2 → 3: no row-by-row proof: a census on either side came from a build before the ledger']);
+  });
+
+  // The first release with census-diff takes its census before from a build that kept no ledger (rc29 and earlier).
+  test('across the release into the ledger, activations are counted: one added passes as counted only, fewer fail', () => {
+    const before = BEFORE.replace('\t1:aaa,2:bbb', '');
+    const counted = diffed(AFTER, true, before);
+
+    expect(counted.failed).toEqual([]);
+    expect(counted.lines).toContain(`  ${W}\tworkspace_activations\t2 → 3 (counted only: the census before came from a build before the ledger)`);
+    expect(diffed(swap('workspace_activations', line({ database: W, table: 'workspace_activations', rows: 1, digest: 'a1', ledger: ['2:bbb'] })), false, before).failed)
+      .toEqual([`${W}\tworkspace_activations\t2 → 1: row(s) lost or rewritten`]);
+    expect(diffed(swap('workspace_activations', line({ database: W, table: 'workspace_activations', rows: 4, digest: 'a4', ledger: ['1:aaa', '2:bbb', '3:ccc', '4:ddd'] })), true, before).failed)
+      .toEqual([`${W}\tworkspace_activations\t2 → 4: 2 rows added, where one walk opens it once`]);
   });
 
   test('on a frozen target refuses any other change, and two activations where the walk opened once; on production names them', () => {

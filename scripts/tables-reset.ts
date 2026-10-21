@@ -278,6 +278,16 @@ function censusOfLines(text: string): Census {
 /** The table each activation of a hosted workspace counts in: one row, whose value moves. */
 const GENERATION = 'kinu_workspace_generation';
 
+/** The tables an FTS5 index keeps itself in, beside it: made with it, the rows its creation writes included. */
+const FTS_SHADOWS = ['data', 'idx', 'content', 'docsize', 'config'];
+
+/** The planned index whose own table `table` is in its database, by FTS5's names and only where that database holds the
+ *  index's `_data` and `_idx`, as every FTS5 index does; undefined for any other table. */
+function plannedIndexOf(row: CensusRow, rows: ReadonlyMap<string, CensusRow>, planned: ReadonlySet<string>): string | undefined {
+  return [...planned].find((index) => FTS_SHADOWS.some((suffix) => row.table === `${index}_${suffix}`)
+    && rows.has(`${row.database}\t${index}_data`) && rows.has(`${row.database}\t${index}_idx`));
+}
+
 /** What a census taken after a reset says of one taken before it: the proof a `--reset-tables` deploy keeps. */
 export interface CensusDiff {
   readonly lines: readonly string[];
@@ -305,6 +315,23 @@ function ledgerRead(was: ReadonlyMap<number, string>, now: ReadonlyMap<number, s
   if (gone.length !== Math.max(0, was.size + added - ring) || gone.some((at) => kept.some((held) => held < at))) return { wrong: `row(s) ${gone.join(', ')} lost` };
 
   return { added };
+}
+
+/**
+ * A ledger read across the one release that crosses into it: the census before came from a build that kept no ledger,
+ * so its rows are known by count and digest alone. Fewer rows, or as many with other contents below the ring's size,
+ * is a loss; more than one added on a frozen target is a second open. What passes is named as counted only.
+ */
+function ledgerCounted(said: string, was: CensusRow, now: CensusRow, frozen: boolean): Judged | { readonly kind: 'alike' } {
+  const added = now.rows - was.rows;
+
+  if (added === 0 && now.digest === was.digest) return { kind: 'alike' };
+
+  if (added < 0 || (added === 0 && was.rows < (LEDGER_RING.get(was.table) ?? Number.POSITIVE_INFINITY))) return { kind: 'hard', said: `${said}: row(s) lost or rewritten` };
+
+  if (frozen && added > 1) return { kind: 'hard', said: `${said}: ${String(added)} rows added, where one walk opens it once` };
+
+  return { kind: 'expected', said: `${said} (counted only: the census before came from a build before the ledger)` };
 }
 
 /** Why a ledger table after a reset is not its rows before and the ones added since; null when it is. On a frozen
@@ -337,14 +364,16 @@ export function censusDiff(before: string, after: string, planned: ReadonlySet<s
   found.hard.push(...was.unreadable.map((database) => unproven(database, 'before the upload')), ...now.unreadable.map((database) => unproven(database, 'after the walk')));
 
   for (const [key, row] of was.rows) {
-    const judged = judgedBefore(key, row, now.rows.get(key), { planned, frozen, reset });
+    const index = plannedIndexOf(row, was.rows, planned);
+    const judged = index === undefined ? judgedBefore(key, row, now.rows.get(key), { planned, frozen, reset }) : null;
 
-    if (judged.kind === 'alike') found.alike += 1;
-    else found[judged.kind].push(judged.said);
+    if (index !== undefined) found.emptied.push(`${key}\tmade anew with ${index}`);
+    else if (judged?.kind === 'alike') found.alike += 1;
+    else if (judged !== null) found[judged.kind].push(judged.said);
   }
 
   for (const [key, row] of now.rows) {
-    const judged = was.rows.has(key) ? null : judgedNew(key, row, planned, reset);
+    const judged = was.rows.has(key) || plannedIndexOf(row, now.rows, planned) !== undefined ? null : judgedNew(key, row, planned, reset);
 
     if (judged !== null) found[judged.kind].push(judged.said);
   }
@@ -398,6 +427,7 @@ function judgedBefore(key: string, row: CensusRow, then: CensusRow | undefined, 
 
   // A ledger table by its name, whatever the census carried: one without its rows proves nothing of them.
   if (LEDGER_RING.has(row.table)) {
+    if (row.ledger === null && then.ledger !== null) return ledgerCounted(said, row, then, at.frozen);
     const wrong = ledgerBadly(row, then, at.frozen);
 
     if (wrong !== null) return { kind: 'hard', said: `${said}: ${wrong}` };
