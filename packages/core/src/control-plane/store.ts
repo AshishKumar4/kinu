@@ -309,6 +309,68 @@ export function forgetWorkspace(
 }
 
 
+/** What forgetting an account deleted that the caller has more to do for: its feedback's screenshots. */
+export interface ForgottenUser {
+  readonly feedback: number;
+}
+
+/**
+ * A deleted account, as the index knew it: its user and workspace rows and its feedback are deleted. The operators'
+ * audit keeps its rows, each naming the account replaced by `pseudonym`: an actor that was it, a target under it
+ * (`<userId>/<workspace>/…`, each workspace one of the pseudonym's own), and in the detail its email and id, and the
+ * names of its workspaces in a row about it, each as a whole token, so no other account's text changes. Answers how
+ * many feedback rows went; their screenshots are the caller's to delete (R2, `feedback/<userId>/`).
+ */
+export function forgetUser(sql: ControlPlaneSql, person: { readonly userId: string; readonly email: string }, pseudonym: string): ForgottenUser {
+  const { userId, email } = person;
+  const feedback = select(sql, v.object({ n: v.number() }), 'SELECT COUNT(*) AS n FROM cp_feedback WHERE user_id = ?', userId)[0]?.n ?? 0;
+  const aliases = new Map<string, string>();
+
+  const alias = (workspace: string): string => {
+    const known = aliases.get(workspace) ?? `workspace-${String(aliases.size + 1)}`;
+
+    aliases.set(workspace, known);
+
+    return known;
+  };
+
+  for (const { name } of select(sql, v.object({ name: v.string() }), 'SELECT name FROM cp_workspaces WHERE user_id = ? ORDER BY name', userId)) alias(name);
+  const audit = select(sql, AuditNamesRow, 'SELECT id, actor_user, actor_email, target, detail FROM cp_audit');
+  const owned = `${userId}/`;
+  const theirs = (text: string): boolean => [email, userId].some((name) => name !== '' && tokenPattern(name).test(text));
+
+  for (const row of audit) {
+    const about = row.target.startsWith(owned);
+    const by = row.actor_user === userId || (email !== '' && row.actor_email.toLowerCase() === email);
+
+    if (!about && !by && !theirs(row.detail)) continue;
+    const [workspace = '', ...rest] = row.target.slice(owned.length).split('/');
+    const target = about ? [pseudonym, alias(workspace), ...rest].join('/') : row.target;
+    let detail = [email, userId].filter((name) => name !== '').reduce((text, name) => text.replace(tokenPattern(name), pseudonym), row.detail);
+
+    // A workspace's name alone names it only in a row about the account; longest first, so none cuts a longer one.
+    if (about || by) {
+      for (const [name, aliased] of [...aliases].sort(([a], [b]) => b.length - a.length)) detail = detail.replace(tokenPattern(name), aliased);
+    }
+
+    sql.exec('UPDATE cp_audit SET actor_user = ?, actor_email = ?, target = ?, detail = ? WHERE id = ?',
+      row.actor_user === userId ? pseudonym : row.actor_user, by && row.actor_email.toLowerCase() === email ? pseudonym : row.actor_email, target, detail, row.id);
+  }
+
+  sql.exec('DELETE FROM cp_feedback WHERE user_id = ?', userId);
+  sql.exec('DELETE FROM cp_workspaces WHERE user_id = ?', userId);
+  sql.exec('DELETE FROM cp_users WHERE user_id = ?', userId);
+
+  return { feedback };
+}
+
+const AuditNamesRow = v.object({ id: v.string(), actor_user: v.string(), actor_email: v.string(), target: v.string(), detail: v.string() });
+
+/** `name` as a whole token: not part of a longer email, id or workspace name on either side. */
+function tokenPattern(name: string): RegExp {
+  return new RegExp(`(?<![A-Za-z0-9._%+-])${name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}(?![A-Za-z0-9._%+-])`, 'giu');
+}
+
 /** `userId`'s workspaces the index holds as removed, whose name no live workspace holds now. */
 export function removedWorkspaceNames(sql: ControlPlaneSql, userId: string): string[] {
   return select(sql, v.object({ name: v.string() }),

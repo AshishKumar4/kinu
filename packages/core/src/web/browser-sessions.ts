@@ -41,6 +41,21 @@ export function ownsBrowserSession(db: SqlExec, actorId: string, sessionId: stri
   return db.exec(`SELECT 1 AS x FROM browser_sessions WHERE session_id = ? AND actor_id = ?`, sessionId, actorId).toArray().length > 0;
 }
 
+/**
+ * Every browser any actor here opened, closed on Browser Run and forgotten, as its workspace is deleted: a session left
+ * open keeps its pages' state until it sits idle out. One Browser Run no longer holds is forgotten as it is.
+ */
+export async function closeWorkspaceBrowserSessions(db: SqlExec, binding: BrowserSessionBinding): Promise<number> {
+  const ids = db.exec('SELECT session_id FROM browser_sessions').toArray().map((row) => v.parse(OwnedRowSchema, row).session_id);
+
+  for (const id of ids) {
+    if (await binding.getSession(id) !== null) await binding.closeSession(id);
+    db.exec('DELETE FROM browser_sessions WHERE session_id = ?', id);
+  }
+
+  return ids.length;
+}
+
 export function browserSessions(input: { readonly db: SqlExec; readonly binding: BrowserSessionBinding; readonly actorId: string }): BrowserSessions {
   const { db, binding, actorId } = input;
 

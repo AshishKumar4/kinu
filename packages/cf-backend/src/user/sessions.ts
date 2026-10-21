@@ -6,7 +6,7 @@ import {
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner, issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, applyReset, listBuiltinAccounts, resetAccount, type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
+  builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner, issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, removeBuiltinAccount, applyReset, listBuiltinAccounts, resetAccount, type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 import { closeEndedRosterSockets, rosterSockets } from './roster';
 import { singletonValue, type SessionStands, type UserObjectHost } from './user-host';
@@ -198,6 +198,11 @@ export class UserSessions {
     await this.host.requireTier(caller, 'builtin_accounts');
 
     return listBuiltinAccounts(this.builtinSql());
+  }
+
+  /** A deleted account's sign-in, on the deployment's directory (`removeBuiltinAccount`). */
+  async builtinRemoveAccount(caller: UserCaller, person: { readonly userId: string; readonly email: string }): Promise<void> {
+    await this.builtinWrite(caller, (sql) => { removeBuiltinAccount(sql, person); });
   }
 
   async builtinClearAttempts(caller: UserCaller, keys: readonly string[]): Promise<void> {

@@ -2265,7 +2265,7 @@ export {
 } from './preview/preview-ports';
 
 export {
-  sandboxPreviewExposure, sandboxPreviewExposures,
+  sandboxPreviewExposure, sandboxPreviewExposures, forgetSandboxPreviews, type ListedKv,
   type SandboxPreviewExposures,
 } from './preview/preview-exposures';
 
@@ -2634,7 +2634,7 @@ export {
 } from './http/health-route';
 
 export {
-  adaptMemory,
+  adaptMemory, forgetMemoryVectors,
   backfillMemoryVectors,
 } from './memory/vector-sync';
 

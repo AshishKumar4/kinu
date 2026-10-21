@@ -134,6 +134,16 @@ export class UserWorkspaces {
     sendRosterFrame(sockets, { type: 'workspace', name, entry: rosterRow(sql, name), counts: rosterCounts(sql) }, this.host.sessionStands);
   }
 
+  /** A deleted account's email gone from every share in this account's overviews, as the next push would leave them. */
+  forgetShareUser(email: string): void {
+    for (const { name, overview } of this.host.sqlx<{ name: string; overview: string }>('SELECT name, overview FROM workspace_overviews')) {
+      const parsed = v.parse(WorkspaceOverviewSchema, JSON.parse(overview));
+      const shares = parsed.shares.map((share) => ({ ...share, users: share.users.filter((user) => user.trim().toLowerCase() !== email) }));
+
+      this.host.sqlx('UPDATE workspace_overviews SET overview = ? WHERE name = ?', JSON.stringify({ ...parsed, shares }), name);
+    }
+  }
+
   /** A repeat writes and sends nothing. */
   async putWorkspaceOverview(caller: UserCaller, name: string, overview: WorkspaceOverview): Promise<void> {
     const resolved = await this.host.requireTier(caller, 'workspaces.overview_self');

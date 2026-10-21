@@ -82,6 +82,14 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
     }));
   }
 
+  /** A deleted account's memberships, in every share here, by its id or its email (lower-cased). */
+  forgetUser(person: { readonly userId: string; readonly email: string }): void {
+    this.db.exec(`DELETE FROM slate_share_users WHERE (user_id = ? OR lower(email) = ?) AND share_id IN (SELECT id FROM slate_shares WHERE kind = ?)`,
+      person.userId, person.email, this.table.kind);
+    // What reads the shares rebuilds from these tables, so no cached overview names them again.
+    markStoreChanged(this.db);
+  }
+
   list(): Rec[] {
     const rows = this.db.exec('SELECT * FROM slate_shares WHERE kind = ? ORDER BY created_at DESC, id', this.table.kind).toArray()
       .map((row) => v.parse(this.table.row, row));
@@ -100,6 +108,8 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
       if (share.revokedAt !== null) return Effect.succeed(share);
       const revokedAt = this.now();
       this.db.exec('UPDATE slate_shares SET revoked_at = ? WHERE id = ?', revokedAt, id);
+      // A revoked share has no members: nothing reads them after, and none of them is kept naming a person.
+      this.db.exec('DELETE FROM slate_share_users WHERE share_id = ?', id);
       markStoreChanged(this.db);
 
       // Read back, as every record is: what a revoke ends (a live share's listing) is the row's to say.

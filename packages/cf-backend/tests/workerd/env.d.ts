@@ -294,6 +294,60 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   resetRefused(): Promise<string>;
 }
 
+/** A person, as `account-census-probe.ts` seeds and counts them. */
+interface CensusPerson {
+  readonly userId: string;
+  readonly email: string;
+}
+
+interface CensusAccountRpc extends Rpc.DurableObjectBranded {
+  accountsOf(emails: readonly string[]): Promise<string[]>;
+  seedProfile(person: CensusPerson, displayName: string): Promise<void>;
+  runDueWork(): Promise<void>;
+  pushStale(priya: CensusPerson): Promise<void>;
+  deletedAt(): Promise<number | null>;
+  seedPriya(person: CensusPerson): Promise<void>;
+  seedDana(priya: CensusPerson): Promise<void>;
+  seedSignIn(person: CensusPerson): Promise<void>;
+  accountCensus(): Promise<Record<string, number>>;
+  sentTo(person: CensusPerson): Promise<{ readonly cards: number; readonly overviews: number }>;
+  deleteThis(): Promise<{ ok: true; workspaces: number }>;
+  signInCensus(person: CensusPerson): Promise<number>;
+  driveNames(tenant: string): Promise<{ readonly user: string; readonly shards: readonly string[] }>;
+  previewKeys(workspace: string): Promise<number>;
+  signInRows(person: CensusPerson): Promise<number>;
+  mailTo(to: string, mime: string): Promise<readonly string[]>;
+}
+
+interface CensusWorkspaceRpc extends Rpc.DurableObjectBranded {
+  seedShareWith(person: CensusPerson): Promise<void>;
+  shareCensus(person: CensusPerson): Promise<Record<string, number>>;
+}
+
+interface CensusMailboxRpc extends Rpc.DurableObjectBranded {
+  open(account: { userId: string; email: string; username: string; assistant: null }): Promise<import('@kinu.run/core').MailBox>;
+  deliver(input: { raw: Uint8Array; envelopeFrom: string; recipient: import('@kinu.run/core').MailRecipient }): Promise<import('@kinu.run/core').MailDelivery | null>;
+  mailCensus(userId: string): Promise<Record<string, number>>;
+  holdNextWrite(): Promise<void>;
+  writeHeld(): Promise<void>;
+  releaseWrite(): Promise<void>;
+}
+
+interface CensusMailNameRpc extends Rpc.DurableObjectBranded {
+  claim(label: string, userId: string): Promise<{ label: string; user_id: string; state: string }>;
+  lookup(): Promise<{ label: string; user_id: string; state: string } | null>;
+  whenRetired(): Promise<void>;
+}
+
+interface CensusStorageRpc extends Rpc.DurableObjectBranded {
+  storageRows(): Promise<number>;
+}
+
+interface CensusControlRpc extends Rpc.DurableObjectBranded {
+  seedPerson(person: CensusPerson): Promise<void>;
+  controlCensus(person: CensusPerson): Promise<Record<string, number>>;
+}
+
 interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
   probeUnderLoad(workspace: string, burns: number, iterations: number): Promise<import('./agent-facet-shapes').ProbeContention>;
   deletedWorkspaceFacet(workspace: string): Promise<{ readonly before: string[]; readonly after: string[] }>;
@@ -578,6 +632,14 @@ declare global {
       DELETE_ALL_PROBE: DurableObjectNamespace<import('./delete-all-probe').DeleteAllProbeDO>;
       MAILBOX: DurableObjectNamespace<MailboxProbeRpc>;
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
+      // `account-census-probe`: each the production class the Worker reaches by its own binding name, plus its census.
+      CENSUS_ACCOUNT: DurableObjectNamespace<CensusAccountRpc>;
+      CENSUS_WORKSPACE: DurableObjectNamespace<CensusWorkspaceRpc>;
+      CENSUS_MAILBOX: DurableObjectNamespace<CensusMailboxRpc>;
+      CENSUS_MAILNAME: DurableObjectNamespace<CensusMailNameRpc>;
+      CENSUS_CONTROL: DurableObjectNamespace<CensusControlRpc>;
+      CENSUS_DRIVE_USER: DurableObjectNamespace<CensusStorageRpc>;
+      CENSUS_DRIVE_SHARD: DurableObjectNamespace<CensusStorageRpc>;
       DEVICE_USER_PROBE: DurableObjectNamespace<DeviceUserProbeRpc>;
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
       ADDRESSED_NAME_PROBE: DurableObjectNamespace<AddressedNameProbeRpc>;

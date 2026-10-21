@@ -44,6 +44,9 @@ export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
 /** The key of every open by someone signed out: one bucket, which never counts as a viewer. */
 export const SIGNED_OUT_VIEWER = '';
 
+/** What a deleted account's edits are recorded under once it is forgotten: no one. */
+const FORGOTTEN_PERSON = 'a deleted account';
+
 const EditMarkRow = v.object({ editor: v.string() });
 
 export interface SlateEditMark {
@@ -177,6 +180,23 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
     const row = this.db.exec('SELECT editor FROM slate_edit_marks WHERE slate_id = ?', slate).toArray()[0];
 
     return row === undefined ? null : v.parse(EditMarkRow, row);
+  }
+
+  /**
+   * A deleted account in this workspace's live shares: its memberships go, and what it left keeps its count without
+   * naming it: its edit marks name no one, and its views, keyed per share by `viewerKey`, are deleted. Its requests were
+   * never kept under its account (`SlateShareViewersDeps.viewerKey`).
+   */
+  async forgetPerson(person: { readonly userId: string; readonly email: string }, viewerKey: (share: string) => Promise<string | null>): Promise<void> {
+    this.forgetUser(person);
+    this.db.exec('UPDATE slate_edit_marks SET editor = ? WHERE lower(editor) = ?', FORGOTTEN_PERSON, person.email);
+
+    // A deployment with no key for views counted no account apart from the signed out: nothing of it is there.
+    for (const { id } of this.db.exec(`SELECT id FROM slate_shares WHERE kind = 'live'`).toArray().map((row) => v.parse(v.object({ id: v.string() }), row))) {
+      const key = await viewerKey(id);
+
+      if (key !== null) this.db.exec('DELETE FROM slate_share_views WHERE share = ? AND viewer = ?', id, key);
+    }
   }
 
   markEdit(slate: string, editor: string): void {

@@ -108,6 +108,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   ownerUserId?(): string | null;
+  /** A signed-in viewer's key on `share`, the deployment's keyed hash of them (`shareViewerKey`); null without a key. */
+  viewerKey?(share: string, userId: string): Promise<string | null>;
   forgetPicture?(slate: string): Promise<void>;
   sharesChanged?(): Promise<'current' | 'pending'>;
   /** A live share of `slate` started or stopped: its server's authority changed, so its running app ends. */
@@ -178,6 +180,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       ...(ports.admitted !== undefined && { admitted: ports.admitted.bind(ports) }),
       ...(ports.budget !== undefined && { budget: ports.budget.bind(ports) }),
       ...(ports.ownerUserId !== undefined && { ownerUserId: ports.ownerUserId.bind(ports) }),
+      ...(ports.viewerKey !== undefined && { viewerKey: ports.viewerKey.bind(ports) }),
       ...(ports.ownerEffects !== undefined && { ownerEffects: ports.ownerEffects }),
     });
     this.servers = new SharedServers({
@@ -624,6 +627,16 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
    * Every live share of `slate` ended, or of every slate here: before a slate's source is removed, or its workspace is
    * deleted, so nothing removed is still shared or found in the Gallery. Whether any was.
    */
+  /**
+   * A deleted account forgotten here: no share of this workspace admits it, by its id or by an email that later signs up
+   * again, and the traces it left name no one (`SlateLiveShareStore.forgetPerson`). The overview goes out again.
+   */
+  async forgetPerson(person: { readonly userId: string; readonly email: string }, viewerKey: (share: string) => Promise<string | null>): Promise<void> {
+    new SlateShareStore(this.ports.sql).forgetUser(person);
+    await this.live.forgetPerson(person, viewerKey);
+    await this.ports.sharesChanged?.();
+  }
+
   async endLiveShares(slate?: string): Promise<boolean> {
     const live = this.live.list().filter((row) => row.revokedAt === null && (slate === undefined || row.slate === slate));
 

@@ -312,6 +312,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'builtin_accounts', name: 'builtinListAccounts', run: (u, c) => u.builtinListAccounts(c) },
   { capability: 'builtin_accounts', name: 'builtinClearAttempts', run: (u, c) => u.builtinClearAttempts(c, ['k']) },
   { capability: 'builtin_accounts', name: 'builtinInvitedEmail', run: (u, c) => u.builtinInvitedEmail(c, 'h') },
+  { capability: 'builtin_accounts', name: 'builtinRemoveAccount', run: (u, c) => u.builtinRemoveAccount(c, { userId: USER_ID, email: 'a@example.com' }) },
   { capability: 'builtin_accounts', name: 'builtinPasswordAccount', run: (u, c) => u.builtinPasswordAccount(c, 'a@example.com') },
   { capability: 'builtin_accounts', name: 'builtinPasskeyAccount', run: (u, c) => u.builtinPasskeyAccount(c, 'cred') },
   { capability: 'builtin_accounts', name: 'builtinRecordPasskeyUse', run: (u, c) => u.builtinRecordPasskeyUse(c, 'cred', 1) },

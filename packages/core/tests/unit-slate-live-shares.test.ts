@@ -8,6 +8,7 @@ import { GALLERY_CATEGORIES, type GalleryCategory } from '../src/slates/gallery-
 import { grantAdmits, slateCapabilityGraph } from '../src/slates/capability-graph';
 import { makeExecRaw, makeSqlExec } from './helpers';
 import type { ShareGrant } from '../src/slates/sharing';
+import { SlateShareViewers } from '../src/slates/share-viewers';
 
 const grant: ShareGrant = {
   slates: ['issues'],
@@ -490,3 +491,45 @@ test("a share's numbers: distinct people signed in, every open, and signed-out o
   }
 });
 
+
+// Owner decision, 2026-10-20 (account deletion): a signed-in viewer's requests are kept under the share's keyed hash of
+// them, never their account, so a deleted account leaves nothing in another owner's workspace that names it, and
+// nothing there needs reaching when it is deleted.
+test("a signed-in viewer's requests are kept under the share's key for them, never their account", async () => {
+  const { db, shares } = shareDb();
+
+  try {
+    shares.add({ ...liveShare(), visibility: 'public', grant: { slates: ['issues'], members: [] } });
+    const keys: string[] = [];
+
+    const viewers = new SlateShareViewers({
+      live: shares, shareEntry: () => null,
+      viewerKey: async (share, userId) => {
+        keys.push(`${share}:${userId}`);
+
+        return 'k-priya';
+      },
+    });
+
+    const admission = await viewers.admit({ handle: '0123456789', claim: { userId: 'u-priya', source: 'ip', consented: true }, pathname: '/' });
+
+    expect(admission).toMatchObject({ kind: 'admitted', viewer: { subject: 'viewer:k-priya' } });
+    expect(keys).toEqual(['s1:u-priya']);
+    expect(shares.requests('s1').map((request) => request.viewer)).toEqual(['viewer:k-priya']);
+    expect(db.query("SELECT COUNT(*) AS n FROM slate_viewer_requests WHERE instr(viewer, 'u-priya') > 0").get()).toEqual({ n: 0 });
+  } finally { db.close(); }
+});
+
+// Owner decision, 2026-10-20 (account deletion): a revoked share has no members, so none is kept naming a person after
+// nothing can use it.
+test('revoking a share deletes its members with it', () => {
+  const { db, shares } = shareDb();
+
+  try {
+    shares.add(liveShare());
+    shares.addUsers('s1', [{ userId: 'u-priya', email: 'priya.raman@example.com' }]);
+    shares.revoke('s1');
+
+    expect(db.query('SELECT COUNT(*) AS n FROM slate_share_users WHERE share_id = ?').get('s1')).toEqual({ n: 0 });
+  } finally { db.close(); }
+});

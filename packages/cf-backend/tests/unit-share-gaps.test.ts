@@ -704,10 +704,7 @@ async function deleteAccount(world: World, owner: AuthIdentity): Promise<number>
     method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: owner.email }),
   });
 
-  // The control plane's Gallery forgets the account's stars and reports; none here to forget.
-  const ControlPlaneDO = { idFromName: (name: string) => name, get: () => ({ galleryForget: async () => undefined }) };
-
-  return present(await serveFamily(accountRoutes, { identity: owner })(request, { ...world.env, ControlPlaneDO }), 'the delete answer').status;
+  return present(await serveFamily(accountRoutes, { identity: owner })(request, world.env), 'the delete answer').status;
 }
 
 test("an account deleted while a card's removal is pending tells that person to forget it", async () => {

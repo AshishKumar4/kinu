@@ -8,6 +8,9 @@ import { sha256Hex, DEVICE_PROTOCOL_VERSION, DEVICE_FEATURES, deviceIdFromSocket
 import { isJsonObject } from '../../../core/src/utils/json';
 import { ownerCaller, type UserCaller } from '@kinu.run/core';
 import type { IndexFeedSink } from '../../src/control-plane/index-feed';
+import type { ControlPlaneDO } from '../../src/control-plane/control-plane-do';
+import type { MailboxDO } from '../../src/mail/mailbox-do';
+import { BUILTIN_ACCOUNTS_OBJECT } from '@kinu.run/core/identity';
 import type { WorkspaceRegistration } from '../../src/user/workspaces';
 import {
   DeviceConsentRegistry,
@@ -103,6 +106,8 @@ export interface TestUserDO {
   /** Capability tokens the UserDO delivered, per workspace. */
   installed: Map<string, string>;
   destroyedWorkspaces: string[];
+  /** What the account's delete reached beyond its own object: its mailbox and labels, its control-plane forget. */
+  accountDeleted: string[];
   /** Reasons passed to `ctx.abort`: an account delete completes only once `destroy()` raises 'destroyed'. */
   aborted: string[];
   abortRaised: () => Promise<void>;
@@ -226,8 +231,16 @@ export interface TestUserDOOptions {
 }
 
 /** The control plane's namespace, binding `sink` for every name; none when there is no sink. */
-function controlPlaneNamespace(sink: IndexFeedSink | undefined): TestUserEnvironment['ControlPlaneDO'] {
-  return sink === undefined ? undefined : { idFromName: (name: string) => name, get: () => sink };
+function controlPlaneNamespace(sink: IndexFeedSink | undefined, deleted: string[]): TestUserEnvironment['ControlPlaneDO'] {
+  if (sink === undefined) return undefined;
+
+  const forgetUser: ControlPlaneDO['forgetUser'] = async (_caller, person) => {
+    deleted.push(`control-plane:${person.userId}`);
+
+    return { feedback: 0 };
+  };
+
+  return { idFromName: (name: string) => name, get: () => ({ ...sink, forgetUser }) };
 }
 
 export interface FakeDaemon {
@@ -294,8 +307,9 @@ function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']):
 }
 
 interface TestUserEnvironment {
-  UserDO?: { idFromName(name: string): string; get(id: string): ShareCardRecipient };
-  ControlPlaneDO?: { idFromName(name: string): string; get(id: string): IndexFeedSink };
+  UserDO?: { idFromName(name: string): string; get(id: string): ShareCardRecipient | Pick<UserDOInstance, 'builtinRemoveAccount'> };
+  ControlPlaneDO?: { idFromName(name: string): string; get(id: string): IndexFeedSink & Pick<ControlPlaneDO, 'forgetUser'> };
+  MAILBOX: { idFromName(name: string): string; get(id: string): Pick<MailboxDO, 'deleteBox'> };
   CREDENTIAL_ENCRYPTION_KEY: string;
   DEV_USER_EMAIL?: string;
   SLATE_PICTURES?: PictureBucket;
@@ -395,6 +409,13 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const sql = sqlExec(db);
   const installed = new Map<string, string>();
   const destroyedWorkspaces: string[] = [];
+  const accountDeleted: string[] = [];
+  const accountOf = options.accounts;
+
+  const directory: Pick<UserDOInstance, 'builtinRemoveAccount'> = {
+    builtinRemoveAccount: async (_caller, person) => { accountDeleted.push(`sign-in:${person.userId}`); },
+  };
+
   const aborts = new AwaitedList<string>();
   const aborted = aborts.items;
   const revokedSocketPushes: string[] = [];
@@ -617,10 +638,20 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     ...(options.cloudflareOAuthClientSecret !== undefined && { CLOUDFLARE_OAUTH_CLIENT_SECRET: options.cloudflareOAuthClientSecret }),
     CLI_PUBLIC_ORIGIN: 'https://kinu.example.com',
     ...(options.devUserEmail !== undefined && { DEV_USER_EMAIL: options.devUserEmail }),
-    ...(options.accounts !== undefined && { UserDO: { idFromName: (name: string) => name, get: options.accounts } }),
+    // The deployment's sign-in directory answers beside the accounts: a deleted account's sign-in is removed there.
+    ...(accountOf !== undefined && { UserDO: { idFromName: (name: string) => name, get: (id: string) => (id === BUILTIN_ACCOUNTS_OBJECT ? directory : accountOf(id)) } }),
     ASSETS: { fetch: async (input: Request) => servedAsset(new URL(input.url).pathname, options.servedBuild) },
     SLATE_PICTURES: options.slatePictures,
-    ControlPlaneDO: controlPlaneNamespace(options.controlPlane),
+    ControlPlaneDO: controlPlaneNamespace(options.controlPlane, accountDeleted),
+    // No mail here: the box answers no labels, and its delete is recorded.
+    MAILBOX: {
+      idFromName: (name: string) => name,
+      get: (name: string) => ({
+        deleteBox: async () => {
+          accountDeleted.push(`mailbox:${name}`);
+        },
+      }),
+    },
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (name: string) => ({
@@ -719,7 +750,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   };
 
   return {
-    userDO, db, sql, installed, destroyedWorkspaces, aborted, revokedSocketPushes,
+    userDO, db, sql, installed, destroyedWorkspaces, accountDeleted, aborted, revokedSocketPushes,
     abortRaised: () => aborts.until((reasons) => reasons.length > 0),
     revokedSessionPushes, connectionsChanged, overviewNudges, secretsMoved,
     pendingConsents: (workspace) => registryFor(workspace).list(),
