@@ -152,6 +152,9 @@ html, body, #root {
   --layout-files-row: 1rem minmax(0, 1fr) auto;
   --layout-files-row-wide: 1rem minmax(0, 1fr) 4.5rem 4rem;
   --layout-files-tiles: repeat(auto-fill, minmax(6.5rem, 1fr));
+  /* The model picker's menu: as wide as its names, never past the screen; its list a scroll of its own. */
+  --layout-picker: min(28rem, calc(100vw - 1rem));
+  --layout-picker-list: min(24rem, 60vh);
 
   /* motion */
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
@@ -644,6 +647,10 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* Preformatted (ui/Preformatted.tsx): text as it is, on the recessed ground, scrolling within its own height. */
 .p-preformatted { margin: 0; padding: 4px 8px; overflow: auto; border-radius: var(--r-inner); background: var(--c-sunken); color: var(--c-text-2); }
 .p-preformatted-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* A quiet Select (ui/Select.tsx): no edge or ground until the pointer is on it; Kumo's own fill and ring give way. */
+.p-select.p-select-quiet { background: transparent !important; box-shadow: none !important; color: var(--c-text-2); transition: background-color var(--dur-state) ease-out; }
+.p-select.p-select-quiet:is(:hover, :focus-visible) { background: var(--c-hover) !important; }
 
 /* Rail (ui/Rail.tsx): a strip of the tabs above below its breakpoint, fading at its scrolling edge; a column of rows
    from it up, the open row on the selected ground. */

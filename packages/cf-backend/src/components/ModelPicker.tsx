@@ -1,6 +1,5 @@
 /** The one model picker for every surface; groups follow server order (connected-provider preference). */
 import { useEffect, useMemo, useState } from "react";
-import { Select } from "@cloudflare/kumo";
 import { Badge } from "@/components/ui/Badge";
 import { ArrowsClockwiseIcon, BrainIcon, EyeIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import {
@@ -18,7 +17,9 @@ import { BrandMark, providerBrand } from "./ui/BrandMark";
 import { ChatGptPlanUsage } from "./account/ChatGptConnect";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { lastValue, useAsyncResource } from "../hooks/use-async-resource";
-import { Combobox } from "@/components/ui/Select";
+import { Combobox, Select } from "@/components/ui/Select";
+import { Loader } from "@/components/ui/Loader";
+import { Button, buttonClass } from "@/components/ui/Button";
 
 type PickerValue = ModelMenuEntry | { value: string; items: ModelMenuEntry[] };
 
@@ -45,21 +46,12 @@ function EffortPicker({ options, value, onChange, disabled }: {
 }) {
   if (options.length === 0) return null;
 
+  const levels: readonly (ReasoningEffort | typeof DEFAULT_EFFORT)[] = [DEFAULT_EFFORT, ...options];
+
   return (
-    <Select
-      aria-label="Thinking level"
-      size="xs"
-      className="shrink-0 !bg-transparent !shadow-none !ring-0 transition-colors hover:!bg-[var(--c-hover)] focus-visible:!bg-[var(--c-hover)]"
-      value={value ?? DEFAULT_EFFORT}
-      disabled={disabled}
-      onValueChange={(next) => { onChange(isReasoningEffort(next) ? next : null); }}
-      renderValue={(picked) => (
-        <span className="p-text-2">{effortLabel(isReasoningEffort(picked) ? picked : DEFAULT_EFFORT)}</span>
-      )}
-    >
-      <Select.Option value={DEFAULT_EFFORT}>{effortLabel(DEFAULT_EFFORT)}</Select.Option>
-      {options.map((effort) => <Select.Option key={effort} value={effort}>{effortLabel(effort)}</Select.Option>)}
-    </Select>
+    <Select label="Thinking level" size="xs" quiet className="shrink-0" value={value ?? DEFAULT_EFFORT} disabled={disabled}
+      onChange={(next) => { onChange(isReasoningEffort(next) ? next : null); }}
+      options={levels.map((effort) => ({ value: effort, label: effortLabel(effort) }))} />
   );
 }
 
@@ -79,18 +71,9 @@ export function AccountPicker({ spec, accounts, onChange, disabled, label }: {
   if (accounts.length < 2) return null;
 
   return (
-    <Select
-      aria-label={label}
-      size="xs"
-      className="shrink-0 !bg-transparent !shadow-none !ring-0 transition-colors hover:!bg-[var(--c-hover)] focus-visible:!bg-[var(--c-hover)]"
-      value={parseModelSpec(spec).account ?? ''}
-      disabled={disabled}
-      onValueChange={(next) => { onChange(specOnAccount(spec, accounts.find((account) => account === next) ?? '')); }}
-      renderValue={(picked) => <span className="p-text-2">{accounts.find((account) => account === picked) ?? 'Default account'}</span>}
-    >
-      <Select.Option value="">Default account</Select.Option>
-      {accounts.map((account) => <Select.Option key={account} value={account}>{account}</Select.Option>)}
-    </Select>
+    <Select label={label} size="xs" quiet className="shrink-0" value={parseModelSpec(spec).account ?? ''} disabled={disabled}
+      onChange={(next) => { onChange(specOnAccount(spec, next)); }}
+      options={[{ value: '', label: 'Default account' }, ...accounts.map((account) => ({ value: account, label: account }))]} />
   );
 }
 
@@ -160,7 +143,7 @@ export function ModelPicker({
           <span className={`min-w-0 truncate ${selected === null ? "p-text-3" : ""}`}>{selected?.label ?? (value === '' ? placeholder : listed)}</span>
         </span>
       </Combobox.TriggerValue>
-      <Combobox.Content className="w-[min(28rem,calc(100vw-1rem))]">
+      <Combobox.Content className="w-[var(--layout-picker)]">
         <Combobox.Input placeholder={tests.enabled ? "Search models · Alt+T tests" : "Search models"} aria-label={`Search ${label.toLowerCase()}`}
           {...(tests.enabled && { "aria-keyshortcuts": "Alt+T" })}
           onKeyDown={(event) => {
@@ -169,7 +152,7 @@ export function ModelPicker({
             tests.toggle(highlighted.spec);
           }} />
         <Combobox.Empty>No models match</Combobox.Empty>
-        <Combobox.List className="max-h-[min(24rem,60vh)]">
+        <Combobox.List className="max-h-[var(--layout-picker-list)]">
           {(group: { value: string; items: ModelMenuEntry[] }) => (
             <Combobox.Group key={group.value} items={group.items}>
               <Combobox.GroupLabel>
@@ -185,10 +168,7 @@ export function ModelPicker({
         </Combobox.List>
         <ProviderFailureNotice failures={failures} models={models} />
         {clearable && value !== '' && (
-          <button type="button" className="t-control mx-2 mt-1 rounded px-2 py-1 text-left p-text-2 hover:bg-[var(--c-hover)]"
-            onClick={() => onChange("")}>
-            Use default model
-          </button>
+          <Button variant="ghost" size="sm" className="mx-2 mt-1" onClick={() => onChange("")}>Use default model</Button>
         )}
       </Combobox.Content>
     </Combobox>
@@ -243,23 +223,15 @@ export function ConnectedModelPicker({
 
   if (resource.status === "loading") {
     return (
-      <span className="t-status inline-flex items-center rounded-md border p-border px-1 py-1 p-text-3" aria-label="Loading models">
-        …
-      </span>
+      <Badge icon={<Loader size="sm" />}><span className="sr-only">Loading models</span></Badge>
     );
   }
 
   if (menu === null) {
     return (
-      <button
-        type="button"
-        onClick={reload}
-        className="t-control inline-flex min-w-0 items-center gap-1 rounded-md border p-border px-2 py-1 p-text-3 hover:p-text-2"
-        title={resource.status === "error" ? resource.message : undefined}
-      >
-        <ArrowsClockwiseIcon size={11} className="shrink-0" />
+      <Button size="sm" icon={<ArrowsClockwiseIcon size={14} />} onClick={reload} title={resource.status === "error" ? resource.message : undefined}>
         <span className="truncate">Couldn't load the model list. Retry</span>
-      </button>
+      </Button>
     );
   }
 
@@ -267,15 +239,7 @@ export function ConnectedModelPicker({
     // Empty because every provider failed is not an unconnected account; skip the OAuth CTA.
     if (menu.failures.length > 0) {
       return (
-        <button
-          type="button"
-          onClick={reload}
-          className="t-status p-tint-warning p-warning inline-flex items-center gap-2 rounded-md border px-2 py-1 hover:opacity-80"
-          title={failureTitle(menu.failures)}
-        >
-          <WarningCircleIcon size={12} />
-          providers unavailable
-        </button>
+        <Button size="sm" className="p-warning" icon={<WarningCircleIcon size={14} />} onClick={reload} title={failureTitle(menu.failures)}>providers unavailable</Button>
       );
     }
 
@@ -285,10 +249,10 @@ export function ConnectedModelPicker({
       <a
         href={cloudflareReconnectPath(window.location.pathname)}
         onClick={(event) => { if (connectCloudflareInHelper(window.location.pathname)) event.preventDefault(); }}
-        className="t-status p-tint-warning p-warning inline-flex items-center gap-2 rounded-md border px-2 py-1 hover:opacity-80"
+        className={`${buttonClass({ size: "sm" })} p-warning`}
         title="Reconnect Cloudflare with Workers AI permissions"
       >
-        <WarningCircleIcon size={12} />
+        <WarningCircleIcon size={14} />
         Connect Workers AI
       </a>
     );
@@ -416,8 +380,7 @@ function TestButton({ spec, tests, inMenu }: { spec: string; tests: ModelTests; 
   const stop = (event: React.SyntheticEvent) => { if (inMenu) event.stopPropagation(); };
 
   return (
-    <button type="button"
-      className="t-status shrink-0 rounded border p-border px-1 py-px p-text-2 hover:p-text"
+    <Button variant="secondary" size="sm" className="shrink-0"
       aria-label={running ? `Cancel the test of ${spec}` : `Test ${spec}`}
       title={inMenu ? "Test (Alt+T)" : "Test"}
       {...(inMenu && { tabIndex: -1, "aria-keyshortcuts": "Alt+T" })}
@@ -425,7 +388,7 @@ function TestButton({ spec, tests, inMenu }: { spec: string; tests: ModelTests; 
       onMouseDown={stop}
       onClick={(event) => { stop(event); event.preventDefault(); tests.toggle(spec); }}>
       {running ? "Testing… Cancel" : "Test"}
-    </button>
+    </Button>
   );
 }
 

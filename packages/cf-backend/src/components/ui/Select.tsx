@@ -2,13 +2,16 @@
 import { Select as KumoSelect } from "@cloudflare/kumo";
 import type { FieldSize } from "@/components/ui/Field";
 
-export function Select<Value extends string>({ label, value, options, onChange, disabled, size = "md", shown, className }: {
+export function Select<Value extends string>({ label, value, options, onChange, disabled, size = "md", quiet = false, shown, className }: {
   label: string;
   value: Value;
   options: ReadonlyArray<{ value: Value; label: string }>;
   onChange: (value: Value) => void;
   disabled?: boolean;
-  size?: FieldSize;
+  /** `xs` sits in a line of text, as the composer's thinking level does. */
+  size?: FieldSize | "xs";
+  /** No edge or ground of its own: a choice in a row of others, washed under the pointer. */
+  quiet?: boolean;
   /** The trigger's own words for the chosen value, where its option's label is too long to sit in a row. */
   shown?: (value: Value) => string;
   className?: string;
@@ -16,8 +19,8 @@ export function Select<Value extends string>({ label, value, options, onChange, 
   return (
     <KumoSelect
       aria-label={label}
-      size={size === "sm" ? "sm" : "base"}
-      className={`p-select p-field-${size}${className === undefined ? "" : ` ${className}`}`}
+      size={size === "md" ? "base" : size}
+      className={`p-select${size === "xs" ? "" : ` p-field-${size}`}${quiet ? " p-select-quiet" : ""}${className === undefined ? "" : ` ${className}`}`}
       value={value}
       disabled={disabled}
       items={options}
