@@ -71,7 +71,6 @@ export function initMailboxTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS mail_messages (
       id           TEXT    PRIMARY KEY,
       thread_id    TEXT    NOT NULL REFERENCES mail_threads (id),
-      direction    TEXT    NOT NULL CHECK (direction IN ('in', 'out')),
       header_id    TEXT,
       from_addr    TEXT    NOT NULL,
       from_name    TEXT,
@@ -90,18 +89,18 @@ export function initMailboxTables(sql: SqlExec): void {
       raw_key      TEXT,
       read         INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0, 1)),
       written_by   TEXT,
+      -- Null on a message received; an outgoing one is a draft, or queued from the moment it is sent.
       send_state   TEXT    CHECK (send_state IS NULL OR send_state IN ('draft', 'queued')),
-      CHECK ((direction = 'in') = (send_state IS NULL)),
-      CHECK (direction = 'out' OR (raw_key IS NOT NULL AND written_by IS NULL)),
+      CHECK (send_state IS NOT NULL OR (raw_key IS NOT NULL AND written_by IS NULL)),
       CHECK (text_body IS NULL OR text_key IS NULL),
-      CHECK (woke IS NULL OR (direction = 'in' AND verdict = 'verified')),
+      CHECK (woke IS NULL OR (send_state IS NULL AND verdict = 'verified')),
       UNIQUE (thread_id, header_id)
     )
   `);
   sql.exec('CREATE INDEX IF NOT EXISTS mail_messages_thread ON mail_messages (thread_id, at)');
   sql.exec('CREATE INDEX IF NOT EXISTS mail_messages_header ON mail_messages (header_id) WHERE header_id IS NOT NULL');
-  sql.exec('CREATE INDEX IF NOT EXISTS mail_messages_sent ON mail_messages (direction, at)');
-  sql.exec("CREATE INDEX IF NOT EXISTS mail_messages_drafts ON mail_messages (send_state) WHERE send_state = 'draft'");
+  sql.exec("CREATE INDEX IF NOT EXISTS mail_messages_sent ON mail_messages (at) WHERE send_state = 'queued'");
+  sql.exec("CREATE INDEX IF NOT EXISTS mail_messages_drafts ON mail_messages (thread_id) WHERE send_state = 'draft'");
   // Its bytes are content-addressed under the account in R2: mail/<user_id>/att/<digest>.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS mail_attachments (

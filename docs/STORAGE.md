@@ -530,7 +530,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Tool lessons | `tool_lessons` | `core/src/evolution/struggles.ts` |
 | Lessons | `lessons` | `core/src/evolution/lessons.ts` |
 | Refinement | `refinement_requests` | `core/src/evolution/refinement.ts` |
-| Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |
+| Branching heads | `head_runs`, `head_journal`, `head_steps` | `core/src/heads/schema.ts` |
 | Swarm search | `search_nodes`, `mcts_search_runs` (durable checkpoints) | `core/src/mcts/schemas.ts`, `search-store.ts` |
 | Alternate takes | `alternate_takes` (a settled `/branch` redirect) | `core/src/mcts/takes.ts` |
 | Swarm leaderboard | `exploration_records` (cumulative across runs), `exploration_objectives` (what each objective measures) | `core/src/strategy/records.ts` |

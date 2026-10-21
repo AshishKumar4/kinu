@@ -167,7 +167,7 @@ import {
   checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore, deviceFileCheckpoints,
   type CheckpointAvailability, type FileCheckpointListing, type FileCheckpointReads,
   type FileRestorePlan, type FileRestoreResult,
-  SleepTimeLane, initSleepTimeUpdatesTable,
+  SleepTimeLane, initSleepTimeTables,
   // Core owns the ingress gates; this actor owns the transports in front of them
   // (DO alarm, Worker webhook + email routes, cross-DO RPC).
   acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
@@ -4406,7 +4406,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // Planes only this root carries (declared in test-utils/src/conformance/manifest.ts).
     initWebhookIngressTables(this.ctx.storage.sql);
 
-    initSleepTimeUpdatesTable(execRaw);
+    initSleepTimeTables(execRaw);
     initTurnBranchesTable(execRaw);
     // Owned by this root: the container is the workspace's; subordinates ride their parent's.
     initSandboxLifecycleTable(execRaw);

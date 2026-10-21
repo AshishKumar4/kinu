@@ -27,7 +27,7 @@ export {
   type HandedOffTurn, type SettledRun, type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts, type TurnEnd,
 } from './orchestrator/terminal-roster';
 
-export { SleepTimeLane, initSleepTimeUpdatesTable } from './orchestrator/sleep-time-lane';
+export { SleepTimeLane, initSleepTimeTables } from './orchestrator/sleep-time-lane';
 
 export {
   assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle,
