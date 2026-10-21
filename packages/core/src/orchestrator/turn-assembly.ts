@@ -74,7 +74,7 @@ export interface TurnAssemblySources {
   /** The turn's tools in `workMode`, and the store operations they run. */
   toolset(workMode: WorkMode): TurnTools;
   /** MCP and extension tools, reachable only through `eval`. */
-  externalTools(window: ModelWindow): Promise<ToolSet>;
+  externalTools(): Promise<ToolSet>;
   /** Non-builtin tools of `toolset` (`report`, `submit_plan`, `reply_to_comment`). */
   wiredToolNames(workMode: WorkMode): readonly string[];
   /** Namespaces reachable only inside `eval`. */
@@ -239,7 +239,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const skilled = (offered: TurnTools): TurnTools => ({ ...offered, tools: filterToolSetBySkills(offered.tools, activeSkills) });
   const drafting = skilled(sources.toolset(drafted.workMode));
   const builtins = drafting.tools;
-  const external = await sources.externalTools(limits);
+  const external = await sources.externalTools();
 
   const profile = frozen?.profile ?? resolvedTurnProfile(sources, { profileInputs, choices, workMode: request.workMode, drafted, builtins, external, activeSkills });
 

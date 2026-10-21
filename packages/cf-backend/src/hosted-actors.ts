@@ -58,13 +58,11 @@ export interface ToolScope {
   readonly report?: ReportDeps;
 }
 
-/** The turn an agent's sources are read for: the surface it runs under, its resolution, its evolved text and the tools
- *  its MCP budget is measured against. */
+/** The turn an agent's sources are read for: its surface, resolution and evolved text. */
 export interface SourcesTurn {
   readonly surface: TurnSurface;
   readonly resolved: ResolvedSurface;
   readonly artifacts: ArtifactOverrides;
-  readonly tools: ToolSet;
   /** The skills this agent's segment does not index yet (`dreamSkillsHidden`). */
   readonly hidesSkills: NonNullable<DiscoverOpts['hides']>;
 }

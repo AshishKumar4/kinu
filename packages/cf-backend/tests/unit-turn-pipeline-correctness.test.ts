@@ -471,7 +471,7 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   // MCP tools differ per workspace, so as native definitions they split the tools prefix between workspaces.
-  test('an MCP tool is no native definition and no system prompt line: eval calls it, and the dynamic block declares it', async () => {
+  test('MCP catalogs stay out of provider definitions and prompts while eval discovers and calls them', async () => {
     const mcp: NonNullable<RecordedUserPlaneCalls['mcp']> = {
       descriptors: [{
         serverId: 'srv-1', serverName: 'tracker', name: 'find_issue', toolKey: mcpToolKey('tracker', 'find_issue'),
@@ -493,12 +493,13 @@ describe('turn-pipeline correctness wiring', () => {
     expect(JSON.stringify(prepared.system)).not.toContain(key);
 
     const said = spoken(prepared.prompt ?? []).map((message) => message.text).join('\n');
-    // Declared to the model by the name eval calls it by, with the server's own description.
-    expect(said).toContain(`tools[${JSON.stringify(key)}]`);
-    expect(said).toContain('Find an issue by title.');
+    expect(said).not.toContain(key);
+    expect(said).not.toContain(mcp.descriptors[0].description);
 
     const evaluated = await toolExecute<JsonValue, JsonValue>(present(prepared.tools.eval, 'eval'))({
-      code: `return await tools[${JSON.stringify(key)}]({ title: 'login' });`,
+      code: `const match = (await codemode.search("find issue title")).results[0];
+        await codemode.describe(match.path);
+        return await tools[match.method]({ title: 'login' });`,
     });
 
     expect(JSON.stringify(evaluated)).toContain('ISSUE-7');

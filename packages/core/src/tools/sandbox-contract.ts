@@ -18,6 +18,8 @@ import type { CraftedToolSource } from './crafted-executor';
 import { toolDescription } from '../utils/tool-description';
 import { allowedInPlan, defineOperation, serve, statedInput, type Served } from '../operations/operation';
 import { operationInputSchema } from './operation-surfaces';
+import { mcpDiscoveryProvider } from './mcp-discovery';
+import { isMcpToolKey } from './mcp-naming';
 
 export {
   CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type CodemodeResult,
@@ -126,7 +128,7 @@ export function externalToolDeclarations(
   if (runnableSandbox(tools, profile) === undefined) return [];
 
   return Object.entries(external)
-    .filter(([name, entry]) => profile.allowedTools.includes(name)
+    .filter(([name, entry]) => !isMcpToolKey(name) && profile.allowedTools.includes(name)
       && workModeRefusal(profile.workMode, hasPlanPermission(entry), name) === null)
     .map(([name, entry]) => {
       const schema = v.safeParse(JsonObjectSchema, asSchema(entry.inputSchema).jsonSchema);
@@ -247,9 +249,10 @@ export function programProviders(input: {
   const { reach, mode } = input;
   const reached = (tools: ToolSet): ToolSet => Object.fromEntries(Object.entries(tools).filter(([name]) => reach.allowsTool(name)));
   // A native name shadows an external one.
-  const tools = toolsNamespace({ ...toolsInWorkMode(mode, reached(input.surface.external())), ...reached(input.surface.native) }, input.signal);
+  const external = toolsInWorkMode(mode, reached(input.surface.external()));
+  const tools = toolsNamespace({ ...external, ...reached(input.surface.native) }, input.signal);
 
-  return [...reach.narrowProviders([tools]), ...providersInWorkMode(mode, reach.narrowProviders(input.namespaces))];
+  return [...reach.narrowProviders([tools, mcpDiscoveryProvider(external)]), ...providersInWorkMode(mode, reach.narrowProviders(input.namespaces))];
 }
 
 /** `tools.*` members, as `toolsNamespace` builds them. */

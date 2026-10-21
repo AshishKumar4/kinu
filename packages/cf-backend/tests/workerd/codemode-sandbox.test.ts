@@ -12,6 +12,8 @@ import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { KinuSandboxExecutor, codemodeLauncher, renderToolsPrelude } from '../../src/codemode-sandbox';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
 import { createWebCodemodeProvider, type WebSearchProvider } from '@kinu.run/core';
+import { buildMcpToolSet, describeMcpTool, narrowToolSurface, programProviders } from '@kinu.run/core';
+import { discoveryQueries, largeMcpCatalog } from '../../../cli-backend/tests/fixtures/large-mcp-catalog';
 
 const files = new Map<string, string>([[`${WORKSPACE_ROOT}/notes.md`, 'hello from the workspace']]);
 
@@ -116,6 +118,51 @@ const SCRATCH_TABLE = 'await db.createTable({ name: "scratch", scope: "private",
 
 describe('the eval sandbox under workerd', () => {
   const executor = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: null }, async () => ({})));
+
+  test('MCP discovery and typed calls cross the hosted sandbox through the shared core surface', async () => {
+    const descriptors = largeMcpCatalog.map((remote) => {
+      const described = describeMcpTool({ id: 'github', name: 'github' }, remote);
+
+      if ('refused' in described) throw new Error(described.refused.reason);
+
+      return described.admitted;
+    });
+
+    const external = buildMcpToolSet(descriptors, {
+      call: async (descriptor, args) => ({ tool: descriptor.name, args }),
+      effectClaims: {
+        sql: () => { throw new Error('Read-only MCP tools must not write receipts'); },
+        get actor(): never { throw new Error('Read-only MCP tools must not claim effects'); },
+        execution: () => ({ turnId: 'discovery', runId: 'discovery' }),
+      },
+      spill: { get vfs(): never { throw new Error('The small result must not spill'); }, home: WORKSPACE_ROOT },
+    });
+
+    const providers = programProviders({
+      surface: { native: {}, external: () => external }, namespaces: [], mode: 'build', signal: undefined,
+      reach: narrowToolSurface(['eval', 'mcp_github_search_code']),
+    });
+
+    const program = createCodeTool({ executor, tools: providers });
+    const execute = program.execute;
+
+    if (execute === undefined) throw new Error('The hosted eval is not executable');
+
+    const output = await execute({ code: `
+      const ranked = await codemode.search("search code");
+      const docs = await codemode.describe(ranked.results[0].path);
+      const hidden = await codemode.search("create issue");
+      const missing = await codemode.describe("tools.not_present");
+      return { path: ranked.results[0].path, schema: docs.inputSchema, hidden: hidden.total, missing: missing.path,
+        result: await tools[ranked.results[0].method]({ query: "DurableObject" }) };
+    ` }, { toolCallId: 'discovery', messages: [], context: undefined });
+
+    expect(output).toMatchObject({ result: {
+      path: 'tools.mcp_github_search_code', hidden: 0, missing: 'tools.not_present',
+      schema: largeMcpCatalog.find((entry) => entry.name === discoveryQueries[0][1])?.inputSchema,
+      result: { tool: 'search_code', args: { query: 'DurableObject' } },
+    } });
+  });
 
   test('hosted codemode distinguishes returned data, handled refusal, and unhandled failure', async () => {
     const outcomes: ToolOutcome[] = [];

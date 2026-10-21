@@ -390,6 +390,9 @@ export function renderCodemodeDescription(providers: readonly DescribedProvider[
   return [
     BUILTIN_TOOL_DESCRIPTIONS.eval,
     `- ${SANDBOX_RUNS[substrate]}`,
+    'Discover MCP tools with `await codemode.list()` (servers), `await codemode.list(server)` (tools), '
+      + '`await codemode.search("short intent phrase")` (ranked paths), then `await codemode.describe(path)` '
+      + '(types and full input schema). Call the returned `tools.<name>(input)` path.',
     ...(shown === undefined ? [] : [`Namespaces are globals of the program, beside \`tools\` and never inside it: call a member as ${shown}.`]),
     'Each namespace with its members\' call forms: positional arguments, then one object of options. '
       + 'Any call can resolve to a `Refusal`, `{ success: false, reason, error }`.',
