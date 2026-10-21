@@ -19,7 +19,7 @@ interface Waiting {
   resolve(end: ComputerProcessEnd): void;
 }
 
-/** Made with the workspace's tables (`initWorkspaceTables`), as its jobs' are. */
+/** Made by the hosted workspace object alone: its computer's processes are the only ones that end so. */
 export function initComputerProcessEndsTable(execRaw: (sql: string) => void): void {
   execRaw(`CREATE TABLE IF NOT EXISTS computer_process_ends (
     job TEXT PRIMARY KEY,

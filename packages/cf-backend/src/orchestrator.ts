@@ -269,7 +269,7 @@ import type { RestoreStatus, SessionRecord, TerminalSession } from "@kinu.run/de
 import type { BoxSize } from "@kinu.run/devbox/sizes";
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY, type ComputerSizeState } from "./computer-size";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
-import { forgetSandboxPreviews, sandboxPreviewExposures } from "@kinu.run/core";
+import { forgetSandboxPreviews, initComputerProcessEndsTable, sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
 import {
   terminalEffect, declareTerminalRoster, isDefinitiveTerminalFailure, CompletedTurnSchema,
@@ -4409,6 +4409,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     initTurnBranchesTable(execRaw);
     // Owned by this root: the container is the workspace's; subordinates ride their parent's.
     initSandboxLifecycleTable(execRaw);
+    // Where its computer's process jobs end, as the box tells it: the workspace object's, every actor's.
+    initComputerProcessEndsTable(execRaw);
     initActivationTable(execRaw);
     initForkNoticeTable(execRaw);
   }

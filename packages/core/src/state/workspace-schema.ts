@@ -30,7 +30,6 @@ import { initRefinementTables } from '../evolution/refinement';
 import { initImportedExperienceTable } from '../experience/imports';
 import { initHeadsTables } from '../heads/schema';
 import { initBackgroundJobsTable } from '../jobs/store';
-import { initComputerProcessEndsTable } from '../execution/computer-process-ends';
 import { initToolEffectClaimTable } from '../tools/effect-claim';
 import { initOwnerRequestsTable } from '../safety/owner-requests';
 import { initAgentWorkspacesTable } from '../identity/agent-workspaces';
@@ -180,7 +179,6 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initFactsTable(execRaw);
   initCurriculumTable(execRaw);
   initBackgroundJobsTable(execRaw);
-  initComputerProcessEndsTable(execRaw);
   initToolEffectClaimTable(execRaw);
   initEffectTombstoneTable(execRaw);
   initOwnerRequestsTable(execRaw);
