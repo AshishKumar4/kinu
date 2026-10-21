@@ -13,7 +13,7 @@ import { detach } from "@kinu.run/core/obs";
 import { APP_ROUTES, DEFAULT_THEME, THEME_NAMES, type ThemeName } from "@kinu.run/core";
 import { setMode, wearTheme, type ThemeMode } from "@/hooks/use-theme";
 import { CHAT_FACES, CHAT_FACE_NAMES, FACE_SCOPES, installChatFaces, type ChatFaceName, type FaceScope } from "@/gallery-chat-fonts";
-import { SELF_DEPLOY_STATES } from "@/gallery-self-deploy";
+import { DEPLOY_FIXTURE_STATES, deployStateHref } from "@/gallery-deploy-fixture";
 
 const BACKGROUNDS = ["today", "quiet", "none"] as const;
 
@@ -228,9 +228,10 @@ export function DesignBar() {
         {pathname === "/deploy" && (
           <Section title="This page's states">
             <ul className="space-y-0.5">
-              {SELF_DEPLOY_STATES.map((state) => (
-                <li key={state.label}>
-                  <button type="button" onClick={state.open} className="w-full rounded-md px-2 py-1 text-left text-xs p-text-2 hover:bg-[var(--c-hover)] hover:p-text">{state.label}</button>
+              {/* The real page, read again from the start in each: its door answers the state's fixtures. */}
+              {DEPLOY_FIXTURE_STATES.map((state) => (
+                <li key={state.id}>
+                  <a href={deployStateHref(state.id)} data-deploy-state={state.id} className="block w-full rounded-md px-2 py-1 text-left text-xs p-text-2 hover:bg-[var(--c-hover)] hover:p-text">{state.label}</a>
                 </li>
               ))}
             </ul>

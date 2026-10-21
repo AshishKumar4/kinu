@@ -8,6 +8,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { answerPictures } from "@kinu.run/core/web/picture-src";
 import { SystemFrame } from "@/gallery-system";
+import { deployFixture } from "@/gallery-deploy-fixture";
 import { galleryPicture } from "@/gallery-pictures";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
@@ -1310,6 +1311,11 @@ function accountMachinesFixture(asked: string, method: string): Response | null 
 }
 
 function userFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response> | null {
+  // The deploy page's door (gallery-deploy-fixture.ts): its own sign-in, reads and run.
+  const deploying = deployFixture(path, method, typeof body === "string" ? body : null);
+
+  if (deploying !== null) return deploying;
+
   // The account's choices, kept in this browser for every frame that reads one.
   const stored = storedConfigFixture(path, method, body);
 
@@ -7609,29 +7615,12 @@ const GALLERY_UPDATE_RUN: DeploySnapshot = {
   setupLink: null,
 };
 
-/** Before the OAuth client is registered; `?state=configured` shows sign-in. */
+/** The deploy page alone, its door answered by `gallery-deploy-fixture.ts`: `&deploy=` names the state. */
 async function deployFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
   const { default: DeployPage } = await import("@/pages/DeployPage");
-  const configured = new URLSearchParams(location.search).get("state") === "configured";
+  const at = new URLSearchParams(location.search).get("at") ?? "/deploy";
 
-  return {
-    entries: ["/deploy"],
-    node: (
-      <div className="h-screen overflow-auto">
-        <DeployPage
-          fixtureOptions={{
-            cloudflare: configured,
-            clientId: configured ? "gallery-client" : "",
-            version: "0.4.0+gallery",
-            prompts: [],
-            reason: configured
-              ? ""
-              : "This Kinu has no Cloudflare OAuth client configured yet.",
-          }}
-        />
-      </div>
-    ),
-  };
+  return { entries: [at.startsWith("/deploy") ? at : "/deploy"], node: <DeployPage /> };
 }
 
 /** `?state=running` shows a run in flight; otherwise one build behind its channel. */

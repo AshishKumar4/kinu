@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-21",
-  "files": 3712,
-  "functions": 98120,
+  "files": 3721,
+  "functions": 98214,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -131,10 +131,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/changes/ChangesPanel.tsx#ChangesPanel",
-      "complexity": 29
-    },
-    {
-      "key": "packages/cf-backend/src/pages/DeployPage.tsx#DeployPage",
       "complexity": 29
     },
     {
