@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
-  CLOUDFLARE_DEPLOY_SCOPES, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET,
+  CLOUDFLARE_DEPLOY_CLIENT, CLOUDFLARE_DEPLOY_SCOPES, apiTokensState, deployClientDrift, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET,
   HeldBytes, LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS, promptedSecrets,
   FACT_VERSION_ID, REFRESH_TOKEN_KEY, deployDoor, deployPlan, deployRunView, domainsMatching, factsFrom,
   judgeRefusal, localLayout, mailHostPreview, parseReleaseManifest, plannedRun, preflight, releaseDir,
@@ -123,6 +123,9 @@ function gatewayRefusal(call: CloudflareCall): CloudflareHttpResponse | null {
 
 class FakeCloudflare implements CloudflareTransport {
   readonly calls: Recorded[] = [];
+
+  /** The parts each asset batch carried, by name: an asset's is its content hash. */
+  readonly assetParts: string[] = [];
 
   readonly namespaces: string[] = [];
 
@@ -312,7 +315,8 @@ class FakeCloudflare implements CloudflareTransport {
   scriptExists = false;
 
   /** The bindings the last version carried, as `…/settings` answers them: secrets by name only. */
-  private bindings: { type: string; name: string; text?: string; class_name?: string }[] = [];
+  /** What the version last uploaded binds, as Cloudflare's settings answer it. */
+  bindings: { type: string; name: string; text?: string; class_name?: string }[] = [];
 
   /** Each version's `workers/tag`, as `…/versions?deployable=true` lists it. */
   readonly tags = new Map<string, string>();
@@ -322,6 +326,9 @@ class FakeCloudflare implements CloudflareTransport {
 
   /** Null: the account has no workers.dev subdomain yet, which the API answers 404. */
   subdomain: string | null = 'acme';
+
+  /** On Workers Free, Cloudflare refuses the Containers API as it did the owner's free account (2026-10-21). */
+  workersFree = false;
 
   /** Zones added by `POST /zones`, not active until their nameservers are set. */
   readonly pendingZones = new Set<string>();
@@ -533,6 +540,12 @@ class FakeCloudflare implements CloudflareTransport {
 
     if (call.path.includes('/durable_objects/namespaces')) return ok([{ id: 'ns-devbox', script: 'kinu', class: 'KinuDevbox' }, { id: 'ns-other', script: 'other', class: 'KinuDevbox' }]);
 
+    if (call.path.includes('/containers/applications') && this.workersFree) {
+      return { status: 401, body: { success: false, result: null, messages: [], errors: [{ code: 1000, message: '{"error":"Unauthorized: You do not have access to Cloudflare Containers. Deploying containers requires the Workers Paid plan. Upgrade your plan at https://dash.cloudflare.com/workers/plans"}' }] } };
+    }
+
+    if (call.method === 'GET' && call.path.endsWith('/containers/applications')) return ok([...this.applications].map(([id, name]) => ({ id, name })));
+
     const application = /\/containers\/applications\/(.+)$/u.exec(call.path);
 
     if (application !== null) {
@@ -568,6 +581,8 @@ class FakeCloudflare implements CloudflareTransport {
     if (refusal !== null) return refusal;
 
     if (upload.path.includes('/workers/assets/upload')) {
+      this.assetParts.push(...upload.parts.map((part) => part.name));
+
       return { status: 201, body: { success: true, errors: [], result: { jwt: 'completion-token' } } };
     }
 
@@ -1197,6 +1212,14 @@ describe('a guided run', () => {
     expect(await mailVars({ ...INPUTS, mailDomain: 'raman.dev', mailAccounts: 'everyone' })).toEqual(['raman.dev', 'everyone']);
   });
 
+  // The owner's free account, 2026-10-21: a build carried two byte-identical assets, Cloudflare asked for their hash once,
+  // and the run sent it twice and refused itself ("asked for 630 asset(s) and the release artifact carries 631").
+  test('two assets with the same bytes are uploaded once, as Cloudflare asks for their hash once', async () => {
+    const twin = { path: 'client/copy.js', sha256: 'e'.repeat(64), size: 7, assetHash: '2'.repeat(32) };
+    const rows = await run(INPUTS, { ...MANIFEST, files: [...MANIFEST.files, twin] });
+    expect({ upload: rows.find((row) => row.id === 'upload')?.state, sent: [...cloudflare.assetParts].sort() }).toEqual({ upload: 'done', sent: ['1'.repeat(32), '2'.repeat(32)] });
+  });
+
   test('uploads the assets with the session token, not the account token', async () => {
     await run();
 
@@ -1230,6 +1253,25 @@ describe('what a run asks, makes and hands over', () => {
     // kinu.run 2026-10-20: the authorize endpoint refused `account:read` with invalid_scope.
     expect(CLOUDFLARE_DEPLOY_SCOPES.filter((scope) => scope.includes(':'))).toEqual([]);
     expect(CLOUDFLARE_DEPLOY_SCOPES).toContain('offline_access');
+    // Its optional scopes are among its scopes, as Cloudflare requires of a registration.
+    expect(CLOUDFLARE_DEPLOY_CLIENT.optional.filter((scope) => !CLOUDFLARE_DEPLOY_SCOPES.includes(scope))).toEqual([]);
+  });
+
+  // f44999, 2026-10-21: the registration held zone-settings.write and registrar-domains.admin, which no consent asked
+  // for, and Cloudflare refused the first as zonesettings.write at the owner's consent.
+  test('a registration that differs from the list is named scope by scope, and one that matches is not', () => {
+    const registered = {
+      scopes: [...CLOUDFLARE_DEPLOY_SCOPES, 'zone-settings.write', 'registrar-domains.admin'].filter((scope) => scope !== 'aig.write'),
+      optional: [...CLOUDFLARE_DEPLOY_CLIENT.optional, 'zone-settings.write'],
+    };
+
+    expect(deployClientDrift(registered)).toEqual([
+      'scope aig.write is not registered',
+      'scope zone-settings.write is registered and not asked for',
+      'scope registrar-domains.admin is registered and not asked for',
+      'optional scope zone-settings.write is registered and not asked for',
+    ]);
+    expect(deployClientDrift({ scopes: CLOUDFLARE_DEPLOY_SCOPES, optional: CLOUDFLARE_DEPLOY_CLIENT.optional })).toEqual([]);
   });
 
   test('a run that would stop at a missing secret stops before it makes anything', async () => {
@@ -1333,7 +1375,8 @@ describe('the computer', () => {
     const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
 
     expect(rows.every((row) => row.state === 'done')).toBe(true);
-    expect(cloudflare.calls.filter((call) => /\/tokens|\/containers\/|devbox-tools/u.test(call.path))).toEqual([]);
+    // The account step's one read of the plan (`workersPlan`) aside, which every run makes.
+    expect(cloudflare.calls.filter((call) => /\/tokens|\/containers\/|devbox-tools/u.test(call.path) && !(call.method === 'GET' && call.path.endsWith('/containers/applications')))).toEqual([]);
     expect(upload?.body?.containers).toBeUndefined();
   });
 });
@@ -1360,6 +1403,34 @@ describe('a second sitting on the same account', () => {
 });
 
 describe('a refusal', () => {
+  // The owner's free account, 2026-10-21: 10089 at the upload, and no API turns Analytics Engine on. Owner decision: skip it.
+  test('a version refused for Analytics Engine off is uploaded once more without its datasets, and the run says so', async () => {
+    cloudflare.refuseOnce = {
+      path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu`, method: 'PUT', status: 403, code: 10_089,
+      message: 'You need to enable Analytics Engine. Head to the Cloudflare Dashboard to enable: https://dash.cloudflare.com/x/workers/analytics-engine',
+    };
+    const rows = await run();
+    const upload = rows.find((row) => row.id === 'upload');
+
+    expect({
+      upload: upload?.state,
+      datasets: cloudflare.bindings.filter((binding) => binding.type === 'analytics_engine'),
+      said: upload?.notes.filter((note) => note.includes('Analytics Engine')),
+    }).toEqual({ upload: 'done', datasets: [], said: ['Analytics Engine is off on this account, so usage analytics are off.'] });
+  });
+
+  // The owner's free account, 2026-10-21: the run made KV, R2, Vectorize and a gateway before 10195 refused its upload.
+  test('a Workers Free account stops at its first step on the plan need, having made nothing', async () => {
+    cloudflare.workersFree = true;
+
+    const rows = await run();
+
+    expect({
+      account: rows.find((row) => row.id === 'account')?.state,
+      made: [...cloudflare.namespaces, ...cloudflare.buckets, ...cloudflare.indexes],
+    }).toEqual({ account: 'failed', made: [] });
+  });
+
   test('stops the run at the step that refused and keeps Cloudflare\'s words', async () => {
     cloudflare.refuseOnce = {
       path: `/accounts/${INPUTS.accountId}/r2/buckets`,
@@ -1867,7 +1938,7 @@ describe('the page\'s view of a run', () => {
   test('the catalog reads a sign-in Cloudflare refuses, and the computer on Workers Free, as needs', () => {
     expect([
       judgeRefusal({ message: 'Authentication error', code: 10_000, status: 401, endpoint: `/accounts/${ACCOUNT}` }, ACCOUNT),
-      judgeRefusal({ message: 'not on this plan', status: 403, endpoint: `/accounts/${ACCOUNT}/containers/applications` }, ACCOUNT),
+      judgeRefusal({ message: 'Unauthorized: Deploying containers requires the Workers Paid plan.', code: 1000, status: 401, endpoint: `/accounts/${ACCOUNT}/containers/applications` }, ACCOUNT),
       // A missing permission on the computer's endpoint is a sign-in to repeat, not a plan to buy.
       judgeRefusal({ message: 'Unauthorized to access requested resource', code: 9109, status: 403, endpoint: `/accounts/${ACCOUNT}/containers/applications` }, ACCOUNT),
     ].map((judged) => ('need' in judged ? [judged.need.id, judged.need.action] : judged.refused.sentence))).toEqual([
@@ -1910,11 +1981,45 @@ describe('what the page reads of an account', () => {
     cloudflare.refuseOnce = R2_OFF;
 
     expect(await settle(preflight(cloudflare, ACCOUNT, 0))).toEqual({
-      workersSubdomain: null, suggestedName: 'kinu-3', r2: 'off', plan: 'unknown',
+      workersSubdomain: null, suggestedName: 'kinu-3', r2: 'off', plan: 'paid',
       zones: [expect.objectContaining({ id: 'zone-example', name: 'example.com', status: 'active' })],
       needs: [expect.objectContaining({ id: 'r2', details: expect.objectContaining({ code: 10_042 }) })],
       checkedAt: '1970-01-01T00:00:00.000Z',
     });
+  });
+
+  // The owner's free account, 2026-10-21: preflight answered plan 'unknown' always, and the run then made storage before
+  // Cloudflare refused its Dynamic Workers. Owner decision: Kinu is Workers Paid only.
+  test('a Workers Free account reads as free, from Cloudflare\'s own refusal of its Containers, and needs the plan first', async () => {
+    cloudflare.workersFree = true;
+
+    const answer = await settle(preflight(cloudflare, ACCOUNT, 0));
+
+    expect({ plan: answer.plan, first: answer.needs[0]?.id, sentence: answer.needs[0]?.sentence, code: answer.needs[0]?.details?.code })
+      .toEqual({ plan: 'free', first: 'plan', sentence: 'Kinu runs on Cloudflare\'s Workers Paid plan, $5 a month.', code: 1000 });
+  });
+
+  test('a version refused for Dynamic Workers on Workers Free is the plan need, in Cloudflare\'s words', () => {
+    const words = { message: 'In order to use Dynamic Workers, you must switch to a paid plan at https://dash.cloudflare.com/x/workers/plans.', code: 10_195, status: 403, endpoint: `/accounts/${ACCOUNT}/workers/scripts/kinu` };
+    const judged = judgeRefusal(words, ACCOUNT);
+
+    expect('need' in judged ? [judged.need.id, judged.need.sentence] : judged).toEqual(['plan', 'Kinu runs on Cloudflare\'s Workers Paid plan, $5 a month.']);
+  });
+
+  test('a sign-in\'s API Tokens state: granted, left out, or left out again after a sign-in made to grant it', () => {
+    expect([
+      apiTokensState(['account-api-tokens.write', 'offline_access'], false),
+      apiTokensState(['offline_access'], false),
+      apiTokensState(['offline_access'], true),
+      apiTokensState(null, true),
+    ]).toEqual(['granted', 'missing', 'missing-after-reconsent', 'granted']);
+  });
+
+  test('the computer refused on Workers Free is the plan need, in Cloudflare\'s words', () => {
+    const words = { message: 'Unauthorized: You do not have access to Cloudflare Containers. Deploying containers requires the Workers Paid plan.', code: 1000, status: 401, endpoint: `/accounts/${ACCOUNT}/containers/applications` };
+    const judged = judgeRefusal(words, ACCOUNT);
+
+    expect('need' in judged ? [judged.need.id, judged.need.action.href, judged.need.details] : judged).toEqual(['plan', `https://dash.cloudflare.com/${ACCOUNT}/workers/plans`, words]);
   });
 
   test('a sign-in Cloudflare refuses is one need, however many reads met it', async () => {

@@ -22,7 +22,7 @@ export interface DeployInputs {
   readonly ownerEmail: string;
   /** Names only; values are in the vault. */
   readonly providerKeyNames: readonly string[];
-  /** Needs Workers Paid (SELF-DEPLOY.md). */
+  /** The computer: the person's choice, on the Workers Paid baseline every deployment needs (SELF-DEPLOY-FLOW.md § 8). */
   readonly sandbox: boolean;
   /** The domain mail addresses sit on (docs/MAIL.md §1); absent or '' gives the deployment no mail. */
   readonly mailDomain?: string;

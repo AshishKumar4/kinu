@@ -14,20 +14,46 @@ export const CLI_DEPLOY_REDIRECT_PORT = 8899;
 
 export const CLI_DEPLOY_REDIRECT_URI = `http://localhost:${String(CLI_DEPLOY_REDIRECT_PORT)}/oauth/callback`;
 
-/** Each scope serves a step, named by Cloudflare's OAuth catalog id (`GET /oauth/scopes`): the authorize endpoint refuses
- *  the old colon names (`invalid_scope`, "not allowed to request scope 'account:read'", kinu.run 2026-10-20). The three
- *  mail and computer scopes are the client's optional ones, which the person may leave unticked on Cloudflare's consent
- *  screen.
- *  `offline_access` yields the refresh token. */
-export const CLOUDFLARE_DEPLOY_SCOPES: readonly string[] = [
-  'user-details.read', 'account-settings.read',
-  'workers-scripts.write', 'workers-routes.write', 'workers-kv-storage.write',
-  'workers-r2.write', 'vectorize.write', 'aig.write', 'zone.read', 'dns.write',
-  'zone-settings.write', 'email-routing-rule.write', 'email-sending.write',
-  // The computer: its container application, and the account token its box deletes snapshots with.
-  'containers.write', 'account-api-tokens.write',
-  'offline_access',
-];
+/**
+ * The deploy client as Cloudflare registers it, and what every consent asks: one list, which
+ * `scripts/deploy-oauth-client.ts` checks the registration against and syncs it to. Each scope serves a step, named by
+ * Cloudflare's OAuth catalog id (`GET /oauth/scopes`): the authorize endpoint refuses the old colon names
+ * (`invalid_scope`, "not allowed to request scope 'account:read'", kinu.run 2026-10-20). The optional ones are mail's
+ * and the computer's, which the person may leave unticked on the consent screen. `offline_access` yields the refresh
+ * token.
+ *
+ * Not `zone-settings.write`, which mail's enabling of Email Routing needs: registered and asked for, Cloudflare's
+ * consent refused it as `zonesettings.write` ("The OAuth 2.0 Client is not allowed to request scope", f44999
+ * 2026-10-21), a name the catalog does not hold. Without it the mail step asks the person to enable routing in the
+ * dashboard, as it does for any token that cannot (mail.ts).
+ */
+export const CLOUDFLARE_DEPLOY_CLIENT = {
+  scopes: [
+    'user-details.read', 'account-settings.read',
+    'workers-scripts.write', 'workers-routes.write', 'workers-kv-storage.write',
+    'workers-r2.write', 'vectorize.write', 'aig.write', 'zone.read', 'dns.write',
+    'email-routing-rule.write', 'email-sending.write',
+    // The computer: its container application, and the account token its box deletes snapshots with.
+    'containers.write', 'account-api-tokens.write',
+    'offline_access',
+  ],
+  optional: ['email-routing-rule.write', 'email-sending.write', 'containers.write', 'account-api-tokens.write'],
+} as const;
+
+export const CLOUDFLARE_DEPLOY_SCOPES: readonly string[] = CLOUDFLARE_DEPLOY_CLIENT.scopes;
+
+/** How a registration differs from the list: each scope it lacks or holds beyond it, required or optional. */
+export function deployClientDrift(registered: { readonly scopes: readonly string[]; readonly optional: readonly string[] }): readonly string[] {
+  const differences = (kind: string, wanted: readonly string[], held: readonly string[]) => [
+    ...wanted.filter((scope) => !held.includes(scope)).map((scope) => `${kind} ${scope} is not registered`),
+    ...held.filter((scope) => !wanted.includes(scope)).map((scope) => `${kind} ${scope} is registered and not asked for`),
+  ];
+
+  return [
+    ...differences('scope', CLOUDFLARE_DEPLOY_CLIENT.scopes, registered.scopes),
+    ...differences('optional scope', CLOUDFLARE_DEPLOY_CLIENT.optional, registered.optional),
+  ];
+}
 
 export interface AuthorizeRequest {
   readonly clientId: string;
@@ -55,12 +81,33 @@ export interface DeployToken {
   readonly accessToken: string;
   readonly refreshToken: string;
   readonly expiresInSeconds: number;
+  /** The scopes Cloudflare granted, as its answer names them (an optional one the person left unticked is not among
+   *  them); null where the answer names none. */
+  readonly scopes: readonly string[] | null;
+}
+
+/** The scope the computer's registry token is minted with (core deploy/computer.ts). */
+const API_TOKENS_SCOPE = 'account-api-tokens.write';
+
+/**
+ * What a sign-in's grant means for the computer, as the page's computer row says it (`DeploySession.apiTokens`): the
+ * scope granted; missing; or missing again after a sign-in the person made to grant it. Cloudflare's consent screen
+ * shows this optional scope unticked (platform-catalog `oauth.consent.optional_scope_default`). A grant that names no
+ * scopes is read as granted: the computer's step then refuses in Cloudflare's own words if it was not.
+ */
+export type ApiTokensState = 'granted' | 'missing' | 'missing-after-reconsent';
+
+export function apiTokensState(scopes: readonly string[] | null, askedForIt: boolean): ApiTokensState {
+  if (scopes === null || scopes.includes(API_TOKENS_SCOPE)) return 'granted';
+
+  return askedForIt ? 'missing-after-reconsent' : 'missing';
 }
 
 const TokenAnswerSchema = v.object({
   access_token: v.optional(v.string()),
   refresh_token: v.optional(v.string()),
   expires_in: v.optional(v.number()),
+  scope: v.optional(v.string()),
   error: v.optional(v.string()),
   error_description: v.optional(v.string()),
 });
@@ -132,6 +179,7 @@ function tokenGrant(body: URLSearchParams, fetchImpl: typeof fetch): Effect.Effe
       accessToken: answer.access_token,
       refreshToken: answer.refresh_token,
       expiresInSeconds: answer.expires_in ?? 0,
+      scopes: answer.scope === undefined ? null : answer.scope.split(' ').filter((scope) => scope !== ''),
     };
 
     return token;

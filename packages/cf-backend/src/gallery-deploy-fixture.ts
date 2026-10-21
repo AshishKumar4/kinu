@@ -228,7 +228,7 @@ function runNow(state: DeployFixtureState): DeployRunView | null {
 /** A finished run is a Kinu the session lists; an unfinished one, or one live with a domain still moving, is resumed. */
 function sessionOf(state: DeployFixtureState): DeploySession {
   if (state === "start" || state === "declined" || state === "unconfigured") {
-    return { signedIn: false, email: "", accounts: [], resume: null, deployments: [], unreadable: [] };
+    return { signedIn: false, email: "", accounts: [], resume: null, deployments: [], unreadable: [], apiTokens: "granted" };
   }
 
   const accounts = state === "two-accounts" || state === "manage-two" || state === "unreadable" ? ACCOUNTS : [ACCOUNTS[0]];
@@ -238,7 +238,7 @@ function sessionOf(state: DeployFixtureState): DeploySession {
   const listed = finished && run.live !== undefined ? [kinu(new URL(run.live.url).hostname, LATEST, LATEST)] : LISTED[state] ?? [];
   const unreadable = state === "unreadable" ? [{ account: SECOND_ACCOUNT, words: { message: "Authentication error", code: 10_000, status: 403, endpoint: `/accounts/${SECOND_ACCOUNT}/workers/scripts` } }] : [];
 
-  return { signedIn: true, email: "ada@lovelace.dev", accounts, resume, deployments: listed, unreadable };
+  return { signedIn: true, email: "ada@lovelace.dev", accounts, resume, deployments: listed, unreadable, apiTokens: "granted" };
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────────────────────────────────────────────

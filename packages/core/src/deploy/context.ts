@@ -71,6 +71,9 @@ export const FACT_UPLOAD_PEAK = 'worker.held_peak_bytes';
 
 export const FACT_ADDRESS = 'worker.address';
 
+/** Set when the account has Analytics Engine off: the version is bound without its datasets (deploy/steps.ts). */
+export const FACT_ANALYTICS_OFF = 'worker.analytics_off';
+
 export function kvFact(binding: string): string {
   return `kv.${binding}`;
 }

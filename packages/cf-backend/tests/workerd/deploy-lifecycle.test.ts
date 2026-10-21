@@ -449,7 +449,7 @@ describe('the deploy page', () => {
       sessionHolds: await signInObject(cookie).heldCredentials(),
       runHolds: await run.heldCredentials(),
     }).toEqual({
-      session: { signedIn: true, email: DEPLOY_FAKE_OWNER, unreadable: [], accounts: [{ id: DEPLOY_FAKE_ACCOUNT, name: 'Probe Account' }], resume: null, deployments: [] },
+      session: { signedIn: true, email: DEPLOY_FAKE_OWNER, unreadable: [], accounts: [{ id: DEPLOY_FAKE_ACCOUNT, name: 'Probe Account' }], resume: null, deployments: [], apiTokens: 'granted' },
       begun: 200,
       checklist: { r2: 'off', needs: ['r2'], name: 'kinu', subdomain: DEPLOY_FAKE_SUBDOMAIN, plan: 'unknown' },
       paused: { state: 'paused', phase: 'storage', need: 'r2', href: `https://dash.cloudflare.com/${DEPLOY_FAKE_ACCOUNT}/r2/overview`, code: 10_042 },
@@ -600,5 +600,22 @@ describe('the deploy page', () => {
       // A new version for the new origin; the move's handover gives the deployment the new grant and keeps none.
       made: { domains: ['flourandhearth.com'], uploads: 2 }, held: [],
     });
+  });
+
+  // The owner's free account, 2026-10-21: a run made storage before Cloudflare refused its Dynamic Workers (10195).
+  it('tells a Workers Free account it needs Paid, and a run started there stops at its first step, making nothing', async () => {
+    await env.DEPLOY_FAKE.reset();
+    await env.DEPLOY_FAKE.free(true);
+
+    const cookie = await signedInPage();
+    const checklist = v.parse(DeployPreflightSchema, JSON.parse((await page(cookie, 'GET', `/api/deploy/preflight?account=${DEPLOY_FAKE_ACCOUNT}`)).body));
+
+    await page(cookie, 'POST', '/api/deploy/runs', newKinu);
+    await pageRun().settledAfter(['failed']);
+    const stopped = await current(cookie);
+    const made = await env.DEPLOY_FAKE.state();
+
+    expect({ plan: checklist.plan, first: checklist.needs[0]?.id, need: stopped.paused?.id, code: stopped.paused?.details?.code, made: made.creates })
+      .toEqual({ plan: 'free', first: 'plan', need: 'plan', code: 1000, made: [] });
   });
 });

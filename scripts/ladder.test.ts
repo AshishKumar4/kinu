@@ -741,11 +741,13 @@ describe('a deploy row with secrets of its own', () => {
     const own = rows.filter((gate) => secretGroup(gate) !== '');
     const sha = 'a'.repeat(40);
     const shared = armadaPhaseRun('post-publish', rows.filter((gate) => secretGroup(gate) === '' && gate.phase === 'post-publish'), sha, 'https://staging.kinu.run');
-    const devbox = armadaPhaseRun('source', own.filter((gate) => gate.phase === undefined), sha, 'https://staging.kinu.run');
+    const devboxGroup = own.filter((gate) => gate.run === 'bun run gate:devbox-e2e').map(secretGroup)[0];
+    const devbox = armadaPhaseRun('source', own.filter((gate) => gate.phase === undefined && secretGroup(gate) === devboxGroup), sha, 'https://staging.kinu.run');
+    const client = armadaPhaseRun('source', own.filter((gate) => gate.run === 'bun scripts/deploy-oauth-client.ts check'), sha, 'https://staging.kinu.run');
     const secretsOf = (argv: readonly string[]) => argv.find((arg) => arg.startsWith('--secrets='))?.slice('--secrets='.length).split(',').sort((a, b) => a.localeCompare(b));
 
     expect({ own: own.map((gate) => gate.run), shared: secretsOf(shared), devbox: secretsOf(devbox), json: devbox.indexOf('--json') !== -1 && devbox.indexOf('--json') < devbox.indexOf('--'), plan: devbox.slice(devbox.indexOf('--') + 1) }).toEqual({
-      own: ['bun run gate:first-run', 'bun run gate:devbox-e2e', 'bun scripts/upgrade-fixtures.ts'],
+      own: ['bun run gate:first-run', 'bun run gate:devbox-e2e', 'bun scripts/deploy-oauth-client.ts check', 'bun scripts/upgrade-fixtures.ts'],
       shared: ['KINU_EVAL_STAGING_WEB_IDENTITY', 'KINU_SCRIPTED_MODEL_KEY'],
       devbox: ['DEVBOX_REGISTRY_TOKEN', 'KINU_CLOUDFLARE_API_TOKEN', 'KINU_EVAL_STAGING_WEB_IDENTITY', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'],
       json: devbox.indexOf('--json') !== -1 && devbox.indexOf('--json') < devbox.indexOf('--'),
@@ -755,12 +757,16 @@ describe('a deploy row with secrets of its own', () => {
       ],
     });
     expect(() => armadaPhaseRun('source', rows, sha, 'https://staging.kinu.run')).toThrow('different secrets');
+    // The OAuth client's check is a job of its own too: its token is in no other container.
+    expect(secretsOf(client)).toEqual(['KINU_OAUTH_CLIENT_TOKEN']);
   });
 
   // The report's reproduce line kept only the plan's arguments, so a pasted line ran with none of the row's secrets.
   test("its report's reproduce line is the job's own command, its secrets with it", () => {
     const sha = 'a'.repeat(40);
-    const devbox = armadaPhaseRun('source', armadaPhaseRows(['source']).filter((gate) => secretGroup(gate) !== ''), sha, 'https://staging.kinu.run');
+    const own = armadaPhaseRows(['source']).filter((gate) => secretGroup(gate) !== '');
+    const group = own.filter((gate) => gate.run === 'bun run gate:devbox-e2e').map(secretGroup)[0];
+    const devbox = armadaPhaseRun('source', own.filter((gate) => secretGroup(gate) === group), sha, 'https://staging.kinu.run');
 
     expect(armadaReproduce(devbox)).toBe(`node_modules/.bin/armada run ${sha} `
       + '--secrets=DEVBOX_REGISTRY_TOKEN,KINU_CLOUDFLARE_API_TOKEN,KINU_EVAL_STAGING_WEB_IDENTITY,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY '

@@ -14,6 +14,7 @@ import {
   type DeployAddress, type DeployInputs,
 } from './inputs';
 import type { DeployPhaseId, DeployRunViewState } from './phases';
+import type { ApiTokensState } from './pkce';
 import { CloudflareWordsSchema, DeployNeedSchema, causeWords, heard, judgeRefusal, type CloudflareWords, type DeployNeed } from './refusals';
 import { HealthAnswerSchema, UpdateOfferSchema, updateOffer, type UpdateBuild, type UpdateOffer } from './update';
 
@@ -47,11 +48,14 @@ export interface DeployPreflight {
   /** Free in this account now; a run that finds it taken by then takes the next free one and says so. */
   readonly suggestedName: string;
   readonly r2: 'on' | 'off';
-  /** "unknown" until a Paid-only read tells Free from Paid without Billing (§ 11). */
+  /** Read from the Containers API (`workersPlan`); "unknown" when that read was refused for another reason. */
   readonly plan: 'free' | 'paid' | 'unknown';
   readonly zones: readonly DeployZone[];
+  /** The plan first, and blocking; a run starts only on an account with none (deploy/routes.ts `beginRun`). */
   readonly needs: readonly DeployNeed[];
   readonly checkedAt: string;
+  /** The sign-in's, added by the route that answers it (`apiTokensState`). */
+  readonly apiTokens?: ApiTokensState;
 }
 
 /** "yours": a zone of this account. "elsewhere": not one, so a run adds it as a zone and waits for its nameservers.
@@ -81,6 +85,7 @@ export const DeployPreflightSchema: v.GenericSchema<DeployPreflight> = v.object(
   zones: v.array(v.object({ id: v.string(), name: v.string(), status: ZoneStatusSchema })),
   needs: v.array(DeployNeedSchema),
   checkedAt: v.string(),
+  apiTokens: v.optional(v.picklist(['granted', 'missing', 'missing-after-reconsent'])),
 });
 
 export const DeployDomainsSchema: v.GenericSchema<readonly DeployDomain[]> = v.array(v.object({
@@ -96,6 +101,8 @@ export interface DeploySession {
   readonly deployments: readonly DeployedKinu[];
   /** Accounts whose Kinus Cloudflare would not list, in its words. */
   readonly unreadable: readonly { readonly account: string; readonly words: CloudflareWords }[];
+  /** Whether this sign-in can mint the computer's registry token (`apiTokensState`). */
+  readonly apiTokens: ApiTokensState;
 }
 
 export const DeploySessionSchema: v.GenericSchema<DeploySession> = v.object({
@@ -110,6 +117,7 @@ export const DeploySessionSchema: v.GenericSchema<DeploySession> = v.object({
   })),
   deployments: v.array(v.object({ account: v.string(), name: v.string(), url: v.string(), update: UpdateOfferSchema })),
   unreadable: v.array(v.object({ account: v.string(), words: CloudflareWordsSchema })),
+  apiTokens: v.picklist(['granted', 'missing', 'missing-after-reconsent']),
 });
 
 const DOMAIN = /^[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/u;
@@ -256,6 +264,25 @@ function needOr<A>(read: Effect.Effect<A, KinuError>, account: string): Effect.E
   );
 }
 
+/**
+ * Workers Paid or Free, as Cloudflare's Containers answer says. Kinu needs Paid: its agents run in Dynamic Workers, which
+ * Free refuses (10195 at the upload), and on Free Cloudflare refuses the Containers list, 401 with code 1000 ("Deploying
+ * containers requires the Workers Paid plan", the owner's free account, 2026-10-21), the read this takes as the plan. On
+ * Free it answers the plan need, in those words. Any other refusal, a sign-in without containers.write among them,
+ * leaves the plan unknown: the upload then says it, if it must.
+ */
+export function workersPlan(transport: CloudflareTransport, account: string): Effect.Effect<{ readonly plan: DeployPreflight['plan']; readonly need: DeployNeed | null }> {
+  return Effect.promise(async () => cloudflareResult(transport, { method: 'GET', path: `/accounts/${account}/containers/applications` }, v.unknown())).pipe(
+    Effect.map(() => ({ plan: 'paid' as const, need: null })),
+    Effect.catchCause((failed) => {
+      const words = causeWords(failed);
+      const judged = words.status === 401 && words.code === 1000 ? judgeRefusal(words, account) : null;
+
+      return Effect.succeed(judged !== null && 'need' in judged ? { plan: 'free' as const, need: judged.need } : { plan: 'unknown' as const, need: null });
+    }),
+  );
+}
+
 /** The checklist of § 4, read together; none of it writes. A need is said once however many reads met it. */
 export function preflight(transport: CloudflareTransport, account: string, now: number): Effect.Effect<DeployPreflight, KinuError> {
   return Effect.gen(function* () {
@@ -267,7 +294,11 @@ export function preflight(transport: CloudflareTransport, account: string, now: 
     )), account);
 
     const zones = yield* needOr(zonesOf(transport, account), account);
+    const { plan, need: planNeed } = yield* workersPlan(transport, account);
     const needs = new Map<string, DeployNeed>();
+
+    // A Free account is told first: nothing else it is asked to do lets Kinu run there.
+    if (planNeed !== null) needs.set(planNeed.id, planNeed);
 
     for (const read of [subdomain, names, r2, zones]) {
       if ('need' in read && !needs.has(read.need.id)) needs.set(read.need.id, read.need);
@@ -278,7 +309,7 @@ export function preflight(transport: CloudflareTransport, account: string, now: 
       // Free only as far as the account says: no name is suggested while its Workers cannot be listed.
       suggestedName: 'answer' in names ? freeWorkerName(names.answer, DEFAULT_INSTANCE_NAME) : '',
       r2: 'answer' in r2 ? 'on' : 'off',
-      plan: 'unknown',
+      plan,
       zones: 'answer' in zones ? zones.answer : [],
       needs: [...needs.values()],
       checkedAt: new Date(now).toISOString(),

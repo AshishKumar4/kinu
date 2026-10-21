@@ -6,8 +6,8 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
-  ACCESS_TOKEN_KEY, DEPLOY_CLIENT_ID_KEY, DEPLOY_SESSION_STATE, REFRESH_TOKEN_KEY, bearerTransport, cloudflareUser,
-  exchangeDeployCode, heard, type CloudflareUser,
+  ACCESS_TOKEN_KEY, DEPLOY_CLIENT_ID_KEY, DEPLOY_SESSION_STATE, REFRESH_TOKEN_KEY, apiTokensState, bearerTransport, cloudflareUser,
+  exchangeDeployCode, heard, type ApiTokensState, type CloudflareUser,
 } from '@kinu.run/core/deploy';
 import { randomToken } from '@kinu.run/core';
 import { settle, type KinuError } from '@kinu.run/core/obs';
@@ -30,6 +30,12 @@ const SESSION_ACCOUNT_KEY = 'session.account';
 
 /** Where the sign-in leg ends: the tab itself, or the helper window's shared finish page. */
 const SESSION_END_KEY = 'session.end';
+
+/** The scopes the grant came with, as Cloudflare named them; absent where its answer named none. */
+const SESSION_SCOPES_KEY = 'session.scopes';
+
+/** Set when the person signed in again to grant API Tokens (the page's computer row asked them to). */
+const SESSION_ASKED_API_TOKENS_KEY = 'session.asked_api_tokens';
 
 /** A grant lasts this long without the person, a sign-in this long from its callback. */
 export const VAULT_TTL_MS = 3_600_000;
@@ -83,14 +89,23 @@ export class DeploySignIn {
     await this.host.arm();
   }
 
-  async hold(verifier: string, end: DeploySignInEnd): Promise<string> {
+  async hold(verifier: string, end: DeploySignInEnd, forApiTokens = false): Promise<string> {
     const state = `${DEPLOY_SESSION_STATE}.${randomToken(NONCE_BYTES)}`;
 
     await this.host.storage.put(VERIFIER_KEY, verifier);
     await this.host.storage.put(STATE_KEY, state);
     await this.host.storage.put(SESSION_END_KEY, end);
+    await this.host.storage.put(SESSION_ASKED_API_TOKENS_KEY, forApiTokens);
 
     return state;
+  }
+
+  /** Whether this sign-in's grant can mint the computer's registry token (`apiTokensState`). */
+  async apiTokens(): Promise<ApiTokensState> {
+    const scopes = await heldValue(this.host.storage, SESSION_SCOPES_KEY, v.array(v.string()));
+    const asked = await heldValue(this.host.storage, SESSION_ASKED_API_TOKENS_KEY, v.boolean()) ?? false;
+
+    return apiTokensState(scopes, asked);
   }
 
   async ending(): Promise<DeploySignInEnd> {
@@ -117,6 +132,8 @@ export class DeploySignIn {
         expiresAt: token.expiresInSeconds === 0 ? 0 : this.host.now() + token.expiresInSeconds * 1000,
       }));
       yield* Effect.promise(async () => storage.put(SESSION_USER_KEY, { id: user.id, email: user.email }));
+
+      if (token.scopes !== null) yield* Effect.promise(async () => storage.put(SESSION_SCOPES_KEY, token.scopes));
       // Its hour from now, as the cookie the callback renews says.
       yield* Effect.promise(async () => this.open());
 

@@ -6,9 +6,10 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { KinuError } from '../obs/index';
-import { cloudflareResult, readEnvelope, type CloudflareTransport, type UploadPart } from './cloudflare';
+import { workersPlan } from './account';
+import { CloudflareApiError, cloudflareResult, readEnvelope, type CloudflareHttpResponse, type CloudflareTransport, type UploadPart } from './cloudflare';
 import {
-  FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
+  FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_ANALYTICS_OFF, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
   FACT_UPLOAD_PEAK, FACT_VERSION_ID, FACT_WORKERS_SUBDOMAIN, kvFact, type DeployContext,
 } from './context';
 import {
@@ -124,6 +125,16 @@ function accountStep(manifest: ReleaseManifest): DeployStep {
           { method: 'GET', path: `/accounts/${context.inputs.accountId}` },
           NamedSchema,
         ));
+
+        // Before anything is made too: Kinu needs Workers Paid, which a Free account is told here, not at the upload.
+        const { need } = yield* workersPlan(context.transport, context.inputs.accountId);
+
+        // Its own words, so the run pauses on the plan need the page already showed.
+        if (need?.details !== undefined) {
+          const { status = 0, endpoint = '', message, code = 0 } = need.details;
+
+          return yield* Effect.die(new CloudflareApiError(status, endpoint, message, [{ code, message }]));
+        }
 
         const name = account.name ?? context.inputs.accountId;
 
@@ -448,27 +459,21 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
           return `Version ${tagged} was already uploaded by this run.`;
         }
 
-        const session = yield* openAssetSession(context, manifest, script);
-        const carried = yield* carryArtifact(context, manifest, session);
-        const metadata = yield* Effect.promise(async () => versionMetadata(context, manifest, carried.token, exists));
-
         const path = exists
           ? `/accounts/${accountId}/workers/scripts/${script}/versions`
           : `/accounts/${accountId}/workers/scripts/${script}`;
 
-        // The transport copies every part, so the module set is held twice in flight.
-        context.artifact.held.hold(carried.bytes);
+        let { response, carried } = yield* uploadVersion(context, manifest, path, exists);
 
-        const response = yield* Effect.promise(async () => context.transport.upload({
-          method: exists ? 'POST' : 'PUT',
-          path,
-          parts: [
-            { name: 'metadata', contentType: 'application/json', body: JSON.stringify(metadata) },
-            ...carried.modules,
-          ],
-        }));
-
-        context.artifact.held.release(carried.bytes * 2);
+        // An account with Analytics Engine off refuses a version that binds a dataset (10089, the owner's free account,
+        // 2026-10-21), and no API turns it on. The datasets are optional: usage analytics are off on such a deployment,
+        // and its one writer writes nothing (core obs/analytics/writer.ts). The second upload's assets are already held
+        // by Cloudflare, so it carries modules alone.
+        if (refusedFor(response, ANALYTICS_ENGINE_OFF) && context.facts.get(FACT_ANALYTICS_OFF) === undefined) {
+          context.facts.set(FACT_ANALYTICS_OFF, 'true');
+          context.note('Analytics Engine is off on this account, so usage analytics are off.');
+          ({ response, carried } = yield* uploadVersion(context, manifest, path, exists));
+        }
 
         const uploaded = readEnvelope(path, response, VersionSchema);
         // A first upload answers the script; its deployment names the version.
@@ -485,6 +490,43 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
       });
     },
   };
+}
+
+/** Cloudflare's code for a version bound to a dataset on an account with Analytics Engine off. */
+const ANALYTICS_ENGINE_OFF = 10_089;
+
+/** Whether `response` is Cloudflare refusing with `code`. */
+function refusedFor(response: CloudflareHttpResponse, code: number): boolean {
+  const errors = v.safeParse(v.object({ errors: v.nullish(v.array(v.object({ code: v.number() }))) }), response.body);
+
+  return response.status >= 400 && errors.success && (errors.output.errors ?? []).some((error) => error.code === code);
+}
+
+/** The assets, then the modules with the version's metadata, in one upload; its answer as Cloudflare gave it. */
+function uploadVersion(
+  context: DeployContext, manifest: ReleaseManifest, path: string, exists: boolean,
+): Effect.Effect<{ readonly response: CloudflareHttpResponse; readonly carried: CarriedRelease }, KinuError> {
+  return Effect.gen(function* () {
+    const session = yield* openAssetSession(context, manifest, context.inputs.instanceName);
+    const carried = yield* carryArtifact(context, manifest, session);
+    const metadata = yield* Effect.promise(async () => versionMetadata(context, manifest, carried.token, exists));
+
+    // The transport copies every part, so the module set is held twice in flight.
+    context.artifact.held.hold(carried.bytes);
+
+    const response = yield* Effect.promise(async () => context.transport.upload({
+      method: exists ? 'POST' : 'PUT',
+      path,
+      parts: [
+        { name: 'metadata', contentType: 'application/json', body: JSON.stringify(metadata) },
+        ...carried.modules,
+      ],
+    }));
+
+    context.artifact.held.release(carried.bytes * 2);
+
+    return { response, carried };
+  });
 }
 
 function addressStep(inputs: DeployInputs): DeployStep {
@@ -764,6 +806,9 @@ async function walkArtifact(context: DeployContext, manifest: ReleaseManifest, s
   let batchBytes = 0;
   let uploaded = 0;
   let token = session.token;
+  // Cloudflare asks for each content hash once: two assets with the same bytes are one upload (the owner's free account,
+  // 2026-10-21: 631 assets, 630 hashes asked for, and the run counted the second copy as an upload it was not asked for).
+  const sent = new Set<string>();
 
   for await (const member of context.artifact.members()) {
     const moduleName = member.path.startsWith(prefix) ? member.path.slice(prefix.length) : '';
@@ -784,7 +829,8 @@ async function walkArtifact(context: DeployContext, manifest: ReleaseManifest, s
 
     const hash = session.hashes.get(member.path);
 
-    if (hash === undefined || !session.wanted.has(hash)) continue;
+    if (hash === undefined || !session.wanted.has(hash) || sent.has(hash)) continue;
+    sent.add(hash);
 
     // Flush before this member joins, so an oversized member travels alone.
     if (batchBytes > 0 && batchBytes + member.size > ASSET_BATCH_BYTES) {
@@ -1013,7 +1059,7 @@ async function versionMetadata(
   return metadata;
 }
 
-// Null for the container (needs Workers Paid and a user registry) and bindings turned off.
+// Null for the container (the computer's own step binds it, with its user registry) and bindings turned off.
 async function wireBinding(
   context: DeployContext,
   manifest: ReleaseManifest,
@@ -1041,7 +1087,8 @@ async function wireBinding(
     }
 
     case 'analytics-engine':
-      return { type: 'analytics_engine', name, dataset: resource };
+      // Off on the account: an optional dataset is left out; a required one is bound, and Cloudflare says why it cannot be.
+      return context.facts.get(FACT_ANALYTICS_OFF) !== undefined && !binding.required ? null : { type: 'analytics_engine', name, dataset: resource };
     case 'ai':
       return { type: 'ai', name };
     case 'browser':

@@ -225,6 +225,31 @@ account census afterwards equals the census before.
   363–377 ms and 777–949 ms (platform-catalog `worker.startup_ms`). The page names the refusal and offers a retry the
   person presses.
 
+### The owner's free account, 2026-10-21
+
+**What was run:** feat/self-deploy's plan engine and its build 1 (0.2.0+8996748cf) from a test channel, on the owner's
+Workers Free account (8158b420), signed in by the owner's consent, without the computer.
+
+**What it met:**
+- **The plan:** Cloudflare's Containers list answers 401, code 1000, "Deploying containers requires the Workers Paid
+  plan". Preflight then read the plan as 'unknown' and raised no need.
+- **R2:** off, 10042 ("Please enable R2 through the Cloudflare Dashboard."). Preflight raised the R2 hand-off; the owner
+  turned R2 on.
+- **Accepted on Free:** KV, 6 R2 buckets, a Vectorize index and an AI Gateway.
+- **Duplicate assets:** two byte-identical assets, whose hash Cloudflare asks for once (631 assets, 630 hashes). The run
+  sent the hash twice and refused itself. Now each hash is sent once.
+- **Analytics Engine:** the version upload was refused with 10089, "You need to enable Analytics Engine". The owner
+  turned it on.
+- **Dynamic Workers:** the next upload was refused with 10195, "In order to use Dynamic Workers, you must switch to a
+  paid plan", because the Worker binds `LOADER`. That ended the run, and led to the Workers Paid decision
+  (SELF-DEPLOY-FLOW.md § 8).
+- **The consent screen:** it showed the optional API Tokens permission unticked (the owner's observation); the owner
+  ticked it. A token minted from the grant could carry no permission outside the grant's scopes: 1001, "The OAuth
+  session does not include the scopes required for the requested permission groups: "Account Analytics Read"".
+
+**Cleanup:** what the run made was torn down, the census equals the census before, the minted token was deleted, and the
+grant was revoked.
+
 ## Not in this design
 
 The CLI and TUI stay standalone agents with no local server (decided

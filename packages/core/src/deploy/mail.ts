@@ -373,7 +373,7 @@ export function mailStep(inputs: DeployInputs) {
         const records = sending === null ? null : await allowed(context.transport, { method: 'GET', path: `/zones/${zone}/email/sending/subdomains/${sending.tag}/dns` }, DnsRecordsSchema);
 
         if (sending === null || records === null) {
-          asks.push(`In the dashboard, open ${domain}, then Email, then Email Sending: enable it for ${domain} and add the records it lists. Sending needs Workers Paid.`);
+          asks.push(`In the dashboard, open ${domain}, then Email, then Email Sending: enable it for ${domain} and add the records it lists.`);
         }
 
         const own = (records ?? []).filter((record) => record.name !== `_dmarc.${domain}`);

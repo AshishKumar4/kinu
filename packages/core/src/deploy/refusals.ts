@@ -71,12 +71,12 @@ interface CatalogEntry {
   readonly action: (account: string) => DeployAction;
 }
 
-/** A Cloudflare dashboard page to open beside the deploy page. */
-function dashboard(label: string, href: string): DeployAction {
-  return { label, href };
-}
-
 const SIGN_IN_AGAIN: DeployAction = { label: 'Sign in again' };
+
+/** Kinu's agents run in Dynamic Workers, and its computer in Containers: both Workers Paid. */
+const PAID_PLAN = 'Kinu runs on Cloudflare\'s Workers Paid plan, $5 a month.';
+
+const upgradeToPaid = (account: string): DeployAction => ({ label: 'Upgrade to Workers Paid', href: `https://dash.cloudflare.com/${account}/workers/plans` });
 
 const RETRY: DeployAction = { label: 'Retry this step' };
 
@@ -85,13 +85,19 @@ const CATALOG: readonly CatalogEntry[] = [
   {
     code: 10_042, endpoint: '/r2/', need: 'r2',
     sentence: 'Cloudflare needs R2, its file storage, turned on before Kinu can keep your files. It\'s free; Cloudflare asks for a card the first time.',
-    action: (account) => dashboard('Turn on R2', `https://dash.cloudflare.com/${account}/r2/overview`),
+    action: (account) => ({ label: 'Turn on R2', href: `https://dash.cloudflare.com/${account}/r2/overview` }),
   },
-  // Unmeasured: the computer's container application on Workers Free. The plans page is wrangler 4.145.0's own hand-off.
+  // Measured on Workers Free (the owner's free account, 2026-10-21): 401, code 1000, "Unauthorized: You do not have access
+  // to Cloudflare Containers. Deploying containers requires the Workers Paid plan." The plans page is wrangler 4.145.0's.
   {
-    code: 0, endpoint: '/containers/', status: 403, need: 'plan',
-    sentence: 'Kinu\'s computer runs on Cloudflare\'s Workers Paid plan, $5 a month.',
-    action: (account) => dashboard('Upgrade to Workers Paid', `https://dash.cloudflare.com/${account}/workers/plans`),
+    code: 1000, endpoint: '/containers/', status: 401, need: 'plan',
+    sentence: PAID_PLAN, action: (account) => upgradeToPaid(account),
+  },
+  // Measured on Workers Free (the owner's free account, 2026-10-21): the version upload refused, 403, "In order to use
+  // Dynamic Workers, you must switch to a paid plan at …/workers/plans": every agent runs in one (`LOADER`).
+  {
+    code: 10_195, endpoint: '/workers/scripts/', need: 'plan',
+    sentence: PAID_PLAN, action: (account) => upgradeToPaid(account),
   },
   // wrangler 4.145.0 reads 10000 as an authentication error; 9109 is a permission the sign-in did not carry.
   { code: 10_000, need: 'signin-again', sentence: 'Cloudflare no longer accepts this sign-in.', action: () => SIGN_IN_AGAIN },
@@ -103,7 +109,7 @@ const CATALOG: readonly CatalogEntry[] = [
   // wrangler 4.145.0: "You need to register a workers.dev subdomain", with the onboarding page.
   {
     code: 10_063, sentence: 'This account has no workers.dev subdomain yet.',
-    action: (account) => dashboard('Choose one', `https://dash.cloudflare.com/${account}/workers/onboarding`),
+    action: (account) => ({ label: 'Choose one', href: `https://dash.cloudflare.com/${account}/workers/onboarding` }),
   },
   {
     code: 10_215, sentence: 'Cloudflare refused a secret while a newer version of the Worker was not serving yet.',
@@ -131,9 +137,7 @@ export function judgeRefusal(words: CloudflareWords, account: string): DeployJud
 
   if (entry.need === undefined) return { refused: { sentence: entry.sentence, action: entry.action(account), details: words } };
 
-  const need: DeployNeed = { id: entry.need, sentence: entry.sentence, action: entry.action(account), details: words };
-
-  return { need };
+  return { need: { id: entry.need, sentence: entry.sentence, action: entry.action(account), details: words } };
 }
 
 /** The grant is gone (an hour unattended, or a renewal Cloudflare refused): no Cloudflare words to show. */

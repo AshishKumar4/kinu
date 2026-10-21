@@ -49,7 +49,7 @@ import {
   type ArtifactMember, type ArtifactSource, type CloudflareUser, type DeployChoice, type DeployFrame, type DeployInputs, type DeployLedger, type DeployNeed,
   DeployRunFrameSchema, type DeployRunFrame, type DeployRunOutcome, type DeployRunPlan, type DeployRunView,
   type DeploySecretVault, type DeploySnapshot,
-  type DeployStepRow, type DeploymentRecord, type TarArtifact,
+  type DeployStepRow, type DeploymentRecord, type TarArtifact, type ApiTokensState,
 } from '@kinu.run/core/deploy';
 import { durableStamps, randomToken, readStamp, repairSchema, SCHEMA_TABLES, sha256Hex, writeStamp } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
@@ -417,8 +417,12 @@ export class DeployRunDO extends DurableObject<Env> {
     return this.signIn.open();
   }
 
-  holdSignIn(verifier: string, end: DeploySignInEnd): Promise<string> {
-    return this.signIn.hold(verifier, end);
+  holdSignIn(verifier: string, end: DeploySignInEnd, forApiTokens: boolean): Promise<string> {
+    return this.signIn.hold(verifier, end, forApiTokens);
+  }
+
+  apiTokens(): Promise<ApiTokensState> {
+    return this.signIn.apiTokens();
   }
 
   ending(): Promise<DeploySignInEnd> {

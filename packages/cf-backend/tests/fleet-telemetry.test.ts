@@ -13,7 +13,7 @@ const originalFetch = globalThis.fetch;
 
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-const SQL_ENV = { CLOUDFLARE_ACCOUNT_ID: 'acct', ANALYTICS_SQL_API_TOKEN: 'token' };
+const SQL_ENV = { CLOUDFLARE_ACCOUNT_ID: 'acct', ANALYTICS_SQL_API_TOKEN: 'token', AGENT_METRICS: { writeDataPoint: () => undefined } };
 
 const USAGE = { inputTokens: { total: 7, noCache: 7, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 3, text: 3, reasoning: undefined } };
 
