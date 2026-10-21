@@ -145,6 +145,8 @@ html, body, #root {
   /* A setting's name column beside its control, and a list of things beside the one open. */
   --layout-field: 11rem minmax(0, 1fr);
   --layout-rail-list: 13rem minmax(0, 1fr);
+  /* A drawer's width beside the page it opens over. */
+  --layout-drawer: min(640px, 92vw);
 
   /* motion */
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
@@ -598,6 +600,20 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-nav-row-quiet { color: var(--c-text-3); }
 .p-nav-row:hover { background: color-mix(in srgb, var(--c-text) 6%, transparent); color: var(--c-text); }
 .p-nav-row[data-current] { background: var(--c-selected); color: var(--c-accent-fg); }
+
+/* Covers (ui/Covers.tsx): a kind's glyph at the cover's size; a page set into its frame as a sheet of paper is. */
+.p-cover-glyph > svg { width: 34px; height: 34px; }
+.p-page-cover { padding: 5% 14% 0; }
+
+/* DropHint (ui/FilePicker.tsx): a dashed accent edge over the place, its words on an accent pill. */
+.p-drop-hint {
+  pointer-events: none; position: absolute; inset: -12px; z-index: 20; display: flex; align-items: center; justify-content: center;
+  border: 2px dashed var(--c-accent); border-radius: var(--r-card); background: color-mix(in srgb, var(--c-bg) 74%, transparent);
+}
+.p-drop-hint-words {
+  display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: var(--r-pill); background: var(--c-accent);
+  color: var(--c-accent-on); box-shadow: var(--shadow-menu);
+}
 
 /* Rail (ui/Rail.tsx): a strip of the tabs above below its breakpoint, fading at its scrolling edge; a column of rows
    from it up, the open row on the selected ground. */

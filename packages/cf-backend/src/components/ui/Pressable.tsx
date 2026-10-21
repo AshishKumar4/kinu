@@ -4,7 +4,13 @@
  * gives it the selected ground, as a list's open row.
  */
 import type { ComponentProps } from "react";
+import { Link } from "react-router-dom";
 
 export function Pressable({ className, type = "button", selected = false, ...rest }: ComponentProps<"button"> & { selected?: boolean }) {
   return <button type={type} className={`p-pressable${className === undefined ? "" : ` ${className}`}`} data-selected={selected ? "" : undefined} {...rest} />;
+}
+
+/** The same, to somewhere: a whole row or tile that is a link. */
+export function PressableLink({ className, selected = false, ...rest }: ComponentProps<typeof Link> & { selected?: boolean }) {
+  return <Link className={`p-pressable${className === undefined ? "" : ` ${className}`}`} data-selected={selected ? "" : undefined} {...rest} />;
 }

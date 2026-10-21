@@ -5,27 +5,15 @@ import {
   AppWindowIcon, BookOpenIcon, BroadcastIcon, FileCodeIcon, FileCsvIcon, FileIcon, FileImageIcon,
   FilePdfIcon, FileTextIcon, FileZipIcon, FolderSimpleIcon, GitForkIcon, LinkSimpleIcon, SquaresFourIcon,
 } from "@phosphor-icons/react";
-import { TILE, TILE_GRID, TileShell } from "@/components/ui/Tiles";
+import { FOLDER_TILE, TILE, TILE_GRID, TileOpener, TileShell } from "@/components/ui/Tiles";
 import { Dot } from "@/components/ui/Dot";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
+import { GlyphCover } from "@/components/ui/Covers";
+import { PressableLink } from "@/components/ui/Pressable";
 
 export const GRID = TILE_GRID;
 
 type DataAttributes = Readonly<Record<`data-${string}`, string>>;
-
-function Opener({ href, onOpen, className, label, children }: {
-  href?: string;
-  onOpen?: () => void;
-  className: string;
-  label: string;
-  children: ReactNode;
-}) {
-  if (href !== undefined) return <Link to={href} aria-label={label} className={className}>{children}</Link>;
-
-  if (onOpen === undefined) return <div className={className}>{children}</div>;
-
-  return <button type="button" aria-label={label} onClick={onOpen} className={`w-full text-left ${className}`}>{children}</button>;
-}
 
 export function Tile({ href, onOpen, picture, icon, title, meta, unseen = false, menu, menuOpen = false, attributes }: {
   href?: string;
@@ -41,7 +29,7 @@ export function Tile({ href, onOpen, picture, icon, title, meta, unseen = false,
 }) {
   return (
     <li className="relative min-w-0" {...attributes}>
-      <Opener href={href} onOpen={onOpen} label={title} className={TILE}>
+      <TileOpener href={href} onOpen={onOpen} label={title} className={TILE}>
         <TileShell cover={picture} title={(
           <span data-drive-tile-name>
             {unseen && <Dot tone="accent" label="New" className="mb-px mr-2 align-middle" />}
@@ -53,7 +41,7 @@ export function Tile({ href, onOpen, picture, icon, title, meta, unseen = false,
             <span className="flex min-w-0 items-center gap-2" data-drive-tile-meta>{meta}</span>
           </span>
         </TileShell>
-      </Opener>
+      </TileOpener>
       <Menu name={title} items={menu} initiallyOpen={menuOpen} className="absolute bottom-3 right-2" />
     </li>
   );
@@ -70,28 +58,24 @@ export function FolderTile({ href, name, icon, menu, attributes, row = false }: 
 }) {
   return (
     <li className="relative min-w-0" {...attributes}>
-      <Link to={href} className={`flex h-12 items-center gap-3 pl-3 pr-8 ${row ? "p-row-hover" : "rounded-lg border p-border p-surface p-card-lift"}`}>
-        <span className="flex shrink-0">{icon}</span>
-        <span className="t-item truncate p-text" data-drive-tile-name>{name}</span>
-      </Link>
+      {row ? (
+        <PressableLink to={href} className="flex h-12 items-center gap-3 pl-3 pr-8">
+          <span className="flex shrink-0">{icon}</span>
+          <span className="t-item truncate p-text" data-drive-tile-name>{name}</span>
+        </PressableLink>
+      ) : (
+        <Link to={href} className={FOLDER_TILE}>
+          <span className="flex shrink-0">{icon}</span>
+          <span className="t-item truncate p-text" data-drive-tile-name>{name}</span>
+        </Link>
+      )}
       <Menu name={name} items={menu} className="absolute right-2 top-3" />
     </li>
   );
 }
 
 export function FileCover({ name, image }: { name: string; image?: string }) {
-  if (image !== undefined) {
-    return <img src={image} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" />;
-  }
-
-  const extension = name.includes(".") ? name.split(".").at(-1) ?? "" : "";
-
-  return (
-    <span className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-sunken">
-      <span className="p-text-3 [&>svg]:size-[34px]">{fileIcon(name)}</span>
-      {extension !== "" && <span className="t-meta t-mono uppercase p-text-3">{extension}</span>}
-    </span>
-  );
+  return <GlyphCover icon={fileIcon(name)} extension={name.includes(".") ? name.split(".").at(-1) ?? "" : ""} image={image} />;
 }
 
 export const FOLDER_ICON = <FolderSimpleIcon size={18} weight="fill" className="p-info" />;

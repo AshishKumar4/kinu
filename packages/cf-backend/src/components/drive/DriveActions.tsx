@@ -251,7 +251,7 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
       return (
         <ConfirmDialog title={`Delete ${dialog.entry.name}?`} action="Delete" marker="data-drive-delete-confirm" maxWidthClass="max-w-sm"
           onConfirm={() => act(() => deleteEntry(joinDir(folder, dialog.entry.name)))} onClose={onClose}>
-          <p className="t-body p-text-2">This deletes <span className="font-medium p-text">{dialog.entry.name}</span>{DELETE_ALSO[dialog.entry.kind]}. It cannot be undone.</p>
+          <p className="t-body p-text-2">This deletes <span className="t-item">{dialog.entry.name}</span>{DELETE_ALSO[dialog.entry.kind]}. It cannot be undone.</p>
         </ConfirmDialog>
       );
     case "add-skill":

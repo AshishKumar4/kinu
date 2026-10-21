@@ -5,12 +5,16 @@
  * typeset cover, never an empty box.
  */
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { WorkspaceLogo } from "@/components/Marks";
 
 export const TILE_GRID = "grid gap-5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))]";
 
 /** The tile's own box: the card radius and edge, its border darkening on hover. */
 export const TILE = "group flex h-full min-w-0 flex-col overflow-hidden rounded-[var(--r-card)] border p-border p-surface transition-[border-color] duration-[var(--dur-state)] ease-out hover:border-[var(--c-border-strong)] data-[force=hover]:border-[var(--c-border-strong)]";
+
+/** A folder among the tiles: the tile's edge and ground, one 48 line high, its name beside its glyph. */
+export const FOLDER_TILE = "flex h-12 min-w-0 items-center gap-3 rounded-[var(--r-card)] border p-border p-surface pl-3 pr-8 transition-[border-color] duration-[var(--dur-state)] ease-out hover:border-[var(--c-border-strong)]";
 
 /** The cover's frame: 16:10, over a hairline; a picture or a typeset cover fills it. */
 const TILE_COVER = "relative block aspect-[16/10] w-full shrink-0 overflow-hidden border-b p-border";
@@ -57,4 +61,19 @@ export function TileShell({ cover, title, children }: { cover: ReactNode; title:
       </span>
     </>
   );
+}
+
+/** What a tile opens as: a link where it has an address, a press where opening it is the page's own act, else nothing. */
+export function TileOpener({ href, onOpen, className, label, children }: {
+  href?: string;
+  onOpen?: () => void;
+  className: string;
+  label: string;
+  children: ReactNode;
+}) {
+  if (href !== undefined) return <Link to={href} aria-label={label} className={className}>{children}</Link>;
+
+  if (onOpen === undefined) return <div className={className}>{children}</div>;
+
+  return <button type="button" aria-label={label} onClick={onOpen} className={`w-full text-left ${className}`}>{children}</button>;
 }

@@ -9,7 +9,7 @@ import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } 
 import { Loader } from "@/components/ui/Loader";
 import {
   AppWindowIcon, ArrowSquareOutIcon, BookOpenIcon, CaretDownIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, FolderSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
-  PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, UsersThreeIcon, WarningIcon, XIcon,
+  PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, UsersThreeIcon, XIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
 import {
@@ -43,6 +43,11 @@ import { Button } from "@/components/ui/Button";
 import { Dot } from "@/components/ui/Dot";
 import { TextInput } from "@/components/ui/Field";
 import { SegmentedNav } from "@/components/ui/Segmented";
+import { CodeCover, PageCover, SheetCover, TransferCover } from "@/components/ui/Covers";
+import { Empty } from "@/components/ui/Empty";
+import { DropHint } from "@/components/ui/FilePicker";
+import { Drawer } from "@/components/ui/Drawer";
+import { Group } from "@/components/ui/Group";
 
 export type DriveTab = "slates" | "mine" | "shared";
 
@@ -270,7 +275,7 @@ function Section({ label, titled = true, heading = "quiet", rows = false, childr
   return (
     <section aria-label={label} data-drive-section={label}>
       {titled && <h2 className={SECTION_HEADING[heading]}>{label}</h2>}
-      <ul className={rows ? "p-group" : GRID}>{children}</ul>
+      {rows ? <Group list>{children}</Group> : <ul className={GRID}>{children}</ul>}
     </section>
   );
 }
@@ -343,58 +348,24 @@ function sheetRows(text: string, name: string): string[][] {
 
 const NUMERIC = /^-?[\d.,$%]+$/u;
 
-function SheetCover({ rows }: { rows: readonly (readonly string[])[] }) {
+/** Which of a table's first columns, up to four, hold only numbers below the head: they set right. */
+function numericColumns(rows: readonly (readonly string[])[]): boolean[] {
   const columns = Math.min(4, rows[0]?.length ?? 1);
-  const right = Array.from({ length: columns }, (_, column) => rows.slice(1).every((row) => NUMERIC.test(row[column]?.trim() ?? "")));
-  const grid = { gridTemplateColumns: `repeat(${String(columns)}, minmax(0, 1fr))` };
 
-  return (
-    <span className="t-meta absolute inset-0 overflow-hidden p-surface">
-      {rows.map((row, index) => (
-        <span key={index} data-drive-sheet-row style={grid}
-          className={`grid gap-2 px-4 ${index === 0 ? "p-sunken py-2 font-semibold p-text-2" : "border-t p-border py-[5px] font-mono p-text-3"}`}>
-          {row.slice(0, columns).map((cell, column) => <span key={column} className={`truncate ${right[column] === true ? "text-right" : ""}`}>{cell}</span>)}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-function CodeCover({ lines }: { lines: readonly string[] }) {
-  return (
-    <span className="t-meta t-mono absolute inset-0 overflow-hidden p-sunken px-3 pt-3">
-      {lines.map((line, index) => (
-        <span key={index} data-drive-code-line className="flex gap-3">
-          <span className="min-w-3 shrink-0 text-right tabular-nums p-text-3">{index + 1}</span>
-          <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre p-text-3">{line === "" ? "\u00a0" : line}</span>
-        </span>
-      ))}
-    </span>
-  );
+  return Array.from({ length: columns }, (_, column) => rows.slice(1).every((row) => NUMERIC.test(row[column]?.trim() ?? "")));
 }
 
 function TextPage({ text, name }: { text: string | null; name: string }) {
   const rows = text !== null && SHEET.test(name) ? sheetRows(text, name) : [];
 
-  if (rows.length > 0) return <SheetCover rows={rows} />;
+  if (rows.length > 0) return <SheetCover rows={rows} numeric={numericColumns(rows)} />;
   const [heading, lines] = text === null ? [null, []] : coverLines(text, name);
 
   if (heading === null && lines.length === 0) return <FileCover name={name} />;
 
   if (heading === null && !PROSE.test(name)) return <CodeCover lines={lines.map((line) => line.text)} />;
 
-  return (
-    <span className="absolute inset-0 overflow-hidden p-sunken px-[14%] pt-[5%]">
-      <span className="t-meta block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2 p-text-3">
-        {heading !== null && <span data-drive-page-heading className="t-micro mb-1 block truncate p-text">{heading}</span>}
-        {lines.map((line, index) => (
-          <span key={index} data-drive-page-line className={`block truncate ${line.heading ? "mt-px font-semibold p-text-2" : ""}`}>
-            {line.text === "" ? "\u00a0" : line.text}
-          </span>
-        ))}
-      </span>
-    </span>
-  );
+  return <PageCover heading={heading} lines={lines} />;
 }
 
 /** The first lines of a text file, read once the tile is in view. */
@@ -443,24 +414,6 @@ interface Transfer extends Sending {
   readonly progress: number;
   readonly error?: string;
   readonly stop: () => void;
-}
-
-function TransferPicture({ status, progress }: { status: Transfer["status"]; progress: number }) {
-  if (status === "failed") {
-    return <span className="absolute inset-0 flex items-center justify-center p-sunken"><WarningIcon size={24} className="p-danger" /></span>;
-  }
-
-  const percent = Math.round(progress * 100);
-
-  return (
-    <span className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-sunken">
-      <span className="t-meta tabular-nums p-text-2">{percent}%</span>
-      <span role="progressbar" aria-label="Uploading" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}
-        className="h-1 w-1/2 overflow-hidden rounded-full bg-[var(--c-border-strong)]">
-        <span className="block h-full rounded-full bg-[var(--c-accent-mark)] transition-[width]" style={{ width: `${String(percent)}%` }} />
-      </span>
-    </span>
-  );
 }
 
 function VisibilityGlyph({ visibility }: { visibility: LiveShareVisibility | undefined }) {
@@ -624,12 +577,8 @@ function MineBody({ resource, onRetry, empty, children }: {
   if (!empty) return children;
 
   return (
-    <div data-drive-empty className="flex flex-col items-center px-6 py-16 text-center">
-      <span className="flex size-14 items-center justify-center rounded-2xl p-text-3 bg-[color-mix(in_srgb,var(--c-text)_7%,transparent)]">
-        <FolderSimpleIcon size={26} />
-      </span>
-      <h2 className="t-title mt-5 p-text">This folder is empty</h2>
-      <p className="t-body mt-2 max-w-[26rem] p-text-3">Drop files here, or use New.</p>
+    <div data-drive-empty>
+      <Empty icon={FolderSimpleIcon} title="This folder is empty">Drop files here, or use New.</Empty>
     </div>
   );
 }
@@ -644,11 +593,7 @@ function DropZone({ label, onFiles, children }: { label: string; onFiles: (files
       onDrop={(event) => { event.preventDefault(); setOver(false); onFiles([...event.dataTransfer.files]); }}>
       {children}
       {over && (
-        <div aria-hidden="true" className="pointer-events-none absolute -inset-3 z-20 flex items-center justify-center rounded-[18px] border-2 border-dashed border-[var(--c-accent)] bg-[color-mix(in_srgb,var(--c-bg)_74%,transparent)]">
-          <span className="t-label flex items-center gap-2 rounded-full bg-[var(--c-accent)] px-4 py-2 text-[var(--c-accent-on)] p-shadow-menu">
-            <UploadSimpleIcon size={15} weight="bold" /> Drop to add to {label}
-          </span>
-        </div>
+        <DropHint><UploadSimpleIcon size={16} weight="bold" /> Drop to add to {label}</DropHint>
       )}
     </div>
   );
@@ -679,18 +624,9 @@ function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource
   );
 }
 
-function Drawer({ onClose, children }: { onClose: () => void; children: ReactNode }) {
-  return (
-    <>
-      <div aria-hidden="true" className="p-scrim fixed inset-0 z-40" onClick={onClose} />
-      <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-[min(640px,92vw)]" data-drive-viewer>{children}</div>
-    </>
-  );
-}
-
 function FileDrawer({ path, entry, onClose }: { path: string; entry: DriveEntry; onClose: () => void }) {
   return (
-    <Drawer onClose={onClose}>
+    <Drawer onClose={onClose} data-drive-viewer="">
       <FileViewer path={path} read={readDriveText} revision={entryRevision(entry)} rawHref={inlineUrl(path)} downloadHref={downloadUrl(path)} onClose={onClose} />
     </Drawer>
   );
@@ -708,7 +644,7 @@ function BuiltinSkillDrawer({ name, onClose }: { name: string; onClose: () => vo
   const bytes = `data:text/markdown;charset=utf-8,${encodeURIComponent(BUILTIN_SKILL_FILES[name])}`;
 
   return (
-    <Drawer onClose={onClose}>
+    <Drawer onClose={onClose} data-drive-viewer="">
       <FileViewer path={skillViewPath(name)} read={readBuiltinSkill} revision="built-in" rawHref={bytes} downloadHref={bytes} onClose={onClose} />
     </Drawer>
   );
@@ -957,7 +893,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   };
 
   const uploadTile = (row: Transfer): ReactNode => (
-    <Tile key={`upload:${String(row.id)}`} title={row.name} icon={fileIcon(row.name)} picture={<TransferPicture status={row.status} progress={row.progress} />}
+    <Tile key={`upload:${String(row.id)}`} title={row.name} icon={fileIcon(row.name)} picture={<TransferCover failed={row.status === "failed"} percent={Math.round(row.progress * 100)} />}
       meta={row.status === "failed"
         ? <span className="truncate p-danger" title={row.error}>{row.error}</span>
         : <span className="truncate">{row.size > 0 ? `Uploading · ${formatBytes(row.size)}` : "Uploading"}</span>}
