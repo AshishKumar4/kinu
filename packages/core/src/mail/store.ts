@@ -297,6 +297,22 @@ export class MailStore {
     ))[0]?.header_id ?? null;
   }
 
+  /**
+   * The References a reply carries (RFC 5322 §3.6.4): the Message-IDs of its thread's messages, oldest first, up to the
+   * one it answers, each as `<id>`. A message not yet sent has none, and the reply's own is not among them.
+   */
+  private referencesOf(threadId: string, reply: string, inReplyTo: string | null): string | null {
+    const chain = rows(v.object({ header_id: v.string() }), this.deps.sql.exec(
+      "SELECT header_id FROM mail_messages WHERE thread_id = ? AND id <> ? AND header_id IS NOT NULL AND send_state IS NOT 'draft' ORDER BY at, rowid",
+      threadId, reply,
+    )).map((row) => row.header_id);
+
+    const answered = inReplyTo === null ? -1 : chain.indexOf(bare(inReplyTo));
+    const upTo = answered === -1 ? chain : chain.slice(0, answered + 1);
+
+    return upTo.length === 0 ? null : upTo.map((id) => `<${id}>`).join(' ');
+  }
+
   /** The box path `asked` names, if the agent reads it; its own when none is named. */
   readablePath(caller: MailCaller, asked: string | undefined): string | null {
     const readable = this.readableBy(caller);
@@ -653,7 +669,9 @@ export class MailStore {
 
   /** Files a message to send, the person's word already given; the Mailbox then hands it to its outbox. */
   /** Files a message to send; `outgoing` is the message as filed, which is what the outbox sends. */
-  async queue(asked: MailOutgoing & { threadId?: string }): Promise<{ view: MailMessageView; from: string; inReplyTo: string | null; outgoing: MailOutgoing }> {
+  async queue(asked: MailOutgoing & { threadId?: string }): Promise<{
+    view: MailMessageView; from: string; inReplyTo: string | null; references: string | null; outgoing: MailOutgoing;
+  }> {
     const outgoing = this.answering(filedRecipients(asked));
     const box = this.box(outgoing.path);
 
@@ -666,7 +684,9 @@ export class MailStore {
 
     if (view === null) return settleSync(Effect.fail(new KinuError('missing', `No message "${id}".`)));
 
-    return { view, from: view.from.address, inReplyTo: outgoing.inReplyTo ?? null, outgoing };
+    const inReplyTo = outgoing.inReplyTo ?? null;
+
+    return { view, from: view.from.address, inReplyTo, references: inReplyTo === null ? null : this.referencesOf(threadId, id, inReplyTo), outgoing };
   }
 
   /** A message's state as shown: a draft is the row's; a sent message's is the outbox's, while it holds the send. */

@@ -8,6 +8,7 @@ import { makeSqlExec } from '../../core/tests/helpers';
 import type { MailDelivery } from '@kinu.run/core';
 import { MailStore, type MailBlobs } from '@kinu.run/core';
 import { parseMail } from '../src/mail/parse';
+import { mailboxEmail } from '@kinu.run/core';
 import { routeInboundMail } from '../src/mail/router';
 
 // The Mailbox's store over SQLite, with the three real deliveries Cloudflare's MX made on 2026-10-19 (docs/MAIL.md §4)
@@ -214,6 +215,39 @@ describe('threads, views and search', () => {
 
     expect(reply.inReplyTo).toBe(`<${arrived.headerId ?? ""}>`);
     expect(arrived.headerId).not.toBeNull();
+  });
+
+  // RFC 5322 §3.6.4: a reply's References is its parent's References and the parent's id (Main, 2026-10-20: only the
+  // parent went out, so a client lost the thread's earlier messages).
+  test("a reply deep in a thread carries the thread's whole chain in its References", async () => {
+    open('ashish@kinu.run');
+    const box = store.boxFor({ kind: 'agent', workspace: 'api-worker', name: 'scout', actorId: 'actor-scout' });
+    const recipient = { username: 'ashish', path: box.path, tag: null };
+
+    const fromDana = (id: string, answering: string | null) => new TextEncoder().encode([
+      'From: Dana Whitfield <dana@northwind.io>', 'To: scout.api-worker.ashish@kinu.run', 'Subject: Webhook deliveries to /hooks/v2 failing with 500',
+      `Message-ID: <${id}>`, ...(answering === null ? [] : [`In-Reply-To: <${answering}>`]), 'Content-Type: text/plain; charset=utf-8', '', 'Still a 500.',
+    ].join('\r\n'));
+
+    const reply = async (threadId: string, sentAs: string | null) => {
+      const queued = await store.queue({ path: box.path, threadId, to: ['dana@northwind.io'], subject: 'Re: Webhook deliveries', text: 'Looking.' });
+
+      if (sentAs !== null) store.sentAs(queued.view.id, `<${sentAs}>`);
+
+      return queued;
+    };
+
+    const { threadId } = await delivered({ raw: fromDana('m1@northwind.io', null), envelopeFrom: 'dana@northwind.io', recipient });
+    await reply(threadId, 'r2@kinu.run');
+    await delivered({ raw: fromDana('m3@northwind.io', 'r2@kinu.run'), envelopeFrom: 'dana@northwind.io', recipient });
+    await reply(threadId, 'r4@kinu.run');
+    await delivered({ raw: fromDana('m5@northwind.io', 'r4@kinu.run'), envelopeFrom: 'dana@northwind.io', recipient });
+    const last = await reply(threadId, null);
+    const chain = '<m1@northwind.io> <r2@kinu.run> <m3@northwind.io> <r4@kinu.run> <m5@northwind.io>';
+
+    expect({ inReplyTo: last.inReplyTo, references: last.references }).toEqual({ inReplyTo: '<m5@northwind.io>', references: chain });
+    expect(mailboxEmail({ from: last.from, to: ['dana@northwind.io'], cc: [], subject: 'Re', text: 'x', inReplyTo: last.inReplyTo, references: last.references }).headers)
+      .toEqual({ 'In-Reply-To': '<m5@northwind.io>', References: chain });
   });
 
   test('Important is the person\'s box only, with the reason; unread counts what is unread there', async () => {
