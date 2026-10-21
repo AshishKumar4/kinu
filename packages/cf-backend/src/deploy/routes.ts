@@ -29,7 +29,7 @@ import {
 } from '@kinu.run/core';
 import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
-import { attemptInItsWords, KinuError } from '@kinu.run/core/obs';
+import { attemptInItsWords, KinuError, renderThrownChain } from '@kinu.run/core/obs';
 import { DEPLOY_SESSION_COOKIE_NAME, DEPLOY_STATE_COOKIE_NAME, readCookie, setCookie } from '../auth/cookies';
 import { beneath, noHead, type FamilyEnv } from '../api/context';
 import type { DeployRunDO } from './deploy-do';
@@ -348,7 +348,7 @@ function callback(request: Request, env: Env, url: URL): Effect.Effect<Response,
 
       return back;
     });
-  }), Effect.catch((failure) => backTo(env, session, { error: 'token_exchange_failed', error_description: failure.message })));
+  }), Effect.catch((failure) => backTo(env, session, { error: 'token_exchange_failed', error_description: renderThrownChain({ cause: failure }) })));
 }
 
 /** The page's sign-in that ran in a helper window ends on the shared finish page, which tells the tab; anything else

@@ -5,7 +5,7 @@ import type { RawSqlExec, SqlExec } from '../types/primitives';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
-import { initSlateShareTables, ShareStore, type ShareTable, type ShareUser } from './shares';
+import { initSlateShareTables, ShareStore, type ShareTable } from './shares';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
 import { ShareModeSchema, type ShareMode } from './share-modes';
 import { canonicalRoot, type LiveShareAuthority } from './share-policy';
@@ -132,16 +132,6 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
     if (live) this.fence(revoked.slate);
 
     return revoked;
-  }
-
-  /** People added to a live share, each to use the slate or to edit it too: one added again takes the role named now. */
-  override addUsers(id: string, users: readonly ShareUser[]): LiveShareRecord {
-    super.addUsers(id, users);
-
-    for (const user of users) this.db.exec('UPDATE slate_share_users SET role = ? WHERE share_id = ? AND user_id = ?', user.role ?? 'use', id, user.userId);
-    markStoreChanged(this.db);
-
-    return this.live(id);
   }
 
   /** Whether `userId` may edit `slate` now: a live share of it adds them to edit. */

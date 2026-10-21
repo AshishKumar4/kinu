@@ -928,30 +928,33 @@ export const PLATFORM_CATALOG = {
 
   'do.sqlite.row_bytes': {
     subject: 'Maximum size of a string, BLOB or table row in a SQLite-backed Durable Object',
-    limit: { value: 2 * MB, unit: 'bytes' },
+    limit: { value: 8 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'row',
-    evidence: 'documented',
-    provenance: `${CF_DO_LIMITS}#sql-storage-limits`,
-    date: DOCS_READ,
-    trigger: 'an INSERT or UPDATE whose row, or any single string/BLOB in it, exceeds 2 MB',
+    evidence: 'proven-by-probe',
+    provenance:
+      '/mnt/local/kinu/evidence/do-sqlite-row-bytes-2026-10-21/RESULT.md:3-6 (production, compat 2026-10-20, probe Worker '
+      + 'worker.ts, deleted after) and LOCAL.md:5-8 there (local workerd 1.20260930.2 through Miniflare, local-run.mjs)',
+    date: '2026-10-21',
+    trigger: 'an INSERT or UPDATE whose row, or any single string/BLOB in it, exceeds 8 MiB',
     onBreach: 'the write fails; reads and deletes continue to work',
-    observable: [],
+    observable: [{ context: 'the INSERT or UPDATE', message: 'string or blob too big: SQLITE_TOOBIG' }],
     firstPartySignal: true,
+    measurements: [
+      { scenario: 'largest single BLOB in a one-key row, production and local workerd alike', value: 8_388_635, unit: 'bytes' },
+      { scenario: 'the first BLOB refused, production and local workerd alike', value: 8_388_636, unit: 'bytes' },
+      { scenario: 'TEXT accepted, local workerd (8 MiB + 64 refused)', value: 8 * MiB, unit: 'bytes' },
+    ],
     notes:
-      'A SECOND DANGLING CITATION, now retired. '
-      + '~/Nimbus/packages/worker/src/session/state-store.ts:52-54 asserts this same 2 MB cap '
-      + '"Per a second internal research note, §9" and tightens itself to 256 KiB against '
-      + 'it; that document was compiled from Cloudflare internal source, is gone, and cannot be '
-      + 'restored. The number is right, it is now sourced from the page Cloudflare publishes, '
-      + 'AND it has an independent probe behind it: do.storage.sync_kv measured the value cap '
-      + 'at roughly 2,200,000 bytes against workerd util/sqlite.c++:1362-1380. So the one lost '
-      + 'claim that mattered is the one claim that is now over-evidenced, and nothing in Kinu '
-      + 'needs the dossier. '
-      + 'The whole chat transcript, plan documents and swarm search nodes persist as rows here. '
-      + 'The agents SDK truncates a chat message to its own ROW_MAX_BYTES guard beneath this, '
-      + 'but can only shrink TEXT parts: file parts ride through verbatim as base64, at 4/3 '
-      + 'of raw, which is what CLOUD_MAX_INLINE_ATTACHMENT_BYTES is derived from.',
+      'RAISED FROM 2 MB, AHEAD OF THE DOCS. Cloudflare\'s limits page (last updated 2026-06-01) still says 2 MB; '
+      + 'production refused nothing up to 8 MiB on 2026-10-21 and refused 8,388,636 bytes and 16 MiB, '
+      + 'and local workerd 1.20260930.2, which the workerd tests run on, answered byte for byte the same, '
+      + 'so one number governs both and a test passes only what production allows. The limit is the '
+      + 'record\'s: a one-key row carries a BLOB 27 bytes past 8 MiB, and columns beside it share the 8 MiB. '
+      + 'Every bound derived from this entry was re-read for the raise (2026-10-21): the reasons are at '
+      + 'each, and the agents SDK still guards a chat message at its own ROW_MAX_BYTES (1.8 MB, agents '
+      + '0.26.0), which governs the cloud\'s inline attachments, not this. The 2 MB the entry held before '
+      + 'had a probe behind it too (do.storage.sync_kv\'s value cap at about 2,200,000 bytes), since raised alike.',
   },
 
   'do.sqlite.statement_bytes': {
@@ -1229,19 +1232,20 @@ export const PLATFORM_CATALOG = {
   'do.storage.sync_kv': {
     subject:
       'ctx.storage.kv on a SQLite-backed Durable Object is genuinely synchronous: structured '
-      + 'clone, zero awaits, with a per-value cap of about 2.2 MB',
-    limit: { value: 2_200_000, unit: 'bytes' },
+      + 'clone, zero awaits, with a per-value cap just under 8 MiB',
+    limit: { value: 8_388_620, unit: 'bytes' },
     origin: 'platform',
     bounds: 'row',
-    // The probe showed sync KV works; the threshold was read in workerd's bounds check, hence proven-by-source.
-    evidence: 'proven-by-source',
+    // Raised with do.sqlite.row_bytes, whose SQLite holds the value; measured on local workerd, not on production.
+    evidence: 'proven-by-probe',
     provenance:
-      'workerd util/sqlite.c++:1362-1380 and api/sync-kv.h:15-16; behaviour probed at '
+      '/mnt/local/kinu/evidence/do-sqlite-row-bytes-2026-10-21/LOCAL.md:9-10 (local workerd 1.20260930.2, a Uint8Array '
+      + 'put and read back); before, workerd util/sqlite.c++:1362-1380 and api/sync-kv.h:15-16, behaviour probed at '
       + '~/Nimbus/scratchpad/workerd-capability-survey.md §1.2 (route /synckv)',
-    date: '2026-07-24',
-    trigger: 'a ctx.storage.kv put whose structured-cloned value exceeds roughly 2,200,000 bytes',
-    onBreach: 'the value is rejected; the wording was not captured: see the declared gap',
-    observable: [],
+    date: '2026-10-21',
+    trigger: 'a ctx.storage.kv put whose structured-cloned value exceeds 8,388,620 bytes',
+    onBreach: 'the put throws; the value is not stored',
+    observable: [{ context: 'the put', message: 'string or blob too big: SQLITE_TOOBIG' }],
     firstPartySignal: true,
     notes:
       'DIRECTLY RELEVANT TO THE ACTIVATION GATE. A sync KV read takes no await at all, so it '
@@ -1251,9 +1255,9 @@ export const PLATFORM_CATALOG = {
       + '(api/actor-state.h:307-309), so it is not gated. The mechanism is why this can be sync '
       + 'while nothing network-shaped can: a SQLite read is a blocking pread on a local file '
       + '(sqlite.c++:2100-2103) and writes are made to LOOK synchronous by the output gate '
-      + '(io-gate.h:12-21). The ~2.2 MB figure also independently CORROBORATES the 2 MB per-row '
-      + 'cap that the second lost dossier asserted, the one lost claim that now has a probe '
-      + 'behind it.',
+      + '(io-gate.h:12-21). The cap was about 2,200,000 bytes until the platform raised '
+      + 'do.sqlite.row_bytes to 8 MiB (2026-10-21); a value is its record, so it moved alike. Production\'s '
+      + 'KV cap is not measured: its SQL row cap is, and answered as local workerd did.',
   },
 
   'do.requests_per_second_soft': {

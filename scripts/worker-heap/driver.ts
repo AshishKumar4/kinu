@@ -6,7 +6,7 @@ import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { SCRIPTED_MODEL_SPEC } from '../../packages/test-utils/src/scripted-model-spec';
 import { readScriptedRequest, SCRIPTED_MODELS_BODY, scriptedBody as compatBody, type ScriptedAnswer } from '../scripted-protocol';
-import { asksSleepTime, SLEEP_TIME_ANSWER } from '../sleep-time-script';
+import { SLEEP_TIME_ANSWER } from '../sleep-time-script';
 
 /** The product RPC setup calls, as the account plane calls it; the classes live in the built bundle. */
 interface WorkspaceRpc extends Rpc.DurableObjectBranded {
@@ -139,21 +139,22 @@ const HELPER_STEPS = 4;
 
 const USAGE = `data: ${JSON.stringify({ response: '', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\n`;
 
-type BindingInputs = { readonly stream?: boolean; readonly messages?: readonly object[] };
+type BindingInputs = { readonly stream?: boolean; readonly messages?: readonly object[]; readonly tools?: readonly object[] };
 
 /**
- * What a call that is no turn's step answers, at once: a completion, and the memory lane's structured call, which
- * streams as every structured call has since 667221f68. Answered a step's prose until 2026-10-20, that call failed off
- * its schema, and each failure's three 0.2 MB log lines stayed live in the DevTools console this gate attaches: the idle
- * workspace held 6.6 MB where it had held 3.9 MB (armada evo-42). Null for a turn's step.
+ * What a call that is no turn's step answers, at once, in the form it asked for: a completion, and the memory lane's
+ * structured call. A turn's step is known by the tools it offers, not by its stream: every Workers AI call streams
+ * (`WORKERS_AI_STREAMS_GENERATE`). The gate's agents run the default roles, every step of which offers tools; a role
+ * offered none (an account role with `allowedTools: []`) would be answered here, so the gate does not measure one. Answered a step's prose until 2026-10-20, the memory call failed off its schema,
+ * and each failure's three 0.2 MB log lines stayed live in the DevTools console this gate attaches: the idle workspace
+ * held 6.6 MB where it had held 3.9 MB (armada evo-42). Null for a turn's step.
  */
 function laneAnswer(inputs: BindingInputs): string | null {
-  if (inputs.stream !== true) return JSON.stringify({ response: SLEEP_TIME_ANSWER });
-  const first = inputs.messages?.[0];
+  if (inputs.tools !== undefined) return null;
 
-  return first !== undefined && 'content' in first && typeof first.content === 'string' && asksSleepTime(first.content)
+  return inputs.stream === true
     ? `data: ${JSON.stringify({ response: SLEEP_TIME_ANSWER })}\n\n${USAGE}data: [DONE]\n\n`
-    : null;
+    : JSON.stringify({ response: SLEEP_TIME_ANSWER });
 }
 
 /** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */

@@ -391,11 +391,14 @@ export class HeadJournal {
   /**
    * The settlement: a cached merge closes the run, so every unfinished head is settled `aborted` in the same
    * transition, before the merge is on the run's header. Idempotent in both halves; a run with no header, which a
-   * top-level run records at its split, has nowhere to keep its merge and is refused.
+   * top-level run records at its split, has nowhere to keep its merge and is refused before any head is settled.
    */
   cacheMerge(rootId: HeadId, narrative: string): void {
     return settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
+      const header = this.sql<{ root_id: string }>`SELECT root_id FROM head_runs WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`;
+
+      if (header.length === 0) return yield* new KinuError('missing', `the run ${rootId} has no header to keep its merge on`);
       void this.sql`UPDATE head_journal
         SET status = 'aborted', completed_at = ${Date.now()},
             error_message = ${UNREPORTED_AT_MERGE_REASON}
@@ -404,10 +407,7 @@ export class HeadJournal {
           AND id != ${rootId}
           AND (status = 'running' OR status = 'interrupted')`;
 
-      const kept = this.sql<{ root_id: string }>`UPDATE head_runs SET merged_narrative = ${narrative}
-        WHERE actor_id = ${this.actorId} AND root_id = ${rootId} RETURNING root_id`;
-
-      if (kept.length === 0) return yield* new KinuError('missing', `the run ${rootId} has no header to keep its merge on`);
+      void this.sql`UPDATE head_runs SET merged_narrative = ${narrative} WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`;
     }));
   }
 

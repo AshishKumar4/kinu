@@ -6,7 +6,7 @@ export const SCHEMA_STAMPS = {
   local: 0x672884f,
   control: 0x77c29ad,
   mailname: 0x9673b19,
-  mailbox: 0x3c7b593,
+  mailbox: 0x8d4dbbc,
   monitor: 0x9b12c22,
   deploy: 0x697facd,
 } as const;

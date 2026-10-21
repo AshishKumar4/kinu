@@ -13,7 +13,6 @@ import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { initActorDdl, initWorkspaceOwnershipTables } from '../identity/schema';
 import { initSearchTables } from '../mcts/schemas';
 import { initScaffoldTables } from '../scaffold/schemas';
-import { initSlateShareTables } from '../slates/shares';
 import { initSlateLiveShareTables } from '../slates/live-shares';
 import { initWorkspaceActorTable } from '../identity/workspace-actors';
 import { initEffectTombstoneTable } from '../identity/effect-tombstones';
@@ -151,7 +150,6 @@ function createAgentTables(db: WorkspaceSchemaSql): void {
     recorded_at INTEGER NOT NULL,
     PRIMARY KEY (slate_id, path)
   )`);
-  initSlateShareTables(execRaw);
   initSlateLiveShareTables(execRaw);
 }
 

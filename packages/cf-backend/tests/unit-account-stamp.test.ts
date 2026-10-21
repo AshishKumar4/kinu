@@ -21,7 +21,8 @@ test('an account made now is stamped as this build\'s', () => {
 });
 
 /** An account with its profile, left as production's build (f9c17ac7b) made it: a received share card with no
- *  `received_at`, a connection ticket with no purpose, a table that build declared, and another stamp. */
+ *  `received_at`, a pending device join, which this build keeps as a connection ticket, a table that build declared,
+ *  and another stamp. */
 async function leftBehind() {
   const storage = new Database(':memory:');
   const made = createTestUserDO({ storage });
@@ -31,7 +32,7 @@ async function leftBehind() {
   made.close();
   storage.exec(`DROP TABLE user_share_cards; CREATE TABLE user_share_cards (owner_user_id TEXT NOT NULL, workspace TEXT NOT NULL, share_id TEXT NOT NULL,
     card TEXT NOT NULL, PRIMARY KEY (owner_user_id, workspace, share_id)); INSERT INTO user_share_cards VALUES ('sender', 'jarvis', 's-1', '{}')`);
-  storage.exec("DROP TABLE connection_tickets; CREATE TABLE connection_tickets (ticket_hash TEXT PRIMARY KEY, expires_at INTEGER NOT NULL); INSERT INTO connection_tickets VALUES ('t-1', 1)");
+  storage.exec("CREATE TABLE device_joins (device_id TEXT PRIMARY KEY, expires_at INTEGER NOT NULL); INSERT INTO device_joins VALUES ('d-1', 1)");
   storage.exec("CREATE TABLE user_peer_grants (agent TEXT PRIMARY KEY); INSERT INTO user_peer_grants VALUES ('peer')");
   kvOf(storage).set('kinu.schema_stamp', 1);
 
@@ -49,8 +50,9 @@ test('an account behind this build is reset as it starts: its changed tables mad
     const answer = await behind.userDO.opsTables(await ops());
 
     expect({ dropped: answer.repair?.dropped, retired: answer.repair?.retired, refused: answer.refused })
-      .toEqual({ dropped: ['connection_tickets', 'user_share_cards'], retired: ['user_peer_grants'], refused: null });
-    expect(storage.query('SELECT COUNT(*) AS n FROM user_share_cards UNION ALL SELECT COUNT(*) FROM connection_tickets').all()).toEqual([{ n: 0 }, { n: 0 }]);
+      .toEqual({ dropped: ['user_share_cards'], retired: ['device_joins', 'user_peer_grants'], refused: null });
+    expect(storage.query('SELECT COUNT(*) AS n FROM user_share_cards').all()).toEqual([{ n: 0 }]);
+    expect(storage.query("SELECT name FROM sqlite_master WHERE name = 'device_joins'").all()).toEqual([]);
     expect(answer.census.find(({ table }) => table === 'user_profile')?.rows).toBe(1);
   } finally {
     behind.close();
@@ -62,7 +64,6 @@ test('an account whose init cannot run over what it holds answers every call wit
 
   // A table holding the name of an index the init makes: no reset can run the init, so it refuses.
   storage.exec('DROP INDEX idx_user_devices_token_hash; CREATE TABLE idx_user_devices_token_hash (id TEXT)');
-  storage.exec("DROP TABLE connection_tickets; CREATE TABLE connection_tickets (ticket_hash TEXT PRIMARY KEY); INSERT INTO connection_tickets VALUES ('t')");
   const refused = createTestUserDO({ storage });
 
   try {
@@ -70,7 +71,9 @@ test('an account whose init cannot run over what it holds answers every call wit
     // A socket or request is refused as a call is.
     expect((await refused.userDO.fetch(new Request('https://user/devices/connect'))).status).toBe(503);
     expect(kvOf(storage).get('kinu.schema_stamp')).toBe(1);
-    expect(storage.query('SELECT ticket_hash FROM connection_tickets').all()).toEqual([{ ticket_hash: 't' }]);
+    // Neither its changed table nor its retired one was dropped.
+    expect(storage.query('SELECT share_id FROM user_share_cards UNION ALL SELECT device_id FROM device_joins').all())
+      .toEqual([{ share_id: 's-1' }, { share_id: 'd-1' }]);
     expect((await refused.userDO.opsTables(await ops())).refused).toContain('idx_user_devices_token_hash');
   } finally {
     refused.close();

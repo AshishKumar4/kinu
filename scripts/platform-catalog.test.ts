@@ -79,7 +79,8 @@ describe('an entry without evidence is the artefact being replaced', () => {
   });
 
   test('the same emptiness on an entry that never claimed to see it is a GAP, not a failure', () => {
-    const audit = auditSchema([{ id: 'probe', fact: entry({ observable: [] }) }]);
+    // The sample is the row fact, which a probe proved: here it claims only an inference.
+    const audit = auditSchema([{ id: 'probe', fact: entry({ evidence: 'inferred', observable: [] }) }]);
     expect(audit.problems).toEqual([]);
     expect(audit.gaps.map((g) => g.missing)).toContain('the verbatim string this surfaces as');
   });

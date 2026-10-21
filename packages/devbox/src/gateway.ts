@@ -4,7 +4,7 @@ import { SandboxFileError, S3Mount, type Files, type S3MountRequest, type S3Gate
 import * as v from 'valibot';
 import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
-import { containerExec, TRUST } from './processes';
+import { containerExec, seamedContainer, TRUST } from './processes';
 import type { GatewayBindings } from './contracts';
 import { createResourceLane } from './operation-lanes';
 import { STORE_MOUNT as CHAIN_STORE_MOUNT, STORE_PUBLISH_ROUTE, serveStore, storeRouteHost, storeSource, type StoreGatewayProps } from './store-gateway';
@@ -211,7 +211,7 @@ export class ContainerRoutes {
 
   #mounts(): Effect.Effect<S3Mount, DevboxError> {
     return this.#gateway().pipe(Effect.map((gateway) => this.#mountClient ??= new S3Mount({
-      exec: (args, options) => containerExec(this.host.container, args, options),
+      exec: seamedContainer(this.host.container).exec,
       interceptOutboundHttp: (host, handler) => this.register(host, handler),
     }, gateway)));
   }

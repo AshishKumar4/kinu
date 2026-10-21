@@ -1,6 +1,6 @@
 import type { ToolSet } from 'ai';
 import { REFUSAL_TYPE } from '../types/tool-outcome';
-import type { CodemodeProvider, MemberDeclaration } from '../types/codemode';
+import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type MemberDeclaration } from '../types/codemode';
 import { namespaceDeclaration } from './operation-surfaces';
 import { EXEC_ANSWERS_AT_EXIT, EXEC_RUNS_WHERE_ITS_CWD_IS } from '../operations/executors';
 
@@ -372,7 +372,10 @@ function reachedDeclarations({ declarations, tools }: DescribedProvider): [strin
  * leaves them out: they were half the text of every request.
  * Both backends compose it here, never through a template token: a `$` in a call form is text.
  */
-export function renderCodemodeDescription(providers: readonly DescribedProvider[], substrate: SandboxSubstrate = 'hosted'): string {
+export function renderCodemodeDescription(all: readonly DescribedProvider[], substrate: SandboxSubstrate = 'hosted'): string {
+  // `tools.*` are the model's own tools, in its tool list and prompt; `describe` answers them, the docstring does not.
+  const providers = all.filter((provider) => provider.name !== CRAFTED_TOOL_NAMESPACE);
+
   const listed = providers.flatMap((provider) => {
     const members = reachedDeclarations(provider).map(([, declared]) => declared.call);
     const purpose = provider.summary === undefined ? '' : ` ${provider.summary}`;
