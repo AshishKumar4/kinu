@@ -5,13 +5,14 @@
 import type { ReactNode } from "react";
 import { CloudflareLogo } from "@cloudflare/kumo";
 import { ArrowSquareOutIcon, CaretDownIcon, CheckIcon, type Icon as PhosphorIcon } from "@phosphor-icons/react";
-import type { CloudflareWords, DeployAction, DeployNeed } from "@kinu.run/core/deploy";
+import type { CloudflareWords, DeployAction, DeployChoice, DeployNeed, DeploySession } from "@kinu.run/core/deploy";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FlowStep } from "@/components/ui/FlowCard";
 import { Loader } from "@/components/ui/Loader";
 import { Switch } from "@/components/ui/Switch";
 import { ChatMascot } from "@/components/Marks";
+import type { DeployRefused } from "@/lib/deploy-page-api";
 
 /** Where the page stands, as a dot: Start, Ready (and its Domain step), Deploying, Live. */
 export type DeployDot = 0 | 1 | 2 | 3;
@@ -186,4 +187,40 @@ const KINU_HUE = 62;
 
 export function KinuFace({ activity, live = false }: { activity: "working" | "waiting" | "idle" | "done"; live?: boolean }) {
   return <ChatMascot seed={live ? "deploy/kinu" : "self-deploy/kinu"} colour={KINU_HUE} activity={activity} size={56} />;
+}
+
+/** What a page that shows a refusal does for the person: sign in again, or open a hand-off. */
+export interface RefusalActions {
+  readonly signingIn: boolean;
+  readonly onSignIn: () => void;
+  readonly onHandedOff: (need: string) => void;
+}
+
+/** A refusal the door answered, in words, with what meets it: a need's one action, or Cloudflare's own words. */
+export function Refused({ refusal, actions }: { refusal: DeployRefused; actions: RefusalActions }) {
+  const { need, refused } = refusal;
+
+  if (need !== null) return <NeedBox need={need} waiting={false} onHandedOff={() => actions.onHandedOff(need.id)} onSignIn={actions.onSignIn} signingIn={actions.signingIn} />;
+
+  return (
+    <div data-deploy-refusal className="space-y-2">
+      <p role="alert" className="t-body p-danger">{refused?.sentence ?? refusal.error}</p>
+      {refused !== null && <CloudflareSaid words={refused.details} />}
+    </div>
+  );
+}
+
+/** The account's name as the session lists it, else its id. */
+export function accountName(accounts: readonly DeployChoice[], account: string): string {
+  return accounts.find((each) => each.id === account)?.name ?? account;
+}
+
+/** Accounts whose Kinus could not be read, so none there are listed: said wherever the person starts. */
+export function Unreadable({ session }: { session: DeploySession }) {
+  return session.unreadable.map(({ account, words }) => (
+    <div key={account} data-deploy-unreadable className="mb-4 space-y-1">
+      <p className="t-body">Kinu couldn't read the Kinus in {accountName(session.accounts, account)}, so any there aren't listed.</p>
+      <CloudflareSaid words={words} />
+    </div>
+  ));
 }

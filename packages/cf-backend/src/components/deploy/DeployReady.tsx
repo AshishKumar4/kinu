@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/Button";
 import { RadioGroup } from "@/components/ui/Check";
 import { Loader } from "@/components/ui/Loader";
 import { Select } from "@/components/ui/Select";
-import { CloudflareSaid, DeployShell, Disclosure, Extra, Line, NeedBox, WhatGetsMade } from "@/components/deploy/DeployParts";
+import { DeployShell, Disclosure, Extra, Line, NeedBox, Refused, Unreadable, WhatGetsMade, type RefusalActions } from "@/components/deploy/DeployParts";
 import { DeployDomain, type PickedDomain } from "@/components/deploy/DeployDomain";
 import { useDeployRead, type Reading } from "@/components/deploy/use-deploy-read";
 import { readMailPreview, readPreflight, type DeployRefused } from "@/lib/deploy-page-api";
@@ -27,13 +27,10 @@ export type ReadyFor = { readonly kind: "new" } | { readonly kind: "domain" | "m
 /** What a change to an existing Kinu asks, past the Kinu it is. */
 type ChangeAsked = Omit<Extract<DeployRunRequest, { kind: "change" }>, "kind" | "account" | "name">;
 
-/** The page's side of the screen: what it is doing, and what it does for the person. */
-interface ReadyActions {
+/** The page's side of the screen: what it is doing, the refusal it last heard, and what it does for the person. */
+interface ReadyActions extends RefusalActions {
   readonly deploying: boolean;
   readonly refusal: DeployRefused | null;
-  readonly signingIn: boolean;
-  readonly onSignIn: () => void;
-  readonly onHandedOff: () => void;
 }
 
 const PURPOSE: Record<MailPurpose, string> = {
@@ -62,16 +59,28 @@ function zoneOf(zones: readonly DeployZone[], host: string): DeployZone | undefi
   return [...zones].sort((a, b) => b.name.length - a.name.length).find((zone) => host === zone.name || host.endsWith(`.${zone.name}`));
 }
 
-/** Mail at a domain: its apex, or a subdomain where the apex gets mail elsewhere; what it adds, read first. */
-function MailChoice({ account, domain, host, onHost }: { account: string; domain: string; host: string; onHost: (host: string) => void }) {
+/**
+ * Mail at a domain: its apex, or its mail subdomain where the apex gets mail elsewhere; what it adds, read first.
+ * `onReady` hears whether the chosen host can take Kinu's mail: read, and getting none elsewhere.
+ */
+function MailChoice({ account, domain, host, onHost, onReady }: {
+  account: string; domain: string; host: string; onHost: (host: string) => void; onReady: (ready: boolean) => void;
+}) {
   const previewed = useDeployRead(`${account}/${host}`, async () => readMailPreview(account, host));
   const conflict = previewed?.state === "read" ? previewed.answer.conflict : null;
+  const ready = previewed?.state === "read" && conflict === null;
   const sub = `mail.${domain}`;
+  // Where the apex's mail goes, once it has moved Kinu's onto the subdomain: said beside the choice, and never moved again.
+  const [moved, setMoved] = useState<string | null>(null);
 
-  // The apex already gets mail elsewhere: Kinu's goes on the subdomain the preview suggests, and the apex stays as it is.
   useEffect(() => {
-    if (conflict !== null && host !== conflict.suggestion) onHost(conflict.suggestion);
-  }, [conflict, host, onHost]);
+    if (conflict === null || host !== domain || moved !== null || conflict.suggestion !== sub) return;
+
+    setMoved(conflict.mx);
+    onHost(sub);
+  }, [conflict, host, domain, sub, moved, onHost]);
+
+  useEffect(() => { onReady(ready); }, [ready, onReady]);
 
   return (
     <div className="space-y-3" data-deploy-mail={host}>
@@ -79,20 +88,9 @@ function MailChoice({ account, domain, host, onHost }: { account: string; domain
         options={[{ value: "apex", label: `At ${domain}, like ada@${domain}` }, { value: "sub", label: `At ${sub}, like ada@${sub}` }]} />
       {previewed?.state === "reading" && <p className="inline-flex items-center gap-2 t-meta"><Loader size="sm" />Reading {host}…</p>}
       {previewed?.state === "refused" && <p role="alert" className="t-body p-danger">{previewed.refusal.error}</p>}
-      {previewed?.state === "read" && <MailWrites preview={previewed.answer} />}
-      {conflict !== null && <p className="t-meta p-text-2">{domain} already gets mail at {conflict.mx}, so Kinu's mail uses {conflict.suggestion} and leaves yours as it is.</p>}
-    </div>
-  );
-}
-
-/** The refusal the page last heard, in words, with what meets it. */
-function Refused({ refusal, actions }: { refusal: DeployRefused; actions: ReadyActions }) {
-  if (refusal.need !== null) return <NeedBox need={refusal.need} waiting={false} onHandedOff={actions.onHandedOff} onSignIn={actions.onSignIn} signingIn={actions.signingIn} />;
-
-  return (
-    <div data-deploy-refusal className="space-y-2">
-      <p role="alert" className="t-body p-danger">{refusal.refused?.sentence ?? refusal.error}</p>
-      {refusal.refused !== null && <CloudflareSaid words={refusal.refused.details} />}
+      {previewed?.state === "read" && conflict === null && <MailWrites preview={previewed.answer} />}
+      {moved !== null && host === sub && <p className="t-meta p-text-2">{domain} already gets mail at {moved}, so Kinu's mail uses {sub} and leaves yours as it is.</p>}
+      {conflict !== null && <p role="alert" className="t-body p-danger">{host} already gets mail at {conflict.mx}. Kinu's mail can't go there without taking it over; choose the other, or leave mail off.</p>}
     </div>
   );
 }
@@ -164,8 +162,8 @@ function AddressLine({ preflight, name, domain, onDomain }: { preflight: DeployP
   );
 }
 
-function MailExtra({ account, domain, mail, onMail, onDomain }: {
-  account: string; domain: PickedDomain | null; mail: string | null; onMail: (host: string | null) => void; onDomain: () => void;
+function MailExtra({ account, domain, mail, onMail, onReady, onDomain }: {
+  account: string; domain: PickedDomain | null; mail: string | null; onMail: (host: string | null) => void; onReady: (ready: boolean) => void; onDomain: () => void;
 }) {
   if (domain?.zone === undefined || domain.zone === null) {
     const copy = domain === null
@@ -178,7 +176,7 @@ function MailExtra({ account, domain, mail, onMail, onDomain }: {
   return (
     <Extra Icon={EnvelopeSimpleIcon} title="Mail at your domain" on={mail !== null} copy={`An inbox for you and your agents, like ada@${mail ?? domain.name}.`}
       onChange={(on) => onMail(on ? domain.name : null)}>
-      {mail !== null && <MailChoice account={account} domain={domain.name} host={mail} onHost={onMail} />}
+      {mail !== null && <MailChoice account={account} domain={domain.name} host={mail} onHost={onMail} onReady={onReady} />}
     </Extra>
   );
 }
@@ -194,34 +192,50 @@ function requestOf(account: string, name: string, choices: Choices): DeployRunRe
   return { kind: "new", account, name, address, computer: choices.computer, mail: choices.mail === null ? null : { host: choices.mail } };
 }
 
+/** A new Kinu's Domain step: a domain picked, or workers.dev kept (`null`). */
+function NewDomain({ account, name, preflight, onPick, onBack }: {
+  account: string; name: string; preflight: DeployPreflight | null; onPick: (domain: PickedDomain | null) => void; onBack: () => void;
+}) {
+  const keep = preflight === null ? null : workersAddress(preflight, name);
+
+  return (
+    <DeployShell dot={1} screen="domain" title="Use your own domain"
+      footer={(
+        <>
+          <Button variant="ghost" size="sm" className="mr-auto" onClick={onBack}>Back</Button>
+          {keep !== null && <Button variant="ghost" size="sm" onClick={() => onPick(null)}>Keep {keep}</Button>}
+        </>
+      )}>
+      <DeployDomain account={account} name={name === "" ? DEFAULT_INSTANCE_NAME : name} zones={preflight?.zones ?? []} onPick={onPick} />
+    </DeployShell>
+  );
+}
+
 function NewKinu({ session, actions, onDeploy, onBack }: { session: DeploySession; actions: ReadyActions; onDeploy: (asked: DeployRunRequest) => void; onBack: () => void }) {
   const [account, setAccount] = useState(session.accounts[0]?.id ?? "");
-  const [handedOff, setHandedOff] = useState(false);
-  const checked = useDeployRead(account, async () => readPreflight(account), { onFocus: true, every: handedOff ? RECHECK_MS : null });
+  // The need a hand-off was opened for: the account is read again every few seconds until it is met.
+  const [handedOff, setHandedOff] = useState<string | null>(null);
+  const checked = useDeployRead(account, async () => readPreflight(account), { onFocus: true, every: handedOff === null ? null : RECHECK_MS });
   const [choosingDomain, setChoosingDomain] = useState(false);
   const [choices, setChoices] = useState<Choices>(NO_CHOICES);
+  const [mailReady, setMailReady] = useState(false);
   const onMail = useCallback((mail: string | null) => setChoices((held) => ({ ...held, mail })), []);
-  const handOff = () => { setHandedOff(true); actions.onHandedOff(); };
+  const handOff = (need: string) => { setHandedOff(need); actions.onHandedOff(need); };
 
   const preflight = checked?.state === "read" ? checked.answer : null;
   const name = preflight?.suggestedName ?? "";
   const kept = actions.refusal;
+  const met = preflight !== null && handedOff !== null && !preflight.needs.some((need) => need.id === handedOff);
+
+  // The need the hand-off was for is met: stop reading the account every few seconds.
+  useEffect(() => {
+    if (met) setHandedOff(null);
+  }, [met]);
 
   if (choosingDomain) {
-    const keep = preflight === null ? null : workersAddress(preflight, name);
+    const pick = (domain: PickedDomain | null) => { setChoices((held) => ({ ...held, domain, mail: null })); setChoosingDomain(false); };
 
-    return (
-      <DeployShell dot={1} screen="domain" title="Use your own domain"
-        footer={(
-          <>
-            <Button variant="ghost" size="sm" className="mr-auto" onClick={() => setChoosingDomain(false)}>Back</Button>
-            {keep !== null && <Button variant="ghost" size="sm" onClick={() => { setChoices((held) => ({ ...held, domain: null, mail: null })); setChoosingDomain(false); }}>Keep {keep}</Button>}
-          </>
-        )}>
-        <DeployDomain account={account} name={name === "" ? DEFAULT_INSTANCE_NAME : name} zones={preflight?.zones ?? []}
-          onPick={(domain) => { setChoices((held) => ({ ...held, domain, mail: null })); setChoosingDomain(false); }} />
-      </DeployShell>
-    );
+    return <NewDomain account={account} name={name} preflight={preflight} onPick={pick} onBack={() => setChoosingDomain(false)} />;
   }
 
   return (
@@ -230,14 +244,17 @@ function NewKinu({ session, actions, onDeploy, onBack }: { session: DeploySessio
         <>
           {session.deployments.length > 0 && <Button variant="ghost" size="sm" className="mr-auto" onClick={onBack}>Back</Button>}
           {preflight !== null && <span className="hidden t-meta sm:inline">{costOf(choices.computer)}</span>}
-          <Button variant="primary" busy={actions.deploying} disabled={preflight === null || preflight.needs.length > 0 || name === ""} data-deploy-go
+          <Button variant="primary" busy={actions.deploying} disabled={preflight === null || preflight.needs.length > 0 || name === "" || (choices.mail !== null && !mailReady)} data-deploy-go
             onClick={() => onDeploy(requestOf(account, name, choices))}>Deploy</Button>
         </>
       )}>
+      <Unreadable session={session} />
       <NotYet checked={checked} actions={{ ...actions, onHandedOff: handOff }} />
       {preflight !== null && (
         <div className="space-y-5">
-          {preflight.needs.map((need) => <NeedBox key={need.id} need={need} waiting={handedOff} onHandedOff={handOff} onSignIn={actions.onSignIn} signingIn={actions.signingIn} />)}
+          {preflight.needs.map((need) => (
+            <NeedBox key={need.id} need={need} waiting={handedOff === need.id} onHandedOff={() => handOff(need.id)} onSignIn={actions.onSignIn} signingIn={actions.signingIn} />
+          ))}
           {kept !== null && <Refused refusal={kept} actions={{ ...actions, onHandedOff: handOff }} />}
           <AccountLine accounts={session.accounts} account={account} onAccount={(id) => { setAccount(id); setChoices(NO_CHOICES); }} />
           {name !== "" && <AddressLine preflight={preflight} name={name} domain={choices.domain} onDomain={() => setChoosingDomain(true)} />}
@@ -246,7 +263,7 @@ function NewKinu({ session, actions, onDeploy, onBack }: { session: DeploySessio
             <Extra Icon={CpuIcon} title="Should your agents get their own computers?" on={choices.computer}
               copy="Each can run code, builds and a browser. Needs Workers Paid, $5 a month; if your account isn't on it, Kinu asks when it gets there."
               onChange={(computer) => setChoices((held) => ({ ...held, computer }))} />
-            <MailExtra account={account} domain={choices.domain} mail={choices.mail} onMail={onMail} onDomain={() => setChoosingDomain(true)} />
+            <MailExtra account={account} domain={choices.domain} mail={choices.mail} onMail={onMail} onReady={setMailReady} onDomain={() => setChoosingDomain(true)} />
           </div>
           <div className="sm:hidden"><Line label="Cost"><span className="t-body p-text">{costOf(choices.computer)}</span></Line></div>
           <WhatGetsMade name={name === "" ? DEFAULT_INSTANCE_NAME : name} domain={choices.domain?.name ?? null} computer={choices.computer} mail={choices.mail} />
@@ -276,6 +293,7 @@ function MoveToDomain({ kinu, actions, onChange, onBack }: { kinu: DeployedKinu;
 function AddMail({ kinu, actions, onChange, onBack }: { kinu: DeployedKinu; actions: ReadyActions; onChange: (asked: ChangeAsked) => void; onBack: () => void }) {
   const checked = useDeployRead(kinu.account, async () => readPreflight(kinu.account), { onFocus: true });
   const [chosen, setChosen] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
   const host = new URL(kinu.url).hostname;
   const zone = checked?.state === "read" ? zoneOf(checked.answer.zones, host) : undefined;
   const mailHost = chosen ?? zone?.name ?? null;
@@ -285,29 +303,28 @@ function AddMail({ kinu, actions, onChange, onBack }: { kinu: DeployedKinu; acti
       footer={(
         <>
           <Button variant="ghost" size="sm" className="mr-auto" onClick={onBack}>Back</Button>
-          <Button variant="primary" busy={actions.deploying} disabled={mailHost === null} onClick={() => { if (mailHost !== null) onChange({ mail: { host: mailHost } }); }}>Add mail</Button>
+          <Button variant="primary" busy={actions.deploying} disabled={mailHost === null || !ready} onClick={() => { if (mailHost !== null) onChange({ mail: { host: mailHost } }); }}>Add mail</Button>
         </>
       )}>
       <NotYet checked={checked} actions={actions} />
       {checked?.state === "read" && (zone === undefined
         ? <p className="t-body">{host} is in no zone of this account Kinu can read, so mail can't be added here.</p>
-        : <MailChoice account={kinu.account} domain={zone.name} host={mailHost ?? zone.name} onHost={setChosen} />)}
+        : <MailChoice account={kinu.account} domain={zone.name} host={mailHost ?? zone.name} onHost={setChosen} onReady={setReady} />)}
       {actions.refusal !== null && <div className="mt-4"><Refused refusal={actions.refusal} actions={actions} /></div>}
     </DeployShell>
   );
 }
 
-export function DeployReady({ session, readyFor, deploying, refusal, signingIn, onDeploy, onSignIn, onBack }: {
+export function DeployReady({ session, readyFor, deploying, refusal, refusalActions, onDeploy, onBack }: {
   session: DeploySession;
   readyFor: ReadyFor;
   deploying: boolean;
   refusal: DeployRefused | null;
-  signingIn: boolean;
+  refusalActions: RefusalActions;
   onDeploy: (asked: DeployRunRequest) => void;
-  onSignIn: () => void;
   onBack: () => void;
 }) {
-  const actions: ReadyActions = { deploying, refusal, signingIn, onSignIn, onHandedOff: () => undefined };
+  const actions: ReadyActions = { ...refusalActions, deploying, refusal };
 
   if (readyFor.kind === "new") return <NewKinu session={session} actions={actions} onDeploy={onDeploy} onBack={onBack} />;
 

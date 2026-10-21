@@ -147,6 +147,20 @@ describe('the deploy page', () => {
     });
   });
 
+  test('a mail subdomain that gets mail elsewhere too is said and holds Deploy back, never stepped past', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'mail-conflict-both');
+
+      await pressNamed(page, 'Use your own domain');
+      await page.waitForSelector('[data-deploy-domain="flourandhearth.com"] button', SOON);
+      await page.click('[data-deploy-domain="flourandhearth.com"] button');
+      await press(page, 'button[aria-label="Mail at your domain"]');
+      await page.waitForSelector('[data-deploy-mail="mail.flourandhearth.com"] [role="alert"]', SOON);
+      expect(await page.$('[data-deploy-mail="mail.mail.flourandhearth.com"]')).toBeNull();
+      expect(await page.$('[data-deploy-go][disabled]')).not.toBeNull();
+    });
+  });
+
   test('a domain registered elsewhere is asked by name: the run adds it and Kinu starts on workers.dev', async () => {
     await withGallery(async (gallery) => {
       const page = await opened(gallery, 'ready');
@@ -176,15 +190,18 @@ describe('the deploy page', () => {
     });
   });
 
-  test('a run paused past an hour signs in again in this tab and carries on where it stopped', async () => {
+  test('a run paused past an hour asks for a sign-in; back from it, the run carries on where it stopped', async () => {
     await withGallery(async (gallery) => {
       const page = await opened(gallery, 'paused-signin');
 
+      // Found waiting on a sign-in, it is carried on at once; refused for want of one, it asks for it, once.
       await page.waitForSelector('[data-deploy-need="signin-again"]', SOON);
-      await pressNamed(page, 'Sign in again');
-      await screenBecomes(page, 'deploying');
-      await page.waitForFunction(() => (document.documentElement.dataset.deployAsked ?? '').includes('"route":"runs/current/continue"'), SOON);
+      expect(await page.$$eval('[data-deploy-need="signin-again"]', (needs) => needs.length)).toBe(1);
       expect((await asked(page)).map((each) => each.route)).toEqual(['runs/current/continue']);
+      await pressNamed(page, 'Sign in again');
+      await page.waitForFunction(() => new URLSearchParams(location.search).get('deploy') === 'paused-signin-back', SOON);
+      await page.waitForFunction(() => (document.documentElement.dataset.deployAsked ?? '').includes('"route":"runs/current/continue"'), SOON);
+      await screenBecomes(page, 'live');
     });
   });
 
@@ -210,8 +227,30 @@ describe('the deploy page', () => {
       const ready = await opened(gallery, 'live-pending-ready');
 
       await ready.waitForSelector('[data-deploy-pending="ready"]', SOON);
+      expect(await ready.$('[data-deploy-refusal], [data-deploy-need]')).toBeNull();
       await pressNamed(ready, 'Sign in again');
-      await ready.waitForFunction(() => (document.documentElement.dataset.deployAsked ?? '').includes('continue'), SOON);
+      await ready.waitForFunction(() => new URLSearchParams(location.search).get('deploy') === 'live-pending-back', SOON);
+      await ready.waitForSelector('[data-deploy-live-address]', SOON);
+      await ready.waitForFunction(() => document.querySelector('[data-deploy-live-address]')?.textContent === 'kinu.ada.dev', SOON);
+    });
+  });
+
+  test('a read of the run the door refuses is said, and the run is read again rather than left where it was', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'running-hiccup');
+
+      await page.waitForSelector('[data-deploy-run="running"] [data-deploy-refusal]', SOON);
+      await screenBecomes(page, 'live');
+      expect(await page.$('[data-deploy-refusal]')).toBeNull();
+    });
+  });
+
+  test('an account whose Kinus could not be read is said on Ready, in Cloudflare\'s words', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'unreadable');
+
+      await screenBecomes(page, 'ready');
+      await page.waitForSelector('[data-deploy-unreadable] [data-deploy-words]', SOON);
     });
   });
 
@@ -227,15 +266,17 @@ describe('the deploy page', () => {
       await press(relink, '[data-deploy-change="link"]');
       expect(await runAsked(relink)).toEqual({ kind: 'change', account: ACCOUNT, name: 'kinu', setupLink: true });
       await screenBecomes(relink, 'live');
+      expect(await relink.$('[data-deploy-open][href*="/setup#"]')).not.toBeNull();
     });
   });
 
-  test('an update this page cannot take is shown, not offered; mail waits for a domain', async () => {
+  test('a release channel it cannot read is said, never called up to date; mail waits for a domain', async () => {
     await withGallery(async (gallery) => {
-      const page = await opened(gallery, 'manage-blocked');
+      const page = await opened(gallery, 'manage-unread');
 
       await page.waitForSelector('[data-deploy-change="update"]', SOON);
       expect(await page.$eval('[data-deploy-change="update"]', (button) => button.hasAttribute('disabled'))).toBe(true);
+      expect(await page.$('[data-deploy-update="current"]')).toBeNull();
       expect(await page.$eval('[data-deploy-change="mail"]', (button) => button.hasAttribute('disabled'))).toBe(true);
     });
   });

@@ -7,7 +7,9 @@ import { ArrowsClockwiseIcon, CaretRightIcon, CheckIcon, EnvelopeSimpleIcon, Glo
 import type { DeployChoice, DeployedKinu, DeploySession, UpdateBuild } from "@kinu.run/core/deploy";
 import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
-import { CloudflareSaid, DeployShell } from "@/components/deploy/DeployParts";
+import { Loader } from "@/components/ui/Loader";
+import { accountName, DeployShell, Refused, Unreadable, type RefusalActions } from "@/components/deploy/DeployParts";
+import type { DeployRefused } from "@/lib/deploy-page-api";
 
 /** What a change asks of the page, for the Kinu it is about. */
 export type KinuChange = "update" | "domain" | "mail" | "link";
@@ -17,10 +19,6 @@ function dayOf(build: UpdateBuild): string {
   const at = new Date(build.builtAt);
 
   return Number.isNaN(at.getTime()) ? build.builtAt : at.toLocaleDateString(undefined, { day: "numeric", month: "long" });
-}
-
-function accountName(accounts: readonly DeployChoice[], id: string): string {
-  return accounts.find((account) => account.id === id)?.name ?? id;
 }
 
 /** Whether a Kinu answers on a domain of its own rather than workers.dev: mail needs one. */
@@ -50,7 +48,10 @@ function Change({ Icon, title, copy, onPick, disabled = false, change }: {
 function UpdateChange({ kinu, onPick }: { kinu: DeployedKinu; onPick: () => void }) {
   const { current, available, upToDate, installable, reason } = kinu.update;
 
-  if (upToDate || available === null) {
+  // The release channel unread: nothing to compare against, which is not the same as current.
+  if (available === null) return <Change change="update" Icon={ArrowsClockwiseIcon} title="Can't check for updates" copy={reason} disabled onPick={onPick} />;
+
+  if (upToDate) {
     return (
       <li data-deploy-update="current" className="flex items-center gap-3 py-3">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-[var(--r-control)] p-fill"><CheckIcon size={16} className="p-success" /></span>
@@ -89,12 +90,16 @@ function KinuChanges({ kinu, accounts, onChange }: { kinu: DeployedKinu; account
   );
 }
 
-export function DeployManage({ session, onChange, onDeployAnother }: {
+export function DeployManage({ session, starting, refusal, refusalActions, onChange, onDeployAnother }: {
   session: DeploySession;
+  /** An update or a new link asked for and not yet begun. */
+  starting: boolean;
+  refusal: DeployRefused | null;
+  refusalActions: RefusalActions;
   onChange: (kinu: DeployedKinu, change: KinuChange) => void;
   onDeployAnother: () => void;
 }) {
-  const { deployments, accounts, unreadable } = session;
+  const { deployments, accounts } = session;
   const [picked, setPicked] = useState<DeployedKinu | null>(deployments.length === 1 ? deployments[0] ?? null : null);
 
   // Back only from one Kinu to the list of several: the list is where a signed-in person starts.
@@ -106,12 +111,9 @@ export function DeployManage({ session, onChange, onDeployAnother }: {
           <Button variant="ghost" size="sm" data-deploy-another onClick={onDeployAnother}>Deploy another Kinu</Button>
         </>
       )}>
-      {unreadable.map(({ account, words }) => (
-        <div key={account} data-deploy-unreadable className="mb-4 space-y-1">
-          <p className="t-body">Kinu couldn't read the Kinus in {accountName(accounts, account)}, so any there aren't listed.</p>
-          <CloudflareSaid words={words} />
-        </div>
-      ))}
+      <Unreadable session={session} />
+      {starting && <p className="mb-4 inline-flex items-center gap-2 t-meta"><Loader size="sm" />Starting…</p>}
+      {refusal !== null && <div className="mb-4"><Refused refusal={refusal} actions={refusalActions} /></div>}
       {picked === null
         ? (
           <ul className="space-y-1">

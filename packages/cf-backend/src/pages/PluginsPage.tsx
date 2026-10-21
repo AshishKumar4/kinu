@@ -11,7 +11,7 @@ import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { removeMcpServer } from "@/lib/user-api";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Row, RowTile } from "@/components/ui/Row";
-import { addablePresets, hostBrand, McpPresetCards, presetOf, PresetRow, ServerStatus, type PresetAvailability } from "@/components/plugins/McpPresetCards";
+import { addablePresets, hostBrand, McpPresetCards, PresetFailuresProvider, presetOf, PresetRow, ServerStatus, type PresetAvailability } from "@/components/plugins/McpPresetCards";
 import { Menu } from "@/components/ui/Menu";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
 import { Page } from "@/components/ui/PageHeader";
@@ -88,8 +88,9 @@ export default function PluginsPage() {
   const [managing, setManaging] = useState(false);
   const availability = lastValue(presets.resource) ?? undefined;
 
+  // One keeper of sign-in failures for the page and its Manage modal: a preset moves between their lists as it is added.
   return (
-    <>
+    <PresetFailuresProvider>
       <Page icon={<PuzzlePieceIcon size={22} />} title="Plugins" actions={<Button variant="secondary" onClick={() => setManaging(true)}>Manage</Button>}>
         <PluginSection title="Connected" onRetry={servers.reload} what="your MCP servers"
           rows={mapResource(servers.resource, (rows) => connectedRows(rows, availability, servers.reload))} />
@@ -100,6 +101,6 @@ export default function PluginsPage() {
           ]))} />
       </Page>
       {managing && <AccountPanelModal panel="mcp" mcp={mcp} onClose={() => setManaging(false)} />}
-    </>
+    </PresetFailuresProvider>
   );
 }

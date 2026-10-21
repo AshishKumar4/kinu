@@ -8,7 +8,8 @@ import type { DeployPhase, DeployRunView } from "@kinu.run/core/deploy";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Loader } from "@/components/ui/Loader";
-import { CloudflareButton, CloudflareSaid, DeployShell, Disclosure, HandOff, KinuFace, NeedBox } from "@/components/deploy/DeployParts";
+import { CloudflareButton, CloudflareSaid, DeployShell, Disclosure, HandOff, KinuFace, NeedBox, Refused, type RefusalActions } from "@/components/deploy/DeployParts";
+import type { DeployRefused } from "@/lib/deploy-page-api";
 
 /** What this page asked the run for, when it asked in this tab: the words it ends on follow. Null for a run found again. */
 export type RunAsked = "new" | "update" | "change" | null;
@@ -49,14 +50,15 @@ function titleOf(asked: RunAsked): string {
   return asked === "change" ? "Changing your Kinu" : "Deploying your Kinu";
 }
 
-export function DeployRunning({ run, asked, handedOff, signingIn, retrying, onHandedOff, onSignIn, onRetry }: {
+export function DeployRunning({ run, asked, handedOff, retrying, refusal, actions, onRetry }: {
   run: DeployRunView;
   asked: RunAsked;
-  handedOff: boolean;
-  signingIn: boolean;
+  /** The need a hand-off was opened for: its box waits on Cloudflare rather than offering the hand-off again. */
+  handedOff: string | null;
   retrying: boolean;
-  onHandedOff: () => void;
-  onSignIn: () => void;
+  /** What the door answered the last carry-on or read, when it refused. */
+  refusal: DeployRefused | null;
+  actions: RefusalActions;
   onRetry: () => void;
 }) {
   let title = titleOf(asked);
@@ -66,7 +68,9 @@ export function DeployRunning({ run, asked, handedOff, signingIn, retrying, onHa
   if (run.state === "paused" && run.paused !== undefined) {
     title = run.paused.id === "signin-again" ? "Sign in to carry on" : "Waiting on Cloudflare";
     said = null;
-    action = <div className="w-full text-left"><NeedBox need={run.paused} waiting={handedOff} onHandedOff={onHandedOff} onSignIn={onSignIn} signingIn={signingIn} /></div>;
+    const need = run.paused;
+
+    action = <div className="w-full text-left"><NeedBox need={need} waiting={handedOff === need.id} onHandedOff={() => actions.onHandedOff(need.id)} onSignIn={actions.onSignIn} signingIn={actions.signingIn} /></div>;
   }
 
   if (run.state === "refused" && run.refused !== undefined) {
@@ -78,7 +82,7 @@ export function DeployRunning({ run, asked, handedOff, signingIn, retrying, onHa
       ? <Button variant="primary" busy={retrying} data-deploy-retry onClick={onRetry}>{run.refused.action.label}</Button>
       : (
         <span className="flex flex-wrap items-center justify-center gap-2">
-          <HandOff action={{ label: run.refused.action.label, href }} onOpened={onHandedOff} />
+          <HandOff action={{ label: run.refused.action.label, href }} />
           <Button busy={retrying} data-deploy-retry onClick={onRetry}>It's done, carry on</Button>
         </span>
       );
@@ -94,6 +98,7 @@ export function DeployRunning({ run, asked, handedOff, signingIn, retrying, onHa
         {said !== null && <p data-deploy-now className="mt-1.5 max-w-md t-body">{said}</p>}
         {going && <div className="mt-5 w-full max-w-sm"><Progress index={run.phase.index} of={run.phase.of} /></div>}
         {action !== null && <div className="mt-5 w-full max-w-md">{action}</div>}
+        {refusal !== null && (refusal.need === null || refusal.need.id !== run.paused?.id) && <div className="mt-4 w-full max-w-md text-left"><Refused refusal={refusal} actions={actions} /></div>}
         {going && <p className="mt-5 t-meta">A few minutes. You can close this page; it carries on, and opening it again shows where it is.</p>}
         {run.state === "paused" && run.paused?.id !== "signin-again" && <p className="mt-3 t-meta">Once it's done, Kinu carries on by itself.</p>}
       </div>
@@ -150,11 +155,11 @@ function liveTitle(asked: RunAsked, setupLink: string): string {
   return "Your Kinu is live";
 }
 
-export function DeployLive({ run, asked, signingIn, onSignIn, onAddDomain }: {
+export function DeployLive({ run, asked, refusal, actions, onAddDomain }: {
   run: DeployRunView & { readonly live: NonNullable<DeployRunView["live"]> };
   asked: RunAsked;
-  signingIn: boolean;
-  onSignIn: () => void;
+  refusal: DeployRefused | null;
+  actions: RefusalActions;
   onAddDomain: () => void;
 }) {
   const { url, setupLink, setupLinkExpiresAt, cli, pending } = run.live;
@@ -187,7 +192,7 @@ export function DeployLive({ run, asked, signingIn, onSignIn, onAddDomain }: {
               <>
                 <p className="t-item">{pending.domain} points at Cloudflare now</p>
                 <p className="mt-1 t-meta p-text-2">Sign in once more and Kinu moves onto it; {host} keeps working.</p>
-                <div className="mt-3"><CloudflareButton busy={signingIn} onClick={onSignIn}>Sign in again</CloudflareButton></div>
+                <div className="mt-3"><CloudflareButton busy={actions.signingIn} onClick={actions.onSignIn}>Sign in again</CloudflareButton></div>
               </>
             )
             : (
@@ -206,6 +211,9 @@ export function DeployLive({ run, asked, signingIn, onSignIn, onAddDomain }: {
             )}
         </div>
       )}
+
+      {/* A domain ready to move onto already offers its sign-in: a carry-on refused for want of one says nothing more. */}
+      {refusal !== null && !(pending?.ready === true && refusal.need?.id === "signin-again") && <div className="mt-4"><Refused refusal={refusal} actions={actions} /></div>}
 
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t p-border pt-4">
         <Disclosure summary="Use Kinu from your terminal">

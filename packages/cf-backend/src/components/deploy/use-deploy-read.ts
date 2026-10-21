@@ -21,30 +21,33 @@ export interface ReadAgain {
   readonly every?: number | null;
 }
 
-/** `asked` names what is read (its account, its query): a new name is a new read. Null reads nothing. */
-export function useDeployRead<A>(asked: string | null, read: () => Promise<DeployHeard<A>>, { rest = 0, onFocus = false, every = null }: ReadAgain = {}): Reading<A> | null {
-  const [reading, setReading] = useState<Reading<A> | null>(null);
+/**
+ * `key` names what is read (its account, its query): a new name is a new read, shown as reading until it answers; the
+ * same name read again (a focus, an interval) keeps what it showed until the new answer. Null reads nothing.
+ */
+export function useDeployRead<A>(key: string | null, read: () => Promise<DeployHeard<A>>, { rest = 0, onFocus = false, every = null }: ReadAgain = {}): Reading<A> | null {
+  const [held, setHeld] = useState<{ readonly key: string; readonly reading: Reading<A> } | null>(null);
   // The read as this render made it: the one the timers run, never one an earlier render captured.
   const latest = useRef(read);
 
   latest.current = read;
 
   useEffect(() => {
-    if (asked === null) {
-      setReading(null);
-
-      return undefined;
-    }
+    if (key === null) return undefined;
 
     let current = true;
+    // Reads overlap (a focus while an interval's read is out): only the last one asked may answer.
+    let asked = 0;
 
     const ask = () => detach(Effect.promise(async () => {
+      asked += 1;
+
+      const mine = asked;
       const heard = await latest.current();
 
-      if (current) setReading("answer" in heard ? { state: "read", answer: heard.answer } : { state: "refused", refusal: heard.refusal });
+      if (current && mine === asked) setHeld({ key, reading: "answer" in heard ? { state: "read", answer: heard.answer } : { state: "refused", refusal: heard.refusal } });
     }));
 
-    setReading({ state: "reading" });
     const first = setTimeout(ask, rest);
     const again = every === null ? undefined : setInterval(ask, every);
 
@@ -56,7 +59,9 @@ export function useDeployRead<A>(asked: string | null, read: () => Promise<Deplo
       clearInterval(again);
       window.removeEventListener("focus", ask);
     };
-  }, [asked, rest, onFocus, every]);
+  }, [key, rest, onFocus, every]);
 
-  return reading;
+  if (key === null) return null;
+
+  return held?.key === key ? held.reading : { state: "reading" };
 }

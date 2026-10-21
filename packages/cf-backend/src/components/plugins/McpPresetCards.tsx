@@ -1,6 +1,6 @@
 /** One-click MCP preset rows; a row's state is the account's server row tagged with its `preset_id`. */
 import { Effect } from 'effect';
-import { useCallback, useState, useSyncExternalStore, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowSquareOutIcon, PlusIcon, SignInIcon, TrashIcon, XIcon,
 } from "@phosphor-icons/react";
@@ -63,29 +63,44 @@ export function ServerStatus({ status }: { status: McpServerSummary['status'] })
 }
 
 /**
- * Each preset's last sign-in failure, kept by the preset rather than by the row that began the sign-in: adding a preset
- * moves it from Add to Connected, so the row that hears how its sign-in ended is not the one that started it, and the
- * finish page closed with the only copy of why it failed. A later sign-in that connects clears it.
+ * Each preset's last sign-in failure, kept by the page that lists the presets rather than by the row that began the
+ * sign-in: adding a preset moves it from Add to Connected, so the row that hears how its sign-in ended is not the one that
+ * started it, and the finish page closed with the only copy of why it failed. A sign-in that connects, or removing the
+ * server, clears it; leaving the page drops them all.
  */
-const presetFailures = new Map<string, string>();
+type PresetFailures = readonly [ReadonlyMap<string, string>, (preset: string, failure: string | null) => void];
 
-const failureListeners = new Set<() => void>();
+const PresetFailuresContext = createContext<PresetFailures | null>(null);
 
-function setPresetFailure(preset: string, failure: string | null): void {
-  if (failure === null) presetFailures.delete(preset);
-  else presetFailures.set(preset, failure);
+/** Keeps the failures for what it holds, unless a page around it already does: the nearest page's keeper is the one. */
+export function PresetFailuresProvider({ children }: { children: ReactNode }) {
+  const outer = useContext(PresetFailuresContext);
+  const [failures, setFailures] = useState<ReadonlyMap<string, string>>(new Map());
 
-  for (const listener of failureListeners) listener();
+  const set = useCallback((preset: string, failure: string | null) => setFailures((held) => {
+    const next = new Map(held);
+
+    if (failure === null) next.delete(preset);
+    else next.set(preset, failure);
+
+    return next;
+  }), []);
+
+  const value = useMemo((): PresetFailures => [failures, set], [failures, set]);
+
+  return <PresetFailuresContext.Provider value={outer ?? value}>{children}</PresetFailuresContext.Provider>;
 }
 
-function heardFailures(changed: () => void): () => void {
-  failureListeners.add(changed);
+/** The preset's failure from the page that lists it, else the row's own where no page keeps them. */
+function usePresetFailure(preset: string): readonly [string | null, (failure: string | null) => void] {
+  const kept = useContext(PresetFailuresContext);
+  const [own, setOwn] = useState<string | null>(null);
 
-  return () => { failureListeners.delete(changed); };
-}
+  if (kept === null) return [own, setOwn];
 
-function usePresetFailure(preset: string): string | null {
-  return useSyncExternalStore(heardFailures, () => presetFailures.get(preset) ?? null);
+  const [failures, set] = kept;
+
+  return [failures.get(preset) ?? null, (failure) => set(preset, failure)];
 }
 
 export function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
@@ -99,8 +114,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
   const [openToken, setOpenToken] = useState(false);
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
-  const err = usePresetFailure(preset.id);
-  const setErr = (failure: string | null) => setPresetFailure(preset.id, failure);
+  const [err, setErr] = usePresetFailure(preset.id);
 
   // A sign-in's end: the list read again, and its outcome kept on this row, its finish page having closed with the only
   // copy of a failure. A later success clears an earlier failure.
@@ -163,7 +177,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
     if (!server) return;
     ask({
       title: `Remove "${server.name}"?`, body: "All workspaces will lose access to its tools.", action: "Remove", failed: "Could not remove it",
-      run: async () => { await removeMcpServer(server.id); onChanged(); },
+      run: async () => { await removeMcpServer(server.id); setErr(null); onChanged(); },
     });
   };
 

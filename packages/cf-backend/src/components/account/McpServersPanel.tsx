@@ -7,7 +7,7 @@ import { PlugIcon, PlusIcon, TrashIcon, ArrowSquareOutIcon, CheckIcon, WarningIc
 import type { ConnectEnded, McpTransport } from "@kinu.run/core";
 import { beginConnect, signInMcpServer } from "@/lib/connect-window";
 import { addMcpServer, removeMcpServer } from "@/lib/user-api";
-import { McpPresetCards } from "@/components/plugins/McpPresetCards";
+import { McpPresetCards, PresetFailuresProvider } from "@/components/plugins/McpPresetCards";
 import { Status } from "@/components/ui/Status";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
@@ -54,7 +54,10 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
     <div className="space-y-4">
       {dialog}
       <div className="space-y-0.5">
-        <McpPresetCards servers={servers} availability={lastValue(presets.resource) ?? undefined} onChanged={reload} onConnected={connected} />
+        {/* Settings keeps its own sign-in failures; opened from Plugins, the page's keeper holds them. */}
+        <PresetFailuresProvider>
+          <McpPresetCards servers={servers} availability={lastValue(presets.resource) ?? undefined} onChanged={reload} onConnected={connected} />
+        </PresetFailuresProvider>
       </div>
 
       <div className="flex justify-end">
