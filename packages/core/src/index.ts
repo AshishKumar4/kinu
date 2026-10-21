@@ -658,7 +658,7 @@ export {
 } from './delegation/agents-tool';
 
 export {
-  createLocalPeerEndpoint, samePeerGroup,
+  createLocalPeerEndpoint, peersToolDeps, samePeerGroup,
   type HostedAgentRef, type LocalPeerEndpoint,
 } from './tools/local-peer';
 
