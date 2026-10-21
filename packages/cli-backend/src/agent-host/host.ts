@@ -30,16 +30,14 @@ import {
   createLocalPeerEndpoint,
   defaultLoopOrigin,
   samePeerGroup,
-  createTeamToolDeps,
-  createTemporaryAgentPort,
-  delegationBudgetOf,
+  teamToolDepsFor,
+  temporaryPortFor,
   inheritedContextFromTranscript,
   actorHomeName,
   receiveSubagentEvent,
   publishSubagentReport,
   TurnReports,
   type SubagentReportLedger,
-  agentNamer,
   subagentDescriptorSource,
   missionOf,
   recoverSubagentLifecycles,
@@ -689,11 +687,10 @@ export class LocalAgentHost {
       eventLog: orchestration.eventLog,
       deliveries: orchestration.deliveries,
       roster,
-      temporary: createTemporaryAgentPort({
+      temporary: temporaryPortFor({
         roster,
         runtime: this.childRuntime(input.tree, input.key),
-        now: () => Date.now(),
-        createName: agentNamer(input.tree.directory, roster),
+        directory: input.tree.directory,
         afterTurn: (_child, work) => { this.retireOffTurn(input.key, work); },
       }),
       team: null,
@@ -1152,17 +1149,16 @@ export class LocalAgentHost {
   }
 
   private buildTeam(parent: HostEntry): TeamToolDeps {
-    const delegation = delegationBudgetOf((actorId) => parent.tree.host.describe(actorId), parent.actor.record);
-
-    const input: Parameters<typeof createTeamToolDeps>[0] = {
-      delegation,
+    // What a capped agent is offered is core's (`offered`): no team at all.
+    return teamToolDepsFor({
+      record: parent.actor.record,
+      directory: parent.tree.directory,
       roster: parent.roster,
       runtime: this.childRuntime(parent.tree, parent.key),
-      now: () => Date.now(),
+      temporary: parent.temporary,
       inheritedContext: (): Promise<SerializedMessage[]> => inheritedContextFromTranscript(parent.actor.session.canonical.transcript(parent.sessionId)),
       originContext: async () => parent.actor.session.history,
       ownMission: () => missionOf(soulOf(parent.tree.db)) ?? '',
-      createName: agentNamer(parent.tree.directory, parent.roster),
       rosterMoved: () => { parent.tree.liveReads.moved(ROSTER_READS); },
       broadcastTask: (event) => parent.session.host.broadcast(metadataBroadcastEvent(
         'subagent_event',
@@ -1170,12 +1166,8 @@ export class LocalAgentHost {
         { status: 'task', text: event.content },
       )),
       workspaceAgents: () => this.workspaceAgents(parent.tree),
-      treeOwner: parent.parentKey === null ? 'main' : parent.actor.record.actorId,
       events: parent.eventLog,
-    };
-
-    // What a capped agent is offered is core's (`offered`): no team at all.
-    return createTeamToolDeps({ ...input, temporary: parent.temporary });
+    });
   }
 
   /**
@@ -1202,7 +1194,6 @@ export class LocalAgentHost {
     return {
       ...this.treeRetirement(tree),
       parent: () => ({ reference: parentOf().actor.reference, record: parentOf().actor.record }),
-      describe: (actorId) => tree.host.describe(actorId),
       born: (reference, name, seed) => this.bornChild(parentOf(), reference, name, seed),
       asHire: async (_reference, name, body) => {
         const entry = await this.openChildEntry(parentOf(), name);

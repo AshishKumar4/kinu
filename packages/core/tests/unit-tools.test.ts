@@ -1,6 +1,6 @@
 /** Unit tests for the canonical tool surface. `skills` is not a BuiltinToolDeps field. */
 
-import { lonelyTree } from './helpers-agents';
+import { lonelyTree, ROOT_DELEGATION_BUDGET } from './helpers-agents';
 import { createFileCodemodeProvider } from '../src/tools/file-operations';
 import { buildToolSurface, type CodemodeSurface } from '../src/tools/builtins';
 import { serveMemory } from '../src/tools/memory-operations';
@@ -37,7 +37,6 @@ import {
   type AgentRuntime,
   TurnEscalationLedger,
 } from '../src/index';
-import { ROOT_DELEGATION_BUDGET } from '../src/subagents/depth';
 import { setDiagnosticsSink } from '../src/obs/index';
 import type { JsonObject } from '../src/utils/json';
 import type { Fact, FactsStore } from '../src/memory/facts';
