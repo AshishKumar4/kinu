@@ -7,13 +7,14 @@ import * as v from "valibot";
 import { BlueprintInspectionSchema, SlateShareRecordSchema, blueprintPagePath, type BlueprintInspection, type SlateAnswer, type SlateShareRecord } from "@kinu.run/core";
 import { settleSync, showing, detach } from "@kinu.run/core/obs";
 import { CopyButton } from "@/components/ui/CopyButton";
-import { inputCls } from "@/components/ui/form";
 import { SecretWarning } from "@/pages/BlueprintPage";
 import { publishBlueprint, revokeShare, type Published } from "@/lib/shared-api";
 import { EmailsField, emailsOf, Failure, Lead, StopButton } from "./ShareParts";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
 import { Group } from "@/components/ui/Group";
+import { Select } from "@/components/ui/Select";
+import { ChipToggle } from "@/components/ui/Chip";
 
 const HistorySchema = v.object({ versions: v.array(v.object({ id: v.string() })), next: v.nullable(v.string()) });
 
@@ -165,18 +166,17 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
         {versions !== null && versions.length > 0 && (
           <dl className="space-y-3">
             <Field label="Version">
-              <select value={version ?? ""} onChange={(event) => { setVersion(event.target.value); setInclude(null); }} className={inputCls} disabled={busy}>
-                {versions.map((id, index) => <option key={id} value={id}>{index === versions.length - 1 ? `${id} (latest)` : id}</option>)}
-              </select>
+              <Select label="Version" value={version ?? ""} onChange={(next) => { setVersion(next); setInclude(null); }} disabled={busy}
+                options={versions.map((id, index) => ({ value: id, label: index === versions.length - 1 ? `${id} (latest)` : id }))} />
             </Field>
             {inspection !== null && (
               <Field label="Includes">
                 <span className="flex flex-wrap gap-2">
                   {topLevel.map((name) => (
-                    <label key={name} className={`t-meta inline-flex items-center gap-2 rounded-md border px-2 py-1 ${includes(name) ? "p-border p-text" : "border-dashed p-border p-text-3"}`}>
-                      <input type="checkbox" checked={includes(name)} onChange={() => toggle(name)} disabled={busy || name === "package.json"} className="accent-[var(--c-accent)]" />
-                      <span className="font-mono">{name}</span>
-                    </label>
+                    <ChipToggle key={name} aria-pressed={includes(name)} onClick={() => toggle(name)} disabled={busy || name === "package.json"}
+                      className={includes(name) ? undefined : "border-dashed p-text-3"}>
+                      <span className="t-mono">{name}</span>
+                    </ChipToggle>
                   ))}
                 </span>
               </Field>

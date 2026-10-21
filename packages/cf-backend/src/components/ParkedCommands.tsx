@@ -14,6 +14,8 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FileBody } from "@/components/surfaces/changes/ChangesPanel";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Checkbox } from "@/components/ui/Check";
+import { Group } from "@/components/ui/Group";
 
 function countLabel(chosen: number, total: number): string {
   if (total === 1) return "";
@@ -177,19 +179,19 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: {
       </div>
 
       <div className="space-y-1">
-        {actions.map((action) => (
-          <label key={action.id} data-parked-command={action.id}
-            className="flex items-start gap-2 rounded-md px-2 py-1 p-fill cursor-pointer">
-            <input type="checkbox" className="mt-px shrink-0 cursor-pointer accent-[var(--c-accent)] hover:brightness-110" checked={chosen.has(action.id)}
-              onChange={() => flow.toggle(action.id, allIds)} disabled={state.busy} />
-            <span className="min-w-0 flex-1">
-              <code className="t-code block p-text break-all whitespace-pre-wrap">{revealMisrepresenting(action.detail ?? "")}</code>
-              {action.where !== undefined && <span className="t-meta block p-text-2 mt-px break-all">Runs {revealMisrepresenting(action.where)}</span>}
-              <span className="t-meta block p-text-3 mt-px">{action.title} · queued {timeAgo(action.at)}</span>
-              {saysAlways && <AlwaysLine action={action} />}
-            </span>
-          </label>
-        ))}
+        <Group>
+          {actions.map((action) => (
+            <div key={action.id} data-parked-command={action.id} className="py-1">
+              <Checkbox checked={chosen.has(action.id)} onChange={() => flow.toggle(action.id, allIds)} disabled={state.busy} label={
+                <span className="min-w-0 flex-1">
+                  <code className="t-code block p-text break-all whitespace-pre-wrap">{revealMisrepresenting(action.detail ?? "")}</code>
+                  {action.where !== undefined && <span className="t-meta block p-text-2 mt-px break-all">Runs {revealMisrepresenting(action.where)}</span>}
+                  <span className="t-meta block p-text-3 mt-px">{action.title} · queued {timeAgo(action.at)}</span>
+                  {saysAlways && <AlwaysLine action={action} />}
+                </span>} />
+            </div>
+          ))}
+        </Group>
         {actions.filter((action) => action.write !== undefined).map((action) => (
           <ParkedWriteChange key={`change-${action.id}`} id={action.id} rpc={rpc} />
         ))}

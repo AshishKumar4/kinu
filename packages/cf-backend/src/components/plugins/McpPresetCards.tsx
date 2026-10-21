@@ -17,6 +17,7 @@ import { Menu } from "@/components/ui/Menu";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { TextInput } from "@/components/ui/Field";
+import { Button } from "@/components/ui/Button";
 
 const PRESET_MARK: Record<McpPresetId, BrandName> = {
   github: "github",
@@ -164,15 +165,12 @@ export function PresetRow({ preset, server, appConfigured, onChanged }: {
             <div className="flex items-center gap-2">
               {/* Credential region: the marker keeps the value out of feedback screenshots. */}
               <TextInput className="min-w-0 flex-1" {...SECRET_REGION} type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} aria-label={tokenLabel} placeholder={tokenLabel} />
-              <button
-                onClick={() => detach(Effect.promise(async () => { await add({
+              <Button variant="secondary" size="sm" onClick={() => detach(Effect.promise(async () => { await add({
                   presetId: preset.id,
                   headers: { Authorization: `Bearer ${token}` },
-                }); }))}
-                disabled={busy || !token.trim()}
-                className="t-status px-2 py-1 rounded-md p-accent-bg p-accent-fg disabled:opacity-50">
+                }); }))} disabled={busy || !token.trim()}>
                 {busy ? 'Connecting…' : 'Connect'}
-              </button>
+              </Button>
             </div>
           )}
           {err !== null && <p className="t-status p-danger">{err}</p>}

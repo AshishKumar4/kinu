@@ -93,25 +93,19 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
         <span className="t-meta t-mono p-text truncate" title={path}>{name}</span>
         <div className="ml-auto flex items-center gap-1 shrink-0">
           {draft === null && render !== "source" && (
-            <button data-files-render-toggle onClick={() => setAsSource((s) => !s)}
-              className="t-control p-text-2 hover:p-text p-1"
-              title={asSource ? `Show the rendered ${render === "markdown" ? "Markdown" : "page"}` : "Show the source"}
-            >{asSource ? "Rendered" : "Source"}</button>
+            <Button variant="ghost" size="sm" data-files-render-toggle onClick={() => setAsSource((s) => !s)} title={asSource ? `Show the rendered ${render === "markdown" ? "Markdown" : "page"}` : "Show the source"}>{asSource ? "Rendered" : "Source"}</Button>
           )}
           {draft === null ? (
             editable && (
-              <button data-files-edit onClick={() => setDraft(content)}
-                className="t-control flex items-center gap-1 p-text-2 hover:p-text p-1" title={`Edit ${name}`}>
-                <PencilSimpleIcon size={12} />Edit
-              </button>
+              <Button variant="ghost" size="sm" data-files-edit onClick={() => setDraft(content)} title={`Edit ${name}`} icon={<PencilSimpleIcon size={14} />}>Edit
+              </Button>
             )
           ) : (
             <>
               <Button variant="ghost" size="sm" data-files-save disabled={saving} onClick={() => void save(draft)} title={`Save ${name}`}>
                 <CheckIcon size={12} />{saving ? "Saving…" : "Save"}
               </Button>
-              <button onClick={() => { setDraft(null); setSaveError(null); }}
-                className="t-control p-text-3 hover:p-text p-1">Cancel</button>
+              <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setSaveError(null); }}>Cancel</Button>
             </>
           )}
           <a data-files-download href={downloadHref} download={name} className="t-control flex items-center gap-1 p-text-2 hover:p-text p-1" title={`Download ${name}`}>

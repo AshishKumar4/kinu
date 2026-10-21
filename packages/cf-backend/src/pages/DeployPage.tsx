@@ -12,10 +12,12 @@ import {
 import { showing, detach } from "@kinu.run/core/obs";
 import * as v from "valibot";
 import { KinuLogo } from "@/components/ui/KinuLogo";
-import { Field, inputCls } from "@/components/ui/form";
+import { Field } from "@/components/ui/form";
 import { StepRow } from "@/components/deploy/DeployStepRow";
 import { Notice } from "@/components/ui/Notice";
 import { TextInput } from "@/components/ui/Field";
+import { Select } from "@/components/ui/Select";
+import { Checkbox } from "@/components/ui/Check";
 
 /** The run key is a capability: `sessionStorage` under the run id, sent in an `authorization` header, never a URL. */
 function heldRunKey(runId: string): string {
@@ -139,20 +141,14 @@ function Answered({ options, runId, onStarted }: {
   });
 
   // The zones offered for the address and for mail: one list, drawn in both.
-  const zoneOptions = zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>);
+  const zoneOptions = zones.map((zone) => ({ value: zone.id, label: zone.name }));
 
   return (
     <section className="space-y-4" aria-label="Your deployment">
       <div className="p-card space-y-5 px-5 py-5">
         <Field label="Cloudflare account" hint="Where Kinu is created. Everything it creates belongs to you.">
-          <select
-            className={inputCls}
-            aria-label="Cloudflare account"
-            value={answers.accountId}
-            onChange={(event) => setAnswers({ ...answers, accountId: event.target.value })}
-          >
-            {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
-          </select>
+          <Select label="Cloudflare account" value={answers.accountId} onChange={(accountId) => setAnswers({ ...answers, accountId })}
+            options={accounts.map((account) => ({ value: account.id, label: account.name }))} />
         </Field>
         <Field label="Instance name" hint="Lower-case letters, numbers and dashes. It names the Worker and its resources.">
           <TextInput aria-label="Instance name" value={answers.instanceName} onChange={(event) => setAnswers({ ...answers, instanceName: event.target.value })} />
@@ -168,15 +164,8 @@ function Answered({ options, runId, onStarted }: {
         >
           {zones.length > 0 && (
             <div className="space-y-2">
-              <select
-                className={inputCls}
-                aria-label="Zone"
-                value={answers.zoneId}
-                onChange={(event) => setAnswers({ ...answers, zoneId: event.target.value })}
-              >
-                <option value="">workers.dev</option>
-                {zoneOptions}
-              </select>
+              <Select label="Zone" value={answers.zoneId} onChange={(zoneId) => setAnswers({ ...answers, zoneId })}
+                options={[{ value: "", label: "workers.dev" }, ...zoneOptions]} />
               {answers.zoneId !== "" && (
                 <TextInput aria-label="Hostname" placeholder="kinu.example.com" value={answers.hostname} onChange={(event) => setAnswers({ ...answers, hostname: event.target.value })} />
               )}
@@ -186,20 +175,11 @@ function Answered({ options, runId, onStarted }: {
         {zones.length > 0 && (
           <Field label="Mail" hint="Optional. Addresses for you, your workspaces and their agents on a zone of yours; the deploy sets up its routing, sending and DNS.">
             <div className="space-y-2">
-              <select
-                className={inputCls}
-                aria-label="Mail domain"
-                value={answers.mailZoneId}
-                onChange={(event) => setAnswers({ ...answers, mailZoneId: event.target.value })}
-              >
-                <option value="">No mail</option>
-                {zoneOptions}
-              </select>
+              <Select label="Mail domain" value={answers.mailZoneId} onChange={(mailZoneId) => setAnswers({ ...answers, mailZoneId })}
+                options={[{ value: "", label: "No mail" }, ...zoneOptions]} />
               {answers.mailZoneId !== "" && (
-                <label className="t-body flex items-center gap-2 p-text-2">
-                  <input type="checkbox" checked={answers.mailEveryone} onChange={(event) => setAnswers({ ...answers, mailEveryone: event.target.checked })} />
-                  Every account may have an address, not only yours
-                </label>
+                <Checkbox checked={answers.mailEveryone} onChange={(mailEveryone) => setAnswers({ ...answers, mailEveryone })}
+                  label="Every account may have an address, not only yours" />
               )}
             </div>
           </Field>

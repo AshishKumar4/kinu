@@ -18,6 +18,9 @@ import {
   Notice, PageWalker, Panel, SectionHeader, Stat, useControlRead, when,
 } from '../components/control/panels';
 import { WorkspaceDrilldown } from '../components/control/WorkspaceDrilldown';
+import { Button } from "@/components/ui/Button";
+import { Select } from "@/components/ui/Select";
+import { Checkbox } from "@/components/ui/Check";
 
 const TABS = {
   overview: { label: 'Overview', Icon: ShieldCheckIcon },
@@ -81,12 +84,8 @@ export default function ControlPage(): ReactNode {
 
         {workspace !== null && (
           <div className="space-y-3">
-            <button
-              onClick={() => go({ workspace: null })}
-              className="t-meta p-text-3 hover:p-text flex items-center gap-1"
-            >
-              <ArrowLeftIcon size={12} /> Back
-            </button>
+            <Button variant="ghost" size="sm" onClick={() => go({ workspace: null })} icon={<ArrowLeftIcon size={14} />}> Back
+            </Button>
             {user === null ? (
               // Workspace names are unique only per account, so the owner is required.
               <Notice tone="warn">
@@ -218,9 +217,8 @@ function UserDetailView(
 
   return (
     <div className="space-y-3">
-      <button onClick={onBack} className="t-meta p-text-3 hover:p-text flex items-center gap-1">
-        <ArrowLeftIcon size={12} /> All accounts
-      </button>
+      <Button variant="ghost" size="sm" onClick={onBack} icon={<ArrowLeftIcon size={14} />}> All accounts
+      </Button>
       <Panel load={load}>
         {(detail) => (
           <div className="space-y-3">
@@ -276,13 +274,7 @@ function WorkspacesView(
         title="Workspaces" hint="Across every account, most recently seen first."
         onRefresh={reload}
         actions={
-          <label className="t-meta flex items-center gap-2 p-text-3">
-            <input
-              type="checkbox" checked={includeRemoved}
-              onChange={(e) => { setIncludeRemoved(e.target.checked); first(); }}
-            />
-            Show removed
-          </label>
+          <Checkbox checked={includeRemoved} onChange={(on) => { setIncludeRemoved(on); first(); }} label="Show removed" />
         }
       />
       <Panel load={load}>
@@ -403,15 +395,8 @@ function MetricsView(): ReactNode {
         hint="Analytics Engine weights samples by interval. Raw counts under-report by the sample rate."
         onRefresh={reload}
         actions={
-          <select
-            value={hours}
-            onChange={(e) => setHours(Number(e.target.value))}
-            className="t-meta p-card px-2 py-1 rounded-sm"
-          >
-            {METRICS_WINDOWS.map((w) => (
-              <option key={w} value={w}>{w < 24 ? `${String(w)}h` : `${String(w / 24)}d`}</option>
-            ))}
-          </select>
+          <Select label="Window" size="sm" value={String(hours)} onChange={(next) => setHours(Number(next))}
+            options={METRICS_WINDOWS.map((w) => ({ value: String(w), label: w < 24 ? `${String(w)}h` : `${String(w / 24)}d` }))} />
         }
       />
       <Panel load={load}>

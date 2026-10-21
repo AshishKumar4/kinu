@@ -210,12 +210,10 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
             <span className="truncate">Branch discarded: {run.message ?? "no comparison available"}</span>
           </>
         )}
-        <button type="button" onClick={() => setOpen(!open)}
-          className="p-text-3 hover:p-text cursor-pointer shrink-0 inline-flex items-center gap-1"
-          aria-expanded={open} title="Read every step this branch took">
+        <Button variant="ghost" size="sm" className="shrink-0" onClick={() => setOpen(!open)} aria-expanded={open} title="Read every step this branch took">
           {open ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />}
           {open ? "Hide" : "Show what it did"}
-        </button>
+        </Button>
         {run.status !== "running" && (
           <Button variant="ghost" size="sm" icon={<XIcon size={14} />} className="shrink-0" onClick={onDismiss} aria-label="Dismiss branch chip" />
         )}

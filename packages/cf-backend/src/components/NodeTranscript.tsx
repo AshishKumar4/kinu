@@ -25,6 +25,7 @@ import type { Page, SeekCursor } from "@kinu.run/core";
 import { fmtTokens, timeAgo } from "@kinu.run/core";
 import type { ForkNode } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Button } from "@/components/ui/Button";
 
 
 /** Shared by this panel and the run pane's node list; covers head-journal and search-node statuses. An unknown status gets the quiet dot. */
@@ -55,11 +56,10 @@ function TaskHeader({ task }: { task: string }) {
             {task}
           </div>
           {long && (
-            <button onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
-              className="t-control mt-1 inline-flex items-center gap-1 p-text-3 hover:p-text transition-colors cursor-pointer">
+            <Button variant="ghost" size="sm" className="mt-1" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
               {expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}
               {expanded ? "collapse" : "expand"}
-            </button>
+            </Button>
           )}
         </div>
       </div>

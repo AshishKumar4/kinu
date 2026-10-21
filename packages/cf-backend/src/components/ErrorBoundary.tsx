@@ -3,6 +3,7 @@
 import { Component, type ReactNode, type ErrorInfo } from "react";
 import { pageDeployedBuildSha, reportRenderFailure, routeTemplateOf } from "@kinu.run/core";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
+import { Button } from "@/components/ui/Button";
 
 interface Props {
   label?: string;
@@ -69,12 +70,9 @@ export class ErrorBoundary extends Component<Props, State> {
               <pre className="t-meta t-mono whitespace-pre-wrap opacity-70">{this.state.error.stack}</pre>
             )}
           </div>
-          <button
-            onClick={this.reset}
-            className="t-meta px-3 py-1 rounded-md p-fill border p-border hover:p-text"
-          >
+          <Button variant="secondary" size="sm" onClick={this.reset}>
             Try again
-          </button>
+          </Button>
         </div>
       </div>
     );

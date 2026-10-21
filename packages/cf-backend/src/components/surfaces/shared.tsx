@@ -74,7 +74,7 @@ export function CodeBlock({ children, className, wrap = false }: { children: str
       {html === null
         ? <pre className="t-code p-text p-scroll-x p-code-scroll m-0 px-3 py-2"><code>{code}</code></pre>
         : <div className="p-scroll-x p-code-scroll"><div className="p-code-highlight" dangerouslySetInnerHTML={{ __html: html }} /></div>}
-      {resource.status === "error" && <button type="button" onClick={reload} className="t-meta px-3 py-1 p-warning" title={resource.message}>Syntax highlighting failed. Retry</button>}
+      {resource.status === "error" && <Button variant="ghost" size="sm" onClick={reload} title={resource.message}>Syntax highlighting failed. Retry</Button>}
     </div>
   );
 }

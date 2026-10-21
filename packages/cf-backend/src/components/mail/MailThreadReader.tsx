@@ -11,6 +11,7 @@ import { MailMessage } from "./MailMessage";
 import { ReplyBox } from "./MailEditor";
 import { mailBoxLabel } from "./MailRow";
 import { SendToWorkspace } from "./SendToWorkspace";
+import { Button } from "@/components/ui/Button";
 
 export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }: {
   id: string; boxes: readonly MailBox[]; owner: string; drafts: boolean; onBack: () => void; onChanged: () => void;
@@ -31,7 +32,7 @@ export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }
 
   return (
     <div className="min-w-0">
-      {mail === null && <button type="button" data-mail-back onClick={onBack} className="t-meta mb-3 flex items-center gap-1 p-text-3 hover:p-text lg:hidden"><CaretLeftIcon size={13} />Mail</button>}
+      {mail === null && <Button variant="ghost" size="sm" className="mb-3 lg:hidden" data-mail-back onClick={onBack} icon={<CaretLeftIcon size={14} />}>Mail</Button>}
       {resource.status === "loading" && <div role="status" aria-label="Loading thread"><Loader /></div>}
       {resource.status === "error" && <LoadFailure what="this thread" message={resource.message} onRetry={reload} />}
       {mail !== null && <Reader key={`${id}:${String(drafts)}`} mail={mail} box={boxes.find((box) => box.path === mail.thread.path)} owner={owner} drafts={drafts} onBack={onBack} onChanged={reload} />}
@@ -73,7 +74,7 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
 
   return (
     <article data-mail-reader={thread.id} aria-busy={busy !== null} className="min-w-0 max-w-[760px] space-y-4">
-      <button type="button" data-mail-back onClick={onBack} className="t-meta flex items-center gap-1 p-text-3 hover:p-text lg:hidden"><CaretLeftIcon size={13} />Mail</button>
+      <Button variant="ghost" size="sm" className="lg:hidden" data-mail-back onClick={onBack} icon={<CaretLeftIcon size={14} />}>Mail</Button>
       <header className="space-y-2">
         <div className="flex items-start gap-2">
           <h2 data-mail-subject className="t-title min-w-0 flex-1 p-text [overflow-wrap:anywhere]">{thread.subject || "(No subject)"}</h2>

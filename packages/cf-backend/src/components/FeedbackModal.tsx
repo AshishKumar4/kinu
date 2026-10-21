@@ -24,6 +24,7 @@ import {
   FEEDBACK_SCREENSHOT_TYPE,
 } from "@kinu.run/core";
 import { TextArea } from "@/components/ui/Field";
+import { Checkbox } from "@/components/ui/Check";
 
 const FeedbackReplySchema = v.object({
   id: v.optional(v.string()),
@@ -333,16 +334,8 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
         </label>
 
         <div className="space-y-2">
-          <label className="t-body flex cursor-pointer items-center gap-2 p-text-2">
-            <input
-              type="checkbox"
-              checked={wanted}
-              onChange={(event) => setWanted(event.target.checked)}
-              data-feedback-include-shot
-            />
-            <CameraIcon size={15} />
-            <span>Include a screenshot of this page</span>
-          </label>
+          <Checkbox checked={wanted} onChange={setWanted} data-feedback-include-shot=""
+            label={<span className="flex items-center gap-2"><CameraIcon size={16} />Include a screenshot of this page</span>} />
 
           {shot.phase === "capturing" && (
             <p className="t-meta p-text-3" data-feedback-shot="capturing">Taking the screenshot…</p>

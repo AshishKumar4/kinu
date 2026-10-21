@@ -362,11 +362,10 @@ function RunObjective({ task }: { task: string }) {
         {task}
       </div>
       {long && (
-        <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
-          className="t-control mt-px inline-flex items-center gap-1 p-text-3 hover:p-text transition-colors cursor-pointer">
+        <Button variant="ghost" size="sm" className="mt-px" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
           {expanded ? <CaretDownIcon size={9} /> : <CaretRightIcon size={9} />}
           {expanded ? "collapse" : "expand"}
-        </button>
+        </Button>
       )}
     </>
   );
@@ -535,10 +534,8 @@ function ForkBranchView({
   return (
     <div className="min-h-0 flex-1 flex flex-col">
       <div className="shrink-0 flex items-center gap-1 border-b p-border px-2 py-1">
-        <button type="button" onClick={onBack}
-          className="t-control flex items-center gap-1 rounded-md px-1 py-px p-text-3 hover:p-text transition-colors cursor-pointer">
-          <ArrowLeftIcon size={10} />all {nodeCount === 1 ? "1 node" : `${nodeCount} nodes`}
-        </button>
+        <Button variant="ghost" size="sm" onClick={onBack} icon={<ArrowLeftIcon size={14} />}>all {nodeCount === 1 ? "1 node" : `${nodeCount} nodes`}
+        </Button>
       </div>
       <NodeTranscript
         selection={{ runId: run.id, nodeId: branchId }}
