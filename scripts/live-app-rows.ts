@@ -1735,6 +1735,18 @@ async function consent(page: Page, choice: 'approve' | 'deny'): Promise<void> {
   await page.$eval(`[${CONSENT_CHOICE}="${choice}"]`, (link) => { if (link instanceof HTMLElement) link.click(); });
 }
 
+/** What a tab that never left its finish page shows, for a failure to name: where it is, the end it read, and the
+ *  return its connect stored. */
+async function finishShown(page: Page): Promise<string> {
+  const shown = await page.evaluate(() => ({
+    finished: document.querySelector('[data-connect-finished]')?.getAttribute('data-connect-finished') ?? null,
+    stored: sessionStorage.getItem('kinu-connect-return'),
+    text: document.body.innerText.slice(0, 300),
+  }));
+
+  return `${page.url()} ${JSON.stringify(shown)}`;
+}
+
 /** Whether `closed` settled within the time a finish page has to load and close its tab. */
 async function closedSoon(closed: Promise<void>): Promise<boolean> {
   return Promise.race([closed.then(() => true), new Promise<boolean>((resolve) => { setTimeout(() => { resolve(false); }, ACROSS_PAGE_LOADS_MS); })]);
@@ -1774,7 +1786,11 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
     await addCustomServer(setup, 'Samehub', provider.serverUrl);
     await named('the consent page in the setup tab', async () => setup.waitForSelector(`[${CONSENT_CHOICE}="approve"]`, { timeout: ACROSS_PAGE_LOADS_MS }));
     await consent(setup, 'approve');
-    await named('the setup tab back from its sign-in', async () => setup.waitForFunction((at: string) => location.origin === at && document.querySelector('[data-welcome-step]') !== null, { timeout: ACROSS_PAGE_LOADS_MS }, origin));
+
+    const stayed = await named('the setup tab back from its sign-in', async () => setup.waitForFunction((at: string) => location.origin === at && document.querySelector('[data-welcome-step]') !== null, { timeout: ACROSS_PAGE_LOADS_MS }, origin)
+      .then(() => null, async () => finishShown(setup)));
+
+    if (stayed !== null) throw new Error(`the setup tab never came back from its sign-in: ${stayed}`);
     const back = new URL(setup.url());
     const sameTab = { back: back.pathname + back.search + back.hash, status: (await listedServer(origin, 'Samehub')).status };
 
