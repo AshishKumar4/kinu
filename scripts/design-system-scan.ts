@@ -223,6 +223,7 @@ const SIZE_VARIANTS: ReadonlyMap<string, string> = new Map([
   ['--t-chat-heading-1', '22px'], ['--t-chat-heading-2', '19px'], ['--t-chat-heading-3', '17px'],
   ['--t-chat-heading-workbench-1', '1.1em'], ['--t-chat-heading-workbench-2', '1.05em'], ['--t-chat-heading-workbench-3', '1em'],
   ['--t-code-workbench', '12.5px'], ['--t-workspace-tab', '13.5px'], ['--t-field-touch', 'max(16px, 1em)'],
+  ['--t-public-body', '15px'], ['--t-public-lede', '17px'], ['--t-public-control', '14px'],
 ]);
 
 /** A size that is a variant's name. */

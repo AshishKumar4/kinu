@@ -341,12 +341,25 @@ function selectors(theme: ThemeName, mode: Mode): string {
   return `${mode === 'dark' ? ':root' : '[data-mode="light"]'},${named}`;
 }
 
+/**
+ * The public pages' type (design system §1.3, the public variants): the landing, /privacy, /terms and the deploy flow
+ * are read by someone not yet in the app, at a reading size, not the app chrome's 13. Body 15, lede 17 and the
+ * call to action's 14, each with its leading; the public shell's CSS and the app's t-public-* roles read these.
+ */
+const PUBLIC_TYPE = {
+  '--t-public-body': '15px',
+  '--t-public-body-leading': '1.7',
+  '--t-public-lede': '17px',
+  '--t-public-lede-leading': '1.62',
+  '--t-public-control': '14px',
+} satisfies Readonly<Record<`--t-public-${string}`, string>>;
+
 const declarations = (tokens: Readonly<Record<string, string>>): string => Object.entries(tokens).map(([name, value]) => `${name}:${value}`).join(';');
 
 const ORDERED: readonly ThemeName[] = [DEFAULT_THEME, ...THEME_NAMES.filter((name) => name !== DEFAULT_THEME)];
 
 export const THEME_CSS = [
-  `:root{${declarations(RADII)}}`,
+  `:root{${declarations(RADII)};${declarations(PUBLIC_TYPE)}}`,
   ...ORDERED.flatMap((theme) => (['dark', 'light'] as const).map((mode) => `${selectors(theme, mode)}{${declarations(THEME_TOKENS[theme][mode])}}`)),
 ].join('\n');
 

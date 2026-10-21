@@ -189,6 +189,12 @@ Define every role for all four looks in `theme.ts`. Each value below is today's 
 | `role.code-workbench` | `--t-code-workbench` | 12.5 | the code block inside the workbench (approved) |
 | `role.workspace-tab` | `--t-workspace-tab` | 13.5 | the workspace tab's title (settled) |
 | `role.field-touch` | `--t-field-touch` | `max(16px, 1em)` | a field's value on a touch screen: iOS Safari zooms the page into any field under 16 px |
+| `role.public-body` | `--t-public-body` (theme.ts), `t-public-body` | 15 / 1.7 | a signed-out public page's body (landing, /privacy, /terms, the deploy flow), and with 500 a row's name there (`t-public-item`) |
+| `role.public-lede` | `--t-public-lede` (theme.ts), `t-public-lede` | 17 / 1.62 | a public page's lede |
+| `role.public-control` | `--t-public-control` (theme.ts), `Button size="lg"` | 14, 38 tall | a public page's call to action |
+
+The public variants are theme.ts's, in `THEME_CSS`, so the server-rendered public shell and the app's deploy flow
+read one definition: someone not yet in the app reads at the public pages' size, never the app chrome's 13.
 
 ### 1.4 Spacing
 - **Scale:** 4, 8, 12, 16, 20, 24, 32, 48, 64. Tailwind units 1, 2, 3, 4, 5, 6, 8, 12, 16, plus 0 and `px`.
