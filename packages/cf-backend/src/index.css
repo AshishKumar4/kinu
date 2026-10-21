@@ -615,6 +615,12 @@ body { background: var(--c-bg); color: var(--c-text); }
   color: var(--c-accent-on); box-shadow: var(--shadow-menu);
 }
 
+/* Floating (ui/Floating.tsx): a panel at a point, on the overlay ground, above the page and its drawers. */
+.p-floating {
+  position: fixed; z-index: 60; background: var(--c-overlay); border: 1px solid var(--c-border);
+  border-radius: var(--r-card); box-shadow: var(--shadow-overlay);
+}
+
 /* Rail (ui/Rail.tsx): a strip of the tabs above below its breakpoint, fading at its scrolling edge; a column of rows
    from it up, the open row on the selected ground. */
 .p-rail { display: flex; border-bottom: 1px solid var(--c-border); mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }
@@ -1662,7 +1668,7 @@ body > .annotation-toolbar {
   [data-kinu-plan-review] .alert-important { border-left-color: var(--c-accent); }
   [data-kinu-plan-review] .alert-important .alert-title { color: var(--c-accent-fg); }
 
-  [data-kinu-plan-review] .directive { border-color: var(--border); background: color-mix(in srgb, var(--muted) 50%, transparent); }
+  [data-kinu-plan-review] .directive { border-color: var(--c-border); background: var(--c-sunken); }
   [data-kinu-plan-review] .directive-title { color: var(--muted-foreground); }
   [data-kinu-plan-review] .directive-note,
   [data-kinu-plan-review] .directive-info { border-color: color-mix(in srgb, var(--c-info) 40%, transparent); background: color-mix(in srgb, var(--c-info) 10%, transparent); }
@@ -1841,6 +1847,36 @@ body > .annotation-toolbar {
   border: 1px solid var(--c-border);
   border-radius: var(--r-row);
 }
+
+/* The plan document's other blocks (components/plan-review/Viewer.tsx), drawn here as the chat's prose is. */
+.plan-review-document [data-plan-frontmatter] {
+  margin: 16px 0 24px; padding: 16px; border: 1px solid var(--c-border); border-radius: var(--r-row); background: var(--c-sunken);
+}
+.plan-review-document [data-plan-frontmatter-key] { min-width: 80px; font-weight: 500; color: var(--c-text-3); }
+.plan-review-document blockquote[data-block-id]:not([class*="alert-"]) { border-left-color: color-mix(in srgb, var(--c-accent) 50%, transparent); font-style: italic; }
+.plan-review-document [data-plan-item] { margin-left: calc(var(--plan-depth, 0) * 1.25rem); }
+.plan-review-document .math-annotatable[data-math-display] {
+  margin-block: 20px; padding: 16px; overflow-x: auto; text-align: center;
+  border: 1px solid var(--c-border); border-radius: var(--r-row); background: var(--c-sunken);
+}
+.plan-review-document .directive { margin-block: 16px; padding: 16px; border: 1px solid; border-radius: var(--r-row); }
+.plan-review-document [data-block-id] table { width: 100%; border-collapse: collapse; }
+.plan-review-document [data-block-id] :is(th, td) { padding: 8px 12px; border: 1px solid var(--c-border); text-align: left; }
+.plan-review-document [data-block-id] th { background: var(--c-sunken); font-weight: 500; }
+.plan-review-document hr[data-block-id] { margin-block: 32px; border: 0; border-top: 1px solid var(--c-border); }
+
+.plan-review-document [data-print-region="article"] { border-radius: var(--r-card); }
+/* The document's own actions, over its top edge as it scrolls. */
+.plan-review-document [data-plan-document-actions] {
+  border-radius: var(--r-row); background: color-mix(in srgb, var(--c-surface) 95%, transparent); box-shadow: var(--shadow-card); backdrop-filter: blur(4px);
+}
+/* A note in the rail: its card, the chosen one on the accent's edge. */
+[data-annotation-panel] [data-annotation-id] {
+  border: 1px solid var(--c-border); border-radius: var(--r-row); background: var(--c-surface);
+  transition: border-color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
+}
+[data-annotation-panel] [data-annotation-id]:hover { border-color: var(--c-border-strong); }
+[data-annotation-panel] [data-annotation-id][data-selected] { border-color: var(--c-accent); background: color-mix(in srgb, var(--c-accent) 5%, var(--c-surface)); }
 
 /* Shown only where the rail OVERLAYS the document — the container query below.
    Beside it, there is nothing to dim. */

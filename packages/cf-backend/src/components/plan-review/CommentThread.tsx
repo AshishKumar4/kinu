@@ -1,6 +1,8 @@
 import { useState } from "react";
 import type { NoteReply } from "@kinu.run/core";
 import { TextArea } from "@/components/ui/Field";
+import { Button } from "@/components/ui/Button";
+import { Badge } from "@/components/ui/Badge";
 
 /** The replies under one comment, oldest first, and the owner's composer while the revision is open for review. */
 export function CommentThread({ replies, agentName, seenAt, onReply, onDelete }: {
@@ -33,15 +35,15 @@ export function CommentThread({ replies, agentName, seenAt, onReply, onDelete }:
         const fresh = reply.author === "agent" && reply.createdA > seenAt;
 
         return (
-          <div key={reply.id} data-comment-reply={reply.author} className="border-l-2 border-border pl-2">
+          <div key={reply.id} data-comment-reply={reply.author} className="border-l-2 p-border pl-2">
             <div className="t-meta flex items-center gap-2 text-muted-foreground">
-              <span className="font-semibold text-foreground/80">{reply.author === "agent" ? agentName : "You"}</span>
+              <span className="p-text-2">{reply.author === "agent" ? agentName : "You"}</span>
               <time dateTime={new Date(reply.createdA).toISOString()}>
                 {new Date(reply.createdA).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
               </time>
-              {fresh && <span data-comment-reply-new className="rounded-full bg-primary/10 px-1 font-medium text-primary">New</span>}
+              {fresh && <Badge tone="accent" data-comment-reply-new="">New</Badge>}
               {onDelete !== undefined && reply.author === "owner" && reply.revision === undefined && (
-                <button type="button" className="ml-auto rounded px-1 text-destructive hover:bg-destructive/10" onClick={() => onDelete(reply.id)}>Delete</button>
+                <Button variant="danger" size="sm" className="ml-auto" onClick={() => onDelete(reply.id)}>Delete</Button>
               )}
             </div>
             <p className="t-meta mt-px whitespace-pre-wrap text-foreground/90">{reply.text}</p>
@@ -54,12 +56,12 @@ export function CommentThread({ replies, agentName, seenAt, onReply, onDelete }:
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) send();
             }} aria-label="Reply" placeholder="Reply" autoFocus />
           <div className="mt-2 flex justify-end gap-2">
-            <button type="button" className="t-meta rounded px-2 py-1 text-muted-foreground hover:bg-muted" onClick={() => { setText(""); setWriting(false); }}>Cancel</button>
-            <button type="button" className="t-micro rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-40" disabled={text.trim() === ""} onClick={send}>Reply</button>
+            <Button variant="ghost" size="sm" onClick={() => { setText(""); setWriting(false); }}>Cancel</Button>
+            <Button variant="primary" size="sm" disabled={text.trim() === ""} onClick={send}>Reply</Button>
           </div>
         </div>
       ) : (
-        <button type="button" data-comment-reply-open className="t-meta rounded px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setWriting(true)}>Reply</button>
+        <Button variant="ghost" size="sm" data-comment-reply-open onClick={() => setWriting(true)}>Reply</Button>
       ))}
     </div>
   );

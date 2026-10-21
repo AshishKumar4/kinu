@@ -3,6 +3,10 @@ import type { Annotation } from '@plannotator/ui/types';
 import { AnnotationType } from '@plannotator/ui/types';
 import { useIsMobile } from '@plannotator/ui/hooks/useIsMobile';
 import { TextArea } from "@/components/ui/Field";
+import { Button } from "@/components/ui/Button";
+import { XIcon } from '@phosphor-icons/react';
+import { Badge } from '@/components/ui/Badge';
+import { Drawer } from '@/components/ui/Drawer';
 
 interface PanelProps {
   isOpen: boolean;
@@ -74,7 +78,8 @@ const AnnotationCard = ({
   return (
     <article
       data-annotation-id={annotation.id}
-      className={`rounded-lg border p-3 transition-colors ${selected ? 'border-primary bg-primary/5' : 'border-border/50 bg-background/40 hover:border-border'}`}
+      data-selected={selected ? '' : undefined}
+      className="p-3"
       onClick={onSelect}
     >
       <div className="flex items-center gap-2">
@@ -89,7 +94,7 @@ const AnnotationCard = ({
         <div data-annotation-place className="t-meta t-mono mt-1 truncate text-muted-foreground">{place}</div>
       )}
       {annotation.originalText && (
-        <blockquote className="t-meta mt-2 line-clamp-3 border-l-2 border-border pl-2 text-muted-foreground">
+        <blockquote className="t-meta mt-2 line-clamp-3 border-l-2 p-border pl-2 text-muted-foreground">
           {annotation.originalText}
         </blockquote>
       )}
@@ -97,8 +102,8 @@ const AnnotationCard = ({
         <div className="mt-2" onClick={(event) => event.stopPropagation()}>
           <TextArea className="min-h-20 w-full resize-y" value={text} onChange={(event) => setText(event.target.value)} autoFocus />
           <div className="mt-2 flex justify-end gap-2">
-            <button type="button" className="t-meta rounded px-2 py-1 text-muted-foreground hover:bg-muted" onClick={() => { setText(annotation.text ?? ''); setEditing(false); }}>Cancel</button>
-            <button type="button" className="t-micro rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-40" disabled={!text.trim()} onClick={save}>Save</button>
+            <Button variant="ghost" size="sm" onClick={() => { setText(annotation.text ?? ''); setEditing(false); }}>Cancel</Button>
+            <Button variant="primary" size="sm" disabled={!text.trim()} onClick={save}>Save</Button>
           </div>
         </div>
       ) : annotation.text && (
@@ -108,9 +113,9 @@ const AnnotationCard = ({
       {!readOnly && !editing && (
         <div className="mt-2 flex justify-end gap-1" onClick={(event) => event.stopPropagation()}>
           {annotation.type !== AnnotationType.DELETION && onEdit && (
-            <button type="button" className="t-meta rounded px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setEditing(true)}>Edit</button>
+            <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>Edit</Button>
           )}
-          <button type="button" className="t-meta rounded px-2 py-1 text-destructive hover:bg-destructive/10" onClick={onDelete}>Delete</button>
+          <Button variant="danger" size="sm" onClick={onDelete}>Delete</Button>
         </div>
       )}
     </article>
@@ -151,16 +156,16 @@ export const AnnotationPanel = ({
   const panel = (
     <aside
       data-annotation-panel="true"
-      className={`flex shrink-0 flex-col border-l border-border/50 bg-card ${isMobile ? 'fixed inset-y-0 right-0 z-[60] w-full max-w-sm shadow-2xl' : ''}`}
+      className={`flex shrink-0 flex-col bg-card ${isMobile ? 'h-full' : 'border-l p-border'}`}
       style={isMobile ? undefined : { width: width ?? 288 }}
     >
-      <div className="flex h-11 items-center justify-between border-b border-border/50 px-3">
+      <div className="flex h-11 items-center justify-between border-b p-border px-3">
         <div className="flex items-center gap-2">
           <h2 className="t-status text-foreground">{title}</h2>
-          <span className="t-meta t-mono rounded-full bg-primary/10 px-1 py-px text-primary">{annotations.length}</span>
+          <Badge tone="accent">{annotations.length}</Badge>
         </div>
         {isMobile && onClose && (
-          <button type="button" className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={onClose} aria-label={`Close ${title.toLowerCase()}`}>×</button>
+          <Button variant="ghost" size="sm" onClick={onClose} aria-label={`Close ${title.toLowerCase()}`} icon={<XIcon size={14} />} />
         )}
       </div>
       <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
@@ -182,14 +187,9 @@ export const AnnotationPanel = ({
           />
         ))}
         {onAddGlobal && !readOnly && (
-          <button
-            type="button"
-            data-annotation-add-global
-            className="t-meta rounded-lg border border-dashed border-border px-3 py-2 text-left text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
-            onClick={onAddGlobal}
-          >
+          <Button variant="ghost" size="sm" data-annotation-add-global onClick={onAddGlobal}>
             {globalLabel}
-          </button>
+          </Button>
         )}
       </div>
     </aside>
@@ -197,10 +197,5 @@ export const AnnotationPanel = ({
 
   if (!isMobile) return panel;
 
-  return (
-    <>
-      <div className="fixed inset-0 z-[59] bg-background/60 backdrop-blur-sm" onClick={onClose} />
-      {panel}
-    </>
-  );
+  return <Drawer onClose={() => onClose?.()}>{panel}</Drawer>;
 };
