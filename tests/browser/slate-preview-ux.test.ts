@@ -149,6 +149,31 @@ describe('the Slate preview frame', () => {
       }
     });
   });
+
+  test('a render around the work surface that brings no new transport keeps the open Slate\'s frame', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await serveSlate(page);
+        await page.setViewport({ width: 1100, height: 850 });
+        await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
+        await openInspectorPage(page, 'Dashboard');
+        const iframe = await page.waitForSelector('iframe[src*="gallery.preview"]');
+
+        // The sandbox-starting line comes and goes through two renders of the frame around WorkSurface; the second
+        // commits after the first one's effects, so a frame the first dropped is gone by then.
+        await page.click('[data-sandbox-starting]');
+        await page.waitForSelector('[data-preview-starting]');
+        await page.click('[data-sandbox-starting]');
+        await page.waitForFunction(() => document.querySelector('[data-preview-starting]') === null);
+
+        expect(await iframe?.evaluate((element) => element.isConnected)).toBe(true);
+      } finally {
+        await page.close();
+      }
+    });
+  });
 });
 
 test('preview tabs lead the fixed surfaces and their URL can be copied and opened', async () => {

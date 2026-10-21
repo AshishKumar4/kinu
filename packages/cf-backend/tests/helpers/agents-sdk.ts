@@ -4,6 +4,7 @@ import { mock } from 'bun:test';
 import * as v from 'valibot';
 import type { AgentContext, Connection, ConnectionContext, FiberRecoveryContext, WSMessage } from 'agents';
 import { Lifecycle } from 'agents/lifecycle';
+import { DurableObjectOAuthClientProvider } from 'agents/mcp/do-oauth-client-provider';
 import { parseJsonValue, type JsonObject, type JsonValue, type SqlExec, type SqlValue } from '@kinu.run/core';
 import type { McpCredentialTransport } from '@kinu.run/core';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -225,9 +226,9 @@ export function mockAgentsSdk(): void {
        *  since cloudflare/agents#1897 that is the only way a manager reaches storage. */
       readonly mcp = new FakeMCPClientManager((callbackUrl) => this.createMcpOAuthProvider(callbackUrl));
 
-      /** The vendor base's default; UserDO builds its own. */
-      createMcpOAuthProvider(_callbackUrl: string): RecordedMcpAuthProvider {
-        return {};
+      /** The vendor base's default, the SDK's own provider; UserDO builds its own. */
+      createMcpOAuthProvider(callbackUrl: string): RecordedMcpAuthProvider {
+        return new DurableObjectOAuthClientProvider(this.ctx.storage, 'agent', callbackUrl);
       }
       #lifecycle: Lifecycle | undefined;
       /** The SDK's own Lifecycle: capability services, the start and the job queue are not approximated. */
@@ -615,37 +616,6 @@ export function mockAgentsSdk(): void {
   // UserDO imports these at module load; the double records the manager's writable state
   // (server rows, live connections), a second truth beside `user_mcp_servers`.
   registerSynchronousMock('agents/mcp/client', () => ({ MCPClientManager: FakeMCPClientManager }));
-  // `connectToServer` reads `authUrl` (queued by `queueMcpAuthUrl`) and `clientId` off the provider.
-  registerSynchronousMock('agents/mcp/do-oauth-client-provider', () => ({
-    DurableObjectOAuthClientProvider: class {
-      serverId = '';
-      clientId: string | null = null;
-      authUrl: string | null = pendingMcpAuthUrl;
-      /** `auth()` reads this off the constructor's third argument, as the real one does. */
-      readonly redirectUrl: string;
-      constructor(storage: DurableObjectStorage, _clientName?: string, baseRedirectUrl = '') {
-        this.redirectUrl = baseRedirectUrl;
-        pendingMcpAuthUrl = null;
-        oauthStorages.push(storage);
-      }
-
-      // Answered as empty storage answers, so the real SDK auth flow runs against it.
-      get clientMetadata() { return {}; }
-      async clientInformation(): Promise<undefined> { return undefined; }
-      async saveClientInformation(): Promise<void> {}
-      async tokens(): Promise<undefined> { return undefined; }
-      async saveTokens(): Promise<void> {}
-      async codeVerifier(): Promise<string> { return 'test-code-verifier'; }
-      async saveCodeVerifier(): Promise<void> {}
-      async state(): Promise<string> { return `st.${this.serverId}`; }
-      /** What the flow discovered, kept for its callback leg, as the real one keeps it in storage. */
-      private discovered: JsonValue | undefined = undefined;
-      async saveDiscoveryState(state: JsonValue): Promise<void> { this.discovered = state; }
-      async discoveryState(): Promise<JsonValue | undefined> { return this.discovered; }
-      async redirectToAuthorization(url: URL): Promise<void> { this.authUrl = url.toString(); }
-      async invalidateCredentials(): Promise<void> {}
-    },
-  }));
   // Spread the preload's boundary stub (`scripts/test-preload.ts`) whole: a named import the mock
   // lacks (sandbox 0.12.0 imports `tracing`) is a SyntaxError at load for every suite reaching it.
   // Recording at `tracing.enterSpan` keeps everything above it production code.
@@ -762,12 +732,10 @@ export function resetNativeSpans(): void {
   openSpans.length = 0;
 }
 
-/** The fields the fake's `connectToServer` and `seedMcpAuthContinuation` read or write. */
-export interface RecordedMcpAuthProvider {
-  authUrl?: string | null;
-  clientId?: string | null;
-  serverId?: string;
-}
+/** A server's OAuth provider: the SDK's own, never a stand-in (a module stand-in outlives its file in a shared module
+ *  registry, and handed `unit-mcp-oauth-refresh` a provider that registers no redirect). The fake manager drives it as
+ *  the vendor's does: `redirectToAuthorization` sets its `authUrl`. */
+export type RecordedMcpAuthProvider = DurableObjectOAuthClientProvider;
 
 export interface RecordedMcpTransport {
   fetch?: McpCredentialTransport['fetch'];
@@ -886,10 +854,11 @@ export function recordedMcpToolAborts(): readonly unknown[] {
  *  and the dispatch are two different requests failing. */
 let mcpDiscoveryFailure: Error | null = null;
 
-/** `userMcp_add` constructs the provider itself, so the provider stub picks this up at construction. */
+/** The sign-in the next dial meets: `userMcp_add` dials as soon as it registers, as the vendor's `connectToServer`
+ *  meets a 401 and authorizes. */
 let pendingMcpAuthUrl: string | null = null;
 
-/** The storage each OAuth provider was handed, in order: what the SDK would keep a login in. */
+/** The storage each OAuth provider registered was handed, in order: what the SDK keeps a login in. */
 const oauthStorages: DurableObjectStorage[] = [];
 
 /** The storage the last OAuth provider made was handed. */
@@ -913,7 +882,7 @@ export function requireMcpSignIn(id: string, authUrl: string): void {
   mcpSignInRequired.set(id, authUrl);
 }
 
-let liveMcpManager: { mcpConnections: Record<string, RecordedMcpConnection> } | null = null;
+let liveMcpManager: FakeMCPClientManager | null = null;
 
 let mcpRestored = 0;
 
@@ -924,7 +893,7 @@ let mcpEstablishGate: Promise<void> | null = null;
 let mcpEstablishArrived: (() => void) | null = null;
 
 /** Named by the harness, not construction order: every stand-in Agent has its own manager. */
-export function rememberMcpManager(manager: { mcpConnections: Record<string, RecordedMcpConnection> }): void {
+export function rememberMcpManager(manager: FakeMCPClientManager): void {
   liveMcpManager = manager;
 }
 
@@ -1022,23 +991,19 @@ export function liveMcpTransport(id: string): RecordedMcpTransport | undefined {
 
 /** Stands in for the authorization redirect: the `authUrl` the SDK reads while authenticating
  *  (`client-zqKcsyFa.js:1704-1706`) and `userMcp_list` renders as the reconnect link. */
-export function seedMcpAuthContinuation(id: string, authUrl: string): void {
+export async function seedMcpAuthContinuation(id: string, authUrl: string): Promise<void> {
   const manager = liveMcpManager;
 
   if (!manager) throw new Error('No MCP manager has been constructed yet.');
-  const connection = manager.mcpConnections[id];
+  const provider = manager.authProviderOf(id);
 
-  if (!connection) throw new Error(`No live MCP connection for ${id}.`);
-  connection.options.transport.authProvider = {
-    authUrl, clientId: 'test-client', serverId: id,
-  };
+  provider.serverId = id;
+  provider.clientId = 'test-client';
+  await provider.redirectToAuthorization(new URL(authUrl));
 }
 
 /** The manager the Agent base built for this instance, the one the SDK's lifecycle restores on start. */
-export function inheritedMcpManager(agent: { mcp: unknown }): {
-  mcpConnections: Record<string, RecordedMcpConnection>;
-  restoreConnectionsFromStorage(clientName: string): Promise<void>;
-} {
+export function inheritedMcpManager(agent: { mcp: unknown }): FakeMCPClientManager {
   const manager = agent.mcp;
 
   if (!(manager instanceof FakeMCPClientManager)) {
@@ -1193,6 +1158,8 @@ class FakeMCPClientManager {
     transport?: RecordedMcpTransport;
   }): Promise<string> {
     const transport = { ...options.transport };
+
+    if (transport.authProvider !== undefined) oauthStorages.push(transport.authProvider.storage);
     mcpServers.set(id, {
       id,
       name: options.name,
@@ -1236,7 +1203,7 @@ class FakeMCPClientManager {
 
   /** Returns early once restored (`_isRestored`, `client-zqKcsyFa.js:1533-1534`); each restored connection starts
    *  `connecting` with its dial tracked, not awaited (`:1541-1580`). */
-  async restoreConnectionsFromStorage(): Promise<void> {
+  async restoreConnectionsFromStorage(_clientName?: string): Promise<void> {
     if (this._isRestored) return;
     mcpRestored += 1;
 
@@ -1260,6 +1227,22 @@ class FakeMCPClientManager {
     }
 
     this._isRestored = true;
+  }
+
+  /** The provider `id` signs in through: its own, or, for a server registered with none, the one the agent builds for
+   *  it, as a restore builds a row's. */
+  authProviderOf(id: string): RecordedMcpAuthProvider {
+    const transport = this.mcpConnections[id]?.options.transport;
+
+    if (transport === undefined) throw new Error(`No live MCP connection for ${id}.`);
+
+    if (this.createAuthProvider === undefined) throw new Error('This manager has no agent to build a provider.');
+    // A row seeded with no callback has none to build from; the account's own callback stands for it.
+    const callbackUrl = mcpServers.get(id)?.callbackUrl ?? '';
+
+    transport.authProvider ??= this.createAuthProvider(callbackUrl === '' ? 'https://kinu.example.com/api/user/mcp/callback' : callbackUrl);
+
+    return transport.authProvider;
   }
 
   /** A row with a callback gets the provider the agent builds for it, its server and client set as the vendor sets them;
@@ -1302,7 +1285,7 @@ class FakeMCPClientManager {
 
     // A server that answers 401 until signed in authorizes again, as `connectToServer` does.
     if (connection && provider !== undefined && signIn !== undefined) {
-      provider.authUrl = signIn;
+      await provider.redirectToAuthorization(new URL(signIn));
       connection.connectionState = 'authenticating';
     } else if (connection) {
       connection.connectionState = 'ready';
@@ -1327,18 +1310,17 @@ class FakeMCPClientManager {
     if (!connection) return { state: 'failed', error: `no registered server ${id}` };
 
     const provider = connection.options.transport.authProvider;
-    const signIn = mcpSignInRequired.get(id);
+    const signIn = mcpSignInRequired.get(id) ?? pendingMcpAuthUrl;
 
-    if (provider !== undefined && signIn !== undefined) provider.authUrl = signIn;
+    pendingMcpAuthUrl = null;
+
+    if (provider !== undefined && signIn !== null && signIn !== undefined) await provider.redirectToAuthorization(new URL(signIn));
 
     if (provider?.authUrl) {
       connection.connectionState = 'authenticating';
 
-      return {
-        state: 'authenticating',
-        authUrl: provider.authUrl,
-        clientId: provider.clientId ?? undefined,
-      };
+      // Read as the vendor reads it: a provider with no client yet has none to name.
+      return { state: 'authenticating', authUrl: provider.authUrl, clientId: (await provider.clientInformation())?.client_id };
     }
 
     connection.connectionState = 'connected';

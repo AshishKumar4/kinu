@@ -7,7 +7,7 @@ import {
   CapabilityDeniedError,
   OwnerCapabilityUnavailableError,
   ownerCaller,
-  initWorkspaceCapabilityTables,
+  initUserTables,
   commitWorkspaceCapability,
   freshWorkspaceCapability,
   requireTier,
@@ -20,17 +20,19 @@ import { TEST_USER_ENV, sqlExec, testOwner } from './helpers/user-do';
 function setup() {
   const db = new Database(':memory:');
   const sql = sqlExec(db);
-  initWorkspaceCapabilityTables(sql);
+  initUserTables(sql);
 
   return { db, sql };
 }
 
-/** The UserDO fence between the phases is exercised in unit-user-authority-races.test.ts. */
+/** A registered workspace's identity minted. The UserDO fence between the phases is exercised in
+ *  unit-user-authority-races.test.ts. */
 async function mintWorkspaceCapability(
   sql: SqlExec, workspaceName: string,
 ): Promise<{ token: string; tokenHash: string }> {
   const fresh = await freshWorkspaceCapability();
-  commitWorkspaceCapability(sql, workspaceName, fresh.tokenHash);
+  sql.exec('INSERT OR IGNORE INTO user_workspaces (name, display_name) VALUES (?, ?)', workspaceName, workspaceName);
+  expect(commitWorkspaceCapability(sql, workspaceName, fresh.tokenHash)).toBe(true);
 
   return fresh;
 }
@@ -54,7 +56,7 @@ describe('capability token mint', () => {
 
     const rows = v.parse(
       v.array(CapabilityTokenRowSchema),
-      db.prepare('SELECT workspace_name, token_hash FROM workspace_capability_tokens').all(),
+      db.prepare('SELECT name AS workspace_name, token_hash FROM user_workspaces WHERE token_hash IS NOT NULL').all(),
     );
 
     expect(rows).toHaveLength(1);
@@ -84,10 +86,21 @@ describe('capability token mint', () => {
 
     const count = v.parse(
       v.object({ n: v.number() }),
-      db.prepare('SELECT COUNT(*) AS n FROM workspace_capability_tokens').get(),
+      db.prepare('SELECT COUNT(*) AS n FROM user_workspaces WHERE token_hash IS NOT NULL').get(),
     );
 
     expect(count.n).toBe(1);
+    db.close();
+  });
+
+  test('a hash is kept only on a registered workspace that is not being torn down', async () => {
+    const { db, sql } = setup();
+    const fresh = await freshWorkspaceCapability();
+
+    expect(commitWorkspaceCapability(sql, 'nowhere', fresh.tokenHash)).toBe(false);
+    sql.exec("INSERT INTO user_workspaces (name, display_name, delete_pending) VALUES ('doomed', 'doomed', 1)");
+    expect(commitWorkspaceCapability(sql, 'doomed', fresh.tokenHash)).toBe(false);
+    expect(db.prepare('SELECT COUNT(*) AS n FROM user_workspaces WHERE token_hash IS NOT NULL').get()).toEqual({ n: 0 });
     db.close();
   });
 

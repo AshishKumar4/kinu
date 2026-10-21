@@ -208,16 +208,28 @@ describe('Explore', () => {
 
           try {
             await page.waitForSelector('[data-gallery-public] [data-blueprint-page="personal-assistant"]', SOON);
+            // Read while the page is still the blueprint's: the press below leaves it for sign-in, and a read racing that
+            // navigation finds its context gone (armada 20261020213324-3ed3be10).
+            expect(await accountReads(page)).toEqual([]);
 
+            const signIns: string[] = [];
+
+            page.on('request', (sent) => {
+              if (sent.isNavigationRequest() && new URL(sent.url()).pathname === '/login') signIns.push(sent.url());
+            });
+
+            // The press and the navigation it causes, awaited together: nothing reads the page it leaves.
             const [login] = await Promise.all([
               page.waitForRequest((sent) => new URL(sent.url()).pathname === '/login', SOON),
+              page.waitForNavigation({ waitUntil: 'domcontentloaded', ...SOON }),
               page.click(control),
             ]);
 
             const back = new URL(new URL(login.url()).searchParams.get('return_to') ?? '', gallery.origin);
 
             expect([back.searchParams.get('id'), back.searchParams.get('install')]).toEqual(['personal-assistant', intent]);
-            expect(await accountReads(page)).toEqual([]);
+            // One press, one trip to sign-in: the page is left once.
+            expect(signIns).toHaveLength(1);
           } finally {
             await page.close();
           }

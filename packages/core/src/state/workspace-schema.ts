@@ -13,7 +13,6 @@ import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { initActorDdl, initWorkspaceOwnershipTables } from '../identity/schema';
 import { initSearchTables } from '../mcts/schemas';
 import { initScaffoldTables } from '../scaffold/schemas';
-import { initSlateShareTables } from '../slates/shares';
 import { initSlateLiveShareTables } from '../slates/live-shares';
 import { initWorkspaceActorTable } from '../identity/workspace-actors';
 import { initEffectTombstoneTable } from '../identity/effect-tombstones';
@@ -31,8 +30,7 @@ import { initImportedExperienceTable } from '../experience/imports';
 import { initHeadsTables } from '../heads/schema';
 import { initBackgroundJobsTable } from '../jobs/store';
 import { initToolEffectClaimTable } from '../tools/effect-claim';
-import { initDeferredApprovalsTable } from '../safety/deferred-approval';
-import { initDeviceConsentAsksTable } from '../safety/device-consent';
+import { initOwnerRequestsTable } from '../safety/owner-requests';
 import { initAgentWorkspacesTable } from '../identity/agent-workspaces';
 import { initInstructionApprovalsTable } from '../safety/instruction-trust';
 import { initPlanReviewTable } from '../plans/review';
@@ -152,7 +150,6 @@ function createAgentTables(db: WorkspaceSchemaSql): void {
     recorded_at INTEGER NOT NULL,
     PRIMARY KEY (slate_id, path)
   )`);
-  initSlateShareTables(execRaw);
   initSlateLiveShareTables(execRaw);
 }
 
@@ -182,8 +179,7 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   initBackgroundJobsTable(execRaw);
   initToolEffectClaimTable(execRaw);
   initEffectTombstoneTable(execRaw);
-  initDeferredApprovalsTable(execRaw);
-  initDeviceConsentAsksTable(execRaw);
+  initOwnerRequestsTable(execRaw);
   initAgentWorkspacesTable(execRaw);
   initPlanReviewTable(execRaw);
   initOwnerQuestionsTable(execRaw);

@@ -1,12 +1,13 @@
 import * as v from 'valibot';
 import { describe, test, expect } from 'bun:test';
-import { MockLanguageModelV3 } from 'ai/test';
+import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { createRoutedModelLane, routedLlm } from '../src/profiles/model-lane';
 import { profileCatalogDigest, resolveTurnProfile } from '../src/profiles';
 import {
   runSleepTimeCompute, applySleepTimeUpdate,
   SLEEP_TIME_CADENCE,
-  initEffectTombstoneTable, initFactsTable, initSleepTimeUpdatesTable, SleepTimeLane,
+  initEffectTombstoneTable, initFactsTable, initSleepTimeTables, SleepTimeLane,
   sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type ConversationProjection,
 } from '../src/index';
@@ -172,13 +173,22 @@ describe('Sleep-time compute', () => {
   test('is asked for its schema, and an answer off it ends the route walk, as a wrong answer does', async () => {
     const formats: string[] = [];
 
+    // Streamed, as every structured call is (`generateObjectReported`).
     const answering = (text: string) => new MockLanguageModelV3({
-      doGenerate: async (options) => {
+      doStream: async (options) => {
         formats.push(options.responseFormat?.type === 'json' && options.responseFormat.schema !== undefined ? 'json schema' : 'text');
 
         return {
-          content: [{ type: 'text' as const, text }], finishReason: { unified: 'stop' as const, raw: undefined }, warnings: [],
-          usage: { inputTokens: { total: 9, noCache: 9, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 2, text: 2, reasoning: undefined } },
+          stream: convertArrayToReadableStream<LanguageModelV3StreamPart>([
+            { type: 'stream-start', warnings: [] },
+            { type: 'text-start', id: 't' },
+            { type: 'text-delta', id: 't', delta: text },
+            { type: 'text-end', id: 't' },
+            {
+              type: 'finish', finishReason: { unified: 'stop', raw: undefined },
+              usage: { inputTokens: { total: 9, noCache: 9, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 2, text: 2, reasoning: undefined } },
+            },
+          ]),
         };
       },
     });
@@ -305,7 +315,7 @@ describe('an idle wake dreams first', () => {
   function lane(count: number) {
     const { rt, stores, testSql } = createTestRuntime();
     initFactsTable(testSql.execRaw);
-    initSleepTimeUpdatesTable(testSql.execRaw);
+    initSleepTimeTables(testSql.execRaw);
     initEffectTombstoneTable(testSql.execRaw);
     stores.config.setSleepTimeComputeEnabled(true);
     const order: string[] = [];

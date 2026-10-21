@@ -84,7 +84,7 @@ import { useTheme } from "@/hooks/use-theme";
 import { WorkspaceRosterProvider, useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { CreateWebhookModal, NewWebhookCard } from "@/components/WorkspaceAutomations";
 import { AddServerCard } from "@/components/account/McpServersPanel";
-import { DevicesFrame, PluginsFrame, SetupModalFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
+import { DevicesFrame, PluginsFrame, SetupModalFrame, UserMcpFrame, WelcomeFrame, WorkspacesFrame } from "@/gallery-account";
 import { CharactersFrame } from "@/gallery-characters";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { DrivePageFrame, DriveRoute, installDriveFixture } from "@/gallery-drive";
@@ -238,7 +238,7 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
   ],
 });
 
-const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "devices", "devices-empty", "secretpaste"]);
+const ACCOUNT_FIXTURE_FRAMES = new Set(["usersettingsstate", "setupmodal", "welcome", "workspaces", "plugins", "usermcp", "devices", "devices-empty", "secretpaste"]);
 
 /* Account-settings failure rig: Codex stays failed until `gallery:settings-heal`, the gateway read pends until
    `gallery:settings-release`; sibling GETs settle immediately so branch-local publication is observable. */
@@ -2493,7 +2493,7 @@ function galleryQuestions(): AskingAgent[] {
     agent: WORKSPACE_PAGE_NAME, actor: null,
     asked: {
       id: "q-1", actor: galleryActorId(WORKSPACE_PAGE_NAME), callId: "ask-1", turnId: "turn-ask", mode: "build", questions: GALLERY_ASK.questions,
-      status: closed === "answered" || closed === "dismissed" ? closed : "open", answers, askedAt: NOW - 2 * 60e3, closedAt: closed === undefined ? null : NOW,
+      status: closed === "answered" || closed === "dismissed" ? closed : "open", answers, askedAt: NOW - 2 * 60e3,
     },
   }];
 }
@@ -5567,11 +5567,14 @@ const slateRpc: SocketCall = async <T,>(method: string, args?: Parameters<Socket
   return stubRpc<T>(method, args);
 };
 
+/** One transport for the frame's life: a new one reads as a reconnect, and the slate's frame reloads on it. */
+const SLATE_RPC = workspaceRpc(slateRpc);
+
 function SlatePreviewFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] min-h-screen border-x p-border p-5">
-        <SlateFrame id={GALLERY_SLATE_ID} rpc={workspaceRpc(slateRpc)} />
+        <SlateFrame id={GALLERY_SLATE_ID} rpc={SLATE_RPC} />
       </div>
     </div>
   );
@@ -5873,7 +5876,7 @@ function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint";
           mode,
           live: first ? { graph: SHARE_GRAPH, liveShares: [] } : { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE, TEAM_SHARE], refused: SHARED_REFUSAL, preapproved: STANDING },
           blueprint: { versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
-            { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", included: ["package.json", "src", "assets"], createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
+            { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
           ] },
         }} />
     </div>
@@ -8033,6 +8036,7 @@ async function mount() {
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
     ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["usermcp", { node: <UserMcpFrame />, entries: ["/user/settings/mcp"] }],
     ["characters", { node: <CharactersFrame />, entries: ["/"] }],
     ["devices-empty", { node: <DevicesFrame />, entries: ["/devices"] }],
   ]);

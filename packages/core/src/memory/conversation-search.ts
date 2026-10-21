@@ -67,13 +67,14 @@ function toHit(row: HitRow): ConversationSearchHit {
 /** SQLite reissues rowids a delete freed, so any purge forces a rebuild; inserts append from `synced_rowid`. */
 interface SyncState { actor_id: string; rev: number; purges: number; synced_rev: number; synced_purges: number; synced_rowid: number }
 
-function ensureIndexTables(sql: SqlExecutor): void {
+/** Made on an agent's first search or fork; a repair's trial reads their shape from here too. */
+export function ensureIndexTables(sql: SqlExecutor): void {
   void sql`
-    CREATE VIRTUAL TABLE IF NOT EXISTS conversation_fts USING fts5(
+    CREATE VIRTUAL TABLE IF NOT EXISTS conversation_fts USING fts5( /* derived from conversation_entries: their text, indexed */
       content, actor_id UNINDEXED, msg_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, created_at UNINDEXED
     )`;
   void sql`
-    CREATE TABLE IF NOT EXISTS conversation_fts_state (
+    CREATE TABLE IF NOT EXISTS conversation_fts_state ( /* derived from conversation_entries: synced_rowid is a rowid of theirs */
       actor_id TEXT PRIMARY KEY NOT NULL,
       rev INTEGER NOT NULL DEFAULT 0,
       purges INTEGER NOT NULL DEFAULT 0,

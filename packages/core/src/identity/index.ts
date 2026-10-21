@@ -5,7 +5,7 @@ export {
 export {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner,
   issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, type BuiltinSql,
-  clearAttempts, reserveAttempt, type AttemptBucket,
+  clearAttempts, removeBuiltinAccount, reserveAttempt, type AttemptBucket,
   applyReset, listBuiltinAccounts, resetAccount, type Grant, type InvitePurpose, type ListedAccount, type Reset, type SigningAccount,
 } from './builtin-accounts';
 

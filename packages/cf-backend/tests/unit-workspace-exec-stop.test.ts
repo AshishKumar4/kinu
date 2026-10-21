@@ -222,3 +222,17 @@ function lostAnswer(box: HostedBox) {
     release: async () => { await Promise.all(kept.map((stream) => stream.reader.cancel())); },
   };
 }
+
+// One rule on every machine (2026-10-20, the owner's `setsid -f chromium` on the computer): a command answers when it
+// exits, and what it started in the background runs on. Nimbus's shell keeps it already; this holds it there.
+describe('a workspace command that leaves a process running', () => {
+  test('answers when it exits, and what it started runs on', async () => {
+    const box = hostedBox();
+    const shell = nimbusSessionShell(box, { home: WORKSPACE_ROOT });
+
+    expect(await shell.exec('(until test -e go; do sleep 0.05; done; echo late; printf ran > after) & echo started', {}))
+      .toMatchObject({ stdout: 'started\n', exitCode: 0 });
+    await writeText(box.store({ home: WORKSPACE_ROOT }), `${WORKSPACE_ROOT}/go`, '');
+    expect(await shell.exec('until test -e after; do sleep 0.05; done; cat after', {})).toMatchObject({ stdout: 'ran', exitCode: 0 });
+  });
+});

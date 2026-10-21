@@ -2,7 +2,7 @@
 // provider's customFetch; a provider rewrite once dropped it silently.
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
-import { CHAT_COMPLETION_BODY } from '@kinu.run/test-utils';
+import { answerChat, OK_CHAT_ANSWER } from '@kinu.run/test-utils';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { actorAffinity, asFetchFunction, type ModelAffinity } from '@kinu.run/core';
@@ -28,7 +28,7 @@ async function captureWorkersAIRequest(affinity: ModelAffinity) {
       const url = new Request(input).url;
       captured.push({ url, headers: new Headers(init?.headers) });
 
-      return Response.json(CHAT_COMPLETION_BODY);
+      return answerChat(OK_CHAT_ANSWER, init);
     }),
   });
 
@@ -58,12 +58,12 @@ describe('Workers AI session affinity (REST path)', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: fakeUserDOStub(),
-      fetch: asFetchFunction(async () => {
+      fetch: asFetchFunction(async (_input: RequestInfo | URL, init?: RequestInit) => {
         calls++;
 
         return calls === 1
           ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
-          : Response.json(CHAT_COMPLETION_BODY);
+          : answerChat(OK_CHAT_ANSWER, init);
       }),
     });
 

@@ -7,11 +7,11 @@ import { tolerate } from '../obs/index';
 import { DeviceRequestOwnership, type DeviceRequestChannel } from './device-ownership';
 import { REAL_CLOCK, type Clock } from '../types/clock';
 import {
-  BACKGROUND_POLICY, type BackgroundPolicy, type InvocationSurface,
+  BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type InvocationSurface,
 } from '../types/jobs';
 
 export {
-  BACKGROUND_POLICY, type BackgroundPolicy, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
+  BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
 } from '../types/jobs';
 
 /** The surface owns the foreground half (`detachAfterMs`, `settleGraceMs`); session durability owns
@@ -25,11 +25,14 @@ export function invocationBackgroundPolicy(
   return base.wakesAfterTurn === wakesAfterTurn ? base : { ...base, wakesAfterTurn };
 }
 
-export interface BackgroundHandle {
-  readonly background: true;
-  readonly jobId: string;
-  readonly kind: string;
-  readonly message: string;
+/** What a call moved to the background answers in place of its result: the job that holds it now, and why it moved. */
+export const BackgroundHandleSchema = v.object({ background: v.literal(true), jobId: v.string(), kind: v.string(), message: v.string() });
+
+export type BackgroundHandle = v.InferOutput<typeof BackgroundHandleSchema>;
+
+/** Why a call moved to the background: its foreground window ran out, or the person wrote while it ran. */
+export function backgroundedBy(handle: BackgroundHandle): 'window' | 'person' {
+  return handle.message === RELEASED_FOR_PERSON ? 'person' : 'window';
 }
 
 /** Same discriminator over the serialized result, the only form the tool-result extension seam carries. */
@@ -48,10 +51,6 @@ export function isBackgroundOutcomeText(result: string): boolean {
 
   return true;
 }
-
-export type DetachOutcome =
-  | { readonly detached: true; readonly jobId: string }
-  | { readonly detached: false; readonly reason: string };
 
 export interface ThresholdDeps {
   thresholdMs?: number;

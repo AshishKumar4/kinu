@@ -313,10 +313,9 @@ function queryTranscriptHalves(sql: SqlExecutor, actorId: string, roots: string)
            MAX(CASE WHEN j.id = j.root_id THEN j.status END)  AS root_status,
            MAX(CASE WHEN j.id = j.root_id THEN j.task END)    AS root_task,
            MAX(r.rationale)                                   AS rationale,
-           MAX(CASE WHEN m.root_id IS NOT NULL THEN 1 ELSE 0 END) AS settled
+           MAX(CASE WHEN r.merged_narrative IS NOT NULL THEN 1 ELSE 0 END) AS settled
     FROM head_journal j
     LEFT JOIN head_runs r ON r.actor_id = j.actor_id AND r.root_id = j.root_id
-    LEFT JOIN head_merge_results m ON m.actor_id = j.actor_id AND m.root_id = j.root_id
     WHERE j.actor_id = ${actorId}
       AND j.root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
       AND j.root_id IN (SELECT value FROM json_each(${roots}))

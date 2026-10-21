@@ -16,7 +16,7 @@ import { createWorkspaceActorHost, HostedActorHomes, type WorkspaceHostSeams } f
 import { createHostedWorkspace } from '../../src/workspace-host';
 import { HELD_NIMBUS_TASKS } from './programmatic-host';
 import { wrapDatabase } from '@kinu.run/core/identity';
-import { createRecordingTracer } from '@kinu.run/test-utils';
+import { createRecordingTracer, NO_JOBS } from '@kinu.run/test-utils';
 
 const opened: Database[] = [];
 
@@ -148,6 +148,9 @@ export async function hostedWorkspace(
     slate: () => Promise.resolve({ ok: false, success: false, reason: 'unavailable', error: 'no slate host in this fixture' }),
 
     deferrals: () => undefined,
+    jobs: () => NO_JOBS,
+    // No box here tells a process's end.
+    processEnds: () => ({ ended: () => new Promise(() => undefined), state: () => 'missing' }),
     chosenLoopOrigin: (record) => chosen.get(record.actorId) ?? null,
     chosenWriteObserver: () => null,
     ...overrides,

@@ -13,7 +13,7 @@ import type { KinuEgress } from "./src/server";
 import type { AgentIsolateTail, AgentWorkspaceRPC } from "./src/agent-facets";
 import type { SlateBinding } from "./src/slates/bindings";
 import type { PartBinding } from "./src/slates/part-binding";
-import type { MossaicShardDO, MossaicUserDO } from "./src/server";
+import type { MossaicShardDO, MossaicUserDO } from "./src/drive/mossaic-objects";
 import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
 import type { PictureBucket } from "./src/slates/pictures";
 

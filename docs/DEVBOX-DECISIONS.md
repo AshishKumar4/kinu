@@ -5155,6 +5155,62 @@ The design.
 - Tests: `supervised-lifecycle.test.ts` "a job seen completed is not started again by the next start" (red before
   this change: its spec kept, started once) and "a server that failed comes back with the next start".
 
+D106. A device stays on its reverse WebSocket: the daemon dials out to the Worker, its owner's object accepts and hibernates
+the socket, and calls go down it (2026-10-20; m2038d and MA-137). MoQ or WebTransport, and SSH through Cloudflare Tunnel,
+were weighed and are not taken. The channel's two open audit findings are fixed in it, not by leaving it.
+
+What was weighed.
+- MoQ and WebTransport. A Worker accepts HTTP, TCP, WebSockets, HTTP/3 and SMTP; no WebTransport or MoQ endpoint a Worker
+  or Durable Object terminates is documented (developers.cloudflare.com/workers/reference/protocols/, read 2026-10-20).
+  Cloudflare's MoQ is a separate relay service in beta (drafts 14 and 16; developers.cloudflare.com/moq/), so a call would
+  leave the object that holds the device's grants and consents. D71 rejected the same relay for the desktop (2026-10-05).
+- SSH through Tunnel. `cloudflared` dials out as our daemon does; SSH behind Access needs `cloudflared` on both machines,
+  an active zone and an Access login (Tunnel docs, "SSH with Access"). That is a second daemon and an Access dependency on
+  every person's machine, and the platform would carry a shell, not the framed calls the sandbox tier (e26541e07) and the
+  consents are enforced on.
+- Cost while idle. The hub accepts through `acceptWebSocket` (`core/src/execution/device-hub.ts`), and a hibernated
+  object's socket stays connected with no duration billed (developers.cloudflare.com/durable-objects/best-practices/websockets/).
+- Not measured: the channel's own call latency, throughput and reconnect time. No such measurement exists; D71 measured the
+  desktop's video, not device calls.
+
+What is fixed in it (the 2026-09-16 device audit, `kinu-logs/audit-0916/SECURITY-devices.md`).
+- C3, critical: a copied `~/.kinu/device.json` (`pdt_` bearer) impersonates the machine until reuse is detected; the
+  rotation and reuse revocation (2e3fb08fc) narrow it but do not close it. Fix: a key-bound device credential. The daemon
+  makes a keypair and the hub keeps its public key; the connect ticket is issued for a signed challenge, and no bearer is
+  persisted.
+- M1, medium: the connect ticket rides in the socket's URL (`/pc/connect?user=&ticket=`, `pc-agent/src/index.js`), where
+  edge and proxy logs keep it. Fix: the ticket travels in the first frame.
+- Both change the protocol: `DEVICE_PROTOCOL_VERSION` moves up, and a daemon on the previous version is admitted to take
+  its update only, as today (`device-hub.ts`). Queued behind the self-deploy build.
+
+D107. The box ends a process with an exec of `kill` on its pid, and sizes a terminal with an exec of `stty` on its client's
+terminal (`/proc/<pid>/fd/0`). It never calls `ExecProcess.kill()` or `resize()`: both are workerd tasks nobody can await,
+and on a lost connection each failed the box's request (staging rc23 and rc29; `connection-lost.test.ts`). Both execs
+rest on two facts, measured on staging rc29 (`62b6c90c6`) on 2026-10-21.
+
+What was measured.
+- `ExecProcess.pid` is the pid in the container's own namespace. In eval-killn-killpid-3r4vlw, a terminal attached to
+  session `shell` had its tmux client at pid 43 on `/dev/pts/0` (`tmux list-clients`, `ps`). `/usr/local/bin/kill`
+  wrapped `/usr/bin/kill` to log its argv. When the socket closed, rc29's `endProcess` logged `-KILL 43` from pid 72,
+  whose parent pid was 0 (an exec of the platform's). Client 43 was gone afterwards. The session lived on: the next
+  attach was client 93 on `/dev/pts/2`, under the same server (pid 47). The platform also resolves an exec's `argv[0]`
+  on the image's PATH.
+- `stty` from another process sizes the pane, and tmux follows. In eval-killn-stty-ticshl, a pane opened at 80x24 ran
+  `stty -F /proc/43/fd/0 cols 120 rows 40` against its client, pid 43, which exited 0. After that, the pane's `stty size`
+  read `40 120`, and tmux's `#{client_width}x#{client_height}` read `120x40`. The `stty` ran in the pane's shell, not as
+  an exec of its own; both run as root in the same namespace.
+- Both workspaces were torn down.
+
+What follows.
+- A client that is gone takes `/proc/<pid>/fd/0` with it. The resize script then exits 3, and the box treats that
+  terminal as ended: its output's end closes the socket with 1000, never 1011. This was measured on a host shell
+  (`exec-seam.test.ts`), not on the platform.
+- The box keeps the size it last set, and a pane that asks for that size again costs no exec.
+
+Not measured: closing an exec's stdin after its process has exited. The seam closes every exec's stdin before it answers
+the exec (`containerExec`), and a close that rejects fails the exec and ends its process. A platform that rejected
+that close would fail every quick exec. rc30's staging canary is the first run that exercises it.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

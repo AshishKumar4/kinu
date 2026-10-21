@@ -61,7 +61,7 @@ function gate() {
 
 function capabilityRows(harness: TestUserDO): string[] {
   return harness.db.prepare<{ workspace_name: string }, []>(
-    `SELECT workspace_name FROM workspace_capability_tokens ORDER BY workspace_name`,
+    `SELECT name AS workspace_name FROM user_workspaces WHERE token_hash IS NOT NULL ORDER BY name`,
   ).all().map((row) => row.workspace_name);
 }
 
@@ -157,7 +157,7 @@ describe('a workspace whose delete has begun', () => {
     // Stored hash and installed token must come from one mint for the workspace to authenticate.
     const installed = harness.installed.get('fresh');
     expect(harness.db.prepare<{ token_hash: string }, []>(
-      `SELECT token_hash FROM workspace_capability_tokens WHERE workspace_name = 'fresh'`,
+      `SELECT token_hash FROM user_workspaces WHERE name = 'fresh'`,
     ).all()).toEqual([{ token_hash: await sha256Hex(installed ?? '') }]);
     expect((await harness.userDO.listWorkspaces({ workspaceToken: installed ?? '' })).entries)
       .toHaveLength(1);

@@ -45,6 +45,24 @@ describe('a command on the runtime\'s exec', () => {
       .toEqual({ stdout: `${cwd}\nout\n`, stderr: 'err\n', exitCode: 7 });
   });
 
+  // Owner report, 2026-10-20: `setsid -f chromium <url>` opened the browser at once and its exec never answered. The
+  // runtime's exec answers when the command's output closes (D64), and the browser held it open.
+  test('answers when the command exits; what it left running writes on into a pipe the box still reads', async () => {
+    const box = await readyBox();
+    const cwd = mkdtempSync(join(root, 'detached-'));
+    const verdict = join(cwd, 'verdict');
+    await runToExit(['mkfifo', verdict]);
+
+    // Waits for `go` (600 looks at most: the exec that waits on it gives up and answers with what came after), then
+    // writes to both streams with SIGPIPE ignored, and says whether the writes landed.
+    const detached = `setsid -f sh -c 'trap "" PIPE; n=0; until [ -e go ] || [ $n -ge 600 ]; do n=$((n+1)); sleep 0.05; done; `
+      + `if [ -e go ]; then { echo late && echo late >&2; } && v=wrote || v=refused; echo $v > verdict; else echo late; fi'`;
+
+    expect(await box.exec(`${detached}; echo started`, { cwd })).toEqual({ stdout: 'started\n', stderr: '', exitCode: 0 });
+    writeFileSync(join(cwd, 'go'), '');
+    expect((await Bun.file(verdict).text()).trim()).toBe('wrote');
+  });
+
   // 2026-10-03: the exec kept per id forced the trust env over the caller's; the plain one did not.
   test('runs with the box\'s trust environment under the caller\'s own, as a raw exec does', async () => {
     const box = await readyBox();
@@ -89,8 +107,8 @@ describe('a command on the runtime\'s exec', () => {
 
         (argv[0] === 'setsid' ? launched : killing).resolve();
 
-        // Its process as the container's: no such work directory here.
-        return { ...await localExec(['true']), pid: 500, output: async () => await never };
+        // Its process as the container's, with the pipe the box asked for: no such work directory here.
+        return { ...await localExec(['true'], { stdin: options?.stdin }), pid: 500, output: async () => await never };
       }
 
       return await localExec(argv, options);

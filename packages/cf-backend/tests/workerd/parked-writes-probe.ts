@@ -9,7 +9,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
-import { cloudPlanes, DeferredApprovalQueue, DeferredApprovalStore, WORKSPACE_ROOT, initDeferredApprovalsTable, initWorkspaceSchema, ParkedWriteFiles, performBoundWrite, sha256Hex, type CheckpointFiles, withApprovalGatedFiles, WorkspaceActorDirectory, type SqlExec, type SqlExecutor, type SqlValue } from '@kinu.run/core';
+import { cloudPlanes, DeferredApprovalQueue, DeferredApprovalStore, WORKSPACE_ROOT, initOwnerRequestsTable, initWorkspaceSchema, ParkedWriteFiles, performBoundWrite, sha256Hex, type CheckpointFiles, withApprovalGatedFiles, WorkspaceActorDirectory, type SqlExec, type SqlExecutor, type SqlValue } from '@kinu.run/core';
 
 /** The owner's machine as the agent's plane mounts it. */
 const MACHINE = '/pc/studio';
@@ -78,7 +78,7 @@ export class ParkedWritesProbeDO extends DurableObject<Cloudflare.Env> {
       const execRaw = (ddl: string): void => { this.ctx.storage.sql.exec(ddl); };
 
       initWorkspaceSchema({ execRaw, sql: this.sql, exec: this.exec, transactionSync: (write) => this.ctx.storage.transactionSync(write) });
-      initDeferredApprovalsTable(execRaw);
+      initOwnerRequestsTable(execRaw);
       void this.sql`INSERT OR IGNORE INTO workspace_identity (id, name) VALUES (${'ws-parked-writes'}, ${'parked-writes'})`;
       const actor = new WorkspaceActorDirectory(this.sql, { workspaceId: 'ws-parked-writes', ownerUserId: '' }).createMain({ name: 'parked-writes' });
       const workspace = await NimbusWorkspace.create({ sql: this.ctx.storage.sql, transactions: { storage: this.ctx.storage } });
@@ -119,7 +119,7 @@ export class ParkedWritesProbeDO extends DurableObject<Cloudflare.Env> {
 
     const asked = pattern(size, 2);
 
-    const files = withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), resolve: null, userRoots: () => ['/pc'], locate: null, parksWrites: true }, {
+    const files = withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), resolve: null, owner: null, userRoots: () => ['/pc'], locate: null, parksWrites: true }, {
       mode: () => 'strict', deferrals: queue.channel,
     });
 

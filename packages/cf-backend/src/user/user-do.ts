@@ -27,7 +27,11 @@ import {
 } from '@kinu.run/core';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
-import { tenantDrive } from '../drive/tenant';
+import { destroyDriveTenant, tenantDrive } from '../drive/tenant';
+import { forgetSharesGiven, forgetSharesReceived } from './shares-given';
+import { internalCaller } from '@kinu.run/core/control-plane';
+import { BUILTIN_ACCOUNTS_OBJECT, builtinSignInOn } from '@kinu.run/core/identity';
+import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
 
 import { installAnalyticsDiagnostics, openAnalyticsWindow } from '@kinu.run/core/analytics';
 import type { McpPresetAvailability, McpServerSummary, ProviderListing } from '@kinu.run/core';
@@ -37,7 +41,7 @@ import {
 
 import { UserDrive, type DriveAnswer, type DriveChunkWrite } from './drive';
 import { UserDevices, type DeviceCancellationOutcome } from './devices';
-import { DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
+import { ACCOUNT_EPOCH_FIELDS, DeviceHelloHeadSchema, DeviceHelloSchema, DeviceUpdateHelloSchema } from '@kinu.run/core';
 import { UserTerminals } from './terminals';
 import { UserScreens } from './screens';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
@@ -87,6 +91,9 @@ export interface AccountSettingsRevision {
   readonly catalog: number;
   readonly credentials: number;
 }
+
+/** When the account was deleted: the one thing its object keeps after, until a sign-in makes it an account again. */
+const ACCOUNT_DELETED_KEY = 'account:deleted-at';
 
 export class UserDO extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
@@ -146,7 +153,7 @@ export class UserDO extends Agent<Env> {
     sessionStands: (tokenHash) => this.sessions.sessionStands(tokenHash),
   };
 
-  private readonly credentials = new UserCredentials({ ...this.host, setConfig: (caller, key, value) => this.profile.setConfig(caller, key, value) });
+  private readonly credentials = new UserCredentials(this.host);
 
   private readonly secrets = new UserSecrets(this.host);
 
@@ -170,6 +177,7 @@ export class UserDO extends Agent<Env> {
     recipient: (userId) => objectNamed(this.env.UserDO, userId),
     accountOf: (email) => accountIdFor(this.env, email),
     caller: () => ownerCaller(this.env),
+    forget: (person, workspaces) => this.forgetPersonIn(person, workspaces),
   });
 
   private readonly evalLeases = new EvalLeaseJobs({
@@ -204,8 +212,13 @@ export class UserDO extends Agent<Env> {
 
   private readonly userDrive = new UserDrive({ ...this.host, accountId: () => this.name, driveFor: (tenant) => this.driveFor(tenant) });
 
-  ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
-    return this.profile.ensureProfile(caller, email, displayName);
+  /** A sign-in: an account deleted before is a new one now, and keeps cards again. */
+  async ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
+    const profile = await this.profile.ensureProfile(caller, email, displayName);
+
+    this.ctx.storage.kv.delete(ACCOUNT_DELETED_KEY);
+
+    return profile;
   }
 
   getProfile(caller: UserCaller): Promise<UserProfile | null> {
@@ -372,8 +385,14 @@ export class UserDO extends Agent<Env> {
     return this.profile.putProfileCatalog(caller, catalog, expectedVersion);
   }
 
-  shareCards_put(caller: UserCaller, row: ReceivedShare): Promise<void> {
-    return this.profile.shareCards_put(caller, row);
+  /** A deleted account keeps no card: it answers `deleted`, and its sender forgets it (`ShareCardJobs.onJob`). */
+  async shareCards_put(caller: UserCaller, row: ReceivedShare): Promise<'kept' | 'deleted'> {
+    await this.requireTier(caller, 'shares');
+
+    if (this.ctx.storage.kv.get(ACCOUNT_DELETED_KEY) !== undefined) return 'deleted';
+    await this.profile.shareCards_put(caller, row);
+
+    return 'kept';
   }
 
   shareCards_remove(caller: UserCaller, ownerUserId: string, workspace: string, shareId: string): Promise<void> {
@@ -394,6 +413,27 @@ export class UserDO extends Agent<Env> {
 
   sharesSeen(caller: UserCaller, at: number): Promise<void> {
     return this.profile.sharesSeen(caller, at);
+  }
+
+  /**
+   * An account this one shared with is deleted; its delete names the workspaces of this account that shared with it.
+   * Each forgets it (`OrchestratorAgent.forgetPerson`), then no card goes to it again and nothing here names it.
+   */
+  async shareRecipient_forget(caller: UserCaller, person: { readonly userId: string; readonly email: string }, workspaces: readonly string[]): Promise<void> {
+    await this.requireTier(caller, 'shares');
+    await this.forgetPersonIn(person, workspaces);
+    await this.shareCards.forgetRecipient(person.userId);
+  }
+
+  /** `person` forgotten in those of `workspaces` that are this account's, and in its overviews of them. */
+  private async forgetPersonIn(person: { readonly userId: string; readonly email: string }, workspaces: readonly string[]): Promise<void> {
+    const mine = new Set(this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`).map((row) => row.name));
+
+    for (const workspace of new Set(workspaces)) {
+      if (mine.has(workspace)) await objectNamed(this.env.OrchestratorAgent, workspace).forgetPerson(this.name, person);
+    }
+
+    this.workspaces.forgetShareUser(person.email);
   }
 
   sharesReceived_forget(caller: UserCaller, ownerUserId: string): Promise<void> {
@@ -627,6 +667,10 @@ export class UserDO extends Agent<Env> {
 
   builtinListAccounts(caller: UserCaller): Promise<ListedAccount[]> {
     return this.sessions.builtinListAccounts(caller);
+  }
+
+  builtinRemoveAccount(caller: UserCaller, person: { readonly userId: string; readonly email: string }): Promise<void> {
+    return this.sessions.builtinRemoveAccount(caller, person);
   }
 
   builtinClearAttempts(caller: UserCaller, keys: readonly string[]): Promise<void> {
@@ -1072,12 +1116,10 @@ export class UserDO extends Agent<Env> {
         try {
           // Deleted since the queue was read: never woken.
           if (!this.workspaces.workspaceRegistered(name)) continue;
-          const [marker] = this.sqlx<{ attempts: number }>(`SELECT attempts FROM workspace_overview_nudges WHERE name = ?`, name);
-          const attempts = (marker?.attempts ?? 0) + 1;
+          const [marker] = this.sqlx<{ nudge_attempts: number }>(`SELECT nudge_attempts FROM user_workspaces WHERE name = ?`, name);
+          const attempts = (marker?.nudge_attempts ?? 0) + 1;
 
-          this.sqlx(`INSERT INTO workspace_overview_nudges (name, attempts, next_at) VALUES (?, ?, ?)
-            ON CONFLICT (name) DO UPDATE SET attempts = excluded.attempts, next_at = excluded.next_at`,
-          name, attempts, Date.now() + recoveryBackoffMs(attempts));
+          this.sqlx(`UPDATE user_workspaces SET nudge_attempts = ?, nudge_next_at = ? WHERE name = ?`, attempts, Date.now() + recoveryBackoffMs(attempts), name);
           await objectNamed(this.env.OrchestratorAgent, name).requestOverviewPush();
         } catch (cause) {
           diagnostics.failure('roster.overview_nudge_failed', toKinuError({
@@ -1174,7 +1216,7 @@ export class UserDO extends Agent<Env> {
       const hello = v.safeParse(DeviceHelloSchema, announced);
 
       if (admitted !== 'serve' || !hello.success) {
-        this.sqlx(`INSERT OR IGNORE INTO user_device_protocol_refusals (device_id) VALUES (?)`, deviceId);
+        this.sqlx(`UPDATE user_devices SET protocol_refused = 1 WHERE id = ?`, deviceId);
         // The protocol before this one is pushed the build that brings it here, and nothing else.
         const previous = v.safeParse(DeviceUpdateHelloSchema, announced);
         // Decided and sent in the turn the HELLO arrived, on its socket: nothing is awaited before the send.
@@ -1291,6 +1333,17 @@ export class UserDO extends Agent<Env> {
     for (const { name } of tables) {
       if (indexes.some((index) => name === index || name.startsWith(`${index}_`))) continue;
 
+      // One row of independent fences: each is held once it is set, and only that one.
+      if (name === 'account_epochs') {
+        for (const field of ACCOUNT_EPOCH_FIELDS) {
+          const set = this.sqlx<{ n: number }>(`SELECT COUNT(${field}) AS n FROM account_epochs`)[0]?.n ?? 0;
+
+          if (set > 0) held[`account_epochs.${field}`] = set;
+        }
+
+        continue;
+      }
+
       const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM "${name.replaceAll('"', '""')}"`)[0]?.n ?? 0;
 
       if (rows > 0) held[name] = rows;
@@ -1303,12 +1356,27 @@ export class UserDO extends Agent<Env> {
    * Delete everything under this account, then the object itself; the step order is the contract.
    * Each step leaves no rows, so a failed sweep resumes on retry; errors propagate to the owner.
    */
+  /**
+   * Everything the account is, deleted, each store through its own delete path (the privacy policy's promise): the
+   * shares it gave and took, its workspaces, devices and MCP servers, its credentials (revoked at their providers), its
+   * mail and mail names, its Drive, its place in the fleet's index and Gallery, its built-in sign-in, then this object.
+   * A step that fails stops it before this object goes, so a retry still has every index here; each step is idempotent.
+   */
   async deleteAccount(caller: UserCaller, ownerUserId: string): Promise<{ ok: true; workspaces: number }> {
     await this.requireTier(caller, 'account');
 
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
+    const person = { userId: ownerUserId, email: (this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '').trim().toLowerCase() };
 
-    const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`);
+    // Every account it sent a card forgets it; its own card jobs are withdrawn first, so none lands after. Every account
+    // that sent it one forgets it too, where it shared.
+    await forgetSharesGiven(this.env, ownerUserId, caller, await this.shareCards_withdraw(caller));
+    const cards = this.sqlx<{ owner_user_id: string; workspace: string }>(`SELECT owner_user_id, workspace FROM user_share_cards`);
+
+    await forgetSharesReceived(this.env, person, caller, cards.map((card) => ({ ownerUserId: card.owner_user_id, workspace: card.workspace })));
+
+    // By name: the first teardown refused stops the sweep, so which went first must not be the query planner's choice.
+    const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces ORDER BY name`);
 
     for (const { name } of workspaces) {
       await this.workspaces.tearDownWorkspace(name, ownerUserId);
@@ -1326,11 +1394,27 @@ export class UserDO extends Agent<Env> {
       await this.mcpServers.userMcp_remove(caller, id);
     }
 
+    // Each grant revoked at its provider where it can be; a provider that refuses is logged, and the grant goes here.
+    for (const { key } of this.sqlx<{ key: string }>(`SELECT key FROM user_credentials`)) await this.credentials.disconnectCredential(key, true);
+
+    await objectNamed(this.env.MAILBOX, ownerUserId).deleteBox(ownerUserId);
+    await destroyDriveTenant(this.env, ownerUserId);
+
+    const { ControlPlaneDO } = this.env;
+
+    if (ControlPlaneDO !== undefined && hasControlPlane({ ControlPlaneDO })) {
+      await controlPlaneStub({ ControlPlaneDO }).forgetUser(await internalCaller(this.env), person);
+    }
+
+    if (builtinSignInOn(this.env)) await objectNamed(this.env.UserDO, BUILTIN_ACCOUNTS_OBJECT).builtinRemoveAccount(await ownerCaller(this.env), person);
+
     await this.destroy();
     // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made
-    // again, empty, and answers as the new account. They are this build's, so they carry its stamp.
+    // again, empty, and answers as the new account. They are this build's, so they carry its stamp. The
+    // one thing kept is when it was deleted, which refuses a card still on its way until a sign-in.
     this.initTables();
     writeStamp(durableStamps(this.ctx.storage.kv), 'account');
+    this.ctx.storage.kv.put(ACCOUNT_DELETED_KEY, Date.now());
 
     return { ok: true, workspaces: workspaces.length };
   }

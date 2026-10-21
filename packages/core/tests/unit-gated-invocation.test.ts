@@ -9,9 +9,9 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Effect } from 'effect';
-import { createTestActors, present } from '@kinu.run/test-utils';
+import { createTestActors, JOBS_WITH_ROOM, present } from '@kinu.run/test-utils';
 import {
-  createNimbusWorkspaceExecutor, createShellSession, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
+  createNimbusWorkspaceExecutor, createShellSession, DeferredApprovalQueue, DeferredApprovalStore, initOwnerRequestsTable,
   nimbusSessionFiles, nimbusSessionShell, withApprovalGatedShell, WORKSPACE_ROOT,
   type ShellApprovalOutcome, type ShellApprovalPolicy, type ShellApprovalRequest,
 } from '../src/index';
@@ -34,7 +34,7 @@ function owner(answer: ShellApprovalOutcome) {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  initDeferredApprovalsTable(execRaw);
+  initOwnerRequestsTable(execRaw);
   let seq = 0;
 
   const queue = new DeferredApprovalQueue({
@@ -110,6 +110,7 @@ describe('the workspace\'s own processes over the user\'s Drive', () => {
           process: { pid: 7, command, argv: [command], cwd: options?.cwd ?? WORKSPACE_ROOT, state: 'running', exitCode: null, startTime: 1, endTime: null, longRunning: true, attachedTty: false },
         };
       },
+      processes: { kill: async (pid) => ({ ok: true, pid }), whenEnded: () => new Promise<number>(() => undefined) },
       files: sessionFilesOver(),
     };
 
@@ -118,6 +119,7 @@ describe('the workspace\'s own processes over the user\'s Drive', () => {
 
     router.register(createNimbusWorkspaceExecutor({
       box,
+      jobs: JOBS_WITH_ROOM,
       shellSession: createShellSession({ home: WORKSPACE_ROOT, userRoots: () => ['/shared'] }),
       inline: { vfs: nimbusSessionFiles(box.files, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box, { home: WORKSPACE_ROOT }), craftStore: rt.craftStore },
     }));

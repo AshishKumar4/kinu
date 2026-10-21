@@ -3,7 +3,7 @@ import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
 import { makeKv, type FakeKv } from './helpers/kv';
 import { workerContext } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
-import { sandboxPreviewExposures, PREVIEW_ENTRY_PATH, VIEWER_EXCHANGE_PATH } from '@kinu.run/core';
+import { forgetSandboxPreviews, sandboxPreviewExposures, PREVIEW_ENTRY_PATH, VIEWER_EXCHANGE_PATH, type ListedKv } from '@kinu.run/core';
 import { mintViewerTicket, previewViewerKey, computerPreviewHandle, selfPreviewPass } from '../src/viewer-pass';
 
 // Dynamic: the entry's graph reaches `cloudflare:email` and `cloudflare:workers` through `agents`,
@@ -308,5 +308,40 @@ describe('a preview host failure', () => {
     expect(res.headers.get('content-type')).toContain('application/json');
     expect(JSON.stringify(await res.json())).not.toContain('sk-live-SECRET');
     expect(p.resolved).toEqual([]);
+  });
+});
+
+// A deleted workspace's preview records go (account deletion). Workers KV may answer a page with no keys and more to
+// come (developers.cloudflare.com/kv/api/list-keys/#pagination); review of the account deletion, 2026-10-20: the forget
+// stopped at the first empty page.
+describe("a deleted workspace's preview records", () => {
+  test('are deleted on every page, past an empty one, and no other sandbox\'s are', async () => {
+    const entries = new Map<string, string>();
+
+    // Pages of two keys, after the cursor's; the first page is empty with more to come.
+    const kv: ListedKv = {
+      get: async (key) => entries.get(key) ?? null,
+      put: async (key, value) => { entries.set(key, value); },
+      delete: async (key) => { entries.delete(key); },
+      list: async ({ prefix, cursor }) => {
+        const keys = [...entries.keys()].filter((key) => key.startsWith(prefix)).sort();
+
+        if (cursor === undefined) return { keys: [], list_complete: keys.length === 0, cursor: '' };
+        const page = keys.filter((key) => key > cursor).slice(0, 2);
+        const last = page.at(-1);
+
+        return { keys: page.map((name) => ({ name })), list_complete: last === undefined || last === keys.at(-1), ...(last !== undefined && { cursor: last }) };
+      },
+    };
+
+    for (const port of [3000, 4100, 5173, 8080, 8787]) await sandboxPreviewExposures(kv, 'priya-notes-box').publish(port, `token-${String(port)}`);
+    await sandboxPreviewExposures(kv, 'northwind-api-box').publish(4100, 'token-dana');
+    const dana = [...entries.keys()].filter((key) => key.includes('northwind-api-box'));
+
+    await forgetSandboxPreviews(kv, 'priya-notes-box');
+
+    expect([...entries.keys()].filter((key) => key.includes('priya-notes-box'))).toEqual([]);
+    expect([...entries.keys()].filter((key) => key.includes('northwind-api-box'))).toEqual(dana);
+    expect(dana.length).toBeGreaterThan(0);
   });
 });

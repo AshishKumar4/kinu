@@ -11,6 +11,36 @@ export function initEffectTombstoneTable(execRaw: RawSqlExec): void {
     key         TEXT NOT NULL,
     PRIMARY KEY (actor_id, scope, key)
   )`);
+  // A model's answer for keyed work, held from when it is paid for until the work's tombstone lands, so a replay applies
+  // what was decided instead of asking again. The text is the feature's own encoding: each reads its own back.
+  execRaw(`CREATE TABLE IF NOT EXISTS prepared_outputs (
+    actor_id    TEXT NOT NULL,
+    scope       TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    output      TEXT NOT NULL,
+    PRIMARY KEY (actor_id, scope, key)
+  )`);
+}
+
+/** The answer held for this work, as its feature wrote it; undefined when none is. */
+export function preparedOutput(sql: SqlExecutor, actor: ActorHandle, effect: EffectKey): string | undefined {
+  actor.assertCurrent();
+
+  return sql<{ output: string }>`SELECT output FROM prepared_outputs
+    WHERE actor_id = ${actor.actorId} AND scope = ${effect.scope} AND key = ${effect.key}`[0]?.output;
+}
+
+/** Holds `output` for this work; the first one held is the one kept. */
+export function prepareOutput(sql: SqlExecutor, actor: ActorHandle, effect: EffectKey, output: string): void {
+  actor.assertCurrent();
+  void sql`INSERT INTO prepared_outputs (actor_id, scope, key, output) VALUES (${actor.actorId}, ${effect.scope}, ${effect.key}, ${output})
+    ON CONFLICT(actor_id, scope, key) DO NOTHING`;
+}
+
+/** In the commit that records the work done: its answer is no longer owed to a replay. */
+export function retirePreparedOutput(sql: SqlExecutor, actor: ActorHandle, effect: EffectKey): void {
+  actor.assertCurrent();
+  void sql`DELETE FROM prepared_outputs WHERE actor_id = ${actor.actorId} AND scope = ${effect.scope} AND key = ${effect.key}`;
 }
 
 /** True when this actor has recorded this scope+key. Keys are minted per actor, so the owner is part of the identity. */

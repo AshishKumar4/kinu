@@ -1,12 +1,12 @@
 // openWorkspaceCLI: the local resume path, reading a workspace's identity and SOUL.md.
-import { workspaceHome } from '../src/runtime';
+import { createCLIRuntime, workspaceHome } from '../src/runtime';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { spawnTest, workspaceDatabase } from '@kinu.run/test-utils';
 
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { LLMProviderConfig } from '@kinu.run/core';
+import { actorHomeName, registerLocalActor, type LLMProviderConfig } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { openWorkspaceCLI } from '../src/open';
 
@@ -81,3 +81,43 @@ describe('openWorkspaceCLI', () => {
     db.close();
   });
 });
+
+// A facet is one of the root's agents over the root's database: opened over a database another build made, it ran its
+// schema over that database with no stamp read, where the root is refused. One check, the root's, for both.
+describe('a facet over a database another build made', () => {
+  // A file, as a facet's space sits beside its database's.
+  const old = (): Database => {
+    const db = workspaceDatabase(join(scratchDir('old-facet'), 'agent.db'));
+
+    db.exec('PRAGMA user_version = 178967584');
+    db.exec('CREATE TABLE inodes (path TEXT PRIMARY KEY)');
+    db.run("INSERT INTO inodes VALUES ('home/main/notes/plan.md')");
+
+    return db;
+  };
+
+  const binding = async () => {
+    const { rt } = await openWorkspaceCLI(workspaceDatabase(bornPath), 'agent.db', { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM });
+    const child = registerLocalActor(rt.actor, { name: 'child', creationId: 'child-birth', origin: 'agent', lifetime: 'durable' });
+
+    return { facet: actorHomeName({ origin: 'agent', name: child.name, storageKey: child.storageKey }), actorBinding: child };
+  };
+
+  test('is refused by name as its root is, before any schema runs over it', async () => {
+    const db = old();
+    const tables = db.query('SELECT name, sql FROM sqlite_master ORDER BY name').all();
+
+    await expect(openWorkspaceCLI(db, 'agent.db', { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM, ...await binding() })).rejects.toThrow('made by an older version of Kinu');
+    expect(db.query('SELECT name, sql FROM sqlite_master ORDER BY name').all()).toEqual(tables);
+  });
+
+  test('is refused when its runtime is bound by the host, which opens no root over it', async () => {
+    const db = old();
+    const tables = db.query('SELECT name, sql FROM sqlite_master ORDER BY name').all();
+    const facet = await binding();
+
+    expect(() => createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: DUMMY_LLM, ...facet })).toThrow('made by an older version of Kinu');
+    expect(db.query('SELECT name, sql FROM sqlite_master ORDER BY name').all()).toEqual(tables);
+  });
+});
+

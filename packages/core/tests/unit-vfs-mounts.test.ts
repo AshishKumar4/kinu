@@ -350,6 +350,31 @@ describe('the workspace plane mount table', () => {
 		// A container is a binding: it provisions on first touch.
 		expect(await readText(mounted, '/computer/workspace/b.txt')).toBe('y');
 	});
+
+	// Owner decision, 2026-10-20 ("Run where the files live"): a command runs on the machine its cwd is on, which the
+	// plane's own lookup says (rc22: a program's `npx tsc` in /computer/… ran in the workspace, over the mount).
+	test('owner: the machine a path is on, by the namespace\'s own lookup, and the path there', async () => {
+		const deviceTree = fakeTree({ '/studio/proj/a.txt': 'x' });
+		const sandboxFiles = fakeTree({ '/workspace/app/b.txt': 'y' });
+		let deviceUp = true;
+
+		const mounts = standardMounts((name) => {
+			if (name === 'device') return { files: deviceTree, isAvailable: () => deviceUp };
+
+			if (name === 'computer') return { files: sandboxFiles, isAvailable: () => true };
+
+			return undefined;
+		});
+
+		const mounted = withMountTable(fakeTree({ '/notes/n.md': 'n' }), mounts);
+
+		expect(await mounted.owner('/computer/workspace/app')).toEqual({ executor: 'computer', path: '/workspace/app' });
+		expect(await mounted.owner('/pc/studio/proj')).toEqual({ executor: 'device', device: 'studio', path: '/proj' });
+		expect(await mounted.owner('/notes')).toEqual({ executor: 'workspace', path: '/notes' });
+		await expect(mounted.owner('/pc')).rejects.toMatchObject({ code: 'bad_input' });
+		deviceUp = false;
+		await expect(mounted.owner('/pc/studio/proj')).rejects.toMatchObject({ code: 'unavailable', message: 'no device connected' });
+	});
 });
 
 describe('the one plane, mutated: rename and removeRecursive route like every other op', () => {

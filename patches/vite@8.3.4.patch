@@ -1,8 +1,8 @@
 diff --git a/dist/node/module-runner.js b/dist/node/module-runner.js
-index 16eb20c5ce44c84855af7438a2f0bfb2849c1bc7..def1971d33e4b17f35075682ef4ad10fc65660db 100644
+index 2a7a295..92fc789 100644
 --- a/dist/node/module-runner.js
 +++ b/dist/node/module-runner.js
-@@ -1256,7 +1256,18 @@ var ModuleRunner = class {
+@@ -1285,7 +1285,18 @@ var ModuleRunner = class {
  			}),
  			[ssrImportMetaKey]: meta
  		};

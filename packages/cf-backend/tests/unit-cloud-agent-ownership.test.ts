@@ -9,7 +9,6 @@ import {
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { testOwner } from './helpers/user-do';
 import { userRoutes } from '../src/user/routes';
-import { handleCreateWorkspaceRequest } from '../src/user/workspace-access';
 import { createCloudWorkspaceForUser, type CloudWorkspaceRegistry } from '../src/user/workspace-create';
 import { claimOwnedWorkspace, ownedByAnotherAccount } from '../src/user/workspace-ownership';
 import {
@@ -892,74 +891,3 @@ async function deletesReaching(workspace: {
 
   return { userDO, remove };
 }
-
-/** `user_workspaces` as accounts created before the 2026-09-22 deploy hold it; `IF NOT EXISTS` keeps this CHECK live. */
-const GENESIS_USER_WORKSPACES_DDL = `
-  CREATE TABLE user_workspaces (
-    name          TEXT PRIMARY KEY,
-    display_name  TEXT NOT NULL,
-    name_origin   TEXT NOT NULL DEFAULT 'user' CHECK (name_origin IN ('auto', 'user')),
-    created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    last_visited  INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-    archived_at   INTEGER,
-    delete_pending INTEGER NOT NULL DEFAULT 0,
-    create_pending INTEGER NOT NULL DEFAULT 0,
-    fork_lease_expires_at INTEGER
-  )`;
-
-describe('a create on an account whose registry predates the current build', () => {
-  test('a mission-only create lands, and its stand-in title is the system\'s', async () => {
-    // The live P0 of 2026-09-22: mission-only creates on older accounts failed
-    // `CHECK constraint failed: name_origin IN ('auto', 'user')`.
-    const storage = new Database(':memory:');
-    storage.exec(GENESIS_USER_WORKSPACES_DDL);
-    const user = createTestUserDO({ durableObjectId: USER_ID, storage });
-
-    const registry: CloudWorkspaceRegistry = {
-      ...registryStub(),
-      registerWorkspace: (caller, name, displayName, from) => user.userDO.registerWorkspace(caller, name, displayName, from),
-      ensureWorkspaceCapability: (name, presented) => user.userDO.ensureWorkspaceCapability(name, presented),
-    };
-
-    const orchestrator = workspaceObject({
-      async claimOwner(userId: string) { return { owner: userId, capabilityHash: null }; },
-      async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) { return { displayName, nameOrigin }; },
-      async setSoul(soul: string) { return { soul, purpose: '' }; },
-      async resetWorkspaceBaseline() { return { ok: true as const, capturedAt: 0, cleanupFailures: [] }; },
-      async setModel(spec: string) { return { ok: true, spec }; },
-      async beginGenesisTurn() { return { started: true }; },
-    });
-
-    const env = {
-      UserDO: { idFromName: (name: string) => name, get: () => registry },
-      OrchestratorAgent: { idFromName: (name: string) => name, get: () => orchestrator },
-      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    };
-
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
-
-    try {
-      const response = await handleCreateWorkspaceRequest({
-        request: new Request('https://kinu.run/api/user/workspaces', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ purpose: 'Build a hello world app in react' }),
-        }),
-        env,
-        userId: USER_ID,
-        userDO: registry,
-      });
-
-      expect({ status: response.status, body: await response.text() })
-        .toMatchObject({ status: 201 });
-      expect(storage.query('SELECT display_name, name_origin FROM user_workspaces').all()).toEqual([
-        { display_name: 'Build a hello world app in react', name_origin: 'auto' },
-      ]);
-    } finally {
-      globalThis.fetch = originalFetch;
-      user.close();
-      storage.close();
-    }
-  });
-});

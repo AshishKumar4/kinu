@@ -26,7 +26,7 @@ export type StoredHeadUsage = { readonly [C in HeadUsageColumn]: number | null }
 /** `neurons` is REAL because it is billed in a fractional unit. */
 
 /** Usage columns are NULLable with no default: NULL means never reported, and `insertSpawn` names no usage column. */
-const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal (
+const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal ( /* derived from head_runs: a head belongs to its run */
   actor_id TEXT NOT NULL,
   id TEXT NOT NULL,
   parent_id TEXT,
@@ -53,21 +53,15 @@ const HEAD_JOURNAL_DDL = `CREATE TABLE IF NOT EXISTS head_journal (
   PRIMARY KEY (actor_id, id)
 )`;
 
-/** The merged narrative of a settled top-level run, keyed by root_id. */
-const HEAD_MERGE_RESULTS_DDL = `CREATE TABLE IF NOT EXISTS head_merge_results (
-  actor_id TEXT NOT NULL,
-  root_id TEXT NOT NULL,
-  merged_narrative TEXT NOT NULL,
-  PRIMARY KEY (actor_id, root_id)
-)`;
-
 export function initHeadsTables(execRaw: RawSqlExec): void {
-  // One row per split, anchoring top-level runs whose heads all have a NULL parent_id.
+  // One row per split, anchoring top-level runs whose heads all have a NULL parent_id. `merged_narrative` is the run's
+  // cached merge, which settles it: null until then, and an empty narrative is a merge.
   execRaw(`CREATE TABLE IF NOT EXISTS head_runs (
     actor_id TEXT NOT NULL,
     root_id TEXT NOT NULL,
     rationale TEXT,
     spawned_at INTEGER NOT NULL,
+    merged_narrative TEXT,
     PRIMARY KEY (actor_id, root_id)
   )`);
 
@@ -79,7 +73,7 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_status ON head_journal(actor_id, status, root_id)`);
 
   // A step is named by its id, which its head and seq generate; its key is the two.
-  execRaw(`CREATE TABLE IF NOT EXISTS head_steps (
+  execRaw(`CREATE TABLE IF NOT EXISTS head_steps ( /* derived from head_journal: a step is its head's */
     actor_id TEXT NOT NULL,
     head_id TEXT NOT NULL,
     seq INTEGER NOT NULL,
@@ -88,7 +82,4 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
     created_at INTEGER NOT NULL,
     PRIMARY KEY (actor_id, head_id, seq)
   )`);
-
-  execRaw(HEAD_MERGE_RESULTS_DDL);
-
 }

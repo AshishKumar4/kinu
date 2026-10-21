@@ -58,7 +58,7 @@ import { ActorSession, type ActorTurnLease,
   steerSkillsBlock,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
-  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeUpdatesTable,
+  TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeTables,
   toolsBehindBoundary, type ToolBoundary, assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
   type OwedReport, type SubordinateReportStatus, type TurnReportFacts,
@@ -193,7 +193,7 @@ type Writable<T> = { -readonly [Key in keyof T]: T[Key] };
 
 /**
  * Per-message aggregate cap on raw attachment bytes inlined as data URLs. The cloud cap
- * (CLOUD_MAX_INLINE_ATTACHMENT_BYTES, 1 MiB) comes from `do.sqlite.row_bytes`; locally the bound is
+ * (CLOUD_MAX_INLINE_ATTACHMENT_BYTES, 1 MiB) comes from the agents SDK's chat row guard; locally the bound is
  * the provider request: base64 of 8 MiB raw ≈ 11 MB, re-sent every later turn. Larger stays a path.
  */
 export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
@@ -441,7 +441,7 @@ export class LocalAgentSession {
     this.eventLog = orchestration.eventLog;
 
     initTerminalEffectTable(this.rt.storage.execRaw);
-    initSleepTimeUpdatesTable(this.rt.storage.execRaw);
+    initSleepTimeTables(this.rt.storage.execRaw);
     // `turn_id` is NULL when the send queued while the actor was idle.
     initPendingSendTables(this.rt.storage.execRaw);
     const pendingSends = new PendingSendStore(this.rt.storage.sql, this.rt.actor.actorId);
@@ -736,7 +736,7 @@ export class LocalAgentSession {
       },
       // The frame a cloud workspace sends for the same rows, so every terminal re-reads the queue one way.
       announce: () => {
-        this.host.broadcast({ type: READS_CHANGED_EVENT, reads: readsOfTables(['deferred_approvals']) });
+        this.host.broadcast({ type: READS_CHANGED_EVENT, reads: readsOfTables(['owner_requests']) });
         // What waits on the owner moved: each wait it now meets wakes its agent, in the session's join set.
         this.tracked(() => this.ownerWaitsChanged());
       },
@@ -1281,10 +1281,15 @@ export class LocalAgentSession {
   /** Run pending drains now, bypassing debounce; the daemon's tick calls this before end(). */
   /** Its due events handed to its chat, and the turns that opened run, before the caller (a daemon's tick, a pass) moves
    *  on: outside the crossing, so no turn's own close waits on one queued behind it. */
-  async flushPendingDrains(): Promise<void> {
+  async flushPendingDrains(admitted?: () => Promise<void>): Promise<void> {
     await this.chat.flushPendingDrains();
+    // Its events are queued as turns now: `admitted` is told before they are joined, since one may wait on the owner.
+    await admitted?.();
 
-    for (const id of this.deliveries.takenSince()) await this.deliveredTurnSettled(id);
+    for (const id of this.deliveries.takenSince()) {
+      // One held behind an open question to the owner runs once they answer: this pass, which holds the actor, ends.
+      if (await this.chat.announcementSettledOrHeld(id) === 'held') return;
+    }
   }
 
   /** What this agent is owed and has been handed, as its orchestration commits it. */
@@ -1645,10 +1650,15 @@ export class LocalAgentSession {
       // A queued turn always has a live pump, so awaiting it drains the queue.
       if (this.chat.pumpPromise) { await this.chat.pumpPromise; continue; }
 
-      if (this.backgroundFibers.size === 0) return;
-
-      if (!await this.joinBackgroundFibers(deadline)) return;
+      // The grace bounds the jobs, not a turn one of them woke while they were joined: that turn is joined too.
+      if ((this.backgroundFibers.size === 0 || !await this.joinBackgroundFibers(deadline)) && !this.pumping()) return;
     }
+  }
+
+  /** Whether a turn runs here or is queued to run: the pump settleBackgroundWork() joins. A turn held behind an open
+   *  question to the owner is neither until the question closes. */
+  pumping(): boolean {
+    return this.chat.pumpPromise !== null;
   }
 
   /** Append to the run-event log, scoped to the in-flight run unless `runId` is given. Never throws. */

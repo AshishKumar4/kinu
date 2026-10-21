@@ -6,6 +6,7 @@ import { createTestRuntime, present } from '@kinu.run/test-utils';
 import { initSessionContextTables } from '../src/session/schema';
 import { SessionMessages } from '../src/session/messages';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
+import { SPILLED_BYTES } from './helpers/fork-conversation';
 import { SessionPayloads } from '../src/session/payload';
 import { SessionContext, type ContextEntry, type ContextSelection } from '../src/session/context';
 import { SessionProposals } from '../src/session/proposals';
@@ -78,7 +79,7 @@ test('an open message reads its accumulated text and a sealed one its content', 
 });
 
 test('an accumulating part never puts one row over the platform limit and seals through the spill rule', async () => {
-  // `do.sqlite.row_bytes` is 2 MB: a long reasoning part continues in the next row.
+  // One append can be any length: a long reasoning part continues in the next row, each under `do.sqlite.row_bytes`.
   const s = setup();
 
   try {
@@ -86,12 +87,14 @@ test('an accumulating part never puts one row over the platform limit and seals 
     s.messages.open('assistant', 'long', 'output');
     s.messages.streamOpenPart('long', { partNo: 0, streamOrder: 0, descriptor });
     const window = 'r'.repeat(300_000);
+    // Past the inline bound, so the sealed message spills.
+    const appends = Math.ceil(SPILLED_BYTES / window.length);
 
-    for (let i = 0; i < 4; i++) s.messages.streamAppend('long', 0, window);
+    for (let i = 0; i < appends; i++) s.messages.streamAppend('long', 0, window);
     const widest = s.testSql.db.query<{ n: number }, []>('SELECT MAX(length(text)) AS n FROM stream_parts').get()?.n ?? -1;
     expect(widest * 3).toBeLessThan(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value);
     expect(widest).toBeLessThan(300_000);
-    expect(await s.messages.materialize({ messageId: 'long' })).toEqual({ role: 'assistant', content: [{ type: 'reasoning', text: window.repeat(4) }] });
+    expect(await s.messages.materialize({ messageId: 'long' })).toEqual({ role: 'assistant', content: [{ type: 'reasoning', text: window.repeat(appends) }] });
     const parts = await s.messages.openParts('long');
 
     if (parts === null) throw new Error('the message is open');
@@ -99,7 +102,7 @@ test('an accumulating part never puts one row over the platform limit and seals 
     const row = s.testSql.db.query<{ content_json: string | null; content_path: string | null }, []>("SELECT content_json, content_path FROM session_messages WHERE message_id = 'long'").get();
     expect(row?.content_json).toBeNull();
     expect(row?.content_path).not.toBeNull();
-    expect(await s.messages.materialize({ messageId: 'long' })).toEqual({ role: 'assistant', content: [{ type: 'reasoning', text: window.repeat(4) }] });
+    expect(await s.messages.materialize({ messageId: 'long' })).toEqual({ role: 'assistant', content: [{ type: 'reasoning', text: window.repeat(appends) }] });
   } finally { s.testSql.close(); }
 });
 
@@ -376,7 +379,8 @@ test('read-only transcript authorization is checked again after payload access',
 
   try {
     initSessionTranscriptTables(s.rt.storage.execRaw);
-    const text = 'retained text '.repeat(100_000);
+    // Past the inline bound, so the read reaches the payload's file.
+    const text = 'retained text '.repeat(Math.ceil(SPILLED_BYTES / 14));
     const prepared = await s.messages.prepare({ role: 'user', content: text }, 'input');
     const reference = s.messages.insert(prepared, 'input');
     const writer = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });

@@ -7,6 +7,7 @@
  * Not facets: `do.facet.cpu_shared` means a facet wave serialises like one isolate.
  */
 
+import type { ComputerProcessEnds } from '@kinu.run/core';
 import type { Agent, AgentContext } from 'agents';
 import {
   childContextResolver, localContextTree, type ContextEditor, type ContextTree, createSeatHost, defaultLoopOrigin,
@@ -24,7 +25,7 @@ import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { flight, KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
 import { Cause, Effect } from 'effect';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks, type WorkspaceBoxUse } from './runtime';
-import type { CommandEnvironment, LiveRead } from '@kinu.run/core';
+import type { AdoptsJobs, CommandEnvironment, LiveRead } from '@kinu.run/core';
 import type { HostedBox, HostedWorkspace } from './workspace-host';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
@@ -73,9 +74,13 @@ export interface WorkspaceHostSeams {
   readonly boxUse: WorkspaceBoxUse;
   readonly modelOperations: ModelOperationSink;
   tracing(): AgentTracing;
-  slate(actor: ActorHandle, operation: SlateOperation): Promise<SlateCallResult>;
+  slate(actor: ActorHandle, operation: SlateOperation, turn?: string): Promise<SlateCallResult>;
   /** The owner's needs-you queue: one per workspace, which each actor parks on as itself. */
   deferrals(actorId: string): DeferredApprovalChannel | undefined;
+  /** The runner `actor`'s calls become jobs on, a process it starts among them. */
+  jobs(actor: BoundActor): AdoptsJobs;
+  /** Where the workspace's computer processes run as jobs end. */
+  processEnds(): Pick<ComputerProcessEnds, 'ended' | 'state'>;
   /** The loop origin a creation site named for this actor, or null for the kind's default. */
   chosenLoopOrigin(record: WorkspaceActor): LoopOrigin | null;
   /**
@@ -203,9 +208,11 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
         liveReadsMoved: (reads) => { seams.liveReadsMoved(reads); },
         servingMoved: () => seams.servingMoved(),
         boxUse: seams.boxUse,
-        slate: (operation) => seams.slate(bound.handle, operation),
+        slate: (operation, turn) => seams.slate(bound.handle, operation, turn),
         // The workspace's own actor's, or a hire's: a decision wakes either. A swarm head has none, as no drain resumes it.
         deferrals: () => (bound.record.origin === 'swarm' ? undefined : seams.deferrals(bound.handle.actorId)),
+        jobs: () => seams.jobs(bound),
+        processEnds: () => seams.processEnds(),
         // The chat's authority: a self-resolved profile could differ from the turn's and make a search unreproducible.
         resolveProfile: async () => (await seams.resolveProfile({
           actor: bound.handle, availableTools: [], workMode: 'build',

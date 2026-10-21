@@ -23,3 +23,15 @@ export function PageHeader({ icon, title, children, className = "" }: {
     </header>
   );
 }
+
+/** A page of forms under the shared header: it starts on every page's left edge and stops at a reading width. */
+export function FormPage({ icon, title, children }: { icon: ReactNode; title: string; children: ReactNode }) {
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className={`max-w-4xl space-y-6 ${PAGE_BODY}`}>
+        <PageHeader icon={icon} title={title} />
+        {children}
+      </div>
+    </div>
+  );
+}

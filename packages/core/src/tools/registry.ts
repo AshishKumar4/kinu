@@ -1,7 +1,8 @@
 import type { ToolSet } from 'ai';
 import { REFUSAL_TYPE } from '../types/tool-outcome';
-import type { CodemodeProvider, MemberDeclaration } from '../types/codemode';
+import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type MemberDeclaration } from '../types/codemode';
 import { namespaceDeclaration } from './operation-surfaces';
+import { EXEC_ANSWERS_AT_EXIT, EXEC_RUNS_WHERE_ITS_CWD_IS } from '../operations/executors';
 
 /** Canonical built-in tool names, reach, and descriptions. Renaming one breaks prompts and UI. */
 
@@ -260,6 +261,7 @@ export const BUILTIN_TOOL_SPECS = {
       'Write it like a Node script: top-level statements, `await` anywhere, and `return` (or a trailing expression) hands back the result. Type annotations do not parse.',
       '`tools.<name>(input)` calls a native tool with the input its schema declares; a tool saved with `workspace.createTool` joins `tools` from the next program, declared in dynamic_context.',
       '`require()` loads Node builtins, plus `fs`, `fs/promises` and `child_process` over your workspace files and shell; `process.cwd()` is the workspace root. Only promise forms work: `execSync`, `spawn` and `fs.*Sync` throw.',
+      `With \`child_process\`: ${EXEC_RUNS_WHERE_ITS_CWD_IS}`,
       '`fs` keeps bytes as they are: `readFile` without an encoding returns the file\'s bytes as a `Uint8Array`, and `writeFile` writes a `Uint8Array` exactly.',
       '`console.log` output comes back with the result. Variables do not survive between programs; a `private` `db` table keeps data.',
       'A refused call, in any namespace, resolves to a `Refusal` instead of throwing: check for one before reading a result\'s fields. Returning it fails the call with that reason.',
@@ -277,6 +279,8 @@ export const BUILTIN_TOOL_SPECS = {
         + 'concurrent calls run side by side. A `name` keeps its directory and exported variables from call to call, '
         + 'and runs one call at a time.',
       'Output starts with the directory the command started in, holds both streams, labelled when both wrote, and gives the exit code when it is not zero.',
+      `On the workspace runtime: ${EXEC_RUNS_WHERE_ITS_CWD_IS}`,
+      EXEC_ANSWERS_AT_EXIT,
       'Each runtime keeps its own files; `workspace` is the filesystem the `file` tool reads.',
       'In a container, `nproc` and `free` report the host: size parallelism from the cpus and memory the execution status lists.',
     ],
@@ -368,7 +372,10 @@ function reachedDeclarations({ declarations, tools }: DescribedProvider): [strin
  * leaves them out: they were half the text of every request.
  * Both backends compose it here, never through a template token: a `$` in a call form is text.
  */
-export function renderCodemodeDescription(providers: readonly DescribedProvider[], substrate: SandboxSubstrate = 'hosted'): string {
+export function renderCodemodeDescription(all: readonly DescribedProvider[], substrate: SandboxSubstrate = 'hosted'): string {
+  // `tools.*` are the model's own tools, in its tool list and prompt; `describe` answers them, the docstring does not.
+  const providers = all.filter((provider) => provider.name !== CRAFTED_TOOL_NAMESPACE);
+
   const listed = providers.flatMap((provider) => {
     const members = reachedDeclarations(provider).map(([, declared]) => declared.call);
     const purpose = provider.summary === undefined ? '' : ` ${provider.summary}`;

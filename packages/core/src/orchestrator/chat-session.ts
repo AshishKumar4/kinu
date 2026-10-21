@@ -730,6 +730,28 @@ export class ChatSession {
     await this.joinAnnounced(identity);
   }
 
+  /**
+   * Once the turn announced under `identity` has settled, or is held: queued behind an open question to the owner,
+   * which only their answer lets run (`runnable`). The pump is joined too, so a question opened while it waits is seen.
+   */
+  async announcementSettledOrHeld(identity: string): Promise<'settled' | 'held'> {
+    for (;;) {
+      if (!this.announcementInFlight(identity)) return 'settled';
+
+      if (this.heldByOwner(identity)) return 'held';
+      const pump = this.activePump;
+
+      // With no pump yet, the join is the only wait, as `announcementSettled`'s is.
+      await (pump === null ? this.joinAnnounced(identity) : Promise.race([this.joinAnnounced(identity), pump]));
+    }
+  }
+
+  private heldByOwner(identity: string): boolean {
+    const queued = this.runningAnnouncement === identity ? undefined : this.queue.find((item) => item.idempotencyKey === identity);
+
+    return queued !== undefined && !this.runnable()(queued);
+  }
+
   announcementInFlight(identity: string): boolean {
     return this.runningAnnouncement === identity
       || this.queue.some((item) => item.idempotencyKey === identity);
