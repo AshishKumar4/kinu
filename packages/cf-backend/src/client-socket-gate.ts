@@ -190,7 +190,7 @@ class ClientSocketGate {
   /** An actor that cannot be acted on now refuses each frame in its frame's own shape; an inspection still reads it. */
   private refusedUnavailable(connection: Connection, message: WSMessage, rpc: RpcFrame | null): boolean {
     const unavailable = this.host.runtimeRefusal();
-    const inspection = rpc && (requiredRpcAccess(rpc.method) === 'workspace.read' || rpc.method === 'inspectSubordinate' || rpc.method === 'exportWorkspaceArchive');
+    const inspection = rpc && (requiredRpcAccess(rpc.method) === 'workspace.read' || rpc.method === 'inspectSubagent' || rpc.method === 'exportWorkspaceArchive');
 
     if (!unavailable || inspection) return false;
     const event = v.is(v.string(), message) ? parseProtocolMessage(message) : null;

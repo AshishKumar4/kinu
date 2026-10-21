@@ -32,7 +32,7 @@ test('large canonical payloads use the issued child home', async () => {
   }
 });
 
-// A home is named by storage key: two parents may each hire a `helper`, and one name would be one home for both.
+// A home is named by storage key: two parents may each hire a `subagent`, and one name would be one home for both.
 test('two hires of one name under two parents keep separate homes, named as the shell and retirement name them', async () => {
   const db = workspaceDatabase(scratchPath('workspace', 'agent.db'));
   const runtime = createCLIRuntime(db, { cwd: scratchDir('workspace-folder'), llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' } });
@@ -40,8 +40,8 @@ test('two hires of one name under two parents keep separate homes, named as the 
   try {
     const { directory } = localActorDirectory(runtime.actor);
     const lead = directory.create({ parent: runtime.actor, name: 'lead', origin: 'agent', lifetime: 'durable', creationId: 'lead' });
-    const mine = directory.create({ parent: runtime.actor, name: 'helper', origin: 'agent', lifetime: 'durable', creationId: 'mine' });
-    const theirs = directory.create({ parent: lead, name: 'helper', origin: 'agent', lifetime: 'durable', creationId: 'theirs' });
+    const mine = directory.create({ parent: runtime.actor, name: 'subagent', origin: 'agent', lifetime: 'durable', creationId: 'mine' });
+    const theirs = directory.create({ parent: lead, name: 'subagent', origin: 'agent', lifetime: 'durable', creationId: 'theirs' });
 
     if (!runtime.filesForActor) throw new Error('runtime did not install its actor file resolver');
     const [a, b] = [await runtime.filesForActor(mine), await runtime.filesForActor(theirs)];

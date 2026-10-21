@@ -1,37 +1,37 @@
-/** Subordinates: roster, identity, admission and the one orchestration policy, platform-neutral. */
+/** Subagents: roster, identity, admission and the one orchestration policy, platform-neutral. */
 
 import { Effect, Cause } from 'effect';
 import { settle, settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import type { EventLog, PublishResult } from '../events/hub/log';
-import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
+import type { SubagentReportHandoff, SubagentReportStatus } from '../events/hub/types';
 import type { SpilledContent } from '../events/hub/content-spill';
 import type { SerializedMessage } from '../heads/types';
 import type { SqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { DelegationBudget } from './depth';
-import { SubordinateRosterStore } from './roster';
-import { requireSubordinateActorName } from '../identity/actor-key';
+import { SubagentRosterStore } from './roster';
+import { requireSubagentActorName } from '../identity/actor-key';
 import { codenameFor, mintAgentName, type NameOrigin } from '../identity/naming';
 import type { WorkspaceActorDirectory } from '../identity/workspace-actors';
 import type { ActorReference } from '../identity/actor-handle';
-import { admitSubordinateBirth, type SubordinateSeed } from './birth';
+import { admitSubagentBirth, type SubagentSeed } from './birth';
 import type { WorkMode } from '../types/turn';
 import type { AgentConfigStore } from '../config/store';
 import type { RoleId, TierId } from '../profiles/catalog';
 import type {
-  SubordinateDismissal,
-  SubordinateHandoff,
-  SubordinateRosterEntry,
+  SubagentDismissal,
+  SubagentHandoff,
+  SubagentRosterEntry,
   TeamToolDeps,
 } from '../delegation/agents-tool';
-import { TEMPORARY_LIFETIME, terminalTaskReport, type OwedReport, type SubordinateLifetime, type TaskTurnEnding, type TemporaryAgentPort } from './temporary';
+import { TEMPORARY_LIFETIME, terminalTaskReport, type OwedReport, type SubagentLifetime, type TaskTurnEnding, type TemporaryAgentPort } from './temporary';
 import { KinuError, renderThrownChain } from '../obs/index';
-import type { SubordinateInheritedContext } from '../types/subordinates';
+import type { SubagentInheritedContext } from '../types/subagents';
 import type { ModelMessage } from 'ai';
 import { inheritedContextFromHistory } from '../orchestrator/heads-support';
 
-export interface SubordinateLiveStatus {
+export interface SubagentLiveStatus {
   lastActivity: number | null;
   recentSteps: Array<{
     event: string;
@@ -48,9 +48,9 @@ const ActivityRowSchema = v.object({
   created_at: v.number(),
 });
 
-export function readSubordinateLiveStatus(
+export function readSubagentLiveStatus(
   sql: SqlExec, actor: ActorHandle,
-): SubordinateLiveStatus {
+): SubagentLiveStatus {
   actor.assertCurrent();
 
   const recentSteps = sql.exec(
@@ -83,7 +83,7 @@ export function readSubordinateLiveStatus(
 }
 
 /** Read from the child's own `actor_config`, the single authority; never persisted elsewhere. */
-interface SubordinateDescriptor {
+interface SubagentDescriptor {
   displayName: string;
   nameOrigin: NameOrigin;
   role: RoleId;
@@ -92,11 +92,11 @@ interface SubordinateDescriptor {
 }
 
 /** Null when the child cannot be asked; callers render unavailable rather than stale. */
-export interface SubordinateDescriptorSource {
-  read(): SubordinateDescriptor | null;
+export interface SubagentDescriptorSource {
+  read(): SubagentDescriptor | null;
 }
 
-export function subordinateDescriptorSource(config: AgentConfigStore): SubordinateDescriptorSource {
+export function subagentDescriptorSource(config: AgentConfigStore): SubagentDescriptorSource {
   return {
     read: () => ({
       displayName: config.getDisplayName() ?? '',
@@ -131,23 +131,23 @@ function namingBrief(input: { readonly brief?: string; readonly mission?: string
 }
 
 /** Only the birth assignment carries a fork; later tasks have no new prefix. */
-export function subordinateForkContext(context?: SubordinateInheritedContext): SerializedMessage[] {
+export function subagentForkContext(context?: SubagentInheritedContext): SerializedMessage[] {
   return context?.kind === 'fork' ? context.messages : [];
 }
 
-export function subordinateTurnContext(log: EventLog, turnId: string): SerializedMessage[] {
-  return log.query({ turn_id: turnId, variant: 'subordinate_task' }).flatMap((event) =>
-    event.variant === 'subordinate_task' && (event.payload_visibility === 'full' || event.payload_visibility === 'redact')
-      ? subordinateForkContext(event.payload.inherited_context)
+export function subagentTurnContext(log: EventLog, turnId: string): SerializedMessage[] {
+  return log.query({ turn_id: turnId, variant: 'subagent_task' }).flatMap((event) =>
+    event.variant === 'subagent_task' && (event.payload_visibility === 'full' || event.payload_visibility === 'redact')
+      ? subagentForkContext(event.payload.inherited_context)
       : []);
 }
 
-export function admitSubordinateTask(log: EventLog, input: {
+export function admitSubagentTask(log: EventLog, input: {
   fromWorkspace: string;
   kind: 'task' | 'message';
   body: string;
   deliverable?: string;
-  inheritedContext?: SubordinateInheritedContext;
+  inheritedContext?: SubagentInheritedContext;
   creationId?: string;
   messageId?: string;
   idempotencyKey?: string;
@@ -179,8 +179,8 @@ export function admitSubordinateTask(log: EventLog, input: {
 
     return log.publish({
       descriptor: {
-        ingress: 'subordinate',
-        variant: 'subordinate_task',
+        ingress: 'subagent',
+        variant: 'subagent_task',
         payload,
       },
       now: input.now,
@@ -189,11 +189,11 @@ export function admitSubordinateTask(log: EventLog, input: {
 }
 
 /** Delegated work carries a trusted Plan/Build mode, so it gets its own turn rather than splicing into live work. A duplicate schedules no drain. */
-export function describeSubordinateHandoff(input: {
+export function describeSubagentHandoff(input: {
   admission: PublishResult;
   turnInFlight: boolean;
-  live: SubordinateLiveStatus;
-}): SubordinateHandoff {
+  live: SubagentLiveStatus;
+}): SubagentHandoff {
   return {
     eventId: input.admission.id,
     delivery: input.admission.admitted && !input.turnInFlight ? 'starts_now' : 'queued',
@@ -210,11 +210,11 @@ export function normalizeReportContent(content: string): string {
   return settleSync(requiredText(content, 'content'));
 }
 
-/** Either source is admitted only while the parent has an open assignment for this subordinate. */
-export type SubordinateReportOrigin = 'report_tool' | 'turn_end';
+/** Either source is admitted only while the parent has an open assignment for this subagent. */
+export type SubagentReportOrigin = 'report_tool' | 'turn_end';
 
 /** Relays only turns a queued signal drove; an owner-typed turn's answer is the owner's. The `report` tool does not come through here. */
-function subordinateRelaysTurnEnd(input: {
+function subagentRelaysTurnEnd(input: {
   /** The `report` tool already spoke for this turn; a relay would duplicate it. */
   reportedThisTurn: boolean;
   ownerDriven: boolean;
@@ -230,8 +230,8 @@ function subordinateRelaysTurnEnd(input: {
  * task's terminal answer, or any child's failure; else a durable child's turn-end progress, for a turn a queued signal
  * drove and that said nothing through `report`. The adapters keep the roster and the relay.
  */
-export async function owedSubordinateTurnReport(input: {
-  readonly lifetime: SubordinateLifetime;
+export async function owedSubagentTurnReport(input: {
+  readonly lifetime: SubagentLifetime;
   readonly ending: TaskTurnEnding;
   readonly assistantText: string;
   readonly narration: () => Promise<readonly string[]>;
@@ -250,39 +250,39 @@ export async function owedSubordinateTurnReport(input: {
   // A task agent reports only its terminal answer.
   if (input.ending !== 'answered' || input.lifetime === TEMPORARY_LIFETIME) return null;
 
-  return subordinateRelaysTurnEnd({ reportedThisTurn: input.reports.spoke, ownerDriven: input.ownerDriven, assistantText: input.assistantText })
+  return subagentRelaysTurnEnd({ reportedThisTurn: input.reports.spoke, ownerDriven: input.ownerDriven, assistantText: input.assistantText })
     ? { status: 'progress', content: input.assistantText }
     : null;
 }
 
 /** Only the parent knows whether it is waiting: with no open assignment, no report may create a parent turn. */
-export function parentAdmitsSubordinateReport(input: {
-  entry: SubordinateRosterEntry;
+export function parentAdmitsSubagentReport(input: {
+  entry: SubagentRosterEntry;
 }): boolean {
   return input.entry.currentTask !== null;
 }
 
 /** Producers spill before admission: the VFS write is async and admission runs in a synchronous storage transaction. */
-export function admitSubordinateReport(log: EventLog, input: {
-  fromSubordinate: string;
-  status: SubordinateReportStatus;
+export function admitSubagentReport(log: EventLog, input: {
+  fromSubagent: string;
+  status: SubagentReportStatus;
   content: string;
   /** Stated by the sender, never minted here: it is the idempotency key. */
   sequenceId: string;
   task?: string;
   spilled?: SpilledContent;
   /** Merged verbatim; a second normalization could disagree with the refused input. */
-  handoff?: SubordinateReportHandoff;
+  handoff?: SubagentReportHandoff;
   mode: WorkMode;
   now: number;
 }): PublishResult {
   return settleSync(Effect.gen(function* () {
-    const fromSubordinate = yield* requiredText(input.fromSubordinate, 'fromSubordinate');
+    const fromSubagent = yield* requiredText(input.fromSubagent, 'fromSubagent');
     const content = yield* requiredText(input.content, 'content');
     const task = optionalText(input.task);
 
     const payload = {
-      from_subordinate: fromSubordinate,
+      from_subagent: fromSubagent,
       status: input.status,
       content,
       sequence_id: yield* requiredText(input.sequenceId, 'sequenceId'),
@@ -299,8 +299,8 @@ export function admitSubordinateReport(log: EventLog, input: {
 
     return log.publish({
       descriptor: {
-        ingress: 'subordinate',
-        variant: 'subordinate_report',
+        ingress: 'subagent',
+        variant: 'subagent_report',
         payload,
       },
       now: input.now,
@@ -308,26 +308,26 @@ export function admitSubordinateReport(log: EventLog, input: {
   }));
 }
 
-export interface SubordinateRuntime {
-  spawn(input: SubordinateSeed & { creationId: string }): Promise<ActorReference>;
-  cancelBirth(input: SubordinateSeed & { creationId: string }): Promise<ActorReference>;
+export interface SubagentRuntime {
+  spawn(input: SubagentSeed & { creationId: string }): Promise<ActorReference>;
+  cancelBirth(input: SubagentSeed & { creationId: string }): Promise<ActorReference>;
   assign(name: string, input: {
     body: string;
     mode: WorkMode;
     deliverable?: string;
-    inheritedContext?: SubordinateInheritedContext;
+    inheritedContext?: SubagentInheritedContext;
     creationId?: string;
-  }): Promise<SubordinateHandoff>;
-  status(name: string): Promise<SubordinateLiveStatus>;
-  message(name: string, content: string, mode: WorkMode): Promise<SubordinateHandoff>;
+  }): Promise<SubagentHandoff>;
+  status(name: string): Promise<SubagentLiveStatus>;
+  message(name: string, content: string, mode: WorkMode): Promise<SubagentHandoff>;
   /** Called with `user` for an owner rename, which makes `planWorkspaceTitle`'s refusal durable. */
   rename(name: string, displayName: string, nameOrigin: NameOrigin): Promise<void>;
   /** Without `interrupt`, retirement waits for the turn to settle. */
-  dismiss(name: string, dismissal: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference): Promise<SubordinateDismissal>;
+  dismiss(name: string, dismissal: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference): Promise<SubagentDismissal>;
 }
 
 /** Same default as `AgentConfigStore.getRoleSelection`. */
-const DEFAULT_SUBORDINATE_ROLE_ID = 'task';
+const DEFAULT_SUBAGENT_ROLE_ID = 'task';
 
 function displayNameForRole(role: string): string {
   return role.trim().split(/\s+/).slice(0, 4)
@@ -335,7 +335,7 @@ function displayNameForRole(role: string): string {
     .join(' ');
 }
 
-function rollback(before: SubordinateRosterEntry, roster: SubordinateRosterStore, operation: string) {
+function rollback(before: SubagentRosterEntry, roster: SubagentRosterStore, operation: string) {
   return <E>(failed: Cause.Cause<E>): Effect.Effect<never, E> => {
     const cause = Cause.squash(failed);
 
@@ -350,20 +350,20 @@ function rollback(before: SubordinateRosterEntry, roster: SubordinateRosterStore
 
 
 function statusView(
-  runtime: SubordinateRuntime,
-  roster: SubordinateRosterEntry,
-): Effect.Effect<SubordinateStatusView> {
+  runtime: SubagentRuntime,
+  roster: SubagentRosterEntry,
+): Effect.Effect<SubagentStatusView> {
   if (roster.status === 'dismissed') return Effect.succeed({ roster, live: null });
 
   return Effect.catchCause(
-    Effect.map(Effect.promise(async () => runtime.status(roster.name)), (live): SubordinateStatusView => ({ roster, live })),
-    (failed) => Effect.succeed<SubordinateStatusView>({ roster, live: null, liveError: renderThrownChain({ cause: Cause.squash(failed) }) }),
+    Effect.map(Effect.promise(async () => runtime.status(roster.name)), (live): SubagentStatusView => ({ roster, live })),
+    (failed) => Effect.succeed<SubagentStatusView>({ roster, live: null, liveError: renderThrownChain({ cause: Cause.squash(failed) }) }),
   );
 }
 
-interface SubordinateStatusView {
-  roster: SubordinateRosterEntry;
-  live: SubordinateLiveStatus | null;
+interface SubagentStatusView {
+  roster: SubagentRosterEntry;
+  live: SubagentLiveStatus | null;
   liveError?: string;
 }
 
@@ -373,7 +373,7 @@ interface SubordinateStatusView {
  * own roster, where a birth waits before its directory row exists.
  */
 export function agentNamer(
-  directory: Pick<WorkspaceActorDirectory, 'namesFrom'>, roster: Pick<SubordinateRosterStore, 'get'>,
+  directory: Pick<WorkspaceActorDirectory, 'namesFrom'>, roster: Pick<SubagentRosterStore, 'get'>,
 ): (role: string, brief: string | null) => string {
   return (role, brief) => mintAgentName({ role, brief }, (base) => {
     const had = directory.namesFrom(base);
@@ -386,8 +386,8 @@ export function agentNamer(
 export function createTeamToolDeps(deps: {
   /** Derived by its parent, never chosen here. */
   delegation: DelegationBudget;
-  roster: SubordinateRosterStore;
-  runtime: SubordinateRuntime;
+  roster: SubagentRosterStore;
+  runtime: SubagentRuntime;
   /** From what the hire was first asked (its brief), else its role ({@link agentNamer}). */
   createName(role: string, brief: string | null): string;
   now(): number;
@@ -396,7 +396,7 @@ export function createTeamToolDeps(deps: {
   /** Inherited by an owner-created agent given none; read at create time, not captured. */
   ownMission(): Promise<string> | string;
   rosterMoved(): void;
-  broadcastTask(event: { subordinate: string; content: string; timestamp: number }): void;
+  broadcastTask(event: { subagent: string; content: string; timestamp: number }): void;
   /**
    * Built once per actor: the port holds the live `shell` waiters, and these deps are rebuilt per call.
    * Absent: no role-targeted ask, structurally.
@@ -404,13 +404,13 @@ export function createTeamToolDeps(deps: {
   temporary?: TemporaryAgentPort;
 }): TeamToolDeps {
   /** A task agent answers one brief and retires; more work for it belongs to a durable hire. */
-  const requireDurable = (entry: SubordinateRosterEntry): Effect.Effect<SubordinateRosterEntry, KinuError> => {
+  const requireDurable = (entry: SubagentRosterEntry): Effect.Effect<SubagentRosterEntry, KinuError> => {
     return Effect.gen(function* () {
       if (entry.lifetime !== 'durable') {
         return yield* new KinuError(
           'bad_input',
-          `subordinate "${entry.name}" is a temporary agent for one question (lifetime 'task'), `
-            + 'retired once it answers: assign and message apply to durable subordinates only',
+          `subagent "${entry.name}" is a temporary agent for one question (lifetime 'task'), `
+            + 'retired once it answers: assign and message apply to durable subagents only',
         );
       }
 
@@ -432,7 +432,7 @@ export function createTeamToolDeps(deps: {
     name: string;
     displayName: string;
     createdAt: number;
-    subordinate: SubordinateRosterEntry;
+    subagent: SubagentRosterEntry;
   }, KinuError> => Effect.gen(function* () {
     let selection: RoleId;
 
@@ -440,7 +440,7 @@ export function createTeamToolDeps(deps: {
       selection = input.role;
     } else if (ownerCreated) {
       // `spawn` already refused an empty mission, so this default is only ever the owner's.
-      selection = DEFAULT_SUBORDINATE_ROLE_ID;
+      selection = DEFAULT_SUBAGENT_ROLE_ID;
     } else {
       return yield* Effect.die(new Error('role must be non-empty'));
     }
@@ -454,9 +454,9 @@ export function createTeamToolDeps(deps: {
     const typedName = input.name?.trim();
     const named = typedName !== undefined && typedName !== '';
     const name = named ? typedName : deps.createName(roleLabel, namingBrief(input, ownerCreated, mission));
-    requireSubordinateActorName(name);
+    requireSubagentActorName(name);
 
-    if (deps.roster.get(name)) return yield* Effect.die(new Error(`subordinate "${name}" already exists`));
+    if (deps.roster.get(name)) return yield* Effect.die(new Error(`subagent "${name}" already exists`));
 
     // A typed title is final, and so is the name a model's hire gives, the one it was told to (a hire "named
     // tidepool" showed "Planner", staging 2026-10-08); an owner's slug is only an address. A role alone yields `auto`;
@@ -466,7 +466,7 @@ export function createTeamToolDeps(deps: {
     const displayName = chosen ?? (provisional ? codenameFor(name) : displayNameForRole(roleLabel));
     const nameOrigin: 'user' | 'auto' = chosen ? 'user' : 'auto';
 
-    const seed: SubordinateSeed = {
+    const seed: SubagentSeed = {
       name,
       displayName,
       nameOrigin,
@@ -480,15 +480,15 @@ export function createTeamToolDeps(deps: {
     if (input.tier !== undefined) seed.tier = input.tier;
     const createdAt = deps.now();
 
-    if (!ownerCreated && mode === null) return yield* new KinuError('bad_input', 'A subordinate task requires a work mode.');
+    if (!ownerCreated && mode === null) return yield* new KinuError('bad_input', 'A subagent task requires a work mode.');
     const assignment = ownerCreated || mode === null ? null : { body: mission, mode, ...(input.inheritedContext !== undefined && { inheritedContext: input.inheritedContext }) };
-    yield* Effect.promise(() => admitSubordinateBirth(deps.roster, deps.runtime, { seed, assignment, createdAt }));
+    yield* Effect.promise(() => admitSubagentBirth(deps.roster, deps.runtime, { seed, assignment, createdAt }));
 
     return {
       name,
       displayName,
       createdAt,
-      subordinate: deps.roster.requireActive(name),
+      subagent: deps.roster.requireActive(name),
     };
   });
 
@@ -501,10 +501,10 @@ export function createTeamToolDeps(deps: {
     list: async () => deps.roster.list(),
 
     create: (input) => settle(Effect.gen(function* () {
-      const { name, displayName, subordinate } = yield* provision(input, true, null);
+      const { name, displayName, subagent } = yield* provision(input, true, null);
       deps.rosterMoved();
 
-      return { name, displayName, subordinate };
+      return { name, displayName, subagent };
     })),
 
     // The child's own actor_config is the only naming authority.
@@ -515,7 +515,7 @@ export function createTeamToolDeps(deps: {
 
       return {
         ok: true as const, name: input.name, displayName,
-        subordinate: deps.roster.requireActive(input.name),
+        subagent: deps.roster.requireActive(input.name),
       };
     })),
 
@@ -523,7 +523,7 @@ export function createTeamToolDeps(deps: {
       const mission = yield* requiredText(input.mission, 'mission');
       const { name, displayName, createdAt } = yield* provision(input, false, input.mode);
       deps.rosterMoved();
-      deps.broadcastTask({ subordinate: name, content: mission, timestamp: createdAt });
+      deps.broadcastTask({ subagent: name, content: mission, timestamp: createdAt });
 
       return { name, displayName };
     })),
@@ -534,10 +534,10 @@ export function createTeamToolDeps(deps: {
         const before = yield* requireDurable(deps.roster.requireActive(input.name));
         deps.roster.assign(input.name, task);
 
-        const handoff: SubordinateHandoff = yield* Effect.catchCause(Effect.gen(function* () {
+        const handoff: SubagentHandoff = yield* Effect.catchCause(Effect.gen(function* () {
           const deliverable = optionalText(input.deliverable);
 
-          const assignment: Parameters<SubordinateRuntime['assign']>[1] = {
+          const assignment: Parameters<SubagentRuntime['assign']>[1] = {
             body: task,
             mode: input.mode,
           };
@@ -550,10 +550,10 @@ export function createTeamToolDeps(deps: {
           deps.roster.recordAssignmentEvent(input.name, assigned.eventId);
 
           return assigned;
-        }), rollback(before, deps.roster, 'subordinate assignment'));
+        }), rollback(before, deps.roster, 'subagent assignment'));
 
         deps.rosterMoved();
-        deps.broadcastTask({ subordinate: input.name, content: task, timestamp: deps.now() });
+        deps.broadcastTask({ subagent: input.name, content: task, timestamp: deps.now() });
 
         return { ok: true, name: input.name, ...handoff };
       }));
@@ -573,9 +573,9 @@ export function createTeamToolDeps(deps: {
         const before = yield* requireDurable(deps.roster.requireActive(input.name));
         deps.roster.resumeAfterMessage(input.name);
 
-        const handoff: SubordinateHandoff = yield* Effect.catchCause(
+        const handoff: SubagentHandoff = yield* Effect.catchCause(
           Effect.promise(async () => deps.runtime.message(input.name, content, input.mode)),
-          rollback(before, deps.roster, 'subordinate message'),
+          rollback(before, deps.roster, 'subagent message'),
         );
 
         deps.rosterMoved();
@@ -589,25 +589,25 @@ export function createTeamToolDeps(deps: {
         const before = deps.roster.requireExisting(input.name);
 
         if (before.origin === 'user' && input.requestedBy !== 'user') {
-          return yield* Effect.die(new Error(`subordinate "${input.name}" was created by the owner and only the owner can dismiss it`));
+          return yield* Effect.die(new Error(`subagent "${input.name}" was created by the owner and only the owner can dismiss it`));
         }
 
         // Archive by default so a dismissal is never silent data loss; wiping requires keepHistory=false.
         const keepHistory = input.keepHistory ?? true;
         const reference = before.actorReference;
 
-        if (!reference) return yield* new KinuError('missing', 'The subordinate birth has not confirmed an actor reference.');
+        if (!reference) return yield* new KinuError('missing', 'The subagent birth has not confirmed an actor reference.');
 
         if (keepHistory && before.deleteRequested) return yield* new KinuError('denied', 'Physical retirement is already requested.');
 
         if (keepHistory) deps.roster.dismiss(input.name, deps.now());
         else deps.roster.requestDeletion(input.name, reference, deps.now());
-        let dismissal: SubordinateDismissal;
+        let dismissal: SubagentDismissal;
 
         if (keepHistory) {
           dismissal = yield* Effect.catchCause(
             Effect.promise(async () => deps.runtime.dismiss(input.name, { keepHistory: true, interrupt: true }, reference)),
-            rollback(before, deps.roster, 'retained subordinate dismissal'),
+            rollback(before, deps.roster, 'retained subagent dismissal'),
           );
         } else {
           dismissal = yield* Effect.promise(async () => deps.runtime.dismiss(input.name, { keepHistory: false, interrupt: true }, reference));

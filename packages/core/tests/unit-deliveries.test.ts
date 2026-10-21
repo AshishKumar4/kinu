@@ -1,7 +1,7 @@
 /** Deliveries (design v2 §1, v3 A): the workspace's record of what each agent is owed, and how producers write it. */
 import { describe, expect, test } from 'bun:test';
 import { createTestActorsOver, createTestSql } from '@kinu.run/test-utils';
-import { admitSubordinateTask, AgentDeliveries, assignmentDelivery, DeliveryCoordinator, DeliveryInbox, InProcessDeliveries, initAgentDeliveriesTable, pendingEventsDelivery, subordinateTurnContext, wordsRefusal, type Delivery, type DeliveryAnswer } from '../src/index';
+import { admitSubagentTask, AgentDeliveries, assignmentDelivery, DeliveryCoordinator, DeliveryInbox, InProcessDeliveries, initAgentDeliveriesTable, pendingEventsDelivery, subagentTurnContext, wordsRefusal, type Delivery, type DeliveryAnswer } from '../src/index';
 import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index';
 import { KinuError } from '../src/obs/index';
 import { makeSqlExec } from './helpers';
@@ -104,15 +104,15 @@ describe('an assignment as its delivery', () => {
     const { eventLog } = workspace();
     const inherited = { kind: 'fork' as const, messages: [{ id: 'm-1', role: 'user' as const, content: 'the hirer said this', createdAt: 1 }] };
 
-    const admitted = admitSubordinateTask(eventLog, {
+    const admitted = admitSubagentTask(eventLog, {
       fromWorkspace: 'lead', kind: 'task', body: '  Count the files.  ', mode: 'plan', inheritedContext: inherited, now: Date.now(),
     });
 
     const delivery = assignmentDelivery(eventLog, { id: admitted.id, body: 'Count the files.', mode: 'plan', from: 'lead' });
 
     expect(delivery).toMatchObject({ id: admitted.id, input: { kind: 'turn', text: 'Count the files.', metadata: { drainTurnId: admitted.id, kinuMode: 'plan' } }, authorship: 'hirer' });
-    expect(eventLog.pending({ variant: 'subordinate_task' })).toEqual([]);
-    expect(subordinateTurnContext(eventLog, admitted.id)).toHaveLength(1);
+    expect(eventLog.pending({ variant: 'subagent_task' })).toEqual([]);
+    expect(subagentTurnContext(eventLog, admitted.id)).toHaveLength(1);
   });
 });
 

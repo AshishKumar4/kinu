@@ -1,18 +1,18 @@
-/** The conversation of the helper the TUI has open: read whole when it opens, and only the open helper's answer shown. */
+/** The conversation of the subagent the TUI has open: read whole when it opens, and only the open subagent's answer shown. */
 import { useEffect, useState } from 'react';
 import { Effect } from 'effect';
 import { detach, renderThrownChain } from '@kinu.run/core/obs';
 import { readConversation, type AgentClient } from '../agent-client';
 import type { TuiSubagentChat } from './hubs';
 
-/** The helper an open surface names: by its path, or by its actor once it has one. */
+/** The subagent an open surface names: by its path, or by its actor once it has one. */
 export interface SubagentTarget {
   readonly path: readonly string[];
   readonly label: string;
   readonly actorId: string | null;
 }
 
-/** Null until the open helper's read has started; a read for a helper no longer open is never shown. */
+/** Null until the open subagent's read has started; a read for a subagent no longer open is never shown. */
 export function useSubagentChat(client: AgentClient, target: SubagentTarget | null): TuiSubagentChat | null {
   const [chat, setChat] = useState<TuiSubagentChat | null>(null);
 
@@ -25,10 +25,10 @@ export function useSubagentChat(client: AgentClient, target: SubagentTarget | nu
 
     detach(Effect.promise(async () => {
       try {
-        const helper = actorId === null ? { path: [...path] } : { path: [], actor: actorId };
+        const subagent = actorId === null ? { path: [...path] } : { path: [], actor: actorId };
 
         const conversation = await readConversation(async (page) => {
-          const result = await client.inspectSubordinate({ ...helper, view: 'history', page });
+          const result = await client.inspectSubagent({ ...subagent, view: 'history', page });
 
           if (result.view === 'missing') throw new Error(result.error);
 

@@ -1,28 +1,28 @@
 /**
- * Owner-authorized inspection of a subordinate's own rows in the workspace database.
+ * Owner-authorized inspection of a subagent's own rows in the workspace database.
  * The owner check runs first; the walk goes through {@link WorkspaceActorDirectory} from
  * the caller, so only the caller's descendants are reachable.
  */
 
-import { missingSubordinateHistory, readSubordinateInspection, SubordinateInspectionRequestSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './inspection';
+import { missingSubagentHistory, readSubagentInspection, SubagentInspectionRequestSchema, type SubagentInspectionRequest, type SubagentInspectionResult } from './inspection';
 import * as v from 'valibot';
 import { tableExists } from '../utils/sql';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
-import { actorStanding, isSubordinateOrigin, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
+import { actorStanding, isSubagentOrigin, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
 import { readSessionTranscript, type SessionTranscriptReader } from '../session/transcript';
 import { actorReadHandle } from '../read-models/workspace-work';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 
-export interface SubordinateInspectionAuthority {
+export interface SubagentInspectionAuthority {
   /** The owner the transport authenticated. */
   readonly owner: string;
   /** The workspace the transport addressed, by name. */
   readonly workspace: string;
 }
 
-export interface SubordinateInspectionAccess {
+export interface SubagentInspectionAccess {
   /** The workspace database every actor's rows live in. */
   readonly sql: SqlExecutor;
   readonly raw: SqlExec;
@@ -31,26 +31,26 @@ export interface SubordinateInspectionAccess {
   /** Membership authority: which actors exist, and whose children they are. */
   readonly directory: WorkspaceActorDirectory;
   readonly transcriptFor: (actor: ActorHandle) => SessionTranscriptReader;
-  /** A subordinate's chat and run views, read where its own rows are. */
-  readonly ownRows: (actor: ActorHandle, request: AgentOwnInspection) => Promise<SubordinateInspectionResult>;
+  /** A subagent's chat and run views, read where its own rows are. */
+  readonly ownRows: (actor: ActorHandle, request: AgentOwnInspection) => Promise<SubagentInspectionResult>;
 }
 
-export type AgentOwnInspection = Extract<SubordinateInspectionRequest, { readonly view: 'history' | 'runs' | 'events' | 'step' }>;
+export type AgentOwnInspection = Extract<SubagentInspectionRequest, { readonly view: 'history' | 'runs' | 'events' | 'step' }>;
 
-function ownView(request: SubordinateInspectionRequest): request is AgentOwnInspection {
+function ownView(request: SubagentInspectionRequest): request is AgentOwnInspection {
   return request.view === 'history' || request.view === 'runs' || request.view === 'events' || request.view === 'step';
 }
 
 const OwnerRowSchema = v.object({ name: v.string(), owner_user_id: v.nullable(v.string()) });
 
 /** Read one actor's own rows, as that actor, under its ancestor's authority. */
-export async function inspectSubordinateStorage(
-  access: SubordinateInspectionAccess,
-  request: SubordinateInspectionRequest,
-  authority: SubordinateInspectionAuthority,
-): Promise<SubordinateInspectionResult> {
-  const input = v.parse(SubordinateInspectionRequestSchema, request);
-  const missing = (): SubordinateInspectionResult => missingSubordinateHistory(input.path);
+export async function inspectSubagentStorage(
+  access: SubagentInspectionAccess,
+  request: SubagentInspectionRequest,
+  authority: SubagentInspectionAuthority,
+): Promise<SubagentInspectionResult> {
+  const input = v.parse(SubagentInspectionRequestSchema, request);
+  const missing = (): SubagentInspectionResult => missingSubagentHistory(input.path);
 
   if (!tableExists(access.sql, 'workspace_identity')) return missing();
 
@@ -67,11 +67,11 @@ export async function inspectSubordinateStorage(
 
 /** The walk from `access.actor` down `path`, then to the named actor if any; the caller has already authorized it. */
 export async function inspectDescendant(
-  access: SubordinateInspectionAccess,
-  request: SubordinateInspectionRequest,
-): Promise<SubordinateInspectionResult> {
-  const input = v.parse(SubordinateInspectionRequestSchema, request);
-  const missing = (): SubordinateInspectionResult => missingSubordinateHistory(input.path);
+  access: SubagentInspectionAccess,
+  request: SubagentInspectionRequest,
+): Promise<SubagentInspectionResult> {
+  const input = v.parse(SubagentInspectionRequestSchema, request);
+  const missing = (): SubagentInspectionResult => missingSubagentHistory(input.path);
   let target = access.actor;
 
   for (const name of input.path) {
@@ -88,26 +88,26 @@ export async function inspectDescendant(
 
     if (ownView(input)) return await access.ownRows(kept.actor, input);
 
-    return readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: kept.actor, transcriptFor: () => kept.transcript }, input);
+    return readSubagentInspection({ sql: access.sql, raw: access.raw, actor: kept.actor, transcriptFor: () => kept.transcript }, input);
   }
 
   // Every agent's chat and runs are its own rows, main's too: where they are is its host's (`ownRows`).
   if (ownView(input)) return await access.ownRows(target, input);
 
-  return readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: target, transcriptFor: access.transcriptFor }, input);
+  return readSubagentInspection({ sql: access.sql, raw: access.raw, actor: target, transcriptFor: access.transcriptFor }, input);
 }
 
-/** A subordinate at any depth below `ancestor`, live or released. */
-function retainedDescendant(access: SubordinateInspectionAccess, ancestor: ActorHandle, actorId: string): { actor: ActorHandle; transcript: SessionTranscriptReader } | null {
+/** A subagent at any depth below `ancestor`, live or released. */
+function retainedDescendant(access: SubagentInspectionAccess, ancestor: ActorHandle, actorId: string): { actor: ActorHandle; transcript: SessionTranscriptReader } | null {
   const record = access.directory.retained(actorId);
 
   for (let step = record; step?.actorId !== ancestor.actorId; step = access.directory.retained(step.parentActorId ?? '')) {
-    if (step === null || !isSubordinateOrigin(step.origin)) return null;
+    if (step === null || !isSubagentOrigin(step.origin)) return null;
   }
 
   if (record === null) return null;
 
-  // The owner holds none of a retired subordinate's files; its offloaded payloads are read where it ran (`ownRows`).
+  // The owner holds none of a retired subagent's files; its offloaded payloads are read where it ran (`ownRows`).
   return readableActor(record, {
     sql: access.sql,
     open: () => {

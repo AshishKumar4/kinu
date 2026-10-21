@@ -128,8 +128,8 @@ export function observingCrafts(entry: ToolSet[string], ledger: CraftLedger, tur
 export {
   PEER_REPLY_TOPIC,
   type AgentsToolDeps, type AgentsSwarmDeps,
-  type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
-  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff, type SubordinateDismissal,
+  type TeamToolDeps, type SubagentRosterEntry, type SubagentStatus,
+  type SubagentDelivery, type SubagentPhase, type SubagentHandoff, type SubagentDismissal,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './agents-tool';

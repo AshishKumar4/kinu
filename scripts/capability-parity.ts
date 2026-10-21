@@ -232,8 +232,8 @@ function referencedTypeName(type: SyntaxNode | undefined): string | undefined {
  * the difference between 77 findings and a signal. `BroadcastEvent.text?: string`
  * and `DirEntry.size?: number` are optional because not every row has them —
  * a literal that omits one is not a backend missing a feature. `AgentsToolDeps
- * .team?: TeamToolDeps` is optional because wiring it is what makes subordinates
- * exist, and a backend that omits it has no subordinates.
+ * .team?: TeamToolDeps` is optional because wiring it is what makes subagents
+ * exist, and a backend that omits it has no subagents.
  */
 export function behaviourTypes(sources: ReadonlyMap<string, string>): ReadonlySet<string> {
   const names = new Set<string>();

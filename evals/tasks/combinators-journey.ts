@@ -287,10 +287,10 @@ ${handoff.coordinator} still coordinates it. Keep the corrected code for the new
     verify: async (verifier) => {
       await verifier.check('independent-review-branches-finished-this-turn', async () => {
         const swarm = await aSwarmRan(verifier, {});
-        const helpers = await verifier.helperWork();
-        const parallel = parallelFinishedWork(helpers, [REVIEW, `${DESK}/reports/review`, `${DESK}/report-totals.js`, `${DESK}/candidates/`, 'report_totals']);
+        const subagents = await verifier.subagentWork();
+        const parallel = parallelFinishedWork(subagents, [REVIEW, `${DESK}/reports/review`, `${DESK}/report-totals.js`, `${DESK}/candidates/`, 'report_totals']);
 
-        return { pass: swarm.pass || parallel, evidence: { swarm: swarm.evidence, parallel, helpers } };
+        return { pass: swarm.pass || parallel, evidence: { swarm: swarm.evidence, parallel, subagents } };
       });
       await verifier.check('boundary-review-records-the-actual-answers', async () => {
         const normalize = (rows: v.InferOutput<typeof ReviewSchema>) => rows.map((row) => ({ ...row, path: basename(row.path) })).sort((a, b) => a.path.localeCompare(b.path));

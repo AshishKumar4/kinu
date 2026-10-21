@@ -150,7 +150,7 @@ export interface SwarmInput {
   /** Candidates per expansion; a resource cap on every preset. */
   readonly branches?: number;
   /** Requested search depth, overriding the selected preset. This bounds the
-   * search tree, separately from subordinate lineage and a head's inherited
+   * search tree, separately from subagent lineage and a head's inherited
    * split budget. */
   readonly depth?: number;
   /** Explicit first-level assignments; `nodes.length` is the width, so combining with

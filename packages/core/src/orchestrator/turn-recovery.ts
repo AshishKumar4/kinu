@@ -12,7 +12,7 @@ import { sha256Hex } from '../safety/argument-digest';
 import { cutsThrough, verifyClaimedProgram, type ClaimOutcome, type ContextRevision, type StoredActorClaim } from './actor-claims';
 import { recordRecoverySettled, sameBuildOf } from './turn-recovery-events';
 import type { RunEventRecorder } from '../events/recorder';
-import type { ReportedTurn } from '../subordinates/turn-reports';
+import type { ReportedTurn } from '../subagents/turn-reports';
 
 type ClosedBy = 'stopped' | 'answered' | 'record_unreadable' | 'stalled' | 'unverified';
 

@@ -9,19 +9,19 @@ export { initFiberTable } from './identity/schema';
 
 export { tableExists } from './utils/sql';
 
-export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
+export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubagentInspectionRequestSchema, SubagentInspectionResultSchema, readSubagentInspection, missingSubagentHistory, type SubagentInspectionRequest, type SubagentInspectionResult, type SubagentChild } from './subagents/inspection';
 
-export { AgentOpenTurns, type AgentOpenTurn } from './subordinates/open-turns';
+export { AgentOpenTurns, type AgentOpenTurn } from './subagents/open-turns';
 
-export { AgentReports, AgentSequence, type AcceptedReport } from './subordinates/report-sequence';
+export { AgentReports, AgentSequence, type AcceptedReport } from './subagents/report-sequence';
 
-export { TurnFences, type ClosedExecution, type FencedRow, type OpenedAt } from './subordinates/turn-fence';
+export { TurnFences, type ClosedExecution, type FencedRow, type OpenedAt } from './subagents/turn-fence';
 
-export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
+export { TurnReports, type ReportedTurn } from './subagents/turn-reports';
 
 export { runEventSinks } from './orchestrator/run-event-sinks';
 
-export { inspectDescendant, inspectSubordinateStorage, readableActor, type AgentOwnInspection, type ReadableActor, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
+export { inspectDescendant, inspectSubagentStorage, readableActor, type AgentOwnInspection, type ReadableActor, type SubagentInspectionAuthority, type SubagentInspectionAccess } from './subagents/inspection-path';
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
@@ -607,23 +607,23 @@ export {
 
 export { ActorReferenceSchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './identity/actor-handle';
 
-export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubordinateActorName } from './identity/actor-key';
+export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubagentActorName } from './identity/actor-key';
 
-export { recoverSubordinateLifecycles, SubordinateBirthSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
+export { recoverSubagentLifecycles, SubagentBirthSchema, type SubagentBirth, type SubagentSeed } from './subagents/birth';
 
-export { SubordinateInheritedContextSchema, type SubordinateInheritedContext } from './types/subordinates';
+export { SubagentInheritedContextSchema, type SubagentInheritedContext } from './types/subagents';
 
-export { subordinateForkContext, subordinateTurnContext } from './subordinates/support';
+export { subagentForkContext, subagentTurnContext } from './subagents/support';
 
-export { admitHireWork, hireLifecycle, retireHireSubtree, type HireLifecyclePorts, type SeatedHire } from './subordinates/hire-lifecycle';
+export { admitHireWork, hireLifecycle, retireHireSubtree, type HireLifecyclePorts, type SeatedHire } from './subagents/hire-lifecycle';
 
 export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { driveDeliveredRun } from './heads/delivered-run';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding, actorEnded, endedStandingOf, type ActorEnded } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subagentDescendants, stoppedBelow, isSubagentOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding, actorEnded, endedStandingOf, type ActorEnded } from './identity/workspace-actors';
 
-export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
+export type { AnsweredEvolutionSubagent } from './identity/evolution-subagents';
 
 export {
   openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
@@ -679,26 +679,26 @@ export { createAgentSelfProvider, type AgentSelfHost, type OwnerWaitsHost } from
 
 export { agentSelfHost } from './orchestrator/agent-self-host';
 
-// Platform-neutral: a backend supplies only SubordinateRuntime.
-export { SubordinateRosterStore, initSubordinateRosterTable, subordinateTitle } from './subordinates/roster';
+// Platform-neutral: a backend supplies only SubagentRuntime.
+export { SubagentRosterStore, initSubagentRosterTable, subagentTitle } from './subagents/roster';
 
 export {
-  admitSubordinateReport,
-  admitSubordinateTask,
+  admitSubagentReport,
+  admitSubagentTask,
   agentNamer,
   createTeamToolDeps,
-  describeSubordinateHandoff,
+  describeSubagentHandoff,
   normalizeReportContent,
-  parentAdmitsSubordinateReport,
-  readSubordinateLiveStatus,
-  subordinateDescriptorSource,
-  owedSubordinateTurnReport,
-  type SubordinateReportOrigin,
-  type SubordinateRuntime,
-} from './subordinates/support';
+  parentAdmitsSubagentReport,
+  readSubagentLiveStatus,
+  subagentDescriptorSource,
+  owedSubagentTurnReport,
+  type SubagentReportOrigin,
+  type SubagentRuntime,
+} from './subagents/support';
 
 export {
-  SUBORDINATE_LIFETIMES,
+  SUBAGENT_LIFETIMES,
   TEMPORARY_LIFETIME,
   TASK_TURN_ENDINGS,
   createTemporaryAgentPort,
@@ -708,12 +708,12 @@ export {
   terminalTaskReport,
   reportReadsNarration,
   type OwedReport,
-  type SubordinateLifetime,
+  type SubagentLifetime,
   type TemporaryAgentPort,
   type TemporaryRunOutcome,
   type TaskTurnEnding,
   type TemporaryRunRequest,
-} from './subordinates/temporary';
+} from './subagents/temporary';
 
 // The depth cap is derived per child, never stated by one.
 export {
@@ -723,7 +723,7 @@ export {
   delegationDepthRefusal,
   delegationExhausted,
   type DelegationBudget,
-} from './subordinates/depth';
+} from './subagents/depth';
 
 export {
   buildBuiltinTools,
@@ -744,8 +744,8 @@ export {
   buildActorTools, PEER_REPLY_TOPIC,
   type ActorToolsetDeps, type ActorToolsets,
   type AgentsToolDeps, type AgentsSwarmDeps,
-  type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
-  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff, type SubordinateDismissal,
+  type TeamToolDeps, type SubagentRosterEntry, type SubagentStatus,
+  type SubagentDelivery, type SubagentPhase, type SubagentHandoff, type SubagentDismissal,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './delegation/actor-tools';
@@ -927,7 +927,7 @@ export { createAgentStores } from './state/agent-stores';
 
 export type { AgentStores } from './state/agent-stores';
 
-export { collectDynamicContext, dynamicReads, subordinateDelegatesOf, type DynamicReads } from './state/dynamic-context';
+export { collectDynamicContext, dynamicReads, subagentDelegatesOf, type DynamicReads } from './state/dynamic-context';
 
 export type { DynamicContextInput } from './state/dynamic-context';
 
@@ -1412,7 +1412,7 @@ export * from './events/hub/index';
 
 export * from './events/ingress/index';
 
-export * from './subordinates/ingress';
+export * from './subagents/ingress';
 
 // Swarm
 export * from './strategy/index';
@@ -1727,7 +1727,7 @@ export {
 
 export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema, WORK_TAB_JOBS } from './read-models/workspace-work';
 
-export { agentTitle, nestedAgent, type AgentLinkIds, type InspectSubordinate } from './subordinates/nested-agent';
+export { agentTitle, nestedAgent, type AgentLinkIds, type InspectSubagent } from './subagents/nested-agent';
 
 export { recognizeGitHubHttp, recognizeGitHubMcp, GitHubFactSchema, GITHUB_MCP_PRESET, type GitHubFact } from './github/recognize';
 
@@ -1856,9 +1856,9 @@ export {
 export {
   AgentDeliveries, AgentStops, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, initAgentStopsTable, pendingEventsDelivery, assignmentDelivery, deliveryMetadata, deliveredSignal, handBackCarried, type OwedDelivery, type DeliveryPort, type OwedAdmission, type Delivery, type DeliveryAnswer, type DeliveryInput, type TurnDeliveryInput, type IntentInput, type IntentResult, type OwedIntent, type OwedOwnerIntent, OwedIntentSchema, OwedOwnerIntentSchema,
   SendMetadataSchema, sentWords, type SendMetadata, type SentWords,
-} from './subordinates/deliveries';
+} from './subagents/deliveries';
 
-export { DeliveryCoordinator, InProcessDeliveries, type CrossedDelivery } from './subordinates/delivery-coordinator';
+export { DeliveryCoordinator, InProcessDeliveries, type CrossedDelivery } from './subagents/delivery-coordinator';
 
 export {
   serializeContentForHeads, narrowInheritedRole,
@@ -2227,8 +2227,8 @@ export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-m
 
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
-  type MemoryEntry, type PendingConsent, type SubordinateActivityEvent,
-  type TabPresence, evolutionHelper, ownerFacingSubordinate,
+  type MemoryEntry, type PendingConsent, type SubagentActivityEvent,
+  type TabPresence, evolutionSubagent, ownerFacingSubagent,
 } from './protocol';
 
 export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';
@@ -2376,7 +2376,7 @@ export {
 } from './read-models/workspace-reads';
 
 export {
-  PROVIDER_WAIT_PART, ProviderWaitSchema, SubordinateActivityEventSchema, WorkspaceBroadcastSchema, WorkspacePlanUpdatedFrameSchema,
+  PROVIDER_WAIT_PART, ProviderWaitSchema, SubagentActivityEventSchema, WorkspaceBroadcastSchema, WorkspacePlanUpdatedFrameSchema,
   type MctsProgress, type WorkspaceBroadcast,
 } from './read-models/workspace-broadcasts';
 
@@ -2714,8 +2714,8 @@ export {
 export type {
   AgentTurnActivity, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentReview, AgentStanding, AgentStandingReport, AgentReport, AgentOwes, AdmittedDelivery, AgentSteps, RunEndOutcome, RunEndReport, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
-} from './subordinates/agent-isolate';
+} from './subagents/agent-isolate';
 
-export { refusedRun, writesSnapshotRows } from './subordinates/agent-isolate';
+export { refusedRun, writesSnapshotRows } from './subagents/agent-isolate';
 
-export { describeAgentTools } from './subordinates/tool-descriptors';
+export { describeAgentTools } from './subagents/tool-descriptors';

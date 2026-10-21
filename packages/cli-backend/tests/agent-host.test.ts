@@ -18,13 +18,13 @@ import {
   BackgroundJobStore,
   backgroundJobWakeTrigger,
   MAX_CONCURRENT_DETACHED_JOBS,
-  openWorkspaceMainActor, SubordinateRosterStore,
+  openWorkspaceMainActor, SubagentRosterStore,
   createTimerTrigger,
   initWorkspaceSchema,
   initCompletedTurnTable, createCompletedTurnStore,
   REPORT_TOOL,
   TriggerRegistry,
-  SUBORDINATE_REPORT_STATUSES,
+  SUBAGENT_REPORT_STATUSES,
   HeadCapture,
   bindActorHandle,
   READS_CHANGED_EVENT,
@@ -61,7 +61,7 @@ import { swarmsOn, toolCallStream, toolSequenceModel } from './helpers/local-ses
 import { staticModelPlane } from '../src/profile-authority';
 
 /** A roster row's lifetime is its actor's. */
-const ROSTER_LIFETIME = "(SELECT lifetime FROM workspace_actors WHERE actor_id = json_extract(actor_subordinates.actor_reference, '$.actorId')) AS lifetime";
+const ROSTER_LIFETIME = "(SELECT lifetime FROM workspace_actors WHERE actor_id = json_extract(actor_subagents.actor_reference, '$.actorId')) AS lifetime";
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake',
@@ -206,7 +206,7 @@ function heldSearchModel() {
   });
 }
 
-/** A subordinate that files a terminal `completed` report; the status must be the child's own word. */
+/** A subagent that files a terminal `completed` report; the status must be the child's own word. */
 /**
  * Starts a task hire, which returns at once; its answer is the settling report its hirer's rail announces, taken once
  * the hirer's turn on it has ended.
@@ -232,7 +232,7 @@ async function taskHire(
   const hirerTurnEnded = Promise.withResolvers<void>();
 
   const off = host.subscribe((agent, event) => {
-    if (event.type === 'broadcast' && event.event.type === 'subordinate_event' && event.event.status !== 'progress') {
+    if (event.type === 'broadcast' && event.event.type === 'subagent_event' && event.event.status !== 'progress') {
       reported.resolve({ status: String(event.event.status), text: String(event.event.text) });
     }
 
@@ -318,7 +318,7 @@ function parkedStream(signal: AbortSignal | undefined): ReadableStream<LanguageM
 }
 
 /** A root's brief that hires a child, whose mission hires the grandchild; `NESTED.work` is the grandchild's own. */
-const NESTED = { brief: 'Split the migration two levels down.', child: 'Hire one helper for the ledger part.', work: 'Move the ledger to integer cents.' } as const;
+const NESTED = { brief: 'Split the migration two levels down.', child: 'Hire one subagent for the ledger part.', work: 'Move the ledger to integer cents.' } as const;
 
 /**
  * Hires at two levels: the root's brief hires a child with `NESTED.child`, and that mission hires a grandchild with
@@ -928,7 +928,7 @@ describe('LocalAgentHost', () => {
     const model = heldSearchModel();
     const first = makeHost(state, model, refs, { swarms: true });
 
-    await (await first.host.team('root')).create({ name: 'helper' });
+    await (await first.host.team('root')).create({ name: 'subagent' });
     await first.host.close();
 
     // Interrupted long ago: re-driven, its next attempt is a minute out, and it is live work all that minute.
@@ -957,7 +957,7 @@ describe('LocalAgentHost', () => {
       const sql = makeSql(db);
       const rootId = openWorkspaceMainActor(sql).actorId;
 
-      await host.acquire('root/helper');
+      await host.acquire('root/subagent');
 
       for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS - 1; i++) {
         db.query(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES (?, ?, 'shell', 'build', 'running', 1)`)
@@ -972,7 +972,7 @@ describe('LocalAgentHost', () => {
       expect(outcomes).not.toContain('bg_job_started');
     } finally {
       // Its search waits for its model until stopped: closing would otherwise wait out the settle grace.
-      await (await host.acquire('root/helper')).cancelBackgroundJob('bgjob-held');
+      await (await host.acquire('root/subagent')).cancelBackgroundJob('bgjob-held');
       await host.close();
     }
   });
@@ -1063,7 +1063,7 @@ describe('LocalAgentHost', () => {
     }
   });
 
-  test('subordinates are durable children with non-blocking assignment, status, reports, and dismissal', async () => {
+  test('subagents are durable children with non-blocking assignment, status, reports, and dismissal', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const gated = gatedFirstModel();
@@ -1080,7 +1080,7 @@ describe('LocalAgentHost', () => {
 
       if (
         event.type === 'broadcast'
-        && event.event.type === 'subordinate_event'
+        && event.event.type === 'subagent_event'
         && event.event.status === 'progress'
       ) reportDelivered.resolve();
 
@@ -1096,13 +1096,13 @@ describe('LocalAgentHost', () => {
 
     const childTeam = await host.team('root/researcher');
     expect(childTeam.delegation.depth).toBe(1);
-    const reference = created.subordinate.actorReference;
+    const reference = created.subagent.actorReference;
 
-    if (!reference) throw new Error('The created subordinate has no actor reference.');
-    expect(created.subordinate.status).toBe('idle');
+    if (!reference) throw new Error('The created subagent has no actor reference.');
+    expect(created.subagent.status).toBe('idle');
     // Asserted while the child is live: absence after dismissal could not fail.
-    expect(existsSync(join(dirname(dbPath), 'subordinates', reference.actorId, 'agent.db'))).toBe(false);
-    expect(existsSync(join(dirname(dbPath), 'subordinates'))).toBe(false);
+    expect(existsSync(join(dirname(dbPath), 'subagents', reference.actorId, 'agent.db'))).toBe(false);
+    expect(existsSync(join(dirname(dbPath), 'subagents'))).toBe(false);
 
     const assigned = await team.assign({
       name: 'researcher',
@@ -1119,14 +1119,14 @@ describe('LocalAgentHost', () => {
     const view = new Database(dbPath, { readonly: true });
 
     const reportCount = view.query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subagent_report'",
     ).get()?.n ?? 0;
 
     view.close();
     expect(reportCount).toBe(1);
     expect(gated.calls()).toBeGreaterThanOrEqual(2);
     expect(events.some((event) =>
-      event.type === 'broadcast' && event.event.type === 'subordinate_event')).toBe(true);
+      event.type === 'broadcast' && event.event.type === 'subagent_event')).toBe(true);
 
     const status = v.parse(TeamStatusSchema, await team.status({ name: 'researcher' }));
     // The child's turn ended with a relayed answer: idle, with the assignment kept for a later `completed`.
@@ -1148,9 +1148,9 @@ describe('LocalAgentHost', () => {
       mission: 'Inspect one isolated case.',
     });
 
-    const temporaryReference = temporary.subordinate.actorReference;
+    const temporaryReference = temporary.subagent.actorReference;
 
-    if (!temporaryReference) throw new Error('The created temporary-named subordinate has no actor reference.');
+    if (!temporaryReference) throw new Error('The created temporary-named subagent has no actor reference.');
     // `keepHistory: false` purges the actor's rows; the directory row stays released either way.
     expect(actorLifecycle(dbPath, temporaryReference.actorId)).toBe('live');
     const temporaryRows = actorRowCount(dbPath, temporaryReference.actorId);
@@ -1284,7 +1284,7 @@ describe('LocalAgentHost', () => {
       }
 
       if (
-        event.type === 'broadcast' && event.event.type === 'subordinate_event'
+        event.type === 'broadcast' && event.event.type === 'subagent_event'
         && event.event.status === 'progress'
       ) reported.resolve();
     });
@@ -1292,9 +1292,9 @@ describe('LocalAgentHost', () => {
     try {
       const team = await host.team('root');
       const created = await team.create({ name: 'auditor', role: 'researcher', mission: 'Watch the ledger.' });
-      const reference = created.subordinate.actorReference;
+      const reference = created.subagent.actorReference;
 
-      if (!reference) throw new Error('The created subordinate has no actor reference.');
+      if (!reference) throw new Error('The created subagent has no actor reference.');
       const answered = awaitTurns(host, 'root/auditor', 1);
       await team.assign({ name: 'auditor', task: brief, mode: 'build' });
       await answered;
@@ -1320,11 +1320,11 @@ describe('LocalAgentHost', () => {
 
       const assignments = view.query<{ body: string }, [string]>(
         `SELECT json_extract(payload, '$.body') AS body FROM agent_log
-         WHERE kind = 'event' AND variant = 'subordinate_task' AND actor_id = ?`,
+         WHERE kind = 'event' AND variant = 'subagent_task' AND actor_id = ?`,
       ).all(reference.actorId);
 
       const reports = view.query<{ n: number }, []>(
-        "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+        "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subagent_report'",
       ).get()?.n ?? 0;
 
       view.close();
@@ -1546,9 +1546,9 @@ describe('LocalAgentHost', () => {
     try {
       (await host.acquire('root')).setReasoningEffort('xhigh');
       const team = await host.team('root');
-      await team.create({ name: 'helper', role: 'task', mission: 'Help.' });
-      const answered = awaitTurns(host, 'root/helper', 1);
-      await team.assign({ name: 'helper', task: 'Say done.', mode: 'build' });
+      await team.create({ name: 'subagent', role: 'task', mission: 'Help.' });
+      const answered = awaitTurns(host, 'root/subagent', 1);
+      await team.assign({ name: 'subagent', task: 'Say done.', mode: 'build' });
       await answered;
 
       expect(efforts).toEqual(['xhigh']);
@@ -1599,9 +1599,9 @@ describe('LocalAgentHost', () => {
       (await host.acquire('root')).setProviderAccount('openai', 'work');
       const team = await host.team('root');
       const before = scopes.length;
-      await team.create({ name: 'helper', role: 'task', mission: 'Help.' });
-      const answered = awaitTurns(host, 'root/helper', 1);
-      await team.assign({ name: 'helper', task: 'Say done.', mode: 'build' });
+      await team.create({ name: 'subagent', role: 'task', mission: 'Help.' });
+      const answered = awaitTurns(host, 'root/subagent', 1);
+      await team.assign({ name: 'subagent', task: 'Say done.', mode: 'build' });
       await answered;
 
       const hired = scopes.slice(before).map((scope) => present(scope.accountFor, 'a call scope')('openai'));
@@ -1668,7 +1668,7 @@ describe('LocalAgentHost', () => {
     const view = new Database(dbPath, { readonly: true });
 
     const reports = view.query<{ payload: string }, []>(
-      "SELECT payload FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+      "SELECT payload FROM agent_log WHERE kind='event' AND variant='subagent_report'",
     ).all();
 
     view.close();
@@ -1708,7 +1708,7 @@ describe('LocalAgentHost', () => {
 
     const rows = archived.query<{
       name: string; status: string; lifetime: string; task_event_id: string | null;
-    }, []>(`SELECT name, status, ${ROSTER_LIFETIME}, task_event_id FROM actor_subordinates`).all();
+    }, []>(`SELECT name, status, ${ROSTER_LIFETIME}, task_event_id FROM actor_subagents`).all();
 
     archived.close();
     expect(rows).toEqual([
@@ -1716,11 +1716,11 @@ describe('LocalAgentHost', () => {
     ]);
 
     await host.close();
-    // The answer is one `subordinate_report` on the hirer's rail, which opened its next turn.
+    // The answer is one `subagent_report` on the hirer's rail, which opened its next turn.
     const view = new Database(dbPath, { readonly: true });
 
     const reports = view.query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subagent_report'",
     ).get()?.n ?? 0;
 
     view.close();
@@ -1778,7 +1778,7 @@ describe('LocalAgentHost', () => {
     const reported = Promise.withResolvers<void>();
     const parentTurnEnded = Promise.withResolvers<void>();
     host.subscribe((agent, event) => {
-      if (event.type === 'broadcast' && event.event.type === 'subordinate_event'
+      if (event.type === 'broadcast' && event.event.type === 'subagent_event'
         && event.event.status === 'completed') reported.resolve();
 
       if (agent === 'root' && event.type === 'turn-end') parentTurnEnded.resolve();
@@ -1800,7 +1800,7 @@ describe('LocalAgentHost', () => {
     const view = new Database(dbPath, { readonly: true });
 
     const reports = view.query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subagent_report'",
     ).get()?.n ?? 0;
 
     view.close();
@@ -1837,11 +1837,11 @@ describe('LocalAgentHost', () => {
       const view = new Database(dbPath, { readonly: true });
 
       const rows = view.query<{ name: string; status: string; lifetime: string }, []>(
-        `SELECT name, status, ${ROSTER_LIFETIME} FROM actor_subordinates`,
+        `SELECT name, status, ${ROSTER_LIFETIME} FROM actor_subagents`,
       ).all();
 
       const reports = view.query<{ n: number }, []>(
-        "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+        "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subagent_report'",
       ).get()?.n ?? 0;
 
       view.close();
@@ -1867,7 +1867,7 @@ describe('LocalAgentHost', () => {
     await host.close();
   });
 
-  test('a subordinate turn hires its advisor, and the note opens its next turn after the answer arrives', async () => {
+  test('a subagent turn hires its advisor, and the note opens its next turn after the answer arrives', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const note = 'The probe failed but the reply claimed success. Check its exit status.';
@@ -1893,7 +1893,7 @@ describe('LocalAgentHost', () => {
     await team.spawn({ role: 'researcher', mission: 'Check the probe.', mode: 'build' });
     const [child] = await team.list();
 
-    if (child === undefined) throw new Error('The subordinate was not rostered.');
+    if (child === undefined) throw new Error('The subagent was not rostered.');
     await ended.promise;
     await host.close();
     const actorId = childActorId(dbPath, child.name);
@@ -1910,14 +1910,14 @@ describe('LocalAgentHost', () => {
       ).all(actorId);
 
       expect(notes).toEqual([{ message: note }]);
-      // The reviewer is a background agent under the subordinate: view-only, no tab, one task.
+      // The reviewer is a background agent under the subagent: view-only, no tab, one task.
       expect(db.query<{ origin: string; lifetime: string }, [string]>(
         'SELECT origin, lifetime FROM workspace_actors WHERE parent_actor_id = ?',
       ).all(actorId)).toContainEqual({ origin: 'evolution', lifetime: 'task' });
     } finally { db.close(); }
   });
 
-  test("a subordinate's blocker advice opens a turn of its hirer's, and never comes back to it as a hirer's note", async () => {
+  test("a subagent's blocker advice opens a turn of its hirer's, and never comes back to it as a hirer's note", async () => {
     const { state, project } = makeRoots();
     await seedAgent(state, 'root');
     const note = 'Stop relying on the failed run.';
@@ -2008,7 +2008,7 @@ describe('LocalAgentHost', () => {
     await childTurnEnded.promise;
     await hiring.host.close();
 
-    // Matches cf, where a subordinate runs `runHeadInference` and never reaches `recordTurn`.
+    // Matches cf, where a subagent runs `runHeadInference` and never reaches `recordTurn`.
     expect(evolutionRows(hireDb, childActorId(hireDb, hired.name))).toEqual({ window: 0, ratings: [], lessons: [] });
     expect(hireChild.reflections()).toBe(0);
   });
@@ -2094,12 +2094,12 @@ describe('LocalAgentHost', () => {
       const view = new Database(dbPath, { readonly: true });
 
       const rows = view.query<{ status: string; lifetime: string }, []>(
-        `SELECT status, ${ROSTER_LIFETIME} FROM actor_subordinates`,
+        `SELECT status, ${ROSTER_LIFETIME} FROM actor_subagents`,
       ).all();
 
       // The progress note is not the answer, so it reaches the rail like any mid-work note, and the answer after it.
       const reports = view.query<{ n: number }, []>(
-        "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+        "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subagent_report'",
       ).get()?.n ?? 0;
 
       view.close();
@@ -2154,30 +2154,30 @@ describe('LocalAgentHost', () => {
 
     try {
       const team = await host.team('root');
-      await team.create({ name: 'helper' });
+      await team.create({ name: 'subagent' });
 
-      const first = awaitTurns(host, 'root/helper', 1);
-      await team.message({ name: 'helper', content: 'Audit the coupon checkout', mode: 'build' });
+      const first = awaitTurns(host, 'root/subagent', 1);
+      await team.message({ name: 'subagent', content: 'Audit the coupon checkout', mode: 'build' });
       await first;
       // The title is the turn's terminal effect, written once its detached close settles.
-      await (await host.acquire('root/helper')).settleBackgroundWork();
+      await (await host.acquire('root/subagent')).settleBackgroundWork();
 
-      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Audit');
+      expect(childConfigValue(dbPath, 'subagent', 'display_name')).toBe('Coupon Audit');
 
-      const second = awaitTurns(host, 'root/helper', 1);
-      await team.message({ name: 'helper', content: 'Name yourself something else entirely', mode: 'build' });
+      const second = awaitTurns(host, 'root/subagent', 1);
+      await team.message({ name: 'subagent', content: 'Name yourself something else entirely', mode: 'build' });
       await second;
 
-      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Audit');
+      expect(childConfigValue(dbPath, 'subagent', 'display_name')).toBe('Coupon Audit');
 
-      await team.rename({ name: 'helper', displayName: 'Coupon Auditor' });
+      await team.rename({ name: 'subagent', displayName: 'Coupon Auditor' });
 
-      const third = awaitTurns(host, 'root/helper', 1);
-      await team.message({ name: 'helper', content: 'Change your name again', mode: 'build' });
+      const third = awaitTurns(host, 'root/subagent', 1);
+      await team.message({ name: 'subagent', content: 'Change your name again', mode: 'build' });
       await third;
 
-      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Auditor');
-      expect(childConfigValue(dbPath, 'helper', 'name_origin')).toBe('user');
+      expect(childConfigValue(dbPath, 'subagent', 'display_name')).toBe('Coupon Auditor');
+      expect(childConfigValue(dbPath, 'subagent', 'name_origin')).toBe('user');
     } finally {
       await host.close();
     }
@@ -2203,16 +2203,16 @@ describe('LocalAgentHost', () => {
     try {
       const team = await host.team('root');
 
-      await team.create({ name: 'helper' });
+      await team.create({ name: 'subagent' });
 
-      const before = childConfigValue(dbPath, 'helper', 'display_name');
+      const before = childConfigValue(dbPath, 'subagent', 'display_name');
 
-      await team.message({ name: 'helper', content: 'Audit the coupon checkout', mode: 'build' });
-      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Audit the coupon checkout');
+      await team.message({ name: 'subagent', content: 'Audit the coupon checkout', mode: 'build' });
+      expect(childConfigValue(dbPath, 'subagent', 'display_name')).toBe('Audit the coupon checkout');
       expect(before).not.toBe('Audit the coupon checkout');
 
-      await team.message({ name: 'helper', content: 'Rename yourself to something else', mode: 'build' });
-      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Audit the coupon checkout');
+      await team.message({ name: 'subagent', content: 'Rename yourself to something else', mode: 'build' });
+      expect(childConfigValue(dbPath, 'subagent', 'display_name')).toBe('Audit the coupon checkout');
     } finally {
       await host.close();
     }
@@ -2278,7 +2278,7 @@ describe('LocalAgentHost', () => {
     const view = new Database(dbPath, { readonly: true });
 
     const reports = view.query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subagent_report'",
     ).get()?.n ?? 0;
 
     view.close();
@@ -2306,12 +2306,12 @@ describe('LocalAgentHost', () => {
     });
     const reported = Promise.withResolvers<void>();
     host.subscribe((_agent, event) => {
-      if (event.type === 'broadcast' && event.event.type === 'subordinate_event'
+      if (event.type === 'broadcast' && event.event.type === 'subagent_event'
         && event.event.status === 'completed') reported.resolve();
     });
     await team.assign({ name: 'ask-researcher-late', task: 'Report it.', mode: 'build' });
     const roster = workspaceDatabase(dbPath);
-    roster.run("UPDATE workspace_actors SET lifetime='task' WHERE actor_id = (SELECT json_extract(actor_reference, '$.actorId') FROM actor_subordinates WHERE name='ask-researcher-late')");
+    roster.run("UPDATE workspace_actors SET lifetime='task' WHERE actor_id = (SELECT json_extract(actor_reference, '$.actorId') FROM actor_subagents WHERE name='ask-researcher-late')");
     roster.close();
     await reported.promise;
     await host.close();
@@ -2319,11 +2319,11 @@ describe('LocalAgentHost', () => {
     const view = new Database(dbPath, { readonly: true });
 
     const reports = view.query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subagent_report'",
     ).get()?.n ?? 0;
 
     const rows = view.query<{ status: string; lifetime: string }, []>(
-      `SELECT status, ${ROSTER_LIFETIME} FROM actor_subordinates WHERE name='ask-researcher-late'`,
+      `SELECT status, ${ROSTER_LIFETIME} FROM actor_subagents WHERE name='ask-researcher-late'`,
     ).all();
 
     view.close();
@@ -2331,7 +2331,7 @@ describe('LocalAgentHost', () => {
     expect(rows).toEqual([{ status: 'dismissed', lifetime: 'task' }]);
   });
 
-  // 2026-10-01: the TUI's agents hub read its helpers once, when it opened, and went stale: the CLI host told its clients
+  // 2026-10-01: the TUI's agents hub read its subagents once, when it opened, and went stale: the CLI host told its clients
   // nothing when a write moved a read. Each write to the workspace's file names the reads it moves, as a workspace object does.
   test('scheduled client updates refresh the hired roster, workspace name and dismissal', async () => {
     const { state, project } = makeRoots();
@@ -2378,7 +2378,7 @@ describe('LocalAgentHost', () => {
     await host.close();
   });
 
-  test("a subordinate's terminal report moves its parent's roster row off working", async () => {
+  test("a subagent's terminal report moves its parent's roster row off working", async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const CONTENT = 'root cause: the callback URL was never registered';
@@ -2388,15 +2388,15 @@ describe('LocalAgentHost', () => {
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
 
-    // Assignment rides the same `subordinate_event` channel under status 'task'; a wrong status fails by name, not by hanging.
+    // Assignment rides the same `subagent_event` channel under status 'task'; a wrong status fails by name, not by hanging.
     const reported = Promise.withResolvers<{ status: string; text: string }>();
     const childTurnEnded = Promise.withResolvers<void>();
     const parentTurnEnded = Promise.withResolvers<void>();
     host.subscribe((agent, event) => {
       if (
         event.type === 'broadcast'
-        && event.event.type === 'subordinate_event'
-        && SUBORDINATE_REPORT_STATUSES.some((known) => known === event.event.status)
+        && event.event.type === 'subagent_event'
+        && SUBAGENT_REPORT_STATUSES.some((known) => known === event.event.status)
       ) {
         reported.resolve({ status: event.event.status ?? '', text: event.event.text ?? '' });
       }
@@ -2429,12 +2429,12 @@ describe('LocalAgentHost', () => {
     expect(status.roster.currentTask).toBeNull();
 
     // Counted after close(), which joins in-flight relays. Either guard alone prevents a duplicate:
-    // `parentAdmitsSubordinateReport` refuses a parent with no task, and `reportedThisTurn` suppresses the turn-end relay.
+    // `parentAdmitsSubagentReport` refuses a parent with no task, and `reportedThisTurn` suppresses the turn-end relay.
     await host.close();
     const view = new Database(dbPath, { readonly: true });
 
     const reports = view.query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
+      "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subagent_report'",
     ).get()?.n ?? 0;
 
     view.close();
@@ -2513,7 +2513,7 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     }
   });
 
-  test('each peer hires its own subordinates, and a subordinate cannot reach out of its workspace', async () => {
+  test('each peer hires its own subagents, and a subagent cannot reach out of its workspace', async () => {
     const { state, project } = makeRoots();
     const alphaDb = await seedAgent(state, 'alpha');
     const betaDb = await seedAgent(state, 'beta');
@@ -2671,13 +2671,13 @@ function renderPromptText(prompt: LanguageModelV2CallOptions['prompt']): string 
   )).join('\n');
 }
 
-/** The actor id a child was hired under; a subordinate is a row set in its parent's one database. */
+/** The actor id a child was hired under; a subagent is a row set in its parent's one database. */
 function childActorId(parent: string, name: string): string {
   const db = new Database(parent, { readonly: true });
 
   try {
     const sql = makeSql(db);
-    const reference = new SubordinateRosterStore(makeSqlExec(db), openWorkspaceMainActor(sql)).get(name)?.actorReference;
+    const reference = new SubagentRosterStore(makeSqlExec(db), openWorkspaceMainActor(sql)).get(name)?.actorReference;
 
     if (!reference) throw new Error('The child has no recorded actor identity.');
 

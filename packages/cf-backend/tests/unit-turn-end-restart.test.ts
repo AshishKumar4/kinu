@@ -410,7 +410,7 @@ test("the owner's inspector reads main's step output where main's turns now run,
 
   const [run] = (await workspace.agent.getRunSummaries()).items;
   const step = (await workspace.agent.getRunEvents(run?.runId ?? '')).find((event) => event.type === 'step_finish');
-  const read = await workspace.agent.inspectSubordinate({ path: [], view: 'step', runId: run?.runId ?? '', eventIndex: step?.eventIndex ?? -1 });
+  const read = await workspace.agent.inspectSubagent({ path: [], view: 'step', runId: run?.runId ?? '', eventIndex: step?.eventIndex ?? -1 });
 
   expect(read).toMatchObject({ view: 'step', runId: run?.runId, eventIndex: step?.eventIndex });
 });

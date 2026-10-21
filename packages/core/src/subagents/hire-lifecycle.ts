@@ -1,5 +1,5 @@
 /**
- * The one hire lifecycle (`SubordinateRuntime`), the cloud's and the CLI's: a hire registered and its birth cancelled, a
+ * The one hire lifecycle (`SubagentRuntime`), the cloud's and the CLI's: a hire registered and its birth cancelled, a
  * newborn's name, role and tier, work admitted with the delivery that opens its turn, its status, a rename, and a subtree
  * dismissed. A backend gives it only the acts it alone can do (seat a hire, write a newborn, deliver, retire); every rule
  * is here, so a rule the two backends once held apart is held once (InternalFish #12, 2026-10-20).
@@ -9,18 +9,18 @@ import { KinuError, settle } from '../obs/index';
 import { EventLog, type PublishResult } from '../events/hub/log';
 import type { SqlExec } from '../types/primitives';
 import type { WorkMode } from '../types/turn';
-import type { SubordinateInheritedContext } from '../types/subordinates';
+import type { SubagentInheritedContext } from '../types/subagents';
 import { actorReferenceOf, type ActorHandle, type ActorReference } from '../identity/actor-handle';
-import { isSubordinateOrigin, subordinateDescendants, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
+import { isSubagentOrigin, subagentDescendants, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
 import { titleActorFromMessage } from '../identity/naming';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorRetirement } from '../state/actor-host';
 import type { JobRetirement } from '../jobs/runner';
 import { assignmentDelivery, type OwedAdmission } from './deliveries';
 import { delegationBudgetOf, delegationDepthRefusal, delegationExhausted } from './depth';
-import type { SubordinateRosterStore } from './roster';
-import type { SubordinateSeed } from './birth';
-import { admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus, type SubordinateRuntime } from './support';
+import type { SubagentRosterStore } from './roster';
+import type { SubagentSeed } from './birth';
+import { admitSubagentTask, describeSubagentHandoff, readSubagentLiveStatus, type SubagentRuntime } from './support';
 
 /** A hire as one call reaches it, where its backend runs it. */
 export interface SeatedHire {
@@ -51,7 +51,7 @@ export interface HireLifecyclePorts<Seat extends SeatedHire = SeatedHire> {
   /** Stops the running jobs of one actor, and says which it could not confirm stopped. */
   readonly retireJobs: (actorId: string) => Promise<JobRetirement>;
   /** The roster of the actor that hired `hirer`'s child. */
-  readonly roster: (hirer: ActorReference) => SubordinateRosterStore;
+  readonly roster: (hirer: ActorReference) => SubagentRosterStore;
   /** Retires an actor under `parent`, ending what this backend holds of it. */
   readonly retire: (parent: ActorReference, retirement: ActorRetirement) => Promise<void>;
 }
@@ -62,7 +62,7 @@ interface HireWork {
   readonly body: string;
   readonly mode: WorkMode;
   readonly deliverable?: string;
-  readonly inheritedContext?: SubordinateInheritedContext;
+  readonly inheritedContext?: SubagentInheritedContext;
   readonly creationId?: string;
 }
 
@@ -84,8 +84,8 @@ export function admitHireWork<Seat extends SeatedHire>(ports: HireLifecyclePorts
     .pipe(Effect.andThen(Effect.promise(() => ports.asHire(reference, name, async (hire) => {
       const busy = hire.turnInFlight();
       const log = new EventLog(hire.exec, hire.handle);
-      const brief = log.query({ variant: 'subordinate_task', limit: 1 }).length === 0;
-      const admission: Parameters<typeof admitSubordinateTask>[1] = { fromWorkspace: hire.handle.workspaceId, kind: work.kind, body: work.body, mode: work.mode, now: Date.now() };
+      const brief = log.query({ variant: 'subagent_task', limit: 1 }).length === 0;
+      const admission: Parameters<typeof admitSubagentTask>[1] = { fromWorkspace: hire.handle.workspaceId, kind: work.kind, body: work.body, mode: work.mode, now: Date.now() };
 
       if (work.deliverable) admission.deliverable = work.deliverable;
 
@@ -94,14 +94,14 @@ export function admitHireWork<Seat extends SeatedHire>(ports: HireLifecyclePorts
       if (work.creationId !== undefined) admission.creationId = work.creationId;
 
       const admitted = await ports.deliver(hire, () => {
-        const result = admitSubordinateTask(log, admission);
+        const result = admitSubagentTask(log, admission);
 
         return { value: result, delivery: result.admitted ? assignmentDelivery(log, { id: result.id, body: work.body.trim(), mode: work.mode, from: ports.hirerName(hire) }) : null };
       });
 
       if (admitted.admitted && brief && (await titleActorFromMessage(hire.handle, work.body)).changed) ports.announce(hire);
 
-      return describeSubordinateHandoff({ admission: admitted, turnInFlight: busy, live: readSubordinateLiveStatus(hire.exec, hire.handle) });
+      return describeSubagentHandoff({ admission: admitted, turnInFlight: busy, live: readSubagentLiveStatus(hire.exec, hire.handle) });
     }))));
 }
 
@@ -110,7 +110,7 @@ export function admitHireWork<Seat extends SeatedHire>(ports: HireLifecyclePorts
 export async function retireHireSubtree(
   ports: Pick<HireLifecyclePorts, 'directory' | 'roster' | 'retire'>, below: ActorReference, keepHistory: boolean,
 ): Promise<void> {
-  for (const descendant of subordinateDescendants(ports.directory.list(), below.actorId)) {
+  for (const descendant of subagentDescendants(ports.directory.list(), below.actorId)) {
     const hirer = ports.directory.retained(descendant.parentActorId ?? '');
 
     if (hirer === null) continue;
@@ -122,8 +122,8 @@ export async function retireHireSubtree(
 }
 
 /** The one hire lifecycle over `ports`. */
-export function hireLifecycle<Seat extends SeatedHire>(ports: HireLifecyclePorts<Seat>): SubordinateRuntime {
-  const inDirectory = (action: 'register' | 'cancelCreation', input: SubordinateSeed & { creationId: string }): ActorReference => {
+export function hireLifecycle<Seat extends SeatedHire>(ports: HireLifecyclePorts<Seat>): SubagentRuntime {
+  const inDirectory = (action: 'register' | 'cancelCreation', input: SubagentSeed & { creationId: string }): ActorReference => {
     const owner = ports.parent().reference;
 
     return ports.directory.apply(owner, ports.directory.storagePath(owner), {
@@ -136,7 +136,7 @@ export function hireLifecycle<Seat extends SeatedHire>(ports: HireLifecyclePorts
     const owner = ports.parent().reference;
     const entry = ports.directory.apply(owner, ports.directory.storagePath(owner), { action: 'resolve', name });
 
-    return refusal(!isSubordinateOrigin(entry.origin), () => new KinuError('denied', 'The roster name does not identify a subordinate.'))
+    return refusal(!isSubagentOrigin(entry.origin), () => new KinuError('denied', 'The roster name does not identify a subagent.'))
       .pipe(Effect.andThen(refusal(entry.state !== 'active', () => new KinuError('missing', 'The hire is retired.'))), Effect.as(entry.reference));
   });
 
@@ -168,7 +168,7 @@ export function hireLifecycle<Seat extends SeatedHire>(ports: HireLifecyclePorts
       return reference;
     })),
     assign: (name, input) => settle(Effect.flatMap(resolve(name), (reference) => admitHireWork(ports, reference, name, { kind: 'task', ...input }))),
-    status: (name) => settle(asHire(name, async (hire) => readSubordinateLiveStatus(hire.exec, hire.handle))),
+    status: (name) => settle(asHire(name, async (hire) => readSubagentLiveStatus(hire.exec, hire.handle))),
     message: (name, content, mode) => settle(Effect.flatMap(resolve(name), (reference) => admitHireWork(ports, reference, name, { kind: 'message', body: content, mode }))),
     rename: (name, displayName, nameOrigin) => settle(asHire(name, async (hire) => { hire.handle.config.setDisplayNameOrigin(displayName, nameOrigin); })),
     /** Its subtree's jobs stop first, or none retires; then its hires, then it. Wipe removes rows and home; archive keeps them. */
@@ -176,7 +176,7 @@ export function hireLifecycle<Seat extends SeatedHire>(ports: HireLifecyclePorts
       const stoppedJobs: string[] = [];
       const refused: string[] = [];
 
-      for (const actorId of [...subordinateDescendants(ports.directory.list(), reference.actorId).map((record) => record.actorId), reference.actorId]) {
+      for (const actorId of [...subagentDescendants(ports.directory.list(), reference.actorId).map((record) => record.actorId), reference.actorId]) {
         const retirement = yield* Effect.promise(() => ports.retireJobs(actorId));
 
         stoppedJobs.push(...retirement.stopped);

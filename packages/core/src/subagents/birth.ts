@@ -6,13 +6,13 @@ import { isWorkMode, type WorkMode } from '../types/turn';
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/index';
 import type { ActorReference } from '../identity/actor-handle';
-import { SUBORDINATE_ORIGINS } from '../identity/workspace-actors';
-import type { SubordinateRosterStore } from './roster';
-import type { SubordinateRuntime } from './support';
-import { SubordinateInheritedContextSchema, subordinateBirthContext } from '../types/subordinates';
+import { SUBAGENT_ORIGINS } from '../identity/workspace-actors';
+import type { SubagentRosterStore } from './roster';
+import type { SubagentRuntime } from './support';
+import { SubagentInheritedContextSchema, subagentBirthContext } from '../types/subagents';
 import type { SerializedMessage } from '../types/heads';
 
-const SubordinateSeedSchema = v.strictObject({
+const SubagentSeedSchema = v.strictObject({
   name: v.pipe(v.string(), v.nonEmpty()),
   displayName: v.string(),
   nameOrigin: v.picklist(['user', 'auto']),
@@ -21,29 +21,29 @@ const SubordinateSeedSchema = v.strictObject({
   mission: v.pipe(v.string(), v.nonEmpty()),
   lifetime: v.picklist(['durable', 'task']),
   /** Who asked for it: the owner, an agent, or an evolution lane. */
-  origin: v.picklist(SUBORDINATE_ORIGINS),
+  origin: v.picklist(SUBAGENT_ORIGINS),
 });
 
-export type SubordinateSeed = v.InferOutput<typeof SubordinateSeedSchema>;
+export type SubagentSeed = v.InferOutput<typeof SubagentSeedSchema>;
 
-export const SubordinateBirthSchema = v.strictObject({
+export const SubagentBirthSchema = v.strictObject({
   creationId: v.pipe(v.string(), v.nonEmpty()),
-  seed: SubordinateSeedSchema,
+  seed: SubagentSeedSchema,
   assignment: v.nullable(v.strictObject({
     body: v.pipe(v.string(), v.nonEmpty()),
     mode: v.custom<WorkMode>(isWorkMode),
     deliverable: v.optional(v.string()),
-    inheritedContext: v.optional(SubordinateInheritedContextSchema),
+    inheritedContext: v.optional(SubagentInheritedContextSchema),
   })),
 });
 
-export type SubordinateBirth = v.InferOutput<typeof SubordinateBirthSchema>;
+export type SubagentBirth = v.InferOutput<typeof SubagentBirthSchema>;
 
-const inFlight = new WeakMap<SubordinateRosterStore, Map<string, Promise<Exit.Exit<ActorReference, KinuError>>>>();
+const inFlight = new WeakMap<SubagentRosterStore, Map<string, Promise<Exit.Exit<ActorReference, KinuError>>>>();
 
 /** What a lifetime decides of a birth; the admission itself is the same for every lifetime. */
-export interface SubordinateBirthRequest {
-  readonly seed: SubordinateSeed;
+export interface SubagentBirthRequest {
+  readonly seed: SubagentSeed;
   /** Null for an owner's hire, which starts idle; else the work it is born to, with the parent's context if forked. */
   readonly assignment: { readonly body: string; readonly mode: WorkMode; readonly inheritedContext?: SerializedMessage[] } | null;
   readonly createdAt: number;
@@ -53,11 +53,11 @@ export interface SubordinateBirthRequest {
  * Admits `request.seed.name` to the roster under a fresh creation id, then completes its birth: the one admission
  * every lifetime makes. The caller has already refused a name the roster holds, each in its own words.
  */
-export function admitSubordinateBirth(roster: SubordinateRosterStore, runtime: SubordinateRuntime, request: SubordinateBirthRequest): Promise<ActorReference> {
+export function admitSubagentBirth(roster: SubagentRosterStore, runtime: SubagentRuntime, request: SubagentBirthRequest): Promise<ActorReference> {
   const { seed, createdAt } = request;
-  const inheritedContext = subordinateBirthContext(request.assignment?.inheritedContext);
+  const inheritedContext = subagentBirthContext(request.assignment?.inheritedContext);
 
-  const assignment: SubordinateBirth['assignment'] = request.assignment === null ? null : {
+  const assignment: SubagentBirth['assignment'] = request.assignment === null ? null : {
     body: request.assignment.body, mode: request.assignment.mode, ...(inheritedContext !== undefined && { inheritedContext }),
   };
 
@@ -67,13 +67,13 @@ export function admitSubordinateBirth(roster: SubordinateRosterStore, runtime: S
     createdAt, dismissedAt: null, taskEventId: null,
   });
 
-  return settle(finishSubordinateBirth(roster, runtime, seed.name));
+  return settle(finishSubagentBirth(roster, runtime, seed.name));
 }
 
 /** Resume only the request that the roster admitted before its first await. */
-function finishSubordinateBirth(
-  roster: SubordinateRosterStore,
-  runtime: SubordinateRuntime,
+function finishSubagentBirth(
+  roster: SubagentRosterStore,
+  runtime: SubagentRuntime,
   name: string,
 ): Effect.Effect<ActorReference, KinuError> {
   return Effect.gen(function* () {
@@ -83,7 +83,7 @@ function finishSubordinateBirth(
     if (entry.deleteRequested) return yield* new KinuError('cancelled', 'The admitted actor birth is cancelled.');
 
     if (!birth) {
-      if (!entry.actorReference) return yield* new KinuError('missing', 'The subordinate has no registered actor reference.');
+      if (!entry.actorReference) return yield* new KinuError('missing', 'The subagent has no registered actor reference.');
 
       return entry.actorReference;
     }
@@ -133,7 +133,7 @@ function finishSubordinateBirth(
 }
 
 /** The existing maintenance owner resumes these intents after an interruption. */
-export function recoverSubordinateLifecycles(roster: SubordinateRosterStore, runtime: SubordinateRuntime): Promise<boolean> {
+export function recoverSubagentLifecycles(roster: SubagentRosterStore, runtime: SubagentRuntime): Promise<boolean> {
   return settle(Effect.gen(function* () {
     for (const entry of roster.pendingDeletions()) {
       let reference = entry.actorReference;
@@ -155,13 +155,13 @@ export function recoverSubordinateLifecycles(roster: SubordinateRosterStore, run
 
     for (const entry of roster.pendingBirths()) {
       yield* Effect.catchCause(Effect.gen(function* () {
-        yield* finishSubordinateBirth(roster, runtime, entry.name);
+        yield* finishSubagentBirth(roster, runtime, entry.name);
       }), (failed) => Effect.gen(function* () {
         const cause = Cause.squash(failed);
         const error = toKinuError({ doing: 'recovering an admitted actor birth', cause, otherwise: 'unavailable' });
 
         if (error.code === 'io' || error.code === 'unavailable') return yield* Effect.die(error);
-        diagnostics.failure('subordinate.birth_recovery_failed', error, { subordinate: entry.name });
+        diagnostics.failure('subagent.birth_recovery_failed', error, { subagent: entry.name });
       }));
     }
 

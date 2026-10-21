@@ -138,7 +138,7 @@ export interface BuiltinToolDeps {
   /** The account's memory: reads join it and a write may ask for it (`MEMORY_WITH_ACCOUNT`). Absent, no call names a scope. */
   account?: import('../memory/account').AccountMemory;
   conversations: ConversationRecall;
-  /** Wired only on subordinate actors. */
+  /** Wired only on subagent actors. */
   report?: ReportDeps;
   webSearch?: WebSearchProvider;
   /** Owner-driven root turns; its absence is the gate. */

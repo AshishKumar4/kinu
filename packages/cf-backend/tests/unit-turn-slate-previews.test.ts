@@ -14,7 +14,7 @@ import { workspaceRpc } from '../src/lib/workspace-rpc';
 import { SlateInlineContext } from '../src/components/slates/context';
 import { MessageView } from '../src/components/MessageView';
 import {
-  agentHistory, chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, storedChat, workspaceFiles,
+  agentHistory, chatSessionTurns, gatewayWorkspace, hostedSubagentHarness, orchestratorHarness, runDelegatedTask, storedChat, workspaceFiles,
   workspaceMainActor, mainDatabase,
 } from './helpers/actor-harness';
 import { scriptedGateway } from './helpers/platform-gateway';
@@ -74,7 +74,7 @@ test("a hire's slate edit is previewed on the hire's answer, and nowhere else", 
 
   await workspaceFiles(workspace.agent).mkdir('/slates/board', { recursive: true });
 
-  const hire = await hostedSubordinateHarness(workspace, {
+  const hire = await hostedSubagentHarness(workspace, {
     name: 'board-keeper', displayName: 'Board keeper', nameOrigin: 'user', mission: 'keep the board current',
   });
 
@@ -239,7 +239,7 @@ test("a hire whose report quotes the slate's line gets no second preview", async
 
   await workspaceFiles(workspace.agent).mkdir('/slates/board', { recursive: true });
 
-  const hire = await hostedSubordinateHarness(workspace, {
+  const hire = await hostedSubagentHarness(workspace, {
     name: 'board-keeper', displayName: 'Board keeper', nameOrigin: 'user', mission: 'keep the board current',
   });
 

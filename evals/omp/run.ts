@@ -33,7 +33,7 @@ import { armEvolution } from '../src/reactive';
 /** A dream is owed every five rated turns, as the cadence takes them. */
 const DREAM_CADENCE = 5;
 
-/** Passes a dream may take to settle, its helpers' turns between them, before the run moves on without it. */
+/** Passes a dream may take to settle, its subagents' turns between them, before the run moves on without it. */
 const DREAM_PASSES = 40;
 
 const SETTLED = new Set(['applied', 'rolled_back', 'refused']);
@@ -97,7 +97,7 @@ function frozenSet(data: string, heldOut: readonly OwnerTurn[], count: number, s
   return frozen;
 }
 
-/** Passes until the dreams owed have settled, the helpers' turns run between them; how many it took. */
+/** Passes until the dreams owed have settled, the subagents' turns run between them; how many it took. */
 async function dream(run: { readonly lane: () => Promise<void>; readonly tick: () => Promise<void>; readonly rt: Pick<AgentRuntime, 'storage' | 'actor'> }): Promise<number> {
   for (let pass = 1; pass <= DREAM_PASSES; pass += 1) {
     await run.lane();

@@ -1,5 +1,5 @@
 /**
- * Subordinate-tree depth cap. A child's depth is walked off the actor directory; a child never
+ * Subagent-tree depth cap. A child's depth is walked off the actor directory; a child never
  * states its own depth. The runtime refusal stays because a cached toolset can be built before
  * the child is seated.
  */
@@ -7,13 +7,13 @@
 import type { ErrorCode } from '../obs/error';
 import type { WorkspaceActor } from '../identity/workspace-actors';
 
-/** Global cap on subordinate-tree depth; the orchestrator is depth 0. Not configurable per actor. */
+/** Global cap on subagent-tree depth; the orchestrator is depth 0. Not configurable per actor. */
 export const DELEGATION_MAX_DEPTH = 4;
 
-/** Where an actor sits in its workspace's subordinate tree, and how much room
+/** Where an actor sits in its workspace's subagent tree, and how much room
  *  is left below it. */
 export interface DelegationBudget {
-  /** 0 = the workspace orchestrator; 1 = a subordinate it hired; and so on. */
+  /** 0 = the workspace orchestrator; 1 = a subagent it hired; and so on. */
   readonly depth: number;
   /** Levels of hiring still available below this actor. 0 refuses. */
   readonly maxDepth: number;
@@ -85,6 +85,6 @@ export function delegationDepthRefusal(budget: DelegationBudget): DelegationDept
       + 'This covers BOTH lifetimes that birth a child: a durable hire and a `lifetime:"task"` '
       + 'hire, because they add a level through the same substrate. An agent at this depth has no team; run '
       + 'the work as a search where searches are on: agents({op:"swarm", task, config:{context:"inherit"}}) inherits '
-      + 'your conversation and adds no depth to the subordinate tree. Otherwise do the work yourself.',
+      + 'your conversation and adds no depth to the subagent tree. Otherwise do the work yourself.',
   };
 }

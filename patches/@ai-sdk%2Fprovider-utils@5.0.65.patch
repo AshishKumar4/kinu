@@ -1,8 +1,8 @@
 diff --git a/dist/index.js b/dist/index.js
-index beef88fc6eaefe99415ce01cd22f9948e4a97f05..b63e534af6a094d5e06dee8f5a25208ba5b4fbe8 100644
+index 42558c265b0a1f762d471660893ab70fb2088de8..79050bf213ffab28d9e5256063ec8fec827470bb 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -3274,7 +3274,10 @@ function isParsableJson(input) {
+@@ -3364,7 +3364,10 @@ function isParsableJson(input) {
  */
  function parseJsonEventStream({ stream, schema }) {
  	return stream.pipeThrough(new TextDecoderStream()).pipeThrough(new EventSourceParserStream$1()).pipeThrough(new TransformStream({ async transform({ data }, controller) {

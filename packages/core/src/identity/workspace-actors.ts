@@ -5,7 +5,7 @@ import { settle } from '../obs/effect';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { ActorReferenceSchema, bindActorHandle, type ActorHandle, type ActorReference } from './actor-handle';
 import { tableExists } from '../utils/sql';
-import { isExplorationActorKey, requireSubordinateActorName } from './actor-key';
+import { isExplorationActorKey, requireSubagentActorName } from './actor-key';
 
 export interface WorkspaceActorAuthority {
   readonly workspaceId: string;
@@ -13,12 +13,12 @@ export interface WorkspaceActorAuthority {
 }
 
 /** A hired agent's origin, one the roster lists and reaches by name: the owner's, an agent's, an evolution lane's. */
-export const SUBORDINATE_ORIGINS = ['user', 'agent', 'evolution'] as const;
+export const SUBAGENT_ORIGINS = ['user', 'agent', 'evolution'] as const;
 
-export type SubordinateOrigin = (typeof SUBORDINATE_ORIGINS)[number];
+export type SubagentOrigin = (typeof SUBAGENT_ORIGINS)[number];
 
 /** What a parent creates a child as: a hire, or a swarm worker, which no roster lists. */
-const CHILD_ORIGINS = [...SUBORDINATE_ORIGINS, 'swarm'] as const;
+const CHILD_ORIGINS = [...SUBAGENT_ORIGINS, 'swarm'] as const;
 
 /** Who made an agent, which decides its preset: `system` is main, `swarm` a swarm worker, `evolution` a background agent. */
 const ACTOR_ORIGINS = ['system', ...CHILD_ORIGINS] as const;
@@ -38,8 +38,8 @@ export interface ActorProfile {
 }
 
 /** A hired agent: a chat of its own, reached by name through the roster. */
-export function isSubordinateOrigin(origin: ActorOrigin): origin is SubordinateOrigin {
-  return SUBORDINATE_ORIGINS.some((subordinate) => subordinate === origin);
+export function isSubagentOrigin(origin: ActorOrigin): origin is SubagentOrigin {
+  return SUBAGENT_ORIGINS.some((subagent) => subagent === origin);
 }
 
 /** Read as a home `actorHomeName` derives from a key (`main`, `sub-<key>`, `head-<key>`), so never one's own. */
@@ -58,10 +58,10 @@ function actorPreset(origin: Exclude<ActorOrigin, 'system'>, lifetime: ActorProf
 }
 
 /** The `kinu.actor_kind` span value, unchanged from before origins, so traces and dashboards keep their keys. */
-export function tracedActorKind(origin: ActorOrigin): 'main' | 'subordinate' | 'run' {
+export function tracedActorKind(origin: ActorOrigin): 'main' | 'subagent' | 'run' {
   if (origin === 'system') return 'main';
 
-  return origin === 'swarm' ? 'run' : 'subordinate';
+  return origin === 'swarm' ? 'run' : 'subagent';
 }
 
 const MAIN_PROFILE: ActorProfile = { origin: 'system', tab: true, input: true, lifetime: 'durable', evolves: true };
@@ -372,7 +372,7 @@ export class WorkspaceActorDirectory {
     const creationId = requiredIdentity(input.creationId);
     const name = requiredIdentity(input.name);
 
-    if (input.origin !== 'swarm') requireSubordinateActorName(name);
+    if (input.origin !== 'swarm') requireSubagentActorName(name);
     else if (!isExplorationActorKey(name)) throw new KinuError('bad_input', 'Exploration actor names must use the exploration address space.');
 
     const prior = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
@@ -393,7 +393,7 @@ export class WorkspaceActorDirectory {
     // A hire whose name no actor of this workspace has had is keyed, and so housed (`actorHomeName`), by that name;
     // a cousin's name, or one used before, keys nothing, and the fresh id does. `insert` decides it as it writes.
     this.insert({
-      actorId, parentActorId: parent.actorId, name, storageKey: actorId, keyByName: isSubordinateOrigin(input.origin) && !mimicsDerivedHome(name),
+      actorId, parentActorId: parent.actorId, name, storageKey: actorId, keyByName: isSubagentOrigin(input.origin) && !mimicsDerivedHome(name),
       profile: actorPreset(input.origin, input.lifetime), creationId, ended: null,
     });
     const row = this.retained(actorId);
@@ -642,12 +642,12 @@ export class WorkspaceActorDirectory {
 }
 
 /** Hired agents below `actorId`, deepest first. */
-export function subordinateDescendants(actors: readonly WorkspaceActor[], actorId: string): readonly WorkspaceActor[] {
+export function subagentDescendants(actors: readonly WorkspaceActor[], actorId: string): readonly WorkspaceActor[] {
   const below: WorkspaceActor[] = [];
 
   const visit = (parentId: string): void => {
     for (const actor of actors) {
-      if (!isSubordinateOrigin(actor.origin) || actor.parentActorId !== parentId) continue;
+      if (!isSubagentOrigin(actor.origin) || actor.parentActorId !== parentId) continue;
       visit(actor.actorId);
       below.push(actor);
     }
@@ -673,7 +673,7 @@ export function stoppedBelow(actors: readonly WorkspaceActor[], actorId: string)
     return false;
   };
 
-  return subordinateDescendants(actors, actorId).filter((actor) => !ownerMade(actor));
+  return subagentDescendants(actors, actorId).filter((actor) => !ownerMade(actor));
 }
 
 /**

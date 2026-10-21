@@ -194,7 +194,7 @@ export const PROMPT_MATRIX: readonly PromptCase[] = [
     },
   },
   {
-    name: 'delegation-report-subordinate',
+    name: 'delegation-report-subagent',
     opts: { availableTools: ['report'], registeredExecutors: [] },
   },
   {

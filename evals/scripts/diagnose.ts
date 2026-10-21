@@ -42,7 +42,7 @@ it hung: a turn whose outcome is "hung" (busy, its ledger silent) is product:han
 outcome is "cancelled" was ended by the run's cancel, holding what its message names: diagnose why that never ended.
 provider means the model provider refused or throttled the inference. harness means the eval itself failed.
 A recorded refusal alone does not distinguish tool misuse from a product defect: inspect its input and explanation.
-Helper runs null means not recorded, NOT idle. An idle status with no runs is recorded idle. Duplicate identical
+Subagent runs null means not recorded, NOT idle. An idle status with no runs is recorded idle. Duplicate identical
 briefs and lead writes to delegated paths are observations: check whether these were harmful duplication or
 necessary integration. A missing report is not proof the agent never waited; reports wake a lead after it yields.
 Generic run errors do not prove a provider error. Do not invent events a trajectory did not record.

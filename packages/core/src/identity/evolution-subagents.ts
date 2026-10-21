@@ -10,20 +10,20 @@ export interface EvolutionLaneRequest {
 
 export type EvolutionAnswerStatus = 'completed' | 'blocked';
 
-/** An answered helper and the lane it answered. */
-export interface AnsweredEvolutionHelper {
+/** An answered subagent and the lane it answered. */
+export interface AnsweredEvolutionSubagent {
   readonly name: string;
   readonly lane: EvolutionLaneRequest;
   readonly status: EvolutionAnswerStatus;
   readonly answer: string;
 }
 
-export type EvolutionHelperAnswer =
+export type EvolutionSubagentAnswer =
   | { readonly state: 'answered'; readonly name: string; readonly status: EvolutionAnswerStatus; readonly answer: string }
   | { readonly state: 'running'; readonly name: string };
 
-export function initEvolutionHelperTable(sql: SqlExec): void {
-  sql.exec(`CREATE TABLE IF NOT EXISTS evolution_helpers (
+export function initEvolutionSubagentTable(sql: SqlExec): void {
+  sql.exec(`CREATE TABLE IF NOT EXISTS evolution_subagents (
     actor_id        TEXT NOT NULL,
     name            TEXT NOT NULL,
     lane_request_id TEXT NOT NULL,
@@ -32,11 +32,11 @@ export function initEvolutionHelperTable(sql: SqlExec): void {
     created_at      INTEGER NOT NULL,
     PRIMARY KEY (actor_id, name)
   )`);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_evolution_helpers_request
-    ON evolution_helpers(actor_id, lane_request_id, created_at)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_evolution_subagents_request
+    ON evolution_subagents(actor_id, lane_request_id, created_at)`);
 }
 
-const HelperRowSchema = v.object({
+const SubagentRowSchema = v.object({
   name: v.string(),
   answer_status: v.nullable(v.picklist(['completed', 'blocked'])),
   answer: v.nullable(v.string()),
@@ -49,7 +49,7 @@ const AnsweredRowSchema = v.object({
   answer: v.string(),
 });
 
-export class EvolutionHelperStore {
+export class EvolutionSubagentStore {
   private readonly actorId: string;
 
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
@@ -59,7 +59,7 @@ export class EvolutionHelperStore {
   record(name: string, request: EvolutionLaneRequest, now: number): void {
     this.actor.assertCurrent();
     this.sql.exec(
-      `INSERT INTO evolution_helpers (actor_id, name, lane_request_id, created_at) VALUES (?, ?, ?, ?)`,
+      `INSERT INTO evolution_subagents (actor_id, name, lane_request_id, created_at) VALUES (?, ?, ?, ?)`,
       this.actorId, name, request.requestId, now,
     );
   }
@@ -68,7 +68,7 @@ export class EvolutionHelperStore {
     this.actor.assertCurrent();
 
     return this.sql.exec(
-      `SELECT 1 FROM evolution_helpers WHERE actor_id = ? AND name = ? LIMIT 1`, this.actorId, name,
+      `SELECT 1 FROM evolution_subagents WHERE actor_id = ? AND name = ? LIMIT 1`, this.actorId, name,
     ).toArray().length > 0;
   }
 
@@ -76,23 +76,23 @@ export class EvolutionHelperStore {
   storeAnswer(name: string, status: EvolutionAnswerStatus, answer: string): void {
     this.actor.assertCurrent();
     this.sql.exec(
-      `UPDATE evolution_helpers SET answer_status = ?, answer = ?
+      `UPDATE evolution_subagents SET answer_status = ?, answer = ?
        WHERE actor_id = ? AND name = ? AND answer_status IS NULL`,
       status, answer, this.actorId, name,
     );
   }
 
-  answerFor(request: EvolutionLaneRequest): EvolutionHelperAnswer | null {
+  answerFor(request: EvolutionLaneRequest): EvolutionSubagentAnswer | null {
     this.actor.assertCurrent();
 
     const rows = this.sql.exec(
-      `SELECT h.name, h.answer_status, h.answer FROM evolution_helpers h
-       LEFT JOIN actor_subordinates s ON s.actor_id = h.actor_id AND s.name = h.name
+      `SELECT h.name, h.answer_status, h.answer FROM evolution_subagents h
+       LEFT JOIN actor_subagents s ON s.actor_id = h.actor_id AND s.name = h.name
        WHERE h.actor_id = ? AND h.lane_request_id = ?
          AND (h.answer_status IS NOT NULL OR s.status != 'dismissed')
        ORDER BY h.answer_status IS NULL, h.created_at DESC, h.name DESC LIMIT 1`,
       this.actorId, request.requestId,
-    ).toArray().map((row) => v.parse(HelperRowSchema, row));
+    ).toArray().map((row) => v.parse(SubagentRowSchema, row));
 
     const row = rows[0];
 
@@ -104,11 +104,11 @@ export class EvolutionHelperStore {
   }
 
   /** Answers still held for their lane, oldest first. */
-  answered(): readonly AnsweredEvolutionHelper[] {
+  answered(): readonly AnsweredEvolutionSubagent[] {
     this.actor.assertCurrent();
 
     return this.sql.exec(
-      `SELECT name, lane_request_id, answer_status, answer FROM evolution_helpers
+      `SELECT name, lane_request_id, answer_status, answer FROM evolution_subagents
        WHERE actor_id = ? AND answer_status IS NOT NULL ORDER BY created_at, name`,
       this.actorId,
     ).toArray().map((row) => v.parse(AnsweredRowSchema, row)).map((row) => ({
@@ -118,6 +118,6 @@ export class EvolutionHelperStore {
 
   remove(name: string): void {
     this.actor.assertCurrent();
-    this.sql.exec(`DELETE FROM evolution_helpers WHERE actor_id = ? AND name = ?`, this.actorId, name);
+    this.sql.exec(`DELETE FROM evolution_subagents WHERE actor_id = ? AND name = ?`, this.actorId, name);
   }
 }

@@ -664,7 +664,7 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     await page.keyboard.press('Enter');
     await until(page, 'the name field to close', `document.querySelector('input[aria-label="Chat name"]') === null`);
     // The rename reply can close the editor before the deferred reads_changed notice refreshes the sidebar.
-    await settledAfter(page, renameLedger, 'renameSubordinateAgent', 'listWorkspaceAgents');
+    await settledAfter(page, renameLedger, 'renameSubagentAgent', 'listWorkspaceAgents');
     await renameLedger.stop();
     // The counter is the sidebar's, drawn once its workspaces have arrived, as the return below waits for them too.
     await until(page, "the sidebar's workspace list", SIDEBAR_LISTED);
@@ -831,7 +831,7 @@ export async function rightPanelKeepsItsState(target: FlowTarget): Promise<Panel
     await page.evaluate(ClickScripts.lastAgentTab);
     await until(page, 'an agent tab after Main, current', `${ACTIVE_TAB_INDEX} > 0`);
 
-    // The '+' flow: the subordinate column mounts a composer its own socket has
+    // The '+' flow: the subagent column mounts a composer its own socket has
     // enabled. The hosted-actor socket defect left that pane connecting forever,
     // so this row's number is the frames that socket answered with. The composer
     // turns live on the socket's open, before its first frame, so the row waits

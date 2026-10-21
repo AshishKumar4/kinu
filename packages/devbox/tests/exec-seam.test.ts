@@ -18,7 +18,9 @@ test('a box that starts sends no exec whose stdin the platform must end', async 
   expect(container.unownedStdin).toEqual([]);
 });
 
-// The platform's `signal()` is the same task: a stop ends the container by an exec through the seam instead.
+// The platform's `signal()` is the same task: a stop ends the container by an exec through the seam instead. Its kill's
+// words are read as the box's procps reads them (the harness asks the host's): staging rc30 sent `kill -TERM -1`, which
+// procps refused, and the stop never answered.
 test('a box that stops ends its container by an exec, and asks the platform for no signal', async () => {
   const { box, container } = harness(TestDevbox);
 
@@ -27,6 +29,29 @@ test('a box that stops ends its container by an exec, and asks the platform for 
 
   expect({ running: container.running.running, signals: container.platformSignals, unowned: container.unownedStdin })
     .toEqual({ running: false, signals: [], unowned: [] });
+});
+
+// staging rc30, 2026-10-21: the kill refused its arguments, and the stop waited on a container nothing had told to end.
+test('a stop whose kill refuses fails in the kill\'s own words, and the container is still running', async () => {
+  const { box, container } = harness(TestDevbox);
+
+  await box.devboxStartup();
+  container.stopKillRefusal = '/usr/bin/kill: failed to parse argument';
+  const [stopped] = await Promise.allSettled([box.stop()]);
+
+  expect({ failed: stopped.status === 'rejected' ? String(stopped.reason) : 'stopped', running: container.running.running })
+    .toEqual({ failed: expect.stringContaining('kill -TERM -- -1 exited 1: /usr/bin/kill: failed to parse argument'), running: true });
+});
+
+// A golden container, 2026-10-21: the kill went with the container it ended, exit 137, and the stop read that as refused.
+test('a stop whose kill ends with the container it ended answers, the container ended', async () => {
+  const { box, container } = harness(TestDevbox);
+
+  await box.devboxStartup();
+  container.stopKillExit = 137;
+  await box.stop();
+
+  expect(container.running.running).toBe(false);
 });
 
 // Reviews of 977bf090f: the SDK's `Files` ran its shim on the bare container, each exec with no stdin of the box's.

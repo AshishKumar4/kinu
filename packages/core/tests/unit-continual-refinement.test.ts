@@ -1175,7 +1175,7 @@ describe('routing — every typed edit lands in the store that already owns it',
         kind: 'subagent_spec',
         role: 'reviewer',
         spec: 'always answer in one line',
-        rationale: 'the reviewer subordinate produced the long answers the user corrected three times',
+        rationale: 'the reviewer subagent produced the long answers the user corrected three times',
       }],
     }));
 
@@ -1207,7 +1207,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(added).toEqual(['refinement_requests']);
 
     // Names that would betray a second authority for an artifact.
-    for (const forbidden of ['skill', 'prompt_section', 'fact', 'subordinate', 'actor_config']) {
+    for (const forbidden of ['skill', 'prompt_section', 'fact', 'subagent', 'actor_config']) {
       expect(added.some((name) => name.includes(forbidden))).toBe(false);
     }
 

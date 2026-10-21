@@ -8,7 +8,7 @@ import { JobOutputFrameSchema } from '../jobs/live-output';
 import { PlanReviewSchema } from '../plans/review';
 import { PROVIDER_WAIT_SOURCES } from '../providers/types';
 import { SLATES_CHANGED_EVENT } from '../slates/rpc';
-import { WorkspacePlanReferenceSchema } from '../subordinates/inspection';
+import { WorkspacePlanReferenceSchema } from '../subagents/inspection';
 import { LIVE_READS, READS_CHANGED_EVENT } from './live-reads';
 import { TurnClaimFrameSchema } from './turn-liveness';
 import { UsageSchema } from '../usage';
@@ -86,11 +86,11 @@ const MctsProgressFrameSchema = v.object({
 
 export type MctsProgress = v.InferOutput<typeof MctsProgressFrameSchema>;
 
-export const SubordinateActivityEventSchema = v.object({
-  type: v.literal('subordinate_event'),
+export const SubagentActivityEventSchema = v.object({
+  type: v.literal('subagent_event'),
   id: v.string(),
   kind: v.picklist(['task', 'report']),
-  subordinate: v.string(),
+  subagent: v.string(),
   status: v.optional(v.string()),
   content: v.string(),
   task: v.optional(v.string()),
@@ -157,7 +157,7 @@ export const WorkspaceBroadcastSchema = v.variant('type', [
   v.object({ type: v.literal('plan_updated'), plan: PlanReviewSchema }),
   WorkspacePlanUpdatedFrameSchema,
   TurnClaimFrameSchema,
-  SubordinateActivityEventSchema,
+  SubagentActivityEventSchema,
   v.object({ type: v.literal('context_fill'), contextTokens: v.optional(v.number()), contextWindow: v.optional(v.number()) }),
   v.object({
     type: v.literal('executor-output'), executor: v.string(), command: v.string(),

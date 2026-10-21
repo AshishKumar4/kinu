@@ -17,7 +17,7 @@ import type { Database } from 'bun:sqlite';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
 import { bindAgentSql } from '../src/runtime';
 import {
-  armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, historyOver, ledgerOver, mainRows, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission,
+  armedWakes, chatSessionTurns, fireSoonestWake, GATEWAY_CATALOG, historyOver, ledgerOver, mainRows, nextTurn, orchestratorHarness, hostedSubagentHarness, seedMission,
   until, wakeForDelegatedTask, workspaceFiles, workspaceMainActor, type HarnessOrchestratorAgent, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
@@ -68,7 +68,7 @@ function ownerTab(agent: HarnessOrchestratorAgent, tags: readonly string[] = [])
   };
 }
 
-const AddedAgentSchema = v.looseObject({ name: v.string(), subordinate: v.looseObject({ actorId: v.string() }) });
+const AddedAgentSchema = v.looseObject({ name: v.string(), subagent: v.looseObject({ actorId: v.string() }) });
 
 const MAPPING = 'Map the failure surface.';
 
@@ -226,7 +226,7 @@ describe("a workspace's tile on its owner's home", () => {
       expect((await agent.foldOverview()).decisionsWaiting).toBe(0);
 
       // ── Children: one working reads Working; one torn down takes its pending plan with it. ──
-      const { actor: scout } = await hostedSubordinateHarness(workspace, { name: 'scout', displayName: 'Scout', nameOrigin: 'user', mission: 'map the failure surface' });
+      const { actor: scout } = await hostedSubagentHarness(workspace, { name: 'scout', displayName: 'Scout', nameOrigin: 'user', mission: 'map the failure surface' });
 
       // Admitted as its hirer's agents tool admits a task; the wake's drain hands it to the child's own chat.
       await wakeForDelegatedTask(workspace, scout.handle.actorId, MAPPING);
@@ -238,8 +238,8 @@ describe("a workspace's tile on its owner's home", () => {
 
       // The owner adds an agent and asks it something in its own window: its turn reads Working until it answers.
       await tab('setSoul', '# Purpose\n\nKeep the ledger balanced.');
-      const added = v.parse(AddedAgentSchema, await tab('createSubordinateAgent'));
-      const addedWindow = ownerTab(agent, [actorConnectionTag(added.subordinate.actorId)]);
+      const added = v.parse(AddedAgentSchema, await tab('createSubagentAgent'));
+      const addedWindow = ownerTab(agent, [actorConnectionTag(added.subagent.actorId)]);
 
       await addedWindow('send', NOTING, crypto.randomUUID());
       await addedAsked.promise;
@@ -250,7 +250,7 @@ describe("a workspace's tile on its owner's home", () => {
       // The added agent's Plan turn submits a plan into its own isolate: a decision the tile counts.
       await addedWindow('send', PLANNING, crypto.randomUUID(), [], 'plan');
       await until(() => last()?.decisionsWaiting === 1, "the child's plan is pushed");
-      await tab('dismissSubordinate', added.name, false);
+      await tab('dismissSubagent', added.name, false);
       await until(() => last()?.decisionsWaiting === 0, 'the retired child takes its plan from the tile');
 
       // ── An app the workspace authors shows by its own title, following its files. ──

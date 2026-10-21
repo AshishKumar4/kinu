@@ -25,7 +25,7 @@ function delegatedEventMode(event: KinuEvent): WorkMode | null {
   // owner's own mail's, since mail is a weaker channel than the signed-in app (docs/MAIL.md §3).
   if (event.variant === 'email') return 'plan';
 
-  if (event.variant !== 'peer_agent' && event.variant !== 'subordinate_report') return null;
+  if (event.variant !== 'peer_agent' && event.variant !== 'subagent_report') return null;
 
   if (event.payload_visibility === 'full' || event.payload_visibility === 'redact') {
     return event.payload.kinu_mode;
@@ -45,13 +45,13 @@ function oneLine(value: string): string {
 }
 
 /**
- * Self-emitted/internal rows never wake a turn (anti-self-wake loop); `subordinate_task` rows belong
+ * Self-emitted/internal rows never wake a turn (anti-self-wake loop); `subagent_task` rows belong
  * to `drainAssignments`; `internal` ones to a lane. Shared with `EventLog.nextPendingDrainAt` so the wake fold cannot drift.
  */
 export function wakesADrain(event: KinuEvent, internal?: InternalEventTest): boolean {
   return event.ingress !== 'self_emit'
     && event.variant !== 'internal'
-    && event.variant !== 'subordinate_task'
+    && event.variant !== 'subagent_task'
     && internal?.(event) !== true;
 }
 
