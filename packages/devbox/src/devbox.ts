@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, isProcessLive, nameBox, containerExec, boxEnv, END_TREE, type ProcessRecord } from "./processes";
+import { Processes, isProcessLive, nameBox, containerExec, seamedContainer, boxEnv, END_TREE, type ProcessRecord } from "./processes";
 import { launched } from './exec-launcher';
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
@@ -3647,7 +3647,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return container;
   }
 
-  #files(): Files { return this.#fileClient ??= new Files(this.#container()); }
+  #files(): Files { return this.#fileClient ??= new Files(seamedContainer(this.#container())); }
   #processes(): Processes {
     return this.#processClient ??= new Processes(this.#container(), undefined, (event, fields) => { this.#trace(event, fields); });
   }
@@ -4024,12 +4024,12 @@ function admissionFailure(container: Container, failed: LateStartFailure): Error
 
 /** Why the first exec after a start failed, or nothing when it ran clean. */
 async function admissionFailureOf(container: Container, signal: AbortSignal): Promise<Error | undefined> {
-  const [admitted] = await Promise.allSettled([containerExec(container, ['/bin/true'], { signal })]);
+  // Its output is the exec's too: a container that answered and then went is read against the start's refusal as well.
+  const [admitted] = await Promise.allSettled([containerExec(container, ['/bin/true'], { signal }).then(async (process) => await process.output())]);
 
   if (admitted?.status !== 'fulfilled') return admissionFailure(container, { cause: admitted?.reason });
-  const { exitCode } = await admitted.value.output();
 
-  return exitCode === 0 ? undefined : new DevboxError('io', `native container admission exited ${String(exitCode)}`);
+  return admitted.value.exitCode === 0 ? undefined : new DevboxError('io', `native container admission exited ${String(admitted.value.exitCode)}`);
 }
 
 async function firstExec(container: Container, signal: AbortSignal): Promise<void> {

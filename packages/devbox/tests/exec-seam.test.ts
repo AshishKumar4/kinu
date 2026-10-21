@@ -4,7 +4,11 @@
 import { TestDevbox } from './support/test-devbox';
 import { expect, test } from 'bun:test';
 
+import { settle } from '../src/errors';
+import { resizePty } from '../src/processes';
+import { chainBox } from './support/chain-box';
 import { harness } from './support/devbox-harness';
+import { pipeExec } from './support/native-process';
 
 test('a box that starts sends no exec whose stdin the platform must end', async () => {
   const { box, container } = harness(TestDevbox);
@@ -24,3 +28,59 @@ test('a box that stops ends its container by an exec, and asks the platform for 
   expect({ running: container.running.running, signals: container.platformSignals, unowned: container.unownedStdin })
     .toEqual({ running: false, signals: [], unowned: [] });
 });
+
+// Reviews of 977bf090f: the SDK's `Files` ran its shim on the bare container, each exec with no stdin of the box's.
+test("a box's file and process calls reach its container through the seam, and every pipe the box owns is closed", async () => {
+  const { box, container } = harness(TestDevbox);
+
+  await box.devboxStartup();
+  await box.mkdir('/workspace/sub', { recursive: true });
+  await box.writeFile('/workspace/sub/a.txt', 'a');
+  await box.readFile('/workspace/sub/a.txt');
+  await box.statFile('/workspace/sub/a.txt');
+  await box.exists('/workspace/sub/a.txt');
+  await box.listProcesses();
+  await box.deleteFile('/workspace/sub/a.txt');
+
+  expect({ unowned: container.unownedStdin, open: container.openStdin }).toEqual({ unowned: [], open: [] });
+});
+
+test('a box woken beside its running container reads what its store left through the seam', async () => {
+  const chain = chainBox();
+
+  await chain.box.devboxStartup();
+  await chain.evict().devboxState();
+
+  expect({ unowned: chain.container.unownedStdin, open: chain.container.openStdin }).toEqual({ unowned: [], open: [] });
+});
+
+test("a file read whose stdin will not close fails in the box's words", async () => {
+  const { box, container } = harness(TestDevbox);
+
+  await box.devboxStartup();
+  await box.writeFile('/workspace/a.txt', 'a');
+  container.stdinCloseFault = new Error('Network connection lost.');
+  const [read] = await Promise.allSettled([box.readFile('/workspace/a.txt')]);
+
+  expect(read?.status === 'rejected' ? String(read.reason) : 'read').toContain('closing the stdin of /usr/local/bin/sandbox-shim');
+});
+
+// The resize's own script, run on a real shell: a client gone is an ended terminal; one whose input is no terminal fails.
+test('a resize of a client that has exited answers that its terminal ended', async () => {
+  const client = Bun.spawn(['true']);
+
+  await client.exited;
+
+  expect(await settle(resizePty({ exec: pipeExec }, client.pid, { cols: 80, rows: 24 }))).toBe('ended');
+});
+
+test("a resize of a client whose input is no terminal fails in stty's words", async () => {
+  const client = Bun.spawn(['cat'], { stdin: 'pipe' });
+  const [sized] = await Promise.allSettled([settle(resizePty({ exec: pipeExec }, client.pid, { cols: 80, rows: 24 }))]);
+
+  client.kill();
+  await client.exited;
+
+  expect(sized?.status === 'rejected' ? String(sized.reason) : 'sized').toContain('stty could not resize the terminal');
+});
+

@@ -67,6 +67,17 @@ test('a rest commits the chain, then takes the snapshot the next wake starts fro
   });
 });
 
+// Review of 977bf090f: the admission probe's output was read outside its settled check, so a start refused for room after
+// the probe answered failed in the lost connection's words, and read as a verdict on the snapshot.
+test('a snapshot wake refused for room after its admission probe answered keeps the snapshot as its source', async () => {
+  const { box, container, rows } = await rested();
+
+  container.admissionLoss = { lost: new Error('Network connection lost.'), refusal: new Error('Account resource limit exceeded') };
+  await box.devboxStartup();
+
+  expect({ starts: container.startOptions.map(startedFrom), snapshotKept: rows.has('devbox:snapshot') }).toEqual({ starts: ['golden', 'snapshot-1'], snapshotKept: true });
+});
+
 test('a snapshot wake that is not admitted within the cutover starts from the golden and tells the agent when it restored to', async () => {
   setSystemTime(new Date('2026-09-30T00:00:00Z'));
   const { box, container, rows } = await rested();

@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
-import { boxEnv, containerExec, endProcess } from './processes';
+import { boxEnv, containerExec, endProcess, resizePty, type TerminalSize } from './processes';
 import { INSTALL_SESSION_FILES, SAVED_SESSIONS, SESSIONS_FORGET, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE, type SessionRecord } from './sessions';
 import { DEVBOX_WORKDIR } from './storage';
 
@@ -23,25 +23,6 @@ const Size = v.object({ cols: v.pipe(v.number(), v.integer(), v.minValue(1), v.m
 
 const Resize = v.object({ type: v.literal('resize'), ...Size.entries });
 
-type TerminalSize = v.InferOutput<typeof Size>;
-
-/**
- * The PTY's size set from another exec, through the seam: `stty` on the client's own terminal, whose new size the
- * kernel tells its tmux client (SIGWINCH). workerd's `ExecProcess.resize()` is a task nobody can await, and on a lost
- * connection it failed the box's request as an uncaught "Network connection lost." (staging rc29, 2026-10-21).
- */
-function resizePty(container: Pick<Container, 'exec'>, pid: number, size: TerminalSize): Effect.Effect<void, DevboxError> {
-  return Effect.gen(function* () {
-    const sized = yield* attempt('process', async () => await (await containerExec(container, [
-      'stty', '-F', `/proc/${String(pid)}/fd/0`, 'cols', String(size.cols), 'rows', String(size.rows),
-    ])).output(), "resizing a terminal's client");
-
-    if (sized.exitCode !== 0) {
-      return yield* Effect.fail(new DevboxError('process', `stty could not resize the terminal: ${new TextDecoder().decode(sized.stderr).trim()}`));
-    }
-  });
-}
-
 /** One PTY process and the socket that carries it. */
 interface TerminalLanes {
   readonly process: ExecProcess;
@@ -50,7 +31,9 @@ interface TerminalLanes {
   readonly output: ReadableStream<Uint8Array>;
   /** Ends the PTY's tmux client, which leaves its session running (`endProcess`). */
   readonly end: () => void;
-  readonly resize: (size: TerminalSize) => Effect.Effect<void, DevboxError>;
+  readonly resize: (size: TerminalSize) => Effect.Effect<'resized' | 'ended', DevboxError>;
+  /** The size the PTY opened at. */
+  readonly size: TerminalSize;
 }
 
 class TerminalConnection {
@@ -59,8 +42,12 @@ class TerminalConnection {
   /** The size the pane asked for last, while a resize runs: a pane being dragged asks many times, and only its last counts. */
   #wanted: TerminalSize | null = null;
   #resizing = false;
+  /** The PTY's size now: a pane that asks for it again is answered without an exec. */
+  #size: TerminalSize;
 
-  constructor(readonly lanes: TerminalLanes) {}
+  constructor(readonly lanes: TerminalLanes) {
+    this.#size = lanes.size;
+  }
 
   close(code: number, message: string): void {
     if (this.#closed) return;
@@ -70,14 +57,15 @@ class TerminalConnection {
     this.lanes.server.close(code, message);
   }
 
-  #failed(lane: 'input' | 'output', cause: DevboxError): void {
-    if (this.#closed && cause.code === 'cancelled') return;
+  /** A lane that failed while the terminal is open closes it; one failing after it closed or its client exited is no news. */
+  failed(lane: 'input' | 'output', cause: DevboxError): void {
+    if (this.#closed || this.#exited) return;
     console.error(`[devbox] native terminal ${lane} failed: ${cause.message}`);
     this.close(1011, `terminal ${lane} failed`);
   }
 
-  accept(event: MessageEvent): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
+  accept(event: MessageEvent): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
       if (this.#closed) return;
 
       if (event.data instanceof ArrayBuffer) {
@@ -87,7 +75,7 @@ class TerminalConnection {
 
         yield* this.#resizes({ cols: resize.cols, rows: resize.rows });
       }
-    }).pipe(Effect.catch(cause => Effect.sync(() => this.#failed('input', cause)))));
+    });
   }
 
   /** Runs the resize the pane asked for, then each it asked for meanwhile, last first; one asked while one runs waits. */
@@ -101,7 +89,12 @@ class TerminalConnection {
       yield* Effect.gen({ self: this }, function* () {
         for (let next = this.#wanted; next !== null && !this.#closed; next = this.#wanted) {
           this.#wanted = null;
-          yield* this.lanes.resize(next);
+
+          if (next.cols === this.#size.cols && next.rows === this.#size.rows) continue;
+
+          // A client gone mid-resize ended its terminal: its output's end closes the socket, and no size is owed it.
+          if ((yield* this.lanes.resize(next)) === 'ended') return;
+          this.#size = next;
         }
       }).pipe(Effect.ensuring(Effect.sync(() => { this.#resizing = false; })));
     });
@@ -128,7 +121,7 @@ class TerminalConnection {
 
     return observe(pump, {
       success: () => this.close(1000, 'terminal exited'),
-      failure: cause => this.#failed('output', cause),
+      failure: cause => this.failed('output', cause),
     });
   }
 }
@@ -155,11 +148,11 @@ export function terminalSocket(container: Pick<Container, 'exec'>, params: URLSe
     server.binaryType = 'arraybuffer';
     server.accept();
     const resize = (wanted: TerminalSize) => resizePty(container, process.pid, wanted);
-    const connection = new TerminalConnection({ process, server, input: process.stdin.getWriter(), output: process.stdout, end, resize });
+    const connection = new TerminalConnection({ process, server, input: process.stdin.getWriter(), output: process.stdout, end, resize, size });
     const cancelRead = connection.read();
-    server.addEventListener('message', event => observe(Effect.promise(() => connection.accept(event)), {
+    server.addEventListener('message', event => observe(connection.accept(event), {
       success: () => undefined,
-      failure: () => { connection.close(1011, 'terminal input failed'); cancelRead(); },
+      failure: (cause) => { connection.failed('input', cause); cancelRead(); },
     }));
     server.addEventListener('close', () => { connection.close(1000, 'terminal detached'); cancelRead(); });
     server.addEventListener('error', () => { connection.close(1011, 'terminal transport failed'); cancelRead(); });

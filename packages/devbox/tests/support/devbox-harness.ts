@@ -386,6 +386,13 @@ export class FakeSandbox {
   readonly sequence: string[] = [];
   /** Each exec the box sent with no stdin of its own, whose end the platform would make a task nobody awaits. */
   readonly unownedStdin: string[] = [];
+  /** Each exec answered with a pipe nobody has closed yet: the box closes every one it owns before it answers. */
+  readonly openStdin: string[] = [];
+  /** Thrown by the next close of an exec's stdin, as by a connection lost after the exec answered. */
+  stdinCloseFault: Error | undefined;
+  /** The next admission probe (`/bin/true`) answers, then its output rejects with `lost` and the start's `monitor()` with
+   *  `refusal`: a container refused after the probe was sent. */
+  admissionLoss: { readonly lost: Error; readonly refusal: Error } | undefined;
   /** Each signal the box asked the platform to send, a task nobody awaits too. */
   readonly platformSignals: number[] = [];
   /** Stands in for what `/proc/mounts` reports for paths the box's `mountBucket` holds mounted. */
@@ -961,13 +968,44 @@ export class FakeSandbox {
         return { id, size: 1, name: options?.name };
       },
       inspect: () => unreached('container.inspect'),
-      exec: (args, options) => {
+      exec: async (args, options) => {
         // The platform ends the stdin of an exec given none, as a task the box cannot await (`containerExec`).
         if (options?.stdin === undefined) this.unownedStdin.push(args.join(' '));
+        const process = await this.#native(args, options);
 
-        return this.#native(args, options);
+        return options?.stdin === 'pipe' ? this.#piped(args.join(' '), process) : process;
       },
     };
+  }
+
+  /** `process` with its stdin's close kept in `openStdin`, and failed once by `stdinCloseFault`. Writes reach the stdin the
+   *  process holds when they are made: a file write's is the file it fills. */
+  #piped(name: string, process: ExecProcess): ExecProcess {
+    if (process.stdin === null) return process;
+    this.openStdin.push(name);
+    let writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
+
+    const held = (): WritableStreamDefaultWriter<Uint8Array> | undefined => {
+      writer ??= process.stdin?.getWriter();
+
+      return writer;
+    };
+
+    const stdin = new WritableStream<Uint8Array>({
+      write: async (chunk) => { await held()?.write(chunk); },
+      close: async () => {
+        const fault = this.stdinCloseFault;
+        this.stdinCloseFault = undefined;
+
+        if (fault !== undefined) throw fault;
+        this.openStdin.splice(this.openStdin.indexOf(name), 1);
+        await held()?.close();
+      },
+      abort: async (reason) => { await held()?.abort(reason); },
+    });
+
+    // Read through, not copied: a copy would read its exit, which no caller may have asked for.
+    return new Proxy(process, { get: (target, key: keyof ExecProcess) => (key === 'stdin' ? stdin : target[key]) });
   }
 
   /** A start from a snapshot the platform no longer holds fails; one marked `hang` never comes up. */
@@ -1095,7 +1133,7 @@ export class FakeSandbox {
     if (args[0] === '/usr/local/bin/sandbox-shim') {
       this.shimCalls.push(args.slice(1, 3).join(' '));
 
-      return this.shim.exec(args);
+      return this.shim.exec(args, options);
     }
 
     return undefined;
@@ -1129,6 +1167,15 @@ export class FakeSandbox {
       const hookGate = this.containerHookGate;
 
       if (hookGate !== undefined) { this.containerHookGate = undefined; hookGate.enter(); await hookGate.promise; }
+
+      const loss = this.admissionLoss;
+
+      if (loss !== undefined) {
+        this.admissionLoss = undefined;
+        this.#ended.reject(loss.refusal);
+
+        return processResult(new Promise<ExecResult>((_, reject) => { setImmediate(() => { reject(loss.lost); }); }), pid);
+      }
 
       return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
     }

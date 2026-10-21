@@ -36,31 +36,157 @@ export function boxEnv(env: Readonly<Record<string, string>>): Record<string, st
 }
 
 /**
- * The one way the box runs a command in its container. workerd ends the stdin of an exec given none with a task nobody
- * can await (`Container::exec`: "If stdin is undefined, the JS API promises immediate EOF"), and on a lost connection
- * that task failed the box's request as an uncaught "Network connection lost." (staging rc29, 2026-10-21), as the
- * platform's kill had (rc23). So every exec owns its stdin: a caller that writes none has it closed here before the
- * exec is answered, as the platform's immediate EOF would, and a lost connection fails the exec, where its caller reads
- * it. A caller's own stdin stays the caller's: the box passes only a pipe it writes and closes, never a stream for the
- * platform to pump (another task of its own).
+ * What the box asks of an exec. `stdin: 'pipe'` is a caller's own pipe, which it writes and closes; every other exec's
+ * stdin the seam closes. `signal` bounds the box's wait for the exec: aborted before the exec is answered and its stdin
+ * closed, the exec fails as cancelled and its process is ended by an exec. The platform never sees it, and a process
+ * once answered is its caller's to end.
  */
-export async function containerExec(container: Pick<Container, 'exec'>, argv: readonly string[], options: ContainerExecOptions = {}): Promise<ExecProcess> {
-  if (options.stdin !== undefined) return container.exec([...argv], options);
-  const process = await container.exec([...argv], { ...options, stdin: 'pipe' });
+export type ExecRequest = Omit<ContainerExecOptions, 'signal' | 'stdin'> & { readonly stdin?: 'pipe'; readonly signal?: AbortSignal };
 
-  await process.stdin?.close();
+/** What `raced` answers when its signal aborts before the exec does. */
+const ABORTED = Symbol('aborted');
 
-  return process;
+/** The exec's answer, or `ABORTED` once `signal` aborts first; neither leaves a listener behind. */
+async function raced(launched: Promise<ExecProcess>, signal: AbortSignal | undefined): Promise<ExecProcess | typeof ABORTED> {
+  if (signal === undefined) return await launched;
+  let off = (): void => {};
+
+  const aborted = new Promise<typeof ABORTED>((resolve) => {
+    const on = (): void => { resolve(ABORTED); };
+
+    off = () => { signal.removeEventListener('abort', on); };
+
+    signal.addEventListener('abort', on, { once: true });
+  });
+
+  return await Promise.race([launched, aborted]).finally(off);
 }
 
 /**
- * Ends `pid` in the container with an exec of `kill`, whose failure the box reads and says. The platform's own kill
- * (`ExecProcess.kill()`, or aborting the signal an exec was given) is a task workerd adds and nobody can await: on a
- * container whose connection was lost it failed the box's request as an uncaught "Network connection lost." (staging
- * rc23, 2026-10-19; `connection-lost.test.ts`). So no exec of the box's is given a signal or killed by the platform.
+ * The one way the box runs a command in its container. workerd makes three things of an exec that are tasks nobody can
+ * await, and on a lost connection each failed the box's request as an uncaught "Network connection lost.": the end of a
+ * stdin it was given none of (`Container::exec`: "If stdin is undefined, the JS API promises immediate EOF"; staging
+ * rc29, 2026-10-21), the kill an exec's signal makes when it aborts, and `kill()` and `resize()` on its process (rc23).
+ * So every exec carries a pipe the box closes before it answers, a signal is the box's own, and the process it hands
+ * back kills and resizes by exec. A lost connection fails the exec, where its caller reads it.
  */
-export function endProcess(container: Pick<Container, 'exec'>, pid: number, doing: string): () => void {
-  return observe(attempt('process', async () => await (await containerExec(container, ['kill', '-KILL', String(pid)])).output(), doing), {
+export function containerExec(container: Pick<Container, 'exec'>, argv: readonly string[], options: ExecRequest = {}): Promise<ExecProcess> {
+  const { signal, stdin, ...asked } = options;
+  const command = argv[0] ?? 'a command';
+  const aborted = (): boolean => signal?.aborted === true;
+  const abort = (): DevboxError => new DevboxError('cancelled', `${command} was not waited for`, { cause: signal?.reason });
+
+  return settle(Effect.gen(function* () {
+    if (aborted()) return yield* Effect.fail(abort());
+    const launched = container.exec([...argv], { ...asked, stdin: 'pipe' });
+    const answer = yield* attempt('process', async () => await raced(launched, signal), `running ${command}`);
+
+    if (answer === ABORTED) {
+      // It may still start: once it answers, it ends.
+      endProcess(container, launched.then((late) => late.pid), `ending ${command}, no longer waited for`);
+
+      return yield* Effect.fail(abort());
+    }
+
+    // What an SDK client calls on the process never becomes a task of the platform's: its kill and resize are execs.
+    const seamed = new Proxy(answer, {
+      get: (target, key: keyof ExecProcess) => {
+        if (key === 'kill') return () => { endProcess(container, answer.pid, 'ending a process its client killed'); };
+
+        if (key === 'resize') {
+          return (cols: number, rows: number) => observe(resizePty(container, answer.pid, { cols, rows }), {
+            success: () => undefined,
+            failure: (cause) => { console.error(`[devbox] ${cause.message}`); },
+          });
+        }
+
+        const value = target[key];
+
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    if (stdin === 'pipe') return seamed;
+    const own = answer.stdin;
+
+    // A pipe the platform did not hand back is one nobody can end: the exec fails, and says so. Ending its process is an
+    // exec too, which the same platform would answer the same way, so none is sent.
+    if (own === null) return yield* Effect.fail(new DevboxError('process', `the platform gave ${command} no stdin to close`));
+
+    // A close that fails leaves a process waiting on its input: ended, and the exec fails with why.
+    yield* attempt('process', async () => { await own.close(); }, `closing the stdin of ${command}`)
+      .pipe(Effect.tapError(() => Effect.sync(() => { endProcess(container, answer.pid, `ending ${command}, whose stdin would not close`); })));
+
+    // A signal that aborted while the stdin closed came before the answer the caller would have had.
+    if (aborted()) {
+      endProcess(container, answer.pid, `ending ${command}, no longer waited for`);
+
+      return yield* Effect.fail(abort());
+    }
+
+    return seamed;
+  }));
+}
+
+/** `container` as an SDK client (Files, S3Mount) execs on it: through the seam, each argv after `prefix`. */
+export function seamedContainer(container: Pick<Container, 'exec'>, prefix: readonly string[] = []): Pick<Container, 'exec'> {
+  return {
+    exec: async (argv, options = {}) => {
+      const { stdin, ...asked } = options;
+
+      // No client of the box's hands the platform a stream to pump: one would be another task of its own.
+      if (stdin !== undefined && stdin !== 'pipe') return await settle(Effect.fail(new DevboxError('process', 'an exec was handed a stream for its stdin')));
+
+      return await containerExec(container, [...prefix, ...argv], stdin === 'pipe' ? { ...asked, stdin } : asked);
+    },
+  };
+}
+
+/** A terminal's size, as its pane asks for one. */
+export interface TerminalSize {
+  readonly cols: number;
+  readonly rows: number;
+}
+
+/** What the resize exits with when the process it sizes is gone, and with it the terminal `/proc/<pid>/fd/0` named. */
+const CLIENT_GONE = 3;
+
+/** `stty` on the terminal of the process `$1`, to `$2` columns and `$3` rows; a process gone before or during it is no failure. */
+const RESIZE = `stty -F "/proc/$1/fd/0" cols "$2" rows "$3" && exit 0
+[ -e "/proc/$1/fd/0" ] || exit ${String(CLIENT_GONE)}
+exit 1`;
+
+/**
+ * Sets the size of the PTY `pid` reads, by an exec of `stty` on that process's own terminal, whose new size the kernel
+ * tells its tmux client (SIGWINCH): the platform's resize is a task nobody can await (`containerExec`). `pid` is a
+ * container-namespace pid, and `stty` from another exec sizes the pane (D107, measured on a staging computer). A process
+ * that is gone answers `ended`: its terminal ended, which its own output says.
+ */
+export function resizePty(container: Pick<Container, 'exec'>, pid: number, size: TerminalSize): Effect.Effect<'resized' | 'ended', DevboxError> {
+  return Effect.gen(function* () {
+    const sized = yield* attempt('process', async () => await (await containerExec(container, [
+      '/bin/sh', '-c', RESIZE, 'devbox-resize', String(pid), String(size.cols), String(size.rows),
+    ])).output(), "resizing a terminal's client");
+
+    if (sized.exitCode === CLIENT_GONE) return 'ended';
+
+    if (sized.exitCode !== 0) {
+      return yield* Effect.fail(new DevboxError('process', `stty could not resize the terminal: ${new TextDecoder().decode(sized.stderr).trim()}`));
+    }
+
+    return 'resized';
+  });
+}
+
+/**
+ * Ends `pid` in the container with an exec of `kill`, whose failure the box reads and says; a pid still to come is ended
+ * once it comes. The platform's own kill (`ExecProcess.kill()`, or aborting the signal an exec was given) is a task
+ * workerd adds and nobody can await: on a container whose connection was lost it failed the box's request as an uncaught
+ * "Network connection lost." (staging rc23, 2026-10-19; `connection-lost.test.ts`). So no exec of the box's is given a
+ * signal or killed by the platform.
+ */
+export function endProcess(container: Pick<Container, 'exec'>, pid: number | PromiseLike<number>, doing: string): () => void {
+  return observe(attempt('process', async () => await (await containerExec(container, ['kill', '-KILL', String(await pid)])).output(), doing), {
     success: () => undefined,
     failure: (cause) => { console.error(`[devbox] ${cause.message}`); },
   });
@@ -344,7 +470,7 @@ export class Processes {
     readonly kernel?: string,
     readonly trace: (event: string, fields: Record<string, string | number | boolean | undefined>) => void = () => {},
   ) {
-    this.#files = new Files(container);
+    this.#files = new Files(seamedContainer(container));
   }
 
   incarnation(): Promise<string> {
@@ -367,7 +493,7 @@ export class Processes {
 
     return new Processes({
       get running() { return native.running; },
-      exec: (argv, options) => containerExec(native, ['/bin/sh', '-c', IN_KERNEL, 'devbox-incarnation', kernel, ...argv], options),
+      exec: seamedContainer(native, ['/bin/sh', '-c', IN_KERNEL, 'devbox-incarnation', kernel]).exec,
     }, kernel, this.trace);
   }
 

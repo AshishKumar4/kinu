@@ -107,8 +107,8 @@ describe('a command on the runtime\'s exec', () => {
 
         (argv[0] === 'setsid' ? launched : killing).resolve();
 
-        // Its process as the container's: no such work directory here.
-        return { ...await localExec(['true']), pid: 500, output: async () => await never };
+        // Its process as the container's, with the pipe the box asked for: no such work directory here.
+        return { ...await localExec(['true'], { stdin: options?.stdin }), pid: 500, output: async () => await never };
       }
 
       return await localExec(argv, options);
