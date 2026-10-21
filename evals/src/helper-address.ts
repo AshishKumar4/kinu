@@ -1,6 +1,6 @@
 /**
- * Where the inspector (`inspectSubordinate`) reaches one of a hirer's helpers: by its actor, which the inspector reads
- * from the root at any depth, live or released (core subordinates/inspection-path.ts). A path walks live children by
+ * Where the inspector (`inspectSubagent`) reaches one of a hirer's helpers: by its actor, which the inspector reads
+ * from the root at any depth, live or released (core subagents/inspection-path.ts). A path walks live children by
  * name only and answers `missing` for a helper released once its work ended, as every task helper is, or dismissed.
  */
 

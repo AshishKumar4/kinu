@@ -1904,7 +1904,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'everything about the SERVER half. The frame stubs `fetchPage`, so no rowid '
       + 'seek, no `limit + 1` over-read and no stale cursor is exercised here — those '
       + 'are unit-tested against the read model instead. Two hooks and one merge rule '
-      + 'of the ~29 gallery frames; the subordinate column and the node transcript walk '
+      + 'of the ~29 gallery frames; the subagent column and the node transcript walk '
       + 'the same contract and are measured by neither this nor any other browser. '
       + 'Chrome cost keeps it out of the commit tier.',
     inputs: CLIENT_BUILD,

@@ -19,7 +19,7 @@ function newEventLog(): EventLog {
   const sql = makeSqlExec(db);
   initEventsHubTables(sql);
 
-  // The inbox is one actor's: a subordinate's delivery is never the root's.
+  // The inbox is one actor's: a subagent's delivery is never the root's.
   return new EventLog(sql, createTestActorsOver(db).main);
 }
 
@@ -220,11 +220,11 @@ describe('every drain path re-establishes the wake', () => {
   });
 });
 
-/** A report on the rail, as `admitSubordinateReport` writes one. */
+/** A report on the rail, as `admitSubagentReport` writes one. */
 function report(from: string, mode: 'plan' | 'build', content: string): IngressDescriptor {
   return {
-    ingress: 'subordinate', variant: 'subordinate_report',
-    payload: { from_subordinate: from, status: 'completed', content, sequence_id: `${from}:1`, kinu_mode: mode },
+    ingress: 'subagent', variant: 'subagent_report',
+    payload: { from_subagent: from, status: 'completed', content, sequence_id: `${from}:1`, kinu_mode: mode },
   };
 }
 

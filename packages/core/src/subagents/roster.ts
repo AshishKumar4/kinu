@@ -1,5 +1,5 @@
 /**
- * The subordinate roster (`actor_subordinates`): the parent's record of who works for it.
+ * The subagent roster (`actor_subagents`): the parent's record of who works for it.
  * Durable and task-lifetime helpers share the table; the lifetime is the actor's, or its birth's before it exists.
  */
 
@@ -10,13 +10,13 @@ import type { SqlExec, SqlExecRow } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { seekPage, StaleCursorError, type Page, type PageRequest } from '../session/page';
 import { boundedInt } from '../utils/bounds';
-import type { SubordinateReportStatus } from '../events/hub/types';
-import type { SubordinateReportOrigin } from './support';
-import { SUBORDINATE_STATUSES, type SubordinateRosterEntry, type SubordinateStatus } from '../delegation/agents-tool';
-import { SUBORDINATE_LIFETIMES, TEMPORARY_LIFETIME, temporaryRunSettles, type TaskTurnEnding } from './temporary';
+import type { SubagentReportStatus } from '../events/hub/types';
+import type { SubagentReportOrigin } from './support';
+import { SUBAGENT_STATUSES, type SubagentRosterEntry, type SubagentStatus } from '../delegation/agents-tool';
+import { SUBAGENT_LIFETIMES, TEMPORARY_LIFETIME, temporaryRunSettles, type TaskTurnEnding } from './temporary';
 import { ActorReferenceSchema, sameActorReference, type ActorReference } from '../identity/actor-handle';
-import { SUBORDINATE_ORIGINS } from '../identity/workspace-actors';
-import { SubordinateBirthSchema } from './birth';
+import { SUBAGENT_ORIGINS } from '../identity/workspace-actors';
+import { SubagentBirthSchema } from './birth';
 import { parseJsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
 import { EvolutionHelperStore, initEvolutionHelperTable } from '../identity/evolution-helpers';
@@ -28,10 +28,10 @@ const ROSTER_COLUMNS =
 
 /** Who made the hire, and for how long, are its actor's; before birth confirms an actor, the birth's seed carries them. */
 const ROSTER_PROJECTION =
-  'name, COALESCE((SELECT origin FROM workspace_actors WHERE actor_id = json_extract(actor_subordinates.actor_reference, \'$.actorId\')), '
+  'name, COALESCE((SELECT origin FROM workspace_actors WHERE actor_id = json_extract(actor_subagents.actor_reference, \'$.actorId\')), '
   + 'json_extract(birth_request, \'$.seed.origin\')) AS origin, status, current_task AS currentTask, '
   + 'created_at AS createdAt, dismissed_at AS dismissedAt, '
-  + 'COALESCE((SELECT lifetime FROM workspace_actors WHERE actor_id = json_extract(actor_subordinates.actor_reference, \'$.actorId\')), '
+  + 'COALESCE((SELECT lifetime FROM workspace_actors WHERE actor_id = json_extract(actor_subagents.actor_reference, \'$.actorId\')), '
   + 'json_extract(birth_request, \'$.seed.lifetime\')) AS lifetime, '
   + 'task_event_id AS taskEventId, actor_reference AS actorReference, birth_request AS birth, delete_requested AS deleteRequested';
 
@@ -45,22 +45,22 @@ const ROSTER_RESTORE_CONFLICT = `
          task_event_id = excluded.task_event_id,
          actor_reference = excluded.actor_reference, birth_request = excluded.birth_request, delete_requested = excluded.delete_requested`;
 
-export const SubordinateRosterEntrySchema = v.object({
+export const SubagentRosterEntrySchema = v.object({
   name: v.string(),
   actorReference: v.nullable(ActorReferenceSchema),
-  birth: v.nullable(SubordinateBirthSchema),
+  birth: v.nullable(SubagentBirthSchema),
   deleteRequested: v.boolean(),
-  origin: v.picklist(SUBORDINATE_ORIGINS),
-  status: v.picklist(SUBORDINATE_STATUSES),
+  origin: v.picklist(SUBAGENT_ORIGINS),
+  status: v.picklist(SUBAGENT_STATUSES),
   currentTask: v.nullable(v.string()),
   createdAt: v.number(),
   dismissedAt: v.nullable(v.number()),
-  lifetime: v.picklist(SUBORDINATE_LIFETIMES),
+  lifetime: v.picklist(SUBAGENT_LIFETIMES),
   taskEventId: v.nullable(v.string()),
-}) satisfies v.GenericSchema<SubordinateRosterEntry>;
+}) satisfies v.GenericSchema<SubagentRosterEntry>;
 
 const StoredRosterEntrySchema = v.object({
-  ...SubordinateRosterEntrySchema.entries, actorReference: v.nullable(v.string()), birth: v.nullable(v.string()),
+  ...SubagentRosterEntrySchema.entries, actorReference: v.nullable(v.string()), birth: v.nullable(v.string()),
   deleteRequested: v.pipe(v.union([v.literal(0), v.literal(1)]), v.transform((value) => value === 1)),
 });
 
@@ -74,13 +74,13 @@ function firstIssue(issues: readonly v.BaseIssue<unknown>[]): string {
 
 /** A stored row, its origin and lifetime read from its actor; one that fails says which row and which field, as
  *  `bad_input`: no retry reads the same row differently, so nothing waiting on it retries on a clock. */
-function parseStoredRosterRow(row: SqlExecRow): Effect.Effect<SubordinateRosterEntry, KinuError> {
+function parseStoredRosterRow(row: SqlExecRow): Effect.Effect<SubagentRosterEntry, KinuError> {
   const named = typeof row.name === 'string' ? row.name : '(unnamed)';
 
   return Effect.catchCause(Effect.sync(() => {
     const stored = v.parse(StoredRosterEntrySchema, row);
 
-    return v.parse(SubordinateRosterEntrySchema, {
+    return v.parse(SubagentRosterEntrySchema, {
       ...stored, actorReference: stored.actorReference === null ? null : parseJsonValue(stored.actorReference),
       birth: stored.birth === null ? null : parseJsonValue(stored.birth),
     });
@@ -88,23 +88,23 @@ function parseStoredRosterRow(row: SqlExecRow): Effect.Effect<SubordinateRosterE
     const cause = Cause.squash(failed);
     const where = v.isValiError(cause) ? firstIssue(cause.issues) : String(cause);
 
-    return Effect.fail(new KinuError('bad_input', `Stored subordinate roster data is malformed: row "${named}", ${where}.`, { cause }));
+    return Effect.fail(new KinuError('bad_input', `Stored subagent roster data is malformed: row "${named}", ${where}.`, { cause }));
   });
 }
 
 /** What a write stores is what a read accepts: a row the roster could not read back is never written. */
-const WrittenRosterRowSchema = v.omit(SubordinateRosterEntrySchema, ['origin', 'lifetime']);
+const WrittenRosterRowSchema = v.omit(SubagentRosterEntrySchema, ['origin', 'lifetime']);
 
 /** What a roster write stores; `origin` and `lifetime` are read from the actor, never written here. */
-type RosterRow = Omit<SubordinateRosterEntry, 'origin' | 'lifetime'>;
+type RosterRow = Omit<SubagentRosterEntry, 'origin' | 'lifetime'>;
 
-export interface SubordinateTitle {
+export interface SubagentTitle {
   readonly displayName: string;
   readonly nameOrigin: NameOrigin;
   readonly role: string;
 }
 
-export function subordinateTitle(entry: SubordinateRosterEntry, config: AgentConfigStore | null): SubordinateTitle {
+export function subagentTitle(entry: SubagentRosterEntry, config: AgentConfigStore | null): SubagentTitle {
   return settleSync(Effect.gen(function* () {
     if (config !== null) {
       return { displayName: config.getDisplayName() ?? entry.name, nameOrigin: config.getNameOrigin() ?? 'auto', role: config.getRoleSelection() };
@@ -112,14 +112,14 @@ export function subordinateTitle(entry: SubordinateRosterEntry, config: AgentCon
 
     const seed = entry.birth?.seed;
 
-    if (seed === undefined) return yield* new KinuError('io', `Subordinate "${entry.name}" has neither an actor nor a birth.`);
+    if (seed === undefined) return yield* new KinuError('io', `Subagent "${entry.name}" has neither an actor nor a birth.`);
 
     return { displayName: seed.displayName, nameOrigin: seed.nameOrigin, role: seed.role };
   }));
 }
 
 /** Only a mid-turn note on an open assignment keeps a row working; a turn's end idles it. */
-function reportedRosterStatus(status: SubordinateReportStatus, origin: SubordinateReportOrigin, currentTask: string | null): SubordinateStatus {
+function reportedRosterStatus(status: SubagentReportStatus, origin: SubagentReportOrigin, currentTask: string | null): SubagentStatus {
   if (status === 'blocked') return 'awaiting_input';
 
   if (temporaryRunSettles({ status, origin })) return 'idle';
@@ -127,8 +127,8 @@ function reportedRosterStatus(status: SubordinateReportStatus, origin: Subordina
   return currentTask === null || currentTask === '' ? 'idle' : 'working';
 }
 
-export function initSubordinateRosterTable(sql: SqlExec): void {
-  sql.exec(`CREATE TABLE IF NOT EXISTS actor_subordinates (
+export function initSubagentRosterTable(sql: SqlExec): void {
+  sql.exec(`CREATE TABLE IF NOT EXISTS actor_subagents (
     actor_id      TEXT NOT NULL,
     name          TEXT NOT NULL,
     status        TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed')),
@@ -140,18 +140,18 @@ export function initSubordinateRosterTable(sql: SqlExec): void {
     birth_request TEXT, delete_requested INTEGER NOT NULL DEFAULT 0 CHECK (delete_requested IN (0,1)),
     PRIMARY KEY (actor_id, name)
   )`);
-  sql.exec(`CREATE INDEX IF NOT EXISTS idx_actor_subordinates_order
-    ON actor_subordinates(actor_id, created_at, name)`);
+  sql.exec(`CREATE INDEX IF NOT EXISTS idx_actor_subagents_order
+    ON actor_subagents(actor_id, created_at, name)`);
   initEvolutionHelperTable(sql);
 }
 
-/** Parent-actor roster; owns all subordinate status policy. */
-export class SubordinateRosterStore {
+/** Parent-actor roster; owns all subagent status policy. */
+export class SubagentRosterStore {
   private readonly actorId: string;
 
   readonly helpers: EvolutionHelperStore;
 
-  /** Scoped to one parent actor: subordinate names are unique only per parent. */
+  /** Scoped to one parent actor: subagent names are unique only per parent. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
     this.helpers = new EvolutionHelperStore(sql, actor);
@@ -159,7 +159,7 @@ export class SubordinateRosterStore {
 
   ensureSchema(): void {
     this.actor.assertCurrent();
-    initSubordinateRosterTable(this.sql);
+    initSubagentRosterTable(this.sql);
   }
 
   /** `onConflict` is empty for a first insert and the upsert clause for a compensating restore. */
@@ -170,7 +170,7 @@ export class SubordinateRosterStore {
 
       if (!checked.success) return new KinuError('bad_input', `The hire "${entry.name}" cannot be recorded: ${firstIssue(checked.issues)}.`);
       this.sql.exec(
-        `INSERT INTO actor_subordinates (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)${onConflict}`,
+        `INSERT INTO actor_subagents (${ROSTER_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)${onConflict}`,
         this.actorId,
         entry.name,
         entry.status,
@@ -203,7 +203,7 @@ export class SubordinateRosterStore {
 
       if (row.actorReference !== null && !sameActorReference(row.actorReference, reference)) return yield* new KinuError('denied', 'The roster actor reference is immutable.');
       const child = v.parse(ActorReferenceSchema, reference);
-      this.sql.exec('UPDATE actor_subordinates SET actor_reference = ? WHERE actor_id = ? AND name = ?',
+      this.sql.exec('UPDATE actor_subagents SET actor_reference = ? WHERE actor_id = ? AND name = ?',
         JSON.stringify(child), this.actorId, name);
     }));
   }
@@ -213,18 +213,18 @@ export class SubordinateRosterStore {
       const row = this.requireExisting(name);
 
       if (row.birth?.creationId !== creationId || row.actorReference === null) return yield* new KinuError('denied', 'The birth admission cannot complete this roster row.');
-      this.sql.exec('UPDATE actor_subordinates SET birth_request = NULL WHERE actor_id = ? AND name = ?',
+      this.sql.exec('UPDATE actor_subagents SET birth_request = NULL WHERE actor_id = ? AND name = ?',
         this.actorId, name);
     }));
   }
 
   /** This parent's rows in roster order, narrowed by `condition` (empty for all). */
-  private orderedRows(condition: string): Effect.Effect<SubordinateRosterEntry[], KinuError> {
+  private orderedRows(condition: string): Effect.Effect<SubagentRosterEntry[], KinuError> {
     return Effect.suspend(() => {
       this.actor.assertCurrent();
 
       return Effect.forEach(this.sql.exec(
-        `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
+        `SELECT ${ROSTER_PROJECTION} FROM actor_subagents
          WHERE actor_id = ? ${condition} ORDER BY created_at, name`,
         this.actorId,
       ).toArray(), parseStoredRosterRow);
@@ -235,12 +235,12 @@ export class SubordinateRosterStore {
     this.actor.assertCurrent();
 
     return this.sql.exec(
-      `SELECT name FROM actor_subordinates WHERE actor_id = ? ${condition} LIMIT 1`,
+      `SELECT name FROM actor_subagents WHERE actor_id = ? ${condition} LIMIT 1`,
       this.actorId,
     ).toArray().length > 0;
   }
 
-  pendingBirths(): SubordinateRosterEntry[] {
+  pendingBirths(): SubagentRosterEntry[] {
     return settleSync(this.orderedRows('AND birth_request IS NOT NULL'));
   }
 
@@ -253,7 +253,7 @@ export class SubordinateRosterStore {
       const row = this.requireExisting(name);
 
       if (!row.actorReference || !sameActorReference(row.actorReference, reference)) return yield* new KinuError('denied', 'The deletion request does not own this roster row.');
-      this.sql.exec(`UPDATE actor_subordinates SET status = 'dismissed', dismissed_at = ?, delete_requested = 1 WHERE actor_id = ? AND name = ?`, now, this.actorId, name);
+      this.sql.exec(`UPDATE actor_subagents SET status = 'dismissed', dismissed_at = ?, delete_requested = 1 WHERE actor_id = ? AND name = ?`, now, this.actorId, name);
     }));
   }
 
@@ -264,7 +264,7 @@ export class SubordinateRosterStore {
       if (!row) return;
 
       if (!row.actorReference || !sameActorReference(row.actorReference, reference)) return yield* new KinuError('denied', 'The deletion cannot remove a replacement actor.');
-      this.sql.exec(`DELETE FROM actor_subordinates WHERE actor_id = ? AND name = ?
+      this.sql.exec(`DELETE FROM actor_subagents WHERE actor_id = ? AND name = ?
         AND json_extract(actor_reference, '$.actorId') = ? AND json_extract(actor_reference, '$.workspaceId') = ?
         AND json_extract(actor_reference, '$.parentActorId') IS ?`, this.actorId, name, reference.actorId, reference.workspaceId, reference.parentActorId);
       this.helpers.remove(name);
@@ -273,12 +273,12 @@ export class SubordinateRosterStore {
 
   cancelBirth(name: string, creationId: string): void {
     this.actor.assertCurrent();
-    this.sql.exec(`UPDATE actor_subordinates SET status = 'dismissed', delete_requested = 1
+    this.sql.exec(`UPDATE actor_subagents SET status = 'dismissed', delete_requested = 1
       WHERE actor_id = ? AND name = ? AND json_extract(birth_request, '$.creationId') = ?`,
       this.actorId, name, creationId);
   }
 
-  pendingDeletions(): SubordinateRosterEntry[] {
+  pendingDeletions(): SubagentRosterEntry[] {
     return settleSync(this.orderedRows('AND delete_requested = 1'));
   }
 
@@ -287,20 +287,20 @@ export class SubordinateRosterStore {
   }
   remove(name: string): void {
     this.actor.assertCurrent();
-    this.sql.exec(`DELETE FROM actor_subordinates WHERE actor_id = ? AND name = ?`, this.actorId, name);
+    this.sql.exec(`DELETE FROM actor_subagents WHERE actor_id = ? AND name = ?`, this.actorId, name);
     this.helpers.remove(name);
   }
 
-  get(name: string): SubordinateRosterEntry | null {
+  get(name: string): SubagentRosterEntry | null {
     return settleSync(this.row(name));
   }
 
-  private row(name: string): Effect.Effect<SubordinateRosterEntry | null, KinuError> {
+  private row(name: string): Effect.Effect<SubagentRosterEntry | null, KinuError> {
     return Effect.suspend(() => {
       this.actor.assertCurrent();
 
       const rows = this.sql.exec(
-        `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? AND name = ?`,
+        `SELECT ${ROSTER_PROJECTION} FROM actor_subagents WHERE actor_id = ? AND name = ?`,
         this.actorId, name,
       ).toArray();
 
@@ -308,49 +308,49 @@ export class SubordinateRosterStore {
     });
   }
 
-  requireExisting(name: string): SubordinateRosterEntry {
+  requireExisting(name: string): SubagentRosterEntry {
     return settleSync(Effect.gen({ self: this }, function* () {
       const entry = this.get(name);
 
-      if (!entry) return yield* Effect.die(new Error(`unknown subordinate "${name}"`));
+      if (!entry) return yield* Effect.die(new Error(`unknown subagent "${name}"`));
 
       return entry;
     }));
   }
 
-  requireActive(name: string): SubordinateRosterEntry {
+  requireActive(name: string): SubagentRosterEntry {
     return settleSync(Effect.gen({ self: this }, function* () {
       const entry = this.requireExisting(name);
 
-      if (entry.status === 'dismissed') return yield* Effect.die(new Error(`subordinate "${name}" is dismissed`));
+      if (entry.status === 'dismissed') return yield* Effect.die(new Error(`subagent "${name}" is dismissed`));
 
       return entry;
     }));
   }
 
-  list(): SubordinateRosterEntry[] {
+  list(): SubagentRosterEntry[] {
     return settleSync(this.orderedRows(`AND status != 'dismissed'`));
   }
 
-  listAll(): SubordinateRosterEntry[] {
+  listAll(): SubagentRosterEntry[] {
     return settleSync(this.orderedRows(''));
   }
 
   /** Owner history includes archived children without reopening them. */
-  listPage(request: PageRequest): Page<SubordinateRosterEntry> {
+  listPage(request: PageRequest): Page<SubagentRosterEntry> {
     return settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
       const limit = boundedInt(request.limit, 50, 1, 200);
       const after = request.cursor?.after;
       const anchor = after === undefined ? null : yield* this.row(after);
 
-      if (after !== undefined && anchor === null) return yield* Effect.die(new StaleCursorError('subordinate roster', after));
+      if (after !== undefined && anchor === null) return yield* Effect.die(new StaleCursorError('subagent roster', after));
 
       const rows = anchor
-        ? this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
+        ? this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subagents
             WHERE actor_id = ? AND (created_at > ? OR (created_at = ? AND name > ?))
             ORDER BY created_at, name LIMIT ?`, this.actorId, anchor.createdAt, anchor.createdAt, anchor.name, limit + 1)
-        : this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? ORDER BY created_at, name LIMIT ?`, this.actorId, limit + 1);
+        : this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subagents WHERE actor_id = ? ORDER BY created_at, name LIMIT ?`, this.actorId, limit + 1);
 
       return seekPage(yield* Effect.forEach(rows.toArray(), parseStoredRosterRow), limit, (row) => row.name);
     }));
@@ -361,7 +361,7 @@ export class SubordinateRosterStore {
   assign(name: string, task: string): void {
     this.requireActive(name);
     this.sql.exec(
-      `UPDATE actor_subordinates
+      `UPDATE actor_subagents
        SET status = 'working', current_task = ?, task_event_id = NULL, dismissed_at = NULL
        WHERE actor_id = ? AND name = ?`,
       task,
@@ -373,7 +373,7 @@ export class SubordinateRosterStore {
   recordAssignmentEvent(name: string, eventId: string): void {
     this.actor.assertCurrent();
     this.sql.exec(
-      `UPDATE actor_subordinates SET task_event_id = ? WHERE actor_id = ? AND name = ?`,
+      `UPDATE actor_subagents SET task_event_id = ? WHERE actor_id = ? AND name = ?`,
       eventId,
       this.actorId,
       name,
@@ -385,7 +385,7 @@ export class SubordinateRosterStore {
 
     if (entry.status !== 'awaiting_input') return;
     this.sql.exec(
-      `UPDATE actor_subordinates SET status = 'working' WHERE actor_id = ? AND name = ?`,
+      `UPDATE actor_subagents SET status = 'working' WHERE actor_id = ? AND name = ?`,
       this.actorId,
       name,
     );
@@ -409,8 +409,8 @@ export class SubordinateRosterStore {
    */
   applyReport(
     name: string,
-    status: SubordinateReportStatus,
-    origin: SubordinateReportOrigin,
+    status: SubagentReportStatus,
+    origin: SubagentReportOrigin,
     now: number,
   ): void {
     const entry = this.requireActive(name);
@@ -423,7 +423,7 @@ export class SubordinateRosterStore {
     }
 
     this.sql.exec(
-      `UPDATE actor_subordinates
+      `UPDATE actor_subagents
        SET status = ?,
            current_task = CASE WHEN ? = 'completed' THEN NULL ELSE current_task END,
            task_event_id = CASE WHEN ? = 'completed' THEN NULL ELSE task_event_id END
@@ -439,7 +439,7 @@ export class SubordinateRosterStore {
   dismiss(name: string, now: number): void {
     this.requireExisting(name);
     this.sql.exec(
-      `UPDATE actor_subordinates
+      `UPDATE actor_subagents
        SET status = 'dismissed', current_task = NULL, task_event_id = NULL,
            dismissed_at = COALESCE(dismissed_at, ?)
        WHERE actor_id = ? AND name = ?`,

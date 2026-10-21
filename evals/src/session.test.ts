@@ -41,7 +41,7 @@ import {
 import { resolvePublicSessionPlan, KinuPublicSession, openPublicSession, type InspectionAnswer } from './session';
 import { resolveWebIdentity } from './workspace-roster';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
-import { SubordinateInspectionRequestSchema } from '../../packages/core/src/subordinates/inspection';
+import { SubagentInspectionRequestSchema } from '../../packages/core/src/subagents/inspection';
 import { measurePromptUsage } from './results';
 import { claimTrialAccount } from './slot';
 import { reviewerCatalog, REVIEWER_ROLE_ID } from './reviewer';
@@ -170,10 +170,10 @@ test('trial usage walks retained descendants\' whole ledgers, every run and even
 
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
     websocket: { message: answerRpcs((request) => {
-      const query = v.parse(SubordinateInspectionRequestSchema, request.args[0]);
+      const query = v.parse(SubagentInspectionRequestSchema, request.args[0]);
 
       // Retired hires no longer resolve through a name path, even when an actor id is also supplied.
-      if (query.path.length > 0) return { view: 'missing', reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
+      if (query.path.length > 0) return { view: 'missing', reason: 'missing', error: 'The requested subagent or retained history is unavailable.' };
 
       if (query.view === 'children') {
         const items = [];
@@ -406,7 +406,7 @@ test('a frame naming a live read moves that read before the answer to a later ca
         const request = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
 
         // Never answered: its rejection is the close landing.
-        if (request.method === 'listSubordinates') return;
+        if (request.method === 'listSubagents') return;
         // The tick that wrote ends with its frame, ahead of the answer to any call after the write.
         socket.send(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ['listBackgroundJobs', 'getMemoryContent'] }));
         socket.send(rpcReplyFrame({ requestId: request.id, result: [lead] }));
@@ -432,7 +432,7 @@ test('a frame naming a live read moves that read before the answer to a later ca
     expect(moving.aborted).toBe(true);
     expect(moved()).toEqual([2, 1]);
 
-    const held = session.subordinates();
+    const held = session.subagents();
     firstServerSocket?.close(1012, 'instance no longer active');
     await expect(held).rejects.toThrow('the workspace socket closed (code 1012, instance no longer active)');
 
@@ -1332,10 +1332,10 @@ test('a beat on a workspace a sweep took marks nothing, so the next 404 is still
 });
 
 /** One RPC method → the reply this fixture answers it with. */
-const FixtureRpcMethodSchema = v.picklist(['listSubordinates']);
+const FixtureRpcMethodSchema = v.picklist(['listSubagents']);
 
 interface FixtureRpcAnswers {
-  listSubordinates: JsonValue;
+  listSubagents: JsonValue;
 }
 
 describe('the verifier reads speak the RPCs the web app is bound to', () => {
@@ -1345,7 +1345,7 @@ describe('the verifier reads speak the RPCs the web app is bound to', () => {
   });
 
   const answers: FixtureRpcAnswers = {
-    listSubordinates: [
+    listSubagents: [
       { name: 'alpha', status: 'dismissed', lifetime: 'task', createdBy: 'orchestrator',
         currentTask: null, createdAt: 1, dismissedAt: 2, actorReference: null, birth: null,
         deleteRequested: false, taskEventId: null },
@@ -1380,7 +1380,7 @@ describe('the verifier reads speak the RPCs the web app is bound to', () => {
     };
   };
 
-  test('subordinates() is listSubordinates, narrowed to name, status and lifetime', async () => {
+  test('subagents() is listSubagents, narrowed to name, status and lifetime', async () => {
     const { server, session } = open();
     asked.length = 0;
 
@@ -1388,10 +1388,10 @@ describe('the verifier reads speak the RPCs the web app is bound to', () => {
       await session.connect();
       // `lifetime` is the point: it is the column no later state recovers, so
       // dropping it would make "a task hire retired itself" unaskable.
-      expect(await session.subordinates())
+      expect(await session.subagents())
         .toEqual([{ name: 'alpha', status: 'dismissed', lifetime: 'task' }]);
 
-      expect(asked).toEqual([{ method: 'listSubordinates', args: [] }]);
+      expect(asked).toEqual([{ method: 'listSubagents', args: [] }]);
     } finally { await session.teardown(); await server.stop(true); }
   });
 });

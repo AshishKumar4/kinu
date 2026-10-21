@@ -34,7 +34,7 @@ async function takingUpThePlanReport(calls: readonly GatewayToolCall[]): Promise
     const step = messages.filter((message) => message.role === 'tool').length;
 
     // The report opens the workspace's next turn, after the turn that hired.
-    if (JSON.stringify(messages.at(-1)).includes('[subordinate_report]')) {
+    if (JSON.stringify(messages.at(-1)).includes('[subagent_report]')) {
       takenUp.push(tools);
 
       return chatCompletion(run, 'Noted.');

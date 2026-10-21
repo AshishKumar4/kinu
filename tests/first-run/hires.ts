@@ -41,12 +41,12 @@ const EventsPageSchema = v.object({
 
 /** One inspection answer, parsed, or the refusal it carried. */
 async function inspect<T>(socket: PublicSocket, request: JsonValue, schema: v.GenericSchema<unknown, T>): Promise<T> {
-  const answer = await ask(socket, 'inspectSubordinate', [request]);
+  const answer = await ask(socket, 'inspectSubagent', [request]);
 
-  if (!answer.ok) throw new Error(`inspectSubordinate ${JSON.stringify(request)} refused: ${answer.failure}`);
+  if (!answer.ok) throw new Error(`inspectSubagent ${JSON.stringify(request)} refused: ${answer.failure}`);
   const parsed = v.safeParse(schema, answer.value);
 
-  if (!parsed.success) throw new Error(`inspectSubordinate ${JSON.stringify(request)} answered ${JSON.stringify(answer.value).slice(0, 300)}`);
+  if (!parsed.success) throw new Error(`inspectSubagent ${JSON.stringify(request)} answered ${JSON.stringify(answer.value).slice(0, 300)}`);
 
   return parsed.output;
 }

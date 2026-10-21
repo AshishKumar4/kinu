@@ -30,8 +30,8 @@ async function dismissedWhile(effect: string, dismissing: (port: AgentWorkspaceH
   }));
 
   await workspace.agent.setSoul('# Purpose\n\nGreet whoever asks.');
-  const { name, subordinate } = await workspace.agent.createSubordinateAgent();
-  const actorId = v.parse(v.string(), subordinate.actorId);
+  const { name, subagent } = await workspace.agent.createSubagentAgent();
+  const actorId = v.parse(v.string(), subagent.actorId);
   const open = workspace.agent.agentWorkspace.bind(workspace.agent);
 
   // The harness's object answers each call as a stub does, so the port it hands the isolate is awaited.
@@ -39,7 +39,7 @@ async function dismissedWhile(effect: string, dismissing: (port: AgentWorkspaceH
     agentWorkspace: async (id: string) => {
       const port = await open(id);
 
-      if (id === actorId) dismissing(port, async () => { await workspace.agent.dismissSubordinate(name, true); });
+      if (id === actorId) dismissing(port, async () => { await workspace.agent.dismissSubagent(name, true); });
 
       return port;
     },

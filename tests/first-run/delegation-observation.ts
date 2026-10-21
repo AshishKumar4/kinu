@@ -16,7 +16,7 @@ const HiredSchema = v.looseObject({ status: v.literal('working'), lifetime: v.li
 
 const HireSchema = v.object({ name: v.string() });
 
-const RosterSchema = v.object({ subordinates: v.array(v.object({ name: v.string() })) });
+const RosterSchema = v.object({ subagents: v.array(v.object({ name: v.string() })) });
 
 /** A step's messages, each one's content read as its text: a plain string, or the parts the SDK sends. */
 const StepMessagesSchema = v.array(v.looseObject({
@@ -108,7 +108,7 @@ export function observeDurableHire(events: readonly RunEvent[]) {
     .some((call) => {
       const roster = v.safeParse(RosterSchema, call.result);
 
-      return roster.success && roster.output.subordinates.some((row) => row.name === durableName);
+      return roster.success && roster.output.subagents.some((row) => row.name === durableName);
     });
 
   return { durableName, shown };
@@ -121,7 +121,7 @@ export function observeDelegationRetirement(events: readonly RunEvent[], name: s
   const retired = calls(events, 'list').some((call) => {
     const roster = v.safeParse(RosterSchema, call.result);
 
-    return roster.success && !roster.output.subordinates.some((row) => row.name === name)
+    return roster.success && !roster.output.subagents.some((row) => row.name === name)
       && dismisses.some((dismiss) => call.runId === dismiss.runId && call.eventIndex > dismiss.eventIndex);
   });
 

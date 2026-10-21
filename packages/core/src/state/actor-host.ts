@@ -18,12 +18,12 @@ import { createAgentStores, type AgentStores } from './agent-stores';
 import { tracedActorKind, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
 import { localContextTree, type ActorContextStores, type ChildContextResolver, type ContextTree } from '../vfs/context-plane';
 import type { ContextEventRecorder } from '../types/context-plane';
-import type { TemporaryAgentPort } from '../types/subordinates';
+import type { TemporaryAgentPort } from '../types/subagents';
 import type { AgentSignal, SendOutcome } from '../types/signals';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { decideInterruptedTurn } from '../orchestrator/turn-recovery';
 import { readVersionedScaffoldSource, type VersionedScaffoldSource } from '../scaffold/versions';
-import type { ReportedTurn } from '../subordinates/turn-reports';
+import type { ReportedTurn } from '../subagents/turn-reports';
 import type { WriteObserver } from '../vfs/write-events';
 import { diagnostics, flight, settle, settleSync, toKinuError, type AgentTracing } from '../obs/index';
 

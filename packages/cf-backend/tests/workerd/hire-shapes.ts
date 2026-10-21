@@ -18,7 +18,7 @@ export const NEST_RELAY = 'RELAYED';
 export const CHAIN_BOTTOM = 'CHAIN-BOTTOM-7';
 
 /** How a hired agent's report reads in the drain turn it opens on its hirer. */
-export const REPORT_MARK = '[subordinate_report]';
+export const REPORT_MARK = '[subagent_report]';
 
 export const HIRE_ROOT_MODEL = 'hire-root';
 
@@ -122,7 +122,7 @@ export interface HireObservation {
   readonly actors: readonly ActorRow[];
   readonly turns: readonly TurnCount[];
   readonly toolResults: readonly string[];
-  /** Every report message a hirer's turn opened on (`[subordinate_report]` drain text). */
+  /** Every report message a hirer's turn opened on (`[subagent_report]` drain text). */
   readonly reports: readonly string[];
   /** The reports the root's own turns opened on: the root alone carries no `report` tool. */
   readonly rootReports: readonly string[];

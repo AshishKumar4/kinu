@@ -258,8 +258,8 @@ function reported(agent: string, task: string, content: string, status: 'complet
 
   log.publish({
     descriptor: {
-      ingress: 'subordinate', variant: 'subordinate_report',
-      payload: { from_subordinate: agent, status, content, sequence_id: `settle:${agent}`, task, kinu_mode: 'build' },
+      ingress: 'subagent', variant: 'subagent_report',
+      payload: { from_subagent: agent, status, content, sequence_id: `settle:${agent}`, task, kinu_mode: 'build' },
     },
     now: 1_000,
   });

@@ -2,7 +2,7 @@
  * FIRST RUN: a delegation tree of uneven depth settles, every branch reporting
  * back through its own parent.
  *
- * THE ASK. Hosted subordinates that delegate in turn: the root hires two
+ * THE ASK. Hosted subagents that delegate in turn: the root hires two
  * task helpers; one hires a helper of its own and relays its answer, the other
  * answers itself. So one branch is two levels deep and the other one, and the
  * tree settles only when the deep answer has climbed both levels and the
@@ -11,11 +11,11 @@
  * waits on the turns the root's room closes until both answers are in the
  * root's history (`hirerHeard`). Every check reads durable state, never the
  * model's account of what it did: what each helper answered is read from its
- * own ledger, down the tree through `inspectSubordinate`, the owner's read of
- * a subordinate's runs, since the workspace's `/runs` lists the root's runs only.
+ * own ledger, down the tree through `inspectSubagent`, the owner's read of
+ * a subagent's runs, since the workspace's `/runs` lists the root's runs only.
  *
  * WHY `delegation` DOES NOT COVER IT. That row hires at one level only. A
- * nested hire runs in a subordinate hosted by the same workspace object, with
+ * nested hire runs in a subagent hosted by the same workspace object, with
  * its own delegation budget one level down, and its answer reaches the root
  * only through the middle helper's settlement — none of which a one-level
  * hire exercises.
@@ -39,9 +39,9 @@ const CASE = firstRunCaseId(import.meta.url);
 
 /** What this case found, and what a red here means (`FirstRunDefect`). */
 const DEFECT: FirstRunDefect = {
-  found: 'Hosted subordinates that delegate in turn, settling a tree whose branches end at '
+  found: 'Hosted subagents that delegate in turn, settling a tree whose branches end at '
     + 'different depths, had no deployed row: `delegation` hires at one level only.',
-  missedBecause: 'a nested hire runs in a subordinate the same workspace object hosts, one delegation '
+  missedBecause: 'a nested hire runs in a subagent the same workspace object hosts, one delegation '
     + 'level down, and its answer reaches the root only through the middle helper\'s settlement, '
     + 'none of which a one-level hire exercises.',
   provedRedAt: 'b220f59f8',

@@ -19,7 +19,7 @@ import {
   ArchiveCursorSchema,
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
   explorationActorKey, writesSnapshotRows,
-  HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
+  HeadController, REAL_CLOCK, runHeadSplit, SubagentRosterStore,
   EventLog, actorReferenceOf, stoppedBelow, TEMPORARY_LIFETIME,
   artifactOverrides, currentArtifacts,
   agentsActionsFor, agentsProfileContext, betaSwarms, buildActorTools, BACKGROUNDABLE_TOOLS,
@@ -27,7 +27,7 @@ import {
   ActorAdvisor, describeAgentTools, historyTurnPairs, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifacts, withToolText,
   BUILTIN_TOOL_NAMES, codemodeCapabilitiesFor, agentRoleSwitch, currentOperationProfile,
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
-  type SubordinateReportLedger, type ActorToolsets,
+  type SubagentReportLedger, type ActorToolsets,
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type BackgroundJobRunner, type JobAuthority,
   createTeamToolDeps,
   agentNamer,
@@ -36,7 +36,7 @@ import {
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult,
   type LoopOrigin, type NodeHomeHost,
   type TeamToolDeps, type WorkspaceActor, type WriteObserver,
-  actorEnded, actorStanding, isSubordinateOrigin,
+  actorEnded, actorStanding, isSubagentOrigin,
   whenActorTakesInput, MEMORY_PATH,
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
   createEmailThreadDispatcher,
@@ -63,7 +63,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { ShareViewerClaimSchema, type ShareViewerClaim } from '@kinu.run/core';
 import {
-  AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, type OpenWork, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type SentWords, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subordinateTurnContext, type SessionEvent, type SessionTranscript, type TurnEndEvent,
+  AgentOpenTurns, AgentReports, TurnFences, type AcceptedReport, type AgentOwes, type RunEndReport, type OpenWork, announcementOf, RECOVERY_BACKOFF_CEILING_MS, type SentWords, type AgentOpenTurn, CHAT_SESSION_ID, steerSkillsBlock, subagentTurnContext, type SessionEvent, type SessionTranscript, type TurnEndEvent,
 } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
@@ -93,13 +93,13 @@ import {
   actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type CFSeat, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
-  hostedDelegationBudget, hostedRetryTools, hostedSubordinateRuntime, relayHostedReport, retireStalledTask,
+  hostedDelegationBudget, hostedRetryTools, hostedSubagentRuntime, relayHostedReport, retireStalledTask,
   hostedOwedReport, hostedParentReport, hostedAutoTitle, reclaimSettledExplorationActors,
   ownerAnswersWait, type ActorSurface, type HostedActorSeams, type SourcesTurn, type SurfaceTurn, type ToolScope,
 } from "./hosted-actors";
 import { createCodemodeToolFactory } from "./codemode-tool";
 import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
-import { publishSubordinateReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
+import { publishSubagentReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
@@ -108,7 +108,7 @@ import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SupervisorOpResult } from '@kinu.run/core/workspace';
 import { openingList, TURN_CLAIM_FRAME, type AccountSpend, type ActivitySnapshot, type TabPresence, type TurnClaimState } from "@kinu.run/core";
-import type { SubordinateView } from "@kinu.run/core/protocol";
+import type { SubagentView } from "@kinu.run/core/protocol";
 import { markStoreChanged, nextAlarmTime } from '@kinu.run/core';
 import { accountDeps, armedWarms, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
@@ -252,7 +252,7 @@ import {
   TURN_AUTHOR_METADATA_KEY,
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
-import type { MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
+import type { MctsSearchRunSummary, SubagentInspectionRequest, SubagentInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
 import { attempt, authoredRefusal, CODE_IS_REFUSAL, diagnostics, flight, hold, KinuError, refusing, renderThrownChain, settle, settleSync, toKinuError, type ErrorCode, type Refusal, type ScopedSpan, logged, recording, settleLogged } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
@@ -366,7 +366,7 @@ type SandboxBox = ReturnType<NonNullable<Env['KinuDevbox']>['getByName']>;
 
 interface HostedTarget {
   readonly handle: ActorHandle;
-  readonly entry: NonNullable<ReturnType<SubordinateRosterStore['get']>>;
+  readonly entry: NonNullable<ReturnType<SubagentRosterStore['get']>>;
 }
 
 /** A turn's surface as its factory opened it, with what it reaches. */
@@ -400,7 +400,7 @@ interface SourcePlanes {
 }
 
 /** An assignment's delivery, as its metadata names it. */
-const AssignmentMetadataSchema = v.looseObject({ kinuEvent: v.literal('subordinate_task'), kinuMode: WorkModeSchema });
+const AssignmentMetadataSchema = v.looseObject({ kinuEvent: v.literal('subagent_task'), kinuMode: WorkModeSchema });
 
 /** A revert's choice, as its dialog sends it: `chatOnly` keeps the computer's work and tells the agent of it. */
 const RevertOptionsSchema = v.object({ chatOnly: v.optional(v.boolean()) });
@@ -435,7 +435,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  or ends moves the Agents panel, which reads an agent working while its wake stands: the rest that ends it crosses
    *  from the agent's isolate after its turn's close, and a page that read the close read the wake still standing. */
   private readonly agentWakes = new AgentWakes(async (actorId) => {
-    this.detachOwned(logged('subordinate.agent_wake_failed', { doing: "waking an agent's own isolate for what it owes", otherwise: 'io' },
+    this.detachOwned(logged('subagent.agent_wake_failed', { doing: "waking an agent's own isolate for what it owes", otherwise: 'io' },
       () => this.wakeAgent(actorId, { recover: true }), { workspace: this.name, actor: actorId }));
   }, () => { this.liveReadsMoved(['listWorkspaceAgents']); });
 
@@ -1160,7 +1160,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       runSettled: async (run) => { this.runSettled(actorId, run); },
       hireAdvisor: async (advisor) => { await this.actorAdvisor(await this.agentSeat(actorId)).hire(advisor); },
       owes: async (seq, next, holds, report) => { await this.agentOwes(actorId, { seq, next, holds, report }); },
-      birthContext: async (drainTurnId) => subordinateTurnContext(new EventLog(this.watchedExec, this.agentBound(actorId).handle), drainTurnId),
+      birthContext: async (drainTurnId) => subagentTurnContext(new EventLog(this.watchedExec, this.agentBound(actorId).handle), drainTurnId),
       releaseForeground: async (executing) => this.foregroundRunnerOf(actorId)?.releaseForeground(executing) ?? false,
       steerSkills: async (text, alreadyActive) => await steerSkillsBlock({
         vfs: this.rt.storage.vfs,
@@ -1504,7 +1504,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       infer: (reference, input, inference) => this.agentTurns.run(reference, input, inference),
       transaction: (body) => this.ctx.storage.transactionSync(body),
-      roster: (actor) => new SubordinateRosterStore(this.watchedExec, actor.handle),
+      roster: (actor) => new SubagentRosterStore(this.watchedExec, actor.handle),
       conversations: (reference) => this.agentStores(reference.actorId).conversations(),
       vfs: () => this.rt.storage.vfs,
       // The hire's own role, not the root's: a delegated turn's prompt and advertised tool
@@ -1605,7 +1605,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** A hire's, a head's or a swarm node's programs, as they reach its own planes and what its native tools hold. */
   /** A hire's: what waits on its owner from its own work. A head or a swarm node, whose run ends with it, holds none. */
   protected hireOwnerWaits(actor: SeatedActor): OwnerWaitsHost | null {
-    return isSubordinateOrigin(actor.record.origin) ? this.ownerWaitsOf(actor.handle.actorId, false) : null;
+    return isSubagentOrigin(actor.record.origin) ? this.ownerWaitsOf(actor.handle.actorId, false) : null;
   }
 
   /** A hosted actor as its programs reach it, over the store operations its native tools run. */
@@ -1696,7 +1696,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // After the activation above, so a cold turn takes in what it just put in the root.
     const hidesSkills = dreamSkillsHidden(this.refinementDeps.approvals?.list() ?? [], actor.stores.config, cold);
 
-    const reports: SubordinateReportLedger = { spoke: false, settled: false };
+    const reports: SubagentReportLedger = { spoke: false, settled: false };
     const report = reach.turn.report ? this.hirerReport(actor, lane.mode, reports, key.turnId) : undefined;
 
     // Read as the turn opened, beside its settings: an owner with no mail address is offered no `mail` this turn
@@ -1764,10 +1764,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** A hire's report to its hirer: the hirer's lane alone carries it, natively and in eval. */
-  private hirerReport(actor: CFSeat, mode: WorkMode, reports: SubordinateReportLedger, turnId: string): ReportDeps {
+  private hirerReport(actor: CFSeat, mode: WorkMode, reports: SubagentReportLedger, turnId: string): ReportDeps {
     return {
       report: async (input) => {
-        const relayed = await publishSubordinateReport({ mode, reports }, {
+        const relayed = await publishSubagentReport({ mode, reports }, {
           status: input.status, content: input.content, origin: 'report_tool',
           sequenceId: `live:${actor.record.name}:${nanoid()}`, handoff: input.handoff,
         }, (published) => relayHostedReport(this.hostedSeams(), actor, {
@@ -1940,7 +1940,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return createTeamToolDeps({
       delegation,
       roster,
-      runtime: hostedSubordinateRuntime(seams, () => actor),
+      runtime: hostedSubagentRuntime(seams, () => actor),
       temporary: seams.temporary(actor),
       now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(actor.handle),
@@ -1949,7 +1949,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ownMission: () => this.ownMission(),
       createName: agentNamer(this.workspaceActors(), roster),
       rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
-      broadcastTask: (event) => this.broadcastSubordinateEvent({
+      broadcastTask: (event) => this.broadcastSubagentEvent({
         kind: 'task',
         ...event,
       }),
@@ -2285,9 +2285,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     runningSwarms: this.held.hold(['mcts_search_runs'], () => this.mctsSearchStore.hasRunningSwarms()),
     // WorkspaceActorDirectory's insert and transitionRetirement over `sql`.
     retirements: this.held.hold(['workspace_actors'], () => this.workspaceActors().hasRetirements()),
-    // Every SubordinateRosterStore over `watchedExec`.
-    pendingBirths: this.held.hold(['actor_subordinates'], () => this.subordinateRoster.hasPendingBirths()),
-    pendingDeletions: this.held.hold(['actor_subordinates'], () => this.subordinateRoster.hasPendingDeletions()),
+    // Every SubagentRosterStore over `watchedExec`.
+    pendingBirths: this.held.hold(['actor_subagents'], () => this.subagentRoster.hasPendingBirths()),
+    pendingDeletions: this.held.hold(['actor_subagents'], () => this.subagentRoster.hasPendingDeletions()),
     // sendChangeNotes and its retire over the runtime's `sql`.
     changeNotes: this.held.hold(['change_notes_outbox'], () => owesChangeNotes(this.rt)),
   };
@@ -2392,7 +2392,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** The agents whose events drain to them: the workspace's own and every hire, each into a turn of its own. */
   private reactingAgents(): WorkspaceActor[] {
     // `list()` holds live actors only.
-    return this.workspaceActors().list().filter((record) => actorPolicy(record).workspaceAgent || isSubordinateOrigin(record.origin));
+    return this.workspaceActors().list().filter((record) => actorPolicy(record).workspaceAgent || isSubagentOrigin(record.origin));
   }
 
   private reactionsDueAt(now: number): number | null {
@@ -2456,11 +2456,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     return settle(Effect.forEach([...byAgent], ([actorId, turns]) => logged(
-      'subordinate.agent_recovery_failed',
+      'subagent.agent_recovery_failed',
       { doing: "recovering the turns an agent's own isolate held when the workspace reset", otherwise: 'io' },
       async () => {
         // Its chat takes up the turn it held, recovered first; the wake is held a lap ahead until it answers what it owes.
-        if (isSubordinateOrigin(this.actingAgentOf(actorId).origin)) {
+        if (isSubagentOrigin(this.actingAgentOf(actorId).origin)) {
           await this.agentWakes.arm(actorId, Date.now() + RECOVERY_BACKOFF_CEILING_MS);
           await this.wakeAgent(actorId, { recover: true });
         } else {
@@ -2498,7 +2498,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (record === null || record.retiringAt !== null || record.deletedAt !== null) return false;
     const recovered = await this.agentCall(actorId, (isolate, snapshot) => isolate.recover(snapshot));
 
-    if (!isSubordinateOrigin(record.origin)) return false;
+    if (!isSubagentOrigin(record.origin)) return false;
 
     for (const turn of recovered.stalled) await retireStalledTask(this.hostedSeams(), await this.actorHost().acquire(actorReferenceOf(record), { kind: 'actor' }), turn);
 
@@ -2902,7 +2902,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ));
   }
 
-  /** Each step a live subordinate its parent's roster still employs: a dismissal keeps rows, not chat. */
+  /** Each step a live subagent its parent's roster still employs: a dismissal keeps rows, not chat. */
   private hostedTarget(target: string): HostedTarget | null {
     const directory = this.workspaceActors();
     let parent = this.actorHandle();
@@ -2916,7 +2916,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       const retained = directory.retained(handle.actorId);
 
-      if (retained === null || !isSubordinateOrigin(retained.origin)) return null;
+      if (retained === null || !isSubagentOrigin(retained.origin)) return null;
       found = { handle, entry };
       parent = handle;
     }
@@ -2924,8 +2924,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return found;
   }
 
-  private rosterOf(parent: ActorHandle): SubordinateRosterStore {
-    return new SubordinateRosterStore(this.watchedExec, parent);
+  private rosterOf(parent: ActorHandle): SubagentRosterStore {
+    return new SubagentRosterStore(this.watchedExec, parent);
   }
 
   protected override hostedWindowName(actorId: string): string | null {
@@ -3096,7 +3096,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async hireCouldNotRun(actorId: string, task: { readonly sequenceId: string; readonly mode: WorkMode }, reason: string): Promise<void> {
     const record = this.actingAgentOf(actorId);
 
-    diagnostics.failure('subordinate.delegated_turn_failed', new KinuError('io', reason), { workspace: this.name, actor: record.name });
+    diagnostics.failure('subagent.delegated_turn_failed', new KinuError('io', reason), { workspace: this.name, actor: record.name });
     await relayHostedReport(this.hostedSeams(), this.actorHost().bindStores(actorReferenceOf(record)), {
       status: 'blocked', content: `${record.name} failed to run its assigned turn: ${reason}`,
       origin: 'turn_end', mode: task.mode, sequenceId: task.sequenceId, answers: task.sequenceId,
@@ -3606,7 +3606,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (exists.length === 0) {
           const main = this.actorHandle().actorId;
 
-          this.detachOwned(logged('subordinate.agent_wake_failed', { doing: "opening main's own isolate", otherwise: 'io' },
+          this.detachOwned(logged('subagent.agent_wake_failed', { doing: "opening main's own isolate", otherwise: 'io' },
             () => this.wakeAgent(main), { workspace: this.name, actor: main }));
         }
 
@@ -4105,7 +4105,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (record === null || record.retiringAt !== null || record.deletedAt !== null) return null;
 
-    if (isSubordinateOrigin(record.origin)) return this.hireJobAuthority(actorReferenceOf(record));
+    if (isSubagentOrigin(record.origin)) return this.hireJobAuthority(actorReferenceOf(record));
 
     return record.origin === 'swarm' ? endedStepLoopJobs({
       actorId, store: this.actorHost().bindStores(actorReferenceOf(record)).stores.jobs,
@@ -4196,7 +4196,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     })));
   }
 
-  /** Roster includes retired actors: a dismissed subordinate's rows still show on the board. */
+  /** Roster includes retired actors: a dismissed subagent's rows still show on the board. */
   @callable()
   async listWorkspaceWork(): Promise<WorkspaceWork> {
     return readWorkspaceWork(
@@ -4247,7 +4247,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const reported: InspectedWork[] = [];
 
     await Promise.all(new AgentReports(this.boundSql).holding().filter((actorId) => this.liveActor(actorId)).map((actorId) => settleLogged(
-      'subordinate.agent_work_unread',
+      'subagent.agent_work_unread',
       { doing: "reading what an agent's own isolate still owes", otherwise: 'io' },
       async () => { reported.push(...await this.agentCall(actorId, (isolate, snapshot) => isolate.owedWork(snapshot))); },
       { workspace: this.name, actor: actorId },
@@ -4454,7 +4454,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     initSleepTimeTables(execRaw);
     initTurnBranchesTable(execRaw);
-    // Owned by this root: the container is the workspace's; subordinates ride their parent's.
+    // Owned by this root: the container is the workspace's; subagents ride their parent's.
     initSandboxLifecycleTable(execRaw);
     initActivationTable(execRaw);
     initForkNoticeTable(execRaw);
@@ -4517,7 +4517,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // A retired agent's isolate is gone with it, and with it what a Stop would cancel.
     const stopped = this.stops.owedEach().map((stop) => stop.actorId).filter((actorId) => this.liveActor(actorId));
 
-    this.detachOwned(logged('subordinate.agent_wake_reconcile_failed', { doing: "reconciling the wakes of agents owed work a reset left", otherwise: 'io' }, async () => {
+    this.detachOwned(logged('subagent.agent_wake_reconcile_failed', { doing: "reconciling the wakes of agents owed work a reset left", otherwise: 'io' }, async () => {
       await Promise.all([this.coordinator.reconcile(), ...stopped.map((actorId) => this.agentWakes.arm(actorId, Date.now()))]);
       await this.agentWakes.project();
     }, { workspace: this.name }));
@@ -4648,7 +4648,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const main = this.actorHandle().actorId;
 
     if (this.agentWakes.armed(main)) {
-      this.detachOwned(logged('subordinate.agent_wake_failed', { doing: "waking main's own isolate for what it owes", otherwise: 'io' },
+      this.detachOwned(logged('subagent.agent_wake_failed', { doing: "waking main's own isolate for what it owes", otherwise: 'io' },
         () => this.wakeAgent(main), { workspace: this.name, actor: main }));
     }
 
@@ -5678,11 +5678,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
+  inspectSubagent(request: SubagentInspectionRequest): Promise<SubagentInspectionResult> {
     return settle(Effect.gen({ self: this }, function* () {
       const owner = yield* this.owner();
 
-      return yield* Effect.promise(async () => this.inspectSubordinateStorage(request, { owner, workspace: this.name }));
+      return yield* Effect.promise(async () => this.inspectSubagentStorage(request, { owner, workspace: this.name }));
     }));
   }
 
@@ -5750,15 +5750,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * Broadcasts only a plan reference; not `@callable`, and deliberately not `broadcast`, which
-   * facets must not reach. A hint: readers re-verify via owner-gated `inspectSubordinate`; a stub
+   * facets must not reach. A hint: readers re-verify via owner-gated `inspectSubagent`; a stub
    * call carries no caller identity.
    */
-  announceSubordinatePlan(reference: WorkspacePlanReference): Promise<void> {
+  announceSubagentPlan(reference: WorkspacePlanReference): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
       const parsed = v.parse(WorkspacePlanReferenceSchema, reference);
       const name = parsed.path[0];
 
-      if (!name || !this.subordinateRoster.get(name)) {
+      if (!name || !this.subagentRoster.get(name)) {
         return yield* new KinuError('denied', 'This workspace has no such plan actor.');
       }
 
@@ -6471,41 +6471,41 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Browser-only; delegates to the same orchestration policy as the model's agents tool. */
-  @callable() async listSubordinates(): Promise<SubordinateView[]> {
-    return this.subordinateViews();
+  @callable() async listSubagents(): Promise<SubagentView[]> {
+    return this.subagentViews();
   }
 
   /**
    * Blank `displayName` is intentional: the first-interaction title policy reads it
-   * (`SubordinateAgent.onChatResponse`). Route by `name`, a stable slug drawn from `opening`, the words the chat is
+   * (`SubagentAgent.onChatResponse`). Route by `name`, a stable slug drawn from `opening`, the words the chat is
    * opened with, which are sent to it once it exists.
    */
-  @callable() async createSubordinateAgent(opening?: string): Promise<{
+  @callable() async createSubagentAgent(opening?: string): Promise<{
     name: string;
     displayName: string;
-    subordinate: SubordinateView;
+    subagent: SubagentView;
   }> {
     const result = await this.getTeamToolDeps().create({ ...(opening !== undefined && { brief: opening }) });
 
     return {
       ...result,
-      subordinate: await this.subordinateView(result.subordinate.name),
+      subagent: await this.subagentView(result.subagent.name),
     };
   }
 
   /** Writes the child and the roster row together and marks the title owner-set,
    *  which stops auto-titling. */
-  @callable() async renameSubordinateAgent(name: string, displayName: string): Promise<{
+  @callable() async renameSubagentAgent(name: string, displayName: string): Promise<{
     ok: true;
     name: string;
     displayName: string;
-    subordinate: SubordinateView;
+    subagent: SubagentView;
   }> {
     const result = await this.getTeamToolDeps().rename({ name, displayName });
 
     return {
       ...result,
-      subordinate: await this.subordinateView(result.subordinate.name),
+      subagent: await this.subagentView(result.subagent.name),
     };
   }
 
@@ -6570,7 +6570,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  @callable() async dismissSubordinate(name: string, keepHistory = true): Promise<{
+  @callable() async dismissSubagent(name: string, keepHistory = true): Promise<{
     ok: true;
     name: string;
     historyKept: boolean;
@@ -6681,9 +6681,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   getWorkspaceOpening() {
     return settle(Effect.gen({ self: this }, function* () {
-      const [reads, subordinates, pendingConsents, workspaceAgents] = yield* Effect.all([
+      const [reads, subagents, pendingConsents, workspaceAgents] = yield* Effect.all([
         attempt({ doing: 'reading what the Work tab draws', otherwise: 'io' }, () => this.workReads(WORK_TAB_JOBS)),
-        openingList('listing the subordinate roster', () => this.listSubordinates()),
+        openingList('listing the subagent roster', () => this.listSubagents()),
         openingList('listing the pending device consents', () => this.listPendingConsents()),
         openingList("listing the workspace's agents", () => this.listWorkspaceAgents()),
       ], { concurrency: 'unbounded' });
@@ -6694,7 +6694,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         ...snapshot,
         // The work rows decide the tab's presence here; the page's one work read draws them.
         pendingActions: reads.pendingActions, backgroundJobs: reads.backgroundJobs,
-        inspectedWork: reads.inspectedWork, subordinates, pendingConsents, workspaceAgents,
+        inspectedWork: reads.inspectedWork, subagents, pendingConsents, workspaceAgents,
       };
     }));
   }

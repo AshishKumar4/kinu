@@ -102,10 +102,10 @@ import {
   ADVISOR_HEADER, ADVISOR_NOTE_METADATA_KEY, ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, buildDrainBatch, CLEAR_NEEDS_IDLE, inspectWork, TURN_CLAIM_FRAME, workspaceGenesisSignal,
   BUILTIN_PROFILE_CATALOG, validateProfileCatalog,
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
-  missingSubordinateHistory, ownerAsks,
-  DEFAULT_FILES_VIEW, FILES_PAGE_ENTRIES, FILES_VIEW_CONFIG_KEY, parseDeviceTier, seekPage, shownEntries, sortDirEntries, SubordinateInspectionRequestSchema,
+  missingSubagentHistory, ownerAsks,
+  DEFAULT_FILES_VIEW, FILES_PAGE_ENTRIES, FILES_VIEW_CONFIG_KEY, parseDeviceTier, seekPage, shownEntries, sortDirEntries, SubagentInspectionRequestSchema,
   type ActorSnapshot, type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
-  type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
+  type ProfileCatalogEnvelope, type SubagentInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry } from "@kinu.run/core";
 import { workspaceRpc, type SocketCall } from "@/lib/workspace-rpc";
@@ -1851,7 +1851,7 @@ window.WebSocket = new Proxy(RealWebSocket, {
 
 /** A frame the gate makes the server send: cards and steers carry an actor stamp, which no fixture read can produce; `reads_changed` names reads to redo; `turn_claim` is the root's claim as it changes; `head_stream` and `head_activity` are a swarm head's live paint and landed step. */
 const GalleryPushFrameSchema = v.object({
-  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity", "subordinate_event", "model_fallback", "provider_wait"]),
+  type: v.picklist(["signal_card", "steer_status", READS_CHANGED_EVENT, TURN_CLAIM_FRAME, "head_stream", "head_activity", "subagent_event", "model_fallback", "provider_wait"]),
   reads: v.optional(v.array(v.string())),
   claim: v.optional(JsonObjectSchema),
   headId: v.optional(v.string()),
@@ -1865,8 +1865,8 @@ const GalleryPushFrameSchema = v.object({
   steerId: v.optional(v.string()),
   status: v.optional(v.string()),
   atStep: v.optional(v.number()),
-  // An agent given work or reporting on it (`subordinate_event`), at the time it happened.
-  subordinate: v.optional(v.string()),
+  // An agent given work or reporting on it (`subagent_event`), at the time it happened.
+  subagent: v.optional(v.string()),
   content: v.optional(v.string()),
   task: v.optional(v.string()),
   timestamp: v.optional(v.number()),
@@ -1932,7 +1932,7 @@ const MESSAGES: UIMessage[] = [
   msg({
     id: "d1", role: "user",
     metadata: { kinuEvent: "event_drain" },
-    parts: [{ type: "text", text: "While you were idle:\n- [subordinate_report] from subordinate (binding-tester): All 14 of the Worker's regression tests green after the binding fix. [the sender awaits your answer]\n- [webhook] from github (AshishKumar4/api-worker): PR #212 review requested" }],
+    parts: [{ type: "text", text: "While you were idle:\n- [subagent_report] from subagent (binding-tester): All 14 of the Worker's regression tests green after the binding fix. [the sender awaits your answer]\n- [webhook] from github (AshishKumar4/api-worker): PR #212 review requested" }],
   }),
   // Copied from production: written before the author stamp, so a bare UUID id and the event name are its only markers.
   msg({
@@ -1985,7 +1985,7 @@ const MESSAGES: UIMessage[] = [
 ];
 
 
-function galleryPlanInspection(request: SubordinateInspectionRequest, plans: readonly PlanReview[]) {
+function galleryPlanInspection(request: SubagentInspectionRequest, plans: readonly PlanReview[]) {
   if (request.view === 'plans') return { view: 'plans', path: request.path, page: { status: 'end', items: plans } };
 
   if (request.view === 'children') {
@@ -2004,15 +2004,15 @@ function galleryPlanInspection(request: SubordinateInspectionRequest, plans: rea
 
     return plan
       ? { view: 'plan', path: request.path, plan }
-      : missingSubordinateHistory(request.path);
+      : missingSubagentHistory(request.path);
   }
 
   throw new Error('Unexpected gallery plan inspection');
 }
 
 const stubRpc: SocketCall = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === 'inspectSubordinate') {
-    const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
+  if (method === 'inspectSubagent') {
+    const request = v.parse(SubagentInspectionRequestSchema, args?.[0]);
 
     return rpcResult(v.parse(JsonValueSchema, galleryPlanInspection(request, []))).json<T>();
   }
@@ -2132,7 +2132,7 @@ function maybeRefuseCreate(): void {
   if (!CREATE_FAILS || createRefused) return;
   createRefused = true;
   throw new Error("the workspace refused the new agent", {
-    cause: new Error("subordinate quota exhausted"),
+    cause: new Error("subagent quota exhausted"),
   });
 }
 
@@ -2843,8 +2843,8 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
 type GalleryAnswer = { readonly value: unknown } | null;
 
 function galleryPlanRpc(method: string, args?: unknown[]): GalleryAnswer {
-  if (method === "inspectSubordinate") {
-    return { value: galleryPlanInspection(v.parse(SubordinateInspectionRequestSchema, args?.[0]), [galleryAgentPlan]) };
+  if (method === "inspectSubagent") {
+    return { value: galleryPlanInspection(v.parse(SubagentInspectionRequestSchema, args?.[0]), [galleryAgentPlan]) };
   }
 
   if (method === "dismissPlanReview") {
@@ -2882,7 +2882,7 @@ function galleryChatName(opening: string | null): string {
 }
 
 function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
-  if (method === "listSubordinates") return { value: [...GALLERY_SUBS] };
+  if (method === "listSubagents") return { value: [...GALLERY_SUBS] };
 
   // Recorded so a gate can read which actor a pick wrote.
   if (method === "setModel" || method === "setReasoningEffort") {
@@ -2895,7 +2895,7 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
     return { value: method === "setModel" ? { ok: true, spec: args?.[0] } : { ok: true, effort: args?.[0] ?? null } };
   }
 
-  if (method === "createSubordinateAgent") {
+  if (method === "createSubagentAgent") {
     maybeRefuseCreate();
     const name = galleryChatName(v.is(v.string(), args?.[0]) ? args[0] : null);
 
@@ -2915,23 +2915,23 @@ function galleryRosterRpc(method: string, args?: unknown[]): GalleryAnswer {
       updatedAt: NOW,
     };
 
-    return { value: { name, displayName: "", subordinate: entry } };
+    return { value: { name, displayName: "", subagent: entry } };
   }
 
-  if (method === "renameSubordinateAgent") {
+  if (method === "renameSubagentAgent") {
     const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
     const entry = GALLERY_SUBS.find((sub) => sub.name === name);
 
     if (RENAME_FAILS) throw new Error("Connection closed");
 
-    if (!entry) throw new Error(`gallery: no subordinate "${name}"`);
+    if (!entry) throw new Error(`gallery: no subagent "${name}"`);
     entry.displayName = displayName;
     rosterMoved();
 
-    return { value: { ok: true, name, displayName, subordinate: { ...entry } } };
+    return { value: { ok: true, name, displayName, subagent: { ...entry } } };
   }
 
-  if (method === "dismissSubordinate") {
+  if (method === "dismissSubagent") {
     const [name, keepHistory] = v.parse(v.tuple([v.string(), v.optional(v.boolean())]), args);
     const index = GALLERY_SUBS.findIndex((sub) => sub.name === name);
 
@@ -3052,7 +3052,7 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
   return from === 0 ? { status: "end", items } : { status: "more", items, next: { before: from } };
 }
 
-/** `&agents=panel`: chats, hires nested two deep, a swarm and a helper. */
+/** `&agents=panel`: chats, hires nested two deep, a swarm and a subagent. */
 const GALLERY_GITHUB: WorkspaceGitHubView = {
   repos: [
     { repo: "acme/api-worker", remote: true, lastPush: { ref: "refs/heads/fix/sessions-binding", at: NOW - 2 * 36e5 }, fetchedAt: NOW - 3 * 36e5,
@@ -3117,7 +3117,7 @@ function galleryWorkspaceAgents(): PanelAgent[] {
 const GALLERY_MAIN_TITLE = { value: "Main" };
 
 function rosterMoved(): void {
-  queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents", "listSubordinates"] })); });
+  queueMicrotask(() => { galleryServerPush(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ["listWorkspaceAgents", "listSubagents"] })); });
 }
 
 async function galleryRevert(args?: unknown[]): Promise<JsonValue> {
@@ -3994,7 +3994,7 @@ const STOPPED_RUN: HeadRunView = {
     }),
     swarmNode("root-merge-0-h4", "packages/cli/src/commands/agents.ts", "the fan-out path", {
       status: "aborted", wallClockMs: 4_300, spawnedAt: NOW - 9 * 36e5, lastStepAt: NOW - 86 * 36e4,
-      errorMessage: "The workspace was evicted while this head was listing subordinates.",
+      errorMessage: "The workspace was evicted while this head was listing subagents.",
     }),
     swarmNode("root-merge-0-h5", "packages/cli/src/commands/files.ts", "the drive path", {
       status: "errored", wallClockMs: 3_100, spawnedAt: NOW - 9 * 36e5, lastStepAt: null,
@@ -5677,7 +5677,7 @@ const AGENT_TASKS = [
   },
 ];
 
-/** Root plan and tasks plus one subordinate's plan, so both owners' rows draw. */
+/** Root plan and tasks plus one subagent's plan, so both owners' rows draw. */
 const WORKSPACE_WORK = {
   plans: [
     {
@@ -6980,8 +6980,8 @@ const DRAINED_EVENT = {
 const DRAIN_BATCHES = {
   delegated: [
     {
-      ...DRAINED_EVENT, id: "ev-report", ingress: "subordinate", variant: "subordinate_report",
-      payload: { from_subordinate: "cli-auditor", status: "completed", content: "Report line one.\nReport line two.", sequence_id: "seq-1", kinu_mode: "build" },
+      ...DRAINED_EVENT, id: "ev-report", ingress: "subagent", variant: "subagent_report",
+      payload: { from_subagent: "cli-auditor", status: "completed", content: "Report line one.\nReport line two.", sequence_id: "seq-1", kinu_mode: "build" },
     },
     {
       ...DRAINED_EVENT, id: "ev-ask", ingress: "peer_async", variant: "peer_agent",

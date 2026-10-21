@@ -158,7 +158,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     expect(await member(ns, 'message').execute('researcher', 'also check the CLI'))
       .toMatchObject({ status: 'delivered', agent: 'researcher', delivery: 'starts_now', event_id: 'evt-starts_now' });
     expect(await member(ns, 'reply').execute('pe1', 'here you go')).toEqual({ ok: true });
-    expect(await member(ns, 'list').execute()).toEqual({ subordinates: [rosterEntry], peers: [{ name: 'scout', displayName: 'Scout' }] });
+    expect(await member(ns, 'list').execute()).toEqual({ subagents: [rosterEntry], peers: [{ name: 'scout', displayName: 'Scout' }] });
     expect(await member(ns, 'dismiss').execute('researcher'))
       .toEqual({ ok: true, name: 'researcher', historyKept: true, stoppedJobs: [] });
 

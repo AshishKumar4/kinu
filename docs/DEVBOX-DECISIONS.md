@@ -924,7 +924,7 @@ Object CPU resets on the eval workspaces. The observability API with a
 `$workers.durableObjectId` filter shows the eval objects' alarm and RPC
 invocations at `exceededCpu` (cpuTimeMs 30,000, wall 36 to 100 s; one
 object burned 649 s of CPU in 26 minutes), every frame the same: activation,
-`subordinate.assignment_repended` (the interrupted delegated turn re-run
+`subagent.assignment_repended` (the interrupted delegated turn re-run
 from its start), a model call, the budget. Output tokens are small (2,370
 over 8 calls for `durable-continuity`), so the burn is not the stream. It
 is the read: every step materializes every message in its context from its

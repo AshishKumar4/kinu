@@ -8,9 +8,9 @@ import { initHeadsTables } from '../src/heads/schema';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
-import { SubordinateRosterStore } from '../src/subordinates/roster';
+import { SubagentRosterStore } from '../src/subagents/roster';
 import { actorReferenceOf, type ActorHandle } from '../src/identity/actor-handle';
-import type { SubordinateRosterEntry } from '../src/delegation/agents-tool';
+import type { SubagentRosterEntry } from '../src/delegation/agents-tool';
 import { readWorkspaceAgents, type ChatReport, type PanelAgent } from '../src/read-models/workspace-agents';
 import { OWNER_STOPPED } from '../src/heads/types';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
@@ -38,13 +38,13 @@ function workspace() {
   // The read model's tables, as the workspace's genesis creates them.
   initOwnerRequestsTable(execRaw);
   const actors = createTestActors(sql, execRaw);
-  new SubordinateRosterStore(exec, actors.main).ensureSchema();
+  new SubagentRosterStore(exec, actors.main).ensureSchema();
 
-  const hire = (parent: ActorHandle, name: string, entry: Partial<SubordinateRosterEntry>): ActorHandle => {
+  const hire = (parent: ActorHandle, name: string, entry: Partial<SubagentRosterEntry>): ActorHandle => {
     const { origin = 'agent', lifetime = 'durable', ...rest } = entry;
     const child = actors.directory.create({ parent, name, origin, lifetime, creationId: name });
 
-    new SubordinateRosterStore(exec, parent).create({
+    new SubagentRosterStore(exec, parent).create({
       name, actorReference: actorReferenceOf(child), birth: null, deleteRequested: false,
       status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, taskEventId: null, ...rest,
     });

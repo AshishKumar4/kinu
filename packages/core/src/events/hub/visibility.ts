@@ -7,8 +7,8 @@ import * as v from 'valibot';
 import { evidenceWindow } from '../../utils/evidence-window';
 import { redactSecrets } from '../../safety/secret-patterns';
 import {
-  SUBORDINATE_REPORT_HANDOFF_FIELDS,
-  type EmailPayload, type TimerPayload, type PayloadPolicy, type KinuEvent, type IngressDescriptor, type SubordinateReportHandoff,
+  SUBAGENT_REPORT_HANDOFF_FIELDS,
+  type EmailPayload, type TimerPayload, type PayloadPolicy, type KinuEvent, type IngressDescriptor, type SubagentReportHandoff,
 } from './types';
 import {
   isJsonObject, JsonObjectSchema, parseJsonValue,
@@ -157,12 +157,12 @@ function briefWindow(text: string): string {
   return evidenceWindow(text, EVENT_BRIEF_MAX_CHARS);
 }
 
-/** Rendered whole: {@link SUBORDINATE_REPORT_HANDOFF_MAX_CHARS} guarantees it fits, and the
+/** Rendered whole: {@link SUBAGENT_REPORT_HANDOFF_MAX_CHARS} guarantees it fits, and the
  *  handoff has no spill file. */
-export function renderSubordinateHandoff(handoff: SubordinateReportHandoff): string {
+export function renderSubagentHandoff(handoff: SubagentReportHandoff): string {
   let rendered = '';
 
-  for (const field of SUBORDINATE_REPORT_HANDOFF_FIELDS) {
+  for (const field of SUBAGENT_REPORT_HANDOFF_FIELDS) {
     const entries = handoff[field];
 
     if (entries === undefined || entries.length === 0) continue;
@@ -206,9 +206,9 @@ function friendlySource(event: KinuEvent): string {
     case 'timer_alarm':     return `schedule (${text('label', 'unlabeled')})`;
     case 'computer_cb':      return `computer (${text('command', 'process').slice(0, 40)})`;
     case 'peer_async':      return `peer agent (${text('from_agent_name', '?')})`;
-    case 'subordinate':
-      return event.variant === 'subordinate_report'
-        ? `subordinate (${text('from_subordinate', '?')})`
+    case 'subagent':
+      return event.variant === 'subagent_report'
+        ? `subagent (${text('from_subagent', '?')})`
         : `workspace orchestrator (${text('from_workspace', '?')})`;
     case 'email_inbound':   return `email (${text('from', '?')})`;
     case 'mcp_streamable':
@@ -306,20 +306,20 @@ function briefForVariant(event: KinuEvent): string {
       return `${p.topic}: ${briefWindow(JSON.stringify(p.body) ?? 'undefined')}${full}`;
     }
 
-    case 'subordinate_task': {
-      // No `inherited_context` prefix: `subordinateBirthMessages` owns the birth context.
+    case 'subagent_task': {
+      // No `inherited_context` prefix: `subagentBirthMessages` owns the birth context.
       const p = event.payload;
       const deliverable = p.deliverable ? ` [deliverable: ${p.deliverable.slice(0, 100)}]` : '';
 
       return `${p.kind}: ${briefWindow(p.body)}${deliverable}`;
     }
 
-    case 'subordinate_report': {
+    case 'subagent_report': {
       const p = event.payload;
       const task = p.task ? ` [re: ${p.task.slice(0, 80)}]` : '';
       const full = rest('report', p.content_path, p.content_unsaved);
 
-      return `${p.status}${task}: ${briefWindow(p.content)}${full}${renderSubordinateHandoff(p)}`;
+      return `${p.status}${task}: ${briefWindow(p.content)}${full}${renderSubagentHandoff(p)}`;
     }
 
     case 'file_changed':

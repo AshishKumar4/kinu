@@ -132,7 +132,7 @@ async function offline(): Promise<void> {
     listSlates: absent, readBytes: absent, listFiles: absent, craftedTools: absent, memoryContent: absent,
     memoryFacts: absent, workspaceWork: absent,
     inspect: async (request) => {
-      const row = input.rpc.find((call) => call.id === 'workspace' && call.method === 'inspectSubordinate' && JSON.stringify(call.args) === JSON.stringify([request]));
+      const row = input.rpc.find((call) => call.id === 'workspace' && call.method === 'inspectSubagent' && JSON.stringify(call.args) === JSON.stringify([request]));
 
       if (row === undefined) throw new Error('the replay has no saved canonical inspector page for this request');
 

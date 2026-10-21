@@ -113,7 +113,7 @@
       // (`hostNamespace: 'OrchestratorAgent'` in src/nimbus-programmatic.ts).
       // Rename it and the supervisor entrypoint resolves a namespace that does
       // not exist. This is the ONLY actor-bearing class: every logical
-      // actor in a workspace — the main actor, hired subordinates, ask-by-role
+      // actor in a workspace — the main actor, hired subagents, ask-by-role
       // temporaries, branching heads, swarm nodes, MCTS rollout branches —
       // lives inside one object of this namespace, over its one SQLite.
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },

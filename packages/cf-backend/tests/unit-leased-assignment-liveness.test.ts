@@ -7,7 +7,7 @@ import type { SQLQueryBindings } from 'bun:sqlite';
 import { EventLog, TERMINAL_EFFECT_RETRY_BASE_MS, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import { AwaitedList } from '@kinu.run/test-utils';
 import {
-  agentSql, alarmDue, catalogTurn, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
+  agentSql, alarmDue, catalogTurn, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, hostedSubagentHarness, nextTurn, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
   wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { cutNextDelivery } from './helpers/agent-facets';
@@ -28,7 +28,7 @@ test("an assignment whose crossing died with its activation runs after the next 
   const gateway = answeringGateway('summarised');
   const workspace = gatewayWorkspace(gateway);
 
-  const child = await hostedSubordinateHarness(workspace, {
+  const child = await hostedSubagentHarness(workspace, {
     name: 'summariser', displayName: 'Summariser', nameOrigin: 'user', mission: 'summarise',
   });
 
@@ -204,7 +204,7 @@ function restore(workspace: ReturnType<typeof gatewayWorkspace>, tables: Snapsho
 
 /** The hire's assignment row, once the parent's `agents` call has written it; that call spawns across macrotasks. */
 async function assigned(workspace: ReturnType<typeof gatewayWorkspace>): Promise<void> {
-  while (workspace.db.query(`SELECT 1 FROM agent_log WHERE variant = 'subordinate_task'`).get() === null) {
+  while (workspace.db.query(`SELECT 1 FROM agent_log WHERE variant = 'subagent_task'`).get() === null) {
     await nextTurn();
   }
 }
@@ -230,7 +230,7 @@ test('a task hire whose answer settled its waiting hirer is not run again after 
     const turn = catalogTurn(workspace.agent, 'Have a task agent summarise the release notes.');
 
     await assigned(workspace);
-    beforeRelease = snapshot(workspace, ['workspace_actors', 'actor_subordinates']);
+    beforeRelease = snapshot(workspace, ['workspace_actors', 'actor_subagents']);
     await workspace.agent.terminalRetryPass();
     await turn;
     await joinHarnessFibers();
@@ -257,10 +257,10 @@ test('a report a reset rolled back before it reached the parent reaches it once,
   const workspace = gatewayWorkspace(gateway);
   const actorId = await hire(workspace, 'task');
 
-  const reports = () => workspace.db.query(`SELECT 1 FROM agent_log WHERE variant = 'subordinate_report'
-    AND dedupe_key = (SELECT 'subordinate_report:' || id FROM agent_log WHERE actor_id = ? AND variant = 'subordinate_task')`).all(actorId).length;
+  const reports = () => workspace.db.query(`SELECT 1 FROM agent_log WHERE variant = 'subagent_report'
+    AND dedupe_key = (SELECT 'subagent_report:' || id FROM agent_log WHERE actor_id = ? AND variant = 'subagent_task')`).all(actorId).length;
 
-  workspace.db.run(`CREATE TRIGGER reset_mid_relay BEFORE INSERT ON agent_log WHEN NEW.variant = 'subordinate_report'
+  workspace.db.run(`CREATE TRIGGER reset_mid_relay BEFORE INSERT ON agent_log WHEN NEW.variant = 'subagent_report'
     BEGIN SELECT RAISE(ABORT, 'the workspace reset mid-relay'); END`);
   await runDelegatedTask(workspace, actorId, BRIEF);
   expect(reports()).toBe(0);
@@ -273,7 +273,7 @@ test('a report a reset rolled back before it reached the parent reaches it once,
   await nextActivation(workspace, gateway);
   await until(() => reports() === 1, 'the owed report reached the parent');
 
-  const leaseOpen = workspace.db.query(`SELECT 1 FROM agent_log WHERE actor_id = ? AND variant = 'subordinate_task'
+  const leaseOpen = workspace.db.query(`SELECT 1 FROM agent_log WHERE actor_id = ? AND variant = 'subagent_task'
     AND consumed_at IS NOT NULL`).all(actorId).length > 0;
 
   expect({ asked: asked(gateway), reports: reports(), leaseOpen }).toEqual({ asked: 1, reports: 1, leaseOpen: false });

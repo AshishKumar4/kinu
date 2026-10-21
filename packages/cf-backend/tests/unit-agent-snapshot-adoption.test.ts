@@ -4,12 +4,12 @@
  * rows. A read writes only what changed.
  */
 import { expect, test } from 'bun:test';
-import { agentSql, gatewayWorkspace, hostedSubordinateHarness } from './helpers/actor-harness';
+import { agentSql, gatewayWorkspace, hostedSubagentHarness } from './helpers/actor-harness';
 import { chatCompletion, stubAiBinding } from './helpers/platform-gateway';
 
 async function helper() {
   const workspace = gatewayWorkspace(stubAiBinding((run) => chatCompletion(run, 'done')));
-  const child = await hostedSubordinateHarness(workspace, { name: 'scout', displayName: 'Scout', nameOrigin: 'user', mission: 'read' });
+  const child = await hostedSubagentHarness(workspace, { name: 'scout', displayName: 'Scout', nameOrigin: 'user', mission: 'read' });
   const sql = agentSql(workspace, child.actor.handle.actorId);
 
   await workspace.agent.accountSpend();

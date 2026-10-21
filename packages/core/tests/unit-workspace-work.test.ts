@@ -5,7 +5,7 @@ import { explorationActorKey, readWorkspaceWork, TaskListStore, type ActorHandle
 import { createTestWorkspace } from './helpers';
 
 describe('the workspace work read', () => {
-  test('each task owner carries the subordinate path to its conversation, and none past a head', () => {
+  test('each task owner carries the subagent path to its conversation, and none past a head', () => {
     const workspace = createTestWorkspace();
     const { directory, main } = createTestActorsOver(workspace.db, { name: 'workspace' });
 

@@ -12,8 +12,8 @@ import { Effect } from 'effect';
 import { diagnostics, settle } from './index';
 import { nowMs } from '../utils/date';
 
-/** `peer` crosses a workspace boundary; `subordinate` stays inside one workspace. */
-type MsgTransport = 'peer' | 'subordinate';
+/** `peer` crosses a workspace boundary; `subagent` stays inside one workspace. */
+type MsgTransport = 'peer' | 'subagent';
 
 /** `agent` names a roster entry; `event` answers an inbound message event by id. */
 type MsgAddressing = 'agent' | 'event';

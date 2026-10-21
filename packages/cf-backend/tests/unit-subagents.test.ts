@@ -1,5 +1,5 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
-// How this backend hosts core's subordinate module (policy: core/tests/unit-subordinates.test.ts), read
+// How this backend hosts core's subagent module (policy: core/tests/unit-subagents.test.ts), read
 // through the actor's own bootstrap reads, a hosted child's runtime, and the tools each actor is built with.
 import './helpers/ui-module-globals';
 import { describe, expect, spyOn, test } from 'bun:test';
@@ -12,12 +12,12 @@ import {
 } from '@kinu.run/core';
 import { gatedTools, present, TURN_REACH } from '@kinu.run/test-utils';
 import { KeptTranscript } from '../src/components/KeptTranscript';
-import { HelperChatBase, MessageView } from '../src/components/MessageView';
-import { nestedAgent, type InspectSubordinate } from '@kinu.run/core';
+import { SubagentChatBase, MessageView } from '../src/components/MessageView';
+import { nestedAgent, type InspectSubagent } from '@kinu.run/core';
 import type { UIMessage } from 'ai';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import {
-  agentSql, chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, rosterOver, runDelegatedTask, workspaceFiles,
+  agentSql, chatSessionTurns, gatewayWorkspace, hostedSubagentHarness, orchestratorHarness, rosterOver, runDelegatedTask, workspaceFiles,
 } from './helpers/actor-harness';
 import { socketConnection } from './helpers/bindings';
 import { answeringGateway, chatCompletion, offeredTools, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
@@ -28,7 +28,7 @@ mockAgentsSdk();
 // After the mock: a static import would bind the class to the real `agents` Agent.
 const { ActorAgent } = await import('../src/actor-agent');
 
-describe('subordinate wiring', () => {
+describe('subagent wiring', () => {
   /** The temporary rung's CF wiring; behaviour is core's (core/tests/unit-temporary-agents.test.ts). */
   /** A temporary agent's caller is blocked on one report, so every terminal state must produce one. */
   test('registered task lifetime supplies a terminal report for each non-answer ending', async () => {
@@ -48,7 +48,7 @@ describe('subordinate wiring', () => {
     // A child reading its parent's row would run bytes its own claim cannot verify after the parent promotes, so the per-actor subtree binds.
     const workspace = orchestratorHarness();
 
-    const child = await hostedSubordinateHarness(workspace, {
+    const child = await hostedSubagentHarness(workspace, {
       name: 'reader-1', displayName: 'Reader', nameOrigin: 'user', mission: 'Read what you may',
     });
 
@@ -67,7 +67,7 @@ describe('subordinate wiring', () => {
     await turns.settle({ messageId: 'a-root', text: 'done' });
     expect(Object.keys(orchTools)).not.toContain(REPORT_TOOL);
 
-    const child = await hostedSubordinateHarness(workspace, {
+    const child = await hostedSubagentHarness(workspace, {
       name: 'confinement-child',
       displayName: 'Confinement Child',
       nameOrigin: 'user',
@@ -80,7 +80,7 @@ describe('subordinate wiring', () => {
     expect(BUILTIN_TOOLS.filter((name) => !subKeys.includes(name))).toEqual([]);
     expect(subKeys).not.toContain('record_evidence');
     expect(subKeys).not.toContain('record_decision');
-    // `hire scope=workspace` mints a fresh tree root, so holding it would let a subordinate escape its depth cap.
+    // `hire scope=workspace` mints a fresh tree root, so holding it would let a subagent escape its depth cap.
     expect(observedOpEnum(subTools.get('agents')?.inputSchema)).not.toContain('reply');
     expect(observedOpEnum(subTools.get('agents')?.inputSchema)).toContain('hire');
     expect(subTools.get('eval')?.description).toMatch(/^- report:/mu);
@@ -114,7 +114,7 @@ describe("a delegated run settles its hirer's roster", () => {
 
     const workspace = gatewayWorkspace(gateway);
 
-    const child = await hostedSubordinateHarness(workspace, {
+    const child = await hostedSubagentHarness(workspace, {
       name: 'researcher', displayName: 'Researcher', nameOrigin: 'user', mission: brief,
     });
 
@@ -132,7 +132,7 @@ describe("a delegated run settles its hirer's roster", () => {
 
     expect(endings).toEqual([{ reason: 'completed' }]);
     expect(roster.requireActive('researcher')).toMatchObject({ status: 'idle', currentTask: brief });
-    expect((await workspace.agent.listSubordinates()).find((entry) => entry.name === 'researcher'))
+    expect((await workspace.agent.listSubagents()).find((entry) => entry.name === 'researcher'))
       .toMatchObject({ status: 'idle', currentTask: brief });
   });
 });
@@ -144,16 +144,16 @@ describe('a dismissed agent keeps its conversation reachable', () => {
     // An added agent inherits the workspace's purpose, so the workspace needs one first.
     await parent.agent.setSoul('# Purpose\n\nBuild the chess app.');
 
-    const { name } = await parent.agent.createSubordinateAgent();
+    const { name } = await parent.agent.createSubagentAgent();
 
-    await parent.agent.dismissSubordinate(name);
+    await parent.agent.dismissSubagent(name);
 
     return { parent, name };
   }
 
   test('the roster a chat surface reads still lists it', async () => {
     const { parent, name } = await dismissedChild();
-    const listed = await parent.agent.listSubordinates();
+    const listed = await parent.agent.listSubagents();
 
     expect(listed.map((entry) => entry.name)).toContain(name);
     expect(listed.find((entry) => entry.name === name)?.status).toBe('dismissed');
@@ -184,7 +184,7 @@ describe('the call that asked a one-question helper opens its chat', () => {
   });
 
   const markup = (base: string | null, output: JsonValue, parent: string | null = null) => renderToStaticMarkup(createElement(MemoryRouter, null,
-    createElement(HelperChatBase.Provider, { value: base === null ? null : { base, parent } }, createElement(MessageView, { message: asked(output) }))));
+    createElement(SubagentChatBase.Provider, { value: base === null ? null : { base, parent } }, createElement(MessageView, { message: asked(output) }))));
 
   test('a task helper\'s name links to its chat below the chat that asked it', () => {
     const answered = { status: 'completed', agent: 'ask-reviewer-a1', lifetime: 'task', role: 'reviewer', answer: 'Fine.', transcript: 'kept' };
@@ -201,7 +201,7 @@ describe('the call that asked a one-question helper opens its chat', () => {
 });
 
 /** A helper below a direct child has no tab; the Work tab opens its chat by the path the TUI walks. */
-describe('a subordinate below a direct child is reached by its path', () => {
+describe('a subagent below a direct child is reached by its path', () => {
   /** The helper's own model hires when its task says so, as a delegated turn does. */
   const hiringGateway = () => stubAiBinding((run) => {
     const asked = requestOf(run).messages.some((message) => message.role === 'user' && JSON.stringify(message.content).includes('Hire ask-checker-a1'));
@@ -215,21 +215,21 @@ describe('a subordinate below a direct child is reached by its path', () => {
   async function grandchild() {
     const parent = gatewayWorkspace(hiringGateway());
     await parent.agent.setSoul('# Purpose\n\nAudit the ledger.');
-    const { name, subordinate } = await parent.agent.createSubordinateAgent();
+    const { name, subagent } = await parent.agent.createSubagentAgent();
 
-    await runDelegatedTask(parent, present(subordinate.actorId, 'the helper id'), 'Hire ask-checker-a1 to check the ledger.');
-    const children = await parent.agent.inspectSubordinate({ path: [name], view: 'children', page: {} });
+    await runDelegatedTask(parent, present(subagent.actorId, 'the helper id'), 'Hire ask-checker-a1 to check the ledger.');
+    const children = await parent.agent.inspectSubagent({ path: [name], view: 'children', page: {} });
     const nested = children.view === 'children' ? children.page.items.find((entry) => entry.name === 'ask-checker-a1') : undefined;
 
-    return { agent: parent.agent, name, parentId: present(subordinate.actorId, 'the helper id'), path: `${name}/ask-checker-a1`, id: nested?.actorReference?.actorId };
+    return { agent: parent.agent, name, parentId: present(subagent.actorId, 'the helper id'), path: `${name}/ask-checker-a1`, id: nested?.actorReference?.actorId };
   }
 
   /** The page's own resolver over this object's RPCs, as its socket answers them. */
-  const pageRpc = (agent: Awaited<ReturnType<typeof grandchild>>['agent']): InspectSubordinate => async (request) => await agent.inspectSubordinate(request);
+  const pageRpc = (agent: Awaited<ReturnType<typeof grandchild>>['agent']): InspectSubagent => async (request) => await agent.inspectSubagent(request);
 
   test('with its parent dismissed, a grandchild still opens kept, found from the id of the chat that asked it or its own', async () => {
     const { agent, name, parentId, path, id } = await grandchild();
-    await agent.dismissSubordinate(name);
+    await agent.dismissSubagent(name);
 
     const byParent = await nestedAgent(pageRpc(agent), path, { actor: null, parent: parentId });
     const byOwnId = await nestedAgent(pageRpc(agent), path, { actor: present(id, 'the grandchild id'), parent: null });
@@ -278,15 +278,15 @@ describe('an agent\'s window hears only what it may act on', () => {
     try {
       // An added agent inherits the workspace's purpose, so the workspace needs one first.
       await agent.setSoul('# Purpose\n\nAudit the ledger.');
-      const { name } = await agent.createSubordinateAgent();
+      const { name } = await agent.createSubagentAgent();
       const resolved = await agent.resolveHostedActorRoute(name);
 
       if ('reason' in resolved) throw new Error(resolved.error);
       const tag = actorConnectionTag(resolved.actorId);
 
       windows.push(socketConnection({ id: 'agent', tags: [tag] }));
-      await agent.renameSubordinateAgent(name, 'Ledger auditor');
-      await agent.announceSubordinatePlan({ path: [name], id: 'plan-1', revision: 1 });
+      await agent.renameSubagentAgent(name, 'Ledger auditor');
+      await agent.announceSubagentPlan({ path: [name], id: 'plan-1', revision: 1 });
       await agent.cancelCurrentWork();
       await agent.setShellApprovalMode('strict');
       await agent.executeInExecutor('workspace', 'git push --force origin main');
@@ -318,7 +318,7 @@ describe('a dismissed agent\'s window', () => {
     const sent: string[] = [];
 
     await agent.setSoul('# Purpose\n\nAudit the ledger.');
-    const { name } = await agent.createSubordinateAgent();
+    const { name } = await agent.createSubagentAgent();
     const resolved = await agent.resolveHostedActorRoute(name);
 
     if ('reason' in resolved) throw new Error(resolved.error);
@@ -326,7 +326,7 @@ describe('a dismissed agent\'s window', () => {
 
     // The window's first frame opens its agent's room.
     await agent.onMessage(window, '{}');
-    await agent.dismissSubordinate(name);
+    await agent.dismissSubagent(name);
     await agent.onMessage(window, '{}');
 
     expect(sent.at(-1)).toContain('no longer hosted here');

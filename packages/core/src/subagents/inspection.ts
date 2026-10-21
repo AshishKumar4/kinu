@@ -12,7 +12,7 @@ import { ERROR_CODES, KinuError, refusalOf } from '../obs/error';
 import { UsageSchema } from '../usage';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { SubordinateRosterEntrySchema, SubordinateRosterStore, subordinateTitle } from './roster';
+import { SubagentRosterEntrySchema, SubagentRosterStore, subagentTitle } from './roster';
 import { createAgentConfigStore } from '../config/store';
 import { DELEGATION_MAX_DEPTH } from './depth';
 import { PlanReviewStore, PlanReviewSchema } from '../plans/review';
@@ -41,7 +41,7 @@ export const WorkspacePlanReferenceSchema = v.strictObject({
 
 export type WorkspacePlanReference = v.InferOutput<typeof WorkspacePlanReferenceSchema>;
 
-export const SubordinateInspectionRequestSchema = v.variant('view', [
+export const SubagentInspectionRequestSchema = v.variant('view', [
   v.strictObject({ path: PathSchema, view: v.literal('plans'), page: PageRequestSchema }),
   v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('plan') }),
   v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('planTasks') }),
@@ -53,7 +53,7 @@ export const SubordinateInspectionRequestSchema = v.variant('view', [
     from: v.optional(IndexSchema), actor: ActorIdSchema }),
 ]);
 
-export type SubordinateInspectionRequest = v.InferOutput<typeof SubordinateInspectionRequestSchema>;
+export type SubagentInspectionRequest = v.InferOutput<typeof SubagentInspectionRequestSchema>;
 
 const SummarySchema = v.object({
   runId: v.string(), eventCount: v.number(), startedAt: v.number(),
@@ -62,10 +62,10 @@ const SummarySchema = v.object({
 });
 
 const ChildSchema = v.object({
-  ...SubordinateRosterEntrySchema.entries, displayName: v.string(), nameOrigin: v.picklist(['user', 'auto']), role: v.string(),
+  ...SubagentRosterEntrySchema.entries, displayName: v.string(), nameOrigin: v.picklist(['user', 'auto']), role: v.string(),
 });
 
-export type SubordinateChild = v.InferOutput<typeof ChildSchema>;
+export type SubagentChild = v.InferOutput<typeof ChildSchema>;
 
 const EventPageSchema: v.GenericSchema<Page<RunEvent, number>> = v.variant('status', [
   v.object({ status: v.literal('more'), items: v.array(RunEventSchema), next: IndexSchema }),
@@ -75,7 +75,7 @@ const EventPageSchema: v.GenericSchema<Page<RunEvent, number>> = v.variant('stat
 export const StepOutputInspectionSchema = v.object({ view: v.literal('step'), path: PathSchema, runId: v.string(), eventIndex: IndexSchema,
   messages: v.array(JsonObjectSchema), nextFrom: v.nullable(IndexSchema) });
 
-export const SubordinateInspectionResultSchema = v.variant('view', [
+export const SubagentInspectionResultSchema = v.variant('view', [
   v.object({ view: v.literal('plans'), path: PathSchema, page: pageSchema(PlanReviewSchema) }),
   v.object({ view: v.literal('plan'), path: PathSchema, plan: PlanReviewSchema }),
   v.object({ view: v.literal('planTasks'), path: PathSchema, tasks: v.array(AgentTaskTreeSchema) }),
@@ -87,14 +87,14 @@ export const SubordinateInspectionResultSchema = v.variant('view', [
   v.object({ reason: v.picklist(ERROR_CODES), error: v.string(), view: v.literal('missing'), path: PathSchema }),
 ]);
 
-export type SubordinateInspectionResult = v.InferOutput<typeof SubordinateInspectionResultSchema>;
+export type SubagentInspectionResult = v.InferOutput<typeof SubagentInspectionResultSchema>;
 
-export function missingSubordinateHistory(path: string[]): SubordinateInspectionResult {
-  return { ...refusalOf(new KinuError('missing', 'The requested subordinate or retained history is unavailable.')), view: 'missing', path };
+export function missingSubagentHistory(path: string[]): SubagentInspectionResult {
+  return { ...refusalOf(new KinuError('missing', 'The requested subagent or retained history is unavailable.')), view: 'missing', path };
 }
 
 /** Where one inspected actor's rows are read from. */
-export interface SubordinateInspectionSource {
+export interface SubagentInspectionSource {
   /** The workspace database every actor's rows live in. */
   readonly sql: SqlExecutor;
   readonly raw: SqlExec;
@@ -104,10 +104,10 @@ export interface SubordinateInspectionSource {
 }
 
 /** Reads existing actor tables. No schema initialization or live actor state. */
-export async function readSubordinateInspection(
-  source: SubordinateInspectionSource,
-  request: SubordinateInspectionRequest,
-): Promise<SubordinateInspectionResult> {
+export async function readSubagentInspection(
+  source: SubagentInspectionSource,
+  request: SubagentInspectionRequest,
+): Promise<SubagentInspectionResult> {
   const { sql, actor, raw, transcriptFor } = source;
   const path = request.path;
 
@@ -118,7 +118,7 @@ export async function readSubordinateInspection(
     case 'planTasks': {
       const plan = new PlanReviewStore(sql, actor).get(request.id, request.revision);
 
-      if (!plan || plan.sessionId !== 'default') return missingSubordinateHistory(path);
+      if (!plan || plan.sessionId !== 'default') return missingSubagentHistory(path);
 
       if (request.view === 'plan') return { view: 'plan', path, plan };
 
@@ -126,11 +126,11 @@ export async function readSubordinateInspection(
     }
 
     case 'children': {
-      const page = new SubordinateRosterStore(raw, actor).listPage(request.page);
+      const page = new SubagentRosterStore(raw, actor).listPage(request.page);
 
       const items = page.items.map((entry) => ({
         ...entry,
-        ...subordinateTitle(entry, entry.actorReference === null ? null : createAgentConfigStore(sql, entry.actorReference.actorId, actor.assertCurrent)),
+        ...subagentTitle(entry, entry.actorReference === null ? null : createAgentConfigStore(sql, entry.actorReference.actorId, actor.assertCurrent)),
       }));
 
       return { view: 'children', path, page: { ...page, items } };
@@ -143,7 +143,7 @@ export async function readSubordinateInspection(
     case 'events': {
       const recorder = new RunEventRecorder(sql, actor);
 
-      if (recorder.runSeq(request.runId) === null) return missingSubordinateHistory(path);
+      if (recorder.runSeq(request.runId) === null) return missingSubagentHistory(path);
       const limit = request.query.limit ?? 200;
       const fetched = recorder.read(request.runId, { since: request.query.since, limit: limit + 1 });
       const items = fetched.slice(0, limit);
@@ -161,10 +161,10 @@ export async function readSubordinateInspection(
 }
 
 /** A sealed output read is independent of roster, plan and timeline projections. */
-async function readStepInspection(sql: SqlExecutor, actor: ActorHandle, transcriptFor: SubordinateInspectionSource['transcriptFor'], request: Extract<SubordinateInspectionRequest, { view: 'step' }>): Promise<SubordinateInspectionResult> {
+async function readStepInspection(sql: SqlExecutor, actor: ActorHandle, transcriptFor: SubagentInspectionSource['transcriptFor'], request: Extract<SubagentInspectionRequest, { view: 'step' }>): Promise<SubagentInspectionResult> {
   const event = new RunEventRecorder(sql, actor).read(request.runId, { since: request.eventIndex, limit: 1 })[0];
 
-  if (event?.type !== 'step_finish' || event.eventIndex !== request.eventIndex) return missingSubordinateHistory(request.path);
+  if (event?.type !== 'step_finish' || event.eventIndex !== request.eventIndex) return missingSubagentHistory(request.path);
 
   const output = await transcriptFor(actor).stepOutput(event.parts, request.from ?? 0);
 

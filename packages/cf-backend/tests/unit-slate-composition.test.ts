@@ -7,7 +7,7 @@ import {
   openWorkspaceMainActor, RunEventRecorder, SESSION_UID, WORKSPACE_RUN_ID,
   INTERRUPTED_TURN, isJsonAnswer, type JsonValue, type SlateSurfaceResult, actorHomeName } from '@kinu.run/core';
 import {
-  catalogTurn, gatewayWorkspace, hostedSubordinateHarness, chatSessionTurns, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceFiles,
+  catalogTurn, gatewayWorkspace, hostedSubagentHarness, chatSessionTurns, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceFiles,
 } from './helpers/actor-harness';
 import { chatCompletion, wordByWordCompletion, GATEWAY_MODEL, openingOf, requestOf, stubAiBinding, textThenToolCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 import { createWorkspaceBundle } from '../../core/tests/helpers';
@@ -172,7 +172,7 @@ test('a slate\'s MCP call follows connection identity and the owner allowlist', 
     // A hosted actor connects no MCP servers of its own, so it refuses with the surface reason, not the role one.
     user.sql.exec(`UPDATE user_mcp_servers SET allowed_tools = '["read_issue"]' WHERE id = 'connection-id'`);
 
-    const child = await hostedSubordinateHarness(actor, {
+    const child = await hostedSubagentHarness(actor, {
       name: 'issue-reader', displayName: 'Issue reader', nameOrigin: 'user', roleId: 'task', mission: 'Read issues',
     });
 
@@ -285,7 +285,7 @@ test('the agent slate operation commits, forks and restores its authored source'
 test('a hired agent makes a slate where slates live, restores it with the main agent, and cannot share it', async () => {
   const parent = orchestratorHarness();
 
-  const child = await hostedSubordinateHarness(parent, {
+  const child = await hostedSubagentHarness(parent, {
     name: 'builder', displayName: 'Builder', nameOrigin: 'user', roleId: 'task', mission: 'Build the widgets slate',
   });
 
@@ -335,7 +335,7 @@ test('a hosted actor cannot restore source that its own filesystem authority can
   root.chown(path, SESSION_UID, 0);
   const reopened = await reactivateOrchestratorHarness(parent.db);
 
-  const child = await hostedSubordinateHarness(reopened, {
+  const child = await hostedSubagentHarness(reopened, {
     name: 'slate-author', displayName: 'Slate author', nameOrigin: 'user',
     roleId: 'task', mission: 'Work inside the assigned private home',
   });
@@ -356,7 +356,7 @@ test('a slate calling as a hosted actor reaches its own files and role, never th
   await writeText(rootFiles, '/slates/reader/package.json', JSON.stringify({ main: 'server.ts' }));
   await writeText(rootFiles, '/home/main/private.md', 'root only');
 
-  const child = await hostedSubordinateHarness(parent, {
+  const child = await hostedSubagentHarness(parent, {
     name: 'reader-1', displayName: 'Reader', nameOrigin: 'user',
     roleId: 'task', mission: 'Read what you may',
   });
@@ -404,7 +404,7 @@ test('a slate\'s file and memory calls use the caller\'s own plane and lose reac
   await writeText(files, '/slates/native-reader/package.json', JSON.stringify({ main: 'server.ts' }));
   await writeText(files, '/home/main/slate-note.txt', 'root note');
 
-  const child = await hostedSubordinateHarness(parent, {
+  const child = await hostedSubagentHarness(parent, {
     name: 'native-reader', displayName: 'Native reader', nameOrigin: 'user', roleId: 'task', mission: 'Read',
   });
 
@@ -432,7 +432,7 @@ test("a class's browser member is authorized at the host by its caller's role as
   await files.mkdir('/slates/driver', { recursive: true });
   await writeText(files, '/slates/driver/package.json', JSON.stringify({ main: 'server.ts' }));
 
-  const child = await hostedSubordinateHarness(parent, {
+  const child = await hostedSubagentHarness(parent, {
     name: 'driver', displayName: 'Driver', nameOrigin: 'user', roleId: 'task', mission: 'Drive',
   });
 
@@ -482,7 +482,7 @@ test('the owner\'s own slate hires a helper and lists it as the owner does; a hi
 
   // As a program calls it: role, message, then its options.
   expect(await asOwner(['agents', 'hire'], ['task', 'Count the files in /home', { name: 'counter' }])).toMatchObject({ ok: true });
-  expect((await parent.agent.listSubordinates()).map((entry) => entry.name)).toContain('counter');
+  expect((await parent.agent.listSubagents()).map((entry) => entry.name)).toContain('counter');
 
   const listed = await asOwner(['agents', 'list']);
 
@@ -490,7 +490,7 @@ test('the owner\'s own slate hires a helper and lists it as the owner does; a hi
   expect(JSON.stringify(listed.ok ? listed.value : null)).toContain('counter');
 
   // The helper's own slate reaches no helpers: refused where the host routes it, before any actor is asked.
-  const child = await hostedSubordinateHarness(parent, { name: 'reader', displayName: 'Reader', nameOrigin: 'user', roleId: 'task', mission: 'Read' });
+  const child = await hostedSubagentHarness(parent, { name: 'reader', displayName: 'Reader', nameOrigin: 'user', roleId: 'task', mission: 'Read' });
   const asChild = await childCaller(parent.db, actorHomeName({ origin: 'agent', name: child.actor.handle.name, storageKey: child.actor.handle.storageKey }), 'reader');
   const own = child.actor.runtime.storage.vfs;
   await own.mkdir('/slates/own', { recursive: true });
@@ -641,7 +641,7 @@ test('workspace read models are the root\'s own reads; a hosted actor holds none
   await rootFiles.mkdir('/slates/status', { recursive: true });
   await writeText(rootFiles, '/slates/status/package.json', JSON.stringify({ main: 'server.ts' }));
 
-  const child = await hostedSubordinateHarness(parent, {
+  const child = await hostedSubagentHarness(parent, {
     name: 'peeker', displayName: 'Peeker', nameOrigin: 'user', roleId: 'task', mission: 'Peek',
   });
 
@@ -760,7 +760,7 @@ test('a slate\'s agent.send delivers one inbox signal naming the slate', async (
     metadata: expect.objectContaining({ slate: 'pager', data: { count: 2 }, kinuEvent: 'slate' }),
   });
 
-  const child = await hostedSubordinateHarness(actor, {
+  const child = await hostedSubagentHarness(actor, {
     name: 'pager-1', displayName: 'Pager', nameOrigin: 'user', roleId: 'task', mission: 'Page',
   });
 

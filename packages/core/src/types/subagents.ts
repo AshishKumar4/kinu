@@ -1,4 +1,4 @@
-/** Temporary-agent port and run contract; the subordinates plane implements it. */
+/** Temporary-agent port and run contract; the subagents plane implements it. */
 
 import type { ErrorCode } from '../obs/error';
 import type { WorkMode } from './turn';
@@ -11,7 +11,7 @@ import type { AnsweredEvolutionHelper, EvolutionHelperAnswer, EvolutionLaneReque
  * The conversation a child is forked from. The `kind` tag stays because the value is persisted in
  * an `agent_log` payload: a second shape must be a schema change, not a reinterpretation.
  */
-export const SubordinateInheritedContextSchema = v.strictObject({
+export const SubagentInheritedContextSchema = v.strictObject({
   kind: v.literal('fork'),
   messages: v.array(v.strictObject({
     id: v.string(),
@@ -22,11 +22,11 @@ export const SubordinateInheritedContextSchema = v.strictObject({
   })),
 });
 
-export type SubordinateInheritedContext = v.InferOutput<typeof SubordinateInheritedContextSchema>;
+export type SubagentInheritedContext = v.InferOutput<typeof SubagentInheritedContextSchema>;
 
-export function subordinateBirthContext(
+export function subagentBirthContext(
   messages: SerializedMessage[] | undefined,
-): SubordinateInheritedContext | undefined {
+): SubagentInheritedContext | undefined {
   return messages === undefined ? undefined : { kind: 'fork', messages };
 }
 

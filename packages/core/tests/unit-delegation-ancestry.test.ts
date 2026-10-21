@@ -9,7 +9,7 @@ import { createTestSql } from '@kinu.run/test-utils';
 import { createTestActor } from './helpers';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { actorReferenceOf } from '../src/identity/actor-handle';
-import { hireLifecycle } from '../src/subordinates/hire-lifecycle';
+import { hireLifecycle } from '../src/subagents/hire-lifecycle';
 import { KinuError } from '../src/obs/error';
 
 const unused = async (): Promise<never> => { throw new KinuError('unsupported', 'A refused hire asks nothing else.'); };

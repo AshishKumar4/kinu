@@ -92,7 +92,7 @@ function Page({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// Remount (and reconnect useAgent) per workspace; subordinate routes keep the key so the main socket stays mounted.
+// Remount (and reconnect useAgent) per workspace; subagent routes keep the key so the main socket stays mounted.
 function KeyedWorkspace() {
   const { agentId } = useParams();
 

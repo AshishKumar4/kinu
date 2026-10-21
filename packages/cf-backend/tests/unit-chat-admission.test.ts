@@ -349,8 +349,8 @@ describe('a chat request through the production gate', () => {
     const workspace = gatewayWorkspace(gateway);
 
     await workspace.agent.setSoul('# Purpose\n\nKeep the lamp log.');
-    const { subordinate } = await workspace.agent.createSubordinateAgent();
-    const actorId = v.parse(v.string(), subordinate.actorId);
+    const { subagent } = await workspace.agent.createSubagentAgent();
+    const actorId = v.parse(v.string(), subagent.actorId);
     const { wire, sent, frame } = connection(workspace.agent, [actorConnectionTag(actorId)]);
     const gate = workspace.agent.harnessChatGate();
     const opening = gate(wire, chatRequest('req-opening', BRIEF));

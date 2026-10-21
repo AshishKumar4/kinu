@@ -29,7 +29,7 @@ function workspace(tree: Readonly<Record<string, string | Uint8Array>>): Evidenc
     },
     listSlates: () => Promise.resolve({ slates: [{ id: 'exchange', title: 'Exchange' }], problems: [] }),
     inspect: (request) => {
-      const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
+      const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subagent or retained history is unavailable.' };
 
       if (request.view === 'children') {
         return Promise.resolve({ view: 'children', page: { status: 'end', items: [

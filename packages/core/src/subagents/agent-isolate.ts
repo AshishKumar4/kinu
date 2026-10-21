@@ -19,7 +19,7 @@ import { renderThrownChain, type ErrorCode, type KinuError } from '../obs/error'
 import type { ModelPricing } from '../providers/types';
 import type { WorkMode } from '../types/turn';
 import type { TurnSourcesBundle } from '../orchestrator/turn-assembly';
-import type { SubordinateReportLedger } from './ingress';
+import type { SubagentReportLedger } from './ingress';
 import type { DeliveryAnswer } from './deliveries';
 import type { TurnReach } from '../delegation/turn-reach';
 
@@ -160,7 +160,7 @@ export interface AgentToolAnswer {
   readonly captured?: AgentCaptureDelta;
   readonly dynamic: DynamicContext;
   /** What the turn has told its hirer by now; the agent keeps it, so a reset of the workspace forgets none of it. */
-  readonly reports: SubordinateReportLedger;
+  readonly reports: SubagentReportLedger;
   /** The agent's open work once the tool ran: its tasks and whether a job of its still runs. */
   readonly openWork: OpenWork;
   /** What its `eval` created and called of the workspace's crafted tools, as scored where it ran; its turn's record keeps

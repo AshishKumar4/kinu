@@ -71,7 +71,7 @@ CREATE TABLE agent_figure_folds ( /* derived from run_events: through is a rowid
     through  INTEGER NOT NULL,
     totals   TEXT NOT NULL
   );
-CREATE TABLE actor_subordinates (
+CREATE TABLE actor_subagents (
     actor_id      TEXT NOT NULL,
     name          TEXT NOT NULL,
     status        TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed')),
@@ -1032,8 +1032,8 @@ CREATE UNIQUE INDEX idx_workspace_actors_names
     ON workspace_actors(parent_actor_id, name) WHERE deleted_at IS NULL;
 CREATE INDEX idx_workspace_actors_parent
     ON workspace_actors(parent_actor_id, created_at, name);
-CREATE INDEX idx_actor_subordinates_order
-    ON actor_subordinates(actor_id, created_at, name);
+CREATE INDEX idx_actor_subagents_order
+    ON actor_subagents(actor_id, created_at, name);
 CREATE INDEX idx_evolution_helpers_request
     ON evolution_helpers(actor_id, lane_request_id, created_at);
 CREATE INDEX idx_fibers_actor_name ON fibers(actor_id, name);

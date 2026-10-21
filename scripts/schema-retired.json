@@ -1,5 +1,6 @@
 [
   "actor_program_state",
+  "actor_subordinates",
   "artifact_trials",
   "background_job_serves",
   "cli_agent_connect_tickets",

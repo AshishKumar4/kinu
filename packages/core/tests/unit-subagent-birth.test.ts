@@ -3,9 +3,9 @@ import { createTestActors, createTestSql } from '@kinu.run/test-utils';
 import { createTestActor, makeSqlExec } from './helpers';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { actorReferenceOf } from '../src/identity/actor-handle';
-import { SubordinateRosterStore } from '../src/subordinates/roster';
-import { admitSubordinateBirth, recoverSubordinateLifecycles, type SubordinateBirthRequest } from '../src/subordinates/birth';
-import { admitSubordinateTask, describeSubordinateHandoff, type SubordinateRuntime } from '../src/subordinates/support';
+import { SubagentRosterStore } from '../src/subagents/roster';
+import { admitSubagentBirth, recoverSubagentLifecycles, type SubagentBirthRequest } from '../src/subagents/birth';
+import { admitSubagentTask, describeSubagentHandoff, type SubagentRuntime } from '../src/subagents/support';
 import { EventLog } from '../src/events/hub/log';
 import { initEventsHubTables } from '../src/events/hub/schema';
 import { KinuError } from '../src/obs/error';
@@ -16,7 +16,7 @@ function setup() {
   const directory = new WorkspaceActorDirectory(database.sql, { workspaceId: 'workspace', ownerUserId: '' });
   const main = directory.main();
   // The roster is the parent's, so two actors of one workspace can hire the same 'reader'.
-  const roster = new SubordinateRosterStore(makeSqlExec(database.db), main);
+  const roster = new SubagentRosterStore(makeSqlExec(database.db), main);
   roster.ensureSchema();
   const child = createTestSql();
   initEventsHubTables(makeSqlExec(child.db));
@@ -27,7 +27,7 @@ function setup() {
   let interruptAssignment = false;
   let interruptDeletion = false;
 
-  const runtime: SubordinateRuntime = {
+  const runtime: SubagentRuntime = {
     spawn: async (seed) => {
       const entry = directory.apply(main, [], { action: 'register', name: seed.name, creationId: seed.creationId, origin: 'agent', lifetime: seed.lifetime });
 
@@ -43,11 +43,11 @@ function setup() {
       return actor.reference;
     },
     assign: async (_name, input) => {
-      const admission = admitSubordinateTask(events, { ...input, fromWorkspace: 'workspace', kind: 'task', now: 100 });
+      const admission = admitSubagentTask(events, { ...input, fromWorkspace: 'workspace', kind: 'task', now: 100 });
 
       if (interruptAssignment) { interruptAssignment = false; throw new KinuError('unavailable', 'Assignment acknowledgement lost.'); }
 
-      return describeSubordinateHandoff({ admission, turnInFlight: false, live: { lastActivity: 0, recentSteps: [] } });
+      return describeSubagentHandoff({ admission, turnInFlight: false, live: { lastActivity: 0, recentSteps: [] } });
     },
     status: async () => ({ lastActivity: 0, recentSteps: [] }),
     message: async () => { throw new KinuError('unsupported', 'This test does not send a second message.'); },
@@ -64,7 +64,7 @@ function setup() {
     },
   };
 
-  const admit = (assignment: SubordinateBirthRequest['assignment'] = { body: 'Read the source.', mode: 'plan' }) => admitSubordinateBirth(roster, runtime, {
+  const admit = (assignment: SubagentBirthRequest['assignment'] = { body: 'Read the source.', mode: 'plan' }) => admitSubagentBirth(roster, runtime, {
     seed: { name: 'reader', displayName: '', nameOrigin: 'auto', role: 'researcher', mission: 'Read the source.', lifetime: 'durable', origin: 'agent' },
     assignment,
     createdAt: 100,
@@ -74,7 +74,7 @@ function setup() {
     interruptSeed: () => { interruptSeed = true; }, interruptAssignment: () => { interruptAssignment = true; }, interruptDeletion: () => { interruptDeletion = true; } };
 }
 
-describe('admitted subordinate lifecycle', () => {
+describe('admitted subagent lifecycle', () => {
   test('a cold birth re-drive retains the fork and admits its first assignment once', async () => {
     const fixture = setup();
 
@@ -83,10 +83,10 @@ describe('admitted subordinate lifecycle', () => {
 
     fixture.interruptAssignment();
     await expect(fixture.admit({ body: assignment.body, mode: assignment.mode, inheritedContext: messages })).rejects.toMatchObject({ code: 'unavailable' });
-    const cold = new SubordinateRosterStore(makeSqlExec(fixture.database.db), fixture.main);
+    const cold = new SubagentRosterStore(makeSqlExec(fixture.database.db), fixture.main);
     expect(cold.requireExisting('reader').birth?.assignment).toEqual(assignment);
-    await recoverSubordinateLifecycles(cold, fixture.runtime);
-    const delivered = fixture.events.pending({ variant: 'subordinate_task' });
+    await recoverSubagentLifecycles(cold, fixture.runtime);
+    const delivered = fixture.events.pending({ variant: 'subagent_task' });
     expect(delivered).toHaveLength(1);
     expect(delivered[0]?.payload).toMatchObject({ inherited_context: assignment.inheritedContext });
     expect(cold.requireExisting('reader').birth).toBeNull();
@@ -99,8 +99,8 @@ describe('admitted subordinate lifecycle', () => {
     const issued = fixture.directory.resolveChild(fixture.main, 'reader');
 
     if (!issued) throw new Error('Registration did not land.');
-    const cold = new SubordinateRosterStore(makeSqlExec(fixture.database.db), fixture.main);
-    await recoverSubordinateLifecycles(cold, fixture.runtime);
+    const cold = new SubagentRosterStore(makeSqlExec(fixture.database.db), fixture.main);
+    await recoverSubagentLifecycles(cold, fixture.runtime);
     expect(cold.requireExisting('reader').actorReference).toEqual(actorReferenceOf(issued));
     expect(cold.requireExisting('reader').birth).toBeNull();
     expect(cold.requireExisting('reader').taskEventId).toBeString();
@@ -110,11 +110,11 @@ describe('admitted subordinate lifecycle', () => {
     const fixture = setup();
     fixture.interruptAssignment();
     await expect(fixture.admit()).rejects.toMatchObject({ code: 'unavailable' });
-    await recoverSubordinateLifecycles(new SubordinateRosterStore(makeSqlExec(fixture.database.db), fixture.main), fixture.runtime);
+    await recoverSubagentLifecycles(new SubagentRosterStore(makeSqlExec(fixture.database.db), fixture.main), fixture.runtime);
 
     const rows = fixture.child.sql<{ count: number }>`SELECT COUNT(*) AS count FROM agent_log
       WHERE actor_id = ${fixture.childActor.actorId}
-        AND kind = 'event' AND variant = 'subordinate_task'`;
+        AND kind = 'event' AND variant = 'subagent_task'`;
 
     expect(rows[0]?.count).toBe(1);
     expect(fixture.roster.requireExisting('reader').birth).toBeNull();
@@ -125,9 +125,9 @@ describe('admitted subordinate lifecycle', () => {
     const reference = await fixture.admit();
     fixture.roster.requestDeletion('reader', reference, 101);
     fixture.interruptDeletion();
-    await expect(recoverSubordinateLifecycles(fixture.roster, fixture.runtime)).rejects.toMatchObject({ code: 'unavailable' });
+    await expect(recoverSubagentLifecycles(fixture.roster, fixture.runtime)).rejects.toMatchObject({ code: 'unavailable' });
     expect(fixture.roster.requireExisting('reader').deleteRequested).toBe(true);
-    await recoverSubordinateLifecycles(fixture.roster, fixture.runtime);
+    await recoverSubagentLifecycles(fixture.roster, fixture.runtime);
     expect(fixture.roster.get('reader')).toBeNull();
     const replacement = await fixture.admit();
     expect(replacement.actorId).not.toBe(reference.actorId);

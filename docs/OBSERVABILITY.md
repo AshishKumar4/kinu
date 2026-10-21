@@ -130,7 +130,7 @@ step's prepared request, the renders it names, and that step's `step_finish`
 row. Wire bytes are never stored, and this read stores nothing new.
 
 Finished-step events contain sealed part references and accounting, not a
-second copy of the native response. Owner-authorized `inspectSubordinate`
+second copy of the native response. Owner-authorized `inspectSubagent`
 with `view: 'step'`, `runId`, `eventIndex` and an optional `from` reads those
 references from the actor's canonical payload store, including retained
 helpers. It returns native message projections and `nextFrom`; pages use
@@ -201,7 +201,7 @@ that asked for it. There is no RPC boundary, so there is no `rpc` span to open,
 and the 120 s cap on an unanswered cross-object request does not apply.
 
 Every span carries `kinu.actor` (the digest of the actor id) and
-`kinu.actor_kind` (`main`, `subordinate`, `head`, `branch`). `kinu.self_path`
+`kinu.actor_kind` (`main`, `subagent`, `head`, `branch`). `kinu.self_path`
 cannot tell actors apart: it renders the Durable Object path, which is the same
 for every actor of a workspace, and so is `ctx.id`. An invocation span carries
 the workspace root; a turn span carries the actor whose turn it is.

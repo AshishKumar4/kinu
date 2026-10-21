@@ -4,12 +4,12 @@
  * agents a stopped agent hired.
  */
 import { expect, test } from 'bun:test';
-import { SubordinateRosterStore, actorConnectionTag } from '@kinu.run/core';
+import { SubagentRosterStore, actorConnectionTag } from '@kinu.run/core';
 import { KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { makeSqlExec } from '../../core/tests/helpers';
 import { asPane, joinHarnessFibers, joinHarnessKeepAlives } from './helpers/agents-sdk';
 import {
-  actorOver, agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, runDelegatedTask, wakeForDelegatedTask, workspaceMainActor,
+  actorOver, agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedSubagentHarness, runDelegatedTask, wakeForDelegatedTask, workspaceMainActor,
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 import { wrapDatabase } from '@kinu.run/core/identity';
@@ -54,7 +54,7 @@ async function helperWorkspace(respond: (run: RecordedGatewayRun) => Response | 
   const workspace = gatewayWorkspace(gateway);
   await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
 
-  const middle = await hostedSubordinateHarness(workspace, {
+  const middle = await hostedSubagentHarness(workspace, {
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
@@ -117,7 +117,7 @@ test("a helper whose turn ends with its hire still working is released, and no d
 });
 
 test('a hire whose facet cannot load reports its named failure to its hirer', async () => {
-  const gateway = stubAiBinding((run) => openingOf(run).includes('[subordinate_report]') || toolResults(run) > 0
+  const gateway = stubAiBinding((run) => openingOf(run).includes('[subagent_report]') || toolResults(run) > 0
     ? chatCompletion(run, 'Root received the failure.')
     : toolCallCompletion(run, { tool: 'agents', args: { op: 'hire', role: 'task', lifetime: 'task', message: 'Unloadable task.' } }, 'call_unloadable'));
 
@@ -130,7 +130,7 @@ test('a hire whose facet cannot load reports its named failure to its hirer', as
     refuses: (actorId) => actorId !== main, error: new KinuError('unsupported', 'loader refused the facet compatibility flag'),
   };
   await catalogTurn(workspace.agent, 'Hire one task agent.');
-  const reports = () => gateway.runs.map(openingOf).filter((text) => text.includes('[subordinate_report]'));
+  const reports = () => gateway.runs.map(openingOf).filter((text) => text.includes('[subagent_report]'));
 
   await driveUntil(workspace, 'the load failure never reached the hirer', () => reports().length > 0);
   const hire = workspace.db.query<{ name: string }, []>("SELECT name FROM workspace_actors WHERE origin = 'agent'").get();
@@ -160,7 +160,7 @@ test("a durable hire whose turn fails delivers its failure to its hirer as a mes
   const told = gateway.runs.filter((run) => openingOf(run).includes('This turn failed before an answer existed'));
 
   expect(told.length).toBe(1);
-  expect(new SubordinateRosterStore(makeSqlExec(workspace.db), actorOver(workspace.db, middleId)).list())
+  expect(new SubagentRosterStore(makeSqlExec(workspace.db), actorOver(workspace.db, middleId)).list())
     .toMatchObject([{ status: 'awaiting_input', currentTask: 'Durable task.' }]);
 });
 
@@ -189,7 +189,7 @@ test("a Stop reaches the agent a stopped helper hired, and wakes no one", async 
   await driveUntil(workspace, 'the Stop never ended the hired agent\'s turn', () => count(durableId, 'run_end') > 0);
 
   await joinHarnessFibers();
-  expect(new SubordinateRosterStore(makeSqlExec(workspace.db), actorOver(workspace.db, middleId)).list())
+  expect(new SubagentRosterStore(makeSqlExec(workspace.db), actorOver(workspace.db, middleId)).list())
     .toMatchObject([{ status: 'awaiting_input', currentTask: 'Durable task.' }]);
   expect(count(middleId, 'run_start')).toBe(1);
 });
@@ -233,7 +233,7 @@ test("a task agent does not settle while more input is queued for it: its answer
   // The root's turn settles once every agent's isolate rests, its helper's included.
   await turn;
 
-  const rootTold = (): string[] => gateway.runs.map(openingOf).filter((opening) => opening.includes('[subordinate_report]'));
+  const rootTold = (): string[] => gateway.runs.map(openingOf).filter((opening) => opening.includes('[subagent_report]'));
 
   await driveUntil(workspace, 'the task helper\'s answer never reached the root', () => rootTold().length > 0);
 
@@ -263,8 +263,8 @@ test("an agent the owner added keeps its own Stop: a root Stop skips it, and its
   const workspace = gatewayWorkspace(gateway);
   const sql = wrapDatabase(workspace.db).sql;
   await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
-  const added = subordinate.actorId ?? '';
+  const { subagent } = await workspace.agent.createSubagentAgent();
+  const added = subagent.actorId ?? '';
 
   // A hire's runs are in its own database.
   const ended = (actorId: string): number => agentSql(workspace, actorId)<{ n: number }>`
@@ -303,14 +303,14 @@ test("archiving an agent the owner added retires the durable agent it hired", as
   const workspace = gatewayWorkspace(gateway);
   const sql = wrapDatabase(workspace.db).sql;
   await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
-  const added = subordinate.actorId ?? '';
+  const { subagent } = await workspace.agent.createSubagentAgent();
+  const added = subagent.actorId ?? '';
 
   await wakeForDelegatedTask(workspace, added, 'Added task.');
   await driveUntil(workspace, 'the added agent\'s hire never started its turn', () => held !== undefined);
   const hired = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE parent_actor_id = ${added}`[0]?.id ?? '';
 
-  await workspace.agent.dismissSubordinate(subordinate.name, true);
+  await workspace.agent.dismissSubagent(subagent.name, true);
 
   expect(held?.aborted).toBe(true);
   expect(sql<{ at: number | null }>`SELECT retiring_at AS at FROM workspace_actors WHERE actor_id = ${hired}`[0]?.at).not.toBeNull();
@@ -369,7 +369,7 @@ test("two hired agents' admitted turns run at once", async () => {
     return chatCompletion(run, `${which} done`);
   });
 
-  const other = await hostedSubordinateHarness(workspace, {
+  const other = await hostedSubagentHarness(workspace, {
     name: 'other', displayName: 'Other', nameOrigin: 'user', mission: 'coordinate too',
   });
 
@@ -423,7 +423,7 @@ test("a hired agent's model steps run under one call its workspace makes into it
     ? toolCallCompletion(run, { tool: 'eval', args: { code: 'return 1' } }, `call_${String(toolResults(run))}`)
     : chatCompletion(run, 'Counted.')));
 
-  const child = await hostedSubordinateHarness(workspace, { name: 'counter', displayName: 'Counter', nameOrigin: 'user', mission: 'count' });
+  const child = await hostedSubagentHarness(workspace, { name: 'counter', displayName: 'Counter', nameOrigin: 'user', mission: 'count' });
 
   await runDelegatedTask(workspace, child.actor.handle.actorId, 'Count twice.');
 

@@ -23,7 +23,7 @@ describe('role, tier, and agent hubs', () => {
         {
           id: 'agent-reviewer',
           label: 'Reviewer',
-          kind: 'subordinate',
+          kind: 'subagent',
           status: 'running',
           roleId: 'auditor',
           tierId: 'deep',
@@ -40,7 +40,7 @@ describe('role, tier, and agent hubs', () => {
           workspace: 'jarvis',
         },
       ],
-      subordinates: [],
+      subagents: [],
       work: [],
       helpers: [],
       profile: {

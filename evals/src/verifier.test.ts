@@ -139,14 +139,14 @@ describe('EvalVerifier', () => {
 const LONG_BRIEF = `Tally the waitlist signups per country. ${'The file is a CSV with a header row. '.repeat(14)}Write the totals to signups-by-country.json`;
 
 /**
- * An inspector over one live helper and one released, as core subordinates/inspection-path.ts answers: a path reaches
+ * An inspector over one live helper and one released, as core subagents/inspection-path.ts answers: a path reaches
  * live children only, so by name the released helper is missing, and every retained helper is reached by its actor from
  * the root. Run summaries and events are previews; the canonical history retains the full run-linked assignment, as a
  * hirer's brief projects it: a `system` entry. Measured on staging 667f96316, 2026-10-19: a finished hire's history held
  * its brief as `system` and its answer as `assistant`, both under the run's id.
  */
 function inspecting(): VerifierSession {
-  const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
+  const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subagent or retained history is unavailable.' };
 
   const actors = new Map([
     ['actor-live', [{ status: 'error', brief: LONG_BRIEF }, { status: 'completed', brief: 'Retry the same tally' }]],

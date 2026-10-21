@@ -28,9 +28,9 @@ function rig() {
   return { ws, actor, actors, events: new RunEventRecorder(ws.sql, actor) };
 }
 
-function headRig(subordinate = false) {
+function headRig(subagent = false) {
   const fixture = rig();
-  const parent = subordinate ? fixture.actors.sibling('helper') : fixture.actor;
+  const parent = subagent ? fixture.actors.sibling('helper') : fixture.actor;
 
   const head = fixture.actors.directory.create({
     parent, name: explorationActorKey('head-a'), creationId: 'head-a', origin: 'swarm', lifetime: 'task',

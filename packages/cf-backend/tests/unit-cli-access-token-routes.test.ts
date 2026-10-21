@@ -147,7 +147,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
     async claimOwner(userId: string) {
       return { owner: userId, capabilityHash: 'sha-existing' };
     },
-    async inspectSubordinate() {
+    async inspectSubagent() {
       calls.push('inspect');
 
       return { view: 'children', path: [], page: { status: 'end', items: [] } };
@@ -422,9 +422,9 @@ describe('access token management routes (session tokens only)', () => {
   });
 });
 
-test('retained subordinate inspection requires the owning interactive session', async () => {
+test('retained subagent inspection requires the owning interactive session', async () => {
   const { env, calls } = setupEnv();
-  const inspection = rpcInit('inspectSubordinate', [{ path: [], view: 'children', page: {} }]);
+  const inspection = rpcInit('inspectSubagent', [{ path: [], view: 'children', page: {} }]);
 
   for (const token of [EXEC_TOKEN, READ_TOKEN, BOTH_TOKEN, PROXY_TOKEN]) {
     expect(handled(await cli(req(token, RPC, inspection), env)).status).toBe(403);
@@ -434,5 +434,5 @@ test('retained subordinate inspection requires the owning interactive session', 
   expect(calls).toEqual([]);
   expect(handled(await cli(req(SESSION_TOKEN, RPC, inspection), env)).status).toBe(200);
   expect(calls).toEqual(['inspect']);
-  expect(handled(await cli(req(SESSION_TOKEN, RPC, rpcInit('inspectSubordinateStorage', [])), env)).status).toBe(404);
+  expect(handled(await cli(req(SESSION_TOKEN, RPC, rpcInit('inspectSubagentStorage', [])), env)).status).toBe(404);
 });

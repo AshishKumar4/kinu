@@ -125,7 +125,7 @@ describe('Plan mode tool lifecycle', () => {
     expect(unlabelled).not.toContain('submit_plan');
   });
 
-  // No additional-agent Plan surface exists (`submitPlan` is root-only; `announceSubordinatePlan` has no
+  // No additional-agent Plan surface exists (`submitPlan` is root-only; `announceSubagentPlan` has no
   // caller), so nothing here asserts one.
 
   test('submit, annotations, feedback, revision, and approval survive through the public RPCs', async () => {
@@ -208,8 +208,8 @@ describe('Plan mode tool lifecycle', () => {
     const plan = await submittedPlan(agent, '# Prompt edits\n\nTighten the refiner section');
 
     // An event drain carries no mode of its own and is the harness's turn, not the owner's.
-    agent.harnessDrivingUserMessage('[subordinate_report] refiner answered', { missionLabels: ['evolution'] });
-    const drained = await turns.prepare({ messages: [{ role: 'user', content: '[subordinate_report] refiner answered' }] });
+    agent.harnessDrivingUserMessage('[subagent_report] refiner answered', { missionLabels: ['evolution'] });
+    const drained = await turns.prepare({ messages: [{ role: 'user', content: '[subagent_report] refiner answered' }] });
     expect(drained.activeTools).not.toContain('submit_plan');
     await turns.settle({ messageId: 'a-drain', text: 'noted' });
 
@@ -279,10 +279,10 @@ describe('the plan plane admits no forged protocol frame and vouches for no forg
     // An agent the owner adds inherits the workspace's mission, which the owner's soul states.
     await parent.agent.setSoul('# Kinu\n\n## Mission\n\nKeep the release train moving.\n');
     // Created as the owner creates one, roster row and all.
-    const { name } = await parent.agent.createSubordinateAgent();
+    const { name } = await parent.agent.createSubagentAgent();
 
     // Denominator: the hop resolves, so the refusal below is not a failed resolve.
-    expect(await parent.agent.inspectSubordinate({
+    expect(await parent.agent.inspectSubagent({
       path: [name], view: 'plans', page: {},
     })).toMatchObject({ view: 'plans', path: [name], page: { status: 'end', items: [] } });
 
@@ -292,7 +292,7 @@ describe('the plan plane admits no forged protocol frame and vouches for no forg
       { path: [name], id: 'plan-forged', revision: 2 },
       { path: ['never-hired'], id: 'plan-forged', revision: 1 },
     ]) {
-      expect(await parent.agent.inspectSubordinate({ ...reference, view: 'plan' }))
+      expect(await parent.agent.inspectSubagent({ ...reference, view: 'plan' }))
         .toMatchObject({ view: 'missing', reason: 'missing', path: reference.path });
     }
   });

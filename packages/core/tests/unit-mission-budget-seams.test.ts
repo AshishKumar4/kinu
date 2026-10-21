@@ -16,13 +16,13 @@ import {
   createAgentsCodemodeProvider,
   type AgentsToolDeps,
 } from '../src/index';
-import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
+import { ROOT_DELEGATION_BUDGET } from '../src/subagents/depth';
 import { runChat } from '../src/chat';
 import { sessionFixture } from './helpers-session';
-import type { SubordinateHandoff } from '../src/index';
+import type { SubagentHandoff } from '../src/index';
 
 /** The admission facts every handoff carries back to the sender. */
-function handoff(): SubordinateHandoff {
+function handoff(): SubagentHandoff {
   return { eventId: 'evt-1', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } };
 }
 
@@ -114,11 +114,11 @@ function searchableDeps(opts: {
       create: async (input) => ({
         name: input.name ?? 'helper',
         displayName: 'Helper',
-        subordinate: { name: input.name ?? 'helper', displayName: 'Helper', role: input.role ?? 'task', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+        subagent: { name: input.name ?? 'helper', displayName: 'Helper', role: input.role ?? 'task', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async (input) => ({
         ok: true, name: input.name, displayName: input.displayName,
-        subordinate: { name: input.name, displayName: input.displayName, role: 'task', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+        subagent: { name: input.name, displayName: input.displayName, role: 'task', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       spawn: async (input) => {
         spawns.push(`hire:${input.role}`);
@@ -235,7 +235,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     governor.debit(1);
 
     const ns = sandbox(searchableDeps({ budget: governor }));
-    expect(await ns.list({})).toMatchObject({ subordinates: [] });
+    expect(await ns.list({})).toMatchObject({ subagents: [] });
     expect(await ns.dismiss('helper')).toMatchObject({ ok: true });
   });
 

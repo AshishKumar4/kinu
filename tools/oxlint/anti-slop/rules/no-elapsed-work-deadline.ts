@@ -65,12 +65,12 @@ export const ELAPSED_WORK_SOURCE_ROOTS = {
     "packages/cf-backend/src/orchestrator.ts",
   ],
   delegation: [
-    "packages/core/src/subordinates/",
+    "packages/core/src/subagents/",
     "packages/core/src/events/ingress/peer.ts",
     "packages/core/src/evolution/delegation-features.ts",
     "packages/core/src/tools/agents-",
     "packages/cli-backend/src/agent-host/",
-    "packages/cf-backend/src/subordinate-agent.ts",
+    "packages/cf-backend/src/subagent.ts",
     "packages/cf-backend/src/facet-spawn.ts",
   ],
   swarm: [

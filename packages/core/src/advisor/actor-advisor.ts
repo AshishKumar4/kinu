@@ -14,7 +14,7 @@ import { resolveModelRoute } from '../profiles/model-route';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { modelWindow } from '../context-window';
-import type { TemporaryAgentPort } from '../types/subordinates';
+import type { TemporaryAgentPort } from '../types/subagents';
 import type { AgentSignal, SendOutcome } from '../types/signals';
 import {
   ADVISOR_ROLE_ID, advisedTurnOf, advisorLane, buildAdvisorPrompt, judgeAdvisorReply, sayAdvisorNote,

@@ -11,7 +11,7 @@ import { wrapDatabase } from '@kinu.run/core/identity';
 export interface TestActors {
   /** The workspace's main actor — what a single-actor test binds its stores to. */
   readonly main: ActorHandle;
-  /** Issue a real subordinate of `main`, for the two-actor isolation cases. */
+  /** Issue a real subagent of `main`, for the two-actor isolation cases. */
   sibling: (name: string) => ActorHandle;
   readonly workspaceId: string;
   readonly directory: WorkspaceActorDirectory;
