@@ -365,15 +365,39 @@ export const SCREENSHOT_TURN = { steps: 450, imageBytes: 200_000, distinct: 450,
  *  23.3 to 30.2 MB. The bound catches one screenshot in fifty held again. */
 export const SCREENSHOT_LIVE_GROWTH_BOUND_BYTES = 20_000_000;
 
-/** The CPU of main's isolate in the last three windows over that in the first three, each the middle of its three: one
- *  window alone read 0.78 to 1.52 over 36 runs once the turn was flat (2026-10-19: the tier on ba1e766a5 failed at 1.52
- *  on a busy host), the middle of three 0.97 to 1.33, mean 1.10, deviation 0.08. The bound is that mean and four
- *  deviations; 814a4ca80, every screenshot held, read 1.75, and the turn with only its room and codec cut 1.52. */
-export const SCREENSHOT_CPU_GROWTH_BOUND = 1.42;
+/**
+ * The CPU a step of the turn's last third takes in main's isolate over one of its first third's, each the mean of the
+ * cheaper half of its third's steps: a host busy with others only ever adds time to a step, so that half is the steps'
+ * own cost, and a regression raises every step's alike.
+ *
+ * Until 2026-10-21 the gate read the middle of the first three 50-step windows' CPU against the last three's, each
+ * window's profile its whole stretch of wall time while busy, so a host that slowed a run's later windows read as growth:
+ * 0.97 to 1.33 over 36 runs once the turn was flat (2026-10-19, mean 1.10, deviation 0.08, bound 1.42), and a rerun-green
+ * 1.43 (kinu-20261020234716-7217b75d, 2026-10-20; within a run, one window took 5.1 s and another 9.2 s for alike steps).
+ * Measured by step instead over 30 runs on 62b6c90c6 (armada heap-calib2-nextrc, 2026-10-21): 1.02 to 1.22, mean 1.104,
+ * deviation 0.043, against the window reading's 0.054 on the same runs. The bound is that mean and four deviations.
+ * 814a4ca80, every screenshot held, read 1.75 by windows, and the turn with only its room and codec cut 1.52: growth every
+ * step shares, which this reads alike.
+ */
+export const SCREENSHOT_CPU_GROWTH_BOUND = 1.28;
 
-/** The middle of three windows' CPU, so one window a busy host slowed reads as noise, not as growth. */
-function middleCpu(windows: readonly ScreenshotWindow[]): number {
-  return [...windows].map((each) => each.mainCpuMs).sort((a, b) => a - b)[Math.floor(windows.length / 2)] ?? 0;
+/** A step of the last third's cost over one of the first third's ({@link SCREENSHOT_CPU_GROWTH_BOUND}). */
+function stepCpuGrowth(steps: readonly number[]): number {
+  const third = Math.floor(steps.length / 3);
+
+  return stepCost(steps.slice(-third)) / stepCost(steps.slice(0, third));
+}
+
+/** `steps` cut into {@link SCREENSHOT_TURN}'s windows, in order. */
+function windowsOf(steps: readonly number[]): number[][] {
+  return Array.from({ length: Math.ceil(steps.length / SCREENSHOT_TURN.window) }, (_, at) => steps.slice(at * SCREENSHOT_TURN.window, (at + 1) * SCREENSHOT_TURN.window));
+}
+
+/** The mean of the cheaper half of `steps`' CPU: what a step costs with what other work on the host took left out. */
+function stepCost(steps: readonly number[]): number {
+  const cheaper = [...steps].sort((a, b) => a - b).slice(0, Math.max(1, Math.floor(steps.length / 2)));
+
+  return cheaper.reduce((sum, ms) => sum + ms, 0) / cheaper.length;
 }
 
 /** The workspace's isolate's live heap at the turn's last window beyond its first: its chat room held every relayed
@@ -479,16 +503,18 @@ export interface HeapMeasurement {
   readonly screenshotTurn: ScreenshotTurn;
 }
 
-/** Each window of {@link SCREENSHOT_TURN}: main's live heap at its end and CPU over it, and the workspace's live heap. */
+/** Each window of {@link SCREENSHOT_TURN}: main's and the workspace's live heap at its end. */
 export interface ScreenshotWindow {
   readonly through: number;
   readonly mainLive: number;
-  readonly mainCpuMs: number;
   readonly workspaceLive: number;
 }
 
 export interface ScreenshotTurn {
   readonly windows: readonly ScreenshotWindow[];
+  /** Each step's CPU in main's isolate, in order: from its answer's release to the next step's request, or the turn's
+   *  end. */
+  readonly stepCpuMs: readonly number[];
   /** Times its turn was re-driven (`turn.resumed`): a turn that died mid-way and was run again. */
   readonly redrives: number;
   readonly stepped: number;
@@ -801,30 +827,31 @@ async function measureScreenshotTurn(ask: (path: string) => Promise<string>, por
     const before = redrives();
     const turn = ask('/turn?workspace=shots&text=shots');
     const windows: ScreenshotWindow[] = [];
+    const stepCpuMs: number[] = [];
 
     for (let step = 1; step <= steps; step++) {
       while (v.parse(v.object({ arrived: v.number() }), JSON.parse(await ask('/model'))).arrived < step) await Bun.sleep(1);
 
-      if (step % window === 1) {
-        await agent.sampleCpu();
-        // Read while the step is parked, as a pane opening on the running turn reads it.
-        await ask('/seed?workspace=shots');
-      }
+      // The step before ends where this one asks its model.
+      if (step > 1) stepCpuMs.push(await agent.cpuBusyMs());
 
-      if (step % window === 0) {
-        windows.push({ through: step, mainCpuMs: await agent.cpuBusyMs(), mainLive: await agent.liveHeap(), workspaceLive: await workspace.liveHeap() });
-      }
+      // Read while the step is parked, as a pane opening on the running turn reads it.
+      if (step % window === 1) await ask('/seed?workspace=shots');
 
+      if (step % window === 0) windows.push({ through: step, mainLive: await agent.liveHeap(), workspaceLive: await workspace.liveHeap() });
+
+      await agent.sampleCpu();
       await ask(`/model?released=${String(step)}`);
     }
 
     await turn;
+    stepCpuMs.push(await agent.cpuBusyMs());
     const { stepped } = v.parse(v.object({ stepped: v.object({ compat: v.number() }) }), JSON.parse(await ask('/model?released=1000000')));
 
     await ask('/main-idle?workspace=shots');
     await ask('/quiesce?workspace=shots');
 
-    return { windows, redrives: redrives() - before, stepped: stepped.compat };
+    return { windows, stepCpuMs, redrives: redrives() - before, stepped: stepped.compat };
   } finally {
     agent.close();
   }
@@ -846,10 +873,10 @@ function screenshotFindings(turn: ScreenshotTurn): string[] {
     out.push(`the screenshot turn holds ${mb(last.mainLive - first.mainLive)} more live in ${ISOLATE_NAMES.main} at step ${String(last.through)} than at ${String(first.through)}, over ${mb(SCREENSHOT_LIVE_GROWTH_BOUND_BYTES)}`);
   }
 
-  const growth = middleCpu(turn.windows.slice(-3)) / middleCpu(turn.windows.slice(0, 3));
+  const growth = stepCpuGrowth(turn.stepCpuMs);
 
   if (growth > SCREENSHOT_CPU_GROWTH_BOUND) {
-    out.push(`the screenshot turn's last three windows take ${growth.toFixed(2)} times its first three's CPU in ${ISOLATE_NAMES.main}, over ${String(SCREENSHOT_CPU_GROWTH_BOUND)}`);
+    out.push(`a step of the screenshot turn's last third takes ${growth.toFixed(2)} times one of its first third's CPU in ${ISOLATE_NAMES.main}, over ${String(SCREENSHOT_CPU_GROWTH_BOUND)}`);
   }
 
   if (last.workspaceLive - first.workspaceLive > SCREENSHOT_WORKSPACE_GROWTH_BOUND_BYTES) {
@@ -1032,7 +1059,9 @@ async function main(args: readonly string[]): Promise<number> {
   findings.push(...workloadFindings(measured));
   findings.push(...screenshotFindings(measured.screenshotTurn));
   console.log(`${GATE}: a ${String(SCREENSHOT_TURN.steps)}-step screenshot turn, by ${String(SCREENSHOT_TURN.window)} steps: ${ISOLATE_NAMES.main} live `
-    + `${measured.screenshotTurn.windows.map((each) => mb(each.mainLive)).join(', ')}; its CPU ${measured.screenshotTurn.windows.map((each) => `${(each.mainCpuMs / 1000).toFixed(1)} s`).join(', ')}; `
+    + `${measured.screenshotTurn.windows.map((each) => mb(each.mainLive)).join(', ')}; a step's CPU there, its window's cheaper half, `
+    + `${windowsOf(measured.screenshotTurn.stepCpuMs).map((window) => `${stepCost(window).toFixed(0)} ms`).join(', ')} `
+    + `(its last third ${stepCpuGrowth(measured.screenshotTurn.stepCpuMs).toFixed(2)} times its first); `
     + `${ISOLATE_NAMES.workspace} live ${measured.screenshotTurn.windows.map((each) => mb(each.workspaceLive)).join(', ')}; re-driven ${String(measured.screenshotTurn.redrives)} time(s)`);
 
   // The churn is the turn's work, wherever it runs.
