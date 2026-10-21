@@ -622,6 +622,9 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-button-sm { height: 28px; padding: 0 10px; }
 .p-button-md.p-button-icon { width: 32px; padding: 0; }
 .p-button-sm.p-button-icon { width: 28px; padding: 0; }
+/* A page's header actions are md whatever a call site asks: one height on every header row (PageHeader). */
+.p-page-actions .p-button { height: 32px; padding: 0 14px; }
+.p-page-actions .p-button.p-button-icon { width: 32px; padding: 0; }
 .p-button-primary { background: var(--c-accent); color: var(--c-accent-on); font-weight: 600; }
 .p-button-primary:hover { background: color-mix(in srgb, var(--c-accent) 92%, #000); }
 .p-button-primary:active { transform: scale(0.98); }

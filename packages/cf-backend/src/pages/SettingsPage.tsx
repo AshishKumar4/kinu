@@ -3,7 +3,8 @@ import { startTransition, useState, useEffect, useCallback, useRef } from "react
 import { Link } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { Button, buttonClass } from "@/components/ui/Button";
-import { FloppyDiskIcon, CheckIcon, KeyIcon, TrashIcon } from "@phosphor-icons/react";
+import { FloppyDiskIcon, CheckIcon, GearSixIcon, KeyIcon, TrashIcon } from "@phosphor-icons/react";
+import { Page } from "@/components/ui/PageHeader";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
   WORKSPACE_ARCHIVE_EXTENSION,
@@ -259,130 +260,117 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto" data-workspace-settings>
-      <div className="mx-auto max-w-3xl space-y-8 px-5 pb-16 pt-9 sm:px-8">
-        <header className="flex flex-wrap items-end justify-between gap-4 border-b p-border pb-6">
-          <div className="min-w-0">
-            <h1 className="p-display text-[26px] leading-8">Settings</h1>
-            <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 p-row-text p-text-3">
-              <span className="font-mono">{agentId}</span>
-              <CopyButton value={agentId} what="the workspace slug" size={11}
-                className="rounded-sm p-0.5 p-card-hover hover:p-text transition-colors" />
-              <span>·</span>
-              <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
-                <KeyIcon size={11} /> Account settings and credentials
-              </Link>
-            </p>
-          </div>
-        </header>
+    <Page fill icon={<GearSixIcon size={22} />} title="Settings" data-workspace-settings>
+      <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 p-row-text p-text-3">
+        <span className="font-mono">{agentId}</span>
+        <CopyButton value={agentId} what="the workspace slug" size={11}
+          className="rounded-sm p-0.5 p-card-hover hover:p-text transition-colors" />
+        <span>·</span>
+        <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
+          <KeyIcon size={11} /> Account settings and credentials
+        </Link>
+      </p>
 
-        {err && <div className="p-notice-danger px-4 py-3 text-xs">{err}</div>}
+      {err && <div className="p-notice-danger px-4 py-3 text-xs">{err}</div>}
 
-        <div className="space-y-5">
-        <Card title="Identity">
-          <LogoField title={title} logo={logo} rpc={rpc} />
-          <Field label="Display name">
-            <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
-              {(value) => (
-                <input value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} className={inputCls} />
-              )}
-            </FieldState>
-          </Field>
-          <Field label="Layout" hint="Focus shows the chat alone; its chats, agents and inspector open from the bar.">
-            <FieldState field={layout} what="the layout" onRetry={retryLoad}>
-              {(value) => (
-                <div className="flex">
-                  <Segmented label="Layout" value={value} segments={LAYOUT_CHOICES} onChange={(chosen) => layout.edit(chosen)} />
-                </div>
-              )}
-            </FieldState>
-          </Field>
-          <Field label="SOUL.md">
-            <FieldState field={soul} what="SOUL.md" onRetry={retryLoad}>
-              {(value) => (
-                <textarea value={value} onChange={(e) => soul.edit(e.target.value)} rows={8}
-                  className={`${inputCls} font-mono`} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
-              )}
-            </FieldState>
-          </Field>
-        </Card>
-
-
-        <Card title="Advisor">
-          <FieldState field={advisor} what="the advisor settings" onRetry={loadRpcFields}>
+      <div className="space-y-5">
+      <Card title="Identity">
+        <LogoField title={title} logo={logo} rpc={rpc} />
+        <Field label="Display name">
+          <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
             {(value) => (
-              <>
-                <div className="space-y-1.5">
-                  <label className="block text-xs p-text-2 font-medium">Second opinion</label>
-                  <div className="flex">
-                    <Segmented label="Second opinion" value={value.advisorEnabled ? "on" : "off"} segments={ADVISOR_SWITCH}
-                      onChange={(id) => advisor.edit({ ...value, advisorEnabled: id === "on" })} />
-                  </div>
-                  <p className="p-meta p-text-3">
-                    Off by default. When on, a second model reads each turn and can add one note. That is one extra model call per turn.
-                  </p>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="block text-xs p-text-2 font-medium">Minimum severity</label>
-                  <div className="flex">
-                    <Segmented label="Minimum severity" value={value.advisorMinSeverity}
-                      segments={ADVISOR_SEVERITIES.map((severity) => ({ id: severity, label: ADVISOR_SEVERITY_LABEL[severity] }))}
-                      onChange={(severity) => advisor.edit({ ...value, advisorMinSeverity: severity })} />
-                  </div>
-                  <p className="p-meta p-text-3">
-                    Notes at or above this severity show in the conversation. Lower ones go to the Changelog. The default is concern.
-                  </p>
-                </div>
-              </>
+              <input value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} className={inputCls} />
             )}
           </FieldState>
-        </Card>
-
-
-        <Card title="Shell-command approval">
-          <FieldState field={approval} what="the approval mode" onRetry={loadRpcFields}>
+        </Field>
+        <Field label="Layout">
+          <FieldState field={layout} what="the layout" onRetry={retryLoad}>
             {(value) => (
-              <div className="grid grid-cols-3 gap-2">
-                {(['strict', 'allow_all', 'deny_all'] satisfies ShellApprovalMode[]).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => approval.edit(m)}
-                    className={`p-2 rounded-md text-xs ${value === m ? 'p-accent-bg p-accent' : 'p-card p-card-hover'}`}
-                  >{APPROVAL_LABEL[m]}</button>
-                ))}
+              <div className="flex">
+                <Segmented label="Layout" value={value} segments={LAYOUT_CHOICES} onChange={(chosen) => layout.edit(chosen)} />
               </div>
             )}
           </FieldState>
-        </Card>
-        <StandingApprovalsCard rpc={rpc} />
-        <InstructionApprovalsCard rpc={rpc} />
+        </Field>
+        <Field label="SOUL.md">
+          <FieldState field={soul} what="SOUL.md" onRetry={retryLoad}>
+            {(value) => (
+              <textarea value={value} onChange={(e) => soul.edit(e.target.value)} rows={8}
+                className={`${inputCls} font-mono`} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
+            )}
+          </FieldState>
+        </Field>
+      </Card>
 
 
-        <AlwaysActiveSkillsCard rpc={rpc} />
+      <Card title="Advisor">
+        <FieldState field={advisor} what="the advisor settings" onRetry={loadRpcFields}>
+          {(value) => (
+            <>
+              <div className="space-y-1.5">
+                <label className="block text-xs p-text-2 font-medium">Second opinion</label>
+                <div className="flex">
+                  <Segmented label="Second opinion" value={value.advisorEnabled ? "on" : "off"} segments={ADVISOR_SWITCH}
+                    onChange={(id) => advisor.edit({ ...value, advisorEnabled: id === "on" })} />
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-xs p-text-2 font-medium">Minimum severity</label>
+                <div className="flex">
+                  <Segmented label="Minimum severity" value={value.advisorMinSeverity}
+                    segments={ADVISOR_SEVERITIES.map((severity) => ({ id: severity, label: ADVISOR_SEVERITY_LABEL[severity] }))}
+                    onChange={(severity) => advisor.edit({ ...value, advisorMinSeverity: severity })} />
+                </div>
+              </div>
+            </>
+          )}
+        </FieldState>
+      </Card>
 
-        <div className="p-card border p-border p-5" id="automations"><WorkspaceAutomations rpc={rpc} workspace={agentId} /></div>
 
-        <WorkspaceBackupCard rpc={rpc} workspace={agentId} />
+      <Card title="Shell-command approval">
+        <FieldState field={approval} what="the approval mode" onRetry={loadRpcFields}>
+          {(value) => (
+            <div className="grid grid-cols-3 gap-2">
+              {(['strict', 'allow_all', 'deny_all'] satisfies ShellApprovalMode[]).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => approval.edit(m)}
+                  className={`p-2 rounded-md text-xs ${value === m ? 'p-accent-bg p-accent' : 'p-card p-card-hover'}`}
+                >{APPROVAL_LABEL[m]}</button>
+              ))}
+            </div>
+          )}
+        </FieldState>
+      </Card>
+      <StandingApprovalsCard rpc={rpc} />
+      <InstructionApprovalsCard rpc={rpc} />
 
-        <Card title="Main's conversation">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="p-meta p-text-3">Clearing removes Main's messages. Memory, SOUL.md, learned tools and evolution stay.</p>
-            <Button size="sm" variant="secondary" icon={<TrashIcon size={12} />} onClick={clearMain}>Clear history</Button>
-          </div>
-        </Card>
+
+      <AlwaysActiveSkillsCard rpc={rpc} />
+
+      <div className="p-card border p-border p-5" id="automations"><WorkspaceAutomations rpc={rpc} workspace={agentId} /></div>
+
+      <WorkspaceBackupCard rpc={rpc} workspace={agentId} />
+
+      <Card title="Main's conversation">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="p-meta p-text-3">Clearing removes Main's messages. Memory, SOUL.md, learned tools and evolution stay.</p>
+          <Button size="sm" variant="secondary" icon={<TrashIcon size={12} />} onClick={clearMain}>Clear history</Button>
         </div>
-        {/* Where the edits are: the bar rises from the page's foot once there is something to save. */}
-        {(dirty || saving || saved) && (
-          <div className="sticky bottom-4 z-10 flex items-center justify-between gap-3 rounded-[14px] border p-border p-overlay py-2.5 pl-4 pr-2.5 p-shadow-menu animate-fade-in">
-            <span className="p-row-text p-text-2">{saved && !dirty ? "Changes saved." : "You have unsaved changes."}</span>
-            <Button variant="primary" size="sm" onClick={save} disabled={saving || !dirty} >
-              {saved && !dirty ? <CheckIcon size={14} /> : <FloppyDiskIcon size={14} />}
-              <span>{saveLabel(saving, saved && !dirty)}</span>
-            </Button>
-          </div>
-        )}
+      </Card>
       </div>
-    </div>
+      {/* Where the edits are: the bar rises from the page's foot once there is something to save. */}
+      {(dirty || saving || saved) && (
+        <div className="sticky bottom-4 z-10 flex items-center justify-between gap-3 rounded-[14px] border p-border p-overlay py-2.5 pl-4 pr-2.5 p-shadow-menu animate-fade-in">
+          <span className="p-row-text p-text-2">{saved && !dirty ? "Changes saved." : "You have unsaved changes."}</span>
+          <Button variant="primary" size="sm" onClick={save} disabled={saving || !dirty} >
+            {saved && !dirty ? <CheckIcon size={14} /> : <FloppyDiskIcon size={14} />}
+            <span>{saveLabel(saving, saved && !dirty)}</span>
+          </Button>
+        </div>
+      )}
+    </Page>
   );
 }
 

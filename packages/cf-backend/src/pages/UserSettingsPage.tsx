@@ -79,7 +79,7 @@ export default function UserSettingsPage() {
   }
 
   return (
-    <Page icon={<GearSixIcon size={22} />} title="Settings">
+    <Page icon={<GearSixIcon size={22} />} title="Settings" rule="wide">
         {/* The rail and the section's column fill the frame: 192 + 48 + 848. The active rail item names the section. */}
         <div className="flex flex-col gap-7 lg:flex-row lg:gap-12">
           <div className="lg:sticky lg:top-8 lg:w-48 lg:shrink-0 lg:self-start">
