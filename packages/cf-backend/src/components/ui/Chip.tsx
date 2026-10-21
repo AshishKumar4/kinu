@@ -16,7 +16,7 @@ const GROUND: Record<ChipTone, string> = {
   accent: "p-chip-accent",
 };
 
-export function Chip({ tone = "neutral", icon, children, onRemove, removeLabel }: {
+export function Chip({ tone = "neutral", icon, children, onRemove, removeLabel, ...data }: {
   tone?: ChipTone;
   /** A 14 icon before the words. */
   icon?: ReactNode;
@@ -24,9 +24,9 @@ export function Chip({ tone = "neutral", icon, children, onRemove, removeLabel }
   /** The chip's own control, a 16 ghost ×; `removeLabel` names what it does. */
   onRemove?: () => void;
   removeLabel?: string;
-}) {
+} & Readonly<Record<`data-${string}`, string>>) {
   return (
-    <span className={`p-chip ${GROUND[tone]}${onRemove === undefined ? "" : " p-chip-removable"}`}>
+    <span className={`p-chip ${GROUND[tone]}${onRemove === undefined ? "" : " p-chip-removable"}`} {...data}>
       {icon}
       <span className="truncate">{children}</span>
       {onRemove !== undefined && (

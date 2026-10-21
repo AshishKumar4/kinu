@@ -44,6 +44,7 @@ import { ChatDisclosure, ToolRun, TurnRollup, usePhaseLinesOnSeen, useSeenRunnin
 import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
 import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
+import { Dot } from "@/components/ui/Dot";
 
 const MessageCreatedAtSchema = v.looseObject({
   createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),
@@ -155,7 +156,7 @@ function FailedTurnRow({ message, live, onRetry }: { message: UIMessage; live: b
 function StoppedMidWorkRow() {
   return (
     <div className="p-turn-mark py-px" role="status">
-      <span className="ml-1 mr-px size-1.5 shrink-0 self-center rounded-full p-dot-danger" aria-hidden />
+      <Dot tone="danger" className="ml-1 mr-px self-center" />
       <span>Stopped before the work was finished</span>
     </div>
   );

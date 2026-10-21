@@ -11,12 +11,13 @@ import { detach, diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { Effect } from "effect";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Pressable } from "@/components/ui/Pressable";
+import { Dot } from "@/components/ui/Dot";
 
 /** The dot and words a piece of work is headed by: pulsing and shimmering while it runs. */
 export function WorkLabel({ live, failed = false, children }: { live: boolean; failed?: boolean; children: ReactNode }) {
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <span className={`size-1.5 shrink-0 rounded-full ${failed ? "p-dot-danger" : "p-dot-accent"}${live ? " p-dot-pulse" : ""}`} aria-hidden />
+      <Dot tone={failed ? "danger" : "accent"} pulse={live} />
       <span className={`t-item min-w-0 truncate${live ? " p-shimmer" : ""}`}>{children}</span>
     </span>
   );

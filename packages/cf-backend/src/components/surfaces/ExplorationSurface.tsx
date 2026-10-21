@@ -34,6 +34,7 @@ import {
 import { fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf, type RunLevel, type RunLiveness, type RunRefusal, type SwarmAxis, type SwarmResolution } from "@kinu.run/core/swarm-view";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Pressable } from "@/components/ui/Pressable";
+import { Dot } from "@/components/ui/Dot";
 
 export interface ExplorationSurfaceProps {
   /** Live trees from `mcts-progress`, keyed by search; they replace polled rows so a
@@ -783,7 +784,7 @@ export function RunRefusalNote({ refusal }: { refusal: RunRefusal }) {
   return (
     <div data-run-refusal={refusal.reason}
       className="t-meta shrink-0 flex items-baseline gap-2 px-3 py-1 border-b p-border">
-      <span aria-hidden className="mt-1 size-1.5 rounded-full p-dot-danger shrink-0" />
+      <Dot tone="danger" className="mt-1" />
       <span className="font-mono p-danger shrink-0">{refusal.reason}</span>
       <span className="p-text-2 leading-snug min-w-0">{refusal.error}</span>
     </div>

@@ -3,6 +3,7 @@ import type { MailBox, MailThreadSummary, MailView } from "@kinu.run/core";
 import { Avatar } from "@/components/ui/Avatar";
 import { mailRowCls, mailTime } from "./ImportantMailRow";
 import { mailExcerpt } from "./MailMessage";
+import { Dot } from "@/components/ui/Dot";
 
 /** Each view's name, as the page's views and lists say it. */
 export const MAIL_VIEW_LABEL: Record<MailView, string> = { important: "Important", all: "All", sent: "Sent", drafts: "Drafts", trash: "Trash" };
@@ -28,7 +29,7 @@ export function MailRow({ thread, open, box, drafts, owner, onOpen }: {
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-baseline gap-2">
           <span className={`t-body min-w-0 truncate ${thread.unread ? "font-semibold p-text" : "p-text-2"}`}>{who}</span>
-          {thread.unread && <span className="size-1.5 shrink-0 -translate-y-px self-center rounded-full p-dot-accent" aria-label="Unread" />}
+          {thread.unread && <Dot tone="accent" label="Unread" className="-translate-y-px self-center" />}
           {!thread.verified && <ShieldWarningIcon size={13} weight="fill" className="shrink-0 self-center p-warning" aria-label="Not verified" />}
           <span className="t-meta ml-auto shrink-0 tabular-nums p-text-3">{mailTime(thread.at)}</span>
         </span>

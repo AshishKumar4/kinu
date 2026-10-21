@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/Button";
 import { SaveBar } from "@/components/ui/SaveBar";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { CaretRightIcon, CheckIcon, MinusIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
+import { useCallback, useMemo, useState, type ReactNode } from 'react';
+import { MinusIcon, PlusIcon, TrashIcon, XIcon } from '@phosphor-icons/react';
 import {
   BUILTIN_ROLE_DEFINITIONS,
   BUILTIN_SKILL_HEADERS,
@@ -36,9 +36,14 @@ import { settle, showing } from '@kinu.run/core/obs';
 import { lastValue, useAsyncResource, type AsyncResource } from '@/hooks/use-async-resource';
 import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog } from '../lib/user-api';
 import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
-import { Card, Choice, Field, composing, inputCls, tabCls } from './ui/form';
+import { Card, Choice, Field, composing } from './ui/form';
 import { Segmented } from './ui/Segmented';
-import { Pressable } from "@/components/ui/Pressable";
+import { Checkbox } from "@/components/ui/Check";
+import { Chip } from "@/components/ui/Chip";
+import { Disclosure } from "@/components/ui/Disclosure";
+import { Dot } from "@/components/ui/Dot";
+import { TextArea, TextInput } from "@/components/ui/Field";
+import { Rail } from "@/components/ui/Rail";
 
 const EMPTY_MENU: ModelMenuResponse = { models: [], failures: [] };
 
@@ -73,10 +78,6 @@ function unsetTierPlaceholder(tierId: TierId, menu: ModelMenuResponse, main: Tie
 function decisionModelName(spec: string): string {
   return spec.slice(spec.lastIndexOf('/') + 1).split('-').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
 }
-
-/** Overrides `inputCls` to the combobox's `size="sm"` metrics; `!` because same-property
- *  utilities resolve by order, not intent. */
-const selectSmCls = `${inputCls}  !h-6.5 !px-2 !py-0 !text-xs`;
 
 /** The first failure of the reads, or null. */
 function readFailure(...reads: readonly AsyncResource<unknown>[]): string | null {
@@ -133,7 +134,6 @@ export function ProfileCatalogSettings() {
   const [addingRole, setAddingRole] = useState(false);
   const [newTierId, setNewTierId] = useState('');
   const [newChainModel, setNewChainModel] = useState('');
-  const roleNav = useRef<HTMLElement>(null);
 
   const roles: RoleCatalog = useMemo(
     () => draft ? effectiveRoleCatalog(draft) : BUILTIN_ROLE_DEFINITIONS,
@@ -141,11 +141,6 @@ export function ProfileCatalogSettings() {
   );
 
   const role = roles[selectedRole] ?? null;
-
-  // A deep selection the phone's strip hasn't scrolled to yet is invisible.
-  useEffect(() => {
-    roleNav.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
-  }, [selectedRole, addingRole]);
 
   const replaceRole = (id: RoleId, next: RoleDefinition) => {
     if (!draft) return;
@@ -330,7 +325,7 @@ export function ProfileCatalogSettings() {
 
                   return (
                     <div key={tierId} data-tier={tierId}
-                      className="grid gap-x-4 gap-y-2 border-t p-border py-3 first:border-t-0 md:grid-cols-[11rem_minmax(0,1fr)]">
+                      className="grid gap-x-4 gap-y-2 border-t p-border py-3 first:border-t-0 md:grid-cols-[var(--layout-field)]">
                       <div className="flex items-start justify-between gap-2 md:pt-px">
                         <div className="min-w-0">
                           <div className="t-body p-text">{words.name}</div>
@@ -362,7 +357,7 @@ export function ProfileCatalogSettings() {
               </div>
             </div>
 
-            <Disclosure label="Advanced" summary="Retries, backups for one model, turn rating, more tiers" section="advanced">
+            <Section label="Advanced" summary="Retries, backups for one model, turn rating, more tiers" section="advanced">
               <Field inline label="Retries"
                 hint="How many more times the last backup is asked after a failure that may pass. Earlier models hand over at once.">
                 <div className="flex items-center gap-1" role="group" aria-label="Retries">
@@ -379,7 +374,7 @@ export function ProfileCatalogSettings() {
                   hint="When a particular model fails, these run instead of its tier's backups, whichever tier runs it." />
                 {chainedModels.map((model) => (
                   <div key={model} data-model-chain={model}
-                    className="grid gap-x-4 gap-y-2 border-t p-border py-2 first:border-t-0 md:grid-cols-[11rem_minmax(0,1fr)] md:items-center">
+                    className="grid gap-x-4 gap-y-2 border-t p-border py-2 first:border-t-0 md:grid-cols-[var(--layout-field)] md:items-center">
                     <div className="flex items-center justify-between gap-2">
                       <span className="t-body truncate p-text">{labelOfSpec(menu, model)}</span>
                       <Button variant="ghost" size="sm" icon={<TrashIcon size={12} />} aria-label={`Remove the ${model} chain`}
@@ -413,8 +408,8 @@ export function ProfileCatalogSettings() {
               </div>
 
               <Field inline label="Another tier" hint="Roles can name it. Lowercase letters, digits and hyphens.">
-                <input
-                  className={`${selectSmCls} w-40`}
+                <TextInput size="sm"
+                  className="w-40"
                   placeholder="e.g. review"
                   value={newTierId}
                   aria-label="New tier id"
@@ -423,52 +418,26 @@ export function ProfileCatalogSettings() {
                 />
                 <Button size="sm" variant="secondary" disabled={!newTierId.trim()} onClick={addTier}>Add</Button>
               </Field>
-            </Disclosure>
+            </Section>
           </>
         )}
       </Card>
 
       {(draft && envelope) && (
         <Card title="Agent roles">
-          <div className="grid gap-5 md:grid-cols-[13rem_minmax(0,1fr)]">
-            {/* A scrolling tab strip below md, the accent-tinted list row at md and up. */}
-            <nav ref={roleNav} aria-label="Agent roles"
-              className="p-tabstrip -mx-5 flex border-b p-border [--scroll-ground:var(--c-surface)] md:mx-0 md:flex-col md:gap-px md:border-b-0 md:overflow-visible">
-              {Object.keys(roles).sort().map((roleId) => {
-                const current = roleId === selectedRole;
-                const entry = roles[roleId];
-
-                return (
-                  <button
-                    key={roleId}
-                    type="button"
-                    aria-current={current ? 'true' : undefined}
-                    className={`${tabCls} ${current ? 'p-tab-active' : ''} md:mb-0 md:w-full md:rounded-md md:border-b-0 md:px-3 md:py-2 ${
-                      current
-                        ? 'md:bg-[var(--c-selected)] md:p-accent-fg'
-                        : 'md:p-text-2 md:hover:bg-[var(--c-hover)] md:hover:p-text'
-                    }`}
-                    onClick={() => { setSelectedRole(roleId); setAddingRole(false); }}
-                  >
-                    <span className="min-w-0 flex-1 text-left">
-                      <span className="flex items-center gap-2">
-                        <span className="truncate">{entry?.label ?? deriveRoleLabel(roleId)}</span>
-                        {roleId in draft.roles && (
-                          <span title="Customized" aria-label="Customized"
-                            className="p-dot-accent inline-block size-1.5 shrink-0 rounded-full" />
-                        )}
-                      </span>
-                      <span className="t-meta hidden truncate p-text-3 md:block">
-                        {entry?.description ?? ''}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-              {addingRole ? (
-                <div className="flex items-center gap-2 px-2 py-[9px] md:px-3">
-                  <input
-                    className={`${selectSmCls} min-w-0 flex-1`}
+          <div className="grid gap-5 md:grid-cols-[var(--layout-rail-list)]">
+            <Rail label="Agent roles" at="md" className="-mx-5 md:mx-0" current={addingRole ? "" : selectedRole}
+              onSelect={(roleId) => { setSelectedRole(roleId); setAddingRole(false); }}
+              items={Object.keys(roles).sort().map((roleId) => ({
+                id: roleId,
+                label: roles[roleId]?.label ?? deriveRoleLabel(roleId),
+                detail: roles[roleId]?.description ?? "",
+                mark: roleId in draft.roles ? <Dot tone="accent" label="Customized" /> : undefined,
+              }))}
+              trailing={addingRole ? (
+                <div className="flex items-center gap-2 px-2 py-2 md:px-3">
+                  <TextInput size="sm"
+                    className="min-w-0 flex-1"
                     placeholder="new-role-id"
                     value={newRoleId}
                     aria-label="New role id"
@@ -486,15 +455,8 @@ export function ProfileCatalogSettings() {
                   <Button variant="ghost" size="sm" icon={<XIcon size={14} />} aria-label="Cancel new role" onClick={() => { setAddingRole(false); setNewRoleId(''); }} />
                 </div>
               ) : (
-                <button
-                  type="button"
-                  className="t-control p-button-ghost flex shrink-0 items-center gap-2 whitespace-nowrap px-2 py-[13px] md:mb-0 md:w-full md:rounded-md md:px-3 md:py-2"
-                  onClick={() => setAddingRole(true)}
-                >
-                  <PlusIcon size={12} /> New role
-                </button>
-              )}
-            </nav>
+                <Button variant="ghost" size="sm" icon={<PlusIcon size={14} />} className="shrink-0 self-center md:self-start" onClick={() => setAddingRole(true)}>New role</Button>
+              )} />
 
             {role && (
               <RoleEditor
@@ -524,18 +486,13 @@ function labelOfSpec(menu: ModelMenuResponse, spec: string): string {
   return account === undefined ? label : `${label} · ${account}`;
 }
 
-/** A section the page opens on closed: `summary` says what is inside. */
-function Disclosure(props: { label: string; summary: string; section: string; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
-
+/** A section the page opens on closed, under the rule that splits it from the one above. */
+function Section(props: { label: string; summary: string; section: string; children: ReactNode }) {
   return (
-    <div className="border-t p-border pt-3" data-section={props.section}>
-      <Pressable className="flex min-w-0 items-center gap-2" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <CaretRightIcon size={12} className={`shrink-0 p-fold-turn p-text-3 ${open ? 'rotate-90' : ''}`} />
-        <span className="t-item shrink-0 p-text">{props.label}</span>
-        <span className="t-meta min-w-0 truncate p-text-3">{props.summary}</span>
-      </Pressable>
-      {open && <div className="mt-4 space-y-5 md:pl-5">{props.children}</div>}
+    <div className="border-t p-border pt-3">
+      <Disclosure label={props.label} summary={props.summary} data-section={props.section}>
+        <div className="space-y-5 md:pl-5">{props.children}</div>
+      </Disclosure>
     </div>
   );
 }
@@ -591,13 +548,13 @@ function BackupChain(props: {
       <span className="t-meta w-16 shrink-0 p-text-3">If it fails</span>
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
         {props.chain.map((spec, index) => (
-          <span key={spec} data-spec={spec} className="t-meta inline-flex items-center gap-1 rounded-md border p-border px-2 py-px p-text">
+          <Chip key={spec} data-spec={spec} removeLabel={`Remove ${spec} from the ${props.label} fallbacks`}
+            onRemove={() => props.onChange(props.chain.filter((entry) => entry !== spec))}>
             <span className="p-text-3">{index + 1}.</span>
             {labelOfSpec(props.menu, spec)}
             <AccountPicker spec={spec} accounts={accountsOf(spec)} label={`${props.label} fallback ${index + 1} account`}
               onChange={(next) => props.onChange(props.chain.map((entry, at) => (at === index ? next : entry)))} />
-            <Button variant="ghost" size="sm" icon={<XIcon size={14} />} aria-label={`Remove ${spec} from the ${props.label} fallbacks`} onClick={() => props.onChange(props.chain.filter((entry) => entry !== spec))} />
-          </span>
+          </Chip>
         ))}
         <ModelPicker
           models={props.menu.models.filter((entry) => freeVariant(entry.spec) !== undefined)}
@@ -652,7 +609,7 @@ function RoleEditor(props: {
       </div>
       <div className="grid gap-x-6 gap-y-5 sm:grid-cols-2">
         <Field label="Name">
-          <input className={inputCls} aria-label="Label"
+          <TextInput aria-label="Label"
             value={props.role.label ?? deriveRoleLabel(props.id)}
             onChange={(event) => set('label', event.target.value)} />
         </Field>
@@ -664,19 +621,14 @@ function RoleEditor(props: {
         </Field>
         <div className="sm:col-span-2">
           <Field label="When to use it">
-            <input className={inputCls} aria-label="Description"
+            <TextInput aria-label="Description"
               value={props.role.description}
               onChange={(event) => set('description', event.target.value)} />
           </Field>
         </div>
       </div>
-      <label className="t-body flex w-fit items-center gap-2 p-text-2">
-        <input type="checkbox" aria-label="Start in Plan mode"
-          className="accent-[var(--c-accent)]"
-          checked={props.role.plan === true}
-          onChange={(event) => set('plan', event.target.checked ? true : undefined)} />
-        Starts in Plan mode: it designs before it changes anything
-      </label>
+      <Checkbox checked={props.role.plan === true} onChange={(on) => set('plan', on ? true : undefined)}
+        label="Starts in Plan mode: it designs before it changes anything" />
       {props.swarms && (
         <Field inline label="Swarm preset">
           <Choice label="Default swarm preset" size="sm" className="w-40"
@@ -686,8 +638,7 @@ function RoleEditor(props: {
         </Field>
       )}
       <Field label="Instructions" hint="The standing brief this role works under, as the prompt reads it.">
-        <textarea rows={8} aria-label="Instructions"
-          className={`${inputCls} t-code max-h-[33rem] min-h-40 resize-y overflow-y-auto`}
+        <TextArea mono rows={8} aria-label="Instructions" className="max-h-132 min-h-40"
           value={props.role.instructions}
           onChange={(event) => set('instructions', event.target.value)} />
       </Field>
@@ -731,7 +682,6 @@ function Allowance(props: {
   onChange(next: readonly string[] | undefined): void;
   emptyMeansNone?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
   const all = props.options.map((option) => option.id);
   const current = props.selected ?? (props.emptyMeansNone ? [] : all);
 
@@ -747,33 +697,15 @@ function Allowance(props: {
 
   return (
     <div className="border-t p-border py-2 first:border-t-0" data-allowance={props.label}>
-      <Pressable className="flex min-w-0 items-center gap-3" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <span className="t-body w-20 shrink-0 p-text">{props.label}</span>
-        <span className="t-meta min-w-0 flex-1 truncate p-text-3">
-          {count}{current.length > 0 && current.length < all.length ? `: ${current.join(', ')}` : ''}
-        </span>
-        <CaretRightIcon size={12} className={`shrink-0 p-fold-turn p-text-3 ${open ? 'rotate-90' : ''}`} />
-      </Pressable>
-      {open && (
-        <div role="group" aria-label={props.label} className="mt-2 flex flex-wrap gap-2">
-          {props.options.map((option) => {
-            const on = current.includes(option.id);
-
-            return (
-              <button key={option.id} type="button" aria-pressed={on} title={option.about ?? undefined}
-                aria-label={`${props.label}: ${option.id}`}
-                onClick={() => toggle(option.id, !on)}
-                className={`inline-flex items-center gap-1 rounded-md border px-2 py-px t-meta ${
-                  on ? 'border-[var(--c-accent)] p-accent-bg p-accent-fg' : 'p-border p-text-3 hover:p-text'
-                }`}>
-                {on && <CheckIcon size={11} />}
-                {option.id}
-              </button>
-            );
-          })}
-          {props.options.length === 0 && <span className="t-meta p-text-3">none shipped</span>}
+      <Disclosure label={props.label} summary={`${count}${current.length > 0 && current.length < all.length ? `: ${current.join(', ')}` : ''}`}>
+        <div role="group" aria-label={props.label} className="flex flex-wrap gap-x-4 gap-y-2">
+          {props.options.map((option) => (
+            <Checkbox key={option.id} checked={current.includes(option.id)} onChange={(on) => toggle(option.id, on)}
+              label={<span className="t-mono" title={option.about ?? undefined}>{option.id}</span>} />
+          ))}
+          {props.options.length === 0 && <span className="t-meta">none shipped</span>}
         </div>
-      )}
+      </Disclosure>
     </div>
   );
 }

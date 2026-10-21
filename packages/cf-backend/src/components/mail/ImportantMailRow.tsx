@@ -4,6 +4,7 @@
  */
 import type { ImportantMail } from "@/lib/mail-api";
 import { Avatar } from "@/components/ui/Avatar";
+import { Dot } from "@/components/ui/Dot";
 
 const MINUTE = 60_000;
 
@@ -29,7 +30,7 @@ export function ImportantMailRow({ mail, open = false, onOpen }: { mail: Importa
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-baseline gap-2">
           <span className={`t-body min-w-0 truncate ${mail.unread ? "font-semibold p-text" : "p-text-2"}`}>{mail.from.name}</span>
-          {mail.unread && <span className="size-1.5 shrink-0 -translate-y-px self-center rounded-full p-dot-accent" aria-label="Unread" />}
+          {mail.unread && <Dot tone="accent" label="Unread" className="-translate-y-px self-center" />}
           <span className="t-meta ml-auto shrink-0 tabular-nums p-text-3">{mailTime(mail.at)}</span>
         </span>
         <span className={`t-body block truncate ${mail.unread ? "p-text" : "p-text-2"}`}>{mail.subject}</span>

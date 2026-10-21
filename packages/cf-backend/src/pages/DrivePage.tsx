@@ -40,6 +40,7 @@ import { FileViewer } from "@/components/surfaces/FileViewer";
 import { SlatePicture } from "@/components/slates/SlatePicture";
 import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
+import { Dot } from "@/components/ui/Dot";
 
 export type DriveTab = "slates" | "mine" | "shared";
 
@@ -72,7 +73,7 @@ function placesOf(library: SharedLibrary | null): DriveTab[] {
 }
 
 function NewDot() {
-  return <span data-drive-unseen className="size-1.5 shrink-0 rounded-full p-dot-accent" title="Something new" />;
+  return <Dot tone="accent" label="Something new" data-drive-unseen="" />;
 }
 
 /** Below `lg`, the places as a switch in the row under the bar, as `Segmented` draws one at 28. */

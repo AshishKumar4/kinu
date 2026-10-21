@@ -7,6 +7,7 @@ import {
 } from "@phosphor-icons/react";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { TILE, TILE_GRID, TileShell } from "@/components/ui/Tiles";
+import { Dot } from "@/components/ui/Dot";
 
 export const GRID = TILE_GRID;
 
@@ -126,7 +127,7 @@ export function Tile({ href, onOpen, picture, icon, title, meta, unseen = false,
       <Opener href={href} onOpen={onOpen} label={title} className={TILE}>
         <TileShell cover={picture} title={(
           <span data-drive-tile-name>
-            {unseen && <span className="mb-px mr-2 inline-block size-1.5 rounded-full p-dot-accent align-middle" title="New" />}
+            {unseen && <Dot tone="accent" label="New" className="mb-px mr-2 align-middle" />}
             {title}
           </span>
         )}>

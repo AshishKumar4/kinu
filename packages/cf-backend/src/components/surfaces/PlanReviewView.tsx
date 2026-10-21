@@ -26,6 +26,7 @@ import { usePlanDecision } from "@/hooks/use-plan-decision";
 import { usePlanRepliesSeen } from "@/hooks/use-plan-replies-seen";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
+import { Dot } from "@/components/ui/Dot";
 
 type RootNote = PassageNote | GeneralNote;
 
@@ -231,7 +232,7 @@ function PlanHeaderActions({ comments, unread, panelOpen, onToggle, mode, onMode
         data-plan-comments-toggle
       >
         Comments <span className="p-num">{comments}</span>
-        {unread && <span data-plan-comments-unread className="size-1.5 rounded-full p-dot-accent" aria-hidden="true" />}
+        {unread && <Dot tone="accent" data-plan-comments-unread="" />}
       </Button>
       {mode !== null && (
         <div className="flex items-center rounded-md border p-border p-sunken p-px" aria-label="Annotation mode">
