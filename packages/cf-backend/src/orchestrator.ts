@@ -394,7 +394,7 @@ interface SourcePlanes {
   /** The account's facts its turn reads once, which never rejects (a failed read is logged and answers none); null with
    *  no turn, whose every read asks. */
   readonly facts: Promise<readonly Fact[]> | null;
-  /** Whether the owner holds a mail address, read once for its turn, which never rejects: null with no turn, on a
+  /** Whether the owner holds a mail address, read once for its turn or run seat, which never rejects: null on a
    *  deployment with no mail, or where the read failed (logged), each of which offers mail as before. */
   readonly mail: Promise<boolean | null> | null;
 }
@@ -1491,7 +1491,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       exec: this.watchedExec,
       directory: this.workspaceActors(),
       turnInFlight: (reference) => this.hostedTurnInFlight(reference),
-      sources: async (actor) => await this.actorSources(actor, actorReach(actorPolicy(actor.record)), null),
+      // A run seat reads its owner's mail plane as a turn does, once as it is seated: its prompt's mail roster and its
+      // programs' `mail` both follow that read (`runSeatMail`), so an owner with no address offers its runs no mail.
+      sources: async (actor) => {
+        const reach = actorReach(actorPolicy(actor.record));
+        const planes = this.sourcePlanes(actor.runtime, reach, false);
+        const sources = await this.actorSources(actor, reach, null, planes);
+
+        this.runSeatMail.set(actor, await (planes.mail ?? Promise.resolve(null)));
+
+        return sources;
+      },
       infer: (reference, input, inference) => this.agentTurns.run(reference, input, inference),
       transaction: (body) => this.ctx.storage.transactionSync(body),
       roster: (actor) => new SubordinateRosterStore(this.watchedExec, actor.handle),
@@ -1541,9 +1551,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return createCodemodeToolFactory({
           launch: this.codemodeLaunch(runtime.actor.actorId, 'owner'), workspace: this.workspaceName(),
         }).toolFor(surface, {
-          reach, namespaces: (executor) => actorNamespaces(this.confinedActor(actor, runtime, { search: webSearch, stores: surface.stores }), SURFACE_POLICY.program, {
-            executor, ...(reported !== undefined && { report: () => reported }),
-          }),
+          reach, namespaces: (executor) => withoutMailIf(
+            this.runSeatMail.get(actor) === false ? { withoutMail: true } : {},
+            actorNamespaces(this.confinedActor(actor, runtime, { search: webSearch, stores: surface.stores }), SURFACE_POLICY.program, {
+              executor, ...(reported !== undefined && { report: () => reported }),
+            }),
+          ),
         });
       },
       recordStep: async (headId, seq, step) => { await this.recordHeadStep(headId, seq, step); },
@@ -2010,9 +2023,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       descriptors: turn && reach.kind === 'workspace' ? this.userMcpDescriptors() : null,
       device: reach.kind === 'workspace' ? runtime.deviceTransport.refreshStatus() : Promise.resolve(),
       facts: turn ? this.account.factsForTurn(this.actorHandle().name) : null,
-      mail: turn ? this.ownerMailRead() : null,
+      mail: this.ownerMailRead(),
     };
   }
+
+  /** Each run seat's own mail read, by the actor it seated: one seat's answer, never another's. */
+  private readonly runSeatMail = new WeakMap<SeatedActor, boolean | null>();
 
   /** Whether the owner holds a mail address now, read off the account's boxes without making one; null where this
    *  deployment has no mail, or the read failed, which is logged. */
