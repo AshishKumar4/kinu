@@ -179,6 +179,21 @@ export function resizePty(container: Pick<Container, 'exec'>, pid: number, size:
 }
 
 /**
+ * Sends TERM to every process in the container but PID 1 and the kill itself, by an exec of `kill`; a kill that refuses
+ * fails in its own words. `--` before `-1`: the box's procps kill (4.0.4) reads a `-1` after the signal as a second option
+ * and refuses it, exit 1, signalling nothing (staging rc30, 2026-10-21, where the box's stop then waited on a container
+ * never told to end).
+ */
+export function endEveryProcess(container: Pick<Container, 'exec'>): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const sent = yield* attempt('process', () => containerExec(container, ['kill', '-TERM', '--', '-1']), 'ending every process');
+    const { exitCode, stderr } = yield* attempt('process', () => sent.output(), 'ending every process');
+
+    if (exitCode !== 0) return yield* Effect.fail(new DevboxError('process', `kill -TERM -- -1 exited ${String(exitCode)}: ${new TextDecoder().decode(stderr).trim()}`));
+  }));
+}
+
+/**
  * Ends `pid` in the container with an exec of `kill`, whose failure the box reads and says; a pid still to come is ended
  * once it comes. The platform's own kill (`ExecProcess.kill()`, or aborting the signal an exec was given) is a task
  * workerd adds and nobody can await: on a container whose connection was lost it failed the box's request as an uncaught

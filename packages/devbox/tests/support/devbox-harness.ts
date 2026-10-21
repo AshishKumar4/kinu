@@ -1,4 +1,5 @@
 // Native platform boundary. Real Files/S3Mount clients execute against the shim model.
+import { spawnSync } from 'node:child_process';
 import { NativeShim } from './native-shim';
 import { processResult } from './native-process';
 import { Devbox } from '../../src/devbox';
@@ -386,6 +387,8 @@ export class FakeSandbox {
   readonly sequence: string[] = [];
   /** Each exec the box sent with no stdin of its own, whose end the platform would make a task nobody awaits. */
   readonly unownedStdin: string[] = [];
+  /** The words the next kill of every process refuses with, exit 1, as a kill that cannot parse its arguments does. */
+  stopKillRefusal: string | undefined;
   /** Each exec answered with a pipe nobody has closed yet: the box closes every one it owns before it answers. */
   readonly openStdin: string[] = [];
   /** Thrown by the next close of an exec's stdin, as by a connection lost after the exec answered. */
@@ -1142,8 +1145,22 @@ export class FakeSandbox {
   /** An exec of kill: the process it names ends as a SIGKILL ends it (`endProcess`), or, sent to every process but
    *  tini (PID 1) as a TERM, its child ends and tini and the container with it (a stop). */
   #killCommand(args: readonly string[], pid: number): ExecProcess {
-    if (args[1] === '-TERM' && args[2] === '-1') void this.stop().then(this.#ended.resolve, this.#ended.reject);
-    else if (args[1] === '-KILL') this.#live.get(Number(args[2]))?.kill(9);
+    if (args.includes('-1')) {
+      // Every process at once, as the box's procps kill (4.0.4, Debian trixie's) reads these words: asked of this host's
+      // own, with the signal 0 that does nothing. It reads a `-1` after the signal as a second option and refuses it
+      // (staging rc30, 2026-10-21: "failed to parse argument", exit 1, and the stop waited on a container never told).
+      const read = spawnSync('/usr/bin/kill', args.slice(1).map((arg) => (arg.startsWith('-') && arg !== '--' && arg !== '-1' ? '-0' : arg)));
+      const refusal = this.stopKillRefusal;
+
+      this.stopKillRefusal = undefined;
+
+      if (refusal !== undefined) return processResult(Promise.resolve({ stdout: '', stderr: refusal, exitCode: 1 }), pid);
+
+      if (read.status !== 0) return processResult(Promise.resolve({ stdout: '', stderr: read.stderr.toString(), exitCode: read.status ?? 1 }), pid);
+      void this.stop().then(this.#ended.resolve, this.#ended.reject);
+    } else if (args[1] === '-KILL') {
+      this.#live.get(Number(args[2]))?.kill(9);
+    }
 
     return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
   }
