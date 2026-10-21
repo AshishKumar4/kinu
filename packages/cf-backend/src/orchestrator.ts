@@ -1444,8 +1444,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       boxUse: this.boxUse,
       modelOperations: this.modelOperations,
       tracing: () => this.tracing,
-      slate: (actor, operation) => this.slateAs(
-        { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation,
+      slate: (actor, operation, turn) => this.slateAs(
+        { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation, turn,
       ),
       deferrals: (actorId) => this.deferralChannel(actorId),
       jobs: (actor) => this.jobRunnerOf(actor),
@@ -5862,9 +5862,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return (await this.slates()).controller.operation(this.slateCaller(), operation);
   }
 
-  /** An actor of this workspace acting as itself; DO-only, like `workspaceBoxOp`. */
-  async slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult> {
-    return (await this.slates()).controller.operation(caller, operation);
+  /** The workspace agent's own program acting on its slates, from the turn it runs in. */
+  protected override async programSlate(operation: SlateOperation, turn?: string): Promise<SlateCallResult> {
+    return (await this.slates()).controller.operation(this.slateCaller(), operation, turn);
+  }
+
+  /** An actor of this workspace acting as itself, from the program `turn` runs; DO-only, like `workspaceBoxOp`. */
+  async slateAs(caller: SlateCaller, operation: SlateOperation, turn?: string): Promise<SlateCallResult> {
+    return (await this.slates()).controller.operation(caller, operation, turn);
   }
 
   override async slateBuild(slate: string): Promise<SlateCallResult> {

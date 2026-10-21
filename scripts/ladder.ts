@@ -2329,6 +2329,22 @@ export const LADDER: readonly Gate[] = [
     inputs: LIVE_APP_INPUTS,
   },
   {
+    run: 'bun test --timeout=0 tests/browser/live-app-slate-ask.test.ts',
+    label: 'Live app in a browser: a slate asks the agent from its program, and from the page',
+    tier: 'ci',
+    // Measured 2026-10-23 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at 459d54d42: 241.2 s wall,
+    // 464 CPU seconds, 4.7 GiB peak (scripts/gate-cost.json); one workspace's turn and a page call beside the dev server's boot.
+    seconds: 242,
+    catches: 'a slate\'s `agent.ask` that waits on the agent\'s own turn: called from a program that turn is running, the '
+      + 'reply could come only once the turn ends, which waits on the program (rc22\'s chat-app trials held it to the 30 s '
+      + 'and 300 s windows, empty). The row proves it is refused at once, the slate answering on its own before its own '
+      + '3 s timer, and that the same ask from the person\'s page, with no turn running, is answered.',
+    blind: 'a chain whose program runs in a hired agent\'s turn and asks the workspace agent, which waits on nothing and '
+      + 'is answered; an ask a share\'s viewer makes, which no turn of the owner\'s awaits. One viewport, a local scripted '
+      + 'model, and a LOCAL dev server whose workerd is not production\'s.',
+    inputs: LIVE_APP_INPUTS,
+  },
+  {
     run: 'bun test --timeout=0 tests/browser/live-app-alerts.test.ts',
     label: 'Live app in a browser: the owner hears a turn end, or a decision, only while away',
     tier: 'ci',

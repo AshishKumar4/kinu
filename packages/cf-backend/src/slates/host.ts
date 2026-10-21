@@ -43,6 +43,8 @@ export interface SlateDispatchContext {
    * owner's slate, held to the grant and the share's life for a viewer. It throws to refuse.
    */
   readonly nested: (namespace: string, member: string) => void;
+  /** The turn whose program began the call's chain (`SlateInvocation.turn`), read from the host's own record. */
+  readonly turn?: string;
   /**
    * A viewer's call: the share's word on it read again where it acts (share-viewers.ts `ViewerRun`). The dispatch calls
    * it synchronously immediately before the call acts, with nothing awaited between; it throws to refuse.
@@ -421,6 +423,7 @@ export class SlateHost {
         run: (bounded, admit) => this.run(callsAs, call.route, {
           nested: (namespace, member) => { within(namespace, member); record(namespace, member); },
           admit,
+          ...(issued?.turn !== undefined && { turn: issued.turn }),
           ...(bounded && { viewer: true }),
           ...(parsed.output.authorize && { authorizeOnly: true }),
         }),
@@ -480,6 +483,8 @@ export class SlateHost {
       case 'app': return this.call({
         caller: this.inheriting(caller, route.chain), id: route.id, method: route.method, args: [...route.args], chain: route.chain, viewer,
         ...(context.admit !== undefined && { admit: context.admit }),
+        // The chain's beginning stays its own on every hop.
+        ...(context.turn !== undefined && { turn: context.turn }),
       });
     }
   }
@@ -519,7 +524,10 @@ export class SlateHost {
       }
 
       // Issued to the process it reaches, under each slate's sharing on its way now.
-      const record = { id, chain, incarnation: this.lineageOfProcess(process).incarnation, generations: this.generationsOf([...chain, id]) };
+      const record = {
+        id, chain, incarnation: this.lineageOfProcess(process).incarnation, generations: this.generationsOf([...chain, id]),
+        ...request.turn !== undefined && { turn: request.turn },
+      };
 
       this.invocations.set(invocation, viewer === undefined ? record : { ...record, viewer });
       const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(process, invocation);

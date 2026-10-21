@@ -79,6 +79,8 @@ export interface SlateAppCall {
   readonly args: JsonValue[];
   readonly chain?: readonly string[];
   readonly viewer?: SlateViewer;
+  /** The turn whose program began the chain (`SlateInvocation.turn`). */
+  readonly turn?: string;
   /** The caller's word on the call, read again where it is sent with nothing awaited between: it throws to refuse. */
   readonly admit?: () => void;
 }
@@ -400,7 +402,8 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
    * One operation a caller runs on the workspace's slates, checked against the caller's mode first. A slate's history
    * answers only for this workspace's slates.
    */
-  operation(caller: SlateCaller, input: SlateOperation): Promise<SlateCallResult> {
+  /** `turn`: the turn whose program makes this operation, stamped by the actor that runs it (`SlateInvocation.turn`). */
+  operation(caller: SlateCaller, input: SlateOperation, turn?: string): Promise<SlateCallResult> {
     return settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
       const parsed = v.safeParse(SlateOperationSchema, input);
 
@@ -409,18 +412,18 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
       requireSlateWorkMode(operation, caller.workMode);
 
-      return yield* this.dispatch(caller, operation);
+      return yield* this.dispatch(caller, operation, turn);
     }), (failed) => Effect.map(refusing('slate operation', 'io')(failed), (refusal): SlateCallResult => ({ ok: false, ...refusal }))));
   }
 
-  private dispatch(caller: SlateCaller, operation: SlateOperation): Effect.Effect<SlateCallResult, KinuError> {
+  private dispatch(caller: SlateCaller, operation: SlateOperation, turn: string | undefined): Effect.Effect<SlateCallResult, KinuError> {
     const running = <Value>(run: () => Promise<Value>) => Effect.promise(run);
 
     switch (operation.op) {
       case 'list': return Effect.map(running(async () => this.list(caller)), (value) => answered({ value }));
       case 'preview': return running(async () => this.preview(caller, operation.id));
       case 'methods': return Effect.map(running(async () => this.processes.booted(caller, operation.id)), ({ process }) => answered({ value: [...process.methods] }));
-      case 'call': return running(async () => this.ports.call({ caller, id: operation.id, method: operation.method, args: operation.args ?? [] }));
+      case 'call': return running(async () => this.ports.call({ caller, id: operation.id, method: operation.method, args: operation.args ?? [], ...turn !== undefined && { turn } }));
       case 'remove': return running(async () => this.remove(caller, operation.id));
       case 'history': return Effect.map(this.history(operation.id, operation.after), (value) => answered({ value }));
       case 'commit': return running(async () => answered({ value: (await (await this.slates(caller.cred)).commit(new SlateId(operation.id))).toData() }));
