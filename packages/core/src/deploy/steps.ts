@@ -23,7 +23,7 @@ import { bytesToBase64 } from '../utils/base64';
 import { randomToken } from '../utils/crypto';
 import { firstOwnerLinkSecret } from '../identity/builtin-sign-in';
 import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
-import { mailRoutingStep, mailStep } from './mail';
+import { mailRoutingRetiredStep, mailRoutingStep, mailStep } from './mail';
 import { computerStep, computerTokenStep, computerToolsStep } from './computer';
 
 export interface DeployStep {
@@ -99,6 +99,8 @@ export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): rea
     mailStep(inputs),
     smokeStep(),
     promoteStep(),
+    // Once this version is live: the running one kept its token and rules until now.
+    mailRoutingRetiredStep(inputs),
     handoverStep(manifest),
   ];
 }

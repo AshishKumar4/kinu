@@ -142,6 +142,25 @@ class FakeCloudflare implements CloudflareTransport {
   /** What the zone's Email Routing and Sending hold. */
   readonly routing = { enabled: new Set<string>(), catchAll: new Map<string, unknown>(), sending: new Map<string, string>() };
 
+  /** Each zone's literal routing rules, by id: the address each sends, and to which Worker. */
+  readonly rules = new Map<string, { zone: string; to: string; worker: string }>();
+
+  /** A zone's routing rules as the API lists and deletes them (one page holds them all here). */
+  private rulesCall(id: string, rest: string, call: CloudflareCall): CloudflareHttpResponse | null {
+    if (rest.startsWith('email/routing/rules?') && call.method === 'GET') {
+      return this.ok([...this.rules].filter(([, rule]) => rule.zone === id).map(([ruleId, rule]) => ({
+        id: ruleId, enabled: true, matchers: [{ type: 'literal', field: 'to', value: rule.to }], actions: [{ type: 'worker', value: [rule.worker] }],
+      })));
+    }
+
+    const ruleId = /^email\/routing\/rules\/(rule-.+)$/u.exec(rest)?.[1];
+
+    if (ruleId === undefined || call.method !== 'DELETE') return null;
+    this.rules.delete(ruleId);
+
+    return this.ok({ id: ruleId });
+  }
+
   /** Paths under a zone the token may not touch: Email Routing, Sending or DNS. */
   readonly forbiddenUnder: string[] = [];
 
@@ -259,6 +278,8 @@ class FakeCloudflare implements CloudflareTransport {
         { type: 'TXT', name: apex, content: 'v=spf1 include:_spf.mx.cloudflare.net ~all' },
       ]);
     }
+
+    if (rest.startsWith('email/routing/rules') && rest !== 'email/routing/rules/catch_all') return this.rulesCall(id, rest, call);
 
     if (rest === 'email/routing/rules/catch_all') { this.routing.catchAll.set(id, call.body ?? null);
 
@@ -429,8 +450,8 @@ class FakeCloudflare implements CloudflareTransport {
     return { status: 200, body: { success: true, errors: [], result: {} } };
   }
 
-  /** The computer's account: its tokens, its namespaces, its container applications (`computer.ts`). */
-  private computerCall(call: CloudflareCall): CloudflareHttpResponse | null {
+  /** The account's tokens: its permission groups by name, and tokens listed, minted, rolled and deleted. */
+  private tokenCall(call: CloudflareCall): CloudflareHttpResponse | null {
     const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
 
     // By the name asked, as the account's permission groups answer (read 2026-10-21).
@@ -453,6 +474,14 @@ class FakeCloudflare implements CloudflareTransport {
       return ok(value);
     }
 
+    const deleted = /\/tokens\/token-(.+)$/u.exec(call.path)?.[1];
+
+    if (deleted !== undefined && call.method === 'DELETE') {
+      this.tokens.delete(decodeURIComponent(deleted));
+
+      return ok({ id: `token-${deleted}` });
+    }
+
     if (call.path.endsWith('/tokens') && call.method === 'POST') {
       const name = bodyText(call.body ?? {}, 'name');
 
@@ -460,6 +489,17 @@ class FakeCloudflare implements CloudflareTransport {
 
       return ok({ id: `token-${name}`, value: 'minted-token' });
     }
+
+    return null;
+  }
+
+  /** The computer's account: its tokens, its namespaces, its container applications (`computer.ts`). */
+  private computerCall(call: CloudflareCall): CloudflareHttpResponse | null {
+    const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
+
+    const token = this.tokenCall(call);
+
+    if (token !== null) return token;
 
     if (call.path.includes('/durable_objects/namespaces')) return ok([{ id: 'ns-devbox', script: 'kinu', class: 'KinuDevbox' }, { id: 'ns-other', script: 'other', class: 'KinuDevbox' }]);
 
@@ -1005,7 +1045,8 @@ describe('a guided run', () => {
       dmarc,
       { method: 'PATCH', path: '/zones/zone-raman/dns_records/record-2', body: { content: 'v=DMARC1; p=none; rua=mailto:dmarc@raman.dev' } },
     ]);
-    expect(cloudflare.calls.filter((call) => call.path.includes('/tokens'))).toEqual([]);
+    // The one read of the account's tokens is the retiring step's, which finds no earlier routing token and touches no zone.
+    expect(cloudflare.calls.filter((call) => call.path.includes('/tokens')).map((call) => `${call.method} ${call.path}`)).toEqual([`GET /accounts/${INPUTS.accountId}/tokens?per_page=50`]);
   });
 
   test('a subdomain is routed by its name with no catch-all, and the run mints its routing token for that zone alone', async () => {
@@ -1017,7 +1058,7 @@ describe('a guided run', () => {
     expect(cloudflare.calls.filter((call) => call.path.endsWith('/email/routing/dns')).map((call) => call.body)).toEqual([{ name: 'mail.raman.dev' }]);
     expect(cloudflare.routing.catchAll.size).toBe(0);
     expect(cloudflare.calls.find((call) => call.method === 'POST' && call.path.endsWith('/tokens'))?.body).toEqual({
-      name: 'kinu mail raman.dev (Kinu)',
+      name: 'kinu mail raman.dev run-tag-1 (Kinu)',
       policies: [{ effect: 'allow', resources: { 'com.cloudflare.api.account.zone.zone-raman': '*' }, permission_groups: [{ id: 'group-email-routing-rules-write' }] }],
     });
     expect(uploadedBindings(upload).find((binding) => binding.name === 'KINU_MAIL_ROUTING')).toEqual({
@@ -1051,21 +1092,60 @@ describe('a guided run', () => {
       .toBe(JSON.stringify({ zone: 'zone-raman', worker: 'kinu', domain: 'mail.raman.dev', token: null }));
   });
 
-  // Review, 2026-10-21: an update kept a grant whose name did not say its zone, so a domain moved to another zone kept
-  // routing under the one it left.
-  test('every run binds a grant of its own: an update rolls the token for its zone, and deletes the one for a zone it left', async () => {
+  // Second review, 2026-10-21: an update rolled the running version's token before its replacement was live, so a
+  // failed update left the running deployment unable to route an address.
+  test('an update mints a token of its own, and leaves the running version\'s as it is', async () => {
     cloudflare.zones.set('raman.dev', 'zone-raman');
-    cloudflare.tokens.set('kinu mail raman.dev (Kinu)', ['minted-token']);
-    cloudflare.tokens.set('kinu mail northwind.dev (Kinu)', ['minted-token']);
+    cloudflare.tokens.set('kinu mail raman.dev run-tag-0 (Kinu)', ['minted-token']);
     updating = true;
     const inputs = { ...INPUTS, mailDomain: 'mail.raman.dev' };
     const step = deployPlan(MANIFEST, inputs).find((each) => each.id === 'mail-routing');
 
     expect(await settle(step?.run(await contextFor(inputs)) ?? Effect.succeed(''))).toBe(
-      'Rolled "kinu mail raman.dev (Kinu)", which may edit raman.dev\'s routing rules and nothing else; 1 for a zone it left deleted.',
+      'Minted "kinu mail raman.dev run-tag-1 (Kinu)", which may edit raman.dev\'s routing rules and nothing else.',
     );
-    expect(await vault.read('KINU_MAIL_ROUTING')).toBe(JSON.stringify({ zone: 'zone-raman', worker: 'kinu', domain: 'mail.raman.dev', token: 'rolled-1' }));
-    expect(cloudflare.calls.filter((call) => call.method === 'DELETE').map((call) => call.path)).toEqual([`/accounts/${INPUTS.accountId}/tokens/token-kinu mail northwind.dev (Kinu)`]);
+    expect(cloudflare.calls.filter((call) => call.method === 'PUT' || call.method === 'DELETE')).toEqual([]);
+    expect([...cloudflare.tokens.keys()]).toEqual(['kinu mail raman.dev run-tag-0 (Kinu)', 'kinu mail raman.dev run-tag-1 (Kinu)']);
+  });
+
+  /** A deployment that routed by rules before: its tokens for two zones, and rules for the domains it held. */
+  const routedBefore = (): void => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.zones.set('northwind.dev', 'zone-northwind');
+    cloudflare.tokens.set('kinu mail raman.dev run-tag-0 (Kinu)', ['minted-token']);
+    cloudflare.tokens.set('kinu mail northwind.dev run-tag-0 (Kinu)', ['minted-token']);
+    cloudflare.tokens.set('kinu-staging mail raman.dev run-tag-0 (Kinu)', ['minted-token']);
+    cloudflare.rules.set('rule-1', { zone: 'zone-northwind', to: 'priya@mail.northwind.dev', worker: 'kinu' });
+    cloudflare.rules.set('rule-2', { zone: 'zone-raman', to: 'dana@mail.raman.dev', worker: 'kinu' });
+    cloudflare.rules.set('rule-3', { zone: 'zone-raman', to: 'dana@old.raman.dev', worker: 'kinu' });
+    cloudflare.rules.set('rule-4', { zone: 'zone-raman', to: 'eval@staging.raman.dev', worker: 'kinu-staging' });
+  };
+
+  test("once this version is live, the routing it replaced is retired: earlier tokens, and this Worker's rules for any other domain", async () => {
+    routedBefore();
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect(rows.find((row) => row.id === 'mail-routing-retired')?.detail).toBe('2 earlier routing token(s) and 2 rule(s) for another domain retired.');
+    expect([...cloudflare.tokens.keys()].sort()).toEqual(['kinu mail raman.dev run-tag-1 (Kinu)', 'kinu-staging mail raman.dev run-tag-0 (Kinu)']);
+    expect([...cloudflare.rules.keys()]).toEqual(['rule-2', 'rule-4']);
+  });
+
+  test('a run that never goes live leaves the running version\'s token and rules as they were', async () => {
+    routedBefore();
+    health = 503;
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+
+    expect(rows.find((row) => row.id === 'smoke')?.state).toBe('failed');
+    expect(cloudflare.calls.filter((call) => call.method === 'DELETE' || (call.method === 'PUT' && call.path.includes('/tokens/')))).toEqual([]);
+    expect([...cloudflare.rules.keys()]).toEqual(['rule-1', 'rule-2', 'rule-3', 'rule-4']);
+  });
+
+  test('a mail host in no zone the token can read binds a grant with no token, so no address is given out that cannot receive', async () => {
+    await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+
+    expect(uploadedBindings(cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'))).find((binding) => binding.name === 'KINU_MAIL_ROUTING')?.text)
+      .toBe(JSON.stringify({ zone: '', worker: 'kinu', domain: 'mail.raman.dev', token: null }));
   });
 
   test('a deployment whose owner gave no mail answers has no mail domain, and only its operators may claim', async () => {

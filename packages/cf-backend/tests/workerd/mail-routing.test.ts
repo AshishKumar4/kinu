@@ -41,7 +41,7 @@ beforeEach(async () => {
 });
 
 describe('mail on a subdomain of its zone, each address by a rule of its own', () => {
-  it("routes the person's address as it is claimed, and her workspace's and agent's before their first call reads them", async () => {
+  it("routes the person's address as her box is opened, and her workspace's and agent's before their first call reads them", async () => {
     await priyaOpened('priya', 'u-priya-1');
 
     expect((await env.MAIL_RULES_FAKE.state()).addresses).toEqual([`priya@${DOMAIN}`]);
@@ -66,10 +66,12 @@ describe('mail on a subdomain of its zone, each address by a rule of its own', (
     });
     expect((await mailbox('u-priya-2').boxes()).map((box) => box.path).sort()).toEqual(['', 'northwind-api']);
 
-    expect(await refusalOf(async () => name('dana').claim('dana', 'u-dana'))).toMatchObject({
+    // A name claimed routes nothing until its box is opened, which is where the 201st is refused.
+    await name('dana').claim('dana', 'u-dana');
+    expect(await refusalOf(async () => mailbox('u-dana').open({ userId: 'u-dana', email: 'dana@northwind.io', username: 'dana', assistant: null }))).toMatchObject({
       code: 'denied', message: `routing dana@${DOMAIN}: Cloudflare answered: Rule limit reached`,
     });
-    expect(await name('dana').lookup()).toBeNull();
+    expect(await mailbox('u-dana').boxes()).toEqual([]);
   });
 
   // Review, 2026-10-21: a box was made before its rule, so a refusal on the second box of a call left the first's rule
@@ -100,7 +102,7 @@ describe('mail on a subdomain of its zone, each address by a rule of its own', (
   it("deletes every rule under the account's root as the account is, and never disables the zone's routing", async () => {
     await priyaOpened('praman', 'u-priya-3');
     await mailbox('u-priya-3').readableBy(caller('triage'));
-    await name('danaw').claim('danaw', 'u-dana');
+    await priyaOpened('danaw', 'u-dana-w');
 
     await mailbox('u-priya-3').deleteBox('u-priya-3');
     const after = await env.MAIL_RULES_FAKE.state();

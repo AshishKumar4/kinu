@@ -56,7 +56,8 @@ function refused<A>(doing: string, work: Effect.Effect<A, KinuError>): Effect.Ef
 }
 
 export interface MailRoutes {
-  /** The grant these routes are made under, without its token: addresses routed under another are routed again. */
+  /** The grant these routes are made under, without its token: addresses routed under another are routed again. Empty
+   *  for a grant that does not read as one. */
   readonly under: string;
   /** Each address routed to this Worker by a rule of its own: made where none is held, turned on where one is off. */
   routed(addresses: readonly string[]): Effect.Effect<void, KinuError>;
@@ -136,5 +137,10 @@ export function mailRoutesOf(held: string | undefined, domain: string, fetchImpl
     diagnostics.failure('mail.unroute_unhonoured', new KinuError('denied', `unrouting ${root}@${domainOf}: this deployment holds no routing token`));
   });
 
-  return { under: '', routed: () => unread, unrouted: kept };
+  // Its identity kept: addresses last routed under another grant are refused with the rest, not given out unrouted.
+  return {
+    under: grant.success ? `${grant.output.zone} ${grant.output.worker} ${grant.output.domain}` : '',
+    routed: (addresses) => (addresses.length === 0 ? Effect.void : unread),
+    unrouted: kept,
+  };
 }

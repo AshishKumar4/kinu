@@ -184,6 +184,15 @@ describe('the grant a deployment routes under', () => {
     expect(await settle(routes.unrouted('priya', DOMAIN))).toBeUndefined();
     expect(zone.calls).toEqual([]);
   });
+
+  // Second review, 2026-10-21: a grant with no token lost its identity, so a deployment moved onto a subdomain without
+  // one gave out the addresses it already had, unrouted, instead of refusing them.
+  test('one with no token keeps its identity, so addresses last routed under another grant are refused with the rest', async () => {
+    const routes = present(rulesZone().routesFor({ ...GRANT, token: null }));
+
+    expect(routes.under).toBe(present(rulesZone().routes()).under);
+    expect(await settle(routes.routed([]))).toBeUndefined();
+  });
 });
 
 // The lead's decision, 2026-10-21: `DELETE …/email/routing/dns` disables Email Routing for the whole zone and takes no

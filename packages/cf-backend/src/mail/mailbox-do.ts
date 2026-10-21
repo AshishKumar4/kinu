@@ -7,7 +7,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import {
-  objectNamed,
+  objectNamed, mailAddressOf,
   durableStamps, EmailOutbox, initMailboxTables, mailboxEmail, sha256Hex, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp,
   type MailAgentMessage, type MailBox, type MailboxAgentCalls, type MailboxCalls, type MailCaller, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
   type MailBoxOwner, type MailRecipient, type MailThreadSummary, type MailThreadView, type MailTriaged, type MailTriageItem, type MailTriagePick, type MailWake,
@@ -105,13 +105,14 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
   /**
    * Mail on a subdomain (core deploy/mail-rules.ts), before a call: the account's addresses routed again where they were
-   * last routed under another grant (its domain moved onto this one), then each box the call would make for `owners`
-   * routed, then made, in one block so nothing comes between a rule and its row. A rule Cloudflare refuses, the 201st
+   * last routed under another grant (its domain moved onto this one), then each address the call would make (`planned`)
+   * routed, then made, in one block so nothing comes between a rule and its row. Every address the account has is made
+   * here: the person's as its box is opened, each workspace's and agent's as a call first reads it. A rule Cloudflare refuses, the 201st
    * among them, leaves its box unmade, keeps those routed before it, and refuses the call in its words; the refusal is
    * answered outside the block, where a thrown one would reset the object. An apex routes nothing, and a grant with no
    * token (`under` empty) routes nothing again: it only refuses new boxes.
    */
-  private addressed(owners: readonly MailBoxOwner[]): Effect.Effect<void, KinuError> {
+  private addressed(planned: () => readonly { readonly address: string; readonly make: () => void }[]): Effect.Effect<void, KinuError> {
     const routes = this.routes;
 
     if (routes === null || this.refusal !== undefined) return Effect.void;
@@ -125,24 +126,29 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
         this.ctx.storage.kv.put(ROUTED_UNDER, routes.under);
       }
 
-      for (const { owner, address } of this.store.unmade(owners)) {
+      for (const { address, make } of planned()) {
         const routed = await hold(routes.routed([address]));
 
         if (Exit.isFailure(routed)) return routed;
-        this.store.boxFor(owner);
+        make();
       }
 
       return Exit.void;
     };
 
-    const due = () => stale() || this.store.unmade(owners).length > 0;
+    const due = () => stale() || planned().length > 0;
 
     return Effect.flatMap(this.fenced(Effect.promise(async () => (due() ? this.ctx.blockConcurrencyWhile(routing) : Exit.void))), (exit) => exit);
   }
 
+  /** The boxes `owners` would have made, each with its address and how it is made. */
+  private boxesPlanned(owners: readonly MailBoxOwner[]): () => readonly { readonly address: string; readonly make: () => void }[] {
+    return () => this.store.unmade(owners).map(({ owner, address }) => ({ address, make: () => { this.store.boxFor(owner); } }));
+  }
+
   /** `work`, once the boxes `caller` reads, if any, are routed. */
   private asCaller<Answer>(work: Effect.Effect<Answer, KinuError>, caller: MailCaller | undefined): Effect.Effect<Answer, KinuError> {
-    return Effect.andThen(this.addressed(caller === undefined ? [] : this.store.ownersOf(caller)), work);
+    return Effect.andThen(this.addressed(this.boxesPlanned(caller === undefined ? [] : this.store.ownersOf(caller))), work);
   }
 
   /** Work under way, which a deletion waits out before it sweeps: a delivery writes its bytes across awaits. */
@@ -175,7 +181,14 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     this.deleting = true;
     const [box] = this.ctx.storage.sql.exec('SELECT username FROM mail_box WHERE id = 1').toArray();
 
-    if (box !== undefined) await objectNamed(this.env.MAILNAME, v.parse(v.object({ username: v.string() }), box).username).retire(userId);
+    const username = box === undefined ? undefined : v.parse(v.object({ username: v.string() }), box).username;
+
+    // Its rules first, the person's and every box's under it, while the box still records the name.
+    const unrouted = username === undefined || this.routes === null ? Exit.void : await hold(this.routes.unrouted(username, this.env.EMAIL_DOMAIN ?? ''));
+
+    if (Exit.isFailure(unrouted)) return settleSync(Effect.failCause(unrouted.cause));
+
+    if (username !== undefined) await objectNamed(this.env.MAILNAME, username).retire(userId);
     await Promise.all(this.working);
     const bucket = this.bucket ?? undefined;
 
@@ -218,11 +231,14 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   }
 
   open(account: { userId: string; email: string; username: string; assistant: { workspace: string; actorId: string } | null }): Promise<MailBox> {
-    return settle(this.served(() => this.store.open(account)));
+    // The person's address, routed as its box is opened: a name claimed whose box never opens routes nothing.
+    const person = () => (this.identity() === null ? [{ address: mailAddressOf(account.username, '', this.env.EMAIL_DOMAIN ?? ''), make: () => { this.store.open(account); } }] : []);
+
+    return settle(Effect.andThen(this.addressed(person), this.served(() => this.store.open(account))));
   }
 
   boxFor(owner: MailBoxOwner): Promise<MailBox> {
-    return settle(Effect.andThen(this.addressed([owner]), this.served(() => this.store.boxFor(owner))));
+    return settle(Effect.andThen(this.addressed(this.boxesPlanned([owner])), this.served(() => this.store.boxFor(owner))));
   }
 
   readBy(reader: { workspace: string; actorId: string }): Promise<MailBox | null> {
