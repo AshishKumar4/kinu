@@ -29,18 +29,18 @@ test('a workspace missing a table its init makes gets it, every other table kept
   const db = new Database(':memory:');
 
   unstartedOrchestratorHarness(undefined, 'shared', db);
-  db.exec(`INSERT INTO slate_live_shares (id, slate_id, visibility, handle, grant_json, created_at, mode, grant_revision)
-    VALUES ('s-1', 'board', 'users', '0123456789', '{"slates":["board"],"members":[]}', 1, 'owner', 'r0')`);
-  db.exec("INSERT INTO slate_live_share_users VALUES ('s-1', 'u-pat', 'pat@example.test', 1, 'edit')");
+  db.exec(`INSERT INTO slate_shares (id, kind, slate_id, visibility, handle, grant_json, created_at, mode, grant_revision)
+    VALUES ('s-1', 'live', 'board', 'users', '0123456789', '{"slates":["board"],"members":[]}', 1, 'owner', 'r0')`);
+  db.exec("INSERT INTO slate_share_users VALUES ('s-1', 'u-pat', 'pat@example.test', 1, 'edit')");
   db.exec('DROP TABLE slate_edit_marks');
   kvOf(db).set('kinu.schema_stamp', 1);
 
   unstartedOrchestratorHarness(undefined, 'shared', db);
 
   expect(kvOf(db).get('kinu.schema_stamp')).toBe(SCHEMA_STAMPS.workspace);
-  expect(db.query('SELECT id, handle, mode, grant_revision FROM slate_live_shares').all())
+  expect(db.query('SELECT id, handle, mode, grant_revision FROM slate_shares').all())
     .toEqual([{ id: 's-1', handle: '0123456789', mode: 'owner', grant_revision: 'r0' }]);
-  expect(db.query('SELECT email, role FROM slate_live_share_users').all()).toEqual([{ email: 'pat@example.test', role: 'edit' }]);
+  expect(db.query('SELECT email, role FROM slate_share_users').all()).toEqual([{ email: 'pat@example.test', role: 'edit' }]);
   expect(db.query('SELECT * FROM slate_edit_marks').all()).toEqual([]);
-  db.exec("INSERT INTO slate_edit_marks VALUES ('board', 'pat@example.test', 'r0')");
+  db.exec("INSERT INTO slate_edit_marks VALUES ('board', 'pat@example.test')");
 });

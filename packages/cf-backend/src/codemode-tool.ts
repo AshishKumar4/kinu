@@ -6,7 +6,7 @@
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool } from 'ai';
-import { DESKTOP_MEMBERS, execCallArgs, execContext, readDeviceRequestChannel, type CodemodeSurface, type DeviceRequestChannel, type ExecutorProviderSurface } from "@kinu.run/core";
+import { DESKTOP_MEMBERS, execCallArgs, execContext, readDeviceRequestChannel, scopedTurnSurface, SlateProgramSchema, type CodemodeSurface, type DeviceRequestChannel, type ExecutorProviderSurface } from "@kinu.run/core";
 import { renderCodemodeDescription, programDeclarations, describeProgramSource, nativeToolFunctions, programProviders, CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
@@ -50,11 +50,19 @@ function guarded(provider: CodemodeProvider, nested: (namespace: string, member:
   };
 }
 
+/** One program's own: what stops it, the device requests it owns, and the turn it runs in, each absent outside one. */
+interface ProgramContext {
+  readonly stop?: AbortSignal;
+  readonly channel?: DeviceRequestChannel;
+  readonly turn?: string;
+}
+
 export function createCodemodeToolFactory(options: CodemodeFactoryOptions): CodemodeFactory {
   // Each executor as one program calls it, built per program: its calls arrive over RPC, outside its async context, and
   // a program moved to the background keeps calling while the next one runs, so each call carries its own program's
   // stop and channel. The channel is read per call: a detach changes the owning job mid-program.
-  const programExecutor = (programStop: AbortSignal | undefined, deviceRequests: DeviceRequestChannel | undefined) => (p: ExecutorProviderSurface): ExecutorProviderSurface => {
+  const programExecutor = (program: ProgramContext) => (p: ExecutorProviderSurface): ExecutorProviderSurface => {
+    const { stop: programStop, channel: deviceRequests, turn } = program;
     const wrapped: typeof p.tools = {};
 
     for (const [name, entry] of Object.entries(p.tools)) {
@@ -64,6 +72,9 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       const drivesDesktop = p.name === 'computer' && DESKTOP_MEMBERS.some((member) => member === name);
 
       const called = (args: unknown[]): unknown[] => {
+        // Stamped here, never by the program: the turn it runs in, which a chain it begins keeps (`SlateInvocation.turn`).
+        if (name === 'slates') return turn === undefined ? [args[0]] : [args[0], { turn } satisfies v.InferOutput<typeof SlateProgramSchema>];
+
         if (drivesDesktop) return [args[0], { ...v.parse(v.optional(v.looseObject({}), {}), args[1]), ...execContext({ signal: programStop, channel: deviceRequests }) }];
 
         return carriesOwnership ? execCallArgs(args, { channel: deviceRequests }) : args;
@@ -121,9 +132,10 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
     toolFor(surface, scope) {
       // Built per call with the call's signal and channel: createCodeTool runs its executor without the tool call's
       // options, so a program's tool calls are stopped with its eval, and owned by it, only through what this binds.
-      const build = (mode: WorkMode, signal: AbortSignal | undefined, channel: DeviceRequestChannel | undefined): Tool => {
+      const build = (mode: WorkMode, program: ProgramContext): Tool => {
+        const signal = program.stop;
         // No prelude here: createCodeTool drops every one; the per-call executor below restores them.
-        const reached = programProviders({ surface, namespaces: scope.namespaces(programExecutor(signal, channel)), reach: scope.reach, mode, signal });
+        const reached = programProviders({ surface, namespaces: scope.namespaces(programExecutor(program)), reach: scope.reach, mode, signal });
         const { nested } = scope;
         const bound = nested === undefined ? reached : reached.map((provider) => guarded(provider, nested));
         const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'), describeProgramSource(programDeclarations(bound)));
@@ -160,10 +172,13 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       };
 
       return withCraftedToolDeclarations(permitInPlan({
-        ...build('build', undefined, undefined),
+        ...build('build', {}),
         execute: (input, context) => {
           const channel = readDeviceRequestChannel({ toolOptions: context });
-          const execute = build(currentWorkMode() === 'plan' ? 'plan' : 'build', context.abortSignal, channel).execute;
+          // Read as the program starts, inside its tool call's turn: its RPC callbacks run outside that scope.
+          const turn = scopedTurnSurface()?.key.turnId;
+          const program = { stop: context.abortSignal, ...channel !== undefined && { channel }, ...turn !== undefined && { turn } };
+          const execute = build(currentWorkMode() === 'plan' ? 'plan' : 'build', program).execute;
 
           if (execute === undefined) throw new Error('Codemode executor is not callable');
 

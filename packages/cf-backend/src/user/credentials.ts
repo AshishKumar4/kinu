@@ -76,11 +76,10 @@ function credentialBaseURL(storedKey: string, cred: Credential): string | null {
 }
 
 
-const AI_GATEWAY_CONFIG_KEY = 'cloudflare_ai_gateway';
+/** The selected AI Gateway: written only by `selectAIGateway`, an authentication setting like a credential. */
+export const AI_GATEWAY_CONFIG_KEY = 'cloudflare_ai_gateway';
 
-export interface UserCredentialsHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'> {
-  setConfig(caller: UserCaller, key: string, value: string): Promise<void>;
-}
+export type UserCredentialsHost = Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx'>;
 
 /** The account's credential vault. */
 export class UserCredentials {
@@ -305,7 +304,7 @@ export class UserCredentials {
 
   private credentialsRevision(): number {
     const row = v.safeParse(v.object({ revision: v.number() }), this.host.sqlx(
-      `SELECT revision FROM user_credentials_revision WHERE id = 1`,
+      `SELECT COALESCE(credentials_revision, 0) AS revision FROM account_epochs WHERE id = 1`,
     )[0]);
 
     return row.success ? row.output.revision : 0;
@@ -342,7 +341,8 @@ export class UserCredentials {
   }
 
   bumpCredentialsRevision(): void {
-    this.host.sqlx(`INSERT INTO user_credentials_revision (id, revision) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET revision = revision + 1`);
+    this.host.sqlx(`INSERT INTO account_epochs (id, credentials_revision) VALUES (1, 1)
+      ON CONFLICT(id) DO UPDATE SET credentials_revision = COALESCE(credentials_revision, 0) + 1`);
   }
 
   /**
@@ -526,17 +526,23 @@ export class UserCredentials {
     }
   }
 
+  /** The gateway names the `cf-aig-gateway-id` every Cloudflare request sends, so a change moves the credentials'
+   *  revision as a credential's does: a workspace the fan-out skips as idle reads it at its next turn's open, with
+   *  the model catalog that gateway serves. */
   async selectAIGateway(caller: UserCaller, gatewayId: string | null): Promise<void> {
     await this.host.requireTier(caller, 'ai_gateway.admin');
 
-    if (gatewayId === null) {
-      this.host.sqlx(`DELETE FROM user_config WHERE key = ?`, AI_GATEWAY_CONFIG_KEY);
+    if (gatewayId !== null && !isCloudflareAIGatewayId(gatewayId)) throw new KinuError('bad_input', 'Invalid AI Gateway id.');
 
-      return;
-    }
+    const changed = gatewayId === null
+      ? this.host.sqlx(`DELETE FROM user_config WHERE key = ? RETURNING key`, AI_GATEWAY_CONFIG_KEY)
+      : this.host.sqlx(
+        `INSERT INTO user_config (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE value <> excluded.value RETURNING key`,
+        AI_GATEWAY_CONFIG_KEY, gatewayId,
+      );
 
-    if (!isCloudflareAIGatewayId(gatewayId)) throw new KinuError('bad_input', 'Invalid AI Gateway id.');
-    await this.host.setConfig(await ownerCaller(this.host.env), AI_GATEWAY_CONFIG_KEY, gatewayId);
+    if (changed.length > 0) this.bumpCredentialsRevision();
   }
 
   /** Reads the stored credential only, no API call, so it cannot fail for a reason the user

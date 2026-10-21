@@ -7,7 +7,6 @@ import { settle } from '@kinu.run/core/obs';
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import type { UserDO } from './user-do';
-import { forgetSharesGiven, type ShareRosterAuthority, type SharesGivenEnv } from './shares-given';
 import type { ObjectNamespace } from '@kinu.run/core';
 import {
   objectNamed,
@@ -17,8 +16,6 @@ import {
   type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
-import { internalCaller, type PresentedCaller } from '@kinu.run/core/control-plane';
-import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
 
 const DeleteConfirm = v.object({ confirm: v.string() });
 
@@ -31,10 +28,8 @@ type AccountAuthority = Pick<
   UserDO, 'completeOnboarding' | 'searchExperience' | 'deleteAccount' | 'heldRows'
 >;
 
-export interface AccountRoutesEnv<Id> extends SharesGivenEnv<Id>, OwnerCapabilityEnv {
-  UserDO: ObjectNamespace<Id, ShareRosterAuthority & AccountAuthority>;
-  /** The control plane, whose Gallery forgets a deleted account's stars and reports. */
-  ControlPlaneDO?: ObjectNamespace<Id, { galleryForget(caller: PresentedCaller, person: { readonly email: string; readonly userId: string }): Promise<void> }>;
+export interface AccountRoutesEnv<Id> extends OwnerCapabilityEnv {
+  UserDO: ObjectNamespace<Id, AccountAuthority>;
 }
 
 interface AccountVariables extends ApiVariables {
@@ -43,7 +38,7 @@ interface AccountVariables extends ApiVariables {
 
 type AccountEnv = FamilyEnv<AccountRoutesEnv<unknown>, AccountVariables>;
 
-function account(c: Context<AccountEnv>): ShareRosterAuthority & AccountAuthority {
+function account(c: Context<AccountEnv>): AccountAuthority {
   return objectNamed(c.env.UserDO, c.get('identity').userId);
 }
 
@@ -84,17 +79,7 @@ accountRoutes.delete('/api/user/account', ownerGate(), (c) => {
       return err(400, 'Type the account email to confirm.');
     }
 
-    // The account's record of share recipients goes with it; each is told to forget its cards first.
-    yield* Effect.promise(async () => forgetSharesGiven(c.env, identity.userId, owner));
-    // Its stars and reports in Explore name it by email and its installs by id; its listings go with its workspaces' shares.
-    const { ControlPlaneDO } = c.env;
-
-    if (ControlPlaneDO !== undefined && hasControlPlane({ ControlPlaneDO })) {
-      yield* Effect.promise(async () => {
-        await controlPlaneStub({ ControlPlaneDO }).galleryForget(await internalCaller(c.env), { email: identity.email.trim().toLowerCase(), userId: identity.userId });
-      });
-    }
-
+    // Every store, its shares given and the Gallery's marks included, goes through the account's own delete.
     yield* Effect.catchCause(Effect.gen(function* () {
       yield* Effect.promise(async () => account(c).deleteAccount(owner, identity.userId));
     }), (failed) => Effect.gen(function* () {

@@ -10,6 +10,9 @@ import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import { toolExecute, createRecordingLogger, present } from '@kinu.run/test-utils';
 import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils/vfs';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
+import { withApprovalGatedFiles } from '../src/execution/approval';
+import { cloudPlanes } from '../src/vfs/resolve';
+import { WORKSPACE_ROOT } from '../src/index';
 import { asSchema, jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime, conversationsFor, actorJobsFor, servedStoresFor } from './helpers';
@@ -439,7 +442,14 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const computerFiles = createMemoryVfs().vfs;
     await seedFiles(computerFiles, { '/workspace/true-myth/package.json': '{}' });
     await rt.toolFiles.mkdir('notes', { recursive: true });
-    const toolFiles = withMountTable(rt.toolFiles, standardMounts((name) => (name === 'computer' ? { files: computerFiles, isAvailable: () => true } : undefined)));
+    const mounted = withMountTable(rt.toolFiles, standardMounts((name) => (name === 'computer' ? { files: computerFiles, isAvailable: () => true } : undefined)));
+
+    // Gated, as the hosted runtime hands it to the tools (staging rc29: the gate passed `resolve` on and not `owner`).
+    const toolFiles = withApprovalGatedFiles(mounted, 'workspace', {
+      planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => mounted.resolve(path, { follow, creating }), owner: (path) => mounted.owner(path),
+      userRoots: () => mounted.userRoots(), locate: null, parksWrites: true,
+    }, { mode: () => 'strict' });
+
     const shellTool = { execute: toolExecute<{ command: string; runtime?: string; cwd?: string }, string>(tools({ ...rt, toolFiles, executionRouter: router }).shell) };
 
     await shellTool.execute({ command: 'npm test', runtime: 'computer', cwd: '/computer/workspace/true-myth' });

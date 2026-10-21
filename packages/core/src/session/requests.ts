@@ -74,10 +74,7 @@ export class SessionRequests {
   /** Inside the claim owner's transaction, after it rechecked its epoch. A position the last request held writes nothing. */
   recordPrepared(bundle: PreparedRequestBundle): void {
     for (const { prepared } of bundle.rendered) this.messages.insertRender(prepared);
-    const list = this.context.record(REQUEST_LINEAGE, bundle.messages);
-    this.record(bundle.request);
-    void this.sql`INSERT INTO request_renders(actor_id,request_id,context_id,revision)
-      VALUES(${this.actor.actorId},${bundle.request.id},${list.contextId},${list.revision})`;
+    this.record(bundle.request, this.context.record(REQUEST_LINEAGE, bundle.messages));
   }
 
   /** After commit, so a later request carrying the same copy names its row by identity. */
@@ -92,10 +89,14 @@ export class SessionRequests {
       FROM actor_requests WHERE actor_id=${this.actor.actorId} AND turn_id=${turnId} ORDER BY epoch,revision`, requestOf));
   }
 
-  /** Inside the claim owner's transaction, after it rechecked its epoch. */
-  record(request: PreparedRequest): void {
-    void this.sql`INSERT INTO actor_requests(actor_id,request_id,turn_id,run_id,epoch,step_index,revision,context_id,context_revision,metadata_json,metadata_path,recorded_at)
-      VALUES(${this.actor.actorId},${request.id},${request.turnId},${request.runId},${request.epoch},${request.step},${request.revision},${request.source.contextId},${request.source.revision},${request.metadata.json},${request.metadata.path},${Date.now()})`;
+  /** Inside the claim owner's transaction, after it rechecked its epoch. `rendered` is the list a step sent; an admission
+   *  sends none. */
+  record(request: PreparedRequest, rendered: ContextSelection | null = null): void {
+    void this.sql`INSERT INTO actor_requests(actor_id,request_id,turn_id,run_id,epoch,step_index,revision,context_id,context_revision,
+        rendered_context_id,rendered_revision,metadata_json,metadata_path,recorded_at)
+      VALUES(${this.actor.actorId},${request.id},${request.turnId},${request.runId},${request.epoch},${request.step},${request.revision},
+        ${request.source.contextId},${request.source.revision},${rendered?.contextId ?? null},${rendered?.revision ?? null},
+        ${request.metadata.json},${request.metadata.path},${Date.now()})`;
   }
 
   /** Inline metadata only. */
@@ -124,12 +125,14 @@ export class SessionRequests {
     return settleSync(Effect.gen({ self: this }, function* () {
       if (request.step === null) return this.context.conversationOf(this.context.entries(request.source));
 
-      const list = this.sql<{ context_id: string; revision: number }>`SELECT context_id,revision FROM request_renders
-        WHERE actor_id=${this.actor.actorId} AND request_id=${request.id}`[0];
+      const list = this.sql<{ rendered_context_id: string | null; rendered_revision: number | null }>`SELECT rendered_context_id,rendered_revision
+        FROM actor_requests WHERE actor_id=${this.actor.actorId} AND request_id=${request.id}`[0];
 
-      if (list === undefined) return yield* new KinuError('io', `request ${request.id} has no recorded message list`);
+      if (list === undefined || list.rendered_context_id === null || list.rendered_revision === null) {
+        return yield* new KinuError('io', `request ${request.id} has no recorded message list`);
+      }
 
-      return this.context.entries({ contextId: list.context_id, revision: list.revision });
+      return this.context.entries({ contextId: list.rendered_context_id, revision: list.rendered_revision });
     }));
   }
 

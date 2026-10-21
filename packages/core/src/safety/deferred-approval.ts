@@ -6,7 +6,7 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
  */
 
 import type { DynamicApproval } from '../types/dynamic-context';
-import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { AgentSignal } from '../types/signals';
 import type { ApprovalConsumedRecord } from '../events/types';
@@ -139,42 +139,21 @@ function toAction(r: Row): DeferredApproval {
   };
 }
 
-/** Spend counter; a settle names its spend so a late or replayed settle cannot reopen a later grant. */
-export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS deferred_approvals (
-    actor_id     TEXT NOT NULL,
-    id           TEXT NOT NULL,
-    command      TEXT NOT NULL,
-    executor     TEXT NOT NULL DEFAULT '',
-    context      TEXT NOT NULL DEFAULT '{}',
-    reason       TEXT NOT NULL,
-    status       TEXT NOT NULL DEFAULT 'queued',
-    requested_at INTEGER NOT NULL,
-    decided_at   INTEGER,
-    spend_seq    INTEGER NOT NULL DEFAULT 0,
-    surface      TEXT,
-    PRIMARY KEY (actor_id, id)
-  )`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_status
-    ON deferred_approvals(actor_id, status, requested_at)`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_command
-    ON deferred_approvals(actor_id, command, executor, context, requested_at DESC)`);
-  // The tripped rules as data: `reason` is display text.
-  execRaw(`CREATE TABLE IF NOT EXISTS deferred_approval_hits ( /* derived from deferred_approvals: each hit names one */
-    actor_id    TEXT NOT NULL,
-    approval_id TEXT NOT NULL,
-    rule        TEXT NOT NULL,
-    decision    TEXT NOT NULL,
-    PRIMARY KEY (actor_id, approval_id, rule)
-  )`);
+const DeferredApprovalHitSchema = v.object({ rule: v.string(), decision: v.string() });
+
+export type DeferredApprovalHit = v.InferOutput<typeof DeferredApprovalHitSchema>;
+
+/** The rules an ask tripped as its row keeps them: the first decision of each rule, by rule. */
+function ruleHitsOf(hits: readonly DeferredApprovalHit[]): string {
+  const first = new Map<string, DeferredApprovalHit>();
+
+  for (const hit of hits) if (!first.has(hit.rule)) first.set(hit.rule, { rule: hit.rule, decision: hit.decision });
+
+  return JSON.stringify([...first.values()].sort((a, b) => Number(a.rule > b.rule) - Number(a.rule < b.rule)));
 }
 
-export interface DeferredApprovalHit {
-  readonly rule: string;
-  readonly decision: string;
-}
-
-/** The durable rows; pure storage. */
+/** The `action` rows of `owner_requests` (safety/owner-requests.ts); pure storage. A settle names its spend
+ *  (`spend_seq`), so a late or replayed settle cannot reopen a later grant. */
 export class DeferredApprovalStore {
   /** The actor whose rows these are. */
   readonly actorId: string;
@@ -201,8 +180,8 @@ export class DeferredApprovalStore {
 
     return this.sql<Row>`
       SELECT d.actor_id, d.id, d.command, d.executor, d.context, d.reason, d.status, d.requested_at, d.decided_at, d.surface
-      FROM deferred_approvals d JOIN workspace_actors a ON a.actor_id = d.actor_id
-      WHERE d.status='queued' AND a.retiring_at IS NULL AND a.deleted_at IS NULL
+      FROM owner_requests d JOIN workspace_actors a ON a.actor_id = d.actor_id
+      WHERE d.kind = 'action' AND d.status='queued' AND a.retiring_at IS NULL AND a.deleted_at IS NULL
       ORDER BY d.requested_at ASC LIMIT ${limit}`.map(toAction);
   }
 
@@ -210,7 +189,7 @@ export class DeferredApprovalStore {
   owners(id: string): string[] {
     this.actor.assertCurrent();
 
-    return this.sql<{ actor_id: string }>`SELECT actor_id FROM deferred_approvals WHERE id = ${id}`.map((row) => row.actor_id);
+    return this.sql<{ actor_id: string }>`SELECT actor_id FROM owner_requests WHERE kind = 'action' AND id = ${id}`.map((row) => row.actor_id);
   }
 
   /** Whether any actor's live row names these bytes: parked bytes are the workspace's, whoever parked them. */
@@ -218,8 +197,8 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     return this.sql<{ id: string }>`
-      SELECT id FROM deferred_approvals
-      WHERE status IN ('queued','approved') AND instr(command, ${` sha256:${sha256} over sha256:`}) > 0
+      SELECT id FROM owner_requests
+      WHERE kind = 'action' AND status IN ('queued','approved') AND instr(command, ${` sha256:${sha256} over sha256:`}) > 0
       LIMIT 1`.length > 0;
   }
 
@@ -230,8 +209,8 @@ export class DeferredApprovalStore {
 
     const rows = this.sql<Row>`
       SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface
-      FROM deferred_approvals
-      WHERE actor_id = ${this.actorId} AND command = ${ask.command} AND executor = ${ask.executor}
+      FROM owner_requests
+      WHERE kind = 'action' AND actor_id = ${this.actorId} AND command = ${ask.command} AND executor = ${ask.executor}
         AND context = ${executionContextKey(ask.context)}
         AND (status IN ('queued','approved')
           OR (status = 'denied' AND decided_at > ${now - DENIAL_STANDING_MS}))
@@ -246,14 +225,12 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     const swept = this.sql<{ id: string; command: string; executor: string }>`
-      DELETE FROM deferred_approvals
-      WHERE actor_id = ${this.actorId} AND status = 'denied'
+      DELETE FROM owner_requests
+      WHERE kind = 'action' AND actor_id = ${this.actorId} AND status = 'denied'
         AND decided_at <= ${now - DENIAL_STANDING_MS}
       RETURNING id, command, executor`;
 
     if (swept.length > 0) markStoreChanged(this.sql);
-
-    for (const { id } of swept) this.dropHits(id);
 
     return swept.map(approvalKindOf);
   }
@@ -265,14 +242,12 @@ export class DeferredApprovalStore {
     const named = which === undefined ? null : JSON.stringify(this.openOn(executor).filter(which).map((action) => action.id));
 
     const retired = this.sql<{ id: string }>`
-      DELETE FROM deferred_approvals
-      WHERE actor_id = ${this.actorId} AND executor = ${executor} AND status IN ('queued', 'approved')
+      DELETE FROM owner_requests
+      WHERE kind = 'action' AND actor_id = ${this.actorId} AND executor = ${executor} AND status IN ('queued', 'approved')
         AND (${named} IS NULL OR id IN (SELECT value FROM json_each(${named})))
       RETURNING id`;
 
     if (retired.length > 0) markStoreChanged(this.sql);
-
-    for (const { id } of retired) this.dropHits(id);
 
     return retired.map((row) => row.id);
   }
@@ -280,22 +255,17 @@ export class DeferredApprovalStore {
   /** The asks still open on `executor`, as {@link retireOpen} would retire them. */
   private openOn(executor: string): DeferredApproval[] {
     return this.sql<Row>`
-      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface FROM deferred_approvals
-      WHERE actor_id = ${this.actorId} AND executor = ${executor} AND status IN ('queued', 'approved')`.map(toAction);
+      SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface FROM owner_requests
+      WHERE kind = 'action' AND actor_id = ${this.actorId} AND executor = ${executor} AND status IN ('queued', 'approved')`.map(toAction);
   }
 
   create(action: Omit<DeferredApproval, 'actor' | 'status' | 'decidedAt'>, hits: readonly DeferredApprovalHit[]): DeferredApproval {
     this.actor.assertCurrent();
-    void this.sql`INSERT INTO deferred_approvals
-        (actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface)
-      VALUES (${this.actorId}, ${action.id}, ${action.command}, ${action.executor}, ${executionContextKey(action.context)}, ${action.reason},
-        'queued', ${action.requestedAt}, NULL, ${action.surface ?? null})`;
+    void this.sql`INSERT INTO owner_requests
+        (kind, actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface, spend_seq, rule_hits)
+      VALUES ('action', ${this.actorId}, ${action.id}, ${action.command}, ${action.executor}, ${executionContextKey(action.context)},
+        ${action.reason}, 'queued', ${action.requestedAt}, NULL, ${action.surface ?? null}, 0, ${ruleHitsOf(hits)})`;
     markStoreChanged(this.sql);
-
-    for (const hit of hits) {
-      void this.sql`INSERT OR IGNORE INTO deferred_approval_hits (actor_id, approval_id, rule, decision)
-        VALUES (${this.actorId}, ${action.id}, ${hit.rule}, ${hit.decision})`;
-    }
 
     return { ...action, actor: this.actorId, status: 'queued', decidedAt: null };
   }
@@ -304,14 +274,10 @@ export class DeferredApprovalStore {
   hits(id: string): DeferredApprovalHit[] {
     this.actor.assertCurrent();
 
-    return this.sql<DeferredApprovalHit>`
-      SELECT rule, decision FROM deferred_approval_hits
-      WHERE actor_id = ${this.actorId} AND approval_id = ${id}
-      ORDER BY rule`;
-  }
+    const [row] = this.sql<{ rule_hits: string }>`
+      SELECT rule_hits FROM owner_requests WHERE kind = 'action' AND actor_id = ${this.actorId} AND id = ${id}`;
 
-  private dropHits(id: string): void {
-    void this.sql`DELETE FROM deferred_approval_hits WHERE actor_id = ${this.actorId} AND approval_id = ${id}`;
+    return row === undefined ? [] : v.parse(v.array(DeferredApprovalHitSchema), parseJsonValue(row.rule_hits));
   }
 
   /** The owner's answer; the row only if this call changed it. No await between read and write: atomic here. */
@@ -321,8 +287,8 @@ export class DeferredApprovalStore {
     if (this.get(id)?.status !== 'queued') return null;
     // The row only holds statuses about this one command; 'always' grants are recorded by the queue.
     const status = answer === 'always' ? 'approved' : answer;
-    void this.sql`UPDATE deferred_approvals SET status=${status}, decided_at=${now}
-      WHERE actor_id=${this.actorId} AND id=${id} AND status='queued'`;
+    void this.sql`UPDATE owner_requests SET status=${status}, decided_at=${now}
+      WHERE kind = 'action' AND actor_id=${this.actorId} AND id=${id} AND status='queued'`;
     markStoreChanged(this.sql);
 
     return this.get(id);
@@ -334,8 +300,8 @@ export class DeferredApprovalStore {
     this.actor.assertCurrent();
 
     const rows = this.sql<SpendRow>`
-      UPDATE deferred_approvals SET status='spent', spend_seq = spend_seq + 1
-      WHERE actor_id = ${this.actorId} AND id = ${id} AND status = 'approved'
+      UPDATE owner_requests SET status='spent', spend_seq = spend_seq + 1
+      WHERE kind = 'action' AND actor_id = ${this.actorId} AND id = ${id} AND status = 'approved'
       RETURNING actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface, spend_seq`;
 
     if (rows.length > 0) markStoreChanged(this.sql);
@@ -356,19 +322,17 @@ export class DeferredApprovalStore {
 
     const rows = outcome === 'did-not-run'
       ? this.sql<{ id: string }>`
-          UPDATE deferred_approvals SET status='approved'
-          WHERE actor_id = ${this.actorId} AND id = ${spent.approvalId}
+          UPDATE owner_requests SET status='approved'
+          WHERE kind = 'action' AND actor_id = ${this.actorId} AND id = ${spent.approvalId}
             AND status='spent' AND spend_seq = ${spent.spend}
           RETURNING id`
       : this.sql<{ id: string }>`
-          DELETE FROM deferred_approvals
-          WHERE actor_id = ${this.actorId} AND id = ${spent.approvalId}
+          DELETE FROM owner_requests
+          WHERE kind = 'action' AND actor_id = ${this.actorId} AND id = ${spent.approvalId}
             AND status='spent' AND spend_seq = ${spent.spend}
           RETURNING id`;
 
     if (rows.length > 0) markStoreChanged(this.sql);
-
-    if (outcome === 'spent') for (const { id } of rows) this.dropHits(id);
 
     return rows.length > 0;
   }
@@ -378,7 +342,7 @@ export class DeferredApprovalStore {
 
     const rows = this.sql<Row>`
       SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface
-      FROM deferred_approvals WHERE actor_id = ${this.actorId} AND id = ${id} LIMIT 1`;
+      FROM owner_requests WHERE kind = 'action' AND actor_id = ${this.actorId} AND id = ${id} LIMIT 1`;
 
     return rows[0] ? toAction(rows[0]) : null;
   }
@@ -389,7 +353,7 @@ export class DeferredApprovalStore {
 
     return this.sql<Row>`
       SELECT actor_id, id, command, executor, context, reason, status, requested_at, decided_at, surface
-      FROM deferred_approvals WHERE actor_id = ${this.actorId} AND status='queued'
+      FROM owner_requests WHERE kind = 'action' AND actor_id = ${this.actorId} AND status='queued'
       ORDER BY requested_at ASC LIMIT ${limit}`.map(toAction);
   }
 }

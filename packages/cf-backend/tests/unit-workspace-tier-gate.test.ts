@@ -312,6 +312,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'builtin_accounts', name: 'builtinListAccounts', run: (u, c) => u.builtinListAccounts(c) },
   { capability: 'builtin_accounts', name: 'builtinClearAttempts', run: (u, c) => u.builtinClearAttempts(c, ['k']) },
   { capability: 'builtin_accounts', name: 'builtinInvitedEmail', run: (u, c) => u.builtinInvitedEmail(c, 'h') },
+  { capability: 'builtin_accounts', name: 'builtinRemoveAccount', run: (u, c) => u.builtinRemoveAccount(c, { userId: USER_ID, email: 'a@example.com' }) },
   { capability: 'builtin_accounts', name: 'builtinPasswordAccount', run: (u, c) => u.builtinPasswordAccount(c, 'a@example.com') },
   { capability: 'builtin_accounts', name: 'builtinPasskeyAccount', run: (u, c) => u.builtinPasskeyAccount(c, 'cred') },
   { capability: 'builtin_accounts', name: 'builtinRecordPasskeyUse', run: (u, c) => u.builtinRecordPasskeyUse(c, 'cred', 1) },
@@ -593,7 +594,7 @@ describe('capability provisioning', () => {
   test('a workspace holding a token the registry does not know is repaired', async () => {
     const harness = await setupWorkspaces();
     // The state a failed teardown leaves: the workspace kept its copy, the UserDO dropped the row.
-    harness.db.prepare('DELETE FROM workspace_capability_tokens WHERE workspace_name = ?').run(WORKSPACE);
+    harness.db.prepare('UPDATE user_workspaces SET token_hash = NULL WHERE name = ?').run(WORKSPACE);
 
     await harness.userDO.ensureWorkspaceCapability(WORKSPACE, await sha256Hex(harness.token));
 
@@ -627,7 +628,7 @@ describe('capability provisioning', () => {
 
   test('the raw token is never persisted in the UserDO', async () => {
     const harness = await setupWorkspaces();
-    const rows = harness.db.prepare('SELECT * FROM workspace_capability_tokens').all();
+    const rows = harness.db.prepare('SELECT * FROM user_workspaces').all();
     expect(JSON.stringify(rows)).not.toContain(harness.token);
     expect(JSON.stringify(rows)).not.toContain(harness.otherToken);
     harness.close();

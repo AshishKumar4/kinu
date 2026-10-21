@@ -523,9 +523,10 @@ describe('a destroyed box starts nothing of its own until it is asked again', ()
     // the teardown deleted it is still delivered.
     await box.devboxStartup();
 
-    // Only the refusal's incident delivery is left: it never reaches a container.
+    // Nothing is left: the teardown deleted the box's records with it, the refusal's incident delivery among them, which
+    // had only the deleted workspace to tell.
     expect({ starts: container.containerStarts, running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
-      .toEqual({ starts, running: false, rows: ['devboxIncidents'] });
+      .toEqual({ starts, running: false, rows: [] });
   });
 
   // Review 3f6, 2026-09-30: a reopen waiting on a quiesce took no arrival, so a teardown that landed

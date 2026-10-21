@@ -63,9 +63,16 @@ describe('a trial\'s slot', () => {
 
 test('a trial account may hold its provider keys and its own bookkeeping, and nothing else', () => {
   expect(inheritedRows({
-    user_credentials: 2, user_credential_revisions: 2, user_credentials_revision: 1, user_profile: 1,
+    user_credentials: 2, user_credential_revisions: 2, 'account_epochs.credentials_revision': 1, user_profile: 1,
     experience_library: 3, user_mcp_servers: 1, user_config: 0,
   })).toEqual({ experience_library: 3, user_mcp_servers: 1 });
+});
+
+// The account's fences share one row: its revocation and credentials counters are its own bookkeeping, but a credential
+// floor set at any value, zero included, is an earlier sign-in history.
+test('a trial account may hold its revocation and credentials fences, never a credential floor', () => {
+  expect(inheritedRows({ 'account_epochs.auth_generation': 1, 'account_epochs.credentials_revision': 1 })).toEqual({});
+  expect(inheritedRows({ 'account_epochs.auth_generation': 1, 'account_epochs.credential_floor': 1 })).toEqual({ 'account_epochs.credential_floor': 1 });
 });
 
 // 2026-10-19, the owner's plans: a model on a plan login runs every task in the one account that owns the login, so every

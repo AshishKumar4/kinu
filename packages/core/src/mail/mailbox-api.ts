@@ -26,7 +26,8 @@ export const MAIL_VIEWS = ['important', 'all', 'sent', 'drafts', 'trash'] as con
 
 export type MailView = (typeof MAIL_VIEWS)[number];
 
-export const MAIL_SEND_STATES = ['draft', 'queued', 'sent', 'delivered', 'bounced', 'failed', 'complained'] as const;
+/** A draft or queued message's own; sent or failed, the outbox's view of a queued one (store.ts `sendStateOf`). */
+export const MAIL_SEND_STATES = ['draft', 'queued', 'sent', 'failed'] as const;
 
 export type MailSendState = (typeof MAIL_SEND_STATES)[number];
 

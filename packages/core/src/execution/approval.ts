@@ -14,7 +14,7 @@ import type { CheckpointFiles, Shell, ShellExecOptions, ShellExecResult } from '
 import { busyShell, callJob, shellExecOptions } from './shell-session';
 import { requireBuild } from './work-mode';
 import { resolvedPath, shellReference, type PathPlanes } from '../vfs/resolve';
-import type { VfsMountRouting } from '../vfs/mounts';
+import type { PathOwner, VfsMountRouting } from '../vfs/mounts';
 import { KinuError, refusalOf } from '../obs/error';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
@@ -98,6 +98,8 @@ export interface FileReach {
    * the path the operation reaches, and the operation runs there, so a link cannot turn the user's file into the agent's.
    */
   readonly resolve: ((path: string, follow: boolean, creating: boolean) => Promise<string>) | null;
+  /** The machine a path is on, by the plane's own lookup (`VfsMountRouting.owner`); null where every path is its own. */
+  readonly owner: ((path: string) => Promise<PathOwner>) | null;
   readonly userRoots: () => readonly string[];
   /** Where `op` on `path` lands on the machine, and whether that is past the agent's own files. */
   readonly locate: ((path: string, op: FileAccess['op']) => { readonly hostPath: string; readonly outside: boolean }) | null;
@@ -110,7 +112,7 @@ type Approve = (op: FileAccess['op'], path: string, bytes?: string | Uint8Array)
 /** A change past the agent's own files is asked; a secret-looking read follows `cat`'s rule. */
 export function withApprovalGatedFiles(
   vfs: VFS & CheckpointFiles, executor: string, reach: FileReach, policy: ShellApprovalPolicy,
-): VFS & CheckpointFiles & Pick<VfsMountRouting, 'resolve'> {
+): VFS & CheckpointFiles & Pick<VfsMountRouting, 'resolve' | 'owner'> {
   const approve: Approve = (op, path, bytes) => Effect.gen(function* () {
     const onUser = onUserRoots(path, reach.userRoots());
     const at = onUser ? undefined : reach.locate?.(path, op);
@@ -145,9 +147,16 @@ export function withApprovalGatedFiles(
   const unasked = <T>(written: string, run: (path: string) => Awaitable<T>, follow = true) =>
     Effect.flatMap(at(written, follow), (path) => Effect.promise(async () => run(path)));
 
-  const gated: VFS & CheckpointFiles & Pick<VfsMountRouting, 'resolve'> = {
+  const gated: VFS & CheckpointFiles & Pick<VfsMountRouting, 'resolve' | 'owner'> = {
     // Where a path lands, as every op here resolves it: what a result names a file by.
     resolve: (path, options) => settle(at(path, options?.follow ?? true, options?.creating === true)),
+    // The machine it is on, by the same path the ops take: a command whose cwd it is runs there (staging rc29: without
+    // this, a program's cwd under /computer ran in the workspace).
+    owner: async (path) => {
+      const { absolute } = await settle(resolvedPath(path, reach.planes));
+
+      return reach.owner === null ? { executor: 'workspace', path: absolute } : await reach.owner(absolute);
+    },
     readFile: (path) => settle(asked('read', path, (absolute) => vfs.readFile(absolute))),
     writeFile: (path, data) => settle(asked('write', path, (absolute) => vfs.writeFile(absolute, data), data)),
     readdir: (path) => settle(unasked(path, (absolute) => vfs.readdir(absolute))),

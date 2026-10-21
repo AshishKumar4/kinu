@@ -260,12 +260,13 @@ title, description, the namespaces a fork calls, the file tree, and one action,
 
 ## 5. What changed
 
-**Data.** Workspace object: `slate_live_shares` (id, slate, visibility, handle,
-grant, created, revoked), `slate_live_share_users` (share id, user id, email)
-and `slate_viewer_requests` (share id, viewer, path, calls, outcome, created,
-settled), all in `packages/core/src/slates/live-shares.ts`. Blueprints:
-`slate_shares` and `slate_share_users` in `packages/core/src/slates/shares.ts`,
-used by `packages/core/src/slates/blueprints.ts`. User object: `user_share_cards`,
+**Data.** Workspace object: `slate_shares`, one header per share of either kind
+(id, kind, slate, created, revoked; a blueprint's publication; a live share's
+visibility, handle, grant, mode and listing), and `slate_share_users` (share id,
+user id, email, role), in `packages/core/src/slates/shares.ts`, used by
+`packages/core/src/slates/blueprints.ts` and `live-shares.ts`; and
+`slate_viewer_requests` (share id, viewer, path, calls, outcome, created,
+settled) in `packages/core/src/slates/live-shares.ts`. User object: `user_share_cards`,
 the cards the Drive's "Shared with you" lists, and `share_cards_sent`, what this
 account last sent each person a share names. Every overview a workspace pushes
 reconciles the two (`packages/cf-backend/src/user/share-cards.ts`): each

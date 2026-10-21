@@ -75,6 +75,7 @@ const USER_DO_METHODS = [
   'builtinAdmissible',
   'builtinApplyReset',
   'builtinClearAttempts',
+  'builtinRemoveAccount',
   'builtinCreateInvite',
   'builtinHasOwner',
   'builtinInvitedEmail',
@@ -220,6 +221,7 @@ const USER_DO_METHODS = [
   'shareCards_put',
   'shareCards_remove',
   'shareCards_withdraw',
+  'shareRecipient_forget',
   'sharesReceived_forget',
   'sharesReceived_list',
   'sharesSeenAt',
@@ -283,6 +285,8 @@ const ORCHESTRATOR_METHODS = [
   'seedBlueprint',
   // The account, DO-to-DO, when the owner's connections change (`user/mcp-servers.ts`).
   'connectionsChanged',
+  // The account, DO-to-DO, when an account it shared with is deleted (`user/share-cards.ts`).
+  'forgetPerson',
   'blueprintBundle',
   'readBlueprint',
   'shareBlueprintWith',

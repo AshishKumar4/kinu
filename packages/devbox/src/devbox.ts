@@ -2522,7 +2522,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  /** Also ends the box's own starts (D36). */
+  /**
+   * Also ends the box's own starts (D36), and deletes what the box kept of its workspace: its process specs, sessions,
+   * settings and records, all but the snapshots still owed a deletion (account deletion).
+   */
   destroy(): Promise<void> {
     return settle(attempt('io', async () => {
       this.#closed = true;
@@ -2536,6 +2539,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       for (const callback of CONTAINER_CALLBACKS) this.#deleteSchedule(callback);
       await this.#destroyContainer();
+      await this.#snapshots.keepingOwed(async () => {
+        await this.ctx.storage.deleteAlarm();
+        await this.ctx.storage.deleteAll();
+      });
     }));
   }
 

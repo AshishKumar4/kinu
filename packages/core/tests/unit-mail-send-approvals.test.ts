@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { Effect } from 'effect';
 import { createTestActors, present } from '@kinu.run/test-utils';
 import {
-  approvalKindOf, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, mailSendExecutor, mailSendText,
+  approvalKindOf, DeferredApprovalQueue, DeferredApprovalStore, initOwnerRequestsTable, mailSendExecutor, mailSendText,
   type AgentSignal, type MailSend,
 } from '../src/index';
 import type { ApprovalGrant } from '../src/safety/approval-gate';
@@ -24,7 +24,7 @@ function world() {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
 
-  initDeferredApprovalsTable(execRaw);
+  initOwnerRequestsTable(execRaw);
 
   const actors = createTestActors(sql, execRaw);
   const store = new DeferredApprovalStore(sql, actors.main);

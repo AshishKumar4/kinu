@@ -12,11 +12,7 @@ export function initMailNameTables(sql: SqlExec): void {
       user_id      TEXT    NOT NULL,
       kind         TEXT    NOT NULL CHECK (kind IN ('username', 'alias')),
       target_path  TEXT,
-      state        TEXT    NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'former', 'retired')),
-      claimed_at   INTEGER NOT NULL,
-      ended_at     INTEGER,
-      CHECK ((kind = 'alias') = (target_path IS NOT NULL)),
-      CHECK ((state = 'active') = (ended_at IS NULL))
+      CHECK ((kind = 'alias') = (target_path IS NOT NULL))
     )
   `);
 }
@@ -28,8 +24,7 @@ export function initMailboxTables(sql: SqlExec): void {
       id          INTEGER PRIMARY KEY CHECK (id = 1),
       user_id     TEXT    NOT NULL,
       email       TEXT    NOT NULL,
-      username    TEXT    NOT NULL,
-      created_at  INTEGER NOT NULL
+      username    TEXT    NOT NULL
     )
   `);
   // A path is relative to the username: '' the person, 'api-worker' a workspace, 'scout.api-worker' an agent.
@@ -40,13 +35,9 @@ export function initMailboxTables(sql: SqlExec): void {
       workspace   TEXT,
       actor_id    TEXT,
       wake        TEXT    NOT NULL DEFAULT 'owner' CHECK (wake IN ('owner', 'allowlist', 'verified', 'never')),
-      state       TEXT    NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'retired')),
-      created_at  INTEGER NOT NULL,
-      retired_at  INTEGER,
       CHECK ((kind = 'person') = (path = '')),
       CHECK ((workspace IS NULL) = (actor_id IS NULL)),
-      CHECK (kind = 'person' OR workspace IS NOT NULL),
-      CHECK ((state = 'retired') = (retired_at IS NOT NULL))
+      CHECK (kind = 'person' OR workspace IS NOT NULL)
     )
   `);
   sql.exec('CREATE UNIQUE INDEX IF NOT EXISTS mail_addresses_actor ON mail_addresses (workspace, actor_id, kind) WHERE actor_id IS NOT NULL');
@@ -54,40 +45,34 @@ export function initMailboxTables(sql: SqlExec): void {
     CREATE TABLE IF NOT EXISTS mail_allow (
       path        TEXT    NOT NULL REFERENCES mail_addresses (path),
       sender      TEXT    NOT NULL,
-      added_at    INTEGER NOT NULL,
       PRIMARY KEY (path, sender)
     )
   `);
-  // All, Sent and Drafts are queries over messages; unverified is a message's verdict, not a folder.
+  // All, Sent and Drafts are queries over messages; unverified is a message's verdict, not a folder. `untriaged_since`: the
+  // person's thread has mail the assistant has not yet picked Important or not on (docs/MAIL.md §8), and is the thread's
+  // version, moved forward at every arrival; null when nothing is owed.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS mail_threads (
-      id          TEXT    PRIMARY KEY,
-      path        TEXT    NOT NULL REFERENCES mail_addresses (path),
-      subject     TEXT    NOT NULL,
-      important   TEXT    CHECK (important IS NULL OR length(important) BETWEEN 1 AND 280),
-      trashed_at  INTEGER,
-      created_at  INTEGER NOT NULL,
-      CHECK (important IS NULL OR path = '')
+      id              TEXT    PRIMARY KEY,
+      path            TEXT    NOT NULL REFERENCES mail_addresses (path),
+      subject         TEXT    NOT NULL,
+      important       TEXT    CHECK (important IS NULL OR length(important) BETWEEN 1 AND 280),
+      trashed_at      INTEGER,
+      untriaged_since INTEGER,
+      CHECK (important IS NULL OR path = ''),
+      CHECK (untriaged_since IS NULL OR path = '')
     )
   `);
-  sql.exec('CREATE INDEX IF NOT EXISTS mail_threads_box ON mail_threads (path, created_at)');
-  sql.exec('CREATE INDEX IF NOT EXISTS mail_threads_important ON mail_threads (created_at) WHERE important IS NOT NULL AND trashed_at IS NULL');
+  sql.exec('CREATE INDEX IF NOT EXISTS mail_threads_box ON mail_threads (path)');
+  sql.exec('CREATE INDEX IF NOT EXISTS mail_threads_important ON mail_threads (id) WHERE important IS NOT NULL AND trashed_at IS NULL');
   sql.exec('CREATE INDEX IF NOT EXISTS mail_threads_trashed ON mail_threads (trashed_at) WHERE trashed_at IS NOT NULL');
-  // The person's threads with mail the assistant has not yet picked Important or not on (docs/MAIL.md §8).
-  sql.exec(`
-    CREATE TABLE IF NOT EXISTS mail_untriaged (
-      thread_id   TEXT    PRIMARY KEY REFERENCES mail_threads (id),
-      since       INTEGER NOT NULL
-    )
-  `);
+  sql.exec('CREATE INDEX IF NOT EXISTS mail_threads_untriaged ON mail_threads (untriaged_since DESC, id) WHERE untriaged_since IS NOT NULL AND trashed_at IS NULL');
   sql.exec(`
     CREATE TABLE IF NOT EXISTS mail_messages (
       id           TEXT    PRIMARY KEY,
       thread_id    TEXT    NOT NULL REFERENCES mail_threads (id),
       direction    TEXT    NOT NULL CHECK (direction IN ('in', 'out')),
       header_id    TEXT,
-      in_reply_to  TEXT,
-      refs         TEXT    NOT NULL DEFAULT '[]',
       from_addr    TEXT    NOT NULL,
       from_name    TEXT,
       to_json      TEXT    NOT NULL DEFAULT '[]',
@@ -103,10 +88,9 @@ export function initMailboxTables(sql: SqlExec): void {
       text_key     TEXT,
       html_key     TEXT,
       raw_key      TEXT,
-      size         INTEGER NOT NULL,
       read         INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0, 1)),
       written_by   TEXT,
-      send_state   TEXT    CHECK (send_state IS NULL OR send_state IN ('draft', 'queued', 'sent', 'delivered', 'bounced', 'failed', 'complained')),
+      send_state   TEXT    CHECK (send_state IS NULL OR send_state IN ('draft', 'queued')),
       CHECK ((direction = 'in') = (send_state IS NULL)),
       CHECK (direction = 'out' OR (raw_key IS NOT NULL AND written_by IS NULL)),
       CHECK (text_body IS NULL OR text_key IS NULL),
@@ -126,8 +110,7 @@ export function initMailboxTables(sql: SqlExec): void {
       filename     TEXT    NOT NULL,
       content_type TEXT    NOT NULL,
       size         INTEGER NOT NULL,
-      digest       TEXT    NOT NULL,
-      inline_cid   TEXT
+      digest       TEXT    NOT NULL
     )
   `);
   sql.exec('CREATE INDEX IF NOT EXISTS mail_attachments_message ON mail_attachments (message_id)');

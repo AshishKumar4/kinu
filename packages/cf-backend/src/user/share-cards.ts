@@ -15,7 +15,8 @@ const SHARE_CARD_JOB = 'share-card';
 const WriteKey = { recipient: v.string(), owner: v.string(), workspace: v.string(), share: v.string() };
 
 const ShareCardWriteSchema = v.variant('op', [
-  v.object({ op: v.literal('put'), ...WriteKey, card: ShareCardSchema }),
+  // `email`: the address it was shared to, which the share names its member by; absent on a job written before it.
+  v.object({ op: v.literal('put'), ...WriteKey, card: ShareCardSchema, email: v.optional(v.string()) }),
   v.object({ op: v.literal('remove'), ...WriteKey }),
 ]);
 
@@ -40,9 +41,9 @@ function shareCardOf(share: WorkspaceOverviewShare, owner: string): ShareCard {
   };
 }
 
-/** What a delivery asks of the recipient's account. */
+/** What a delivery asks of the recipient's account: a deleted one keeps nothing, and answers so. */
 export interface ShareCardRecipient {
-  shareCards_put(caller: UserCaller, row: ReceivedShare): Promise<void>;
+  shareCards_put(caller: UserCaller, row: ReceivedShare): Promise<'kept' | 'deleted'>;
   shareCards_remove(caller: UserCaller, ownerUserId: string, workspace: string, shareId: string): Promise<void>;
 }
 
@@ -55,6 +56,8 @@ export interface ShareCardDeps {
   readonly accountOf: (email: string) => Promise<string>;
   /** The deployment's owner authority, as one account writes another's cards. */
   readonly caller: () => Promise<UserCaller>;
+  /** A recipient whose account was deleted forgotten by this account, in `workspaces` (`shareRecipient_forget`). */
+  readonly forget: (person: { readonly userId: string; readonly email: string }, workspaces: readonly string[]) => Promise<void>;
 }
 
 export class ShareCardJobs extends LifecycleCapability {
@@ -75,7 +78,7 @@ export class ShareCardJobs extends LifecycleCapability {
   async reconcile(workspace: string, shares: readonly WorkspaceOverviewShare[]): Promise<void> {
     const { sql } = this.#deps;
     const owner = this.#deps.owner();
-    const wanted = new Map<string, { share: string; recipient: string; card: ShareCard; text: string }>();
+    const wanted = new Map<string, { share: string; recipient: string; email: string; card: ShareCard; text: string }>();
 
     for (const share of shares) {
       const card = shareCardOf(share, owner.email);
@@ -83,7 +86,7 @@ export class ShareCardJobs extends LifecycleCapability {
       for (const email of share.users) {
         const recipient = await this.#deps.accountOf(email);
 
-        if (recipient !== owner.userId) wanted.set(JSON.stringify([share.share, recipient]), { share: share.share, recipient, card, text: JSON.stringify(card) });
+        if (recipient !== owner.userId) wanted.set(JSON.stringify([share.share, recipient]), { share: share.share, recipient, email, card, text: JSON.stringify(card) });
       }
     }
 
@@ -106,7 +109,7 @@ export class ShareCardJobs extends LifecycleCapability {
          ON CONFLICT (workspace, share_id, recipient_user_id) DO UPDATE SET card = excluded.card`,
         workspace, want.share, want.recipient, want.text,
       );
-      pushes.push(this.queue({ op: 'put', recipient: want.recipient, owner: owner.userId, workspace, share: want.share, card: want.card }));
+      pushes.push(this.queue({ op: 'put', recipient: want.recipient, owner: owner.userId, workspace, share: want.share, card: want.card, email: want.email }));
     }
 
     await Promise.all(pushes);
@@ -128,6 +131,19 @@ export class ShareCardJobs extends LifecycleCapability {
     await Promise.allSettled(this.#sending);
 
     return [...new Set([...sent, ...owed])];
+  }
+
+  /**
+   * A deleted recipient: no delivery to it is still owed or lands after this, and no sent row names it. Its account is
+   * gone, so it is told nothing; its workspaces forgot it first (`OrchestratorAgent.forgetPerson`).
+   */
+  async forgetRecipient(userId: string, running?: string): Promise<void> {
+    const jobs = this.lifecycle.jobs.list()
+      .filter((job) => job.fn === SHARE_CARD_JOB && job.id !== running && v.parse(ShareCardWriteSchema, job.payload).recipient === userId);
+
+    await Promise.all(jobs.map((job) => this.lifecycle.jobs.cancel(job.id)));
+    await Promise.allSettled(this.#sending);
+    this.#deps.sql.exec('DELETE FROM share_cards_sent WHERE recipient_user_id = ?', userId);
   }
 
   /** One job per recipient and share: a newer write replaces an older one not yet delivered, since only the last counts. */
@@ -155,12 +171,19 @@ export class ShareCardJobs extends LifecycleCapability {
       ? recipient.shareCards_put(caller, { ownerUserId: write.owner, workspace: write.workspace, shareId: write.share, card: write.card })
       : recipient.shareCards_remove(caller, write.owner, write.workspace, write.share);
 
-    this.#sending.add(sending);
+    // Its end, however it ends: a withdrawal waits for it, and its failure is the job's to retry.
+    const sent = Promise.allSettled([sending]).then(() => undefined);
+
+    this.#sending.add(sent);
 
     try {
-      await sending;
+      // A deleted account keeps no card, and this one forgets it where it shared (account deletion): no later card goes.
+      if (await sending === 'deleted' && write.op === 'put') {
+        await this.#deps.forget({ userId: write.recipient, email: write.email ?? '' }, [write.workspace]);
+        await this.forgetRecipient(write.recipient, job.id);
+      }
     } finally {
-      this.#sending.delete(sending);
+      this.#sending.delete(sent);
     }
 
     // The alarm's own work: a call into the recipient's account, none into this one (core `ALARM_WORK`).

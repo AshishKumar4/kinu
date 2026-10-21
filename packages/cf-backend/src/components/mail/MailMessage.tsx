@@ -83,7 +83,7 @@ export function MailMessage({ mail, box, owner, open, onToggle }: {
       <MessageHeader mail={mail} name={name} onToggle={onToggle} />
       {mail.woke !== null && <p data-mail-woke={mail.woke} className="p-meta p-text-3">Woke {reader}{chat !== null && <> · <Link to={chat} className="inline-flex items-center gap-0.5 p-accent-fg hover:underline">Open chat<ArrowUpRightIcon size={11} /></Link></>}</p>}
       {mail.direction === "out" && mail.writtenBy !== null && <p className="p-meta p-text-3">Written by {mail.writtenBy} · approved by you</p>}
-      {mail.sendState !== null && ["queued", "bounced", "failed", "complained"].includes(mail.sendState) && <p className="p-meta p-text-3">{mail.sendState}</p>}
+      {mail.sendState !== null && ["queued", "failed"].includes(mail.sendState) && <p className="p-meta p-text-3">{mail.sendState}</p>}
       {mail.html === null ? <MailBody text={mail.text} /> : <SealedMailHtml html={mail.html} />}
       {mail.attachments.length > 0 && <div className="flex flex-wrap gap-1.5" data-mail-attachments>
         {mail.attachments.map((file) => <AttachmentChip key={file.id} part={{ type: "file", filename: file.filename, mediaType: "application/octet-stream", url: "about:blank" }} />)}

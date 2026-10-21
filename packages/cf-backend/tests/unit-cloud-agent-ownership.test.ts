@@ -904,7 +904,10 @@ const GENESIS_USER_WORKSPACES_DDL = `
     archived_at   INTEGER,
     delete_pending INTEGER NOT NULL DEFAULT 0,
     create_pending INTEGER NOT NULL DEFAULT 0,
-    fork_lease_expires_at INTEGER
+    fork_lease_expires_at INTEGER,
+    nudge_attempts INTEGER NOT NULL DEFAULT 0,
+    nudge_next_at INTEGER NOT NULL DEFAULT 0,
+    token_hash TEXT UNIQUE
   )`;
 
 describe('a create on an account whose registry predates the current build', () => {

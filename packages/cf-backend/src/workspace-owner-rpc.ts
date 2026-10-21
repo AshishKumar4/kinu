@@ -22,7 +22,7 @@ export interface LiveShareReading {
 
 /** Slate operations made as a caller; the browser's `@callable slate` mints the root caller locally. */
 export interface WorkspaceOwnerRpc {
-  slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult>;
+  slateAs(caller: SlateCaller, operation: SlateOperation, turn?: string): Promise<SlateCallResult>;
   /** Whether a slate still builds, asked as a caller; a check, never a preview. */
   slateBuildAs(caller: SlateCaller, slate: string): Promise<SlateCallResult>;
   /** One call a slate's process made through its binding, with the lineage the host minted into that binding. */

@@ -78,7 +78,7 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     expect(inspection.warnings).toEqual([]);
 
     const published = answered(await owner.agent.slate({ op: 'publish', id: 'issues', version: committed.id, include: ['src'] }), PublishedBlueprintSchema);
-    expect(published.share).toMatchObject({ slate: 'issues', included: ['package.json', 'src'], revokedAt: null });
+    expect(published.share).toMatchObject({ slate: 'issues', revokedAt: null });
     expect(answered(await owner.agent.slate({ op: 'shares' }), v.array(SlateShareRecordSchema)).map((share) => share.id)).toEqual([published.share.id]);
 
     const bundle = answered(await owner.agent.blueprintBundle(published.share.id), BlueprintBundleSchema);
@@ -200,7 +200,8 @@ test('naming users on a blueprint records them with the owner and projects the r
     await expect(recipient.userDO.sharesReceived_list({ workspaceToken: 'not-an-owner' })).rejects.toThrow();
     answered(await owner.agent.slate({ op: 'unshare', share: published.share.id }), SlateShareRecordSchema);
     expect(await owner.agent.shareBlueprintWith(published.share.id, [{ userId: 'x', email: 'x@example.test' }])).toMatchObject({ ok: false, reason: 'denied' });
-    expect(answered(await owner.agent.slate({ op: 'shares' }), v.array(SlateShareRecordSchema))[0]?.users).toEqual(['pat@example.test']);
+    // A revoked share keeps no member (owner decision, 2026-10-20): nothing reads them after, so none names a person.
+    expect(answered(await owner.agent.slate({ op: 'shares' }), v.array(SlateShareRecordSchema))[0]?.users).toEqual([]);
   } finally {
     user.close();
     recipient.close();

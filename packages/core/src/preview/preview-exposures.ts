@@ -44,14 +44,21 @@ function marked(exposure: Exposure, mark: v.InferOutput<typeof PUBLIC_SCHEMA> | 
 /** Longer than any publication lives between refreshes: a mark outlasts its exposure, never the other way round. */
 const PUBLIC_MARK_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 
+/** The key families a sandbox's ports are recorded under, each `<family>:<sandbox>:<port>`. */
+const PORT_FAMILIES = { exposure: 'sandbox-preview', public: 'sandbox-preview-public', withdrawal: 'sandbox-preview-withdrawn' } as const;
+
+function portPrefix(family: keyof typeof PORT_FAMILIES, sandboxId: string): string {
+  return `${PORT_FAMILIES[family]}:${sandboxId.toLowerCase()}:`;
+}
+
 function publicKey(sandboxId: string, port: number): string {
-  return `sandbox-preview-public:${sandboxId.toLowerCase()}:${String(port)}`;
+  return `${portPrefix('public', sandboxId)}${String(port)}`;
 }
 
 const REVOCATION_SCHEMA = v.object({ revokedBefore: v.number() });
 
 function exposureKey(sandboxId: string, port: number): string {
-  return `sandbox-preview:${sandboxId.toLowerCase()}:${String(port)}`;
+  return `${portPrefix('exposure', sandboxId)}${String(port)}`;
 }
 
 function revocationKey(sandboxId: string): string {
@@ -59,7 +66,7 @@ function revocationKey(sandboxId: string): string {
 }
 
 function withdrawalKey(sandboxId: string, port: number): string {
-  return `sandbox-preview-withdrawn:${sandboxId.toLowerCase()}:${String(port)}`;
+  return `${portPrefix('withdrawal', sandboxId)}${String(port)}`;
 }
 
 /** The latest withdrawal over this port: the sandbox's, or the port's own. */
@@ -204,4 +211,30 @@ export function sandboxPreviewExposures(
       );
     },
   };
+}
+
+/** A KV namespace that lists its keys, as Cloudflare's does: a page may be empty with more to come. */
+export interface ListedKv extends KvStore {
+  list(options: { readonly prefix: string; readonly cursor?: string }): Promise<{
+    readonly keys: readonly { readonly name: string }[];
+    readonly list_complete: boolean;
+    readonly cursor?: string;
+  }>;
+}
+
+/**
+ * A deleted workspace's preview records, deleted: its exposures, public marks and withdrawals, every port. The
+ * revocation watermark (`revokeAll`) stays until it expires, a time alone, so a write still in flight publishes nothing.
+ */
+export async function forgetSandboxPreviews(kv: ListedKv, sandboxId: string): Promise<void> {
+  for (const prefix of (['exposure', 'public', 'withdrawal'] as const).map((family) => portPrefix(family, sandboxId))) {
+    // Every page, to the one that says it is the last: an empty page is not the end (Workers KV, list-keys).
+    for (let cursor: string | undefined, more = true; more;) {
+      const page = await kv.list({ prefix, ...(cursor !== undefined && { cursor }) });
+
+      for (const { name } of page.keys) await kv.delete(name);
+      cursor = page.cursor;
+      more = !page.list_complete && cursor !== undefined;
+    }
+  }
 }

@@ -760,7 +760,7 @@ describe('OwnedModelServices — the listing kept at the account', () => {
     const otherAccounts = await services({ openai: 'work' }).profileProviderSnapshot();
 
     await settled();
-    user.db.exec('UPDATE user_credentials_revision SET revision = revision + 1 WHERE id = 1');
+    user.db.exec('UPDATE account_epochs SET credentials_revision = credentials_revision + 1 WHERE id = 1');
     const movedKeys = await services().profileProviderSnapshot();
 
     expect([otherAccounts.cache, movedKeys.cache]).toEqual(['miss', 'miss']);
