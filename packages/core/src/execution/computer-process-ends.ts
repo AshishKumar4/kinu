@@ -19,16 +19,20 @@ interface Waiting {
   resolve(end: ComputerProcessEnd): void;
 }
 
+/** Made with the workspace's tables (`initWorkspaceTables`), as its jobs' are. */
+export function initComputerProcessEndsTable(execRaw: (sql: string) => void): void {
+  execRaw(`CREATE TABLE IF NOT EXISTS computer_process_ends (
+    job TEXT PRIMARY KEY,
+    exit_code INTEGER,
+    tail TEXT NOT NULL
+  )`);
+}
+
 export class ComputerProcessEnds {
   private readonly waiting = new Map<string, Waiting>();
 
-  constructor(private readonly sql: EndsSql, private readonly running: (jobId: string) => boolean) {
-    sql.exec(`CREATE TABLE IF NOT EXISTS computer_process_ends (
-      job TEXT PRIMARY KEY,
-      exit_code INTEGER,
-      tail TEXT NOT NULL
-    )`);
-  }
+  /** Over a workspace's schema, which has the table (`initComputerProcessEndsTable`). */
+  constructor(private readonly sql: EndsSql, private readonly running: (jobId: string) => boolean) {}
 
   /** The job's process's end: at once if the box told it already, else when it does. */
   ended(jobId: string): Promise<ComputerProcessEnd> {

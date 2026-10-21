@@ -5,10 +5,11 @@
  */
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
-import { ComputerProcessEnds } from '@kinu.run/core';
+import { ComputerProcessEnds, initComputerProcessEndsTable } from '@kinu.run/core';
 
 function ends(running: (jobId: string) => boolean) {
   const db = new Database(':memory:');
+  initComputerProcessEndsTable((sql) => { db.run(sql); });
 
   return {
     // As a Durable Object's SQL: each statement runs as it is issued, and its rows are read after.

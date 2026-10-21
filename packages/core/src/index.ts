@@ -1079,7 +1079,7 @@ export {
 
 export { computerProcessResume, stopComputerProcessJob } from './jobs/computer-process';
 
-export { ComputerProcessEnds } from './execution/computer-process-ends';
+export { ComputerProcessEnds, initComputerProcessEndsTable } from './execution/computer-process-ends';
 
 export {
   DESKTOP_MEMBERS,
