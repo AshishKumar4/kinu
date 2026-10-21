@@ -62,10 +62,11 @@ function debianStore(root: string, sources: Readonly<Record<string, string>>): v
   mkdirSync(join(root, 'usr/local/share/ca-certificates'), { recursive: true });
   writeFileSync(join(root, 'etc/ca-certificates.conf'), `${Object.keys(sources).join('\n')}\n`);
 
-  const made = spawnSync('update-ca-certificates', ['--certsconf', join(root, 'etc/ca-certificates.conf'), '--certsdir', join(root, 'usr/share/ca-certificates'),
+  // Debian's own tool, where Debian installs it: outside a user's PATH, as the box runs it as root.
+  const made = spawnSync('/usr/sbin/update-ca-certificates', ['--certsconf', join(root, 'etc/ca-certificates.conf'), '--certsdir', join(root, 'usr/share/ca-certificates'),
     '--localcertsdir', join(root, 'usr/local/share/ca-certificates'), '--etccertsdir', join(root, 'etc/ssl/certs'), '--hooksdir', join(root, 'etc/ca-certificates/update.d')], { encoding: 'utf8' });
 
-  if (made.status !== 0) throw new Error(made.stderr);
+  if (made.status !== 0) throw new Error(`update-ca-certificates: ${made.error?.message ?? ''} ${made.stderr} ${made.stdout}`);
 }
 
 const fingerprintOf = (pem: string) => new X509Certificate(pem).fingerprint256.replaceAll(':', '');

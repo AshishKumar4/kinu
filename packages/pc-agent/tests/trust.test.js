@@ -109,7 +109,7 @@ test('after the install, fetch, WebSocket and node:https refuse a chain through 
     await server.stop(true);
     fs.rmSync(dir, { recursive: true, force: true });
   }
-}, 60_000);
+});
 
 test('a caller\'s own roots stand, and a protocol list rides the socket\'s options beside them', async () => {
   /** @type {unknown[]} */

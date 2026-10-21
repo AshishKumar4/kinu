@@ -106,7 +106,7 @@ const DESELECTED = DISTRUSTED.roots.flatMap((root) => (root.debian === null ? []
 
 const DESELECT = `if grep -qxF ${DESELECTED.map((name) => `-e '${name}'`).join(' ')} ${CA_CONF}; then
   sed -i ${DESELECTED.map((name) => `-e 's|^${name.replaceAll('.', '\\.')}$|!&|'`).join(' ')} ${CA_CONF} \\
-  && update-ca-certificates --certsconf ${CA_CONF} --certsdir ${CA_SOURCES} --localcertsdir ${LOCAL_CA} --etccertsdir ${CA_DIR} --hooksdir ${CA_HOOKS} >/dev/null \\
+  && /usr/sbin/update-ca-certificates --certsconf ${CA_CONF} --certsdir ${CA_SOURCES} --localcertsdir ${LOCAL_CA} --etccertsdir ${CA_DIR} --hooksdir ${CA_HOOKS} >/dev/null \\
   && cp ${BUNDLE} ${SYSTEM_BUNDLE}.tmp && mv ${SYSTEM_BUNDLE}.tmp ${SYSTEM_BUNDLE}
 fi`;
 
