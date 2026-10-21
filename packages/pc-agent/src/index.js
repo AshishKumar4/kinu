@@ -95,6 +95,8 @@ const supervisor = require('./daemon/supervisor.js');
 
 const { log, errorDetail } = require('./daemon/log.js');
 
+const { installTrustedRoots } = require('./daemon/trust.js');
+
 const update = require('./update.js');
 
 const machinePidfile = require('../../cli-backend/src/machine-pidfile.ts');
@@ -2486,6 +2488,8 @@ if (require.main === module) {
       if (stamp === null) throw new Error(`no version stamp beside ${daemonPath()}`);
       console.log(stamp);
     } else {
+      // Before anything connects: the device socket, its ticket, an update's download (daemon/trust.js).
+      installTrustedRoots();
       startOnApprovedBun().catch(reportFatal);
     }
   } catch (err) {

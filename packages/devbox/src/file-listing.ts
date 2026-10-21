@@ -2,6 +2,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import type { ListFilesOptions, ListedFile } from './contracts';
 import { attempt, attemptSync, DevboxError } from './errors';
+import { containerExec } from './processes';
 
 const Entry = v.object({
   name: v.string(), path: v.string(),
@@ -26,7 +27,7 @@ export function listFiles(container: Pick<Container, 'exec'>, path: string, opti
 
     if (!path.startsWith('/')) return yield* Effect.fail(new DevboxError('file', 'cwd is required when path is relative', { cause: new TypeError('cwd is required when path is relative') }));
 
-    const output = yield* attempt('io', async () => await (await container.exec(['python3', '-c', LIST_FILES, path, options.recursive === true ? '1' : '0'])).output());
+    const output = yield* attempt('io', async () => await (await containerExec(container, ['python3', '-c', LIST_FILES, path, options.recursive === true ? '1' : '0'])).output());
 
     const decoder = new TextDecoder();
 

@@ -376,6 +376,23 @@ describe('the daemon\'s own sign-in', () => {
     while (read(home).accessToken !== accessToken) await new Promise((resolve) => { setImmediate(resolve); });
   }
 
+  // The daemon makes its session as its module loads, before it installs the trust its fetch carries (daemon/trust.js).
+  test('a session made before the global fetch is replaced fetches through the one in place at each call', async () => {
+    const home = scratchDir('siwc-device-late-fetch');
+    deviceRecord(home, { accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 60_000 });
+    const session = chatgpt.createDeviceSession({ home });
+    const auth = authServer(await signer(), async () => Response.json({ access_token: 'at-new', refresh_token: 'rt-new', expires_in: 3600 }));
+    const original = globalThis.fetch;
+
+    globalThis.fetch = /** @type {typeof fetch} */ (auth.fetch);
+
+    try {
+      expect(await session.bearer()).toBe('at-new');
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   test('callers that meet an expiring token share one rotation, and the replacement lands owner-only', async () => {
     const home = scratchDir('siwc-device-rotate');
     deviceRecord(home, { accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 60_000 });
