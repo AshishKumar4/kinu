@@ -16,6 +16,8 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { Modal } from "@/components/ui/Modal";
 import { Notice } from "@/components/ui/Notice";
 import { TextInput } from "@/components/ui/Field";
+import { Pressable } from "@/components/ui/Pressable";
+import { CopyField } from "@/components/ui/CopyField";
 
 /** How often a waiting sign-in is read. */
 const SIGN_IN_POLL_MS = 2_000;
@@ -98,12 +100,11 @@ export function ChatGptConnect({ plan, onSignedIn }: { plan: ChatGptPlan; onSign
 
 function WayButton({ icon, title, text, onClick }: { icon: ReactNode; title: string; text: string; onClick: () => void }) {
   return (
-    <button type="button" onClick={onClick}
-      // A row to pick, not a box inside the card (design review 2026-10-20).
-      className="-mx-2 flex flex-col items-start gap-1 rounded-lg px-2 py-2 text-left transition-colors hover:bg-[var(--c-hover)]">
-      <span className="t-item flex items-center gap-2 p-text">{icon}{title}</span>
-      <span className="t-meta p-text-3">{text}</span>
-    </button>
+    // A row to pick, not a box inside the card (design review 2026-10-20).
+    <Pressable onClick={onClick} className="-mx-2 flex flex-col items-start gap-1 px-2 py-2">
+      <span className="t-item flex items-center gap-2">{icon}{title}</span>
+      <span className="t-meta">{text}</span>
+    </Pressable>
   );
 }
 
@@ -153,7 +154,7 @@ function OnYourPc({ plan, onDone, onGaveUp, onFailed }: {
   if (signIn?.state === "open") {
     return (
       <div className="space-y-2" data-chatgpt-way="pc" data-chatgpt-state="open">
-        <p className="t-meta p-text-2">Sign in from a browser on <span className="font-medium p-text">{signIn.device.label}</span>. The sign-in comes back to that machine.</p>
+        <p className="t-meta p-text-2">Sign in from a browser on <span className="p-text">{signIn.device.label}</span>. The sign-in comes back to that machine.</p>
         <div className="flex flex-wrap items-center gap-2">
           <a href={signIn.authorizeUrl} target="_blank" rel="noopener noreferrer" className={buttonClass({ size: "sm" })}>
             <ArrowSquareOutIcon size={12} /> Open ChatGPT sign-in
@@ -169,10 +170,7 @@ function OnYourPc({ plan, onDone, onGaveUp, onFailed }: {
     <div className="space-y-2" data-chatgpt-way="pc" data-chatgpt-state="waiting">
       <p className="t-meta p-text-2">Run this on your PC. It installs the Kinu CLI and connects the machine; the sign-in then opens there.</p>
       {command !== null && (
-        <div className="flex items-start gap-2 rounded-md p-fill border p-border p-3">
-          <code data-connect-command className="t-code p-text flex-1 break-all select-all">{command}</code>
-          <CopyButton value={command} what="the connect command" size={13} className="p-text-3 hover:p-text shrink-0" />
-        </div>
+        <div data-connect-command><CopyField value={command} what="the connect command" /></div>
       )}
       <p className="t-meta flex items-center gap-2 p-text-3"><Loader size="sm" /> Waiting for your machine…</p>
     </div>

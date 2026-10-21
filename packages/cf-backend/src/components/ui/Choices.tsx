@@ -64,7 +64,7 @@ function Tile<T extends string>({ option }: { option: Choice<T> }) {
   return (
     <>
       {option.picture}
-      <span className="mt-2 flex items-baseline justify-between gap-2 px-1">
+      <span className={`${option.picture === undefined ? "" : "mt-2 "}flex items-baseline justify-between gap-2 px-1`}>
         <span className="t-item">{option.label}</span>
         {option.aside}
       </span>

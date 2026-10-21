@@ -23,6 +23,8 @@ import {
 } from "@/components/secrets/SecretRows";
 import { Pressable } from "@/components/ui/Pressable";
 import { TextArea, TextInput } from "@/components/ui/Field";
+import { Group } from "@/components/ui/Group";
+import { Chip } from "@/components/ui/Chip";
 
 
 /** What turning reading on lets an agent do; said where the switch is turned, and again as it is asked. */
@@ -42,9 +44,9 @@ export function SecretsPanel() {
           {(secrets) => (secrets.length === 0
             ? <p className="t-body p-text-3" data-secrets-empty>No secrets yet. Add one below, or paste a .env file.</p>
             : (
-              <ul className="-mx-5 -my-5 divide-y divide-[var(--c-border)]" data-secrets-list>
+              <Group list data-secrets-list="">
                 {secrets.map((secret) => <SecretItem key={secret.name} secret={secret} onChanged={reload} />)}
-              </ul>
+              </Group>
             ))}
         </CardSlot>
       </Card>
@@ -72,7 +74,7 @@ function SecretItem({ secret, onChanged }: { secret: SecretSummary; onChanged: (
         <Caret size={12} className="shrink-0 p-text-3" />
         <span className="t-item t-mono p-text">{secret.name}</span>
         <span className="flex min-w-0 flex-wrap gap-1">
-          {secret.hosts.map((host) => <span key={host} className="t-meta t-mono rounded-sm p-sunken px-1 py-px p-text-2">{host}</span>)}
+          {secret.hosts.map((host) => <Chip key={host}><span className="t-mono">{host}</span></Chip>)}
           {secret.position.kind !== "authorization" && <span className="t-meta self-center p-text-3">in {positionWords(secret.position)}</span>}
         </span>
         <span className="t-meta ml-auto p-text-3">
@@ -95,7 +97,7 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
   const destinationMoved = hostList(hosts).join(" ") !== secret.hosts.join(" ") || JSON.stringify(position) !== JSON.stringify(secret.position);
 
   return (
-    <div className="space-y-5 border-t border-[var(--c-border)] px-5 py-4" data-secret-details={secret.name}>
+    <div className="space-y-5 border-t p-border px-5 py-4" data-secret-details={secret.name}>
       <Field label="Where it may go" hint="The hosts it may be sent to, over https only (*.example.com covers a domain), and the one place in a request its API reads it from.">
         <form className="space-y-2" onSubmit={(event) => {
           event.preventDefault();
@@ -139,8 +141,7 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
                     })
                     : run(`reveal:${grant.workspace}`, async () => { await grantSecret(secret.name, grant.workspace, false); }))} />
               </label>
-              <button type="button" disabled={busy !== null} onClick={() => run(`revoke:${grant.workspace}`, async () => { await revokeSecretGrant(secret.name, grant.workspace); })}
-                className="t-meta p-text-3 hover:p-danger">Remove</button>
+              <Button variant="danger" size="sm" disabled={busy !== null} onClick={() => run(`revoke:${grant.workspace}`, async () => { await revokeSecretGrant(secret.name, grant.workspace); })}>Remove</Button>
             </div>
           ))}
           <WorkspaceAdder held={secret.grants.map(({ workspace }) => workspace)} placeholder="Allow in another workspace…"

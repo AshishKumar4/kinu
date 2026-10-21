@@ -1,15 +1,15 @@
 import { useState } from "react";
 import { Loader } from "@/components/ui/Loader";
-import { Button, buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 import { Effect } from "effect";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { builtinAuthStatus, createBuiltinLink, listBuiltinAccounts } from "@/lib/user-api";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { Card, Field } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
-import { CopyButton } from "@/components/ui/CopyButton";
 import { Group } from "@/components/ui/Group";
 import { TextInput } from "@/components/ui/Field";
+import { CopyField } from "@/components/ui/CopyField";
 
 export function InviteCard() {
   const status = useAsyncResource(builtinAuthStatus);
@@ -48,10 +48,7 @@ export function InviteCard() {
         </form>
       </Field>
       {invite !== null && (
-        <div className="mt-3 flex items-center gap-2" data-invite-link>
-          <code className="t-body t-mono min-w-0 flex-1 truncate rounded-md border p-border p-fill px-3 py-2 p-text select-all">{invite.url}</code>
-          <CopyButton value={invite.url} what="the invite link" size={14} className={buttonClass({ iconOnly: true })} />
-        </div>
+        <div className="mt-3" data-invite-link><CopyField value={invite.url} what="the invite link" /></div>
       )}
       {invite !== null && (
         <p className="t-meta mt-2 p-text-3">

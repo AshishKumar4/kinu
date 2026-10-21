@@ -5,7 +5,7 @@
  */
 import { useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
-import { KeyIcon, ShieldWarningIcon } from "@phosphor-icons/react";
+import { KeyIcon } from "@phosphor-icons/react";
 import { pastedSecrets, type PastedSecret } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
@@ -68,22 +68,21 @@ export function usePastedSecretGuard(input: {
   };
 
   const offer = waiting.length === 0 ? null : (
-    <div className="mx-1 mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border p-border p-overlay px-3 py-2" role="status" data-secret-offer>
-      <ShieldWarningIcon size={16} className="shrink-0 p-warning" />
-      <p className="t-body min-w-[14rem] flex-1 p-text">
-        This looks like {described(waiting)}. Keep it out of the chat: move it to Secrets and your agents use it without seeing it.
-      </p>
-      <div className="ml-auto flex shrink-0 items-center gap-2">
+    <>
+    <Notice tone="warning" className="mx-1 mb-2" data-secret-offer="" action={
+      <div className="flex shrink-0 items-center gap-2">
         <Button size="sm" variant="ghost" data-secret-offer-send onClick={() => {
           setSendAsIs(draft);
           setHeld(null);
 
           if (held !== null) acts.current.get(held.key)?.();
         }}>Send anyway</Button>
-        <Button variant="primary" size="sm" data-secret-offer-move onClick={() => setMoving(true)}><KeyIcon size={12} /> Move to Secrets</Button>
-      </div>
-      {moving && <MoveToSecrets found={waiting} workspace={workspace} onClose={() => setMoving(false)} onMoved={moved} />}
-    </div>
+        <Button variant="primary" size="sm" icon={<KeyIcon size={14} />} data-secret-offer-move onClick={() => setMoving(true)}>Move to Secrets</Button>
+      </div>}>
+      This looks like {described(waiting)}. Keep it out of the chat: move it to Secrets and your agents use it without seeing it.
+    </Notice>
+    {moving && <MoveToSecrets found={waiting} workspace={workspace} onClose={() => setMoving(false)} onMoved={moved} />}
+    </>
   );
 
   return { guarded, offer };

@@ -34,3 +34,7 @@ export function Select<Value extends string>({ label, value, options, onChange, 
     />
   );
 }
+
+/** One value searched for and chosen (docs/DESIGN-SYSTEM.md §2, Select / Combobox): Kumo's, themed through the
+ *  `--color-kumo-*` bridge, its menu the system's. This is the one place it is imported. */
+export { Combobox } from "@cloudflare/kumo";

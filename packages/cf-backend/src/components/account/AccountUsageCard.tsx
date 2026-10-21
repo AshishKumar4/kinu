@@ -9,6 +9,8 @@ import { Card } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { Group } from "@/components/ui/Group";
+import { Meter } from "@/components/ui/Meter";
+import { Button } from "@/components/ui/Button";
 
 function usedShare(window: LimitWindow): number | undefined {
   if (window.usedPercent !== undefined) return Math.min(1, Math.max(0, window.usedPercent / 100));
@@ -27,12 +29,9 @@ function LimitRow({ report, now }: { report: LimitReport; now: number }) {
 
           return (
             <li key={window.name} className="space-y-px">
-              <p className="t-meta p-text-2">{limitWindowText(window, now)}</p>
-              {share !== undefined && (
-                <div className="h-1 overflow-hidden rounded-full bg-[var(--c-fill)]" aria-hidden="true">
-                  <div className={`h-full rounded-full ${share >= 0.9 ? "bg-[var(--c-danger)]" : "bg-[var(--c-accent)]"}`} style={{ width: `${String(Math.round(share * 100))}%` }} />
-                </div>
-              )}
+              {share === undefined
+                ? <p className="t-meta p-text-2">{limitWindowText(window, now)}</p>
+                : <Meter label={limitWindowText(window, now)} value={Math.round(share * 100)} />}
             </li>
           );
         })}
@@ -47,7 +46,7 @@ function AccountRow({ row, now, live }: { row: AccountSpend; now: number; live: 
   return (
     <div className="px-4 py-2">
       <div className="t-body flex items-baseline gap-2">
-        <span className="min-w-0 flex-1 break-words font-medium p-text">
+        <span className="t-item min-w-0 flex-1 break-words">
           {row.provider === null ? "No account recorded" : `${row.provider} · ${row.account ?? ""}`}
         </span>
         <span className="p-text-3 shrink-0">×{row.calls}</span>
@@ -79,9 +78,7 @@ function LimitsTable({ usage, onRefresh }: { usage: AccountUsage; onRefresh: () 
           ))}
         </Group>
       )}
-      <button type="button" onClick={onRefresh} className="t-meta inline-flex items-center gap-1 p-text-3 hover:p-text-2">
-        <ArrowsClockwiseIcon size={11} /> Read again
-      </button>
+      <Button variant="ghost" size="sm" icon={<ArrowsClockwiseIcon size={14} />} onClick={onRefresh}>Read again</Button>
     </div>
   );
 }

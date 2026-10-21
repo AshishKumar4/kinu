@@ -3,7 +3,6 @@
  * they go to. Settings adds them through these, and so does the chat's offer to move a pasted one out of the message.
  */
 import { useEffect, useState } from "react";
-import { Combobox } from "@cloudflare/kumo";
 import { TrashIcon } from "@phosphor-icons/react";
 import { detach, diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { parseDotenv, secretProvider } from "@kinu.run/core";
@@ -13,6 +12,7 @@ import { listWorkspaces, type SecretEntry } from "@/lib/user-api";
 import { isSecretName, positionWords, type SecretPosition } from "@kinu.run/core";
 import { Button } from "@/components/ui/Button";
 import { TextInput } from "@/components/ui/Field";
+import { Combobox } from "@/components/ui/Select";
 
 /** A row being written: its hosts as typed, one or several, split on spaces and commas. */
 export interface SecretDraft {
@@ -147,10 +147,10 @@ export function SecretRows({ rows, onChange, removable }: {
             {advanced.has(index) || row.position.kind !== "authorization"
               ? <PositionField position={row.position} label={row.name || "this secret"} onChange={(position) => edit(index, { ...row, position })} />
               : (
-                <button type="button" className="t-meta p-text-3 hover:p-text" data-secret-advanced={index}
+                <Button variant="ghost" size="sm" className="self-start" data-secret-advanced={index}
                   onClick={() => setAdvanced(new Set([...advanced, index]))}>
                   Sent in {positionWords(row.position)} · Advanced
-                </button>
+                </Button>
               )}
             {problem !== null && <p className="t-meta p-warning">{problem}</p>}
           </div>

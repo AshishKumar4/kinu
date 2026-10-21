@@ -7,7 +7,7 @@ import { useState, type ReactNode } from "react";
 import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
-import { ArrowSquareOutIcon, XIcon } from "@phosphor-icons/react";
+import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import {
   DEFAULT_WEB_SEARCH_CHAIN, WEB_SEARCH_PROVIDER_IDS, WEB_SEARCH_PROVIDERS,
   type CredentialSummary, type ProfileCatalogEnvelope, type WebSearchBilling, type WebSearchProviderId, type WebSearchRoute,
@@ -25,6 +25,9 @@ import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotic
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { Notice } from "@/components/ui/Notice";
 import { TextInput } from "@/components/ui/Field";
+import { Card } from "@/components/ui/Card";
+import { Chip } from "@/components/ui/Chip";
+import { Choices, type Choice as Option } from "@/components/ui/Choices";
 
 /** What a Test searches for: a question an agent of the owner's asks. */
 const TEST_QUERY = "Cloudflare Durable Objects alarms API";
@@ -32,6 +35,13 @@ const TEST_QUERY = "Cloudflare Durable Objects alarms API";
 const CLOUDFLARE_INDEXES = WEB_SEARCH_PROVIDER_IDS.filter((id) => WEB_SEARCH_PROVIDERS[id].cloudflare);
 
 const KEYED_PROVIDERS = WEB_SEARCH_PROVIDER_IDS.filter((id) => WEB_SEARCH_PROVIDERS[id].direct !== null);
+
+/** Who pays for a search. Your own key is offered once a provider that takes a key is admitted; until then there is no
+ *  such choice to show. */
+const BILLINGS: readonly Option<WebSearchBilling>[] = [
+  { id: "cloudflare", label: "Cloudflare", aside: <span className="t-meta">Default</span>, detail: "Paid through your Cloudflare account." },
+  ...(KEYED_PROVIDERS.length > 0 ? [{ id: "key", label: "Your own key", detail: "Paid to the provider, with your API key." } satisfies Option<WebSearchBilling>] : []),
+];
 
 function routeLabel(route: WebSearchRoute): string {
   return `${WEB_SEARCH_PROVIDERS[route.provider].label} · ${route.billing === "cloudflare" ? "Cloudflare" : "your key"}`;
@@ -62,7 +72,7 @@ function shown<A>(doing: string, run: () => Promise<A>, on: {
 type Place = "settings" | "setup";
 
 function Framed({ place, children }: { place: Place; children: ReactNode }) {
-  return place === "settings" ? <section className="p-card overflow-hidden"><div className="px-5 py-5">{children}</div></section> : <>{children}</>;
+  return place === "settings" ? <Card>{children}</Card> : <>{children}</>;
 }
 
 export function WebSearchSettings({ returnTo, place }: { returnTo: string; place: Place }) {
@@ -134,17 +144,8 @@ function SearchChoice({ place, envelope, credentials, saved, onKeySaved, payer }
   return (
     <div className="space-y-6" data-web-search>
       <Field label="Search with" hint={failure ?? (saving ? "Saving…" : undefined)}>
-        <div role="radiogroup" aria-label="Search with" className="grid gap-3 sm:grid-cols-2">
-          <Tile billing="cloudflare" opened={opened} onPick={pick} disabled={saving}
-            title="Cloudflare" badge="Default"
-            about="Paid through your Cloudflare account." />
-          {/* Offered once a provider that takes a key is admitted; until then there is no such choice to show. */}
-          {KEYED_PROVIDERS.length > 0 && (
-            <Tile billing="key" opened={opened} onPick={pick} disabled={saving}
-              title="Your own key"
-              about="Paid to the provider, with your API key." />
-          )}
-        </div>
+        <Choices tiles label="Search with" marker="data-web-search-tile" value={opened} disabled={saving} onChange={(billing) => detach(pick(billing))}
+          options={BILLINGS} />
       </Field>
 
       {opened === "cloudflare" || KEYED_PROVIDERS.length === 0 ? (
@@ -175,29 +176,6 @@ function SearchChoice({ place, envelope, credentials, saved, onKeySaved, payer }
         </>
       )}
     </div>
-  );
-}
-
-function Tile({ billing, opened, onPick, disabled, title, badge, about }: {
-  billing: WebSearchBilling;
-  opened: WebSearchBilling;
-  onPick: (billing: WebSearchBilling) => Effect.Effect<void>;
-  disabled: boolean;
-  title: string;
-  badge?: string;
-  about: string;
-}) {
-  return (
-    <label data-web-search-tile={billing}
-      className="relative block cursor-pointer rounded-[14px] border p-border px-4 py-3 transition-colors hover:border-[var(--c-border-strong)] has-[:checked]:border-[var(--c-accent)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--c-selected)] has-[:disabled]:cursor-default has-[:disabled]:opacity-60">
-      <input type="radio" name="web-search-billing" value={billing} checked={opened === billing} disabled={disabled}
-        onChange={() => detach(onPick(billing))} className="sr-only" />
-      <span className="flex items-baseline justify-between gap-2">
-        <span className="t-item p-text">{title}</span>
-        {badge !== undefined && <span className="t-meta p-text-3">{badge}</span>}
-      </span>
-      <span className="t-meta mt-1 block p-text-3">{about}</span>
-    </label>
   );
 }
 
@@ -296,12 +274,11 @@ function Backups({ backups, chain, stored, disabled, onChange }: {
     <Field label="If it fails" hint="Tried in order when the one before it fails.">
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Web search backups">
         {backups.map((route, at) => (
-          <span key={`${route.provider}|${route.billing}`} data-web-search-backup={`${route.provider}|${route.billing}`}
-            className="t-meta inline-flex items-center gap-1 rounded-md border p-border px-2 py-px p-text">
+          <Chip key={`${route.provider}|${route.billing}`} data-web-search-backup={`${route.provider}|${route.billing}`}
+            removeLabel={`Remove ${routeLabel(route)} from the backups`} onRemove={disabled ? undefined : () => onChange(backups.filter((entry) => !sameRoute(route)(entry)))}>
             <span className="p-text-3">{at + 1}.</span>
             {routeLabel(route)}
-            <Button variant="ghost" size="sm" icon={<XIcon size={14} />} disabled={disabled} aria-label={`Remove ${routeLabel(route)} from the backups`} onClick={() => onChange(backups.filter((entry) => !sameRoute(route)(entry)))} />
-          </span>
+          </Chip>
         ))}
         {candidates.length > 0 && (
           <Choice<string> label="Add a web search backup" size="sm" className="w-52" disabled={disabled} value=""

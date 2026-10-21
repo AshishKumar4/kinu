@@ -1,6 +1,6 @@
 /** The one model picker for every surface; groups follow server order (connected-provider preference). */
 import { useEffect, useMemo, useState } from "react";
-import { Combobox, Select } from "@cloudflare/kumo";
+import { Select } from "@cloudflare/kumo";
 import { Badge } from "@/components/ui/Badge";
 import { ArrowsClockwiseIcon, BrainIcon, EyeIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import {
@@ -18,6 +18,7 @@ import { BrandMark, providerBrand } from "./ui/BrandMark";
 import { ChatGptPlanUsage } from "./account/ChatGptConnect";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { lastValue, useAsyncResource } from "../hooks/use-async-resource";
+import { Combobox } from "@/components/ui/Select";
 
 type PickerValue = ModelMenuEntry | { value: string; items: ModelMenuEntry[] };
 

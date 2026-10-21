@@ -40,12 +40,27 @@ export function Field({ label, hint, error = null, inline = false, children }: {
   );
 }
 
-/** A one-line text field; `invalid` draws its edge in danger. */
-export function TextInput({ size = "md", invalid = false, className, ...rest }: Omit<ComponentProps<"input">, "size"> & {
+/** A one-line text field; `invalid` draws its edge in danger. `before` and `after` are words inside its edge, around
+ *  the value: "Context window … tokens". */
+export function TextInput({ size = "md", invalid = false, className, before, after, ...rest }: Omit<ComponentProps<"input">, "size"> & {
   size?: FieldSize;
   invalid?: boolean;
+  before?: ReactNode;
+  after?: ReactNode;
 }) {
-  return <Input className={`p-field p-field-${size}${className === undefined ? "" : ` ${className}`}`} aria-invalid={invalid || undefined} {...rest} />;
+  const placed = className === undefined ? "" : ` ${className}`;
+
+  if (before === undefined && after === undefined) {
+    return <Input className={`p-field p-field-${size}${placed}`} aria-invalid={invalid || undefined} {...rest} />;
+  }
+
+  return (
+    <label data-focus-box data-invalid={invalid ? "" : undefined} className={`p-field p-field-${size} p-field-affixed${placed}`}>
+      {before !== undefined && <span className="shrink-0 p-text-3">{before}</span>}
+      <Input className="p-field-bare" aria-invalid={invalid || undefined} {...rest} />
+      {after !== undefined && <span className="shrink-0 p-text-3">{after}</span>}
+    </label>
+  );
 }
 
 /** Text over several lines, at least 80 high; `mono` for text that is code (SOUL.md). */

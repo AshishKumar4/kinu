@@ -798,6 +798,10 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-field-md { height: 32px; }
 .p-field-sm { height: 28px; padding: 0 10px; }
 .p-field-area { min-height: 80px; height: auto; padding: 8px 12px; resize: vertical; }
+/* A field with words inside its edge around the value (TextInput's before and after); the box takes the focus ring. */
+.p-field-affixed { display: flex; align-items: center; gap: 8px; cursor: text; }
+.p-field-affixed[data-invalid] { border-color: var(--c-danger); }
+.p-field-bare, .p-field-bare:focus-visible { min-width: 0; flex: 1; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: inherit; outline: none; }
 .p-select {
   width: 100%; border-radius: var(--r-control) !important; border: 1px solid var(--c-field-border) !important;
   background: var(--c-field) !important; box-shadow: none !important; font: 400 13px/20px var(--font-ui) !important;

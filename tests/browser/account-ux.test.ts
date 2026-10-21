@@ -773,7 +773,7 @@ describe('account panels', () => {
           if (id === 'mail') await page.waitForSelector('[data-welcome-step="mail"] [data-mail-address-state="available"]');
 
           // Web search opens on the default already chosen, so Next passes it with nothing to pick.
-          if (id === 'search') await page.waitForSelector('[data-welcome-step="search"] [data-web-search-tile="cloudflare"] input:checked');
+          if (id === 'search') await page.waitForSelector('[data-welcome-step="search"] [data-web-search-tile="cloudflare"][aria-checked="true"]');
 
           if (id !== 'showcase') await clickByText(page, 'button', 'Next');
         }

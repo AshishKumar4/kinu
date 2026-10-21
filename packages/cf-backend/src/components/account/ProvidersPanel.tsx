@@ -3,9 +3,8 @@
  * Each read is its own resource and fails visibly: a swallowed rejection shows a connected account as disconnected.
  */
 import { Effect } from 'effect';
-import { Button, buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 import { useState, type ReactNode } from "react";
-import { Combobox } from "@cloudflare/kumo";
 import { CheckIcon } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import {
@@ -33,6 +32,7 @@ import {
 } from '@kinu.run/core';
 import { Group } from "@/components/ui/Group";
 import { TextInput } from "@/components/ui/Field";
+import { Combobox } from "@/components/ui/Select";
 
 function ConnectedBadge({ detail }: { detail?: ReactNode }) {
   return (
@@ -49,8 +49,6 @@ function loginEnds(credentials: readonly CredentialSummary[], key: string): Reac
 
   return ends === undefined ? null : <>until {new Date(ends).toLocaleString()}, then sign in again</>;
 }
-
-const dangerQuietCls = buttonClass({ variant: "danger", size: "sm" });
 
 /** The panel in its own titled card; `framed` false where its host already says "Connect a provider". */
 function Framed({ framed, children }: { framed: boolean; children: ReactNode }) {
@@ -240,7 +238,7 @@ function ProviderEntry({ provider, name, method, connected, detail, disconnect, 
         <span className="ml-auto flex items-center gap-2">
           {connected ? <ConnectedBadge detail={detail} /> : <span className="t-meta p-text-3">Not connected</span>}
           {connected && disconnect !== undefined && (
-            <button type="button" onClick={leave} className={dangerQuietCls} aria-label={`Disconnect ${name}`}>Disconnect</button>
+            <Button variant="danger" size="sm" onClick={leave} aria-label={`Disconnect ${name}`}>Disconnect</Button>
           )}
         </span>
       </div>
@@ -472,14 +470,9 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
               <TextInput className="max-w-44" value={compatName} onChange={(e) => setCompatName(e.target.value)} placeholder="name (e.g. groq)" aria-label="Endpoint name" />
               <TextInput className="min-w-0 flex-1" value={compatBaseURL} onChange={(e) => setCompatBaseURL(e.target.value)} placeholder="https://api.example.com/v1" aria-label="Base URL" />
               <span className="basis-full" aria-hidden />
-              <label data-invalid={windowValid ? undefined : ""}
-                data-focus-box className="t-body flex h-9 w-full max-w-72 cursor-text items-center gap-2 rounded-md border border-[var(--c-field-border)] bg-[var(--c-surface)] px-3 p-text transition-all data-[invalid]:border-[var(--c-danger)]">
-                <span className="shrink-0 p-text-3">Context window</span>
-                <input value={compatWindow} onChange={(e) => setCompatWindow(e.target.value)} inputMode="numeric" placeholder="optional"
-                  aria-label="Context window in tokens" aria-invalid={windowValid ? undefined : true}
-                  className="min-w-0 flex-1 bg-transparent text-right outline-none focus-visible:!outline-none placeholder:p-text-3" />
-                <span className="shrink-0 p-text-3">tokens</span>
-              </label>
+              <TextInput before="Context window" after="tokens" className="max-w-72 text-right" invalid={!windowValid}
+                value={compatWindow} onChange={(e) => setCompatWindow(e.target.value)} inputMode="numeric" placeholder="optional"
+                aria-label="Context window in tokens" />
             </>
           ) : (
             <TextInput className="max-w-44" value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="account (blank: main)" aria-label="Account name" />
