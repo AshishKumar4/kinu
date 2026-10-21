@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
-import { HeadCapture, REAL_CLOCK, sha256Hex, type HeadInput, type HostedActor } from '@kinu.run/core';
+import { CHAT_SESSION_ID, HeadCapture, REAL_CLOCK, sha256Hex, type HeadInput, type HostedActor } from '@kinu.run/core';
 import { scratchDir, scriptedTurnModel, workspaceDatabase, admitTestClaim, servedStoresOf } from '@kinu.run/test-utils';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { workspaceHome, type CLIRuntime } from '../src/runtime';
@@ -93,6 +93,32 @@ test('startup claim recovery leaves a restarted node available to re-drive on th
     expect(result.status).toBe('completed');
   } finally {
     await cold.close();
+  }
+});
+
+// The cloud drives a head's or a node's run as a delivered run, which keeps its brief and its answer in its own chat; the
+// CLI ran the same inference with no chat at all, so a run actor's transcript was empty.
+test('a run actor\'s chat holds what it was asked and its answer, as the cloud\'s does', async () => {
+  const workspace = await reopenableWorkspace('run-transcript');
+  const host = new LocalAgentHost(workspace.options);
+
+  try {
+    const owner = await host.acquire('root');
+    const node = await owner.hostNode({ nodeId: 'transcribed-node', rootId: 'transcript-work', depth: 1 });
+
+    const result = await node.infer(head('transcribed-node'), {
+      actor: node.actor, runId: node.runId, stores: servedStoresOf(node.actor.runtime, node.actor.stores.conversationSearch), sources: node.sources, clock: REAL_CLOCK,
+      tools: {}, capture: new HeadCapture(), isAborted: () => false,
+    });
+
+    expect(result.status).toBe('completed');
+
+    const chat = node.actor.stores.history.transcript(CHAT_SESSION_ID);
+    const said = await Promise.all(chat.entries().map(async (entry) => [entry.role, (await chat.narration(entry.parts)).join('')]));
+
+    expect(said).toEqual([['user', 'Continue retained work.'], ['assistant', 'retained answer']]);
+  } finally {
+    await host.close();
   }
 });
 

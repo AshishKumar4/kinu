@@ -59,7 +59,7 @@ import { ActorSession, type ActorTurnLease,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeTables,
-  toolsBehindBoundary, type ToolBoundary, assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
+  toolsBehindBoundary, type ToolBoundary, assembleActorTurn, driveSeatedRun, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
   type OwedReport, type SubagentReportStatus, type TurnReportFacts,
   terminalEffect,
@@ -2719,7 +2719,12 @@ export class LocalAgentSession {
         actor,
         runId,
         sources: this.runActorSources(actor, runId, { extension: compaction.extension, models, report, operations }),
-        infer: (input, inference) => runHeadInference(preparedHeadRun(input, { ...inference, actor, compaction: compaction.trigger })),
+        // Driven as a delivered run, so its chat holds what it was asked and its answer, as a cloud run actor's does.
+        infer: (input, inference) => {
+          const run = preparedHeadRun(input, { ...inference, actor, compaction: compaction.trigger });
+
+          return driveSeatedRun(actor, input, { runId: inference.runId, prepare: (capability) => run.prepare(capability) });
+        },
         conversations: actor.stores.conversationSearch,
         jobs: { ports: this.loopJobPorts(), attach: (authority) => this.jobAuthorities.attach(authority) },
         receipts: {
