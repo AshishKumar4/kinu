@@ -43,7 +43,7 @@ test("a durable grandchild that only worked its assignment shows the task, from 
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n ?? 0) > 0;
 
   await wakeForDelegatedTask(workspace, middle.actor.handle.actorId, 'Middle task.');
-  await driveUntil(workspace, 'the helper never hired its durable agent', () => grandchild() !== undefined);
+  await driveUntil(workspace, 'the subagent never hired its durable agent', () => grandchild() !== undefined);
   const actorId = grandchild() ?? '';
   await driveUntil(workspace, 'the durable agent never ended its turn', () => ended(actorId));
 

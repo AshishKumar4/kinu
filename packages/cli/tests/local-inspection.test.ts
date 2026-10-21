@@ -47,7 +47,7 @@ async function say(db: Database, actor: ActorHandle, said: { id: string; content
 describe('local inspection of a subagent', () => {
   test('a request that names an actor reads that actor\'s kept chat, not the owner\'s', async () => {
     await createCliAgent({
-      name: NAME, mode: 'local', purpose: 'inspect a helper',
+      name: NAME, mode: 'local', purpose: 'inspect a subagent',
       baseUrl: 'http://localhost:0/v1', auth: 'Bearer offline', model: 'openai-compatible/offline-model',
     });
 
@@ -57,12 +57,12 @@ describe('local inspection of a subagent', () => {
     if (identity === null) throw new Error('the created workspace has no identity row');
     const directory = new WorkspaceActorDirectory(makeSql(db), { workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '' });
     const main = directory.main();
-    const helper = directory.create({ parent: main, name: 'ask-refiner-a1', creationId: 'lane/ask-refiner-a1', origin: 'evolution', lifetime: 'task' });
+    const subagent = directory.create({ parent: main, name: 'ask-refiner-a1', creationId: 'lane/ask-refiner-a1', origin: 'evolution', lifetime: 'task' });
     await say(db, main, { id: 'owner-words', content: 'the owner asked' });
-    await say(db, helper, { id: 'helper-words', content: 'the refiner answered' });
+    await say(db, subagent, { id: 'subagent-words', content: 'the refiner answered' });
     db.close();
 
-    const read = await inspectLocalSubagent(NAME, { path: [], view: 'history', page: {}, actor: helper.actorId });
+    const read = await inspectLocalSubagent(NAME, { path: [], view: 'history', page: {}, actor: subagent.actorId });
 
     expect(read).toMatchObject({ view: 'history', page: { items: [{ parts: [{ type: 'text', text: 'the refiner answered' }] }] } });
   });

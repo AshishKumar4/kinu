@@ -361,8 +361,8 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
   });
 
   // The schema offers `name` on every hire; on staging 5c522f12d a task hire refused it 6 times, Luna naming 3 parallel
-  // helpers to tell their answers apart.
-  test('a task hire takes the name it is given, as the helper it shows', async () => {
+  // subagents to tell their answers apart.
+  test('a task hire takes the name it is given, as the subagent it shows', async () => {
     const scene = makeScene();
     const started = await startRun(scene, { role: 'auditor', message: 'Count signups by country.', name: 'signup-country-tally' });
 

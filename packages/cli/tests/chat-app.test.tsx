@@ -1041,7 +1041,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     }],
     subagents: [],
     work: [],
-    helpers: [],
+    taskSubagents: [],
     profile: {
       envelope: {
         authority: { kind: 'local' },
@@ -1197,20 +1197,20 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const dismissed: SubagentChild = {
       ...scout,
-      name: 'retired-helper',
+      name: 'retired-subagent',
       birth: null,
       status: 'dismissed',
       dismissedAt: 2,
     };
 
-    const helper: SubagentChild = { ...scout, name: 'busy-mill-01', displayName: 'Busy Mill', nameOrigin: 'auto', birth: null, currentTask: null };
-    const refiner: SubagentChild = { ...helper, name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', origin: 'evolution', lifetime: 'task' };
-    const asked: SubagentChild = { ...helper, name: 'ask-reviewer-a1', displayName: 'reviewing', lifetime: 'task' };
+    const subagent: SubagentChild = { ...scout, name: 'busy-mill-01', displayName: 'Busy Mill', nameOrigin: 'auto', birth: null, currentTask: null };
+    const refiner: SubagentChild = { ...subagent, name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', origin: 'evolution', lifetime: 'task' };
+    const asked: SubagentChild = { ...subagent, name: 'ask-reviewer-a1', displayName: 'reviewing', lifetime: 'task' };
 
     const main = fakeClient({
       name: 'checkout',
       inspectSubagent: async (request) => {
-        if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [scout, dismissed, helper, refiner, asked] } };
+        if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [scout, dismissed, subagent, refiner, asked] } };
 
         if (request.view !== 'history' || request.path.join('/') !== 'scout') return missingSubagentHistory(request.path);
 
@@ -1233,7 +1233,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the hired subagent in the hub', () => screen.frame().includes('Scout') && !screen.composerFocused());
     expect(screen.frame()).toContain('Survey the logs');
     expect(rowInOrder(screen.frame(), ['Scout', 'task/default'])).toBe(true);
-    expect(screen.frame()).not.toContain('retired-helper');
+    expect(screen.frame()).not.toContain('retired-subagent');
 
     for (const shown of ['reviewing', 'ask-reviewer-a1', 'Quiet Ash']) expect(screen.frame()).not.toContain(shown);
     expect(screen.frame()).toContain('Busy Mill');
@@ -1243,13 +1243,13 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the subagent conversation', () => screen.frame().includes('Found 3 errors in app.log'));
     expect(screen.frame()).toContain('Look through app.log for errors');
     screen.mockInput.pressEscape();
-    // The hub's other helper: the conversation's own header names Scout too.
+    // The hub's other subagent: the conversation's own header names Scout too.
     await screen.waitFor('back in the Agent Hub', () => screen.frame().includes('Busy Mill'));
     expect(screen.frame()).not.toContain('Found 3 errors in app.log');
   });
 
-  // 2026-10-01: the hub read the agent's helpers once, when it opened, and a hire made after that never showed.
-  test('the open Agent Hub reads its helpers again when a frame names them', async () => {
+  // 2026-10-01: the hub read the agent's subagents once, when it opened, and a hire made after that never showed.
+  test('the open Agent Hub reads its subagents again when a frame names them', async () => {
     const scout: SubagentChild = {
       name: 'scout', displayName: 'Scout', nameOrigin: 'user', role: 'task', actorReference: null, birth: null, deleteRequested: false,
       origin: 'agent', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
@@ -1364,7 +1364,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     expect(rowInOrder(screen.frame(), [/\b2(\.0)?\s*KB\b/u, 'linked'])).toBe(true);
   });
 
-  test('after a reload, a one-question helper the chat asked is listed as answered, and Enter opens its kept chat by id', async () => {
+  test('after a reload, a one-question subagent the chat asked is listed as answered, and Enter opens its kept chat by id', async () => {
     const reads: unknown[] = [];
     const answered = { status: 'completed', agent: 'ask-reviewer-a1', lifetime: 'task', role: 'reviewer', answer: 'Fine.', transcript: 'kept' };
 
@@ -1392,7 +1392,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the answered helper in the hub', () => !screen.composerFocused() && screen.frame().includes('ask-reviewer-a1'));
+    await screen.waitFor('the answered subagent in the hub', () => !screen.composerFocused() && screen.frame().includes('ask-reviewer-a1'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
@@ -1401,7 +1401,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressEscape();
   });
 
-  test('a finished helper stays reachable from its finished task, its kept chat read by id', async () => {
+  test('a finished subagent stays reachable from its finished task, its kept chat read by id', async () => {
     const reads: unknown[] = [];
 
     const main = fakeClient({
@@ -1437,7 +1437,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressEscape();
   });
 
-  test('an evolution helper is a Work row in the Agent Hub, and Enter opens its kept chat by id', async () => {
+  test('an evolution subagent is a Work row in the Agent Hub, and Enter opens its kept chat by id', async () => {
     const reads: unknown[] = [];
 
     const refiner: SubagentChild = {
@@ -1471,8 +1471,8 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressEscape();
   });
 
-  test('a helper with no tab appears as the owner of its task in the Agent Hub, and Enter opens its conversation', async () => {
-    const helper = ['ask-refiner-fb0gr9'];
+  test('a subagent with no tab appears as the owner of its task in the Agent Hub, and Enter opens its conversation', async () => {
+    const subagent = ['ask-refiner-fb0gr9'];
     const opened: (string | undefined)[] = [];
 
     const main = fakeClient({
@@ -1480,7 +1480,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       workspaceWork: async () => ({
         plans: [],
         tasks: [{
-          owner: { actorId: 'actor-refiner', name: 'ask-refiner-fb0gr9', title: 'ask-refiner-fb0gr9', retired: true, path: helper },
+          owner: { actorId: 'actor-refiner', name: 'ask-refiner-fb0gr9', title: 'ask-refiner-fb0gr9', retired: true, path: subagent },
           plan: null,
           tasks: [{ id: 't1', parentId: null, title: 'Tighten the turn-ending rule', status: 'active', updatedAt: 1, note: null, subtasks: [] }],
         }],
@@ -1501,11 +1501,11 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the helper\'s task in the hub', () => screen.frame().includes('Tighten the turn-ending rule') && screen.frame().includes('ask-refiner-fb0gr9'));
+    await screen.waitFor('the subagent\'s task in the hub', () => screen.frame().includes('Tighten the turn-ending rule') && screen.frame().includes('ask-refiner-fb0gr9'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
-    await screen.waitFor('the helper\'s conversation', () => screen.frame().includes('Two edits proposed for the turn-ending section'));
+    await screen.waitFor('the subagent\'s conversation', () => screen.frame().includes('Two edits proposed for the turn-ending section'));
     expect(opened).toEqual(['actor-refiner']);
     screen.mockInput.pressEscape();
   });

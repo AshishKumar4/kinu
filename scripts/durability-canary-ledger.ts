@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import { decodeModelMessageValues, encodeModelMessageValues, type JsonValue, type RunEvent } from '../packages/core/src/index';
 import { readStepMessages, type StepMessages } from '../evals/src/transcript';
-import { helperAddress } from '../evals/src/helper-address';
+import { subagentAddress } from '../evals/src/subagent-address';
 import type { KinuPublicSession, PublicBackgroundJob, PublicMessage } from '../evals/src/session';
 import { CANARY_PREFIX, canaryMarker, type CanaryLoad } from './canary-script';
 
@@ -19,7 +19,7 @@ interface MarkerWitness {
   readonly runId: string | null;
 }
 
-interface HelperRecord {
+interface SubagentRecord {
   readonly name: string;
   readonly actor: string | null;
   readonly status: string;
@@ -33,7 +33,7 @@ export interface CanaryLedger {
   readonly output: readonly CapturedOutput[];
   readonly history: readonly PublicMessage[];
   readonly jobs: readonly PublicBackgroundJob[];
-  readonly helpers: readonly HelperRecord[];
+  readonly subagents: readonly SubagentRecord[];
   readonly roster: Awaited<ReturnType<KinuPublicSession['subagents']>>;
   readonly agents: Awaited<ReturnType<KinuPublicSession['agents']>>;
   readonly swarms: Awaited<ReturnType<KinuPublicSession['swarmRuns']>>;
@@ -46,23 +46,23 @@ function capturedOutput(messages: StepMessages): CapturedOutput[] {
   return [...messages].map(([step, body]) => ({ runId: step.runId, eventIndex: step.eventIndex, messages: encodeModelMessageValues(body) }));
 }
 
-async function helperEvents(session: KinuPublicSession, child: {
+async function subagentEvents(session: KinuPublicSession, child: {
   readonly name: string; readonly status: string; readonly actorReference: { readonly actorId: string } | null;
 }): Promise<RunEvent[]> {
-  const address = helperAddress(child);
+  const address = subagentAddress(child);
   const events: RunEvent[] = [];
 
   for (let cursor: { after: string } | undefined; ;) {
     const requestPage = cursor === undefined ? { limit: 200 } : { limit: 200, cursor };
     const pageOfRuns = await session.inspect({ ...address, path: [...address.path], view: 'runs', page: requestPage });
 
-    if (pageOfRuns.view !== 'runs') throw new Error(`helper ${child.name}: ${pageOfRuns.view === 'missing' ? pageOfRuns.error : 'runs unavailable'}`);
+    if (pageOfRuns.view !== 'runs') throw new Error(`subagent ${child.name}: ${pageOfRuns.view === 'missing' ? pageOfRuns.error : 'runs unavailable'}`);
 
     for (const run of pageOfRuns.page.items) {
       for (let since = 0; ;) {
         const page = await session.inspect({ ...address, path: [...address.path], view: 'events', runId: run.runId, query: { since, limit: 500 } });
 
-        if (page.view !== 'events') throw new Error(`helper ${child.name}: ${page.view === 'missing' ? page.error : 'events unavailable'}`);
+        if (page.view !== 'events') throw new Error(`subagent ${child.name}: ${page.view === 'missing' ? page.error : 'events unavailable'}`);
         events.push(...page.page.items);
 
         if (page.page.status === 'end') break;
@@ -83,33 +83,33 @@ export async function readCanaryLedger(session: KinuPublicSession): Promise<Cana
     session.history(), session.backgroundJobs(), session.subagents(), session.agents(), session.swarmRuns(),
   ]);
 
-  const helpers: HelperRecord[] = [];
+  const subagents: SubagentRecord[] = [];
 
   for (let cursor: { after: string } | undefined; ;) {
     const page = cursor === undefined ? { limit: 200 } : { limit: 200, cursor };
     const children = await session.inspect({ path: [], view: 'children', page });
 
-    if (children.view !== 'children') throw new Error(`helper roster: ${children.view === 'missing' ? children.error : 'children unavailable'}`);
+    if (children.view !== 'children') throw new Error(`subagent roster: ${children.view === 'missing' ? children.error : 'children unavailable'}`);
 
     for (const child of children.page.items) {
       if (child.lifetime !== 'task') continue;
 
       try {
-        const helperLedger = await helperEvents(session, child);
-        const address = helperAddress(child);
+        const subagentLedger = await subagentEvents(session, child);
+        const address = subagentAddress(child);
 
-        const helperOutput = capturedOutput(await readStepMessages(helperLedger, async (step, from) => {
+        const subagentOutput = capturedOutput(await readStepMessages(subagentLedger, async (step, from) => {
           const read = await session.inspect({ ...address, path: [...address.path], view: 'step', runId: step.runId, eventIndex: step.eventIndex, from });
 
-          if (read.view !== 'step') throw new Error(`helper ${child.name}: canonical output unavailable`);
+          if (read.view !== 'step') throw new Error(`subagent ${child.name}: canonical output unavailable`);
 
           return read;
         }));
 
-        helpers.push({ name: child.name, actor: child.actorReference?.actorId ?? null, status: child.status,
-          events: helperLedger, output: helperOutput, failure: null });
+        subagents.push({ name: child.name, actor: child.actorReference?.actorId ?? null, status: child.status,
+          events: subagentLedger, output: subagentOutput, failure: null });
       } catch (error) {
-        helpers.push({ name: child.name, actor: child.actorReference?.actorId ?? null, status: child.status,
+        subagents.push({ name: child.name, actor: child.actorReference?.actorId ?? null, status: child.status,
           events: [], output: [], failure: String(error) });
       }
     }
@@ -118,12 +118,12 @@ export async function readCanaryLedger(session: KinuPublicSession): Promise<Cana
     cursor = children.page.next;
   }
 
-  return { events, output, history, jobs, helpers, roster, agents, swarms };
+  return { events, output, history, jobs, subagents, roster, agents, swarms };
 }
 
 function shellWitnesses(events: readonly RunEvent[]): MarkerWitness[] {
   return events.flatMap((event) => event.type !== 'tool_call_end' || event.name !== 'shell' ? [] :
-    [...JSON.stringify(event.result ?? null).matchAll(/KINU_CANARY_(?:ROOT|HELPER|NODE|JOB)_STEP_\d+/g)]
+    [...JSON.stringify(event.result ?? null).matchAll(/KINU_CANARY_(?:ROOT|SUBAGENT|NODE|JOB)_STEP_\d+/g)]
       .map(([marker]) => ({ marker, at: event.timestamp, runId: event.runId })));
 }
 
@@ -225,15 +225,15 @@ export function measureCanaryLedger(ledger: CanaryLedger, load: CanaryLoad) {
     ? [{ runId: event.runId, at: event.timestamp, causedBy: event.caused_by ?? null, ingress: event.ingress_kind ?? null, trigger: event.trigger_id ?? null }]
     : []);
 
-  const helperRecords = ledger.helpers.filter((helper) => helper.failure !== null || helper.events.some((event) =>
-    event.type === 'run_start' && event.userMessage?.includes(`${CANARY_PREFIX} helper`) === true));
+  const subagentRecords = ledger.subagents.filter((subagent) => subagent.failure !== null || subagent.events.some((event) =>
+    event.type === 'run_start' && event.userMessage?.includes(`${CANARY_PREFIX} subagent`) === true));
 
-  const helpers = helperRecords.map((helper) => {
-    const done = answers(helper.events, helper.output, `${CANARY_PREFIX}_HELPER_DONE`);
+  const subagents = subagentRecords.map((subagent) => {
+    const done = answers(subagent.events, subagent.output, `${CANARY_PREFIX}_SUBAGENT_DONE`);
 
-    return { name: helper.name, actor: helper.actor, status: helper.status, failure: helper.failure,
-      runs: runs(helper.events, done), done: { count: done.length, evidence: done },
-      markers: markers(Array.from({ length: load.helperSteps }, (_, step) => canaryMarker('helper', step)), shellWitnesses(helper.events)) };
+    return { name: subagent.name, actor: subagent.actor, status: subagent.status, failure: subagent.failure,
+      runs: runs(subagent.events, done), done: { count: done.length, evidence: done },
+      markers: markers(Array.from({ length: load.subagentSteps }, (_, step) => canaryMarker('subagent', step)), shellWitnesses(subagent.events)) };
   });
 
   const expectedJobs = Array.from({ length: load.jobs }, (_, step) => canaryMarker('job', step));
@@ -247,26 +247,26 @@ export function measureCanaryLedger(ledger: CanaryLedger, load: CanaryLoad) {
   const nodes = swarmCandidates(ledger);
 
   const rootReceived = ledger.history.filter((message) => message.role !== 'assistant').flatMap((message) =>
-    [...message.text.matchAll(/\bKINU_CANARY_HELPER_DONE\b/g)].map(() => ({ id: message.id ?? null, role: message.role })));
+    [...message.text.matchAll(/\bKINU_CANARY_SUBAGENT_DONE\b/g)].map(() => ({ id: message.id ?? null, role: message.role })));
 
-  const helperDone = helpers.flatMap((helper) => helper.done.evidence);
+  const subagentDone = subagents.flatMap((subagent) => subagent.done.evidence);
 
   // A report that lands while the root's turn runs rides its next step as a non-durable message (Inbox.prepareStep):
   // no root row records it, so the root's rows can neither count nor miss it.
-  const absorbedMidTurn = helperDone.filter((witness) => witness.at !== null && rootRuns.some((run) =>
+  const absorbedMidTurn = subagentDone.filter((witness) => witness.at !== null && rootRuns.some((run) =>
     Date.parse(run.start) <= Date.parse(witness.at ?? '') && (run.end === null || Date.parse(witness.at ?? '') <= Date.parse(run.end))));
 
   const rootFinalRuns = rootRuns.filter((run) => run.done > 0);
 
-  const ended = rootFinalRuns.some((run) => run.reason === 'completed') && helperDone.length > 0
-    && helpers.every((helper) => helper.runs.some((run) => run.done > 0 && run.reason === 'completed'))
+  const ended = rootFinalRuns.some((run) => run.reason === 'completed') && subagentDone.length > 0
+    && subagents.every((subagent) => subagent.runs.some((run) => run.done > 0 && run.reason === 'completed'))
     && jobs.length >= load.jobs && jobs.every((job) => job.status !== 'running' && job.status !== 'serving')
     && ledger.jobs.every((job) => job.status !== 'running' && job.status !== 'serving')
     && !ledger.agents.some((agent) => agent.activity === 'working') && nodes.length >= 5;
 
   const completionTimes = [
     ...rootFinalRuns.flatMap((run) => run.end === null ? [] : [Date.parse(run.end)]),
-    ...helperDone.flatMap((witness) => witness.at === null ? [] : [Date.parse(witness.at)]),
+    ...subagentDone.flatMap((witness) => witness.at === null ? [] : [Date.parse(witness.at)]),
     ...ledger.jobs.flatMap((job) => job.settledAt == null ? [] : [job.settledAt]),
   ];
 
@@ -279,9 +279,9 @@ export function measureCanaryLedger(ledger: CanaryLedger, load: CanaryLoad) {
       completedEnds: rootFinalRuns.reduce((sum, run) => sum + run.completedEnds, 0),
       done: { count: rootDone.length, evidence: rootDone },
       markers: markers(Array.from({ length: load.steps }, (_, step) => canaryMarker('root', step)), shellWitnesses(ledger.events).filter((witness) => witness.marker.includes('_ROOT_'))) },
-    helper: { found: helpers.length, helpers, resultReceivedByRoot: { count: rootReceived.length, source: 'root history, non-assistant messages', evidence: rootReceived },
+    subagent: { found: subagents.length, subagents, resultReceivedByRoot: { count: rootReceived.length, source: 'root history, non-assistant messages', evidence: rootReceived },
       absorbedMidTurn,
-      ingressRuns: ledger.events.filter((event) => event.type === 'run_start' && event.userMessage?.includes(`${CANARY_PREFIX}_HELPER_DONE`) === true)
+      ingressRuns: ledger.events.filter((event) => event.type === 'run_start' && event.userMessage?.includes(`${CANARY_PREFIX}_SUBAGENT_DONE`) === true)
         .map((event) => ({ runId: event.runId, at: event.timestamp })) },
     jobs: { planned: load.jobs, found: jobs.length, completed: jobs.filter((job) => job.status === 'completed').length,
       markers: markers(expectedJobs, jobWitnesses), rows: jobs,
@@ -371,28 +371,28 @@ export function ledgerFindings(measured: CanaryMeasurement): CanaryFinding[] {
   once('root.result-not-exactly-once', measured.root.done.count, 'step_finish/assistant', measured.root.done.evidence);
   once('root.completed-run-count', measured.root.completedDoneRuns, 'run_end', measured.root.done.evidence);
   once('root.completed-end-count', measured.root.completedEnds, 'run_end', measured.root.done.evidence);
-  const delivered = measured.helper.resultReceivedByRoot.count + measured.helper.ingressRuns.length;
+  const delivered = measured.subagent.resultReceivedByRoot.count + measured.subagent.ingressRuns.length;
 
-  if (delivered === 0 && measured.helper.absorbedMidTurn.length > 0) {
-    findings.push({ name: 'helper.result-absorbed-mid-turn', kind: 'limitation',
-      cause: 'The helper finished while the root turn ran, so its report rode a step as a non-durable message that no root row records.',
-      evidence: measured.helper.absorbedMidTurn.map((witness) => ({ at: witness.at, event: 'helper DONE inside a root run', count: 1, detail: witness.marker })) });
+  if (delivered === 0 && measured.subagent.absorbedMidTurn.length > 0) {
+    findings.push({ name: 'subagent.result-absorbed-mid-turn', kind: 'limitation',
+      cause: 'The subagent finished while the root turn ran, so its report rode a step as a non-durable message that no root row records.',
+      evidence: measured.subagent.absorbedMidTurn.map((witness) => ({ at: witness.at, event: 'subagent DONE inside a root run', count: 1, detail: witness.marker })) });
   } else {
-    once('helper.result-delivery-not-exactly-once', delivered, 'root.history and root run_start', []);
+    once('subagent.result-delivery-not-exactly-once', delivered, 'root.history and root run_start', []);
   }
 
-  if (measured.helper.found !== 1) findings.push({ name: 'helper.not-found-exactly-once', kind: 'defect', cause: 'The retained helper ledger did not identify exactly one canary task hire.',
-    evidence: [{ at: null, event: 'inspectSubagent', count: measured.helper.found, detail: measured.helper.helpers.map((helper) => helper.name).join(', ') }] });
+  if (measured.subagent.found !== 1) findings.push({ name: 'subagent.not-found-exactly-once', kind: 'defect', cause: 'The retained subagent ledger did not identify exactly one canary task hire.',
+    evidence: [{ at: null, event: 'inspectSubagent', count: measured.subagent.found, detail: measured.subagent.subagents.map((subagent) => subagent.name).join(', ') }] });
 
-  for (const helper of measured.helper.helpers) {
-    if (helper.failure !== null) {
-      findings.push({ name: 'helper.ledger-unavailable', kind: 'measurement', cause: helper.failure,
-        evidence: [{ at: null, event: 'inspectSubagent', count: 1, detail: helper.name }] });
+  for (const subagent of measured.subagent.subagents) {
+    if (subagent.failure !== null) {
+      findings.push({ name: 'subagent.ledger-unavailable', kind: 'measurement', cause: subagent.failure,
+        evidence: [{ at: null, event: 'inspectSubagent', count: 1, detail: subagent.name }] });
       continue;
     }
 
-    findings.push(...markerFindings(`helper.${helper.name}`, helper.markers));
-    once(`helper.${helper.name}.result-not-exactly-once`, helper.done.count, 'step_finish/assistant', helper.done.evidence);
+    findings.push(...markerFindings(`subagent.${subagent.name}`, subagent.markers));
+    once(`subagent.${subagent.name}.result-not-exactly-once`, subagent.done.count, 'step_finish/assistant', subagent.done.evidence);
   }
 
   if (measured.jobs.completed !== measured.jobs.planned) findings.push({ name: 'jobs.not-completed', kind: 'defect', cause: 'Planned detached shell jobs did not all settle completed.',

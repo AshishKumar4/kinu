@@ -1,6 +1,6 @@
 /**
  * Every system role is hired the way a dream hires its two agents and the advisor lane its reviewer: a temporary
- * helper of origin `evolution`, born through the roster. A role id the roster cannot read back left a birth row no
+ * subagent of origin `evolution`, born through the roster. A role id the roster cannot read back left a birth row no
  * listing could parse, and every agent list of the workspace failed after it (staging rc27, 2026-10-20: a dream's
  * `dream_reviewer`).
  */
@@ -34,7 +34,7 @@ function setup() {
   return { roster, runtime, database, directory, main };
 }
 
-describe('a system role hired as a temporary helper', () => {
+describe('a system role hired as a temporary subagent', () => {
   for (const role of Object.keys(SYSTEM_ROLE_DEFINITIONS)) {
     test(`${role} is born and listed`, async () => {
       const { roster, runtime } = setup();

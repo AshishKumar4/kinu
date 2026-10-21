@@ -12,7 +12,7 @@ import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evoluti
 import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries } from '@kinu.run/test-utils';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import { makeSqlExec } from './helpers';
-import { EvolutionHelperStore } from '../src/identity/evolution-helpers';
+import { EvolutionSubagentStore } from '../src/identity/evolution-subagents';
 
 function newEventLog(): EventLog {
   const db = new Database(':memory:');
@@ -230,19 +230,19 @@ function report(from: string, mode: 'plan' | 'build', content: string): IngressD
 
 const PROPOSAL = '{"scope":"workspace","edits":[{"kind":"prompt_section","source":"Stop after one line."}]}';
 
-function railWithHelper() {
+function railWithSubagent() {
   const db = new Database(':memory:');
   const sql = makeSqlExec(db);
   initEventsHubTables(sql);
   const main = createTestActorsOver(db).main;
-  new EvolutionHelperStore(sql, main).record('ask-refiner-x1', { requestId: 'refine-1' }, 1);
+  new EvolutionSubagentStore(sql, main).record('ask-refiner-x1', { requestId: 'refine-1' }, 1);
 
   return new EventLog(sql, main);
 }
 
-describe('an evolution helper report on the rail belongs to its lane, not the parent', () => {
+describe('an evolution subagent report on the rail belongs to its lane, not the parent', () => {
   test('alone, it wakes nothing and drains nothing', async () => {
-    const log = railWithHelper();
+    const log = railWithSubagent();
     const now = Date.now();
     log.publish({ descriptor: report('ask-refiner-x1', 'plan', PROPOSAL), now });
     const { host, enqueued } = watchedHost();
@@ -253,7 +253,7 @@ describe('an evolution helper report on the rail belongs to its lane, not the pa
   });
 
   test("beside the owner's work it is left out, and the owner's mode holds", async () => {
-    const log = railWithHelper();
+    const log = railWithSubagent();
     const now = Date.now();
     log.publish({ descriptor: report('ask-refiner-x1', 'plan', PROPOSAL), now });
     log.publish({ descriptor: report('researcher', 'build', 'Root cause found.'), now: now + 1 });

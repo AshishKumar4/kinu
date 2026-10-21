@@ -159,7 +159,7 @@ test('a hosted actor cannot publish, and plan mode may inspect but not publish',
   const root: SlateCaller = { ...ROOT_SLATE_CALLER, workMode: 'plan' };
   expect(await owner.agent.slateAs(root, { op: 'inspect', id: 'issues', version: committed.id })).toMatchObject({ ok: true });
   expect(await owner.agent.slateAs(root, { op: 'publish', id: 'issues', version: committed.id })).toMatchObject({ ok: false, reason: 'denied' });
-  const hosted: SlateCaller = { ...ROOT_SLATE_CALLER, path: [{ name: 'helper' }] };
+  const hosted: SlateCaller = { ...ROOT_SLATE_CALLER, path: [{ name: 'subagent' }] };
   expect(await owner.agent.slateAs(hosted, { op: 'publish', id: 'issues', version: committed.id })).toMatchObject({ ok: false, reason: 'denied' });
   expect(await owner.agent.slateAs(hosted, { op: 'shares' })).toMatchObject({ ok: false, reason: 'denied' });
 });

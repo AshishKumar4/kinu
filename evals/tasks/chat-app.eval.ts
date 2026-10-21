@@ -113,7 +113,7 @@ const build: EvalPart = {
     'Build a chat slate with accounts, rooms joined only by invitation, and messages kept in the slate, each method to its contract and refusing what it must without changing anything.',
     'A message that mentions @kinu gets an answer in the room from Kinu, the workspace assistant.',
     'Its page lets a person sign in and read and write their rooms, drawn in the workspace theme and usable on a phone.',
-    'Built by the lead itself, from its own files: no prototype, no helpers.',
+    'Built by the lead itself, from its own files: no prototype, no subagents.',
   ],
   turns: [{
     prompt: `Build a slate with id "${SLATE_ID}" named "Chat": a chat app for my friends and family, with our assistant in it.
@@ -257,7 +257,7 @@ const extend: EvalPart = {
   id: 'chat-extended',
   objectives: [
     'A room owner can remove a member, who then can no longer read or write there, and each room counts what a member has not read; everything that worked keeps working.',
-    'Built by the lead itself, from its own files: no prototype, no helpers.',
+    'Built by the lead itself, from its own files: no prototype, no subagents.',
   ],
   turns: [{
     prompt: `Two more things for the chat. A room's owner can remove a member:

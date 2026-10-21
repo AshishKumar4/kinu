@@ -10,6 +10,7 @@
   "device_consent_asks",
   "device_consent_requests",
   "device_joins",
+  "evolution_helpers",
   "gallery_reports",
   "gepa_candidates",
   "gepa_runs",

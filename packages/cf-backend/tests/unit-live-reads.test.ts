@@ -275,7 +275,7 @@ test('an email delivered to Main reads working until its drain takes it, and the
   expect(await activities(agent)).toEqual({ Main: 'working' });
 });
 
-// Staging f75f06932: a helper handed a task read idle until its drain claimed it.
+// Staging f75f06932: a subagent handed a task read idle until its drain claimed it.
 test('an agent handed a message reads working from the handoff, before its drain runs, and the handoff names the Agents panel', async () => {
   const { agent } = orchestratorHarness();
   await agent.setSoul('# Purpose\n\nShip the coupon fix.');

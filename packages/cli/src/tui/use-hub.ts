@@ -10,7 +10,7 @@ import { detach, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/c
 import type { AgentClient } from '../agent-client';
 import { loadActiveProfile } from '../default-model';
 import {
-  answeredHelpers, buildAgentHubEntries, evolutionWork, jobOwners, jobWork, lastPrinted, newerTail, subagentsFromRoster,
+  answeredTaskSubagents, buildAgentHubEntries, evolutionWork, jobOwners, jobWork, lastPrinted, newerTail, subagentsFromRoster,
   workFromWorkspace, type TuiHubData, type TuiHubView, type TuiJobOwner, type TuiWorkEntry,
 } from './hubs';
 import type { DisplayMessage } from './messages';
@@ -99,7 +99,7 @@ export function useHub({ client, seed, readHub, view, roster, label, running, me
     }),
   }, [hub, roster.page.items, client, label, running, jobTails]);
 
-  const answered = useMemo(() => answeredHelpers(messages, hub?.data.helpers ?? []), [messages, hub]);
+  const answered = useMemo(() => answeredTaskSubagents(messages, hub?.data.taskSubagents ?? []), [messages, hub]);
   // Bumped by each frame naming a read the hub shows, so the hub reads again.
   const [hubReadsMoved, setHubReadsMoved] = useState(0);
 
@@ -160,7 +160,7 @@ export async function loadHubData(client: AgentClient): Promise<TuiHubData> {
   };
 }
 
-async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subagents' | 'subagentsError' | 'work' | 'workError' | 'helpers'>> {
+async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subagents' | 'subagentsError' | 'work' | 'workError' | 'taskSubagents'>> {
   const [subagents, work] = await Promise.allSettled([readSubagents(client), client.workspaceWork()]);
   const owners = subagents.status === 'fulfilled' ? subagents.value.owners : [];
   // Each agent's own jobs, the workspace's first, each under the agent that runs it.
@@ -170,15 +170,15 @@ async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subage
 
   return {
     ...(subagents.status === 'fulfilled'
-      ? { subagents: subagents.value.subagents, helpers: subagents.value.helpers }
-      : { subagents: [], helpers: [], subagentsError: `Subagents could not be read: ${renderThrownChain({ cause: subagents.reason })}` }),
+      ? { subagents: subagents.value.subagents, taskSubagents: subagents.value.taskSubagents }
+      : { subagents: [], taskSubagents: [], subagentsError: `Subagents could not be read: ${renderThrownChain({ cause: subagents.reason })}` }),
     ...(work.status === 'fulfilled'
       ? { work: [...workFromWorkspace(work.value), ...evolution] }
       : { work: evolution, workError: `Work could not be read: ${renderThrownChain({ cause: work.reason })}` }),
   };
 }
 
-async function readSubagents(client: AgentClient): Promise<Pick<TuiHubData, 'subagents' | 'helpers'> & { evolution: TuiWorkEntry[]; owners: TuiJobOwner[] }> {
+async function readSubagents(client: AgentClient): Promise<Pick<TuiHubData, 'subagents' | 'taskSubagents'> & { evolution: TuiWorkEntry[]; owners: TuiJobOwner[] }> {
   const entries: SubagentChild[] = [];
   let cursor: SeekCursor | undefined;
 
@@ -190,9 +190,9 @@ async function readSubagents(client: AgentClient): Promise<Pick<TuiHubData, 'sub
     cursor = result.page.status === 'more' ? result.page.next : undefined;
   } while (cursor !== undefined);
 
-  const helpers = entries.flatMap((entry) => entry.lifetime === 'task' && entry.actorReference !== null
+  const taskSubagents = entries.flatMap((entry) => entry.lifetime === 'task' && entry.actorReference !== null
     ? [{ name: entry.name, actorId: entry.actorReference.actorId }]
     : []);
 
-  return { subagents: subagentsFromRoster(entries), helpers, evolution: evolutionWork(entries), owners: jobOwners(entries) };
+  return { subagents: subagentsFromRoster(entries), taskSubagents, evolution: evolutionWork(entries), owners: jobOwners(entries) };
 }

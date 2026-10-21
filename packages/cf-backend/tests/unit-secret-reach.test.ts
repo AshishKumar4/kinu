@@ -246,7 +246,7 @@ describe("a viewer never reaches the owner's computer", () => {
 
   test('viewer dispatch refuses the computer on the workspace actor and on a hosted hop, while the owner still executes', async () => {
     const workspace = orchestratorHarness();
-    const { actor } = await hostedExplorationHarness(workspace, 'shared-helper', { kind: 'head' });
+    const { actor } = await hostedExplorationHarness(workspace, 'shared-subagent', { kind: 'head' });
     const main = await hostedMainActor(workspace);
     const box = computer(async () => ({}));
     present(main.actor.runtime.executionRouter, 'workspace executors').register(box.provider);

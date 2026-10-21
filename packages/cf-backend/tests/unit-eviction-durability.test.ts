@@ -228,7 +228,7 @@ describe('the post-turn lanes', () => {
     expect(calls()).toBe(1);
     expect(notes(died)).toBe(0);
     // The answer and the job that delivers it are both still on disk.
-    expect(count(died, "SELECT COUNT(*) AS n FROM evolution_helpers WHERE answer_status IS NOT NULL")).toBe(1);
+    expect(count(died, "SELECT COUNT(*) AS n FROM evolution_subagents WHERE answer_status IS NOT NULL")).toBe(1);
 
     const restarted = await restart();
     await restart();
@@ -268,7 +268,7 @@ describe('an advisor answer handed to a turn', () => {
     await turns.settle({ messageId: 'turn-42', text: 'ran it' });
 
     const answers = (): number => harness.db.query<{ n: number }, []>(
-      'SELECT COUNT(*) AS n FROM evolution_helpers WHERE answer_status IS NOT NULL',
+      'SELECT COUNT(*) AS n FROM evolution_subagents WHERE answer_status IS NOT NULL',
     ).get()?.n ?? 0;
 
     // The note opens a turn on the idle actor, and that turn parks on its model call; the wake drives the advisor's

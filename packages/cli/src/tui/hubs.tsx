@@ -8,7 +8,7 @@ import { tierIdsOf,
   type WorkspaceWork,
   taskTreePhase,
   type JobOutputTail,
-  evolutionHelper, jobName, lastOutputLines, ownerFacingSubagent,
+  evolutionSubagent, jobName, lastOutputLines, ownerFacingSubagent,
 } from '@kinu.run/core';
 import type { AgentJobSummary } from '../agent-client';
 import type { ScrollBoxRenderable } from '@opentui/core';
@@ -109,7 +109,7 @@ export function jobWork(jobs: readonly AgentJobSummary[], owner?: TuiJobOwner): 
   });
 }
 
-const HELPER_WORK_STATUS = {
+const SUBAGENT_WORK_STATUS = {
   idle: 'settled',
   working: 'running',
   awaiting_input: 'needs-you',
@@ -117,14 +117,14 @@ const HELPER_WORK_STATUS = {
 } as const satisfies Record<SubagentChild['status'], TuiWorkEntry['status']>;
 
 export function evolutionWork(entries: readonly SubagentChild[]): TuiWorkEntry[] {
-  return entries.flatMap((entry): TuiWorkEntry[] => (evolutionHelper(entry) && entry.actorReference !== null ? [{
-    id: `helper:${entry.actorReference.actorId}`, title: entry.currentTask ?? 'refining from recent turns',
+  return entries.flatMap((entry): TuiWorkEntry[] => (evolutionSubagent(entry) && entry.actorReference !== null ? [{
+    id: `subagent:${entry.actorReference.actorId}`, title: entry.currentTask ?? 'refining from recent turns',
     label: agentDisplayLabel({ name: entry.name, label: entry.displayName }), path: [entry.name], actorId: entry.actorReference.actorId,
-    status: HELPER_WORK_STATUS[entry.status],
+    status: SUBAGENT_WORK_STATUS[entry.status],
   }] : []));
 }
 
-export interface TuiHelperRef {
+export interface TuiSubagentRef {
   readonly name: string;
   readonly actorId: string;
 }
@@ -132,16 +132,16 @@ export interface TuiHelperRef {
 const AnsweredSubagentSchema = v.looseObject({ agent: v.string(), lifetime: v.literal('task') });
 
 /** Newest first. */
-export function answeredHelpers(messages: readonly DisplayMessage[], helpers: readonly TuiHelperRef[]): TuiHubRow[] {
+export function answeredTaskSubagents(messages: readonly DisplayMessage[], taskSubagents: readonly TuiSubagentRef[]): TuiHubRow[] {
   const rows: TuiHubRow[] = [];
 
   for (const message of [...messages].reverse()) {
     if (message.role !== 'tool_result' || message.toolName !== 'agents') continue;
     const answered = v.safeParse(v.pipe(v.string(), v.parseJson(), AnsweredSubagentSchema), message.content);
-    const helper = answered.success ? helpers.find((entry) => entry.name === answered.output.agent) : undefined;
+    const subagent = answered.success ? taskSubagents.find((entry) => entry.name === answered.output.agent) : undefined;
 
-    if (helper !== undefined && !rows.some((row) => row.actorId === helper.actorId)) {
-      rows.push({ id: `helper:${helper.actorId}`, label: helper.name, path: [helper.name], actorId: helper.actorId });
+    if (subagent !== undefined && !rows.some((row) => row.actorId === subagent.actorId)) {
+      rows.push({ id: `subagent:${subagent.actorId}`, label: subagent.name, path: [subagent.name], actorId: subagent.actorId });
     }
   }
 
@@ -234,7 +234,7 @@ export interface TuiHubData {
   readonly subagentsError?: string;
   readonly work: readonly TuiWorkEntry[];
   readonly workError?: string;
-  readonly helpers: readonly TuiHelperRef[];
+  readonly taskSubagents: readonly TuiSubagentRef[];
   readonly answered?: readonly TuiHubRow[];
   readonly profile: TuiProfileHubData;
 }

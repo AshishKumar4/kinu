@@ -621,7 +621,7 @@ export { driveDeliveredRun } from './heads/delivered-run';
 
 export { initWorkspaceActorTable, WorkspaceActorDirectory, subagentDescendants, stoppedBelow, isSubagentOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding, actorEnded, endedStandingOf, type ActorEnded } from './identity/workspace-actors';
 
-export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
+export type { AnsweredEvolutionSubagent } from './identity/evolution-subagents';
 
 export {
   openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
@@ -2226,7 +2226,7 @@ export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-m
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
   type MemoryEntry, type PendingConsent, type SubagentActivityEvent,
-  type TabPresence, evolutionHelper, ownerFacingSubagent,
+  type TabPresence, evolutionSubagent, ownerFacingSubagent,
 } from './protocol';
 
 export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';

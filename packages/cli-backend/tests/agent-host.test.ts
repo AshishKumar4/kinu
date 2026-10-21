@@ -318,7 +318,7 @@ function parkedStream(signal: AbortSignal | undefined): ReadableStream<LanguageM
 }
 
 /** A root's brief that hires a child, whose mission hires the grandchild; `NESTED.work` is the grandchild's own. */
-const NESTED = { brief: 'Split the migration two levels down.', child: 'Hire one helper for the ledger part.', work: 'Move the ledger to integer cents.' } as const;
+const NESTED = { brief: 'Split the migration two levels down.', child: 'Hire one subagent for the ledger part.', work: 'Move the ledger to integer cents.' } as const;
 
 /**
  * Hires at two levels: the root's brief hires a child with `NESTED.child`, and that mission hires a grandchild with
@@ -928,7 +928,7 @@ describe('LocalAgentHost', () => {
     const model = heldSearchModel();
     const first = makeHost(state, model, refs, { swarms: true });
 
-    await (await first.host.team('root')).create({ name: 'helper' });
+    await (await first.host.team('root')).create({ name: 'subagent' });
     await first.host.close();
 
     // Interrupted long ago: re-driven, its next attempt is a minute out, and it is live work all that minute.
@@ -957,7 +957,7 @@ describe('LocalAgentHost', () => {
       const sql = makeSql(db);
       const rootId = openWorkspaceMainActor(sql).actorId;
 
-      await host.acquire('root/helper');
+      await host.acquire('root/subagent');
 
       for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS - 1; i++) {
         db.query(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES (?, ?, 'shell', 'build', 'running', 1)`)
@@ -972,7 +972,7 @@ describe('LocalAgentHost', () => {
       expect(outcomes).not.toContain('bg_job_started');
     } finally {
       // Its search waits for its model until stopped: closing would otherwise wait out the settle grace.
-      await (await host.acquire('root/helper')).cancelBackgroundJob('bgjob-held');
+      await (await host.acquire('root/subagent')).cancelBackgroundJob('bgjob-held');
       await host.close();
     }
   });
@@ -1546,9 +1546,9 @@ describe('LocalAgentHost', () => {
     try {
       (await host.acquire('root')).setReasoningEffort('xhigh');
       const team = await host.team('root');
-      await team.create({ name: 'helper', role: 'task', mission: 'Help.' });
-      const answered = awaitTurns(host, 'root/helper', 1);
-      await team.assign({ name: 'helper', task: 'Say done.', mode: 'build' });
+      await team.create({ name: 'subagent', role: 'task', mission: 'Help.' });
+      const answered = awaitTurns(host, 'root/subagent', 1);
+      await team.assign({ name: 'subagent', task: 'Say done.', mode: 'build' });
       await answered;
 
       expect(efforts).toEqual(['xhigh']);
@@ -1599,9 +1599,9 @@ describe('LocalAgentHost', () => {
       (await host.acquire('root')).setProviderAccount('openai', 'work');
       const team = await host.team('root');
       const before = scopes.length;
-      await team.create({ name: 'helper', role: 'task', mission: 'Help.' });
-      const answered = awaitTurns(host, 'root/helper', 1);
-      await team.assign({ name: 'helper', task: 'Say done.', mode: 'build' });
+      await team.create({ name: 'subagent', role: 'task', mission: 'Help.' });
+      const answered = awaitTurns(host, 'root/subagent', 1);
+      await team.assign({ name: 'subagent', task: 'Say done.', mode: 'build' });
       await answered;
 
       const hired = scopes.slice(before).map((scope) => present(scope.accountFor, 'a call scope')('openai'));
@@ -2154,30 +2154,30 @@ describe('LocalAgentHost', () => {
 
     try {
       const team = await host.team('root');
-      await team.create({ name: 'helper' });
+      await team.create({ name: 'subagent' });
 
-      const first = awaitTurns(host, 'root/helper', 1);
-      await team.message({ name: 'helper', content: 'Audit the coupon checkout', mode: 'build' });
+      const first = awaitTurns(host, 'root/subagent', 1);
+      await team.message({ name: 'subagent', content: 'Audit the coupon checkout', mode: 'build' });
       await first;
       // The title is the turn's terminal effect, written once its detached close settles.
-      await (await host.acquire('root/helper')).settleBackgroundWork();
+      await (await host.acquire('root/subagent')).settleBackgroundWork();
 
-      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Audit');
+      expect(childConfigValue(dbPath, 'subagent', 'display_name')).toBe('Coupon Audit');
 
-      const second = awaitTurns(host, 'root/helper', 1);
-      await team.message({ name: 'helper', content: 'Name yourself something else entirely', mode: 'build' });
+      const second = awaitTurns(host, 'root/subagent', 1);
+      await team.message({ name: 'subagent', content: 'Name yourself something else entirely', mode: 'build' });
       await second;
 
-      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Audit');
+      expect(childConfigValue(dbPath, 'subagent', 'display_name')).toBe('Coupon Audit');
 
-      await team.rename({ name: 'helper', displayName: 'Coupon Auditor' });
+      await team.rename({ name: 'subagent', displayName: 'Coupon Auditor' });
 
-      const third = awaitTurns(host, 'root/helper', 1);
-      await team.message({ name: 'helper', content: 'Change your name again', mode: 'build' });
+      const third = awaitTurns(host, 'root/subagent', 1);
+      await team.message({ name: 'subagent', content: 'Change your name again', mode: 'build' });
       await third;
 
-      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Coupon Auditor');
-      expect(childConfigValue(dbPath, 'helper', 'name_origin')).toBe('user');
+      expect(childConfigValue(dbPath, 'subagent', 'display_name')).toBe('Coupon Auditor');
+      expect(childConfigValue(dbPath, 'subagent', 'name_origin')).toBe('user');
     } finally {
       await host.close();
     }
@@ -2203,16 +2203,16 @@ describe('LocalAgentHost', () => {
     try {
       const team = await host.team('root');
 
-      await team.create({ name: 'helper' });
+      await team.create({ name: 'subagent' });
 
-      const before = childConfigValue(dbPath, 'helper', 'display_name');
+      const before = childConfigValue(dbPath, 'subagent', 'display_name');
 
-      await team.message({ name: 'helper', content: 'Audit the coupon checkout', mode: 'build' });
-      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Audit the coupon checkout');
+      await team.message({ name: 'subagent', content: 'Audit the coupon checkout', mode: 'build' });
+      expect(childConfigValue(dbPath, 'subagent', 'display_name')).toBe('Audit the coupon checkout');
       expect(before).not.toBe('Audit the coupon checkout');
 
-      await team.message({ name: 'helper', content: 'Rename yourself to something else', mode: 'build' });
-      expect(childConfigValue(dbPath, 'helper', 'display_name')).toBe('Audit the coupon checkout');
+      await team.message({ name: 'subagent', content: 'Rename yourself to something else', mode: 'build' });
+      expect(childConfigValue(dbPath, 'subagent', 'display_name')).toBe('Audit the coupon checkout');
     } finally {
       await host.close();
     }
@@ -2331,7 +2331,7 @@ describe('LocalAgentHost', () => {
     expect(rows).toEqual([{ status: 'dismissed', lifetime: 'task' }]);
   });
 
-  // 2026-10-01: the TUI's agents hub read its helpers once, when it opened, and went stale: the CLI host told its clients
+  // 2026-10-01: the TUI's agents hub read its subagents once, when it opened, and went stale: the CLI host told its clients
   // nothing when a write moved a read. Each write to the workspace's file names the reads it moves, as a workspace object does.
   test('scheduled client updates refresh the hired roster, workspace name and dismissal', async () => {
     const { state, project } = makeRoots();

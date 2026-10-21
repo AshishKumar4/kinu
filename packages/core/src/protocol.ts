@@ -71,12 +71,12 @@ export interface SubagentView {
 	dismissedAt: number | null;
 }
 
-/** Evolution and one-question helpers get no tab or list row. */
+/** Evolution and one-question subagents get no tab or list row. */
 export function ownerFacingSubagent(entry: Pick<SubagentView, "origin" | "lifetime">): boolean {
-	return !evolutionHelper(entry) && entry.lifetime === "durable";
+	return !evolutionSubagent(entry) && entry.lifetime === "durable";
 }
 
-export function evolutionHelper(entry: Pick<SubagentView, "origin">): boolean {
+export function evolutionSubagent(entry: Pick<SubagentView, "origin">): boolean {
 	return entry.origin === "evolution";
 }
 

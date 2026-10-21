@@ -26,9 +26,9 @@ function finished([runId, eventIndex, timestamp, reason]: readonly [string, numb
 
 const MISSION = 'Reply with exactly the word bramblelight and nothing else.';
 
-const ASK = 'Hire one helper to say the word.';
+const ASK = 'Hire one subagent to say the word.';
 
-// The shape a task hire answers in since cafab2bfc: at once, its helper still at work.
+// The shape a task hire answers in since cafab2bfc: at once, its subagent still at work.
 const taskHire = call('task', 4, { op: 'hire', lifetime: 'task', role: 'task', message: MISSION }, {
   status: 'working', agent: 'ask-task-ymhu3n', lifetime: 'task', role: 'task', answer: 'Working.',
 });
@@ -37,7 +37,7 @@ const durableHire = call('roster', 4, { op: 'hire' }, { name: 'task-9j4odl' });
 
 const roster = call('roster', 10, { op: 'list' }, { subagents: [{ name: 'task-9j4odl' }] });
 
-test('a task hire is read by the helper it named and the message it gave', () => {
+test('a task hire is read by the subagent it named and the message it gave', () => {
   expect(taskHires([durableHire, taskHire]).map((hire) => [hire.agent, hire.message])).toEqual([['ask-task-ymhu3n', MISSION]]);
 });
 
@@ -54,7 +54,7 @@ test('refused, errored and malformed hires are not task hires', () => {
 
 // rc21 (001f6d749), 2026-10-19: the chat showed the delivery as a `system` row and this read waited for a `user` one, so
 // the delegation case waited out its budget on an answer the hirer had already given.
-test('an answer is delivered by the first event after the ask that names its helper, as the chat shows it, and the reply that follows it', () => {
+test('an answer is delivered by the first event after the ask that names its subagent, as the chat shows it, and the reply that follows it', () => {
   const report = '1 event arrived while you were idle.\n- report from ask-task-ymhu3n: bramblelight';
 
   expect(delivered([
@@ -65,7 +65,7 @@ test('an answer is delivered by the first event after the ask that names its hel
   ], ASK, 'ask-task-ymhu3n')).toEqual({ text: report, reply: 'HIRED bramblelight' });
 });
 
-test('no message names the helper after the ask: nothing was delivered', () => {
+test('no message names the subagent after the ask: nothing was delivered', () => {
   expect(delivered([
     { role: 'user', text: 'an earlier mention of ask-task-ymhu3n' },
     { role: 'user', text: ASK },
@@ -77,7 +77,7 @@ test('no message names the helper after the ask: nothing was delivered', () => {
   expect(delivered([{ role: 'user', text: 'ask-task-ymhu3n answered' }], ASK, 'ask-task-ymhu3n')).toBeNull();
 });
 
-test("a ledger holds a delivery when a turn of its own opened on a message naming the helper", () => {
+test("a ledger holds a delivery when a turn of its own opened on a message naming the subagent", () => {
   const opened = (text: string): RunEvent => ({
     type: 'run_start', runId: 'r2', eventIndex: 0, timestamp: '2026-10-01T03:12:34.536Z', agentId: 'relay',
     turn: { turnId: 'programmatic:evt-1', messageId: 'm', kind: 'programmatic', text },

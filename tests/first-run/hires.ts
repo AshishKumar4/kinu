@@ -1,14 +1,14 @@
 /**
- * A hire returns at once (cafab2bfc, SUBAGENTS.md s4): its helper's answer reaches the hirer as a message, in a turn
+ * A hire returns at once (cafab2bfc, SUBAGENTS.md s4): its subagent's answer reaches the hirer as a message, in a turn
  * the product opens for it or in one already running. The delegation cases follow it with two reads: the hirer's
- * room, closing turn by turn until the answer is in the hirer's history, and each helper's own ledger, read where the
- * inspector reaches it (`evals/src/helper-address.ts`).
+ * room, closing turn by turn until the answer is in the hirer's history, and each subagent's own ledger, read where the
+ * inspector reaches it (`evals/src/subagent-address.ts`).
  */
 import * as v from 'valibot';
 import { readStepMessages, type StepMessages } from '../../evals/src/transcript';
 import { finalAnswer } from './delegation-observation';
 import { JsonObjectSchema, RunEventSchema, type JsonObject, type JsonValue, type RunEvent } from '../../packages/core/src/index';
-import { helperAddress, type HelperAddress } from '../../evals/src/helper-address';
+import { subagentAddress, type SubagentAddress } from '../../evals/src/subagent-address';
 import { ask, type PublicSocket } from './public-socket';
 
 /**
@@ -52,21 +52,21 @@ async function inspect<T>(socket: PublicSocket, request: JsonValue, schema: v.Ge
 }
 
 /** `request` for the actor at `address`. */
-function at(address: HelperAddress, request: JsonObject): JsonValue {
+function at(address: SubagentAddress, request: JsonObject): JsonValue {
   return address.actor === undefined
     ? { path: [...address.path], ...request }
     : { path: [...address.path], actor: address.actor, ...request };
 }
 
 /** A hire's place for the inspector and its own ledger, by the name the roster of its hirer at `hirer` gives it. */
-export async function helperRecord(
-  socket: PublicSocket, hirer: HelperAddress, agent: string,
-): Promise<{ readonly address: HelperAddress; readonly events: RunEvent[]; readonly messages: StepMessages }> {
+export async function subagentRecord(
+  socket: PublicSocket, hirer: SubagentAddress, agent: string,
+): Promise<{ readonly address: SubagentAddress; readonly events: RunEvent[]; readonly messages: StepMessages }> {
   const roster = await inspect(socket, at(hirer, { view: 'children', page: { limit: 200 } }), ChildrenPageSchema);
   const row = roster.page.items.find((item) => item.name === agent);
 
   if (row === undefined) throw new Error(`the roster at ${JSON.stringify(hirer)} has no hire ${agent}`);
-  const address = helperAddress(row);
+  const address = subagentAddress(row);
   const runs = await inspect(socket, at(address, { view: 'runs', page: { limit: 200 } }), RunsPageSchema);
   const events: RunEvent[] = [];
 
@@ -85,9 +85,9 @@ export async function helperRecord(
   return { address, events, messages };
 }
 
-/** A retained helper's finished answer, materialized from its own sealed output, not its hirer's chat. */
-export async function helperAnswer(socket: PublicSocket, hirer: HelperAddress, agent: string): Promise<string> {
-  const read = await helperRecord(socket, hirer, agent);
+/** A retained subagent's finished answer, materialized from its own sealed output, not its hirer's chat. */
+export async function subagentAnswer(socket: PublicSocket, hirer: SubagentAddress, agent: string): Promise<string> {
+  const read = await subagentRecord(socket, hirer, agent);
 
   return finalAnswer(read.events, read.messages);
 }

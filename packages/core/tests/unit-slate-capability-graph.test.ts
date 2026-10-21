@@ -95,7 +95,7 @@ test('a cut grant is every observing member plus exactly the approved ones that 
   expect(() => cutShareGrant(graph, [{ slate: 'issues', namespace: 'workspace', member: 'remove' }])).toThrow('is not a member of slate issues that acts');
 });
 
-test('helpers an owner\'s slate hired are in its graph, but no share carries them: not even listing them', () => {
+test('subagents an owner\'s slate hired are in its graph, but no share carries them: not even listing them', () => {
   const hiring = slateCapabilityGraph({
     slate: 'board', workspace: 'w', catalog: { mcp: [], slates: ['board'] }, usage: () => used('agents.list', 'agents.hire', 'workspace.fs.text'),
   });

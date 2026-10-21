@@ -113,7 +113,7 @@ describe('agents.* codemode namespace — dispatch', () => {
   });
 
   test('Plan mode does not narrow the search surface', async () => {
-    // Plan mode constrains what a helper may do, never which members exist.
+    // Plan mode constrains what a subagent may do, never which members exist.
     const provider = createAgentsCodemodeProvider(() => ({ mode: 'plan', swarms: true, swarm: swarmDeps() }));
     expect(await member(provider.tools, 'swarm').execute('research')).toMatchObject({ reason: 'bad_input' });
     expect(Object.keys(provider.tools))

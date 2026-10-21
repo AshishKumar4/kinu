@@ -4,7 +4,7 @@ import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import type { KinuPublicSession, PublicAgent, PublicBackgroundJob, PublicMessage, PublicSubagent } from './session';
 
 /** How often a busy workspace that says nothing moved is looked at, for a hang alone: while the turn's own stream is
- *  open, and while a run, helper or job holds it. Each look reads every run's new rows over HTTP: once a second for 180
+ *  open, and while a run, subagent or job holds it. Each look reads every run's new rows over HTTP: once a second for 180
  *  trials at once is hundreds of requests a second at the build. */
 const LOOK_MS = 30_000;
 
@@ -15,9 +15,9 @@ const SETTLE_READS: readonly LiveRead[] = ['listWorkspaceAgents', 'listSubagents
 /** Polls in a row the deployment's transport may fail before the trial fails as infrastructure. */
 const DROPPED_POLLS = 3;
 
-/** How often a working helper's own jobs are read: at every poll, each helper would multiply the build's reads, and a
+/** How often a working subagent's own jobs are read: at every poll, each subagent would multiply the build's reads, and a
  *  job is judged by whether it settled, which half a minute's age does not change against a bound of minutes. */
-const HELPER_JOBS_MS = 30_000;
+const SUBAGENT_JOBS_MS = 30_000;
 
 /** How often a trial says which jobs it waits on: a job publishes nothing while it runs, and the deploy ends a run that
  *  writes nothing for 480 s (`GATE_DEADLINE_SECONDS`). */
@@ -50,7 +50,7 @@ const WALL_CLOCK: WatchClock = {
   }),
 };
 
-/** What a watch reads of a workspace, the helpers' rooms it asks to hear, and the reads the workspace says moved. */
+/** What a watch reads of a workspace, the subagents' rooms it asks to hear, and the reads the workspace says moved. */
 export type WatchedWorkspace = Pick<KinuPublicSession,
   'runEvents' | 'backgroundJobs' | 'subagents' | 'agents' | 'toolCallsInFlight' | 'heard' | 'listen' | 'readsMoved' | 'readsMoving'>;
 
@@ -59,7 +59,7 @@ export type WatchOptions = { readonly clock?: WatchClock; readonly waiting?: (li
 
 /**
  * What a watch ended a turn on: `outcome`, the message naming what held the workspace, and `heldBy`, the kinds of what
- * held it (`open run`, `working helper`, `running shell job`), which the report counts the failure under.
+ * held it (`open run`, `working subagent`, `running shell job`), which the report counts the failure under.
  */
 export abstract class WorkspaceHeld extends Error {
   abstract readonly outcome: 'hung' | 'cancelled';
@@ -70,7 +70,7 @@ export abstract class WorkspaceHeld extends Error {
 }
 
 /**
- * A turn whose workspace stayed busy and silent past the bound, held by a run or a helper: the build hung. A job is never
+ * A turn whose workspace stayed busy and silent past the bound, held by a run or a subagent: the build hung. A job is never
  * silent, only unfinished: it publishes nothing while it runs, so it is waited on until it settles.
  */
 export class WorkspaceHang extends WorkspaceHeld {
@@ -86,13 +86,13 @@ export class TrialCancelled extends WorkspaceHeld {
   override readonly outcome = 'cancelled';
 }
 
-/** A job the workspace waits on: the lead's, or one of a helper waiting on its own. */
-type HeldJob = { readonly job: PublicBackgroundJob; readonly helper: string | null };
+/** A job the workspace waits on: the lead's, or one of a subagent waiting on its own. */
+type HeldJob = { readonly job: PublicBackgroundJob; readonly subagent: string | null };
 
-/** What holds a workspace busy: its open runs, the helpers that stream, the agents working past both (a turn owed and
+/** What holds a workspace busy: its open runs, the subagents that stream, the agents working past both (a turn owed and
  *  not yet run, a hire's hire), and the jobs it waits on. */
 type Holders = {
-  readonly runs: readonly string[]; readonly helpers: readonly PublicSubagent[]; readonly agents: readonly PublicAgent[]; readonly jobs: readonly HeldJob[];
+  readonly runs: readonly string[]; readonly subagents: readonly PublicSubagent[]; readonly agents: readonly PublicAgent[]; readonly jobs: readonly HeldJob[];
 };
 
 function openRuns(events: readonly RunEvent[]): string[] {
@@ -105,8 +105,8 @@ function running(job: PublicBackgroundJob): boolean {
   return job.status === 'running';
 }
 
-function jobName({ job, helper }: HeldJob): string {
-  return `${job.kind} job ${job.id}${job.label === undefined || job.label === null ? '' : ` (${job.label})`}${helper === null ? '' : ` of helper ${helper}`}`;
+function jobName({ job, subagent }: HeldJob): string {
+  return `${job.kind} job ${job.id}${job.label === undefined || job.label === null ? '' : ` (${job.label})`}${subagent === null ? '' : ` of subagent ${subagent}`}`;
 }
 
 function described(events: readonly RunEvent[], held: Holders, age: (job: PublicBackgroundJob) => string = () => ''): string[] {
@@ -116,7 +116,7 @@ function described(events: readonly RunEvent[], held: Holders, age: (job: Public
 
       return `open run ${runId}${last === undefined ? '' : `, its last row ${last.type} at ${last.timestamp}`}`;
     }),
-    ...held.helpers.map((helper) => `working helper ${helper.name}`),
+    ...held.subagents.map((subagent) => `working subagent ${subagent.name}`),
     ...held.agents.map((agent) => `working agent ${agent.label}`),
     ...held.jobs.map((job) => `running ${jobName(job)}${age(job.job)}`),
   ];
@@ -125,7 +125,7 @@ function described(events: readonly RunEvent[], held: Holders, age: (job: Public
 function kinds(held: Holders): string[] {
   return [...new Set([
     ...held.runs.map(() => 'open run'),
-    ...held.helpers.map(() => 'working helper'),
+    ...held.subagents.map(() => 'working subagent'),
     ...held.agents.map(() => 'working agent'),
     ...held.jobs.map(({ job }) => `running ${job.kind} job`),
   ])];
@@ -133,10 +133,10 @@ function kinds(held: Holders): string[] {
 
 /**
  * One turn's look at its workspace, kept across polls: whether it is busy (a run open, a background job running, a
- * helper or agent working), and since when what streams has said nothing. The ledger writes a step and a call only at
+ * subagent or agent working), and since when what streams has said nothing. The ledger writes a step and a call only at
  * their ends, so the rooms the session hears are where a model is seen streaming and a call running: the turn's own, the
- * turns the product opens on its own, and each working helper's and agent's, which the watch asks the session to listen
- * to. A job, the lead's or a helper's waiting on its own, streams nothing: it is judged by whether it settled.
+ * turns the product opens on its own, and each working subagent's and agent's, which the watch asks the session to listen
+ * to. A job, the lead's or a subagent's waiting on its own, streams nothing: it is judged by whether it settled.
  */
 export class TurnWatch {
   readonly clock: WatchClock;
@@ -149,7 +149,7 @@ export class TurnWatch {
 
   private saidAt: number;
 
-  private readonly helperJobs = new Map<string, { readonly at: number; readonly running: readonly PublicBackgroundJob[] }>();
+  private readonly subagentJobs = new Map<string, { readonly at: number; readonly running: readonly PublicBackgroundJob[] }>();
 
   private readonly firstSeen = new Map<string, number>();
 
@@ -172,9 +172,9 @@ export class TurnWatch {
     const busy = held.runs.length > 0 || working.length > 0 || held.agents.length > 0 || held.jobs.length > 0;
     const frames = this.workspace.heard();
 
-    this.workspace.listen([...new Set([...working.map((helper) => helper.name), ...held.agents.flatMap((agent) => agent.open.path ?? [])])]);
+    this.workspace.listen([...new Set([...working.map((subagent) => subagent.name), ...held.agents.flatMap((agent) => agent.open.path ?? [])])]);
 
-    if (held.runs.length + held.helpers.length + held.agents.length === 0 || events.length > this.rows || frames > this.frames
+    if (held.runs.length + held.subagents.length + held.agents.length === 0 || events.length > this.rows || frames > this.frames
       || this.workspace.toolCallsInFlight().length > 0) {
       this.heardAt = now;
     }
@@ -214,27 +214,27 @@ export class TurnWatch {
     }
   }
 
-  /** The ledger and what holds the workspace: its open runs, its working helpers and agents, and the jobs it waits on.
-   *  `fresh` reads each helper's own jobs now rather than as last read. */
+  /** The ledger and what holds the workspace: its open runs, its working subagents and agents, and the jobs it waits on.
+   *  `fresh` reads each subagent's own jobs now rather than as last read. */
   private async read(fresh = false): Promise<{ events: readonly RunEvent[]; working: readonly PublicSubagent[]; held: Holders }> {
-    const [events, agents, helpers, jobs] = await Promise.all([
+    const [events, agents, subagents, jobs] = await Promise.all([
       this.workspace.runEvents(), this.workspace.agents(), this.workspace.subagents(), this.workspace.backgroundJobs(),
     ]);
 
-    const working = helpers.filter((helper) => helper.status === 'working');
-    const theirs = await this.jobsOfHelpers(working, fresh);
+    const working = subagents.filter((subagent) => subagent.status === 'working');
+    const theirs = await this.jobsOfSubagents(working, fresh);
     const runs = openRuns(events);
-    const rostered = new Set(working.map((helper) => helper.name));
+    const rostered = new Set(working.map((subagent) => subagent.name));
 
     return {
       events,
       working,
       held: {
         runs,
-        helpers: working.filter((helper) => (theirs.get(helper.name) ?? []).length === 0),
+        subagents: working.filter((subagent) => (theirs.get(subagent.name) ?? []).length === 0),
         agents: agents.filter((agent) => agent.activity === 'working'
           && !(agent.category === 'main' && runs.length > 0) && !rostered.has(agent.open.path ?? '')),
-        jobs: [...jobs.filter(running).map((job) => ({ job, helper: null })), ...[...theirs].flatMap(([helper, own]) => own.map((job) => ({ job, helper })))],
+        jobs: [...jobs.filter(running).map((job) => ({ job, subagent: null })), ...[...theirs].flatMap(([subagent, own]) => own.map((job) => ({ job, subagent })))],
       },
     };
   }
@@ -279,28 +279,28 @@ export class TurnWatch {
     for (const held of jobs) {
       const since = new Date(held.job.createdAt ?? this.firstSeen.get(held.job.id) ?? now).toISOString();
 
-      this.options.waiting?.(`waiting on ${held.helper === null ? '' : `helper ${held.helper}'s `}job ${held.job.id}`
+      this.options.waiting?.(`waiting on ${held.subagent === null ? '' : `subagent ${held.subagent}'s `}job ${held.job.id}`
         + `${held.job.label === undefined || held.job.label === null ? '' : ` (${held.job.label})`} since ${since}`);
     }
   }
 
-  /** Each working helper's own running jobs: a task helper whose turn ended with one running stays working until it
+  /** Each working subagent's own running jobs: a task subagent whose turn ended with one running stays working until it
    *  settles (core `finishTurn`), streaming nothing meanwhile. */
-  private async jobsOfHelpers(working: readonly PublicSubagent[], fresh: boolean): Promise<ReadonlyMap<string, readonly PublicBackgroundJob[]>> {
+  private async jobsOfSubagents(working: readonly PublicSubagent[], fresh: boolean): Promise<ReadonlyMap<string, readonly PublicBackgroundJob[]>> {
     const now = this.clock.now();
 
-    for (const name of this.helperJobs.keys()) {
-      if (!working.some((helper) => helper.name === name)) this.helperJobs.delete(name);
+    for (const name of this.subagentJobs.keys()) {
+      if (!working.some((subagent) => subagent.name === name)) this.subagentJobs.delete(name);
     }
 
     await Promise.all(working.map(async ({ name }) => {
-      const read = this.helperJobs.get(name);
+      const read = this.subagentJobs.get(name);
 
-      if (!fresh && read !== undefined && now - read.at < HELPER_JOBS_MS) return;
-      this.helperJobs.set(name, { at: now, running: (await this.workspace.backgroundJobs(name)).filter(running) });
+      if (!fresh && read !== undefined && now - read.at < SUBAGENT_JOBS_MS) return;
+      this.subagentJobs.set(name, { at: now, running: (await this.workspace.backgroundJobs(name)).filter(running) });
     }));
 
-    return new Map([...this.helperJobs].map(([name, read]) => [name, read.running]));
+    return new Map([...this.subagentJobs].map(([name, read]) => [name, read.running]));
   }
 }
 
@@ -350,12 +350,12 @@ async function look(watch: TurnWatch, polled: SettlePoll | undefined): Promise<b
 }
 
 /**
- * Wait until the workspace has nothing left to do for this turn: no run open, no job running, no helper or agent
+ * Wait until the workspace has nothing left to do for this turn: no run open, no job running, no subagent or agent
  * working, on two reads in a row with no frame between them saying a read they made moved. A read's calls are answered
  * one at a time, so a change can land between two of them and the read see neither side's work; the frame for it
  * arrives before the next read's answers on the same socket. A busy workspace is read again when such a frame arrives,
  * or looked at for a hang. A background job's completion wakes the agent in a run of its own, and that run answers the
- * prompt too. A workspace whose runs, helpers and agents stay silent fails the turn as a {@link WorkspaceHang}, and the
+ * prompt too. A workspace whose runs, subagents and agents stay silent fails the turn as a {@link WorkspaceHang}, and the
  * run's cancel ends it as a {@link TrialCancelled}.
  */
 export async function settle(watch: TurnWatch, polled?: SettlePoll): Promise<void> {

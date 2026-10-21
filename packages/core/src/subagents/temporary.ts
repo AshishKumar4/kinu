@@ -27,7 +27,7 @@ export const SUBAGENT_LIFETIMES = ['durable', 'task'] as const;
 
 export type SubagentLifetime = (typeof SUBAGENT_LIFETIMES)[number];
 
-/** Later while a hire works, input is queued, or a settled hire's report waits unread. An evolution helper (the
+/** Later while a hire works, input is queued, or a settled hire's report waits unread. An evolution subagent (the
  *  turn's advisor) answers the runtime, never this turn, so it holds nothing. */
 export function taskAnswerIsLater(input: {
   readonly roster: SubagentRosterStore;
@@ -192,7 +192,7 @@ export function createTemporaryAgentPort(deps: {
 
       if (deps.roster.get(name)) return outcome('failed', 'The generated actor name is already in use.', 'none', 'denied');
 
-      if (request.lane) deps.roster.helpers.record(name, request.lane, startedAt);
+      if (request.lane) deps.roster.subagents.record(name, request.lane, startedAt);
 
       const birth: SubagentBirthRequest = {
         seed: {
@@ -223,9 +223,9 @@ export function createTemporaryAgentPort(deps: {
       deps.afterTurn(actor, async () => { await deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor); });
     },
 
-    reclaim: (request) => deps.roster.helpers.answerFor(request),
-    answered: () => deps.roster.helpers.answered(),
-    forget: (name) => { deps.roster.helpers.remove(name); },
+    reclaim: (request) => deps.roster.subagents.answerFor(request),
+    answered: () => deps.roster.subagents.answered(),
+    forget: (name) => { deps.roster.subagents.remove(name); },
   };
 }
 

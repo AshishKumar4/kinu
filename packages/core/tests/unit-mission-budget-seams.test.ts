@@ -112,9 +112,9 @@ function searchableDeps(opts: {
       snapshot: () => [],
       list: async () => [],
       create: async (input) => ({
-        name: input.name ?? 'helper',
-        displayName: 'Helper',
-        subagent: { name: input.name ?? 'helper', displayName: 'Helper', role: input.role ?? 'task', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+        name: input.name ?? 'subagent',
+        displayName: 'Subagent',
+        subagent: { name: input.name ?? 'subagent', displayName: 'Subagent', role: input.role ?? 'task', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async (input) => ({
         ok: true, name: input.name, displayName: input.displayName,
@@ -123,7 +123,7 @@ function searchableDeps(opts: {
       spawn: async (input) => {
         spawns.push(`hire:${input.role}`);
 
-        return { name: 'helper', displayName: 'Helper' };
+        return { name: 'subagent', displayName: 'Subagent' };
       },
       assign: recordHandoff('ask'),
       knows: async () => true,
@@ -214,10 +214,10 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     for (const [member, args] of [
       ['swarm', ['x', TWO_BRANCHES]],
       ['hire', ['r', 'm']],
-      ['assign', ['helper', 'm']],
+      ['assign', ['subagent', 'm']],
       // An exhausted label must not mint a task-lifetime agent either.
       ['hire', ['auditor', 'm', { lifetime: 'task' }]],
-      ['message', ['helper', 'm']],
+      ['message', ['subagent', 'm']],
     ] as const) {
       const refusal = v.parse(BudgetRefusalSchema, await present(ns[member], `agents.${member}`)(...args));
       expect(refusal.error).toBe('budget_exhausted');
@@ -236,7 +236,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
 
     const ns = sandbox(searchableDeps({ budget: governor }));
     expect(await ns.list({})).toMatchObject({ subagents: [] });
-    expect(await ns.dismiss('helper')).toMatchObject({ ok: true });
+    expect(await ns.dismiss('subagent')).toMatchObject({ ok: true });
   });
 
   test('no governor and no scope leave the search path unbudgeted, and identically so', async () => {

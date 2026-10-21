@@ -3,21 +3,21 @@
  * back through its own parent.
  *
  * THE ASK. Hosted subagents that delegate in turn: the root hires two
- * task helpers; one hires a helper of its own and relays its answer, the other
+ * task subagents; one hires a subagent of its own and relays its answer, the other
  * answers itself. So one branch is two levels deep and the other one, and the
  * tree settles only when the deep answer has climbed both levels and the
  * shallow one its single level. A hire returns at once (cafab2bfc): each
  * answer arrives as a message that opens its hirer's next turn, so the row
  * waits on the turns the root's room closes until both answers are in the
  * root's history (`hirerHeard`). Every check reads durable state, never the
- * model's account of what it did: what each helper answered is read from its
+ * model's account of what it did: what each subagent answered is read from its
  * own ledger, down the tree through `inspectSubagent`, the owner's read of
  * a subagent's runs, since the workspace's `/runs` lists the root's runs only.
  *
  * WHY `delegation` DOES NOT COVER IT. That row hires at one level only. A
  * nested hire runs in a subagent hosted by the same workspace object, with
  * its own delegation budget one level down, and its answer reaches the root
- * only through the middle helper's settlement — none of which a one-level
+ * only through the middle subagent's settlement — none of which a one-level
  * hire exercises.
  */
 import { afterAll, describe, test } from 'vitest';
@@ -26,8 +26,8 @@ import { ORCHESTRATOR_AGENT_SLUG, type RunEvent } from '../../packages/core/src/
 import type { PublicMessage } from '../../evals/src/session';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { delivered, deliveredInLedger, finalAnswer, taskHires, type TaskHire } from './delegation-observation';
-import { ROOT } from '../../evals/src/helper-address';
-import { helperAnswer, helperRecord, hirerHeard } from './hires';
+import { ROOT } from '../../evals/src/subagent-address';
+import { subagentAnswer, subagentRecord, hirerHeard } from './hires';
 import { openPublicSocket, type PublicSocket } from './public-socket';
 import {
   RELAY_MISSION, TREE_ASK as ASK, TREE_DEEP_WORD as DEEP, TREE_SHALLOW_WORD as SHALLOW, sayWordMission,
@@ -42,12 +42,12 @@ const DEFECT: FirstRunDefect = {
   found: 'Hosted subagents that delegate in turn, settling a tree whose branches end at '
     + 'different depths, had no deployed row: `delegation` hires at one level only.',
   missedBecause: 'a nested hire runs in a subagent the same workspace object hosts, one delegation '
-    + 'level down, and its answer reaches the root only through the middle helper\'s settlement, '
+    + 'level down, and its answer reaches the root only through the middle subagent\'s settlement, '
     + 'none of which a one-level hire exercises.',
   provedRedAt: 'b220f59f8',
-  redDirection: 'RED on the deployed build: a task hire settles at its helper\'s first turn end, so a helper '
+  redDirection: 'RED on the deployed build: a task hire settles at its subagent\'s first turn end, so a subagent '
     + 'that hires its own and waits for the wake reports "has been hired" upward and the nested answer never '
-    + 'climbs; it stays red until a task hire waits for its helper\'s own delegated work. Also planted on '
+    + 'climbs; it stays red until a task hire waits for its subagent\'s own delegated work. Also planted on '
     + 'loopback `vite dev`: a delegation budget that refuses the nested hire leaves `nested-hire-settled` missed.',
 };
 
@@ -62,7 +62,7 @@ afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE
 /** How much of a message a run's start keeps (`turn-lifecycle.ts`, `slice(0, 500)`). */
 const RUN_START_MESSAGE_CHARS = 500;
 
-/** The runs this row's own message opened: the root's turn, never a helper's.
+/** The runs this row's own message opened: the root's turn, never a subagent's.
  *  This ask is longer than a run's start keeps, so it is matched as cut. */
 function rootRuns(events: readonly RunEvent[]): ReadonlySet<string> {
   const opened = ASK.slice(0, RUN_START_MESSAGE_CHARS);
@@ -70,7 +70,7 @@ function rootRuns(events: readonly RunEvent[]): ReadonlySet<string> {
   return new Set(events.filter((event) => event.type === 'run_start' && event.userMessage === opened).map((event) => event.runId));
 }
 
-/** What the tree's helpers answered, each read from its own ledger, and the root's history the answers arrived in. */
+/** What the tree's subagents answered, each read from its own ledger, and the root's history the answers arrived in. */
 interface TreeRead {
   readonly top: readonly TaskHire[];
   readonly relay: TaskHire | undefined;
@@ -83,15 +83,15 @@ interface TreeRead {
   readonly history: readonly PublicMessage[];
 }
 
-/** Down the tree through the root's room: the relay's ledger, its own hire's, and the shallow helper's. */
+/** Down the tree through the root's room: the relay's ledger, its own hire's, and the shallow subagent's. */
 async function readTree(room: PublicSocket, top: readonly TaskHire[], history: readonly PublicMessage[]): Promise<TreeRead> {
   const relay = top.find((hire) => hire.message === RELAY_MISSION);
   const shallow = top.find((hire) => hire.message === sayWordMission(SHALLOW));
-  const relayRecord = relay === undefined ? null : await helperRecord(room, ROOT, relay.agent);
+  const relayRecord = relay === undefined ? null : await subagentRecord(room, ROOT, relay.agent);
   const relayEvents = relayRecord?.events ?? [];
   const [deep] = taskHires(relayEvents);
-  const deepAnswer = relayRecord === null || deep === undefined ? '' : await helperAnswer(room, relayRecord.address, deep.agent);
-  const shallowAnswer = shallow === undefined ? '' : await helperAnswer(room, ROOT, shallow.agent);
+  const deepAnswer = relayRecord === null || deep === undefined ? '' : await subagentAnswer(room, relayRecord.address, deep.agent);
+  const shallowAnswer = shallow === undefined ? '' : await subagentAnswer(room, ROOT, shallow.agent);
   const relayAnswer = relayRecord === null ? '' : finalAnswer(relayRecord.events, relayRecord.messages);
 
   return { top, relay, shallow, deep, relayEvents, relayAnswer, deepAnswer, shallowAnswer, history };
@@ -108,7 +108,7 @@ function treeSubgoals(tree: TreeRead): EvalSubgoal[] {
     ...tree.top.map((hire) => `root hired ${hire.agent}`),
     ...(deep === undefined ? [] : [`${relay?.agent ?? ''} hired ${deep.agent}, which answered ${JSON.stringify(deepAnswer.slice(0, 40))}`]),
     `${relay?.agent ?? 'no relay'} answered ${JSON.stringify(relayAnswer.slice(0, 40))}`,
-    `${shallow?.agent ?? 'no shallow helper'} answered ${JSON.stringify(shallowAnswer.slice(0, 40))}`,
+    `${shallow?.agent ?? 'no shallow subagent'} answered ${JSON.stringify(shallowAnswer.slice(0, 40))}`,
   ].join('; ');
 
   return [
@@ -125,7 +125,7 @@ function treeSubgoals(tree: TreeRead): EvalSubgoal[] {
     {
       what: 'shallow-branch-settled',
       reached: shallowAnswer === SHALLOW && answered !== null,
-      detail: answered === null ? `no answer from the shallow helper reached the root: ${seen}` : `the shallow helper's answer reached the root: ${JSON.stringify(answered.text.slice(0, 200))}`,
+      detail: answered === null ? `no answer from the shallow subagent reached the root: ${seen}` : `the shallow subagent's answer reached the root: ${JSON.stringify(answered.text.slice(0, 200))}`,
     },
     {
       what: 'root-reported-both',

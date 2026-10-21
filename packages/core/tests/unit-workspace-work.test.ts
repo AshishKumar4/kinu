@@ -1,4 +1,4 @@
-/** The Work read names each task's owner by the path its conversation opens at: a helper with no chat tab is reached this way. */
+/** The Work read names each task's owner by the path its conversation opens at: a subagent with no chat tab is reached this way. */
 import { describe, expect, test } from 'bun:test';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 import { explorationActorKey, readWorkspaceWork, TaskListStore, type ActorHandle } from '../src/index';

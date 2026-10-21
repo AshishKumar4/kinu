@@ -273,7 +273,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return hosted + (this._inFlight ? 1 : 0);
   }
 
-  /** Actors whose turn waits inside a task hire: a task helper of theirs is still working. */
+  /** Actors whose turn waits inside a task hire: a task subagent of theirs is still working. */
   harnessTurnsWaitingOnDelegates(): number {
     return this.boundSql<{ n: number }>`
       SELECT COUNT(DISTINCT s.actor_id) AS n FROM actor_subagents s
@@ -803,7 +803,7 @@ export function nextTurn(): Promise<void> {
  * Runs the object's wake until `holds()`. Detached work is observed by its effect, the way an operator would see it,
  * and a condition that never holds fails by name rather than hanging the suite: `failure` is thrown once the object has
  * nothing left to run (no owed work, no fiber in flight), or once every running turn waits either on the suite (a
- * scripted model call not yet answered, a planted hold) or on a task helper of its own, so nothing else could move it.
+ * scripted model call not yet answered, a planted hold) or on a task subagent of its own, so nothing else could move it.
  * No lap count.
  */
 export async function driveUntil(
@@ -2029,7 +2029,7 @@ export async function hostedSubagentHarness(
     readonly nameOrigin: 'user' | 'auto';
     readonly mission: string;
     readonly roleId?: string;
-    /** `evolution` stands in for a lane's helper: a view-only task agent. */
+    /** `evolution` stands in for a lane's subagent: a view-only task agent. */
     readonly origin?: 'agent' | 'evolution';
   },
 ): Promise<HostedActorHarness> {
@@ -2037,7 +2037,7 @@ export async function hostedSubagentHarness(
     name: identity.name,
     displayName: identity.displayName,
     nameOrigin: identity.nameOrigin,
-    // Durable: this stands in for a hire; a lane's helper lives one task.
+    // Durable: this stands in for a hire; a lane's subagent lives one task.
     lifetime: identity.origin === 'evolution' ? 'task' : 'durable',
     origin: identity.origin ?? 'agent',
     mission: identity.mission,
