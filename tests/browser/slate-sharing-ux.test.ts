@@ -269,4 +269,33 @@ describe('slate sharing surfaces', () => {
       
     });
   });
+
+  test('a share row\'s menu, closing after a choice, never stands between the next press and the row', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'sharedialog', 'light', 'mobile');
+
+      try {
+        // The exit as a loaded machine draws it: long enough that the next press lands while the menu is still leaving.
+        await page.addStyleTag({ content: '.p-menu { transition: opacity 2s linear !important; }' });
+        await page.click('[data-live-share="live-board-1"] [data-live-share-review]');
+        await page.waitForSelector('[data-share-approve-reach]');
+        await page.click('[data-share-approve-reach]');
+        await page.waitForFunction(() => document.querySelector('[data-live-share="live-board-1"] [data-live-share-review]') === null);
+        await page.click('[data-live-share="live-board-1"] [data-row-menu]');
+        await page.waitForSelector('[role="menu"][data-open] [data-live-share-own]');
+        await page.click('[role="menu"][data-open] [data-live-share-own]');
+        await page.waitForSelector('[data-ending-style]');
+
+        const under = await page.$eval('[data-live-share="live-board-1"] [data-row-menu]', (trigger) => {
+          const box = trigger.getBoundingClientRect();
+
+          return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest('[data-row-menu]') === trigger;
+        });
+
+        expect(under).toBe(true);
+      } finally {
+        await page.close();
+      }
+    });
+  });
 });

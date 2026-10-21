@@ -799,6 +799,8 @@ body { background: var(--c-bg); color: var(--c-text); }
   transition: opacity var(--dur-enter) var(--ease-out-strong), transform var(--dur-enter) var(--ease-out-strong);
 }
 .p-menu:is([data-starting-style], [data-ending-style]) { opacity: 0; transform: scale(0.98); }
+/* A menu leaving takes no press: the scrim of a sheet that is fading out would swallow the next one. */
+:is(.p-menu, .p-menu-scrim, .p-menu-positioner)[data-closed] { pointer-events: none; }
 .p-menu[data-sheet] { width: calc(100vw - 24px); max-height: 70vh; overflow-y: auto; border-radius: var(--r-card); box-shadow: var(--shadow-overlay); }
 .p-menu-name { padding: 4px 8px 8px; color: var(--c-text-3); }
 .p-menu-item {
