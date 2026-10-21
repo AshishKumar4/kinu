@@ -150,7 +150,7 @@ export function QuestionCard({ asking, busy, owed = false, onAnswer, onDismiss }
         ))}
       </div>
       {unsent.note === null ? (
-        <button type="button" disabled={busy} className="t-meta mt-2 p-accent-fg hover:underline" onClick={() => keep({ ...unsent, note: "" })}>Add a note</button>
+        <Button variant="ghost" size="sm" className="mt-2" disabled={busy} onClick={() => keep({ ...unsent, note: "" })}>Add a note</Button>
       ) : (
         <textarea disabled={busy} value={unsent.note} onChange={(event) => keep({ ...unsent, note: event.target.value })} rows={2} placeholder="A note for the agent"
           aria-label="A note for the agent"

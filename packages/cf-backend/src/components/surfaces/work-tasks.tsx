@@ -4,6 +4,7 @@ import { CircleIcon, CircleDashedIcon, CheckCircleIcon, ProhibitIcon, SparkleIco
 import { taskSettled, type AgentTask, type AgentTaskTree, type PanelAgent, type TaskStatus, type WorkspaceWorkOwner } from "@kinu.run/core";
 import { toneInk } from "@/components/ui/Status";
 import { Pressable } from "@/components/ui/Pressable";
+import { InlineAction } from "@/components/ui/InlineAction";
 
 const STATUS_META = {
   open: { icon: CircleDashedIcon, tone: toneInk("neutral"), label: "Open", weight: "regular", text: "p-text-2" },
@@ -25,8 +26,7 @@ function OwnerMark({ owner, onOpenOwner }: TaskOwnership) {
   if (onOpenOwner === undefined || path.length === 0) return <span className="t-meta p-text-3"> · {owner.title}</span>;
 
   return (
-    <> · <button type="button" className="t-meta p-accent-fg hover:underline" aria-label={`Open ${owner.title}'s conversation`}
-      onClick={() => void onOpenOwner(path.join("/"), owner.actorId)}>{owner.title}</button></>
+    <> · <InlineAction aria-label={`Open ${owner.title}'s conversation`} onClick={() => void onOpenOwner(path.join("/"), owner.actorId)}>{owner.title}</InlineAction></>
   );
 }
 

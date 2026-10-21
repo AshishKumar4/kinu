@@ -107,11 +107,9 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
             )
           ) : (
             <>
-              <button data-files-save disabled={saving} onClick={() => void save(draft)}
-                className="t-control flex items-center gap-1 p-accent-fg hover:underline p-1 disabled:opacity-50"
-                title={`Save ${name}`}>
+              <Button variant="ghost" size="sm" data-files-save disabled={saving} onClick={() => void save(draft)} title={`Save ${name}`}>
                 <CheckIcon size={12} />{saving ? "Saving…" : "Save"}
-              </button>
+              </Button>
               <button onClick={() => { setDraft(null); setSaveError(null); }}
                 className="t-control p-text-3 hover:p-text p-1">Cancel</button>
             </>
@@ -132,11 +130,11 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
         <div data-files-conflict className="t-meta px-3 py-1 p-danger border-b p-border flex items-start gap-2">
           <WarningIcon size={13} className="shrink-0 mt-px" />
           <span className="min-w-0 break-words">This file changed after you opened it. Your draft is still here.</span>
-          <button type="button" onClick={() => {
+          <Button variant="ghost" size="sm" className="ml-auto shrink-0" onClick={() => {
             setDraft(null);
             setConflict(false);
             reload();
-          }} className="ml-auto shrink-0 p-accent-fg hover:underline">Reload newer content</button>
+          }}>Reload newer content</Button>
         </div>
       )}
       {kind === "text" && file?.readOnlyReason && draft === null && (

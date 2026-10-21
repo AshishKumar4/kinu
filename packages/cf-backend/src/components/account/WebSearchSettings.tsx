@@ -267,7 +267,7 @@ function KeyEntry({ primary, stored, disabled, onSaved, onRemoved }: {
       <div className="t-meta flex flex-wrap items-center gap-x-3 gap-y-1 p-text-3">
         {has && <Status tone="success">Key stored</Status>}
         {has && (
-          <button type="button" disabled={saving || disabled} onClick={() => detach(remove())} className="p-danger hover:underline">Remove key</button>
+          <Button variant="danger" size="sm" disabled={saving || disabled} onClick={() => detach(remove())}>Remove key</Button>
         )}
         {direct !== null && (
           <a href={direct.keyPage} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 p-accent-fg hover:underline">

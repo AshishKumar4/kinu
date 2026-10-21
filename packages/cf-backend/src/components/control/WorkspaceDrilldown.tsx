@@ -195,18 +195,14 @@ export function WorkspaceDrilldown(
                     {control.label}
                   </Button>
                 ))}
-                <button
-                  disabled={busy}
-                  onClick={() => confirm({
+                <Button variant="danger" size="sm" disabled={busy} onClick={() => confirm({
                     action: { action: 'workspace.remove', userId, workspace, confirm: '' },
                     title: 'Remove this workspace',
                     body: 'This removes the workspace and everything in it: its conversation, model, scaffold, triggers, and computer. It belongs to another account and cannot be undone.',
                     danger: true,
-                  })}
-                  className="t-meta p-danger hover:underline flex items-center gap-1 px-2 py-1"
-                >
+                  })}>
                   <TrashIcon size={12} /> Remove workspace
-                </button>
+                </Button>
               </div>
 
               <div className="grid gap-3 md:grid-cols-2">

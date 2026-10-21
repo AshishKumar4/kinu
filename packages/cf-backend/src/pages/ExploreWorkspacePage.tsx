@@ -185,7 +185,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
                 {inside.layout === "focus" ? "Its chat alone; its agents, tabs and inspector a click away." : "Chats as tabs, beside the inspector."}
               </Row>
             </ul>
-            <button type="button" onClick={() => setSoul((shown) => !shown)} aria-expanded={soul} className="t-meta p-accent-fg hover:underline">{soul ? "Hide its soul" : "Read its soul"}</button>
+            <Button variant="ghost" size="sm" onClick={() => setSoul((shown) => !shown)} aria-expanded={soul}>{soul ? "Hide its soul" : "Read its soul"}</Button>
             {soul && <pre className="t-code max-h-64 overflow-auto rounded-[var(--r-card)] border p-border p-sunken p-4 whitespace-pre-wrap p-text-2" data-blueprint-soul>{inside.soul}</pre>}
           </Section>
         </div>

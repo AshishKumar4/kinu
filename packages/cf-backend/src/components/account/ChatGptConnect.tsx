@@ -89,7 +89,7 @@ export function ChatGptConnect({ plan, onSignedIn }: { plan: ChatGptPlan; onSign
       {way === "pc" && <OnYourPc plan={plan} onDone={finished} onGaveUp={gaveUp} onFailed={shown} />}
       {way === "here" && <SignInHere onDone={finished} onFailed={shown} />}
       {way !== null && (
-        <button type="button" onClick={cancel} className="t-meta p-text-3 underline-offset-2 hover:p-text hover:underline">Cancel</button>
+        <Button variant="ghost" size="sm" onClick={cancel}>Cancel</Button>
       )}
       {error && <p role="alert" className="t-meta p-danger">{error}</p>}
     </div>

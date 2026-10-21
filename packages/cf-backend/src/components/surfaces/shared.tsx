@@ -11,6 +11,8 @@ import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
 import { Pressable } from "@/components/ui/Pressable";
+import { Button } from "@/components/ui/Button";
+import { InlineAction } from "@/components/ui/InlineAction";
 
 const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
   add: { tone: "p-badge-success px-3", mark: "+" },
@@ -205,7 +207,7 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
         if (id !== null) return <SlateLink id={id} />;
 
         if (files !== null && href !== undefined && isWholeReference(href, roots)) {
-          return <button type="button" data-file-link={href} className="p-accent-fg hover:underline" onClick={() => files.open(href)}>{children}</button>;
+          return <InlineAction data-file-link={href} onClick={() => files.open(href)}>{children}</InlineAction>;
         }
 
         return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent-fg hover:underline">{children}</a>;
@@ -313,7 +315,7 @@ function HistoryBoundaryNotice({ loading, error, exhausted, onRetry }: HistoryBo
       <>
         <WarningCircleIcon size={13} className="p-danger shrink-0" />
         <span className="p-text-3">Could not load earlier messages.</span>
-        <button onClick={() => { onRetry(); }} className="p-accent-fg hover:underline">Retry</button>
+        <Button variant="ghost" size="sm" onClick={() => { onRetry(); }}>Retry</Button>
       </>
     );
   }

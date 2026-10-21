@@ -734,6 +734,11 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-pressable:is(:active, [data-force="active"]) { background: var(--c-pressed); }
 .p-pressable[data-selected] { background: var(--c-selected); }
 
+/* An action inside running text (ui/InlineAction.tsx): the sentence's type, accent ink, underlined on hover. */
+.p-inline-action { display: inline; padding: 0; border: 0; background: none; font: inherit; color: var(--c-accent-fg); text-align: inherit; cursor: pointer; }
+.p-inline-action:hover { text-decoration: underline; }
+.p-inline-action:disabled { cursor: default; color: var(--c-text-3); text-decoration: none; }
+
 /* A busy button's spinner, in the icon's place. */
 .p-button-spinner {
   width: 14px; height: 14px; flex-shrink: 0; border-radius: var(--r-pill);

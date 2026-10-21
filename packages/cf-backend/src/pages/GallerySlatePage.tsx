@@ -169,7 +169,7 @@ export default function GallerySlatePage() {
             {read.forks !== undefined && <span data-gallery-forks>{read.forks === 1 ? "1 fork" : `${read.forks.toLocaleString("en-US")} forks`}</span>}
             {reported
               ? <span data-gallery-reported className="ml-auto inline-flex items-center gap-1"><FlagIcon size={12} />Reported</span>
-              : <button type="button" data-gallery-report onClick={() => (signedIn ? setDialog("report") : signInAndReturn())} className="ml-auto inline-flex items-center gap-1 hover:underline"><FlagIcon size={12} />Report</button>}
+              : <Button variant="ghost" size="sm" className="ml-auto" data-gallery-report onClick={() => (signedIn ? setDialog("report") : signInAndReturn())}><FlagIcon size={12} />Report</Button>}
           </p>
           {read.needs !== undefined && <UsesYours needs={read.needs} />}
         </div>

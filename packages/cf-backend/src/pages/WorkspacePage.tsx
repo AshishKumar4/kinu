@@ -90,7 +90,7 @@ function TerminalCloseBoundary({ close, onRetry }: {
       </p>
       <p className="t-meta p-text-3 max-w-sm break-words">{close.reason || close.message}</p>
       <div className="flex items-center gap-3">
-        <button type="button" onClick={onRetry} className="t-meta p-accent-fg hover:underline">Try again</button>
+        <Button variant="ghost" size="sm" onClick={onRetry}>Try again</Button>
         <Link to="/" className="t-meta p-accent-fg hover:underline">Back to your workspaces</Link>
       </div>
     </div>
@@ -933,7 +933,7 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
               : "This workspace is unavailable."}
             {" "}{state.terminalClose.reason || state.terminalClose.message}
           </span>
-          <button type="button" onClick={state.retryLoad} className="p-accent-fg hover:underline">Try again</button>
+          <Button variant="ghost" size="sm" onClick={state.retryLoad}>Try again</Button>
           <Link to="/" className="p-accent-fg hover:underline">Back to your workspaces</Link>
         </div>
       )}

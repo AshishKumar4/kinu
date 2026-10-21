@@ -45,8 +45,7 @@ function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: (
       <span className="ml-auto flex shrink-0 gap-1">
         <button type="button" data-upload-keep onClick={onKeep}
           className="rounded px-2 py-px p-text-2 hover:p-text p-row-hover">Cancel</button>
-        <button type="button" data-upload-confirm onClick={onReplace} autoFocus
-          className="rounded px-2 py-px p-accent-fg hover:underline">Replace</button>
+        <Button variant="ghost" size="sm" data-upload-confirm onClick={onReplace} autoFocus>Replace</Button>
       </span>
     </div>
   );
@@ -739,10 +738,9 @@ function OfflineTreeRow({ row, depth }: { row: OfflineRow; depth: number }) {
       <span className="truncate">{row.name}</span>
       <span className="t-meta ml-1 truncate">offline</span>
       {row.onConnect && (
-        <button type="button" data-files-tree-connect onClick={row.onConnect}
-          className="t-status ml-auto shrink-0 p-accent-fg hover:underline opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100">
+        <Button variant="ghost" size="sm" className="ml-auto shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100" data-files-tree-connect onClick={row.onConnect}>
           Connect
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -761,8 +759,7 @@ function OfflineMountRow({ row }: { row: OfflineRow }) {
       </span>
       <span className="text-right @[26rem]:col-span-2">
         {row.onConnect && (
-          <button type="button" data-files-connect onClick={row.onConnect}
-            className="t-status p-accent-fg hover:underline">Connect</button>
+          <Button variant="ghost" size="sm" data-files-connect onClick={row.onConnect}>Connect</Button>
         )}
       </span>
     </div>
@@ -863,8 +860,7 @@ function DeleteChoice({ name, onDelete, onCancelDelete, className }: {
 }) {
   return (
     <span className={`t-meta flex items-center gap-3 ${className}`} onClick={(e) => e.stopPropagation()}>
-      <button data-files-delete-confirm onClick={() => detach(Effect.promise(onDelete))}
-        className="font-medium p-danger hover:underline" aria-label={`Delete ${name}`}>Delete</button>
+      <Button variant="danger" size="sm" data-files-delete-confirm onClick={() => detach(Effect.promise(onDelete))} aria-label={`Delete ${name}`}>Delete</Button>
       <button onClick={onCancelDelete} className="p-text-3 hover:p-text" aria-label="Keep it">Keep</button>
     </span>
   );
@@ -954,7 +950,7 @@ function OfflineMountTile({ row }: { row: OfflineRow }) {
       <span className="t-meta flex items-baseline gap-2">
         <span className="p-text-3">offline</span>
         {row.onConnect && (
-          <button type="button" data-files-connect onClick={row.onConnect} className="font-medium p-accent-fg hover:underline">Connect</button>
+          <Button variant="ghost" size="sm" data-files-connect onClick={row.onConnect}>Connect</Button>
         )}
       </span>
     </div>

@@ -60,7 +60,7 @@ function NoLines({ file, onOpenInFiles }: { file: FileDiff; onOpenInFiles: (() =
   return (
     <div className="m-3 rounded-lg p-sunken px-3 py-3" data-no-lines={body.kind}>
       <p className="t-body p-text-2">{text}</p>
-      {onOpenInFiles !== null && <button type="button" onClick={onOpenInFiles} className="t-meta mt-2 p-accent-fg hover:underline">Open in Files</button>}
+      {onOpenInFiles !== null && <Button variant="ghost" size="sm" className="mt-2" onClick={onOpenInFiles}>Open in Files</Button>}
     </div>
   );
 }
@@ -107,7 +107,7 @@ function NextFile({ next, reviewable, onOpen, onReviewed, onList }: {
     return (
       <div className="mx-3 mb-6 mt-4 flex items-center gap-3 rounded-lg border p-border px-3 py-3">
         <span className="t-body min-w-0 flex-1 p-text-2">That is every change.</span>
-        {reviewable ? <MarkReviewed onClick={onReviewed} /> : <button type="button" onClick={onList} className="t-meta p-accent-fg hover:underline">All files</button>}
+        {reviewable ? <MarkReviewed onClick={onReviewed} /> : <Button variant="ghost" size="sm" onClick={onList}>All files</Button>}
       </div>
     );
   }
@@ -389,7 +389,7 @@ function Reviewed({ sets, source, at, now, menuOpen, onSource, onUndo }: {
     <div className="px-4 py-4" data-changes="reviewed">
       <p className="t-item flex items-center gap-2 p-text">
         <CheckCircleIcon size={15} weight="fill" className="p-success" />Reviewed at {sinceLabel(at, now)}
-        {onUndo !== null && <button type="button" onClick={onUndo} data-undo-reviewed className="t-meta ml-auto p-accent-fg hover:underline">Undo</button>}
+        {onUndo !== null && <Button variant="ghost" size="sm" className="ml-auto" onClick={onUndo} data-undo-reviewed>Undo</Button>}
       </p>
       <p className="t-meta mt-1 pl-[23px] p-text-3">New changes show here as they happen.</p>
       {sets.length > 1 && (

@@ -8,6 +8,7 @@ import { Modal } from "@/components/ui/Modal";
 import { BlueprintShareForm, type BlueprintFixture } from "./BlueprintShareForm";
 import { LiveShareForm, type LiveShareFixture } from "./LiveShareForm";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Button } from "@/components/ui/Button";
 
 type ShareMode = "live" | "blueprint";
 
@@ -30,10 +31,9 @@ export function ShareSlateDialog({ workspace, slate, title, rpc, onClose, onList
       {mode === "live"
         ? <LiveShareForm workspace={workspace} slate={slate} rpc={rpc} onClose={onClose} onBusy={setBusy} onListingPending={onListingPending} fixture={fixture?.live} />
         : <BlueprintShareForm workspace={workspace} slate={slate} rpc={rpc} onClose={onClose} onBusy={setBusy} onListingPending={onListingPending} fixture={fixture?.blueprint} />}
-      <button type="button" data-share-switch={mode === "live" ? "blueprint" : "live"} disabled={busy} onClick={() => setMode(mode === "live" ? "blueprint" : "live")}
-        className="t-meta self-start p-text-3 underline-offset-2 hover:underline">
+      <Button variant="ghost" size="sm" className="self-start" data-share-switch={mode === "live" ? "blueprint" : "live"} disabled={busy} onClick={() => setMode(mode === "live" ? "blueprint" : "live")}>
         {mode === "live" ? "Share a copy instead" : "Share it live instead"}
-      </button>
+      </Button>
     </Modal>
   );
 }

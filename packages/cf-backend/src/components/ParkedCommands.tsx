@@ -229,9 +229,9 @@ export function ParkedWriteChange({ id, rpc }: { id: string; rpc: WorkspaceRpc }
 
   return (
     <div className="rounded-md px-2 py-1 p-fill" data-parked-write={id}>
-      <button type="button" className="t-meta p-accent-fg hover:underline" onClick={() => setOpen((was) => !was)} aria-expanded={open}>
+      <Button variant="ghost" size="sm" onClick={() => setOpen((was) => !was)} aria-expanded={open}>
         {open ? "Hide the change" : "Show the change"}
-      </button>
+      </Button>
       {open && <ParkedWriteDiff id={id} rpc={rpc} />}
     </div>
   );
