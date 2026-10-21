@@ -5,18 +5,20 @@ import { Checkbox as Box } from "@cloudflare/kumo/primitives/checkbox";
 import { Radio } from "@cloudflare/kumo/primitives/radio";
 import { RadioGroup as Group } from "@cloudflare/kumo/primitives/radio-group";
 
-/** `mixed` for a box standing for a set some of which are ticked. */
-export function Checkbox({ checked, onChange, label, mixed = false, disabled = false }: {
+/** `mixed` for a box standing for a set some of which are ticked. A label over two lines keeps the box on its first. */
+export function Checkbox({ checked, onChange, label, mixed = false, disabled = false, describedBy, ...data }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   label: ReactNode;
   mixed?: boolean;
   disabled?: boolean;
-}) {
+  /** The id of what the choice risks or means, read after its name. */
+  describedBy?: string;
+} & Readonly<Record<`data-${string}`, string>>) {
   return (
-    <label className="inline-flex items-center gap-2 t-body">
+    <label className="inline-flex items-start gap-2 t-body">
       <Box.Root nativeButton render={<button type="button" />} checked={checked} indeterminate={mixed} disabled={disabled}
-        onCheckedChange={(next) => onChange(next)} className="p-check">
+        onCheckedChange={(next) => onChange(next)} className="p-check mt-0.5" aria-describedby={describedBy} {...data}>
         <Box.Indicator className="flex">{mixed ? <MinusIcon size={12} weight="bold" /> : <CheckIcon size={12} weight="bold" />}</Box.Indicator>
       </Box.Root>
       {label}

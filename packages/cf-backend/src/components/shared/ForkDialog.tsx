@@ -8,12 +8,14 @@ import { GitBranchIcon } from "@phosphor-icons/react";
 import { showing, detach } from "@kinu.run/core/obs";
 import { workspaceDisplayTitle, type BlueprintFork, type WorkspaceEntry } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
-import { inputCls } from "@/components/ui/form";
+import { TextInput } from "@/components/ui/Field";
+import { Choices } from "@/components/ui/Choices";
 import { listWorkspaces } from "@/lib/user-api";
 import { forkBlueprint, forkLiveShare } from "@/lib/shared-api";
 import { Notice } from "@/components/ui/Notice";
 
-const NEW_WORKSPACE = "\u0000new";
+/** The choice of a new workspace: a `+` is in no workspace's name. */
+const NEW_WORKSPACE = "+new";
 
 /** `reaches` is the fork's requirements, one namespace each, for its landing panel. */
 function forkedSlatePath(fork: BlueprintFork): string {
@@ -84,30 +86,24 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces, create
         </Button>
       </>}
     >
-      <p className="t-meta p-text-2">
-        <span className="font-medium p-text">{title}</span> lands as a new slate that calls your own workspace, as you. Nothing runs until you open it.
+      <p className="t-body">
+        <span className="t-item">{title}</span> lands as a new slate that calls your own workspace, as you. Nothing runs until you open it.
       </p>
       {roster === null && err === null && <div className="flex justify-center py-4"><Loader size="sm" /></div>}
       {roster !== null && (
-        <fieldset className="space-y-1" aria-label="Target workspace">
-          {roster.map((entry) => (
-            <label key={entry.name} className={`t-body flex items-center gap-3 rounded-md border px-3 py-2 cursor-pointer ${target === entry.name ? "p-border p-fill" : "border-transparent p-card-hover"}`}>
-              <input type="radio" name="fork-target" value={entry.name} checked={target === entry.name} onChange={() => setTarget(entry.name)} disabled={busy} />
-              <span className="min-w-0 flex-1 truncate p-text">{workspaceDisplayTitle(entry)}</span>
-              <span className="t-meta t-mono p-text-3">{entry.name}</span>
-            </label>
-          ))}
-          <label className={`t-body flex items-center gap-3 rounded-md border px-3 py-2 cursor-pointer ${target === NEW_WORKSPACE ? "p-border p-fill" : "border-transparent p-card-hover"}`}>
-            <input type="radio" name="fork-target" value={NEW_WORKSPACE} checked={target === NEW_WORKSPACE} onChange={() => setTarget(NEW_WORKSPACE)} disabled={busy} />
-            <span className="p-text">New workspace</span>
-          </label>
+        <div className="space-y-3">
+          <Choices label="Target workspace" marker="data-fork-target" value={target} disabled={busy} onChange={setTarget}
+            options={[
+              ...roster.map((entry) => ({ id: entry.name, label: workspaceDisplayTitle(entry), detail: <span className="t-mono">{entry.name}</span> })),
+              { id: NEW_WORKSPACE, label: "New workspace" },
+            ]} />
           {target === NEW_WORKSPACE && (
-            <div className="space-y-1 pl-1 pt-1">
+            <div className="space-y-1">
               <label className="t-meta p-text-3 block" htmlFor="fork-mission">What the new workspace is for</label>
-              <input id="fork-mission" value={mission} onChange={(event) => setMission(event.target.value)} className={inputCls} disabled={busy} />
+              <TextInput id="fork-mission" value={mission} onChange={(event) => setMission(event.target.value)} disabled={busy} />
             </div>
           )}
-        </fieldset>
+        </div>
       )}
       {err && <Notice tone="danger">{err}</Notice>}
     </Modal>

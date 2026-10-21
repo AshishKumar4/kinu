@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/Button";
 import { GALLERY_CATEGORIES, type GalleryCategory, type LiveShareRecord } from "@kinu.run/core";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { Switch } from "@/components/ui/Switch";
+import { TextInput } from "@/components/ui/Field";
+import { Segmented } from "@/components/ui/Segmented";
 
 /** Lists the share with its card's words, or, with null, takes it off the Gallery. */
 export type ListShare = (listing: { line: string; category: GalleryCategory } | null) => void;
@@ -37,21 +39,17 @@ export function ShareListing({ share, onList, disabled }: { share: LiveShareReco
         <Switch on={listed !== null || drafting} label="List in the Gallery" data-share-gallery onChange={turn} disabled={disabled} />
       </div>
       {listed === null && drafting && (
-        <form className="space-y-2 rounded-lg border p-border p-2" onSubmit={(event) => {
+        <form className="space-y-2" onSubmit={(event) => {
           event.preventDefault();
 
           if (line.trim() === "") return;
           onList({ line: line.trim(), category });
           setDrafting(false);
         }}>
-          <input value={line} onChange={(event) => setLine(event.target.value)} placeholder="One line about it" aria-label="One line about it" data-share-gallery-line maxLength={140}
-            className="t-body w-full rounded-md border p-border bg-[var(--c-field)] px-2 py-1 p-text outline-none placeholder:text-[var(--c-text-3)]" />
-          <div role="radiogroup" aria-label="Category" className="flex flex-wrap gap-2">
-            {GALLERY_CATEGORIES.map((each) => (
-              <button key={each} type="button" role="radio" aria-checked={each === category} data-share-gallery-category={each} onClick={() => setCategory(each)}
-                className={`t-meta rounded-full px-2 py-px ${each === category ? "bg-[var(--c-selected)] p-accent-fg font-medium" : "p-fill p-text-2"}`}>{CATEGORY_WORDS[each]}</button>
-            ))}
-          </div>
+          <TextInput size="sm" value={line} onChange={(event) => setLine(event.target.value)} placeholder="One line about it" aria-label="One line about it"
+            data-share-gallery-line maxLength={140} />
+          <Segmented size="sm" label="Category" value={category} onChange={setCategory} disabled={disabled}
+            segments={GALLERY_CATEGORIES.map((each) => ({ id: each, label: CATEGORY_WORDS[each] }))} />
           <div className="flex justify-end"><Button size="sm" variant="secondary" type="submit" data-share-gallery-list disabled={disabled}>List it</Button></div>
         </form>
       )}

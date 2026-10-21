@@ -790,6 +790,21 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-radio-dot { width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--c-accent-on); }
 .p-check[data-disabled], .p-radio[data-disabled] { opacity: 0.5; }
 
+/* Choices: one of a few options, rows in a group or tiles over a picture, the whole option the radio (ui/Choices.tsx). */
+.p-choice {
+  width: 100%; text-align: left; color: var(--c-text-3); font: inherit; cursor: pointer; background: transparent;
+  transition: background-color var(--dur-state) ease-out, border-color var(--dur-state) ease-out;
+}
+.p-choice[data-disabled] { cursor: default; opacity: 0.5; }
+.p-choice[data-checked] .p-choice-icon { color: var(--c-accent-fg); }
+.p-choice[data-checked] .p-radio { background: var(--c-accent); border-color: var(--c-accent); }
+.p-choice-row { display: flex; align-items: flex-start; gap: 12px; padding: 8px 12px; border: 0; }
+.p-choice-row:is(:hover, [data-force="hover"]):not([data-disabled]) { background: var(--c-hover); }
+.p-choice-row[data-checked] { background: var(--c-fill); }
+.p-choice-tile { display: block; padding: 8px; border: 1px solid var(--c-border); border-radius: var(--r-card); }
+.p-choice-tile:is(:hover, [data-force="hover"]):not([data-disabled]) { border-color: var(--c-border-strong); }
+.p-choice-tile[data-checked] { border-color: var(--c-accent); }
+
 /* Switch: a 32 by 18 track, a 14 thumb, white in both modes (ui/Switch.tsx). */
 .p-switch {
   position: relative; display: inline-flex; width: 32px; height: 18px; flex-shrink: 0; align-items: center; padding: 0 2px;

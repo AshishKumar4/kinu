@@ -14,12 +14,13 @@ interface SegmentOption<T extends string> {
  *  28 track inside a 46 bar (a tool's view). */
 const SEGMENT_BOX = { md: "px-2 py-[5px]", sm: "px-2 py-px" } as const;
 
-export function Segmented<T extends string>({ label, segments, value, onChange, size = "md" }: {
+export function Segmented<T extends string>({ label, segments, value, onChange, size = "md", disabled = false }: {
   label: string;
   segments: readonly SegmentOption<T>[];
   value: T;
   onChange: (id: T) => void;
   size?: keyof typeof SEGMENT_BOX;
+  disabled?: boolean;
 }) {
   const strip = useRef<HTMLDivElement>(null);
   // The tab a keystroke or click focused; null means "the selected one".
@@ -68,6 +69,7 @@ export function Segmented<T extends string>({ label, segments, value, onChange, 
             data-segment={segment.id}
             aria-selected={selected}
             tabIndex={(focusId ?? value) === segment.id ? 0 : -1}
+            disabled={disabled}
             onClick={() => onChange(segment.id)}
             onFocus={() => setFocusId(segment.id)}
             aria-label={segment.icon === undefined ? undefined : segment.label}

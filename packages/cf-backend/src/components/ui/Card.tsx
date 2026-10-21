@@ -4,7 +4,14 @@
  */
 import type { ReactNode } from "react";
 
-export function Card({ title, actions, children }: { title: string; actions?: ReactNode; children: ReactNode }) {
+export function Card({ title, actions, children }: {
+  /** Absent where the page's own section header already names it: the box alone. */
+  title?: string;
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  if (title === undefined) return <section className="p-card-body">{children}</section>;
+
   return (
     <section className="space-y-2">
       <header className="flex min-h-7 items-end gap-3">

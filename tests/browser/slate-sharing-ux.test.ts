@@ -84,7 +84,7 @@ describe('slate sharing surfaces', () => {
 
           try {
             // Who can open it and Share, the choices said in one line: the safe defaults, each changed only when asked to.
-            expect(await live.$eval('[data-share-access]', (element) => element.getAttribute('data-share-access'))).toBe('users');
+            expect(await live.$eval('[data-share-access-option][aria-checked="true"]', (element) => element.getAttribute('data-share-access-option'))).toBe('users');
             expect(await live.$eval('[data-share-summary]', (element) => element.textContent ?? '')).toContain("Runs on each person's own access · Can be forked");
             expect(await live.$$('[data-share-mode], [data-share-fork], [data-share-start], [data-share-limits]')).toHaveLength(0);
             // Each share on one row, with who opened it through its link and how often, never who.
@@ -97,7 +97,7 @@ describe('slate sharing surfaces', () => {
             expect(await live.$eval('[data-share-mode][aria-checked="true"]', (element) => element.getAttribute('data-share-mode'))).toBe('own');
             expect(await live.$('[data-share-reach]')).toBeNull();
             expect(await live.$('[data-share-owner-warning]')).toBeNull();
-            expect(await live.$eval('[data-share-fork]', (box) => box instanceof HTMLInputElement && box.checked)).toBe(true);
+            expect(await live.$eval('[data-share-fork]', (box) => box.getAttribute('aria-checked'))).toBe('true');
             // docs/SLATE-SHARING.md S5, independent of the constants used to render these bounds.
             const limits = await live.$eval('[data-share-limits]', (element) => element.textContent ?? '');
             const requests: number[] = [];
@@ -120,7 +120,7 @@ describe('slate sharing surfaces', () => {
             await live.waitForSelector('[data-grant-summary]');
             const text = await live.$eval('[role="dialog"]', (element) => element.textContent ?? '');
             // Read members are granted with no click; changes wait for one.
-            expect(await live.$$eval('[role="dialog"] input[data-approve]', (boxes) => boxes.filter((box) => box instanceof HTMLInputElement && box.checked).length)).toBe(0);
+            expect(await live.$$eval('[role="dialog"] [data-approve][aria-checked="true"]', (boxes) => boxes.length)).toBe(0);
             expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('People get 5 read-only members. You allowed 0 of 5 changes.');
             // The risk statement is per member: the act, the workspace, who can trigger it.
             expect(text).toContain('Calls create_issue on GitHub with your credentials.');
@@ -133,7 +133,6 @@ describe('slate sharing surfaces', () => {
             await live.click('[data-approve="agent.send"]');
             expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('You allowed 1 of 5');
             // Public wording follows the access choice.
-            await live.click('[data-share-access]');
             await live.click('[data-share-access-option="public"]');
             expect(await live.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Anyone who opens this share can trigger it.');
 
@@ -188,7 +187,7 @@ describe('slate sharing surfaces', () => {
             await live.click('[data-live-share="live-board-1"] [data-live-share-listing]');
             await live.click('[data-share-gallery]');
             await live.type('[data-share-gallery-line]', 'Triage issues by label');
-            await live.click('[data-share-gallery-category="developer"]');
+            await live.click('[data-share-gallery-for] [data-segment="developer"]');
             await live.click('[data-share-gallery-list]');
             await live.waitForFunction(() => (document.querySelector('[data-share-gallery-for]')?.textContent ?? '').includes('Triage issues by label'));
             // And taken off again.
@@ -210,7 +209,7 @@ describe('slate sharing surfaces', () => {
             await first.type('[data-share-emails]', 'pat@example.com, sam@example.com');
             await first.waitForSelector('[data-share-person="sam@example.com"]');
             expect(await first.$('[data-share-editors-note]')).toBeNull();
-            await first.click('[data-share-person="pat@example.com"] [data-share-person-role="edit"]');
+            await first.click('[data-share-person="pat@example.com"] [data-segment="edit"]');
             await first.waitForSelector('[data-share-editors-note]');
             await first.click('[data-share-submit]');
             await first.waitForSelector('[data-share-created]');
