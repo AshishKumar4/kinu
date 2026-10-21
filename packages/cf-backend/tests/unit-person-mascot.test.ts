@@ -11,7 +11,8 @@ const NAMES = ['Ada Lovelace', 'Ashish', 'Lucía Ferreira', 'kai', 'Owner', '李
 
 describe("a person's assistant", () => {
   test('looks the same for the same name, however it is spaced or cased', () => {
-    expect(personMascot('  ada LOVELACE ')).toEqual(personMascot('Ada Lovelace'));
+    expect(['  ada LOVELACE ', 'Ada Lovelace', 'ADA LOVELACE'].map((name) => personMascot(name).seed))
+      .toEqual(['person:ada lovelace', 'person:ada lovelace', 'person:ada lovelace']);
   });
 
   test("never wears Main's crown, and two people's assistants differ", () => {

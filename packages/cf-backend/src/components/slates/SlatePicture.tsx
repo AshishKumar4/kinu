@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { pictureUrl } from "@/lib/user-api";
-import { pictureSrc } from "@/lib/picture-src";
+import { pictureSrc } from "@kinu.run/core/web/picture-src";
 import { CaptureMat } from "@/components/ui/Tiles";
 
 /**

@@ -1,6 +1,6 @@
 /**
  * The design gallery's pictures: what a slate looks like at work, captured once from mock slates of this gallery, and
- * answered for the digests its fixtures name (`lib/picture-src.ts` `answerPictures`, at the gallery's start): the
+ * answered for the digests its fixtures name (core `web/picture-src.ts` `answerPictures`, at the gallery's start): the
  * gallery's server is static, so a picture route the app addresses is read from these files instead.
  */
 import prBoard from "./gallery-assets/pr-board.webp";

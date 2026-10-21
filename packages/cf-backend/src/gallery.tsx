@@ -6,7 +6,7 @@ import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { answerPictures } from "@/lib/picture-src";
+import { answerPictures } from "@kinu.run/core/web/picture-src";
 import { galleryPicture } from "@/gallery-pictures";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
