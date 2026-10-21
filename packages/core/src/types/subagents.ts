@@ -1,17 +1,17 @@
-/** Temporary-agent port and run contract; the subordinates plane implements it. */
+/** Temporary-agent port and run contract; the subagents plane implements it. */
 
 import type { ErrorCode } from '../obs/error';
 import type { WorkMode } from './turn';
 import type { RoleId } from './profile';
 import * as v from 'valibot';
 import type { SerializedMessage } from './heads';
-import type { AnsweredEvolutionHelper, EvolutionHelperAnswer, EvolutionLaneRequest } from '../identity/evolution-helpers';
+import type { AnsweredEvolutionSubagent, EvolutionSubagentAnswer, EvolutionLaneRequest } from '../identity/evolution-subagents';
 
 /**
  * The conversation a child is forked from. The `kind` tag stays because the value is persisted in
  * an `agent_log` payload: a second shape must be a schema change, not a reinterpretation.
  */
-export const SubordinateInheritedContextSchema = v.strictObject({
+export const SubagentInheritedContextSchema = v.strictObject({
   kind: v.literal('fork'),
   messages: v.array(v.strictObject({
     id: v.string(),
@@ -22,11 +22,11 @@ export const SubordinateInheritedContextSchema = v.strictObject({
   })),
 });
 
-export type SubordinateInheritedContext = v.InferOutput<typeof SubordinateInheritedContextSchema>;
+export type SubagentInheritedContext = v.InferOutput<typeof SubagentInheritedContextSchema>;
 
-export function subordinateBirthContext(
+export function subagentBirthContext(
   messages: SerializedMessage[] | undefined,
-): SubordinateInheritedContext | undefined {
+): SubagentInheritedContext | undefined {
   return messages === undefined ? undefined : { kind: 'fork', messages };
 }
 
@@ -43,7 +43,7 @@ export interface TemporaryRunRequest {
   /** Workspace paths the child reads itself; programmatic callers only, not model-facing. */
   readonly contextRefs?: readonly string[];
   readonly mode: WorkMode;
-  /** An evolution helper: it answers this lane request only. */
+  /** An evolution subagent: it answers this lane request only. */
   readonly lane?: EvolutionLaneRequest;
 }
 
@@ -67,9 +67,9 @@ export interface TemporaryAgentPort {
   start(request: TemporaryRunRequest): Promise<TemporaryRunOutcome>;
   /** Called inside the child's turn, so it only schedules the retire. */
   release(name: string): void;
-  reclaim(request: EvolutionLaneRequest): EvolutionHelperAnswer | null;
-  /** This hirer's helpers that answered and whose answer is not yet taken. */
-  answered(): readonly AnsweredEvolutionHelper[];
+  reclaim(request: EvolutionLaneRequest): EvolutionSubagentAnswer | null;
+  /** This hirer's subagents that answered and whose answer is not yet taken. */
+  answered(): readonly AnsweredEvolutionSubagent[];
   /** The answer was taken: its row goes. */
   forget(name: string): void;
 }

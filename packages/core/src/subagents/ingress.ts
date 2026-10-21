@@ -1,39 +1,39 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Report ingress for durable and task-lifetime children: a live waiter consumes its answer;
- *  every other admitted report enters the parent event rail, except an evolution helper's. */
+ *  every other admitted report enters the parent event rail, except an evolution subagent's. */
 
 import type { EventLog } from '../events/hub/log';
 
 import { spillEventContent } from '../events/hub/content-spill';
-import { subordinateReportDedupeKey } from '../events/hub/dedupe';
-import { renderSubordinateHandoff } from '../events/hub/visibility';
-import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
+import { subagentReportDedupeKey } from '../events/hub/dedupe';
+import { renderSubagentHandoff } from '../events/hub/visibility';
+import type { SubagentReportHandoff, SubagentReportStatus } from '../events/hub/types';
 import type { WorkMode } from '../types/turn';
 import {
-  admitSubordinateReport, normalizeReportContent, parentAdmitsSubordinateReport,
-  type SubordinateReportOrigin,
+  admitSubagentReport, normalizeReportContent, parentAdmitsSubagentReport,
+  type SubagentReportOrigin,
 } from './support';
-import type { SubordinateRosterStore } from './roster';
+import type { SubagentRosterStore } from './roster';
 import { TEMPORARY_LIFETIME, temporaryRunSettles } from './temporary';
-import type { TemporaryAgentPort } from '../types/subordinates';
+import type { TemporaryAgentPort } from '../types/subagents';
 
-export interface SubordinateEventInput {
-  fromSubordinate: string;
-  status: SubordinateReportStatus;
+export interface SubagentEventInput {
+  fromSubagent: string;
+  status: SubagentReportStatus;
   content: string;
-  origin: SubordinateReportOrigin;
+  origin: SubagentReportOrigin;
   /** The idempotency key. */
   sequenceId: string;
   /** Travels with the report: a replay settles after the child's turn metadata is gone. */
   mode: WorkMode;
   /** Absent on the automatic turn-end relay. */
-  handoff?: SubordinateReportHandoff;
+  handoff?: SubagentReportHandoff;
   /** A Stop: wakes no one. */
   quiet?: true;
 }
 
 /** `already_held`: replay, nothing re-published. `not_awaited`: no open assignment, `id` empty. */
-export interface SubordinateEventResult {
+export interface SubagentEventResult {
   readonly id: string;
   readonly disposition: 'admitted' | 'already_held' | 'not_awaited';
 }
@@ -42,18 +42,18 @@ export interface SubordinateEventResult {
  * What a child's turn has told its hirer so far. `spoke` (durable relay policy) and `settled` (temporary rung answered)
  * are distinct: a `progress` note speaks without settling, and conflating them suppressed the terminal report of an ask.
  */
-export interface SubordinateReportLedger {
+export interface SubagentReportLedger {
   spoke: boolean;
   settled: boolean;
 }
 
 /** The one report publisher: both report sources, its report tool and its turn's end, carry the admitted turn's mode
  *  and update the same ledger. */
-export async function publishSubordinateReport(
-  turn: { readonly mode: WorkMode; readonly reports: SubordinateReportLedger | null },
-  report: Omit<SubordinateEventInput, 'fromSubordinate' | 'mode'>,
-  send: (report: Omit<SubordinateEventInput, 'fromSubordinate'>) => Promise<SubordinateEventResult>,
-): Promise<SubordinateEventResult> {
+export async function publishSubagentReport(
+  turn: { readonly mode: WorkMode; readonly reports: SubagentReportLedger | null },
+  report: Omit<SubagentEventInput, 'fromSubagent' | 'mode'>,
+  send: (report: Omit<SubagentEventInput, 'fromSubagent'>) => Promise<SubagentEventResult>,
+): Promise<SubagentEventResult> {
   const result = await send({ ...report, mode: turn.mode });
 
   if (turn.reports !== null) {
@@ -64,23 +64,23 @@ export async function publishSubordinateReport(
   return result;
 }
 
-export interface AdmittedSubordinateReport {
+export interface AdmittedSubagentReport {
   id: string;
-  subordinate: string;
-  status: SubordinateReportStatus;
+  subagent: string;
+  status: SubagentReportStatus;
   content: string;
   task?: string;
   timestamp: number;
 }
 
-export interface SubordinateIngressDeps {
+export interface SubagentIngressDeps {
   log: EventLog;
-  roster: SubordinateRosterStore;
+  roster: SubagentRosterStore;
   vfs: VFS;
   transaction<T>(body: () => T): T;
-  announce(report: AdmittedSubordinateReport): void;
+  announce(report: AdmittedSubagentReport): void;
   onAdmitted(): void;
-  /** Inside the transaction that stores an evolution helper's answer: a host with a durable job queue writes the
+  /** Inside the transaction that stores an evolution subagent's answer: a host with a durable job queue writes the
    *  delivery job here, so the answer and its job land or vanish together; what it returns is awaited after the
    *  commit (the queue's alarm re-arm). A host without one returns nothing: its stored answer is the owed delivery. */
   evolutionAnswerStored(): Promise<void> | undefined;
@@ -89,63 +89,63 @@ export interface SubordinateIngressDeps {
   temporary?: TemporaryAgentPort;
 }
 
-export async function receiveSubordinateEvent(
-  deps: SubordinateIngressDeps,
-  input: SubordinateEventInput,
+export async function receiveSubagentEvent(
+  deps: SubagentIngressDeps,
+  input: SubagentEventInput,
   now: number,
-): Promise<SubordinateEventResult> {
+): Promise<SubagentEventResult> {
   // Before every other check, including the roster: the rail is the only witness that survives the
   // child's crash, and re-answering a replay would leave the child's row owed forever.
-  const held = deps.log.idForDedupeKey(subordinateReportDedupeKey(input.sequenceId));
+  const held = deps.log.idForDedupeKey(subagentReportDedupeKey(input.sequenceId));
 
   if (held !== null) return { id: held, disposition: 'already_held' };
-  const subordinate = deps.roster.get(input.fromSubordinate);
+  const subagent = deps.roster.get(input.fromSubagent);
 
   // `not_awaited` settles the child's row; throwing would make it retry forever.
-  if (!subordinate) {
+  if (!subagent) {
     return { id: '', disposition: 'not_awaited' };
   }
 
   const answer = normalizeReportContent(input.content)
-    + (input.handoff ? renderSubordinateHandoff(input.handoff) : '');
+    + (input.handoff ? renderSubagentHandoff(input.handoff) : '');
 
-  const settlesTask = subordinate.lifetime === TEMPORARY_LIFETIME && temporaryRunSettles(input);
+  const settlesTask = subagent.lifetime === TEMPORARY_LIFETIME && temporaryRunSettles(input);
 
-  // A rail row would wake the parent in the helper's mode, with the lane's proposal in its context.
-  if (subordinate.origin === 'evolution') {
-    if (subordinate.status === 'dismissed' || !temporaryRunSettles(input)) {
+  // A rail row would wake the parent in the subagent's mode, with the lane's proposal in its context.
+  if (subagent.origin === 'evolution') {
+    if (subagent.status === 'dismissed' || !temporaryRunSettles(input)) {
       return { id: '', disposition: 'not_awaited' };
     }
 
     const queued = deps.transaction(() => {
-      deps.roster.helpers.storeAnswer(input.fromSubordinate, input.status === 'blocked' ? 'blocked' : 'completed', answer);
-      deps.roster.applyReport(input.fromSubordinate, input.status, input.origin, now);
+      deps.roster.evolution.storeAnswer(input.fromSubagent, input.status === 'blocked' ? 'blocked' : 'completed', answer);
+      deps.roster.applyReport(input.fromSubagent, input.status, input.origin, now);
 
       return deps.evolutionAnswerStored();
     });
 
     await queued;
     await deps.onEvolutionAnswer();
-    deps.temporary?.release(input.fromSubordinate);
+    deps.temporary?.release(input.fromSubagent);
 
     return { id: '', disposition: 'admitted' };
   }
 
-  if (subordinate.status === 'dismissed') {
+  if (subagent.status === 'dismissed') {
     return { id: '', disposition: 'not_awaited' };
   }
 
   // Before the spill, so a relay this workspace does not admit leaves no file behind; and before a Stop's quiet report,
   // which settles only a row its parent awaits: the owner's Stop in their own chat, which awaits nothing, marked that
   // chat as waiting on them for good (production, 2026-10-08).
-  if (!parentAdmitsSubordinateReport({ entry: subordinate })) {
+  if (!parentAdmitsSubagentReport({ entry: subagent })) {
     return { id: '', disposition: 'not_awaited' };
   }
 
   if (input.quiet === true) {
-    deps.transaction(() => { deps.roster.applyReport(input.fromSubordinate, input.status, input.origin, now); });
+    deps.transaction(() => { deps.roster.applyReport(input.fromSubagent, input.status, input.origin, now); });
 
-    if (settlesTask) deps.temporary?.release(input.fromSubordinate);
+    if (settlesTask) deps.temporary?.release(input.fromSubagent);
 
     return { id: '', disposition: 'admitted' };
   }
@@ -154,20 +154,20 @@ export async function receiveSubordinateEvent(
   const spilled = await spillEventContent(deps.vfs, content);
 
   const published = deps.transaction(() => {
-    const result = admitSubordinateReport(deps.log, {
-      fromSubordinate: input.fromSubordinate,
+    const result = admitSubagentReport(deps.log, {
+      fromSubagent: input.fromSubagent,
       status: input.status,
       content,
       sequenceId: input.sequenceId,
       mode: input.mode,
-      task: subordinate.currentTask ?? undefined,
+      task: subagent.currentTask ?? undefined,
       spilled: spilled ?? undefined,
       handoff: input.handoff,
       now,
     });
 
     if (result.admitted) {
-      deps.roster.applyReport(input.fromSubordinate, input.status, input.origin, now);
+      deps.roster.applyReport(input.fromSubagent, input.status, input.origin, now);
     }
 
     return result;
@@ -177,15 +177,15 @@ export async function receiveSubordinateEvent(
   if (!published.admitted) return { id: published.id, disposition: 'already_held' };
   deps.announce({
     id: published.id,
-    subordinate: input.fromSubordinate,
+    subagent: input.fromSubagent,
     status: input.status,
     content: input.content,
-    task: subordinate.currentTask ?? undefined,
+    task: subagent.currentTask ?? undefined,
     timestamp: now,
   });
   deps.onAdmitted();
 
-  if (settlesTask) deps.temporary?.release(input.fromSubordinate);
+  if (settlesTask) deps.temporary?.release(input.fromSubagent);
 
   return { id: published.id, disposition: 'admitted' };
 }

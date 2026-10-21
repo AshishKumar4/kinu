@@ -108,10 +108,10 @@ sys.exit(0)
 
   // Production crafted-harbor-37f29697, 2026-10-16: `await agents` called `agents.then` as a member and never ended.
   test('a program that awaits a namespace gets the namespace, never a wait on a member called `then`', async () => {
-    const agents = { name: 'agents', fns: { list: async () => ['helper'] } };
+    const agents = { name: 'agents', fns: { list: async () => ['subagent'] } };
 
     expect(await createSandboxedExecutor().execute('return await agents ? "awaited" : "never";', [agents])).toEqual({ result: 'awaited' });
-    expect(await createSandboxedExecutor().execute('const ns = await agents; return await ns.list();', [agents])).toEqual({ result: ['helper'] });
+    expect(await createSandboxedExecutor().execute('const ns = await agents; return await ns.list();', [agents])).toEqual({ result: ['subagent'] });
   });
 
   // Duplication audit, 2026-10-20 (InternalFish #12): the runtime's programs and eval held namespaces two ways, and the

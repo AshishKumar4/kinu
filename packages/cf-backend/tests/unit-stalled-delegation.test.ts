@@ -26,7 +26,7 @@ const STALLED_PROVIDER_CUTS = 20;
 /** The build every activation runs unless a deploy ships another; recovery verifies a claim's program by it. */
 const BUILD = 'build-stalled';
 
-const ReportSchema = v.looseObject({ from_subordinate: v.string(), status: v.string(), content: v.string() });
+const ReportSchema = v.looseObject({ from_subagent: v.string(), status: v.string(), content: v.string() });
 
 type Workspace = ActorHarness<HarnessOrchestratorAgent>;
 
@@ -108,8 +108,8 @@ test('a delegated turn whose model wait a reset ends at one step is settled at t
     const last = await afterReset(first.db, gateway);
 
     expect(await drainEndsOrRunsAgain(last, runs, STALLED_PROVIDER_CUTS)).toBe('ended');
-    const reports = eventsOver(first.db).query({ variant: 'subordinate_report' }).map((event) => v.parse(ReportSchema, event.payload));
-    expect(reports).toEqual([expect.objectContaining({ from_subordinate: 'stalled-child', status: 'blocked' })]);
+    const reports = eventsOver(first.db).query({ variant: 'subagent_report' }).map((event) => v.parse(ReportSchema, event.payload));
+    expect(reports).toEqual([expect.objectContaining({ from_subagent: 'stalled-child', status: 'blocked' })]);
 
     // The drain re-pends a lease held past its stale age (10 minutes); a retired one stays retired.
     setSystemTime(new Date(at + 11 * 60_000));
@@ -135,5 +135,5 @@ test('a delegated turn our own deploys restarted twice runs again, and its hirer
   // The agent's own chat takes the turn up again on its activation, as a CLI hire's does after a restart.
   await third.agent.terminalRetryPass();
   await runs.until((seen) => seen.length === 3);
-  expect(eventsOver(first.db).query({ variant: 'subordinate_report' })).toEqual([]);
+  expect(eventsOver(first.db).query({ variant: 'subagent_report' })).toEqual([]);
 });

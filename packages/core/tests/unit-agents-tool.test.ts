@@ -107,7 +107,7 @@ const WorkingResultSchema = v.object({ status: v.string(), agent: v.string(), no
 const HandoffResultSchema = v.object({
   event_id: v.string(),
   delivery: v.string(),
-  subordinate_phase: v.object({
+  subagent_phase: v.object({
     busy: v.boolean(), lastActivityAt: v.nullable(v.number()), workingOn: v.nullable(v.string()),
   }),
   note: v.string(),
@@ -141,7 +141,7 @@ function propertyNames(input: { value: unknown }): string[] {
 }
 
 describe('agents tool — registration and dep-gating', () => {
-  test('a new helper takes its birth context; an existing agent is refused one', async () => {
+  test('a new subagent takes its birth context; an existing agent is refused one', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps, profile: testProfile });
 
@@ -156,7 +156,7 @@ describe('agents tool — registration and dep-gating', () => {
     expect(Object.keys(tools)).not.toContain('agents');
   });
 
-  test('the exploration substrate (the CLI / subordinate surface) offers the search alone', () => {
+  test('the exploration substrate (the CLI / subagent surface) offers the search alone', () => {
     const deps = withBuildMode({ swarm: swarmDeps() });
     expect(agentsActionsFor(deps)).toEqual(['swarm']);
     expect(opsOf({ value: agentsTool(deps).inputSchema })).toEqual(['swarm']);
@@ -319,8 +319,8 @@ describe('agents tool — delegation depth', () => {
     expect(team.calls).toEqual([]);
   });
 
-  // Minting a workspace would reset depth to 0; `peers` is never wired below the orchestrator, so a subordinate is not offered it.
-  test('a subordinate cannot mint a fresh root to escape its own subtree', async () => {
+  // Minting a workspace would reset depth to 0; `peers` is never wired below the orchestrator, so a subagent is not offered it.
+  test('a subagent cannot mint a fresh root to escape its own subtree', async () => {
     const { deps, team } = depthDeps(2);
     const pending = agentsTool(deps).execute({ op: 'hireWorkspace', mission: 'a tree of my own', message: 'go' });
     await expect(pending).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('unknown op "hireWorkspace"') });
@@ -365,7 +365,7 @@ describe('agents tool — the swarm refusal seam', () => {
 
 });
 
-describe('agents tool — subordinate actions', () => {
+describe('agents tool — subagent actions', () => {
   test('Plan research children cannot acquire Build file authority from a Build-shaped parent provider', async () => {
     const { rt } = createTestRuntime();
     const path = '/home/main/project.txt';
@@ -483,7 +483,7 @@ describe('agents tool — subordinate actions', () => {
     expect(calls).toEqual([]);
   });
 
-  test('a hire to an existing agent reports the event id, how the work lands, and what the subordinate was doing', async () => {
+  test('a hire to an existing agent reports the event id, how the work lands, and what the subagent was doing', async () => {
     const { deps } = makeTeam();
     const t = agentsTool({ team: deps });
 
@@ -494,12 +494,12 @@ describe('agents tool — subordinate actions', () => {
 
     expect(result.event_id).toBe('evt-queued');
     expect(result.delivery).toBe('queued');
-    expect(result.subordinate_phase).toEqual({ busy: true, lastActivityAt: 1234, workingOn: 'reading src/auth.ts' });
+    expect(result.subagent_phase).toEqual({ busy: true, lastActivityAt: 1234, workingOn: 'reading src/auth.ts' });
     expect(result.note).toContain('evt-queued');
   });
 
   const hires = [
-    { name: 'a hire against an idle subordinate says the work starts now',
+    { name: 'a hire against an idle subagent says the work starts now',
       delivery: 'starts_now', busy: false },
     { name: 'a hire deduped against work already waiting says so instead of claiming a fresh start',
       delivery: 'queued', busy: true },
@@ -531,7 +531,7 @@ describe('agents tool — subordinate actions', () => {
       agent: 'researcher',
       event_id: 'evt-starts_now',
       delivery: 'starts_now',
-      subordinate_phase: { busy: false, lastActivityAt: 1234, workingOn: null },
+      subagent_phase: { busy: false, lastActivityAt: 1234, workingOn: null },
     });
     expect(calls[0]).toEqual({
       action: 'message', input: { name: 'researcher', content: 'also check the CLI', mode: 'build' },
@@ -553,7 +553,7 @@ describe('agents tool — subordinate actions', () => {
       .toMatchObject({ status: 'queued', delivery: 'queued' });
   });
 
-  test('a COMPLETED (idle) subordinate still answers a follow-up hire — persistence is the semantic', async () => {
+  test('a COMPLETED (idle) subagent still answers a follow-up hire — persistence is the semantic', async () => {
     // 'idle' is the post-completion state; it must stay addressable.
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
@@ -570,18 +570,18 @@ describe('agents tool — subordinate actions', () => {
   test('list returns the unified roster; empty roster hints hire', async () => {
     const { deps } = makeTeam();
     const t = agentsTool({ team: deps });
-    expect(await t.execute({ op: 'list' })).toEqual({ subordinates: [rosterEntry] });
+    expect(await t.execute({ op: 'list' })).toEqual({ subagents: [rosterEntry] });
 
     const empty = agentsTool({ team: makeTeam({ list: async () => [] }).deps });
 
     const emptyResult = v.parse(v.object({
-      subordinates: v.array(v.unknown()), note: v.optional(v.string()),
+      subagents: v.array(v.unknown()), note: v.optional(v.string()),
     }), await empty.execute({ op: 'list' }));
 
-    expect(emptyResult.subordinates).toEqual([]);
+    expect(emptyResult.subagents).toEqual([]);
   });
 
-  test('list with a subordinate name returns its live status view', async () => {
+  test('list with a subagent name returns its live status view', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
     const result = await t.execute({ op: 'list', agent: 'researcher' });
@@ -611,7 +611,7 @@ describe('agents tool — subordinate actions', () => {
     expect(calls).toEqual([]);
   });
 
-  test('a peers-only actor is not offered a subordinate hire, and asking for one is refused, not indicted', async () => {
+  test('a peers-only actor is not offered a subagent hire, and asking for one is refused, not indicted', async () => {
     const t = agentsTool({ peers: makePeers().deps });
     await expect(t.execute({ op: 'hire', role: 'r', message: 'm' })).rejects.toMatchObject({ code: 'bad_input', message: expect.stringContaining('unknown op "hire"') });
   });
@@ -624,7 +624,7 @@ describe('agents tool — subordinate actions', () => {
 
   test('deps exceptions surface as tool error objects (never throw into the turn)', async () => {
     const { deps } = makeTeam({
-      assign: async () => { throw new Error('subordinate "researcher" is dismissed'); },
+      assign: async () => { throw new Error('subagent "researcher" is dismissed'); },
     });
 
     const t = agentsTool({ team: deps });
@@ -643,7 +643,7 @@ describe('agents tool — peer workspace actions', () => {
     expect(team.calls).toEqual([]);
   });
 
-  test('a subordinate name wins an addressing collision with a peer', async () => {
+  test('a subagent name wins an addressing collision with a peer', async () => {
     const team = makeTeam();
     const peers = makePeers({ listPeers: async () => [{ name: 'researcher' }] });
     const t = agentsTool({ team: team.deps, peers: peers.deps });
@@ -700,10 +700,10 @@ describe('agents tool — peer workspace actions', () => {
     });
   });
 
-  test('list merges subordinates and peers into one roster', async () => {
+  test('list merges subagents and peers into one roster', async () => {
     const t = agentsTool({ team: makeTeam().deps, peers: makePeers().deps });
     expect(await t.execute({ op: 'list' })).toEqual({
-      subordinates: [rosterEntry],
+      subagents: [rosterEntry],
       peers: [{ name: 'scout', displayName: 'Scout' }],
     });
   });

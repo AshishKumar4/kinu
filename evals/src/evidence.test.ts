@@ -7,10 +7,10 @@ import { scratchDir } from '@kinu.run/test-utils';
 import { gatherEvidence, writeEvidence, type EvidenceSession } from './evidence';
 import { HarnessRunSchema } from './results';
 
-/** The brief one released helper was given: longer than the 500 characters a run summary keeps (core turn-lifecycle.ts). */
+/** The brief one released subagent was given: longer than the 500 characters a run summary keeps (core turn-lifecycle.ts). */
 const BRIEF = `Tally the signups. ${'The file is a CSV. '.repeat(40)}Write signups-by-country.json`;
 
-/** A workspace as the Files plane, the slate RPC and the inspector serve it: one helper, dismissed, reached by its actor. */
+/** A workspace as the Files plane, the slate RPC and the inspector serve it: one subagent, dismissed, reached by its actor. */
 function workspace(tree: Readonly<Record<string, string | Uint8Array>>): EvidenceSession {
   const entries = (dir: string) => [...new Set(Object.keys(tree).filter((path) => path.startsWith(`${dir}/`))
     .map((path) => path.slice(dir.length + 1).split('/')))]
@@ -29,7 +29,7 @@ function workspace(tree: Readonly<Record<string, string | Uint8Array>>): Evidenc
     },
     listSlates: () => Promise.resolve({ slates: [{ id: 'exchange', title: 'Exchange' }], problems: [] }),
     inspect: (request) => {
-      const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
+      const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subagent or retained history is unavailable.' };
 
       if (request.view === 'children') {
         return Promise.resolve({ view: 'children', page: { status: 'end', items: [
@@ -99,7 +99,7 @@ describe('a trial\'s evidence', () => {
     expect(JSON.parse(readFileSync(join(directory, 'slates.json'), 'utf8')).histories)
       .toEqual([{ id: 'exchange', history: [{ ok: true, value: { versions: [{ id: 'v-1' }] } }] }]);
     expect(JSON.parse(readFileSync(join(directory, 'data.json'), 'utf8'))).toEqual([
-      { helpers: [{ name: 'tally', status: 'dismissed', runs: [{ startedAt: 5, endedAt: null, status: 'completed', userMessage: BRIEF }] }] },
+      { subagents: [{ name: 'tally', status: 'dismissed', runs: [{ startedAt: 5, endedAt: null, status: 'completed', userMessage: BRIEF }] }] },
       { slate: 'exchange', method: 'book', input: { symbol: 'ACME' }, answer: { ok: true, value: { bids: [], asks: [] } } },
       { slate: 'exchange', method: 'trades', input: { symbol: 'ACME' }, answer: { ok: false, reason: 'bad_input', error: 'Slate compilation failed' } },
     ]);
@@ -121,11 +121,11 @@ describe('a trial\'s evidence', () => {
     const directory = join(scratchDir('eval-evidence'), 'trial-1');
 
     const lead: RunEvent = { runId: 'run-1', eventIndex: 1, timestamp: '2026-09-26T00:00:00.000Z', type: 'run_start', agentId: 'root' };
-    const helper: RunEvent = { runId: 'run-2', eventIndex: 1, timestamp: '2026-09-26T00:00:01.000Z', type: 'run_start', agentId: 'tally' };
+    const subagent: RunEvent = { runId: 'run-2', eventIndex: 1, timestamp: '2026-09-26T00:00:01.000Z', type: 'run_start', agentId: 'tally' };
 
     writeEvidence(directory, {
       run: RUN, verdict: { status: 'failed', durationMs: 1 }, events: [lead],
-      ledgers: [{ actor: 'main', events: [lead] }, { actor: 'tally', events: [helper] }], workspace: gathered, timeline: [],
+      ledgers: [{ actor: 'main', events: [lead] }, { actor: 'tally', events: [subagent] }], workspace: gathered, timeline: [],
     });
 
     expect(readFileSync(join(directory, 'files/home/main/logs/2027-06-01.log'), 'utf8')).toBe('GET /api 200 3ms FRA\n');

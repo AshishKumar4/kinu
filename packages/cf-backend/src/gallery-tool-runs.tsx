@@ -1,7 +1,7 @@
 /**
  * A turn's runs of tool calls in the real chat (`frame=workspacepage&transcript=toolruns`), as an agent fixes a Worker's
  * failing deploy: an answer that tailed the Worker's errors and read its way to the cause, a long fix with a failed
- * test run mid-way and a helper hired for the routes, and a run split by a preview it started and by a question for the
+ * test run mid-way and a subagent hired for the routes, and a run split by a preview it started and by a question for the
  * owner. `gallery:tool-run` with `{ calls, failAt?, answer?, agent? }` shows `agent`'s chat (the
  * workspace's by default) with a newest turn of that many calls, the newest running unless the answer has started; a
  * test drives the run through its states with it, against the claim it pushes. `&live=1` plays that turn itself, a
@@ -40,7 +40,7 @@ const page = (id: string, url: string): Part => ({ type: "tool-web", toolCallId:
 
 const STEP: Part = { type: "step-start" };
 
-/** The helper the fix hires, whose chat holds the thread too. */
+/** The subagent the fix hires, whose chat holds the thread too. */
 const HIRED = "route-checker";
 
 /** The ask a run stops at, as `ask_owner` puts it. */
@@ -51,12 +51,12 @@ const DEPLOY_ASK = {
   }],
 };
 
-/** A helper the run hires for the routes, as the agents tool puts it. */
+/** A subagent the run hires for the routes, as the agents tool puts it. */
 const hire = (id: string, name: string, role: string): Part => ({
   type: "tool-agents", toolCallId: id, state: "output-available", input: { op: "hire", name, role, lifetime: "task" }, output: `${name} is checking`,
 });
 
-/** Twenty calls fixing the deploy, a test run failing in the middle and a helper hired for the routes. */
+/** Twenty calls fixing the deploy, a test run failing in the middle and a subagent hired for the routes. */
 const FIX_RUN: Part[] = [
   thought("**Fixing the binding**\n\nThe config renamed the database binding to `SESSIONS_DB`; the code still reads `env.DB`."),
   ...["src/index.ts", "src/db.ts", "wrangler.jsonc", "migrations/0007_sessions.sql"].map((file, index) => read(`fix-read-${String(index)}`, file)),
@@ -68,7 +68,7 @@ const FIX_RUN: Part[] = [
   edit("fix-edit-2", "src/db.ts"),
   command("fix-test-2", "bun test", "38 pass, 0 fail"),
   STEP,
-  thought("Any route could read the old binding directly. A helper can check them while I read the hot ones."),
+  thought("Any route could read the old binding directly. A subagent can check them while I read the hot ones."),
   hire("fix-hire", HIRED, "check every route for env.DB"),
   ...["health.ts", "sessions.ts", "users.ts", "admin.ts", "webhooks.ts"].map((file, index) => read(`fix-route-${String(index)}`, `src/routes/${file}`)),
   edit("fix-edit-3", "src/routes/webhooks.ts"),

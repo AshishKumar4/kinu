@@ -1,24 +1,24 @@
 /** Per-variant dedupe keys; the unique index on `agent_log.dedupe_key` enforces once-per-key. */
 
 import { sha256Hex, stableStringify } from '../../safety/argument-digest';
-import type { IngressDescriptor, KinuEvent, ReadableKinuEvent, SubordinateTaskPayload } from './types';
+import type { IngressDescriptor, KinuEvent, ReadableKinuEvent, SubagentTaskPayload } from './types';
 import { decodeJsonValue } from '../../utils/json';
 
-export function subordinateReportDedupeKey(sequenceId: string): string {
-  return `subordinate_report:${sequenceId}`;
+export function subagentReportDedupeKey(sequenceId: string): string {
+  return `subagent_report:${sequenceId}`;
 }
 
-function subordinateTaskDedupeKey(payload: SubordinateTaskPayload): string | null {
-  if (payload.creation_id !== undefined) return `subordinate-birth:${payload.creation_id}`;
+function subagentTaskDedupeKey(payload: SubagentTaskPayload): string | null {
+  if (payload.creation_id !== undefined) return `subagent-birth:${payload.creation_id}`;
 
-  if (payload.idempotency_key !== undefined) return `subordinate-signal:${payload.idempotency_key}`;
+  if (payload.idempotency_key !== undefined) return `subagent-signal:${payload.idempotency_key}`;
 
-  return payload.message_id === undefined ? null : subordinateMessageDedupeKey(payload.message_id);
+  return payload.message_id === undefined ? null : subagentMessageDedupeKey(payload.message_id);
 }
 
 /** The key a chat message's assignment is admitted under: one assignment per message. */
-function subordinateMessageDedupeKey(messageId: string): string {
-  return `subordinate-message:${messageId}`;
+function subagentMessageDedupeKey(messageId: string): string {
+  return `subagent-message:${messageId}`;
 }
 
 export function dedupeKeyFor(event: KinuEvent): string | null {
@@ -72,11 +72,11 @@ function dedupeReadableEvent(
       return `email:${sha256Hex(`${p.from}|${p.to}|${p.subject}|${p.body_text}`, 24)}:${bucket}`;
     }
 
-    case 'subordinate_report':
-      return subordinateReportDedupeKey(event.payload.sequence_id);
+    case 'subagent_report':
+      return subagentReportDedupeKey(event.payload.sequence_id);
 
-    case 'subordinate_task':
-      return subordinateTaskDedupeKey(event.payload);
+    case 'subagent_task':
+      return subagentTaskDedupeKey(event.payload);
 
     case 'chat':
     case 'internal':

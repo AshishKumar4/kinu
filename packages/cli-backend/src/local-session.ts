@@ -35,11 +35,11 @@ import type {
 import { ActorSession, type ActorTurnLease,
   recoverActorTurns, TurnReports,
   type TurnSteering,
-  type AgentStores, collectDynamicContext, subordinateDelegatesOf,
+  type AgentStores, collectDynamicContext, subagentDelegatesOf,
   BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type JobHolder, processJobHolder, type TaskListStore,
   WorkspaceJobAuthorities, endedStepLoopJobs, actorReferenceOf, type JobAuthority, type JobRetirement, type WorkspaceJobPorts,
   backgroundJobNotice,
-  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, admitSubordinateTask, AgentDeliveries, assignmentDelivery, type AgentSignal,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, admitSubagentTask, AgentDeliveries, assignmentDelivery, type AgentSignal,
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, resumableBackgroundJob, harvestBackgroundJob, type ActorToolsets,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
@@ -61,7 +61,7 @@ import { ActorSession, type ActorTurnLease,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeTables,
   toolsBehindBoundary, type ToolBoundary, assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
-  type OwedReport, type SubordinateReportStatus, type TurnReportFacts,
+  type OwedReport, type SubagentReportStatus, type TurnReportFacts,
   terminalEffect,
   type TerminalEffectTable, type TerminalEffectFault,
   type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
@@ -116,7 +116,7 @@ import { ActorSession, type ActorTurnLease,
   type TurnReads,
   approvedTaskPlan,
   decodeJsonValue, projectJsonValue,
-  agentSelfHost, ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, isSubordinateOrigin, type OwnerWaitsHost, type ScopedOwnerWait,
+  agentSelfHost, ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, isSubagentOrigin, type OwnerWaitsHost, type ScopedOwnerWait,
   cancelBackgroundJob, listBackgroundJobs,
   getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
   getShellApprovalGrants, revokeShellApprovalGrants, type ApprovalGrant,
@@ -202,7 +202,7 @@ export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 export type LocalSessionDb = Pick<Database, 'query' | 'transaction'>;
 
 /**
- * The answer a subordinate's turn owes its parent, installed by the owning host. A port, not a
+ * The answer a subagent's turn owes its parent, installed by the owning host. A port, not a
  * listener: the report is an owed effect that must survive a process death.
  */
 export interface LocalParentRelay {
@@ -215,7 +215,7 @@ export interface LocalParentRelay {
   readonly sequenceId: (messageId: string) => string;
   readonly send: (report: {
     readonly text: string;
-    readonly status: SubordinateReportStatus;
+    readonly status: SubagentReportStatus;
     readonly mode: WorkMode;
     readonly sequenceId: string;
     readonly quiet?: true;
@@ -544,7 +544,7 @@ export class LocalAgentSession {
       ports: {
         prepareTurn: (item, lease, opening, round) => this.prepareTurn(item, lease, opening, round),
         composeRequest: () => this.composeNextRequest(),
-        // Only a root chat can approve a plan; a subordinate's plan is refused at admission.
+        // Only a root chat can approve a plan; a subagent's plan is refused at admission.
         stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
         // The owner's decision as an intent delivers it, as their own decision here decides it.
         decidePlan: (verdict) => this.planActions.decideAndHandOff(verdict, (turn) => this.enqueueTurn(turn)),
@@ -823,7 +823,7 @@ export class LocalAgentSession {
       const from = this.rt.actor.name;
 
       writeTransaction(this.db, () => {
-        const admitted = admitSubordinateTask(log, { fromWorkspace: from, kind: 'message', body: signal.text, mode: 'build', now: Date.now() });
+        const admitted = admitSubagentTask(log, { fromWorkspace: from, kind: 'message', body: signal.text, mode: 'build', now: Date.now() });
 
         if (admitted.admitted) new AgentDeliveries(this.rt.storage.sql).add(actorId, assignmentDelivery(log, { id: admitted.id, body: signal.text.trim(), mode: 'build', from }));
       });
@@ -1027,7 +1027,7 @@ export class LocalAgentSession {
     return this._planActions;
   }
 
-  /** Only a root chat holds the plan review surface; a subordinate answers via `report`. */
+  /** Only a root chat holds the plan review surface; a subagent answers via `report`. */
   private planReviewSurface(): boolean {
     return this.parentRelay === null;
   }
@@ -2289,7 +2289,7 @@ export class LocalAgentSession {
       memoryTail,
       unavailableMcp: this.mcpUnavailable,
       missingCapabilities: [],
-      subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),
+      subagentDelegates: () => subagentDelegatesOf(this.teamDeps?.snapshot() ?? []),
       approvals: () => {
         // A command shown on the live prompt is a row here too.
         const items = this.deferrals.approvals(this.rt.actor.actorId);
@@ -2356,11 +2356,11 @@ export class LocalAgentSession {
   }
   /** Team transport from the owning LocalAgentHost; absent, team actions are structurally missing. */
   private teamDeps: TeamToolDeps | null = null;
-  /** Peer transport, roots only; absent, `reply` does not exist and ask/send reach subordinates only. */
+  /** Peer transport, roots only; absent, `reply` does not exist and ask/send reach subagents only. */
   private peersDeps: PeersToolDeps | null = null;
-  /** Report transport, subordinates only. */
+  /** Report transport, subagents only. */
   private reportDeps: ReportDeps | null = null;
-  /** Automatic turn-end relay for a subordinate, distinct from the model's own {@link reportDeps}. */
+  /** Automatic turn-end relay for a subagent, distinct from the model's own {@link reportDeps}. */
   private parentRelay: LocalParentRelay | null = null;
 
   /** The advisor is hired as every temporary agent is: through the team's port, absent without a host. */
@@ -2396,7 +2396,7 @@ export class LocalAgentSession {
   }
 
   /** What the running turn may reach in `mode`, decided by core's `turnReach` as every host's turns are. The CLI shows
-   *  the owner a root's questions and plans alone; a subordinate's partner is its parent. */
+   *  the owner a root's questions and plans alone; a subagent's partner is its parent. */
   private reach(mode: WorkMode): TurnReach {
     return turnReach({
       lane: this.turnLaneOf, mode, driving: this.turnDriving, ownerSurface: this.planReviewSurface(),
@@ -2561,7 +2561,7 @@ export class LocalAgentSession {
       web: { search: this.getWebSearchProvider(), files: this.rt.storage, browser: null },
       stores,
       // A hire's: what waits on its owner from its own work. A head or a swarm node, whose run ends with it, holds none.
-      ownerWaits: isSubordinateOrigin(this.seat.record.origin) ? this.ownerWaitsHost() : null,
+      ownerWaits: isSubagentOrigin(this.seat.record.origin) ? this.ownerWaitsHost() : null,
       agents: () => this.agentsToolDeps(mode),
       mail: null,
     }), SURFACE_POLICY.program, reported);
@@ -2778,7 +2778,7 @@ export class LocalAgentSession {
       ...(reads.activeSkills !== null && { activeSkills: reads.activeSkills }),
       memoryTail: reads.memoryTail,
       missingCapabilities: [],
-      subordinateDelegates: () => [],
+      subagentDelegates: () => [],
       approvals: () => ({ items: [], total: 0 }),
     });
   }

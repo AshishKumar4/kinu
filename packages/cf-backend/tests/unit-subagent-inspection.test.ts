@@ -7,13 +7,13 @@ import {
   CHAT_SESSION_ID,
   RunEventRecorder,
   SessionHistory,
-  SubordinateRosterStore,
-  SubordinateInspectionRequestSchema,
+  SubagentRosterStore,
+  SubagentInspectionRequestSchema,
   actorReferenceOf,
-  inspectSubordinateStorage, readSessionTranscript, readSubordinateInspection,
+  inspectSubagentStorage, readSessionTranscript, readSubagentInspection,
   type ActorHandle,
-  type SubordinateInspectionAccess,
-  type SubordinateInspectionRequest,
+  type SubagentInspectionAccess,
+  type SubagentInspectionRequest,
   type WorkspaceActorDirectory,
 } from '@kinu.run/core';
 import { claimFences } from '@kinu.run/core';
@@ -24,9 +24,9 @@ interface InspectionFixture {
   readonly raw: ReturnType<typeof makeSqlExec>;
   readonly directory: WorkspaceActorDirectory;
   readonly main: ActorHandle;
-  readonly access: SubordinateInspectionAccess;
+  readonly access: SubagentInspectionAccess;
   child(parent: ActorHandle, name: string): ActorHandle;
-  roster(parent: ActorHandle): SubordinateRosterStore;
+  roster(parent: ActorHandle): SubagentRosterStore;
   history(actor: ActorHandle): SessionHistory;
 }
 
@@ -54,14 +54,14 @@ function workspaceFixture(): InspectionFixture {
     return built;
   };
 
-  const access: SubordinateInspectionAccess = {
+  const access: SubagentInspectionAccess = {
     sql: created.sql,
     raw,
     actor: actors.main,
     directory: actors.directory,
     transcriptFor: (actor) => history(actor).transcript(CHAT_SESSION_ID),
     // One database holds every actor's rows here.
-    ownRows: (actor, own) => readSubordinateInspection({ sql: created.sql, raw, actor, transcriptFor: () => readSessionTranscript(created.sql, actor, CHAT_SESSION_ID, null) }, own),
+    ownRows: (actor, own) => readSubagentInspection({ sql: created.sql, raw, actor, transcriptFor: () => readSessionTranscript(created.sql, actor, CHAT_SESSION_ID, null) }, own),
   };
 
   return {
@@ -80,8 +80,8 @@ function workspaceFixture(): InspectionFixture {
         lifetime: 'task',
       });
     },
-    roster(parent: ActorHandle): SubordinateRosterStore {
-      const roster = new SubordinateRosterStore(raw, parent);
+    roster(parent: ActorHandle): SubagentRosterStore {
+      const roster = new SubagentRosterStore(raw, parent);
       roster.ensureSchema();
 
       return roster;
@@ -91,10 +91,10 @@ function workspaceFixture(): InspectionFixture {
 
 function read(
   fixture: InspectionFixture,
-  request: SubordinateInspectionRequest,
+  request: SubagentInspectionRequest,
   authority = { owner: '', workspace: 'workspace' },
 ) {
-  return inspectSubordinateStorage(fixture.access, request, authority);
+  return inspectSubagentStorage(fixture.access, request, authority);
 }
 
 function rosterChild(
@@ -118,7 +118,7 @@ function rosterChild(
   fixture.roster(parent).dismiss(name, 5);
 }
 
-describe('owner reads of retained subordinate paths', () => {
+describe('owner reads of retained subagent paths', () => {
   test('nested archived tool events page without changing the stored work', async () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, 'child');
@@ -181,7 +181,7 @@ describe('owner reads of retained subordinate paths', () => {
     expect(after.filter((row) => row.name === 'child')).toHaveLength(1);
   });
 
-  test('a finished helper\'s kept history reads by its id, where its name no longer resolves', async () => {
+  test('a finished subagent\'s kept history reads by its id, where its name no longer resolves', async () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, 'child');
     const leaf = fixture.child(child, 'leaf');
@@ -200,7 +200,7 @@ describe('owner reads of retained subordinate paths', () => {
     expect(await read(fixture, { path: [], view: 'history', page: {}, actor: 'not-an-actor' })).toMatchObject({ view: 'missing' });
   });
 
-  test('a finished helper\'s runs and their events read by its id, where its name no longer resolves', async () => {
+  test('a finished subagent\'s runs and their events read by its id, where its name no longer resolves', async () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, 'child');
     const events = new RunEventRecorder(fixture.sql, child);
@@ -220,7 +220,7 @@ describe('owner reads of retained subordinate paths', () => {
     });
   });
 
-  test('a released parent\'s roster reads by its id, so its helpers are still found', async () => {
+  test('a released parent\'s roster reads by its id, so its subagents are still found', async () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, 'child');
     const leaf = fixture.child(child, 'leaf');
@@ -261,9 +261,9 @@ describe('owner reads of retained subordinate paths', () => {
   });
 
   test('request variants reject fields that cannot apply to the selected view', () => {
-    expect(v.safeParse(SubordinateInspectionRequestSchema, { path: [], view: 'history', page: {}, runId: 'shell' }).success).toBe(false);
-    expect(v.safeParse(SubordinateInspectionRequestSchema, { path: [], view: 'events', query: {} }).success).toBe(false);
-    expect(v.safeParse(SubordinateInspectionRequestSchema, { path: ['foreign/path'], view: 'children', page: {} }).success).toBe(false);
+    expect(v.safeParse(SubagentInspectionRequestSchema, { path: [], view: 'history', page: {}, runId: 'shell' }).success).toBe(false);
+    expect(v.safeParse(SubagentInspectionRequestSchema, { path: [], view: 'events', query: {} }).success).toBe(false);
+    expect(v.safeParse(SubagentInspectionRequestSchema, { path: ['foreign/path'], view: 'children', page: {} }).success).toBe(false);
   });
 
   test('retained history uses the exact roster name without an inspection-only cap', async () => {

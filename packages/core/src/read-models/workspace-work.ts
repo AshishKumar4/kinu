@@ -5,7 +5,7 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { bindActorHandle, type ActorHandle, type ActorIdentity } from '../identity/actor-handle';
-import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
+import { isSubagentOrigin, type WorkspaceActor } from '../identity/workspace-actors';
 import { AgentTaskTreeSchema, readPlanTasks, TaskListStore, type AgentTaskTree } from '../tools/task-store';
 import { PlanReviewSchema, PlanReviewStore, type PlanReview } from '../plans/review';
 import type { SqlExecutor } from '../types/primitives';
@@ -23,7 +23,7 @@ export interface WorkspaceWorkOwner {
   readonly title: string;
   /** Retiring or released: shown as retained, not live. */
   readonly retired: boolean;
-  /** For `inspectSubordinate`; null: none. */
+  /** For `inspectSubagent`; null: none. */
   readonly path: readonly string[] | null;
 }
 
@@ -55,7 +55,7 @@ function conversationPath(row: WorkspaceActor, byId: ReadonlyMap<string, Workspa
   const names: string[] = [];
 
   for (let at: WorkspaceActor | undefined = row; at?.actorId !== rootId; at = byId.get(at.parentActorId ?? '')) {
-    if (at === undefined || !isSubordinateOrigin(at.origin)) return null;
+    if (at === undefined || !isSubagentOrigin(at.origin)) return null;
     names.unshift(at.name);
   }
 

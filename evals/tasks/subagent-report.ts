@@ -5,9 +5,9 @@ import type { EvalPart } from '../src/task';
 import { answersWithSlates, madeNoApp } from './ephemeral';
 import { Seeded } from './seeded';
 
-// A lead that hires and then waits the way the product wakes it: the helper's report opens a new turn, so the lead
-// ends its own turn instead of checking on the helper, and answers from the report once it arrives. Then a chart of
-// the same numbers in the chat, which the lead draws itself with no helper and no app. Every answer is the checker's
+// A lead that hires and then waits the way the product wakes it: the subagent's report opens a new turn, so the lead
+// ends its own turn instead of checking on the subagent, and answers from the report once it arrives. Then a chart of
+// the same numbers in the chat, which the lead draws itself with no subagent and no app. Every answer is the checker's
 // own, computed from the file it seeds.
 
 const TICKETS = `${WORKSPACE_ROOT}/support/tickets.jsonl`;
@@ -50,15 +50,15 @@ const GAP = (RANKED[0]?.[1] ?? 0) - (RANKED.at(-1)?.[1] ?? 0);
 
 const HIRES = /"op":"hire"|agents\.hire\(/;
 
-/** A call that asks a helper how far it got, or sleeps to wait for one. */
-const CHECKS_ON_A_HELPER = new Map([
+/** A call that asks a subagent how far it got, or sleeps to wait for one. */
+const CHECKS_ON_A_SUBAGENT = new Map([
   ['agents', /"op":"(list|message)"/],
   ['eval', /agents\.(list|message)\(|setTimeout|\bsleep\(/],
   ['shell', /\bsleep\b|\bwatch\b/],
 ]);
 
 /**
- * The lead's calls between its first hire and the first run a report started that check on the helper, and whether
+ * The lead's calls between its first hire and the first run a report started that check on the subagent, and whether
  * such a run started at all: a lead still working when the report lands takes it mid-turn, so none does.
  */
 function waiting(events: readonly RunEvent[], output: import('../src/transcript').StepMessages) {
@@ -74,7 +74,7 @@ function waiting(events: readonly RunEvent[], output: import('../src/transcript'
   const wake = after.findIndex((event) => event.type === 'run_start' && event.caused_by === 'event_drain');
 
   const checks = (wake === -1 ? after : after.slice(0, wake)).flatMap((event) => event.type === 'tool_call_end'
-    && (CHECKS_ON_A_HELPER.get(event.name)?.test(callText(event)) ?? false) ? [{ tool: event.name, call: callText(event).slice(0, 200) }] : []);
+    && (CHECKS_ON_A_SUBAGENT.get(event.name)?.test(callText(event)) ?? false) ? [{ tool: event.name, call: callText(event).slice(0, 200) }] : []);
 
   return { hired: hire !== -1, checks, woken: wake !== -1 };
 }
@@ -87,43 +87,43 @@ function sameMedians(answered: JsonValue): boolean {
     && Object.entries(MEDIANS).every(([product, median]) => Math.abs((entries.output[product] ?? Number.NaN) - median) <= 0.5);
 }
 
-export const helperReport: EvalPart = {
+export const subagentReport: EvalPart = {
   id: 'report',
   objectives: [
-    'Hire a helper for each product\'s median first-response time, then end the turn rather than check on it, and answer from its report once the report wakes a new turn.',
+    'Hire a subagent for each product\'s median first-response time, then end the turn rather than check on it, and answer from its report once the report wakes a new turn.',
     'Name the slowest product and how many minutes it trails the fastest, as the tickets have them.',
-    'Draw the medians as a bar chart in the chat, with no helper and no app.',
+    'Draw the medians as a bar chart in the chat, with no subagent and no app.',
   ],
   turns: [{
     seed: [{ path: TICKETS, content: TICKETS_FILE }],
-    prompt: `Hire a helper to go through ${TICKETS} and write ${REPORT}: an object from each product to the
+    prompt: `Hire a subagent to go through ${TICKETS} and write ${REPORT}: an object from each product to the
 median first-response time of its tickets in minutes, like {"Trail 2": 41}. When its report is in, tell me which
 product has the slowest median first response and by how many minutes it trails the fastest.`,
     verify: async (verifier) => {
       const events = await verifier.leadEvents();
       const seen = waiting(events, await verifier.stepMessages(events));
 
-      await verifier.check('a-helper-wrote-the-report', async () => {
-        const worked = await verifier.helperWork();
+      await verifier.check('a-subagent-wrote-the-report', async () => {
+        const worked = await verifier.subagentWork();
         const text = await verifier.readFile(REPORT);
         const parsed = v.safeParse(v.pipe(v.string(), v.parseJson()), text);
         // A report that is not JSON is its own evidence.
         const answered = parsed.success ? v.parse(JsonValueSchema, parsed.output) : text;
 
         return {
-          pass: seen.hired && worked.some((helper) => helper.runs.some((run) => run.status === 'completed')) && sameMedians(answered),
-          evidence: { answered, expected: MEDIANS, helpers: worked.map((helper) => ({ name: helper.name, runs: helper.runs.map((run) => run.status) })) },
+          pass: seen.hired && worked.some((subagent) => subagent.runs.some((run) => run.status === 'completed')) && sameMedians(answered),
+          evidence: { answered, expected: MEDIANS, subagents: worked.map((subagent) => ({ name: subagent.name, runs: subagent.runs.map((run) => run.status) })) },
         };
       });
 
-      await verifier.check('did-not-check-on-the-helper', async () => ({
+      await verifier.check('did-not-check-on-the-subagent', async () => ({
         pass: seen.hired && seen.checks.length === 0,
         evidence: { hired: seen.hired, checks: seen.checks },
       }));
 
       await verifier.check('the-report-woke-a-new-turn', async () => ({ pass: seen.woken, evidence: { hired: seen.hired, woken: seen.woken } }));
 
-      // A reply of this turn names both: a housekeeping reply after it (a helper dismissed on a later wake, delegation
+      // A reply of this turn names both: a housekeeping reply after it (a subagent dismissed on a later wake, delegation
       // trial 2 of rc22) does not take the answer back.
       await verifier.check('names-the-slowest-product-and-the-gap', async () => ({
         pass: verifier.replies.some((reply) => reply.includes(SLOWEST) && new RegExp(`\\b${GAP}\\b`).test(reply)),
@@ -136,10 +136,10 @@ product has the slowest median first response and by how many minutes it trails 
       await answersWithSlates(verifier, 1);
       await madeNoApp(verifier);
 
-      await verifier.check('drew-it-without-a-helper', async () => {
-        const worked = await verifier.helperWork();
+      await verifier.check('drew-it-without-a-subagent', async () => {
+        const worked = await verifier.subagentWork();
 
-        return { pass: worked.every((helper) => helper.runs.length === 0), evidence: { helpers: worked.map((helper) => ({ name: helper.name, runs: helper.runs.length })) } };
+        return { pass: worked.every((subagent) => subagent.runs.length === 0), evidence: { subagents: worked.map((subagent) => ({ name: subagent.name, runs: subagent.runs.length })) } };
       });
     },
   }],

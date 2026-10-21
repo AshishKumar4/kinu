@@ -17,8 +17,8 @@ import {
 } from '../types/peers';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { ActorReference } from '../identity/actor-handle';
-import type { SubordinateOrigin } from '../identity/workspace-actors';
-import type { SubordinateBirth } from '../subordinates/birth';
+import type { SubagentOrigin } from '../identity/workspace-actors';
+import type { SubagentBirth } from '../subagents/birth';
 import type { SerializedMessage } from '../types/heads';
 import { freezeInheritedContext } from '../orchestrator/heads-support';
 import type { BranchContext } from '../types/swarm';
@@ -60,12 +60,12 @@ import {
   delegationDepthRefusal,
   delegationExhausted,
   type DelegationBudget,
-} from '../subordinates/depth';
+} from '../subagents/depth';
 import {
-  type SubordinateLifetime,
+  type SubagentLifetime,
   type TemporaryAgentPort,
   type TemporaryRunRequest,
-} from '../subordinates/temporary';
+} from '../subagents/temporary';
 import {
   parseJsonObject,
   type JsonObject, type JsonValue,
@@ -82,61 +82,61 @@ export {
 } from '../types/peers';
 
 // Team deps: spawn is `ActorHost.acquire` over the shared workspace database; tasks go out as
-// `subordinate_task` events and reports return as `subordinate_report` events on the parent.
+// `subagent_task` events and reports return as `subagent_report` events on the parent.
 
-export const SUBORDINATE_STATUSES = ['idle', 'working', 'awaiting_input', 'dismissed'] as const;
+export const SUBAGENT_STATUSES = ['idle', 'working', 'awaiting_input', 'dismissed'] as const;
 
-export type SubordinateStatus = (typeof SUBORDINATE_STATUSES)[number];
+export type SubagentStatus = (typeof SUBAGENT_STATUSES)[number];
 
-/** One actor_subordinates row; title and role live in the child's actor_config. */
-export interface SubordinateRosterEntry {
+/** One actor_subagents row; title and role live in the child's actor_config. */
+export interface SubagentRosterEntry {
   name: string;
   actorReference: ActorReference | null;
-  birth: SubordinateBirth | null;
+  birth: SubagentBirth | null;
   deleteRequested: boolean;
-  /** Its actor's origin; `evolution` is an evolution lane's helper. */
-  origin: SubordinateOrigin;
-  status: SubordinateStatus;
+  /** Its actor's origin; `evolution` is an evolution lane's subagent. */
+  origin: SubagentOrigin;
+  status: SubagentStatus;
   currentTask: string | null;
   createdAt: number;
   dismissedAt: number | null;
-  lifetime: SubordinateLifetime;
-  /** EventLog id of the open assignment ({@link SubordinateHandoff.eventId}; what the report cites), or null. */
+  lifetime: SubagentLifetime;
+  /** EventLog id of the open assignment ({@link SubagentHandoff.eventId}; what the report cites), or null. */
   taskEventId: string | null;
 }
 
 /**
- * Which branch the subordinate's drain took for a handoff (not a caller choice):
+ * Which branch the subagent's drain took for a handoff (not a caller choice):
  * `starts_now` when idle, `queued` when busy or deduped.
  */
-export type SubordinateDelivery = 'starts_now' | 'queued';
+export type SubagentDelivery = 'starts_now' | 'queued';
 
-export interface SubordinatePhase {
+export interface SubagentPhase {
   busy: boolean;
   lastActivityAt: number | null;
   workingOn: string | null;
 }
 
-/** The sender's half of a handoff; `eventId` is what the eventual `subordinate_report` cites. */
-export interface SubordinateHandoff {
+/** The sender's half of a handoff; `eventId` is what the eventual `subagent_report` cites. */
+export interface SubagentHandoff {
   eventId: string;
-  delivery: SubordinateDelivery;
-  phase: SubordinatePhase;
+  delivery: SubagentDelivery;
+  phase: SubagentPhase;
 }
 
-export interface SubordinateDismissal {
+export interface SubagentDismissal {
   readonly stoppedJobs: readonly string[];
 }
 
 export interface TeamToolDeps {
   /** The same bounded parent conversation handed to an exploration head. */
   inheritedContext?(): Promise<SerializedMessage[]>;
-  /** Where this roster's actor sits in the subordinate tree (subordinates/depth.ts). */
+  /** Where this roster's actor sits in the subagent tree (subagents/depth.ts). */
   readonly delegation: DelegationBudget;
-  /** The workspace's subordinate roster (dismissed entries excluded). */
-  list(): Promise<SubordinateRosterEntry[]>;
-  snapshot(): SubordinateRosterEntry[];
-  /** Create an idle durable subordinate for the owner; it has no task until messaged or assigned. Role defaults
+  /** The workspace's subagent roster (dismissed entries excluded). */
+  list(): Promise<SubagentRosterEntry[]>;
+  snapshot(): SubagentRosterEntry[];
+  /** Create an idle durable subagent for the owner; it has no task until messaged or assigned. Role defaults
    *  to `task`, mission to the creator's; the model's `hire` uses {@link spawn}. `role` is the catalog id,
    *  written to the child's config store at seed time. */
   create(input: {
@@ -149,13 +149,13 @@ export interface TeamToolDeps {
     /** The words the owner opened it with: they name it, and its mission stays the creator's. */
     brief?: string;
   }): Promise<{
-    name: string; displayName: string; subordinate: SubordinateRosterEntry;
+    name: string; displayName: string; subagent: SubagentRosterEntry;
   }>;
   /** Retitle on the owner's behalf with `user` origin, which permanently stops auto-titling. */
   rename(input: { name: string; displayName: string }): Promise<{
-    ok: true; name: string; displayName: string; subordinate: SubordinateRosterEntry;
+    ok: true; name: string; displayName: string; subagent: SubagentRosterEntry;
   }>;
-  /** Create a durable subordinate; its first turn is the mission. Same role
+  /** Create a durable subagent; its first turn is the mission. Same role
    *  vocabulary as {@link create}. */
   spawn(input: {
     name?: string;
@@ -167,9 +167,9 @@ export interface TeamToolDeps {
   }): Promise<{
     name: string; displayName: string;
   }>;
-  /** Enqueue a task on the subordinate (drained as its next turn). */
+  /** Enqueue a task on the subagent (drained as its next turn). */
   assign(input: { name: string; task: string; deliverable?: string; mode: WorkMode }): Promise<
-    { ok: true; name: string } & SubordinateHandoff
+    { ok: true; name: string } & SubagentHandoff
   >;
   /** Whether this roster holds `name` at all, archived rows included. Provenance, not addressing:
    *  hire/msg route on {@link list}. */
@@ -177,9 +177,9 @@ export interface TeamToolDeps {
   /** Roster row and live state; archived rows have none. */
   status(input: { name?: string }): Promise<object>;
   message(input: { name: string; content: string; mode: WorkMode }): Promise<
-    { ok: true; name: string } & SubordinateHandoff
+    { ok: true; name: string } & SubagentHandoff
   >;
-  /** Retire a subordinate. Archives by default; storage is wiped only when keepHistory=false. */
+  /** Retire a subagent. Archives by default; storage is wiped only when keepHistory=false. */
   dismiss(input: {
     name: string;
     keepHistory?: boolean;
@@ -199,18 +199,18 @@ export interface TeamToolDeps {
 // Peers deps: the EventsHub peer transport (`outbox_peer` -> receivePeerMessage -> EventLog -> turn).
 
 
-function renderHandoff(handoff: SubordinateHandoff) {
+function renderHandoff(handoff: SubagentHandoff) {
   return {
     event_id: handoff.eventId,
     delivery: handoff.delivery,
-    subordinate_phase: handoff.phase,
+    subagent_phase: handoff.phase,
   };
 }
 
 const ASSIGN_NOTES = {
-  starts_now: 'Assigned. The subordinate was idle and starts on it now.',
-  queued: 'Queued behind the subordinate\'s current or already-admitted work as its own turn.',
-} satisfies Record<SubordinateDelivery, string>;
+  starts_now: 'Assigned. The subagent was idle and starts on it now.',
+  queued: 'Queued behind the subagent\'s current or already-admitted work as its own turn.',
+} satisfies Record<SubagentDelivery, string>;
 
 // Counter readers: translate each transport's outcome for the counter. Kept beside the outcome types
 // so a new outcome case fails to compile here.
@@ -230,7 +230,7 @@ function peerReplyCount(outcome: PeerReplyOutcome): MsgSendResult {
   return { outcome: outcome.ok ? 'delivered' : 'rejected' };
 }
 
-function handoffCount(handoff: SubordinateHandoff): MsgSendResult {
+function handoffCount(handoff: SubagentHandoff): MsgSendResult {
   return {
     outcome: handoff.delivery === 'queued' ? 'queued' : 'delivered',
     messageId: handoff.eventId,
@@ -308,7 +308,7 @@ export interface AgentsToolDeps {
   /** The account's `SWARMS_BETA_SETTING` the toolset was built under: off withholds the substrate. */
   swarms: boolean;
   team?: TeamToolDeps;
-  /** Cross-workspace peer messaging, orchestrator only. Never subordinates: `hire scope=workspace`
+  /** Cross-workspace peer messaging, orchestrator only. Never subagents: `hire scope=workspace`
    *  mints a fresh tree root and would escape the depth cap. */
   peers?: PeersToolDeps;
   /** Mission budget governor: gates every spawn on its label and hands a search the port its model
@@ -320,7 +320,7 @@ export interface AgentsToolDeps {
 }
 
 interface UnifiedRosterResult {
-  subordinates?: SubordinateRosterEntry[];
+  subagents?: SubagentRosterEntry[];
   peers?: Array<{ name: string; displayName?: string }>;
   note?: string;
 }
@@ -396,7 +396,7 @@ interface SwarmFields {
   readonly budgetLabel?: string;
 }
 
-/** A new helper's fields, as `agents.hire` admits them. */
+/** A new subagent's fields, as `agents.hire` admits them. */
 interface HireFields {
   readonly role: RoleId;
   readonly message: string;
@@ -405,7 +405,7 @@ interface HireFields {
   readonly tier?: TierId;
   readonly context?: BranchContext;
   /** `durable` (default) stays in the roster; `task` answers once and is archived. */
-  readonly lifetime?: SubordinateLifetime;
+  readonly lifetime?: SubagentLifetime;
 }
 
 /** An existing agent's next workstream, as `agents.assign` admits it. */
@@ -796,7 +796,7 @@ async function hireWorkspace({ deps, fields, mode, toolOptions, spawnDepthRefusa
   // Classified: a fresh workspace escapes the depth cap, so this refusal must land in `refused`.
   if (!peers) {
     throw new KinuError('denied', 'agents.hireWorkspace creates a whole workspace, which only the workspace orchestrator may do: '
-      + 'hire a subordinate here instead, or run a search.');
+      + 'hire a subagent here instead, or run a search.');
   }
 
   const request: Parameters<PeersToolDeps['spawnWorkspace']>[0] = {
@@ -814,7 +814,7 @@ async function hireWorkspace({ deps, fields, mode, toolOptions, spawnDepthRefusa
 
 interface CreateHireCall extends Omit<AgentsActionCall<HireFields>, 'toolOptions'> {
   team: TeamToolDeps;
-  lifetime: SubordinateLifetime;
+  lifetime: SubagentLifetime;
 }
 
 async function hireCreate({ deps, team, fields, mode, lifetime }: CreateHireCall): Promise<object> {
@@ -884,21 +884,21 @@ interface RosterCall {
   readonly mode: WorkMode;
   readonly toolOptions: AgentsToolCallOptions | undefined;
   readonly spawnGuard: () => void;
-  readonly isSubordinate: (name: string) => Promise<boolean>;
+  readonly isSubagent: (name: string) => Promise<boolean>;
 }
 
-/** An existing agent's next workstream: a subordinate's reports later, a peer's reply is awaited. Spends no depth. */
-async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, toolOptions, isSubordinate }: RosterCall): Promise<object> {
+/** An existing agent's next workstream: a subagent's reports later, a peer's reply is awaited. Spends no depth. */
+async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, toolOptions, isSubagent }: RosterCall): Promise<object> {
   const { team, peers } = deps;
   const asked = requestedTopic(fields.topic);
 
-  if (team && await isSubordinate(fields.agent)) {
+  if (team && await isSubagent(fields.agent)) {
     const assignment: Parameters<TeamToolDeps['assign']>[0] = { name: fields.agent, task: fields.message, mode };
 
     if (fields.deliverable) Object.assign(assignment, { deliverable: fields.deliverable });
 
     const handoff = await countedMsgSend(
-      { action: 'assign', transport: 'subordinate', addressing: 'agent', target: fields.agent, chars: fields.message.length },
+      { action: 'assign', transport: 'subagent', addressing: 'agent', target: fields.agent, chars: fields.message.length },
       () => team.assign(assignment),
       handoffCount,
     );
@@ -907,7 +907,7 @@ async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, to
       status: 'working',
       agent: fields.agent,
       ...renderHandoff(handoff),
-      note: `${ASSIGN_NOTES[handoff.delivery]} The subordinate's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
+      note: `${ASSIGN_NOTES[handoff.delivery]} The subagent's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
     };
   }
 
@@ -927,16 +927,16 @@ async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, to
 }
 
 /** A message to an agent, with no workstream handed over. Waking an agent is a spawn-shaped spend. */
-async function messageAgent(deps: AgentsToolDeps, fields: MessageFields, { mode, spawnGuard, isSubordinate }: RosterCall): Promise<object> {
+async function messageAgent(deps: AgentsToolDeps, fields: MessageFields, { mode, spawnGuard, isSubagent }: RosterCall): Promise<object> {
   const { team, peers } = deps;
   const { agent, message } = fields;
 
   spawnGuard();
   const sent = requestedTopic(fields.topic);
 
-  if (team && await isSubordinate(agent)) {
+  if (team && await isSubagent(agent)) {
     const handoff = await countedMsgSend(
-      { action: 'message', transport: 'subordinate', addressing: 'agent', target: agent, chars: message.length },
+      { action: 'message', transport: 'subagent', addressing: 'agent', target: agent, chars: message.length },
       () => team.message({ name: agent, content: message, mode }),
       handoffCount,
     );
@@ -961,16 +961,16 @@ async function roster(deps: AgentsToolDeps, fields: ListFields): Promise<object>
 
   if (fields.agent && team && await team.knows(fields.agent)) return await team.status({ name: fields.agent });
 
-  const subordinates = team ? await team.list() : undefined;
+  const subagents = team ? await team.list() : undefined;
   const peerRoster = peers ? await peers.listPeers() : undefined;
-  const empty = (subordinates?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
+  const empty = (subagents?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
   const listed: UnifiedRosterResult = {};
 
-  if (subordinates) Object.assign(listed, { subordinates });
+  if (subagents) Object.assign(listed, { subagents });
 
   if (peerRoster) Object.assign(listed, { peers: peerRoster });
 
-  if (empty) Object.assign(listed, { note: 'No helper agents yet: create one with op:"hire".' });
+  if (empty) Object.assign(listed, { note: 'No subagents yet: create one with op:"hire".' });
 
   return listed;
 }
@@ -992,7 +992,7 @@ export async function dispatchAgentsCall(
   const { team, peers } = wired;
 
   // No catch: a roster read failure must reach the caller, not route the assignment to the peer path.
-  const isSubordinate = async (name: string): Promise<boolean> => {
+  const isSubagent = async (name: string): Promise<boolean> => {
     if (!team) return false;
 
     return (await team.list()).some((entry) => entry.name === name);
@@ -1021,7 +1021,7 @@ export async function dispatchAgentsCall(
 
   if (SPAWNING.has(call.op)) spawnGuard();
 
-  const rosterCall: RosterCall = { mode, toolOptions, spawnGuard, isSubordinate };
+  const rosterCall: RosterCall = { mode, toolOptions, spawnGuard, isSubagent };
 
   try {
     switch (call.op) {
@@ -1036,7 +1036,7 @@ export async function dispatchAgentsCall(
         if (planBar) throw new KinuError(planBar.reason, planBar.error);
 
         // Capability absence is `denied`; admission already holds `hire` to a wired team.
-        if (!team) throw new KinuError('denied', 'hiring subordinates is not available on this actor');
+        if (!team) throw new KinuError('denied', 'hiring subagents is not available on this actor');
 
         return await hireCreate({ deps, team, fields: call.fields, mode, lifetime });
       }
@@ -1065,7 +1065,7 @@ export async function dispatchAgentsCall(
         return await roster(wired, call.fields);
 
       case 'dismiss':
-        if (!team) throw new KinuError('denied', 'dismiss applies to subordinates, which this actor does not have');
+        if (!team) throw new KinuError('denied', 'dismiss applies to subagents, which this actor does not have');
 
         return await team.dismiss({ name: call.fields.agent, keepHistory: call.fields.keepHistory ?? true });
     }
@@ -1079,7 +1079,7 @@ export async function dispatchAgentsCall(
 
 /** How much further a hire may delegate, said on `hire`. */
 export function nestingRoom(delegation: DelegationBudget): string {
-  if (delegation.maxDepth > 1) return `A subordinate you hire can hire its own, ${delegation.maxDepth - 1} level(s) further.`;
+  if (delegation.maxDepth > 1) return `A subagent you hire can hire its own, ${delegation.maxDepth - 1} level(s) further.`;
 
-  return 'A subordinate you hire cannot hire its own.';
+  return 'A subagent you hire cannot hire its own.';
 }

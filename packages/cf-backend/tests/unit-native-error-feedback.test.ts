@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { MockLanguageModelV4 } from 'ai/test';
 import * as v from 'valibot';
-import { chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask } from './helpers/actor-harness';
+import { chatSessionTurns, gatewayWorkspace, hostedSubagentHarness, orchestratorHarness, runDelegatedTask } from './helpers/actor-harness';
 import { requestOf, scriptedGateway } from './helpers/platform-gateway';
 
 function modelCallingFile() {
@@ -56,7 +56,7 @@ test('a delegated turn sends the same typed native error feedback in its NEXT pr
   const gateway = scriptedGateway([{ tool: 'file', args: { op: 'transmogrify', path: '/' } }]);
   const workspace = gatewayWorkspace(gateway);
 
-  const child = await hostedSubordinateHarness(workspace, {
+  const child = await hostedSubagentHarness(workspace, {
     name: 'error-prover', displayName: 'Error prover', nameOrigin: 'user',
     mission: 'Try the file operation.',
   });

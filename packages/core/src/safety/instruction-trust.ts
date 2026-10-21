@@ -87,7 +87,7 @@ function trustOfInstructionApprovals(
 
 /**
  * Keyed by (actor, scope, path): `scope` isolates workspaces (forks start unapproved) and each actor,
- * subordinates included, starts with no decisions.
+ * subagents included, starts with no decisions.
  */
 export class InstructionApprovalStore {
   private readonly actorId: string;

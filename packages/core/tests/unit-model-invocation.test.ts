@@ -64,7 +64,12 @@ describe('an endpoint model files every call it makes', () => {
     hostname: '127.0.0.1',
     async fetch(request) {
       const body = v.parse(v.looseObject({ stream: v.optional(v.boolean()) }), await request.json());
-      const usage = { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 };
+
+      // Cache reads and reasoning reported, as zeros: a count left out is unmeasured, not zero (`normalizeUsage`).
+      const usage = {
+        prompt_tokens: 12, completion_tokens: 3, total_tokens: 15,
+        prompt_tokens_details: { cached_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 0 },
+      };
 
       if (body.stream === true) {
         const chunk = (delta: { content?: string }, finish: string | null): string => `data: ${JSON.stringify({

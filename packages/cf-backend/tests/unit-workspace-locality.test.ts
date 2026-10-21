@@ -201,26 +201,26 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(await workspaceSoul(workspace.bundle)).toBe('# main edited this\n');
 
     const session = await workspace.bundle.session();
-    const identity = agentIdentity(session.sql, 'subordinate-alpha');
-    const home = provisionAgentHome(session.vfs.as(CRED_KERNEL), 'subordinate-alpha', identity);
-    const subordinate = await agentPlane(workspace.bundle, { cred: agentCred(identity), home, tmp: `${home}/tmp` });
-    const edit = await subordinate.shell.exec("printf '# a subordinate edited this\\n' > /home/main/SOUL.md");
+    const identity = agentIdentity(session.sql, 'subagent-alpha');
+    const home = provisionAgentHome(session.vfs.as(CRED_KERNEL), 'subagent-alpha', identity);
+    const subagent = await agentPlane(workspace.bundle, { cred: agentCred(identity), home, tmp: `${home}/tmp` });
+    const edit = await subagent.shell.exec("printf '# a subagent edited this\\n' > /home/main/SOUL.md");
 
     expect([edit.exitCode, edit.stderr]).toEqual([0, '']);
     const restarted = open();
-    expect(await workspaceSoul(restarted.bundle)).toBe('# a subordinate edited this\n');
+    expect(await workspaceSoul(restarted.bundle)).toBe('# a subagent edited this\n');
     expect(await soulFile(restarted)).toMatchObject({ uid: 1000, mode: 0o664, type: 'file' });
   });
 
   test('only the main agent creates in the workspace root', async () => {
     const workspace = (await ownedSoul(actorObject()))();
     const session = await workspace.bundle.session();
-    const identity = agentIdentity(session.sql, 'subordinate-alpha');
-    const home = provisionAgentHome(session.vfs.as(CRED_KERNEL), 'subordinate-alpha', identity);
-    const subordinate = await agentPlane(workspace.bundle, { cred: agentCred(identity), home, tmp: `${home}/tmp` });
+    const identity = agentIdentity(session.sql, 'subagent-alpha');
+    const home = provisionAgentHome(session.vfs.as(CRED_KERNEL), 'subagent-alpha', identity);
+    const subagent = await agentPlane(workspace.bundle, { cred: agentCred(identity), home, tmp: `${home}/tmp` });
 
-    await expect(writeText(subordinate.vfs, '/home/main/AGENTS.md', 'forged')).rejects.toThrow();
-    await subordinate.shell.exec('printf forged > /home/main/skills.md');
+    await expect(writeText(subagent.vfs, '/home/main/AGENTS.md', 'forged')).rejects.toThrow();
+    await subagent.shell.exec('printf forged > /home/main/skills.md');
     await workspace.box('agent:main').exec('printf mine > /home/main/notes.md');
 
     expect(await exists(workspace.bundle.vfs, 'AGENTS.md')).toBe(false);
@@ -346,7 +346,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     await workspace.bundle.vfs.mkdir('alpha', { recursive: true });
     await workspace.bundle.vfs.mkdir('beta', { recursive: true });
 
-    const alpha = workspace.box('subordinate:alpha');
+    const alpha = workspace.box('subagent:alpha');
     const beta = workspace.box('head:beta');
     const work = { shellId: 'work' };
     expect(await alpha.exec('cd /home/main/alpha', work)).toMatchObject({ exitCode: 0 });
@@ -355,7 +355,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(await beta.exec('pwd', work)).toMatchObject({ stdout: '/home/main\n' });
     expect(await alpha.exec('pwd', { cwd: '/home/main' })).toMatchObject({ stdout: '/home/main\n' });
     // The box is a view: one got again by scope finds the same shell.
-    expect(await workspace.box('subordinate:alpha').exec('pwd', work)).toMatchObject({ stdout: '/home/main/alpha\n' });
+    expect(await workspace.box('subagent:alpha').exec('pwd', work)).toMatchObject({ stdout: '/home/main/alpha\n' });
   });
 
   test('the workspace never reads a session binding out of env', async () => {

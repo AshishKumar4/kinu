@@ -9,40 +9,40 @@ import {
   initEventsHubTables,
   renderForLLM,
   spillEventContent,
-  SubordinateRosterStore,
+  SubagentRosterStore,
   DELEGATION_MAX_DEPTH,
   ROOT_DELEGATION_BUDGET,
   delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,
-  admitSubordinateReport,
-  admitSubordinateTask,
+  admitSubagentReport,
+  admitSubagentTask,
   agentNamer,
   createTeamToolDeps,
-  describeSubordinateHandoff,
-  subordinateDescriptorSource,
+  describeSubagentHandoff,
+  subagentDescriptorSource,
   normalizeReportContent,
-  parentAdmitsSubordinateReport,
-  readSubordinateLiveStatus,
-  receiveSubordinateEvent,
-  SUBORDINATE_REPORT_HANDOFF_MAX_CHARS,
+  parentAdmitsSubagentReport,
+  readSubagentLiveStatus,
+  receiveSubagentEvent,
+  SUBAGENT_REPORT_HANDOFF_MAX_CHARS,
   type ReportDeps,
-  type SubordinateIngressDeps,
-  owedSubordinateTurnReport,
+  type SubagentIngressDeps,
+  owedSubagentTurnReport,
   type SerializedMessage,
   type SqlExec,
-  type SubordinateDelivery,
-  type SubordinateHandoff,
-  type SubordinateReportOrigin,
-  type SubordinateReportPayload,
-  type SubordinateReportStatus,
-  type SubordinateRosterEntry,
-  type SubordinateRuntime,
+  type SubagentDelivery,
+  type SubagentHandoff,
+  type SubagentReportOrigin,
+  type SubagentReportPayload,
+  type SubagentReportStatus,
+  type SubagentRosterEntry,
+  type SubagentRuntime,
   type KinuEvent,
-  WorkspaceActorDirectory, actorReferenceOf, recoverSubordinateLifecycles, type ActorReference,
+  WorkspaceActorDirectory, actorReferenceOf, recoverSubagentLifecycles, type ActorReference,
   type ActorHandle,
   type AgentConfigStore,
-  initSubordinateRosterTable,
+  initSubagentRosterTable,
 } from '../src/index';
 import { CODE_IS_REFUSAL, KinuError } from '../src/obs/index';
 import { codenameFor } from '../src/identity/naming';
@@ -62,23 +62,23 @@ const NOW = 1_700_000_000_000;
 function makeWorld(db: Database = new Database(':memory:')) {
   return {
     sql: makeSqlExec(db),
-    actor: createTestActor(makeTagged(db), makeExecRaw(db), 'subordinates-workspace', 'main'),
+    actor: createTestActor(makeTagged(db), makeExecRaw(db), 'subagents-workspace', 'main'),
   } satisfies { sql: SqlExec; actor: ActorHandle };
 }
 
-function makeRosterStore(db: Database = new Database(':memory:')): SubordinateRosterStore {
+function makeRosterStore(db: Database = new Database(':memory:')): SubagentRosterStore {
   const { sql, actor } = makeWorld(db);
 
-  return new SubordinateRosterStore(sql, actor);
+  return new SubagentRosterStore(sql, actor);
 }
 
-function reportPayload(event: KinuEvent | undefined): SubordinateReportPayload {
-  if (!event) throw new Error('expected subordinate report event');
+function reportPayload(event: KinuEvent | undefined): SubagentReportPayload {
+  if (!event) throw new Error('expected subagent report event');
 
-  if (event.variant !== 'subordinate_report') throw new Error('expected subordinate report payload');
+  if (event.variant !== 'subagent_report') throw new Error('expected subagent report payload');
 
   return v.parse(v.object({
-    from_subordinate: v.string(),
+    from_subagent: v.string(),
     status: v.picklist(['progress', 'completed', 'blocked']),
     content: v.string(),
     sequence_id: v.string(),
@@ -107,7 +107,7 @@ describe('the child descriptor authority', () => {
     config.setAssignedTier('deep');
 
     const cold = makeConfig(db);
-    expect(subordinateDescriptorSource(cold).read()).toEqual({
+    expect(subagentDescriptorSource(cold).read()).toEqual({
       displayName: 'Jarvis',
       nameOrigin: 'user',
       role: 'researcher',
@@ -116,7 +116,7 @@ describe('the child descriptor authority', () => {
   });
 
   test('an unset config reads as a blank auto-titled general-hire descriptor', () => {
-    const source = subordinateDescriptorSource(makeConfig(new Database(':memory:')));
+    const source = subagentDescriptorSource(makeConfig(new Database(':memory:')));
     expect(source.read()).toEqual({
       displayName: '',
       nameOrigin: 'auto',
@@ -174,9 +174,9 @@ describe('the delegation depth cap', () => {
 });
 
 /** Unborn: until birth confirms an actor, the seed says who asked for the hire. */
-const initialRosterEntry = { name: 'researcher', actorReference: null, birth: { creationId: 'c-researcher', seed: { name: 'researcher', displayName: 'Researcher', nameOrigin: 'user', role: 'researcher', mission: 'Map the market.', lifetime: 'durable', origin: 'agent' }, assignment: null }, deleteRequested: false, status: 'working', currentTask: 'Map the market.', createdAt: 100, dismissedAt: null, lifetime: 'durable', taskEventId: null } satisfies Omit<SubordinateRosterEntry, 'origin'>;
+const initialRosterEntry = { name: 'researcher', actorReference: null, birth: { creationId: 'c-researcher', seed: { name: 'researcher', displayName: 'Researcher', nameOrigin: 'user', role: 'researcher', mission: 'Map the market.', lifetime: 'durable', origin: 'agent' }, assignment: null }, deleteRequested: false, status: 'working', currentTask: 'Map the market.', createdAt: 100, dismissedAt: null, lifetime: 'durable', taskEventId: null } satisfies Omit<SubagentRosterEntry, 'origin'>;
 
-describe('workspace subordinate roster', () => {
+describe('workspace subagent roster', () => {
   test('owns closed status transitions and can restore an exact snapshot', () => {
     const roster = makeRosterStore();
     roster.ensureSchema();
@@ -213,15 +213,15 @@ describe('workspace subordinate roster', () => {
 
     roster.restore(beforeDismiss);
     expect(roster.get('researcher')).toEqual(beforeDismiss);
-    expect(() => roster.requireExisting('missing')).toThrow('unknown subordinate');
+    expect(() => roster.requireExisting('missing')).toThrow('unknown subagent');
   });
 
   test('a roster read works on tables the workspace object made at construction, before any store existed', () => {
     const { sql, actor } = makeWorld();
-    initSubordinateRosterTable(sql);
+    initSubagentRosterTable(sql);
 
     // No `ensureSchema`: a read that reaches the object first finds only what the constructor made.
-    const roster = new SubordinateRosterStore(sql, actor);
+    const roster = new SubagentRosterStore(sql, actor);
 
     expect(roster.list()).toEqual([]);
   });
@@ -251,7 +251,7 @@ describe('workspace subordinate roster', () => {
   });
 });
 
-describe('subordinate live status', () => {
+describe('subagent live status', () => {
   test('returns the latest activity and bounded recent step summaries', () => {
     // The production activity_log, keyed by (actor_id, id).
     const workspace = createTestWorkspace();
@@ -278,7 +278,7 @@ describe('subordinate live status', () => {
     // A sibling's newer step in the same table: an unscoped read would report it as this child's.
     insert(actors.sibling('other').actorId, 9, 'someone else entirely');
 
-    expect(readSubordinateLiveStatus(sql, actors.main)).toEqual({
+    expect(readSubagentLiveStatus(sql, actors.main)).toEqual({
       lastActivity: 700,
       recentSteps: [
         { event: 'step-7', summary: 'Integrated auth findings', elapsedMs: 70, createdAt: 700 },
@@ -291,23 +291,23 @@ describe('subordinate live status', () => {
   });
 });
 
-const fakeHandoff = (delivery: SubordinateDelivery): SubordinateHandoff => ({
+const fakeHandoff = (delivery: SubagentDelivery): SubagentHandoff => ({
   eventId: `evt-${delivery}`,
   delivery,
   phase: { busy: delivery === 'queued', lastActivityAt: null, workingOn: null },
 });
 
 interface TeamHarness {
-  roster: SubordinateRosterStore;
-  runtime: SubordinateRuntime;
+  roster: SubagentRosterStore;
+  runtime: SubagentRuntime;
   actorReference(): ActorReference;
   team: ReturnType<typeof createTeamToolDeps>;
   calls: string[];
-  assignments: Array<Parameters<SubordinateRuntime['assign']>[1]>;
-  seeds: Array<Parameters<SubordinateRuntime['spawn']>[0]>;
+  assignments: Array<Parameters<SubagentRuntime['assign']>[1]>;
+  seeds: Array<Parameters<SubagentRuntime['spawn']>[0]>;
   broadcasts: number[];
-  tasks: Array<{ subordinate: string; content: string; timestamp: number }>;
-  failures: Set<keyof SubordinateRuntime>;
+  tasks: Array<{ subagent: string; content: string; timestamp: number }>;
+  failures: Set<keyof SubagentRuntime>;
 }
 
 const HARNESS_OWN_MISSION = 'Keep the release train moving.';
@@ -319,19 +319,19 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = [], { namedFrom
   const roster = makeRosterStore(actorDb);
   roster.ensureSchema();
   const calls: string[] = [];
-  const assignments: Array<Parameters<SubordinateRuntime['assign']>[1]> = [];
-  const seeds: Array<Parameters<SubordinateRuntime['spawn']>[0]> = [];
+  const assignments: Array<Parameters<SubagentRuntime['assign']>[1]> = [];
+  const seeds: Array<Parameters<SubagentRuntime['spawn']>[0]> = [];
   const broadcasts: number[] = [];
-  const tasks: Array<{ subordinate: string; content: string; timestamp: number }> = [];
-  const failures = new Set<keyof SubordinateRuntime>();
+  const tasks: Array<{ subagent: string; content: string; timestamp: number }> = [];
+  const failures = new Set<keyof SubagentRuntime>();
 
-  const fail = (operation: keyof SubordinateRuntime) => {
+  const fail = (operation: keyof SubagentRuntime) => {
     if (failures.has(operation)) throw new KinuError('unavailable', `${operation} failed`);
   };
 
-  const directory = new WorkspaceActorDirectory(makeTagged(actorDb), { workspaceId: 'subordinates-workspace', ownerUserId: '' });
+  const directory = new WorkspaceActorDirectory(makeTagged(actorDb), { workspaceId: 'subagents-workspace', ownerUserId: '' });
 
-  const runtime: SubordinateRuntime = {
+  const runtime: SubagentRuntime = {
     async spawn(input) {
       seeds.push(input);
       calls.push(`spawn:${input.name}:${input.mission}`);
@@ -425,7 +425,7 @@ describe('team action routing', () => {
 
     expect(await h.team.create({ role: 'researcher', mission: 'Understand the domain.' })).toEqual({
       name: 'researcher-a1b2c3', displayName: 'Researcher',
-      subordinate: { name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+      subagent: { name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null },
     });
     expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
       origin: 'user', status: 'idle', currentTask: null,
@@ -447,7 +447,7 @@ describe('team action routing', () => {
 
     const created = await h.team.create({});
 
-    expect(created.subordinate).toEqual({ name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null });
+    expect(created.subagent).toEqual({ name: 'researcher-a1b2c3', actorReference: h.actorReference(), birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1_700_000_000_000, dismissedAt: null, lifetime: 'durable', taskEventId: null });
     expect(created.displayName).toBe(codenameFor('researcher-a1b2c3'));
     expect(h.seeds).toEqual([{
       creationId: expect.any(String), name: 'researcher-a1b2c3',
@@ -523,7 +523,7 @@ describe('team action routing', () => {
   });
 
 
-  test('only the owner can dismiss an owner-created subordinate', async () => {
+  test('only the owner can dismiss an owner-created subagent', async () => {
     const h = makeTeamHarness();
     await h.team.create({ role: 'researcher', mission: 'Own this role.' });
 
@@ -556,7 +556,7 @@ describe('team action routing', () => {
     const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
-    admitSubordinateTask(log, {
+    admitSubagentTask(log, {
       fromWorkspace: 'kinu-main',
       kind: 'task',
       body: 'Repair the auth flow.',
@@ -564,8 +564,8 @@ describe('team action routing', () => {
       now: 10,
     });
 
-    expect(log.pending({ variant: 'subordinate_task' })).toHaveLength(1);
-    expect(buildDrainBatch(log.pending({ variant: 'subordinate_task' }))).toBeNull();
+    expect(log.pending({ variant: 'subagent_task' })).toHaveLength(1);
+    expect(buildDrainBatch(log.pending({ variant: 'subagent_task' }))).toBeNull();
   });
 
   // S22: an assignment fires exactly one roster refresh and one task event.
@@ -598,12 +598,12 @@ describe('team action routing', () => {
       'assign:researcher-a1b2c3:Map the market.',
     ]);
     expect(h.tasks).toEqual([{
-      subordinate: 'researcher-a1b2c3', content: 'Map the market.', timestamp: 1_700_000_000_000,
+      subagent: 'researcher-a1b2c3', content: 'Map the market.', timestamp: 1_700_000_000_000,
     }]);
 
     await h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Compare vendors' });
     expect(h.tasks.at(-1)).toEqual({
-      subordinate: 'researcher-a1b2c3', content: 'Compare vendors', timestamp: 1_700_000_000_000,
+      subagent: 'researcher-a1b2c3', content: 'Compare vendors', timestamp: 1_700_000_000_000,
     });
     expect(await h.team.status({ name: 'researcher-a1b2c3' })).toEqual({
       roster: h.roster.requireActive('researcher-a1b2c3'),
@@ -624,7 +624,7 @@ describe('team action routing', () => {
   });
 
   test('runtime failures roll the roster back and never broadcast partial state', async () => {
-    const operations: Array<keyof Pick<SubordinateRuntime, 'spawn' | 'assign' | 'message' | 'dismiss'>> = [
+    const operations: Array<keyof Pick<SubagentRuntime, 'spawn' | 'assign' | 'message' | 'dismiss'>> = [
       'spawn', 'assign', 'message', 'dismiss',
     ];
 
@@ -707,7 +707,7 @@ describe('team action routing', () => {
     const before = h.roster.requireExisting('researcher-a1b2c3');
     expect(before.birth?.assignment?.body).toBe('Mission');
     h.failures.clear();
-    await recoverSubordinateLifecycles(h.roster, h.runtime);
+    await recoverSubagentLifecycles(h.roster, h.runtime);
     const after = h.roster.requireExisting('researcher-a1b2c3');
     expect(after.actorReference).toEqual(before.actorReference);
     expect(after.birth).toBeNull();
@@ -723,7 +723,7 @@ describe('team action routing', () => {
     expect(h.roster.requireExisting('researcher-a1b2c3').actorReference).toEqual(reference);
     expect(h.roster.requireExisting('researcher-a1b2c3').deleteRequested).toBe(true);
     h.failures.clear();
-    await recoverSubordinateLifecycles(h.roster, h.runtime);
+    await recoverSubagentLifecycles(h.roster, h.runtime);
     expect(h.roster.get('researcher-a1b2c3')).toBeNull();
   });
 
@@ -732,8 +732,8 @@ describe('team action routing', () => {
     const actorDb = new Database(':memory:');
     const roster = makeRosterStore(actorDb);
     roster.ensureSchema();
-    const observed: Array<{ operation: string; roster: SubordinateRosterEntry | null }> = [];
-    const directory = new WorkspaceActorDirectory(makeTagged(actorDb), { workspaceId: 'subordinates-workspace', ownerUserId: '' });
+    const observed: Array<{ operation: string; roster: SubagentRosterEntry | null }> = [];
+    const directory = new WorkspaceActorDirectory(makeTagged(actorDb), { workspaceId: 'subagents-workspace', ownerUserId: '' });
     const actor = directory.create({ parent: directory.main(), name: 'researcher-a1b2c3', creationId: 'c-transition', origin: 'agent', lifetime: 'durable' });
 
     const observe = (operation: 'assign' | 'message', name: string) => {
@@ -742,7 +742,7 @@ describe('team action routing', () => {
       return fakeHandoff('starts_now');
     };
 
-    const runtime: SubordinateRuntime = {
+    const runtime: SubagentRuntime = {
       async spawn() { return actorReferenceOf(actor); },
       async cancelBirth() { return actorReferenceOf(actor); },
       async assign(name) { return observe('assign', name); },
@@ -794,7 +794,7 @@ describe('team action routing', () => {
     }]);
   });
 
-  test('EVICTION FIX: a completed subordinate stays in the roster and answers a follow-up task', async () => {
+  test('EVICTION FIX: a completed subagent stays in the roster and answers a follow-up task', async () => {
     const h = makeTeamHarness();
     await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Map the market.' });
 
@@ -825,35 +825,35 @@ describe('team action routing', () => {
   });
 });
 
-describe('subordinate event admission', () => {
+describe('subagent event admission', () => {
   test('canonical tasks and reports enter the standard drain rail', () => {
     const { sql, actor } = makeWorld();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
-    const task = admitSubordinateTask(log, {
+    const task = admitSubagentTask(log, {
       fromWorkspace: 'kinu-main', kind: 'task', body: 'Investigate',
       deliverable: 'Report', mode: 'build', now: 10,
     });
 
-    const report = admitSubordinateReport(log, {
-      fromSubordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate',
+    const report = admitSubagentReport(log, {
+      fromSubagent: 'researcher', status: 'completed', content: 'Done', task: 'Investigate',
       sequenceId: 'settle:msg-1', mode: 'build', now: 11,
     });
 
     expect(task.admitted).toBe(true);
     expect(report.admitted).toBe(true);
-    expect(log.pending({ variant: 'subordinate_task' })[0]).toMatchObject({
+    expect(log.pending({ variant: 'subagent_task' })[0]).toMatchObject({
       trust: 'authenticated', priority: 'normal',
       payload: {
         from_workspace: 'kinu-main', kind: 'task', body: 'Investigate',
         deliverable: 'Report', kinu_mode: 'build',
       },
     });
-    expect(log.pending({ variant: 'subordinate_report' })[0]).toMatchObject({
+    expect(log.pending({ variant: 'subagent_report' })[0]).toMatchObject({
       trust: 'authenticated', priority: 'background',
       payload: {
-        from_subordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate',
+        from_subagent: 'researcher', status: 'completed', content: 'Done', task: 'Investigate',
         sequence_id: 'settle:msg-1', kinu_mode: 'build',
       },
     });
@@ -866,12 +866,12 @@ describe('subordinate event admission', () => {
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
-    const wake = (now: number) => admitSubordinateTask(log, {
+    const wake = (now: number) => admitSubagentTask(log, {
       fromWorkspace: 'kinu-main', kind: 'message', body: 'Background shell job bgjob-1 completed.', mode: 'build',
       idempotencyKey: 'background-job-wake:bgjob-1', now,
     });
 
-    const owner = (now: number) => admitSubordinateTask(log, {
+    const owner = (now: number) => admitSubagentTask(log, {
       fromWorkspace: 'kinu-main', kind: 'message', body: 'Look at the logs.', mode: 'build', messageId: 'msg-1', now,
     });
 
@@ -879,9 +879,9 @@ describe('subordinate event admission', () => {
     expect([owner(12).admitted, owner(13).admitted]).toEqual([true, false]);
 
     // The wake opens its own turn on its text: it carries no message id, which says the owner's row is already open.
-    const pending = log.pending({ variant: 'subordinate_task' });
+    const pending = log.pending({ variant: 'subagent_task' });
 
-    const messageIds = pending.map((event) => (event.variant === 'subordinate_task'
+    const messageIds = pending.map((event) => (event.variant === 'subagent_task'
       && (event.payload_visibility === 'full' || event.payload_visibility === 'redact') ? event.payload.message_id ?? null : 'unreadable'));
 
     expect(messageIds).toEqual([null, 'msg-1']);
@@ -892,11 +892,11 @@ describe('subordinate event admission', () => {
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
-    const admission = admitSubordinateTask(log, {
+    const admission = admitSubagentTask(log, {
       fromWorkspace: 'kinu-main', kind: 'task', body: 'Investigate', mode: 'build', now: 10,
     });
 
-    const handoff = describeSubordinateHandoff({
+    const handoff = describeSubagentHandoff({
       admission,
       turnInFlight: false,
       live: { lastActivity: null, recentSteps: [] },
@@ -905,22 +905,22 @@ describe('subordinate event admission', () => {
     expect(handoff.eventId).toBe(admission.id);
   });
 
-  test('a busy subordinate queues a mode-homogeneous turn, while an idle one starts now', () => {
+  test('a busy subagent queues a mode-homogeneous turn, while an idle one starts now', () => {
     const live = { lastActivity: 34, recentSteps: [{ event: 'beforeturn', summary: 'reading src/auth.ts', elapsedMs: 12, createdAt: 34 }] };
     const admission = { id: 'evt-1', admitted: true };
 
-    expect(describeSubordinateHandoff({ admission, turnInFlight: true, live })).toEqual({
+    expect(describeSubagentHandoff({ admission, turnInFlight: true, live })).toEqual({
       eventId: 'evt-1',
       delivery: 'queued',
       phase: { busy: true, lastActivityAt: 34, workingOn: 'reading src/auth.ts' },
     });
-    expect(describeSubordinateHandoff({ admission, turnInFlight: false, live }).delivery).toBe('starts_now');
+    expect(describeSubagentHandoff({ admission, turnInFlight: false, live }).delivery).toBe('starts_now');
   });
 
   test('an admission the log rejected as a duplicate is queued, not claimed as a fresh start', () => {
     // `admitted: false`: the event was already logged, so this publish scheduled no drain.
     for (const turnInFlight of [true, false]) {
-      expect(describeSubordinateHandoff({
+      expect(describeSubagentHandoff({
         admission: { id: 'evt-existing', admitted: false },
         turnInFlight,
         live: { lastActivity: null, recentSteps: [] },
@@ -928,8 +928,8 @@ describe('subordinate event admission', () => {
     }
   });
 
-  test('a subordinate that has done nothing yet reports no work in progress', () => {
-    const handoff = describeSubordinateHandoff({
+  test('a subagent that has done nothing yet reports no work in progress', () => {
+    const handoff = describeSubagentHandoff({
       admission: { id: 'evt-1', admitted: true },
       turnInFlight: false,
       live: { lastActivity: null, recentSteps: [] },
@@ -943,10 +943,10 @@ describe('subordinate event admission', () => {
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
-    expect(() => admitSubordinateTask(log, {
+    expect(() => admitSubagentTask(log, {
       fromWorkspace: ' ', kind: 'task', body: 'work', mode: 'build', now: 1,
     })).toThrow('fromWorkspace');
-    expect(() => admitSubordinateTask(log, {
+    expect(() => admitSubagentTask(log, {
       fromWorkspace: 'main', kind: 'task', body: ' ', mode: 'build', now: 1,
     })).toThrow('body');
 
@@ -954,8 +954,8 @@ describe('subordinate event admission', () => {
       { content: ' ', sequenceId: 'settle:msg-1', names: 'content' },
       { content: 'work', sequenceId: ' ', names: 'sequenceId' },
     ]) {
-      expect(() => admitSubordinateReport(log, {
-        fromSubordinate: 'researcher', status: 'progress', content: blank.content,
+      expect(() => admitSubagentReport(log, {
+        fromSubagent: 'researcher', status: 'progress', content: blank.content,
         sequenceId: blank.sequenceId, mode: 'build', now: 1,
       })).toThrow(blank.names);
     }
@@ -964,7 +964,7 @@ describe('subordinate event admission', () => {
   });
 });
 
-describe('the owner talking to a subordinate does not wake its parent', () => {
+describe('the owner talking to a subagent does not wake its parent', () => {
   /** Both hops in production order; assertions read the parent's event log because that log is the wake. */
   function scenario() {
     const { sql, actor } = makeWorld();
@@ -977,15 +977,15 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
     let sequence = 0;
 
     const arrivesAtParent = (
-      origin: SubordinateReportOrigin,
+      origin: SubagentReportOrigin,
       content: string,
-      status: SubordinateReportStatus,
+      status: SubagentReportStatus,
     ) => {
       const entry = roster.requireActive('researcher');
 
-      if (!parentAdmitsSubordinateReport({ entry })) return;
-      admitSubordinateReport(log, {
-        fromSubordinate: 'researcher', status, content,
+      if (!parentAdmitsSubagentReport({ entry })) return;
+      admitSubagentReport(log, {
+        fromSubagent: 'researcher', status, content,
         sequenceId: `settle:msg-${++sequence}`, mode: 'build', now: 1,
       });
       roster.applyReport('researcher', status, origin, NOW);
@@ -995,17 +995,17 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
       roster,
       async turnEnds(input: { ownerDriven: boolean; assistantText: string; reportedThisTurn?: boolean }) {
         // A durable hire's answered turn, as either backend ends one.
-        const owed = await owedSubordinateTurnReport({
+        const owed = await owedSubagentTurnReport({
           lifetime: 'durable', ending: 'answered', assistantText: input.assistantText, narration: async () => [],
           reports: { spoke: input.reportedThisTurn ?? false, settled: false }, ownerDriven: input.ownerDriven, delegating: false,
         });
 
         if (owed !== null) arrivesAtParent('turn_end', owed.content, owed.status);
       },
-      reportTool: (content: string, status: SubordinateReportStatus = 'completed') =>
+      reportTool: (content: string, status: SubagentReportStatus = 'completed') =>
         arrivesAtParent('report_tool', content, status),
       jobSettles: (content: string) => arrivesAtParent('turn_end', content, 'progress'),
-      woken: () => log.pending({ variant: 'subordinate_report' })
+      woken: () => log.pending({ variant: 'subagent_report' })
         .map((event) => reportPayload(event).content),
     };
   }
@@ -1073,20 +1073,20 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
   });
 });
 
-describe('oversize subordinate reports stay reachable', () => {
-  /** Parent ingress in orchestrator.receiveSubordinateEvent order: normalize, spill, admit. */
-  async function admitFromSubordinate(log: EventLog, vfs: Parameters<typeof spillEventContent>[0], raw: string) {
+describe('oversize subagent reports stay reachable', () => {
+  /** Parent ingress in orchestrator.receiveSubagentEvent order: normalize, spill, admit. */
+  async function admitFromSubagent(log: EventLog, vfs: Parameters<typeof spillEventContent>[0], raw: string) {
     const content = normalizeReportContent(raw);
     const spilled = await spillEventContent(vfs, content);
 
     const input = {
-      fromSubordinate: 'researcher', status: 'completed', content,
+      fromSubagent: 'researcher', status: 'completed', content,
       sequenceId: 'settle:msg-1', task: 'Survey auth', mode: 'build', now: 11,
-    } satisfies Parameters<typeof admitSubordinateReport>[1];
+    } satisfies Parameters<typeof admitSubagentReport>[1];
 
     if (spilled) Object.assign(input, { spilled });
 
-    return admitSubordinateReport(log, input);
+    return admitSubagentReport(log, input);
   }
 
   function freshLog(): EventLog {
@@ -1101,9 +1101,9 @@ describe('oversize subordinate reports stay reachable', () => {
     const { vfs } = createMemoryVfs();
     const content = 'seam found in the auth module; '.repeat(60).trim();
 
-    expect((await admitFromSubordinate(log, vfs, `${content}\n`)).admitted).toBe(true);
+    expect((await admitFromSubagent(log, vfs, `${content}\n`)).admitted).toBe(true);
 
-    const event = log.pending({ variant: 'subordinate_report' })[0];
+    const event = log.pending({ variant: 'subagent_report' })[0];
     const path = reportPayload(event).content_path;
     expect(path).toBe(eventContentPath(content));
 
@@ -1113,7 +1113,7 @@ describe('oversize subordinate reports stay reachable', () => {
     expect(renderForLLM(event).brief).toEndWith(`: full report: ${path}`);
     const batch = buildDrainBatch([event]);
 
-    if (!batch) throw new Error('expected subordinate report drain batch');
+    if (!batch) throw new Error('expected subagent report drain batch');
     expect(batch.text).toContain(path);
   });
 
@@ -1121,9 +1121,9 @@ describe('oversize subordinate reports stay reachable', () => {
     const log = freshLog();
     const { vfs } = createMemoryVfs();
 
-    await admitFromSubordinate(log, vfs, 'Survey done — three seams found; note written.');
+    await admitFromSubagent(log, vfs, 'Survey done — three seams found; note written.');
 
-    const event = log.pending({ variant: 'subordinate_report' })[0];
+    const event = log.pending({ variant: 'subagent_report' })[0];
     expect(reportPayload(event).content_path).toBeUndefined();
     expect(await filesIn(vfs)).toEqual([]);
     expect(renderForLLM(event).brief)
@@ -1133,11 +1133,11 @@ describe('oversize subordinate reports stay reachable', () => {
 
 interface ParentScene {
   log: EventLog;
-  roster: SubordinateRosterStore;
+  roster: SubagentRosterStore;
   vfs: MemoryVfs['vfs'];
   seen: string[];
   announced: Array<{ id: string; content: string }>;
-  deps: SubordinateIngressDeps;
+  deps: SubagentIngressDeps;
 }
 
 function parentScene(): ParentScene {
@@ -1187,14 +1187,14 @@ describe('the parent ingress, in the order it runs', () => {
       return transaction(body);
     };
 
-    const result = await receiveSubordinateEvent(scene.deps, {
-      fromSubordinate: 'researcher', status: 'completed', content: `${content}\n`,
+    const result = await receiveSubagentEvent(scene.deps, {
+      fromSubagent: 'researcher', status: 'completed', content: `${content}\n`,
       origin: 'report_tool', sequenceId: 'settle:msg-1', mode: 'build',
     }, 11);
 
     expect(result.disposition).toBe('admitted');
     expect(await readText(scene.vfs, spilled)).toBe(content);
-    const event = scene.log.pending({ variant: 'subordinate_report' })[0];
+    const event = scene.log.pending({ variant: 'subagent_report' })[0];
     expect(reportPayload(event).content_path).toBe(spilled);
     expect(scene.seen).toEqual(['transaction', 'announce', 'drain']);
     expect(scene.roster.requireActive('researcher')).toMatchObject({ status: 'idle', currentTask: null });
@@ -1204,34 +1204,34 @@ describe('the parent ingress, in the order it runs', () => {
     const scene = parentScene();
     scene.roster.applyReport('researcher', 'completed', 'report_tool', NOW);
 
-    const result = await receiveSubordinateEvent(scene.deps, {
-      fromSubordinate: 'researcher', status: 'progress', content: 'x'.repeat(4000),
+    const result = await receiveSubagentEvent(scene.deps, {
+      fromSubagent: 'researcher', status: 'progress', content: 'x'.repeat(4000),
       origin: 'turn_end', sequenceId: 'settle:msg-1', mode: 'build',
     }, 12);
 
     expect(result).toEqual({ id: '', disposition: 'not_awaited' });
     expect(await filesIn(scene.vfs)).toEqual([]);
     expect(scene.seen).toEqual([]);
-    expect(scene.log.pending({ variant: 'subordinate_report' })).toEqual([]);
+    expect(scene.log.pending({ variant: 'subagent_report' })).toEqual([]);
   });
 
-  test('a report from a subordinate this parent does not have is not awaited, not admitted', async () => {
+  test('a report from a subagent this parent does not have is not awaited, not admitted', async () => {
     const scene = parentScene();
     // An unknown name is a forgotten decision, not a delivery failure: throwing made the child retry forever.
-    expect(await receiveSubordinateEvent(scene.deps, {
-      fromSubordinate: 'ghost', status: 'progress', content: 'hello',
+    expect(await receiveSubagentEvent(scene.deps, {
+      fromSubagent: 'ghost', status: 'progress', content: 'hello',
       origin: 'report_tool', sequenceId: 'settle:msg-1', mode: 'build',
     }, 13)).toEqual({ id: '', disposition: 'not_awaited' });
     expect(await filesIn(scene.vfs)).toEqual([]);
-    expect(scene.log.pending({ variant: 'subordinate_report' })).toEqual([]);
+    expect(scene.log.pending({ variant: 'subagent_report' })).toEqual([]);
   });
 
   // A report is replayed until the parent holds it; the sequence is the dedupe key.
   test('one sequence delivered twice wakes the parent once, and says the second was already held', async () => {
     const scene = parentScene();
 
-    const deliver = () => receiveSubordinateEvent(scene.deps, {
-      fromSubordinate: 'researcher', status: 'completed', content: 'Market mapped.',
+    const deliver = () => receiveSubagentEvent(scene.deps, {
+      fromSubagent: 'researcher', status: 'completed', content: 'Market mapped.',
       origin: 'turn_end', sequenceId: 'settle:msg-1', mode: 'build',
     }, 20);
 
@@ -1240,36 +1240,36 @@ describe('the parent ingress, in the order it runs', () => {
 
     expect(first.disposition).toBe('admitted');
     expect(replay).toEqual({ id: first.id, disposition: 'already_held' });
-    expect(scene.log.pending({ variant: 'subordinate_report' })).toHaveLength(1);
+    expect(scene.log.pending({ variant: 'subagent_report' })).toHaveLength(1);
     expect(scene.seen).toEqual(['transaction', 'announce', 'drain']);
     expect(scene.announced).toHaveLength(1);
   });
 
-  test('two sequences from one subordinate are two parent events', async () => {
+  test('two sequences from one subagent are two parent events', async () => {
     const scene = parentScene();
 
     const deliver = (sequenceId: string, content: string) =>
-      receiveSubordinateEvent(scene.deps, {
-        fromSubordinate: 'researcher', status: 'progress', content,
+      receiveSubagentEvent(scene.deps, {
+        fromSubagent: 'researcher', status: 'progress', content,
         origin: 'turn_end', sequenceId, mode: 'build',
       }, 20);
 
     expect((await deliver('settle:msg-1', 'Mapped 8 so far.')).disposition).toBe('admitted');
     expect((await deliver('settle:msg-2', 'Mapped 14 now.')).disposition).toBe('admitted');
 
-    expect(scene.log.pending({ variant: 'subordinate_report' }).map((e) => reportPayload(e).content))
+    expect(scene.log.pending({ variant: 'subagent_report' }).map((e) => reportPayload(e).content))
       .toEqual(['Mapped 8 so far.', 'Mapped 14 now.']);
   });
 
   // The mode travels with the report: a cold replay outlives the child's turn metadata.
   test('the report carries the mode its sender stated', async () => {
     const scene = parentScene();
-    await receiveSubordinateEvent(scene.deps, {
-      fromSubordinate: 'researcher', status: 'progress', content: 'Three options, no code yet.',
+    await receiveSubagentEvent(scene.deps, {
+      fromSubagent: 'researcher', status: 'progress', content: 'Three options, no code yet.',
       origin: 'turn_end', sequenceId: 'settle:msg-1', mode: 'plan',
     }, 20);
 
-    const event = scene.log.pending({ variant: 'subordinate_report' })[0];
+    const event = scene.log.pending({ variant: 'subagent_report' })[0];
     expect(reportPayload(event).kinu_mode).toBe('plan');
     expect(reportPayload(event).sequence_id).toBe('settle:msg-1');
   });
@@ -1280,8 +1280,8 @@ describe('the structured handoff a report carries', () => {
   function childReportingTo(scene: ParentScene): ReportDeps {
     return {
       report: async ({ status, content, handoff }) => {
-        const relayed = await receiveSubordinateEvent(scene.deps, {
-          fromSubordinate: 'researcher', status, content, handoff,
+        const relayed = await receiveSubagentEvent(scene.deps, {
+          fromSubagent: 'researcher', status, content, handoff,
           origin: 'report_tool', sequenceId: `settle:${content.length}`, mode: 'build',
         }, 30);
 
@@ -1295,8 +1295,8 @@ describe('the structured handoff a report carries', () => {
     return (await serveReport(() => deps).run(input, { callId: 'report-1' })).value;
   }
 
-  function reportOn(scene: ParentScene): SubordinateReportPayload {
-    return reportPayload(scene.log.pending({ variant: 'subordinate_report' })[0]);
+  function reportOn(scene: ParentScene): SubagentReportPayload {
+    return reportPayload(scene.log.pending({ variant: 'subagent_report' })[0]);
   }
 
   test('what the child stated is on the parent’s event AND in the brief the parent reads', async () => {
@@ -1313,7 +1313,7 @@ describe('the structured handoff a report carries', () => {
       concerns: ['the 429 budget is a guess — no production trace to size it from'],
       findings: ['the gateway already limits per-account, so per-IP double-counts'],
     });
-    expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]).brief).toBe(
+    expect(renderForLLM(scene.log.pending({ variant: 'subagent_report' })[0]).brief).toBe(
       'completed [re: Map the market.]: Rate limiter landed behind the existing flag.'
       + '\nconcerns:\n  - the 429 budget is a guess — no production trace to size it from'
       + '\nfindings:\n  - the gateway already limits per-account, so per-IP double-counts',
@@ -1331,7 +1331,7 @@ describe('the structured handoff a report carries', () => {
     // An optional field is absent when unused, not an empty list.
     expect(payload.concerns).toBeUndefined();
     expect(payload.open_work).toBeUndefined();
-    expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]).brief)
+    expect(renderForLLM(scene.log.pending({ variant: 'subagent_report' })[0]).brief)
       .toBe('progress [re: Map the market.]: Mapped 8 of the 14 so far.');
   });
 
@@ -1342,12 +1342,12 @@ describe('the structured handoff a report carries', () => {
     const oversize = send(childReportingTo(scene), {
       status: 'completed',
       content: 'Done.',
-      open_work: [`x`.repeat(SUBORDINATE_REPORT_HANDOFF_MAX_CHARS + 1)],
+      open_work: [`x`.repeat(SUBAGENT_REPORT_HANDOFF_MAX_CHARS + 1)],
     });
 
     await expect(oversize).rejects.toMatchObject({ code: 'bad_input' });
-    await expect(oversize).rejects.toThrow(`${SUBORDINATE_REPORT_HANDOFF_MAX_CHARS}-character budget`);
-    expect(scene.log.pending({ variant: 'subordinate_report' })).toEqual([]);
+    await expect(oversize).rejects.toThrow(`${SUBAGENT_REPORT_HANDOFF_MAX_CHARS}-character budget`);
+    expect(scene.log.pending({ variant: 'subagent_report' })).toEqual([]);
   });
 
   test('a destination that reads only the body is offered no handoff, and is handed none', async () => {

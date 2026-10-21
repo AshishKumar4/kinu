@@ -203,20 +203,20 @@ function toolIcon(toolName: string): ReactNode {
   return <DotsThreeCircleIcon size={15} />;
 }
 
-/** Where a one-question helper's chat opens, relative to the chat its `agents` call sits in; null draws no link. */
-export const HelperChatBase = createContext<{ readonly base: string; readonly parent: string | null } | null>(null);
+/** Where a one-question subagent's chat opens, relative to the chat its `agents` call sits in; null draws no link. */
+export const SubagentChatBase = createContext<{ readonly base: string; readonly parent: string | null } | null>(null);
 
-const AnsweredHelperObject = v.looseObject({ agent: v.string(), lifetime: v.literal("task") });
+const AnsweredSubagentObject = v.looseObject({ agent: v.string(), lifetime: v.literal("task") });
 
-const AnsweredHelperSchema = v.union([AnsweredHelperObject, v.pipe(v.string(), v.parseJson(), AnsweredHelperObject)]);
+const AnsweredSubagentSchema = v.union([AnsweredSubagentObject, v.pipe(v.string(), v.parseJson(), AnsweredSubagentObject)]);
 
-/** A task-lifetime helper has no tab and makes no report card: the call that asked it is its durable door. */
-function HelperChatLink({ output }: { output?: JsonValue }) {
-  const base = useContext(HelperChatBase);
-  const helper = v.safeParse(AnsweredHelperSchema, output);
+/** A task-lifetime subagent has no tab and makes no report card: the call that asked it is its durable door. */
+function SubagentChatLink({ output }: { output?: JsonValue }) {
+  const base = useContext(SubagentChatBase);
+  const subagent = v.safeParse(AnsweredSubagentSchema, output);
 
-  if (base === null || !helper.success) return null;
-  const name = helper.output.agent;
+  if (base === null || !subagent.success) return null;
+  const name = subagent.output.agent;
 
   return (
     <Link to={`${base.base}${encodeURIComponent(name)}${base.parent === null ? "" : `?parent=${encodeURIComponent(base.parent)}`}`} aria-label={`Open ${name}'s conversation`}
@@ -319,7 +319,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
         </span>
         <CaretRightIcon size={11} aria-hidden className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
       </button>
-      {toolName === "agents" && <HelperChatLink output={output} />}
+      {toolName === "agents" && <SubagentChatLink output={output} />}
       {expanded && provisionErr && (
         <div className="p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 text-xs p-text-2 flex items-start gap-2">
           <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />

@@ -3,7 +3,7 @@
  * report already answered its assignment is settled, never run a second time.
  */
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import type { SubordinateReportLedger } from './ingress';
+import type { SubagentReportLedger } from './ingress';
 
 export function initTurnReportTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS agent_turn_reports (
@@ -24,14 +24,14 @@ export class TurnReports {
   constructor(private readonly sql: SqlExecutor) {}
 
   /** A turn that spoke has a row; whether it settled only ever turns on. */
-  record(turn: ReportedTurn, reports: SubordinateReportLedger): void {
+  record(turn: ReportedTurn, reports: SubagentReportLedger): void {
     if (!reports.spoke) return;
     void this.sql`INSERT INTO agent_turn_reports (actor_id, turn_id, settled)
       VALUES (${turn.actorId}, ${turn.turnId}, ${reports.settled ? 1 : 0})
       ON CONFLICT(actor_id, turn_id) DO UPDATE SET settled = MAX(settled, excluded.settled)`;
   }
 
-  read(turn: ReportedTurn): SubordinateReportLedger {
+  read(turn: ReportedTurn): SubagentReportLedger {
     const row = this.sql<{ settled: number }>`
       SELECT settled FROM agent_turn_reports WHERE actor_id = ${turn.actorId} AND turn_id = ${turn.turnId}`[0];
 

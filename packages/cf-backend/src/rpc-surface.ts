@@ -257,7 +257,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'slateCallDispatch',
   'closeRevokedCliSockets',
   'closeRevokedSessionSockets',
-  'inspectSubordinateStorage',
+  'inspectSubagentStorage',
   'headJournalCacheMerge',
   'headJournalInsertSpawn',
   'headJournalRecordReport',

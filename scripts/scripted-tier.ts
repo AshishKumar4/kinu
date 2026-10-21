@@ -1,7 +1,7 @@
 /**
  * Puts one eval account a deployed tier acts as on the scripted model, and proves the deployment reaches it. The
  * account's `openai-compat` credential points at the tiers' Worker and its default tier becomes the scripted model, so
- * its workspaces, and the helpers and swarm nodes they hire, all answer from `tierModel`; its search chain is chosen
+ * its workspaces, and the subagents and swarm nodes they hire, all answer from `tierModel`; its search chain is chosen
  * (`chooseSearch`), and `gateway` signs in to Cloudflare. Run by the tier before its cases, against the build it drives,
  * with that account's CLI bearer in KINU_TOKEN.
  *   bun scripts/scripted-tier.ts <origin> <eval account>

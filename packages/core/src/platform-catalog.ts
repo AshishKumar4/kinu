@@ -1069,7 +1069,7 @@ export const PLATFORM_CATALOG = {
       + 'so an O(1) clone is free in time and not in quota. Causality was established by '
       + 'freeing 5 GiB and retrying successfully '
       + '(~/Nimbus/scratchpad/do-sqlite-fork-feasibility.md §4). Every Kinu fork and '
-      + 'subordinate is a facet, so this is one shared 10 GB across a whole exploration tree: '
+      + 'subagent is a facet, so this is one shared 10 GB across a whole exploration tree: '
       + 'and see do.storage.size_is_per_object, because NOTHING on the platform reports the '
       + 'shared total. Accounting is LOGICAL rather than physical: a 1.058 GB facet cloned nine '
       + 'times is roughly 10.58 GB logical across ten databases, and all of them succeeded before '
@@ -1526,27 +1526,30 @@ export const PLATFORM_CATALOG = {
   // `do.facet.cpu_shared`, `do.isolate.abort_keeps_isolate`, `do.facet.count`.
 
   'do.facet.memory_independent': {
-    subject: 'A facet\'s memory ceiling is independent of its parent\'s residency',
-    limit: { value: 208 * MiB, unit: 'bytes' },
+    subject: 'A facet\'s memory ceiling, independent of its parent\'s residency',
+    // Kinu's agent facets (loaded workers) under a turn's churn: 125 MB lived and 130 MB was reset. That is the published
+    // 128 MB, and D8's 110/115 MB with a heavier base, not the 208 MiB Nimbus's plain facets measured on 2026-07-24.
+    limit: { value: 125 * MB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'peak-resident',
     evidence: 'proven-by-probe',
-    provenance: '~/Nimbus/scratchpad/do-facets-migration.md §1.6, §1.7, §1.8',
-    date: '2026-07-24',
-    trigger: 'a facet allocating while its parent already holds a large working set',
-    onBreach: 'nothing: the ceilings do not interact',
+    provenance: '/mnt/local/kinu/tmp/agent-placement/DESIGN.md §2.3',
+    date: '2026-10-21',
+    trigger: 'an agent facet whose turn holds more than about 125 MB',
+    onBreach: 'the facet is reset; its parent and its siblings keep running (their boot ids unchanged)',
     observable: [],
     firstPartySignal: false,
     measurements: [
-      { scenario: 'facet ceiling with parent holding 0 bytes', value: 208 * MiB, unit: 'bytes' },
-      { scenario: 'facet ceiling with parent holding 128 MiB: bit-identical', value: 208 * MiB, unit: 'bytes' },
-      { scenario: 'eight facets at 192 MiB plus a 128 MiB parent, live at once', value: 1664 * MiB, unit: 'bytes' },
-      { scenario: 'facets confirmed to be distinct isolates', value: 40, unit: 'count' },
+      { scenario: 'a Kinu agent facet under turn churn, highest that lived (f44999, 2026-10-21)', value: 125 * MB, unit: 'bytes' },
+      { scenario: 'a Kinu agent facet under turn churn, lowest reset (f44999, 2026-10-21)', value: 130 * MB, unit: 'bytes' },
+      { scenario: 'D8, an agent facet with a 13-18 MB idle base, highest that lived (2026-09-27)', value: 110 * MB, unit: 'bytes' },
+      { scenario: 'Nimbus plain facets, parent holding 0 or 128 MiB (2026-07-24): not Kinu\'s loader facets', value: 208 * MiB, unit: 'bytes' },
     ],
     notes:
-      'The GOOD half of the facet trade, and it is a large one: memory is genuinely per-facet, '
-      + 'so a fan-out of heads does not share one 128-200 MiB budget. Read together with '
-      + 'do.facet.cpu_shared, which is the price.',
+      'The good half of the facet trade holds: one facet\'s reset leaves its parent and its siblings alone, so a fan-out '
+      + 'of agents does not share one budget. The ceiling is not 208 MiB for Kinu: that was Nimbus\'s plain facets; a '
+      + 'loaded worker\'s facet is reset near the published 128 MB. Plan on about 125 MB per agent isolate, and on agents '
+      + 'sharing an isolate sharing it. Read together with do.facet.cpu_shared, which is the price.',
   },
 
   'do.facet.cpu_shared': {
@@ -1717,7 +1720,7 @@ export const PLATFORM_CATALOG = {
     observable: [{ context: 'the setAlarm call', message: 'Error: Facets currently cannot set alarms.' }],
     firstPartySignal: true,
     notes:
-      'Directly constrains this repo: forks and subordinates are facets, so a head cannot '
+      'Directly constrains this repo: forks and subagents are facets, so a head cannot '
       + 'schedule its own resumption, its own timeout, or its own recovery sweep. Everything '
       + 'time-driven must route through the root\'s single alarm (see do.alarm.wall_ms), which '
       + 'is also the only alarm there is.',
@@ -1977,13 +1980,13 @@ export const PLATFORM_CATALOG = {
     date: '2026-08-17',
     trigger: 'mapping a Durable Object id to a class, or correlating telemetry on ctx.id, for a facet',
     onBreach:
-      'every facet is labelled as its root\'s class: every head and every subordinate reads as '
+      'every facet is labelled as its root\'s class: every head and every subagent reads as '
       + 'an OrchestratorAgent, and nothing contradicts the label',
     observable: [],
     firstPartySignal: false,
     notes:
       'A CORRECTNESS TRAP FOR ANY PER-AGENT VIEW, not just for tracing. Kinu spawns every '
-      + 'subordinate and every exploration head as a facet, so an id-keyed roster, an id-keyed '
+      + 'subagent and every exploration head as a facet, so an id-keyed roster, an id-keyed '
       + 'log field or an id-keyed UI grouping silently collapses the whole tree into one '
       + 'orchestrator. Correlate on selfPath. This is the "correct, wired, dead" shape at the '
       + 'identity layer: the map returns a class name, the name is wrong, and nothing fails.',

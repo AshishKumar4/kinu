@@ -135,8 +135,8 @@ describe('peers over one directory', () => {
     expect(readdirSync(project)).toEqual([]);
   });
 
-  test('a subordinate writes into the shared directory and keeps its own actor-scoped stores', async () => {
-    const { state, project } = roots('cwd-plane-subordinate');
+  test('a subagent writes into the shared directory and keeps its own actor-scoped stores', async () => {
+    const { state, project } = roots('cwd-plane-subagent');
     const parent = agentRuntime(state, 'parent', project);
     const binding = registerLocalActor(parent.actor, { name: 'child', creationId: 'child-birth', origin: 'agent', lifetime: 'durable' });
     const physicalName = actorHomeName({ origin: 'agent', name: binding.name, storageKey: binding.storageKey });
