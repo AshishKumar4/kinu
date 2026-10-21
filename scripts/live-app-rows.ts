@@ -1795,8 +1795,8 @@ async function walkToTools(page: Page, origin: string): Promise<void> {
 
 /**
  * The connect row. Its first sign-in runs in the tab itself (a blocked popup) from setup's tools step, reached by Next;
- * the rest run in a helper tab from the account's MCP page: a finish page for another run is opened while one waits,
- * the person declines, then signs in again and approves.
+ * the rest run in a helper tab from that step opened in another tab: a finish page for another run is opened while one
+ * waits, the person declines, then signs in again and approves.
  */
 async function measureConnect(newPage: LiveApp['newPage'], origin: string): Promise<ConnectVerdict> {
   const provider = startConsentingProvider();
@@ -1818,8 +1818,9 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
     const back = new URL(setup.url());
     const sameTab = { back: back.pathname + back.search + back.hash, status: (await listedServer(origin, 'Samehub')).status };
 
-    await named('the MCP page to load', async () => panel.goto(`${origin}/user/settings/mcp`, { waitUntil: 'load' }));
-    await until(panel, 'the MCP page', `[...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Add custom server')`);
+    // Setup's tools step, as the MCP page sends an account that has not finished setup there.
+    await named('setup\'s tools step to load', async () => panel.goto(`${origin}/welcome?step=tools`, { waitUntil: 'load' }));
+    await until(panel, 'the MCP servers on setup\'s tools step', `[...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Add custom server')`);
     const first = await signInHelper(panel, async () => addCustomServer(panel, 'Denyhub', provider.serverUrl));
 
     // Opened by no script, so it stays: it names a run that is not the panel's.
@@ -1839,8 +1840,8 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
     const deniedSaid = await connectSaid(panel);
     const denyhub = await listedServer(origin, 'Denyhub');
     // The panel's list read after the end, as a person sees it.
-    await named('the MCP page to reload', async () => panel.reload({ waitUntil: 'load' }));
-    await until(panel, 'the MCP page listing Denyhub', `document.querySelector('[data-mcp-server="${denyhub.id}"]') !== null`);
+    await named('setup\'s tools step to reload', async () => panel.reload({ waitUntil: 'load' }));
+    await until(panel, 'setup\'s tools step listing Denyhub', `document.querySelector('[data-mcp-server="${denyhub.id}"]') !== null`);
     const signIn = `[data-mcp-server="${denyhub.id}"] [data-mcp-sign-in]`;
     const denied = { helperClosed, said: deniedSaid, status: denyhub.status, signInOffered: await panel.$(signIn) !== null };
 
