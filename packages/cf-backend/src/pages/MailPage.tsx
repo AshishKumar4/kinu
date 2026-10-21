@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearchParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
 import { Button, ICON_ON_PHONE, buttonClass } from "@/components/ui/Button";
@@ -92,6 +92,24 @@ function ThreadList({ resource, view, boxes, path, owner, reading, onOpen, onRet
   </>;
 }
 
+/** A view's segment: its count beside it where it has one (Important's unread once there is an assistant, Drafts). */
+function viewSegment(id: MailView, loaded: Inbox | null, waiting: boolean): { id: MailView; label: string; count?: number } {
+  let count = 0;
+
+  if (id === "important" && !waiting) count = loaded?.important ?? 0;
+
+  if (id === "drafts") count = loaded?.drafts ?? 0;
+
+  return count > 0 ? { id, label: MAIL_VIEW_LABEL[id], count } : { id, label: MAIL_VIEW_LABEL[id] };
+}
+
+/** Where the views, search and addresses go: in the bar where the whole set fits, else the row under it. */
+function placed({ narrow, views, search, addresses }: { narrow: boolean; views: ReactNode; search: ReactNode; addresses: ReactNode }) {
+  if (narrow) return { below: <div className="p-tool-row">{views}{search}{addresses}</div>, inBar: null };
+
+  return { view: views, inBar: <>{search}{addresses}</> };
+}
+
 function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   const [params, setParams] = useSearchParams();
   const location = useLocation();
@@ -165,15 +183,7 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   };
 
   const views = (
-    <Segmented label="Mail views" size="sm" value={view} onChange={(next) => at({ view: next })} segments={MAIL_VIEWS.map((id) => {
-      let count = 0;
-
-      if (id === "important" && !waiting) count = loaded?.important ?? 0;
-
-      if (id === "drafts") count = loaded?.drafts ?? 0;
-
-      return count > 0 ? { id, label: MAIL_VIEW_LABEL[id], count } : { id, label: MAIL_VIEW_LABEL[id] };
-    })} />
+    <Segmented label="Mail views" size="sm" value={view} onChange={(next) => at({ view: next })} segments={MAIL_VIEWS.map((id) => viewSegment(id, loaded, waiting))} />
   );
 
   const search = (
@@ -189,18 +199,19 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
       options={[{ value: "*", label: "All addresses" }, ...account.boxes.map((box) => ({ value: box.path, label: mailBoxLabel(box) }))]} /></div>
   );
 
+  const controls = placed({ narrow, views, search, addresses });
+
   // A tool (design review 2026-10-20, A2): the list a full-height column with its own rule, the thread read beside it on
   // the ground; below `lg` one of the two at a time.
   return (
-    <ToolPage icon={<EnvelopeSimpleIcon size={18} />} title="Mail" view={narrow ? undefined : views}
+    <ToolPage icon={<EnvelopeSimpleIcon size={18} />} title="Mail" view={controls.view} below={controls.below}
       actions={(
         <>
-          {!narrow && search}
-          {!narrow && addresses}
+          {controls.inBar}
           <Button variant="primary" size="sm" data-mail-compose aria-label="Compose" className={ICON_ON_PHONE} onClick={() => setComposing(true)}><NotePencilIcon size={15} /><span className="max-sm:hidden">Compose</span></Button>
         </>
       )}
-      below={narrow && <div className="p-tool-row">{views}{search}{addresses}</div>}>
+>
       <section className={`min-w-0 overflow-y-auto p-border lg:w-[400px] lg:shrink-0 lg:border-r ${opened === null ? "flex-1 lg:flex-none" : "hidden lg:block"}`}>
         {navigation.error !== null && <p role="alert" className="px-4 pt-3 p-row-text p-danger">{navigation.error}</p>}
         {waiting ? <div data-mail-no-assistant className="flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">

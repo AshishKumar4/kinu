@@ -77,7 +77,7 @@ export function Page({ icon, back, title, actions, fill = false, rule, children,
  * chat bar's 46 px band, not a page's header. The tool's icon and name at its left, then its view; its search, filter and
  * primary at its right, every control 28 high. A hairline under it, since the tool's columns meet it.
  */
-export function ToolBar({ icon, title, view, actions }: { icon: ReactNode; title: string; view?: ReactNode; actions?: ReactNode }) {
+function ToolBar({ icon, title, view, actions }: { icon: ReactNode; title: string; view?: ReactNode; actions?: ReactNode }) {
   return (
     <header className="p-tool-bar" data-tool-bar>
       <span className="flex shrink-0 p-text-3 [&>svg]:size-[18px]" aria-hidden>{icon}</span>

@@ -177,6 +177,27 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
   );
 }
 
+/** Below `lg`, the places as the row under the bar; with one place there is nothing to switch. */
+function PlacesRow({ tab, places, unseen }: { tab: DriveTab; places: readonly DriveTab[]; unseen: boolean }) {
+  if (places.length < 2) return null;
+
+  return <div className="p-tool-row lg:hidden"><PlaceSwitch tab={tab} places={places} unseen={unseen} /></div>;
+}
+
+/** The bar's right end: Shared's search, or My stuff's New; Slates has neither. */
+function BarActions({ tab, search, primary }: {
+  tab: DriveTab; search: { readonly query: string; readonly set: (query: string) => void }; primary: ReactNode;
+}) {
+  if (tab === "mine") return primary;
+
+  if (tab !== "shared") return null;
+
+  return (
+    <input value={search.query} onChange={(event) => search.set(event.target.value)} placeholder="Search shared" aria-label="Search shared"
+      data-drive-search className={`${inputCls} h-7 w-60 min-w-0 shrink rounded-[var(--r-control)] py-0`} />
+  );
+}
+
 /** Where in My stuff the page is: the crumbs under a folder, and the root's line; nothing on another place. */
 function DriveHead({ tab, path, subtitle }: { tab: DriveTab; path: string; subtitle: ReactNode }) {
   const isRoot = path === "/";
@@ -957,29 +978,21 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const builtin = contents.builtins.find((name) => name === search.get("skill"));
   const subtitle = subtitleOf(tab, path);
 
-  const searchShared = (
-    <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search shared" aria-label="Search shared"
-      data-drive-search className={`${inputCls} h-7 w-60 min-w-0 shrink rounded-[var(--r-control)] py-0`} />
-  );
-
   // A tool (design review 2026-10-20, A2): the chat bar's band, the places column from `lg` (below it, the places are the
   // row under the bar), and the content padded 24 inside its own column.
   return (
-    <ToolPage icon={<HardDrivesIcon size={18} />} title="Drive" actions={(
-      <>
-        {tab === "shared" && searchShared}
-        {tab === "mine" && (
-          <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
-            onFolder={(picks) => { if (picks.length > 0) uploadPicked(picks); }}
-            onZip={(file) => {
-              const unpacked = file.name.replace(/\.zip$/iu, "");
+    <ToolPage icon={<HardDrivesIcon size={18} />} title="Drive" below={<PlacesRow tab={tab} places={places} unseen={unseen} />} actions={(
+      <BarActions tab={tab} search={{ query, set: setQuery }} primary={(
+        <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
+          onFolder={(picks) => { if (picks.length > 0) uploadPicked(picks); }}
+          onZip={(file) => {
+            const unpacked = file.name.replace(/\.zip$/iu, "");
 
-              transfer({ folder: path, name: file.name, size: file.size, lands: unpacked }, (watch) => uploadZip(joinDir(path, unpacked), file, watch));
-            }}
-            onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
-        )}
-      </>
-    )} below={places.length > 1 && <div className="p-tool-row lg:hidden"><PlaceSwitch tab={tab} places={places} unseen={unseen} /></div>}>
+            transfer({ folder: path, name: file.name, size: file.size, lands: unpacked }, (watch) => uploadZip(joinDir(path, unpacked), file, watch));
+          }}
+          onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
+      )} />
+    )}>
       <DriveColumn tab={tab} path={path} shown={lastValue(listing.resource)} places={places} unseen={unseen} />
       <div className="min-w-0 flex-1 overflow-y-auto">
       <div className="p-5 pb-20 sm:p-6 sm:pb-20">
