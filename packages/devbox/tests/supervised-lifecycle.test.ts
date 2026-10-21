@@ -536,6 +536,50 @@ describe('a supervised process that runs as a job', () => {
     expect(told(rows)).toEqual([expect.objectContaining({ stage: 'process-restored', processId: 'dev-server', job: 'bgjob-dev-server' })]);
   });
 
+  // Review of the computer process jobs, 2026-10-21: an end with no output carried an empty reason, which the workspace's
+  // incident schema refuses, so the end was never delivered.
+  test('a process that wrote nothing ends told with a reason that says so', async () => {
+    const { box, container, rows } = harness(Devbox);
+    const { processId } = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-quiet' });
+
+    container.files.set(`/var/tmp/devbox/processes/${processId}/exit`, '0');
+    await box.devboxHeartbeat();
+
+    expect(told(rows)).toEqual([expect.objectContaining({ stage: 'process-ended', job: 'bgjob-quiet', exitCode: 0, reason: 'it ended, and wrote nothing' })]);
+  });
+
+  // Review, 2026-10-21: a stop removed the spec without telling its end, so its job ran on forever.
+  test('a job process the agent stops is told ended, as stopped', async () => {
+    const { box, rows } = harness(Devbox);
+    const { processId } = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-stopped' });
+
+    expect(await box.stopSupervised(processId)).toEqual({ stopped: true });
+
+    expect(told(rows)).toEqual([expect.objectContaining({ stage: 'process-ended', processId, job: 'bgjob-stopped', reason: expect.stringContaining('it was stopped') })]);
+    expect(await reservations(box)).toEqual([]);
+  });
+
+  // Review, 2026-10-21: a start of a command that still ran took its process for a second job, and the first never
+  // heard its end; a start after it ended overwrote its job before its end was told.
+  test('a start of a command that still runs answers its job; one after it ended tells the earlier end first', async () => {
+    const { box, container, rows } = harness(Devbox);
+    const first = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-first' });
+
+    expect(await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-again' })).toEqual({ processId: first.processId, job: 'bgjob-first' });
+    expect(told(rows)).toEqual([]);
+
+    container.files.set(`/var/tmp/devbox/processes/${first.processId}/exit`, '1');
+    const second = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-second' });
+
+    expect(second).toEqual({ processId: first.processId, job: 'bgjob-second' });
+    expect(told(rows)).toEqual([expect.objectContaining({ stage: 'process-ended', job: 'bgjob-first', exitCode: 1 })]);
+
+    // The successor runs: a beat after it retires nothing of it, and tells nothing more.
+    await box.devboxHeartbeat();
+    expect(told(rows)).toHaveLength(1);
+    expect(await reservations(box)).toEqual([first.processId]);
+  });
+
   test('a process that runs as no job is not told, and keeps its spec for the restore', async () => {
     const { box, container, rows } = harness(Devbox);
     const { processId } = await box.startSupervised(COMMAND);

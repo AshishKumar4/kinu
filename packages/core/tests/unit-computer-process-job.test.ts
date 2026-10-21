@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
   BackgroundJobRunner, BackgroundJobStore, createSandboxExecutor, initBackgroundJobsTable, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS,
-  WORKSPACE_ROOT, type ComputerProcessEnd, type ExecutorProviderSurface, type SandboxHandle,
+  WORKSPACE_ROOT, ComputerProcessEnds, jobState, type ExecutorProviderSurface, type SandboxHandle,
 } from '../src/index';
 import { executorNamespace, routedByCwd } from '../src/tools/executor-operations';
 import { serveFile } from '../src/tools/file-operations';
@@ -52,18 +52,19 @@ function actorJobs() {
   return { runner: new BackgroundJobRunner({ store, fiber, inbox: hostDeliveries(host).signals }), store, woke, settled: () => Promise.all(runs) };
 }
 
-/** A computer whose box starts one process and whose end the test tells, as the box's heartbeat would. */
-function computerBox() {
+/**
+ * A computer whose box starts one process, and the workspace's register its end is told to, as the box's heartbeat tells
+ * it (`ComputerProcessEnds`, over the actor's own job rows). `runs`: the job an earlier start of the same command still
+ * runs as, which the box answers.
+ */
+function computerBox(jobs: ReturnType<typeof actorJobs>, runs?: string) {
   const starts: { command: string; job: string | undefined; stamp: string | undefined }[] = [];
   const stopped: string[] = [];
-  const ends = new Map<string, { promise: Promise<ComputerProcessEnd>; resolve(end: ComputerProcessEnd): void }>();
 
-  const endOf = (jobId: string) => {
-    const known = ends.get(jobId) ?? Promise.withResolvers<ComputerProcessEnd>();
-    ends.set(jobId, known);
-
-    return known;
-  };
+  const ends = new ComputerProcessEnds({
+    state: (jobId) => jobState(jobs.store.get(jobId)?.status),
+    complete: (jobId, end) => jobs.runner.complete(jobId, { processId: 'proc-dev', ...end }),
+  });
 
   const handle: SandboxHandle = {
     ...sandboxHandleLifecycle,
@@ -71,7 +72,7 @@ function computerBox() {
     startSupervisedProcess: async (command, opts) => {
       starts.push({ command, job: opts?.job, stamp: opts?.env?.[JOB_STAMP_ENV] });
 
-      return { processId: 'proc-dev' };
+      return { processId: 'proc-dev', ...((runs ?? opts?.job) !== undefined && { job: runs ?? opts?.job }) };
     },
     stopSupervisedProcess: async (processId) => {
       stopped.push(processId);
@@ -83,43 +84,72 @@ function computerBox() {
     unexposePort: async () => {}, getExposedPorts: async () => [],
   };
 
-  return { handle, starts, stopped, end: (jobId: string, end: ComputerProcessEnd) => { endOf(jobId).resolve(end); }, ended: async (jobId: string) => await endOf(jobId).promise };
+  const processJobs = { adopt: (request: Parameters<typeof jobs.runner.adopt>[0]) => jobs.runner.adopt(request), ended: (jobId: string) => ends.ended(jobId) };
+
+  return { handle, starts, stopped, ends, processJobs };
 }
 
 const Started = v.object({ processId: v.string(), jobId: v.string() });
 
 describe("the computer's startProcess, each process a job of the actor's", () => {
-  test('starts as its job, named on its spec and in its variables; its end completes the job and wakes the agent', async () => {
+  // Review of the computer process jobs, 2026-10-21: the end was asked before the job's row existed, and the register
+  // read that as settled, so every job completed at its start, empty, while its process ran.
+  test('starts as its job, which runs while its process does; its end completes it and wakes the agent once', async () => {
     const jobs = actorJobs();
-    const box = computerBox();
-    const computer = createSandboxExecutor(box.handle, { processJobs: { adopt: (request) => jobs.runner.adopt(request), ended: box.ended } });
+    const box = computerBox(jobs);
+    const computer = createSandboxExecutor(box.handle, { processJobs: box.processJobs });
 
     const { processId, jobId } = v.parse(Started, await computer.tools.startProcess.execute('npm run dev', { cwd: '/workspace/app' }));
+    await Promise.resolve();
 
     expect({ processId, starts: box.starts }).toEqual({ processId: 'proc-dev', starts: [{ command: 'npm run dev', job: jobId, stamp: jobId }] });
     expect(jobs.store.get(jobId)).toMatchObject({ kind: 'startProcess', status: 'running' });
     expect(jobs.woke).toEqual([]);
 
-    box.end(jobId, { exitCode: 1, tail: 'Error: listen EADDRINUSE: address already in use :::3000\n' });
+    await box.ends.record(jobId, { exitCode: 1, tail: 'Error: listen EADDRINUSE: address already in use :::3000\n' });
     await jobs.settled();
 
     expect(jobs.store.get(jobId)).toMatchObject({ status: 'completed', result: expect.stringContaining('EADDRINUSE') });
     expect(jobs.woke.map((turn) => turn.text)).toEqual([expect.stringContaining(`Background startProcess job ${jobId} completed`)]);
   });
 
+  // Review, 2026-10-21: the incident was acknowledged when the end reached the waiting promise, before any row held it;
+  // a restart then lost the end, and its resume waited for one that never came again.
+  test('an end told is on the job row before the telling answers', async () => {
+    const jobs = actorJobs();
+    const box = computerBox(jobs);
+    const computer = createSandboxExecutor(box.handle, { processJobs: box.processJobs });
+    const { jobId } = v.parse(Started, await computer.tools.startProcess.execute('npm run dev'));
+
+    await box.ends.record(jobId, { exitCode: 0, tail: 'ready\n' });
+
+    expect(jobs.store.get(jobId)).toMatchObject({ status: 'completed', result: expect.stringContaining('ready') });
+  });
+
   test('a process no job takes is stopped, and the call says it ran and was stopped', async () => {
     const jobs = actorJobs();
-    const box = computerBox();
+    const box = computerBox(jobs);
 
     for (let n = 0; n < MAX_CONCURRENT_DETACHED_JOBS; n += 1) jobs.runner.create('shell', { command: 'sleep' }, 'build', new AbortController());
-    const computer = createSandboxExecutor(box.handle, { processJobs: { adopt: (request) => jobs.runner.adopt(request), ended: box.ended } });
+    const computer = createSandboxExecutor(box.handle, { processJobs: box.processJobs });
 
     expect(await computer.tools.startProcess.execute('npm run dev')).toMatchObject({ success: false, reason: 'cancelled', error: expect.stringContaining('stopped') });
     expect(box.stopped).toEqual(['proc-dev']);
   });
 
+  // Review, 2026-10-21: a start of a command still running reused its process and took it for a second job, so the
+  // first never heard its end.
+  test('a start of a command that still runs as a job answers that job, and makes no second', async () => {
+    const jobs = actorJobs();
+    const box = computerBox(jobs, 'bgjob-earlier');
+    const computer = createSandboxExecutor(box.handle, { processJobs: box.processJobs });
+
+    expect(await computer.tools.startProcess.execute('npm run dev')).toEqual({ processId: 'proc-dev', jobId: 'bgjob-earlier' });
+    expect(jobs.store.list(20).filter((job) => job.kind === 'startProcess')).toEqual([]);
+  });
+
   test('without the actor\'s jobs, a process is no job, as before', async () => {
-    const box = computerBox();
+    const box = computerBox(actorJobs());
     const computer = createSandboxExecutor(box.handle);
 
     expect(await computer.tools.startProcess.execute('npm run dev')).toEqual({ processId: 'proc-dev' });
@@ -131,7 +161,7 @@ describe("the computer's startProcess, each process a job of the actor's", () =>
 // computer's starts on the computer, through its own member, in its own terms; the workspace's member is not asked.
 describe("a program's workspace.startProcess", () => {
   test("whose cwd is the computer's starts there, in the computer's terms; any other starts in the workspace", async () => {
-    const box = computerBox();
+    const box = computerBox(actorJobs());
     const computerFiles = createMemoryVfs().vfs;
     await seedFiles(computerFiles, { '/workspace/app/package.json': '{}' });
     const mounted = withMountTable(createMemoryVfs().vfs, standardMounts((name) => (name === 'computer' ? { files: computerFiles, isAvailable: () => true } : undefined)));

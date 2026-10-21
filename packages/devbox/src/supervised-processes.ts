@@ -17,17 +17,23 @@ export type SupervisedStop =
   | { readonly kind: 'stop'; readonly processId: string }
   | { readonly kind: 'native-stop'; readonly processId: string };
 
-type Request = SupervisedStart | SupervisedStop;
+/** A job's process looked at under its reservation: its end told and its spec gone if it has ended. */
+export type SupervisedReap = { readonly kind: 'reap'; readonly spec: SupervisedProcessSpec };
 
-type Started = { readonly kind: 'started'; readonly process: ProcessRecord };
+type Request = SupervisedStart | SupervisedStop | SupervisedReap;
+
+/** `job`: the job the process runs as, which may be an earlier start's: a live run keeps the job it was started as. */
+type Started = { readonly kind: 'started'; readonly process: ProcessRecord; readonly job?: string };
 
 type Stopped = { readonly kind: 'stopped'; readonly stopped: boolean };
+
+type Reaped = { readonly kind: 'reaped'; readonly ended: boolean };
 
 const STALE = { kind: 'stale' } as const;
 
 const REBIND = { kind: 'rebind' } as const;
 
-type Outcome = Started | Stopped | typeof STALE;
+type Outcome = Started | Stopped | Reaped | typeof STALE;
 
 export interface ReservationContext {
   readonly generation: number;
@@ -42,6 +48,16 @@ interface Ports {
   readonly failedStop: (processId: string, cause: DevboxError) => Promise<void>;
   /** The values a job its owner started may read, asked at each of its launches and handed over in memory only. */
   readonly revealed: () => Promise<Readonly<Record<string, string>>>;
+  /**
+   * A process that runs as a job has ended, or is about to be forgotten: its end is told to the workspace while its spec
+   * still names the job. `process` is its record, null where there is none; `why` says what ended it, where not itself.
+   */
+  readonly ended: (spec: SupervisedProcessSpec & { readonly job: string }, process: ProcessRecord | null, why?: string) => Promise<void>;
+}
+
+/** A run's answer, with the job its reservation names, if it runs as one. */
+function startedAs(process: ProcessRecord, owner: SupervisedProcessSpec | undefined): Started {
+  return owner?.job === undefined ? { kind: 'started', process } : { kind: 'started', process, job: owner.job };
 }
 
 /** Native id plus the durable request's generation. A new request with the same command is not the old owner. */
@@ -64,13 +80,20 @@ export class SupervisedProcesses {
     return [...(await this.ports.storage.list<SupervisedProcessSpec>({ prefix: SUPERVISED_SPEC_PREFIX })).values()];
   }
 
-  /** A stopped computer's job, ended without starting it: its spec goes, so no restore runs it again. */
-  async forget(processId: string): Promise<void> {
+  /**
+   * A stopped computer's job, ended without starting it: its spec goes, so no restore runs it again. One that runs as a
+   * background job has its end told first, while its spec still names the job.
+   */
+  async forget(processId: string, why: string): Promise<void> {
+    const spec = await this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${processId}`);
+
+    if (spec?.job !== undefined) await this.ports.ended({ ...spec, job: spec.job }, null, why);
     await this.ports.storage.delete(`${SUPERVISED_SPEC_PREFIX}${processId}`);
   }
 
   run(request: SupervisedStart, context?: ReservationContext): Promise<Started | typeof STALE>;
   run(request: SupervisedStop, context?: ReservationContext): Promise<Stopped | typeof STALE>;
+  run(request: SupervisedReap, context?: ReservationContext): Promise<Reaped | typeof STALE>;
   run(request: Request, context?: ReservationContext): Promise<Outcome> {
     return settle(Effect.gen({ self: this }, function* () {
       const generation = context === undefined ? this.ports.generation() : context.generation;
@@ -86,7 +109,7 @@ export class SupervisedProcesses {
 
         let seen: SupervisedProcessSpec | undefined;
 
-        if (request.kind === 'restore') seen = request.spec;
+        if (request.kind === 'restore' || request.kind === 'reap') seen = request.spec;
         else if (request.kind !== 'start') seen = yield* attempt('io', () => this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${request.processId}`));
 
         if (!current()) return STALE;
@@ -95,7 +118,7 @@ export class SupervisedProcesses {
 
         if (request.kind === 'start') scopes = supervisedScope(request.command, request.cwd, kernel);
         else {
-          const processId = request.kind === 'restore' ? request.spec.processId : request.processId;
+          const processId = request.kind === 'restore' || request.kind === 'reap' ? request.spec.processId : request.processId;
 
           scopes = seen === undefined ? processScope(processId, kernel) : [
             ...processScope(seen.processId, kernel), ...supervisedScope(seen.command, seen.cwd ?? DEVBOX_WORKDIR, kernel),
@@ -122,28 +145,43 @@ export class SupervisedProcesses {
         if (!current()) return STALE;
 
         if (owner === undefined) known = false;
+        const ownerJob = owner?.job;
+
+        // A run that is a job's keeps it: a live one is that job's still, and answers it, with nothing rewritten; an
+        // ended one has its end told before a new start takes its id.
+        if (owner !== undefined && ownerJob !== undefined) {
+          const was = owner;
+          const run = yield* attempt('process', () => native.get(was.processId));
+
+          if (!current()) return STALE;
+
+          if (run !== null && isProcessLive(run.status)) return { kind: 'started', process: run, job: ownerJob };
+          yield* attempt('io', () => this.ports.ended({ ...was, job: ownerJob }, run));
+        }
 
         // A re-issue keeps its id and takes the variables and the starter it was asked with, for this start and every
         // restart after.
         const reserved: SupervisedProcessSpec = {
           processId: crypto.randomUUID(), createdAt: Date.now(), ...owner, command: request.command, cwd: request.cwd, env: request.env, reveal: request.reveal,
-          ...(request.job !== undefined && { job: request.job }),
+          ...(request.job === undefined ? { job: undefined } : { job: request.job }),
         };
 
         owner = reserved;
 
         yield* attempt('io', () => this.ports.storage.put(`${SUPERVISED_SPEC_PREFIX}${reserved.processId}`, reserved));
       } else {
-        const processId = request.kind === 'restore' ? request.spec.processId : request.processId;
+        const processId = request.kind === 'restore' || request.kind === 'reap' ? request.spec.processId : request.processId;
 
         owner = yield* attempt('io', () => this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${processId}`));
 
         if (!current()) return STALE;
 
-        if (!sameReservation(seen, owner)) return request.kind === 'restore' ? STALE : REBIND;
+        if (!sameReservation(seen, owner)) return request.kind === 'restore' || request.kind === 'reap' ? STALE : REBIND;
       }
 
       if (!current()) return STALE;
+
+      if (request.kind === 'reap') return yield* this.reap(request, owner, current, native);
 
       return yield* (request.kind === 'stop' || request.kind === 'native-stop'
         ? this.stop(request, owner, current, native) : this.start(request, owner, current, { known, native }));
@@ -166,7 +204,7 @@ export class SupervisedProcesses {
         if (!current() || !sameReservation(owner, held)) return STALE;
       }
 
-      if (existing !== null && isProcessLive(existing.status)) return { kind: 'started', process: existing };
+      if (existing !== null && isProcessLive(existing.status)) return startedAs(existing, owner);
       const command = request.kind === 'restore' ? request.spec.command : request.command;
       const cwd = request.kind === 'restore' ? request.spec.cwd ?? DEVBOX_WORKDIR : request.cwd;
       const env = request.kind === 'native-start' ? undefined : owner?.env;
@@ -188,7 +226,28 @@ export class SupervisedProcesses {
         return yield* Effect.fail(started.failure);
       }
 
-      return current() ? { kind: 'started', process: started.success } : STALE;
+      return current() ? startedAs(started.success, owner) : STALE;
+    });
+  }
+
+  /**
+   * A job's process, read under its reservation, which a start or stop of it holds too: one that has ended has its end
+   * told and its spec removed; a live one is left. A spec a later start rewrote is not this reap's (D105).
+   */
+  private reap(request: SupervisedReap, owner: SupervisedProcessSpec | undefined, current: () => boolean, native: Processes): Effect.Effect<Reaped | typeof STALE, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const job = owner?.job;
+
+      if (owner === undefined || job === undefined || job !== request.spec.job) return STALE;
+      const run = yield* attempt('process', () => native.get(owner.processId));
+
+      if (!current()) return STALE;
+
+      if (run !== null && isProcessLive(run.status)) return { kind: 'reaped', ended: false };
+      yield* attempt('io', () => this.ports.ended({ ...owner, job }, run));
+      yield* attempt('io', () => this.ports.storage.delete(`${SUPERVISED_SPEC_PREFIX}${owner.processId}`));
+
+      return { kind: 'reaped', ended: true };
     });
   }
 
@@ -212,6 +271,15 @@ export class SupervisedProcesses {
         const held = yield* attempt('io', () => this.ports.storage.get<SupervisedProcessSpec>(`${SUPERVISED_SPEC_PREFIX}${request.processId}`));
 
         if (!current() || !sameReservation(owner, held)) return STALE;
+        const job = held?.job;
+
+        // Told while the spec still names its job: once it is gone, nothing could say whose end this was.
+        if (held !== undefined && job !== undefined) {
+          const run = yield* attempt('process', () => native.get(request.processId));
+
+          yield* attempt('io', () => this.ports.ended({ ...held, job }, run, 'it was stopped'));
+        }
+
         yield* attempt('io', () => this.ports.storage.delete(`${SUPERVISED_SPEC_PREFIX}${request.processId}`));
       }
 

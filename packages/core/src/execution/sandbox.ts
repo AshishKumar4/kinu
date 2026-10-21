@@ -94,8 +94,9 @@ export interface SandboxHandle {
    * restart. `reveal`: the owner started it, so at each start and restart the box asks the account for the values this
    * workspace's agents may read, and the process holds them in memory only.
    */
+  /** Answers `job` where the process runs as one: an earlier start's, when the same command still runs. */
   startSupervisedProcess(command: string, opts?: { cwd?: string; env?: Readonly<Record<string, string>>; reveal?: boolean; job?: string }):
-    Promise<{ processId: string }>;
+    Promise<{ processId: string; job?: string }>;
   stopSupervisedProcess(processId: string): Promise<{ stopped: boolean }>;
   /** What a supervised job wrote most recently, both streams as its terminal showed them. */
   supervisedProcessLogs(processId: string, limits: { readonly lines?: number | undefined; readonly bytes?: number | undefined }): Promise<string>;
@@ -447,6 +448,9 @@ function startProcessMember({ handle, touch, environment, processJobs }: Compute
           });
 
           if (processJobs === undefined || jobId === undefined) return { processId: started.processId };
+
+          // The same command still runs as an earlier start's job: it is that job's, and no second is made of it.
+          if (started.job !== undefined && started.job !== jobId) return { processId: started.processId, jobId: started.job };
 
           return await adoptedProcess({ handle, touch, jobs: processJobs, jobId, command, cwd, processId: started.processId });
         } catch (err) {

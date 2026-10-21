@@ -1,5 +1,5 @@
 import { Cause, Effect, Exit } from 'effect';
-import { ComputerProcessEnds } from '@kinu.run/core';
+import { ComputerProcessEnds, jobState } from '@kinu.run/core';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
 /**
@@ -1899,7 +1899,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** Where this object's actors' computer processes run as jobs end (`ComputerProcessEnds`). */
   protected get processEnds(): ComputerProcessEnds {
     return this._processEnds ??= new ComputerProcessEnds({
-      running: (jobId) => this.jobRow(jobId)?.status === 'running',
+      state: (jobId) => jobState(this.jobRow(jobId)?.status),
       // The end is the job's own outcome: its row settles with it, through the runner that holds the job.
       complete: async (jobId, end) => {
         const row = this.jobRow(jobId);

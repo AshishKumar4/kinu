@@ -1079,7 +1079,7 @@ export {
 
 export { computerProcessResume, stopComputerProcessJob } from './jobs/computer-process';
 
-export { ComputerProcessEnds, type ComputerProcessJobRows } from './execution/computer-process-ends';
+export { ComputerProcessEnds, jobState, type ComputerProcessJobRows, type ComputerProcessJobState } from './execution/computer-process-ends';
 
 export {
   DESKTOP_MEMBERS,

@@ -743,9 +743,12 @@ export class BackgroundJobRunner {
   async complete(jobId: string, result: JsonValue): Promise<void> {
     const job = this.deps.store.get(jobId);
 
-    if (job?.status !== 'running') return;
-
-    if (this.deps.store.settle(jobId, job.epoch, serializeJobResult({ value: result }), Date.now())) await this.wake(jobId);
+    if (job?.status !== 'running' || !this.deps.store.settle(jobId, job.epoch, serializeJobResult({ value: result }), Date.now())) return;
+    // As a settle by its own promise: its work is accounted, and its agent woken once.
+    this.interrupted.delete(jobId);
+    this.deps.logActivity?.('bg_job_settled', `${jobId} completed`);
+    this.notifySettled(jobId);
+    await this.wake(jobId);
   }
 
   /**
