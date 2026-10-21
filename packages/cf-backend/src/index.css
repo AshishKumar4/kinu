@@ -147,6 +147,11 @@ html, body, #root {
   --layout-rail-list: 13rem minmax(0, 1fr);
   /* A drawer's width beside the page it opens over. */
   --layout-drawer: min(640px, 92vw);
+  /* The file list's columns: icon, name, then size and age in one cell, or a column each from 26rem; its tiles, as many
+     as fit at their least. */
+  --layout-files-row: 1rem minmax(0, 1fr) auto;
+  --layout-files-row-wide: 1rem minmax(0, 1fr) 4.5rem 4rem;
+  --layout-files-tiles: repeat(auto-fill, minmax(6.5rem, 1fr));
 
   /* motion */
   --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
@@ -621,6 +626,21 @@ body { background: var(--c-bg); color: var(--c-text); }
   border-radius: var(--r-card); box-shadow: var(--shadow-overlay);
 }
 
+/* Entries (ui/Entries.tsx): a tool pane's items. The open one on the fill with its name at the item weight; the keys'
+   cursor on it only while the list has the keyboard; what is hidden dimmed. */
+.p-entry { cursor: pointer; color: var(--c-text-2); transition: background-color var(--dur-state) ease-out; }
+.p-entry:hover { background: var(--c-hover); color: var(--c-text); }
+.p-entry[data-open], .group\/list:focus-visible .p-entry[data-cursor] { background: var(--c-fill); color: var(--c-text); }
+.p-entry[data-open] .t-body { font-weight: 500; }
+.p-entry[data-hidden] [data-entry-face] { opacity: 0.55; }
+.p-entry-tile { border-radius: var(--r-row); }
+.p-entry-inert, .p-entry-inert:hover { cursor: default; background: none; color: var(--c-text-3); }
+.p-entries-head { position: sticky; top: 0; z-index: 10; border-bottom: 1px solid var(--c-border); background: var(--c-sidebar); color: var(--c-text-3); }
+[data-tree-row] { display: flex; align-items: center; gap: 4px; padding: 1px 8px 1px calc(8px + var(--tree-depth, 0) * 12px); font: 400 12px/16px var(--font-ui); }
+.p-tree-gap { width: 14px; flex-shrink: 0; }
+.p-tree-fold { display: flex; flex-shrink: 0; padding: 0; border: 0; background: none; color: var(--c-text-3); cursor: pointer; }
+.p-tree-fold:hover { color: var(--c-text); }
+
 /* Rail (ui/Rail.tsx): a strip of the tabs above below its breakpoint, fading at its scrolling edge; a column of rows
    from it up, the open row on the selected ground. */
 .p-rail { display: flex; border-bottom: 1px solid var(--c-border); mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }
@@ -861,6 +881,9 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* A field with words inside its edge around the value (TextInput's before and after); the box takes the focus ring. */
 .p-field-affixed { display: flex; align-items: center; gap: 8px; cursor: text; }
 .p-field-affixed[data-invalid] { border-color: var(--c-danger); }
+/* A bare field (TextInput and TextArea `bare`): drawn into its surface, which owns its edge; the value and placeholder only. */
+:where(.p-field-surface) { width: 100%; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--c-text); font: inherit; outline: none; resize: none; }
+.p-field-surface::placeholder { color: var(--c-text-3); }
 .p-field-bare, .p-field-bare:focus-visible { min-width: 0; flex: 1; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: inherit; outline: none; }
 .p-select {
   width: 100%; border-radius: var(--r-control) !important; border: 1px solid var(--c-field-border) !important;
