@@ -389,6 +389,8 @@ export class FakeSandbox {
   readonly unownedStdin: string[] = [];
   /** The words the next kill of every process refuses with, exit 1, as a kill that cannot parse its arguments does. */
   stopKillRefusal: string | undefined;
+  /** The exit the next kill of every process answers once it ended the container, as one ended with it (137). */
+  stopKillExit = 0;
   /** Each exec answered with a pipe nobody has closed yet: the box closes every one it owns before it answers. */
   readonly openStdin: string[] = [];
   /** Thrown by the next close of an exec's stdin, as by a connection lost after the exec answered. */
@@ -1158,6 +1160,11 @@ export class FakeSandbox {
 
       if (read.status !== 0) return processResult(Promise.resolve({ stdout: '', stderr: read.stderr.toString(), exitCode: read.status ?? 1 }), pid);
       void this.stop().then(this.#ended.resolve, this.#ended.reject);
+      const exitCode = this.stopKillExit;
+
+      this.stopKillExit = 0;
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode }), pid);
     } else if (args[1] === '-KILL') {
       this.#live.get(Number(args[2]))?.kill(9);
     }

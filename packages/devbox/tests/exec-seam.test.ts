@@ -43,6 +43,17 @@ test('a stop whose kill refuses fails in the kill\'s own words, and the containe
     .toEqual({ failed: expect.stringContaining('kill -TERM -- -1 exited 1: /usr/bin/kill: failed to parse argument'), running: true });
 });
 
+// A golden container, 2026-10-21: the kill went with the container it ended, exit 137, and the stop read that as refused.
+test('a stop whose kill ends with the container it ended answers, the container ended', async () => {
+  const { box, container } = harness(TestDevbox);
+
+  await box.devboxStartup();
+  container.stopKillExit = 137;
+  await box.stop();
+
+  expect(container.running.running).toBe(false);
+});
+
 // Reviews of 977bf090f: the SDK's `Files` ran its shim on the bare container, each exec with no stdin of the box's.
 test("a box's file and process calls reach its container through the seam, and every pipe the box owns is closed", async () => {
   const { box, container } = harness(TestDevbox);
