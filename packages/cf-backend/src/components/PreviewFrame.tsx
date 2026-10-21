@@ -29,7 +29,7 @@ export function PreviewChrome({ url, publicLink }: { url: string; publicLink?: P
   return (
     <PreviewAddress url={url}>
       {publicLink !== undefined && <PublicLinkSwitch key={url} link={publicLink} />}
-      <CopyButton value={url} what="the preview URL" size={11} className="p-text-3 hover:p-text p-1 shrink-0" />
+      <CopyButton value={url} what="the preview URL" className="shrink-0" />
       <a href={url} target="_blank" rel="noopener noreferrer" className="p-text-3 hover:p-text p-1 shrink-0" title="Open in new tab"><ArrowSquareOutIcon size={11} /></a>
     </PreviewAddress>
   );

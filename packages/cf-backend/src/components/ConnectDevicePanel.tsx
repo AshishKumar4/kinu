@@ -110,7 +110,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
           <code data-connect-command className="t-code p-text flex-1 break-all select-all">
             {state.command}
           </code>
-          <CopyButton value={state.command} what="the connect command" size={13} className="p-text-3 hover:p-text shrink-0" />
+          <CopyButton value={state.command} what="the connect command" className="shrink-0" />
         </div>
         <div data-connect-waiting className="t-meta flex items-center gap-2 p-text-3">
           <Loader size="sm" /> Waiting for this machine. This panel closes when it connects.

@@ -2,7 +2,7 @@
 import { Effect } from 'effect';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Loader } from "@/components/ui/Loader";
-import { Button, buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 import {
   CaretDownIcon, CaretRightIcon, FileDashedIcon, GlobeIcon, IdentificationCardIcon, PackageIcon, SquaresFourIcon, StopCircleIcon, UserCircleIcon,
   UsersIcon,
@@ -754,7 +754,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
           ) : (
             <div className="flex items-center gap-2">
               <a href={created.url} className="min-w-0 flex-1 break-all font-mono p-accent-fg" target="_blank" rel="noopener noreferrer">{created.url}</a>
-              <CopyButton value={created.url} what="the share link" className={buttonClass({ size: "sm", iconOnly: true })} />
+              <CopyButton variant="secondary" value={created.url} what="the share link" />
             </div>
           )}
         </div>

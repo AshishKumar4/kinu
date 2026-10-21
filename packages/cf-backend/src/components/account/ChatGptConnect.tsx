@@ -159,7 +159,7 @@ function OnYourPc({ plan, onDone, onGaveUp, onFailed }: {
           <a href={signIn.authorizeUrl} target="_blank" rel="noopener noreferrer" className={buttonClass({ size: "sm" })}>
             <ArrowSquareOutIcon size={12} /> Open ChatGPT sign-in
           </a>
-          <CopyButton value={signIn.authorizeUrl} what="the sign-in link" size={13} className={buttonClass({ size: "sm", iconOnly: true })} />
+          <CopyButton variant="secondary" value={signIn.authorizeUrl} what="the sign-in link" />
         </div>
         <p className="t-meta flex items-center gap-2 p-text-3"><Loader size="sm" /> Waiting for the sign-in to finish on {signIn.device.label}…</p>
       </div>

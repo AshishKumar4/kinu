@@ -3,16 +3,12 @@ import { useState, useCallback } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
-import {
-  LightningIcon, CheckIcon,
-  PlusIcon, TrashIcon, WarningIcon, PlugIcon,
-} from "@phosphor-icons/react";
+import { LightningIcon, PlusIcon, TrashIcon, WarningIcon, PlugIcon } from "@phosphor-icons/react";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { SECRET_REGION, SecretValue } from "@/components/ui/SecretValue";
 import { Modal } from "@/components/ui/Modal";
-import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { StatusDot, type StatusTone } from "@/components/ui/Status";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
@@ -21,6 +17,12 @@ import { showing, detach } from '@kinu.run/core/obs';
 import { dailyTimeOf } from "@kinu.run/core";
 import type { WorkspaceAnswer, WorkspaceRpc } from "@/lib/workspace-rpc";
 import { TextInput } from "@/components/ui/Field";
+import { Group } from "@/components/ui/Group";
+import { Chip } from "@/components/ui/Chip";
+import { CopyField } from "@/components/ui/CopyField";
+import { Preformatted } from "@/components/ui/Preformatted";
+import { Select } from "@/components/ui/Select";
+import { Card } from "@/components/ui/Card";
 
 type TriggerRow = WorkspaceAnswer<"listTriggers">["triggers"][number];
 
@@ -69,11 +71,11 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: WorkspaceRpc; wo
         : <div className="flex justify-center py-6"><Loader size="sm" /></div>)}
       {triggers !== null && triggers.length === 0 && <p className="t-meta p-text-3">No webhooks or timers yet. Use New webhook to let another system wake this agent.</p>}
       {triggers !== null && triggers.length > 0 && (
-        <div className="t-meta rounded-md border p-border overflow-hidden">
+        <Group>
           {triggers.map((t) => (
             <TriggerLine key={t.id} trigger={t} onRevoke={() => revoke(t.id)} rpc={rpc} onMoved={reload} />
           ))}
-        </div>
+        </Group>
       )}
 
       {showCreate && (
@@ -104,13 +106,18 @@ function DailyTime({ rpc, trigger, at, onMoved }: { rpc: WorkspaceRpc; trigger: 
   return (
     <span className="flex shrink-0 items-center gap-2" data-schedule-time={trigger.id}>
       <span className="p-text-3">each day at</span>
-      <input type="time" defaultValue={at} aria-label="Time of day" disabled={trigger.state === "revoked"}
-        onBlur={(event) => detach(move(event.target.value))} onKeyDown={(event) => detach(event.key === "Enter" ? move(event.currentTarget.value) : Effect.void)}
-        className="rounded-sm border p-border bg-transparent px-1 font-mono p-text-2" />
+      <TextInput size="sm" type="time" className="t-mono w-28" defaultValue={at} aria-label="Time of day" disabled={trigger.state === "revoked"}
+        onBlur={(event) => detach(move(event.target.value))} onKeyDown={(event) => detach(event.key === "Enter" ? move(event.currentTarget.value) : Effect.void)} />
       {failure !== null && <span className="p-danger" role="alert">{failure}</span>}
     </span>
   );
 }
+
+const AUTH_MODES: ReadonlyArray<{ value: v.InferOutput<typeof AuthModeSchema>; label: string }> = [
+  { value: "hmac", label: "HMAC (signed body)" },
+  { value: "bearer", label: "Bearer token (Authorization header)" },
+  { value: "mtls", label: "mTLS (client certificate)" },
+];
 
 function TriggerLine({ trigger, onRevoke, rpc, onMoved }: {
   trigger: TriggerRow; onRevoke: () => void; rpc: WorkspaceRpc; onMoved: () => void;
@@ -123,18 +130,17 @@ function TriggerLine({ trigger, onRevoke, rpc, onMoved }: {
   const daily = cron === null ? null : dailyTimeOf(cron);
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1 border-b p-border last:border-0">
+    <div className="t-meta flex items-center gap-2 py-1">
       <StatusDot tone={TRIGGER_TONE.get(trigger.state) ?? "neutral"} />
-      <span className="font-medium p-text-2 truncate max-w-40" title={label}>{label}</span>
+      <span className="t-item truncate max-w-40" title={label}>{label}</span>
       <span className="font-mono p-text-3 shrink-0">{trigger.kind}</span>
       {daily !== null && <DailyTime rpc={rpc} trigger={trigger} at={daily} onMoved={onMoved} />}
-      {cron !== null && daily === null && <code className="p-fill px-1 rounded-sm p-text-3 shrink-0">{cron}</code>}
+      {cron !== null && daily === null && <Chip><span className="t-mono">{cron}</span></Chip>}
       <span className="flex-1" />
       {trigger.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{trigger.fire_count} fires</span>}
       <span className="p-text-3 shrink-0">{trigger.state}</span>
       {url !== null && (
-        <CopyButton value={url} what="the webhook URL" size={11}
-          className="p-1 rounded-sm p-card-hover p-text-3 shrink-0" />
+        <CopyButton value={url} what="the webhook URL" className="shrink-0" />
       )}
       {url === null && isWebhook && (
         <span className="p-text-3 shrink-0"
@@ -196,43 +202,34 @@ export function NewWebhookCard({ result, onDismiss }: {
   const curl = curlCommand(url, result);
 
   return (
-    <div className="p-card p-5 space-y-3 border p-border mb-3">
-      <div className="flex items-center gap-2">
-        <CheckIcon size={16} className="p-success" />
-        <span className="t-label">Webhook created</span>
-        <button className="t-meta ml-auto p-text-3 hover:p-text" onClick={onDismiss}>Dismiss</button>
-      </div>
+    <div className="mb-3"><Card title="Webhook created" actions={<Button variant="ghost" size="sm" onClick={onDismiss}>Dismiss</Button>}>
       <p className="t-meta p-text-2">
         {result.secret ? "Save the secret now. Kinu shows it only once. " : ""}The URL works until you revoke this webhook.
       </p>
       <div className="space-y-2">
         <div>
           <div className="t-label mb-1">URL</div>
-          <div className="flex items-center gap-2">
-            <code className="t-meta t-mono p-fill px-2 py-1 rounded-sm flex-1 break-all">{url}</code>
-            <CopyButton value={url} what="the webhook URL" className="p-2 rounded-sm p-card p-card-hover" />
-          </div>
+          <CopyField value={url} what="the webhook URL" />
         </div>
         {result.secret && (
           <div>
             <div className="t-label mb-1">Secret <span className="p-danger">(shown once)</span></div>
             <div className="flex items-center gap-2">
-              <SecretValue value={result.secret}
-                className="t-meta t-mono p-fill px-2 py-1 rounded-sm flex-1 break-all" />
-              <CopyButton value={result.secret} what="the secret" className="p-2 rounded-sm p-card p-card-hover" />
+              <Preformatted className="flex-1"><SecretValue value={result.secret} /></Preformatted>
+              <CopyButton variant="secondary" value={result.secret} what="the secret" />
             </div>
           </div>
         )}
         <div>
           <div className="t-label mb-1">Test with curl</div>
-          <pre className="t-meta t-mono p-fill p-3 rounded-sm overflow-x-auto whitespace-pre">
+          <Preformatted wrap={false} className="p-3">
             {curl.before}
             {curl.secret !== null && <SecretValue value={curl.secret} />}
             {curl.after}
-          </pre>
+          </Preformatted>
         </div>
       </div>
-    </div>
+    </Card></div>
   );
 }
 
@@ -309,11 +306,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
         </label>
         <label className="block">
           <div className="t-meta p-text-2 mb-1">Authentication</div>
-          <select value={authMode} onChange={(e) => setAuthMode(v.parse(AuthModeSchema, e.target.value))} className={inputCls}>
-            <option value="hmac">HMAC (signed body)</option>
-            <option value="bearer">Bearer token (Authorization header)</option>
-            <option value="mtls">mTLS (client certificate)</option>
-          </select>
+          <Select label="Authentication" value={authMode} onChange={setAuthMode} options={AUTH_MODES} />
         </label>
         {authMode !== "mtls" && (
           <label className="block">

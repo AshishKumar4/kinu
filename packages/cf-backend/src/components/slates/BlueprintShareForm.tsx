@@ -2,7 +2,7 @@
 import { Effect } from 'effect';
 import { useCallback, useEffect, useState } from "react";
 import { Loader } from "@/components/ui/Loader";
-import { Button, buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 import * as v from "valibot";
 import { BlueprintInspectionSchema, SlateShareRecordSchema, blueprintPagePath, type BlueprintInspection, type SlateAnswer, type SlateShareRecord } from "@kinu.run/core";
 import { settleSync, showing, detach } from "@kinu.run/core/obs";
@@ -147,7 +147,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
           </Notice>
           <div className="flex items-center gap-2">
             <a href={blueprintPagePath(published.id)} className="min-w-0 flex-1 break-all font-mono p-accent-fg" target="_blank" rel="noopener noreferrer">{link}</a>
-            <CopyButton value={link} what="the blueprint link" className={buttonClass({ size: "sm", iconOnly: true })} />
+            <CopyButton variant="secondary" value={link} what="the blueprint link" />
           </div>
           {published.users.length > 0 && <p className="p-text-3">It is in the Drive of {published.users.join(", ")}.</p>}
         </div>

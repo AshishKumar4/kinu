@@ -242,7 +242,7 @@ function CloudflareSaid({ message, code }: { message: string; code: string }) {
     <Disclosure summary="Details">
       <div className="flex items-start gap-2 rounded-lg bg-[var(--c-sunken)] px-3 py-2.5">
         <p className="min-w-0 flex-1 t-code p-text-2">Cloudflare said: {message} <span className="p-text-3">{code}</span></p>
-        <CopyButton value={details} what="the details" className="p-text-3 hover:p-text shrink-0" />
+        <CopyButton value={details} what="the details" className="shrink-0" />
       </div>
     </Disclosure>
   );
@@ -817,7 +817,7 @@ function LiveScreen({ state, go }: { state: FlowState; go: Go }) {
         <h2 className="mt-3 t-page-title p-text">{relinked ? "A new setup link" : "Your Kinu is live"}</h2>
         <div className="mt-2 inline-flex max-w-full items-center gap-1.5">
           <span data-deploy-live-address className="truncate t-title p-text">{address}</span>
-          <CopyButton value={`https://${address}`} what="the address" size={13} className="p-text-3 hover:p-text p-1" />
+          <CopyButton value={`https://${address}`} what="the address" />
         </div>
         <div className="mt-6 w-full max-w-xs"><PrimaryButton wide onClick={() => {}}>Open and set up<ArrowSquareOutIcon size={15} /></PrimaryButton></div>
         <p className="mt-2.5 max-w-sm t-meta p-text-3">{relinked ? "The old link no longer works. This one makes you the owner, once, within 7 days." : "This link makes you the owner, once, and works for 7 days. If you lose it, come back here for a new one."}</p>
@@ -831,7 +831,7 @@ function LiveScreen({ state, go }: { state: FlowState; go: Go }) {
             {NAMESERVERS.map((server) => (
               <li key={server} className="flex items-center gap-2 rounded-md bg-[var(--c-surface)] px-2.5 py-1.5">
                 <span className="min-w-0 flex-1 truncate t-code p-text">{server}</span>
-                <CopyButton value={server} what="the nameserver" className="p-text-3 hover:p-text" />
+                <CopyButton value={server} what="the nameserver" />
               </li>
             ))}
           </ul>
@@ -843,7 +843,7 @@ function LiveScreen({ state, go }: { state: FlowState; go: Go }) {
           <div className="flex items-center gap-2 rounded-lg bg-[var(--c-sunken)] px-3 py-2">
             <TerminalWindowIcon size={14} className="shrink-0 p-text-3" />
             <code className="min-w-0 flex-1 truncate t-code p-text-2">{CLI_LINE}</code>
-            <CopyButton value={CLI_LINE} what="the install command" className="p-text-3 hover:p-text" />
+            <CopyButton value={CLI_LINE} what="the install command" />
           </div>
         </Disclosure>
         {domainOf(state) === null && (
