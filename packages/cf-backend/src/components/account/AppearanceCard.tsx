@@ -52,7 +52,7 @@ function NotificationsField() {
 
   if (permission === null) return null;
 
-  const hint = { default: "Shown at the same moments, once this browser allows them.", granted: "On in this browser.", denied: "Blocked in this browser's settings for this site." }[permission];
+  const hint = { default: undefined, granted: undefined, denied: "Blocked in this browser's settings for this site." }[permission];
 
   return (
     <Field label="Notifications" hint={hint} inline>
@@ -69,7 +69,7 @@ function AlertFields() {
 
   return (
     <>
-      <Field label="Sound" hint="A soft chime when a turn finishes or something waits on you, while Kinu is in the background. On this device." inline>
+      <Field label="Sound" hint="A chime when a turn ends or something waits on you." inline>
         <Switch on={sound} onChange={setAlertSound} label="Sound" data-alerts-sound />
       </Field>
       <NotificationsField />
@@ -113,7 +113,7 @@ export function AppearanceCard() {
             ))}
           </div>
         </Field>
-        <Field label="Mode" hint="On this device." inline>
+        <Field label="Mode" inline>
           <div role="radiogroup" aria-label="Mode" className="flex items-center gap-0.5 rounded-lg p-recessed p-0.5">
             {MODES.map(({ id, label, Icon }) => (
               <label key={id} className="cursor-pointer">

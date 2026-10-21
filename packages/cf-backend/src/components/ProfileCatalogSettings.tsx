@@ -303,7 +303,7 @@ export function ProfileCatalogSettings() {
         ) : (
           <>
             <div data-tier="default" className="space-y-3">
-              <Field label="Main model" hint="Every chat and every new workspace runs on it.">
+              <Field label="Main model">
                 <ModelPicker
                   models={menu.models}
                   failures={menu.failures}
@@ -321,7 +321,6 @@ export function ProfileCatalogSettings() {
 
             <div className="border-t p-border pt-4" data-section="tiers">
               <div className="p-row-text font-medium p-text">For particular work</div>
-              <p className="mt-0.5 p-meta p-text-3">Left unset, Quick picks the cheapest of your providers' models that can do the work; the others use the main model.</p>
               <div className="mt-1">
                 {tierIdsOf(draft).filter((tierId) => tierId !== 'default').map((tierId) => {
                   const assignment = draft.tiers[tierId];
@@ -515,19 +514,28 @@ export function ProfileCatalogSettings() {
         </Card>
       )}
 
-      {(draft && envelope) && (
-        <div className="sticky bottom-3 z-10 p-card p-surface px-4 py-3 shadow-[var(--shadow-composer)]">
-          {error && <div className="mb-3 rounded-md px-3 py-2 text-xs p-notice-danger">{error}</div>}
-          <div className="flex items-center justify-between gap-3">
-            {dirty && <span className="p-meta p-warning">Unsaved changes</span>}
-            <div className="ml-auto flex gap-2">
-              <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
-              <Button variant="primary" size="sm" disabled={!dirty || busy} onClick={() => void save()}>{busy ? 'Saving…' : 'Save'}</Button>
-            </div>
-          </div>
-        </div>
-      )}
+      {(draft && envelope) && <SaveBar dirty={dirty} error={error} busy={busy} onDiscard={() => setDraft(envelope.catalog)} onSave={() => void save()} />}
     </>
+  );
+}
+
+/** Only while there is something to save: on the page's own ground under a hairline, after the form, never over it. */
+function SaveBar({ dirty, error, busy, onDiscard, onSave }: {
+  dirty: boolean; error: string | null; busy: boolean; onDiscard: () => void; onSave: () => void;
+}) {
+  if (!dirty && error === null) return null;
+
+  return (
+    <div className="sticky bottom-0 z-10 mt-4 border-t p-border p-bg py-3" data-models-save-bar>
+      {error !== null && <div className="mb-3 rounded-md px-3 py-2 text-xs p-notice-danger">{error}</div>}
+      <div className="flex items-center justify-between gap-3">
+        {dirty && <span className="p-meta p-warning">Unsaved changes</span>}
+        <div className="ml-auto flex gap-2">
+          <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={onDiscard}>Discard</Button>
+          <Button variant="primary" size="sm" disabled={!dirty || busy} onClick={onSave}>{busy ? 'Saving…' : 'Save'}</Button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -681,7 +689,7 @@ function RoleEditor(props: {
             onChange={(tier) => set('tier', tier)} />
         </Field>
         <div className="sm:col-span-2">
-          <Field label="When to use it" hint="Shown in the role list, and read by an agent deciding whom to hire.">
+          <Field label="When to use it">
             <input className={inputCls} aria-label="Description"
               value={props.role.description}
               onChange={(event) => set('description', event.target.value)} />

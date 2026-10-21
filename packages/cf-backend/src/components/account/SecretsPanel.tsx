@@ -45,7 +45,6 @@ export function SecretsPanel() {
               </ul>
             ))}
         </CardSlot>
-        <p className="p-meta p-text-3">In a workspace you allow, each is <code>$NAME</code> in commands and <code>env.NAME</code> in programs.</p>
       </Card>
       <Card title="Add secrets">
         <AddSecrets onSaved={reload} />
@@ -211,7 +210,7 @@ function AddSecrets({ onSaved }: { onSaved: () => void }) {
 
       {(mode === "one" || rows.length > 0) && <SecretRows rows={rows} onChange={setRows} removable={mode === "env"} />}
 
-      <Field label="Use in" hint="Agents in these workspaces get it. You can allow more workspaces later.">
+      <Field label="Use in" hint={<>Agents there read it as <code>$NAME</code> in commands and <code>env.NAME</code> in programs.</>}>
         <WorkspaceChooser chosen={workspaces} onChange={setWorkspaces} placeholder="Choose workspaces…" />
       </Field>
 

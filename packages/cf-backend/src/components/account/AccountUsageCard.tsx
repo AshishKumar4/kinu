@@ -123,7 +123,7 @@ export function AccountUsageCard() {
 
   return (
     <>
-      <Card title="Limits · what each account has left">
+      <Card title="Limits">
         <CardSlot resource={usage.resource} what="your limits" onRetry={usage.reload}>
           {(value) => <LimitsTable usage={value} onRefresh={readAgain} />}
         </CardSlot>

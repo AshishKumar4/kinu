@@ -36,7 +36,7 @@ export function BetaSettings() {
           const on = betaSwarms(envelope.catalog);
 
           return (
-            <Field label={SWARMS_BETA_SETTING} hint={failure ?? (saving ? "Saving…" : "Applies from each workspace's next turn.")} inline>
+            <Field label="Use swarms" hint={failure ?? (saving ? "Saving…" : undefined)} inline>
               <Switch on={on} onChange={(next) => detach(turn(envelope, next))} label={SWARMS_BETA_SETTING} disabled={saving} data-beta-swarms />
             </Field>
           );
