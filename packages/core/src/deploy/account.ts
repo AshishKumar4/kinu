@@ -468,10 +468,12 @@ export function plannedRun(transport: CloudflareTransport, user: CloudflareUser,
       const name = freeWorkerName(yield* workerNames(transport, request.account), request.name);
       const placed = yield* addressFor(transport, request.account, request.address);
 
-      const inputs = v.parse(DeployInputsSchema, {
+      const asked: DeployInputs = {
         accountId: request.account, instanceName: name, address: placed.address, ownerEmail: user.email,
         providerKeyNames: [], sandbox: request.computer, mailDomain: request.mail?.host ?? '',
-      });
+      };
+
+      const inputs = v.parse(DeployInputsSchema, asked);
 
       return { kind: 'new', inputs, renamedFrom: name === request.name ? '' : request.name, freshSetupLink: false, pending: placed.pending };
     }
