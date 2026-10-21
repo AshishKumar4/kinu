@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import type { StartClock } from './lifecycle';
 import { attempt, observe } from './errors';
-import { endProcess } from './processes';
+import { containerExec, endProcess } from './processes';
 
 /** The native deadline cannot be held behind a Worker timer accepted outside the restore gate. */
 export function nativeStartClock(container: Pick<Container, 'exec'>): StartClock {
@@ -9,7 +9,7 @@ export function nativeStartClock(container: Pick<Container, 'exec'>): StartClock
     now: () => Date.now(),
     after(ms, fire) {
       return observe(Effect.gen(function* () {
-        const process = yield* attempt('io', () => container.exec(['/bin/sleep', String(Math.max(0, ms) / 1000)], {
+        const process = yield* attempt('io', () => containerExec(container, ['/bin/sleep', String(Math.max(0, ms) / 1000)], {
           stdout: 'ignore', stderr: 'ignore',
         }));
 

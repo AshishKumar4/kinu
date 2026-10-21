@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 
 import { BOX_CHROMIUM_POLICY, CHROMIUM_PROFILES } from '../src/desktop';
-import { TRUST } from '../src/processes';
+import { CONTAINER_ENV, TRUST } from '../src/processes';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
 import { harness } from './support/devbox-harness';
@@ -74,6 +74,69 @@ test("each start's trust names exactly its own CA to Chromium, and leaves a host
     expect([...readdirSync(policies)].sort()).toEqual(['eval.json', 'kinu-box.json']);
     expect(readFileSync(join(policies, 'eval.json'), 'utf8')).toBe('{"DeveloperToolsAvailability": 2}\n');
   } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Mozilla bug 2083449 (2026-10-17): eight eMudhra intermediates' keys were recoverable, and the image's bundle still
+// trusted the roots they chain to. The box's bundle leaves those out, and is otherwise the image's as it was.
+test('each start leaves the roots eMudhra\'s compromised intermediates chain to out of the system bundle', () => {
+  const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}distrust-`));
+  const distrusted = readFileSync(join(import.meta.dir, 'fixtures/distrusted-roots.pem'), 'utf8');
+
+  try {
+    mkdirSync(join(root, 'etc/cloudflare/certs'), { recursive: true });
+    mkdirSync(join(root, 'etc/ssl/certs'), { recursive: true });
+    const kept = freshCa(root, 'a-kept-root');
+    const start = freshCa(root, 'this-start');
+
+    writeFileSync(join(root, 'etc/ssl/certs/ca-certificates.crt'), `${kept}${distrusted}`);
+    writeFileSync(join(root, 'etc/cloudflare/certs/cloudflare-containers-ca.crt'), start);
+    trustIn(root);
+
+    const bundle = readFileSync(join(root, 'etc/ssl/certs/ca-certificates.crt'), 'utf8');
+    const policy = v.parse(v.object({ CADistrustedCertificates: v.array(v.string()) }), JSON.parse(readFileSync(join(root, BOX_CHROMIUM_POLICY.replace('/etc/', 'etc/')), 'utf8')));
+    const chromiums = distrusted.match(/# emSign ECC Root CA - G3[^\n]*\n(-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----)/u)?.[1] ?? '';
+
+    expect(bundle.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/gu)?.map(derOf)).toEqual([derOf(kept), derOf(start)]);
+    // Chromium reads its own root store, not the bundle: its policy distrusts the one of them that store holds.
+    expect(policy.CADistrustedCertificates).toEqual([derOf(chromiums)]);
+    // A second start reads the image's bundle again, and leaves the same out.
+    trustIn(root);
+    expect(readFileSync(join(root, 'etc/ssl/certs/ca-certificates.crt'), 'utf8')).toBe(bundle);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Node keeps roots of its own, and the image's Node 24 answered a G3B chain the bundle no longer trusts: the box's
+// environment has every Node read the bundle the trust step writes instead.
+test('Node in the box reads the system bundle the trust step writes, not its own roots', async () => {
+  const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}node-trust-`));
+
+  const made = spawnSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:P-256', '-nodes', '-days', '1', '-subj', '/CN=localhost',
+    '-addext', 'subjectAltName=DNS:localhost', '-keyout', join(root, 'key.pem'), '-out', join(root, 'cert.pem')], { encoding: 'utf8' });
+
+  if (made.status !== 0) throw new Error(made.stderr);
+  const cert = readFileSync(join(root, 'cert.pem'), 'utf8');
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', tls: { cert, key: readFileSync(join(root, 'key.pem'), 'utf8') }, fetch: () => new Response('ok') });
+  const ask = `require('https').get('https://localhost:${String(server.port)}/', (res) => { console.log(res.statusCode); }).on('error', (error) => { console.log(error.code); })`;
+
+  const asked = async (bundle: string, env: Readonly<Record<string, string>>) => {
+    writeFileSync(join(root, 'bundle.crt'), bundle);
+    const child = Bun.spawn(['node', '-e', ask], { env: { PATH: process.env['PATH'] ?? '', SSL_CERT_FILE: join(root, 'bundle.crt'), ...env }, stdout: 'pipe' });
+
+    return (await new Response(child.stdout).text()).trim();
+  };
+
+  try {
+    expect({
+      boxReadsBundle: await asked(cert, { NODE_OPTIONS: CONTAINER_ENV.NODE_OPTIONS }),
+      boxWithoutIt: await asked('', { NODE_OPTIONS: CONTAINER_ENV.NODE_OPTIONS }),
+      nodeAsShipped: await asked(cert, {}),
+    }).toEqual({ boxReadsBundle: '200', boxWithoutIt: 'DEPTH_ZERO_SELF_SIGNED_CERT', nodeAsShipped: 'DEPTH_ZERO_SELF_SIGNED_CERT' });
+  } finally {
+    await server.stop(true);
     rmSync(root, { recursive: true, force: true });
   }
 });

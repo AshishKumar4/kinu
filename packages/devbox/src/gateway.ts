@@ -4,7 +4,7 @@ import { SandboxFileError, S3Mount, type Files, type S3MountRequest, type S3Gate
 import * as v from 'valibot';
 import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
-import { TRUST } from './processes';
+import { containerExec, TRUST } from './processes';
 import type { GatewayBindings } from './contracts';
 import { createResourceLane } from './operation-lanes';
 import { STORE_MOUNT as CHAIN_STORE_MOUNT, STORE_PUBLISH_ROUTE, serveStore, storeRouteHost, storeSource, type StoreGatewayProps } from './store-gateway';
@@ -163,7 +163,7 @@ export class ContainerRoutes {
       this.#source = source;
       yield* this.#install();
       // Its CA appears with the HTTPS intercept.
-      const trust = yield* attempt('io', () => this.host.container.exec([...TRUST]));
+      const trust = yield* attempt('io', () => containerExec(this.host.container, [...TRUST]));
       const trusted = yield* attempt('io', () => trust.output());
 
       if (trusted.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `the container did not trust the intercept CA: ${new TextDecoder().decode(trusted.stderr)}`));
@@ -211,7 +211,7 @@ export class ContainerRoutes {
 
   #mounts(): Effect.Effect<S3Mount, DevboxError> {
     return this.#gateway().pipe(Effect.map((gateway) => this.#mountClient ??= new S3Mount({
-      exec: (args, options) => this.host.container.exec(args, options),
+      exec: (args, options) => containerExec(this.host.container, args, options),
       interceptOutboundHttp: (host, handler) => this.register(host, handler),
     }, gateway)));
   }

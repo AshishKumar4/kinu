@@ -2,7 +2,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
-import { Processes, isProcessLive, nameBox, CONTAINER_ENV, END_TREE } from "./processes";
+import { Processes, isProcessLive, nameBox, containerExec, CONTAINER_ENV, END_TREE } from "./processes";
 import { launched } from './exec-launcher';
 import { nativeStartClock } from './native-clock';
 import type { DevboxExecOptions, ExecResult, ReadOptions, FileResult, ListFilesOptions, FileMetadata, GatewayBindings } from './contracts';
@@ -707,7 +707,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         keepStartRefusal(container());
         await firstExec(container(), AbortSignal.timeout(120_000));
       },
-      exec: async (command) => decoded(await (await container().exec(['/bin/bash', '-c', command])).output()),
+      exec: async (command) => decoded(await (await containerExec(container(), ['/bin/bash', '-c', command])).output()),
       pipe: (key, path) => this.#pipeParts(key, path),
       snapshot: async (name) => (await container().snapshotContainer({ name })).id,
       destroy: () => this.#destroyGoldenContainer(),
@@ -2178,7 +2178,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (container === undefined) return null;
 
       if (ports?.length === 0) return [];
-      const read = await (await container.exec(['sh', '-c', PORT_LISTENERS, 'port-listeners', stamp, ...(ports ?? []).map(String)])).output();
+      const read = await (await containerExec(container, ['sh', '-c', PORT_LISTENERS, 'port-listeners', stamp, ...(ports ?? []).map(String)])).output();
 
       return parsePortListeners(new TextDecoder().decode(read.stdout));
     }));
@@ -2192,7 +2192,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const container = this.#readyContainer();
 
       if (container === undefined) return null;
-      const read = await (await container.exec(['sh', '-c', STAMPED, 'stamped-processes', stamp, value])).output();
+      const read = await (await containerExec(container, ['sh', '-c', STAMPED, 'stamped-processes', stamp, value])).output();
 
       return new TextDecoder().decode(read.stdout).split('\n').filter((line) => /^\d+$/.test(line)).map(Number);
     }));
@@ -2214,7 +2214,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       if (container?.running !== true) return false;
       running.killing = true;
       const { pid } = yield* this.#unlessRestarted(() => started);
-      const ended = yield* this.#unlessRestarted(async () => await (await container.exec(['sh', '-c', `${END_TREE}\nend_tree "$1"`, 'kill-tree', String(pid)])).output());
+      const ended = yield* this.#unlessRestarted(async () => await (await containerExec(container, ['sh', '-c', `${END_TREE}\nend_tree "$1"`, 'kill-tree', String(pid)])).output());
 
       if (ended.exitCode === 3) return false;
 
@@ -2273,7 +2273,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const container = this.ctx.container;
 
       if (container?.running !== true) return null;
-      const read = yield* attempt('process', async () => await (await container.exec(['/bin/bash', '-c', DISK_PROBE, 'devbox-disk-stall'])).output());
+      const read = yield* attempt('process', async () => await (await containerExec(container, ['/bin/bash', '-c', DISK_PROBE, 'devbox-disk-stall'])).output());
       const roots = pinned.every((running) => running.pid !== undefined) ? pinned.map((running) => running.pid ?? 0) : undefined;
       const stall = diskStallOf(new TextDecoder().decode(read.stdout), roots);
 
@@ -3692,7 +3692,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (container?.running !== true) return;
     const ids = this.#sessionRecords().map((record) => record.id);
-    const [saved] = await Promise.allSettled([(async () => (await container.exec(['bash', '-c', SESSIONS_SAVE, 'sessions-save', ...ids])).output())()]);
+    const [saved] = await Promise.allSettled([(async () => (await containerExec(container, ['bash', '-c', SESSIONS_SAVE, 'sessions-save', ...ids])).output())()]);
 
     if (saved.status === 'rejected') this.#trace('sessions.unsaved', { reason: describe({ cause: saved.reason }) });
     else if (saved.value.exitCode !== 0) this.#trace('sessions.unsaved', { reason: new TextDecoder().decode(saved.value.stderr).trim() });
@@ -3712,7 +3712,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const ids = this.#closedSessions();
 
     if (ids.length === 0) return;
-    const [forgot] = await Promise.allSettled([(async () => (await this.#container().exec(['sh', '-c', SESSIONS_FORGET, 'sessions-forget', ...ids])).output())()]);
+    const [forgot] = await Promise.allSettled([(async () => (await containerExec(this.#container(), ['sh', '-c', SESSIONS_FORGET, 'sessions-forget', ...ids])).output())()]);
 
     if (forgot.status === 'fulfilled' && forgot.value.exitCode === 0) this.ctx.storage.kv.delete(SESSIONS_CLOSED_KEY);
     else this.#trace('sessions.unforgotten', { ids: ids.join(' '), reason: forgot.status === 'rejected' ? describe({ cause: forgot.reason }) : new TextDecoder().decode(forgot.value.stderr).trim() });
@@ -3748,7 +3748,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       // An unready box's sessions are its records: its container's restoration is not confirmed, and the records must
       // not move to it (R1).
       if (container === undefined) return mergeSessions(this.#sessionRecords(), null);
-      const read = parseSessionsRead(decoded(await (await container.exec(['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS])).output()).stdout);
+      const read = parseSessionsRead(decoded(await (await containerExec(container, ['bash', '-c', SESSIONS_READ, 'terminal-sessions', PORT_LISTENERS])).output()).stdout);
       const records = this.#sessionRecords();
       const moved = records.map((record) => ({ ...record, cwd: read.get(record.id)?.cwd ?? record.cwd }));
 
@@ -3971,7 +3971,7 @@ function admissionFailure(container: Container, failed: LateStartFailure): Error
 
 /** Why the first exec after a start failed, or nothing when it ran clean. */
 async function admissionFailureOf(container: Container, signal: AbortSignal): Promise<Error | undefined> {
-  const [admitted] = await Promise.allSettled([container.exec(['/bin/true'], { signal })]);
+  const [admitted] = await Promise.allSettled([containerExec(container, ['/bin/true'], { signal })]);
 
   if (admitted?.status !== 'fulfilled') return admissionFailure(container, { cause: admitted?.reason });
   const { exitCode } = await admitted.value.output();
@@ -3989,7 +3989,7 @@ async function firstExec(container: Container, signal: AbortSignal): Promise<voi
 const UTF8 = { LC_ALL: 'C.UTF-8' };
 
 function launch(container: Container, argv: readonly string[], options: DevboxExecOptions): Promise<ExecProcess> {
-  return container.exec([...argv], {
+  return containerExec(container, [...argv], {
     cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...CONTAINER_ENV, ...options.env },
   });
 }
