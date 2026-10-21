@@ -50,12 +50,13 @@ interface AgentRowInput {
 }
 
 /** A row as the diagnostics path reads it from log fields: its classifications are text, and it alone carries a
- *  `reason` and an `activation`. */
+ *  `reason`, an `activation` and a `facets` count. */
 export interface AgentRowFields extends Omit<AgentRowInput, 'outcome' | 'agentKind'> {
   outcome?: string;
   agentKind?: string;
   reason?: string;
   activation?: number;
+  facets?: number;
 }
 
 /** Every `AGENT_METRICS_SCHEMA` slot, absent ones at `''`/0: the one row builder for typed writers and diagnostics. */
@@ -75,8 +76,7 @@ export function agentRow(input: AgentRowFields): AgentRow {
     model: input.model ?? '',
     tool: input.tool ?? '',
     source: input.source ?? '',
-    // Only the diagnostics path fills `reason`; typed rows carry the verdict in `outcome` + `code`.
-    reason: input.reason ?? '',
+    ...diagnosticSlots(input),
     count: 1,
     durationMs: input.durationMs ?? 0,
     ttftMs: input.ttftMs ?? 0,
@@ -91,8 +91,12 @@ export function agentRow(input: AgentRowFields): AgentRow {
     neurons: usage.neurons ?? 0,
     usd: input.usd ?? 0,
     priced: input.usd === undefined ? 0 : 1,
-    activation: input.activation ?? 0,
   };
+}
+
+/** The slots only the diagnostics path fills: typed rows carry the verdict in `outcome` + `code`, and no ordinal. */
+function diagnosticSlots(input: AgentRowFields): Pick<AgentRow, 'reason' | 'activation' | 'facets'> {
+  return { reason: input.reason ?? '', activation: input.activation ?? 0, facets: input.facets ?? 0 };
 }
 
 function emit<S extends AnalyticsSchema>(writer: AnalyticsWriter<S>, row: AnalyticsRow<S>): Effect.Effect<void> {

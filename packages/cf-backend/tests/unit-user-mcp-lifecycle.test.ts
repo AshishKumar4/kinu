@@ -6,7 +6,7 @@ import {
   type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import {
-  closeMcpTransport, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, holdNextMcpToolCall, inheritedMcpManager,
+  closeMcpTransport, seedMcpAnswer, failNextMcpToolCall, failNextMcpDiscovery, hangMcpEstablish, hangNextMcpConnect, holdNextMcpToolCall, inheritedMcpManager,
   liveMcpFetch, liveMcpTransport, recordedMcpFetch, recordedMcpLifecycle, recordedMcpServers, recordedMcpToolAborts,
   recordedMcpToolCalls, requireMcpSignIn, resetRecordedMcp, seedMcpSession, seedMcpTools, seedMcpAuthContinuation, seedConfiguredMcpServer, seedSdkMcpServer, seedUndiscoveredMcpTools,
 } from './helpers/agents-sdk';
@@ -17,6 +17,7 @@ import { ProtocolError, SdkError, SdkErrorCode } from '@modelcontextprotocol/cli
 import type { McpToolSurface } from '../src/user/mcp-servers';
 import type { UserCaller } from '@kinu.run/core';
 import { refusedSseConnect, refusedToolCall } from './helpers/mcp-transport';
+import { nextTurn } from './helpers/actor-harness';
 import * as v from 'valibot';
 
 /** The descriptor surface, held to `McpToolSurfaceSchema`, the contract the orchestrator's cache reads. */
@@ -578,6 +579,32 @@ describe('a caller stops the MCP call it made', () => {
 
     await h.userDO.userMcp_cancelCall(owner, 'call-running');
     await expect(running).rejects.toMatchObject({ code: 'cancelled' });
+    h.close();
+  });
+
+  // Staging 39a0b3fd5 (2026-10-21), `mcp-reconnect` 1 of 4: a warmup redialled the server whose ended session a call was
+  // renewing, as the connection read closed between the vendor's new client and its connect. Two connects shared that
+  // client, and the renewal's handshake went out on the other's transport with no session, which the server refused.
+  test("a warmup while a call renews its server's session starts no second connect of it, and the call answers", async () => {
+    const h = harness();
+    await seedServer(h, 'srv1');
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    seedMcpSession('srv1', 's1');
+    const owner = await testOwner();
+
+    failNextMcpToolCall(await refusedToolCall({ status: 404, body: 'session ended' }));
+    const renewal = hangNextMcpConnect();
+    const call = h.userDO.userMcp_callTool(owner, { serverId: 'srv1', name: 'do_thing', args: {}, id: 'call-renewed' });
+
+    await renewal.entered;
+    const warming = h.userDO.userMcp_warmConnections(owner);
+
+    // The warmup reads the connection while the renewal's connect is out.
+    await nextTurn();
+    renewal.release();
+    await Promise.all([call, warming]);
+
+    expect(recordedMcpLifecycle().overlapped).toEqual([]);
     h.close();
   });
 

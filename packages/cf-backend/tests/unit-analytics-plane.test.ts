@@ -253,6 +253,8 @@ describe('column resolution is derived, never spelled', () => {
     expect(doubleColumn(AGENT_METRICS_SCHEMA, 'usd')).toBe('double12');
     expect(doubleColumn(AGENT_METRICS_SCHEMA, 'priced')).toBe('double13');
     expect(doubleColumn(AGENT_METRICS_SCHEMA, 'attempts')).toBe('double14');
+    expect(doubleColumn(AGENT_METRICS_SCHEMA, 'activation')).toBe('double15');
+    expect(doubleColumn(AGENT_METRICS_SCHEMA, 'facets')).toBe('double16');
     expect(indexColumn(AGENT_METRICS_SCHEMA)).toBe('index1');
   });
 
@@ -661,6 +663,29 @@ describe('the diagnostics sink routes by event name', () => {
     expect(indexOf('rpc_gate.denied')).toBe('');
   });
 
+  test('a startup line\'s activation and facet count land in its row, and no other row carries them', () => {
+    const plane = fakeEnv();
+    const restore = installSink(plane);
+
+    try {
+      diagnostics.event('actor.startup', { workspace: 'counted-forge', activation: 7, facets: 31_300 });
+      diagnostics.event('turn.resumed', { workspace: 'counted-forge' });
+    } finally {
+      restore();
+    }
+
+    const slot = (name: 'activation' | 'facets') => Number(doubleColumn(AGENT_METRICS_SCHEMA, name).slice('double'.length)) - 1;
+
+    const read = (event: string) => {
+      const point = plane.agent.points.find((each) => each.blobs?.[2] === event);
+
+      return { activation: point?.doubles?.[slot('activation')], facets: point?.doubles?.[slot('facets')] };
+    };
+
+    expect({ startup: read('actor.startup'), resumed: read('turn.resumed') })
+      .toEqual({ startup: { activation: 7, facets: 31_300 }, resumed: { activation: 0, facets: 0 } });
+  });
+
   test('automatic titling is attributed by workspace, and the title is not published', () => {
     // The title stays out: it is derived from the mission, the person's own sentence.
     const plane = fakeEnv();
@@ -795,7 +820,7 @@ describe('the record adapters write the rows their boundaries promise', () => {
       'orchestrator', 'workers-ai', 'deepseek-v4', '', '', '',
     ]);
     // The trailing 0 is `attempts`: a turn is not a delivery.
-    expect(point.doubles).toEqual([1, 4200, 0, 6, 9, 1200, 340, 900, 12, 45, 7, 0.0031, 1, 0, 0]);
+    expect(point.doubles).toEqual([1, 4200, 0, 6, 9, 1200, 340, 900, 12, 45, 7, 0.0031, 1, 0, 0, 0]);
   });
 
   test('an unpriced call reports priced 0, so an average cost cannot be diluted', () => {
@@ -823,7 +848,7 @@ describe('the record adapters write the rows their boundaries promise', () => {
     expect(point.doubles?.[1]).toBe(91);
     expect(point.doubles?.[4]).toBe(1);
     // No token report or price on a tool row: a zero would pool into spend aggregates.
-    expect(point.doubles?.slice(5)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    expect(point.doubles?.slice(5)).toEqual([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
   });
 
   test('a first-token row is its own kind, so a silent turn is absent rather than zero', () => {
