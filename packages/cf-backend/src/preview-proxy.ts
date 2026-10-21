@@ -5,7 +5,7 @@
  */
 import { Effect } from "effect";
 import { diagnostics, recording, settle } from "@kinu.run/core/obs";
-import { escapeHtml, VIEWER_EXCHANGE_PATH } from "@kinu.run/core";
+import { escapeHtml, THEME_CSS, VIEWER_EXCHANGE_PATH } from "@kinu.run/core";
 import { containPreviewResponse, sandboxPreviewLabelOf } from "@kinu.run/core";
 import { workspaceOfSandbox } from "@kinu.run/core";
 import { sandboxPreviewExposure, type LabelSignerEnv, type PreviewSuffixEnv } from "@kinu.run/core";
@@ -122,38 +122,34 @@ function renderNotReadyPage(host: string): Response {
 <meta charset="utf-8" />
 <title>Preview not ready · :${safePort}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<style>
+<style>${THEME_CSS}
   * { box-sizing: border-box; }
   body {
-    margin: 0; padding: 0;
+    margin: 0; padding: 2rem;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    background: #1A1613; color: #F5EFE6;
+    background: var(--c-bg); color: var(--c-text);
     min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    padding: 2rem;
   }
   .card {
-    max-width: 640px; width: 100%;
-    background: #241E18; border: 1px solid rgba(224, 164, 88, 0.14); border-radius: 12px;
-    padding: 2rem; box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    max-width: 640px; width: 100%; padding: 2rem;
+    background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-card); box-shadow: var(--shadow-card);
   }
-  h1 { font-size: 1.25rem; font-weight: 600; margin: 0 0 1rem; display: flex; align-items: center; gap: 0.5rem; }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #D99A4E; }
-  p { line-height: 1.6; color: #B6A893; font-size: 0.95rem; margin: 0.5rem 0; }
-  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #2E261E; color: #E8B97A; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85em; }
+  h1 { font-size: 15px; line-height: 22px; font-weight: 600; margin: 0 0 1rem; display: flex; align-items: center; gap: 0.5rem; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: var(--r-pill); background: var(--c-accent-mark); }
+  p { font-size: 13px; line-height: 20px; color: var(--c-text-2); margin: 0.5rem 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--c-fill); color: var(--c-accent-fg); padding: 0.15rem 0.4rem; border-radius: var(--r-check); }
   pre {
-    background: #1f1a15; border: 1px solid rgba(224, 164, 88, 0.14); border-radius: 6px;
-    padding: 0.75rem 1rem; overflow-x: auto; font-size: 0.8rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    color: #d8cdb8; white-space: pre-wrap; word-break: break-word;
+    background: var(--c-sunken); border: 1px solid var(--c-border); border-radius: var(--r-inner);
+    padding: 0.75rem 1rem; overflow-x: auto; font: 13px/20px ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--c-text-2); white-space: pre-wrap; word-break: break-word;
   }
-  .hint { color: #7d7261; font-size: 0.85rem; margin-top: 1rem; }
-  .meta { color: #7d7261; font-size: 0.75rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid rgba(224, 164, 88, 0.14); }
+  .hint { color: var(--c-text-3); font-size: 12px; margin-top: 1rem; }
+  .meta { color: var(--c-text-3); font: 12px/16px ui-monospace, SFMono-Regular, Menlo, monospace; margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--c-border); }
   button {
-    background: #E0A458; color: #2a1d0c; border: 0; border-radius: 6px;
-    padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 600; cursor: pointer;
-    margin-top: 1rem;
+    background: var(--c-accent); color: var(--c-accent-on); border: 0; border-radius: var(--r-control);
+    padding: 0.5rem 1rem; font-size: 13px; font-weight: 600; cursor: pointer; margin-top: 1rem; box-shadow: var(--shadow-primary);
   }
-  button:hover { background: #caa05a; }
+  button:hover { background: var(--c-accent-hover); }
 </style>
 </head>
 <body>
