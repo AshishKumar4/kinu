@@ -13,6 +13,7 @@ import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { createLocalProfileAuthority, resolverModelPlane } from '../src/profile-authority';
 import { GITHUB_MCP_INTENTS, GITHUB_MCP_TOOLS } from '@kinu.run/test-utils/github-mcp-catalog';
+import * as v from 'valibot';
 import { scratchPath, scriptedTurnModel, toolExecute, scratchDir, type ScriptedTurnOptions, type ScriptedTurnResult, workspaceDatabase, freshServedStores } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -257,9 +258,12 @@ test('eval discovers and calls a tool beyond the former catalog budget without s
       schema: searchCode?.inputSchema,
       result: { structuredContent: { tool: 'search_code', input: { query: 'repo:cloudflare/agents DurableObject' } } },
     } } });
-    // No tool of the catalog is described to the model before a program asks.
-    expect({ bounded: searchCode?.inputSchema.properties.perPage, prompted: GITHUB_MCP_TOOLS.filter((entry) => captured.includes(entry.description)).map((entry) => entry.name) })
-      .toEqual({ bounded: expect.objectContaining({ minimum: 1, maximum: 100 }), prompted: [] });
+    // The schema returned exactly, bounds and all; and no MCP tool is named to the model before a program asks, by its
+    // callable key (a description may reach the request only escaped or trimmed).
+    const returned = v.parse(v.object({ output: v.object({ result: v.object({ schema: v.unknown() }) }) }), result).output.result.schema;
+
+    expect({ returned, bounded: searchCode?.inputSchema.properties.perPage, named: ['mcp_github_', 'mcp_tracker_team_'].filter((key) => captured.includes(key)) })
+      .toEqual({ returned: searchCode?.inputSchema, bounded: expect.objectContaining({ minimum: 1, maximum: 100 }), named: [] });
   } finally {
     await session.end();
   }

@@ -12,7 +12,7 @@ The cap covers the whole string the model receives. The truncation marker is pri
 |---|---|---|---|
 | `shell`, `web` fetch, `eval` results | head + tail (8k chars) | `.kinu/tool-output/<id>.log` | `core/src/tools/clamp.ts` |
 | `file` read of an oversize file | offset-bounded page (8k chars) | the file's own path, and the next offset in the marker | `core/src/tools/file-tool.ts` |
-| MCP / external tool results | head + tail (8k chars) | same | `withClampedToolResults` at each backend's MCP wiring |
+| MCP tool results, inside a program | head + tail (`PROGRAM_RESULT_MAX_CHARS`, a DO row's eighth) | same | `buildMcpToolSet` (`core/src/tools/mcp-surface.ts`); the program's own answer is then `eval`'s, capped as above |
 | Uploads the model cannot accept | reference text part | `/uploads/<name>`, saved once under the name it came with as the words are admitted | `core/src/prompting/attachment-sanitizer.ts` |
 | Text uploads over 8 KiB | reference text part | same | same |
 | Uploaded documents the model can accept, over 1 MiB | reference text part | same | same |
@@ -43,8 +43,9 @@ A remote catalog adds nothing to a request. The prompt carries no MCP definition
 `packages/core/src/tools/mcp-discovery.ts`, over codemode's portable search and describe), then calls it as
 `tools.<key>`. Discovery answers only the callable surface, already narrowed by the role's reach, so it never names a
 tool the program could not call. `describe` returns the tool's JSON input schema whole, never clipped: a schema is
-the contract of what the tool accepts. What discovery hands back reaches the model as `eval`'s own result, capped as
-every program result is (`PROGRAM_RESULT_MAX_CHARS`).
+the contract of what the tool accepts. Inside the program, an MCP call's result is capped at `PROGRAM_RESULT_MAX_CHARS`
+(`buildMcpToolSet`); what the program returns, discovery answers included, reaches the model as `eval`'s own result,
+capped at `DEFAULT_TOOL_RESULT_MAX_CHARS` as every tool result is.
 
 `stepContextLimit` (`packages/core/src/prompting/step-prune.ts`) remains the one request-level allocation: the
 resolved model's context window minus the output allowance the answer needs (`outputReserveTokens`). The step-prune

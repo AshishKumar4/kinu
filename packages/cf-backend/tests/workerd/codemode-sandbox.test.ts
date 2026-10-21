@@ -168,6 +168,8 @@ describe('the eval sandbox under workerd', () => {
       schema: searchCode?.inputSchema,
       result: { tool: 'search_code', args: { query: 'DurableObject' } },
     } });
+    // Exactly the catalog's schema, not a subset of it; its page bounds among what it keeps.
+    expect(v.parse(v.object({ result: v.object({ schema: v.unknown() }) }), output).result.schema).toEqual(searchCode?.inputSchema);
     expect(searchCode?.inputSchema.properties.perPage).toMatchObject({ minimum: 1, maximum: 100 });
   });
 
