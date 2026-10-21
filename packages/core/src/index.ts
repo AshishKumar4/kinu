@@ -1064,7 +1064,7 @@ export {
 } from './execution/router';
 
 export {
-  withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, type FileReach,
+  withApprovalGatedShell, withApprovalGatedFiles, hostedToolFiles, gateProviderExec, type FileReach,
 } from './execution/approval';
 
 export {

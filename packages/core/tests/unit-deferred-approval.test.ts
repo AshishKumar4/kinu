@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import { Database } from 'bun:sqlite';
 import { createMemoryVfs, fakeCommandMember, fakeMossaic, toolExecute, createRecordingLogger, NO_JOBS } from '@kinu.run/test-utils';
 import { sessionFilesOver, type SessionBox } from '@kinu.run/test-utils/vfs';
-import { DeferredApprovalQueue, DeferredApprovalStore, initOwnerRequestsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ExecutionContext, type ParkedWrites, type ShellApprovalPolicy, type ShellApprovalOutcome, type ShellApprovalRequest, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT, createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell } from '../src/index';
+import { DeferredApprovalQueue, DeferredApprovalStore, initOwnerRequestsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, hostedToolFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ExecutionContext, type ParkedWrites, type ShellApprovalPolicy, type ShellApprovalOutcome, type ShellApprovalRequest, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT, createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell } from '../src/index';
 import type { BoundFileWrite } from '../src/safety/bound-write';
 import { RESUMED_SURFACE, type InvocationSurface } from '../src/types/jobs';
 import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
@@ -1267,7 +1267,7 @@ async function driveWithQueue(perform: (plane: VFS, write: BoundFileWrite, bytes
   });
 
   const policy: ShellApprovalPolicy = { mode: () => 'strict', deferrals: queue.channel };
-  const files = withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => plane.resolve(path, { follow, creating }), owner: (path) => plane.owner(path), userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, policy);
+  const files = hostedToolFiles(plane, cloudPlanes(WORKSPACE_ROOT), policy);
 
   return { drive, files, queue, store, woken, kernel };
 }
