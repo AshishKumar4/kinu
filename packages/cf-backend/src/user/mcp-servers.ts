@@ -1032,7 +1032,7 @@ export class UserMcpServers {
   private dialForSignIn(serverId: string): Effect.Effect<void> {
     return Effect.promise(async () => this.host.mcp.connectToServer(serverId)).pipe(Effect.asVoid, Effect.catchCause(recording({
       doing: 'dialling an MCP server again after its sign-in ended unsigned', otherwise: 'unavailable',
-    }, (failure) => { diagnostics.failure('mcp.connect_failed', failure, { serverId }); })));
+    }, (failure) => { diagnostics.failure('mcp.redial_after_sign_in_failed', failure, { serverId }); })));
   }
 
   /** The run a sign-in of `serverId` was begun for, taken: one callback ends one run. */
