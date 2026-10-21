@@ -60,14 +60,15 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'forgetActivation');
     Reflect.deleteProperty(this, 'pendingNimbusTasks');
     Reflect.deleteProperty(this, 'executorRows');
+    Reflect.deleteProperty(this, 'storedStreamChars');
     Reflect.deleteProperty(this, 'runShell');
     Reflect.deleteProperty(this, 'previewTabs');
     Reflect.deleteProperty(this, 'failingSlates');
     Reflect.deleteProperty(this, 'wakeOnce');
     Reflect.deleteProperty(this, 'approveWaitingEffects');
     sealRpcSurface(this, [
-      ...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'runShell', 'previewTabs',
-      'failingSlates', 'wakeOnce', 'approveWaitingEffects',
+      ...ORCHESTRATOR_RPC_SURFACE, 'portReservations', 'runProgram', 'forgetActivation', 'pendingNimbusTasks', 'executorRows', 'storedStreamChars', 'runShell',
+      'previewTabs', 'failingSlates', 'wakeOnce', 'approveWaitingEffects',
     ]);
   }
 
@@ -115,6 +116,13 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** The workspace executor's terminal rows, as a reload reads them. */
   async executorRows(): Promise<Array<{ stdout: string; stdout_len: number }>> {
     return (await this.getExecutorOutput('workspace')).map(({ stdout, stdout_len }) => ({ stdout, stdout_len }));
+  }
+
+  /** The widest stream any of the executor's rows stores, as SQLite holds it rather than as a reader reads it. */
+  async storedStreamChars(): Promise<number> {
+    return this.ctx.storage.sql.exec<{ widest: number | null }>(
+      "SELECT MAX(MAX(length(stdout)), MAX(length(stderr))) AS widest FROM executor_output WHERE executor = 'workspace'",
+    ).one().widest ?? 0;
   }
 
   /** Nimbus's pending tasks as this object's Lifecycle holds them, and the alarm that wakes the next. */
@@ -194,7 +202,7 @@ export { ObservedOrchestrator as OrchestratorAgent };
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
-  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs' | 'failingSlates'
+  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'storedStreamChars' | 'runShell' | 'previewTabs' | 'failingSlates'
   | 'wakeOnce' | 'approveWaitingEffects'> & Pick<ProductionOrchestrator, 'setLiveShareMode'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
@@ -754,7 +762,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
   /** Hold the graph await while a real editor batch commits, reproducing the own-to-owner R0 approval race. */
   async editorFence(latest = false): Promise<{
     pending: string; afterPendingMode: string | null; approved: boolean; cleared: boolean; lending: string;
-    afterOwnerBuild: { grantRevision: string | null; editedBy: string | null } | null; stopped: string; revisionBefore: string | null;
+    afterOwnerBuild: { grantRevision: string | null; editedBy: string | null } | null; stopped: string;
   }> {
     const { sql } = this.ctx.storage;
     const raw = (ddl: string) => { sql.exec(ddl); };
@@ -826,14 +834,13 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
       const second = await controller.writeShared('board', { 'server.ts': { text: 'r2', base: sha256Hex('r1') } }, 'sam');
 
       if (!second.ok) throw new Error(second.error);
-      const revisionBefore = labelOf(controller.live.editMark('board')?.revisionBefore ?? null);
       const firstBuildApproval = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: first, approved: [] });
       const mode = controller.live.get(share.id)?.mode ?? null;
       const secondBuilt = revision('r2');
       const secondBuildApproval = await controller.setLiveShareMode({ workspace: 'fence-probe', share: share.id, mode: 'owner', revision: secondBuilt, approved: [] });
 
       return {
-        pending: JSON.stringify(firstBuildApproval), afterPendingMode: mode, revisionBefore,
+        pending: JSON.stringify(firstBuildApproval), afterPendingMode: mode,
         approved: secondBuildApproval.ok, cleared: controller.live.editMark('board') === null,
         lending: serverAuthority(controller.live.authoritiesOf('board'), secondBuilt).kind,
         afterOwnerBuild: null, stopped: 'none',
@@ -853,7 +860,7 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     return {
       pending: JSON.stringify(pending), afterPendingMode, approved: approved.ok, cleared, lending,
       afterOwnerBuild: after === undefined ? null : { grantRevision: labelOf(after.grantRevision), editedBy: after.editedBy },
-      stopped: serverAuthority(controller.live.authoritiesOf('board'), current).kind, revisionBefore: labelOf(controller.live.editMark('board')?.revisionBefore ?? null),
+      stopped: serverAuthority(controller.live.authoritiesOf('board'), current).kind,
     };
   }
 
@@ -1011,6 +1018,10 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
   async executorOutputs(workspace: string): Promise<Array<{ stdout: string; stdout_len: number }>> {
     return (await this.workspaceTarget(workspace)).executorRows();
+  }
+
+  async storedStreamChars(workspace: string): Promise<number> {
+    return (await this.workspaceTarget(workspace)).storedStreamChars();
   }
 
   /** The workspace's own pass to its preview (`selfPreviewPass`): what its own browsers and fetches carry. */

@@ -1,6 +1,6 @@
 import type { ToolSet } from 'ai';
 import { REFUSAL_TYPE } from '../types/tool-outcome';
-import type { CodemodeProvider, MemberDeclaration } from '../types/codemode';
+import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type MemberDeclaration } from '../types/codemode';
 import { namespaceDeclaration } from './operation-surfaces';
 import { EXEC_ANSWERS_AT_EXIT, EXEC_RUNS_WHERE_ITS_CWD_IS } from '../operations/executors';
 
@@ -74,7 +74,7 @@ export function isBuiltinToolName(value: string): value is BuiltinToolName {
   return BUILTIN_TOOL_NAMES.has(value);
 }
 
-/** The subordinate → parent progress tool id. */
+/** The subagent → parent progress tool id. */
 export const REPORT_TOOL: BuiltinToolName = 'report';
 
 /** The plan review's submission tool. Not in TOOL_REACH: `buildBuiltinTools` adds it where its deps are wired. */
@@ -299,9 +299,9 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'agents',
     summary: 'Delegate work to other agents and message them.',
     notes: [
-      'Do the work yourself by default. A helper costs more than it looks: you write its brief, you see only its report, and trusting that report means reading what it touched.',
+      'Do the work yourself by default. A subagent costs more than it looks: you write its brief, you see only its report, and trusting that report means reading what it touched.',
       'Delegate only when the work is large, separable from your next step, and clearly costs more to do than to brief and check: independent pieces that can run at the same time, or a long side task whose raw output would flood your context.',
-      'Do it yourself when it takes a handful of calls, when your next step depends on it, or when you would redo it to trust the result. Never delegate one small piece, and never split one modest job across several helpers.',
+      'Do it yourself when it takes a handful of calls, when your next step depends on it, or when you would redo it to trust the result. Never delegate one small piece, and never split one modest job across several subagents.',
     ],
     // Cheapest complete call: `ideate` is the one preset that takes no `objective`.
     example: "agents({op:'swarm', preset:'ideate', task:'Three ways to stop staging 502ing under load'})",
@@ -372,7 +372,10 @@ function reachedDeclarations({ declarations, tools }: DescribedProvider): [strin
  * leaves them out: they were half the text of every request.
  * Both backends compose it here, never through a template token: a `$` in a call form is text.
  */
-export function renderCodemodeDescription(providers: readonly DescribedProvider[], substrate: SandboxSubstrate = 'hosted'): string {
+export function renderCodemodeDescription(all: readonly DescribedProvider[], substrate: SandboxSubstrate = 'hosted'): string {
+  // `tools.*` are the model's own tools, in its tool list and prompt; `describe` answers them, the docstring does not.
+  const providers = all.filter((provider) => provider.name !== CRAFTED_TOOL_NAMESPACE);
+
   const listed = providers.flatMap((provider) => {
     const members = reachedDeclarations(provider).map(([, declared]) => declared.call);
     const purpose = provider.summary === undefined ? '' : ` ${provider.summary}`;

@@ -30,13 +30,13 @@ export function initSessionContextTables(exec: RawSqlExec): void {
     CHECK(part_no >= 0), CHECK(segment >= 0), CHECK(stream_order >= 0), CHECK(ended IN (0,1)),
     CHECK((segment > 0 AND descriptor_json IS NULL AND descriptor_path IS NULL)
       OR (segment = 0 AND (descriptor_json IS NULL) <> (descriptor_path IS NULL))))`);
-  exec(`CREATE TABLE IF NOT EXISTS actor_contexts (
+  exec(`CREATE TABLE IF NOT EXISTS actor_contexts ( /* derived from session_messages: a context is the messages it holds */
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), context_id TEXT NOT NULL,
     PRIMARY KEY(actor_id,context_id))`);
-  exec(`CREATE TABLE IF NOT EXISTS actor_context_selection (
+  exec(`CREATE TABLE IF NOT EXISTS actor_context_selection ( /* derived from session_messages: it selects a context of theirs */
     actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id), context_id TEXT NOT NULL,
     FOREIGN KEY(actor_id,context_id) REFERENCES actor_contexts(actor_id,context_id))`);
-  exec(`CREATE TABLE IF NOT EXISTS context_revisions (
+  exec(`CREATE TABLE IF NOT EXISTS context_revisions ( /* derived from session_messages: a revision is the messages it lists */
     actor_id TEXT NOT NULL, context_id TEXT NOT NULL, revision INTEGER NOT NULL,
     author TEXT NOT NULL, cause TEXT NOT NULL, turn_id TEXT, proposal_id TEXT, recorded_at INTEGER NOT NULL,
     PRIMARY KEY(actor_id,context_id,revision), CHECK(revision >= 0),
@@ -55,7 +55,7 @@ export function initSessionContextTables(exec: RawSqlExec): void {
   exec(`CREATE UNIQUE INDEX IF NOT EXISTS context_live_position ON context_memberships(actor_id,context_id,position) WHERE to_revision IS NULL`);
   exec(`CREATE INDEX IF NOT EXISTS context_history_members ON context_memberships(actor_id,context_id,from_revision,to_revision,position)`);
   exec(`CREATE INDEX IF NOT EXISTS context_message_members ON context_memberships(actor_id,message_id)`);
-  exec(`CREATE TABLE IF NOT EXISTS context_proposals (
+  exec(`CREATE TABLE IF NOT EXISTS context_proposals ( /* derived from session_messages: a proposal changes which of them a context lists */
     actor_id TEXT NOT NULL, proposal_id TEXT NOT NULL, context_id TEXT NOT NULL, base_revision INTEGER NOT NULL,
     author TEXT NOT NULL, via TEXT NOT NULL, cause TEXT NOT NULL, turn_id TEXT, build_identity TEXT,
     status TEXT NOT NULL CHECK(status IN ('pending','applied','closed')),
@@ -71,20 +71,19 @@ export function initSessionContextTables(exec: RawSqlExec): void {
     FOREIGN KEY(actor_id,proposal_id) REFERENCES context_proposals(actor_id,proposal_id),
     FOREIGN KEY(actor_id,expected_message_id) REFERENCES session_messages(actor_id,message_id),
     FOREIGN KEY(actor_id,message_id) REFERENCES session_messages(actor_id,message_id))`);
+  // `context_id`/`context_revision` are what a request was offered. A step's `rendered_*` are the list it sent, a revision
+  // of the actor's unselected `requests` context; an admission sends none.
   exec(`CREATE TABLE IF NOT EXISTS actor_requests (
     actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id), request_id TEXT NOT NULL, turn_id TEXT NOT NULL, run_id TEXT NOT NULL,
     epoch INTEGER NOT NULL, step_index INTEGER, revision INTEGER NOT NULL,
     context_id TEXT NOT NULL, context_revision INTEGER NOT NULL,
+    rendered_context_id TEXT, rendered_revision INTEGER,
     metadata_json TEXT, metadata_path TEXT, recorded_at INTEGER NOT NULL,
     PRIMARY KEY(actor_id,request_id), UNIQUE(actor_id,turn_id,epoch,revision),
     FOREIGN KEY(actor_id,context_id,context_revision) REFERENCES context_revisions(actor_id,context_id,revision),
+    FOREIGN KEY(actor_id,rendered_context_id,rendered_revision) REFERENCES context_revisions(actor_id,context_id,revision),
+    CHECK((rendered_context_id IS NULL) = (rendered_revision IS NULL)),
     CHECK((metadata_json IS NULL) <> (metadata_path IS NULL)))`);
   // `lastStep` names the literal `step_index IS NOT NULL`.
   exec(`CREATE INDEX IF NOT EXISTS actor_step_requests ON actor_requests(actor_id,recorded_at) WHERE step_index IS NOT NULL`);
-  // A step's list is a revision of the actor's unselected `requests` context.
-  exec(`CREATE TABLE IF NOT EXISTS request_renders (
-    actor_id TEXT NOT NULL, request_id TEXT NOT NULL, context_id TEXT NOT NULL, revision INTEGER NOT NULL,
-    PRIMARY KEY(actor_id,request_id),
-    FOREIGN KEY(actor_id,request_id) REFERENCES actor_requests(actor_id,request_id),
-    FOREIGN KEY(actor_id,context_id,revision) REFERENCES context_revisions(actor_id,context_id,revision))`);
 }

@@ -22,7 +22,7 @@ function figuresLine({ tokens, usd, activeMs, cacheEma }: PanelAgent["figures"])
   ].filter((part) => part !== null).join(" · ");
 }
 
-/** The person's chats, each with the agents it started nested under it; swarms and helpers in folded groups below. */
+/** The person's chats, each with the agents it started nested under it; swarms and subagents in folded groups below. */
 export function SidebarAgents({ panel, onBack }: { panel: WorkspaceAgentsPanel; onBack: () => void }) {
   const back = useRef<HTMLButtonElement>(null);
   const chats = panel.list.filter((agent) => agent.category === "main" || (agent.category === "user" && agent.parent === "main"));
@@ -75,7 +75,7 @@ function AgentRow({ agent, panel }: { agent: PanelAgent; panel: WorkspaceAgentsP
   return (
     <NavRowButton size="sm" current={shown} onClick={() => panel.open(agent)} data-agent-row={agent.key} data-status={agent.activity}
       aria-current={shown ? "page" : undefined} title={figures === "" ? undefined : figures} className="p-halo relative">
-      {/* A chat and a hire each wear their own mascot; a swarm worker or a background helper, its state mark. */}
+      {/* A chat and a hire each wear their own mascot; a swarm worker or a background subagent, its state mark. */}
       {agent.tab || agent.category === "hired" || agent.category === "user"
         ? <ChatMascot seed={look.seed} colour={look.colour} activity={agent.activity} />
         : <span className="flex w-4 shrink-0 justify-center"><AgentStatusMark activity={agent.activity} /></span>}

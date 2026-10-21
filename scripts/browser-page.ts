@@ -634,7 +634,7 @@ export interface RpcCounts {
   readonly sent: Readonly<Record<string, number>>;
   readonly received: Readonly<Record<string, number>>;
   /** Frames received on an `actor/<name>` socket. Zero after the '+' flow means
-   *  the subordinate pane's transport never answered — the shape the hosted
+   *  the subagent pane's transport never answered — the shape the hosted
    *  actor socket defect left behind, where the composer stays disabled. */
   readonly actorFrames: number;
 }

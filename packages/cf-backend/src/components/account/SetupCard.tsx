@@ -4,7 +4,7 @@ import { AccountPanelModal, type AccountPanel } from "@/components/account/Accou
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 
-export function SetupCard({ returnTo }: { returnTo: string }) {
+export function SetupCard() {
   const [open, setOpen] = useState<AccountPanel | null>(null);
 
   return (
@@ -17,7 +17,7 @@ export function SetupCard({ returnTo }: { returnTo: string }) {
         </div>
       </Card>
       {open !== null && (
-        <AccountPanelModal panel={open} returnTo={returnTo} onClose={() => setOpen(null)} />
+        <AccountPanelModal panel={open} onClose={() => setOpen(null)} />
       )}
     </>
   );

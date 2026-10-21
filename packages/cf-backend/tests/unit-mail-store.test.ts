@@ -3,11 +3,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import { initMailboxTables, mailInContext, type SqlExec } from '@kinu.run/core';
 import { makeSqlExec } from '../../core/tests/helpers';
 import type { MailDelivery } from '@kinu.run/core';
 import { MailStore, type MailBlobs } from '@kinu.run/core';
 import { parseMail } from '../src/mail/parse';
+import { mailboxEmail } from '@kinu.run/core';
 import { routeInboundMail } from '../src/mail/router';
 
 // The Mailbox's store over SQLite, with the three real deliveries Cloudflare's MX made on 2026-10-19 (docs/MAIL.md §4)
@@ -216,6 +218,39 @@ describe('threads, views and search', () => {
     expect(arrived.headerId).not.toBeNull();
   });
 
+  // RFC 5322 §3.6.4: a reply's References is its parent's References and the parent's id (Main, 2026-10-20: only the
+  // parent went out, so a client lost the thread's earlier messages).
+  test("a reply deep in a thread carries the thread's whole chain in its References", async () => {
+    open('ashish@kinu.run');
+    const box = store.boxFor({ kind: 'agent', workspace: 'api-worker', name: 'scout', actorId: 'actor-scout' });
+    const recipient = { username: 'ashish', path: box.path, tag: null };
+
+    const fromDana = (id: string, answering: string | null) => new TextEncoder().encode([
+      'From: Dana Whitfield <dana@northwind.io>', 'To: scout.api-worker.ashish@kinu.run', 'Subject: Webhook deliveries to /hooks/v2 failing with 500',
+      `Message-ID: <${id}>`, ...(answering === null ? [] : [`In-Reply-To: <${answering}>`]), 'Content-Type: text/plain; charset=utf-8', '', 'Still a 500.',
+    ].join('\r\n'));
+
+    const reply = async (threadId: string, sentAs: string | null) => {
+      const queued = await store.queue({ path: box.path, threadId, to: ['dana@northwind.io'], subject: 'Re: Webhook deliveries', text: 'Looking.' });
+
+      if (sentAs !== null) store.sentAs(queued.view.id, `<${sentAs}>`);
+
+      return queued;
+    };
+
+    const { threadId } = await delivered({ raw: fromDana('m1@northwind.io', null), envelopeFrom: 'dana@northwind.io', recipient });
+    await reply(threadId, 'r2@kinu.run');
+    await delivered({ raw: fromDana('m3@northwind.io', 'r2@kinu.run'), envelopeFrom: 'dana@northwind.io', recipient });
+    await reply(threadId, 'r4@kinu.run');
+    await delivered({ raw: fromDana('m5@northwind.io', 'r4@kinu.run'), envelopeFrom: 'dana@northwind.io', recipient });
+    const last = await reply(threadId, null);
+    const chain = '<m1@northwind.io> <r2@kinu.run> <m3@northwind.io> <r4@kinu.run> <m5@northwind.io>';
+
+    expect({ inReplyTo: last.inReplyTo, references: last.references }).toEqual({ inReplyTo: '<m5@northwind.io>', references: chain });
+    expect(mailboxEmail({ from: last.from, to: ['dana@northwind.io'], cc: [], subject: 'Re', text: 'x', inReplyTo: last.inReplyTo, references: last.references }).headers)
+      .toEqual({ 'In-Reply-To': '<m5@northwind.io>', References: chain });
+  });
+
   test('Important is the person\'s box only, with the reason; unread counts what is unread there', async () => {
     open('ashish@kinu.run');
     const delivery = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: toPerson });
@@ -267,6 +302,42 @@ describe('threads, views and search', () => {
     expect(store.list({ view: 'all', query: 'kinu-probe-b@ashishkumarsingh.com' }).threads).toHaveLength(1);
     expect(store.list({ view: 'all', query: 'NEAR( "x' }).threads).toEqual([]);
   });
+});
+
+// What the store asks often is answered from the rows it asks about: a thread's draft (each new draft replaces it) and
+// the day's sends against the cap are each read through an index of their own, never a scan of every message.
+test("a thread's draft and the day's sends are read through their own indexes", async () => {
+  const asked: string[] = [];
+
+  const watched: SqlExec = {
+    exec: (query, ...bindings) => {
+      asked.push(query);
+
+      return db.exec(query, ...bindings);
+    },
+  };
+
+  const watching = new MailStore({
+    sql: watched, blobs, domain: 'kinu.run', now: () => clock, id: () => { next += 1;
+
+ return `id-${String(next)}`; }, parse: parseMail,
+    digest: (bytes) => Promise.resolve(createHash('sha256').update(bytes).digest('hex')),
+  });
+
+  watching.open({ userId: 'u-ashish', email: 'ashish@kinu.run', username: 'ashish', assistant: null });
+  const arrived = await watching.deliver({ raw: stranger('Status', 'Is it done?'), envelopeFrom: 'dana@northwind.io', recipient: toPerson });
+
+  if (arrived === null) throw new Error('the arrival was not filed');
+  await watching.draft({ path: '', threadId: arrived.threadId, to: ['dana@northwind.io'], subject: 'Re: Status', text: 'Nearly.' });
+  watching.sentToday();
+
+  const plans = asked.filter((query) => /^SELECT.*FROM mail_messages WHERE (thread_id = \? AND send_state = 'draft'|send_state = 'queued')/su.test(query))
+    .map((query) => db.exec(`EXPLAIN QUERY PLAN ${query}`, ...query.split('?').slice(1).map(() => null)).toArray().map((row) => v.parse(v.string(), row.detail)).join(' '));
+
+  expect(plans).toEqual([
+    expect.stringContaining('INDEX mail_messages_drafts (thread_id=?)'),
+    expect.stringContaining('INDEX mail_messages_sent (at>?)'),
+  ]);
 });
 
 describe('Trash', () => {

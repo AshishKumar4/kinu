@@ -170,7 +170,7 @@
     "@types/node": "^25.9.1",
     "@vitest/coverage-istanbul": "^4.1.11",
     "agents": "^0.26.0",
-    "armada": "github:AshishKumar4/armada#eefcd6df3d152799c4e0b97c10f4310239457c2b",
+    "armada": "github:AshishKumar4/armada#138e0d62a993aedaef300ee72eadc9a14b021796",
     "aws4fetch": "^1.0.20",
     "bun": "1.4.3",
     "capnweb": "^0.12.0",
@@ -191,7 +191,7 @@
     "vite": "8.3.4",
     "vitest": "^4.1.11",
     "vitest-evals": "^0.16.1",
-    "wrangler": "^4.145.0"
+    "wrangler": "^4.151.3"
   },
   "//patchedDependencies": "Every other dependency floats on a caret, newest by default. A patched one stays exact, since its patch applies to that version alone; each floats again with its patch removed, once upstream ships the fix the patch carries.",
   "patchedDependencies": {

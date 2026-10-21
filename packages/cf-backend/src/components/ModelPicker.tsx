@@ -8,10 +8,10 @@ import {
   type ReasoningEffort, type ModelMenuResponse, type ModelMenuEntry, type ProviderFailure,
 } from "@kinu.run/core";
 import {
-  cloudflareReconnectPath, listAvailableModels,
+  listAvailableModels,
   type ModelTestResult, 
 } from "../lib/user-api";
-import { connectCloudflareInHelper } from "../lib/connect-window";
+import { connectCloudflare } from "./CloudflareAIConnectNotice";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
 import { BrandMark, providerBrand } from "./ui/BrandMark";
 import { ChatGptPlanUsage } from "./account/ChatGptConnect";
@@ -19,7 +19,7 @@ import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { lastValue, useAsyncResource } from "../hooks/use-async-resource";
 import { Combobox, Select } from "@/components/ui/Select";
 import { Loader } from "@/components/ui/Loader";
-import { Button, buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 
 type PickerValue = ModelMenuEntry | { value: string; items: ModelMenuEntry[] };
 
@@ -215,6 +215,8 @@ export function ConnectedModelPicker({
   renderEmpty?: () => React.ReactNode;
 }) {
   const { resource, reload } = useAsyncResource(listAvailableModels);
+  // Why the last Workers AI connect did not connect: its finish page closed with the only copy.
+  const [connectFailed, setConnectFailed] = useState<string | null>(null);
   const menu = lastValue(resource);
 
   useEffect(() => {
@@ -246,15 +248,13 @@ export function ConnectedModelPicker({
     if (renderEmpty) return <>{renderEmpty()}</>;
 
     return (
-      <a
-        href={cloudflareReconnectPath(window.location.pathname)}
-        onClick={(event) => { if (connectCloudflareInHelper(window.location.pathname)) event.preventDefault(); }}
-        className={`${buttonClass({ size: "sm" })} p-warning`}
-        title="Reconnect Cloudflare with Workers AI permissions"
-      >
-        <WarningCircleIcon size={14} />
-        Connect Workers AI
-      </a>
+      <span className="inline-flex items-center gap-2">
+        <Button size="sm" className="p-warning" icon={<WarningCircleIcon size={14} />} title="Connect Cloudflare with Workers AI permissions"
+          onClick={() => { setConnectFailed(null); connectCloudflare(reload, setConnectFailed); }}>
+          Connect Workers AI
+        </Button>
+        {connectFailed !== null && <span data-connect-failed className="t-status p-danger">Cloudflare did not connect: {connectFailed}</span>}
+      </span>
     );
   }
 

@@ -55,7 +55,7 @@ function Framed({ framed, children }: { framed: boolean; children: ReactNode }) 
   return framed ? <Card title="Connect a provider">{children}</Card> : <>{children}</>;
 }
 
-export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; framed?: boolean }) {
+export function ProvidersPanel({ framed = true }: { framed?: boolean }) {
   const creds = useAsyncResource(listCredentials);
   const codex = useAsyncResource(codexStatus);
   const chatgpt = useAsyncResource(chatgptPlan);
@@ -99,13 +99,13 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
                       : undefined}
                     revokesAt={revokingProviderOf(CLOUDFLARE_OAUTH_CRED_KEY)}
                     onChanged={reloadAll}
-                    connect={<CloudflareAIConnectNotice returnTo={returnTo} message="Connect Cloudflare to use your Workers AI quota and AI Gateway." />}>
+                    connect={<CloudflareAIConnectNotice onConnected={reloadAll} message="Connect Cloudflare to use your Workers AI quota and AI Gateway." />}>
                     {/* Asked first: the account decides which gateway is reachable. */}
                     <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
                       {(status) => <CloudflareAccountSection status={status} onChanged={reloadAll} />}
                     </CardSlot>
                     <CardSlot resource={gateways.resource} what="your AI gateways" onRetry={reloadAll}>
-                      {(status) => <CloudflareGatewaySection status={status} returnTo={returnTo} onChanged={reloadAll} />}
+                      {(status) => <CloudflareGatewaySection status={status} onChanged={reloadAll} />}
                     </CardSlot>
                   </ProviderEntry>
                   <CardSlot resource={codex.resource} what="your ChatGPT connection" onRetry={reloadAll}>
@@ -282,9 +282,8 @@ function CloudflareAccountSection({ status, onChanged }: {
   );
 }
 
-function CloudflareGatewaySection({ status, returnTo, onChanged }: {
+function CloudflareGatewaySection({ status, onChanged }: {
   status: CloudflareGatewayStatus | null;
-  returnTo: string;
   onChanged: () => void;
 }) {
   const [saving, setSaving] = useState(false);
@@ -302,7 +301,7 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
   if (status.error) {
     return (
       <CloudflareAIConnectNotice
-        returnTo={returnTo}
+        onConnected={onChanged}
         message={`Could not list your AI Gateways: ${status.error}`}
       />
     );

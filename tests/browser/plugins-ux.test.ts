@@ -35,19 +35,26 @@ function drawnRows(page: Page): Promise<{ name: string; text: string; buttons: n
   })));
 }
 
-/** Capture the tabs a row opens: a real `window.open` navigation would hang
- *  the fixture, so the capture writes each URL into the same localStorage
- *  pocket the fixture uses, newest last. */
-async function captureOpenedTabs(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    localStorage.setItem('gallery-mcp-opened', '');
-    window.open = (url?: string | URL) => {
-      localStorage.setItem('gallery-mcp-opened',
-        `${localStorage.getItem('gallery-mcp-opened') ?? ''}${String(url)}\n`);
+/** Where the tab a click on `selector` opens is sent: the sign-in address the server answered for the card, in a real
+ *  tab. The fixture's addresses are this origin's, so nothing past it loads; the tab is closed once it is sent. The
+ *  sign-in itself, approved, declined and run again, runs through the Worker in live-app-connect.test.ts. */
+async function signInTab(page: Page, selector: string): Promise<string> {
+  const opened = page.browser().waitForTarget((target) => target.opener() === page.target());
 
-      return null;
-    };
-  });
+  await page.click(selector);
+  const target = await opened;
+  const sent = await page.browser().waitForTarget((each) => each === target && each.url() !== 'about:blank');
+
+  await (await target.page())?.close();
+
+  return new URL(sent.url()).pathname;
+}
+
+/** The runs each sign-in the page began was begun for, oldest first, as the fixture recorded their POSTs. */
+async function begunRuns(page: Page): Promise<string[]> {
+  const raw = await page.evaluate(() => localStorage.getItem('gallery-mcp-connects') ?? '');
+
+  return raw.split('\n').filter((line) => line !== '').map((line) => v.parse(v.pipe(v.string(), v.parseJson(), v.object({ run: v.pipe(v.string(), v.uuid()) })), line).run);
 }
 
 /** The names in the Connected list, in the order it draws them. */
@@ -85,33 +92,17 @@ describe('MCP presets', () => {
         expect(await presetStatus(page, 'cloudflare')).toBe('Not added');
         expect(await presetStatus(page, 'google')).toBe('Not added');
 
-        await captureOpenedTabs(page);
-
-        // Cloudflare is the OAuth preset: one click posts the add.
-        await page.click('[data-plugin-source="cloudflare"] [data-plugin-add]');
-
+        // Cloudflare is the OAuth preset: one click posts the add, begins its sign-in for a run of the page's own, and
+        // sends a tab of its own to the address the server answered.
+        const sentTo = await signInTab(page, '[data-plugin-source="cloudflare"] [data-plugin-add]');
         const add = v.parse(v.object({ presetId: v.literal('cloudflare') }), await lastMcpAdd(page));
 
-        expect(add.presetId).toBe('cloudflare');
+        expect({ add: add.presetId, sentTo, runs: (await begunRuns(page)).length }).toEqual({ add: 'cloudflare', sentTo: expect.stringMatching(/^\/gallery-sign-in\/srv-add-\d+$/u), runs: 1 });
 
-        await page.waitForFunction(
-          () => localStorage.getItem('gallery-mcp-opened') !== '',
-        );
-
-        const opened = v.parse(
-          v.string(),
-          await page.evaluate(() => localStorage.getItem('gallery-mcp-opened')),
-        );
-
-        // The authorize server is the preset's own, and the URL carries the
-        // row the add created — whose id is the fixture's own counter.
-        expect(opened.trim()).toMatch(/^https:\/\/mcp\.cloudflare\.com\/authorize\?srv-add-\d+$/);
-
-        // The status the next list read reports — the same poll the panel runs.
+        // The status the next list read reports, while the sign-in waits.
         await page.waitForFunction(
           () => document.querySelector('[data-plugin-source="cloudflare"]')?.getAttribute('data-plugin-state') === 'Needs sign-in',
         );
-        expect(await presetStatus(page, 'cloudflare')).toBe('Needs sign-in');
 
         // The added server moves to what the account holds, and the page
         // still draws it once: its own preset row, under Connected alone.
@@ -185,33 +176,24 @@ describe('MCP presets', () => {
 
         expect(await page.$('[data-plugin-source="google"]')).toBeNull();
 
-        await captureOpenedTabs(page);
+        // GitHub's add is a sign-in, not a token prompt: no field opens, the
+        // add posts the preset id alone, and the sign-in opens in its tab.
+        const sentTo = await signInTab(page, '[data-plugin-source="github"] [data-plugin-add]');
+        const add = v.parse(v.object({ presetId: v.literal('github') }), await lastMcpAdd(page));
 
-        // GitHub's add is a sign-in, not a token prompt: no field opens and
-        // the add posts the preset id alone.
-        await page.click('[data-plugin-source="github"] [data-plugin-add]');
-
-        const add = v.parse(
-          v.object({ presetId: v.literal('github') }),
-          await lastMcpAdd(page),
-        );
-
-        expect(add.presetId).toBe('github');
-
-        await page.waitForFunction(
-          () => localStorage.getItem('gallery-mcp-opened') !== '',
-        );
-
-        const opened = v.parse(
-          v.string(),
-          await page.evaluate(() => localStorage.getItem('gallery-mcp-opened')),
-        );
-
-        expect(opened.trim()).toMatch(/^https:\/\/api\.githubcopilot\.com\/authorize\?srv-add-\d+$/);
+        expect({ add: add.presetId, sentTo }).toEqual({ add: 'github', sentTo: expect.stringMatching(/^\/gallery-sign-in\/srv-add-\d+$/u) });
 
         await page.waitForFunction(
           () => document.querySelector('[data-plugin-source="github"]')?.getAttribute('data-plugin-state') === 'Needs sign-in',
         );
+
+        // Not connected, the card keeps its way to the sign-in, begun again for a run of its own.
+        await page.click('[data-plugin-source="github"] [data-row-menu]');
+        await page.waitForSelector('[role="menu"][data-open] [data-plugin-sign-in]');
+        const again = await signInTab(page, '[role="menu"][data-open] [data-plugin-sign-in]');
+        const runs = await begunRuns(page);
+
+        expect({ again, runs: runs.length, distinct: new Set(runs).size }).toEqual({ again: sentTo, runs: 2, distinct: 2 });
       } finally {
         await page.close();
       }
@@ -260,6 +242,150 @@ describe('MCP presets', () => {
         await page.waitForFunction(() => document.querySelector('[role="dialog"]') === null);
 
         expect((await drawnRows(page)).map((row) => row.name)).toContain('tracker');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // Review finding (2026-10-23): a custom server's sign-in that could not begin was said on the add form, which the add
+  // then closed, so the failure went with it.
+  test('a custom server whose sign-in cannot begin says so in the manager after its form closes', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'plugins&mcp-sign-in=refused', 'dark', 'desktop');
+      const manage = 'xpath/.//header//button[normalize-space()="Manage"]';
+
+      try {
+        await page.waitForSelector(manage);
+        await page.click(manage);
+        await page.waitForSelector('[role="dialog"]');
+        await page.$$eval('[role="dialog"] button', (buttons) => buttons.find((button) => button.textContent?.includes('Add custom server'))?.click());
+        await page.type('[role="dialog"] input[placeholder="github"]', 'tracker');
+        await page.type('[role="dialog"] input[placeholder="https://mcp.example.com/v1"]', 'https://mcp.tracker.example/v1');
+        await page.$$eval('[role="dialog"] button', (buttons) => buttons.find((button) => button.textContent === 'Add server')?.click());
+        await page.waitForSelector('[role="dialog"] [data-connect-ended="failed"]');
+
+        expect({
+          formOpen: await page.$('[role="dialog"] input[placeholder="github"]') !== null,
+          said: await page.$eval('[role="dialog"] [data-connect-ended="failed"]', (node) => node.textContent ?? ''),
+        }).toEqual({ formOpen: false, said: expect.stringContaining("The MCP server's sign-in could not begin.") });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // Sol's review (2026-10-23): every connect opened one named window, so two begun together shared it, each sending it
+  // elsewhere and closing it under the other.
+  test('two preset sign-ins begun together each get a helper window of their own', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'plugins', 'dark', 'desktop');
+
+      try {
+        await page.waitForFunction(() => ['cloudflare', 'github'].every((id) => document.querySelector(`[data-plugin-source="${id}"] [data-plugin-add]`) !== null));
+        // Each window a connect opens, by its target name.
+        await page.evaluate(() => {
+          const open = window.open.bind(window);
+
+          window.open = (url, target, features) => {
+            localStorage.setItem('gallery-opened', `${localStorage.getItem('gallery-opened') ?? ''}${String(target)}\n`);
+
+            return open(url, target, features);
+          };
+        });
+        // Two clicks in one task: the second begins before the first's add has answered.
+        await page.evaluate(() => {
+          for (const id of ['cloudflare', 'github']) document.querySelector<HTMLElement>(`[data-plugin-source="${id}"] [data-plugin-add]`)?.click();
+        });
+        await page.waitForFunction(() => (localStorage.getItem('gallery-opened') ?? '').split('\n').filter(Boolean).length === 2);
+
+        const targets = (await page.evaluate(() => localStorage.getItem('gallery-opened') ?? '')).split('\n').filter(Boolean);
+
+        expect({ windows: targets.length, distinct: new Set(targets).size }).toEqual({ windows: 2, distinct: 2 });
+      } finally {
+        for (const opened of await page.browser().pages()) if (opened !== page) await opened.close();
+        await page.close();
+      }
+    });
+  });
+
+  // Sol's review (2026-10-23): the Plugins page passes no outcome handler, so a sign-in that did not connect closed its
+  // finish page with the only copy of why.
+  test('a preset whose sign-in did not connect says why on its row', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'plugins', 'dark', 'desktop');
+      const row = '[data-plugin-source="cloudflare"]';
+
+      try {
+        await page.waitForSelector(`${row} [data-plugin-add]`);
+        const opened = page.browser().waitForTarget((target) => target.opener() === page.target());
+
+        await page.click(`${row} [data-plugin-add]`);
+        const helper = await (await opened).page();
+
+        if (helper === null) throw new Error('the sign-in opened no tab');
+        await page.waitForFunction(() => (localStorage.getItem('gallery-mcp-connects') ?? '') !== '');
+        const [run = ''] = await begunRuns(page);
+
+        // Where the callback sends the helper once the provider declines: the finish page, for this run.
+        await Promise.allSettled([helper.goto(`${gallery.origin}/gallery.html?frame=connected&${new URLSearchParams({ run, service: 'Cloudflare', error: 'access_denied: the person declined' }).toString()}`)]);
+        await page.waitForSelector(`${row} [data-plugin-error]`);
+
+        // The provider's own reason, as the finish page carried it.
+        const said = await page.$eval(`${row} [data-plugin-error]`, (node) => node.textContent ?? '');
+
+        // A retry begun and abandoned (its tab closed with no end): the earlier failure stays, pending and after
+        // (Sol's final review: it was cleared as the retry began).
+        const signInAgain = async (runs: number) => {
+          const retryTarget = page.browser().waitForTarget((target) => target.opener() === page.target());
+
+          await page.click(`${row} [data-row-menu]`);
+          await page.waitForSelector('[role="menu"][data-open] [data-plugin-sign-in]');
+          await page.click('[role="menu"][data-open] [data-plugin-sign-in]');
+          const tab = await (await retryTarget).page();
+
+          if (tab === null) throw new Error('the sign-in opened no tab');
+          await page.waitForFunction((count: number) => (localStorage.getItem('gallery-mcp-connects') ?? '').split('\n').filter(Boolean).length === count, {}, runs);
+
+          return tab;
+        };
+
+        const abandoned = await signInAgain(2);
+        const keptPending = await page.$(`${row} [data-plugin-error]`) !== null;
+
+        await abandoned.close();
+        const keptAbandoned = await page.$(`${row} [data-plugin-error]`) !== null;
+
+        // Signed in again and connected: the earlier failure goes (Sol-round review: it stayed on a ready row).
+        const retry = await signInAgain(3);
+        const retried = (await begunRuns(page))[2] ?? '';
+
+        await Promise.allSettled([retry.goto(`${gallery.origin}/gallery.html?frame=connected&${new URLSearchParams({ run: retried, service: 'Cloudflare' }).toString()}`)]);
+        // The row has heard the retry's end once its helper closed (its finish page closes it after telling the row).
+        await new Promise<void>((resolve) => { if (retry.isClosed()) resolve(); else retry.once('close', () => { resolve(); }); });
+        await page.waitForFunction(() => new Promise((resolve) => { requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(true); }); }); }));
+
+        expect({ said: said.includes('access_denied: the person declined'), keptPending, keptAbandoned, cleared: await page.$(`${row} [data-plugin-error]`) === null })
+          .toEqual({ said: true, keptPending: true, keptAbandoned: true, cleared: true });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
+  // Sol's final review (2026-10-23): an added row's menu offered Sign in by its preset's kind and the deployment's app,
+  // so a GitHub added with a token whose server refused it offered a sign-in its token never needs.
+  test("an added row offers Sign in only where the account says it signs in", async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'plugins&mcp-preset=token-failed', 'dark', 'desktop');
+      const row = '[data-plugin-source="github"]';
+
+      try {
+        await page.waitForSelector(`${row} [data-row-menu]`);
+        await page.click(`${row} [data-row-menu]`);
+        await page.waitForSelector('[role="menu"][data-open] [role="menuitem"]');
+
+        expect(await page.$('[role="menu"][data-open] [data-plugin-sign-in]')).toBeNull();
       } finally {
         await page.close();
       }

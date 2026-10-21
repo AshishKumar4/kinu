@@ -90,7 +90,7 @@ export function toolExecute<Args, Result>(
   }));
 }
 
-/** A hire port whose advisors answer when the test says so, as the ingress stores a helper's answer. */
+/** A hire port whose advisors answer when the test says so, as the ingress stores a subagent's answer. */
 export interface ScriptedAdvisorPort extends TemporaryAgentPort {
   /** Every brief an advisor was hired on, in order. */
   readonly tasks: readonly TemporaryRunRequest[];

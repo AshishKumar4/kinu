@@ -132,8 +132,8 @@ FLEET_TOKEN="$(scripted_account "$FLEET_ACCOUNT")" || exit 1
 
 # THE CASES ACT AS THE `scripted` ACCOUNT, ON THE SCRIPTED MODEL. The tier
 # checks the product, not what a model chooses: every workspace of both
-# accounts, and every helper and swarm node they hire, answers from
-# `tierModel` (scripts/tier-model.ts) through the tiers' Worker. A helper's
+# accounts, and every subagent and swarm node they hire, answers from
+# `tierModel` (scripts/tier-model.ts) through the tiers' Worker. A subagent's
 # model comes from its account's default tier, so the cases need an account
 # of their own; the eval service's is shared with the evals, whose runs must
 # keep a real model. Whether a model makes the calls a case names when asked

@@ -9,7 +9,7 @@ import { KinuError } from '../src/obs/error';
 import { McpToolError } from '../src/tools/mcp-error';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
-import { readSubordinateInspection } from '../src/subordinates/inspection';
+import { readSubagentInspection } from '../src/subagents/inspection';
 import { makeSqlExec } from './helpers';
 import { decodeModelMessageValues } from '../src/session/message-codec';
 import { claimFences } from '../src/orchestrator/actor-claims';
@@ -39,7 +39,7 @@ test('step inspection returns decoded image and file bytes, not storage placehol
 
     if (event?.type !== 'step_finish') throw new Error('missing sealed media step');
 
-    const inspected = await readSubordinateInspection({ sql: s.rt.storage.sql, raw: makeSqlExec(s.testSql.db), actor: s.rt.actor,
+    const inspected = await readSubagentInspection({ sql: s.rt.storage.sql, raw: makeSqlExec(s.testSql.db), actor: s.rt.actor,
       transcriptFor: () => s.history.transcript('default') }, { view: 'step', path: [], runId: event.runId, eventIndex: event.eventIndex });
 
     if (inspected.view !== 'step') throw new Error('missing media inspection');
@@ -74,7 +74,7 @@ test('a sealed step stores canonical output references, not a second transcript 
     expect(event.parts.length).toBe(1);
     expect(await s.history.messages.materialize({ messageId: event.parts[0].messageId })).toEqual(message);
 
-    const read = await readSubordinateInspection({ sql: s.rt.storage.sql, raw: makeSqlExec(s.testSql.db), actor: s.rt.actor,
+    const read = await readSubagentInspection({ sql: s.rt.storage.sql, raw: makeSqlExec(s.testSql.db), actor: s.rt.actor,
       transcriptFor: () => s.history.transcript('default') }, { view: 'step', path: [], runId: event.runId, eventIndex: event.eventIndex });
 
     if (read.view !== 'step') throw new Error('the inspector could not read sealed canonical output');

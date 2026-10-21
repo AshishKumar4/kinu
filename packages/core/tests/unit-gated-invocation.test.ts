@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { Effect } from 'effect';
 import { createTestActors, JOBS_WITH_ROOM, present } from '@kinu.run/test-utils';
 import {
-  createNimbusWorkspaceExecutor, createShellSession, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
+  createNimbusWorkspaceExecutor, createShellSession, DeferredApprovalQueue, DeferredApprovalStore, initOwnerRequestsTable,
   nimbusSessionFiles, nimbusSessionShell, withApprovalGatedShell, WORKSPACE_ROOT,
   type ShellApprovalOutcome, type ShellApprovalPolicy, type ShellApprovalRequest,
 } from '../src/index';
@@ -34,7 +34,7 @@ function owner(answer: ShellApprovalOutcome) {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  initDeferredApprovalsTable(execRaw);
+  initOwnerRequestsTable(execRaw);
   let seq = 0;
 
   const queue = new DeferredApprovalQueue({

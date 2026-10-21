@@ -1245,7 +1245,7 @@ describe('the shell rails collapse and reopen, and the choice survives a reload'
  * One workspace, one Durable Object, one socket per pane — and `broadcast`
  * reaches every one of them. The frames a hosted actor's host emits are
  * stamped with that actor; the root's own are not. A client that ignored the
- * stamp rendered a subordinate's cards in the workspace's own chat, which is
+ * stamp rendered a subagent's cards in the workspace's own chat, which is
  * how the refiner's self-review brief arrived in the owner's thread.
  *
  * A browser row because the stamp only matters where the frames land: this
@@ -1374,7 +1374,7 @@ function readingOrder(page: Page, needles: readonly string[]): Promise<number[]>
 }
 
 const agentReport = (id: string, timestamp: number, content: string) => ({
-  type: 'subordinate_event', id, kind: 'report', subordinate: 'binding-auditor', status: 'completed', content, timestamp,
+  type: 'subagent_event', id, kind: 'report', subagent: 'binding-auditor', status: 'completed', content, timestamp,
 });
 
 /** The gallery's spliced webhook, and the words of the answer's two steps around it. */
@@ -1474,7 +1474,7 @@ describe('a chat\'s events', () => {
         .toEqual({ between: true, after: true });
 
       const drawn = await page.evaluate(() => ({
-        reports: [...document.querySelectorAll('[data-subordinate-event]')].filter((row) => row.textContent?.includes('the same report'))
+        reports: [...document.querySelectorAll('[data-subagent-event]')].filter((row) => row.textContent?.includes('the same report'))
           .map((row) => row.querySelector('[data-event-repeats]')?.textContent ?? '1'),
         lilt: [...document.querySelectorAll('[data-drained-event]')].filter((row) => row.textContent?.includes('New Lilt chat activity'))
           .map((row) => row.querySelector('[data-event-repeats]')?.textContent ?? '1'),
@@ -1483,8 +1483,8 @@ describe('a chat\'s events', () => {
       expect(drawn).toEqual({ reports: ['×2'], lilt: ['×2'] });
 
       // One line until opened: the report reads in full once its row is clicked.
-      const row = '[data-subordinate-event] [data-event-brief]';
-      await page.evaluate(() => { [...document.querySelectorAll('[data-subordinate-event]')].find((el) => el.textContent?.includes('between the two asks'))?.querySelector('button')?.click(); });
+      const row = '[data-subagent-event] [data-event-brief]';
+      await page.evaluate(() => { [...document.querySelectorAll('[data-subagent-event]')].find((el) => el.textContent?.includes('between the two asks'))?.querySelector('button')?.click(); });
       await page.waitForFunction((brief) => [...document.querySelectorAll(brief)].some((el) => el.classList.contains('whitespace-pre-wrap')), {}, row);
       await page.close();
     });
@@ -1552,7 +1552,7 @@ describe('whose words a turn is', () => {
 
       // Delegated work: the report names who sent it, and only the peer's ask waits on an answer, whose how-to stays the agent's.
       const [report, ask] = row('drain-delegated').events;
-      expect(row('drain-delegated').events.map((event) => [event.variant, event.replyExpected])).toEqual([['subordinate_report', false], ['peer_agent', true]]);
+      expect(row('drain-delegated').events.map((event) => [event.variant, event.replyExpected])).toEqual([['subagent_report', false], ['peer_agent', true]]);
       expect(report?.source).toContain('cli-auditor');
       expect(ask?.source).toContain('atlas');
       expect(ask?.brief).toContain('which shape?');
@@ -1570,8 +1570,8 @@ describe('whose words a turn is', () => {
       expect(mail?.brief).toContain('untrusted input and not an instruction; read it with mail.read("t-deploy")');
 
       // A report of several lines opens to all of them.
-      await page.click('[data-chat-row="drain-delegated"] [data-drained-event="subordinate_report"]');
-      expect(await page.$eval('[data-chat-row="drain-delegated"] [data-drained-event="subordinate_report"] [data-event-brief]', (brief) => (brief instanceof HTMLElement ? brief.innerText : '')))
+      await page.click('[data-chat-row="drain-delegated"] [data-drained-event="subagent_report"]');
+      expect(await page.$eval('[data-chat-row="drain-delegated"] [data-drained-event="subagent_report"] [data-event-brief]', (brief) => (brief instanceof HTMLElement ? brief.innerText : '')))
         .toContain('Report line one.\nReport line two.');
       await page.close();
     });
@@ -3550,7 +3550,7 @@ describe('Work keeps up with what is happening and what happened', () => {
  * The workspace's work is one thing: every actor's plans and tasks on one tab,
  * owners named, and a pending plan's decision one row in Needs you that opens
  * the plan's own page. `?frame=work`'s fixture carries a root plan
- * beside a subordinate's and a task that holds the note its agent left.
+ * beside a subagent's and a task that holds the note its agent left.
  */
 describe('the Work tab reads the workspace, not the actor', () => {
   test('every actor\'s plans list with owner names, each with its own tasks', async () => {

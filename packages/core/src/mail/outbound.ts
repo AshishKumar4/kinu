@@ -53,9 +53,11 @@ function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'references
  */
 export function mailboxEmail(message: {
   readonly from: string; readonly to: readonly string[]; readonly cc: readonly string[]; readonly subject: string; readonly text: string;
+  /** What it answers, and its thread's chain to that (`MailStore.queue`). */
   readonly inReplyTo: string | null;
+  readonly references: string | null;
 }): OutboundEmailMessage {
-  const headers = threadingHeaders({ message_id: message.inReplyTo, references: null });
+  const headers = threadingHeaders({ message_id: message.inReplyTo, references: message.references });
 
   return {
     from: message.from, to: [...message.to], ...(message.cc.length > 0 && { cc: [...message.cc] }), subject: message.subject, text: message.text,

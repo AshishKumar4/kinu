@@ -42,15 +42,18 @@ export async function recordIncident(
   store: IncidentStore,
   stage: IncidentStage,
   reason: string,
-  extra?: { readonly processId?: string; readonly port?: number },
+  extra?: { readonly processId?: string; readonly port?: number; readonly job?: string; readonly exitCode?: number },
 ): Promise<void> {
   const incidentId = crypto.randomUUID();
   await store.put(`${INCIDENT_PREFIX}${incidentId}`, {
     incidentId,
     stage,
-    reason: reason.slice(0, INCIDENT_REASON_MAX_CHARS),
+    // A tail keeps its end: what a process wrote last is what says why it ended.
+    reason: stage === 'process-ended' ? reason.slice(-INCIDENT_REASON_MAX_CHARS) : reason.slice(0, INCIDENT_REASON_MAX_CHARS),
     processId: extra?.processId,
     port: extra?.port,
+    ...(extra?.job !== undefined && { job: extra.job }),
+    ...(extra?.exitCode !== undefined && { exitCode: extra.exitCode }),
     at: Date.now(),
     attempts: 0,
   } satisfies IncidentRow);
@@ -77,6 +80,8 @@ export function deliverIncidents(
           processId: row.processId,
           port: row.port,
           at: row.at,
+          ...(row.job !== undefined && { job: row.job }),
+          ...(row.exitCode !== undefined && { exitCode: row.exitCode }),
         // `row.attempts` is only incremented after the handler returns, so this delivery's ordinal is
         // `+ 1`: the host needs the ordinal of the announcement it is making.
         }, row.attempts + 1),

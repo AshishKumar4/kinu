@@ -86,7 +86,7 @@ export function SetupModalFrame() {
         </Suspense>
         {parsed.success && (
           // The dialog stays up for the capture.
-          <AccountPanelModal panel={parsed.output} returnTo="/" onClose={() => {}} />
+          <AccountPanelModal panel={parsed.output} onClose={() => {}} />
         )}
       </main>
     </div>

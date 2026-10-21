@@ -923,7 +923,7 @@ const WAITS_NOTE = '_Durations leave out time the product spent waiting on the m
 
 const METRICS_NOTE = '_Mean wall, mean cost and cache hits show baseline → candidate. Wall time includes provider waits; '
   + 'cache hits are cache-read tokens / prompt tokens, excluding infrastructure trials. Tokens and cache hits count every '
-  + 'agent\u2019s model calls, helpers and swarm nodes included, and cost is the whole workspace\u2019s spend. A dash means a '
+  + 'agent\u2019s model calls, subagents and swarm nodes included, and cost is the whole workspace\u2019s spend. A dash means a '
   + 'count is missing, not zero or a rate over a subset._';
 
 const MEASURE_LABEL: Record<Measure, { name: string; value: (amount: number) => string }> = {

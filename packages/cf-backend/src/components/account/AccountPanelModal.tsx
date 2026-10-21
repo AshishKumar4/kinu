@@ -17,9 +17,8 @@ const PANEL_HEADS = {
   cli: { title: "Install the CLI", Icon: TerminalIcon },
 } satisfies Record<AccountPanel, { title: string; Icon: ComponentType<{ size?: number; className?: string }> }>;
 
-export function AccountPanelModal({ panel, returnTo, onClose, mcp }: {
+export function AccountPanelModal({ panel, onClose, mcp }: {
   panel: AccountPanel;
-  returnTo: string;
   onClose: () => void;
   /** The page's own MCP read, when the page shows the same servers: a change here is a change there. */
   mcp?: McpServers;
@@ -34,7 +33,7 @@ export function AccountPanelModal({ panel, returnTo, onClose, mcp }: {
       maxWidthClass="max-w-2xl"
       footer={<Button variant="ghost" size="sm" onClick={onClose}>Done</Button>}
     >
-      {panel === 'providers' && <ProvidersPanel returnTo={returnTo} />}
+      {panel === 'providers' && <ProvidersPanel />}
       {panel === 'mcp' && (mcp === undefined ? <McpServersSection /> : <McpServersPanel mcp={mcp} />)}
       {panel === 'cli' && <CliInstallCard />}
     </Modal>

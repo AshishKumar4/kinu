@@ -9,14 +9,15 @@ import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect } from 'effect';
 import { getCurrentScaffoldVersion, pragmaStamps, requireSchemaStamp, type ActorHandle, type SqlExecutor, type VersionedScaffoldSource } from '@kinu.run/core';
 import { KinuError, settle } from '@kinu.run/core/obs';
-import { makeSqlExec } from './runtime';
+import { sqlStorageOver } from '@kinu.run/core/identity';
 
 /** The stamp a database carries, 0 for none. */
 export function schemaGenesisOf(db: Database): number {
-  return pragmaStamps(makeSqlExec(db)).read();
+  return pragmaStamps(sqlStorageOver(db)).read();
 }
 
-/** Refuses a database another Kinu's schema made. */
+/** Refuses a database another Kinu's schema made, before anything runs over it: the root's, and a facet's, which is the
+ *  root's database bound to one of its agents. */
 export function requireSchemaGenesis(db: Database, name: string): void {
   requireSchemaStamp(`Workspace "${name}"`, 'local', schemaGenesisOf(db));
 }

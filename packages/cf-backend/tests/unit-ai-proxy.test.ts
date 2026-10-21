@@ -14,6 +14,7 @@ import {
 } from '@kinu.run/core';
 import type { AccessTokenScope, AuthRequest, AuthResolution, UserCaller, WorkersAIRunOptions } from '@kinu.run/core';
 import * as v from 'valibot';
+import { chatResponse, OK_CHAT_ANSWER } from '@kinu.run/test-utils';
 import { requestUrl } from '@kinu.run/core';
 
 
@@ -190,15 +191,9 @@ function handled(response: Response | null): Response {
   return response;
 }
 
-function completionResponse(model: string): Response {
-  return new Response(JSON.stringify({
-    id: 'chatcmpl-1',
-    object: 'chat.completion',
-    created: 0,
-    model,
-    choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-  }), { headers: { 'content-type': 'application/json' } });
+/** `ok` from `model`, as the upstream call asked for it. */
+function completionResponse(model: string, seen: CapturedUpstream): Response {
+  return chatResponse({ ...OK_CHAT_ANSWER, model }, seen.body.stream === true);
 }
 
 describe('AI proxy auth gate', () => {
@@ -216,7 +211,7 @@ describe('AI proxy auth gate', () => {
 
   test('pta_ tokens need the ai.proxy scope; ptc_ session tokens always pass', async () => {
     const { env } = setupEnv();
-    captureUpstream(() => completionResponse('@cf/moonshotai/kimi-k2.6'));
+    captureUpstream((seen) => completionResponse('@cf/moonshotai/kimi-k2.6', seen));
 
     const denied = await aiProxy(chatRequest(READ_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }), env);
     expect(denied?.status).toBe(403);
@@ -233,7 +228,7 @@ describe('AI proxy auth gate', () => {
 describe('AI proxy model → upstream selection', () => {
   test('@cf models ride the Workers AI credential to {account}/ai/v1', async () => {
     const { env } = setupEnv({ token: 'cf-user-token' });
-    const captured = captureUpstream(() => completionResponse('@cf/moonshotai/kimi-k2.6'));
+    const captured = captureUpstream((seen) => completionResponse('@cf/moonshotai/kimi-k2.6', seen));
 
     const res = await aiProxy(chatRequest(SESSION_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
@@ -458,7 +453,7 @@ describe('AI proxy model → upstream selection', () => {
 
   test('{author}/{model} ids ride the AI Gateway credential with cf-aig-gateway-id', async () => {
     const { env } = setupEnv({ gatewayId: 'prod-gw', token: 'cf-user-token' });
-    const captured = captureUpstream(() => completionResponse('openai/gpt-4.1'));
+    const captured = captureUpstream((seen) => completionResponse('openai/gpt-4.1', seen));
 
     const res = await aiProxy(chatRequest(SESSION_TOKEN, { model: 'openai/gpt-4.1', messages: [] }), env);
     expect(res?.status).toBe(200);
@@ -475,7 +470,7 @@ describe('AI proxy model → upstream selection', () => {
 
   test('a missing Cloudflare connection is an actionable 401, not an upstream call', async () => {
     const { env } = setupEnv({ gatewayId: null });
-    const captured = captureUpstream(() => completionResponse('openai/gpt-4.1'));
+    const captured = captureUpstream((seen) => completionResponse('openai/gpt-4.1', seen));
     const res = await aiProxy(chatRequest(SESSION_TOKEN, { model: 'openai/gpt-4.1', messages: [] }), env);
     expect(res?.status).toBe(401);
     expect(captured).toHaveLength(0);
@@ -521,7 +516,7 @@ describe('AI proxy streaming + refresh + error mapping', () => {
         ? new Response(JSON.stringify({ errors: [{ code: 10000, message: 'Invalid access token' }] }), {
           status: 401, headers: { 'content-type': 'application/json' },
         })
-        : completionResponse('openai/gpt-4.1'));
+        : completionResponse('openai/gpt-4.1', seen));
 
     const res = await aiProxy(chatRequest(SESSION_TOKEN, { model: 'openai/gpt-4.1', messages: [] }), env);
     expect(res?.status).toBe(200);

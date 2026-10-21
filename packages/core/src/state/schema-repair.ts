@@ -8,7 +8,7 @@
  *   run over the rest): a table is stale while its CREATE statement is not the one the init makes, so a change no
  *   column name shows (a CHECK, a key, nullability) is seen too.
  * - A stale table is dropped with every table that refers to it by a foreign key, or declares itself derived from it
- *   ({@link DERIVED_FROM}), transitively: rows left in a kept table would name rows that are gone. The tables and the triggers and views that name them go in one transaction,
+ *   ({@link DERIVED_FROM}), a virtual table (an FTS index) included, transitively: rows left in a kept table would name rows that are gone. The tables and the triggers and views that name them go in one transaction,
  *   the init makes them anew, and a table or view of the group the init does not make is made again as it was, empty.
  * - A table no build declares any longer (`SCHEMA_RETIRED`) is dropped, unless rows a kept table holds refer to it.
  *
@@ -200,22 +200,31 @@ function dependents(rows: readonly SchemaRow[], tables: readonly string[]): Sche
   return rows.filter((row) => found.has(row));
 }
 
-/** The statement each of `tables`, and each view, has as the init (or, for a table left to its first use, `later`)
- *  makes it now, read in a rolled-back trial; and which of them only `later` makes. */
+/** Whether `row` is a virtual table: a module's (an FTS index), which no class lists and no foreign key can name. */
+function isVirtual(row: SchemaRow): boolean {
+  return row.type === 'table' && /^CREATE\s+VIRTUAL\s+TABLE\b/iu.test(row.sql ?? '');
+}
+
+/** The statement each of `tables`, each virtual table and each view has as the init (or, for one left to its first use,
+ *  `later`) makes it now, read in a rolled-back trial; and which of them only `later` makes. A virtual table is set
+ *  aside too, so its statement, and the mark that says what it is derived from, is this build's and not the one the
+ *  database was made with. */
 function initStatements(sql: SqlExec, writes: TableWrites, tables: readonly string[]): Effect.Effect<Declared, KinuError> {
   return inTransaction(writes, () => Effect.gen(function* () {
     yield* run(sql, 'PRAGMA defer_foreign_keys = ON');
     const rows = schemaRows(sql);
-    const named = dependents(rows, tables);
+    const virtuals = rows.filter((row) => isVirtual(row) && !tables.includes(row.name)).map((row) => row.name);
+    const read = [...tables, ...virtuals];
+    const named = dependents(rows, read);
 
     for (const row of [...named, ...rows.filter((view) => view.type === 'view' && !named.includes(view))]) yield* run(sql, `DROP ${row.type.toUpperCase()} "${row.name}"`);
 
-    for (const table of tables) yield* run(sql, `ALTER TABLE "${table}" RENAME TO "${table}${ASIDE}"`);
+    for (const table of read) yield* run(sql, `ALTER TABLE "${table}" RENAME TO "${table}${ASIDE}"`);
     yield* Effect.try({ try: () => { writes.init(); }, catch: (cause) => new KinuError('unsupported', `the init refused: ${String(cause)}`) });
     const byInit = new Set(schemaRows(sql).map((row) => row.name));
 
     yield* Effect.try({ try: () => { writes.later?.(); }, catch: (cause) => new KinuError('unsupported', `a table's first use refused: ${String(cause)}`) });
-    const made = schemaRows(sql).filter((row) => (row.type === 'table' && tables.includes(row.name)) || row.type === 'view');
+    const made = schemaRows(sql).filter((row) => (row.type === 'table' && read.includes(row.name)) || row.type === 'view');
 
     return {
       statements: new Map(made.map((row) => [row.name, row.sql ?? ''])),
@@ -268,15 +277,17 @@ function reset(sql: SqlExec, writes: TableWrites, group: readonly string[], lazy
     const present = new Set(schemaRows(sql).filter((row) => row.type === 'table').map((row) => row.name));
     const remade = new Set(group.filter((table) => present.has(table)));
 
-    // A table its first use makes is left to that use, which makes it in this build's shape.
-    for (const row of before.filter((table) => table.type === 'table' && group.includes(table.name) && !remade.has(table.name) && !lazy.has(table.name))) {
+    // A table its first use makes is left to that use, which makes it in this build's shape; a retired one, to no build.
+    const kept = (table: string): boolean => !lazy.has(table) && !SCHEMA_RETIRED.includes(table);
+
+    for (const row of before.filter((table) => table.type === 'table' && group.includes(table.name) && !remade.has(table.name) && kept(table.name))) {
       yield* run(sql, row.sql ?? '');
     }
 
     const made = new Set(schemaRows(sql).map((row) => row.name));
 
     // What the init made anew is the init's; what it did not make is the database's own, made again as it was.
-    for (const row of [...indexes, ...named].filter((dropped) => !made.has(dropped.name) && !lazy.has(dropped.tbl_name) && (dropped.type === 'view' || !remade.has(dropped.tbl_name)))) {
+    for (const row of [...indexes, ...named].filter((dropped) => !made.has(dropped.name) && kept(dropped.tbl_name) && (dropped.type === 'view' || !remade.has(dropped.tbl_name)))) {
       yield* run(sql, row.sql ?? '');
     }
 
@@ -340,10 +351,21 @@ function resetStale(sql: SqlExec, writes: TableWrites, outcome: Outcome, { state
       return;
     }
 
-    outcome.dropped.push(...group);
+    // A retired table the group took is retired, as the retire step would have said, and that step finds it gone.
+    const retired = new Set(group.filter((table) => SCHEMA_RETIRED.includes(table)));
+
+    outcome.dropped.push(...group.filter((table) => !retired.has(table)));
+    outcome.retired.push(...retired);
     // A table left to its first use has no rows until then.
-    outcome.tables.push(...before.map(({ table, rows }) => ({ table, before: rows, after: lazy.has(table) ? 0 : rowsOf(sql, table) })));
+    outcome.tables.push(...before.map(({ table, rows }) => ({ table, before: rows, after: afterReset(sql, table, { lazy, retired }) })));
   });
+}
+
+/** A table's rows once a reset made it anew: none until its first use for a table left to it, none ever for a retired one. */
+function afterReset(sql: SqlExec, table: string, { lazy, retired }: { lazy: ReadonlySet<string>; retired: ReadonlySet<string> }): number | null {
+  if (retired.has(table)) return null;
+
+  return lazy.has(table) ? 0 : rowsOf(sql, table);
 }
 
 /** The init's statements read, then every stale table reset, then every stale view made again. */

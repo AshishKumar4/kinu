@@ -275,9 +275,7 @@ export interface ReviewedPackage {
  *
  * Most arrive through wrangler, miniflare, the MCP SDK, @opentui and the
  * pi-coding-agent dev toolchain, at versions those parents pin exactly.
- * `valibot` is the one that is still our own direct dependency, and the
- * vulnerable function is called nowhere in tracked source. `react-router` is
- * the one entry that ships in code we serve.
+ * `react-router` is the one entry that ships in code we serve.
  *
  * Four entries say a lockfile refresh would clear them. That is a statement this
  * gate then enforces: once the refresh happens the ids stop reproducing and the
@@ -317,13 +315,6 @@ export const REVIEWED_ADVISORIES = {
       + 'downloaded browser archive, which never happens in a Worker; worker-bundle-reach.test.ts fails '
       + 'if either package enters the Worker bundle. No fixed release exists: 2.0.1 is its last publish.',
     ids: [1139346, 1193685],
-  },
-  valibot: {
-    reason: 'transitive: armada (github:AshishKumar4/armada#eefcd6d) pins valibot 1.4.1 exactly; the '
-      + 'root and @kinu.run/cf-backend resolve 1.5.0. record() issue paths can make flatten() throw '
-      + 'for an inherited Object property name, and armada\'s src calls flatten() nowhere. Cleared '
-      + 'by armada moving its pin to ^1.5.0 upstream.',
-    ids: [1124298],
   },
 } satisfies Record<string, ReviewedPackage>;
 

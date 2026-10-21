@@ -113,7 +113,7 @@
       // (`hostNamespace: 'OrchestratorAgent'` in src/nimbus-programmatic.ts).
       // Rename it and the supervisor entrypoint resolves a namespace that does
       // not exist. This is the ONLY actor-bearing class: every logical
-      // actor in a workspace — the main actor, hired subordinates, ask-by-role
+      // actor in a workspace — the main actor, hired subagents, ask-by-role
       // temporaries, branching heads, swarm nodes, MCTS rollout branches —
       // lives inside one object of this namespace, over its one SQLite.
       { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
@@ -313,7 +313,7 @@
     // Access-protected site on this account already advertises.
     "CONTROL_PLANE_ACCESS_TEAM_DOMAIN": "https://aksingh.cloudflareaccess.com",
     "CONTROL_PLANE_ACCESS_AUD": "fa05f0a7d7193ab2d57e08039c567ce3a3bbafa5bccc32e300ab432c607f0015",
-    "CONTROL_PLANE_ADMINS": "me@ashishkumarsingh.com",
+    "CONTROL_PLANE_ADMINS": "me@ashishkumarsingh.com,ashishkmr472@gmail.com",
     // Who may claim a mail address (docs/MAIL.md §1): `operators` (CONTROL_PLANE_ADMINS) until the owner opens it
     // to `everyone`, who then send at most 100 a day.
     "MAIL_ACCOUNTS": "operators",

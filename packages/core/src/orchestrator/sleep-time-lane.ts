@@ -4,7 +4,7 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
-import { effectsAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
+import { effectsAlreadyDone, preparedOutput, prepareOutput, recordEffectDone, retirePreparedOutput } from '../identity/effect-tombstones';
 import type { FactsStore } from '../memory/facts';
 import {
   accountProposals, applySleepTimeUpdate, runSleepTimeCompute, SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
@@ -26,12 +26,7 @@ const CLOSED_AT = 'closed';
 /** One answer past the cadence, plus steers: decides as the whole transcript would. */
 const READ_ROWS = (SLEEP_TIME_CADENCE.everyTurns + 1) * 8;
 
-export function initSleepTimeUpdatesTable(execRaw: RawSqlExec): void {
-  // The paid answer, so a replay applies it instead of buying another.
-  execRaw(`CREATE TABLE IF NOT EXISTS sleep_time_updates (
-      effect_key  TEXT PRIMARY KEY,
-      update_json TEXT NOT NULL
-    )`);
+export function initSleepTimeTables(execRaw: RawSqlExec): void {
   // Account proposals a commit owes the user object, kept until it takes each: `delivery` is the proposal's identity
   // there, so a delivery repeated after a crash or a refusal files nothing new.
   execRaw(`CREATE TABLE IF NOT EXISTS account_proposal_outbox (
@@ -261,9 +256,8 @@ export class SleepTimeLane {
       })));
 
       if (stored === undefined) {
-        void this.deps.sql`INSERT INTO sleep_time_updates (effect_key, update_json)
-          VALUES (${key}, ${JSON.stringify(update)})
-          ON CONFLICT(effect_key) DO NOTHING`;
+        // The paid answer, so a replay applies it instead of buying another.
+        prepareOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key }, JSON.stringify(update));
       }
 
       const proposals = account === undefined ? [] : accountProposals(update, window.turns);
@@ -323,13 +317,13 @@ export class SleepTimeLane {
 
   private finish(key: string): void {
     recordEffectDone(this.deps.sql, this.deps.actor, { scope: PROCESSED, key });
-    void this.deps.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
+    retirePreparedOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key });
     this.clear(SETTLED_AT, CLOSED_AT);
   }
 
   private recordedUpdate(key: string): SleepTimeUpdate | undefined {
-    const row = this.deps.sql<{ update_json: string }>`SELECT update_json FROM sleep_time_updates WHERE effect_key = ${key}`[0];
+    const held = preparedOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key });
 
-    return row === undefined ? undefined : v.parse(SleepTimeUpdateSchema, JSON.parse(row.update_json));
+    return held === undefined ? undefined : v.parse(SleepTimeUpdateSchema, JSON.parse(held));
   }
 }

@@ -74,7 +74,7 @@ const LONG_TURN_PARTS: readonly Part[] = [
   STEP,
   said("Fixed: `openDb` reads `SESSIONS_DB`, and the old name until every environment has redeployed. The first test run caught the test helpers binding only the old name; all 41 tests pass."),
   STEP,
-  thought("**Checking the routes**\n\nAny route could still read `env.DB` itself. A helper can check the cold ones while I read the two that matched."),
+  thought("**Checking the routes**\n\nAny route could still read `env.DB` itself. A subagent can check the cold ones while I read the two that matched."),
   shell("r1", "rg -n \"env\\.DB\\b\" src", "src/routes/webhooks.ts:14\nsrc/routes/admin.ts:31\nsrc/db.ts:9"),
   STEP,
   agents("r2", { op: "hire", name: "route-checker", role: "check every route for a read of env.DB", lifetime: "task" }, "route-checker is checking"),

@@ -6,7 +6,7 @@ import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { SCRIPTED_MODEL_SPEC } from '../../packages/test-utils/src/scripted-model-spec';
 import { readScriptedRequest, SCRIPTED_MODELS_BODY, scriptedBody as compatBody, type ScriptedAnswer } from '../scripted-protocol';
-import { asksSleepTime, SLEEP_TIME_ANSWER } from '../sleep-time-script';
+import { SLEEP_TIME_ANSWER } from '../sleep-time-script';
 
 /** The product RPC setup calls, as the account plane calls it; the classes live in the built bundle. */
 interface WorkspaceRpc extends Rpc.DurableObjectBranded {
@@ -113,7 +113,7 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, screenshots: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 } };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, screenshots: 0, stepping: false, arrived: 0, released: 0, hires: 0, subagentsAnswered: 0, holdSubagent: false, subagentParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 } };
 
 /** Each character above U+00FF in `request`, with the text before it: one of them stores the whole request two bytes each. */
 function noteWide(request: string): void {
@@ -125,35 +125,36 @@ function userTexts(messages: readonly object[]): string[] {
   return messages.flatMap((message) => ('role' in message && message.role === 'user' && 'content' in message ? [JSON.stringify(message.content)] : []));
 }
 
-/** Holds a helper's model call while `holdHelper` is set. */
-async function parkHelper(): Promise<void> {
-  if (!model.holdHelper) return;
-  model.helperParked = true;
+/** Holds a subagent's model call while `holdSubagent` is set. */
+async function parkSubagent(): Promise<void> {
+  if (!model.holdSubagent) return;
+  model.subagentParked = true;
 
-  while (model.holdHelper) await scheduler.wait(20);
-  model.helperParked = false;
+  while (model.holdSubagent) await scheduler.wait(20);
+  model.subagentParked = false;
 }
 
-/** Steps each hired helper works before it answers. */
-const HELPER_STEPS = 4;
+/** Steps each hired subagent works before it answers. */
+const SUBAGENT_STEPS = 4;
 
 const USAGE = `data: ${JSON.stringify({ response: '', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\n`;
 
-type BindingInputs = { readonly stream?: boolean; readonly messages?: readonly object[] };
+type BindingInputs = { readonly stream?: boolean; readonly messages?: readonly object[]; readonly tools?: readonly object[] };
 
 /**
- * What a call that is no turn's step answers, at once: a completion, and the memory lane's structured call, which
- * streams as every structured call has since 667221f68. Answered a step's prose until 2026-10-20, that call failed off
- * its schema, and each failure's three 0.2 MB log lines stayed live in the DevTools console this gate attaches: the idle
- * workspace held 6.6 MB where it had held 3.9 MB (armada evo-42). Null for a turn's step.
+ * What a call that is no turn's step answers, at once, in the form it asked for: a completion, and the memory lane's
+ * structured call. A turn's step is known by the tools it offers, not by its stream: every Workers AI call streams
+ * (`WORKERS_AI_STREAMS_GENERATE`). The gate's agents run the default roles, every step of which offers tools; a role
+ * offered none (an account role with `allowedTools: []`) would be answered here, so the gate does not measure one. Answered a step's prose until 2026-10-20, the memory call failed off its schema,
+ * and each failure's three 0.2 MB log lines stayed live in the DevTools console this gate attaches: the idle workspace
+ * held 6.6 MB where it had held 3.9 MB (armada evo-42). Null for a turn's step.
  */
 function laneAnswer(inputs: BindingInputs): string | null {
-  if (inputs.stream !== true) return JSON.stringify({ response: SLEEP_TIME_ANSWER });
-  const first = inputs.messages?.[0];
+  if (inputs.tools !== undefined) return null;
 
-  return first !== undefined && 'content' in first && typeof first.content === 'string' && asksSleepTime(first.content)
+  return inputs.stream === true
     ? `data: ${JSON.stringify({ response: SLEEP_TIME_ANSWER })}\n\n${USAGE}data: [DONE]\n\n`
-    : null;
+    : JSON.stringify({ response: SLEEP_TIME_ANSWER });
 }
 
 /** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */
@@ -175,7 +176,7 @@ async function scriptedBody(inputs: BindingInputs): Promise<string> {
   while (model.holding || model.released < seq) await scheduler.wait(seq > 0 ? 2 : 20);
   model.parked -= 1;
 
-  // Hiring: the root turn hires `hires` task helpers; each helper answers one page and is done.
+  // Hiring: the root turn hires `hires` task subagents; each subagent answers one page and is done.
 
   if (model.hires > 0) {
     const users = userTexts(inputs.messages ?? []);
@@ -188,41 +189,41 @@ async function scriptedBody(inputs: BindingInputs): Promise<string> {
       const steps = messages.filter((message) => 'role' in message && message.role === 'tool').length;
 
       const briefed = messages.some((message) => 'role' in message && (message.role === 'system' || message.role === 'user')
-        && 'content' in message && JSON.stringify(message.content).includes('SUB-HELPER'));
+        && 'content' in message && JSON.stringify(message.content).includes('SUB-SUBAGENT'));
 
-      // Nested: the helper's own hire, held on its first call while the helper and the root wait on it. First call
-      // only: the helper's own later steps carry the mission too, in the runtime context naming its hire.
+      // Nested: the subagent's own hire, held on its first call while the subagent and the root wait on it. First call
+      // only: the subagent's own later steps carry the mission too, in the runtime context naming its hire.
       if (model.nest && briefed && steps === 0) {
-        await parkHelper();
+        await parkSubagent();
 
         return `data: ${JSON.stringify({ response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`;
       }
 
-      if (model.nest && steps === HELPER_STEPS) {
-        const hire = { id: `sub-${String(model.calls)}`, name: 'agents', arguments: { op: 'hire', role: 'task', lifetime: 'task', message: 'SUB-HELPER: answer done.' } };
+      if (model.nest && steps === SUBAGENT_STEPS) {
+        const hire = { id: `sub-${String(model.calls)}`, name: 'agents', arguments: { op: 'hire', role: 'task', lifetime: 'task', message: 'SUB-SUBAGENT: answer done.' } };
 
         return `data: ${JSON.stringify({ response: '', tool_calls: [hire] })}\n\n${USAGE}data: [DONE]\n\n`;
       }
 
-      // Held at its last working step, a helper turn carries its whole transcript into a model call.
-      if (!model.nest && steps === HELPER_STEPS - 1) await parkHelper();
+      // Held at its last working step, a subagent turn carries its whole transcript into a model call.
+      if (!model.nest && steps === SUBAGENT_STEPS - 1) await parkSubagent();
 
-      // A helper works a page per step, with a cheap tool call, then answers in one word.
-      if (steps < HELPER_STEPS) {
+      // A subagent works a page per step, with a cheap tool call, then answers in one word.
+      if (steps < SUBAGENT_STEPS) {
         const page = 'word '.repeat(Math.ceil(model.answerBytes / 5)).slice(0, model.answerBytes);
         const call = { id: `work-${String(model.calls)}`, name: 'tasks', arguments: { op: 'list' } };
 
         return `data: ${JSON.stringify({ response: page, tool_calls: [call] })}\n\n${USAGE}data: [DONE]\n\n`;
       }
 
-      model.helpersAnswered += 1;
+      model.subagentsAnswered += 1;
 
       return `data: ${JSON.stringify({ response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`;
     }
 
     const calls = hiring
       ? Array.from({ length: model.hires }, (_, at) => ({ id: `hire-${String(model.calls)}-${String(at)}`, name: 'agents',
-        arguments: { op: 'hire', role: 'task', lifetime: 'task', message: `Helper ${String(at)}: write one page, then stop.` } }))
+        arguments: { op: 'hire', role: 'task', lifetime: 'task', message: `Subagent ${String(at)}: write one page, then stop.` } }))
       : [];
 
     return `data: ${JSON.stringify(calls.length > 0 ? { response: '', tool_calls: calls } : { response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`;
@@ -322,9 +323,9 @@ function scriptModel(asked: URLSearchParams): Response {
   if (asked.has('released')) model.released = Number(asked.get('released'));
 
   // Released here, not when the held call next polls: the next phase's wait must not read this one's park.
-  if (asked.has('holdHelper')) {
-    model.holdHelper = asked.get('holdHelper') === '1';
-    model.helperParked &&= model.holdHelper;
+  if (asked.has('holdSubagent')) {
+    model.holdSubagent = asked.get('holdSubagent') === '1';
+    model.subagentParked &&= model.holdSubagent;
   }
 
   if (asked.has('nest')) model.nest = asked.get('nest') === '1';
@@ -337,11 +338,11 @@ function scriptModel(asked: URLSearchParams): Response {
 
   if (asked.has('hires')) {
     model.hires = Number(asked.get('hires'));
-    model.helpersAnswered = 0;
+    model.subagentsAnswered = 0;
     model.stepping = false;
   }
 
-  return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered, helperParked: model.helperParked, failingSteps: model.failingSteps, stepped: model.stepped });
+  return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, subagentsAnswered: model.subagentsAnswered, subagentParked: model.subagentParked, failingSteps: model.failingSteps, stepped: model.stepped });
 }
 
 export default {

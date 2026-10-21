@@ -2,7 +2,6 @@ import { useState, type ReactNode } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { PlugsConnectedIcon, PuzzlePieceIcon, TrashIcon } from "@phosphor-icons/react";
-import { APP_ROUTES } from "@kinu.run/core";
 import type { McpServerSummary } from "@kinu.run/core";
 import { mapResource, lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import { useMcpServers } from "@/hooks/use-mcp-servers";
@@ -12,7 +11,7 @@ import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { removeMcpServer } from "@/lib/user-api";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Row, RowTile } from "@/components/ui/Row";
-import { addablePresets, hostBrand, McpPresetCards, presetOf, PresetRow, ServerStatus, type PresetAvailability } from "@/components/plugins/McpPresetCards";
+import { addablePresets, hostBrand, McpPresetCards, presetOf, PresetRow, ServerStatus, usePresetErrors, type PresetAvailability, type PresetErrors } from "@/components/plugins/McpPresetCards";
 import { Menu } from "@/components/ui/Menu";
 import { AccountPanelModal } from "@/components/account/AccountPanelModal";
 import { Page } from "@/components/ui/PageHeader";
@@ -49,14 +48,14 @@ function CustomServerRow({ server, onChanged }: { server: McpServerSummary; onCh
 
 /** Everything the account holds, in the order it added it, each once with its status; a catalog server keeps its row,
  *  one added by its URL included. */
-function connectedRows(servers: readonly McpServerSummary[], availability: PresetAvailability, onChanged: () => void): ReactNode[] {
+function connectedRows(servers: readonly McpServerSummary[], availability: PresetAvailability, onChanged: () => void, errors: PresetErrors): ReactNode[] {
   return servers.map((server) => {
     const preset = presetOf(server);
 
     if (preset !== undefined) {
       const appConfigured = availability?.find((a) => a.id === preset.id)?.appConfigured;
 
-      return <PresetRow key={server.id} preset={preset} server={server} appConfigured={appConfigured} onChanged={onChanged} />;
+      return <PresetRow key={server.id} preset={preset} server={server} appConfigured={appConfigured} onChanged={onChanged} errors={errors} />;
     }
 
     return <CustomServerRow key={server.id} server={server} onChanged={onChanged} />;
@@ -88,19 +87,20 @@ export default function PluginsPage() {
   const { servers, presets } = mcp;
   const [managing, setManaging] = useState(false);
   const availability = lastValue(presets.resource) ?? undefined;
+  const errors = usePresetErrors();
 
   return (
     <>
       <Page icon={<PuzzlePieceIcon size={22} />} title="Plugins" actions={<Button variant="secondary" onClick={() => setManaging(true)}>Manage</Button>}>
         <PluginSection title="Connected" onRetry={servers.reload} what="your MCP servers"
-          rows={mapResource(servers.resource, (rows) => connectedRows(rows, availability, servers.reload))} />
+          rows={mapResource(servers.resource, (rows) => connectedRows(rows, availability, servers.reload, errors))} />
 
         <PluginSection title="Add" onRetry={servers.reload} what="the catalog"
           rows={mapResource(servers.resource, (rows) => (addablePresets(rows, availability).length === 0 ? [] : [
-            <McpPresetCards key="presets" servers={rows} availability={availability} onChanged={servers.reload} unadded />,
+            <McpPresetCards key="presets" servers={rows} availability={availability} onChanged={servers.reload} errors={errors} unadded />,
           ]))} />
       </Page>
-      {managing && <AccountPanelModal panel="mcp" mcp={mcp} returnTo={APP_ROUTES.plugins} onClose={() => setManaging(false)} />}
+      {managing && <AccountPanelModal panel="mcp" mcp={mcp} onClose={() => setManaging(false)} />}
     </>
   );
 }

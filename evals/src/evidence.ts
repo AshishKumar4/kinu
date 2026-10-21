@@ -1,5 +1,5 @@
 // What a trial leaves behind when its workspace is torn down: its transcript and ledger, the files and
-// slates the workspace held at the end, the data its slates served and every run its helpers were given, under the
+// slates the workspace held at the end, the data its slates served and every run its subagents were given, under the
 // run's directory. A failed trial is read from here to tell the model's work from the product's.
 import { isUtf8 } from 'node:buffer';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -13,7 +13,7 @@ import type { KinuPublicSession } from './session';
 import type { EvidenceCall } from './task';
 import type { TimelineEntry } from './timeline';
 import { renderTrial } from './trajectories';
-import { helperWorkSince, SlateAnswerSchema } from './verifier';
+import { subagentWorkSince, SlateAnswerSchema } from './verifier';
 
 /** Folders that hold no one's work: installed packages and version-control history. */
 const SKIPPED = new Set(['node_modules', '.git']);
@@ -26,7 +26,7 @@ export interface WorkspaceEvidence {
   readonly files: ReadonlyMap<string, Uint8Array>;
   /** The slate listing, and each slate's `history` pages: its versions, or why it has none. */
   readonly slates: JsonValue;
-  /** The lead's helpers, each with every run it was given: how the run ended and the whole message that started it,
+  /** The lead's subagents, each with every run it was given: how the run ended and the whole message that started it,
    *  so a failed child run can be told from its brief; then the task's reads of its slates' data, each as the slate
    *  answered it. */
   readonly data: readonly JsonValue[];
@@ -97,7 +97,7 @@ export async function gatherEvidence(session: EvidenceSession, reads: readonly E
     for (const root of [WORKSPACE_ROOT, SLATES_ROOT]) await walk(session, root, files);
   });
   await part('slates', async () => { slates = await readSlates(session); });
-  await part('helpers', async () => { data.push({ helpers: await helperWorkSince(session, 0) }); });
+  await part('subagents', async () => { data.push({ subagents: await subagentWorkSince(session, 0) }); });
 
   const call: EvidenceCall = async (slate, method, input) => {
     const answer = v.parse(SlateAnswerSchema, await session.slateOp({ op: 'call', id: slate, method, args: input === undefined ? [] : [input] }));
@@ -119,7 +119,7 @@ function kept(bytes: Uint8Array): string | Uint8Array {
 
 /**
  * Write one trial's evidence into `directory`: `transcript.md` (rendered, and scrubbed, as a reviewer
- * reads a report), `ledger.jsonl` (the lead's run events), `descendants.jsonl` (each helper's and swarm node's, a line
+ * reads a report), `ledger.jsonl` (the lead's run events), `descendants.jsonl` (each subagent's and swarm node's, a line
  * `{ actor, event }` each), `timeline.jsonl`, and what the workspace gave up of `files/`, `slates.json` and
  * `data.json`; `workspace.txt` says what it would not, and why. Everything but the transcript is kept as
  * the deployment answered, less the run's own credential: a pattern scrub would rewrite the code a

@@ -3,6 +3,7 @@
 // carries a ticket that registers the machine with no session of its own, and asked from a workspace, the device is
 // that workspace's without an approval.
 import { expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { deviceJoinTicketUser } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 
@@ -107,6 +108,37 @@ test('a join names only a workspace the account holds, and one deleted before th
     expect(await harness.userDO.listDeviceConsents(owner)).toEqual([]);
   } finally {
     await harness.joinFibers();
+    harness.close();
+  }
+});
+
+// Three purposes share one table: each ticket holds its own fields and none of another's.
+test('a connection ticket holds one purpose whole, and is refused with another purpose\'s fields', () => {
+  const storage = new Database(':memory:');
+  const harness = createTestUserDO({ storage });
+
+  try {
+    const insert = (row: Record<string, string | number | null>) => {
+      const columns = Object.keys(row);
+
+      storage.query(`INSERT INTO connection_tickets (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`).run(...Object.values(row));
+    };
+
+    const connect = { ticket_hash: 'h-1', purpose: 'device_connect', expires_at: 1, device_id: 'dev-1', token_was_current: 1 };
+    const join = { ticket_hash: 'h-2', purpose: 'device_join', expires_at: 1, device_id: 'dev-2', workspace: null };
+    const cli = { ticket_hash: 'h-3', purpose: 'cli_agent_connect', expires_at: 1, workspace: 'kiln', cli_token_hash: 'c-1' };
+
+    for (const whole of [connect, join, cli]) insert(whole);
+
+    for (const mixed of [
+      { ...connect, ticket_hash: 'h-4', workspace: 'kiln' },
+      { ...join, ticket_hash: 'h-5', device_id: 'dev-5', token_was_current: 0 },
+      { ...cli, ticket_hash: 'h-6', device_id: 'dev-6' },
+      { ...connect, ticket_hash: 'h-7', cli_token_hash: 'c-7' },
+    ]) {
+      expect(() => { insert(mixed); }).toThrow('CHECK constraint failed');
+    }
+  } finally {
     harness.close();
   }
 });

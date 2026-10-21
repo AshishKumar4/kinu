@@ -45,25 +45,12 @@ export function initGalleryTables(execRaw: RawSqlExec): void {
   )`);
   execRaw('CREATE INDEX IF NOT EXISTS gallery_stars_email ON gallery_stars (email)');
   execRaw('CREATE INDEX IF NOT EXISTS gallery_stars_at ON gallery_stars (at)');
-  // One report per person per listing, its latest reason: reporting again replaces it. Kept past an unlist, for the
-  // operators.
-  execRaw(`CREATE TABLE IF NOT EXISTS gallery_reports (
-    kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace')),
-    workspace TEXT NOT NULL,
-    item TEXT NOT NULL,
-    email TEXT NOT NULL,
-    reason TEXT NOT NULL,
-    at INTEGER NOT NULL,
-    PRIMARY KEY (kind, workspace, item, email)
-  )`);
-  execRaw('CREATE INDEX IF NOT EXISTS gallery_reports_email ON gallery_reports (email)');
   // Who installed what, once each: a listing's installs are its count here.
   execRaw(`CREATE TABLE IF NOT EXISTS gallery_installs (
     kind TEXT NOT NULL CHECK (kind IN ('app', 'workspace')),
     workspace TEXT NOT NULL,
     item TEXT NOT NULL,
     user_id TEXT NOT NULL,
-    at INTEGER NOT NULL,
     PRIMARY KEY (kind, workspace, item, user_id)
   )`);
   execRaw('CREATE INDEX IF NOT EXISTS gallery_installs_user ON gallery_installs (user_id)');
@@ -152,11 +139,11 @@ export class GalleryIndex {
   }
 
   /** An install of a listed item by `userId`, counted once; false when it is not listed. */
-  installed(install: { readonly kind: ExploreKind; readonly workspace: string; readonly item: string; readonly userId: string }, now: number): boolean {
+  installed(install: { readonly kind: ExploreKind; readonly workspace: string; readonly item: string; readonly userId: string }): boolean {
     const { kind, workspace, item, userId } = install;
 
     if (!this.holds(kind, workspace, item)) return false;
-    this.db.exec('INSERT OR IGNORE INTO gallery_installs (kind, workspace, item, user_id, at) VALUES (?, ?, ?, ?, ?)', kind, workspace, item, userId, now);
+    this.db.exec('INSERT OR IGNORE INTO gallery_installs (kind, workspace, item, user_id) VALUES (?, ?, ?, ?)', kind, workspace, item, userId);
 
     return true;
   }
@@ -170,10 +157,10 @@ export class GalleryIndex {
     }
   }
 
-  /** A deleted account's stars, reports and installs: neither its email nor its id is kept here after it. */
+  /** A deleted account's stars and installs: neither its email nor its id is kept here after it. Its reports are the
+   *  operators' feedback (`control-plane/store.ts`). */
   forget(person: { readonly email: string; readonly userId: string }): void {
     this.db.exec('DELETE FROM gallery_stars WHERE email = ?', person.email);
-    this.db.exec('DELETE FROM gallery_reports WHERE email = ?', person.email);
     this.db.exec('DELETE FROM gallery_installs WHERE user_id = ?', person.userId);
   }
 
@@ -258,19 +245,6 @@ export class GalleryIndex {
 
     return this.rows("WHERE l.kind = 'app' AND l.rowid IN (SELECT gl.rowid FROM gallery_listings gl JOIN gallery_stars gs ON gs.kind = gl.kind AND gs.workspace = gl.workspace AND gs.item = gl.item WHERE gs.email = ?) ORDER BY l.listed_at DESC",
       [email], email, now).map((row) => listingOf(row, featured));
-  }
-
-  /** A person's report of a listing: one per person per listing, and reporting it again replaces their reason. */
-  report(report: { readonly email: string; readonly workspace: string; readonly slate: string; readonly reason: string }, now: number): boolean {
-    const { email, workspace, slate, reason } = report;
-
-    if (this.listed(workspace, slate) === null) return false;
-    this.db.exec(
-      "INSERT INTO gallery_reports (kind, workspace, item, email, reason, at) VALUES ('app', ?, ?, ?, ?, ?) ON CONFLICT (kind, workspace, item, email) DO UPDATE SET reason = excluded.reason, at = excluded.at",
-      workspace, slate, email, reason.slice(0, 2000), now,
-    );
-
-    return true;
   }
 
   private rows(tail: string, params: readonly (string | number)[], viewer: string | null, now: number): Row[] {

@@ -119,7 +119,6 @@ interface PlanReviewRow {
   annotations_json: string;
   feedback: string | null;
   handoff_accepted: number;
-  handoff_attempt: number;
   created_at: number;
   updated_at: number;
 }
@@ -153,7 +152,6 @@ export function initPlanReviewTable(execRaw: RawSqlExec): void {
     annotations_json TEXT NOT NULL DEFAULT '[]',
     feedback         TEXT,
     handoff_accepted INTEGER NOT NULL DEFAULT 0 CHECK (handoff_accepted IN (0, 1)),
-    handoff_attempt  INTEGER NOT NULL DEFAULT 0 CHECK (handoff_attempt >= 0),
     created_at       INTEGER NOT NULL,
     updated_at       INTEGER NOT NULL,
     -- Every write to the row adds one: an agent's plans, summed, name each change a reader that is not here must see.
@@ -429,9 +427,9 @@ export function planHandoffStillOwed(
   return plans.get(planId, revision)?.status === (kinuEvent === 'plan_approved' ? 'approved' : 'changes_requested');
 }
 
-/** Keyed on the decision's identity so a re-delivery collapses onto the first attempt's row. */
-function planHandoffKey(plan: PlanReview, decision: PlanReviewDecision, attempt: number): string {
-  return `plan:${plan.id}:${plan.revision}:${decision}:${attempt}`;
+/** Keyed on the decision's identity so a re-delivery collapses onto the first attempt's row: one decision, one handoff. */
+function planHandoffKey(plan: PlanReview, decision: PlanReviewDecision): string {
+  return `plan:${plan.id}:${plan.revision}:${decision}:1`;
 }
 
 export interface PlanReviewStoreOptions {
@@ -549,10 +547,10 @@ export class PlanReviewStore {
       const now = this.now();
       void this.sql`INSERT INTO plan_reviews (
       actor_id, id, session_id, revision, content, status, annotations_json, feedback,
-      handoff_accepted, handoff_attempt, created_at, updated_at
+      handoff_accepted, created_at, updated_at
     ) VALUES (
       ${this.actorId}, ${id}, ${sessionId}, ${revision}, ${content}, 'pending', ${carried}, NULL,
-      0, 0, ${now}, ${now}
+      0, ${now}, ${now}
     )`;
       markStoreChanged(this.sql);
 
@@ -730,28 +728,6 @@ export class PlanReviewStore {
 
     return this.written(id, revision);
   }
-
-  handoffAttempt(id: string, revision: number): number {
-    return settleSync(Effect.gen({ self: this }, function* () {
-      const current = this.get(id, revision);
-
-      if (!current || (current.status !== 'approved' && current.status !== 'changes_requested')) {
-        return yield* Effect.die(new Error(`plan revision ${id}/${revision} has no decided handoff`));
-      }
-
-      const rows = this.sql<{ handoff_attempt: number }>`SELECT handoff_attempt FROM plan_reviews
-        WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} LIMIT 1`;
-
-      const attempt = rows[0]?.handoff_attempt ?? 0;
-
-      if (attempt > 0) return attempt;
-      void this.sql`UPDATE plan_reviews SET writes=writes+1, handoff_attempt=1
-        WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND handoff_attempt=0`;
-      markStoreChanged(this.sql);
-
-      return 1;
-    }));
-  }
 }
 
 
@@ -839,9 +815,8 @@ export class PlanReviewActions {
     const { text, metadata } = planHandoffTurn(plan, decision);
 
     return settle(Effect.catchCause(Effect.gen({ self: this }, function* (): Effect.gen.Return<PlanDecisionOutcome> {
-      const attempt = this.store.handoffAttempt(plan.id, plan.revision);
       // The owner's decision: its turn is the owner's.
-      const queued = yield* Effect.promise(() => enqueue({ text, metadata, idempotencyKey: planHandoffKey(plan, decision, attempt), authorship: 'owner' }));
+      const queued = yield* Effect.promise(() => enqueue({ text, metadata, idempotencyKey: planHandoffKey(plan, decision), authorship: 'owner' }));
 
       if (queued.status !== 'queued') {
         return { ok: true, plan, queued: false, queueError: queued.reason ?? 'the durable turn submission was skipped' };

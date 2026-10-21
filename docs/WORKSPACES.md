@@ -27,7 +27,7 @@ A workspace holds the state. Agents are the actors that work inside it.
 │   │  AGENTS  (actors)                                                 │  │
 │   │   orchestrator: the DEFAULT agent, always present. Answers        │  │
 │   │     chat, runs tools, evolves the workspace.                      │  │
-│   │   subordinates: DURABLE teammates hired by `agents`.              │  │
+│   │   subagents: DURABLE teammates hired by `agents`.              │  │
 │   │     Each is its own hosted actor running the full turn loop on an │  │
 │   │     independent workstream, sharing the workspace's canonical     │  │
 │   │     files and reporting assigned work back as events.             │  │
@@ -67,7 +67,7 @@ A workspace holds the state. Agents are the actors that work inside it.
   (`packages/core/src/tools/local-peer.ts`). Roots sharing the pair are equal
   peers with one physical directory and one shell, each with its own SQLite
   identity, role and scaffold. None of them is the workspace, so mail between
-  them is peer mail, not a report up a tree. Subordinates stay children: they
+  them is peer mail, not a report up a tree. Subagents stay children: they
   inherit their root's directory as their workspace plane, keep their own SQL
   identity, and never hold the peer transport. Each agent owns one durable
   conversation, the chat session `CHAT_SESSION_ID`
@@ -155,7 +155,7 @@ A workspace holds the state. Agents are the actors that work inside it.
     and its tmp at `0o700`. Each agent writes its own home; what they share
     goes in `/scratch`, which every agent of the workspace reads and writes
     (a shared root beside `/slates` and `/uploads`, kept like any other file;
-    `docs/STORAGE.md`). A subordinate lives under its own name
+    `docs/STORAGE.md`). A subagent lives under its own name
     (`/home/fix-coupon-expiry`), drawn from what it was first asked and new to
     the workspace; one hired before that, or under a cousin's name, lives at
     `/home/sub-<id>`. A head or swarm node lives at `/home/head-<id>`. Both backends
@@ -208,27 +208,27 @@ A workspace holds the state. Agents are the actors that work inside it.
     outside it does not: the shell and the file surface keep separate roots
     there, and each hides the other's root writes.
 
-  - Subordinates (`agents`, `action: 'hire'`) are durable. Each is a logical
+  - Subagents (`agents`, `action: 'hire'`) are durable. Each is a logical
     actor with its own `actor_id`-scoped history in the canonical conversation
     store (`conversation_entries`) and a full turn loop, using the canonical
     workspace files and the parent's computer and device planes. Locally it
     opens over its root's stored directory, sharing the parent's plane while
     memory, craft store and conversation stay its own. Assigned tasks and
-    reports travel on the `subordinate` ingress. Owner-driven chat is private,
+    reports travel on the `subagent` ingress. Owner-driven chat is private,
     and `report` is exposed only on a parent-assigned turn. `hire` with
     `lifetime: 'task'` creates a full agent for one question, returns its
-    answer and archives the row; `dismiss` retires a subordinate.
+    answer and archives the row; `dismiss` retires a subagent.
   - Peers are the owner's other workspace agents. `msg` speaks to one by name
     (or answers an inbound agent message by `event_id`) and `list` shows the
     roster. `hire` with `scope: 'workspace'` creates a whole specialist
-    workspace instead of a subordinate, and only the workspace orchestrator may
+    workspace instead of a subagent, and only the workspace orchestrator may
     do it: a fresh workspace is the root of its own delegation tree, so a
-    subordinate that could call it could not be its child. The hire creates a
+    subagent that could call it could not be its child. The hire creates a
     fresh workspace from the mission and sends it the message: no conversation
     history or file crosses, and no lineage is recorded. The roster the UI shows
-    comes from `listSubordinates()`
+    comes from `listSubagents()`
     (RPC, re-read when a `reads_changed` frame names it) and holds this
-    workspace's durable subordinates. Swarm nodes are left off because they
+    workspace's durable subagents. Swarm nodes are left off because they
     live only for the search that spawned them.
 
   An export carries every retained agent's conversation and turn tables, main's
@@ -329,7 +329,7 @@ A workspace holds the state. Agents are the actors that work inside it.
 
 Some names keep the actor sense. `OrchestratorAgent` is the one exported agent
 class (`packages/cf-backend/src/server.ts`), bound once in
-`packages/cf-backend/wrangler.jsonc`. A subordinate used to reach it as a facet;
+`packages/cf-backend/wrangler.jsonc`. A subagent used to reach it as a facet;
 since the one-store cutover it is a logical actor of the same object.
 
 The others: the wire paths `/agents/orchestrator-agent/<name>` and

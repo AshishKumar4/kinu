@@ -17,7 +17,7 @@ import { defaultToScriptedModel, registerScriptedModel, startScriptedModel } fro
 import { tierModel } from '../../scripts/tier-model';
 import {
   DRIVE_SLATE, agentIsThereOnReturn, agentPlanIsReviewedInItsPane, agentCreatesAWorkspace, accountMemoryCrossesWorkspaces,
-  accountMemoryInTheStack, approvalsStackAtTheComposer, spliceSitsWhereItWasRead, hireParksAndRunsOnApproval, driveKeepsWhatIsDone,
+  accountMemoryInTheStack, approvalsStackAtTheComposer, spliceSitsWhereItWasRead, hireParksAndRunsOnApproval, driveKeepsWhatIsDone, DROPPED_TEXT,
   driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState, openWaitsNamed, slateOpensFromSlates,
   slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
@@ -92,8 +92,13 @@ describe(productFlowTestName('welcome', 'the product reaches its home page'), ()
     observed = await flowRow('welcome', reachesHome);
   });
 
-  test('through setup when the account has not done it, and straight there when it has', () => {
-    expect(verdictOf(observed, 'welcome').landedAt).toBe('/');
+  // Setup's default installs the Personal assistant, and Home is its chat (389aac88a); an account set up before keeps
+  // the Home it chose.
+  test('through setup onto the assistant\'s chat when the account has not done it, and straight there when it has', () => {
+    const welcome = verdictOf(observed, 'welcome');
+
+    expect(welcome.landedAt).toBe('/');
+    expect(!welcome.welcomed || welcome.assistantHome).toBe(true);
   });
 });
 
@@ -468,7 +473,7 @@ describe(productFlowTestName('slate-reach', "a slate streams answers as they are
     expect(agentStream.final).toContain(REACH_REPLY.end);
   });
 
-  test("the owner's own slate hires a helper, and the same slate opened from its share link cannot", () => {
+  test("the owner's own slate hires a subagent, and the same slate opened from its share link cannot", () => {
     const reach = verdictOf(observed, 'slate-reach');
 
     expect(reach.ownerHire).toMatch(/^hired /u);
@@ -509,6 +514,14 @@ describe(productFlowTestName('drive', 'what a person does in the Drive page is k
     expect(drive.afterCreate).toContain(drive.file);
   });
 
+  // MA-020: the picker was proved; a file dragged onto the list is the other way in.
+  test('a file dropped on the list is uploaded, listed, and holds what was dropped', () => {
+    const drive = verdictOf(observed, 'drive');
+
+    expect(drive.afterDrop).toContain(drive.dropped);
+    expect(drive.droppedText).toBe(DROPPED_TEXT);
+  });
+
   test('a rename survives a reload', () => {
     const drive = verdictOf(observed, 'drive');
 
@@ -522,6 +535,7 @@ describe(productFlowTestName('drive', 'what a person does in the Drive page is k
 
     expect(drive.afterDelete).not.toContain(drive.renamed);
     expect(drive.afterDelete).not.toContain(drive.file);
+    expect(drive.afterDelete).not.toContain(drive.dropped);
   });
 });
 

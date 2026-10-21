@@ -11,7 +11,7 @@ import type { CodemodeProvider } from '../types/codemode';
 import type { BrowserSessions, WebSearchProvider } from '../web/provider';
 import { createAgentSelfProvider, createHireOwnerWaitsProvider, type AgentSelfHost, type OwnerWaitsHost } from '../tools/agent-self';
 import { createDbCodemodeProvider, type AppDataStore } from '../tools/db-codemode';
-import { executorNamespace } from '../tools/executor-operations';
+import { executorNamespace, routedByCwd } from '../tools/executor-operations';
 import { createFileCodemodeProvider } from '../tools/file-operations';
 import type { ServedStores } from '../tools/actor-stores';
 import { createMemoryCodemodeProvider } from '../tools/memory-operations';
@@ -74,7 +74,7 @@ export const SURFACE_POLICY = {
   operations: { private: true, agents: true, webFiles: true, browser: 'class', account: true },
   /** A slate's call, which a share's visitor may make: it saves nothing through web, delegates nothing and reaches no private table. */
   slate: { private: false, agents: false, webFiles: false, browser: 'class', account: false },
-  /** The owner's own slate calling as the owner, no share in it: a slate's reach, and it hires and messages helpers. */
+  /** The owner's own slate calling as the owner, no share in it: a slate's reach, and it hires and messages subagents. */
   ownerSlate: { private: false, agents: true, webFiles: false, browser: 'class', account: false },
   /** A crafted tool a slate runs: a program of the actor's that delegates nothing, driving its caller's browser. */
   slateTool: { private: false, agents: false, webFiles: true, browser: 'program', account: false },
@@ -128,8 +128,9 @@ export function actorNamespaces(actor: SurfaceActor, policy: SurfacePolicy, call
     // The agent's own mail, never a slate's or a share's viewer's.
     ...(policy.private && actor.mail !== null ? [createMailCodemodeProvider(actor.mail)] : []),
     webFor(actor.web, policy),
-    // Every machine's `fs` is the actor's own `file` operations, on that machine's root in its plane.
-    ...actor.executors().map((provider) => executorNamespace(executor(provider), stores.file)),
+    // Every machine's `fs` is the actor's own `file` operations, on that machine's root in its plane; a process starts
+    // on the machine its cwd is on.
+    ...routedByCwd(actor.executors().map((provider) => executorNamespace(executor(provider), stores.file))),
   ];
 }
 

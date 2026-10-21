@@ -20,6 +20,7 @@ import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../sr
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
+import { fireTimer } from './helpers/local-session';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -136,6 +137,38 @@ async function userEntry(rt: CLIRuntime, text: string): Promise<string> {
 }
 
 describe('AN INTERRUPTED TURN CONTINUES — once', () => {
+  // The drained turn a dead process left open owes its events still: the restart re-opens it, and its reclaim must not
+  // re-pend those events for the next drain to deliver a second time.
+  test('a drained turn a process died inside is delivered once by the next process', async () => {
+    const { db, rt } = workspaceDb();
+    const eventsA = new AwaitedList<SessionEvent>();
+    const firesAt = Date.now() + 60_000;
+
+    rt.actor.config.setLearning(false);
+    const a = new LocalAgentSession({ rt, db, model: scriptedModel([parked('reading the report-')]), cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
+
+    await fireTimer(a, 'nightly ledger report', firesAt);
+    const dying = a.flushPendingDrains();
+    await eventsA.until((frames) => frames.some((event) => event.type === 'text-delta'));
+
+    const eventsB = new AwaitedList<SessionEvent>();
+    const promptsB: PromptMessage[][] = [];
+
+    rt.actor.config.setLearning(false);
+    const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('read it')], promptsB), cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+
+    b.reclaimStrandedEventDeliveries();
+    await b.flushPendingDrains();
+    await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
+    await b.settleBackgroundWork();
+    await b.end();
+    await Promise.race([dying, Promise.resolve()]);
+
+    const reopened = eventsB.items.filter((event) => event.type === 'background' && event.event === 'turn_reopened');
+
+    expect({ reopened: reopened.length, requests: promptsB.length }).toEqual({ reopened: 1, requests: 1 });
+  });
+
   test('the continuation seals the run it re-opened, so a third process re-opens nothing', async () => {
     const db = workspaceDatabase(scratchPath('turn-continuation', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));

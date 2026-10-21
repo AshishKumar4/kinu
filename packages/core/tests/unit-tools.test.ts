@@ -10,6 +10,9 @@ import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import { toolExecute, createRecordingLogger, present } from '@kinu.run/test-utils';
 import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils/vfs';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
+import { hostedToolFiles } from '../src/execution/approval';
+import { cloudPlanes } from '../src/vfs/resolve';
+import { WORKSPACE_ROOT } from '../src/index';
 import { asSchema, jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
 import { createTestRuntime, conversationsFor, actorJobsFor, servedStoresFor } from './helpers';
@@ -28,12 +31,12 @@ import {
   type CodemodeBuilder,
   type JsonValue,
   type ReportDeps,
-  type SubordinateReportHandoff,
+  type SubagentReportHandoff,
   type TeamToolDeps,
   type AgentRuntime,
   TurnEscalationLedger,
 } from '../src/index';
-import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
+import { ROOT_DELEGATION_BUDGET } from '../src/subagents/depth';
 import { setDiagnosticsSink } from '../src/obs/index';
 import type { JsonObject } from '../src/utils/json';
 import type { Fact, FactsStore } from '../src/memory/facts';
@@ -144,13 +147,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       create: async () => ({
         name: 's',
         displayName: 'S',
-        subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+        subagent: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async () => ({
         ok: true as const,
         name: 's',
         displayName: 'S',
-        subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+        subagent: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       spawn: async () => ({ name: 's', displayName: 'S' }),
       assign: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
@@ -328,7 +331,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   test('report.send carries a third-argument handoff to the same deps, and refuses a field it does not own', async () => {
-    const delivered: Array<{ status: string; content: string; handoff?: SubordinateReportHandoff }> = [];
+    const delivered: Array<{ status: string; content: string; handoff?: SubagentReportHandoff }> = [];
 
     const deps: ReportDeps = { report: async (input) => {
       delivered.push(input);
@@ -439,7 +442,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const computerFiles = createMemoryVfs().vfs;
     await seedFiles(computerFiles, { '/workspace/true-myth/package.json': '{}' });
     await rt.toolFiles.mkdir('notes', { recursive: true });
-    const toolFiles = withMountTable(rt.toolFiles, standardMounts((name) => (name === 'computer' ? { files: computerFiles, isAvailable: () => true } : undefined)));
+    const mounted = withMountTable(rt.toolFiles, standardMounts((name) => (name === 'computer' ? { files: computerFiles, isAvailable: () => true } : undefined)));
+
+    // Gated, as the hosted runtime hands it to the tools (staging rc29: the gate passed `resolve` on and not `owner`).
+    const toolFiles = hostedToolFiles(mounted, cloudPlanes(WORKSPACE_ROOT), { mode: () => 'strict' });
+
     const shellTool = { execute: toolExecute<{ command: string; runtime?: string; cwd?: string }, string>(tools({ ...rt, toolFiles, executionRouter: router }).shell) };
 
     await shellTool.execute({ command: 'npm test', runtime: 'computer', cwd: '/computer/workspace/true-myth' });

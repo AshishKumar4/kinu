@@ -8,13 +8,13 @@ import { attempt, diagnostics, settle, type KinuError } from '../obs/index';
 import type { AgentConfigStore } from '../config/store';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { CompletedTurn } from '../evolution/types';
-import type { AnsweredEvolutionHelper } from '../identity/evolution-helpers';
+import type { AnsweredEvolutionSubagent } from '../identity/evolution-subagents';
 import type { ActorHandle } from '../identity/actor-handle';
 import { resolveModelRoute } from '../profiles/model-route';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { modelWindow } from '../context-window';
-import type { TemporaryAgentPort } from '../types/subordinates';
+import type { TemporaryAgentPort } from '../types/subagents';
 import type { AgentSignal, SendOutcome } from '../types/signals';
 import {
   ADVISOR_ROLE_ID, advisedTurnOf, advisorLane, buildAdvisorPrompt, judgeAdvisorReply, sayAdvisorNote,
@@ -58,7 +58,7 @@ function deliveryFailed(turnId: string): (failure: KinuError) => Effect.Effect<b
 }
 
 export class ActorAdvisor {
-  /** Notes handed to the conversation and not yet said, by the helper that answered them. */
+  /** Notes handed to the conversation and not yet said, by the subagent that answered them. */
   private readonly delivering = new Map<string, Promise<void>>();
 
   constructor(private readonly deps: ActorAdvisorDeps) {}
@@ -112,21 +112,21 @@ export class ActorAdvisor {
    * as it runs, and the answer is forgotten only once it is said. False while any answer is still held. `deliver`
    * says it where the actor's notes live, true once said: an agent in its own isolate says it there.
    */
-  async deliverAnswers(deliver?: (helper: AnsweredEvolutionHelper, turnId: string) => Promise<boolean>): Promise<boolean> {
+  async deliverAnswers(deliver?: (subagent: AnsweredEvolutionSubagent, turnId: string) => Promise<boolean>): Promise<boolean> {
     const port = this.deps.port?.() ?? null;
 
     if (port === null) return true;
     let settled = true;
 
-    for (const helper of port.answered()) {
-      const turnId = advisedTurnOf(helper.lane);
+    for (const subagent of port.answered()) {
+      const turnId = advisedTurnOf(subagent.lane);
 
       if (turnId === null) continue;
 
       if (deliver === undefined) {
-        if (!await this.deliverAnswer(port, helper, turnId)) settled = false;
-      } else if (await deliver(helper, turnId)) {
-        port.forget(helper.name);
+        if (!await this.deliverAnswer(port, subagent, turnId)) settled = false;
+      } else if (await deliver(subagent, turnId)) {
+        port.forget(subagent.name);
       } else {
         settled = false;
       }
@@ -136,22 +136,22 @@ export class ActorAdvisor {
   }
 
   /** True once the answer is forgotten. */
-  deliverAnswer(port: TemporaryAgentPort, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
-    if (this.delivering.has(helper.name)) return Promise.resolve(false);
+  deliverAnswer(port: TemporaryAgentPort, subagent: AnsweredEvolutionSubagent, turnId: string): Promise<boolean> {
+    if (this.delivering.has(subagent.name)) return Promise.resolve(false);
 
     return settle(attempt({ doing: `judging the advisor's review of turn ${turnId}`, otherwise: 'unavailable' }, async () => {
-      const judged = helper.status === 'completed' ? this.judged(helper.answer, turnId) : null;
+      const judged = subagent.status === 'completed' ? this.judged(subagent.answer, turnId) : null;
 
       if (judged === null || !judged.spoken) {
-        port.forget(helper.name);
+        port.forget(subagent.name);
 
         return true;
       }
 
       // Settles once the note is said and its answer forgotten, or failed and kept for the next pass.
-      this.delivering.set(helper.name, this.say(judged.note, turnId)
-        .then((said) => { if (said) port.forget(helper.name); })
-        .finally(() => { this.delivering.delete(helper.name); }));
+      this.delivering.set(subagent.name, this.say(judged.note, turnId)
+        .then((said) => { if (said) port.forget(subagent.name); })
+        .finally(() => { this.delivering.delete(subagent.name); }));
 
       return false;
     }).pipe(Effect.catch(deliveryFailed(turnId))));
@@ -176,8 +176,8 @@ export class ActorAdvisor {
   }
 
   /** The answer judged and, if it speaks, said here; true once nothing of it is owed. */
-  async sayAnswer(helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
-    const judged = helper.status === 'completed' ? this.judged(helper.answer, turnId) : null;
+  async sayAnswer(subagent: AnsweredEvolutionSubagent, turnId: string): Promise<boolean> {
+    const judged = subagent.status === 'completed' ? this.judged(subagent.answer, turnId) : null;
 
     return judged === null || !judged.spoken || await this.say(judged.note, turnId);
   }

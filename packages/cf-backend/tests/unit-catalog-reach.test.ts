@@ -7,7 +7,7 @@ import { expect, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC, type JsonValue } from '@kinu.run/core';
-import { hostedSubordinateHarness, orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
+import { hostedSubagentHarness, orchestratorHarness, workspaceFiles } from './helpers/actor-harness';
 import { ROOT_SLATE_CALLER } from '@kinu.run/core/slates';
 
 /** A slate's process as its bindings name it, started before any share of it: its sharing's first generation. */
@@ -31,7 +31,7 @@ test('a role with eval but not the file tool reaches no file operation, as the w
 
   await workspace.agent.setSoul('# Purpose\n\nCode.');
   workspace.agent.harnessInstallCatalog(CODER);
-  const hire = await hostedSubordinateHarness(workspace, { name: 'coder', displayName: 'Coder', nameOrigin: 'user', roleId: 'task', mission: 'Code' });
+  const hire = await hostedSubagentHarness(workspace, { name: 'coder', displayName: 'Coder', nameOrigin: 'user', roleId: 'task', mission: 'Code' });
 
   hire.actor.stores.config.setRoleSelection('coder');
   await workspace.agent.setRole('coder');

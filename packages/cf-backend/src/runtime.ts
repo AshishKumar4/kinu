@@ -1,4 +1,5 @@
 import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { ComputerProcessEnds } from '@kinu.run/core';
 import type { ToolSet } from 'ai';
 /**
  * CF runtime adapter: bridges the Agents DO context to core's AgentRuntime. One Durable Object per
@@ -12,7 +13,7 @@ import {
   DefaultExecutionRouter, createNimbusWorkspaceExecutor, processRetryTool,
   workspaceFilePlane, standardMounts, contextMount, skillsMount, type WorkspacePrincipal,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
-  withApprovalGatedShell, withApprovalGatedFiles, createInheritedApprovalPolicy, holdsGrant,
+  withApprovalGatedShell, hostedToolFiles, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   createSandboxExecutor, createDeviceTunnelExecutor, soleLiveDevice, type DeviceTransport,
   type WorkspaceFiles,
@@ -57,7 +58,7 @@ import {
   userCredentials,
 } from "./providers/agent-registry";
 import { ownerCaller, type UserCaller } from "@kinu.run/core";
-import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
+import { adaptMemory, backfillMemoryVectors, forgetMemoryVectors } from "@kinu.run/core";
 import { actorAffinity } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 import { workspaceServingScope, type HostedBox, type WorkspaceServing } from "./workspace-host";
@@ -112,7 +113,7 @@ export function bindAgentSql(agent: AgentSqlSource, holds?: Holds): SqlExecutor 
 export interface ActorRuntimeIdentity {
   actor: ActorHandle;
   /** Stated, never inferred: every hosted actor answers to the root's agent `name`, so a name test would
-     *  hand a subordinate the root's shell-approval authority. */
+     *  hand a subagent the root's shell-approval authority. */
   rootActor: boolean;
   /** Resolved per call, never cached, so a use before owner claim can't bake in null. */
   ownerUserId(): string | null;
@@ -199,6 +200,8 @@ function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCre
 export type CFRuntime = AgentRuntime & {
   /** The reflection lane: routed, so it answers to a schema where a fast lane is absent. */
   llm: RoutedLLM;
+  /** The workspace memory's vectors deleted, as the workspace is (`forgetMemoryVectors`): its teardown's alone. */
+  forgetMemoryVectors(): Promise<void>;
   /** Also what the parent-file RPC serves a fork, so a fork reads exactly its parent's bytes. */
   localVfs: WorkspaceFiles;
   /** `refreshStatus()` is awaited at turn start. */
@@ -228,9 +231,9 @@ export interface WorkspaceBoxUse {
 
 export interface CFRuntimeHooks {
   /** Read at exec time, as resolving during construction re-enters the runtime getter. Undefined (head,
-     *  subordinate): no queue, so 'strict' refuses. */
+     *  subagent): no queue, so 'strict' refuses. */
   deferrals?: () => DeferredApprovalChannel | undefined;
-  slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
+  slate?: (operation: SlateOperation, turn?: string) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
   liveReadsMoved?: (reads: readonly LiveRead[]) => void;
   /** A computer port was exposed or withdrawn, which can change the job that serves it; awaited by the call. */
@@ -251,6 +254,8 @@ export interface CFRuntimeHooks {
   workspaceExecution?: HostedNodeHome;
   /** The actor's jobs, a process it starts among them; read at the call, as its runner is built over this runtime. */
   jobs: () => AdoptsJobs;
+  /** Where its computer's processes run as jobs end, as the box tells it: the workspace object's, every actor's. */
+  processEnds: () => Pick<ComputerProcessEnds, 'ended' | 'state'>;
   /** `children` is opened under the actor host's directory authority, never by a caller knowing an id. */
   contextPlane?: {
     readonly actorId: string;
@@ -396,9 +401,7 @@ export function createCFRuntime(
     mounts, principal, home, ...(hooks.workspaceObserver !== undefined && { observer: hooks.workspaceObserver }),
   });
 
-  const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
-    planes, resolve: (path, follow, creating) => agentFileVfs.resolve(path, { follow, creating }), userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
-  }, approvalPolicy);
+  const toolFiles = hostedToolFiles(agentFileVfs, planes, approvalPolicy);
 
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
@@ -460,6 +463,12 @@ export function createCFRuntime(
         // The box's desktop has one driver at a time; each of the workspace's agents drives as itself.
         desktop: { driver: actor.actor.actorId, screen: { ...DESKTOP_SIZE, sheet: WATCH_SHEET } },
         environment: access.commandEnvironment,
+        // Each process it starts is a job of the actor's, which its box's word on the process's end settles.
+        processJobs: {
+          adopt: async (request) => await hooks.jobs().adopt(request),
+          ended: (jobId) => hooks.processEnds().ended(jobId),
+          state: (jobId) => hooks.processEnds().state(jobId),
+        },
       }));
       diagnostics.event('computer.executor_registered', {
         sandboxId,
@@ -591,6 +600,7 @@ export function createCFRuntime(
     localVfs: baseWorkspaceVfs,
     deviceTransport,
     vectorStore,
+    forgetMemoryVectors: () => forgetMemoryVectors(memoryStore, { store: vectorStore }),
     sandboxHandle,
     processRetry: processRetryTool(executionBox),
     portHolders: () => {

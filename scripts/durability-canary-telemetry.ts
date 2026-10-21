@@ -228,7 +228,7 @@ export interface CanaryTelemetryRequest {
   readonly active: CanaryWindow;
   readonly idle: CanaryWindow | null;
   readonly touches: readonly CanaryTouch[];
-  readonly helperActors: readonly string[];
+  readonly subagentActors: readonly string[];
   /** The ring the driver read at its last touch; null when it could not. */
   readonly activations: readonly CanaryActivation[] | null;
 }
@@ -300,7 +300,7 @@ export async function measureCanaryTelemetry(request: CanaryTelemetryRequest) {
       invocationScope: 'Active invocation rows are only alarms and non-ok outcomes; successful active RPCs are not downloaded. All invocation types are queried in the idle window.',
       hosted: hostedResumes.map((row) => ({ actor: row.source.fields.actor, object: row.$workers.durableObjectId ?? null,
         matchesWorkspaceObject: row.$workers.durableObjectId !== undefined && objects.includes(row.$workers.durableObjectId),
-        isCanaryHelper: request.helperActors.includes(row.source.fields.actor ?? '') })),
+        isCanarySubagent: request.subagentActors.includes(row.source.fields.actor ?? '') })),
       unavailable: ['The API exposes no explicit silent-eviction reason.',
         'Request attribution to the driver is temporal, not a unique driver request-id match.',
         'A lost isolate may print a marker without committing its result; only durable output is observable.'] },

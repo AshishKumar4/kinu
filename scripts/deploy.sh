@@ -359,6 +359,14 @@ startup_reading() {
   echo "${said:-none}"
 }
 
+# A refused startup in a wrangler upload's <log>, in the platform's words and what its operator does: prints nothing for
+# any other failure. The deploy never asks again by itself (L27); the validator reads one bundle in two modes, so its
+# operator reruns the deploy (platform-catalog `worker.startup_ms`).
+startup_refusal() {
+  [ "$(startup_reading "$1")" = refused ] || return 0
+  echo "Cloudflare refused this build's startup (code 10021): \"Script startup exceeded CPU time limit.\" Its validator reads one bundle in two modes, about 370 and 780-950 ms (platform-catalog worker.startup_ms), so run the same deploy again. "
+}
+
 # Read one dotted JSON field from stdin. Prints nothing when the body is not
 # JSON — which is exactly what a smoke test needs, because "not JSON" is how a
 # missing asset presents itself (the SPA shell under a JSON
@@ -811,7 +819,7 @@ if [ "$KINU_RESET" = "1" ] && [ "${KINU_PENDING_RESET:-none}" = "none" ]; then
   report startup validated "$(startup_reading "$KINU_VALIDATE_LOG")" "${KINU_WITHHELD_CLASSES[@]}"
   if [ "$KINU_VALIDATED" -ne 0 ]; then
     wait "$KINU_ALONGSIDE_PID"
-    publish_red "$KINU_WORKER refused this build's version before the reset, so nothing was deleted and it still serves what it did; the log is $KINU_VALIDATE_LOG"
+    publish_red "$(startup_refusal "$KINU_VALIDATE_LOG")$KINU_WORKER refused this build's version before the reset, so nothing was deleted and it still serves what it did; the log is $KINU_VALIDATE_LOG"
     return 1
   fi
 fi
@@ -828,8 +836,17 @@ if [ "$KINU_RESET" = "1" ]; then
     || { publish_red "the reset failed; its lines in the deploy's output say what it deleted before it stopped, and a deploy with --reset finishes it from its record"; return 1; }
 fi
 
-# The tables plan's record becomes the rollback barrier only now, the last step before any object can repair.
+# The tables plan's record becomes the rollback barrier only now, the last step before any object can repair. Just
+# before it, every table's rows and digest on every object, as the build before holds them: the walk's census after the
+# upload is read against this one (census-diff below), the proof the reset dropped what its plan named and no more.
 if [ "$KINU_RESET_TABLES" = "1" ]; then
+  bun "$KINU_ROOT/scripts/reset.ts" census "$KINU_ENV" "$KINU_TABLES_RECORD.before.tsv" \
+    || { publish_red "the census before the upload could not be taken; nothing was uploaded"; return 1; }
+  # A database it could not read is one census-diff cannot prove after: refused here, before anything changes.
+  if grep -q $'\t!unreachable\t' "$KINU_TABLES_RECORD.before.tsv"; then
+    publish_red "the census before the upload could not read $(grep -c $'\t!unreachable\t' "$KINU_TABLES_RECORD.before.tsv") object(s) (lines with !unreachable in $KINU_TABLES_RECORD.before.tsv); nothing was uploaded"
+    return 1
+  fi
   bun "$KINU_ROOT/scripts/reset.ts" tables-record "$KINU_ENV" "$KINU_TABLES_RECORD" \
     || { publish_red "the tables plan's record could not be published as the rollback barrier; nothing was uploaded"; return 1; }
 fi
@@ -851,7 +868,7 @@ if upload "$KINU_DEPLOY_LOG" npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}"; the
 else
   report startup deployed "$(startup_reading "$KINU_DEPLOY_LOG")"
   echo ""
-  publish_red "wrangler deploy failed; its log is $KINU_DEPLOY_LOG"
+  publish_red "$(startup_refusal "$KINU_DEPLOY_LOG")wrangler deploy failed; its log is $KINU_DEPLOY_LOG"
   return 1
 fi
 
@@ -905,6 +922,9 @@ if [ "$KINU_RESET_TABLES" = "1" ]; then
   fi
   KINU_VERSION="$KINU_VERSION" KINU_PROPAGATION_SECONDS="$KINU_PROPAGATION_SECONDS" bun "$KINU_ROOT/scripts/reset.ts" tables "$KINU_ENV" "$KINU_TABLES_RECORD" \
     || { publish_red "the tables walk found a reset that refused (its lines name it); 'KINU_VERSION=$KINU_VERSION bun scripts/reset.ts tables $KINU_ENV $KINU_TABLES_RECORD' walks again"; return 1; }
+  # The reset's structure fails a deploy anywhere; a change outside its plan fails one only where nothing else writes.
+  bun "$KINU_ROOT/scripts/reset.ts" census-diff "$KINU_ENV" "$KINU_TABLES_RECORD.before.tsv" "$KINU_TABLES_RECORD.census.tsv" "$KINU_TABLES_RECORD" \
+    || { publish_red "the census after the reset is not the one before it but for the plan's tables (its lines name each); 'bun scripts/reset.ts census-diff $KINU_ENV $KINU_TABLES_RECORD.before.tsv $KINU_TABLES_RECORD.census.tsv $KINU_TABLES_RECORD' reads them again"; return 1; }
 fi
 
 # ── Step 4: Post-deploy smoke test ───────────────────────────────

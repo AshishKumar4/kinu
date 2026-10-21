@@ -5,7 +5,7 @@
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { Link } from "react-router-dom";
 import { AppWindowIcon, DownloadSimpleIcon, EyeIcon, KeyIcon, SealCheckIcon, SquaresFourIcon, StarIcon } from "@phosphor-icons/react";
-import { galleryPicturePath } from "@kinu.run/core";
+import { galleryPagePath, galleryPicturePath } from "@kinu.run/core";
 import { Avatar } from "@/components/ui/Avatar";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { presetBrand } from "@/components/plugins/McpPresetCards";
@@ -17,9 +17,6 @@ import { IconTile } from "@/components/ui/IconTile";
 
 /** A workspace blueprint's page. */
 export const exploreWorkspaceHref = (id: string) => `/explore/workspaces/${encodeURIComponent(id)}`;
-
-/** A listed slate's own page: the Gallery's, unchanged. */
-const appHref = (workspace: string, slate: string) => `/gallery/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}`;
 
 /** Where a workspace blueprint's picture is read. */
 /** A picture of one of Kinu's own blueprints at work, which the app serves with its assets, under its base. */
@@ -83,7 +80,7 @@ export function ExploreCard({ item }: { item: ExploreItem }) {
     const { app } = item;
 
     return (
-      <Card href={appHref(app.workspace, app.slate)} kind="app" title={app.title} line={app.line} id={app.slate} typeset={app.picture === undefined}
+      <Card href={galleryPagePath(app.workspace, app.slate)} kind="app" title={app.title} line={app.line} id={app.slate} typeset={app.picture === undefined}
         picture={(
           <SlatePicture mat workspace={app.workspace} slate={{ id: app.slate, title: app.title, picture: app.picture }} at={galleryPicturePath}
             className={ZOOMED} fallback={<TypesetCover title={app.title} line={app.line} mark={false} />} />

@@ -15,7 +15,7 @@ import {
 } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
 
-import { present } from '@kinu.run/test-utils';
+import { answerChat, OK_CHAT_ANSWER, present } from '@kinu.run/test-utils';
 
 const ACCOUNT_ROOT = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1';
 
@@ -46,15 +46,8 @@ function gatewayStub(opts: {
   });
 }
 
-function chatCompletionResponse(model: string): Response {
-  return new Response(JSON.stringify({
-    id: 'chatcmpl-1',
-    object: 'chat.completion',
-    created: 0,
-    model,
-    choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-  }), { headers: { 'content-type': 'application/json' } });
+function chatCompletionResponse(model: string, init?: RequestInit): Response {
+  return answerChat({ ...OK_CHAT_ANSWER, model }, init);
 }
 
 /** models.dev knows none of these authors, so each is sent on the gateway's unified chat API. */
@@ -85,7 +78,7 @@ describe('my-gateway request shape', () => {
           model: body.model,
         });
 
-        return chatCompletionResponse(wireModel);
+        return chatCompletionResponse(wireModel, init);
       })),
     });
 
@@ -111,7 +104,7 @@ describe('my-gateway request shape', () => {
           });
         }
 
-        return chatCompletionResponse('xai/grok-4.7');
+        return chatCompletionResponse('xai/grok-4.7', init);
       })),
     });
 
@@ -414,10 +407,10 @@ describe('my-gateway registry precedence', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub(),
-      fetch: asFetchFunction(async (input: RequestInfo | URL) => {
+      fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
         wire.push(requestUrl(input));
 
-        return chatCompletionResponse('@cf/moonshotai/kimi-k2.6');
+        return chatCompletionResponse('@cf/moonshotai/kimi-k2.6', init);
       }),
     });
 
@@ -523,6 +516,35 @@ describe('UserDO gateway credential derivation', () => {
       // With no selection and no gateway named in the env, Cloudflare's own `default` gateway.
       expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_OAUTH_CRED_KEY))
         .toMatchObject({ 'cf-aig-gateway-id': 'default' });
+    } finally {
+      harness.close();
+      restore();
+    }
+  });
+
+  // The gateway is named in every Cloudflare request's headers, so the model catalog a workspace holds is that
+  // gateway's: a change moves the revision a warm workspace reconciles on, which a fan-out skipping it cannot.
+  test('selecting or clearing a gateway moves the credentials\' revision; the same selection and the generic config write do not', async () => {
+    const restore = stubGatewayListing([{ id: 'gw-one', authentication: false }, { id: 'gw-two', authentication: false }]);
+    const harness = createTestUserDO();
+
+    try {
+      const owner = await testOwner();
+      await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, oauthCredential());
+      const revision = async () => await harness.userDO.getCredentialsRevision(owner);
+      const before = await revision();
+
+      await harness.userDO.selectAIGateway(owner, 'gw-one');
+      const selected = await revision();
+      await harness.userDO.selectAIGateway(owner, 'gw-one');
+      const again = await revision();
+      await harness.userDO.selectAIGateway(owner, null);
+      const cleared = await revision();
+      await harness.userDO.selectAIGateway(owner, null);
+
+      expect([selected > before, again === selected, cleared > again, (await revision()) === cleared]).toEqual([true, true, true, true]);
+      await expect(harness.userDO.setConfig(owner, 'cloudflare_ai_gateway', 'gw-two')).rejects.toThrow('has a dedicated route');
+      expect(await harness.userDO.getAuthHeaders(owner, CLOUDFLARE_OAUTH_CRED_KEY)).toMatchObject({ 'cf-aig-gateway-id': 'default' });
     } finally {
       harness.close();
       restore();

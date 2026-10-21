@@ -1,4 +1,5 @@
 // Native platform boundary. Real Files/S3Mount clients execute against the shim model.
+import { spawnSync } from 'node:child_process';
 import { NativeShim } from './native-shim';
 import { processResult } from './native-process';
 import { Devbox } from '../../src/devbox';
@@ -54,7 +55,7 @@ export function gate(): Gate {
 export const HARNESS_IMAGE = 'registry.cloudflare.com/test/kinu-devbox@sha256:0000';
 
 /** The process manager's scripts, named by their `$0` (`src/processes.ts`). */
-const PROCESS_SCRIPTS = new Set(['devbox-process', 'devbox-unlaunch', 'devbox-status', 'devbox-kill']);
+const PROCESS_SCRIPTS = new Set(['devbox-process', 'devbox-unlaunch', 'devbox-status', 'devbox-kill', 'devbox-logs']);
 
 /** Uses the SDK's own status vocabulary: `isProcessLive` reads `status`. */
 export interface FakeProcessRow {
@@ -285,6 +286,13 @@ export function fakeStorage(): FakeStorage {
     setAlarm: async (at: number | Date) => { alarm.at = Number(at); },
     getAlarm: async () => alarm.at,
     deleteAlarm: async () => { alarm.at = null; },
+    // As the platform's: every key goes, each a new version; the alarm is the caller's to delete.
+    deleteAll: async () => {
+      for (const key of rows.keys()) {
+        rows.delete(key);
+        keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
+      }
+    },
     sql: {
       exec: (query: string) => unreached("sql: " + query),
       get databaseSize() { return unreached("sql.databaseSize"); },
@@ -298,7 +306,6 @@ export function fakeStorage(): FakeStorage {
 
       return Promise.resolve(new Map([...rows].filter(([key]) => key.startsWith(options.prefix))));
     },
-    deleteAll: () => unreached('storage.deleteAll'),
     sync: () => unreached('storage.sync'),
     transactionSync: <T>(run: () => T): T => {
       const before = new Map(rows);
@@ -378,6 +385,21 @@ export class FakeSandbox {
   /** Mounts and execs share one chronological list: stop order is a property of the order
    *  across both channels and cannot be reconstructed from two separate lists. */
   readonly sequence: string[] = [];
+  /** Each exec the box sent with no stdin of its own, whose end the platform would make a task nobody awaits. */
+  readonly unownedStdin: string[] = [];
+  /** The words the next kill of every process refuses with, exit 1, as a kill that cannot parse its arguments does. */
+  stopKillRefusal: string | undefined;
+  /** The exit the next kill of every process answers once it ended the container, as one ended with it (137). */
+  stopKillExit = 0;
+  /** Each exec answered with a pipe nobody has closed yet: the box closes every one it owns before it answers. */
+  readonly openStdin: string[] = [];
+  /** Thrown by the next close of an exec's stdin, as by a connection lost after the exec answered. */
+  stdinCloseFault: Error | undefined;
+  /** The next admission probe (`/bin/true`) answers, then its output rejects with `lost` and the start's `monitor()` with
+   *  `refusal`: a container refused after the probe was sent. */
+  admissionLoss: { readonly lost: Error; readonly refusal: Error } | undefined;
+  /** Each signal the box asked the platform to send, a task nobody awaits too. */
+  readonly platformSignals: number[] = [];
   /** Stands in for what `/proc/mounts` reports for paths the box's `mountBucket` holds mounted. */
   readonly s3fsMounts = new Set<string>();
   /** Hosts the box bound to a named outbound handler (`setOutboundByHost`). */
@@ -917,7 +939,11 @@ export class FakeSandbox {
       },
       monitor: () => this.#ended.promise,
       destroy: async () => { await this.destroy(); this.#ended.resolve(); },
-      signal: () => { void this.stop().then(this.#ended.resolve, this.#ended.reject); },
+      // The platform's signal ends the container as tini forwards it, but as a task the box cannot await.
+      signal: (signo) => {
+        this.platformSignals.push(signo);
+        void this.stop().then(this.#ended.resolve, this.#ended.reject);
+      },
       getTcpPort: port => ({
         fetch: async (request: Request) => await this.portAnswer?.(port, request) ?? new Response('', { status: this.listening.has(port) ? 200 : 503 }),
         connect: () => unreached('port.connect'),
@@ -947,8 +973,44 @@ export class FakeSandbox {
         return { id, size: 1, name: options?.name };
       },
       inspect: () => unreached('container.inspect'),
-      exec: (args, options) => this.#native(args, options),
+      exec: async (args, options) => {
+        // The platform ends the stdin of an exec given none, as a task the box cannot await (`containerExec`).
+        if (options?.stdin === undefined) this.unownedStdin.push(args.join(' '));
+        const process = await this.#native(args, options);
+
+        return options?.stdin === 'pipe' ? this.#piped(args.join(' '), process) : process;
+      },
     };
+  }
+
+  /** `process` with its stdin's close kept in `openStdin`, and failed once by `stdinCloseFault`. Writes reach the stdin the
+   *  process holds when they are made: a file write's is the file it fills. */
+  #piped(name: string, process: ExecProcess): ExecProcess {
+    if (process.stdin === null) return process;
+    this.openStdin.push(name);
+    let writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
+
+    const held = (): WritableStreamDefaultWriter<Uint8Array> | undefined => {
+      writer ??= process.stdin?.getWriter();
+
+      return writer;
+    };
+
+    const stdin = new WritableStream<Uint8Array>({
+      write: async (chunk) => { await held()?.write(chunk); },
+      close: async () => {
+        const fault = this.stdinCloseFault;
+        this.stdinCloseFault = undefined;
+
+        if (fault !== undefined) throw fault;
+        this.openStdin.splice(this.openStdin.indexOf(name), 1);
+        await held()?.close();
+      },
+      abort: async (reason) => { await held()?.abort(reason); },
+    });
+
+    // Read through, not copied: a copy would read its exit, which no caller may have asked for.
+    return new Proxy(process, { get: (target, key: keyof ExecProcess) => (key === 'stdin' ? stdin : target[key]) });
   }
 
   /** A start from a snapshot the platform no longer holds fails; one marked `hang` never comes up. */
@@ -1054,9 +1116,12 @@ export class FakeSandbox {
       return this.#native(args.slice(5), options);
     }
 
-    // `cat > <path>` fed on stdin: the bytes land in the file once the writer closes.
-    if (options.stdin === 'pipe' && args[0] === '/bin/sh') {
-      const [, append = '', target = ''] = /^cat (>>?) '([^']+)'$/.exec(args[2] ?? '') ?? [];
+    // `cat > <path>` fed on stdin: the bytes land in the file once the writer closes. Every exec carries a pipe (the
+    // box owns each one's stdin, `containerExec`); this one is the writer's.
+    const fed = /^cat (>>?) '([^']+)'$/.exec(args[2] ?? '');
+
+    if (options.stdin === 'pipe' && args[0] === '/bin/sh' && fed !== null) {
+      const [, append = '', target = ''] = fed;
       const chunks: Uint8Array[] = append === '>>' ? [this.binaryFiles.get(target) ?? new Uint8Array()] : [];
       const closed = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
 
@@ -1073,22 +1138,45 @@ export class FakeSandbox {
     if (args[0] === '/usr/local/bin/sandbox-shim') {
       this.shimCalls.push(args.slice(1, 3).join(' '));
 
-      return this.shim.exec(args);
+      return this.shim.exec(args, options);
     }
 
     return undefined;
+  }
+
+  /** An exec of kill: the process it names ends as a SIGKILL ends it (`endProcess`), or, sent to every process but
+   *  tini (PID 1) as a TERM, its child ends and tini and the container with it (a stop). */
+  #killCommand(args: readonly string[], pid: number): ExecProcess {
+    if (args.includes('-1')) {
+      // Every process at once, as the box's procps kill (4.0.4, Debian trixie's) reads these words: asked of this host's
+      // own, with the signal 0 that does nothing. It reads a `-1` after the signal as a second option and refuses it
+      // (staging rc30, 2026-10-21: "failed to parse argument", exit 1, and the stop waited on a container never told).
+      const read = spawnSync('/usr/bin/kill', args.slice(1).map((arg) => (arg.startsWith('-') && arg !== '--' && arg !== '-1' ? '-0' : arg)));
+      const refusal = this.stopKillRefusal;
+
+      this.stopKillRefusal = undefined;
+
+      if (refusal !== undefined) return processResult(Promise.resolve({ stdout: '', stderr: refusal, exitCode: 1 }), pid);
+
+      if (read.status !== 0) return processResult(Promise.resolve({ stdout: '', stderr: read.stderr.toString(), exitCode: read.status ?? 1 }), pid);
+      void this.stop().then(this.#ended.resolve, this.#ended.reject);
+      const exitCode = this.stopKillExit;
+
+      this.stopKillExit = 0;
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode }), pid);
+    } else if (args[1] === '-KILL') {
+      this.#live.get(Number(args[2]))?.kill(9);
+    }
+
+    return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
   }
 
   async #nativeCommand(launched: string[], options: ContainerExecOptions, pid: number): Promise<ExecProcess> {
     // A caller's run is in its own group, `setsid -w` (D69): what it runs follows.
     const args = launched[0] === 'setsid' && launched[1] === '-w' ? launched.slice(2) : launched;
 
-    // The box ends a process with an exec of kill (`endProcess`): the process it names ends as a SIGKILL ends it.
-    if (args[0] === 'kill' && args[1] === '-KILL') {
-      this.#live.get(Number(args[2]))?.kill(9);
-
-      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
-    }
+    if (args[0] === 'kill') return this.#killCommand(args, pid);
 
     // The restore deadline's process ends only when it is killed: a test that needs the deadline to
     // fall hands the box a hand clock rather than waiting out a duration.
@@ -1103,6 +1191,15 @@ export class FakeSandbox {
       const hookGate = this.containerHookGate;
 
       if (hookGate !== undefined) { this.containerHookGate = undefined; hookGate.enter(); await hookGate.promise; }
+
+      const loss = this.admissionLoss;
+
+      if (loss !== undefined) {
+        this.admissionLoss = undefined;
+        this.#ended.reject(loss.refusal);
+
+        return processResult(new Promise<ExecResult>((_, reject) => { setImmediate(() => { reject(loss.lost); }); }), pid);
+      }
 
       return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
     }
@@ -1166,7 +1263,28 @@ export class FakeSandbox {
   }
 
   /** The process scripts' file protocol: `launch` stands for the claim symlink and holds its target. */
+  /** The next read of what a process wrote waits on this, to interleave work with a report that reads it. */
+  logsHeld: Gate | undefined;
+
   async #processScript(args: string[], pid: number): Promise<ExecProcess> {
+    // What it wrote, both streams, the last `bytes` of it when asked (`processes.ts` LOGS); held once if a test asks.
+    if (args[3] === 'devbox-logs') {
+      const held = this.logsHeld;
+
+      this.logsHeld = undefined;
+
+      if (held !== undefined) {
+        held.enter();
+        await held.promise;
+      }
+
+      const dir = args[4] ?? '';
+      const bytes = Number(args[6] ?? '0');
+      const text = `${this.files.get(`${dir}/stdout.log`) ?? ''}${this.files.get(`${dir}/stderr.log`) ?? ''}`;
+
+      return processResult(Promise.resolve({ stdout: bytes > 0 ? text.slice(-bytes) : text, stderr: '', exitCode: 0 }), pid);
+    }
+
     if (args[3] === 'devbox-process') {
       const dir = args[4] ?? '';
       const cwd = args[5] ?? '';

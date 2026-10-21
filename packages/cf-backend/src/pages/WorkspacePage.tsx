@@ -14,7 +14,7 @@ import {
 } from "@kinu.run/core";
 import { APP_ROUTES, type OwedOwnerIntent, type PlanReview, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
 import type { UIMessage } from "ai";
-import type { SubordinateView } from "@kinu.run/core/protocol";
+import type { SubagentView } from "@kinu.run/core/protocol";
 import { useActorChat, useKinu } from "@/hooks/use-kinu";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
@@ -30,12 +30,12 @@ import { readFailureText } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Modal } from "@/components/ui/Modal";
 import { TurnRevert } from "@/components/RevertTurnDialog";
-import { DeviceOfflineRow, HelperChatBase } from "@/components/MessageView";
+import { DeviceOfflineRow, SubagentChatBase } from "@/components/MessageView";
 import { ChatColumn, EmptyConversation } from "@/components/ChatColumn";
 import { ProgrammaticTurnCard } from "@/components/ProgrammaticTurnCard";
 import { AttentionStack, type AttentionStackProps } from "@/components/AttentionStack";
 import { ChatImageContext } from "@/components/ChatImages";
-import { placeEvents, subordinateEventRow, type PlacedEvent } from "@/components/ChatEvents";
+import { placeEvents, subagentEventRow, type PlacedEvent } from "@/components/ChatEvents";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@kinu.run/core";
 import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, turnRows } from "@kinu.run/core";
@@ -171,7 +171,7 @@ function ForkModal({
 }
 
 function NestedAgentColumn({ workspace, path, rpc, ids, input }: { workspace: string; path: string; rpc: WorkspaceRpc; ids: AgentLinkIds; input: boolean }) {
-  const load = useCallback(() => nestedAgent((request) => rpc("inspectSubordinate", [request]), path, ids), [rpc, path, ids]);
+  const load = useCallback(() => nestedAgent((request) => rpc("inspectSubagent", [request]), path, ids), [rpc, path, ids]);
   const { resource, reload } = useAsyncResource(load, undefined, `${path}|${ids.actor ?? ""}|${ids.parent ?? ""}`);
 
   if (resource.status === "loading") return <div className="flex flex-1 items-center justify-center"><Loader size="sm" /></div>;
@@ -182,11 +182,11 @@ function NestedAgentColumn({ workspace, path, rpc, ids, input }: { workspace: st
   if (agent === null) return <p className="t-body p-4 p-text-3">No agent is at {path} in this workspace.</p>;
 
   return (
-    <HelperChatBase.Provider value={{ base: helperBase(workspace, path), parent: agent.actorId }}>
+    <SubagentChatBase.Provider value={{ base: subagentBase(workspace, path), parent: agent.actorId }}>
       {agent.live
-        ? <SubordinateChatColumn workspace={workspace} subName={path} title={agent.title} input={input} />
+        ? <SubagentChatColumn workspace={workspace} subName={path} title={agent.title} input={input} />
         : <KeptChatColumn workspace={workspace} subName={path} title={agent.title} rpc={rpc} actorId={agent.actorId} />}
-    </HelperChatBase.Provider>
+    </SubagentChatBase.Provider>
   );
 }
 
@@ -275,7 +275,7 @@ function shownPanelAgent(agents: readonly PanelAgent[], node: string | null, sub
 }
 
 function agentPagePath(workspace: string, { open }: PanelAgent): string {
-  if (open.kind === "chat") return open.path === null ? `/workspace/${workspace}` : helperBase(workspace, open.path).slice(0, -1);
+  if (open.kind === "chat") return open.path === null ? `/workspace/${workspace}` : subagentBase(workspace, open.path).slice(0, -1);
   const owner = open.owner === null ? "" : `&owner=${encodeURIComponent(open.owner)}`;
 
   return `/workspace/${workspace}?node=${encodeURIComponent(`${open.runId}/${open.nodeId}`)}${owner}`;
@@ -308,7 +308,7 @@ function DeleteChat({ chat, workspace, shown, dismiss, onClose }: {
   chat: { readonly title: string; readonly path: string } | null;
   workspace: string;
   shown: string | undefined;
-  dismiss: WorkspaceState["dismissSubordinate"];
+  dismiss: WorkspaceState["dismissSubagent"];
   onClose: () => void;
 }) {
   const navigate = useNavigate();
@@ -350,7 +350,7 @@ function chatTab(workspace: string, agent: PanelAgent, actions: {
   if (path === null) return { agent, to: `/workspace/${workspace}`, rename: actions.renameMain, remove: actions.clearMain, clears: true };
 
   return {
-    agent, to: helperBase(workspace, path).slice(0, -1),
+    agent, to: subagentBase(workspace, path).slice(0, -1),
     rename: (title: string) => actions.renameChat(path, title),
     remove: () => actions.remove(path),
   };
@@ -363,11 +363,11 @@ function openBarItem(view: string | undefined, shown: PanelAgent | undefined): s
   return view === undefined && shown?.tab === true ? shown.key : null;
 }
 
-function helperBase(workspace: string, subName: string): string {
+function subagentBase(workspace: string, subName: string): string {
   return `/workspace/${workspace}/agents/${subName.split("/").map(encodeURIComponent).join("/")}/`;
 }
 
-/** A subordinate below a direct child is addressed by its `/`-joined path of names, as its socket and RPCs take it. */
+/** A subagent below a direct child is addressed by its `/`-joined path of names, as its socket and RPCs take it. */
 function routedAgentPath({ subName, "*": below }: Readonly<Record<string, string | undefined>>): string | undefined {
   if (subName === undefined) return undefined;
 
@@ -405,30 +405,30 @@ function planOwnerName(subName: string | undefined, agentId: string | undefined)
   return agentId ?? "main";
 }
 
-function AgentChatColumn({ workspace, subName, subordinates, rpc, ids, input }: {
+function AgentChatColumn({ workspace, subName, subagents, rpc, ids, input }: {
   workspace: string;
   subName: string;
-  subordinates: readonly SubordinateView[];
+  subagents: readonly SubagentView[];
   rpc: WorkspaceRpc;
   ids: AgentLinkIds;
   input: boolean;
 }) {
   if (subName.includes("/")) return <NestedAgentColumn workspace={workspace} path={subName} rpc={rpc} ids={ids} input={input} />;
-  const rosterEntry = subordinates.find((entry) => entry.name === subName);
-  let column = <SubordinateChatColumn workspace={workspace} subName={subName} title={rosterEntry ? agentTitle(rosterEntry) : subName} input={input} />;
+  const rosterEntry = subagents.find((entry) => entry.name === subName);
+  let column = <SubagentChatColumn workspace={workspace} subName={subName} title={rosterEntry ? agentTitle(rosterEntry) : subName} input={input} />;
 
   if (rosterEntry?.status === "dismissed") {
     // A dismissed agent has no socket; its kept chat is paged over this workspace's.
     column = <KeptChatColumn workspace={workspace} subName={subName} title={agentTitle(rosterEntry)} rpc={rpc} actorId={rosterEntry.actorId} />;
   }
 
-  // A helper this agent asked opens below it.
-  return <HelperChatBase.Provider value={{ base: helperBase(workspace, subName), parent: rosterEntry?.actorId ?? null }}>{column}</HelperChatBase.Provider>;
+  // A subagent this agent asked opens below it.
+  return <SubagentChatBase.Provider value={{ base: subagentBase(workspace, subName), parent: rosterEntry?.actorId ?? null }}>{column}</SubagentChatBase.Provider>;
 }
 
-/** One subordinate's chat over its own facet socket; Work Surface and Timeline stay on
+/** One subagent's chat over its own facet socket; Work Surface and Timeline stay on
  *  the parent socket. The facet exposes no fork/feedback/takes/restore. */
-function SubordinateChatColumn({
+function SubagentChatColumn({
   workspace, subName, title, input,
 }: {
   workspace: string;
@@ -436,7 +436,7 @@ function SubordinateChatColumn({
   title: string;
   input: boolean;
 }) {
-  const state = useActorChat({ workspace, subordinate: subName });
+  const state = useActorChat({ workspace, subagent: subName });
   const pane = `${workspace}/agents/${subName}`;
   const ui = useConversationUiState(pane);
 
@@ -586,7 +586,7 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
       logo={logo} state={state} clearMain={clearMain} />;
   }
 
-  if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubordinate} />;
+  if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubagent} />;
 
   return <WorkspaceOverview workspace={workspace} title={title} logo={logo} rpc={state.rpc} readMoves={state.readMoves}
     plan={state.activePlan} arrival={state.workspacePlanArrival}
@@ -736,7 +736,7 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
   // A chat renames and deletes alike from its tab and its sidebar row, through the same dialogs.
   const chatActions = useCallback((agent: PanelAgent): ChatTab => chatTab(agentId ?? "", agent, {
     renameMain: async (name) => { await latestState.current.rpc("renameMainChat", [name]); },
-    renameChat: async (path, name) => { await latestState.current.renameSubordinate(path, name); },
+    renameChat: async (path, name) => { await latestState.current.renameSubagent(path, name); },
     clearMain: () => { setClearingMain(true); },
     remove: (path) => { setDeletingChat({ title: agent.label, path }); },
   }), [agentId]);
@@ -862,8 +862,8 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
         draw: (count) => <ProgrammaticTurnCard turn={turn} text={card.text} state={card.state} count={count} />,
       }] : [];
     }),
-    ...state.subordinateEvents.map((event) => subordinateEventRow(event, agentId ?? "")),
-  ], [state.signalCards, state.subordinateEvents, messageCardIds, liveSplices, agentId]);
+    ...state.subagentEvents.map((event) => subagentEventRow(event, agentId ?? "")),
+  ], [state.signalCards, state.subagentEvents, messageCardIds, liveSplices, agentId]);
 
   const threadMessages = useMemo(() => thread.entries.map(({ message }) => message), [thread.entries]);
   const placed = useMemo(() => placeEvents(threadMessages, looseEvents), [threadMessages, looseEvents]);
@@ -899,7 +899,7 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
       <WorkspaceBar workspace={agentId} title={shownTitle} editValue={rosterEntry === undefined ? "" : workspaceTitleDraft(rosterEntry)}
         state={state} agents={agentsPanel.list} shown={shownAgent} view={view} inspector={inspectorControl} actions={chatActions}
         focus={focus} pending={pending} />
-      <DeleteChat chat={deletingChat} workspace={agentId} shown={subName} dismiss={state.dismissSubordinate} onClose={() => setDeletingChat(null)} />
+      <DeleteChat chat={deletingChat} workspace={agentId} shown={subName} dismiss={state.dismissSubagent} onClose={() => setDeletingChat(null)} />
     </>
   );
 
@@ -950,14 +950,14 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
         contents={state}
         quiet={focus !== null}
         onInspector={setInspectorControl}
-        chat={(control) => <HelperChatBase.Provider value={{ base: `/workspace/${agentId}/agents/`, parent: null }}><ChatSlates shownInPanel={panelSlate(control)}>
+        chat={(control) => <SubagentChatBase.Provider value={{ base: `/workspace/${agentId}/agents/`, parent: null }}><ChatSlates shownInPanel={panelSlate(control)}>
             {shownNode !== null && (
               <SwarmNodePane key={shownNode} main={state} node={shownNode} ownerPath={nodeOwner} agent={shownAgent} rosterLoaded={rosterLoaded} />
             )}
             {shownNode === null && (subName ? (
               <AgentPlanWindowContext.Provider value={reviewed.showAgentWindow}>
                 <AttentionContext.Provider value={{ reads: { ...state, questions: state.ownerQuestions }, stack: attentionCalls }}>
-                  <AgentChatColumn key={subName} workspace={agentId} subName={subName} subordinates={state.subordinates} rpc={state.rpc} ids={linkIds}
+                  <AgentChatColumn key={subName} workspace={agentId} subName={subName} subagents={state.subagents} rpc={state.rpc} ids={linkIds}
                     input={shownAgent?.input ?? true} />
                 </AttentionContext.Provider>
               </AgentPlanWindowContext.Provider>
@@ -1022,7 +1022,7 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
                 ],
               }} />
             ))}
-        </ChatSlates></HelperChatBase.Provider>}
+        </ChatSlates></SubagentChatBase.Provider>}
         inspector={(
           // `planOwner` is the actor's registered name, as the work read reports it; the root's is the workspace's.
           <WorkSurface
@@ -1035,7 +1035,7 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
             planRpc={reviewed.planRpc}
             workspacePlanArrival={state.workspacePlanArrival}
             onReviewActor={async (name, actorId) => {
-              await navigate(`${helperBase(agentId, name).slice(0, -1)}${actorId === undefined ? "" : `?actor=${encodeURIComponent(actorId)}`}`);
+              await navigate(`${subagentBase(agentId, name).slice(0, -1)}${actorId === undefined ? "" : `?actor=${encodeURIComponent(actorId)}`}`);
               workbench.current?.showChat();
             }}
             onSurface={setSurface}

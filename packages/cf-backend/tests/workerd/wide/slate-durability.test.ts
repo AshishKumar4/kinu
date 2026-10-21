@@ -451,11 +451,12 @@ it("after its object restarts, a terminal's notice is said once however often a 
   }
 });
 
-// Staging 2026-10-08: a 20 MB print failed its row's write (SQLITE_TOOBIG) as an uncaught rejection.
+// Staging 2026-10-08: a 20 MB print failed its row's write (SQLITE_TOOBIG) as an uncaught rejection. Past the row's
+// 8 MiB (do.sqlite.row_bytes, 2026-10-21), as that print was past its 2 MB.
 it('a print past the row limit runs, and its row keeps the head a reader shows with the length printed', async () => {
   const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName('clip'));
   const workspace = 'durability-clip';
-  const printed = 3_000_000;
+  const printed = 9_000_000;
   await subject().serveSlate({ workspace, owner: 'durability-owner', id: 'beside-clip', body: 'served' });
 
   expect((await subject().runInWorkspace(workspace, `node -e "process.stdout.write('x'.repeat(${String(printed)}))"`)).exitCode).toBe(0);
@@ -463,6 +464,8 @@ it('a print past the row limit runs, and its row keeps the head a reader shows w
 
   expect(row?.stdout_len).toBe(printed);
   expect(row?.stdout).toBe('x'.repeat(16 * 1024));
+  // Stored as far as a reload reads it, not as far as the row would hold.
+  expect(await subject().storedStreamChars(workspace)).toBe(16 * 1024);
 
   // A print that reads like a clip note is output, not metadata: its length is its own.
   const lookalike = 'ok\n[kinu: clipped from 9999999 chars]';

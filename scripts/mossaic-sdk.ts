@@ -35,7 +35,7 @@
 
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
 import { MOSSAIC_MANIFEST, MOSSAIC_ROOT, MOSSAIC_SDK, isMossaicVendored, trackedFiles } from './sources';
@@ -153,9 +153,10 @@ export function bindPinnedCompiler(root: string): void {
       + `${dirname(dirname(plugin))} this worktree links, then \`bash scripts/setup-worktree.sh\` here`);
   }
 
+  // Relative: a checkout moved (`git worktree move`) keeps reaching its own compiler.
   mkdirSync(dirname(peer), { recursive: true });
   rmSync(peer, { recursive: true, force: true });
-  symlinkSync(compiler, peer, 'dir');
+  symlinkSync(relative(dirname(peer), compiler), peer, 'dir');
 }
 
 /** Upstream's own build, over upstream's own config. Throws on a non-zero exit. */

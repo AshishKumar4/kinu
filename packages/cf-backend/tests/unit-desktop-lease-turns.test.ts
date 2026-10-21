@@ -48,7 +48,7 @@ async function hired() {
   // The owner's egress vault is read before the box is used.
   workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
   await workspace.agent.setSoul('# Purpose\n\nWatch the desktop.');
-  const { name } = await workspace.agent.createSubordinateAgent();
+  const { name } = await workspace.agent.createSubagentAgent();
   const route = await workspace.agent.resolveHostedActorRoute(name);
 
   if ('reason' in route) throw new Error(route.error);

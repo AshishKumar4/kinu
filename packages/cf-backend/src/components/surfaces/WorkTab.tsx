@@ -17,7 +17,7 @@ import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { Section } from "./shared";
-import { HelperRow, PlanProgress, TaskTree } from "./work-tasks";
+import { SubagentRow, PlanProgress, TaskTree } from "./work-tasks";
 import { InspectedRow, JobCard } from "./work-jobs";
 import type { SurfaceKind } from "@kinu.run/core";
 import { WorkPlans } from "./WorkPlans";
@@ -74,7 +74,7 @@ export function WorkTab({
 
   const openTasks = taskRows.filter(({ task }) => taskTreePhase(task) !== "settled");
   const closedTasks = taskRows.filter(({ task }) => taskTreePhase(task) === "settled");
-  const helpers = useMemo(() => (agents?.list ?? []).filter((agent) => agent.category === "background"), [agents]);
+  const subagents = useMemo(() => (agents?.list ?? []).filter((agent) => agent.category === "background"), [agents]);
   const runningJobs = backgroundJobs.filter((job) => jobPhase(job, Date.now()) !== "settled");
   const settledJobs = backgroundJobs.filter((job) => jobPhase(job, Date.now()) === "settled");
 
@@ -97,7 +97,7 @@ export function WorkTab({
     <div className="space-y-6 animate-fade-in">
       <WorkPlans work={work} onOpen={openPlan} />
       <NeedsYou pendingActions={pendingActions} onOpenAsk={onOpenAsk} onOpenSurface={onOpenSurface} onOpenPlan={onOpenPlan} />
-      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} inspected={inspectedWork} runningJobs={runningJobs} helpers={helpers} onOpenHelper={agents?.open} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
+      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} inspected={inspectedWork} runningJobs={runningJobs} subagents={subagents} onOpenSubagent={agents?.open} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
       <WorkJournal journal={journal} rpc={rpc} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} />
     </div>
   );
@@ -141,22 +141,22 @@ interface WorkTaskRow {
 }
 
 /** The read's tri-state gates only the work half, so a running job never waits behind the plan's spinner. */
-function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, helpers, onOpenHelper, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
+function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, subagents, onOpenSubagent, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
   work: WorkspaceWork | null;
   taskRows: WorkTaskRow[];
   openTasks: WorkTaskRow[];
   /** Turns and effects still owed, by their recorded phase. */
   inspected: readonly InspectedWork[];
   runningJobs: BackgroundJob[];
-  helpers: readonly PanelAgent[];
-  onOpenHelper?: (agent: PanelAgent) => void;
+  subagents: readonly PanelAgent[];
+  onOpenSubagent?: (agent: PanelAgent) => void;
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
   onRefreshJobs: () => void;
   onOpenOwner?: (name: string, actorId: string) => void | Promise<void>;
   rpc: WorkspaceRpc;
 }) {
-  const nowEmpty = work !== null && openTasks.length === 0 && inspected.length === 0 && runningJobs.length === 0 && helpers.length === 0;
+  const nowEmpty = work !== null && openTasks.length === 0 && inspected.length === 0 && runningJobs.length === 0 && subagents.length === 0;
   const now = Date.now();
 
   if (nowEmpty && resource.status !== "error") return null;
@@ -191,9 +191,9 @@ function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, helpers, o
             ))}
           </div>
         )}
-        {helpers.length > 0 && (
+        {subagents.length > 0 && (
           <div className="space-y-1">
-            {helpers.map((agent) => <HelperRow key={agent.key} agent={agent} onOpen={onOpenHelper} />)}
+            {subagents.map((agent) => <SubagentRow key={agent.key} agent={agent} onOpen={onOpenSubagent} />)}
           </div>
         )}
       </div>

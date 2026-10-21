@@ -1,5 +1,5 @@
 import type { ModelAttemptIdentity } from '@kinu.run/core';
-import { createChatModel, routeWebSearch, type LLMProviderConfig, type WebSearch } from '@kinu.run/core';
+import { createChatModel, routeWebSearch, WORKERS_AI_STREAMS_GENERATE, type LLMProviderConfig, type WebSearch } from '@kinu.run/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
   credentialToHeaders,
@@ -161,6 +161,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
         defaultModel: gateway.model,
         llm: gateway,
         catalogProviderId: 'cloudflare-workers-ai',
+        streamsGenerate: WORKERS_AI_STREAMS_GENERATE,
         fetch: opts.fetch,
       }),
     myGateway: cloudProvider(readMenu, { id: 'my-gateway', label: 'Your AI Gateway',
@@ -172,6 +173,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       llm: gateway,
       catalogProviderId: 'cloudflare-workers-ai',
       catalogModelPrefix: 'workers-ai/',
+      streamsGenerate: WORKERS_AI_STREAMS_GENERATE,
       fetch: opts.fetch,
     }),
     chatgpt: createChatGptProvider(),
@@ -273,9 +275,12 @@ function createGatewayBackedProvider(opts: {
   llm: LLMProviderConfig;
   catalogProviderId?: 'cloudflare-workers-ai';
   catalogModelPrefix?: string;
+  /** Its models are Workers AI's, which must stream (`WORKERS_AI_STREAMS_GENERATE`). */
+  streamsGenerate?: boolean;
   fetch?: typeof fetch;
 }): ModelProvider {
   return {
+    ...(opts.streamsGenerate === true && { streamsGenerate: true }),
     id: opts.id,
     label: opts.label,
     defaultModel: opts.defaultModel,
@@ -448,6 +453,8 @@ class CloudProxyProvider implements ModelProvider {
 
   get id() { return this.opts.id; }
   get label() { return this.opts.label; }
+  /** The account forwards a call as it came, so Workers AI's is streamed here (`WORKERS_AI_STREAMS_GENERATE`). */
+  get streamsGenerate() { return this.opts.id === 'workers-ai' && WORKERS_AI_STREAMS_GENERATE; }
   get defaultModel() { return this.opts.defaultModel; }
 
   isAvailable() {

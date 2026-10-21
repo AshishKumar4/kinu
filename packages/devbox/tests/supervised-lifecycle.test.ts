@@ -442,7 +442,7 @@ describe("a job its owner started reads the values its agents may read at each l
   test('the launch is handed the value in memory; the spec and the job directory hold the placeholder alone', async () => {
     const made = harness(RevealingBox);
 
-    await made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER }, true);
+    await made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER }, { reveal: true });
 
     expect(made.box.asked).toBe(1);
     expect(made.container.launchEnvs.at(-1)).toMatchObject({ DATABASE_PASSWORD: VALUE, DEVBOX_REVEALED: 'DATABASE_PASSWORD' });
@@ -453,7 +453,7 @@ describe("a job its owner started reads the values its agents may read at each l
   test("the job's own variables file leaves out what it reads the value of, so the pane cannot set the placeholder back", async () => {
     const made = harness(RevealingBox);
 
-    await made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER, DATABASE_PASSWORD: `pxs1_${'d'.repeat(43)}` }, true);
+    await made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER, DATABASE_PASSWORD: `pxs1_${'d'.repeat(43)}` }, { reveal: true });
     const files = [...made.container.files].filter(([path]) => path.endsWith('/env')).map(([, content]) => content);
 
     expect(files).toHaveLength(1);
@@ -481,7 +481,7 @@ describe("a job its owner started reads the values its agents may read at each l
   test('an account that does not answer fails the start with that reason, and nothing is launched short of its value', async () => {
     const made = harness(UnansweredBox);
 
-    await expect(made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER }, true)).rejects.toThrow('the account did not answer');
+    await expect(made.box.startSupervised(COMMAND, '/workspace', { CLOUDFLARE_API_TOKEN: PLACEHOLDER }, { reveal: true })).rejects.toThrow('the account did not answer');
     expect(made.container.launchEnvs).toEqual([]);
   });
 
@@ -502,5 +502,183 @@ describe("a job its owner started reads the values its agents may read at each l
 
     expect(made.box.asked).toBe(0);
     expect(JSON.stringify(made.container.launchEnvs)).not.toContain(VALUE);
+  });
+});
+
+// Main's decision, 2026-10-20: a computer's process started as a job is told to its workspace when it ends, on the box's
+// own heartbeat (no arm of its own, no workspace polling), and a crash is not restarted on a clock: the job ends, and its
+// agent decides. The box's restore after it went away is the one restart, and it is told too.
+describe('a supervised process that runs as a job', () => {
+  const told = (rows: Map<string, unknown>) => [...rows].filter(([key]) => key.startsWith('devbox:incident:')).map(([, row]) => row);
+
+  test('ends told on the heartbeat, with its exit code and what it wrote last, once, and is not restarted', async () => {
+    const { box, container, rows } = harness(Devbox);
+    const { processId } = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-dev-server' });
+    const dir = `/var/tmp/devbox/processes/${processId}`;
+
+    container.files.set(`${dir}/stdout.log`, 'listening on :4100\nError: listen EADDRINUSE: address already in use :::4100\n');
+    container.files.set(`${dir}/exit`, '1');
+    await box.devboxHeartbeat();
+    await box.devboxHeartbeat();
+
+    expect(told(rows)).toEqual([expect.objectContaining({
+      stage: 'process-ended', processId, job: 'bgjob-dev-server', exitCode: 1, reason: expect.stringContaining('EADDRINUSE'),
+    })]);
+    expect(await reservations(box)).toEqual([]);
+  });
+
+  test("the box's restore after it went away starts it again, and that is told", async () => {
+    const { box, rows } = harness(Devbox);
+
+    rows.set('devbox:proc:dev-server', { processId: 'dev-server', command: COMMAND, cwd: '/workspace', createdAt: 1, job: 'bgjob-dev-server' });
+    await box.devboxStartup();
+
+    expect(told(rows)).toEqual([expect.objectContaining({ stage: 'process-restored', processId: 'dev-server', job: 'bgjob-dev-server' })]);
+  });
+
+  // Review of the computer process jobs, 2026-10-21: an end with no output carried an empty reason, which the workspace's
+  // incident schema refuses, so the end was never delivered.
+  test('a process that wrote nothing ends told with a reason that says so', async () => {
+    const { box, container, rows } = harness(Devbox);
+    const { processId } = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-quiet' });
+
+    container.files.set(`/var/tmp/devbox/processes/${processId}/exit`, '0');
+    await box.devboxHeartbeat();
+
+    expect(told(rows)).toEqual([expect.objectContaining({ stage: 'process-ended', job: 'bgjob-quiet', exitCode: 0, reason: 'it ended, and wrote nothing' })]);
+  });
+
+  // Review, 2026-10-21: a stop removed the spec without telling its end, so its job ran on forever.
+  test('a job process the agent stops is told ended, as stopped', async () => {
+    const { box, rows } = harness(Devbox);
+    const { processId } = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-stopped' });
+
+    expect(await box.stopSupervised(processId)).toEqual({ stopped: true });
+
+    expect(told(rows)).toEqual([expect.objectContaining({ stage: 'process-ended', processId, job: 'bgjob-stopped', reason: expect.stringContaining('it was stopped') })]);
+    expect(await reservations(box)).toEqual([]);
+  });
+
+  // Review, 2026-10-21: a start of a command that still ran took its process for a second job, and the first never
+  // heard its end; a start after it ended overwrote its job before its end was told.
+  test('a start of a command that still runs answers its job; one after it ended tells the earlier end first', async () => {
+    const { box, container, rows } = harness(Devbox);
+    const first = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-first' });
+
+    expect(await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-again' })).toEqual({ processId: first.processId, job: 'bgjob-first' });
+    expect(told(rows)).toEqual([]);
+
+    container.files.set(`/var/tmp/devbox/processes/${first.processId}/exit`, '1');
+    const second = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-second' });
+
+    expect(second).toEqual({ processId: first.processId, job: 'bgjob-second' });
+    expect(told(rows)).toEqual([expect.objectContaining({ stage: 'process-ended', job: 'bgjob-first', exitCode: 1 })]);
+
+    // The successor runs: a beat after it retires nothing of it, and tells nothing more.
+    await box.devboxHeartbeat();
+    expect(told(rows)).toHaveLength(1);
+    expect(await reservations(box)).toEqual([first.processId]);
+  });
+
+  // Second review, 2026-10-21: an end told while the box was torn down wrote its incident, and a start after it its
+  // spec, into the storage the teardown had just emptied.
+  for (const entry of ['start', 'heartbeat', 'stop'] as const) {
+    test(`a ${entry} that tells an earlier end while the box is destroyed writes nothing after it`, async () => {
+      const { box, container, rows } = harness(Devbox);
+      const { processId } = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-first' });
+      const paused = gate();
+
+      container.files.set(`/var/tmp/devbox/processes/${processId}/exit`, '1');
+      container.logsHeld = paused;
+
+      const operations = {
+        start: () => box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-second' }),
+        heartbeat: () => box.devboxHeartbeat(),
+        stop: () => box.stopSupervised(processId),
+      };
+
+      const telling = Promise.allSettled([operations[entry]()]);
+
+      await paused.reached;
+
+      try {
+        await box.destroy();
+      } finally {
+        paused.release();
+        await telling;
+      }
+
+      expect([...rows.keys()].filter((key) => key.startsWith('devbox:proc:') || key.startsWith('devbox:incident:'))).toEqual([]);
+    });
+  }
+
+  // Second review, 2026-10-21: no test held a heartbeat inside its look at an ended run while the agent came for the same
+  // command, so a reap that told an end twice, or took a successor's spec for the run it saw end, would pass (D105).
+  for (const entry of ['start', 'stop'] as const) {
+    test(`a heartbeat telling an end holds its run; a ${entry} of it waits, the end is told once, and nothing after it is lost`, async () => {
+      const { box, container, rows } = harness(Devbox);
+      const first = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-first' });
+      const paused = gate();
+
+      container.files.set(`/var/tmp/devbox/processes/${first.processId}/exit`, '1');
+      container.logsHeld = paused;
+      const beating = box.devboxHeartbeat();
+
+      await paused.reached;
+      const next = entry === 'start' ? box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-second' }) : box.stopSupervised(first.processId);
+      let waited = false;
+
+      // The fake answers on promises alone: after one turn, all that can run has run, and one still unanswered waits.
+      try {
+        waited = await Promise.race([next.then(() => false), new Promise<boolean>((resolve) => { setImmediate(() => { resolve(true); }); })]);
+      } finally {
+        paused.release();
+        await beating;
+      }
+
+      const answered = await next;
+
+      expect(waited).toBe(true);
+      expect(told(rows)).toEqual([expect.objectContaining({ stage: 'process-ended', job: 'bgjob-first', exitCode: 1 })]);
+
+      if (entry === 'start') {
+        await box.devboxHeartbeat();
+        const kept = await reservations(box);
+
+        expect(kept).toHaveLength(1);
+        expect(answered).toEqual({ processId: kept[0], job: 'bgjob-second' });
+        expect(told(rows)).toHaveLength(1);
+      } else expect(await reservations(box)).toEqual([]);
+    });
+  }
+
+  test('a job process seen finished at quiesce is told once, by the reap, and the forget after it tells nothing', async () => {
+    const { box, container, rows } = chainBox();
+
+    try {
+      await box.start();
+      const { processId } = await box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-done' });
+      const row = container.processes.get(processId);
+
+      container.processes.set(processId, { id: processId, pid: row?.pid ?? 1, command: COMMAND, status: 'completed' });
+      container.files.set(`/var/tmp/devbox/processes/${processId}/exit`, '0');
+      expect((await box.quiesce()).kind).toBe('committed');
+
+      expect(told(rows)).toEqual([expect.objectContaining({ stage: 'process-ended', processId, job: 'bgjob-done', exitCode: 0 })]);
+      expect(await reservations(box)).toEqual([]);
+    } finally {
+      await box.destroy();
+    }
+  });
+
+  test('a process that runs as no job is not told, and keeps its spec for the restore', async () => {
+    const { box, container, rows } = harness(Devbox);
+    const { processId } = await box.startSupervised(COMMAND);
+
+    container.files.set(`/var/tmp/devbox/processes/${processId}/exit`, '1');
+    await box.devboxHeartbeat();
+
+    expect(told(rows)).toEqual([]);
+    expect(await reservations(box)).toEqual([processId]);
   });
 });

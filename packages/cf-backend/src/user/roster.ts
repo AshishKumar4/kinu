@@ -202,8 +202,8 @@ const ROSTER_NUDGE_ATTEMPTS = 6;
 
 export function unreportedWorkspaces(sql: SqlExec, now: number): string[] {
   return sql.exec(`SELECT w.name FROM user_workspaces w
-    LEFT JOIN workspace_overviews o ON o.name = w.name LEFT JOIN workspace_overview_nudges n ON n.name = w.name
-    WHERE ${ACTIVE} AND o.name IS NULL AND (n.name IS NULL OR (n.attempts < ? AND n.next_at <= ?))`, ROSTER_NUDGE_ATTEMPTS, now)
+    LEFT JOIN workspace_overviews o ON o.name = w.name
+    WHERE ${ACTIVE} AND o.name IS NULL AND w.nudge_attempts < ? AND w.nudge_next_at <= ?`, ROSTER_NUDGE_ATTEMPTS, now)
     .toArray().map((row) => v.parse(NameRowSchema, row).name);
 }
 

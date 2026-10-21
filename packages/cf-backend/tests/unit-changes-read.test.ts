@@ -6,7 +6,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { agentHome, actorHomeName } from '@kinu.run/core';
-import { hostedSubordinateHarness, orchestratorHarness, workspaceFiles, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { hostedSubagentHarness, orchestratorHarness, workspaceFiles, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 /** The workspace's change-set as the page lists it. A write's file events are delivered on a microtask queued before
  *  its promise settles, so a read after it sees them. */
@@ -37,7 +37,7 @@ test("a hire's write tells the workspace's pages that Changes moved, so a tab no
 
   Reflect.set(workspace.agent, 'broadcast', (payload: string) => { frames.push(payload); });
 
-  const hire = await hostedSubordinateHarness(workspace, {
+  const hire = await hostedSubagentHarness(workspace, {
     name: 'builder-1', displayName: 'Builder', nameOrigin: 'user', roleId: 'task', mission: 'build the thing',
   });
 

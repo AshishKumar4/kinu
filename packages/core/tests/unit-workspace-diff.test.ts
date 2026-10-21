@@ -13,10 +13,10 @@ import {
   restoreWorkspaceBaseline,
   type WorkspaceBaselines,
   type WorkspaceDiffResult,
+  bodyMaxBytes,
 } from '../src/read-models/workspace-diff';
 import type { ExecutorProvider, ExecutionRouter } from '../src/execution/types';
 import { MAX_LINES_PER_FILE } from '../src/vfs/diff';
-import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { createTestRuntime } from './helpers';
 import { commandResultAt, type CommandResult } from '../src/execution/exec-result';
 import { agentCred, provisionAgentHome, actorHomeName } from '../src/vfs/agent-home';
@@ -124,13 +124,13 @@ describe('workspace diff lifecycle', () => {
     expect((await getWorkspaceDiff(rt, baselines)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['changed s/f-7.txt']);
   });
 
-  test('a file past one row is listed as changed and large, without a body', async () => {
+  test('a file past what a review diffs is listed as changed and large, without a body', async () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
-    const row = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
-    await writeText(rt.storage.vfs, 'big.log', 'x'.repeat(row));
+    const past = bodyMaxBytes() + 1;
+    await writeText(rt.storage.vfs, 'big.log', 'x'.repeat(past));
     await resetWorkspaceBaseline(rt, baselines);
-    await writeText(rt.storage.vfs, 'big.log', 'y'.repeat(row + 1));
+    await writeText(rt.storage.vfs, 'big.log', 'y'.repeat(past + 1));
 
     expect((await getWorkspaceDiff(rt, baselines)).files).toEqual([
       { path: 'big.log', status: 'changed', added: 0, removed: 0, lines: [], omitted: 'large' },

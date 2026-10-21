@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { ROOT_DELEGATION_BUDGET, JsonObjectSchema, type JsonObject, type PeersToolDeps, type SubordinateDelivery, type SubordinateHandoff, type SubordinateRosterEntry, type TeamToolDeps } from '../src/index';
+import { ROOT_DELEGATION_BUDGET, JsonObjectSchema, type JsonObject, type PeersToolDeps, type SubagentDelivery, type SubagentHandoff, type SubagentRosterEntry, type TeamToolDeps } from '../src/index';
 
 interface Call { action: string; input: JsonObject }
 
@@ -7,12 +7,12 @@ function recordCall(calls: Call[], action: string, call: { input: unknown }): vo
   calls.push({ action, input: v.parse(JsonObjectSchema, call.input) });
 }
 
-export const rosterEntry: SubordinateRosterEntry = { name: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'agent', status: 'idle', currentTask: null, createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null };
+export const rosterEntry: SubagentRosterEntry = { name: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'agent', status: 'idle', currentTask: null, createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null };
 
 interface HandoffEcho {
   action: string;
   input: { name: string };
-  delivery: SubordinateDelivery;
+  delivery: SubagentDelivery;
   busy: boolean;
 }
 
@@ -22,7 +22,7 @@ function echoHandoff(calls: Call[], echo: HandoffEcho) {
   return { ok: true as const, name: echo.input.name, ...handoff(echo.delivery, echo.busy) };
 }
 
-export const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHandoff => ({
+export const handoff = (delivery: SubagentDelivery, busy: boolean): SubagentHandoff => ({
   eventId: `evt-${delivery}`,
   delivery,
   phase: { busy, lastActivityAt: 1234, workingOn: busy ? 'reading src/auth.ts' : null },
@@ -57,14 +57,14 @@ export function makeTeam(
     create: async (input) => ({
       name: input.name ?? 'researcher',
       displayName: 'Researcher',
-      subordinate: { name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'task', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+      subagent: { name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'task', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
     }),
     rename: async (input) => {
       recordCall(calls, 'rename', { input });
 
       return {
         ok: true, name: input.name, displayName: input.displayName,
-        subordinate: { ...rosterEntry, name: input.name, displayName: input.displayName },
+        subagent: { ...rosterEntry, name: input.name, displayName: input.displayName },
       };
     },
     spawn: async (input) => {

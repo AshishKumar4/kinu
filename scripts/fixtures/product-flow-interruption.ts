@@ -6,7 +6,7 @@ process.env.KINU_ORIGIN = 'http://127.0.0.1';
 
 await mock.module('../product-flows', () => ({
   ...flows,
-  reachesHome: async (): Promise<flows.WelcomeVerdict> => ({ welcomed: false, landedAt: '/' }),
+  reachesHome: async (): Promise<flows.WelcomeVerdict> => ({ welcomed: false, landedAt: '/', assistantHome: false }),
   workspaceGetsFirstAnswer: (): Promise<flows.FirstAnswerVerdict> => {
     process.stderr.write('fixture: second flow blocked\n');
 

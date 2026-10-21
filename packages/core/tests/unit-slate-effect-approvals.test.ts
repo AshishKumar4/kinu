@@ -7,7 +7,7 @@ import { Database } from 'bun:sqlite';
 import { Effect } from 'effect';
 import { createTestActors, present } from '@kinu.run/test-utils';
 import {
-  approvalKindOf, DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, slateEffectExecutor, slateEffectText, type AgentSignal,
+  approvalKindOf, DeferredApprovalQueue, DeferredApprovalStore, initOwnerRequestsTable, slateEffectExecutor, slateEffectText, type AgentSignal,
   type SlateEffect,
 } from '../src/index';
 import { buildPendingActions } from '../src/read-models/pending-actions';
@@ -23,7 +23,7 @@ function world() {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
 
-  initDeferredApprovalsTable(execRaw);
+  initOwnerRequestsTable(execRaw);
   const store = new DeferredApprovalStore(sql, createTestActors(sql, execRaw).main);
   const woken: AgentSignal[] = [];
 

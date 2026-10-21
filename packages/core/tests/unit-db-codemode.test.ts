@@ -394,7 +394,7 @@ describe('what db cannot reach', () => {
       for (const name of [
         'workspace_identity', 'workspace_actors', 'conversation_entries', 'session_messages',
         'workspace_capability',
-        'webhook_secrets', 'deferred_approvals', 'actor_turn_claims', 'run_events',
+        'webhook_secrets', 'owner_requests', 'actor_turn_claims', 'run_events',
         'tool_effect_claims', 'effect_tombstones', 'actor_config', 'actor_program_state',
         catalogueTable(), 'sqlite_master', 'sqlite_sequence',
       ]) {

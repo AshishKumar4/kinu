@@ -163,7 +163,7 @@ for (const { rule } of cases) {
  * Object is here — not a list in this file, which would stop covering a class the moment one was
  * added. It is not the whole set though: a FACET is a Durable Object surface with its own
  * `ctx.storage` and the same eviction semantics, and it carries no binding at all, so
- * `SubordinateAgent` sat outside this count while being exactly the class
+ * `SubagentAgent` sat outside this count while being exactly the class
  * a head's background work runs in. It is read from the `subAgent`/`abortSubAgent`/
  * `deleteSubAgent` call sites, which is where the deployment actually names them.
  *
@@ -207,7 +207,7 @@ function durableObjectCorpus(): {
   // BE EMPTY. It is kept, and still scanned both ways, because an empty result
   // is the assertion below rather than an absence nobody checks.
   //
-  // Nothing spawns facets: a hired subordinate, a temporary, a head, a swarm
+  // Nothing spawns facets: a hired subagent, a temporary, a head, a swarm
   // node and an MCTS branch are logical actors of the ONE workspace object,
   // bound over its SQLite by `core/src/state/actor-host.ts`, so nothing calls
   // `subAgent()` and no second Durable Object activates. A head's background

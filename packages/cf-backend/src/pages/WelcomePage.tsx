@@ -29,8 +29,6 @@ import { useElementSize } from "@/hooks/use-element-size";
 import { MailAddressField, useMailUsername } from "@/components/mail/MailAddressField";
 import { createMailAddress, readMailBoxes } from "@/lib/mail-api";
 
-/** Where Mail's step sits in the whole list, so a setup opened past it can step back when it is not offered. */
-const MAIL_STEP = ONBOARDING_STEPS.findIndex((each) => each.id === 'mail');
 
 /** Setup's steps: Mail's only where the deployment has mail and the person may create an address and has none. */
 function stepsFor(mail: boolean): typeof ONBOARDING_STEPS[number][] {
@@ -85,6 +83,37 @@ function ShowcaseStep({ revealed }: { revealed: boolean }) {
   );
 }
 
+/**
+ * The step setup shows, held in the address by its id (`?step=`): a connect run in this tab comes back to it, and a step
+ * keeps its place when Mail turns out not to be offered. Opened on no step it names, it shows `initialStep` and writes
+ * it down while Mail is still counted. `goTo` replaces the address rather than pushing: Back is the wizard's own button,
+ * and the browser's leaves setup.
+ */
+function useAddressedStep(offerMail: boolean, initialStep: number) {
+  const steps = stepsFor(offerMail);
+  const [search, setSearch] = useSearchParams();
+  // A step it names that is not offered, Mail read as not offered after all, gives way to the step after it.
+  const named = ONBOARDING_STEPS.findIndex((candidate) => candidate.id === search.get("step"));
+  const addressed = named < 0 ? -1 : steps.findIndex((candidate) => ONBOARDING_STEPS.indexOf(candidate) >= named);
+  const step = addressed >= 0 ? addressed : Math.min(Math.max(0, initialStep), steps.length - 1);
+
+  const goTo = useCallback((index: number) => {
+    const id = stepsFor(offerMail)[index]?.id;
+
+    if (id === undefined) return;
+
+    setSearch((at) => {
+      at.set("step", id);
+
+      return at;
+    }, { replace: true });
+  }, [offerMail, setSearch]);
+
+  useEffect(() => { if (addressed < 0) goTo(step); }, [addressed, step, goTo]);
+
+  return { step, goTo };
+}
+
 export default function WelcomePage({ initialStep = 0 }: { initialStep?: number }) {
   const account = useAccount();
   const navigate = useNavigate();
@@ -97,13 +126,9 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const offerMail = mail.status === "loading" || (mailBoxes?.enabled === true && mailBoxes.canCreate);
   const steps = stepsFor(offerMail);
   const LAST_STEP = steps.length - 1;
-  // `?step=` names the step to open on: a sign-in that left this page returns to the step it left from.
-  const [search] = useSearchParams();
-  const opened = steps.findIndex((candidate) => candidate.id === search.get("step"));
-
-  // `null` until touched, so a slow profile load never overwrites an edit.
-  const [step, setStep] = useState(() => (opened >= 0 ? opened : Math.min(Math.max(0, initialStep), LAST_STEP)));
+  const { step, goTo } = useAddressedStep(offerMail, initialStep);
   const [reached, setReached] = useState(step);
+  // `null` until touched, so a slow profile load never overwrites an edit.
   const [name, setName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -118,11 +143,6 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   // The name typed a step before is the one it is offered from.
   const address = useMailUsername(profile === null ? null : suggestedMailUsername({ displayName, email: profile.email }));
   const onMail = steps[step]?.id === 'mail';
-
-  // Read as not offered after setup opened on a later step: the steps after it moved up one.
-  useEffect(() => {
-    if (mail.status !== "loading" && !offerMail) setStep((at) => (at > MAIL_STEP ? at - 1 : at));
-  }, [mail.status, offerMail]);
 
   useEffect(() => setReached((most) => Math.max(most, step)), [step]);
 
@@ -203,8 +223,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
       }
     }
 
-    setStep((s) => Math.min(s + 1, LAST_STEP));
-  })), [step, name, profile, account, onMail, address.username, LAST_STEP]);
+    goTo(Math.min(step + 1, LAST_STEP));
+  })), [step, name, profile, account, onMail, address.username, LAST_STEP, goTo]);
 
   return (
     <div className="fixed inset-0 p-bg overflow-y-auto">
@@ -260,7 +280,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
                 {s.id === 'providers' && (
                   <div className="space-y-5">
-                    <ProvidersPanel framed={false} returnTo={`${APP_ROUTES.welcome}?step=${s.id}`} />
+                    <ProvidersPanel framed={false} />
                   </div>
                 )}
 
@@ -268,7 +288,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                 {s.id === 'model' && i === step && <DefaultModelField />}
 
                 {/* Likewise: the model step writes the same catalog, so this one reads it when it opens. */}
-                {s.id === 'search' && i === step && <WebSearchSettings place="setup" returnTo={`${APP_ROUTES.welcome}?step=${s.id}`} />}
+                {s.id === 'search' && i === step && <WebSearchSettings place="setup" />}
 
                 {s.id === 'tools' && (
                   <div className="space-y-4">
@@ -289,7 +309,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
           <div className="flex items-center justify-between gap-3 border-t p-border px-5 py-4 sm:px-8">
             {step > 0 ? (
-              <Button variant="ghost" size="sm" disabled={busy} onClick={() => setStep((s) => s - 1)}>Back</Button>
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => goTo(step - 1)}>Back</Button>
             ) : <span />}
 
             {step < LAST_STEP ? (
@@ -297,7 +317,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                 <Button variant="ghost" disabled={busy} onClick={finish}>
                   Skip setup
                 </Button>
-                {onMail && <Button variant="ghost" size="sm" data-mail-not-now disabled={busy} onClick={() => setStep((s) => Math.min(s + 1, LAST_STEP))}>Not now</Button>}
+                {onMail && <Button variant="ghost" size="sm" data-mail-not-now disabled={busy} onClick={() => goTo(Math.min(step + 1, LAST_STEP))}>Not now</Button>}
                 <Button variant="primary" size="md" disabled={busy || (onMail && address.state !== "available")} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
                   {busy && <Loader size="sm" />} Next
                 </Button>

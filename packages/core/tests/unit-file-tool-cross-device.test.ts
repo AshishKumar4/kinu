@@ -7,7 +7,7 @@ import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/executi
 import type { DeviceFleetEntry, DeviceStatus } from '../src/execution/device-status';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { buildBuiltinTools } from '../src/tools/builtins';
-import { withApprovalGatedFiles } from '../src/execution/approval';
+import { hostedToolFiles } from '../src/execution/approval';
 import { createInlineExecutor } from '../src/tools/inline-executor';
 
 import { createSandboxExecutor } from '../src/execution/sandbox';
@@ -92,7 +92,7 @@ function fileToolOverTheFleet(written: JsonValue = { success: true }, gated = fa
   const plane = withMountTable(rt.storage.vfs, standardMounts((name) => router.getProvider(name)));
 
   const toolFiles = gated
-    ? withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => plane.resolve(path, { follow, creating }), userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, policy)
+    ? hostedToolFiles(plane, cloudPlanes(WORKSPACE_ROOT), policy)
     : plane;
 
   const tools = buildBuiltinTools({

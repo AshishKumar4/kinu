@@ -79,7 +79,7 @@ export function PlanProgress({ tasks }: { tasks: AgentTaskTree[] }) {
   );
 }
 
-const HELPER_ACTIVITY: Record<PanelAgent["activity"], string> = {
+const SUBAGENT_ACTIVITY: Record<PanelAgent["activity"], string> = {
   working: "refining from recent turns",
   waiting: "waiting",
   idle: "answered",
@@ -89,18 +89,18 @@ const HELPER_ACTIVITY: Record<PanelAgent["activity"], string> = {
   failed: "failed",
 };
 
-export function HelperRow({ agent, onOpen }: { agent: PanelAgent; onOpen?: (agent: PanelAgent) => void }) {
+export function SubagentRow({ agent, onOpen }: { agent: PanelAgent; onOpen?: (agent: PanelAgent) => void }) {
   const text = (
     <>
       <SparkleIcon size={14} className="mt-px shrink-0 p-text-2" />
-      <span className="t-body">{agent.label} <span className="p-text-3">· {HELPER_ACTIVITY[agent.activity]}</span></span>
+      <span className="t-body">{agent.label} <span className="p-text-3">· {SUBAGENT_ACTIVITY[agent.activity]}</span></span>
     </>
   );
 
-  if (!onOpen) return <div className="flex items-start gap-2 py-1" data-helper-row={agent.key}>{text}</div>;
+  if (!onOpen) return <div className="flex items-start gap-2 py-1" data-subagent-row={agent.key}>{text}</div>;
 
   return (
-    <Pressable className="flex items-start gap-2 py-1" data-helper-row={agent.key} onClick={() => onOpen(agent)}>
+    <Pressable className="flex items-start gap-2 py-1" data-subagent-row={agent.key} onClick={() => onOpen(agent)}>
       {text}
     </Pressable>
   );

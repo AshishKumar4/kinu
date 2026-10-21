@@ -21,7 +21,7 @@ test("the opening carries the snapshot and every list the first screen draws, ea
     pendingActions: await agent.listPendingActions(),
     backgroundJobs: await agent.listBackgroundJobs(WORK_TAB_JOBS),
     inspectedWork: await agent.inspectWork(),
-    subordinates: { value: await agent.listSubordinates() },
+    subagents: { value: await agent.listSubagents() },
     pendingConsents: { value: await agent.listPendingConsents() },
     workspaceAgents: { value: await agent.listWorkspaceAgents() },
   });
@@ -39,6 +39,6 @@ test('a list that fails is its own failure: the rest of the opening still lands'
   const opening = await agent.getWorkspaceOpening();
 
   expect(opening.pendingConsents).toEqual({ error: expect.stringContaining('the consent store did not answer') });
-  expect(opening.subordinates).toEqual({ value: await agent.listSubordinates() });
+  expect(opening.subagents).toEqual({ value: await agent.listSubagents() });
   expect(opening.status).toEqual(await agent.getAgentStatus());
 });

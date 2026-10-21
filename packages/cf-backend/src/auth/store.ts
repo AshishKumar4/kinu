@@ -33,6 +33,18 @@ export interface OAuthStateInput {
   nonce?: string | null;
   returnTo: string;
   redirectUri: string;
+  /** A connect's: the account whose session started it, which the callback attaches to and must still be signed in
+   *  as. Absent, the run is a sign-in. */
+  connectFor?: string | null;
+  /** A connect's run, the starting page's own id (`ConnectRunSchema`), which its finish page names. */
+  connectRun?: string | null;
+}
+
+/** A handoff spent by the browser it was issued to: its record, and why it is refused if it is (expired, another
+ *  provider's). Refused, the record still says whether it was a connect, and whose run. */
+export interface ConsumedOAuthState {
+  readonly record: OAuthStateRecord;
+  readonly refusal: string | null;
 }
 
 /** Provider echoes `state`; the browser carries `binding` in a cookie. Both are needed to spend the
@@ -40,7 +52,6 @@ export interface OAuthStateInput {
 export interface OAuthHandoff {
   state: string;
   binding: string;
-  lifetimeMs: number;
 }
 
 export interface OAuthProfile {
@@ -79,11 +90,13 @@ const OAuthStateSchema = v.object({
   redirectUri: v.string(),
   /** SHA-256 of the binding; the record never holds the binding itself. */
   bindingHash: v.string(),
+  connectFor: v.optional(v.nullable(v.string()), null),
+  connectRun: v.optional(v.nullable(v.string()), null),
   createdAt: v.number(),
   expiresAt: v.number(),
 });
 
-export type OAuthStateRecord = v.InferOutput<typeof OAuthStateSchema>;
+type OAuthStateRecord = v.InferOutput<typeof OAuthStateSchema>;
 
 /** Truncated sha256 in the shape every userId-carrying format (UserDO name, `ptc_…` token) expects;
  *  the one derivation for dev and real sign-in. */
@@ -122,39 +135,46 @@ export async function createOAuthState(
     returnTo: sanitizeReturnTo(input.returnTo, new URL(input.redirectUri).origin),
     redirectUri: input.redirectUri,
     bindingHash: await sha256Hex(binding),
+    connectFor: input.connectFor ?? null,
+    connectRun: input.connectRun ?? null,
     createdAt: now,
     expiresAt,
   };
 
+  // Kept as long as the state is redeemable: a later callback is named by its browser's own cookie (`handoffCookie`).
   await writeKvJson(kv, `oauth-state:${await sha256Hex(state)}`, record, OAUTH_STATE_TTL_MS);
 
-  return { state, binding, lifetimeMs: OAUTH_STATE_TTL_MS };
+  return { state, binding };
 }
 
-/** Deleted before it is judged, so a concurrent second callback finds nothing. A callback whose
- *  `binding` cookie is missing or wrong is refused before anything in the record is acted on. */
+/** Deleted before it is judged, so a concurrent second callback finds nothing, and a planted link spends its own state
+ *  (the planted-link test). A callback without the `binding` it was issued is refused before anything in the record is
+ *  read back; one with it is answered with its record, refused or not, so a connect that is refused still names its
+ *  run. */
 export function consumeOAuthState(
   kv: KvStore,
   state: string,
   provider: OAuthProviderId,
   binding: string | null,
-): Promise<OAuthStateRecord> {
+): Promise<ConsumedOAuthState> {
   return settle(Effect.gen(function* () {
     const key = `oauth-state:${yield* Effect.promise(async () => sha256Hex(state))}`;
     const record = yield* Effect.promise(async () => readKvJson(kv, key, OAuthStateSchema));
     yield* Effect.promise(async () => kv.delete(key));
 
-    if (!record) return yield* Effect.die(new Error('OAuth state is invalid or already used.'));
+    if (!record) return yield* Effect.die(new Error('OAuth state expired, or was already used. Start again.'));
 
     if (!binding || !timingSafeEqual(yield* Effect.promise(async () => sha256Hex(binding)), record.bindingHash)) {
       return yield* Effect.die(new Error('OAuth state was not issued to this browser. Start sign-in again.'));
     }
 
-    if (record.provider !== provider) return yield* Effect.die(new Error('OAuth state provider mismatch.'));
+    const bound = { ...record, returnTo: sanitizeReturnTo(record.returnTo, new URL(record.redirectUri).origin) };
 
-    if (record.expiresAt <= Date.now()) return yield* Effect.die(new Error('OAuth state expired. Start sign-in again.'));
+    if (record.provider !== provider) return { record: bound, refusal: 'OAuth state provider mismatch.' };
 
-    return { ...record, returnTo: sanitizeReturnTo(record.returnTo, new URL(record.redirectUri).origin) };
+    if (record.expiresAt <= Date.now()) return { record: bound, refusal: 'OAuth state expired. Start sign-in again.' };
+
+    return { record: bound, refusal: null };
   }));
 }
 

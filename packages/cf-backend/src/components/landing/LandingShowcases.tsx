@@ -28,7 +28,7 @@ function TuiPreview(): ReactElement {
       label: 'audit',
       location: 'local',
       status: 'idle',
-      subordinate: 'reviewer · auditor',
+      subagent: 'reviewer · auditor',
       prompt: 'Audit the api Worker, fix the 500 on /api/health, and keep the tests green.',
       answer: 'The config renamed the sessions binding and openDb still read the old one. I fixed openDb, added the missing-binding case, and started the focused suite.',
       tools: [['run', '{"runtime":"workspace","command":"bun test workers/api"}', '7 pass'], ['file', '{"action":"read","path":"workers/api/src/db.ts"}', '1.8 KB'], ['file', '{"action":"edit","path":"workers/api/src/db.ts"}', 'saved'], ['agents', '{"action":"swarm","preset":"prove","task":"three independent checks"}', 'settled']],
@@ -37,7 +37,7 @@ function TuiPreview(): ReactElement {
       label: 'migrations',
       location: 'local',
       status: 'idle',
-      subordinate: null,
+      subagent: null,
       prompt: 'Review the migration plan and identify any destructive step.',
       answer: 'The plan now ships the sessions index first, verifies both binding names, then drops the old name in a later release.',
       tools: [['file', '{"action":"read","path":"migrations/0007_sessions.sql"}', '2.1 KB'], ['agents', '{"action":"swarm","preset":"audit","task":"audit migration plan"}', '2 reports'], ['file', '{"action":"edit","path":"MIGRATION.md"}', 'saved']],
@@ -46,7 +46,7 @@ function TuiPreview(): ReactElement {
       label: 'Jarvis',
       location: 'cloud',
       status: 'running',
-      subordinate: null,
+      subagent: null,
       prompt: 'Summarize the overnight research and flag the decision I need to make.',
       answer: 'The evidence supports staged rollout. Decide whether the first cohort should be 5% or 10%; the rest is ready.',
       tools: [['web', '{"action":"fetch","url":"https://example.com/rollout-study"}', '3 sources'], ['agents', '{"action":"swarm","preset":"redteam","task":"independent risk review"}', 'settled'], ['report', '{"action":"write","title":"Owner decision"}', 'ready']],
@@ -92,8 +92,8 @@ function TuiPreview(): ReactElement {
           <span className={agents[id].status === 'running' ? 'p-accent-fg' : 'p-text-3'}>{agents[id].status === 'running' ? TUI_MARKS.activity.running : TUI_MARKS.activity.idle} </span>
           {agents[id].label}
         </button>
-        {agents[id].subordinate !== null && (
-          <div className="whitespace-pre px-2 leading-6 p-text-3"><span className="p-text-3">    └ </span>{agents[id].subordinate}</div>
+        {agents[id].subagent !== null && (
+          <div className="whitespace-pre px-2 leading-6 p-text-3"><span className="p-text-3">    └ </span>{agents[id].subagent}</div>
         )}
       </div>
     ))

@@ -13,7 +13,7 @@ import { workspaceFilePlane } from '../src/vfs/mounts';
 import { storeFiles } from '../src/vfs/nimbus-workspace';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes } from '../src/vfs/resolve';
-import { withApprovalGatedFiles } from '../src/execution/approval';
+import { hostedToolFiles } from '../src/execution/approval';
 
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
@@ -70,10 +70,7 @@ test('the file tool reads and writes where the walk lands, past its approval gat
   const { files } = workspaceFilePlane(workspace, { mounts: [], principal: {}, home: WORKSPACE_ROOT });
 
   // As the runtime gates it: the gate decides on the path the namespace's own lookup reaches.
-  const gated = withApprovalGatedFiles(files, 'workspace', {
-    planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => files.resolve(path, { follow, creating }), userRoots: () => files.userRoots(),
-    locate: null, parksWrites: true,
-  }, { mode: () => 'strict' });
+  const gated = hostedToolFiles(files, cloudPlanes(WORKSPACE_ROOT), { mode: () => 'strict' });
 
   const file = toolExecute<JsonObject, JsonValue>(fileToolOver({
     home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: gated, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
@@ -111,10 +108,7 @@ test('the owner\'s file manager opens, saves and uploads where the walk lands', 
 function gatedTool(workspace: ReturnType<typeof createWorkspaceBundle>, memory?: Memory) {
   const { files } = workspaceFilePlane(workspace, { mounts: [], principal: {}, home: WORKSPACE_ROOT });
 
-  const gated = withApprovalGatedFiles(files, 'workspace', {
-    planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => files.resolve(path, { follow, creating }), userRoots: () => files.userRoots(),
-    locate: null, parksWrites: true,
-  }, { mode: () => 'strict' });
+  const gated = hostedToolFiles(files, cloudPlanes(WORKSPACE_ROOT), { mode: () => 'strict' });
 
   const file = toolExecute<JsonObject, JsonValue>(fileToolOver({
     home: WORKSPACE_ROOT, planes: cloudPlanes(WORKSPACE_ROOT), vfs: gated, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),

@@ -85,9 +85,10 @@ function jobRead(job: BackgroundJob): JobRead {
   return { ...job, result: job.result === null ? null : safeJsonParse(job.result) };
 }
 
-function formatJobRead(job: BackgroundJob | null): JobRead | RunningJobRead | null {
-  if (job === null) return null;
+/** The recent jobs an unknown id is answered with: enough to see a misquoted id beside the one it meant. */
+const RECENT_JOBS_NAMED = 5;
 
+function formatJobRead(job: BackgroundJob): JobRead | RunningJobRead {
   if (job.status !== 'running') return jobRead(job);
 
   return {
@@ -149,7 +150,17 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
     })),
     serve(AGENT.cancelSchedule, async ({ id }) => await host.cancelTrigger(id, 'self')),
     serve(AGENT.budget, async ({ label }) => host.budget.snapshot(label)),
-    serve(AGENT.jobResult, async ({ jobId }) => formatJobRead(await host.jobResult(jobId))),
+    serve(AGENT.jobResult, ({ jobId }) => Effect.gen(function* () {
+      const job = yield* Effect.promise(async () => host.jobResult(jobId));
+
+      if (job !== null) return formatJobRead(job);
+      // No job of this agent's has the id: a null would read as a result already taken, so the platform says what it
+      // has instead, and a misquoted id shows beside the one it meant.
+      const recent = yield* Effect.promise(async () => host.listBackgroundJobs(RECENT_JOBS_NAMED));
+      const named = recent.map((each) => `${each.id} (${each.kind}, ${each.status})`).join(', ');
+
+      return yield* new KinuError('missing', `agent.jobResult: no job ${jobId} is yours. ${recent.length === 0 ? 'You have no background jobs.' : `Your recent jobs: ${named}.`}`);
+    })),
     serve(AGENT.backgroundJobs, async ({ limit }) => (await host.listBackgroundJobs(limit)).map(jobRead)),
     serve(AGENT.compactNow, async () => {
       await host.armCompactNow();

@@ -62,11 +62,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       await session.decideDeferredApprovals([present(parked, 'the parked command').id], 'denied');
       await session.flushPendingDrains();
 
-      // Delivered to the agent as a signal of its own, once, its card in the chat; the wait is spent.
-      const cards = () => events.items.filter((event) => JSON.stringify(event).includes('Your owner has handled everything'));
+      // Delivered to the agent as a signal of its own, once: its card in the chat, then the one turn it opened; the wait
+      // is spent.
+      const about = () => events.items.filter((event) => JSON.stringify(event).includes('Your owner has handled everything'));
 
-      await events.until(() => cards().length > 0);
-      expect(cards().map((event) => JSON.stringify(event).includes('signal_card'))).toEqual([true]);
+      await events.until(() => about().some((event) => event.type === 'turn-end'));
+      expect(about().map((event) => (JSON.stringify(event).includes('signal_card') ? 'card' : event.type)))
+        .toEqual(['card', 'turn-start', 'run-event', 'turn-end']);
       expect(rt.actor.config.getOwnerWaitsWatch()).toBeNull();
     } finally {
       await session.end();

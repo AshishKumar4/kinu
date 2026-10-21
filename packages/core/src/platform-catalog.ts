@@ -928,30 +928,33 @@ export const PLATFORM_CATALOG = {
 
   'do.sqlite.row_bytes': {
     subject: 'Maximum size of a string, BLOB or table row in a SQLite-backed Durable Object',
-    limit: { value: 2 * MB, unit: 'bytes' },
+    limit: { value: 8 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'row',
-    evidence: 'documented',
-    provenance: `${CF_DO_LIMITS}#sql-storage-limits`,
-    date: DOCS_READ,
-    trigger: 'an INSERT or UPDATE whose row, or any single string/BLOB in it, exceeds 2 MB',
+    evidence: 'proven-by-probe',
+    provenance:
+      '/mnt/local/kinu/evidence/do-sqlite-row-bytes-2026-10-21/RESULT.md:3-6 (production, compat 2026-10-20, probe Worker '
+      + 'worker.ts, deleted after) and LOCAL.md:5-8 there (local workerd 1.20260930.2 through Miniflare, local-run.mjs)',
+    date: '2026-10-21',
+    trigger: 'an INSERT or UPDATE whose row, or any single string/BLOB in it, exceeds 8 MiB',
     onBreach: 'the write fails; reads and deletes continue to work',
-    observable: [],
+    observable: [{ context: 'the INSERT or UPDATE', message: 'string or blob too big: SQLITE_TOOBIG' }],
     firstPartySignal: true,
+    measurements: [
+      { scenario: 'largest single BLOB in a one-key row, production and local workerd alike', value: 8_388_635, unit: 'bytes' },
+      { scenario: 'the first BLOB refused, production and local workerd alike', value: 8_388_636, unit: 'bytes' },
+      { scenario: 'TEXT accepted, local workerd (8 MiB + 64 refused)', value: 8 * MiB, unit: 'bytes' },
+    ],
     notes:
-      'A SECOND DANGLING CITATION, now retired. '
-      + '~/Nimbus/packages/worker/src/session/state-store.ts:52-54 asserts this same 2 MB cap '
-      + '"Per a second internal research note, §9" and tightens itself to 256 KiB against '
-      + 'it; that document was compiled from Cloudflare internal source, is gone, and cannot be '
-      + 'restored. The number is right, it is now sourced from the page Cloudflare publishes, '
-      + 'AND it has an independent probe behind it: do.storage.sync_kv measured the value cap '
-      + 'at roughly 2,200,000 bytes against workerd util/sqlite.c++:1362-1380. So the one lost '
-      + 'claim that mattered is the one claim that is now over-evidenced, and nothing in Kinu '
-      + 'needs the dossier. '
-      + 'The whole chat transcript, plan documents and swarm search nodes persist as rows here. '
-      + 'The agents SDK truncates a chat message to its own ROW_MAX_BYTES guard beneath this, '
-      + 'but can only shrink TEXT parts: file parts ride through verbatim as base64, at 4/3 '
-      + 'of raw, which is what CLOUD_MAX_INLINE_ATTACHMENT_BYTES is derived from.',
+      'RAISED FROM 2 MB, AHEAD OF THE DOCS. Cloudflare\'s limits page (last updated 2026-06-01) still says 2 MB; '
+      + 'production refused nothing up to 8 MiB on 2026-10-21 and refused 8,388,636 bytes and 16 MiB, '
+      + 'and local workerd 1.20260930.2, which the workerd tests run on, answered byte for byte the same, '
+      + 'so one number governs both and a test passes only what production allows. The limit is the '
+      + 'record\'s: a one-key row carries a BLOB 27 bytes past 8 MiB, and columns beside it share the 8 MiB. '
+      + 'Every bound derived from this entry was re-read for the raise (2026-10-21): the reasons are at '
+      + 'each, and the agents SDK still guards a chat message at its own ROW_MAX_BYTES (1.8 MB, agents '
+      + '0.26.0), which governs the cloud\'s inline attachments, not this. The 2 MB the entry held before '
+      + 'had a probe behind it too (do.storage.sync_kv\'s value cap at about 2,200,000 bytes), since raised alike.',
   },
 
   'do.sqlite.statement_bytes': {
@@ -1066,7 +1069,7 @@ export const PLATFORM_CATALOG = {
       + 'so an O(1) clone is free in time and not in quota. Causality was established by '
       + 'freeing 5 GiB and retrying successfully '
       + '(~/Nimbus/scratchpad/do-sqlite-fork-feasibility.md §4). Every Kinu fork and '
-      + 'subordinate is a facet, so this is one shared 10 GB across a whole exploration tree: '
+      + 'subagent is a facet, so this is one shared 10 GB across a whole exploration tree: '
       + 'and see do.storage.size_is_per_object, because NOTHING on the platform reports the '
       + 'shared total. Accounting is LOGICAL rather than physical: a 1.058 GB facet cloned nine '
       + 'times is roughly 10.58 GB logical across ten databases, and all of them succeeded before '
@@ -1229,19 +1232,20 @@ export const PLATFORM_CATALOG = {
   'do.storage.sync_kv': {
     subject:
       'ctx.storage.kv on a SQLite-backed Durable Object is genuinely synchronous: structured '
-      + 'clone, zero awaits, with a per-value cap of about 2.2 MB',
-    limit: { value: 2_200_000, unit: 'bytes' },
+      + 'clone, zero awaits, with a per-value cap just under 8 MiB',
+    limit: { value: 8_388_620, unit: 'bytes' },
     origin: 'platform',
     bounds: 'row',
-    // The probe showed sync KV works; the threshold was read in workerd's bounds check, hence proven-by-source.
-    evidence: 'proven-by-source',
+    // Raised with do.sqlite.row_bytes, whose SQLite holds the value; measured on local workerd, not on production.
+    evidence: 'proven-by-probe',
     provenance:
-      'workerd util/sqlite.c++:1362-1380 and api/sync-kv.h:15-16; behaviour probed at '
+      '/mnt/local/kinu/evidence/do-sqlite-row-bytes-2026-10-21/LOCAL.md:9-10 (local workerd 1.20260930.2, a Uint8Array '
+      + 'put and read back); before, workerd util/sqlite.c++:1362-1380 and api/sync-kv.h:15-16, behaviour probed at '
       + '~/Nimbus/scratchpad/workerd-capability-survey.md §1.2 (route /synckv)',
-    date: '2026-07-24',
-    trigger: 'a ctx.storage.kv put whose structured-cloned value exceeds roughly 2,200,000 bytes',
-    onBreach: 'the value is rejected; the wording was not captured: see the declared gap',
-    observable: [],
+    date: '2026-10-21',
+    trigger: 'a ctx.storage.kv put whose structured-cloned value exceeds 8,388,620 bytes',
+    onBreach: 'the put throws; the value is not stored',
+    observable: [{ context: 'the put', message: 'string or blob too big: SQLITE_TOOBIG' }],
     firstPartySignal: true,
     notes:
       'DIRECTLY RELEVANT TO THE ACTIVATION GATE. A sync KV read takes no await at all, so it '
@@ -1251,9 +1255,9 @@ export const PLATFORM_CATALOG = {
       + '(api/actor-state.h:307-309), so it is not gated. The mechanism is why this can be sync '
       + 'while nothing network-shaped can: a SQLite read is a blocking pread on a local file '
       + '(sqlite.c++:2100-2103) and writes are made to LOOK synchronous by the output gate '
-      + '(io-gate.h:12-21). The ~2.2 MB figure also independently CORROBORATES the 2 MB per-row '
-      + 'cap that the second lost dossier asserted, the one lost claim that now has a probe '
-      + 'behind it.',
+      + '(io-gate.h:12-21). The cap was about 2,200,000 bytes until the platform raised '
+      + 'do.sqlite.row_bytes to 8 MiB (2026-10-21); a value is its record, so it moved alike. Production\'s '
+      + 'KV cap is not measured: its SQL row cap is, and answered as local workerd did.',
   },
 
   'do.requests_per_second_soft': {
@@ -1713,7 +1717,7 @@ export const PLATFORM_CATALOG = {
     observable: [{ context: 'the setAlarm call', message: 'Error: Facets currently cannot set alarms.' }],
     firstPartySignal: true,
     notes:
-      'Directly constrains this repo: forks and subordinates are facets, so a head cannot '
+      'Directly constrains this repo: forks and subagents are facets, so a head cannot '
       + 'schedule its own resumption, its own timeout, or its own recovery sweep. Everything '
       + 'time-driven must route through the root\'s single alarm (see do.alarm.wall_ms), which '
       + 'is also the only alarm there is.',
@@ -1973,13 +1977,13 @@ export const PLATFORM_CATALOG = {
     date: '2026-08-17',
     trigger: 'mapping a Durable Object id to a class, or correlating telemetry on ctx.id, for a facet',
     onBreach:
-      'every facet is labelled as its root\'s class: every head and every subordinate reads as '
+      'every facet is labelled as its root\'s class: every head and every subagent reads as '
       + 'an OrchestratorAgent, and nothing contradicts the label',
     observable: [],
     firstPartySignal: false,
     notes:
       'A CORRECTNESS TRAP FOR ANY PER-AGENT VIEW, not just for tracing. Kinu spawns every '
-      + 'subordinate and every exploration head as a facet, so an id-keyed roster, an id-keyed '
+      + 'subagent and every exploration head as a facet, so an id-keyed roster, an id-keyed '
       + 'log field or an id-keyed UI grouping silently collapses the whole tree into one '
       + 'orchestrator. Correlate on selfPath. This is the "correct, wired, dead" shape at the '
       + 'identity layer: the map returns a class name, the name is wrong, and nothing fails.',
@@ -2033,12 +2037,22 @@ export const PLATFORM_CATALOG = {
     date: DOCS_READ,
     trigger: 'module top-level evaluation exceeding 1 second',
     onBreach: 'the deploy or the isolate start fails',
-    observable: [],
+    observable: [{ context: 'a script or version upload, code 10021', message: 'Error: Script startup exceeded CPU time limit.\n' }],
     firstPartySignal: true,
+    measurements: [
+      { scenario: 'rc30 (b04fac742) upload, the fast reading', value: 363, unit: 'ms' },
+      { scenario: 'rc30 (b04fac742) upload, the slow reading', value: 949, unit: 'ms' },
+      { scenario: 'rc30 (b04fac742) local `wrangler check startup`, median of 5', value: 202, unit: 'ms' },
+    ],
     notes:
       'The practical ceiling on bundle size, and the reason module top level is the only place '
       + 'codegen is permitted (isolate.codegen_blocked): the startup window is short by '
-      + 'construction. Every cold activation of every Durable Object pays it.',
+      + 'construction. Every cold activation of every Durable Object pays it. The upload validator '
+      + 'reads it in two modes (f44999, 2026-10-21, eight uploads of one rc30 bundle, each '
+      + '`startup_time_ms`): 363, 364, 371 and 377 ms, then 777, 794 and 949 ms, and one upload '
+      + 'refused 10021. The same bundle passed on retry four times in four (0.2.0+62b6c90c6, the same '
+      + 'day). A refusal is surfaced in these words with a retry the person presses, never retried '
+      + 'by itself: the self-deploy page, and deploy.sh, which fails the upload for its operator.',
   },
 
   'facet.module_text_bytes': {

@@ -25,7 +25,7 @@ function ended(stdout: Uint8Array, exitCode = 0, stderr = '', exited: Promise<nu
   const err = new TextEncoder().encode(stderr);
 
   return {
-    pid: pids += 1, isPty: false, stdin: null, stdout: bytes(stdout), stderr: bytes(err), exitCode: exited,
+    pid: pids += 1, isPty: false, stdin: new WritableStream<Uint8Array>(), stdout: bytes(stdout), stderr: bytes(err), exitCode: exited,
     kill() { /* its group's kill ends it */ }, resize() { throw new Error('this process has no PTY'); },
     output: async () => ({ stdout: stdout.slice().buffer, stderr: err.slice().buffer, exitCode: await exited }),
   };

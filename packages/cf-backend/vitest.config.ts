@@ -382,10 +382,32 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
         outboundService: async (request) => {
           throw new Error('Unmatched test egress is disabled: ' + request.url);
         },
+        // Every deployment binds the mailbox and the mail names: an account's delete reaches both.
+        r2Buckets: ['MAIL_BUCKET'],
         durableObjects: {
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', useSQLite: true },
           OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
           UserDO: { className: 'UserDO', useSQLite: true },
+          MAILBOX: { className: 'MailboxDO', useSQLite: true },
+          MAILNAME: { className: 'MailNameDO', useSQLite: true },
+        }, })],
+// Account deletion's census: every store the account has, each under the binding name production code reaches it by.
+['account-census-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('account-census-probe.ts', { ...probeRuntime, keepNames: true }),
+        bindings: { CREDENTIAL_ENCRYPTION_KEY: 'Y2Vuc3VzLXByb2JlLWNyZWRlbnRpYWwta2V5LTMyYnk=', EMAIL_DOMAIN: 'kinu.run', JWT_SECRET: 'census-probe-drive-listing-secret' },
+        serviceBindings: { ASSETS: agentAssets() },
+        outboundService: async (request) => {
+          throw new Error('Unmatched test egress is disabled: ' + request.url);
+        },
+        r2Buckets: ['MAIL_BUCKET', 'FEEDBACK_BUCKET'],
+        kvNamespaces: ['AUTH_KV'],
+        durableObjects: {
+          UserDO: { className: 'CensusAccountDO', useSQLite: true },
+          OrchestratorAgent: { className: 'CensusWorkspace', useSQLite: true },
+          MAILBOX: { className: 'CensusMailboxDO', useSQLite: true },
+          MAILNAME: { className: 'CensusMailNameDO', useSQLite: true },
+          ControlPlaneDO: { className: 'CensusControlPlaneDO', useSQLite: true },
+          MOSSAIC_USER: { className: 'CensusDriveUser', useSQLite: true },
+          MOSSAIC_SHARD: { className: 'CensusDriveShard', useSQLite: true },
         }, })],
 ["store-reset-probe", async () => ({
           // The probe's `OrchestratorAgent` is the production class plus the one method that plants the old table.
@@ -558,6 +580,13 @@ const runnerOptions = {
           DELETE_ALL_PROBE: { className: 'DeleteAllProbeDO', scriptName: 'delete-all-probe', useSQLite: true },
           MAILBOX: { className: 'MailboxProbeDO', scriptName: 'mailbox-probe', useSQLite: true },
           ACCOUNT_RESET_PROBE: { className: 'AccountResetProbeDO', scriptName: 'account-reset-probe', useSQLite: true },
+          CENSUS_ACCOUNT: { className: 'CensusAccountDO', scriptName: 'account-census-probe', useSQLite: true },
+          CENSUS_WORKSPACE: { className: 'CensusWorkspace', scriptName: 'account-census-probe', useSQLite: true },
+          CENSUS_MAILBOX: { className: 'CensusMailboxDO', scriptName: 'account-census-probe', useSQLite: true },
+          CENSUS_MAILNAME: { className: 'CensusMailNameDO', scriptName: 'account-census-probe', useSQLite: true },
+          CENSUS_CONTROL: { className: 'CensusControlPlaneDO', scriptName: 'account-census-probe', useSQLite: true },
+          CENSUS_DRIVE_USER: { className: 'CensusDriveUser', scriptName: 'account-census-probe', useSQLite: true },
+          CENSUS_DRIVE_SHARD: { className: 'CensusDriveShard', scriptName: 'account-census-probe', useSQLite: true },
           DEVICE_USER_PROBE: { className: 'UserDO', scriptName: 'device-user-probe', useSQLite: true },
           STORE_RESET_PROBE: { className: 'StoreResetProbeRoot', scriptName: 'store-reset-probe', useSQLite: true },
           ADDRESSED_NAME_PROBE: { className: 'AddressedNameProbeRoot', scriptName: 'addressed-name-probe', useSQLite: true },

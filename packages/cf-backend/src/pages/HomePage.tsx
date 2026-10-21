@@ -75,7 +75,7 @@ function MissionHome() {
         />
 
         <aside className="order-3 min-w-0 lg:order-none">
-          <SetupCard returnTo="/" />
+          <SetupCard />
         </aside>
 
         {(listFailed || workspaces.length > 0) && (

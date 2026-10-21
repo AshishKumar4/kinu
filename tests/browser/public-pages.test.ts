@@ -669,7 +669,7 @@ beforeAll(async () => {
           assistantLabel: assistant?.querySelector('span')?.textContent ?? null,
           adaptiveHint: document.querySelector('[data-tui-agent]')?.textContent?.includes('Alt+W workspaces') === true,
           groupHeader: buttons.some((button) => button.textContent?.replace(/\s+/gu, ' ').includes('api-worker · 2') === true),
-          subordinate: pinned?.textContent?.includes('└ reviewer · auditor') === true,
+          subagent: pinned?.textContent?.includes('└ reviewer · auditor') === true,
           cloudCollapsedHidesJarvis: buttons.every((button) => button.textContent?.includes('Jarvis') !== true),
         };
       })).toEqual({
@@ -679,7 +679,7 @@ beforeAll(async () => {
         assistantLabel: null,
         adaptiveHint: true,
         groupHeader: true,
-        subordinate: true,
+        subagent: true,
         cloudCollapsedHidesJarvis: true,
       });
       // Expanding the collapsed cloud section reveals the remote workspace;

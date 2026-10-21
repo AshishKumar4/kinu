@@ -71,6 +71,11 @@ function reject<E extends Error>(cause: Cause.Cause<E>, signal?: AbortSignal): n
   throw new DevboxError('cancelled', 'devbox operation cancelled', { cause: signal?.reason });
 }
 
+/** A run whose exit is stored and read where it is used: it never rejects, and its holder decides what the exit means. */
+export function hold<A, E extends Error>(effect: Effect.Effect<A, E>): Promise<Exit.Exit<A, E>> {
+  return settle(Effect.exit(effect));
+}
+
 export async function settle<A, E extends Error>(effect: Effect.Effect<A, E>, options?: { readonly signal?: AbortSignal }): Promise<A> {
   const exit = await Effect.runPromiseExit(effect, { scheduler: withinOneEvent, signal: options?.signal });
 

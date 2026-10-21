@@ -200,8 +200,8 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   const as = state.actorSnapshot;
 
   // A pane's agent is asked for by its id, so none is asked until its id is known.
-  const askLines = useMemo(() => (state.isSubordinate && state.paneActorId === null ? null : phaseLinesAsker(state.rpc, state.paneActorId)),
-    [state.isSubordinate, state.paneActorId, state.rpc]);
+  const askLines = useMemo(() => (state.isSubagent && state.paneActorId === null ? null : phaseLinesAsker(state.rpc, state.paneActorId)),
+    [state.isSubagent, state.paneActorId, state.rpc]);
 
   // The answer whose failure notice was dismissed: its line in the thread keeps the Retry.
   const [dismissedFailure, setDismissedFailure] = useState<string | null>(null);

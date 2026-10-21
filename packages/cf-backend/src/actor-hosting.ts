@@ -7,6 +7,7 @@
  * Not facets: `do.facet.cpu_shared` means a facet wave serialises like one isolate.
  */
 
+import type { ComputerProcessEnds } from '@kinu.run/core';
 import type { Agent, AgentContext } from 'agents';
 import {
   childContextResolver, localContextTree, type ContextEditor, type ContextTree, createSeatHost, defaultLoopOrigin,
@@ -18,7 +19,7 @@ import {
   type NodeHomeHost, type NodeWorkspace, type ProfileAuthorityInputs,
   type ResolvedTurnProfile, type SeatedActor, type SlateCallResult, type SlateOperation, type SqlExec,
   type SqlExecutor, type SqlValue, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
-  type WriteObserver, actorPolicy, isSubordinateOrigin, type TierRefusals, currentOperationProfile, providerAccounts,
+  type WriteObserver, actorPolicy, isSubagentOrigin, type TierRefusals, currentOperationProfile, providerAccounts,
 } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { flight, KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
@@ -60,7 +61,7 @@ export interface WorkspaceHostSeams {
   /** Root-owned uid-0 view, principal registry and uid table, so homes are provisioned in this isolate. */
   homeHost(): Promise<NodeHomeHost>;
   readonly homes: HostedActorHomes;
-  /** The profile authority chats resolve through, so role restrictions narrow heads, nodes and subordinates identically. */
+  /** The profile authority chats resolve through, so role restrictions narrow heads, nodes and subagents identically. */
   resolveProfile(input: {
     readonly actor: ActorHandle;
     readonly availableTools: readonly string[];
@@ -73,11 +74,13 @@ export interface WorkspaceHostSeams {
   readonly boxUse: WorkspaceBoxUse;
   readonly modelOperations: ModelOperationSink;
   tracing(): AgentTracing;
-  slate(actor: ActorHandle, operation: SlateOperation): Promise<SlateCallResult>;
+  slate(actor: ActorHandle, operation: SlateOperation, turn?: string): Promise<SlateCallResult>;
   /** The owner's needs-you queue: one per workspace, which each actor parks on as itself. */
   deferrals(actorId: string): DeferredApprovalChannel | undefined;
   /** The runner `actor`'s calls become jobs on, a process it starts among them. */
   jobs(actor: BoundActor): AdoptsJobs;
+  /** Where the workspace's computer processes run as jobs end. */
+  processEnds(): Pick<ComputerProcessEnds, 'ended' | 'state'>;
   /** The loop origin a creation site named for this actor, or null for the kind's default. */
   chosenLoopOrigin(record: WorkspaceActor): LoopOrigin | null;
   /**
@@ -94,7 +97,7 @@ export type CFSeat = SeatedActor<CFRuntime>;
 export interface HostedActorPlacement {
   /** A swarm node's home is in `head-`. */
   readonly homeName: string | null;
-  /** Origin-prefixed: a head's and a subordinate's differ. */
+  /** Origin-prefixed: a head's and a subagent's differ. */
   readonly shellId: string;
 }
 
@@ -103,7 +106,7 @@ export function hostedActorPlacement(record: WorkspaceActor): HostedActorPlaceme
 
   return {
     homeName: actorHomeName(record),
-    shellId: `${isSubordinateOrigin(record.origin) ? 'subordinate' : 'run'}:${record.storageKey}`,
+    shellId: `${isSubagentOrigin(record.origin) ? 'subagent' : 'run'}:${record.storageKey}`,
   };
 }
 
@@ -205,10 +208,11 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
         liveReadsMoved: (reads) => { seams.liveReadsMoved(reads); },
         servingMoved: () => seams.servingMoved(),
         boxUse: seams.boxUse,
-        slate: (operation) => seams.slate(bound.handle, operation),
+        slate: (operation, turn) => seams.slate(bound.handle, operation, turn),
         // The workspace's own actor's, or a hire's: a decision wakes either. A swarm head has none, as no drain resumes it.
         deferrals: () => (bound.record.origin === 'swarm' ? undefined : seams.deferrals(bound.handle.actorId)),
         jobs: () => seams.jobs(bound),
+        processEnds: () => seams.processEnds(),
         // The chat's authority: a self-resolved profile could differ from the turn's and make a search unreproducible.
         resolveProfile: async () => (await seams.resolveProfile({
           actor: bound.handle, availableTools: [], workMode: 'build',
@@ -259,7 +263,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
       vfs: seams.workspaceBox(hostedActorPlacement(bound.record).shellId).store({ home: WORKSPACE_ROOT }) }),
 
     /**
-     * Heads and branches inherit the parent's promoted loop; hired subordinates start builtin.
+     * Heads and branches inherit the parent's promoted loop; hired subagents start builtin.
      * The root is always a readable parent (inheritance needs only durable state); a deeper
      * parent must be live, else the guard refuses rather than silently starting builtin.
      */

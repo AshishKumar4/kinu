@@ -11,10 +11,36 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { asFetchFunction, callRetries, requestUrl } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, WORKERS_AI_MODELS_DEV, workspaceDatabase } from '@kinu.run/test-utils';
+import { chatResponse, createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, WORKERS_AI_MODELS_DEV, workspaceDatabase, type ChatUsage } from '@kinu.run/test-utils';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession } from '../src/local-session';
+
+const ONE_TOKEN_EACH: ChatUsage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };
+
+/** A chat completion answering `content` as the request asked for it; `usage` null for an answer with none, as Workers
+ *  AI's can be. */
+function chatAnswer(body: JsonObject, content: string, usage: ChatUsage | null = ONE_TOKEN_EACH): Response {
+  return chatResponse({ model: typeof body.model === 'string' ? body.model : 'echo', text: content, ...(usage !== null && { usage }) }, body.stream === true);
+}
+
+/** An endpoint that answers every chat call `ok` and keeps each request's body. */
+function recordingEndpoint() {
+  const bodies: JsonObject[] = [];
+
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    async fetch(request) {
+      const body = v.parse(JsonObjectSchema, await request.json());
+      bodies.push(body);
+
+      return chatAnswer(body, 'ok');
+    },
+  });
+
+  return { bodies, server };
+}
 
 /** A Workers AI endpoint served on `port`, as `--base-url` hands one to the CLI. */
 function servedWorkersAi(port: number | undefined): LLMProviderConfig {
@@ -147,12 +173,10 @@ describe('createLocalModelResolver', () => {
     const sent: unknown[] = [];
 
     const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
-      sent.push(await request.json());
+      const body = v.parse(JsonObjectSchema, await request.json());
+      sent.push(body);
 
-      return Response.json({
-        id: 'c', object: 'chat.completion', created: 1, model: 'm', usage: { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 },
-        choices: [{ index: 0, message: { role: 'assistant', content: '{"key":"build.dir"}' }, finish_reason: 'stop' }],
-      });
+      return chatAnswer(body, '{"key":"build.dir"}', { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 });
     } });
 
     const output = Output.object({ schema: jsonSchema<{ key: string }>({ type: 'object', properties: { key: { type: 'string' } }, required: ['key'] }) });
@@ -243,36 +267,7 @@ describe('createLocalModelResolver', () => {
 
   /** A routed lane sets no output cap, and a config object still carrying one must be inert. */
   test('a runtime lane carries no output cap, whatever the config holds', async () => {
-    const bodies: JsonObject[] = [];
-
-    const server = Bun.serve({
-      port: 0,
-      hostname: '127.0.0.1',
-      async fetch(request) {
-        const body = v.parse(JsonObjectSchema, await request.json());
-        bodies.push(body);
-        const model = v.parse(v.string(), body.model);
-
-        if (body.stream === true) {
-          const chunk = (delta: JsonObject, finish: JsonValue): string => `data: ${JSON.stringify({
-            id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 0, model,
-            choices: [{ index: 0, delta, finish_reason: finish }],
-            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-          })}\n\n`;
-
-          return new Response(
-            `${chunk({ content: 'ok' }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`,
-            { headers: { 'content-type': 'text/event-stream' } },
-          );
-        }
-
-        return Response.json({
-          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model,
-          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-        });
-      },
-    });
+    const { bodies, server } = recordingEndpoint();
 
     const staleCap = { maxTokens: 123 };
     const route = { source: 'reflection', tier: 'fast', model: 'workers-ai/@cf/test/model', reasoningEffort: null, fallbacks: [], retries: 0 } as const;
@@ -305,15 +300,8 @@ describe('createLocalModelResolver', () => {
       async fetch(request) {
         const body = v.parse(JsonObjectSchema, await request.json());
 
-        const reply: JsonObject = {
-          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: v.parse(v.string(), body.model),
-          choices: [{ index: 0, message: { role: 'assistant', content: ' graded ' }, finish_reason: 'stop' }],
-        };
-
         // No usage block (a real Workers AI shape): any `?? 0` here would call the judge free.
-        if (!quiet) reply.usage = { prompt_tokens: 41, completion_tokens: 7, total_tokens: 48 };
-
-        return Response.json(reply);
+        return chatAnswer(body, ' graded ', quiet ? null : { prompt_tokens: 41, completion_tokens: 7, total_tokens: 48 });
       },
     });
 
@@ -340,22 +328,7 @@ describe('createLocalModelResolver', () => {
   });
 
   test('a runtime lane sends its route\'s reasoning effort, as the cf lane does', async () => {
-    const bodies: JsonObject[] = [];
-
-    const server = Bun.serve({
-      port: 0,
-      hostname: '127.0.0.1',
-      async fetch(request) {
-        const body = v.parse(JsonObjectSchema, await request.json());
-        bodies.push(body);
-
-        return Response.json({
-          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: v.parse(v.string(), body.model),
-          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-        });
-      },
-    });
+    const { bodies, server } = recordingEndpoint();
 
     const { db, rt } = endpointRuntime(servedWorkersAi(server.port));
 
@@ -748,11 +721,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
           });
         }
 
-        return Response.json({
-          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: v.parse(v.string(), body.model),
-          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-        });
+        return chatAnswer(body, 'ok');
       },
     });
 
@@ -819,14 +788,10 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       port: 0,
       hostname: '127.0.0.1',
       async fetch(request) {
-        await request.json();
+        const body = v.parse(JsonObjectSchema, await request.json());
         seen.push({ affinity: request.headers.get('x-session-affinity'), auth: request.headers.get('authorization') });
 
-        return Response.json({
-          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: 'echo',
-          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-        });
+        return chatAnswer({ ...body, model: 'echo' }, 'ok');
       },
     });
 

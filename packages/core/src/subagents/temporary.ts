@@ -1,0 +1,233 @@
+/**
+ * Task-lifetime agents on a durable hire's runtime and roster: started at once; the settling report wakes the hirer.
+ */
+
+import type { SubagentReportStatus } from '../events/hub/types';
+import type { EventLog } from '../events/hub/log';
+import { Cause, Effect } from 'effect';
+import { settle } from '../obs/effect';
+import { KinuError, renderCauseChain, toKinuError, type ErrorCode } from '../obs/error';
+import type { SubagentRosterStore } from './roster';
+import type { SubagentRuntime } from './support';
+import { admitSubagentBirth, type SubagentBirthRequest } from './birth';
+import { codenameFor } from '../identity/naming';
+import type { ActorReference } from '../identity/actor-handle';
+import {
+  TEMPORARY_LIFETIME,
+  type TemporaryAgentPort, type TemporaryRunOutcome,
+} from '../types/subagents';
+
+export {
+  TEMPORARY_LIFETIME,
+  type TemporaryAgentPort, type TemporaryRunOutcome, type TemporaryRunRequest,
+} from '../types/subagents';
+
+/** How long a roster row lives; state cannot tell the two apart. */
+export const SUBAGENT_LIFETIMES = ['durable', 'task'] as const;
+
+export type SubagentLifetime = (typeof SUBAGENT_LIFETIMES)[number];
+
+/** Later while a hire works, input is queued, or a settled hire's report waits unread. An evolution subagent (the
+ *  turn's advisor) answers the runtime, never this turn, so it holds nothing. */
+export function taskAnswerIsLater(input: {
+  readonly roster: SubagentRosterStore;
+  readonly log: EventLog;
+  readonly turnTaskId?: string;
+}): boolean {
+  return input.roster.list().some((hire) => hire.status === 'working' && hire.origin !== 'evolution')
+    || input.log.pending({ variant: 'subagent_task' }).some((row) => row.id !== input.turnTaskId)
+    // Delivered to it and not yet answered by a turn of its own: its answer is that turn's.
+    || input.log.openAssignments().some((id) => id !== input.turnTaskId)
+    || input.log.pending({ variant: 'subagent_report' }).length > 0;
+}
+
+/** How a task child's turn ended. The set must stay closed: the hirer is owed exactly one report. */
+export const TASK_TURN_ENDINGS = [
+  'answered',
+  'silent',
+  'blocked',
+  'errored',
+  'interrupted',
+  'recovered',
+] as const;
+
+export type TaskTurnEnding = (typeof TASK_TURN_ENDINGS)[number];
+
+/** What a task child reports for one end state. `null` for `answered`, whose
+ *  content is the child's own words and never this module's. */
+const TASK_ENDING_REPORT = {
+  answered: null,
+  silent:
+    'This turn ended without producing an answer. Nothing was established, and no partial '
+    + 'result is being reported as one.',
+  blocked:
+    'Blocked: this agent could not get far enough to answer, and the blocking condition is '
+    + 'described above or in its own transcript.',
+  errored:
+    'This turn failed before an answer existed. The failure is recorded on this agent\'s own '
+    + 'transcript; nothing here is a partial answer.',
+  interrupted:
+    'This turn was interrupted before an answer existed. Whatever work it had done is on this '
+    + 'agent\'s own transcript.',
+  recovered:
+    'This agent was restarted while working and its turn did not survive. No answer was '
+    + 'produced; its transcript holds what it had done.',
+} as const satisfies Record<TaskTurnEnding, string | null>;
+
+export interface OwedReport {
+  readonly status: SubagentReportStatus;
+  readonly content: string;
+  /** A Stop: settles the row, wakes no one. */
+  readonly quiet?: true;
+}
+
+/** How a turn ended, as a task child's caller hears it. */
+export function taskTurnEnding(completed: boolean, interrupted: boolean): TaskTurnEnding {
+  if (completed) return 'answered';
+
+  return interrupted ? 'interrupted' : 'errored';
+}
+
+/** Whether a terminal report reads the turn's narration: a task that did not answer is reported in its steps' words. */
+export function reportReadsNarration(ending: TaskTurnEnding): boolean {
+  return ending !== 'answered';
+}
+
+/** A child's terminal report: a task answer, any failure, a quiet Stop; null for a durable answer. */
+export async function terminalTaskReport(input: {
+  readonly lifetime: SubagentLifetime;
+  readonly ending: TaskTurnEnding;
+  readonly assistantText: string;
+  /** Each step's words, oldest first; read only for a task that did not answer. */
+  readonly narration: () => Promise<readonly string[]>;
+  /** A later turn's reply is its answer ({@link taskAnswerIsLater}). */
+  readonly delegating?: boolean;
+}): Promise<OwedReport | null> {
+  const text = input.assistantText.trim();
+
+  if (!reportReadsNarration(input.ending)) {
+    if (input.lifetime !== TEMPORARY_LIFETIME || input.delegating === true) return null;
+
+    // An empty `answered` is `silent`: the content decides.
+    return text.length > 0
+      ? { status: 'completed', content: text }
+      : { status: 'blocked', content: TASK_ENDING_REPORT.silent };
+  }
+
+  // A stopped or failed turn often found something on the way.
+  const said: string[] = [];
+
+  for (const step of await input.narration()) {
+    const words = step.trim();
+
+    if (words.length > 0 && words !== said.at(-1)) said.push(words);
+  }
+
+  if (text.length > 0 && !said.includes(text)) said.push(text);
+
+  const content = [...said, TASK_ENDING_REPORT[input.ending]].join('\n\n');
+
+  return input.ending === 'interrupted' ? { status: 'blocked', content, quiet: true } : { status: 'blocked', content };
+}
+
+/** Whether this report ends the run; only a deliberate mid-work note is progress. */
+export function temporaryRunSettles(input: {
+  readonly status: SubagentReportStatus;
+  readonly origin: 'report_tool' | 'turn_end';
+}): boolean {
+  return !(input.status === 'progress' && input.origin === 'report_tool');
+}
+
+/** A task-lifetime hire's brief: the question, the material paths, and that the next
+ *  message is the whole deliverable. */
+function renderTemporaryTaskBrief(input: {
+  readonly task: string;
+  readonly contextRefs?: readonly string[];
+}): string {
+  const parts = [input.task];
+
+  if (input.contextRefs && input.contextRefs.length > 0) {
+    parts.push(
+      'Material for this question, by workspace path: read it yourself, in ranges when it is '
+      + `large: ${input.contextRefs.join(', ')}.`,
+    );
+  }
+
+  parts.push(
+    'You exist for this one question. Your final reply is delivered to the agent that asked as a message, '
+    + 'and there is no second exchange: put the whole finished answer in one reply, and say what '
+    + 'you could not establish rather than leaving it out.',
+  );
+
+  return parts.join('\n\n');
+}
+
+/** Task-lifetime policy over the shared roster. */
+export function createTemporaryAgentPort(deps: {
+  roster: SubagentRosterStore;
+  runtime: SubagentRuntime;
+  /** From what the hire was first asked (its brief), else its role (`agentNamer`). */
+  createName(role: string, brief: string | null): string;
+  now(): number;
+  afterTurn(child: ActorReference, work: () => Promise<void>): void;
+}): TemporaryAgentPort {
+  return {
+    start: (request) => settle(Effect.gen(function* () {
+      const task = request.task.trim();
+
+      if (!task) return yield* new KinuError('bad_input', 'hire requires a non-empty mission');
+      const refs = request.contextRefs ?? [];
+      const roleLabel = request.roleLabel.trim();
+
+      if (!roleLabel) return yield* new KinuError('bad_input', 'hire requires a role');
+      const typed = request.name?.trim();
+      const chosen = typed === '' ? undefined : typed;
+      // An advisor's brief is written for it, not by anyone, so it is named for its role; a name the hirer gave wins.
+      const name = deps.createName(`ask-${roleLabel}`, request.lane ? null : chosen ?? task);
+      const startedAt = deps.now();
+
+      const outcome = (status: TemporaryRunOutcome['status'], answer: string, transcript: 'kept' | 'none', reason?: ErrorCode): TemporaryRunOutcome => ({
+        status, agent: name, lifetime: TEMPORARY_LIFETIME, role: roleLabel, answer, transcript, ...(reason !== undefined && { reason }),
+      });
+
+      if (deps.roster.get(name)) return outcome('failed', 'The generated actor name is already in use.', 'none', 'denied');
+
+      if (request.lane) deps.roster.evolution.record(name, request.lane, startedAt);
+
+      const birth: SubagentBirthRequest = {
+        seed: {
+          name, displayName: chosen ?? codenameFor(name), nameOrigin: chosen === undefined ? 'auto' : 'user', role: request.role, mission: task,
+          lifetime: TEMPORARY_LIFETIME, origin: request.lane ? 'evolution' : 'agent',
+        },
+        assignment: {
+          body: renderTemporaryTaskBrief({ task, contextRefs: refs }), mode: request.mode,
+          ...(request.inheritedContext !== undefined && { inheritedContext: request.inheritedContext }),
+        },
+        createdAt: startedAt,
+      };
+
+      const failure = yield* Effect.catchCause(Effect.as(Effect.promise(() => admitSubagentBirth(deps.roster, deps.runtime, birth)), null), (failed) => Effect.succeed(
+        toKinuError({ doing: 'completing an admitted temporary actor birth', cause: Cause.squash(failed), otherwise: 'unavailable' }),
+      ));
+
+      if (failure !== null) return outcome('failed', renderCauseChain(failure), 'kept', failure.code);
+
+      return outcome('working', TEMPORARY_ANSWER_ARRIVES, 'kept');
+    })),
+
+    release: (name) => {
+      const actor = deps.roster.get(name)?.actorReference;
+
+      if (!actor) return;
+      deps.roster.dismiss(name, deps.now());
+      deps.afterTurn(actor, async () => { await deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor); });
+    },
+
+    reclaim: (request) => deps.roster.evolution.answerFor(request),
+    answered: () => deps.roster.evolution.answered(),
+    forget: (name) => { deps.roster.evolution.remove(name); },
+  };
+}
+
+const TEMPORARY_ANSWER_ARRIVES = 'Working. Its answer, or why it could not answer, arrives later as a message '
+  + 'that opens your next turn; end this turn when you have nothing else to do.';

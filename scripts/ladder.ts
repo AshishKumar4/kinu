@@ -1605,7 +1605,7 @@ export const LADDER: readonly Gate[] = [
       + 'turn is checked black-box: the checker calls the slates the agent built over the slate '
       + 'RPC and compares every answer with its own reference implementation of the contract, so '
       + 'any correct build passes, and reads what a person would: the files, the task board, each '
-      + 'helper\'s runs, and each preview address fetched with no credential. Five trials per '
+      + 'subagent\'s runs, and each preview address fetched with no credential. Five trials per '
       + 'task, each trial its own armada map task, the candidate on staging and the '
       + 'promoted build on kinu.run measured at once under the candidate\'s definitions, compared by a '
       + 'two-sided Fisher exact test (evals/src/comparison.ts), with infrastructure failures and '
@@ -1904,7 +1904,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'everything about the SERVER half. The frame stubs `fetchPage`, so no rowid '
       + 'seek, no `limit + 1` over-read and no stale cursor is exercised here — those '
       + 'are unit-tested against the read model instead. Two hooks and one merge rule '
-      + 'of the ~29 gallery frames; the subordinate column and the node transcript walk '
+      + 'of the ~29 gallery frames; the subagent column and the node transcript walk '
       + 'the same contract and are measured by neither this nor any other browser. '
       + 'Chrome cost keeps it out of the commit tier.',
     inputs: CLIENT_BUILD,
@@ -2329,6 +2329,22 @@ export const LADDER: readonly Gate[] = [
     inputs: LIVE_APP_INPUTS,
   },
   {
+    run: 'bun test --timeout=0 tests/browser/live-app-slate-ask.test.ts',
+    label: 'Live app in a browser: a slate asks the agent from its program, and from the page',
+    tier: 'ci',
+    // Measured 2026-10-23 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at 459d54d42: 241.2 s wall,
+    // 464 CPU seconds, 4.7 GiB peak (scripts/gate-cost.json); one workspace's turn and a page call beside the dev server's boot.
+    seconds: 242,
+    catches: 'a slate\'s `agent.ask` that waits on the agent\'s own turn: called from a program that turn is running, the '
+      + 'reply could come only once the turn ends, which waits on the program (rc22\'s chat-app trials held it to the 30 s '
+      + 'and 300 s windows, empty). The row proves it is refused at once, the slate answering on its own before its own '
+      + '3 s timer, and that the same ask from the person\'s page, with no turn running, is answered.',
+    blind: 'a chain whose program runs in a hired agent\'s turn and asks the workspace agent, which waits on nothing and '
+      + 'is answered; an ask a share\'s viewer makes, which no turn of the owner\'s awaits. One viewport, a local scripted '
+      + 'model, and a LOCAL dev server whose workerd is not production\'s.',
+    inputs: LIVE_APP_INPUTS,
+  },
+  {
     run: 'bun test --timeout=0 tests/browser/live-app-alerts.test.ts',
     label: 'Live app in a browser: the owner hears a turn end, or a decision, only while away',
     tier: 'ci',
@@ -2368,6 +2384,24 @@ export const LADDER: readonly Gate[] = [
       + 'leaves: the follow-up is answered, the stopped ask never runs, and nothing reads as a failure, words the Stop '
       + 'handed back returning to the draft; and a new chat\'s opening offers Stop while its first call waits.',
     blind: LIVE_APP_BLIND,
+    inputs: LIVE_APP_INPUTS,
+  },
+  {
+    run: 'bun test --timeout=0 tests/browser/live-app-connect.test.ts',
+    label: 'Live app in a browser: a connect through the Worker',
+    tier: 'ci',
+    // Measured 2026-10-23 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at fa5806580: 219.0 s wall,
+    // 459 CPU seconds, 5.5 GiB peak (scripts/gate-cost.json); four sign-ins and a finish page beside the dev server's boot.
+    seconds: 220,
+    catches: 'an MCP server\'s sign-in on `vite dev` (workerd with real Durable Objects) driven in Chrome, through the '
+      + 'Worker\'s own OAuth callback, account storage and MCP SDK, against a loopback provider that asks the person '
+      + '(scripts/consenting-oauth.ts). Run in the tab itself from setup\'s tools step reached by Next, it comes back '
+      + 'to that step connected; a finish page naming another run, opened while a sign-in waits, closes nothing and '
+      + 'tells its page nothing; declined, the helper tab closes, the page says it failed and the row offers the '
+      + 'sign-in again, which connects once approved.',
+    blind: 'a Cloudflare connect, whose provider is Cloudflare\'s own dashboard (its callback is unit-tested, its page '
+      + 'half in providers-ux); a provider that answers its consent slowly. One viewport, and a LOCAL dev server whose '
+      + 'workerd is not production\'s.',
     inputs: LIVE_APP_INPUTS,
   },
   {

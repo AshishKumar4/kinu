@@ -39,7 +39,7 @@ export interface ParsedMail {
   /** The words the sender wrote this time, quoted history set aside: an owner's instruction is these. */
   readonly ownWords: string;
   readonly html: string | null;
-  readonly attachments: readonly { readonly filename: string; readonly contentType: string; readonly content: Uint8Array; readonly contentId: string | null }[];
+  readonly attachments: readonly { readonly filename: string; readonly contentType: string; readonly content: Uint8Array }[];
 }
 
 /** The account's R2 prefix: keys are relative to `mail/<user_id>/`. */
@@ -68,14 +68,17 @@ const BoxRow = v.object({
 
 const IdentityRow = v.object({ user_id: v.string(), email: v.string(), username: v.string() });
 
-const MessageRow = v.object({
-  rowid: v.number(), id: v.string(), thread_id: v.string(), direction: v.picklist(['in', 'out']), header_id: v.nullable(v.string()),
+const MessageColumns = v.object({
+  rowid: v.number(), id: v.string(), thread_id: v.string(), header_id: v.nullable(v.string()),
   from_addr: v.string(), from_name: v.nullable(v.string()), to_json: v.string(), cc_json: v.string(), delivered_to: v.nullable(v.string()),
   subject: v.string(), at: v.number(), verdict: v.picklist(['verified', 'unverified', 'ours']), auth: v.nullable(v.string()),
   woke: v.nullable(v.picklist(MAIL_WOKE)), snippet: v.string(), text_body: v.nullable(v.string()), text_key: v.nullable(v.string()),
   html_key: v.nullable(v.string()), raw_key: v.nullable(v.string()), read: v.number(), written_by: v.nullable(v.string()),
   send_state: v.nullable(v.picklist(MAIL_SEND_STATES)),
 });
+
+/** A message as stored, with its direction: received where it has no send state. */
+const MessageRow = v.pipe(MessageColumns, v.transform((row) => ({ ...row, direction: row.send_state === null ? 'in' as const : 'out' as const })));
 
 type Message = v.InferOutput<typeof MessageRow>;
 
@@ -108,7 +111,7 @@ export class MailStore {
   }
 
   private box(path: string): MailBox | null {
-    const [row] = rows(BoxRow, this.deps.sql.exec("SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE path = ? AND state = 'active'", path));
+    const [row] = rows(BoxRow, this.deps.sql.exec("SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE path = ?", path));
 
     return row === undefined ? null : this.boxOf(row);
   }
@@ -128,11 +131,9 @@ export class MailStore {
   }
 
   open(account: { userId: string; email: string; username: string; assistant: { workspace: string; actorId: string } | null }): MailBox {
-    const now = this.deps.now();
-
-    this.deps.sql.exec('INSERT OR IGNORE INTO mail_box (id, user_id, email, username, created_at) VALUES (1, ?, ?, ?, ?)', account.userId, mailAddress(account.email), account.username, now);
-    this.deps.sql.exec("INSERT OR IGNORE INTO mail_addresses (path, kind, workspace, actor_id, created_at) VALUES ('', 'person', ?, ?, ?)",
-      account.assistant?.workspace ?? null, account.assistant?.actorId ?? null, now);
+    this.deps.sql.exec('INSERT OR IGNORE INTO mail_box (id, user_id, email, username) VALUES (1, ?, ?, ?)', account.userId, mailAddress(account.email), account.username);
+    this.deps.sql.exec("INSERT OR IGNORE INTO mail_addresses (path, kind, workspace, actor_id) VALUES ('', 'person', ?, ?)",
+      account.assistant?.workspace ?? null, account.assistant?.actorId ?? null);
 
     // The person's box names its reader once the Personal assistant is installed.
     if (account.assistant !== null) {
@@ -154,7 +155,7 @@ export class MailStore {
   boxFor(owner: { kind: 'workspace' | 'agent'; workspace: string; name: string; actorId: string }): MailBox {
     // By kind too: the Personal assistant's main agent reads the person's box and its workspace's.
     const [held] = rows(BoxRow, this.deps.sql.exec(
-      "SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND kind = ? AND state = 'active'", owner.workspace, owner.actorId, owner.kind,
+      'SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND kind = ?', owner.workspace, owner.actorId, owner.kind,
     ));
 
     if (held !== undefined) return this.boxOf(held);
@@ -170,7 +171,7 @@ export class MailStore {
     // A label is unique per person: a clash numbers its own label, inside its 20 characters, and keeps its workspace (§1).
     for (let n = 2; this.deps.sql.exec('SELECT 1 FROM mail_addresses WHERE path = ?', path).toArray().length > 0; n += 1) path = at(mailLabelNumbered(label, n));
 
-    this.deps.sql.exec('INSERT INTO mail_addresses (path, kind, workspace, actor_id, created_at) VALUES (?, ?, ?, ?, ?)', path, owner.kind, owner.workspace, owner.actorId, this.deps.now());
+    this.deps.sql.exec('INSERT INTO mail_addresses (path, kind, workspace, actor_id) VALUES (?, ?, ?, ?)', path, owner.kind, owner.workspace, owner.actorId);
 
     return settleSync(this.written(path));
   }
@@ -208,8 +209,9 @@ export class MailStore {
     // Each version is read before its thread: mail that lands while the thread is read makes the read stale, never lost.
     // `skip` is a pass's own failures, so it is as long as they are; json_each keeps it one bound parameter.
     const waiting = rows(v.object({ id: v.string(), since: v.number() }), this.deps.sql.exec(
-      `SELECT t.id, u.since FROM mail_untriaged u JOIN mail_threads t ON t.id = u.thread_id
-       WHERE t.trashed_at IS NULL AND t.id NOT IN (SELECT value FROM json_each(?)) ORDER BY u.since DESC, t.id LIMIT ?`, JSON.stringify(skip), limit,
+      `SELECT id, untriaged_since AS since FROM mail_threads
+       WHERE untriaged_since IS NOT NULL AND trashed_at IS NULL AND id NOT IN (SELECT value FROM json_each(?))
+       ORDER BY untriaged_since DESC, id LIMIT ?`, JSON.stringify(skip), limit,
     ));
 
     const items = await Promise.all(waiting.map(async (row) => {
@@ -229,14 +231,13 @@ export class MailStore {
   triagedFor(caller: MailCaller, thread: string, version: number, pick: MailTriagePick): MailTriaged {
     if (this.readablePath(caller, '') === null || this.pathOf(thread) !== '') return settleSync(Effect.fail(new KinuError('missing', `No thread "${thread}" in a box you read.`)));
 
-    const waits = this.deps.sql.exec('SELECT 1 FROM mail_untriaged WHERE thread_id = ? AND since = ?', thread, version).toArray().length > 0;
+    const waits = this.deps.sql.exec('SELECT 1 FROM mail_threads WHERE id = ? AND untriaged_since = ?', thread, version).toArray().length > 0;
 
     if (!waits) return { settled: false, drafted: false };
 
     const drafted = pick.reply !== null && pick.reply.trim() !== '' && this.draftReply(caller, thread, pick.reply.trim());
 
-    this.deps.sql.exec('UPDATE mail_threads SET important = ? WHERE id = ?', pick.important === null ? null : pick.important.slice(0, 280), thread);
-    this.deps.sql.exec('DELETE FROM mail_untriaged WHERE thread_id = ?', thread);
+    this.deps.sql.exec('UPDATE mail_threads SET important = ?, untriaged_since = NULL WHERE id = ?', pick.important === null ? null : pick.important.slice(0, 280), thread);
 
     return { settled: true, drafted };
   }
@@ -299,6 +300,22 @@ export class MailStore {
     ))[0]?.header_id ?? null;
   }
 
+  /**
+   * The References a reply carries (RFC 5322 §3.6.4): the Message-IDs of its thread's messages, oldest first, up to the
+   * one it answers, each as `<id>`. A message not yet sent has none, and the reply's own is not among them.
+   */
+  private referencesOf(threadId: string, reply: string, inReplyTo: string | null): string | null {
+    const chain = rows(v.object({ header_id: v.string() }), this.deps.sql.exec(
+      "SELECT header_id FROM mail_messages WHERE thread_id = ? AND id <> ? AND header_id IS NOT NULL AND send_state IS NOT 'draft' ORDER BY at, rowid",
+      threadId, reply,
+    )).map((row) => row.header_id);
+
+    const answered = inReplyTo === null ? -1 : chain.indexOf(bare(inReplyTo));
+    const upTo = answered === -1 ? chain : chain.slice(0, answered + 1);
+
+    return upTo.length === 0 ? null : upTo.map((id) => `<${id}>`).join(' ');
+  }
+
   /** The box path `asked` names, if the agent reads it; its own when none is named. */
   readablePath(caller: MailCaller, asked: string | undefined): string | null {
     const readable = this.readableBy(caller);
@@ -307,7 +324,7 @@ export class MailStore {
   }
 
   boxes(): MailBox[] {
-    return rows(BoxRow, this.deps.sql.exec("SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE state = 'active' ORDER BY path")).map((row) => this.boxOf(row));
+    return rows(BoxRow, this.deps.sql.exec('SELECT path, kind, workspace, actor_id, wake FROM mail_addresses ORDER BY path')).map((row) => this.boxOf(row));
   }
 
   setWake(path: string, wake: MailWake, allow?: readonly string[]): MailBox {
@@ -320,7 +337,7 @@ export class MailStore {
       this.deps.sql.exec('DELETE FROM mail_allow WHERE path = ?', path);
 
       for (const sender of new Set(allow.map(mailAddress).filter(Boolean))) {
-        this.deps.sql.exec('INSERT INTO mail_allow (path, sender, added_at) VALUES (?, ?, ?)', path, sender, this.deps.now());
+        this.deps.sql.exec('INSERT INTO mail_allow (path, sender) VALUES (?, ?)', path, sender);
       }
     }
 
@@ -341,7 +358,7 @@ export class MailStore {
   }
 
   /** The thread a message belongs to: the one holding a message it answers or references, else a new one. */
-  private threadFor(path: string, parsed: ParsedMail, at: number): string {
+  private threadFor(path: string, parsed: ParsedMail): string {
     const answered = [parsed.inReplyTo, ...parsed.references].filter((id): id is string => id !== null).map(bare);
 
     for (const id of answered) {
@@ -354,7 +371,7 @@ export class MailStore {
 
     const id = this.deps.id();
 
-    this.deps.sql.exec('INSERT INTO mail_threads (id, path, subject, created_at) VALUES (?, ?, ?, ?)', id, path, parsed.subject, at);
+    this.deps.sql.exec('INSERT INTO mail_threads (id, path, subject) VALUES (?, ?, ?)', id, path, parsed.subject);
 
     return id;
   }
@@ -372,7 +389,7 @@ export class MailStore {
     const from: MailParty = { name: parsed.from?.name ?? null, address: verdict.from ?? parsed.from?.address ?? input.envelopeFrom.toLowerCase() };
     const headerId = parsed.messageId === null ? null : bare(parsed.messageId);
 
-    const [seen] = headerId === null ? [] : rows(v.pick(MessageRow, ['id', 'thread_id', 'verdict', 'woke']), this.deps.sql.exec(
+    const [seen] = headerId === null ? [] : rows(v.pick(MessageColumns, ['id', 'thread_id', 'verdict', 'woke']), this.deps.sql.exec(
       'SELECT m.id, m.thread_id, m.verdict, m.woke FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ?', headerId, box.path,
     ));
 
@@ -386,20 +403,20 @@ export class MailStore {
 
     const at = this.deps.now();
     const woke = named === null ? null : this.wakeOf(box, verdict);
-    const threadId = this.threadFor(box.path, parsed, at);
+    const threadId = this.threadFor(box.path, parsed);
     const messageId = this.deps.id();
     const keys = await this.keep(input.raw, parsed);
     const tag = input.recipient.tag === null ? '' : `+${input.recipient.tag}`;
 
     this.deps.sql.exec(
-      `INSERT INTO mail_messages (id, thread_id, direction, header_id, in_reply_to, refs, from_addr, from_name, to_json, cc_json, delivered_to,
-        subject, at, verdict, auth, woke, snippet, text_body, text_key, html_key, raw_key, size)
-       VALUES (?, ?, 'in', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      messageId, threadId, headerId, parsed.inReplyTo === null ? null : bare(parsed.inReplyTo), JSON.stringify(parsed.references.map(bare)),
+      `INSERT INTO mail_messages (id, thread_id, header_id, from_addr, from_name, to_json, cc_json, delivered_to,
+        subject, at, verdict, auth, woke, snippet, text_body, text_key, html_key, raw_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      messageId, threadId, headerId,
       from.address, from.name, JSON.stringify(parsed.to), JSON.stringify(parsed.cc),
       `${(input.recipient.path === '' ? '' : `${input.recipient.path}.`)}${input.recipient.username}${tag}@${this.deps.domain}`,
       parsed.subject, at, verdict.verified ? 'verified' : 'unverified', verdict.auth, woke, snippetOf(parsed.text),
-      keys.text === null ? parsed.text : null, keys.text, keys.html, keys.raw, input.raw.byteLength,
+      keys.text === null ? parsed.text : null, keys.text, keys.html, keys.raw,
     );
     await this.attach(messageId, parsed.attachments);
     this.index(messageId, parsed.subject, `${from.name ?? ''} ${from.address}`, parsed.text);
@@ -429,9 +446,10 @@ export class MailStore {
    */
   private awaitTriage(box: MailBox, woke: MailWoke | null, threadId: string, at: number): MailDelivery['triage'] {
     if (box.path !== '' || woke === 'owner') return null;
-    // `since` is also the thread's version: it moves forward at every arrival, even two in one millisecond.
+    // `untriaged_since` is also the thread's version: it moves forward at every arrival, even two in one millisecond.
     this.deps.sql.exec(
-      'INSERT INTO mail_untriaged (thread_id, since) VALUES (?, ?) ON CONFLICT (thread_id) DO UPDATE SET since = MAX(excluded.since, mail_untriaged.since + 1)', threadId, at,
+      'UPDATE mail_threads SET untriaged_since = CASE WHEN untriaged_since IS NULL THEN ? ELSE MAX(?, untriaged_since + 1) END WHERE id = ?',
+      at, at, threadId,
     );
 
     return box.workspace === null || box.actorId === null ? null : { workspace: box.workspace, actorId: box.actorId };
@@ -459,8 +477,8 @@ export class MailStore {
       const digest = await this.deps.digest(file.content);
 
       await this.deps.blobs.put(`att/${digest}`, file.content);
-      this.deps.sql.exec('INSERT INTO mail_attachments (id, message_id, filename, content_type, size, digest, inline_cid) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        this.deps.id(), messageId, file.filename, file.contentType, file.content.byteLength, digest, file.contentId);
+      this.deps.sql.exec('INSERT INTO mail_attachments (id, message_id, filename, content_type, size, digest) VALUES (?, ?, ?, ?, ?, ?)',
+        this.deps.id(), messageId, file.filename, file.contentType, file.content.byteLength, digest);
     }
   }
 
@@ -480,7 +498,7 @@ export class MailStore {
 
     if (query.view === 'important') where.push("t.important IS NOT NULL AND t.path = ''");
 
-    if (query.view === 'sent') where.push("EXISTS (SELECT 1 FROM mail_messages s WHERE s.thread_id = t.id AND s.direction = 'out' AND s.send_state <> 'draft')");
+    if (query.view === 'sent') where.push("EXISTS (SELECT 1 FROM mail_messages s WHERE s.thread_id = t.id AND s.send_state = 'queued')");
 
     if (query.view === 'drafts') where.push("EXISTS (SELECT 1 FROM mail_messages d WHERE d.thread_id = t.id AND d.send_state = 'draft')");
 
@@ -501,7 +519,7 @@ export class MailStore {
 
     const ids = rows(v.object({ id: v.string(), latest: v.number(), unread: v.number() }), this.deps.sql.exec(
       `SELECT t.id, (SELECT MAX(at) FROM mail_messages m WHERE m.thread_id = t.id) AS latest,
-         EXISTS (SELECT 1 FROM mail_messages u WHERE u.thread_id = t.id AND u.direction = 'in' AND u.read = 0) AS unread
+         EXISTS (SELECT 1 FROM mail_messages u WHERE u.thread_id = t.id AND u.send_state IS NULL AND u.read = 0) AS unread
        FROM mail_threads t WHERE ${where.join(' AND ')} ORDER BY latest DESC`, ...bindings,
     )).filter((row) => query.before === undefined || row.latest < query.before);
 
@@ -564,7 +582,7 @@ export class MailStore {
 
     if (thread === undefined) return settleSync(Effect.fail(new KinuError('missing', `No thread "${id}".`)));
 
-    if (change.read !== undefined) this.deps.sql.exec("UPDATE mail_messages SET read = ? WHERE thread_id = ? AND direction = 'in'", change.read ? 1 : 0, id);
+    if (change.read !== undefined) this.deps.sql.exec("UPDATE mail_messages SET read = ? WHERE thread_id = ? AND send_state IS NULL", change.read ? 1 : 0, id);
 
     if (change.trashed !== undefined) this.deps.sql.exec('UPDATE mail_threads SET trashed_at = ? WHERE id = ?', change.trashed ? this.deps.now() : null, id);
 
@@ -592,7 +610,7 @@ export class MailStore {
 
     if (threadId === null) {
       threadId = this.deps.id();
-      this.deps.sql.exec('INSERT INTO mail_threads (id, path, subject, created_at) VALUES (?, ?, ?, ?)', threadId, outgoing.path, outgoing.subject, at);
+      this.deps.sql.exec('INSERT INTO mail_threads (id, path, subject) VALUES (?, ?, ?)', threadId, outgoing.path, outgoing.subject);
     }
 
     const id = this.deps.id();
@@ -600,11 +618,11 @@ export class MailStore {
     const party = (address: string): MailParty => ({ name: null, address: mailAddress(address) });
 
     this.deps.sql.exec(
-      `INSERT INTO mail_messages (id, thread_id, direction, header_id, in_reply_to, from_addr, to_json, cc_json, subject, at, verdict, snippet,
-        text_body, size, read, written_by, send_state) VALUES (?, ?, 'out', ?, ?, ?, ?, ?, ?, ?, 'ours', ?, ?, ?, 1, ?, ?)`,
-      id, threadId, headerId, outgoing.inReplyTo == null ? null : bare(outgoing.inReplyTo), box.address,
+      `INSERT INTO mail_messages (id, thread_id, header_id, from_addr, to_json, cc_json, subject, at, verdict, snippet,
+        text_body, read, written_by, send_state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ours', ?, ?, 1, ?, ?)`,
+      id, threadId, headerId, box.address,
       JSON.stringify(outgoing.to.map(party)), JSON.stringify((outgoing.cc ?? []).map(party)), outgoing.subject, at, snippetOf(outgoing.text),
-      outgoing.text, new TextEncoder().encode(outgoing.text).byteLength, outgoing.writtenBy ?? null, state,
+      outgoing.text, outgoing.writtenBy ?? null, state,
     );
     this.index(id, outgoing.subject, box.address, outgoing.text);
 
@@ -648,13 +666,15 @@ export class MailStore {
   /** Sends sent from this account in the last day, against its cap (none for operators, 100 otherwise). */
   sentToday(): number {
     return rows(v.object({ n: v.number() }), this.deps.sql.exec(
-      "SELECT COUNT(*) AS n FROM mail_messages WHERE direction = 'out' AND send_state <> 'draft' AND at >= ?", this.deps.now() - DAY,
+      "SELECT COUNT(*) AS n FROM mail_messages WHERE send_state = 'queued' AND at >= ?", this.deps.now() - DAY,
     ))[0]?.n ?? 0;
   }
 
   /** Files a message to send, the person's word already given; the Mailbox then hands it to its outbox. */
   /** Files a message to send; `outgoing` is the message as filed, which is what the outbox sends. */
-  async queue(asked: MailOutgoing & { threadId?: string }): Promise<{ view: MailMessageView; from: string; inReplyTo: string | null; outgoing: MailOutgoing }> {
+  async queue(asked: MailOutgoing & { threadId?: string }): Promise<{
+    view: MailMessageView; from: string; inReplyTo: string | null; references: string | null; outgoing: MailOutgoing;
+  }> {
     const outgoing = this.answering(filedRecipients(asked));
     const box = this.box(outgoing.path);
 
@@ -667,7 +687,9 @@ export class MailStore {
 
     if (view === null) return settleSync(Effect.fail(new KinuError('missing', `No message "${id}".`)));
 
-    return { view, from: view.from.address, inReplyTo: outgoing.inReplyTo ?? null, outgoing };
+    const inReplyTo = outgoing.inReplyTo ?? null;
+
+    return { view, from: view.from.address, inReplyTo, references: inReplyTo === null ? null : this.referencesOf(threadId, id, inReplyTo), outgoing };
   }
 
   /** A message's state as shown: a draft is the row's; a sent message's is the outbox's, while it holds the send. */
@@ -706,7 +728,6 @@ export class MailStore {
       }
 
       this.deps.sql.exec('DELETE FROM mail_messages WHERE thread_id = ?', id);
-      this.deps.sql.exec('DELETE FROM mail_untriaged WHERE thread_id = ?', id);
       this.deps.sql.exec('DELETE FROM mail_threads WHERE id = ?', id);
     }
 

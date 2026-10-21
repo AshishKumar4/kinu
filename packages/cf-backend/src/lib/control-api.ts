@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import { JsonValueSchema, pageSchema, type JsonValue, type Page } from '@kinu.run/core';
 import {
   ControlAuditRowSchema, ControlMetricsSchema, ControlOverviewSchema, ControlUserRowSchema, ControlWorkspaceRowSchema,
-  FeedbackRecordSchema, MonitorIncidentSchema, type ControlAuditRow, type ControlFeedbackRow, type ControlMetrics,
+  ControlFeedbackRowSchema, MonitorIncidentSchema, type ControlAuditRow, type ControlFeedbackRow, type ControlMetrics,
   type ControlOverview, type ControlUserRow, type ControlWorkspaceRow, type MonitorIncident,
 } from '@kinu.run/core/control-plane';
 import { settle, tolerateAsync } from '@kinu.run/core/obs';
@@ -211,7 +211,7 @@ export function fetchIncidents(): Promise<ControlAnswer<{ incidents: MonitorInci
 export function fetchFeedback(
   cursor: string | null = null, limit?: number,
 ): Promise<ControlAnswer<Page<ControlFeedbackRow>>> {
-  return settle(control(pageSchema(FeedbackRecordSchema), `/feedback${pageQuery(cursor, limit)}`));
+  return settle(control(pageSchema(ControlFeedbackRowSchema), `/feedback${pageQuery(cursor, limit)}`));
 }
 
 export function fetchAudit(

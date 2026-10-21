@@ -4,7 +4,7 @@
  */
 import type {
   LanguageModelV4Content, LanguageModelV4GenerateResult, LanguageModelV4Reasoning, LanguageModelV4ResponseMetadata, LanguageModelV4StreamResult,
-  LanguageModelV4Text, SharedV4Warning,
+  LanguageModelV4StreamPart, LanguageModelV4Text, SharedV4Warning,
 } from '@ai-sdk/provider';
 import { APICallError, type LanguageModelMiddleware } from 'ai';
 import { Effect } from 'effect';
@@ -18,10 +18,31 @@ export function generateFromStream(answer: LanguageModelV4StreamResult): Promise
   return settle(collected(answer));
 }
 
+function isBlock(entry: LanguageModelV4Content): entry is Block {
+  return entry.type === 'text' || entry.type === 'reasoning';
+}
+
+/** The content so far, `part` added: a block's start opens one at its own place, its deltas grow it until its end, and
+ *  every other content part is kept as it came. `open` is where each open block's id sits; a provider reuses an id once
+ *  its block has ended (the OpenAI-compatible adapter's `txt-0` as text and reasoning alternate). */
+function addContent(content: LanguageModelV4Content[], open: Map<string, number>, part: LanguageModelV4StreamPart): void {
+  if (part.type === 'text-start' || part.type === 'reasoning-start') {
+    open.set(part.id, content.length);
+    content.push({ type: part.type === 'text-start' ? 'text' : 'reasoning', text: '', ...(part.providerMetadata !== undefined && { providerMetadata: part.providerMetadata }) });
+  } else if (part.type === 'text-delta' || part.type === 'reasoning-delta') {
+    const at = open.get(part.id);
+    const block = at === undefined ? undefined : content[at];
+
+    if (at !== undefined && block !== undefined && isBlock(block)) content[at] = { ...block, text: block.text + part.delta };
+  } else if (part.type === 'text-end' || part.type === 'reasoning-end') open.delete(part.id);
+  else if (part.type === 'tool-call' || part.type === 'tool-result' || part.type === 'file' || part.type === 'reasoning-file'
+    || part.type === 'source' || part.type === 'custom' || part.type === 'tool-approval-request') content.push(part);
+}
+
 function collected(answer: LanguageModelV4StreamResult): Effect.Effect<LanguageModelV4GenerateResult> {
   return Effect.gen(function* () {
-    const content: Array<LanguageModelV4Content | string> = [];
-    const blocks = new Map<string, Block>();
+    const content: LanguageModelV4Content[] = [];
+    const open = new Map<string, number>();
     const reader = answer.stream.getReader();
     let warnings: SharedV4Warning[] = [];
     let metadata: LanguageModelV4ResponseMetadata = {};
@@ -34,11 +55,8 @@ function collected(answer: LanguageModelV4StreamResult): Effect.Effect<LanguageM
       if (part.type === 'error') return yield* Effect.die(part.error);
 
       if (part.type === 'finish') {
-        const order = content.flatMap((entry) => (typeof entry === 'string' ? [blocks.get(entry)] : [entry]))
-          .flatMap((entry) => (entry === undefined ? [] : [entry]));
-
         return {
-          content: order, finishReason: part.finishReason, usage: part.usage, warnings,
+          content, finishReason: part.finishReason, usage: part.usage, warnings,
           ...(part.providerMetadata !== undefined && { providerMetadata: part.providerMetadata }),
           ...(answer.request !== undefined && { request: answer.request }),
           response: { ...answer.response, ...metadata },
@@ -47,15 +65,7 @@ function collected(answer: LanguageModelV4StreamResult): Effect.Effect<LanguageM
 
       if (part.type === 'stream-start') warnings = part.warnings;
       else if (part.type === 'response-metadata') metadata = { id: part.id, timestamp: part.timestamp, modelId: part.modelId };
-      else if (part.type === 'text-start' || part.type === 'reasoning-start') {
-        blocks.set(part.id, { type: part.type === 'text-start' ? 'text' : 'reasoning', text: '', ...(part.providerMetadata !== undefined && { providerMetadata: part.providerMetadata }) });
-        content.push(part.id);
-      } else if (part.type === 'text-delta' || part.type === 'reasoning-delta') {
-        const block = blocks.get(part.id);
-
-        if (block !== undefined) blocks.set(part.id, { ...block, text: block.text + part.delta });
-      } else if (part.type === 'tool-call' || part.type === 'tool-result' || part.type === 'file' || part.type === 'reasoning-file'
-        || part.type === 'source' || part.type === 'custom' || part.type === 'tool-approval-request') content.push(part);
+      else addContent(content, open, part);
     }
 
     return yield* Effect.die(new APICallError({ message: 'the stream ended without its finish', url: 'stream', requestBodyValues: undefined, isRetryable: true }));

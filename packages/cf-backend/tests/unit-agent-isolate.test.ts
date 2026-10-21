@@ -3,7 +3,7 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import { accountCredentialKey, asFetchFunction, requestUrl } from '@kinu.run/core';
 import { OPENCODE_GO_CATALOG } from '@kinu.run/test-utils';
 import {
-  agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedMainActor, hostedSubordinateHarness, makeEnv, orchestratorHarness, runDelegatedTask,
+  agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedMainActor, hostedSubagentHarness, makeEnv, orchestratorHarness, runDelegatedTask,
   wakeForDelegatedTask, workspaceMainActor,
 } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
@@ -60,7 +60,7 @@ test("a turn an agent's isolate loses to its own reset runs again, the workspace
   });
 
   const workspace = gatewayWorkspace(gateway);
-  const middle = await hostedSubordinateHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
+  const middle = await hostedSubagentHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
   const middleId = middle.actor.handle.actorId;
 
   const ended = (): number => agentSql(workspace, middleId)<{ n: number }>`
@@ -142,7 +142,7 @@ async function workAccountWorkspace(name: string) {
 
 test("a hired agent's model call authenticates with the provider account the owner selected", async () => {
   const { user, workspace, used } = await workAccountWorkspace('accounts');
-  const hire = await hostedSubordinateHarness(workspace, { name: 'writer', displayName: 'Writer', nameOrigin: 'user', mission: 'write' });
+  const hire = await hostedSubagentHarness(workspace, { name: 'writer', displayName: 'Writer', nameOrigin: 'user', mission: 'write' });
 
   await wakeForDelegatedTask(workspace, hire.actor.handle.actorId, 'Write it.');
   await driveUntil(workspace, "the hire's model was never called", () => used.length > 0);
@@ -186,7 +186,7 @@ test("a hired agent's model call to OpenCode Go names the agent's own conversati
     // hirer opens on hearing the hire failed carries the report, and the hirer's own model may not be this one at all.
     const body = typeof init?.body === 'string' ? init.body : '';
 
-    if (body.includes(MODEL.slice('opencode-go/'.length)) && body.includes('"tools"') && body.includes('Write it.') && !body.includes('[subordinate_report]')) {
+    if (body.includes(MODEL.slice('opencode-go/'.length)) && body.includes('"tools"') && body.includes('Write it.') && !body.includes('[subagent_report]')) {
       sessions.push(new Headers(init?.headers).get('x-opencode-session'));
     }
 
@@ -194,7 +194,7 @@ test("a hired agent's model call to OpenCode Go names the agent's own conversati
   });
   workspace.agent.harnessHoldsCapability(token);
   workspace.agent.harnessInstallCatalog({ tiers: { default: { model: MODEL }, deep: { model: MODEL }, fast: { model: MODEL } }, availableModels: [MODEL] });
-  const hire = await hostedSubordinateHarness(workspace, { name: 'writer', displayName: 'Writer', nameOrigin: 'user', mission: 'write' });
+  const hire = await hostedSubagentHarness(workspace, { name: 'writer', displayName: 'Writer', nameOrigin: 'user', mission: 'write' });
 
   await runDelegatedTask(workspace, hire.actor.handle.actorId, 'Write it.');
 
@@ -218,7 +218,7 @@ test("a hire made with context=inherit carries its hirer's working conversation 
   });
 
   const workspace = gatewayWorkspace(gateway);
-  const middle = await hostedSubordinateHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
+  const middle = await hostedSubagentHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
   const inherited = () => gateway.runs.find((run) => openingOf(run).includes('Pass it on.'));
 
   await wakeForDelegatedTask(workspace, middle.actor.handle.actorId, 'The code word is OTTER.');
@@ -230,7 +230,7 @@ test("a hire made with context=inherit carries its hirer's working conversation 
 test("a hired agent's turn requests are read from its own database", async () => {
   const gateway = stubAiBinding((run) => chatCompletion(run, 'Done.'));
   const workspace = gatewayWorkspace(gateway);
-  const middle = await hostedSubordinateHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
+  const middle = await hostedSubagentHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
   const middleId = middle.actor.handle.actorId;
 
   const ended = (): number => agentSql(workspace, middleId)<{ n: number }>`
@@ -259,7 +259,7 @@ test("a hired agent's conversation recall searches its own conversation", async 
   });
 
   const workspace = gatewayWorkspace(gateway);
-  const middle = await hostedSubordinateHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
+  const middle = await hostedSubagentHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
   const middleId = middle.actor.handle.actorId;
   const recalled = () => answeredRun(gateway, 'Recall the word.');
 
@@ -274,7 +274,7 @@ test("a hired agent's conversation recall searches its own conversation", async 
 test("a hired agent's model spend counts in the workspace's and the account's totals", async () => {
   const gateway = stubAiBinding((run) => chatCompletion(run, 'Done.'));
   const workspace = gatewayWorkspace(gateway);
-  const middle = await hostedSubordinateHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
+  const middle = await hostedSubagentHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
   const middleId = middle.actor.handle.actorId;
 
   const steps = (): number => agentSql(workspace, middleId)<{ n: number }>`
@@ -308,7 +308,7 @@ test("a hired agent's working context is read and edited where its conversation 
   });
 
   const workspace = gatewayWorkspace(gateway);
-  const middle = await hostedSubordinateHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
+  const middle = await hostedSubagentHarness(workspace, { name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate' });
   const middleId = middle.actor.handle.actorId;
   const hirer = `/context/agents/${middle.actor.record.storageKey}/working.jsonl`;
 
