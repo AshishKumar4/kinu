@@ -113,7 +113,7 @@ import { markStoreChanged, nextAlarmTime } from '@kinu.run/core';
 import { accountDeps, armedWarms, CacheWarmingLane, CacheWarmStore } from '@kinu.run/core';
 import {
   EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
-  readActivityLog, initActivationTable, listActivations, recordActivation, type Activation,
+  readActivityLog, initActivationTable, listActivations, recordActivation, facetNamesGiven, type Activation,
   summarizeSteps,
   // Whole-workspace spend by producer; `summarizeSteps` covers only this agent's turns.
   workspaceSpend, headStepSources, mergeAccountSpend, type SpendLedger,
@@ -4493,9 +4493,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // A sibling's first RPC starts it too (agents 0.25); it is no workspace, so it records no startup.
     if (this.nimbusSibling) return;
 
-    // The ordinal is the count readers use; a pre-reset store, which takes no writes, numbers nothing.
+    // The ordinal is the count readers use; a pre-reset store, which takes no writes, numbers nothing. `facets` reads how
+    // near the object is to its lifetime facet ids (`do.facet.count`).
     if (this.storageRefusal === undefined) {
-      diagnostics.event('actor.startup', { workspace: this.name, activation: recordActivation(this.boundSql, Date.now(), this.env.CF_VERSION_METADATA?.id ?? null) });
+      const activation = recordActivation(this.boundSql, Date.now(), this.env.CF_VERSION_METADATA?.id ?? null);
+
+      diagnostics.event('actor.startup', { workspace: this.name, activation, facets: facetNamesGiven(this.boundSql) });
     }
 
     // An unborn workspace owes nothing: its first claim writes it.
