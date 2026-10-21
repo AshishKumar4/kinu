@@ -10,7 +10,7 @@
  */
 
 import { Effect } from 'effect';
-import type { Page } from 'puppeteer';
+import type { Page, Target } from 'puppeteer';
 import * as v from 'valibot';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -1747,6 +1747,30 @@ async function finishShown(page: Page): Promise<string> {
   return `${page.url()} ${JSON.stringify(shown)}`;
 }
 
+/**
+ * Whether `page`'s tab reaches an address starting `at` within `ms`, read off its target, which follows the tab through
+ * every origin. A wait in its page stays with the document it began in: one begun on the provider's page never saw the
+ * tab come back (2026-10-23, /mnt/local/kinu/tmp/connect-live/debug2.ts: back at 219 s, the wait pending till teardown).
+ */
+async function reaches(page: Page, at: string, ms: number): Promise<boolean> {
+  const target = page.target();
+  const browser = page.browser();
+  const { promise, resolve } = Promise.withResolvers<boolean>();
+  const changed = (each: Target) => { if (each === target && each.url().startsWith(at)) resolve(true); };
+
+  const timer = setTimeout(() => { resolve(false); }, ms);
+
+  browser.on('targetchanged', changed);
+  changed(target);
+
+  try {
+    return await promise;
+  } finally {
+    clearTimeout(timer);
+    browser.off('targetchanged', changed);
+  }
+}
+
 /** Whether `closed` settled within the time a finish page has to load and close its tab. */
 async function closedSoon(closed: Promise<void>): Promise<boolean> {
   return Promise.race([closed.then(() => true), new Promise<boolean>((resolve) => { setTimeout(() => { resolve(false); }, ACROSS_PAGE_LOADS_MS); })]);
@@ -1787,10 +1811,10 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
     await named('the consent page in the setup tab', async () => setup.waitForSelector(`[${CONSENT_CHOICE}="approve"]`, { timeout: ACROSS_PAGE_LOADS_MS }));
     await consent(setup, 'approve');
 
-    const stayed = await named('the setup tab back from its sign-in', async () => setup.waitForFunction((at: string) => location.origin === at && document.querySelector('[data-welcome-step]') !== null, { timeout: ACROSS_PAGE_LOADS_MS }, origin)
-      .then(() => null, async () => finishShown(setup)));
+    const cameBack = await named('the setup tab back from its sign-in', async () => reaches(setup, `${origin}/welcome`, ACROSS_PAGE_LOADS_MS));
 
-    if (stayed !== null) throw new Error(`the setup tab never came back from its sign-in: ${stayed}`);
+    if (!cameBack) throw new Error(`the setup tab never came back from its sign-in: ${await finishShown(setup)}`);
+    await until(setup, 'setup to draw its step again', `document.querySelector('[data-welcome-step]') !== null`);
     const back = new URL(setup.url());
     const sameTab = { back: back.pathname + back.search + back.hash, status: (await listedServer(origin, 'Samehub')).status };
 
