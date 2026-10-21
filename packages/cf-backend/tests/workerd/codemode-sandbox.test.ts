@@ -13,7 +13,7 @@ import { KinuSandboxExecutor, codemodeLauncher, renderToolsPrelude } from '../..
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
 import { createWebCodemodeProvider, type WebSearchProvider } from '@kinu.run/core';
 import { buildMcpToolSet, describeMcpTool, narrowToolSurface, programProviders } from '@kinu.run/core';
-import { discoveryQueries, largeMcpCatalog } from '../../../cli-backend/tests/fixtures/large-mcp-catalog';
+import { GITHUB_MCP_INTENTS, GITHUB_MCP_TOOLS } from '@kinu.run/test-utils/github-mcp-catalog';
 
 const files = new Map<string, string>([[`${WORKSPACE_ROOT}/notes.md`, 'hello from the workspace']]);
 
@@ -116,19 +116,22 @@ const dbProvider = {
 
 const SCRATCH_TABLE = 'await db.createTable({ name: "scratch", scope: "private", columns: [{ name: "key", type: "text", primaryKey: true }, { name: "value", type: "json" }] });';
 
+/** GitHub's catalog as `describeMcpTool` serves it from a server named `github`. */
+function githubDescriptors() {
+  return GITHUB_MCP_TOOLS.map((remote) => {
+    const described = describeMcpTool({ id: 'github', name: 'github' }, remote);
+
+    if ('refused' in described) throw new Error(described.refused.reason);
+
+    return described.admitted;
+  });
+}
+
 describe('the eval sandbox under workerd', () => {
   const executor = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: null }, async () => ({})));
 
   test('MCP discovery and typed calls cross the hosted sandbox through the shared core surface', async () => {
-    const descriptors = largeMcpCatalog.map((remote) => {
-      const described = describeMcpTool({ id: 'github', name: 'github' }, remote);
-
-      if ('refused' in described) throw new Error(described.refused.reason);
-
-      return described.admitted;
-    });
-
-    const external = buildMcpToolSet(descriptors, {
+    const external = buildMcpToolSet(githubDescriptors(), {
       call: async (descriptor, args) => ({ tool: descriptor.name, args }),
       effectClaims: {
         sql: () => { throw new Error('Read-only MCP tools must not write receipts'); },
@@ -157,11 +160,42 @@ describe('the eval sandbox under workerd', () => {
         result: await tools[ranked.results[0].method]({ query: "DurableObject" }) };
     ` }, { toolCallId: 'discovery', messages: [], context: undefined });
 
+    const searchCode = GITHUB_MCP_TOOLS.find((entry) => entry.name === 'search_code');
+
+    // GitHub's own schema returned whole, its page bounds kept; reach narrowed to one tool hides the rest from search.
     expect(output).toMatchObject({ result: {
       path: 'tools.mcp_github_search_code', hidden: 0, missing: 'tools.not_present',
-      schema: largeMcpCatalog.find((entry) => entry.name === discoveryQueries[0][1])?.inputSchema,
+      schema: searchCode?.inputSchema,
       result: { tool: 'search_code', args: { query: 'DurableObject' } },
     } });
+    expect(searchCode?.inputSchema.properties.perPage).toMatchObject({ minimum: 1, maximum: 100 });
+  });
+
+  test('over GitHub\'s own catalog, search ranks first the tool each representative intent means', async () => {
+    const external = buildMcpToolSet(githubDescriptors(), {
+      call: async () => { throw new Error('search calls no tool'); },
+      effectClaims: {
+        sql: () => { throw new Error('search writes no receipt'); },
+        get actor(): never { throw new Error('search claims no effect'); },
+        execution: () => ({ turnId: 'discovery', runId: 'discovery' }),
+      },
+      spill: { get vfs(): never { throw new Error('search spills nothing'); }, home: WORKSPACE_ROOT },
+    });
+
+    const providers = programProviders({
+      surface: { native: {}, external: () => external }, namespaces: [], mode: 'build', signal: undefined, reach: narrowToolSurface(undefined),
+    });
+
+    const execute = createCodeTool({ executor, tools: providers }).execute;
+
+    if (execute === undefined) throw new Error('The hosted eval is not executable');
+
+    const output = await execute({ code: `
+      const queries = ${JSON.stringify(GITHUB_MCP_INTENTS.map(([query]) => query))};
+      return await Promise.all(queries.map(async (query) => (await codemode.search(query)).results[0].path));
+    ` }, { toolCallId: 'ranking', messages: [], context: undefined });
+
+    expect(output).toMatchObject({ result: GITHUB_MCP_INTENTS.map(([, name]) => `tools.mcp_github_${name}`) });
   });
 
   test('hosted codemode distinguishes returned data, handled refusal, and unhandled failure', async () => {

@@ -12,7 +12,7 @@ import { connectMcpServers } from '../src/mcp';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { createLocalProfileAuthority, resolverModelPlane } from '../src/profile-authority';
-import { discoveryQueries } from './fixtures/large-mcp-catalog';
+import { GITHUB_MCP_INTENTS, GITHUB_MCP_TOOLS } from '@kinu.run/test-utils/github-mcp-catalog';
 import { scratchPath, scriptedTurnModel, toolExecute, scratchDir, type ScriptedTurnOptions, type ScriptedTurnResult, workspaceDatabase, freshServedStores } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -212,9 +212,9 @@ test('eval discovers and calls a tool beyond the former catalog budget without s
   const code = `
     const servers = await codemode.list();
     const listed = await codemode.list("github");
-    const queries = ${JSON.stringify(discoveryQueries.map(([query]) => query))};
+    const queries = ${JSON.stringify(GITHUB_MCP_INTENTS.map(([query]) => query))};
     const ranked = await Promise.all(queries.map(async (query) => (await codemode.search(query)).results[0].path));
-    const path = ranked[0];
+    const path = (await codemode.search("search code")).results[0].path;
     const docs = await codemode.describe(path);
     const undocumented = await codemode.describe((await codemode.search("archive 000")).results[0].path);
     const missing = await codemode.describe("tools.not_present");
@@ -226,7 +226,8 @@ test('eval discovers and calls a tool beyond the former catalog budget without s
   `;
 
   const { session, events } = sessionWithWindows(scriptedTurnModel({ doGenerate: (options) => {
-    captured = JSON.stringify(options.prompt);
+    // The first request, before any program ran: what the turn sends the model unasked, tool definitions included.
+    if (step === 0) captured = JSON.stringify({ prompt: options.prompt, tools: options.tools });
 
     return ++step === 1
       ? { content: [{ type: 'tool-call', toolCallId: 'discovery', toolName: 'eval', input: JSON.stringify({ code }) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage: USAGE, warnings: [] }
@@ -234,25 +235,31 @@ test('eval discovers and calls a tool beyond the former catalog budget without s
   } }), { 'local/small': 32_000 });
 
   try {
-    const server = { command: 'bun', args: [new URL('./fixtures/large-mcp-server.ts', import.meta.url).pathname] };
+    const server = { command: 'bun', args: [new URL('./fixtures/github-mcp-server.ts', import.meta.url).pathname] };
 
     await session.connectMcp({ github: server, 'tracker-team': server });
     await session.send('Find the MCP tool for searching source code and use it.', { id: crypto.randomUUID() });
     const result = events.find((event) => event.type === 'tool-result' && event.toolCallId === 'discovery');
 
+    const searchCode = GITHUB_MCP_TOOLS.find((entry) => entry.name === 'search_code');
+
+    // GitHub's own catalog, one tool with no description beside it: its schema whole, bounds and all, as `describe`
+    // returns it, never in the prompt.
     expect(result).toMatchObject({ success: true, output: { result: {
-      servers: [{ server: 'github', tools: 120 }, { server: 'tracker-team', tools: 120 }],
-      count: 120,
-      listed: { path: 'tools.mcp_github_search_code', name: 'search_code', description: discoveryQueries[0][2] },
-      ranked: discoveryQueries.map(([, name]) => `tools.mcp_github_${name}`),
+      servers: [{ server: 'github', tools: GITHUB_MCP_TOOLS.length + 1 }, { server: 'tracker-team', tools: GITHUB_MCP_TOOLS.length + 1 }],
+      count: GITHUB_MCP_TOOLS.length + 1,
+      listed: { path: 'tools.mcp_github_search_code', name: 'search_code', description: searchCode?.description },
+      ranked: GITHUB_MCP_INTENTS.map(([, name]) => `tools.mcp_github_${name}`),
       tracker: 'tools.mcp_tracker_team_search_users',
       trackerResult: { structuredContent: { tool: 'search_users', input: { query: 'developers' } } },
       undocumented: { path: 'tools.mcp_github_archive_000', description: false },
       missing: 'tools.not_present',
-      schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
+      schema: searchCode?.inputSchema,
       result: { structuredContent: { tool: 'search_code', input: { query: 'repo:cloudflare/agents DurableObject' } } },
     } } });
-    expect(captured).not.toContain('Archived telemetry record identifier');
+    // No tool of the catalog is described to the model before a program asks.
+    expect({ bounded: searchCode?.inputSchema.properties.perPage, prompted: GITHUB_MCP_TOOLS.filter((entry) => captured.includes(entry.description)).map((entry) => entry.name) })
+      .toEqual({ bounded: expect.objectContaining({ minimum: 1, maximum: 100 }), prompted: [] });
   } finally {
     await session.end();
   }

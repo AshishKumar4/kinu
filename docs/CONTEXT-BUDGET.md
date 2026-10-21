@@ -38,13 +38,17 @@ A turn-cumulative second cap (after 120,000 admitted chars, the per-result cap d
 
 A tool result arrives once. A tool definition (description and JSON Schema) rides every request of every step, and for MCP a third party writes it. An unbounded catalog lets a stranger spend the user's context window.
 
-There is no separate MCP limit. `stepContextLimit` (`packages/core/src/prompting/step-prune.ts`) is the one request-level allocation: the resolved model's context window minus the output allowance the answer needs (`outputReserveTokens`). The step-prune pass shrinks tool outputs toward it. The actor's builtin tools are priced first; a remote catalog is admitted against what the limit has left, measured on the same scale (`toolSurfaceTokens`, `packages/core/src/tools/mcp-surface.ts`).
+A remote catalog adds nothing to a request. The prompt carries no MCP definition at all: a program finds a tool inside
+`eval` through `codemode.list`, `codemode.search` and `codemode.describe` (`mcpDiscoveryProvider`,
+`packages/core/src/tools/mcp-discovery.ts`, over codemode's portable search and describe), then calls it as
+`tools.<key>`. Discovery answers only the callable surface, already narrowed by the role's reach, so it never names a
+tool the program could not call. `describe` returns the tool's JSON input schema whole, never clipped: a schema is
+the contract of what the tool accepts. What discovery hands back reaches the model as `eval`'s own result, capped as
+every program result is (`PROGRAM_RESULT_MAX_CHARS`).
 
-`admitMcpDescriptors` (same file) admits in `(server, tool)` name order, so two turns that read the same rows admit the same set:
-
-- A schema is never truncated. A clipped schema lies about what the tool accepts. A descriptor whose schema will not fit is deferred whole.
-- Prose gets equal shares of what remains, re-divided at every descriptor, so one server's long descriptions cannot crowd out the rest. There is no per-description percentage to tune.
-- Every deferral is reported through the same missing-capability channel a disconnected server uses, so the model knows what it lacks.
+`stepContextLimit` (`packages/core/src/prompting/step-prune.ts`) remains the one request-level allocation: the
+resolved model's context window minus the output allowance the answer needs (`outputReserveTokens`). The step-prune
+pass shrinks tool outputs toward it. No catalog is priced against it, because none is sent.
 
 ## The counters
 
