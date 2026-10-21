@@ -1099,9 +1099,9 @@ describe('the app document policy', () => {
     expect(cspOf(null)).toContain("connect-src 'self' wss://kinu.example.com");
   });
 
-  // KaTeX_Size3-Regular.woff2 is inlined by Vite as `data:font/woff2`; without `font-src` the browser refuses it.
-  test('the inlined maths font survives the font-src rule', () => {
-    expect(cspOf(null)).toContain("font-src 'self' data:");
+  // The build inlines no font (vite.config.ts), so fonts come from this origin alone, on the app as on a public page.
+  test('fonts come from this origin alone', () => {
+    expect(cspOf(null)).toContain("font-src 'self';");
   });
 
   // D70: KasmVNC's client takes its socket's host, port and path from settings a user can edit.

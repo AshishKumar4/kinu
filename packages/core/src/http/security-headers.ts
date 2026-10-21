@@ -59,8 +59,8 @@ function appDocumentCsp(url: URL, previewOrigin: string | null, framedBy: string
     ...BASE_CSP.map((directive) => (framedBy !== null && directive === "frame-ancestors 'none'" ? `frame-ancestors ${framedBy}` : directive)),
     `connect-src 'self' wss://${url.host}`,
     "img-src 'self' data: blob: https:",
-    // `data:`: Vite inlines small KaTeX fonts as data URLs.
-    "font-src 'self' data:",
+    // Fonts are files of this origin: the build inlines none (vite.config.ts `assetsInlineLimit`).
+    "font-src 'self'",
     `frame-src ${frameSrc}`,
   ].join('; ');
 }

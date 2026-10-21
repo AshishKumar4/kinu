@@ -160,6 +160,10 @@ export default defineConfig(({ command }) => ({
   environments: {
     client: {
       build: {
+        // A font is always a file of this origin, never a `data:` URL: under Vite's 4 KB default KaTeX_Size3-Regular.woff2
+        // (3.6 KB) was inlined into the CSS every page shares, and the public pages' CSP, which allows fonts from `'self'`
+        // alone, refused it on every landing load (rc29 walkthrough F3).
+        assetsInlineLimit: (file: string) => (/\.(?:woff2?|ttf|otf|eot)$/u.test(file) ? false : undefined),
         rolldownOptions: {
           input: {
             app: resolve(__dirname, "index.html"),
