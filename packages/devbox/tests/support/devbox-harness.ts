@@ -378,6 +378,8 @@ export class FakeSandbox {
   /** Mounts and execs share one chronological list: stop order is a property of the order
    *  across both channels and cannot be reconstructed from two separate lists. */
   readonly sequence: string[] = [];
+  /** Each exec the box sent with no stdin of its own, whose end the platform would make a task nobody awaits. */
+  readonly unownedStdin: string[] = [];
   /** Stands in for what `/proc/mounts` reports for paths the box's `mountBucket` holds mounted. */
   readonly s3fsMounts = new Set<string>();
   /** Hosts the box bound to a named outbound handler (`setOutboundByHost`). */
@@ -947,7 +949,12 @@ export class FakeSandbox {
         return { id, size: 1, name: options?.name };
       },
       inspect: () => unreached('container.inspect'),
-      exec: (args, options) => this.#native(args, options),
+      exec: (args, options) => {
+        // The platform ends the stdin of an exec given none, as a task the box cannot await (`containerExec`).
+        if (options?.stdin === undefined) this.unownedStdin.push(args.join(' '));
+
+        return this.#native(args, options);
+      },
     };
   }
 
@@ -1054,9 +1061,12 @@ export class FakeSandbox {
       return this.#native(args.slice(5), options);
     }
 
-    // `cat > <path>` fed on stdin: the bytes land in the file once the writer closes.
-    if (options.stdin === 'pipe' && args[0] === '/bin/sh') {
-      const [, append = '', target = ''] = /^cat (>>?) '([^']+)'$/.exec(args[2] ?? '') ?? [];
+    // `cat > <path>` fed on stdin: the bytes land in the file once the writer closes. Every exec carries a pipe (the
+    // box owns each one's stdin, `containerExec`); this one is the writer's.
+    const fed = /^cat (>>?) '([^']+)'$/.exec(args[2] ?? '');
+
+    if (options.stdin === 'pipe' && args[0] === '/bin/sh' && fed !== null) {
+      const [, append = '', target = ''] = fed;
       const chunks: Uint8Array[] = append === '>>' ? [this.binaryFiles.get(target) ?? new Uint8Array()] : [];
       const closed = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
 
