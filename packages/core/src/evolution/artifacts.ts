@@ -16,6 +16,7 @@ import type { SqlExecutor } from '../types/primitives';
 import { nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { diagnostics, tolerate } from '../obs/index';
+import { changedRows } from '../vfs/diff';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
 import { templateContract } from '../prompting/template';
 import { PROMPT_SECTIONS, type PromptSectionOverrides } from '../prompting/section-templates';
@@ -215,16 +216,20 @@ export function artifactVersion(sql: SqlExecutor, actor: ActorHandle, artifactId
 }
 
 /** Characters an edit changes: what lies between the common prefix and suffix, on the longer side. */
+/**
+ * What an edit changes, in characters: what a word-level diff deletes plus what it inserts, each run of word or of
+ * whitespace a token aligned by the VFS's own minimal diff ({@link changedRows}). Two small edits far apart count
+ * themselves alone, where the span from the first difference to the last counted the unchanged text between them
+ * (the OMP pilot's dreams, 2026-10-21: a 296-character change measured 1,421); scattered edits still add up.
+ */
 function changedChars(before: string, after: string): number {
-  let head = 0;
+  const { removed, added } = changedRows(wordsOf(before), wordsOf(after));
 
-  while (head < before.length && head < after.length && before[head] === after[head]) head++;
-  let tail = 0;
+  return [...removed, ...added].reduce((sum, token) => sum + token.length, 0);
+}
 
-  while (tail < before.length - head && tail < after.length - head
-    && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail++;
-
-  return Math.max(before.length - head - tail, after.length - head - tail);
+function wordsOf(text: string): string[] {
+  return text.split(/(\s+)/u).filter((token) => token !== '');
 }
 
 const FieldTextSchema = v.record(v.string(), v.string());
