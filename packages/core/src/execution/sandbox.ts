@@ -301,6 +301,16 @@ export interface ComputerProcessEnd {
   readonly tail: string;
 }
 
+const ComputerProcessJobInput = v.object({ processId: v.string(), machine: v.literal('computer'), job: v.string() });
+
+/** A job that is a computer's process (`adoptedProcess` writes its input): its process and its own id; else null. */
+export function computerProcessJob(kind: string, input: JsonValue): { readonly processId: string; readonly job: string } | null {
+  if (kind !== 'startProcess') return null;
+  const parsed = v.safeParse(ComputerProcessJobInput, input);
+
+  return parsed.success ? { processId: parsed.output.processId, job: parsed.output.job } : null;
+}
+
 /** The actor's jobs, and the box's word on when a job's process ends. */
 export interface ComputerProcessJobs extends AdoptsJobs {
   ended(jobId: string): Promise<ComputerProcessEnd>;

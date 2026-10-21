@@ -1,4 +1,5 @@
 import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { ComputerProcessEnds } from './computer-process-ends';
 import type { ToolSet } from 'ai';
 /**
  * CF runtime adapter: bridges the Agents DO context to core's AgentRuntime. One Durable Object per
@@ -253,6 +254,8 @@ export interface CFRuntimeHooks {
   workspaceExecution?: HostedNodeHome;
   /** The actor's jobs, a process it starts among them; read at the call, as its runner is built over this runtime. */
   jobs: () => AdoptsJobs;
+  /** Where its computer's processes run as jobs end, as the box tells it: the workspace object's, every actor's. */
+  processEnds: () => Pick<ComputerProcessEnds, 'ended'>;
   /** `children` is opened under the actor host's directory authority, never by a caller knowing an id. */
   contextPlane?: {
     readonly actorId: string;
@@ -463,6 +466,8 @@ export function createCFRuntime(
         // The box's desktop has one driver at a time; each of the workspace's agents drives as itself.
         desktop: { driver: actor.actor.actorId, screen: { ...DESKTOP_SIZE, sheet: WATCH_SHEET } },
         environment: access.commandEnvironment,
+        // Each process it starts is a job of the actor's, which its box's word on the process's end settles.
+        processJobs: { adopt: async (request) => await hooks.jobs().adopt(request), ended: (jobId) => hooks.processEnds().ended(jobId) },
       }));
       diagnostics.event('computer.executor_registered', {
         sandboxId,

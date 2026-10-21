@@ -1449,6 +1449,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ),
       deferrals: (actorId) => this.deferralChannel(actorId),
       jobs: (actor) => this.jobRunnerOf(actor),
+      processEnds: () => this.processEnds,
       chosenLoopOrigin: (record: WorkspaceActor) => this._chosenLoopOrigins.get(record.actorId) ?? null,
       chosenWriteObserver: (record: WorkspaceActor) => this._actorWriteObservers.get(record.actorId) ?? null,
     };
@@ -7295,6 +7296,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return acceptSandboxLifecycleIncident({
       sql: this.boundSql,
       inbox: this.workspaceAgentDeliveries().signals,
+      jobs: {
+        ended: (jobId, end) => { this.processEnds.record(jobId, end); },
+        // The note goes to the actor whose job it is: the workspace agent's, or a hire's own.
+        restored: async (jobId, note) => {
+          const [row] = this.ctx.storage.sql.exec('SELECT actor_id FROM background_jobs WHERE id = ?', jobId).toArray();
+          const actorId = typeof row?.['actor_id'] === 'string' ? row['actor_id'] : null;
+
+          if (actorId === null) return;
+          const runner = actorId === this.actorHandle().actorId ? this.jobRunner : (this.jobAuthorities.live(actorId) ?? this.reviveJobAuthority(actorId))?.runner;
+
+          await runner?.note(jobId, note);
+        },
+      },
       // The workspace name is the only dimension the lifecycle module cannot know.
       recordRecovery: (row) => { recordSandboxRecovery(this.env, { workspace: this.name, ...row }); },
       logActivity: (event, detail) => this.logActivity(event, detail),

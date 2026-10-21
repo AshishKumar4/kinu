@@ -7,6 +7,7 @@
  * Not facets: `do.facet.cpu_shared` means a facet wave serialises like one isolate.
  */
 
+import type { ComputerProcessEnds } from './computer-process-ends';
 import type { Agent, AgentContext } from 'agents';
 import {
   childContextResolver, localContextTree, type ContextEditor, type ContextTree, createSeatHost, defaultLoopOrigin,
@@ -78,6 +79,8 @@ export interface WorkspaceHostSeams {
   deferrals(actorId: string): DeferredApprovalChannel | undefined;
   /** The runner `actor`'s calls become jobs on, a process it starts among them. */
   jobs(actor: BoundActor): AdoptsJobs;
+  /** Where the workspace's computer processes run as jobs end. */
+  processEnds(): Pick<ComputerProcessEnds, 'ended'>;
   /** The loop origin a creation site named for this actor, or null for the kind's default. */
   chosenLoopOrigin(record: WorkspaceActor): LoopOrigin | null;
   /**
@@ -209,6 +212,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
         // The workspace's own actor's, or a hire's: a decision wakes either. A swarm head has none, as no drain resumes it.
         deferrals: () => (bound.record.origin === 'swarm' ? undefined : seams.deferrals(bound.handle.actorId)),
         jobs: () => seams.jobs(bound),
+        processEnds: () => seams.processEnds(),
         // The chat's authority: a self-resolved profile could differ from the turn's and make a search unreproducible.
         resolveProfile: async () => (await seams.resolveProfile({
           actor: bound.handle, availableTools: [], workMode: 'build',

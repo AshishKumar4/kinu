@@ -320,6 +320,22 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** Main's chat, in its own isolate (D9): a turn is open there. */
   harnessMainTurnInFlight(): boolean { return this.mainChatTurn() !== null; }
+
+  /** A computer's process run as the workspace agent's job, as the computer's `startProcess` makes one. */
+  async harnessComputerProcessJob(jobId: string, processId: string): Promise<void> {
+    await this.jobRunner.adopt({
+      jobId, kind: 'startProcess', mode: 'build', controller: new AbortController(),
+      promise: this.processEnds.ended(jobId).then((end) => ({ processId, ...end })),
+      input: { command: 'npm run dev', cwd: '/workspace/app', processId, machine: 'computer', job: jobId },
+    });
+  }
+
+  /** A job of the workspace agent's, as its store holds it. */
+  harnessJob(jobId: string): { readonly status: string; readonly result: string | null } | null {
+    const job = this.jobs.get(jobId);
+
+    return job === null ? null : { status: job.status, result: job.result };
+  }
   /** The owner's Stop of main's chat, as its window sends it. */
   async harnessStopMain(): Promise<void> { await this.cancelCurrentWork(); }
   /** The owner's words to main, admitted as its window admits them; resolves once reserved. */

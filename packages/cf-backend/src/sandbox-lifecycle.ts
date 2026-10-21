@@ -7,6 +7,7 @@
 
 import { Effect } from 'effect';
 import * as v from 'valibot';
+import type { ComputerProcessEnd } from '@kinu.run/core';
 import type { DevboxIncident, IncidentStage, RestoreClockPhase } from '@kinu.run/devbox';
 // Pure subpath: the barrel loads `cloudflare:workers`, which exists only under workerd.
 import { INCIDENT_REASON_MAX_CHARS } from '@kinu.run/devbox/incidents';
@@ -136,6 +137,14 @@ function readDeliveryState(
 export interface SandboxLifecycleDeps {
   readonly sql: SqlExecutor;
   readonly inbox: AgentInbox;
+  /**
+   * A computer's process run as a job: its end settles the job (`ComputerProcessEnds`), its restore is noted to it
+   * (`runner.note`). The job's own wake tells the agent, so no incident text does.
+   */
+  readonly jobs?: {
+    readonly ended: (jobId: string, end: ComputerProcessEnd) => void;
+    readonly restored: (jobId: string, note: { readonly id: string; readonly text: string }) => Promise<void>;
+  };
   /** Required: an absent instrument looks exactly like a quiet fleet. */
   readonly recordRecovery: (row: Omit<RecoveryRowInput, 'workspace'>) => void;
   readonly logActivity?: (event: string, detail?: string) => void;
@@ -217,6 +226,19 @@ export function acceptSandboxLifecycleIncident(
       (incident_id, first_seen_at, outcome)
     VALUES (${incident.incidentId}, ${now}, NULL)
     ON CONFLICT(incident_id) DO NOTHING`;
+
+    // A job's process: the job tells its agent, and the incident is announced as the job's.
+    const { job } = incident;
+
+    if (job !== undefined && deps.jobs !== undefined && (incident.stage === 'process-ended' || incident.stage === 'process-restored')) {
+      if (incident.stage === 'process-ended') deps.jobs.ended(job, { ...(incident.exitCode !== undefined && { exitCode: incident.exitCode }), tail: incident.reason });
+      else yield* attempt({ doing: "noting a computer process's restore to its job", otherwise: 'io' }, () => deps.jobs?.restored(job, { id: incident.incidentId, text: incidentText(incident) }) ?? Promise.resolve());
+
+      void deps.sql`UPDATE sandbox_lifecycle_incidents SET outcome = ${'queued'} WHERE incident_id = ${incident.incidentId}`;
+      recordSettlement('ok', '');
+
+      return { status: 'queued', incidentId: incident.incidentId, duplicate: false };
+    }
 
     const metadata: JsonObject = {
       incidentId: incident.incidentId,

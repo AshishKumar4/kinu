@@ -48,7 +48,7 @@ function actorJobs() {
 function computerBox() {
   const starts: { command: string; job: string | undefined; stamp: string | undefined }[] = [];
   const stopped: string[] = [];
-  const ends = new Map<string, ReturnType<typeof Promise.withResolvers<ComputerProcessEnd>>>();
+  const ends = new Map<string, { promise: Promise<ComputerProcessEnd>; resolve(end: ComputerProcessEnd): void }>();
 
   const endOf = (jobId: string) => {
     const known = ends.get(jobId) ?? Promise.withResolvers<ComputerProcessEnd>();
