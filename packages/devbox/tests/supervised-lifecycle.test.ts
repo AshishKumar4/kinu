@@ -628,8 +628,9 @@ describe('a supervised process that runs as a job', () => {
       const next = entry === 'start' ? box.startSupervised(COMMAND, undefined, {}, { job: 'bgjob-second' }) : box.stopSupervised(first.processId);
       let waited = false;
 
+      // The fake answers on promises alone: after one turn, all that can run has run, and one still unanswered waits.
       try {
-        waited = await Promise.race([next.then(() => false), new Promise<boolean>((resolve) => { setTimeout(() => { resolve(true); }, 50); })]);
+        waited = await Promise.race([next.then(() => false), new Promise<boolean>((resolve) => { setImmediate(() => { resolve(true); }); })]);
       } finally {
         paused.release();
         await beating;
