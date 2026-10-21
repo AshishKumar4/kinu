@@ -782,16 +782,6 @@ export const SUPPLY = new Map<string, Supply>([
     absent: 'previews and shares are addressed on 443, where a deployed zone serves them. Only '
       + '`vite dev` sets it, for its own loopback zone (packages/cf-backend/vite-preview-zone.ts).',
   }],
-  ['CLOUDFLARE_DEPLOY_CLIENT_ID', {
-    handling: 'config-var',
-    required: false,
-    absent: 'the Cloudflare half of /deploy renders as not configured and refuses to start a '
-      + 'run; `kinu deploy local` is unaffected. Set in `vars` (wrangler.jsonc, both environments): '
-      + 'a PKCE client has no secret to pair it with.',
-    source: 'the self-managed OAuth client registered for the deploy door, with PKCE, redirect '
-      + 'https://kinu.run/deploy/callback plus a localhost redirect for the CLI door, and the scopes in '
-      + 'docs/SELF-DEPLOY.md § The Cloudflare door.',
-  }],
   ['KINU_FIRST_OWNER_LINK', {
     handling: 'out-of-band',
     required: false,

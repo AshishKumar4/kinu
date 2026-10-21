@@ -634,7 +634,12 @@ export class DeployRunDO extends DurableObject<Env> {
       const now = this.now();
       const session = yield* Effect.promise(async () => this.ctx.storage.get<number>(SESSION_UNTIL_KEY));
 
-      if (session !== undefined && session <= now) return yield* Effect.promise(async () => this.deleteSelf('deploy.session_ended'));
+      if (session !== undefined && session <= now) {
+        const run = yield* Effect.promise(async () => this.deleteSelf());
+
+        return diagnostics.event('deploy.session_ended', { run });
+      }
+
       const grantUntil = yield* Effect.promise(async () => this.ctx.storage.get<number>(GRANT_UNTIL_KEY));
 
       if (session === undefined && grantUntil !== undefined && grantUntil <= now) {
@@ -647,7 +652,12 @@ export class DeployRunDO extends DurableObject<Env> {
 
       const retain = yield* Effect.promise(async () => this.ctx.storage.get<number>(RETAIN_KEY));
 
-      if (retain !== undefined && retain <= now) return yield* Effect.promise(async () => this.deleteSelf('deploy.run_retired'));
+      if (retain !== undefined && retain <= now) {
+        const run = yield* Effect.promise(async () => this.deleteSelf());
+
+        return diagnostics.event('deploy.run_retired', { run });
+      }
+
       yield* Effect.promise(async () => this.arm());
     });
   }
@@ -775,7 +785,7 @@ export class DeployRunDO extends DurableObject<Env> {
     await this.ctx.storage.delete([...dropped, GRANT_UNTIL_KEY]);
 
     if (!own && this.rows().length === 0 && await this.plan() === null) {
-      await this.deleteSelf('deploy.run_dropped');
+      diagnostics.event('deploy.run_dropped', { run: await this.deleteSelf() });
 
       return true;
     }
@@ -787,12 +797,14 @@ export class DeployRunDO extends DurableObject<Env> {
     return false;
   }
 
-  private async deleteSelf(event: `deploy.${string}`): Promise<void> {
+  /** Everything this run kept, deleted, its schema made again empty; the run it was, for the caller's event. */
+  private async deleteSelf(): Promise<string> {
     const run = await this.runId();
 
     await this.ctx.storage.deleteAll();
     this.initSchema();
-    diagnostics.event(event, { run });
+
+    return run;
   }
 
   /**
