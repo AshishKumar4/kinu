@@ -20,15 +20,15 @@
  *                                                     the pre-upload gate, which defers exactly the rows it deleted
  *   bun scripts/reset.ts served <environment>         the build the deployment serves, which a tables plan diffs from
  *   bun scripts/reset.ts stamps <environment>         the classes whose stamp the candidate moves; exit 3 if any
- *   bun scripts/reset.ts census <environment> <out>   every table's rows on every object, for a diff
+ *   bun scripts/reset.ts census <environment> <out>   every table's rows and their digest on every object, for a diff
  *   bun scripts/reset.ts tables-plan <environment> <record> [--from <sha>]
- *                                                     before the upload: what each object's repair of the tables
- *                                                     the release changed will do, and what refuses
+ *                                                     before the upload: every table each class drops (those the
+ *                                                     release changed, and what refers to them), and what refuses
  *   bun scripts/reset.ts tables-record <environment> <record>
  *                                                     just before the upload: the plan's record published as the
  *                                                     rollback barrier
  *   bun scripts/reset.ts tables <environment> <record>
- *                                                     after it: every object opened, so each repairs itself, and
+ *                                                     after it: every object opened, so each resets itself, and
  *                                                     its census (scripts/tables-reset.ts)
  */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -50,7 +50,7 @@ import {
 import { servedHealth } from './served-health';
 import { readGenesisLockText } from './schema-drift';
 import {
-  censusLines, changedTables, confirmation, listedObjects, planLines, regenerableIn, verdictOf, walk, walkLines, writeLines, type TablesTarget,
+  censusLines, changedTables, confirmation, derivedIn, listedObjects, planLines, referrersOf, verdictOf, walk, walkLines, writeLines, type TablesTarget,
 } from './tables-reset';
 import { OPS_PASS_PREFIX } from '@kinu.run/core';
 
@@ -641,17 +641,16 @@ export function releaseVerdicts(from: string, repo = process.cwd()) {
 
   const changed = [...lockDiff.changed, ...retired].sort((a, b) => a.table.localeCompare(b.table));
   const { added } = lockDiff;
-  const declared = (table: string) => Object.keys(after).find((key) => key.startsWith(`${table}@`))?.slice(table.length + 1);
 
-  const verdicts = changed.map((table) => {
-    const file = declared(table.table);
-    // A retired table's declaring file is gone from the candidate: the build it is retired from declared it.
-    const source = file === undefined ? null : fileAt(repo, table.change === 'removed' ? from : 'HEAD', file);
+  const direct = changed.map((table) => verdictOf(table, { to: after, classes }));
+  // Each object drops what refers to a dropped table, or is derived from one, with it, so the plan names those too.
+  // A lock entry may name a file the candidate retired with its table; the candidate's own files are what it declares.
+  const held = new Set(Bun.spawnSync(['git', 'ls-tree', '-r', '--name-only', 'HEAD'], { cwd: repo }).stdout.toString().split('\n'));
+  const files = [...new Set(Object.keys(after).map((key) => key.slice(key.indexOf('@') + 1)))].filter((file) => held.has(file));
+  const derived = new Map(files.flatMap((file) => [...derivedIn(fileAt(repo, 'HEAD', file))]));
+  const verdicts = [...direct, ...referrersOf(direct, { to: after, classes, derived })];
 
-    return verdictOf(table, { from: before, to: after, classes, regenerable: source === null ? null : regenerableIn(source, table.table) });
-  });
-
-  return { changed, added, verdicts };
+  return { changed: [...changed, ...verdicts.slice(direct.length).map(({ table }) => ({ table, change: 'reshaped' as const }))], added, verdicts };
 }
 
 /** The class stamps a commit's build carries, or none for a build before stamps were per class. */
@@ -675,19 +674,19 @@ async function planTables(input: { environment: InfraEnvironment; recordFile: st
   if (candidate.startsWith(from.slice(0, 7))) throw new Error(`${origin(config)} already serves ${candidate}: name the build it served before with --from <sha>`);
   const { changed, added, verdicts } = releaseVerdicts(from);
 
-  console.log(`tables: ${from} → ${candidate} on ${config.name ?? ''}; each database repairs itself the first time the candidate opens it`);
+  console.log(`tables: ${from} → ${candidate} on ${config.name ?? ''}; each database drops these tables the first time the candidate opens it`);
 
   for (const line of planLines(verdicts, added)) console.log(`tables: ${line}`);
 
   if (verdicts.some((verdict) => verdict.does === 'refuse')) {
-    console.error('tables: REFUSED before the upload: the repairs above would leave databases refused. Nothing was uploaded.');
+    console.error('tables: REFUSED before the upload: the resets above would leave databases refused. Nothing was uploaded.');
 
     return 1;
   }
 
   const words = confirmation(verdicts);
 
-  if (environment === 'production' && words !== null && !await confirmedAtTerminal(words, 'repair production\'s databases, losing the rows of exactly these tables where they are held')) {
+  if (environment === 'production' && words !== null && !await confirmedAtTerminal(words, 'drop exactly these tables in production\'s databases, and every row they hold')) {
     console.error(`tables: not confirmed at a terminal with '${words}'; nothing was uploaded.`);
 
     return 1;

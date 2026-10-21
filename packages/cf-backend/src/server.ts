@@ -105,7 +105,7 @@ export { UserDO } from "./user/user-do";
 
 // Mossaic Drive DOs, renamed to avoid clashing with `UserDO`; the SDK
 // addresses them by binding name (`MOSSAIC_USER`, `MOSSAIC_SHARD`).
-export { UserDO as MossaicUserDO, ShardDO as MossaicShardDO } from "@mossaic/sdk";
+export { MossaicUserDO, MossaicShardDO } from "./drive/mossaic-objects";
 
 export { MonitorDO } from "./monitor/monitor-do";
 

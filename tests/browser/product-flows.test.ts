@@ -92,8 +92,13 @@ describe(productFlowTestName('welcome', 'the product reaches its home page'), ()
     observed = await flowRow('welcome', reachesHome);
   });
 
-  test('through setup when the account has not done it, and straight there when it has', () => {
-    expect(verdictOf(observed, 'welcome').landedAt).toBe('/');
+  // Setup's default installs the Personal assistant, and Home is its chat (389aac88a); an account set up before keeps
+  // the Home it chose.
+  test('through setup onto the assistant\'s chat when the account has not done it, and straight there when it has', () => {
+    const welcome = verdictOf(observed, 'welcome');
+
+    expect(welcome.landedAt).toBe('/');
+    expect(!welcome.welcomed || welcome.assistantHome).toBe(true);
   });
 });
 
@@ -525,6 +530,15 @@ describe(productFlowTestName('drive', 'what a person does in the Drive page is k
   });
 });
 
+/** Where a first visit to `/drive` lands for what the account holds. */
+function landingFor(opened: DriveOpensVerdict): string {
+  if (opened.mineHolds) return '/drive';
+
+  if (opened.places.includes('slates')) return '/slates';
+
+  return opened.places.includes('shared') ? '/shared' : '/drive';
+}
+
 describe(productFlowTestName('drive-opens', 'the Drive opens and draws nothing empty'), () => {
   let observed: DriveOpensVerdict | null = null;
 
@@ -532,11 +546,11 @@ describe(productFlowTestName('drive-opens', 'the Drive opens and draws nothing e
     observed = await flowRow('drive-opens', driveOpens);
   });
 
-  // The approved design (42f40a419, `landingPlace`): Slates first when there is one, as 8f9598ea1 built it.
-  test('on Slates when there is one, else on My stuff or Shared for an account that owns nothing yet, its sidebar row lit', () => {
+  // The approved design since b6067fb3a (owner, 2026-10-19): files first, DrivePage's `landing`.
+  test('on My stuff when it holds anything, else on Slates when there is one, else on Shared or My stuff, its sidebar row lit', () => {
     const opened = verdictOf(observed, 'drive-opens');
 
-    expect(opened.places.includes('slates') ? ['/slates'] : ['/drive', '/shared']).toContain(opened.landedAt);
+    expect(opened.landedAt).toBe(landingFor(opened));
     expect(opened.sidebarLit).toBe(true);
   });
 

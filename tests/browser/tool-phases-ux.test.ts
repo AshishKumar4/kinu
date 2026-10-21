@@ -117,7 +117,10 @@ describe('a long turn, in the real chat', () => {
     await withGallery(async ({ newPage, origin }) => {
       const live = await opened(newPage, origin, '&at=37&lines=asked');
 
-      // The settled phases above the running one ask; the stub finds no committed answer and writes nothing.
+      // Running first: the workspace's claim on the turn arrives after the page's first draw, and the page may ask before it
+      // (armada, 2026-10-20). Then the settled phases above the running one ask; the stub finds no committed answer and
+      // writes nothing.
+      await live.waitForSelector('[data-tool-run="live"]');
       await live.waitForFunction(() => (document.documentElement.dataset.phaseLinesAsked ?? '').includes('lt-a1'));
       expect(await live.evaluate(() => ({
         running: document.querySelector('[data-tool-run="live"]') !== null,

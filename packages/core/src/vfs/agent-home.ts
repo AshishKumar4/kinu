@@ -123,7 +123,8 @@ export function agentCred(identity: AgentIdentity): VfsCred {
 
 const IDENTITY_TABLE = 'kinu_agent_identity';
 
-function ensureIdentityTable(sql: SqlDatabase): void {
+/** Made on first use (a workspace's boot, a facet's first home); a repair's trial reads its shape from here too. */
+export function ensureIdentityTable(sql: SqlDatabase): void {
   sql.exec(
     `CREATE TABLE IF NOT EXISTS ${IDENTITY_TABLE} (
        agent_name TEXT PRIMARY KEY,

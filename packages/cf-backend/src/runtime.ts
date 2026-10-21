@@ -1,4 +1,6 @@
 import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
+import type { ComputerProcessEnds } from '@kinu.run/core';
+import type { ToolSet } from 'ai';
 /**
  * CF runtime adapter: bridges the Agents DO context to core's AgentRuntime. One Durable Object per
  * workspace; VFS, shell, memory and craft stores all live in the owning actor's `ctx.storage.sql`.
@@ -8,10 +10,10 @@ import type { AgentRuntime, ActorHandle, RoutedLLM, Schedule, Identity, SqlExecu
 import {
   objectNamed,
   nimbusSessionShell, createShellSession,
-  DefaultExecutionRouter, createNimbusWorkspaceExecutor,
+  DefaultExecutionRouter, createNimbusWorkspaceExecutor, processRetryTool,
   workspaceFilePlane, standardMounts, contextMount, skillsMount, type WorkspacePrincipal,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
-  withApprovalGatedShell, withApprovalGatedFiles, createInheritedApprovalPolicy, holdsGrant,
+  withApprovalGatedShell, hostedToolFiles, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   createSandboxExecutor, createDeviceTunnelExecutor, soleLiveDevice, type DeviceTransport,
   type WorkspaceFiles,
@@ -23,7 +25,7 @@ import {
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
 import { JOB_STAMP_ENV, withCommandEnvironment, withHostedNodeExecution, WORKSPACE_ROOT, type CommandEnvironment, type Holds, type PortHolders, cloudPlanes, holdConfig } from '@kinu.run/core';
-import type { ActorReference, HostedNodeHome, InvocationSurface, ProviderAccounts, TierRefusals } from '@kinu.run/core';
+import type { ActorReference, AdoptsJobs, HostedNodeHome, InvocationSurface, ProviderAccounts, TierRefusals } from '@kinu.run/core';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
@@ -56,7 +58,7 @@ import {
   userCredentials,
 } from "./providers/agent-registry";
 import { ownerCaller, type UserCaller } from "@kinu.run/core";
-import { adaptMemory, backfillMemoryVectors } from "@kinu.run/core";
+import { adaptMemory, backfillMemoryVectors, forgetMemoryVectors } from "@kinu.run/core";
 import { actorAffinity } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 import { workspaceServingScope, type HostedBox, type WorkspaceServing } from "./workspace-host";
@@ -198,6 +200,8 @@ function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCre
 export type CFRuntime = AgentRuntime & {
   /** The reflection lane: routed, so it answers to a schema where a fast lane is absent. */
   llm: RoutedLLM;
+  /** The workspace memory's vectors deleted, as the workspace is (`forgetMemoryVectors`): its teardown's alone. */
+  forgetMemoryVectors(): Promise<void>;
   /** Also what the parent-file RPC serves a fork, so a fork reads exactly its parent's bytes. */
   localVfs: WorkspaceFiles;
   /** `refreshStatus()` is awaited at turn start. */
@@ -205,6 +209,8 @@ export type CFRuntime = AgentRuntime & {
   vectorStore: import("@kinu.run/core").VectorStore;
   startupWork: Promise<void>;
   sandboxHandle: SandboxHandle | null;
+  /** A process job's retry: its command started again on this actor's workspace box (`processRetryTool`). */
+  processRetry: ToolSet[string];
   /**
    * Which job holds each exposed port, the workspace's and the box's, read without the executor's touch. The box is read
    * only once this activation used it: a call activates the box's object, and only real use keeps a box alive (D56).
@@ -227,7 +233,7 @@ export interface CFRuntimeHooks {
   /** Read at exec time, as resolving during construction re-enters the runtime getter. Undefined (head,
      *  subordinate): no queue, so 'strict' refuses. */
   deferrals?: () => DeferredApprovalChannel | undefined;
-  slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
+  slate?: (operation: SlateOperation, turn?: string) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
   liveReadsMoved?: (reads: readonly LiveRead[]) => void;
   /** A computer port was exposed or withdrawn, which can change the job that serves it; awaited by the call. */
@@ -246,6 +252,10 @@ export interface CFRuntimeHooks {
   /** The actor's uid on both planes, or neither: split credentials measured `EACCES` on its own home
      *  and could write a sibling's. */
   workspaceExecution?: HostedNodeHome;
+  /** The actor's jobs, a process it starts among them; read at the call, as its runner is built over this runtime. */
+  jobs: () => AdoptsJobs;
+  /** Where its computer's processes run as jobs end, as the box tells it: the workspace object's, every actor's. */
+  processEnds: () => Pick<ComputerProcessEnds, 'ended' | 'state'>;
   /** `children` is opened under the actor host's directory authority, never by a caller knowing an id. */
   contextPlane?: {
     readonly actorId: string;
@@ -391,12 +401,11 @@ export function createCFRuntime(
     mounts, principal, home, ...(hooks.workspaceObserver !== undefined && { observer: hooks.workspaceObserver }),
   });
 
-  const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
-    planes, resolve: (path, follow, creating) => agentFileVfs.resolve(path, { follow, creating }), userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
-  }, approvalPolicy);
+  const toolFiles = hostedToolFiles(agentFileVfs, planes, approvalPolicy);
 
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
+    jobs: { adopt: async (request) => await hooks.jobs().adopt(request) },
     shellSession,
     // Declared exactly when NIMBUS_RUNTIME_CACHE is bound: without it there is nothing to install.
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
@@ -454,6 +463,12 @@ export function createCFRuntime(
         // The box's desktop has one driver at a time; each of the workspace's agents drives as itself.
         desktop: { driver: actor.actor.actorId, screen: { ...DESKTOP_SIZE, sheet: WATCH_SHEET } },
         environment: access.commandEnvironment,
+        // Each process it starts is a job of the actor's, which its box's word on the process's end settles.
+        processJobs: {
+          adopt: async (request) => await hooks.jobs().adopt(request),
+          ended: (jobId) => hooks.processEnds().ended(jobId),
+          state: (jobId) => hooks.processEnds().state(jobId),
+        },
       }));
       diagnostics.event('computer.executor_registered', {
         sandboxId,
@@ -585,7 +600,9 @@ export function createCFRuntime(
     localVfs: baseWorkspaceVfs,
     deviceTransport,
     vectorStore,
+    forgetMemoryVectors: () => forgetMemoryVectors(memoryStore, { store: vectorStore }),
     sandboxHandle,
+    processRetry: processRetryTool(executionBox),
     portHolders: () => {
       const box = hooks.boxUse.used && previewSuffix !== undefined && sandboxHandle !== null ? sandboxHandle : null;
       let workspace: Promise<WorkspaceServing> | undefined;

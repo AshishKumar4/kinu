@@ -736,7 +736,7 @@ export class LocalAgentSession {
       },
       // The frame a cloud workspace sends for the same rows, so every terminal re-reads the queue one way.
       announce: () => {
-        this.host.broadcast({ type: READS_CHANGED_EVENT, reads: readsOfTables(['deferred_approvals']) });
+        this.host.broadcast({ type: READS_CHANGED_EVENT, reads: readsOfTables(['owner_requests']) });
         // What waits on the owner moved: each wait it now meets wakes its agent, in the session's join set.
         this.tracked(() => this.ownerWaitsChanged());
       },

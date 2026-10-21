@@ -118,7 +118,6 @@ export const ForkOwnerQuestionRowSchema = v.object({
   status: v.picklist(['answered', 'dismissed', 'in_chat']),
   answers_json: v.nullable(v.string()),
   asked_at: v.number(),
-  closed_at: v.nullable(v.number()),
 });
 
 /** One of the `db` tool's tables, as its declaration's JSON text (the store checks it as it checks any declaration),

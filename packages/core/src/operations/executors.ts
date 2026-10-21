@@ -12,6 +12,14 @@ import { FILE } from './file';
 
 const Command = v.pipe(v.string(), v.nonEmpty());
 
+/** Where a workspace command runs: said by the `shell` tool and by a program's `child_process`. */
+export const EXEC_RUNS_WHERE_ITS_CWD_IS = 'A command whose cwd is under /computer runs on the computer, under /pc/<name> on that machine, '
+  + 'and anywhere else in the workspace; a `cd` inside the command does not move it.';
+
+/** When a command answers, on every machine: said by its `exec` and by the `shell` tool. */
+export const EXEC_ANSWERS_AT_EXIT = 'It answers when the command itself exits: a process it starts in the background keeps running, '
+  + 'and what that process writes afterwards is not returned.';
+
 const Text = v.string();
 
 /** An executor's member; Plan keeps only what observes. */
@@ -40,7 +48,7 @@ function machineMembers<const O extends v.ObjectEntries>(op: MachineOp, option: 
       exec: op({
         name: 'exec', impact: 'execute', output: v.union([Text, v.strictObject({ stdout: v.string(), stderr: v.string(), exitCode: v.number() })]),
         help: 'Run a shell command on this machine. Each call starts fresh in `cwd` (default its home) unless it names a shell, '
-          + 'which keeps its directory and exported variables.',
+          + `which keeps its directory and exported variables. ${EXEC_ANSWERS_AT_EXIT}`,
         input: input({
           command: Command,
           cwd: v.optional(described(v.string(), 'Where the command starts.')),
@@ -55,7 +63,10 @@ function machineMembers<const O extends v.ObjectEntries>(op: MachineOp, option: 
         help: 'Start a long-running process in the background, such as a server; it returns while the process runs. Put '
           + 'variables at the head of the command (`PORT=4100 node server.js`). `logs` reads what it writes, `stopProcess` ends it.',
         input: input({ command: Command, cwd: v.optional(described(v.string(), 'Where it starts; default its home.')) }),
-        output: v.strictObject({ processId: v.string() }),
+        output: v.strictObject({
+          processId: v.string(),
+          jobId: v.optional(described(v.string(), 'The background job it runs as on the workspace: its end wakes you.')),
+        }),
       }),
       stopProcess: op({
         name: 'stopProcess', help: 'End a process `startProcess` started.', impact: 'administer',

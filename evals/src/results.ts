@@ -2,7 +2,7 @@
 // renderer read it. Every object is loose: the reporter adds fields freely and only these are relied on.
 import { basename } from 'node:path';
 import * as v from 'valibot';
-import { JsonValueSchema, summarizeSteps, type RunEvent } from '@kinu.run/core';
+import { BACKGROUND_POLICY, BackgroundHandleSchema, backgroundedBy, JsonValueSchema, summarizeSteps, type JsonValue, type RunEvent } from '@kinu.run/core';
 import { TURN_OUTCOMES } from './task';
 
 const JsonRecordSchema = v.record(v.string(), JsonValueSchema);
@@ -51,6 +51,21 @@ export type ToolFailure = v.InferOutput<typeof ToolFailureSchema>;
  *  the last, in percent. An account's window is shared by every trial on it, so a delta is an upper bound. */
 const PlanUsageSchema = v.object({ account: v.string(), measure: v.string(), from: v.number(), to: v.number() });
 
+/** A tool call the agent waited on: the actor that made it, its tool, what it ran (a shell's command, a program's
+ *  opening lines), and how long the agent waited on it (a call moved to the background, until it moved). */
+const WaitedCallSchema = v.object({ actor: v.string(), tool: v.string(), ran: v.string(), wallMs: v.number() });
+
+/** Where a trial's agent waited (`measureWaits`). */
+const TrialWaitsSchema = v.object({
+  /** Each shell command or program that became a job, and what moved it: its foreground window, or a person writing. */
+  backgrounded: v.array(v.object({ ...WaitedCallSchema.entries, by: v.picklist(['window', 'person']) })),
+  /** The trial's slowest calls, slowest first. */
+  slowest: v.array(WaitedCallSchema),
+  /** How long its calls held the agent past the 30 s a person-watched turn waits: what the 300 s window of a turn a
+   *  wake started costs the trial. */
+  pastInteractiveMs: v.number(),
+});
+
 export type PlanUsage = v.InferOutput<typeof PlanUsageSchema>;
 
 const CacheSchema = v.object({
@@ -92,6 +107,7 @@ export const HarnessRunSchema = v.looseObject({
       providerWaitMs: v.pipe(v.number(), v.minValue(0)),
     }),
     toolFailures: v.optional(v.array(ToolFailureSchema), []),
+    waits: v.optional(TrialWaitsSchema, { backgrounded: [], slowest: [], pastInteractiveMs: 0 }),
     turns: v.array(v.looseObject({
       part: v.pipe(v.string(), v.minLength(1)),
       turn: v.pipe(v.number(), v.integer(), v.minValue(1)),
@@ -170,6 +186,46 @@ export function steadyCacheP5(runs: readonly (readonly StepUsage[])[]): number |
   const rates = steadySteps(runs).map((step) => step.cached / step.prompt).sort((left, right) => left - right);
 
   return rates.length === 0 ? null : rates[Math.max(1, Math.ceil(0.05 * rates.length)) - 1] ?? null;
+}
+
+export type WaitedCall = v.InferOutput<typeof WaitedCallSchema>;
+
+export type TrialWaits = v.InferOutput<typeof TrialWaitsSchema>;
+
+/** The slowest calls a trial keeps. */
+const SLOWEST_PER_TRIAL = 5;
+
+/** What a call ran, as a reader scans for it: a shell's command, a program's opening, else its input. */
+function ranBy(args: JsonValue | undefined): string {
+  const shell = v.safeParse(v.object({ command: v.string() }), args);
+  const program = v.safeParse(v.object({ code: v.string() }), args);
+  let text = JSON.stringify(args ?? null);
+
+  if (shell.success) text = shell.output.command;
+  else if (program.success) text = program.output.code;
+
+  return text.replace(/\s+/gu, ' ').trim().slice(0, 160);
+}
+
+/** Where a trial's agent waited, over every actor's ledger: each shell command or program that became a job, and the
+ *  trial's slowest calls. A call's wall time is the wait it caused: a backgrounded one's ends where it moved. */
+export function measureWaits(ledgers: readonly ActorLedger[]): TrialWaits {
+  const calls = ledgers.flatMap(({ actor, events }) => events.flatMap((event) => (event.type === 'tool_call_end' && event.durationMs !== undefined
+    ? [{ call: { actor, tool: event.name, ran: ranBy(event.args), wallMs: event.durationMs }, result: event.result }]
+    : [])));
+
+  const backgrounded = calls.flatMap(({ call, result }) => {
+    // A spawn hands back its job by design; only a shell command or a program waits out a window.
+    const handle = v.safeParse(BackgroundHandleSchema, result);
+
+    return handle.success && (call.tool === 'shell' || call.tool === 'eval') ? [{ ...call, by: backgroundedBy(handle.output) }] : [];
+  });
+
+  return {
+    backgrounded,
+    slowest: calls.map(({ call }) => call).sort((a, b) => b.wallMs - a.wallMs).slice(0, SLOWEST_PER_TRIAL),
+    pastInteractiveMs: calls.reduce((sum, { call }) => sum + Math.max(0, call.wallMs - BACKGROUND_POLICY.interactive.detachAfterMs), 0),
+  };
 }
 
 /** Each plan window's use over a trial, from the quota its calls' answers carried (`PlanUsage`). */

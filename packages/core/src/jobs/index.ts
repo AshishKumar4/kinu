@@ -20,7 +20,7 @@ export {
   readDeviceRequestChannel,
   RESUME_REDRIVE_OPTION,
   readResumeRedrive,
-  type BackgroundHandle,
+  type BackgroundHandle, BackgroundHandleSchema, backgroundedBy,
   type BackgroundPolicy,
   type DetachOutcome,
   type InvocationSurface, InvocationSurfaceSchema,
@@ -75,6 +75,6 @@ export {
   type BackgroundableTool,
 } from './background-wrap';
 
-export { JOB_STAMP_ENV } from '../types/jobs';
+export { JOB_STAMP_ENV, type AdoptsJobs, type JobAdoption } from '../types/jobs';
 
 export { recordServingJobs, type PortHolders, type ServingScope } from './serving';

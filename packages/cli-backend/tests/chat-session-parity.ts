@@ -140,6 +140,9 @@ function sequencedModel(scripts: readonly TestLanguageModelV2[]): TestLanguageMo
     provider: 'fake',
     modelId: 'fake-model',
     doStream: (options) => {
+      // A structured call (the settled turn's sleep-time compute) is no step of the scripted turns: the scenario scripts
+      // none, so it is refused, without spending a turn's step.
+      if (options.responseFormat?.type === 'json') throw new Error('the scenario scripts no structured call');
       const script = scripts[next];
 
       if (script === undefined) throw new Error(`the scenario scripted ${String(scripts.length)} model calls and a ${String(next + 1)}th arrived`);

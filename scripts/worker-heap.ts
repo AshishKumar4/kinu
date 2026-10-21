@@ -29,6 +29,12 @@
  * On the same product the old read gave 143-154 MB or 165-170 MB as the race fell (b9c667740, 5724b7472); at settlement
  * it read 171.6-183.0 MB over 15 runs on 0d3f6491a. See {@link LONG_TURN_ALLOCATED_BOUND_BYTES}.
  *
+ * The idle row bounds data alone since 2026-10-20, and reports beside it the code V8 compiled for the step's turns. It
+ * bounded the live total at 4.0 MB in the workspace's isolate, against 2.55-2.58 MB read on 2026-10-12; by 44ce0e110 that
+ * read 3.9-4.0 MB, which snapshots at setup and idle split into 3.4 MB of code and 0.5-0.6 MB of data. The code had spent
+ * the margin a leak was to trip, and streaming the memory lane's structured call (667221f68, 0.2 MB more code and 15 kB
+ * more data) tripped it. Main's total, 6.6 MB under 7.9 MB, was 3.7 MB of code. See {@link IDLE_DATA_BOUND_BYTES}.
+ *
  * The planting probe proves each session reads the isolate it names: a buffer planted in one is found there, whole, and
  * in no other. Until 2026-10-12 it subtracted live heap totals, which any work crossing the read moves: red in 4 of 20
  * runs on 009c51396 and 8 of 20 on 8a71331cb (armada 20261012091025-eb23b0d7, 20261012091030-301e97ae), each reading
@@ -62,7 +68,7 @@ import * as v from 'valibot';
 import { ownerCaller } from '../packages/core/src/safety/workspace-capability';
 import { workersAiBinding } from '../packages/cf-backend/tests/helpers/workers-ai-binding';
 import { buildAgentBundle } from '../packages/cf-backend/vite-agent-bundle';
-import { inspect, inspectAll, type Allocations, type HeapMakeup, type Inspector } from './worker-heap/inspector';
+import { inspect, inspectAll, type Allocations, type HeapMakeup, type Inspector, type LiveHeap } from './worker-heap/inspector';
 import { REPO_ROOT } from './repo-root';
 
 
@@ -222,8 +228,15 @@ export const LONG_TURN_ALLOCATED_BOUND_BYTES = 295_000_000;
  *  there and 2.6-2.7 MB in main's over 3 runs once setup joins main's load and both are read. Those reads came before
  *  the turns ran: an admission answers once its turn is queued, and the read caught the third in flight with nine queued.
  *  Read once all twelve ended and settled, 2026-10-12: 2.55-2.58 MB in the workspace's and 6.57-6.58 MB in main's over 10
- *  runs (armada 20261012110831-e3858893, 20261012111603-1a3edf49), main's the twelve answers its conversation keeps. */
-export const IDLE_RETAINED_BOUND_BYTES = { workspace: 4_000_000, main: 7_900_000 } as const;
+ *  runs (armada 20261012110831-e3858893, 20261012111603-1a3edf49), main's the twelve answers its conversation keeps.
+ *  Those totals were bounded at 4.0 MB and 7.9 MB until 2026-10-20; since then the data alone is (the header says why).
+ *  Over 6 runs on b3afff5ab, 2026-10-20: 568-573 kB of data in the workspace's and 2873-2906 kB in main's, beside 3.6 and
+ *  3.7 MB of code; over 3 on 44ce0e110, before the memory lane's call streamed, 542-561 and 2900-2904 kB, beside 3.4 and
+ *  3.7 MB. Each bound is about the highest data read and 0.4 MB, two of the step's answers. Red on b3afff5ab, 2 runs each:
+ *  an answer of 0.2 MB kept a turn in each isolate, 2976-2977 kB in the workspace's and 5305-5308 kB in main's; the
+ *  driver answering the memory lane's structured call with prose, whose three log lines a turn the inspector's console
+ *  kept, 2951-2956 kB in the workspace's. */
+export const IDLE_DATA_BOUND_BYTES = { workspace: 1_000_000, main: 3_300_000 } as const;
 
 const WranglerSchema = v.object({
   compatibility_date: v.string(),
@@ -352,15 +365,39 @@ export const SCREENSHOT_TURN = { steps: 450, imageBytes: 200_000, distinct: 450,
  *  23.3 to 30.2 MB. The bound catches one screenshot in fifty held again. */
 export const SCREENSHOT_LIVE_GROWTH_BOUND_BYTES = 20_000_000;
 
-/** The CPU of main's isolate in the last three windows over that in the first three, each the middle of its three: one
- *  window alone read 0.78 to 1.52 over 36 runs once the turn was flat (2026-10-19: the tier on ba1e766a5 failed at 1.52
- *  on a busy host), the middle of three 0.97 to 1.33, mean 1.10, deviation 0.08. The bound is that mean and four
- *  deviations; 814a4ca80, every screenshot held, read 1.75, and the turn with only its room and codec cut 1.52. */
-export const SCREENSHOT_CPU_GROWTH_BOUND = 1.42;
+/**
+ * The CPU a step of the turn's last third takes in main's isolate over one of its first third's, each the mean of the
+ * cheaper half of its third's steps: a host busy with others only ever adds time to a step, so that half is the steps'
+ * own cost, and a regression raises every step's alike.
+ *
+ * Until 2026-10-21 the gate read the middle of the first three 50-step windows' CPU against the last three's, each
+ * window's profile its whole stretch of wall time while busy, so a host that slowed a run's later windows read as growth:
+ * 0.97 to 1.33 over 36 runs once the turn was flat (2026-10-19, mean 1.10, deviation 0.08, bound 1.42), and a rerun-green
+ * 1.43 (kinu-20261020234716-7217b75d, 2026-10-20; within a run, one window took 5.1 s and another 9.2 s for alike steps).
+ * Measured by step instead over 30 runs on 62b6c90c6 (armada heap-calib2-nextrc, 2026-10-21): 1.02 to 1.22, mean 1.104,
+ * deviation 0.043, against the window reading's 0.054 on the same runs. The bound is that mean and four deviations.
+ * 814a4ca80, every screenshot held, read 1.75 by windows, and the turn with only its room and codec cut 1.52: growth every
+ * step shares, which this reads alike.
+ */
+export const SCREENSHOT_CPU_GROWTH_BOUND = 1.28;
 
-/** The middle of three windows' CPU, so one window a busy host slowed reads as noise, not as growth. */
-function middleCpu(windows: readonly ScreenshotWindow[]): number {
-  return [...windows].map((each) => each.mainCpuMs).sort((a, b) => a - b)[Math.floor(windows.length / 2)] ?? 0;
+/** A step of the last third's cost over one of the first third's ({@link SCREENSHOT_CPU_GROWTH_BOUND}). */
+function stepCpuGrowth(steps: readonly number[]): number {
+  const third = Math.floor(steps.length / 3);
+
+  return stepCost(steps.slice(-third)) / stepCost(steps.slice(0, third));
+}
+
+/** `steps` cut into {@link SCREENSHOT_TURN}'s windows, in order. */
+function windowsOf(steps: readonly number[]): number[][] {
+  return Array.from({ length: Math.ceil(steps.length / SCREENSHOT_TURN.window) }, (_, at) => steps.slice(at * SCREENSHOT_TURN.window, (at + 1) * SCREENSHOT_TURN.window));
+}
+
+/** The mean of the cheaper half of `steps`' CPU: what a step costs with what other work on the host took left out. */
+function stepCost(steps: readonly number[]): number {
+  const cheaper = [...steps].sort((a, b) => a - b).slice(0, Math.max(1, Math.floor(steps.length / 2)));
+
+  return cheaper.reduce((sum, ms) => sum + ms, 0) / cheaper.length;
 }
 
 /** The workspace's isolate's live heap at the turn's last window beyond its first: its chat room held every relayed
@@ -402,6 +439,16 @@ function beyond(after: Isolates<number>, before: Isolates<number>): Isolates<num
   return { workspace: after.workspace - before.workspace, main: after.main - before.main };
 }
 
+/** {@link beyond}, the code V8 compiled meanwhile apart from the data. */
+function retainedApart(after: Isolates<LiveHeap>, before: Isolates<LiveHeap>): HeapMeasurement['idleRetained'] {
+  const data = (heap: LiveHeap) => heap.live - heap.code;
+
+  return {
+    data: beyond({ workspace: data(after.workspace), main: data(after.main) }, { workspace: data(before.workspace), main: data(before.main) }),
+    code: beyond({ workspace: after.workspace.code, main: after.main.code }, { workspace: before.workspace.code, main: before.main.code }),
+  };
+}
+
 /** Planted in each isolate in turn at the end of the run, under a marker of its own, and found by that marker: a gate
  *  that read the wrong isolate, or none, would bound nothing there. */
 export const PLANTED_BYTES = 4_000_000;
@@ -419,8 +466,9 @@ function plantingAssets(directory: string): string {
 export interface HeapMeasurement {
   /** What a step parked on the model holds live beyond the idle workspace before it, at {@link STEP}. */
   readonly stepLive: Isolates<number>;
-  /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup. */
-  readonly idleRetained: Isolates<number>;
+  /** What the idle workspace holds after {@link STEP}'s turns beyond right after setup: its data, and apart from it the
+   *  code V8 compiled for those turns. */
+  readonly idleRetained: { readonly data: Isolates<number>; readonly code: Isolates<number> };
   /** What a workspace holds live after each of two batches of {@link HEADS} heads was hosted and released, beyond before it. */
   readonly headsRetained: readonly number[];
   /** What a workspace holds live per finished task helper after {@link HELPERS} settle, beyond before them. */
@@ -455,16 +503,18 @@ export interface HeapMeasurement {
   readonly screenshotTurn: ScreenshotTurn;
 }
 
-/** Each window of {@link SCREENSHOT_TURN}: main's live heap at its end and CPU over it, and the workspace's live heap. */
+/** Each window of {@link SCREENSHOT_TURN}: main's and the workspace's live heap at its end. */
 export interface ScreenshotWindow {
   readonly through: number;
   readonly mainLive: number;
-  readonly mainCpuMs: number;
   readonly workspaceLive: number;
 }
 
 export interface ScreenshotTurn {
   readonly windows: readonly ScreenshotWindow[];
+  /** Each step's CPU in main's isolate, in order: from its answer's release to the next step's request, or the turn's
+   *  end. */
+  readonly stepCpuMs: readonly number[];
   /** Times its turn was re-driven (`turn.resumed`): a turn that died mid-way and was run again. */
   readonly redrives: number;
   readonly stepped: number;
@@ -552,7 +602,8 @@ export async function measure(): Promise<HeapMeasurement> {
       sessions.push(workspace);
       const stepIsolates = { workspace, main: await inspect(port, `${ISOLATE_NAMES.main} in the step's workspace`, mainOf(stepWorkspace)) };
       sessions.push(stepIsolates.main);
-      const setUp = await inEach(stepIsolates, async (session) => await session.liveHeap());
+      const setUpSplit = await inEach(stepIsolates, async (session) => await session.liveSplit());
+      const setUp = { workspace: setUpSplit.workspace.live, main: setUpSplit.main.live };
       const setupMakeup = await inEach(stepIsolates, async (session) => await session.makeup());
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}`);
       await inEach(stepIsolates, async (session) => { await session.sampleAllocations(); });
@@ -564,7 +615,8 @@ export async function measure(): Promise<HeapMeasurement> {
       await ask('/main-idle?workspace=heap');
       await ask('/quiesce?workspace=heap');
       const bindingTurnsAllocated = await inEach(stepIsolates, async (session) => await session.allocations());
-      const idle = await inEach(stepIsolates, async (session) => await session.liveHeap());
+      const idleSplit = await inEach(stepIsolates, async (session) => await session.liveSplit());
+      const idle = { workspace: idleSplit.workspace.live, main: idleSplit.main.live };
       const answered = streamsOpened;
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`);
       const parked = ask('/turn?workspace=heap&text=parked');
@@ -751,7 +803,7 @@ export async function measure(): Promise<HeapMeasurement> {
 
       const planted = { workspace: await plant('workspace'), main: await plant('main') };
 
-      return { screenshotTurn, planted, concurrentAgentsLive, failedPortRetained, failedPortCalls, coldStepLive, stepLive: beyond(during, idle), idleRetained: beyond(idle, setUp), headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
+      return { screenshotTurn, planted, concurrentAgentsLive, failedPortRetained, failedPortCalls, coldStepLive, stepLive: beyond(during, idle), idleRetained: retainedApart(idleSplit, setUpSplit), headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: beyond(lastLive, firstLive), longTurnAllocated, bindingTurnsAllocated, setupMakeup, live: { setUp, longTurnFirst: firstLive, longTurnLast: lastLive }, wide };
     } finally {
       for (const session of sessions) session.close();
     }
@@ -775,30 +827,31 @@ async function measureScreenshotTurn(ask: (path: string) => Promise<string>, por
     const before = redrives();
     const turn = ask('/turn?workspace=shots&text=shots');
     const windows: ScreenshotWindow[] = [];
+    const stepCpuMs: number[] = [];
 
     for (let step = 1; step <= steps; step++) {
       while (v.parse(v.object({ arrived: v.number() }), JSON.parse(await ask('/model'))).arrived < step) await Bun.sleep(1);
 
-      if (step % window === 1) {
-        await agent.sampleCpu();
-        // Read while the step is parked, as a pane opening on the running turn reads it.
-        await ask('/seed?workspace=shots');
-      }
+      // The step before ends where this one asks its model.
+      if (step > 1) stepCpuMs.push(await agent.cpuBusyMs());
 
-      if (step % window === 0) {
-        windows.push({ through: step, mainCpuMs: await agent.cpuBusyMs(), mainLive: await agent.liveHeap(), workspaceLive: await workspace.liveHeap() });
-      }
+      // Read while the step is parked, as a pane opening on the running turn reads it.
+      if (step % window === 1) await ask('/seed?workspace=shots');
 
+      if (step % window === 0) windows.push({ through: step, mainLive: await agent.liveHeap(), workspaceLive: await workspace.liveHeap() });
+
+      await agent.sampleCpu();
       await ask(`/model?released=${String(step)}`);
     }
 
     await turn;
+    stepCpuMs.push(await agent.cpuBusyMs());
     const { stepped } = v.parse(v.object({ stepped: v.object({ compat: v.number() }) }), JSON.parse(await ask('/model?released=1000000')));
 
     await ask('/main-idle?workspace=shots');
     await ask('/quiesce?workspace=shots');
 
-    return { windows, redrives: redrives() - before, stepped: stepped.compat };
+    return { windows, stepCpuMs, redrives: redrives() - before, stepped: stepped.compat };
   } finally {
     agent.close();
   }
@@ -820,10 +873,10 @@ function screenshotFindings(turn: ScreenshotTurn): string[] {
     out.push(`the screenshot turn holds ${mb(last.mainLive - first.mainLive)} more live in ${ISOLATE_NAMES.main} at step ${String(last.through)} than at ${String(first.through)}, over ${mb(SCREENSHOT_LIVE_GROWTH_BOUND_BYTES)}`);
   }
 
-  const growth = middleCpu(turn.windows.slice(-3)) / middleCpu(turn.windows.slice(0, 3));
+  const growth = stepCpuGrowth(turn.stepCpuMs);
 
   if (growth > SCREENSHOT_CPU_GROWTH_BOUND) {
-    out.push(`the screenshot turn's last three windows take ${growth.toFixed(2)} times its first three's CPU in ${ISOLATE_NAMES.main}, over ${String(SCREENSHOT_CPU_GROWTH_BOUND)}`);
+    out.push(`a step of the screenshot turn's last third takes ${growth.toFixed(2)} times one of its first third's CPU in ${ISOLATE_NAMES.main}, over ${String(SCREENSHOT_CPU_GROWTH_BOUND)}`);
   }
 
   if (last.workspaceLive - first.workspaceLive > SCREENSHOT_WORKSPACE_GROWTH_BOUND_BYTES) {
@@ -835,6 +888,11 @@ function screenshotFindings(turn: ScreenshotTurn): string[] {
 
 function mb(bytes: number): string {
   return `${(bytes / 1e6).toFixed(1)} MB`;
+}
+
+/** For a figure whose bound is under a megabyte or two, which {@link mb} would read to a tenth of it. */
+function kb(bytes: number): string {
+  return `${(bytes / 1e3).toFixed(0)} kB`;
 }
 
 function printAllocations(workload: string, allocated: Allocations): void {
@@ -967,8 +1025,8 @@ async function main(args: readonly string[]): Promise<number> {
       findings.push(`a parked step holds ${mb(measured.stepLive[isolate])} live in ${where} at ${transcript()}, over ${mb(STEP_LIVE_BOUND_BYTES[isolate])}`);
     }
 
-    if (measured.idleRetained[isolate] > IDLE_RETAINED_BOUND_BYTES[isolate]) {
-      findings.push(`the idle workspace holds ${mb(measured.idleRetained[isolate])} in ${where} after ${transcript()}, over ${mb(IDLE_RETAINED_BOUND_BYTES[isolate])}`);
+    if (measured.idleRetained.data[isolate] > IDLE_DATA_BOUND_BYTES[isolate]) {
+      findings.push(`the idle workspace holds ${kb(measured.idleRetained.data[isolate])} of data in ${where} after ${transcript()}, over ${kb(IDLE_DATA_BOUND_BYTES[isolate])}`);
     }
 
     if (measured.longTurnGrowth[isolate] > LONG_TURN_GROWTH_BOUND_BYTES[isolate]) {
@@ -1001,7 +1059,9 @@ async function main(args: readonly string[]): Promise<number> {
   findings.push(...workloadFindings(measured));
   findings.push(...screenshotFindings(measured.screenshotTurn));
   console.log(`${GATE}: a ${String(SCREENSHOT_TURN.steps)}-step screenshot turn, by ${String(SCREENSHOT_TURN.window)} steps: ${ISOLATE_NAMES.main} live `
-    + `${measured.screenshotTurn.windows.map((each) => mb(each.mainLive)).join(', ')}; its CPU ${measured.screenshotTurn.windows.map((each) => `${(each.mainCpuMs / 1000).toFixed(1)} s`).join(', ')}; `
+    + `${measured.screenshotTurn.windows.map((each) => mb(each.mainLive)).join(', ')}; a step's CPU there, its window's cheaper half, `
+    + `${windowsOf(measured.screenshotTurn.stepCpuMs).map((window) => `${stepCost(window).toFixed(0)} ms`).join(', ')} `
+    + `(its last third ${stepCpuGrowth(measured.screenshotTurn.stepCpuMs).toFixed(2)} times its first); `
     + `${ISOLATE_NAMES.workspace} live ${measured.screenshotTurn.windows.map((each) => mb(each.workspaceLive)).join(', ')}; re-driven ${String(measured.screenshotTurn.redrives)} time(s)`);
 
   // The churn is the turn's work, wherever it runs.
@@ -1013,14 +1073,16 @@ async function main(args: readonly string[]): Promise<number> {
 
   // Every figure, red or green, so two runs compare.
   console.log(`${GATE}: ${inEachIsolate(measured.live.setUp)} live after setup, a parked step holds ${inEachIsolate(measured.stepLive)} live at `
-    + `${transcript()}, the idle workspace holds ${inEachIsolate(measured.idleRetained)} after them, `
+    + `${transcript()}, the idle workspace holds ${kb(measured.idleRetained.data.workspace)} of data (main's isolate `
+    + `${kb(measured.idleRetained.data.main)}) and ${inEachIsolate(measured.idleRetained.code)} of code compiled for them, `
     + `${String(HEADS.count)} released heads leave ${measured.headsRetained.map((bytes) => mb(bytes)).join(' then ')}, a finished helper `
     + `${mb(measured.perHelperRetained)}, a running helper turn ${mb(measured.helperTurnLive)}, a helper waiting on its `
     + `own hire ${mb(measured.waitingParentLive)}, a ${steps} peaks at ${inEachIsolate(measured.longTurnPeak)} used, grows `
     + `${inEachIsolate(measured.longTurnGrowth)} live and allocates ${inEachIsolate(allocated)}; no wasm on the static graph, every module ASCII, every request Latin-1`);
   console.log('  blind: garbage is sampled once per model call, so a spike inside a step is missed; transcripts shaped unlike these; a hired '
     + 'helper\'s own Worker Loader isolate, where its turns run (the helper rows read the workspace\'s); the agent sessions of the cold, long-turn '
-    + 'and helpers\' workspaces, picked as the step\'s main is but never planted; and memory outside V8 (compiled wasm, SQLite pages)');
+    + 'and helpers\' workspaces, picked as the step\'s main is but never planted; the code V8 compiles for the step\'s turns, which the idle '
+    + 'row reports and does not bound; and memory outside V8 (compiled wasm, SQLite pages)');
 
   if (findings.length > 0) {
     console.error(`${GATE}: ${String(findings.length)} finding(s)\n`);

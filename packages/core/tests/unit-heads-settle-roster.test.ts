@@ -136,9 +136,25 @@ describe('a run that settles closes every head it did not hear from', () => {
     expect(sql<{ completed_at: number | null }>`
       SELECT completed_at FROM head_journal
       WHERE actor_id = ${actor.actorId} AND id = 'h0'`[0].completed_at).toBe(closedAt);
-    expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_merge_results
-      WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`[0].n)
-      .toBe(1);
+    expect(sql<{ merged_narrative: string | null }>`SELECT merged_narrative FROM head_runs
+      WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`).toEqual([{ merged_narrative: MERGE }]);
+  });
+
+  // The merge lives on the run's header: null until it lands, and an empty narrative is still a merge.
+  test('an empty merge settles the run as any merge does', () => {
+    const { journal } = seeded();
+    const task = 'Check every other call site that indexes rules by kind';
+
+    expect(journal.findResumableRun(task)).toBe(RUN);
+    journal.cacheMerge(RUN, '');
+    expect(journal.findResumableRun(task)).toBeNull();
+    expect(journal.readRun(RUN)?.merge).toEqual({ narrative: '' });
+  });
+
+  test('a run with no header has nowhere to keep its merge, and is refused', () => {
+    const { journal } = seeded();
+
+    expect(() => journal.cacheMerge('no-such-run', MERGE)).toThrow('has no header to keep its merge on');
   });
 
   test('a recursive split keeps its parent head, which IS the run and is still working', () => {

@@ -73,21 +73,6 @@ function _addIssue(context, label, dataset, config$1, other) {
   else
     dataset.issues = [issue];
 }
-var _standardCache = /* @__PURE__ */ new WeakMap;
-function _getStandardProps(context) {
-  let cached = _standardCache.get(context);
-  if (!cached) {
-    cached = {
-      version: 1,
-      vendor: "valibot",
-      validate(value$1) {
-        return context["~run"]({ value: value$1 }, /* @__PURE__ */ getGlobalConfig());
-      }
-    };
-    _standardCache.set(context, cached);
-  }
-  return cached;
-}
 function _isValidObjectKey(object$1, key) {
   return Object.prototype.hasOwnProperty.call(object$1, key) && key !== "__proto__" && key !== "prototype" && key !== "constructor";
 }
@@ -97,6 +82,14 @@ function _joinExpects(values$1, separator) {
     return `(${list.join(` ${separator} `)})`;
   return list[0] ?? "never";
 }
+function _standardSchema(schema) {
+  schema["~standard"] = {
+    version: 1,
+    vendor: "valibot",
+    validate: (value$1) => schema["~run"]({ value: value$1 }, /* @__PURE__ */ getGlobalConfig())
+  };
+  return schema;
+}
 function getFallback(schema, dataset, config$1) {
   return typeof schema.fallback === "function" ? schema.fallback(dataset, config$1) : schema.fallback;
 }
@@ -104,7 +97,7 @@ function getDefault(schema, dataset, config$1) {
   return typeof schema.default === "function" ? schema.default(dataset, config$1) : schema.default;
 }
 function array(item, message$1) {
-  return {
+  return _standardSchema({
     kind: "schema",
     type: "array",
     reference: array,
@@ -112,9 +105,6 @@ function array(item, message$1) {
     async: false,
     item,
     message: message$1,
-    get "~standard"() {
-      return /* @__PURE__ */ _getStandardProps(this);
-    },
     "~run"(dataset, config$1) {
       const input = dataset.value;
       if (Array.isArray(input)) {
@@ -153,19 +143,16 @@ function array(item, message$1) {
         _addIssue(this, "type", dataset, config$1);
       return dataset;
     }
-  };
+  });
 }
 function number(message$1) {
-  return {
+  return _standardSchema({
     kind: "schema",
     type: "number",
     reference: number,
     expects: "number",
     async: false,
     message: message$1,
-    get "~standard"() {
-      return /* @__PURE__ */ _getStandardProps(this);
-    },
     "~run"(dataset, config$1) {
       if (typeof dataset.value === "number" && !isNaN(dataset.value))
         dataset.typed = true;
@@ -173,10 +160,10 @@ function number(message$1) {
         _addIssue(this, "type", dataset, config$1);
       return dataset;
     }
-  };
+  });
 }
 function object(entries$1, message$1) {
-  return {
+  return _standardSchema({
     kind: "schema",
     type: "object",
     reference: object,
@@ -184,9 +171,6 @@ function object(entries$1, message$1) {
     async: false,
     entries: entries$1,
     message: message$1,
-    get "~standard"() {
-      return /* @__PURE__ */ _getStandardProps(this);
-    },
     "~run"(dataset, config$1) {
       const input = dataset.value;
       if (input && typeof input === "object") {
@@ -244,10 +228,10 @@ function object(entries$1, message$1) {
         _addIssue(this, "type", dataset, config$1);
       return dataset;
     }
-  };
+  });
 }
 function picklist(options, message$1) {
-  return {
+  return _standardSchema({
     kind: "schema",
     type: "picklist",
     reference: picklist,
@@ -255,9 +239,6 @@ function picklist(options, message$1) {
     async: false,
     options,
     message: message$1,
-    get "~standard"() {
-      return /* @__PURE__ */ _getStandardProps(this);
-    },
     "~run"(dataset, config$1) {
       if (this.options.includes(dataset.value))
         dataset.typed = true;
@@ -265,10 +246,10 @@ function picklist(options, message$1) {
         _addIssue(this, "type", dataset, config$1);
       return dataset;
     }
-  };
+  });
 }
 function record(key, value$1, message$1) {
-  return {
+  return _standardSchema({
     kind: "schema",
     type: "record",
     reference: record,
@@ -277,9 +258,6 @@ function record(key, value$1, message$1) {
     key,
     value: value$1,
     message: message$1,
-    get "~standard"() {
-      return /* @__PURE__ */ _getStandardProps(this);
-    },
     "~run"(dataset, config$1) {
       const input = dataset.value;
       if (input && typeof input === "object") {
@@ -340,19 +318,16 @@ function record(key, value$1, message$1) {
         _addIssue(this, "type", dataset, config$1);
       return dataset;
     }
-  };
+  });
 }
 function string(message$1) {
-  return {
+  return _standardSchema({
     kind: "schema",
     type: "string",
     reference: string,
     expects: "string",
     async: false,
     message: message$1,
-    get "~standard"() {
-      return /* @__PURE__ */ _getStandardProps(this);
-    },
     "~run"(dataset, config$1) {
       if (typeof dataset.value === "string")
         dataset.typed = true;
@@ -360,7 +335,7 @@ function string(message$1) {
         _addIssue(this, "type", dataset, config$1);
       return dataset;
     }
-  };
+  });
 }
 function safeParse(schema, input, config$1) {
   const dataset = schema["~run"]({ value: input }, /* @__PURE__ */ getGlobalConfig(config$1));
@@ -511,22 +486,6 @@ var REVIEWED_ADVISORIES = {
   "extract-zip": {
     reason: "TRANSITIVE: @cloudflare/puppeteer 1.4.0 (the slate-picture capture) pins @puppeteer/browsers " + "2.2.4, which requires it. The Worker imports the package's workers entry, " + "puppeteer-cloudflare.js, whose import graph reaches 116 files and never @puppeteer/browsers: only " + "the Node launchers (node/ChromeLauncher, FirefoxLauncher, ProductLauncher, PuppeteerNode) import " + "it, and nothing in this repository calls them. extract-zip's only use there is unpacking a " + "downloaded browser archive, which never happens in a Worker; worker-bundle-reach.test.ts fails " + "if either package enters the Worker bundle. No fixed release exists: 2.0.1 is its last publish.",
     ids: [1139346, 1193685]
-  },
-  nanoid: {
-    reason: "transitive: postcss requires ^3.3.12 <- vite <- vitest. The non-secure generator " + "loops forever on a negative or zero size; postcss calls it with a fixed size. Build " + "and test only.",
-    ids: [1138811, 1139427]
-  },
-  postcss: {
-    reason: "transitive: vite 8.0.16 requires ^8.5.15 <- vitest. Path traversal via " + "sourceMappingURL auto-loading, at build time over CSS in this repository. Fixed above " + "8.5.22, inside vite's range.",
-    ids: [1130709, 1139510]
-  },
-  "react-router": {
-    reason: "SHIPS IN CODE WE SERVE: react-router-dom 7.16.0 <- @kinu.run/cf-backend (^7.14.1). " + "Open redirect via backslash, RSC XSS and CSRF bypass, constructor injection through " + "deserializeErrors, and route-matching DoS. Our own ^7.14.1 admits the fixed 7.18.2, so " + "a lockfile refresh clears all five: accepted until that refresh, not indefinitely.",
-    ids: [1124268, 1124271, 1124272, 1124276, 1138769]
-  },
-  valibot: {
-    reason: "direct: the root manifest and @kinu.run/cf-backend both require ^1.4.1. record() " + "issue paths can make flatten() throw for an inherited Object property name, and " + "flatten() is called in no package src. `bun update --dry-run` resolves 1.4.2, outside " + "the vulnerable <=1.4.1 \u2014 the next lockfile refresh clears it.",
-    ids: [1124298]
   }
 };
 function unreviewedExposures(exposures, reviewed = REVIEWED_ADVISORIES) {

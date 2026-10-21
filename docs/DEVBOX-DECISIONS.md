@@ -5155,6 +5155,34 @@ The design.
 - Tests: `supervised-lifecycle.test.ts` "a job seen completed is not started again by the next start" (red before
   this change: its spec kept, started once) and "a server that failed comes back with the next start".
 
+D106. A device stays on its reverse WebSocket: the daemon dials out to the Worker, its owner's object accepts and hibernates
+the socket, and calls go down it (2026-10-20; m2038d and MA-137). MoQ or WebTransport, and SSH through Cloudflare Tunnel,
+were weighed and are not taken. The channel's two open audit findings are fixed in it, not by leaving it.
+
+What was weighed.
+- MoQ and WebTransport. A Worker accepts HTTP, TCP, WebSockets, HTTP/3 and SMTP; no WebTransport or MoQ endpoint a Worker
+  or Durable Object terminates is documented (developers.cloudflare.com/workers/reference/protocols/, read 2026-10-20).
+  Cloudflare's MoQ is a separate relay service in beta (drafts 14 and 16; developers.cloudflare.com/moq/), so a call would
+  leave the object that holds the device's grants and consents. D71 rejected the same relay for the desktop (2026-10-05).
+- SSH through Tunnel. `cloudflared` dials out as our daemon does; SSH behind Access needs `cloudflared` on both machines,
+  an active zone and an Access login (Tunnel docs, "SSH with Access"). That is a second daemon and an Access dependency on
+  every person's machine, and the platform would carry a shell, not the framed calls the sandbox tier (e26541e07) and the
+  consents are enforced on.
+- Cost while idle. The hub accepts through `acceptWebSocket` (`core/src/execution/device-hub.ts`), and a hibernated
+  object's socket stays connected with no duration billed (developers.cloudflare.com/durable-objects/best-practices/websockets/).
+- Not measured: the channel's own call latency, throughput and reconnect time. No such measurement exists; D71 measured the
+  desktop's video, not device calls.
+
+What is fixed in it (the 2026-09-16 device audit, `kinu-logs/audit-0916/SECURITY-devices.md`).
+- C3, critical: a copied `~/.kinu/device.json` (`pdt_` bearer) impersonates the machine until reuse is detected; the
+  rotation and reuse revocation (2e3fb08fc) narrow it but do not close it. Fix: a key-bound device credential. The daemon
+  makes a keypair and the hub keeps its public key; the connect ticket is issued for a signed challenge, and no bearer is
+  persisted.
+- M1, medium: the connect ticket rides in the socket's URL (`/pc/connect?user=&ticket=`, `pc-agent/src/index.js`), where
+  edge and proxy logs keep it. Fix: the ticket travels in the first frame.
+- Both change the protocol: `DEVICE_PROTOCOL_VERSION` moves up, and a daemon on the previous version is admitted to take
+  its update only, as today (`device-hub.ts`). Queued behind the self-deploy build.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

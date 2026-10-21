@@ -19,6 +19,8 @@ const PluginsPage = lazy(() => import("@/pages/PluginsPage"));
 
 const DevicesPage = lazy(() => import("@/pages/DevicesPage"));
 
+const UserMcpPage = lazy(() => import("@/pages/UserMcpPage"));
+
 function Chrome({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-screen w-screen p-bg p-text overflow-hidden">
@@ -46,6 +48,10 @@ export function PluginsFrame() {
 
 export function DevicesFrame() {
   return <Chrome><DevicesPage /></Chrome>;
+}
+
+export function UserMcpFrame() {
+  return <Chrome><UserMcpPage /></Chrome>;
 }
 
 const AccountPanelParam = v.picklist(ACCOUNT_PANELS);

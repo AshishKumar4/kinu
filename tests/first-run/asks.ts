@@ -169,8 +169,8 @@ export const DESKTOP_PROBE_TITLE = 'KINU_DESKTOP_PROBE';
 export const DESKTOP_PROGRAM = [
   'await computer.screenshot();',
   `await computer.exec("mkdir -p /tmp/kinu-desk && printf '<title>${DESKTOP_PROBE_TITLE}</title><h1>probe</h1>' > /tmp/kinu-desk/index.html");`,
-  "await computer.exec('setsid -f python3 -m http.server 8766 --bind 127.0.0.1 --directory /tmp/kinu-desk >/dev/null 2>&1');",
-  "await computer.exec('setsid -f chromium --no-first-run --user-data-dir=/tmp/kinu-desk/profile http://127.0.0.1:8766/ >/dev/null 2>&1');",
+  "await computer.exec('setsid -f python3 -m http.server 8766 --bind 127.0.0.1 --directory /tmp/kinu-desk');",
+  "await computer.exec('setsid -f chromium --no-first-run --user-data-dir=/tmp/kinu-desk/profile http://127.0.0.1:8766/');",
   'for (let tries = 0; tries < 60; tries += 1) {',
   `  if (String(await computer.exec('xdotool search --name ${DESKTOP_PROBE_TITLE} || true')).trim() !== '') break;`,
   '  await new Promise((resolve) => setTimeout(resolve, 500));',

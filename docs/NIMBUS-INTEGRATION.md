@@ -187,7 +187,7 @@ into the Core interfaces:
 | `Storage.vfs` | the actor's file plane, `workspaceFilePlane()` over the hosted box's store and its mounts |
 | `Shell` and `shell` | `box.exec()` through `nimbusSessionShell()` |
 | `workspace.*` | `createNimbusWorkspaceExecutor()` |
-| background processes | `box.startProcess()` and `box.processes` |
+| background processes | `box.startProcess()` and `box.processes`; each one a job of the agent's, ended by `processes.whenEnded` |
 | live previews | `box.ports`, wrapped by the Kinu capability host |
 | runtime install and list | `box.runtimes` when `NIMBUS_RUNTIME_CACHE` is bound |
 

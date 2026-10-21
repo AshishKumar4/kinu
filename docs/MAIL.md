@@ -347,9 +347,9 @@ Mail is built around Kinu, not as a separate mailbox. Each piece below composes 
    - It reads `ashish@`, the address it holds, and wakes on new mail in batches.
    - It picks what is Important and writes the reason. It drafts replies for the owner to send as themselves.
    - It sends nothing as the person.
-   - Built (`core/src/mail/triage.ts`): new mail in the person's box that is not their own verified instruction waits for triage: its thread is queued in `mail_untriaged`. The router tells the box's reader, the assistant, and the assistant's workspace runs a pass outside any turn (`triageOwnerMail`). Nudges that arrive during a pass owe one more pass, not one each. The assistant's install also starts a pass, for mail that came before it.
+   - Built (`core/src/mail/triage.ts`): new mail in the person's box that is not their own verified instruction waits for triage: its thread is queued by `mail_threads.untriaged_since`. The router tells the box's reader, the assistant, and the assistant's workspace runs a pass outside any turn (`triageOwnerMail`). Nudges that arrive during a pass owe one more pass, not one each. The assistant's install also starts a pass, for mail that came before it.
    - A pass reads the waiting threads ten at a time, newest first, and keeps reading until the queue holds only threads it could not answer this pass; a backlog is emptied in one pass, not left for the next mail. Each thread is one fast-tier call (`oneShotOn('fast')`). The model gets the assistant's soul, the owner's sign-in address, and the thread as `mailThreadText` renders it, sealed. It answers `{important, reason, reply}`.
-   - Each read carries the thread's version, `mail_untriaged.since`, which moves forward at every arrival, even two in one millisecond. The pick and the reply are applied together through `triagedFor`, in one synchronous step, and only if the thread still waits at that version. Otherwise nothing is written: mail that arrived while the model read the thread leaves it waiting, and the pass reads it again with that mail. A pick either way takes the thread off the queue; `mail.update` no longer does. The reason is one line, at most 280 characters. A reply, when one is due, is left as a draft signed with the assistant's name. The Mailbox addresses it to the newest inbound sender, under the thread's own subject (`replySubject`, the one `Re:` rule); the model gives only its words. A thread the person already drafted in, or whose newest mail came from the owner's own address, gets no draft. Nothing is sent: the person sends a draft from Drafts.
+   - Each read carries the thread's version, `mail_threads.untriaged_since`, which moves forward at every arrival, even two in one millisecond. The pick and the reply are applied together through `triagedFor`, in one synchronous step, and only if the thread still waits at that version. Otherwise nothing is written: mail that arrived while the model read the thread leaves it waiting, and the pass reads it again with that mail. A pick either way takes the thread off the queue; `mail.update` no longer does. The reason is one line, at most 280 characters. A reply, when one is due, is left as a draft signed with the assistant's name. The Mailbox addresses it to the newest inbound sender, under the thread's own subject (`replySubject`, the one `Re:` rule); the model gives only its words. A thread the person already drafted in, or whose newest mail came from the owner's own address, gets no draft. Nothing is sent: the person sends a draft from Drafts.
    - A thread the model cannot answer (the tier is down) stays waiting and is tried at the next pass. One it answers in no shape is settled as not Important, so mail written to confuse it cannot cost a call at every later arrival. Both are logged as `mail.triage_failed`. New mail in a settled thread makes it wait again.
    - The Important view and the footer's badge read `important`, so they show the picks as soon as a pass records them.
 3. **Drafts in the reading pane.** A thread with the assistant's draft offers "Open Personal assistant's draft" beside Reply. The person reads it, edits it and sends it.
@@ -430,19 +430,13 @@ CREATE TABLE IF NOT EXISTS mail_name (
   user_id      TEXT    NOT NULL,                                            -- the account whose Mailbox it routes to
   kind         TEXT    NOT NULL CHECK (kind IN ('username', 'alias')),
   target_path  TEXT,                                                        -- an alias's box (see mail_addresses.path); NULL for a username
-  state        TEXT    NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'former', 'retired')),
-  claimed_at   INTEGER NOT NULL,
-  ended_at     INTEGER,
-  CHECK ((kind = 'alias') = (target_path IS NOT NULL)),
-  CHECK ((state = 'active') = (ended_at IS NULL))
+  CHECK ((kind = 'alias') = (target_path IS NOT NULL))
 );
 ```
 
-**States:**
-
-- **`active`:** the label routes mail.
-- **`former`:** a username the account renamed away from. It still routes to the same account, and is never claimable by anyone else.
-- **`retired`:** nothing routes there, and the label is never reissued.
+A claimed label routes mail. Nothing renames or retires one yet: a former username's routing and a retired label's
+refusal are designed (a rename touches no row in the Mailbox), and their states were dropped with the 2026-10-20 schema
+consolidation until something writes them.
 
 **Who may have an address:**
 
@@ -457,8 +451,7 @@ CREATE TABLE IF NOT EXISTS mail_box (
   id          INTEGER PRIMARY KEY CHECK (id = 1),
   user_id     TEXT    NOT NULL,
   email       TEXT    NOT NULL,           -- the account's sign-in email: a verified message From it is the owner's
-  username    TEXT    NOT NULL,           -- the account's current label; MailName holds the claim, this is its pointer back
-  created_at  INTEGER NOT NULL
+  username    TEXT    NOT NULL            -- the account's current label; MailName holds the claim, this is its pointer back
 );
 
 -- Every box of the account. A path is relative to the username: '' is the person, 'api-worker' a workspace,
@@ -469,13 +462,9 @@ CREATE TABLE IF NOT EXISTS mail_addresses (
   workspace   TEXT,                       -- the workspace that reads it (its Durable Object's name); the Personal assistant's for the person
   actor_id    TEXT,                       -- the agent it belongs to; a workspace's main agent for a workspace box
   wake        TEXT    NOT NULL DEFAULT 'owner' CHECK (wake IN ('owner', 'allowlist', 'verified', 'never')),
-  state       TEXT    NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'retired')),
-  created_at  INTEGER NOT NULL,
-  retired_at  INTEGER,
   CHECK ((kind = 'person') = (path = '')),
   CHECK ((workspace IS NULL) = (actor_id IS NULL)),       -- NULL only for a person whose assistant isn't installed
-  CHECK (kind = 'person' OR workspace IS NOT NULL),
-  CHECK ((state = 'retired') = (retired_at IS NOT NULL))
+  CHECK (kind = 'person' OR workspace IS NOT NULL)
 );
 
 -- By kind too: the Personal assistant's main agent holds its workspace's box and the person's.
@@ -485,7 +474,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS mail_addresses_actor ON mail_addresses (worksp
 CREATE TABLE IF NOT EXISTS mail_allow (
   path        TEXT    NOT NULL REFERENCES mail_addresses (path),
   sender      TEXT    NOT NULL,           -- canonical lowercase address
-  added_at    INTEGER NOT NULL,
   PRIMARY KEY (path, sender)
 );
 
@@ -497,19 +485,16 @@ CREATE TABLE IF NOT EXISTS mail_threads (
   subject     TEXT    NOT NULL,
   important   TEXT    CHECK (important IS NULL OR length(important) BETWEEN 1 AND 280),  -- the Personal assistant's reason; NULL: not picked
   trashed_at  INTEGER,                    -- emptied 30 days after
-  created_at  INTEGER NOT NULL,
-  CHECK (important IS NULL OR path = '')  -- the assistant picks from the box it reads
+  untriaged_since INTEGER,                -- mail the assistant has not yet picked Important or not on (§8): its newest such mail's
+                                          -- time, and the thread's version, never the same twice; NULL when nothing is owed
+  CHECK (important IS NULL OR path = ''),  -- the assistant picks from the box it reads
+  CHECK (untriaged_since IS NULL OR path = '')
 );
 
-CREATE INDEX IF NOT EXISTS mail_threads_box ON mail_threads (path, created_at);
-CREATE INDEX IF NOT EXISTS mail_threads_important ON mail_threads (created_at) WHERE important IS NOT NULL AND trashed_at IS NULL;
+CREATE INDEX IF NOT EXISTS mail_threads_box ON mail_threads (path);
+CREATE INDEX IF NOT EXISTS mail_threads_important ON mail_threads (id) WHERE important IS NOT NULL AND trashed_at IS NULL;
 CREATE INDEX IF NOT EXISTS mail_threads_trashed ON mail_threads (trashed_at) WHERE trashed_at IS NOT NULL;
-
--- The person's threads with mail their assistant has not yet picked Important or not on (§8).
-CREATE TABLE IF NOT EXISTS mail_untriaged (
-  thread_id   TEXT    PRIMARY KEY REFERENCES mail_threads (id),
-  since       INTEGER NOT NULL                -- its newest such mail's time, and its version: never the same twice
-);
+CREATE INDEX IF NOT EXISTS mail_threads_untriaged ON mail_threads (untriaged_since DESC, id) WHERE untriaged_since IS NOT NULL AND trashed_at IS NULL;
 
 -- One message, as received or written. Large parts and the raw message live in R2 under the account.
 CREATE TABLE IF NOT EXISTS mail_messages (
@@ -517,8 +502,6 @@ CREATE TABLE IF NOT EXISTS mail_messages (
   thread_id   TEXT    NOT NULL REFERENCES mail_threads (id),
   direction   TEXT    NOT NULL CHECK (direction IN ('in', 'out')),
   header_id   TEXT,                       -- Message-ID: the sender's (in), or the platform's once sent (out)
-  in_reply_to TEXT,
-  refs        TEXT    NOT NULL DEFAULT '[]',  -- References, a JSON array bounded to the 998-octet header line
   from_addr   TEXT    NOT NULL,
   from_name   TEXT,
   to_json     TEXT    NOT NULL DEFAULT '[]',
@@ -534,10 +517,9 @@ CREATE TABLE IF NOT EXISTS mail_messages (
   text_key    TEXT,
   html_key    TEXT,
   raw_key     TEXT,                       -- the raw .eml (in)
-  size        INTEGER NOT NULL,
   read        INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0, 1)),
   written_by  TEXT,                       -- the agent that wrote it (out)
-  send_state  TEXT    CHECK (send_state IS NULL OR send_state IN ('draft', 'queued', 'sent', 'delivered', 'bounced', 'failed', 'complained')),
+  send_state  TEXT    CHECK (send_state IS NULL OR send_state IN ('draft', 'queued')),  -- sent or failed: the outbox's view of a queued one
   CHECK ((direction = 'in') = (send_state IS NULL)),
   CHECK (direction = 'out' OR (raw_key IS NOT NULL AND written_by IS NULL)),
   CHECK (text_body IS NULL OR text_key IS NULL),
@@ -557,12 +539,13 @@ CREATE TABLE IF NOT EXISTS mail_attachments (
   filename    TEXT    NOT NULL,
   content_type TEXT   NOT NULL,
   size        INTEGER NOT NULL,
-  digest      TEXT    NOT NULL,           -- sha256: the R2 key is mail/<user_id>/att/<digest>
-  inline_cid  TEXT                        -- Content-ID of an inline part
+  digest      TEXT    NOT NULL            -- sha256: the R2 key is mail/<user_id>/att/<digest>
 );
 
 CREATE INDEX IF NOT EXISTS mail_attachments_message ON mail_attachments (message_id);
 CREATE INDEX IF NOT EXISTS mail_attachments_digest ON mail_attachments (digest);
+-- Not built: inline images. An inline part is kept as an attachment, and nothing renders it in its place in the HTML;
+-- its Content-ID, which that would need, is not kept (dropped with the 2026-10-20 schema consolidation, unread).
 
 -- Search: regenerable from the messages and their R2 parts; rowid is mail_messages' rowid.
 CREATE VIRTUAL TABLE IF NOT EXISTS mail_fts USING fts5 (

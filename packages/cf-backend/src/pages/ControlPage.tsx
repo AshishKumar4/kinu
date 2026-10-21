@@ -349,6 +349,15 @@ function IncidentsView(): ReactNode {
   );
 }
 
+/** A Gallery report carries no screenshot: its route is the listing's page and its note the reason. */
+function feedbackAttachment(f: ControlFeedbackRow): ReactNode {
+  if (f.kind === 'gallery_report') return <span className="p-text-3 p-t-status">Gallery report</span>;
+
+  return f.bytes === null
+    ? <span className="p-text-3 p-t-status">note only</span>
+    : <span className="p-meta tabular-nums">{formatBytes(f.bytes)}</span>;
+}
+
 function FeedbackView(): ReactNode {
   const { cursor, page, next, first } = usePageWalk();
   const { load, reload } = useControlRead(() => fetchFeedback(cursor), [cursor]);
@@ -371,9 +380,7 @@ function FeedbackView(): ReactNode {
                   when(f.createdAt), f.email,
                   <span className="font-mono text-xs">{f.route}</span>,
                   f.workspace ?? <span className="p-text-3">—</span>,
-                  f.bytes === null
-                    ? <span className="p-text-3 p-t-status">note only</span>
-                    : <span className="p-meta tabular-nums">{formatBytes(f.bytes)}</span>,
+                  feedbackAttachment(f),
                   <span className="p-text-2 text-xs whitespace-pre-wrap">{f.note}</span>,
                 ],
               }))}

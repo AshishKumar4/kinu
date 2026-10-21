@@ -118,9 +118,8 @@ describe('a daemon reports why it cannot take a served build', () => {
     const second = await refuse(harness, harness.token, SERVED, 'Bun install failed: no space left on device');
     expect(second.status).toBe(200);
     expect((await devices(harness))[0]).toMatchObject({ update: 'refused', updateRefusal: 'Bun install failed: no space left on device' });
-    expect(harness.db.query('SELECT * FROM user_device_update_refusals').all()).toEqual([{
-      device_id: harness.deviceId, version: SERVED, runtime: REFUSED_ON, reason: 'Bun install failed: no space left on device',
-      refused_at: expect.any(Number),
+    expect(harness.db.query('SELECT update_refused_version, update_refused_runtime, update_refusal_reason FROM user_devices WHERE update_refused_version IS NOT NULL').all()).toEqual([{
+      update_refused_version: SERVED, update_refused_runtime: REFUSED_ON, update_refusal_reason: 'Bun install failed: no space left on device',
     }]);
   });
 
@@ -228,7 +227,7 @@ describe('a daemon reports why it cannot take a served build', () => {
     const harness = await connected();
     await expect(harness.userDO.recordDeviceUpdateRefusal({ ownerToken: '' }, harness.token, { version: SERVED, runtime: REFUSED_ON, reason: REFUSAL }))
       .rejects.toThrow('owner');
-    expect(harness.db.query('SELECT * FROM user_device_update_refusals').all()).toEqual([]);
+    expect(harness.db.query('SELECT update_refused_version, update_refused_runtime, update_refusal_reason FROM user_devices WHERE update_refused_version IS NOT NULL').all()).toEqual([]);
   });
 
   test('a revoked device token cannot record a refusal', async () => {
@@ -238,14 +237,14 @@ describe('a daemon reports why it cannot take a served build', () => {
     await harness.userDO.revokeDevice(await testOwner(), harness.deviceId);
     expect((await devices(harness))[0]).toMatchObject({ id: harness.deviceId, revokedAt: expect.any(Number) });
     expect((await refuse(harness, harness.token)).status).toBe(401);
-    expect(harness.db.query('SELECT * FROM user_device_update_refusals').all()).toEqual([]);
+    expect(harness.db.query('SELECT update_refused_version, update_refused_runtime, update_refusal_reason FROM user_devices WHERE update_refused_version IS NOT NULL').all()).toEqual([]);
   });
 
   test('an expired device token cannot record a refusal', async () => {
     const harness = await connected();
     harness.db.query('UPDATE user_devices SET expires_at = ? WHERE id = ?').run(Date.now() - 1, harness.deviceId);
     expect((await refuse(harness, harness.token)).status).toBe(401);
-    expect(harness.db.query('SELECT * FROM user_device_update_refusals').all()).toEqual([]);
+    expect(harness.db.query('SELECT update_refused_version, update_refused_runtime, update_refusal_reason FROM user_devices WHERE update_refused_version IS NOT NULL').all()).toEqual([]);
   });
 });
 

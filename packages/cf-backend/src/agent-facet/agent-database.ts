@@ -24,7 +24,7 @@ import { attempt, detach, diagnostics, hold, KinuError, logged, settle, settleSy
 import { isDeepStrictEqual } from 'node:util';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, stoppedProgram, writeStamp, type Repair } from '@kinu.run/core';
+import { durableStamps, ensureIndexTables, initMissionBudgetTable, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, stoppedProgram, writeStamp, type Repair } from '@kinu.run/core';
 import type { ChatWindow, MediaRef, MediaUrl, StoredImage } from '@kinu.run/core';
 import type { AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentSteps, AgentTurnActivity, ConversationProjection, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt, FactsKey, FrozenAuthority } from '@kinu.run/core';
 import type { AgentWorkspace, TurnBound } from './agent-turn';
@@ -105,6 +105,11 @@ export function repairAgentDatabase(storage: DurableObjectStorage, database: str
     schema: 'agent', tables: SCHEMA_TABLES.agent, stamps: durableStamps(storage.kv),
     transactionSync: (write) => storage.transactionSync(write),
     init: () => { initAgentDatabaseTables(storage, { sql: agentSql(storage.sql), exec: storage.sql }); },
+    // Made on first use: the conversation index, a ledger.
+    later: () => {
+      ensureIndexTables(agentSql(storage.sql));
+      initMissionBudgetTable((ddl) => { storage.sql.exec(ddl); });
+    },
   }, database);
 }
 

@@ -4,9 +4,8 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import {
   buildDrainBatch, DeferredApprovalQueue, DeferredApprovalStore, DeviceConsentRegistry, DeviceConsentStore, EventLog,
-  initDeferredApprovalsTable, initEventsHubTables, reviewCommand, steerSkillsBlock, workspaceGenesisSignal, type JsonObject,
+  initEventsHubTables, initOwnerRequestsTable, reviewCommand, steerSkillsBlock, workspaceGenesisSignal, type JsonObject,
 } from '@kinu.run/core';
-import { initDeviceConsentAsksTable } from '../../packages/core/src/safety/device-consent';
 import { createTestActors, createTestActorsOver, createTestSql, present } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../packages/core/tests/helpers';
 import { createMemoryVfs } from '../../packages/test-utils/src/vfs';
@@ -287,7 +286,7 @@ async function consentWake(machine: string, command: string, answer: 'once' | 'd
   const woken: string[] = [];
 
   try {
-    initDeviceConsentAsksTable(db.execRaw);
+    initOwnerRequestsTable(db.execRaw);
 
     const registry = new DeviceConsentRegistry({
       store: new DeviceConsentStore(db.sql), announce: () => {}, newId: () => 'cons-1',
@@ -313,7 +312,7 @@ async function decisionWake(command: string, answer: 'approved' | 'denied'): Pro
   const woken: string[] = [];
 
   try {
-    initDeferredApprovalsTable(execRaw);
+    initOwnerRequestsTable(execRaw);
 
     const queue = new DeferredApprovalQueue({
       writes: null, store: new DeferredApprovalStore(sql, createTestActors(sql, execRaw).main), remember: () => {},

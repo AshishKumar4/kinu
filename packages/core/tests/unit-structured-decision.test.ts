@@ -1,6 +1,7 @@
 /** Decisions over a chat model: one category a question through its structured output, each a fixed answer. */
 import { describe, expect, test } from 'bun:test';
-import { MockLanguageModelV3 } from 'ai/test';
+import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { APICallError } from 'ai';
 import { answerStructured, createStructuredDecider } from '../src/evolution/structured-decision';
 import { decisionPortOf, type DecisionPort, type DecisionQuestion, type DecisionResult } from '../src/providers/decision-model';
@@ -17,18 +18,24 @@ interface Seen {
   readonly formats: string[];
 }
 
-/** A model that answers `text`, recording what it was sent. */
+/** A model that answers `text`, recording what it was sent; streamed, as every structured call is. */
 function scripted(text: string, seen: Seen = { prompts: [], formats: [] }) {
   return new MockLanguageModelV3({
-    doGenerate: async (options) => {
+    doStream: async (options) => {
       seen.prompts.push(JSON.stringify(options.prompt));
       seen.formats.push(options.responseFormat?.type ?? 'text');
 
       return {
-        content: [{ type: 'text' as const, text }],
-        finishReason: { unified: 'stop' as const, raw: undefined },
-        usage: { inputTokens: { total: 11, noCache: 11, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 3, text: 3, reasoning: undefined } },
-        warnings: [],
+        stream: convertArrayToReadableStream<LanguageModelV3StreamPart>([
+          { type: 'stream-start', warnings: [] },
+          { type: 'text-start', id: 't' },
+          { type: 'text-delta', id: 't', delta: text },
+          { type: 'text-end', id: 't' },
+          {
+            type: 'finish', finishReason: { unified: 'stop', raw: undefined },
+            usage: { inputTokens: { total: 11, noCache: 11, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 3, text: 3, reasoning: undefined } },
+          },
+        ]),
       };
     },
   });
@@ -37,7 +44,7 @@ function scripted(text: string, seen: Seen = { prompts: [], formats: [] }) {
 /** A model that refuses as a spent allowance does: a refusal only the owner can fix. */
 function spent() {
   return new MockLanguageModelV3({
-    doGenerate: async () => {
+    doStream: async () => {
       throw new APICallError({ message: 'insufficient balance', url: 'https://api.example/v1', requestBodyValues: {}, statusCode: 402, isRetryable: false });
     },
   });

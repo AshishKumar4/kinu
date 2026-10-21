@@ -5,6 +5,7 @@ import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
 import { TERM_GRACE_MS } from './lifecycle';
 import { BOX_CHROMIUM_POLICY, CHROMIUM_POLICIES, CHROMIUM_PROFILES } from './desktop';
 import { INSTALL_SESSION_FILES, READS_TERMINAL, SAVED_SESSIONS, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE } from './sessions';
+import DISTRUSTED from './distrusted-roots.json';
 
 const CA_PATH = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
@@ -12,9 +13,45 @@ const BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
 
 const SYSTEM_BUNDLE = '/etc/ssl/certs/ca-certificates.system.crt';
 
+/** Node reads OpenSSL's store (the bundle and the hashed directory the trust step rebuilds), not the roots compiled into
+ *  it, so the roots that store leaves out are out for Node too (its `--use-system-ca` adds the system's roots to its
+ *  own, which keeps them). Last among a process's options, so a program's own `NODE_OPTIONS` keeps it (`boxEnv`). */
+const NODE_TRUST = '--use-openssl-ca';
+
 // Native exec does not inherit start() env; the upstream coding-agents example passes this per process. The trust
-// bundles, and the desktop's display, so a window a program opens lands on the screen the owner watches (D89).
-export const CONTAINER_ENV = { NODE_EXTRA_CA_CERTS: CA_PATH, REQUESTS_CA_BUNDLE: BUNDLE, DISPLAY: ':0' };
+// bundles, and the desktop's display, so a window a program opens lands on the screen the owner watches (D89). The
+// tools' Bun 1.4.3 has no option that drops its own roots (`--use-system-ca` and `--use-openssl-ca` both still answered
+// G3B, 2026-10-21): it distrusts when tools-setup.sh pins a Bun that does, the CLI's (a test holds the two pins equal,
+// and pc-agent's trust test goes red the day that Bun ships the distrust).
+const CONTAINER_ENV = { NODE_EXTRA_CA_CERTS: CA_PATH, NODE_OPTIONS: NODE_TRUST, REQUESTS_CA_BUNDLE: BUNDLE, DISPLAY: ':0' };
+
+/** A value of `name` as a box process gets it: a program's own `NODE_OPTIONS` with the box's trust after it. */
+function boxValue(name: string, value: string): string {
+  return name === 'NODE_OPTIONS' && value !== NODE_TRUST ? `${value} ${NODE_TRUST}`.trim() : value;
+}
+
+/** `env` over the box's own, each value as `boxValue` gives it. */
+export function boxEnv(env: Readonly<Record<string, string>>): Record<string, string> {
+  return Object.fromEntries(Object.entries({ ...CONTAINER_ENV, ...env }).map(([name, value]) => [name, boxValue(name, value)]));
+}
+
+/**
+ * The one way the box runs a command in its container. workerd ends the stdin of an exec given none with a task nobody
+ * can await (`Container::exec`: "If stdin is undefined, the JS API promises immediate EOF"), and on a lost connection
+ * that task failed the box's request as an uncaught "Network connection lost." (staging rc29, 2026-10-21), as the
+ * platform's kill had (rc23). So every exec owns its stdin: a caller that writes none has it closed here before the
+ * exec is answered, as the platform's immediate EOF would, and a lost connection fails the exec, where its caller reads
+ * it. A caller's own stdin stays the caller's: the box passes only a pipe it writes and closes, never a stream for the
+ * platform to pump (another task of its own).
+ */
+export async function containerExec(container: Pick<Container, 'exec'>, argv: readonly string[], options: ContainerExecOptions = {}): Promise<ExecProcess> {
+  if (options.stdin !== undefined) return container.exec([...argv], options);
+  const process = await container.exec([...argv], { ...options, stdin: 'pipe' });
+
+  await process.stdin?.close();
+
+  return process;
+}
 
 /**
  * Ends `pid` in the container with an exec of `kill`, whose failure the box reads and says. The platform's own kill
@@ -23,7 +60,7 @@ export const CONTAINER_ENV = { NODE_EXTRA_CA_CERTS: CA_PATH, REQUESTS_CA_BUNDLE:
  * rc23, 2026-10-19; `connection-lost.test.ts`). So no exec of the box's is given a signal or killed by the platform.
  */
 export function endProcess(container: Pick<Container, 'exec'>, pid: number, doing: string): () => void {
-  return observe(attempt('process', async () => await (await container.exec(['kill', '-KILL', String(pid)])).output(), doing), {
+  return observe(attempt('process', async () => await (await containerExec(container, ['kill', '-KILL', String(pid)])).output(), doing), {
     success: () => undefined,
     failure: (cause) => { console.error(`[devbox] ${cause.message}`); },
   });
@@ -46,16 +83,51 @@ prefs.setdefault("profile", {}).update(exit_type="Normal", exited_cleanly=True)
 json.dump(prefs, open(path + ".tmp", "w"))' "$prefs" 2>/dev/null && mv "$prefs.tmp" "$prefs"
 done`;
 
+const CA_CONF = '/etc/ca-certificates.conf';
+
+const CA_SOURCES = '/usr/share/ca-certificates';
+
+const LOCAL_CA = '/usr/local/share/ca-certificates';
+
+const CA_DIR = '/etc/ssl/certs';
+
+const CA_HOOKS = '/etc/ca-certificates/update.d';
+
+/**
+ * The roots eMudhra's compromised intermediates chain to (Mozilla bug 2083449), as Debian's ca-certificates names the
+ * two it carries (distrusted-roots.json, the one list, which the daemon reads too). Deselected the Debian way: a `!` in
+ * ca-certificates.conf, and update-ca-certificates rebuilds the bundle and the hashed directory OpenSSL reads (curl,
+ * Python, Node with `--use-openssl-ca`), for what the box's programs reach directly; 443 goes through the platform's
+ * proxy, which judges the chain itself. Once per filesystem: a box whose conf deselects them already skips it.
+ * Deleted when the tools' snapshot (block-lower/tools-setup.sh) serves Debian's ca-certificates 20250419+deb13u1,
+ * which carries neither (https://bugs.debian.org/1151413).
+ */
+const DESELECTED = DISTRUSTED.roots.flatMap((root) => (root.debian === null ? [] : [root.debian]));
+
+const DESELECT = `if grep -qxF ${DESELECTED.map((name) => `-e '${name}'`).join(' ')} ${CA_CONF}; then
+  sed -i ${DESELECTED.map((name) => `-e 's|^${name.replaceAll('.', '\\.')}$|!&|'`).join(' ')} ${CA_CONF} \\
+  && /usr/sbin/update-ca-certificates --certsconf ${CA_CONF} --certsdir ${CA_SOURCES} --localcertsdir ${LOCAL_CA} --etccertsdir ${CA_DIR} --hooksdir ${CA_HOOKS} >/dev/null \\
+  && cp ${BUNDLE} ${SYSTEM_BUNDLE}.tmp && mv ${SYSTEM_BUNDLE}.tmp ${SYSTEM_BUNDLE}
+fi`;
+
+/**
+ * The one of those Chromium's own root store holds (emSign ECC Root CA - G3; Chrome Root Store), as its policy
+ * `CADistrustedCertificates` (Chromium 132+) takes it: base64 DER, distrusting every certificate with its key.
+ * Chromium verifies with its own store, not the system's, so no Debian package retires this: deleted when the box's
+ * Chromium is one whose Chrome Root Store no longer holds that root (net/data/ssl/chrome_root_store/root_store.textproto).
+ */
+const CHROMIUM_DISTRUSTED = 'MIICTjCCAdOgAwIBAgIKPPYHqWhwDtqLhDAKBggqhkjOPQQDAzBrMQswCQYDVQQGEwJJTjETMBEGA1UECxMKZW1TaWduIFBLSTElMCMGA1UEChMcZU11ZGhyYSBUZWNobm9sb2dpZXMgTGltaXRlZDEgMB4GA1UEAxMXZW1TaWduIEVDQyBSb290IENBIC0gRzMwHhcNMTgwMjE4MTgzMDAwWhcNNDMwMjE4MTgzMDAwWjBrMQswCQYDVQQGEwJJTjETMBEGA1UECxMKZW1TaWduIFBLSTElMCMGA1UEChMcZU11ZGhyYSBUZWNobm9sb2dpZXMgTGltaXRlZDEgMB4GA1UEAxMXZW1TaWduIEVDQyBSb290IENBIC0gRzMwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAAQjpQy4LRL1KPOxst3iAhKAnjlfSU2fySU0WXTsuwYc58Byr+iuL+FBVIcUqEqy6HyC5ltqtdyzdc6LBtCGI79G1Y4PPwT01xySfvalY8L1X44uT6EYGQIrMgqCZH0Wk9GjQjBAMB0GA1UdDgQWBBR8XQKEE9TMipuBzhccLikenEhjQjAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAwNpADBmAjEAvvNhzwIQHWSVB7gYboiFBS+DCBeQyh+KTOgNG3qxrdWBCUfvO6wIBHxcmbHtRwfSAjEAnbpV/KlK6O3t5nYBQnvI+GDZjVGLVTv7jHvrZQnD+JbNR6iC8hZVdyR+EhCVBCyj';
+
 /**
  * The SDK docs' trust step, which keeps no earlier container's CA: the system bundle, and Chromium's policy. The
  * desktop's earlier policy file, `devbox.json`, is folded into the box's own. It is the start's step for the desktop's
  * browser too, before any browser runs: its last exit is marked clean first, which no failure of it stops.
  */
 export const TRUST = ['/bin/sh', '-c', `${CLEAN_EXIT}
-[ -e ${SYSTEM_BUNDLE} ] || { cp ${BUNDLE} ${SYSTEM_BUNDLE}.tmp && mv ${SYSTEM_BUNDLE}.tmp ${SYSTEM_BUNDLE}; }
-timeout 10 sh -c 'until [ -s ${CA_PATH} ]; do sleep 0.1; done' && cat ${SYSTEM_BUNDLE} ${CA_PATH} >${BUNDLE}.tmp && mv ${BUNDLE}.tmp ${BUNDLE} \\
+${DESELECT} && { [ -e ${SYSTEM_BUNDLE} ] || { cp ${BUNDLE} ${SYSTEM_BUNDLE}.tmp && mv ${SYSTEM_BUNDLE}.tmp ${SYSTEM_BUNDLE}; }; } \\
+  && timeout 10 sh -c 'until [ -s ${CA_PATH} ]; do sleep 0.1; done' && cat ${SYSTEM_BUNDLE} ${CA_PATH} >${BUNDLE}.tmp && mv ${BUNDLE}.tmp ${BUNDLE} \\
   && mkdir -p ${CHROMIUM_POLICIES} && rm -f ${CHROMIUM_POLICIES}/devbox.json \\
-  && printf '{"CACertificates":[%s],"CommandLineFlagSecurityWarningsEnabled":false}\\n' "$(${CA_DER})" >${BOX_CHROMIUM_POLICY}.tmp \\
+  && printf '{"CACertificates":[%s],"CADistrustedCertificates":["${CHROMIUM_DISTRUSTED}"],"CommandLineFlagSecurityWarningsEnabled":false}\\n' "$(${CA_DER})" >${BOX_CHROMIUM_POLICY}.tmp \\
   && mv ${BOX_CHROMIUM_POLICY}.tmp ${BOX_CHROMIUM_POLICY}`, 'devbox-trust'] as const;
 
 const ROOT = '/var/tmp/devbox/processes';
@@ -91,7 +163,7 @@ export interface BoxNaming { readonly named: boolean; readonly detail: string }
  * name, and starts.
  */
 export function nameBox(container: Container, name: string): Promise<BoxNaming> {
-  return settle(attempt('process', async () => await (await container.exec(['sh', '-c', NAME_BOX, 'name-box', name])).output()).pipe(
+  return settle(attempt('process', async () => await (await containerExec(container, ['sh', '-c', NAME_BOX, 'name-box', name])).output()).pipe(
     Effect.map((ran): BoxNaming => {
       const said = new TextDecoder().decode(ran.stdout).trim();
 
@@ -278,7 +350,7 @@ export class Processes {
   incarnation(): Promise<string> {
     return settle(Effect.gen({ self: this }, function* () {
       this.trace('incarnation.exec.enter', {});
-      const read = yield* attempt('process', () => this.container.exec([...KERNEL_READ]));
+      const read = yield* attempt('process', () => containerExec(this.container, [...KERNEL_READ]));
       this.trace('incarnation.exec.exit', {});
       const output = yield* attempt('process', () => read.output());
       this.trace('incarnation.output.exit', { exitCode: output.exitCode });
@@ -295,9 +367,7 @@ export class Processes {
 
     return new Processes({
       get running() { return native.running; },
-      exec: (argv, options) => native.exec([
-        '/bin/sh', '-c', IN_KERNEL, 'devbox-incarnation', kernel, ...argv,
-      ], options),
+      exec: (argv, options) => containerExec(native, ['/bin/sh', '-c', IN_KERNEL, 'devbox-incarnation', kernel, ...argv], options),
     }, kernel, this.trace);
   }
 
@@ -340,22 +410,21 @@ export class Processes {
 
       // A name it reads the value of is left out: the pane sources this file after the session's own values are set.
       const variables = Object.entries(options.env ?? {}).filter(([name]) => options.revealed?.[name] === undefined)
-        .map(([name, value]) => `export ${name}='${value.replaceAll("'", "'\\''")}'\n`).join('');
+        .map(([name, value]) => `export ${name}='${boxValue(name, value).replaceAll("'", "'\\''")}'\n`).join('');
 
       if (variables !== '') yield* whileCurrent(options.current, () => attempt('file', () => this.#files.writeFile(`${dir}/env`, variables)));
 
       const revealed = options.revealed ?? {};
 
-      const env = options.session === undefined ? { ...CONTAINER_ENV, ...revealed } : {
-        ...CONTAINER_ENV,
+      const env = options.session === undefined ? boxEnv(revealed) : {
+        ...boxEnv(revealed),
         ...SESSION_FILES,
-        ...revealed,
         DEVBOX_SESSION: options.session,
         DEVBOX_JOB_PANE: JOB_PANE,
         ...(Object.keys(revealed).length > 0 && { DEVBOX_REVEALED: Object.keys(revealed).join(' ') }),
       };
 
-      const launched = yield* Effect.result(whileCurrent(options.current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {
+      const launched = yield* Effect.result(whileCurrent(options.current, () => attempt('process', () => containerExec(this.container, ['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {
         env, stdout: 'ignore', stderr: 'ignore',
       }))));
 
@@ -402,7 +471,7 @@ export class Processes {
   logs(id: string, limits: { readonly lines?: number | undefined; readonly bytes?: number | undefined }): Promise<string> {
     return settle(Effect.gen({ self: this }, function* () {
       const dir = yield* directory(id);
-      const ran = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', LOGS, 'devbox-logs', dir, String(limits.lines ?? LOG_LINES), String(limits.bytes ?? 0)]));
+      const ran = yield* attempt('process', () => containerExec(this.container, ['/bin/sh', '-c', LOGS, 'devbox-logs', dir, String(limits.lines ?? LOG_LINES), String(limits.bytes ?? 0)]));
       const output = yield* attempt('process', () => ran.output());
 
       if (output.exitCode === 3) return yield* Effect.fail(new DevboxError('missing', `no process ${id}`));
@@ -426,17 +495,17 @@ export class Processes {
 
       if (Result.isFailure(token) && !(SandboxFileError.is(token.failure.cause) && token.failure.cause.code === 'ENOENT')) return yield* Effect.fail(token.failure);
 
-      const ended = yield* whileCurrent(options.current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', `dir=$1; expected=$2
-[ -f "$dir/process.json" ] || exit 0
-if [ -n "$expected" ]; then [ "$(cat "$dir/pid" 2>/dev/null)" = "$expected" ] || exit 0; fi
-set -- "$dir"
-${UNLAUNCH} && exit 0
-while [ ! -f "$dir/pid" ] && [ ! -f "$dir/exit" ]; do sleep 0.1; done
-[ -f "$dir/exit" ] && exit 0
-${LIVE}
-pid=$(live "$dir") || exit 0
-${END_TREE}
-end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir, expected])));
+      const ended = yield* whileCurrent(options.current, () => attempt('process', () => containerExec(this.container, ['/bin/sh', '-c', `dir=$1; expected=$2
+      [ -f "$dir/process.json" ] || exit 0
+      if [ -n "$expected" ]; then [ "$(cat "$dir/pid" 2>/dev/null)" = "$expected" ] || exit 0; fi
+      set -- "$dir"
+      ${UNLAUNCH} && exit 0
+      while [ ! -f "$dir/pid" ] && [ ! -f "$dir/exit" ]; do sleep 0.1; done
+      [ -f "$dir/exit" ] && exit 0
+      ${LIVE}
+      pid=$(live "$dir") || exit 0
+      ${END_TREE}
+      end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir, expected])));
 
       const result = yield* attempt('process', () => ended.output());
 
@@ -447,7 +516,7 @@ end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir, expected])));
   /** `true`: the launch in `dir` never ran, and never will. */
   #unlaunched(dir: string, current?: () => boolean): Effect.Effect<boolean, DevboxError> {
     return Effect.gen({ self: this }, function* () {
-      const claim = yield* whileCurrent(current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', UNLAUNCH, 'devbox-unlaunch', dir])));
+      const claim = yield* whileCurrent(current, () => attempt('process', () => containerExec(this.container, ['/bin/sh', '-c', UNLAUNCH, 'devbox-unlaunch', dir])));
       const result = yield* attempt('process', () => claim.output());
 
       if (result.exitCode > 1) return yield* Effect.fail(new DevboxError('process', `the launch claim failed: ${new TextDecoder().decode(result.stderr)}`));
@@ -460,7 +529,7 @@ end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir, expected])));
     return Effect.gen({ self: this }, function* () {
       if (dirs.length === 0 || !this.container.running) return [];
       this.trace('status.exec.enter', { dirs: dirs.length });
-      const process = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', STATUS, 'devbox-status', ...dirs]));
+      const process = yield* attempt('process', () => containerExec(this.container, ['/bin/sh', '-c', STATUS, 'devbox-status', ...dirs]));
       this.trace('status.exec.exit', {});
       const result = yield* attempt('process', () => process.output());
       this.trace('status.output.exit', { exitCode: result.exitCode });

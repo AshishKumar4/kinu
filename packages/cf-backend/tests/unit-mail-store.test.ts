@@ -8,6 +8,8 @@ import { makeSqlExec } from '../../core/tests/helpers';
 import type { MailDelivery } from '@kinu.run/core';
 import { MailStore, type MailBlobs } from '@kinu.run/core';
 import { parseMail } from '../src/mail/parse';
+import { mailboxEmail } from '@kinu.run/core';
+import { routeInboundMail } from '../src/mail/router';
 
 // The Mailbox's store over SQLite, with the three real deliveries Cloudflare's MX made on 2026-10-19 (docs/MAIL.md §4)
 // as its mail. Their From is probe@ashishkumarsingh.com, which passed DMARC; the account's email is set per test to
@@ -215,6 +217,39 @@ describe('threads, views and search', () => {
     expect(arrived.headerId).not.toBeNull();
   });
 
+  // RFC 5322 §3.6.4: a reply's References is its parent's References and the parent's id (Main, 2026-10-20: only the
+  // parent went out, so a client lost the thread's earlier messages).
+  test("a reply deep in a thread carries the thread's whole chain in its References", async () => {
+    open('ashish@kinu.run');
+    const box = store.boxFor({ kind: 'agent', workspace: 'api-worker', name: 'scout', actorId: 'actor-scout' });
+    const recipient = { username: 'ashish', path: box.path, tag: null };
+
+    const fromDana = (id: string, answering: string | null) => new TextEncoder().encode([
+      'From: Dana Whitfield <dana@northwind.io>', 'To: scout.api-worker.ashish@kinu.run', 'Subject: Webhook deliveries to /hooks/v2 failing with 500',
+      `Message-ID: <${id}>`, ...(answering === null ? [] : [`In-Reply-To: <${answering}>`]), 'Content-Type: text/plain; charset=utf-8', '', 'Still a 500.',
+    ].join('\r\n'));
+
+    const reply = async (threadId: string, sentAs: string | null) => {
+      const queued = await store.queue({ path: box.path, threadId, to: ['dana@northwind.io'], subject: 'Re: Webhook deliveries', text: 'Looking.' });
+
+      if (sentAs !== null) store.sentAs(queued.view.id, `<${sentAs}>`);
+
+      return queued;
+    };
+
+    const { threadId } = await delivered({ raw: fromDana('m1@northwind.io', null), envelopeFrom: 'dana@northwind.io', recipient });
+    await reply(threadId, 'r2@kinu.run');
+    await delivered({ raw: fromDana('m3@northwind.io', 'r2@kinu.run'), envelopeFrom: 'dana@northwind.io', recipient });
+    await reply(threadId, 'r4@kinu.run');
+    await delivered({ raw: fromDana('m5@northwind.io', 'r4@kinu.run'), envelopeFrom: 'dana@northwind.io', recipient });
+    const last = await reply(threadId, null);
+    const chain = '<m1@northwind.io> <r2@kinu.run> <m3@northwind.io> <r4@kinu.run> <m5@northwind.io>';
+
+    expect({ inReplyTo: last.inReplyTo, references: last.references }).toEqual({ inReplyTo: '<m5@northwind.io>', references: chain });
+    expect(mailboxEmail({ from: last.from, to: ['dana@northwind.io'], cc: [], subject: 'Re', text: 'x', inReplyTo: last.inReplyTo, references: last.references }).headers)
+      .toEqual({ 'In-Reply-To': '<m5@northwind.io>', References: chain });
+  });
+
   test('Important is the person\'s box only, with the reason; unread counts what is unread there', async () => {
     open('ashish@kinu.run');
     const delivery = await delivered({ raw: raw('cloudflare-pass'), envelopeFrom: 'b@x', recipient: toPerson });
@@ -323,5 +358,41 @@ describe('what a sent message shows, and what replies to it reach', () => {
     });
 
     expect(reply.threadId).toBe(view.threadId);
+  });
+});
+
+// Schema audit, 2026-10-20: a clash on a 20-character label took `-2` past the label's 20 characters, so the address Kinu
+// gave the agent was one its router refused; under a 20-character workspace label the path broke the table's 41 outright.
+describe('a clash on a full-length label', () => {
+  test('is numbered inside the label, keeps its workspace, and mail reaches the address it gives', async () => {
+    open('ashish@kinu.run');
+    const writer = (workspace: string, actorId: string) => store.boxFor({ kind: 'agent', workspace, name: 'release-notes-writer', actorId });
+
+    const reached = async (address: string) => {
+      const bytes = stranger('Release notes for v2', 'Draft the notes.');
+      const rejected: string[] = [];
+
+      const routed = await routeInboundMail({
+        from: 'dana@northwind.io', to: address, headers: new Headers(), rawSize: bytes.byteLength,
+        raw: new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(bytes); controller.close(); } }), setReject: (reason) => { rejected.push(reason); },
+      }, {
+        domain: 'kinu.run',
+        name: () => ({ lookup: () => Promise.resolve({ label: 'ashish', user_id: 'u-ashish', kind: 'username', target_path: null, state: 'active' }) }),
+        mailbox: () => store,
+        wake: () => Promise.resolve(),
+        triage: () => Promise.resolve(),
+      });
+
+      return rejected.length === 0 && routed.outcome === 'filed' ? routed.delivery.box : `refused: ${rejected.join(', ')}`;
+    };
+
+    // Under a short workspace the numbered label alone was too long, which the router refuses; under a 20-character
+    // one the whole path was, which the table refuses.
+    for (const workspace of ['api', 'northwind-api-worker']) {
+      const [first, second] = [writer(workspace, `actor-writer-${workspace}`), writer(workspace, `actor-writer-2-${workspace}`)];
+
+      expect([first.path, second.path]).toEqual([`release-notes-writer.${workspace}`, `release-notes-writ-2.${workspace}`]);
+      expect(await reached(second.address)).toBe(second.path);
+    }
   });
 });

@@ -57,7 +57,7 @@ import { createAgentConfigStore, type AgentConfigStore } from '../src/config/sto
 import { resolveTurnSkills } from '../src/orchestrator/turn-surface';
 import { renderSkillsIndexSection } from '../src/skills/render';
 import { idleDream, refinementPass } from '../src/evolution/refinement-host';
-import { createTestSql, present } from '@kinu.run/test-utils';
+import { answeredAs, createTestSql, present } from '@kinu.run/test-utils';
 import { createLineLogger, renderThrownChain, setDiagnosticsSink } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
 import type { Database } from 'bun:sqlite';
@@ -128,11 +128,11 @@ function helperRoute(tier: HelperAsk['tier'], refiner: ScriptedRefiner, reviewer
       const role = Object.is(schema, DreamVerdictsSchema) ? 'dream_reviewer' : 'dreamer';
       refiner.requests.push({ role, tier, task: prompt });
 
-      if (role === 'dreamer') return v.parse(schema, extractJsonObject(await refiner.answerOf({ role, tier, task: prompt })));
+      if (role === 'dreamer') return answeredAs(schema, JSON.stringify(extractJsonObject(await refiner.answerOf({ role, tier, task: prompt }))));
       const edits = prompt.match(/^### Edit \d+:/gmu)?.length ?? 0;
       const answered = reviewer(prompt, edits);
 
-      return v.parse(schema, typeof answered === 'string' ? JSON.parse(answered) : { verdicts: answered });
+      return answeredAs(schema, typeof answered === 'string' ? answered : JSON.stringify({ verdicts: answered }));
     },
   };
 }
@@ -506,7 +506,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
         const key = Object.keys(DreamVerdictsSchema.entries)[0] ?? 'verdict';
         asked.push(key);
 
-        return v.parse(schema, { [key]: [{ edit: 0, verdict: 'accept', note: 'it fits the turns' }] });
+        return answeredAs(schema, JSON.stringify({ [key]: [{ edit: 0, verdict: 'accept', note: 'it fits the turns' }] }));
       },
     };
 
@@ -527,8 +527,8 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id);
 
     expect(row?.stage).toBe('refused');
-    expect(row?.detail).toContain('did not answer in its shape');
-    expect(row?.detail).toContain('verdict');
+    expect(row?.detail).toContain('did not answer (bad_input)');
+    expect(row?.detail).toContain('verdicts: expected');
   });
 
   test('the brief and the review name the picks the turns switched from or corrected, with their descriptions now', async () => {
@@ -739,7 +739,7 @@ describe('the brief and the schema are one contract', () => {
     expect(section).toContain(`\`rationale\` is ${String(MIN_EDIT_RATIONALE)} characters or longer`);
   });
 
-  test('an answer missing the required keys is refused, classified, naming every key', async () => {
+  test('an answer missing the required keys is refused, classified, naming the first key it got wrong and no other', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     // One key with no slot, and all three required keys absent.
@@ -752,9 +752,9 @@ describe('the brief and the schema are one contract', () => {
 
     expect(row.stage).toBe('refused');
 
-    for (const key of ['scope', 'summary', 'edits', 'see_rpi']) {
-      expect(row.detail).toContain(`${key}: Invalid key`);
-    }
+    const named = ['scope', 'summary', 'edits', 'see_rpi'].filter((key) => row.detail?.includes(`${key}: expected`) === true);
+
+    expect(named).toHaveLength(1);
 
     // A classified refusal, and nothing written.
     expect(row.detail).toContain('bad_input');

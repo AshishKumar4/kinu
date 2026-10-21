@@ -1,4 +1,5 @@
 import { Cause, Effect, Exit } from 'effect';
+import { ComputerProcessEnds, jobState } from '@kinu.run/core';
 import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { type SlateCaller, type SlateCallerHop } from '@kinu.run/core/slates';
 /**
@@ -104,10 +105,10 @@ import {
   type SqlExecutor,
   betaSwarms,
   // Background-job system (#173: auto-background past the surface threshold)
-  BackgroundJobRunner, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
+  BackgroundJobRunner, type JobResumer, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE,
   invocationBackgroundPolicy,
   type BackgroundJobStore, type TaskListStore,
-  resumeBackgroundJob, resumableBackgroundJob, harvestBackgroundJob, type ActorToolsets,
+  resumeBackgroundJob, resumableBackgroundJob, computerProcessJob, computerProcessResume, stopComputerProcessJob, harvestBackgroundJob, type ActorToolsets,
   cancelCurrentWork, getStoredModelSpec,
   type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
@@ -178,7 +179,7 @@ import { BROWSER_PRELUDE } from './browser-prelude';
 import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
-import { slateAiAnswer } from '@kinu.run/core/slates';
+import { initSlateUsageTable, slateAiAnswer } from '@kinu.run/core/slates';
 import { OwnedModelServices } from "./owned-model-services";
 import { AgentStoreBroker } from "./agent-facets";
 import type { AgentFacetCalls } from "./agent-facet/agent-facet";
@@ -194,7 +195,8 @@ import { gatedClientHandlers } from "./client-socket-gate";
 import { isWorkspaceTerminal } from "@kinu.run/core";
 import type { HostedBox, HostedWorkspace, WorkspaceTerminal } from "./workspace-host";
 import type { UserCaller } from "@kinu.run/core";
-import { JOB_STAMP_ENV, sha256Hex, webSearchChainOf } from '@kinu.run/core';
+import { ensureIdentityTable, initMissionBudgetTable, JOB_STAMP_ENV, sha256Hex, webSearchChainOf } from '@kinu.run/core';
+import { initWorkspaceGenerationTable } from '@kinu.run/core/workspace';
 import { attributeWorkspace, installAnalyticsDiagnostics } from "@kinu.run/core/analytics";
 import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
@@ -564,9 +566,18 @@ export abstract class ActorAgent extends Agent<Env> {
   protected repairStorage(init: () => void): void {
     const { storage } = this.ctx;
 
+    const execRaw = (ddl: string) => { storage.sql.exec(ddl); };
+
     this.schemaRepair = repairSchema(storage.sql, {
       schema: 'workspace', tables: SCHEMA_TABLES.workspace, stamps: durableStamps(storage.kv),
       transactionSync: (write) => storage.transactionSync(write), init,
+      // Made on first use: the boot's agent identities, the hosted workspace's generation, a ledger, the slates.
+      later: () => {
+        ensureIdentityTable(storage.sql);
+        initWorkspaceGenerationTable(storage.sql);
+        initMissionBudgetTable(execRaw);
+        initSlateUsageTable(execRaw);
+      },
     }, `workspace ${this.name}`);
 
     if (this.schemaRepair?.refused == null) return;
@@ -1883,6 +1894,40 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   // Work auto-detached past the 30s threshold (#173).
+  private _processEnds: ComputerProcessEnds | undefined;
+
+  /** Where this object's actors' computer processes run as jobs end (`ComputerProcessEnds`). */
+  protected get processEnds(): ComputerProcessEnds {
+    return this._processEnds ??= new ComputerProcessEnds({
+      state: (jobId) => jobState(this.jobRow(jobId)?.status),
+      // The end is the job's own outcome: its row settles with it, through the runner that holds the job.
+      complete: async (jobId, end) => {
+        const row = this.jobRow(jobId);
+        const process = row === null ? null : computerProcessJob(row.kind, row.input);
+
+        if (row !== null && process !== null) await this.jobRunnerHolding(row.actorId)?.complete(jobId, { processId: process.processId, ...end });
+      },
+    });
+  }
+
+  /** A job's row in the workspace's one job table, whichever actor's it is. */
+  protected jobRow(jobId: string): { readonly actorId: string; readonly kind: string; readonly status: string; readonly input: JsonValue } | null {
+    const [row] = this.ctx.storage.sql.exec('SELECT actor_id, kind, status, input_json FROM background_jobs WHERE id = ?', jobId).toArray();
+    const parsed = v.safeParse(v.object({ actor_id: v.string(), kind: v.string(), status: v.string(), input_json: v.nullable(v.string()) }), row);
+
+    if (!parsed.success) return null;
+    const { actor_id: actorId, kind, status, input_json: input } = parsed.output;
+
+    return { actorId, kind, status, input: input === null ? null : v.parse(JsonValueSchema, JSON.parse(input)) };
+  }
+
+  /** The runner that holds `actorId`'s jobs: the workspace agent's, or a hire's own, revived if it is not hosted now. */
+  protected jobRunnerHolding(actorId: string): BackgroundJobRunner | null {
+    if (actorId === this.actorHandle().actorId) return this.jobRunner;
+
+    return (this.jobAuthorities.live(actorId) ?? this.reviveJobAuthority(actorId))?.runner ?? null;
+  }
+
   protected get jobs(): BackgroundJobStore {
     return this.stores.jobs;
   }
@@ -1959,8 +2004,14 @@ export abstract class ActorAgent extends Agent<Env> {
 
       },
       // Evict-resume (B6): re-drive from the durable checkpoint. Side-effecting kinds (eval / run)
-      // decline and fall back to the eviction failure.
-      resume: { resumes: resumableBackgroundJob, redrive: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, input, mode, signal) },
+      // decline and fall back to the eviction failure. A computer's process runs on in its box across this object's
+      // restart: its job is resumed by waiting for the end its box tells, starting nothing.
+      resume: {
+        resumes: (kind, input) => resumableBackgroundJob(kind, input) || this.computerProcessResume.resumes(kind, input),
+        redrive: (kind, input, mode, signal) => (this.computerProcessResume.resumes(kind, input)
+          ? this.computerProcessResume.redrive(kind, input, mode, signal)
+          : this.resumeBackgroundJob(kind, input, mode, signal)),
+      },
       // Same predicate as `resume`: a kind that cannot be re-driven has no harvestable partial.
       harvest: (kind, input) => Promise.resolve(harvestBackgroundJob(
         { sql: this.boundSql, actor: this.actorHandle(), ledger: this.mctsSearchStore }, kind, input,
@@ -2001,6 +2052,8 @@ export abstract class ActorAgent extends Agent<Env> {
     const { notifySettled, ...own } = actor;
 
     return new BackgroundJobRunner({
+      // A hire's computer processes resume as the workspace agent's do; one that re-drives more brings its own.
+      resume: this.computerProcessResume,
       ...own,
       ...this.workspaceJobPorts(owner),
       logActivity: (event, detail) => this.logActivity(event, detail),
@@ -2024,8 +2077,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
         return this.transferDeviceRequests(jobId, requestIds);
       },
-      // A refused device cancel leaves the job running and retryable.
-      onCancelled: (jobId) => this.cancelBackgroundDeviceRequests(jobId),
+      // A refused device cancel, or a computer's process its box would not stop, leaves the job running and retryable.
+      onCancelled: async (jobId) => {
+        await this.stopComputerProcessJob(jobId);
+        await this.cancelBackgroundDeviceRequests(jobId);
+      },
       onSettled: () => { this.detachOwned(Effect.promise(() => this.servingMoved())); },
       // A command on the computer runs in the box's container, which a restart of this object leaves running: its
       // processes carry its job's id (`sandbox.ts`), and the box is asked for them without being started.
@@ -2060,6 +2116,16 @@ export abstract class ActorAgent extends Agent<Env> {
    * `terminated` and `unknown` count as settled; any `failed` (command may still run) throws,
    * keeping the job `running` so the cancel can be retried.
    */
+  /** A computer's process runs on across this object's restart: its job resumes waiting for the end its box tells. */
+  private get computerProcessResume(): JobResumer {
+    return computerProcessResume((jobId) => this.processEnds.ended(jobId));
+  }
+
+  /** A cancelled job that is a computer's process, read from the workspace's one job table, whichever actor's it is. */
+  private async stopComputerProcessJob(jobId: string): Promise<void> {
+    await stopComputerProcessJob(this.jobRow(jobId), this.rt.sandboxHandle, jobId);
+  }
+
   private async cancelBackgroundDeviceRequests(jobId: string): Promise<void> {
     const { stub, caller } = await this.userHub();
     const outcomes = await stub.cancelDeviceRequestsForBackgroundJob(caller, jobId);
@@ -2271,7 +2337,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!this._rt) {
       const hooks: CFRuntimeHooks = {
         deferrals: () => this.deferralChannel(),
-        slate: (operation) => this.slate(operation),
+        slate: (operation, turn) => this.programSlate(operation, turn),
         reportModelCall: (report) => this.reportModelCall(report),
         modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
@@ -2281,6 +2347,8 @@ export abstract class ActorAgent extends Agent<Env> {
         currentTurn: (reference) => this.currentTurnOf(reference),
         accounts: () => this.providerAccounts(),
         refusals: this.tierRefusals,
+        jobs: () => this.jobRunner,
+        processEnds: () => this.processEnds,
         contextPlane: {
           actorId: this.actorHandle().actorId,
           // Main's context is its own isolate's, as every agent's is.
@@ -2345,7 +2413,12 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Every actor's slate operations run on the object that owns its workspace, as this actor. */
   async slate(operation: SlateOperation): Promise<SlateCallResult> {
-    return workspaceOwner(this.env, this.workspaceName()).slateAs(this.slateCaller(), operation);
+    return await this.programSlate(operation);
+  }
+
+  /** A slate operation from this actor's own program, which `turn` runs (`SlateInvocation.turn`); never a browser's. */
+  protected async programSlate(operation: SlateOperation, turn?: string): Promise<SlateCallResult> {
+    return await workspaceOwner(this.env, this.workspaceName()).slateAs(this.slateCaller(), operation, turn);
   }
 
   /** Whether a slate still builds, asked as this actor; a check, never a preview. */
@@ -2505,35 +2578,7 @@ export abstract class ActorAgent extends Agent<Env> {
           return v.parse(JsonValueSchema, JSON.parse(answered));
         }
 
-        case 'agent': {
-          // `said` is the slate's own message, for the person's card; the text adds what the agent is told.
-          const metadata: JsonObject = { slate: route.slate, said: cardWords(route.text), ask: route.ask === true };
-
-          if (route.data !== undefined) metadata.data = route.data;
-
-          if (route.viewer !== undefined) metadata.viewer = route.viewer;
-
-          const said = route.viewer === undefined ? `Slate ${route.slate}: ${route.text}` : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`;
-
-          context.admit?.();
-
-          if (route.ask !== true) return { outcome: yield* Effect.promise(async () => this.slateInbox().send({ kind: 'slate', text: said, metadata })) };
-
-          // Asked: the reply is open before the message is sent, so the turn it lands in feeds it from its first word. A
-          // send that opens a turn settles only when that turn ends, so the reply is answered now and only the wait is
-          // detached; a message that never lands says so on its card, which ends the reply.
-          const key = `ask:${crypto.randomUUID()}`;
-          const reply = this.replies.open(signalCardId(key));
-
-          const sent = this.slateInbox().send({
-            kind: 'slate', idempotencyKey: key, metadata,
-            text: `${said}\nYour answer's text streams to slate ${route.slate} as you write it: answer it in prose.`,
-          });
-
-          this.detachOwned(Effect.promise(async () => { await this.keepAliveWhile(async () => sent); }));
-
-          return { reply };
-        }
+        case 'agent': return yield* this.slateAgentCall(route, context);
 
         case 'ai': return yield* Effect.promise(async () => this.slateAiRun(route, undefined, context.admit));
 
@@ -2545,6 +2590,49 @@ export abstract class ActorAgent extends Agent<Env> {
 
         case 'app': return yield* new KinuError('bad_input', 'An app hop is answered by the slate host, not by an actor');
       }
+    });
+  }
+
+  /** A slate's `agent.send` or `agent.ask`, delivered to this agent's turn inbox. */
+  private slateAgentCall(route: Extract<SlateRoute, { kind: 'agent' }>, context: SlateDispatchContext): Effect.Effect<SlateSurfaceValue, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      // `said` is the slate's own message, for the person's card; the text adds what the agent is told.
+      const metadata: JsonObject = { slate: route.slate, said: cardWords(route.text), ask: route.ask === true };
+
+      if (route.data !== undefined) metadata.data = route.data;
+
+      if (route.viewer !== undefined) metadata.viewer = route.viewer;
+
+      const said = route.viewer === undefined ? `Slate ${route.slate}: ${route.text}` : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`;
+
+      // A program this agent's running turn waits on began the chain: the reply could come only once that turn ends,
+      // and the turn waits on the program, so the ask is refused now rather than held until the turn gives up on it.
+      if (route.ask === true && context.turn !== undefined && context.turn === this.mainChatTurn()) {
+        return yield* new KinuError('unsupported', `agent.ask came from a program the agent is running in its turn, which waits on that program: the agent can answer only once the program returns, so the ask would wait on itself. A slate the agent's own program calls answers without asking it (ai.run), and a page asks it outside its turns.`);
+      }
+
+      context.admit?.();
+
+      if (route.ask !== true) {
+        const delivered: SlateSurfaceValue = { outcome: yield* Effect.promise(async () => this.slateInbox().send({ kind: 'slate', text: said, metadata })) };
+
+        return delivered;
+      }
+
+      // Asked: the reply is open before the message is sent, so the turn it lands in feeds it from its first word. A
+      // send that opens a turn settles only when that turn ends, so the reply is answered now and only the wait is
+      // detached; a message that never lands says so on its card, which ends the reply.
+      const key = `ask:${crypto.randomUUID()}`;
+      const reply = this.replies.open(signalCardId(key));
+
+      const sent = this.slateInbox().send({
+        kind: 'slate', idempotencyKey: key, metadata,
+        text: `${said}\nYour answer's text streams to slate ${route.slate} as you write it: answer it in prose.`,
+      });
+
+      this.detachOwned(Effect.promise(async () => { await this.keepAliveWhile(async () => sent); }));
+
+      return { reply };
     });
   }
 

@@ -21,6 +21,9 @@ import {
 } from './sharing';
 import { admitNestedViewerCall, routeViewerCall, SLATE_DRIVEN_MEMBERS, slateCallAddress, type SlateCallRequest, type SlateInvocation, type SlateRoute, type SlateViewer } from './surface';
 
+/** Every signed-in viewer, where the deployment keeps no key to tell them apart by. */
+const SIGNED_IN_VIEWER = 'viewer';
+
 export interface SlateShareViewersDeps {
   readonly live: SlateLiveShareStore;
   /** The app's page a `users` share is entered through, or null where this deployment names no app origin. */
@@ -30,6 +33,12 @@ export interface SlateShareViewersDeps {
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   ownerUserId?(): string | null;
+  /**
+   * A signed-in viewer's key on a share: the deployment's keyed hash of them, which no one links to them, or one share's
+   * viewer to another's, without its secret. Their requests and conversations are kept under it, never their account,
+   * so a deleted account leaves nothing here that names it. Absent or null, every signed-in viewer is one.
+   */
+  viewerKey?(share: string, userId: string): Promise<string | null>;
   /** Settles a spent approval once its call was handed on (shared-server.ts takes it at the send). */
   readonly ownerEffects?: Pick<OwnerEffects, 'settle'>;
 }
@@ -67,6 +76,13 @@ export class SlateShareViewers {
     return userId === this.deps.ownerUserId?.() || this.deps.live.hasUser(share, userId);
   }
 
+  /** What a signed-in viewer is kept under on `share`: its key for them, or, with none, every signed-in viewer's. */
+  private async signedIn(share: string, userId: string): Promise<string> {
+    const key = await this.deps.viewerKey?.(share, userId) ?? null;
+
+    return key === null ? SIGNED_IN_VIEWER : `viewer:${key}`;
+  }
+
   /** Re-reads the share row now (S6: a revoked share refuses before a process starts). */
   async admit(input: { readonly handle: string; readonly claim: ShareViewerClaim; readonly pathname: string }): Promise<ViewerAdmission> {
     const share = this.deps.live.byHandle(input.handle);
@@ -77,7 +93,7 @@ export class SlateShareViewers {
     if (entry !== null) return { kind: 'sign-in', entry };
 
     if (share.visibility === 'users' && (input.claim.userId === null || !this.admits(share.id, input.claim.userId))) return { kind: 'missing' };
-    const subject = input.claim.userId === null ? `source:${input.claim.source}` : `user:${input.claim.userId}`;
+    const subject = input.claim.userId === null ? `source:${input.claim.source}` : await this.signedIn(share.id, input.claim.userId);
 
     // S2: a viewer past the bound is refused; the share is never paused.
     if (this.deps.admitted !== undefined && !await this.deps.admitted(`${share.id}:${subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) return { kind: 'too-many' };

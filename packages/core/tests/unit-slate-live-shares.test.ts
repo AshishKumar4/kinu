@@ -1,12 +1,14 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initSlateLiveShareTables, SIGNED_OUT_VIEWER, SlateLiveShareStore } from '../src/slates/live-shares';
+import { SlateShareStore } from '../src/slates/shares';
 import { setShareMode, shareLiveSlate } from '../src/slates/live-sharing';
 import { initSlateBuildTable, SlateBuilds } from '../src/slates/builds';
 import { GALLERY_CATEGORIES, type GalleryCategory } from '../src/slates/gallery-api';
 import { grantAdmits, slateCapabilityGraph } from '../src/slates/capability-graph';
 import { makeExecRaw, makeSqlExec } from './helpers';
 import type { ShareGrant } from '../src/slates/sharing';
+import { SlateShareViewers } from '../src/slates/share-viewers';
 
 const grant: ShareGrant = {
   slates: ['issues'],
@@ -65,10 +67,10 @@ test('edit attribution comes from the slate mark in every mode, never from an en
   const { db, shares } = shareDb();
 
   shares.add(liveShare());
-  shares.markEdit('issues', 'pat@example.test', 'r0');
-  shares.markEdit('issues', 'sam@example.test', 'r1');
+  shares.markEdit('issues', 'pat@example.test');
+  shares.markEdit('issues', 'sam@example.test');
 
-  expect(shares.editMark('issues')).toEqual({ editor: 'sam@example.test', revisionBefore: 'r1' });
+  expect(shares.editMark('issues')).toEqual({ editor: 'sam@example.test' });
   expect(shares.get('s1')).toMatchObject({ mode: 'own', grantRevision: null, editedBy: 'sam@example.test' });
   expect(shares.byHandle('0123456789')?.editedBy).toBe('sam@example.test');
   expect(shares.add({ ...liveShare(), id: 's2', handle: '1123456789', authority: { mode: 'owner', grantRevision: 'r0' } }))
@@ -102,6 +104,53 @@ test('named users land on the share and a revoked share takes no more', () => {
 
     shares.revoke(share.id);
     expect(() => shares.addUsers(share.id, [{ userId: 'u3', email: 'c@example.com' }])).toThrow();
+  } finally {
+    db.close();
+  }
+});
+
+// Both kinds keep their people in one table: a blueprint's recipient is no viewer of a live share of the same id space.
+test('a blueprint\'s recipient is not a live share\'s user, and a live share\'s user is the live share\'s alone', () => {
+  const { db, shares } = shareDb();
+
+  try {
+    const blueprints = new SlateShareStore(makeSqlExec(db), () => 1);
+
+    blueprints.add({ id: 'b1', slate: 'issues', publication: 'p1' });
+    blueprints.addUsers('b1', [{ userId: 'u1', email: 'alpha@example.com' }]);
+    shares.add(liveShare());
+    shares.addUsers('s1', [{ userId: 'u2', email: 'beta@example.com' }]);
+
+    expect([shares.hasUser('b1', 'u1'), shares.hasUser('s1', 'u2'), shares.hasUser('s1', 'u1')]).toEqual([false, true, false]);
+  } finally {
+    db.close();
+  }
+});
+
+test('a share row holds one kind whole: a blueprint holds no live field, a live share no publication', () => {
+  const { db } = shareDb();
+
+  try {
+    const insert = (row: Record<string, string | number | null>) => {
+      const columns = Object.keys(row);
+
+      db.query(`INSERT INTO slate_shares (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`).run(...Object.values(row));
+    };
+
+    const blueprint = { id: 'b1', kind: 'blueprint', slate_id: 'issues', created_at: 1, publication_id: 'p1' };
+    const live = { id: 's1', kind: 'live', slate_id: 'issues', created_at: 1, visibility: 'users', handle: '0123456789', grant_json: '{}', mode: 'own' };
+
+    insert(blueprint);
+    insert(live);
+
+    for (const mixed of [
+      { ...blueprint, id: 'b2', handle: '9876543210' },
+      { ...blueprint, id: 'b3', mode: 'own' },
+      { ...live, id: 's2', handle: '1111111111', publication_id: 'p1' },
+      { ...live, id: 's3', handle: '2222222222', grant_json: null },
+    ]) {
+      expect(() => { insert(mixed); }).toThrow('CHECK constraint failed');
+    }
   } finally {
     db.close();
   }
@@ -197,7 +246,7 @@ test('a slate\'s live shares say what its server acts with, a revoked one nothin
   try {
     shares.add(liveShare());
     shares.add({ ...liveShare(), id: 's2', handle: '1123456789' });
-    db.exec("UPDATE slate_live_shares SET mode = 'owner', grant_revision = 'rev-1' WHERE id = 's2'");
+    db.exec("UPDATE slate_shares SET mode = 'owner', grant_revision = 'rev-1' WHERE id = 's2'");
     shares.add({ ...liveShare(), id: 's3', handle: '2123456789' });
     shares.revoke('s3');
     shares.add({ ...liveShare(), id: 'other', slate: 'other', handle: '3123456789' });
@@ -218,9 +267,9 @@ test('an owner share names the revision its reach was approved for, and an own s
   try {
     shares.add(liveShare());
 
-    expect(() => db.exec("UPDATE slate_live_shares SET mode = 'owner' WHERE id = 's1'")).toThrow('CHECK constraint failed');
-    expect(() => db.exec("UPDATE slate_live_shares SET grant_revision = 'rev-1' WHERE id = 's1'")).toThrow('CHECK constraint failed');
-    expect(() => db.exec("UPDATE slate_live_shares SET mode = 'all' WHERE id = 's1'")).toThrow('CHECK constraint failed');
+    expect(() => db.exec("UPDATE slate_shares SET mode = 'owner' WHERE id = 's1'")).toThrow('CHECK constraint failed');
+    expect(() => db.exec("UPDATE slate_shares SET grant_revision = 'rev-1' WHERE id = 's1'")).toThrow('CHECK constraint failed');
+    expect(() => db.exec("UPDATE slate_shares SET mode = 'all' WHERE id = 's1'")).toThrow('CHECK constraint failed');
   } finally {
     db.close();
   }
@@ -308,9 +357,9 @@ test('a live share is listed with its card\'s words while on its viewers\' own a
     // Never on the owner's access: the store refuses, and the table refuses a row that would say so.
     shares.setAuthority('s1', { mode: 'owner', grantRevision: 'rev-1' }, grant);
     expect(shares.setListing('s1', card)).toBe(false);
-    expect(() => db.exec(`UPDATE slate_live_shares SET listing_line = 'x', listing_category = 'work' WHERE id = 's1'`)).toThrow('CHECK constraint failed');
-    expect(() => db.exec(`UPDATE slate_live_shares SET listing_line = 'x', listing_category = 'games' WHERE id = 's2'`)).toThrow('CHECK constraint failed');
-    expect(() => db.exec(`UPDATE slate_live_shares SET listing_line = 'x', listing_category = NULL WHERE id = 's2'`)).toThrow('CHECK constraint failed');
+    expect(() => db.exec(`UPDATE slate_shares SET listing_line = 'x', listing_category = 'work' WHERE id = 's1'`)).toThrow('CHECK constraint failed');
+    expect(() => db.exec(`UPDATE slate_shares SET listing_line = 'x', listing_category = 'games' WHERE id = 's2'`)).toThrow('CHECK constraint failed');
+    expect(() => db.exec(`UPDATE slate_shares SET listing_line = 'x', listing_category = NULL WHERE id = 's2'`)).toThrow('CHECK constraint failed');
 
     // Every category the Gallery offers is one the table keeps.
     for (const category of GALLERY_CATEGORIES) expect(shares.setListing('s2', { ...card, category })).toBe(true);
@@ -442,3 +491,45 @@ test("a share's numbers: distinct people signed in, every open, and signed-out o
   }
 });
 
+
+// Owner decision, 2026-10-20 (account deletion): a signed-in viewer's requests are kept under the share's keyed hash of
+// them, never their account, so a deleted account leaves nothing in another owner's workspace that names it, and
+// nothing there needs reaching when it is deleted.
+test("a signed-in viewer's requests are kept under the share's key for them, never their account", async () => {
+  const { db, shares } = shareDb();
+
+  try {
+    shares.add({ ...liveShare(), visibility: 'public', grant: { slates: ['issues'], members: [] } });
+    const keys: string[] = [];
+
+    const viewers = new SlateShareViewers({
+      live: shares, shareEntry: () => null,
+      viewerKey: async (share, userId) => {
+        keys.push(`${share}:${userId}`);
+
+        return 'k-priya';
+      },
+    });
+
+    const admission = await viewers.admit({ handle: '0123456789', claim: { userId: 'u-priya', source: 'ip', consented: true }, pathname: '/' });
+
+    expect(admission).toMatchObject({ kind: 'admitted', viewer: { subject: 'viewer:k-priya' } });
+    expect(keys).toEqual(['s1:u-priya']);
+    expect(shares.requests('s1').map((request) => request.viewer)).toEqual(['viewer:k-priya']);
+    expect(db.query("SELECT COUNT(*) AS n FROM slate_viewer_requests WHERE instr(viewer, 'u-priya') > 0").get()).toEqual({ n: 0 });
+  } finally { db.close(); }
+});
+
+// Owner decision, 2026-10-20 (account deletion): a revoked share has no members, so none is kept naming a person after
+// nothing can use it.
+test('revoking a share deletes its members with it', () => {
+  const { db, shares } = shareDb();
+
+  try {
+    shares.add(liveShare());
+    shares.addUsers('s1', [{ userId: 'u-priya', email: 'priya.raman@example.com' }]);
+    shares.revoke('s1');
+
+    expect(db.query('SELECT COUNT(*) AS n FROM slate_share_users WHERE share_id = ?').get('s1')).toEqual({ n: 0 });
+  } finally { db.close(); }
+});
