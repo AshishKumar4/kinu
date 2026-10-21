@@ -173,10 +173,18 @@ export interface UserMcpServersHost extends Pick<UserObjectHost, 'ctx' | 'env' |
   readonly vault: Pick<UserCredentials, 'sealMcpHeaders' | 'openMcpHeaders' | 'getAuthHeaders'>;
 }
 
-/** Where a server's sign-in keeps the run it was begun for, until its callback takes it. */
-function connectRunKey(serverId: string): string {
-  return `mcp-connect-run:${serverId}`;
+/** Where a sign-in keeps the run it was begun for: under the exact OAuth state the SDK minted for it, which its callback
+ *  carries back. The state names its server in the clear (`{nonce}.{serverId}`), and the SDK answers a callback with that
+ *  server whether or not it verified the state, so a run is never found by the server alone. */
+function connectRunKey(serverId: string, state?: string): string {
+  return `mcp-connect-run:${serverId}:${state ?? ''}`;
 }
+
+/** How long a sign-in's state stays redeemable, as the SDK keeps it (`do-oauth-client-provider.js`, STATE_EXPIRATION_MS):
+ *  a run older than this can end no sign-in. */
+const CONNECT_RUN_MS = 600_000;
+
+const StoredConnectRunSchema = v.object({ run: ConnectRunSchema, at: v.number() });
 
 /** The account's MCP servers. */
 export class UserMcpServers {
@@ -972,15 +980,20 @@ export class UserMcpServers {
 
       if (!parsed.success) return yield* new KinuError('bad_input', 'A sign-in starts from the page that asks for it.');
       yield* Effect.promise(async () => this.joinActivation());
-      const server = (yield* Effect.promise(async () => this.userMcp_list(caller))).find((summary) => summary.id === id);
+      // This server alone: its configuration, its name, its connection. Listing every server would dial and read them all.
+      const configured = this.host.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers WHERE id = ?`, id).length > 0;
+      const name = this.catalog().get(id)?.name;
 
-      if (server === undefined) return yield* new KinuError('missing', 'This account has no such MCP server.');
+      if (!configured || name === undefined) return yield* new KinuError('missing', 'This account has no such MCP server.');
 
-      if (server.status === 'ready') return yield* new KinuError('bad_input', `${server.name} is connected already.`);
+      if (mapConnectionStatus(this.host.mcp.mcpConnections[id]?.connectionState) === 'ready') return yield* new KinuError('bad_input', `${name} is connected already.`);
       const result = yield* Effect.promise(async () => this.host.mcp.connectToServer(id));
 
-      if (result.state !== 'authenticating' || !result.authUrl) return yield* new KinuError('bad_input', `${server.name} waits for no sign-in.`);
-      yield* Effect.promise(async () => this.host.ctx.storage.put(connectRunKey(id), parsed.output));
+      if (result.state !== 'authenticating' || !result.authUrl) return yield* new KinuError('bad_input', `${name} waits for no sign-in.`);
+      const state = new URL(result.authUrl).searchParams.get('state');
+
+      if (state === null) return yield* new KinuError('unavailable', `${name}'s sign-in names no state its end could be matched by.`);
+      yield* Effect.promise(async () => this.keepConnectRun(id, state, parsed.output));
 
       return { authUrl: result.authUrl };
     }));
@@ -995,7 +1008,7 @@ export class UserMcpServers {
       await this.joinActivation();
       const req = new Request(url);
       const result = await this.host.mcp.handleCallbackRequest(req);
-      const run = await this.connectRun(result.serverId);
+      const run = await this.connectRun(result.serverId, req);
 
       if (result.authSuccess) {
         // Awaited in its own try: tokens are already saved, so a connect failure is not an auth failure.
@@ -1014,8 +1027,9 @@ export class UserMcpServers {
       }
 
       // Declined or refused, the server still waits for a sign-in, as it did before this one began: dialled again, it
-      // offers a fresh one, and its row the way to it. Left failed, its row offered none (the `connect` live row).
-      if (result.serverId !== undefined) await hold(this.dialForSignIn(result.serverId));
+      // offers a fresh one, and its row the way to it. Left failed, its row offered none (the `connect` live row). Only a
+      // sign-in begun here: a callback whose state names no run is no sign-in of this account's to answer.
+      if (result.serverId !== undefined && run !== null) await hold(this.dialForSignIn(result.serverId));
 
       return { run, service: this.serverName(result.serverId), error: result.authError ?? 'The MCP server refused the sign-in.' };
     } catch (cause) {
@@ -1035,16 +1049,32 @@ export class UserMcpServers {
     }, (failure) => { diagnostics.failure('mcp.redial_after_sign_in_failed', failure, { serverId }); })));
   }
 
-  /** The run a sign-in of `serverId` was begun for, taken: one callback ends one run. */
-  private async connectRun(serverId: string | null | undefined): Promise<string | null> {
-    if (serverId === null || serverId === undefined) return null;
-    const key = connectRunKey(serverId);
-    const run = v.safeParse(ConnectRunSchema, await this.host.ctx.storage.get(key));
+  /** Keeps `run` for the sign-in of `serverId` the SDK minted `state` for, and drops this server's runs whose states
+   *  have expired: one tab's begin never replaces another's. */
+  private async keepConnectRun(serverId: string, state: string, run: string): Promise<void> {
+    const storage = this.host.ctx.storage;
+    const now = Date.now();
+    const kept = await storage.list({ prefix: connectRunKey(serverId) });
+    const expired = [...kept].filter(([, stored]) => !v.is(StoredConnectRunSchema, stored) || now - stored.at > CONNECT_RUN_MS).map(([key]) => key);
+
+    if (expired.length > 0) await storage.delete(expired);
+    await storage.put(connectRunKey(serverId, state), { run, at: now });
+  }
+
+  /** The run the sign-in `req` ends was begun for, taken: found by the exact state it carries, so one callback ends one
+   *  run, and a callback with a state this account never minted ends none. */
+  private async connectRun(serverId: string | null | undefined, req: Request): Promise<string | null> {
+    const state = new URL(req.url).searchParams.get('state');
+
+    if (serverId === null || serverId === undefined || state === null) return null;
+    const key = connectRunKey(serverId, state);
+    const stored = v.safeParse(StoredConnectRunSchema, await this.host.ctx.storage.get(key));
 
     await this.host.ctx.storage.delete(key);
 
-    return run.success ? run.output : null;
+    return stored.success && Date.now() - stored.output.at <= CONNECT_RUN_MS ? stored.output.run : null;
   }
+
 
   /** A server's name as the person gave it, for words about it. */
   private serverName(serverId: string | null | undefined): string {

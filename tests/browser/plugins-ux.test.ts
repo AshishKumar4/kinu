@@ -248,6 +248,33 @@ describe('MCP presets', () => {
     });
   });
 
+  // Review finding (2026-10-23): a custom server's sign-in that could not begin was said on the add form, which the add
+  // then closed, so the failure went with it.
+  test('a custom server whose sign-in cannot begin says so in the manager after its form closes', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'plugins&mcp-sign-in=refused', 'dark', 'desktop');
+      const manage = 'xpath/.//header//button[normalize-space()="Manage"]';
+
+      try {
+        await page.waitForSelector(manage);
+        await page.click(manage);
+        await page.waitForSelector('[role="dialog"]');
+        await page.$$eval('[role="dialog"] button', (buttons) => buttons.find((button) => button.textContent?.includes('Add custom server'))?.click());
+        await page.type('[role="dialog"] input[placeholder="github"]', 'tracker');
+        await page.type('[role="dialog"] input[placeholder="https://mcp.example.com/v1"]', 'https://mcp.tracker.example/v1');
+        await page.$$eval('[role="dialog"] button', (buttons) => buttons.find((button) => button.textContent === 'Add server')?.click());
+        await page.waitForSelector('[role="dialog"] [data-connect-ended="failed"]');
+
+        expect({
+          formOpen: await page.$('[role="dialog"] input[placeholder="github"]') !== null,
+          said: await page.$eval('[role="dialog"] [data-connect-ended="failed"]', (node) => node.textContent ?? ''),
+        }).toEqual({ formOpen: false, said: expect.stringContaining("The MCP server's sign-in could not begin.") });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('the preset row renders in the account modal and on the plugins page at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
       

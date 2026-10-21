@@ -29,7 +29,7 @@ import {
 import "virtual:kinu-theme.css";
 import "./index.css";
 import { markDocument, codenameFor, mintAgentName, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
+import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, type McpPreset, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, OwnerAnswersSchema, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
 import type { AlternateTakeSet, AskingAgent, OwedOwnerIntent, OwnerAnswer, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
 import { OwedOwnerIntentSchema } from "@kinu.run/core";
@@ -293,6 +293,9 @@ const GALLERY_UNCLAIMED_MCP = GALLERY_CUSTOM_MCP.filter((row) => row.name !== "g
 let galleryMcpRows: McpServerSummary[] = [...GALLERY_CUSTOM_MCP];
 
 const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset");
+
+/** `&mcp-sign-in=refused`: a custom server's add needs a sign-in, and the account refuses to begin it. */
+const MCP_SIGN_IN_REFUSED = new URLSearchParams(location.search).get("mcp-sign-in") === "refused";
 
 if (mcpPresetVariant === "connected") {
   galleryMcpRows = [
@@ -669,7 +672,17 @@ function mcpConnectFixture(path: string, method: string, body: BodyInit | null |
 
   localStorage.setItem("gallery-mcp-connects", `${localStorage.getItem("gallery-mcp-connects") ?? ""}${typeof body === "string" ? body : ""}\n`);
 
+  if (MCP_SIGN_IN_REFUSED) return fixtureJson({ error: "The MCP server's sign-in could not begin." }, 502);
+
   return row?.authUrl ? fixtureJson({ authUrl: row.authUrl }) : fixtureJson({ error: "waits for no sign-in" }, 400);
+}
+
+/** Whether an add signs in: only where an authorize URL exists, DCR always, oauth-app only while the frame claims the app;
+ *  a custom server only where the frame refuses its sign-in. */
+function gallerySignsIn(preset: McpPreset | undefined): boolean {
+  if (preset === undefined) return MCP_SIGN_IN_REFUSED;
+
+  return preset.auth === 'oauth' || (preset.auth === 'oauth-app' && mcpSecrets.has(preset.id));
 }
 
 function mcpServersFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
@@ -691,9 +704,7 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
       return fixtureJson({ error: `An MCP server named '${name}' already exists.` }, 400);
     }
 
-    // Sign-in only where an authorize URL exists: DCR always, oauth-app only while the frame claims the app.
-    const signIn = preset?.auth === 'oauth'
-      || (preset?.auth === 'oauth-app' && mcpSecrets.has(preset.id));
+    const signIn = gallerySignsIn(preset);
 
     if (preset?.auth === 'oauth-app' && !signIn && addBody.output.headers === undefined) {
       return fixtureJson({ error: `'${preset.title}' needs either the deployment's OAuth app or a token in \`headers\`.` }, 400);

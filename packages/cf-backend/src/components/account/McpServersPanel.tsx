@@ -184,10 +184,11 @@ export function AddServerCard({ onCancel, onAdded, onConnected }: {
       }));
 
       // Known only now: a custom server may or may not sign in. Opened after the add, a blocked helper runs it in this tab.
+      // A sign-in that could not begin is said where the panel says every sign-in's end: this card closes on the add.
       if (result.authUrl) {
         const failed = yield* Effect.promise(async () => signInMcpServer(beginConnect(), result.id, onConnected));
 
-        if (failed !== null) setErr(failed);
+        if (failed !== null) onConnected({ run: null, service: name.trim(), error: failed });
       }
 
       onAdded();

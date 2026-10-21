@@ -3,7 +3,8 @@
 import { describe, expect, test } from 'bun:test';
 import { APP_ROUTES, connectEndedOf, type UserCaller } from '@kinu.run/core';
 import { serveFamily } from './helpers/api';
-import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { createTestUserDO, sqlExec, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
+import { requireMcpSignIn, seedConfiguredMcpServer, seedSdkMcpServer } from './helpers/agents-sdk';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
@@ -65,5 +66,36 @@ describe('an MCP server\'s sign-in ends on the finish page', () => {
     );
 
     expect({ status: answered?.status, begun }).toEqual({ status: 200, begun: [{ id: 'srv-one', run }] });
+  });
+
+  // Review finding (2026-10-23): a run was kept by its server, and the SDK answers a callback with the server its state
+  // names whether or not it minted that state, so a second tab's begin, or a link anyone could write, ended a sign-in.
+  test('each sign-in ends the run that began it, found by its exact state; a state it never minted ends none', async () => {
+    const callback = 'https://kinu.example.com/api/user/mcp/callback';
+    const first = createTestUserDO();
+    const owner = await testOwner();
+
+    await first.userDO.userMcp_list(owner);
+    seedConfiguredMcpServer(sqlExec(first.db), 'srv1', { name: 'linear', url: 'https://mcp.linear.example/mcp', transport: 'streamable-http' });
+    seedSdkMcpServer('srv1', { type: 'streamable-http' }, { name: 'linear', url: 'https://mcp.linear.example/mcp', callbackUrl: callback, authUrl: 'https://auth.example/authorize?state=before.srv1' });
+
+    // Awake again, the server waits for its sign-in; two tabs begin one each.
+    const woken = createTestUserDO({ storage: first.db });
+    const runs = [crypto.randomUUID(), crypto.randomUUID()];
+
+    try {
+      for (const [tab, run] of runs.entries()) {
+        requireMcpSignIn('srv1', `https://auth.example/authorize?state=minted${String(tab)}.srv1`);
+        await woken.userDO.userMcp_beginConnect(owner, 'srv1', run);
+      }
+
+      const ended = async (state: string) => (await woken.userDO.userMcp_handleOAuthCallback(owner, `${callback}?state=${state}&error=access_denied`)).run;
+
+      expect({ forged: await ended('forged.srv1'), first: await ended('minted0.srv1'), second: await ended('minted1.srv1'), replayed: await ended('minted0.srv1') })
+        .toEqual({ forged: null, first: runs[0], second: runs[1], replayed: null });
+    } finally {
+      woken.close();
+      first.close();
+    }
   });
 });
