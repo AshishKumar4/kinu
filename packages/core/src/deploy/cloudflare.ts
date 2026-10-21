@@ -152,6 +152,13 @@ function describe(issues: readonly v.BaseIssue<unknown>[]): string {
   return path === '' ? 'the expected result' : `\`${path}\``;
 }
 
+/**
+ * `DELETE …/email/routing/dns` disables Email Routing for the whole zone and names no subdomain: on a zone another
+ * deployment receives mail on (kinu.run's, under every deployment on a subdomain of it) it turns that mail off too.
+ * No path of Kinu's sends it (2026-10-21); a subdomain's addresses go as their rules are deleted.
+ */
+const DISABLES_ROUTING = /^\/zones\/[^/]+\/email\/routing\/dns(?:\?|$)/u;
+
 export function bearerTransport(
   token: string,
   fetchImpl: typeof fetch = fetch,
@@ -161,6 +168,10 @@ export function bearerTransport(
 
   return {
     async request(call: CloudflareCall): Promise<CloudflareHttpResponse> {
+      if (call.method === 'DELETE' && DISABLES_ROUTING.test(call.path)) {
+        return settleSync(Effect.die(new CloudflareApiError(0, call.path, "Kinu never disables a zone's Email Routing: it is every address's on the zone", [])));
+      }
+
       const response = await fetchImpl(`${apiRoot}${call.path}`, {
         method: call.method,
         headers: {

@@ -1,15 +1,20 @@
 // Onboarding the deployment's mail domain (docs/MAIL.md §5), the same on kinu.run and on a self-host: Email Routing
 // on the zone with a catch-all to this Worker, Email Sending for the domain and its DNS records, and `_dmarc` where
-// the domain has none. Each call is made only when the deploy's token may; what it may not do is asked of the owner,
+// the domain has none. A domain under its zone's apex is routed as a subdomain, which has no catch-all (Cloudflare's is
+// the apex's alone): each of its addresses routes by a literal rule the deployment makes as it makes the address, with
+// the token `mailRoutingStep` mints. Each call is made only when the deploy's token may; what it may not do is asked of the owner,
 // named exactly, and the deployment goes on without mail rather than failing. Paths are those wrangler 4.x calls
 // (`src/email-routing/*`) and the API reference names, read 2026-10-20: routing is enabled through its DNS (`/enable` is
 // deprecated; the apex with no name, as kinu.run's was refused one), and a sending subdomain is named by its `tag`.
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import type { KinuError } from '../obs/index';
-import { cloudflareResult, readEnvelope, type CloudflareCall, type CloudflareTransport } from './cloudflare';
+import { CloudflareApiError, cloudflareResult, readEnvelope, type CloudflareCall, type CloudflareTransport } from './cloudflare';
 import type { DeployContext } from './context';
-import type { DeployInputs } from './inputs';
+import { MAIL_ROUTING_SECRET, type DeployInputs } from './inputs';
+import { instanceToken } from './instance-token';
+import { mailRoutingGrant } from './mail-rules';
+import type { DeployStep } from './steps';
 import type { JsonObject } from '../utils/json';
 
 /** Where DMARC reports go until the owner moves the policy past `p=none` (MAIL.md §5). */
@@ -39,11 +44,27 @@ async function allowed<Result>(transport: CloudflareTransport, call: CloudflareC
   return readEnvelope(call.path, response, schema);
 }
 
-/** The zone the mail domain is the apex of: Email Routing's catch-all exists only there. */
-async function zoneOf(context: DeployContext, domain: string): Promise<string | null> {
-  const zones = await allowed(context.transport, { method: 'GET', path: `/zones?name=${encodeURIComponent(domain)}&account.id=${context.inputs.accountId}` }, ZonesSchema);
+export interface MailZone {
+  readonly id: string;
+  readonly name: string;
+}
 
-  return zones?.find((zone) => zone.name === domain)?.id ?? null;
+/**
+ * The account's zone the mail host is in: the host itself where it is a zone's apex, else the nearest zone above it.
+ * Null where the token can read none. An apex is asked for once, as it always was.
+ */
+async function zoneOf(transport: CloudflareTransport, accountId: string, host: string): Promise<MailZone | null> {
+  const labels = host.split('.');
+
+  for (let at = 0; at < labels.length - 1; at += 1) {
+    const name = labels.slice(at).join('.');
+    const zones = await allowed(transport, { method: 'GET', path: `/zones?name=${encodeURIComponent(name)}&account.id=${accountId}` }, ZonesSchema);
+    const zone = zones?.find((each) => each.name === name);
+
+    if (zone !== undefined) return { id: zone.id, name: zone.name };
+  }
+
+  return null;
 }
 
 /**
@@ -115,6 +136,59 @@ async function sendingDomain(context: DeployContext, zone: string, domain: strin
     ?? await allowed(context.transport, { method: 'POST', path: `/zones/${zone}/email/sending/subdomains`, body: { name: domain } }, SendingDomainSchema);
 }
 
+/** Cloudflare's name for the permission a subdomain's rules are made with (its permission groups, read 2026-10-21). */
+const EMAIL_ROUTING_RULES_WRITE = 'Email Routing Rules Write';
+
+/** A refusal the token's scope explains: the person did not grant it, and can, or can make the rules themselves. */
+const scopeRefused = (failed: Cause.Cause<KinuError>): boolean => {
+  const cause = Cause.squash(failed);
+
+  return cause instanceof CloudflareApiError && (cause.status === 401 || cause.status === 403);
+};
+
+/**
+ * Mail on a subdomain routes each address by a rule the deployment makes as it makes the address, so the run mints it a
+ * token that may edit that zone's routing rules and nothing else, from the person's grant, and keeps it with the zone
+ * and this Worker as `KINU_MAIL_ROUTING`. Before the upload, which binds it. An apex needs none: its catch-all routes
+ * every address, and kinu.run's is untouched by this.
+ */
+export function mailRoutingStep(inputs: DeployInputs): DeployStep {
+  return {
+    id: 'mail-routing',
+    title: "Mint the mail's routing token",
+    run(context: DeployContext): Effect.Effect<string, KinuError> {
+      return Effect.gen(function* () {
+        const domain = inputs.mailDomain ?? '';
+
+        if (domain === '') return 'No mail domain was given, so there is nothing to route.';
+        const zone = yield* Effect.promise(async () => zoneOf(context.transport, inputs.accountId, domain));
+
+        // The mail step says what it needs.
+        if (zone === null) return `${domain} is in no zone this token can read.`;
+
+        if (zone.name === domain) return `${domain} is its zone's apex, whose catch-all routes every address.`;
+        const name = `${inputs.instanceName} mail (Kinu)`;
+
+        const outcome = yield* instanceToken(context, {
+          name, permission: EMAIL_ROUTING_RULES_WRITE, resource: `com.cloudflare.api.account.zone.${zone.id}`, secret: MAIL_ROUTING_SECRET, keep: context.update,
+          stored: (token) => mailRoutingGrant({ zone: zone.id, worker: inputs.instanceName, token }),
+        }).pipe(Effect.catchCause((failed) => (scopeRefused(failed) ? Effect.succeed('refused' as const) : Effect.failCause(failed))));
+
+        if (outcome === 'refused') {
+          context.note(`Mail on ${domain} routes each address by a rule of its own, which this deployment makes with a token it mints. `
+            + 'Sign in again and allow "Email Routing Rules" and "API Tokens", then run the update; until then no new address receives mail.');
+
+          return `No routing token: Cloudflare refused minting one for ${zone.name}.`;
+        }
+
+        if (outcome === 'kept') return `The routing token for ${domain} is held.`;
+
+        return `${outcome === 'minted' ? 'Minted' : 'Rolled'} "${name}", which may edit ${zone.name}'s routing rules and nothing else.`;
+      });
+    },
+  };
+}
+
 const recordLine = (record: DnsRecord): string => `${record.type} ${record.name} ${record.priority === undefined ? '' : `${String(record.priority)} `}${record.content}`;
 
 export function mailStep(inputs: DeployInputs) {
@@ -127,26 +201,32 @@ export function mailStep(inputs: DeployInputs) {
 
         if (domain === '') return 'No mail domain was given, so this deployment has no mail addresses.';
 
-        const zone = await zoneOf(context, domain);
+        const zoned = await zoneOf(context.transport, inputs.accountId, domain);
 
-        if (zone === null) {
-          context.note(`Mail needs ${domain} as a zone in this Cloudflare account, readable by the deploy's token. Add it, then run the update.`);
+        if (zoned === null) {
+          context.note(`Mail needs ${domain} in a zone of this Cloudflare account, readable by the deploy's token. Add it, then run the update.`);
 
-          return `Mail is off: ${domain} is not a zone this token can read.`;
+          return `Mail is off: ${domain} is in no zone this token can read.`;
         }
 
+        const zone = zoned.id;
+        const apex = zoned.name === domain;
         const asks: string[] = [];
-        // The domain is its zone's apex, which routing takes with no name: `name` is for a subdomain, and the apex's is refused.
-        const routed = await allowed(context.transport, { method: 'POST', path: `/zones/${zone}/email/routing/dns`, body: {} }, v.unknown());
+        // An apex takes routing with no name, and its catch-all routes every address. A subdomain is named, and has no
+        // catch-all: the apex's is the zone's own, never this step's to touch.
+        const routed = await allowed(context.transport, { method: 'POST', path: `/zones/${zone}/email/routing/dns`, body: apex ? {} : { name: domain } }, v.unknown());
 
-        const catchAll = routed === null ? null : await allowed(context.transport, {
+        const catchAll = routed === null || !apex ? routed : await allowed(context.transport, {
           method: 'PUT', path: `/zones/${zone}/email/routing/rules/catch_all`,
           body: { enabled: true, name: 'Kinu', matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: [inputs.instanceName] }] },
         }, v.unknown());
 
         if (routed === null || catchAll === null) {
-          asks.push(`In the dashboard, open ${domain}, then Email, then Email Routing: enable it, and set the catch-all to "Send to a Worker: ${inputs.instanceName}". `
-            + 'Or give the deploy token the zone\'s "Email Routing Rules: Edit" and "Zone Settings: Edit".');
+          asks.push(apex
+            ? `In the dashboard, open ${domain}, then Email, then Email Routing: enable it, and set the catch-all to "Send to a Worker: ${inputs.instanceName}". `
+              + 'Or give the deploy token the zone\'s "Email Routing Rules: Edit" and "Zone Settings: Edit".'
+            : `In the dashboard, open ${zoned.name}, then Email, then Email Routing, then Settings: add ${domain} under Subdomains. `
+              + 'Or give the deploy token the zone\'s "Zone Settings: Edit".');
         }
 
         const dmarcPath = `/zones/${zone}/dns_records?type=TXT&name=${encodeURIComponent(`_dmarc.${domain}`)}&per_page=100`;
@@ -166,8 +246,10 @@ export function mailStep(inputs: DeployInputs) {
 
         for (const ask of asks) context.note(ask);
 
+        const routes = apex ? `routing to ${inputs.instanceName}` : `each address routed to ${inputs.instanceName} by a rule of its own`;
+
         return asks.length === 0
-          ? `Mail onboarded on ${domain}: routing to ${inputs.instanceName}, sending, and DMARC at p=none.`
+          ? `Mail onboarded on ${domain}: ${routes}, sending, and DMARC at p=none.`
           : `Mail on ${domain} needs ${String(asks.length)} thing${asks.length === 1 ? '' : 's'} from you; until then mail does not arrive or leave.`;
       });
     },
@@ -215,19 +297,22 @@ function purposeOf(record: Pick<DnsRecord, 'type' | 'content'>, routing: boolean
 }
 
 /**
- * The same records the step reaches: Email Routing's (`GET …/email/routing/dns`, the records it needs), the sending
- * domain's when it exists (Cloudflare makes them with it, so a domain not sending yet lists none), and DMARC where the
- * domain has none. A read Cloudflare refuses fails the preview in its words: a record it could not read is not absent.
+ * The same records the step reaches for `host`, the zone's apex unless it names a subdomain under it: Email Routing's
+ * (`GET …/email/routing/dns`, the records it needs), the sending domain's when it exists (Cloudflare makes them with
+ * it, so a domain not sending yet lists none), and DMARC where the domain has none. A read Cloudflare refuses fails the
+ * preview in its words: a record it could not read is not absent.
  */
-export function mailPreview(transport: CloudflareTransport, zone: { readonly id: string; readonly name: string }): Effect.Effect<MailPreview> {
+export function mailPreview(transport: CloudflareTransport, zone: MailZone, host = zone.name): Effect.Effect<MailPreview> {
   return Effect.promise(async () => {
-    const host = zone.name;
-
     const read = async (type: string, name: string) => await cloudflareResult(transport, {
       method: 'GET', path: `/zones/${zone.id}/dns_records?type=${type}&name=${encodeURIComponent(name)}&per_page=100`,
     }, DnsRecordsSchema);
 
-    const routing = await cloudflareResult(transport, { method: 'GET', path: `/zones/${zone.id}/email/routing/dns` }, DnsRecordsSchema);
+    // Routing lists the apex's records; a subdomain it routes holds the same, under its own name (kinu.run and
+    // staging.kinu.run, zone census 2026-10-20). Its `subdomain` query is deprecated, its answer unmodelled.
+    const routing = (await cloudflareResult(transport, { method: 'GET', path: `/zones/${zone.id}/email/routing/dns` }, DnsRecordsSchema))
+      .map((record) => (record.name === zone.name ? { ...record, name: host } : record));
+
     const sendings = await cloudflareResult(transport, { method: 'GET', path: `/zones/${zone.id}/email/sending/subdomains` }, v.array(SendingDomainSchema));
     const sending = sendings.find((each) => each.name === host);
 

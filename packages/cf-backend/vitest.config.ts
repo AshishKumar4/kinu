@@ -21,6 +21,9 @@ import {
   DEPLOY_FAKE_CHANNEL, DEPLOY_FAKE_CLIENT_ID, DEPLOY_FAKE_RECORD, DEPLOY_FAKE_REFRESH_TOKEN,
   assetsOutbound, deployOutbound,
 } from './tests/workerd/deploy-fake';
+import {
+  MAIL_RULES_DOMAIN, MAIL_RULES_TOKEN, MAIL_RULES_WORKER, MAIL_RULES_ZONE, mailRulesOutbound,
+} from './tests/workerd/mail-rules-fake';
 import type { V4ModuleDefinition } from 'miniflare';
 import { builtinModules } from 'node:module';
 import { spawn } from 'node:child_process';
@@ -391,6 +394,19 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
           MAILBOX: { className: 'MailboxDO', useSQLite: true },
           MAILNAME: { className: 'MailNameDO', useSQLite: true },
         }, })],
+// Mail on a subdomain of its zone: the Mailbox and the mail names with the routing grant the deploy run mints, each
+// address's rule made and deleted against Email Routing faked Node-side.
+['mail-routing-probe', async () => ({ ...workerCompatibility, modules: probeModules('mail-routing-probe.ts', { ...probeRuntime, keepNames: true }),
+        bindings: {
+          EMAIL_DOMAIN: MAIL_RULES_DOMAIN,
+          KINU_MAIL_ROUTING: JSON.stringify({ zone: MAIL_RULES_ZONE, worker: MAIL_RULES_WORKER, token: MAIL_RULES_TOKEN }),
+        },
+        outboundService: mailRulesOutbound,
+        r2Buckets: ['MAIL_BUCKET'],
+        durableObjects: {
+          MAILBOX: { className: 'MailboxDO', useSQLite: true },
+          MAILNAME: { className: 'MailNameDO', useSQLite: true },
+        }, })],
 // Account deletion's census: every store the account has, each under the binding name production code reaches it by.
 ['account-census-probe', async () => ({ ...workerCompatibility, workerLoaders: { LOADER: {} }, modules: probeModules('account-census-probe.ts', { ...probeRuntime, keepNames: true }),
         bindings: { CREDENTIAL_ENCRYPTION_KEY: 'Y2Vuc3VzLXByb2JlLWNyZWRlbnRpYWwta2V5LTMyYnk=', EMAIL_DOMAIN: 'kinu.run', JWT_SECRET: 'census-probe-drive-listing-secret' },
@@ -543,6 +559,7 @@ const runnerOptions = {
           UPDATES_PROBE: { name: 'deploy-probe', entrypoint: 'UpdatesProbe' },
           DEPLOY_DOOR_PROBE: { name: 'deploy-probe', entrypoint: 'DeployDoorProbe' },
           DEPLOY_FRAMES_PROBE: { name: 'deploy-probe', entrypoint: 'DeployFramesProbe' },
+          MAIL_RULES_FAKE: { name: 'mail-routing-probe', entrypoint: 'MailRulesFakeControl' },
         },
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
@@ -599,6 +616,8 @@ const runnerOptions = {
           SEALED_USER_DO: { className: 'UserDO', scriptName: 'public-surface-probe', useSQLite: true },
           DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', scriptName: 'deploy-probe', useSQLite: true },
           REQUEST_SIGNAL_PROBE: { className: 'RequestSignalProbeDO', scriptName: 'request-signal-probe', useSQLite: true },
+          ROUTED_MAILBOX: { className: 'MailboxDO', scriptName: 'mail-routing-probe', useSQLite: true },
+          ROUTED_MAILNAME: { className: 'MailNameDO', scriptName: 'mail-routing-probe', useSQLite: true },
         },
       } satisfies NonNullable<Parameters<typeof getDurableObjectDesignators>[0]['miniflare']>;
 

@@ -1475,6 +1475,26 @@ export const PLATFORM_CATALOG = {
     conflictsWith: ['rpc.arg_bytes'],
   },
 
+  'email.routing.rules_per_domain': {
+    subject: 'Routing rules Cloudflare Email Routing holds for one domain',
+    limit: { value: 200, unit: 'count' },
+    origin: 'platform',
+    bounds: 'count',
+    evidence: 'documented',
+    provenance: 'https://developers.cloudflare.com/email-routing/limits/',
+    date: '2026-10-21',
+    trigger: 'a 201st routing rule asked for on one domain',
+    onBreach: 'Cloudflare refuses to make the rule; Kinu refuses the address it would have routed, in Cloudflare\'s words, and makes nothing of it',
+    observable: [],
+    firstPartySignal: true,
+    notes:
+      'An apex routes every address by its one catch-all; a subdomain has none (Catch-all rules are only available for the '
+      + 'apex domain: developers.cloudflare.com/email-service/configuration/subdomains/), so a deployment whose mail is on a '
+      + 'subdomain holds a literal rule for each address it gives out: the person\'s, and each workspace\'s and agent\'s '
+      + '(core/src/deploy/mail-rules.ts). No cap of Kinu\'s comes before this one. A rule matches one address of at most 90 '
+      + 'characters (the rules API\'s matcher value), and a +tag variant of it does not route. Unmeasured: the refusal\'s '
+      + 'words need a zone that may hold 200 probe rules, which no zone of Kinu\'s shared with a live deployment may.',
+  },
   'email.routing.message_bytes': {
     subject: 'Maximum size of an inbound message Cloudflare Email Routing delivers to a Worker',
     limit: { value: 25 * MiB, unit: 'bytes' },

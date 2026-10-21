@@ -173,6 +173,20 @@ export class MailStore {
     return settleSync(this.written(path));
   }
 
+  /** Whether `caller`'s next call makes no box: each it reads is made, or the person has no address yet to make them under. */
+  madeFor(caller: MailCaller): boolean {
+    const made = (kind: 'workspace' | 'agent', actorId: string) => this.deps.sql.exec(
+      'SELECT 1 FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND kind = ?', caller.workspace, actorId, kind,
+    ).toArray().length > 0;
+
+    return this.identity() === null || (made('workspace', caller.mainActorId) && (caller.actorId === caller.mainActorId || made('agent', caller.actorId)));
+  }
+
+  /** Boxes just made, unmade: their address could not be routed, so nothing may read or write them (mail-rules.ts). */
+  unmake(paths: readonly string[]): void {
+    for (const path of paths) this.deps.sql.exec("DELETE FROM mail_addresses WHERE path = ? AND kind != 'person'", path);
+  }
+
   /**
    * The boxes an agent reads (docs/MAIL.md §3), its own first, made on first ask: its own, its workspace's, and for the
    * agent a box names as its reader (the Personal assistant's main agent, the person's) that one too.

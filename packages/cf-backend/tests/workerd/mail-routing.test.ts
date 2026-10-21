@@ -1,0 +1,88 @@
+/**
+ * @vitest-environment node
+ */
+import { env } from 'cloudflare:workers';
+import * as v from 'valibot';
+import { beforeEach, describe, expect, it } from 'vitest';
+
+// Mail on a subdomain of its zone (docs/MAIL.md §5). Priya Raman's deployment receives at mail.northwind.dev, under
+// Northwind's zone, whose catch-all is the zone's own and never this deployment's. Each address she and her agents are
+// given routes by a rule of its own, made as the address is; deleting her account deletes those rules; and nothing
+// disables the zone's routing.
+
+const DOMAIN = 'mail.northwind.dev';
+
+const name = (label: string) => env.ROUTED_MAILNAME.get(env.ROUTED_MAILNAME.idFromName(label));
+
+const mailbox = (userId: string) => env.ROUTED_MAILBOX.get(env.ROUTED_MAILBOX.idFromName(userId));
+
+/** A call from the Northwind API workspace: its main agent, or its triage agent. */
+const caller = (actorId: 'main' | 'triage') => ({
+  workspace: 'northwind-api', title: 'Northwind API', mainActorId: 'main', actorId, name: actorId === 'main' ? 'Northwind API' : 'Triage',
+});
+
+/** Her address, under a label each test keeps to itself: a label is claimed once, for good. */
+async function priyaOpened(label: string, userId: string) {
+  await name(label).claim(label, userId);
+  await mailbox(userId).open({ userId, email: 'priya.raman@example.com', username: label, assistant: null });
+}
+
+const Refusal = v.object({ code: v.string(), message: v.string() });
+
+/** A call's refusal as a value, read once: an RPC promise handed to `expect` is read again by its matchers. */
+async function refusalOf(call: () => Promise<object>): Promise<v.InferOutput<typeof Refusal> | null> {
+  const [settled] = await Promise.allSettled([call()]);
+
+  return settled?.status === 'rejected' ? v.parse(Refusal, settled.reason) : null;
+}
+
+beforeEach(async () => {
+  await env.MAIL_RULES_FAKE.reset();
+});
+
+describe('mail on a subdomain of its zone, each address by a rule of its own', () => {
+  it("routes the person's address as it is claimed, and her workspace's and agent's before their first call reads them", async () => {
+    await priyaOpened('priya', 'u-priya-1');
+
+    expect((await env.MAIL_RULES_FAKE.state()).addresses).toEqual([`priya@${DOMAIN}`]);
+
+    const boxes = await mailbox('u-priya-1').readableBy(caller('triage'));
+
+    expect(boxes.map((box) => box.address)).toEqual([`triage.northwind-api.priya@${DOMAIN}`, `northwind-api.priya@${DOMAIN}`]);
+    expect([...(await env.MAIL_RULES_FAKE.state()).addresses].sort()).toEqual([`northwind-api.priya@${DOMAIN}`, `priya@${DOMAIN}`, `triage.northwind-api.priya@${DOMAIN}`]);
+
+    // Made once: a second call routes nothing again.
+    await mailbox('u-priya-1').readableBy(caller('triage'));
+    expect((await env.MAIL_RULES_FAKE.state()).calls.filter((call) => call.startsWith('POST'))).toHaveLength(3);
+  });
+
+  it("refuses the 201st address in Cloudflare's words, and makes nothing of it", async () => {
+    await priyaOpened('priyaraman', 'u-priya-2');
+    await mailbox('u-priya-2').readableBy(caller('main'));
+    await env.MAIL_RULES_FAKE.cap(2);
+
+    expect(await refusalOf(async () => mailbox('u-priya-2').readableBy(caller('triage')))).toMatchObject({
+      code: 'denied', message: `routing triage.northwind-api.priyaraman@${DOMAIN}: Cloudflare answered: Rule limit reached`,
+    });
+    expect((await mailbox('u-priya-2').boxes()).map((box) => box.path).sort()).toEqual(['', 'northwind-api']);
+
+    expect(await refusalOf(async () => name('dana').claim('dana', 'u-dana'))).toMatchObject({
+      code: 'denied', message: `routing dana@${DOMAIN}: Cloudflare answered: Rule limit reached`,
+    });
+    expect(await name('dana').lookup()).toBeNull();
+  });
+
+  it("deletes every rule under the account's root as the account is, and never disables the zone's routing", async () => {
+    await priyaOpened('praman', 'u-priya-3');
+    await mailbox('u-priya-3').readableBy(caller('triage'));
+    await name('danaw').claim('danaw', 'u-dana');
+
+    await mailbox('u-priya-3').deleteBox('u-priya-3');
+    const after = await env.MAIL_RULES_FAKE.state();
+
+    expect(after.addresses).toEqual([`danaw@${DOMAIN}`]);
+    expect(await name('praman').lookup()).toMatchObject({ label: 'praman', user_id: '' });
+    expect(after.calls.filter((call) => call.includes('/email/routing/dns'))).toEqual([]);
+    expect(after.calls.filter((call) => call.startsWith('DELETE')).every((call) => /\/email\/routing\/rules\/rule-\d+$/u.test(call))).toBe(true);
+  });
+});

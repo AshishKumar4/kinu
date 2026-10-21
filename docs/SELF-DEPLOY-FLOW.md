@@ -95,6 +95,12 @@ a report-only DMARC if there is none) and what is already there. An existing MX 
 Cloudflare's own words and two choices: keep that mail and use a subdomain (`mail.example.com`), or stop. On the
 Workers Free plan Kinu can receive mail and send only to verified addresses; the step says so.
 
+On a subdomain (MAIL.md § 5) the zone is the nearest one above the host (`zoneOf`), routing is enabled by the
+subdomain's name with no catch-all, and before the upload the run mints the deployment a token that may edit that
+zone's routing rules and nothing else (`mailRoutingStep`, through the same `instanceToken` the registry token is
+minted with), so each address it gives out routes by a rule of its own. The preview takes the host
+(`mailPreview(transport, zone, host)`).
+
 ## 7. The run (step 3)
 
 The ledger steps (`deployPlan` in `steps.ts`) shown as seven phases, by one table in `phases.ts` (a step it does not

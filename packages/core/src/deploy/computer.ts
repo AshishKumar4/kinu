@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import type { KinuError } from '../obs/index';
 import { cloudflareResult, readEnvelope } from './cloudflare';
 import type { DeployContext } from './context';
+import { instanceToken } from './instance-token';
 import { REGISTRY_TOKEN_SECRET, resourceName } from './inputs';
 import { devboxToolsPath, type ReleaseComputer, type ReleaseManifest } from './manifest';
 import type { DeployStep } from './steps';
@@ -87,55 +88,18 @@ export function computerTokenStep(manifest: ReleaseManifest): DeployStep {
 
         // An update keeps the running version's (`keep_bindings`).
         if (context.update) return 'The running version keeps its registry token.';
-
-        if ((yield* Effect.promise(async () => context.vault.read(REGISTRY_TOKEN_SECRET))) !== null) return 'The registry token is minted.';
-        const account = context.inputs.accountId;
         const name = `${context.inputs.instanceName} computer (Kinu)`;
 
-        const tokens = yield* Effect.promise(async () => cloudflareResult(
-          context.transport, { method: 'GET', path: `/accounts/${account}/tokens?per_page=50` }, v.array(v.object({ id: v.string(), name: v.string() })),
-        ));
+        const outcome = yield* instanceToken(context, {
+          name, permission: CONTAINERS_WRITE, resource: `com.cloudflare.api.account.${context.inputs.accountId}`, secret: REGISTRY_TOKEN_SECRET,
+        });
 
-        const held = tokens.find((token) => token.name === name);
+        if (outcome === 'kept') return 'The registry token is minted.';
 
-        const value = held === undefined ? yield* mintToken(context, name) : yield* Effect.promise(async () => cloudflareResult(
-          context.transport, { method: 'PUT', path: `/accounts/${account}/tokens/${held.id}/value`, body: {} }, v.string(),
-        ));
-
-        yield* Effect.promise(async () => context.vault.write(REGISTRY_TOKEN_SECRET, value));
-
-        return held === undefined ? `Minted "${name}", which may write this account's containers.` : `Rolled "${name}": this run had lost its value.`;
+        return outcome === 'minted' ? `Minted "${name}", which may write this account's containers.` : `Rolled "${name}": this run had lost its value.`;
       });
     },
   };
-}
-
-function mintToken(context: DeployContext, name: string): Effect.Effect<string, KinuError> {
-  return Effect.gen(function* () {
-    const account = context.inputs.accountId;
-
-    const groups = yield* Effect.promise(async () => cloudflareResult(
-      context.transport,
-      { method: 'GET', path: `/accounts/${account}/tokens/permission_groups?name=${encodeURIComponent(CONTAINERS_WRITE)}` },
-      v.array(v.object({ id: v.string(), name: v.string() })),
-    ));
-
-    const group = groups.find((entry) => entry.name === CONTAINERS_WRITE);
-
-    if (group === undefined) return yield* Effect.die(new Error(`Cloudflare lists no "${CONTAINERS_WRITE}" permission for this account`));
-
-    const minted = yield* Effect.promise(async () => cloudflareResult(
-      context.transport,
-      {
-        method: 'POST',
-        path: `/accounts/${account}/tokens`,
-        body: { name, policies: [{ effect: 'allow', resources: { [`com.cloudflare.api.account.${account}`]: '*' }, permission_groups: [{ id: group.id }] }] },
-      },
-      v.object({ value: v.string() }),
-    ));
-
-    return minted.value;
-  });
 }
 
 /** The container application on the class's namespace, as Wrangler makes one with no image: Cloudflare runs its managed

@@ -339,6 +339,26 @@ interface CensusMailNameRpc extends Rpc.DurableObjectBranded {
   whenRetired(): Promise<void>;
 }
 
+/** `mail-routing-probe`: the shipped mail objects, on a subdomain, with a routing grant. */
+interface RoutedMailboxRpc extends Rpc.DurableObjectBranded {
+  open(account: { userId: string; email: string; username: string; assistant: null }): Promise<import('@kinu.run/core').MailBox>;
+  readableBy(caller: import('@kinu.run/core').MailCaller): Promise<readonly import('@kinu.run/core').MailBox[]>;
+  boxes(): Promise<readonly import('@kinu.run/core').MailBox[]>;
+  deleteBox(userId: string): Promise<void>;
+}
+
+interface RoutedMailNameRpc extends Rpc.DurableObjectBranded {
+  claim(label: string, userId: string): Promise<{ label: string; user_id: string; kind: string; target_path: string | null }>;
+  lookup(): Promise<{ label: string; user_id: string; kind: string; target_path: string | null } | null>;
+  retire(userId: string): Promise<void>;
+}
+
+interface MailRulesFakeControlRpc extends Rpc.WorkerEntrypointBranded {
+  reset(): Promise<import('./mail-rules-fake').MailRulesState>;
+  state(): Promise<import('./mail-rules-fake').MailRulesState>;
+  cap(rules: number): Promise<import('./mail-rules-fake').MailRulesState>;
+}
+
 interface CensusStorageRpc extends Rpc.DurableObjectBranded {
   storageRows(): Promise<number>;
 }
@@ -674,6 +694,9 @@ declare global {
       UPDATES_PROBE: Service<UpdatesProbeRpc>;
       DEPLOY_DOOR_PROBE: Service<DeployDoorProbeRpc>;
       DEPLOY_FRAMES_PROBE: Service<DeployFramesProbeRpc>;
+      ROUTED_MAILBOX: DurableObjectNamespace<RoutedMailboxRpc>;
+      ROUTED_MAILNAME: DurableObjectNamespace<RoutedMailNameRpc>;
+      MAIL_RULES_FAKE: Service<MailRulesFakeControlRpc>;
     }
 
     /** `exports.CodemodeEgress` is a loopback stub here as in production. */

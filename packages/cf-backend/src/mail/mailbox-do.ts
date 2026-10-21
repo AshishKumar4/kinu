@@ -14,10 +14,12 @@ import {
   MailStore, type MailBlobs,
 } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
-import { Effect } from 'effect';
-import { diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { Effect, Exit } from 'effect';
+import { diagnostics, hold, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import type { MailRoutes } from '@kinu.run/core/deploy';
 import { parseMail } from './parse';
 import { isListedOperator } from '../control-plane/admin-caller';
+import { mailRoutesOf } from './routing';
 
 /** A message's send in the outbox: this prefix and the message's id. */
 const MAIL_SEND_KEY = 'mail:';
@@ -38,8 +40,12 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
   private readonly bucket: R2Bucket | null;
 
+  /** Null where the deployment's mail is on its zone's apex, whose catch-all routes every address (routing.ts). */
+  private readonly routes: MailRoutes | null;
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    this.routes = mailRoutesOf(env);
     // Storage a release left behind is repaired first, before any method reads it (core state/schema-repair.ts).
     const stamps = durableStamps(ctx.storage.kv);
     const unmade = readStamp(stamps, ctx.storage.sql, 'mailbox') === 'unmade';
@@ -93,6 +99,39 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   /** A call's answer from the store, or the refusal every call answers first. */
   private served<Answer>(work: () => Answer | Promise<Answer>): Effect.Effect<Answer, KinuError> {
     return this.refusal === undefined ? this.fenced(Effect.promise(async () => await work())) : Effect.fail(this.refusal);
+  }
+
+  /**
+   * Mail on a subdomain (routing.ts): the boxes `make` makes, each routed by a rule of its own before any work reads it,
+   * with nothing between the rule and the row. A box whose rule Cloudflare refuses, the 201st among them, is unmade, and
+   * the call refused in its words. Boxes already made, or an apex's, route nothing.
+   */
+  private addressed(made: () => boolean, make: () => readonly MailBox[]): Effect.Effect<void, KinuError> {
+    const routes = this.routes;
+
+    if (routes === null) return Effect.void;
+
+    return Effect.flatMap(this.served(async () => (made() ? Exit.void : this.ctx.blockConcurrencyWhile(async () => {
+      const before = new Set(this.store.boxes().map((box) => box.path));
+      const fresh = make().filter((box) => !before.has(box.path));
+
+      for (const box of fresh) {
+        const routed = await hold(routes.routed(box.address));
+
+        if (Exit.isFailure(routed)) {
+          this.store.unmake(fresh.map((each) => each.path));
+
+          return routed;
+        }
+      }
+
+      return Exit.void;
+    }))), (exit) => exit);
+  }
+
+  /** The boxes `caller` reads, routed before its call reads one. */
+  private addressedFor(caller: MailCaller): Effect.Effect<void, KinuError> {
+    return this.addressed(() => this.store.madeFor(caller), () => this.store.readableBy(caller));
   }
 
   /** Work under way, which a deletion waits out before it sweeps: a delivery writes its bytes across awaits. */
@@ -172,7 +211,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   }
 
   boxFor(owner: { kind: 'workspace' | 'agent'; workspace: string; name: string; actorId: string }): Promise<MailBox> {
-    return settle(this.served(() => this.store.boxFor(owner)));
+    return settle(Effect.andThen(this.addressed(() => false, () => [this.store.boxFor(owner)]), this.served(() => this.store.boxFor(owner))));
   }
 
   readBy(reader: { workspace: string; actorId: string }): Promise<MailBox | null> {
@@ -180,11 +219,11 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   }
 
   untriagedFor(caller: MailCaller, limit: number, skip?: readonly string[]): Promise<readonly MailTriageItem[]> {
-    return settle(this.served(() => this.store.untriagedFor(caller, limit, skip)));
+    return settle(Effect.andThen(this.addressedFor(caller), this.served(() => this.store.untriagedFor(caller, limit, skip))));
   }
 
   triagedFor(caller: MailCaller, thread: string, version: number, pick: MailTriagePick): Promise<MailTriaged> {
-    return settle(this.served(() => this.store.triagedFor(caller, thread, version, pick)));
+    return settle(Effect.andThen(this.addressedFor(caller), this.served(() => this.store.triagedFor(caller, thread, version, pick))));
   }
 
   boxes(): Promise<readonly MailBox[]> {
@@ -253,27 +292,27 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
   /* ——— An agent's calls (docs/MAIL.md §3): only the boxes it reads ——— */
 
   readableBy(caller: MailCaller): Promise<readonly MailBox[]> {
-    return settle(this.served(() => this.store.readableBy(caller)));
+    return settle(Effect.andThen(this.addressedFor(caller), this.served(() => this.store.readableBy(caller))));
   }
 
   findFor(caller: MailCaller, query: Omit<MailListQuery, 'path'> & { box?: string; unread?: boolean }): Promise<MailListing> {
-    return settle(this.served(() => this.store.findFor(caller, query)));
+    return settle(Effect.andThen(this.addressedFor(caller), this.served(() => this.store.findFor(caller, query))));
   }
 
   readFor(caller: MailCaller, thread: string): Promise<MailThreadView | null> {
-    return settle(this.served(() => this.store.readFor(caller, thread)));
+    return settle(Effect.andThen(this.addressedFor(caller), this.served(() => this.store.readFor(caller, thread))));
   }
 
   draftFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView> {
-    return settle(this.served(async () => this.store.draft(this.store.messageFor(caller, message))));
+    return settle(Effect.andThen(this.addressedFor(caller), this.served(async () => this.store.draft(this.store.messageFor(caller, message)))));
   }
 
   sendFor(caller: MailCaller, message: MailAgentMessage): Promise<MailMessageView> {
-    return settle(this.sendOut(async () => this.store.queue(this.store.messageFor(caller, message))));
+    return settle(Effect.andThen(this.addressedFor(caller), this.sendOut(async () => this.store.queue(this.store.messageFor(caller, message)))));
   }
 
   updateFor(caller: MailCaller, thread: string, change: { read?: boolean; trashed?: boolean; important?: string | null }): Promise<MailThreadSummary> {
-    return settle(this.changed(change, () => this.store.updateFor(caller, thread, change)));
+    return settle(Effect.andThen(this.addressedFor(caller), this.changed(change, () => this.store.updateFor(caller, thread, change))));
   }
 
   setWake(path: string, wake: MailWake, allow?: readonly string[]): Promise<MailBox> {

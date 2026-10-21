@@ -39,7 +39,7 @@ export {
 } from './cloudflare';
 
 export {
-  ACCESS_TOKEN_KEY, COMPUTER_SECRETS, DEFAULT_INSTANCE_NAME, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET,
+  ACCESS_TOKEN_KEY, COMPUTER_SECRETS, MAIL_ROUTING_SECRET, DEFAULT_INSTANCE_NAME, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET,
   DEPLOY_CLIENT_ID_KEY, DeployInputsSchema, DeploymentRecordSchema, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET, MINTED_SECRETS,
   REFRESH_TOKEN_KEY, promptedSecrets,
   type DeployAddress, type DeployAddressKind, type DeployInputs, type DeploymentRecord,
@@ -54,7 +54,9 @@ export {
 
 export { deployPlan, type DeployStep } from './steps';
 
-export { MailPreviewSchema, mailPreview, type MailPreview, type MailPurpose, type MailRecord } from './mail';
+export { MailPreviewSchema, mailPreview, type MailPreview, type MailPurpose, type MailRecord, type MailZone } from './mail';
+
+export { MailRoutingGrantSchema, mailRoutes, type MailRoutes, type MailRoutingGrant } from './mail-rules';
 
 export {
   DeployDomainsSchema, DeployPreflightSchema, DeployRunPlanSchema, DeployRunRequestSchema, DeploySessionSchema, accountChoices, cloudflareUser, deployedKinus,

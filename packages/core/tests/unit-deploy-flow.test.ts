@@ -433,7 +433,13 @@ class FakeCloudflare implements CloudflareTransport {
   private computerCall(call: CloudflareCall): CloudflareHttpResponse | null {
     const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
 
-    if (call.path.includes('/tokens/permission_groups')) return ok([{ id: 'group-containers-write', name: 'Workers Containers Write' }]);
+    // By the name asked, as the account's permission groups answer (read 2026-10-21).
+    if (call.path.includes('/tokens/permission_groups')) {
+      const asked = decodeURIComponent(/name=([^&]+)/u.exec(call.path)?.[1] ?? '');
+
+      return ok([['group-containers-write', 'Workers Containers Write'], ['group-email-routing-rules-write', 'Email Routing Rules Write']]
+        .filter(([, name]) => name === asked).map(([id, name]) => ({ id, name })));
+    }
 
     if (call.path.endsWith('/tokens?per_page=50')) return ok([...this.tokens.keys()].map((name) => ({ id: `token-${name}`, name })));
 
@@ -970,8 +976,90 @@ describe('a guided run', () => {
   test('a mail domain that is not a zone of the account is named, and mail stays off', async () => {
     const rows = await run({ ...INPUTS, mailDomain: 'raman.dev' });
 
-    expect(rows.find((row) => row.id === 'mail')?.detail).toBe('Mail is off: raman.dev is not a zone this token can read.');
+    expect(rows.find((row) => row.id === 'mail')?.detail).toBe('Mail is off: raman.dev is in no zone this token can read.');
     expect(cloudflare.routing.enabled.size).toBe(0);
+  });
+
+  // Mail on a subdomain, 2026-10-21: kinu.run's routing is an apex's, and must come out of every run byte-identical.
+  test("an apex's routing is asked for as it always was: its catch-all, no rule and no token", async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    await run({ ...INPUTS, mailDomain: 'raman.dev' });
+
+    const lookup = { method: 'GET', path: `/zones?name=raman.dev&account.id=${INPUTS.accountId}` };
+    const dmarc = { method: 'GET', path: '/zones/zone-raman/dns_records?type=TXT&name=_dmarc.raman.dev&per_page=100' };
+
+    expect(cloudflare.calls.filter((call) => call.path.startsWith('/zones')).map(({ method, path, body }) => (body === undefined ? { method, path } : { method, path, body }))).toEqual([
+      // The routing token's step reads the zone, finds an apex, and writes nothing.
+      lookup,
+      lookup,
+      { method: 'POST', path: '/zones/zone-raman/email/routing/dns', body: {} },
+      {
+        method: 'PUT', path: '/zones/zone-raman/email/routing/rules/catch_all',
+        body: { enabled: true, name: 'Kinu', matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: ['kinu'] }] },
+      },
+      dmarc,
+      { method: 'GET', path: '/zones/zone-raman/email/sending/subdomains' },
+      { method: 'POST', path: '/zones/zone-raman/email/sending/subdomains', body: { name: 'raman.dev' } },
+      { method: 'GET', path: '/zones/zone-raman/email/sending/subdomains/tag-raman.dev/dns' },
+      { method: 'GET', path: '/zones/zone-raman/dns_records?type=MX&name=cf-bounce.raman.dev&per_page=100' },
+      { method: 'GET', path: '/zones/zone-raman/dns_records?type=TXT&name=cf-bounce._domainkey.raman.dev&per_page=100' },
+      dmarc,
+      { method: 'PATCH', path: '/zones/zone-raman/dns_records/record-2', body: { content: 'v=DMARC1; p=none; rua=mailto:dmarc@raman.dev' } },
+    ]);
+    expect(cloudflare.calls.filter((call) => call.path.includes('/tokens'))).toEqual([]);
+  });
+
+  test('a subdomain is routed by its name with no catch-all, and the run mints its routing token for that zone alone', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect(cloudflare.calls.filter((call) => call.path.endsWith('/email/routing/dns')).map((call) => call.body)).toEqual([{ name: 'mail.raman.dev' }]);
+    expect(cloudflare.routing.catchAll.size).toBe(0);
+    expect(cloudflare.calls.find((call) => call.method === 'POST' && call.path.endsWith('/tokens'))?.body).toEqual({
+      name: 'kinu mail (Kinu)',
+      policies: [{ effect: 'allow', resources: { 'com.cloudflare.api.account.zone.zone-raman': '*' }, permission_groups: [{ id: 'group-email-routing-rules-write' }] }],
+    });
+    expect(uploadedBindings(upload).find((binding) => binding.name === 'KINU_MAIL_ROUTING')).toEqual({
+      type: 'secret_text', name: 'KINU_MAIL_ROUTING', text: JSON.stringify({ zone: 'zone-raman', worker: 'kinu', token: 'minted-token' }),
+    });
+    expect(cloudflare.dns.map((record) => `${record.type} ${record.name}`)).toEqual(['MX cf-bounce.mail.raman.dev', 'TXT cf-bounce._domainkey.mail.raman.dev', 'TXT _dmarc.mail.raman.dev']);
+    expect(rows.find((row) => row.id === 'mail')?.detail).toBe('Mail onboarded on mail.raman.dev: each address routed to kinu by a rule of its own, sending, and DMARC at p=none.');
+  });
+
+  test('a host deeper under its zone is routed in the nearest zone above it, each name asked for from the host up', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    await run({ ...INPUTS, mailDomain: 'eu.mail.raman.dev' });
+
+    expect(cloudflare.calls.filter((call) => call.path.startsWith('/zones?name=')).map((call) => decodeURIComponent(/name=([^&]+)/u.exec(call.path)?.[1] ?? ''))).toEqual([
+      'eu.mail.raman.dev', 'mail.raman.dev', 'raman.dev', 'eu.mail.raman.dev', 'mail.raman.dev', 'raman.dev',
+    ]);
+    expect(cloudflare.calls.filter((call) => call.path.endsWith('/email/routing/dns')).map((call) => call.body)).toEqual([{ name: 'eu.mail.raman.dev' }]);
+  });
+
+  test('a routing token Cloudflare will not mint is asked of the owner by name, and the deployment goes on', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.refuseOnce = { method: 'GET', path: `/accounts/${INPUTS.accountId}/tokens`, status: 403, code: 9109, message: 'Unauthorized to access requested resource' };
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+    const asked = progress.flatMap((event) => (event.kind === 'step-note' && event.id === 'mail-routing' ? [event.note] : []));
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect(rows.find((row) => row.id === 'mail-routing')?.detail).toBe('No routing token: Cloudflare refused minting one for raman.dev.');
+    expect(asked).toEqual([expect.stringContaining('allow "Email Routing Rules" and "API Tokens"')]);
+    expect(await vault.read('KINU_MAIL_ROUTING')).toBeNull();
+  });
+
+  test('an update keeps the routing token its running version holds, and rolls nothing', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.tokens.set('kinu mail (Kinu)', ['minted-token']);
+    updating = true;
+    const inputs = { ...INPUTS, mailDomain: 'mail.raman.dev' };
+    const step = deployPlan(MANIFEST, inputs).find((each) => each.id === 'mail-routing');
+
+    expect(await settle(step?.run(await contextFor(inputs)) ?? Effect.succeed(''))).toBe('The routing token for mail.raman.dev is held.');
+    expect(cloudflare.calls.filter((call) => call.method !== 'GET')).toEqual([]);
+    expect([...cloudflare.tokens]).toEqual([['kinu mail (Kinu)', ['minted-token']]]);
   });
 
   test('a deployment whose owner gave no mail answers has no mail domain, and only its operators may claim', async () => {
@@ -1732,6 +1820,25 @@ describe('what the page reads of an account', () => {
     });
     expect(cloudflare.calls.filter((call) => call.method !== 'GET')).toEqual([]);
   });
+
+  test("a subdomain's preview lists routing's records under its own name, and its own sending and DMARC", async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+
+    const preview = await settle(mailPreview(cloudflare, { id: 'zone-raman', name: 'raman.dev' }, 'mail.raman.dev'));
+
+    expect(preview).toEqual({
+      host: 'mail.raman.dev',
+      conflict: null,
+      writes: [
+        { type: 'MX', name: 'mail.raman.dev', content: 'route1.mx.cloudflare.net', purpose: 'receive' },
+        { type: 'MX', name: 'mail.raman.dev', content: 'route2.mx.cloudflare.net', purpose: 'receive' },
+        { type: 'TXT', name: 'mail.raman.dev', content: 'v=spf1 include:_spf.mx.cloudflare.net ~all', purpose: 'send' },
+        { type: 'TXT', name: '_dmarc.mail.raman.dev', content: 'v=DMARC1; p=none; rua=mailto:dmarc@mail.raman.dev', purpose: 'report' },
+      ],
+      kept: [],
+    });
+  });
+
 });
 
 describe('the run a page asks for', () => {

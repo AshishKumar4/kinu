@@ -12,7 +12,7 @@ import {
   FACT_UPLOAD_PEAK, FACT_VERSION_ID, FACT_WORKERS_SUBDOMAIN, kvFact, type DeployContext,
 } from './context';
 import {
-  COMPUTER_SECRETS, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, FIRST_OWNER_LINK_MS,
+  COMPUTER_SECRETS, DEPLOYMENT_RECORD_SECRET, MAIL_ROUTING_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, FIRST_OWNER_LINK_MS,
   FIRST_OWNER_LINK_SECRET, MINTED_SECRETS, REFRESH_TOKEN_KEY, resourceName,
   type DeployInputs, type DeploymentRecord,
 } from './inputs';
@@ -23,7 +23,7 @@ import { bytesToBase64 } from '../utils/base64';
 import { randomToken } from '../utils/crypto';
 import { firstOwnerLinkSecret } from '../identity/builtin-sign-in';
 import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
-import { mailStep } from './mail';
+import { mailRoutingStep, mailStep } from './mail';
 import { computerStep, computerTokenStep, computerToolsStep } from './computer';
 
 export interface DeployStep {
@@ -82,6 +82,8 @@ export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): rea
   return [
     accountStep(manifest),
     computerTokenStep(manifest),
+    // Before the upload, which binds what it mints.
+    mailRoutingStep(inputs),
     kvStep(manifest),
     bucketStep(manifest),
     vectorizeStep(manifest),
@@ -942,7 +944,7 @@ async function versionMetadata(
     if (value !== null) bindings.push({ type: 'plain_text', name: declared.name, text: value });
   }
 
-  for (const name of [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, ...COMPUTER_SECRETS, ...context.inputs.providerKeyNames]) {
+  for (const name of [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, ...COMPUTER_SECRETS, MAIL_ROUTING_SECRET, ...context.inputs.providerKeyNames]) {
     const value = await context.vault.read(name);
 
     if (value !== null) bindings.push({ type: 'secret_text', name, text: value });
