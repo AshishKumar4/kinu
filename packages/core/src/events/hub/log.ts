@@ -536,8 +536,9 @@ export class EventLog {
   }
 
   /**
-   * `olderThanMs` has no default: `0` only for a host holding an exclusive lease. `answered` turns
-   * owe a reply, and re-pending them would silently repeat the question.
+   * `olderThanMs` has no default: `0` only for a host holding an exclusive lease. `answered` names the turns that still
+   * owe their events, whose bindings stay: one answered owes a reply, and one restored still runs them; re-pending
+   * either would repeat its events.
    */
   unbindStale(
     olderThanMs: number,
