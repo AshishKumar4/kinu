@@ -1776,20 +1776,26 @@ async function closedSoon(closed: Promise<void>): Promise<boolean> {
   return Promise.race([closed.then(() => true), new Promise<boolean>((resolve) => { setTimeout(() => { resolve(false); }, ACROSS_PAGE_LOADS_MS); })]);
 }
 
+/** A wait on setup's own page, named as `until` names its waits. Not `until`: it reads the welcome page offering Next,
+ *  which every step of setup does, as an account stopped in front of the page it asked for. */
+async function onSetup(page: Page, what: string, condition: string): Promise<void> {
+  await named(what, async () => page.waitForFunction(condition, { timeout: ACROSS_PAGE_LOADS_MS, polling: 100 }));
+}
+
 /** Walks setup to its tools step by its own Next, as a person does: `?step=` is never typed in. */
 async function walkToTools(page: Page, origin: string): Promise<void> {
   await page.goto(`${origin}/welcome`, { waitUntil: 'load' });
   const shown = `document.querySelector('[data-welcome-step]:not([aria-hidden="true"])')?.getAttribute('data-welcome-step') ?? null`;
 
   for (let pressed = 0; ; pressed += 1) {
-    await until(page, 'a setup step', `${shown} !== null`);
+    await onSetup(page, 'a setup step', `${shown} !== null`);
     const step = v.parse(v.string(), await page.evaluate(shown));
 
     if (step === 'tools') return;
 
     if (pressed === 8) throw new Error(`setup never reached its tools step; it shows ${step}`);
     await pressButton(page, 'button', await page.$('[data-mail-not-now]') === null ? 'Next' : 'Not now');
-    await until(page, `setup past its ${step} step`, `${shown} !== ${JSON.stringify(step)}`);
+    await onSetup(page, `setup past its ${step} step`, `${shown} !== ${JSON.stringify(step)}`);
   }
 }
 
@@ -1814,13 +1820,13 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
     const cameBack = await named('the setup tab back from its sign-in', async () => reaches(setup, `${origin}/welcome`, ACROSS_PAGE_LOADS_MS));
 
     if (!cameBack) throw new Error(`the setup tab never came back from its sign-in: ${await finishShown(setup)}`);
-    await until(setup, 'setup to draw its step again', `document.querySelector('[data-welcome-step]') !== null`);
+    await onSetup(setup, 'setup to draw its step again', `document.querySelector('[data-welcome-step]') !== null`);
     const back = new URL(setup.url());
     const sameTab = { back: back.pathname + back.search + back.hash, status: (await listedServer(origin, 'Samehub')).status };
 
     // Setup's tools step, as the MCP page sends an account that has not finished setup there.
     await named('setup\'s tools step to load', async () => panel.goto(`${origin}/welcome?step=tools`, { waitUntil: 'load' }));
-    await until(panel, 'the MCP servers on setup\'s tools step', `[...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Add custom server')`);
+    await onSetup(panel, 'the MCP servers on setup\'s tools step', `[...document.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Add custom server')`);
     const first = await signInHelper(panel, async () => addCustomServer(panel, 'Denyhub', provider.serverUrl));
 
     // Opened by no script, so it stays: it names a run that is not the panel's.
@@ -1836,12 +1842,12 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
     await consent(first.helper, 'deny');
     const helperClosed = await named('the declined sign-in\'s tab to close', async () => closedSoon(first.closed));
 
-    await until(panel, 'the panel to say how the sign-in ended', `document.querySelector('[data-connect-ended]') !== null`);
+    await onSetup(panel, 'the panel to say how the sign-in ended', `document.querySelector('[data-connect-ended]') !== null`);
     const deniedSaid = await connectSaid(panel);
     const denyhub = await listedServer(origin, 'Denyhub');
     // The panel's list read after the end, as a person sees it.
     await named('setup\'s tools step to reload', async () => panel.reload({ waitUntil: 'load' }));
-    await until(panel, 'setup\'s tools step listing Denyhub', `document.querySelector('[data-mcp-server="${denyhub.id}"]') !== null`);
+    await onSetup(panel, 'setup\'s tools step listing Denyhub', `document.querySelector('[data-mcp-server="${denyhub.id}"]') !== null`);
     const signIn = `[data-mcp-server="${denyhub.id}"] [data-mcp-sign-in]`;
     const denied = { helperClosed, said: deniedSaid, status: denyhub.status, signInOffered: await panel.$(signIn) !== null };
 
@@ -1850,7 +1856,7 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
 
     await consent(again.helper, 'approve');
     await named('the approved sign-in\'s tab to close', async () => closedSoon(again.closed));
-    await until(panel, 'the panel to say the sign-in connected', `document.querySelector('[data-connect-ended="connected"]') !== null`);
+    await onSetup(panel, 'the panel to say the sign-in connected', `document.querySelector('[data-connect-ended="connected"]') !== null`);
 
     return { sameTab, planted: plantedSaw, denied, retried: { said: await connectSaid(panel), status: (await listedServer(origin, 'Denyhub')).status } };
   } finally {
