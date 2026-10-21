@@ -46,21 +46,23 @@ const AA = TEST_REQUIREMENTS.wcagTextContrast.values.normal;
 /** WCAG's floor for a graphic that carries meaning: the open sidebar row's icon on its wash. */
 const NON_TEXT = TEST_REQUIREMENTS.wcagNonTextContrast.values.minimum;
 
-const FLOOR = TEST_REQUIREMENTS.designContrastFloors.values;
-
 type Ground = (typeof SURFACES)[number] | (typeof WASHES)[number];
 
+type Floors = typeof TEST_REQUIREMENTS.designContrastFloors.values;
+
 /** The palette's own floors (docs/DESIGN-SYSTEM.md §1.1): each role, the grounds it lands on, and its least ratio there. */
-const FLOORS: readonly { readonly role: string; readonly grounds: readonly Ground[]; readonly floor: number }[] = [
-  { role: '--c-text', grounds: ['--c-bg', '--c-surface', '--c-overlay'], floor: FLOOR.text },
-  { role: '--c-text-2', grounds: ['--c-bg', '--c-surface'], floor: FLOOR.text2 },
-  { role: '--c-text-3', grounds: ['--c-bg', '--c-sidebar', '--c-surface', '--c-overlay', '--c-fill', '--c-hover', '--c-sunken'], floor: FLOOR.quiet },
-  { role: '--c-accent-fg', grounds: ['--c-bg', '--c-surface', '--c-selected'], floor: FLOOR.quiet },
-  { role: '--c-accent', grounds: ['--c-bg'], floor: FLOOR.fill },
-  { role: '--c-field-border', grounds: ['--c-bg', '--c-surface'], floor: FLOOR.fill },
-  { role: '--c-focus', grounds: ['--c-bg', '--c-surface'], floor: FLOOR.fill },
-  ...STATUSES.map((status) => ({ role: `--c-${status}`, grounds: ['--c-bg', '--c-surface'] satisfies Ground[], floor: FLOOR.quiet })),
-];
+function floorsOf(floor: Floors): readonly { readonly role: string; readonly grounds: readonly Ground[]; readonly floor: number }[] {
+  return [
+    { role: '--c-text', grounds: ['--c-bg', '--c-surface', '--c-overlay'], floor: floor.text },
+    { role: '--c-text-2', grounds: ['--c-bg', '--c-surface'], floor: floor.text2 },
+    { role: '--c-text-3', grounds: ['--c-bg', '--c-sidebar', '--c-surface', '--c-overlay', '--c-fill', '--c-hover', '--c-sunken'], floor: floor.quiet },
+    { role: '--c-accent-fg', grounds: ['--c-bg', '--c-surface', '--c-selected'], floor: floor.quiet },
+    { role: '--c-accent', grounds: ['--c-bg'], floor: floor.fill },
+    { role: '--c-field-border', grounds: ['--c-bg', '--c-surface'], floor: floor.fill },
+    { role: '--c-focus', grounds: ['--c-bg', '--c-surface'], floor: floor.fill },
+    ...STATUSES.map((status) => ({ role: `--c-${status}`, grounds: ['--c-bg', '--c-surface'] satisfies Ground[], floor: floor.quiet })),
+  ];
+}
 
 const ASKED = [
   ...SURFACES, ...WASHES, ...TEXT_ROLES, ...FILLS.flatMap(([ink, fill]) => [ink, fill]),
@@ -238,7 +240,7 @@ describe.each(LOOKS)('the %s palette, %s', (theme, mode) => {
   });
 
   test('every role clears its own floor on every ground it lands on', () => {
-    const failures = FLOORS.flatMap(({ role, grounds, floor }) => grounds.map((ground) => ({
+    const failures = floorsOf(TEST_REQUIREMENTS.designContrastFloors.values).flatMap(({ role, grounds, floor }) => grounds.map((ground) => ({
       role, ground, floor, ratio: contrast(colour(role), groundOf(ground)),
     }))).filter((row) => row.ratio < row.floor);
 
@@ -250,7 +252,8 @@ describe.each(LOOKS)('the %s palette, %s', (theme, mode) => {
 
     const hairlines = (['--c-bg', '--c-surface'] as const).map((ground) => contrast(colour('--c-border'), colour(ground)));
 
-    expect(hairlines.filter((ratio) => ratio < FLOOR.hairlineLow || ratio > FLOOR.hairlineHigh)).toEqual([]);
+    expect(Math.min(...hairlines)).toBeGreaterThanOrEqual(TEST_REQUIREMENTS.designContrastFloors.values.hairlineLow);
+    expect(Math.max(...hairlines)).toBeLessThanOrEqual(TEST_REQUIREMENTS.designContrastFloors.values.hairlineHigh);
   });
 
   test('every text role meets AA on every surface', () => {
