@@ -30,7 +30,7 @@ export function TakesChip({ set, onPick }: {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1 p-t-control p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm border p-border p-card-hover transition-colors"
+        className="t-control inline-flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm border p-border p-card-hover transition-colors"
         title="Your mid-turn redirect ran as a parallel branch. Compare both answers and pick one."
       >
         <GitBranchIcon size={11} />
@@ -103,7 +103,7 @@ function TakesComparison({ set, onPick, onClose }: {
         </Button>
       </>}
     >
-      <p className="text-xs p-text-3 leading-relaxed">
+      <p className="t-meta p-text-3">
         You redirected mid-turn with{" "}
         <span className="p-text-2">{set.task.length > 120 ? `${set.task.slice(0, 120)}…` : set.task}</span>{" "}
         and it ran as a parallel branch. Compare both answers.{" "}
@@ -115,10 +115,10 @@ function TakesComparison({ set, onPick, onClose }: {
           className="p-1.5 rounded-sm p-text-3 hover:p-text p-card-hover transition-colors cursor-pointer">
           <ArrowLeftIcon size={14} />
         </button>
-        <div className="flex items-center gap-2 text-xs p-text-2">
+        <div className="t-meta flex items-center gap-2 p-text-2">
           <span className="font-medium p-text">Take {index + 1} of {count}</span>
           {isCurrent && (
-            <span className="inline-flex items-center gap-1 p-t-status p-success">
+            <span className="t-status inline-flex items-center gap-1 p-success">
               <CheckCircleIcon size={11} weight="fill" />current answer
             </span>
           )}
@@ -130,20 +130,20 @@ function TakesComparison({ set, onPick, onClose }: {
       </div>
 
       <div className="border p-border p-card px-3 py-2.5 max-h-64 overflow-y-auto">
-        <div className="prose-chat p-text text-sm">
+        <div className="t-body prose-chat p-text">
           <MarkdownContent content={candidate.text} />
         </div>
       </div>
 
-      <div className="p-meta p-text-3">{takeEvidence(candidate)}</div>
+      <div className="t-meta p-text-3">{takeEvidence(candidate)}</div>
 
       {notice && (
-        <div className="text-xs rounded-md px-3 py-2 p-notice-success">
+        <div className="t-meta rounded-md px-3 py-2 p-notice-success">
           {notice}
         </div>
       )}
       {err && (
-        <div className="text-xs rounded-md px-3 py-2 p-notice-danger">
+        <div className="t-meta rounded-md px-3 py-2 p-notice-danger">
           {err}
         </div>
       )}
@@ -177,7 +177,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
 
   let branchBody: ReactNode = (
     // The head id derives from the run id, so "nothing recorded" means the branch died before its first write.
-    <div className="px-4 py-6 text-center p-meta p-text-3">
+    <div className="t-meta px-4 py-6 text-center p-text-3">
       Nothing is recorded for this branch yet.
     </div>
   );
@@ -186,7 +186,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
     branchBody = <TranscriptBody view={view} pending={pending} />;
   } else if (resource.status === "loading") {
     branchBody = (
-      <div className="flex items-center justify-center gap-2 py-6 p-t-status p-text-2">
+      <div className="t-status flex items-center justify-center gap-2 py-6 p-text-2">
         <Loader size="sm" />Reading the branch…
       </div>
     );
@@ -194,7 +194,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
 
   return (
     <div className="flex flex-col items-start gap-1 animate-fade-in py-0.5">
-      <div className="inline-flex items-center gap-2 max-w-full px-3 py-1.5 rounded-full p-fill border p-border p-row-text p-text-2">
+      <div className="t-body inline-flex items-center gap-2 max-w-full px-3 py-1.5 rounded-full p-fill border p-border p-text-2">
         {run.status === "running" && (
           <>
             <Loader size="sm" />

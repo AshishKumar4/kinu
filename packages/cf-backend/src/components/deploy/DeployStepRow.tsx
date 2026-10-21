@@ -24,13 +24,13 @@ export function StepRow({ row, onRetry }: {
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2">
-            <span className={`p-row-text ${row.state === "pending" ? "p-text-3" : "p-text"}`}>{row.title}</span>
-            {row.attempt > 1 && <span className="p-badge-neutral rounded-sm px-1.5 py-0.5 text-[10px]">attempt {row.attempt}</span>}
+            <span className={`t-body ${row.state === "pending" ? "p-text-3" : "p-text"}`}>{row.title}</span>
+            {row.attempt > 1 && <span className="t-meta p-badge-neutral rounded-sm px-1.5 py-0.5">attempt {row.attempt}</span>}
           </div>
-          {row.state === "done" && row.detail !== "" && <p className="mt-0.5 p-meta p-text-3">{row.detail}</p>}
-          {row.state === "running" && note !== "" && <p className="mt-0.5 p-meta p-text-3">{note}</p>}
+          {row.state === "done" && row.detail !== "" && <p className="t-meta mt-0.5 p-text-3">{row.detail}</p>}
+          {row.state === "running" && note !== "" && <p className="t-meta mt-0.5 p-text-3">{note}</p>}
           {row.failure !== null && (
-            <div className="mt-2 p-notice-danger rounded-md px-3 py-2 text-xs" role="alert">
+            <div className="t-meta mt-2 p-notice-danger rounded-md px-3 py-2" role="alert">
               <p className="font-mono">{row.failure.detail}</p>
               {row.failure.code !== 0 && (
                 <p className="mt-1 opacity-80">Cloudflare error {row.failure.code}, HTTP {row.failure.status}.</p>

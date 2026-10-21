@@ -82,8 +82,8 @@ export function EventRow({ icon: Mark, tone, label, source, body, detail, state,
               <CaretUpIcon size={12} weight="bold" />
             </button>
           </div>
-          {body !== undefined && <p data-event-brief className="mt-1.5 ml-6 whitespace-pre-wrap break-words p-row-text p-text-2">{body}</p>}
-          {detail !== undefined && <p className="mt-1.5 ml-6 whitespace-pre-wrap break-words p-row-text p-text-3">{detail}</p>}
+          {body !== undefined && <p data-event-brief className="t-body mt-1.5 ml-6 whitespace-pre-wrap break-words p-text-2">{body}</p>}
+          {detail !== undefined && <p className="t-body mt-1.5 ml-6 whitespace-pre-wrap break-words p-text-3">{detail}</p>}
           {action !== undefined && <div className="mt-2 ml-6">{action}</div>}
         </div>
       ) : (
@@ -149,7 +149,7 @@ function DrainedEvents({ text, state, count }: { text: string; state: CardState;
       state={state}
       count={repeats * count}
       badge={event.replyExpected && (
-        <span className="shrink-0 rounded-sm px-1 p-meta p-badge-warning" title="The sender is waiting on the agent's reply">reply expected</span>
+        <span className="t-meta shrink-0 rounded-sm px-1 p-badge-warning" title="The sender is waiting on the agent's reply">reply expected</span>
       )}
       hooks={{ "data-drained-event": event.variant, "data-reply-expected": event.replyExpected ? "" : undefined }}
     />
@@ -213,7 +213,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
         icon={EyeIcon}
         tone={tone.icon}
         label="Advisor"
-        badge={<span className={`shrink-0 px-1.5 p-meta ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[turn.severity]}</span>}
+        badge={<span className={`t-meta shrink-0 px-1.5 ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[turn.severity]}</span>}
         body={turn.note ?? keptAdvisorNote(text, turn.severity) ?? undefined}
         state={state}
         count={count}

@@ -56,7 +56,7 @@ export function ActivitySurface({ rpc, isStreaming }: ActivitySurfaceProps) {
   }
 
   return (
-    <div className="flex flex-col gap-6 text-xs">
+    <div className="t-meta flex flex-col gap-6">
       <ContextBlock snap={snap} />
       <CostBlock snap={snap} />
       <CacheBlock cacheHit={snap.telemetry.cacheHit} />
@@ -72,8 +72,8 @@ function BlockHeader(
   return (
     <div className="flex items-baseline gap-2 mb-2.5">
       <Icon size={13} className="p-accent self-center" />
-      <h3 className="p-title p-text">{title}</h3>
-      {note && <span className="p-meta p-text-3 ml-auto text-right">{note}</span>}
+      <h3 className="t-title p-text">{title}</h3>
+      {note && <span className="t-meta p-text-3 ml-auto text-right">{note}</span>}
     </div>
   );
 }
@@ -97,12 +97,12 @@ function Source({ kind }: { kind: "API" | "local" }) {
 }
 
 function Empty({ children }: { children: React.ReactNode }) {
-  return <p className="p-row-text p-text-3">{children}</p>;
+  return <p className="t-body p-text-3">{children}</p>;
 }
 
 function Warning({ children }: { children: React.ReactNode }) {
   return (
-    <p className="flex items-start gap-1.5 p-meta p-warning mt-1.5">
+    <p className="t-meta flex items-start gap-1.5 p-warning mt-1.5">
       <WarningCircleIcon size={12} className="shrink-0 mt-px" />
       <span>{children}</span>
     </p>
@@ -143,22 +143,22 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
       />
 
       <div className="flex items-end gap-2 mb-1">
-        <Num className="text-[22px] leading-none p-text">{fill.tokens.toLocaleString()}</Num>
-        <span className="p-meta p-text-2 pb-px">{measure}</span>
+        <Num className="t-page-title p-text">{fill.tokens.toLocaleString()}</Num>
+        <span className="t-meta p-text-2 pb-px">{measure}</span>
         <span className="ml-auto pb-px"><Source kind={step === null ? "local" : "API"} /></span>
       </div>
 
       {windowShare !== null ? (
         <>
           <Meter value={windowShare} />
-          <p className="p-meta p-text-3 mt-1">
+          <p className="t-meta p-text-3 mt-1">
             {fmtPct(windowShare, 1)} of the window{step === null ? "" : ` · ${cacheRead === undefined
               ? "the provider reported no cache-read count for this step"
               : `${cacheRead.toLocaleString()} of those input tokens were a cache read`}`}
           </p>
         </>
       ) : (
-        <p className="p-meta p-text-3 mt-1">Context window unknown.</p>
+        <p className="t-meta p-text-3 mt-1">Context window unknown.</p>
       )}
 
       {step !== null && <Breakdown context={step.context} />}
@@ -194,9 +194,9 @@ function Breakdown({ context }: { context: ContextComposition | null }) {
   return (
     <div className="mt-4">
       <div className="flex items-baseline gap-2 mb-2">
-        <h4 className="p-title p-text-2">Composed content</h4>
+        <h4 className="t-title p-text-2">Composed content</h4>
         <Source kind="local" />
-        <span className="ml-auto p-meta p-text-3">
+        <span className="t-meta ml-auto p-text-3">
           {measuredChars.toLocaleString()} exact chars
         </span>
       </div>
@@ -211,7 +211,7 @@ function Breakdown({ context }: { context: ContextComposition | null }) {
         </tbody>
       </table>
 
-      <p className="p-meta p-text-3 mt-2.5 pt-2.5 border-t p-border">
+      <p className="t-meta p-text-3 mt-2.5 pt-2.5 border-t p-border">
         These rows count characters in the prompt content Kinu composed.
       </p>
     </div>
@@ -236,7 +236,7 @@ function StackedBar(
       </div>
       <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
         {planes.map((row) => (
-          <span key={row.plane} className="flex items-center gap-1 p-meta p-text-3">
+          <span key={row.plane} className="t-meta flex items-center gap-1 p-text-3">
             <span className={swatch} style={{ background: planeFill(row.plane) }} />
             {PLANE_LABEL[row.plane]}
           </span>
@@ -258,25 +258,25 @@ function PlaneRows({ plane, measuredChars }: { plane: BreakdownPlane; measuredCh
         <td className={`py-1 ${labelCell}`}>
           <span className="flex items-center gap-1.5">
             <span className={swatch} style={{ background: planeFill(plane.plane) }} />
-            <span className="p-row-text font-medium p-text truncate">{PLANE_LABEL[plane.plane]}</span>
+            <span className="t-item p-text truncate">{PLANE_LABEL[plane.plane]}</span>
           </span>
         </td>
-        <td className={`py-1 ${countCell}`}><Num className="p-row-text p-text">{plane.chars.toLocaleString()} ch</Num></td>
+        <td className={`py-1 ${countCell}`}><Num className="t-body p-text">{plane.chars.toLocaleString()} ch</Num></td>
         <td className={`py-1 ${countCell}`}>
-          <Num className="p-row-text p-text-2">{fmtPct(shareOfMeasured(plane.chars, measuredChars), 1)}</Num>
+          <Num className="t-body p-text-2">{fmtPct(shareOfMeasured(plane.chars, measuredChars), 1)}</Num>
         </td>
       </tr>
       {plane.rows.map((row: BreakdownRow) => (
         <tr key={`${plane.plane}:${row.label}`}>
           <td className={`py-px pl-[14px] ${labelCell}`}>
-            <span className="p-row-text p-text-3 truncate block" title={row.label}>
+            <span className="t-body p-text-3 truncate block" title={row.label}>
               {row.label}
               {row.items > 1 && <span className="p-text-3"> ×{row.items}</span>}
             </span>
           </td>
-          <td className={`py-px ${countCell}`}><Num className="p-row-text p-text-3">{row.chars.toLocaleString()} ch</Num></td>
+          <td className={`py-px ${countCell}`}><Num className="t-body p-text-3">{row.chars.toLocaleString()} ch</Num></td>
           <td className={`py-px ${countCell}`}>
-            <Num className="p-row-text p-text-3">{fmtPct(shareOfMeasured(row.chars, measuredChars), 1)}</Num>
+            <Num className="t-body p-text-3">{fmtPct(shareOfMeasured(row.chars, measuredChars), 1)}</Num>
           </td>
         </tr>
       ))}
@@ -298,8 +298,8 @@ function CostBlock({ snap }: { snap: ActivitySnapshot }) {
       />
       {priced ? (
         <div className="flex items-end gap-2">
-          <Num className="text-[20px] leading-none p-text">{fmtUsd(telemetry.usd)}</Num>
-          <span className="p-meta p-text-2 pb-px">
+          <Num className="t-title p-text">{fmtUsd(telemetry.usd)}</Num>
+          <span className="t-meta p-text-2 pb-px">
             over {telemetry.pricedSteps} priced steps from this agent&apos;s turns
           </span>
         </div>
@@ -349,9 +349,9 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
   return (
     <div className="mt-3 pt-2.5 border-t p-border">
       <div className="flex items-baseline gap-2 mb-2">
-        <h4 className="p-title p-text-2">Workspace spend</h4>
+        <h4 className="t-title p-text-2">Workspace spend</h4>
         <span
-          className="ml-auto p-meta p-text-3"
+          className="t-meta ml-auto p-text-3"
           title="Every recorded call in this workspace, summed over the whole log."
         >
           {coverage.calls} call{coverage.calls === 1 ? "" : "s"} · whole log
@@ -366,7 +366,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
         <>
           <table className="w-full border-collapse">
             <thead>
-              <tr className="p-meta p-text-3 uppercase tracking-wide">
+              <tr className="t-meta p-text-3 uppercase">
                 <th className="text-left font-normal pb-1">Producer</th>
                 <th
                   className="text-right font-normal pb-1 w-20"
@@ -391,10 +391,10 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                   <td className="py-1 pr-2">
                     <span className="flex items-baseline gap-1">
                       <span
-                        className="p-row-text p-text truncate"
+                        className="t-body p-text truncate"
                         title={SPEND_SOURCE_DETAIL[producer.source]}
                       >{SPEND_SOURCE_LABEL[producer.source]}</span>
-                      <span className="p-row-text p-text-3 shrink-0">×{producer.calls}</span>
+                      <span className="t-body p-text-3 shrink-0">×{producer.calls}</span>
                     </span>
                   </td>
                   <SpendCells
@@ -405,8 +405,8 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
               <tr className="border-t p-border">
                 <td className="py-1 pr-2">
                   <span className="flex items-baseline gap-1">
-                    <span className="p-row-text font-semibold p-text">Workspace total</span>
-                    <span className="p-row-text p-text-3 shrink-0">×{total.calls}</span>
+                    <span className="t-label p-text">Workspace total</span>
+                    <span className="t-body p-text-3 shrink-0">×{total.calls}</span>
                   </span>
                 </td>
                 <SpendCells
@@ -420,7 +420,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                 <tr>
                   <th
                     colSpan={neurons ? 5 : 4}
-                    className="text-left font-normal pt-3 pb-1 p-meta p-text-3 uppercase tracking-wide"
+                    className="t-meta text-left pt-3 pb-1 p-text-3 uppercase"
                     title="Each mission's whole life, because a cap is cumulative."
                   >
                     By mission · whole life
@@ -431,12 +431,12 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                     <td className="py-1 pr-2">
                       <span className="flex items-baseline gap-1">
                         <span
-                          className="p-row-text p-text truncate"
+                          className="t-body p-text truncate"
                           title={mission.parent === null
                             ? "A top-level mission. Everything it delegates debits it."
                             : `Nested under "${mission.parent}", which every debit here also charges.`}
                         >{mission.label}</span>
-                        <span className="p-row-text p-text-3 shrink-0">×{mission.calls}</span>
+                        <span className="t-body p-text-3 shrink-0">×{mission.calls}</span>
                         {mission.exhausted && (
                           <span className="px-1 rounded-sm p-badge-danger shrink-0">spent</span>
                         )}
@@ -444,7 +444,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                     </td>
                     <td className="py-1 text-right w-20">
                       <Num
-                        className="p-row-text p-text"
+                        className="t-body p-text"
                         title={mission.limits.tokens === undefined
                           ? "Metered, uncapped in tokens."
                           : `${mission.remaining.tokens?.toLocaleString() ?? 0} of ${mission.limits.tokens.toLocaleString()} tokens left.`}
@@ -452,14 +452,14 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                     </td>
                     <td className="py-1 text-right w-12">
                       <Num
-                        className="p-row-text p-text-3"
+                        className="t-body p-text-3"
                         title="This row is cumulative; the total above is a window."
                       >—</Num>
                     </td>
-                    {neurons && <td className="py-1 text-right w-16"><Num className="p-row-text p-text-3">—</Num></td>}
+                    {neurons && <td className="py-1 text-right w-16"><Num className="t-body p-text-3">—</Num></td>}
                     <td className="py-1 text-right w-16">
                       <Num
-                        className="p-row-text p-text-2"
+                        className="t-body p-text-2"
                         title={mission.pricing.source === "catalog"
                           ? "Every token priced from the models.dev catalog."
                           : `${mission.pricing.blendedTokens.toLocaleString()} of these tokens used the blended fallback rate, not catalog rates.`}
@@ -479,7 +479,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                 <tr>
                   <th
                     colSpan={neurons ? 5 : 4}
-                    className="text-left font-normal pt-3 pb-1 p-meta p-text-3 uppercase tracking-wide"
+                    className="t-meta text-left pt-3 pb-1 p-text-3 uppercase"
                     title="Each account's calls at API rates from the models.dev catalog; a subscription is billed by its plan instead."
                   >
                     By account · API-equivalent cost
@@ -495,7 +495,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
             )}
           </table>
 
-          <p className="p-meta p-text-3 mt-2.5 pt-2.5 border-t p-border">
+          <p className="t-meta p-text-3 mt-2.5 pt-2.5 border-t p-border">
             <Num className="p-text-2">{fmtPct(reported, reported === 1 ? 0 : 1)}</Num> of the{" "}
             {coverage.calls} known call{coverage.calls === 1 ? "" : "s"} reported usage.{" "}
             {reported === 1
@@ -506,14 +506,14 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
           </p>
 
           {spend.offTurnShare !== null && (
-            <p className="p-meta p-text-3 mt-1.5">
+            <p className="t-meta p-text-3 mt-1.5">
               <Num className="p-text-2">{fmtPct(spend.offTurnShare, 1)}</Num> of the measured tokens
               went on work outside this agent&apos;s turns. The figure above counts none of it.
             </p>
           )}
 
           {neurons && (
-            <p className="p-meta p-text-3 mt-1.5">
+            <p className="t-meta p-text-3 mt-1.5">
               Neurons are Cloudflare&apos;s billing unit, reported on every Workers AI call. The
               dollar column is priced from the models.dev catalog, so it is an estimate.
             </p>
@@ -545,13 +545,13 @@ function AccountSpendRow(
     <tr className="border-t p-border">
       <td className="py-1 pr-2">
         <span className="flex items-baseline gap-1">
-          <span className="p-row-text p-text truncate">
+          <span className="t-body p-text truncate">
             {row.provider === null ? "No account recorded" : `${row.provider} · ${row.account ?? ""}`}
           </span>
-          <span className="p-row-text p-text-3 shrink-0">×{row.calls}</span>
+          <span className="t-body p-text-3 shrink-0">×{row.calls}</span>
         </span>
         {row.quota !== undefined && (
-          <span className="block p-meta p-text-3" title={`As the provider reported it ${timeAgo(row.quota.at)}.`}>
+          <span className="t-meta block p-text-3" title={`As the provider reported it ${timeAgo(row.quota.at)}.`}>
             {row.quota.windows.map((window) => quotaWindowText(window, now)).join(" · ")}
           </span>
         )}
@@ -599,7 +599,7 @@ function SpendCells(
     <>
       <td className="py-1 text-right w-20">
         <Num
-          className={`p-row-text ${className}`}
+          className={`t-body ${className}`}
           title={countNote(tokens, row, "No call here reported an input or output count.")}
         >
           {fmtTokens(tokens)}
@@ -607,12 +607,12 @@ function SpendCells(
         </Num>
       </td>
       <td className="py-1 text-right w-12">
-        <Num className="p-row-text p-text-2">{fmtPct(shareOfTokens(tokens, measuredTokens), 1)}</Num>
+        <Num className="t-body p-text-2">{fmtPct(shareOfTokens(tokens, measuredTokens), 1)}</Num>
       </td>
       {neurons && (
         <td className="py-1 text-right w-16">
           <Num
-            className={`p-row-text ${className}`}
+            className={`t-body ${className}`}
             title={countNote(
               row.usage.neurons, row,
               "No call from this producer reported neurons.",
@@ -624,7 +624,7 @@ function SpendCells(
         </td>
       )}
       <td className="py-1 text-right w-16">
-        <Num className="p-row-text p-text-2" title={unpriced}>
+        <Num className="t-body p-text-2" title={unpriced}>
           {row.usd === undefined ? "—" : fmtUsd(row.usd)}
           {row.usd !== undefined && unpriced !== undefined && <Floor />}
         </Num>
@@ -671,8 +671,8 @@ const sourceList = (sources: readonly SpendSource[]): string =>
 function Stat({ label, value, size = "normal" }: { label: string; value: string; size?: "normal" | "small" }) {
   return (
     <div>
-      <dt className="p-meta p-text-3 uppercase tracking-wide">{label}</dt>
-      <dd><Num className={size === "small" ? "p-meta p-text-2" : "p-row-text p-text"}>{value}</Num></dd>
+      <dt className="t-meta p-text-3 uppercase">{label}</dt>
+      <dd><Num className={size === "small" ? "t-meta p-text-2" : "t-body p-text"}>{value}</Num></dd>
     </div>
   );
 }
@@ -695,8 +695,8 @@ export function CacheBlock({ cacheHit }: { cacheHit: CacheHitStats }) {
       ) : (
         <>
           <dl className="mb-3">
-            <dt className="p-meta p-text-3 uppercase tracking-wide">EMA</dt>
-            <dd><Num className="text-[22px] leading-none p-text">{fmtPct(cacheHit.ema, 1)}</Num></dd>
+            <dt className="t-meta p-text-3 uppercase">EMA</dt>
+            <dd><Num className="t-page-title p-text">{fmtPct(cacheHit.ema, 1)}</Num></dd>
           </dl>
           <dl className="grid grid-cols-4 gap-x-3 gap-y-1">
             <Stat label="Last" value={fmtPct(cacheHit.last, 1)} />
@@ -704,7 +704,7 @@ export function CacheBlock({ cacheHit }: { cacheHit: CacheHitStats }) {
             <Stat label="p95" value={fmtPct(cacheHit.p95, 1)} size="small" />
             <Stat label="p99" value={fmtPct(cacheHit.p99, 1)} size="small" />
           </dl>
-          <p className="p-meta p-text-3 mt-2">
+          <p className="t-meta p-text-3 mt-2">
             Cached input over total input, per step. Cached tokens are a subset of the billed input.
             The EMA weights recent steps at α={cacheHit.emaAlpha}. The mean, p95 and p99 cover the
             {" "}{cacheHit.samples} retained step{cacheHit.samples === 1 ? "" : "s"}
@@ -755,17 +755,17 @@ function LogRow({ row }: { row: ActivityLogEntry }) {
 
   return (
     <li className="flex items-baseline gap-2 px-2 py-1 border-b p-border last:border-0">
-      <Num className="p-meta p-text-3 shrink-0">
+      <Num className="t-meta p-text-3 shrink-0">
         {new Date(row.createdAt).toLocaleTimeString()}
       </Num>
-      <span className="p-annotation p-text shrink-0">{row.event}</span>
+      <span className="t-meta t-mono p-text shrink-0">{row.event}</span>
       {row.detail === null ? null : (
-        <span className="p-meta p-text-3 min-w-0 flex-1 truncate" title={row.detail}>
+        <span className="t-meta p-text-3 min-w-0 flex-1 truncate" title={row.detail}>
           {row.detail}
         </span>
       )}
       <Num
-        className={`p-meta shrink-0 ${row.detail === null ? "ml-auto" : ""} ${outsideTurn ? "p-text-3" : "p-text-2"}`}
+        className={`t-meta shrink-0 ${row.detail === null ? "ml-auto" : ""}  ${outsideTurn ? "p-text-3" : "p-text-2"}`}
         title={outsideTurn
           ? "Written outside a turn, so there is no elapsed time to report."
           : "Milliseconds into the turn that wrote this row."}

@@ -53,8 +53,8 @@ function QuestionField({ question, draft, onDraft, busy }: {
   return (
     <fieldset className="min-w-0" data-question={question.id} disabled={busy}>
       <legend className="flex min-w-0 items-baseline gap-1.5">
-        {question.header !== undefined && <span className="shrink-0 rounded-sm px-1.5 p-meta p-badge-neutral" data-question-header>{question.header}</span>}
-        <span className="p-row-text p-text">{question.question}</span>
+        {question.header !== undefined && <span className="t-meta shrink-0 rounded-sm px-1.5 p-badge-neutral" data-question-header>{question.header}</span>}
+        <span className="t-body p-text">{question.question}</span>
       </legend>
       <div className={preview === undefined ? "mt-1.5" : "mt-1.5 grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]"}>
         <div className="flex min-w-0 flex-col gap-1" role={many ? "group" : "radiogroup"} aria-label={question.question}>
@@ -67,11 +67,11 @@ function QuestionField({ question, draft, onDraft, busy }: {
                 <input type={many ? "checkbox" : "radio"} name={name} className="mt-0.5 shrink-0 accent-[var(--c-accent)]" checked={checked}
                   onChange={() => choose(option.label, index)} onFocus={() => setFocused(index)} />
                 <span className="min-w-0">
-                  <span className="p-row-text p-text">
+                  <span className="t-body p-text">
                     {option.label}
-                    {question.recommended === index && <span className="ml-1 p-meta p-accent" data-question-recommended> (Recommended)</span>}
+                    {question.recommended === index && <span className="t-meta ml-1 p-accent" data-question-recommended> (Recommended)</span>}
                   </span>
-                  {option.description !== undefined && <span className="block p-meta p-text-2">{option.description}</span>}
+                  {option.description !== undefined && <span className="t-meta block p-text-2">{option.description}</span>}
                 </span>
               </label>
             );
@@ -80,17 +80,17 @@ function QuestionField({ question, draft, onDraft, busy }: {
             <input type={many ? "checkbox" : "radio"} name={name} className="mt-0.5 shrink-0 accent-[var(--c-accent)]" checked={draft.other !== null}
               onChange={() => onDraft(draft.other === null ? { ...draft, other: "", selected: many ? draft.selected : [] } : { ...draft, other: null })} />
             <span className="min-w-0 flex-1">
-              <span className="p-row-text p-text">{OTHER_OPTION}</span>
+              <span className="t-body p-text">{OTHER_OPTION}</span>
               {draft.other !== null && (
                 <textarea value={draft.other} onChange={(event) => onDraft({ ...draft, other: event.target.value })} aria-label={`Your answer to: ${question.question}`}
                   placeholder="Write your answer" rows={2} autoFocus data-question-other
-                  className="mt-1 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground" />
+                  className="t-meta mt-1 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-foreground" />
               )}
             </span>
           </label>
         </div>
         {preview !== undefined && (
-          <pre className="p-code max-h-48 min-w-0 overflow-auto rounded-md px-2.5 py-2 text-xs leading-5 whitespace-pre" data-question-preview>{preview}</pre>
+          <pre className="t-meta p-code max-h-48 min-w-0 overflow-auto rounded-md px-2.5 py-2 whitespace-pre" data-question-preview>{preview}</pre>
         )}
       </div>
     </fieldset>
@@ -150,16 +150,16 @@ export function QuestionCard({ asking, busy, owed = false, onAnswer, onDismiss }
         ))}
       </div>
       {unsent.note === null ? (
-        <button type="button" disabled={busy} className="mt-1.5 p-meta p-accent hover:underline" onClick={() => keep({ ...unsent, note: "" })}>Add a note</button>
+        <button type="button" disabled={busy} className="t-meta mt-1.5 p-accent hover:underline" onClick={() => keep({ ...unsent, note: "" })}>Add a note</button>
       ) : (
         <textarea disabled={busy} value={unsent.note} onChange={(event) => keep({ ...unsent, note: event.target.value })} rows={2} placeholder="A note for the agent"
           aria-label="A note for the agent"
-          className="mt-2 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground" />
+          className="t-meta mt-2 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-foreground" />
       )}
       {owed ? (
-        <div role="status" className="mt-1 p-meta p-text-3">Your answer is on its way. The agent takes it when it next wakes.</div>
+        <div role="status" className="t-meta mt-1 p-text-3">Your answer is on its way. The agent takes it when it next wakes.</div>
       ) : (
-        <div className="mt-1 p-meta p-text-3">{asking.actor === null ? "Asked" : `${asking.agent} asked`} {timeAgo(asking.asked.askedAt)}. The agent waits for your answer.</div>
+        <div className="t-meta mt-1 p-text-3">{asking.actor === null ? "Asked" : `${asking.agent} asked`} {timeAgo(asking.asked.askedAt)}. The agent waits for your answer.</div>
       )}
       <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
         <Button size="sm" variant="ghost" disabled={busy} onClick={dismiss} data-question-dismiss>
@@ -202,7 +202,7 @@ export function AskRecord({ callId, input }: { callId: string; input: unknown })
 
   return (
     <div className="rounded-md border p-border px-3 py-2" data-ask-record={asked?.status ?? "asked"}>
-      <div className="flex items-center gap-1.5 p-meta p-text-3">
+      <div className="t-meta flex items-center gap-1.5 p-text-3">
         <ChatCircleTextIcon size={12} aria-hidden />
         <span>{asked?.status === "open" ? "Asked you, waiting for your answer" : "Asked you"}</span>
       </div>
@@ -213,13 +213,13 @@ export function AskRecord({ callId, input }: { callId: string; input: unknown })
 
           return (
             <li key={question.id} className="min-w-0">
-              <div className="p-row-text p-text-2">{question.question}</div>
-              {asked?.status === "answered" && <div className="p-row-text p-text" data-ask-answer={question.id}>{said}{answer?.note !== undefined && <span className="p-meta p-text-3"> · {answer.note}</span>}</div>}
+              <div className="t-body p-text-2">{question.question}</div>
+              {asked?.status === "answered" && <div className="t-body p-text" data-ask-answer={question.id}>{said}{answer?.note !== undefined && <span className="t-meta p-text-3"> · {answer.note}</span>}</div>}
             </li>
           );
         })}
       </ul>
-      {(asked?.status === "dismissed" || asked?.status === "in_chat") && <div className="mt-1 p-meta p-text-3">{CLOSED_AS[asked.status]}</div>}
+      {(asked?.status === "dismissed" || asked?.status === "in_chat") && <div className="t-meta mt-1 p-text-3">{CLOSED_AS[asked.status]}</div>}
     </div>
   );
 }

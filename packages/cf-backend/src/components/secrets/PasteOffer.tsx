@@ -69,7 +69,7 @@ export function usePastedSecretGuard(input: {
   const offer = waiting.length === 0 ? null : (
     <div className="mx-1 mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border p-border p-overlay px-3 py-2.5" role="status" data-secret-offer>
       <ShieldWarningIcon size={16} className="shrink-0 p-warning" />
-      <p className="min-w-[14rem] flex-1 p-row-text p-text">
+      <p className="t-body min-w-[14rem] flex-1 p-text">
         This looks like {described(waiting)}. Keep it out of the chat: move it to Secrets and your agents use it without seeing it.
       </p>
       <div className="ml-auto flex shrink-0 items-center gap-2">
@@ -120,17 +120,17 @@ function MoveToSecrets({ found, workspace, onClose, onMoved }: {
           onMoved(new Map(rows.flatMap((row): [string, string][] => (row.found === undefined || row.name.trim() === "" ? [] : [[row.found, row.name.trim()]]))));
         })}>{saving ? "Saving…" : `Save and use ${said}`}</Button>
       </>}>
-      <p className="p-row-text p-text-2">
+      <p className="t-body p-text-2">
         Stored sealed in your account. Your message will say <code>{said}</code> instead, and agents use the stand-in it holds, which becomes the value only when sent over https to these hosts.
       </p>
       <SecretRows rows={rows} onChange={setRows} removable={rows.length > 1} />
       {workspace !== undefined && (
-        <label className="flex items-center gap-2 p-row-text p-text">
+        <label className="t-body flex items-center gap-2 p-text">
           <Switch on={allowHere} onChange={setAllowHere} label="Allow in this workspace" data-secret-move-here />
           Allow in this workspace
         </label>
       )}
-      {error !== null && <div role="alert" className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
+      {error !== null && <div role="alert" className="t-meta p-notice-danger rounded-md px-3 py-2">{error}</div>}
     </Modal>
   );
 }

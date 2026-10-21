@@ -261,7 +261,7 @@ export function ChangesSurface({ executors, lastActiveExecutor, rpc, focus = nul
       <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="sm" /></div>}>
         <ChangesView key={shown.source} notes={{ baseline: shown.baseline ?? "", files: shown.files, store, now: Date.now }} panelKey={focus?.nonce ?? 0}
           banner={<>
-            {failure !== null && <p role="alert" className="mx-3 mt-3 rounded-md px-3 py-2 text-xs p-notice-danger">{failure}</p>}
+            {failure !== null && <p role="alert" className="t-meta mx-3 mt-3 rounded-md px-3 py-2 p-notice-danger">{failure}</p>}
             {resource.status === "error" && <LoadFailure what="the latest change-set" message={resource.message} onRetry={reload} className="mx-3 mt-3" />}
           </>}
           file={focus?.path ?? null} sets={sets} source={shown.source}

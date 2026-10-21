@@ -105,10 +105,10 @@ export function AppearanceCard() {
                   onChange={() => detach(choose(theme))} className="sr-only" />
                 <Swatch theme={theme} mode={mode} />
                 <span className="mt-2 flex items-baseline justify-between gap-2 px-1">
-                  <span className="p-row-text font-medium p-text">{THEMES[theme].label}</span>
-                  {name === theme && <span className="p-meta p-accent">In use</span>}
+                  <span className="t-item p-text">{THEMES[theme].label}</span>
+                  {name === theme && <span className="t-meta p-accent">In use</span>}
                 </span>
-                <span className="mt-0.5 block px-1 pb-1 p-meta p-text-3">{THEMES[theme].about}</span>
+                <span className="t-meta mt-0.5 block px-1 pb-1 p-text-3">{THEMES[theme].about}</span>
               </label>
             ))}
           </div>
@@ -118,7 +118,7 @@ export function AppearanceCard() {
             {MODES.map(({ id, label, Icon }) => (
               <label key={id} className="cursor-pointer">
                 <input type="radio" name="mode" value={id} checked={mode === id} onChange={() => setMode(id)} className="peer sr-only" />
-                <span className="flex h-7 items-center gap-1.5 rounded-md px-3 text-xs font-medium p-text-3 transition-colors peer-checked:bg-[var(--c-surface)] peer-checked:p-text peer-checked:shadow-[0_0_0_1px_var(--c-border)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--c-selected)] hover:p-text">
+                <span className="t-status flex h-7 items-center gap-1.5 rounded-md px-3 p-text-3 transition-colors peer-checked:bg-[var(--c-surface)] peer-checked:p-text peer-checked:shadow-[0_0_0_1px_var(--c-border)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--c-selected)] hover:p-text">
                   <Icon size={13} />{label}
                 </span>
               </label>

@@ -28,7 +28,7 @@ export function SendToWorkspace({ thread, onClose }: { thread: string; onClose: 
       </>}>
       <div data-mail-hand className="space-y-2">
         <WorkspacePicker chosen={chosen} onChange={setChosen} placeholder="Workspace" />
-        {error !== null && <div role="alert" className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
+        {error !== null && <div role="alert" className="t-meta p-notice-danger rounded-md px-3 py-2">{error}</div>}
       </div>
     </Modal>
   );

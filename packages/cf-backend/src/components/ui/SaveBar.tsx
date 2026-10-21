@@ -58,10 +58,10 @@ export function SaveBar({ dirty, saving, error = null, onSave, onDiscard }: {
 
   if (!shown && !present) return null;
 
-  let said = <span className="p-row-text font-medium p-text-2">Unsaved changes</span>;
+  let said = <span className="t-item p-text-2">Unsaved changes</span>;
 
-  if (error !== null) said = <p role="alert" className="min-w-0 truncate p-row-text p-danger" title={error}>{error}</p>;
-  else if (saved && !dirty) said = <span className="flex items-center gap-1.5 p-row-text font-medium p-text-2"><CheckIcon size={14} className="p-success" />Saved</span>;
+  if (error !== null) said = <p role="alert" className="t-body min-w-0 truncate p-danger" title={error}>{error}</p>;
+  else if (saved && !dirty) said = <span className="t-item flex items-center gap-1.5 p-text-2"><CheckIcon size={14} className="p-success" />Saved</span>;
 
   // Its buttons only while there is something to save: saved, there is nothing to discard or save, so it says so alone.
   const acting = dirty || saving || error !== null;

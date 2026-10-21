@@ -51,7 +51,7 @@ export function PageHeader({ icon, back, title, rule = "always", children, class
             <ArrowLeftIcon size={18} />
           </Link>
         )}
-      <h1 className="p-page-title">{title}</h1>
+      <h1 className="t-page-title">{title}</h1>
       {children !== undefined && children !== null && children !== false && <div className="p-page-actions ml-auto flex items-center gap-2">{children}</div>}
     </header>
   );

@@ -39,7 +39,7 @@ export function PreviewChrome({ url, publicLink }: { url: string; publicLink?: P
 export function PreviewAddress({ url, children }: { url: string; children?: ReactNode }) {
   return (
     <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
-      <code data-preview-address className="p-annotation p-text-3 truncate flex-1">{url}</code>
+      <code data-preview-address className="t-meta t-mono p-text-3 truncate flex-1">{url}</code>
       {children}
     </div>
   );
@@ -71,7 +71,7 @@ function PublicLinkSwitch({ link }: { link: PublicLink }) {
 
   return (
     <>
-      <label className="flex shrink-0 items-center gap-1.5 p-annotation p-text-3" title={error ?? (open ? "Anyone with this link can open it" : "Opens only for you, signed in")} data-preview-public>
+      <label className="t-meta t-mono flex shrink-0 items-center gap-1.5 p-text-3" title={error ?? (open ? "Anyone with this link can open it" : "Opens only for you, signed in")} data-preview-public>
         {open ? <span className="p-warning">Public link</span> : "Public link"}
         <Switch on={open} label="Anyone with the link can open this preview" data-preview-public-switch
           onChange={(next) => (next
@@ -97,7 +97,7 @@ export function PreviewFrame({ url, label, publicLink }: {
   if (!isPreviewUrl(url)) {
     return (
       <div className="h-full flex items-center justify-center p-4 text-center">
-        <span className="p-annotation p-text-3 break-all">
+        <span className="t-meta t-mono p-text-3 break-all">
           Refused to preview a URL that is not a Kinu preview: {url}
         </span>
       </div>

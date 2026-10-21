@@ -69,7 +69,7 @@ export function ChangelogFailure(
     return <LoadFailure what="the changelog" message={resource.message} onRetry={reload} />;
   }
 
-  return <div className="flex items-center justify-center gap-2 py-4 text-xs p-text-3" role="status">
+  return <div className="t-meta flex items-center justify-center gap-2 py-4 p-text-3" role="status">
     <Loader size="sm" />
     <span>Loading journal…</span>
   </div>;
@@ -77,7 +77,7 @@ export function ChangelogFailure(
 
 function EntryField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-2 text-[11px] leading-relaxed">
+    <div className="t-meta grid grid-cols-[64px_minmax(0,1fr)] gap-2">
       <span className="p-text-3">{label}</span>
       <span className="p-text-2 min-w-0 break-words">{children}</span>
     </div>
@@ -160,9 +160,9 @@ function EntryDetails({ entry, id, expanded, rpc, onReverted }: {
   return (
     <div id={id} role="region" aria-label={`Details for ${entry.summary}`} hidden={!expanded} className="mt-2 ml-6 border-t p-border pt-2">
       {entry.kind === 'fact' && <div className="mb-2"><EntryFacts entry={entry} /></div>}
-      {evidence && <div className="p-annotation p-text-3 whitespace-pre-wrap break-words">{entry.evidence}</div>}
+      {evidence && <div className="t-meta t-mono p-text-3 whitespace-pre-wrap break-words">{entry.evidence}</div>}
       {entry.workspace !== undefined && (
-        <Link to={`/workspace/${encodeURIComponent(entry.workspace)}`} className="mt-1.5 inline-block p-meta p-accent hover:underline" data-changelog-workspace={entry.workspace}>
+        <Link to={`/workspace/${encodeURIComponent(entry.workspace)}`} className="t-meta mt-1.5 inline-block p-accent hover:underline" data-changelog-workspace={entry.workspace}>
           Open the workspace
         </Link>
       )}
@@ -199,10 +199,10 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   const headline = (
     <div className="min-w-0 flex-1">
       <div className="flex items-center gap-2">
-        <span className="p-row-text p-text flex-1 decoration-[var(--c-border-strong)] underline-offset-4 group-hover/expander:underline" title={entry.summary}>{entry.summary}</span>
+        <span className="t-body p-text flex-1 decoration-[var(--c-border-strong)] underline-offset-4 group-hover/expander:underline" title={entry.summary}>{entry.summary}</span>
         {fresh && !kept && <span className="shrink-0 size-1.5 rounded-full bg-[var(--c-accent)]" />}
       </div>
-      <div className="mt-1 p-meta p-text-3">{timeAgo(entry.at)}</div>
+      <div className="t-meta mt-1 p-text-3">{timeAgo(entry.at)}</div>
     </div>
   );
 
@@ -237,7 +237,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       </div>
 
       {notice && (
-        <div className={`mt-1.5 p-t-status ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
+        <div className={`t-status mt-1.5 ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
       )}
 
       {hasDetails && <EntryDetails entry={entry} id={detailsId} expanded={expanded} rpc={rpc} onReverted={onReverted} />}
@@ -255,16 +255,16 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Work
     <li className={`rounded-md border p-border px-2.5 py-2 ${kept ? "opacity-70" : ""}`}>
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
-          <div className="text-xs p-text-2 leading-relaxed">{entry.summary}</div>
+          <div className="t-meta p-text-2">{entry.summary}</div>
           {entry.kind === 'fact' ? (
             <div className="mt-1"><EntryFacts entry={entry} /></div>
           ) : entry.evidence && (
-            <div className="mt-1 p-annotation p-text-3 whitespace-pre-wrap break-words">
+            <div className="t-meta t-mono mt-1 p-text-3 whitespace-pre-wrap break-words">
               {entry.evidence}
             </div>
           )}
           {notice && (
-            <div className={`mt-1.5 p-t-status ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
+            <div className={`t-status mt-1.5 ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
           )}
         </div>
         <div className="flex items-center gap-1 shrink-0">

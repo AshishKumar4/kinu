@@ -29,7 +29,7 @@ function PartButton({ children, onClick, ...data }: {
 }) {
   return (
     <button type="button" onClick={onClick} {...data}
-      className="inline-flex min-h-7 items-center gap-1 rounded-md border p-border p-surface px-2.5 py-1 text-left text-xs font-medium leading-4 p-text transition-colors hover:bg-[var(--c-hover)]">
+      className="t-status inline-flex min-h-7 items-center gap-1 rounded-md border p-border p-surface px-2.5 py-1 text-left p-text transition-colors hover:bg-[var(--c-hover)]">
       {children}
     </button>
   );
@@ -46,7 +46,7 @@ function InPlace({ icon, said, action, onAct, ...data }: {
   return (
     <div {...data} className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 rounded-lg p-sunken px-4 py-6 text-center">
       <span className="shrink-0 p-text-3">{icon}</span>
-      <p className="max-w-sm p-row-text p-text-2">{said}</p>
+      <p className="t-body max-w-sm p-text-2">{said}</p>
       {action !== null && <Button variant="primary" size="sm" onClick={onAct}>{action}</Button>}
     </div>
   );
@@ -61,7 +61,7 @@ function ActionControl({ action, onAct }: { action: PartAction; onAct: PartContr
   return (
     <form className="flex items-center gap-1.5" onSubmit={(event) => { event.preventDefault(); onAct({ id: action.id, input: text }); }}>
       <input value={text} onChange={(event) => setText(event.target.value)} aria-label={action.label} data-part-action-input={action.id}
-        className="h-7 min-w-0 flex-1 rounded-md border p-border p-surface px-2 text-xs p-text" />
+        className="t-meta h-7 min-w-0 flex-1 rounded-md border p-border p-surface px-2 p-text" />
       <PartButton data-part-action={action.id} onClick={() => onAct({ id: action.id, input: text })}>{action.label}</PartButton>
     </form>
   );
@@ -130,7 +130,7 @@ export function PartView({ answer, slate, controls }: { answer: PartRunAnswer; s
 export function PartOutsideItsSlate() {
   return (
     <div data-part-outside className="flex flex-1 items-center justify-center px-4 text-center">
-      <p className="max-w-sm p-row-text p-text-2">This part shows only inside its slate, opened from Kinu.</p>
+      <p className="t-body max-w-sm p-text-2">This part shows only inside its slate, opened from Kinu.</p>
     </div>
   );
 }

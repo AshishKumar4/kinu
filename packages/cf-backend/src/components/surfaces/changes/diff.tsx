@@ -56,7 +56,7 @@ export function Counts({ added, removed, className = "" }: { added: number; remo
   if (added + removed === 0) return null;
 
   return (
-    <span className={`shrink-0 font-mono text-[11px] tabular-nums ${className}`}>
+    <span className={`t-meta t-mono shrink-0 tabular-nums ${className}`}>
       {added > 0 && <span className="p-success">+{count(added)}</span>}
       {added > 0 && removed > 0 && " "}
       {removed > 0 && <span className="p-danger">−{count(removed)}</span>}
@@ -222,8 +222,8 @@ function Fold({ label, context, gutter, onOpen }: { label: string; context: stri
   const inner = (
     <>
       <span style={{ width: gutter }} className="flex shrink-0 justify-end pr-1 p-text-3">{onOpen !== null && <CaretUpDownIcon size={12} />}</span>
-      <span className="shrink-0 pl-2.5 font-sans p-meta">{label}</span>
-      {context !== null && <span className="min-w-0 truncate pr-4 text-[11px] p-text-3">{context}</span>}
+      <span className="t-meta shrink-0 pl-2.5 font-sans">{label}</span>
+      {context !== null && <span className="t-meta min-w-0 truncate pr-4 p-text-3">{context}</span>}
     </>
   );
 
@@ -252,7 +252,7 @@ function Blocks({ blocks, draw, open, onOpen }: {
             <button key={index} type="button" onClick={() => onOpen(block.id)} data-diff-fold
               className={`flex h-8 w-full items-center gap-2 text-left ${QUIET_ROW} p-text-2 transition-colors hover:p-text`}>
               <span style={{ width: draw.gutter }} className="flex shrink-0 justify-end pr-1 p-text-3"><CaretDownIcon size={12} /></span>
-              <span className="pl-2.5 font-sans p-meta">{block.deleted ? `Show the ${count(block.count)} deleted lines` : `Show ${count(block.count)} more lines`}</span>
+              <span className="t-meta pl-2.5 font-sans">{block.deleted ? `Show the ${count(block.count)} deleted lines` : `Show ${count(block.count)} more lines`}</span>
             </button>
           );
         }
@@ -320,7 +320,7 @@ export function DiffBody({ path, blocks, split }: { path: string; blocks: readon
 
   return (
     <div ref={root} data-note-root onMouseDown={notes === null ? undefined : onMouseDown} onMouseUp={notes === null ? undefined : onMouseUp}
-      className="overflow-hidden font-mono text-[12px] leading-5 [font-variant-ligatures:none]" data-diff-tinted={tintedState(resource.status, tints)}>
+      className="t-meta t-mono overflow-hidden [font-variant-ligatures:none]" data-diff-tinted={tintedState(resource.status, tints)}>
       <Blocks blocks={blocks} draw={{ split, tints, gutter, path, onPick: notes === null ? undefined : onPick }} open={open}
         onOpen={(id) => setOpen((prior) => new Set([...prior, id]))} />
     </div>

@@ -56,20 +56,20 @@ export function ForkReachPanel({ title, reaches, onOpen }: {
         <header className="flex items-start gap-3">
           <PlugsConnectedIcon size={20} className="mt-0.5 shrink-0 p-accent" />
           <div>
-            <h2 className="p-title p-text">{title} runs as you here</h2>
-            <p className="mt-0.5 p-meta p-text-3">This slate was forked. It calls your own workspace, as you, and nothing has run yet.</p>
+            <h2 className="t-title p-text">{title} runs as you here</h2>
+            <p className="t-meta mt-0.5 p-text-3">This slate was forked. It calls your own workspace, as you, and nothing has run yet.</p>
           </div>
         </header>
         <ul className="space-y-2">
-          {shown.length === 0 && <li className="p-card px-4 py-3 text-xs p-text-3">It was published calling nothing of its publisher&apos;s. It runs on its own.</li>}
+          {shown.length === 0 && <li className="t-meta p-card px-4 py-3 p-text-3">It was published calling nothing of its publisher&apos;s. It runs on its own.</li>}
           {shown.map((namespace) => {
             const connection = reachConnection(namespace);
 
             return (
               <li key={namespace} className="p-card flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:gap-4">
                 <div className="min-w-0 flex-1">
-                  <span className="font-mono text-sm p-text">{namespace}</span>
-                  <p className="mt-0.5 text-xs p-text-2">{connection.text}</p>
+                  <span className="t-body t-mono p-text">{namespace}</span>
+                  <p className="t-meta mt-0.5 p-text-2">{connection.text}</p>
                 </div>
                 {connection.to !== undefined && (
                   <Link to={connection.to} className={buttonClass({ size: "sm" })}>

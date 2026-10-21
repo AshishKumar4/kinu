@@ -89,7 +89,7 @@ export function DevicesCard() {
             ))}
           </div>
         ) : roster.resource.status === "ready" && (
-          <p data-devices-empty className="p-row-text p-text-3">
+          <p data-devices-empty className="t-body p-text-3">
             No machine yet. Run <code className="font-mono p-text">kinu connect</code> in the folder the agent may use.
           </p>
         )}
@@ -99,7 +99,7 @@ export function DevicesCard() {
         {grantRoster.resource.status === "error" && (
           <LoadFailure what="the device grants" message={grantRoster.resource.message} onRetry={grantRoster.reload} />
         )}
-        {err && <p className="text-xs p-danger">{err}</p>}
+        {err && <p className="t-meta p-danger">{err}</p>}
       </Card>
 
       {connecting && (

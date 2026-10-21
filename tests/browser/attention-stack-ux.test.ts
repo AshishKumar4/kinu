@@ -57,7 +57,7 @@ async function openWork(page: Page): Promise<void> {
 
 /** Work's own count of what waits, or 0 once its Needs you section is gone. */
 function workCount(page: Page): Promise<number> {
-  return page.evaluate(() => Number(document.querySelector('[data-section="work-needs-you"] .p-label + span')?.textContent ?? '0'));
+  return page.evaluate(() => Number(document.querySelector('[data-section="work-needs-you"] [data-section-badge]')?.textContent ?? '0'));
 }
 
 async function opened(page: Page, origin: string, query: string): Promise<void> {

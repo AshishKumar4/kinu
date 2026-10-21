@@ -64,10 +64,10 @@ function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: 
         <Button variant="primary" size="md" data-drive-dialog-commit onClick={submit} disabled={!valid || busy}>{busy ? `${action}…` : action}</Button>
       </>}>
       <form onSubmit={(event) => { event.preventDefault(); submit(); }} className="space-y-2">
-        <label className="block p-meta p-text-3" htmlFor="drive-name">{label}</label>
+        <label className="t-meta block p-text-3" htmlFor="drive-name">{label}</label>
         <input id="drive-name" autoFocus value={value} onChange={(event) => setValue(event.target.value)}
           onFocus={(event) => event.currentTarget.select()} className={inputCls} aria-invalid={value !== "" && !valid} />
-        {error !== null && <div role="alert" className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
+        {error !== null && <div role="alert" className="t-meta p-notice-danger rounded-md px-3 py-2">{error}</div>}
       </form>
     </Modal>
   );
@@ -109,14 +109,14 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
         </Button>
       </>}>
       <div className="space-y-3">
-        <p className="p-row-text p-text-2">
+        <p className="t-body p-text-2">
           Paste a <span className="font-mono p-text">SKILL.md</span>: front matter that names it, then the steps. Every workspace you own uses it from its next turn.
         </p>
         <textarea data-drive-skill-text value={text} onChange={(event) => setText(event.target.value)} rows={9} spellCheck={false}
           placeholder={"---\nname: deploy\ndescription: Ship the current branch\n---\nSteps…"}
-          aria-label="SKILL.md" className={`${inputCls} font-mono text-xs leading-relaxed`} />
+          aria-label="SKILL.md" className={`${inputCls} t-meta t-mono`} />
         <div className="flex flex-wrap items-center gap-2">
-          <span className="p-meta p-text-3">or pick</span>
+          <span className="t-meta p-text-3">or pick</span>
           <button type="button" className={buttonClass({ size: "sm" })} disabled={busy}
             onClick={() => folderInput.current?.click()}><FolderSimpleIcon size={13} /> a folder</button>
           <button type="button" className={buttonClass({ size: "sm" })} disabled={busy}
@@ -136,7 +136,7 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
               if (file !== undefined) run(() => addSkillArchive(file, file.name.replace(/\.zip$/iu, "")));
             }} />
         </div>
-        {error !== null && <div role="alert" data-drive-skill-error className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
+        {error !== null && <div role="alert" data-drive-skill-error className="t-meta p-notice-danger rounded-md px-3 py-2">{error}</div>}
       </div>
     </Modal>
   );
@@ -186,7 +186,7 @@ function NewMenu({ onFiles, onFolder, onZip, onNewFolder, onNewSkill }: NewProps
             <div key={item.label}>
               {item.apart === true && <div className="mx-1 my-1.5 border-t p-border" />}
               <button type="button" role="menuitem" {...{ [item.marker]: "" }} onClick={() => { setOpen(false); item.run(); }}
-                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm p-text transition-colors hover:bg-[var(--c-hover)]">
+                className="t-body flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left p-text transition-colors hover:bg-[var(--c-hover)]">
                 <span className="flex shrink-0 p-text-3">{item.icon}</span>{item.label}
               </button>
             </div>
@@ -269,7 +269,7 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
       return (
         <ConfirmDialog title={`Delete ${dialog.entry.name}?`} action="Delete" marker="data-drive-delete-confirm" maxWidthClass="max-w-sm"
           onConfirm={() => act(() => deleteEntry(joinDir(folder, dialog.entry.name)))} onClose={onClose}>
-          <p className="p-row-text p-text-2">This deletes <span className="font-medium p-text">{dialog.entry.name}</span>{DELETE_ALSO[dialog.entry.kind]}. It cannot be undone.</p>
+          <p className="t-body p-text-2">This deletes <span className="font-medium p-text">{dialog.entry.name}</span>{DELETE_ALSO[dialog.entry.kind]}. It cannot be undone.</p>
         </ConfirmDialog>
       );
     case "add-skill":
@@ -286,7 +286,7 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
             onSharesChanged((yield* Effect.promise(async () => revokeShare({ workspace, share: dialog.row.share }))).listing);
           }))}
           onClose={onClose}>
-          <p className="p-row-text p-text-2">{`${whoLoses(dialog.row)} access right away, and the link stops working. You can share it again later.`}</p>
+          <p className="t-body p-text-2">{`${whoLoses(dialog.row)} access right away, and the link stops working. You can share it again later.`}</p>
         </ConfirmDialog>
       );
     case "fork":

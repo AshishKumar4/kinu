@@ -75,7 +75,7 @@ function decisionModelName(spec: string): string {
 
 /** Overrides `inputCls` to the combobox's `size="sm"` metrics; `!` because same-property
  *  utilities resolve by order, not intent. */
-const selectSmCls = `${inputCls} !h-6.5 !px-2 !py-0 !text-xs`;
+const selectSmCls = `${inputCls}  !h-6.5 !px-2 !py-0 !text-xs`;
 
 /** The first failure of the reads, or null. */
 function readFailure(...reads: readonly AsyncResource<unknown>[]): string | null {
@@ -296,7 +296,7 @@ export function ProfileCatalogSettings() {
     <>
       <Card title="Tiers">
         {!draft || !envelope ? (
-          <div className="flex items-center gap-2 p-row-text p-text-3">
+          <div className="t-body flex items-center gap-2 p-text-3">
             <span>{busy ? 'Loading account profiles…' : 'Profiles are unavailable.'}</span>
             {!busy && <Button size="sm" variant="secondary" onClick={load}>Retry</Button>}
             {error && <span className="p-danger">{error}</span>}
@@ -321,7 +321,7 @@ export function ProfileCatalogSettings() {
             </div>
 
             <div className="border-t p-border pt-4" data-section="tiers">
-              <div className="p-row-text font-medium p-text">For particular work</div>
+              <div className="t-item p-text">For particular work</div>
               <div className="mt-1">
                 {tierIdsOf(draft).filter((tierId) => tierId !== 'default').map((tierId) => {
                   const assignment = draft.tiers[tierId];
@@ -332,8 +332,8 @@ export function ProfileCatalogSettings() {
                       className="grid gap-x-4 gap-y-2 border-t p-border py-3 first:border-t-0 md:grid-cols-[11rem_minmax(0,1fr)]">
                       <div className="flex items-start justify-between gap-2 md:pt-0.5">
                         <div className="min-w-0">
-                          <div className="p-row-text p-text">{words.name}</div>
-                          <div className="p-meta p-text-3">{words.use}</div>
+                          <div className="t-body p-text">{words.name}</div>
+                          <div className="t-meta p-text-3">{words.use}</div>
                         </div>
                         {!TIER_IDS.some((id) => id === tierId) && (
                           <Button variant="ghost" size="sm" icon={<TrashIcon size={12} />}
@@ -367,7 +367,7 @@ export function ProfileCatalogSettings() {
                 <div className="flex items-center gap-1" role="group" aria-label="Retries">
                   <Button size="sm" variant="secondary" icon={<MinusIcon size={12} />} aria-label="Fewer retries"
                     disabled={retries === 0} onClick={() => setRetries(retries - 1)} />
-                  <span className="w-8 text-center p-num p-row-text p-text" data-retries>{retries}</span>
+                  <span className="t-body w-8 text-center p-num p-text" data-retries>{retries}</span>
                   <Button size="sm" variant="secondary" icon={<PlusIcon size={12} />} aria-label="More retries"
                     disabled={retries === 10} onClick={() => setRetries(retries + 1)} />
                 </div>
@@ -380,7 +380,7 @@ export function ProfileCatalogSettings() {
                   <div key={model} data-model-chain={model}
                     className="grid gap-x-4 gap-y-1.5 border-t p-border py-2.5 first:border-t-0 md:grid-cols-[11rem_minmax(0,1fr)] md:items-center">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="truncate p-row-text p-text">{labelOfSpec(menu, model)}</span>
+                      <span className="t-body truncate p-text">{labelOfSpec(menu, model)}</span>
                       <Button variant="ghost" size="sm" icon={<TrashIcon size={12} />} aria-label={`Remove the ${model} chain`}
                         onClick={() => editChain(model, [])} />
                     </div>
@@ -457,7 +457,7 @@ export function ProfileCatalogSettings() {
                             className="p-dot-accent inline-block size-1.5 shrink-0 rounded-full" />
                         )}
                       </span>
-                      <span className="hidden truncate p-meta p-text-3 md:block">
+                      <span className="t-meta hidden truncate p-text-3 md:block">
                         {entry?.description ?? ''}
                       </span>
                     </span>
@@ -491,7 +491,7 @@ export function ProfileCatalogSettings() {
               ) : (
                 <button
                   type="button"
-                  className="p-button-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] p-t-control md:mb-0 md:w-full md:rounded-md md:px-3 md:py-2"
+                  className="t-control p-button-ghost flex shrink-0 items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] md:mb-0 md:w-full md:rounded-md md:px-3 md:py-2"
                   onClick={() => setAddingRole(true)}
                 >
                   <PlusIcon size={12} /> New role
@@ -536,8 +536,8 @@ function Disclosure(props: { label: string; summary: string; section: string; ch
       <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
         className="flex w-full min-w-0 items-center gap-2 text-left">
         <CaretRightIcon size={12} className={`shrink-0 p-fold-turn p-text-3 ${open ? 'rotate-90' : ''}`} />
-        <span className="shrink-0 p-row-text font-medium p-text">{props.label}</span>
-        <span className="min-w-0 truncate p-meta p-text-3">{props.summary}</span>
+        <span className="t-item shrink-0 p-text">{props.label}</span>
+        <span className="t-meta min-w-0 truncate p-text-3">{props.summary}</span>
       </button>
       {open && <div className="mt-4 space-y-5 md:pl-5">{props.children}</div>}
     </div>
@@ -559,7 +559,7 @@ function TierTuning(props: {
     <div className="space-y-2">
       {efforts.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          <span className="w-16 shrink-0 p-meta p-text-3">Thinking</span>
+          <span className="t-meta w-16 shrink-0 p-text-3">Thinking</span>
           <Segmented<ReasoningEffort | 'auto'>
             label={`${props.tierId} reasoning effort`}
             segments={[{ id: 'auto', label: 'Auto' }, ...efforts.map((effort) => ({ id: effort, label: reasoningEffortLabel(effort) }))]}
@@ -592,10 +592,10 @@ function BackupChain(props: {
 
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5" role="group" aria-label={`${props.label} fallbacks`}>
-      <span className="w-16 shrink-0 p-meta p-text-3">If it fails</span>
+      <span className="t-meta w-16 shrink-0 p-text-3">If it fails</span>
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
         {props.chain.map((spec, index) => (
-          <span key={spec} data-spec={spec} className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 text-xs p-text">
+          <span key={spec} data-spec={spec} className="t-meta inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 p-text">
             <span className="p-text-3">{index + 1}.</span>
             {labelOfSpec(props.menu, spec)}
             <AccountPicker spec={spec} accounts={accountsOf(spec)} label={`${props.label} fallback ${index + 1} account`}
@@ -648,9 +648,9 @@ function RoleEditor(props: {
     <div className="min-w-0 space-y-5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="p-title p-text">{props.role.label ?? deriveRoleLabel(props.id)}</h3>
-          <div className="p-meta p-text-3">
-            {props.customized ? 'Customized' : origin} · <span className="p-annotation">{props.id}</span>
+          <h3 className="t-title p-text">{props.role.label ?? deriveRoleLabel(props.id)}</h3>
+          <div className="t-meta p-text-3">
+            {props.customized ? 'Customized' : origin} · <span className="t-meta t-mono">{props.id}</span>
           </div>
         </div>
         <Button size="sm" variant="secondary" disabled={!props.customized} onClick={props.onReset}>
@@ -677,7 +677,7 @@ function RoleEditor(props: {
           </Field>
         </div>
       </div>
-      <label className="flex w-fit items-center gap-2 p-row-text p-text-2">
+      <label className="t-body flex w-fit items-center gap-2 p-text-2">
         <input type="checkbox" aria-label="Start in Plan mode"
           className="accent-[var(--c-accent)]"
           checked={props.role.plan === true}
@@ -694,12 +694,12 @@ function RoleEditor(props: {
       )}
       <Field label="Instructions" hint="The standing brief this role works under, as the prompt reads it.">
         <textarea rows={8} aria-label="Instructions"
-          className={`${inputCls} p-t-code max-h-[33rem] min-h-40 resize-y overflow-y-auto`}
+          className={`${inputCls} t-code max-h-[33rem] min-h-40 resize-y overflow-y-auto`}
           value={props.role.instructions}
           onChange={(event) => set('instructions', event.target.value)} />
       </Field>
       <div>
-        <div className="p-row-text font-medium p-text">What it can use</div>
+        <div className="t-item p-text">What it can use</div>
         <div className="mt-1">
           <Allowance
             label="Tools"
@@ -756,8 +756,8 @@ function Allowance(props: {
     <div className="border-t p-border py-2 first:border-t-0" data-allowance={props.label}>
       <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
         className="flex w-full min-w-0 items-center gap-3 text-left">
-        <span className="w-20 shrink-0 p-row-text p-text">{props.label}</span>
-        <span className="min-w-0 flex-1 truncate p-meta p-text-3">
+        <span className="t-body w-20 shrink-0 p-text">{props.label}</span>
+        <span className="t-meta min-w-0 flex-1 truncate p-text-3">
           {count}{current.length > 0 && current.length < all.length ? `: ${current.join(', ')}` : ''}
         </span>
         <CaretRightIcon size={12} className={`shrink-0 p-fold-turn p-text-3 ${open ? 'rotate-90' : ''}`} />
@@ -779,7 +779,7 @@ function Allowance(props: {
               </button>
             );
           })}
-          {props.options.length === 0 && <span className="p-meta p-text-3">none shipped</span>}
+          {props.options.length === 0 && <span className="t-meta p-text-3">none shipped</span>}
         </div>
       )}
     </div>

@@ -8,17 +8,17 @@ export function SetupCard({ returnTo }: { returnTo: string }) {
   return (
     <>
       <div className="rounded-[14px] border p-border p-surface px-[18px] py-4">
-        <div className="mb-2.5 text-xs font-semibold p-text-3">Setup</div>
+        <div className="t-status mb-2.5 p-text-3">Setup</div>
         <button type="button" onClick={() => setOpen('providers')}
-          className="block w-full py-[5px] text-left p-t-control p-accent">
+          className="t-control block w-full py-[5px] text-left p-accent">
           Connect providers →
         </button>
         <button type="button" onClick={() => setOpen('mcp')}
-          className="block w-full py-[5px] text-left p-t-control p-accent">
+          className="t-control block w-full py-[5px] text-left p-accent">
           Add MCP servers →
         </button>
         <button type="button" onClick={() => setOpen('cli')}
-          className="block w-full py-[5px] text-left p-t-control p-accent">
+          className="t-control block w-full py-[5px] text-left p-accent">
           Install the CLI →
         </button>
       </div>

@@ -154,12 +154,12 @@ export function SecretRows({ rows, onChange, removable }: {
             {advanced.has(index) || row.position.kind !== "authorization"
               ? <PositionField position={row.position} label={row.name || "this secret"} onChange={(position) => edit(index, { ...row, position })} />
               : (
-                <button type="button" className="p-meta p-text-3 hover:p-text" data-secret-advanced={index}
+                <button type="button" className="t-meta p-text-3 hover:p-text" data-secret-advanced={index}
                   onClick={() => setAdvanced(new Set([...advanced, index]))}>
                   Sent in {positionWords(row.position)} · Advanced
                 </button>
               )}
-            {problem !== null && <p className="p-meta p-warning">{problem}</p>}
+            {problem !== null && <p className="t-meta p-warning">{problem}</p>}
           </div>
         );
       })}
@@ -240,7 +240,7 @@ function WorkspaceOptions() {
           <Combobox.Item key={item.workspace} value={item}>
             <span className="flex w-full items-baseline gap-2">
               <span className="truncate">{item.title}</span>
-              <span className="ml-auto shrink-0 font-mono p-meta p-text-3">{item.workspace}</span>
+              <span className="t-meta t-mono ml-auto shrink-0 p-text-3">{item.workspace}</span>
             </span>
           </Combobox.Item>
         )}

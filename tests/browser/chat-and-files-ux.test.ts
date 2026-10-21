@@ -3286,11 +3286,11 @@ interface WorkSection {
  *  progressive-disclosure rule. */
 function workSections(page: Page): Promise<WorkSection[]> {
   return page.$$eval('section', (nodes) => nodes.map((node) => {
-    const heading = node.querySelector('.p-label');
+    const heading = node.querySelector('[data-section-title]');
 
     return {
       title: heading?.textContent ?? '',
-      badge: heading?.nextElementSibling?.textContent ?? '',
+      badge: node.querySelector('[data-section-badge]')?.textContent ?? '',
       chips: [...node.querySelectorAll('button[aria-pressed]')].map((chip) => chip.textContent?.trim() ?? ''),
       retries: [...node.querySelectorAll('button')].filter((button) => button.textContent?.trim() === 'Retry').length,
       text: node.textContent ?? '',
@@ -3301,7 +3301,7 @@ function workSections(page: Page): Promise<WorkSection[]> {
 /** Waits until the Work tab has drawn the section under `title`. */
 async function waitForWorkSection(page: Page, title: string): Promise<void> {
   await page.waitForFunction((label: string) => [...document.querySelectorAll('section')]
-    .some((node) => node.querySelector('.p-label')?.textContent === label), {}, title);
+    .some((node) => node.querySelector('[data-section-title]')?.textContent === label), {}, title);
 }
 
 /** Rows the journal is rendering right now: the feed is one group of row

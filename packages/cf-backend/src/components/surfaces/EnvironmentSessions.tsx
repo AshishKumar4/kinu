@@ -250,13 +250,13 @@ function useHiddenEdges(strip: RefObject<HTMLDivElement | null>, shown: string):
 export function SessionDetails({ session, name }: { session: TerminalSession | null; name?: string }): ReactNode {
   const now = Date.now();
 
-  if (session === null) return name === undefined ? null : <span className="p-row-text font-medium p-text">{name}</span>;
+  if (session === null) return name === undefined ? null : <span className="t-item p-text">{name}</span>;
   const detail = sessionDetail(session, now);
   const failed = session.last !== null && session.last.exit !== 0 && session.running === null;
 
   return (
-    <span className="flex min-w-0 items-center gap-3 p-meta p-text-3">
-      {name !== undefined && <span className="inline-flex shrink-0 items-center gap-2 p-row-text font-medium p-text"><Dot tone={sessionTone(session).tone} />{name}</span>}
+    <span className="t-meta flex min-w-0 items-center gap-3 p-text-3">
+      {name !== undefined && <span className="t-item inline-flex shrink-0 items-center gap-2 p-text"><Dot tone={sessionTone(session).tone} />{name}</span>}
       {/* A narrow pane keeps its ports and state: the branch goes first, then the folder shows its last part. The text
           holds both forms, so the folder itself is named on the element. */}
       <span data-session-cwd={session.cwd} title={session.cwd} className="inline-flex min-w-0 items-center gap-1.5">

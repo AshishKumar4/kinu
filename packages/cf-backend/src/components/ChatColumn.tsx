@@ -56,11 +56,11 @@ export function EmptyConversation({ mission }: { mission: string }) {
       <KinuMark size={34} className="mb-4 text-[var(--c-accent)] opacity-70" />
       {brief && (
         <>
-          <p className="p-eyebrow">Mission</p>
-          <p className="mt-2 max-w-md whitespace-pre-wrap p-heading p-title p-text-2">{brief}</p>
+          <p className="t-label">Mission</p>
+          <p className="t-title mt-2 max-w-md whitespace-pre-wrap p-text-2">{brief}</p>
         </>
       )}
-      <p className="mt-4 text-sm p-text-3">Send the first message to start.</p>
+      <p className="t-body mt-4 p-text-3">Send the first message to start.</p>
     </div>
   );
 }
@@ -168,7 +168,7 @@ function DropOverlay() {
   return (
     <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center rounded-lg border-2 border-dashed"
       style={{ borderColor: "var(--c-accent)", background: "var(--c-selected)" }}>
-      <div className="flex items-center gap-2 text-sm p-text px-3 py-1.5 rounded-lg p-fill border p-border">
+      <div className="t-body flex items-center gap-2 p-text px-3 py-1.5 rounded-lg p-fill border p-border">
         <PaperclipIcon size={16} className="p-accent" />Drop files to attach
       </div>
     </div>

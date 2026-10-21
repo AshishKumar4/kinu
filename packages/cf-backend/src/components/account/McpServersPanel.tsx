@@ -72,12 +72,12 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
       </div>
 
       {authResult === 'ok' && (
-        <div className="p-card p-3 text-xs flex items-center gap-2 p-success">
+        <div className="t-meta p-card p-3 flex items-center gap-2 p-success">
           <CheckIcon size={14} /> Authorization complete. Discovering tools…
         </div>
       )}
       {authResult === 'failed' && (
-        <div className="p-card p-3 text-xs flex items-center gap-2 p-danger">
+        <div className="t-meta p-card p-3 flex items-center gap-2 p-danger">
           <WarningIcon size={14} /> Authorization failed{authError ? `: ${authError}` : ''}.
         </div>
       )}
@@ -95,35 +95,35 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
       {resource.status !== "loading" && (servers.length === 0 ? (
         <section className="p-card p-8 text-center space-y-2">
           <PlugIcon size={28} className="p-text-3 mx-auto" />
-          <div className="text-sm font-medium">No MCP servers yet</div>
+          <div className="t-item">No MCP servers yet</div>
         </section>
       ) : (
         <section className="p-card overflow-hidden">
-          <div className="p-group text-xs">
+          <div className="t-meta p-group">
             {servers.map((s) => (
               <div key={s.id} className="px-4 py-3" data-mcp-server={s.id}>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-                  <span className="p-row-text font-medium p-text">{s.name}</span>
+                  <span className="t-item p-text">{s.name}</span>
                   <Status tone={mcpServerStatus(s.status).tone}>{mcpServerStatus(s.status).label}</Status>
                   <div className="ml-auto flex items-center gap-2">
                     {s.authUrl && (
                       <a
                         href={s.authUrl} target="_blank" rel="noopener noreferrer"
-                        className="text-xs px-2 py-1 rounded-sm p-card p-card-hover flex items-center gap-1"
+                        className="t-meta px-2 py-1 rounded-sm p-card p-card-hover flex items-center gap-1"
                       >
                         <ArrowSquareOutIcon size={11} /> Authorize
                       </a>
                     )}
                     <button
                       onClick={() => remove(s.id, s.name)}
-                      className="text-xs p-text-3 hover:p-danger flex items-center gap-1 px-2 py-1"
+                      className="t-meta p-text-3 hover:p-danger flex items-center gap-1 px-2 py-1"
                       title="Remove server"
                     >
                       <TrashIcon size={11} /> Remove
                     </button>
                   </div>
                 </div>
-                <div className="mt-1 flex flex-wrap items-center gap-x-2 p-annotation p-text-3">
+                <div className="t-meta t-mono mt-1 flex flex-wrap items-center gap-x-2 p-text-3">
                   <span className="truncate max-w-full font-mono" title={s.serverUrl}>{s.serverUrl}</span>
                   <span>·</span>
                   <span>{s.transport}</span>
@@ -134,7 +134,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
                   </span>
                 </div>
                 {s.error && (
-                  <div className="mt-1 p-t-status p-danger" title={s.error}>
+                  <div className="t-status mt-1 p-danger" title={s.error}>
                     {s.error}
                   </div>
                 )}
@@ -193,26 +193,26 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
   return (
     <section className="p-card p-5 space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Add MCP server</h2>
-        <button onClick={onCancel} className="text-xs p-text-3 hover:p-text">Cancel</button>
+        <h2 className="t-label">Add MCP server</h2>
+        <button onClick={onCancel} className="t-meta p-text-3 hover:p-text">Cancel</button>
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">
-          <label className="text-xs p-text-3">Name</label>
+          <label className="t-meta p-text-3">Name</label>
           <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} placeholder="github" />
         </div>
         <div className="space-y-1">
-          <label className="text-xs p-text-3">Transport</label>
+          <label className="t-meta p-text-3">Transport</label>
           <Choice label="Transport" value={transport} onChange={setTransport} options={MCP_TRANSPORTS} />
         </div>
       </div>
       <div className="space-y-1">
-        <label className="text-xs p-text-3">Server URL</label>
+        <label className="t-meta p-text-3">Server URL</label>
         <input value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} className={inputCls}
           placeholder="https://mcp.example.com/v1" />
       </div>
       <div className="space-y-1">
-        <label className="text-xs p-text-3">
+        <label className="t-meta p-text-3">
           Static headers for private servers (optional JSON)
         </label>
         {/* Credential region: the marker keeps the typed value out of feedback screenshots. */}
@@ -222,16 +222,16 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
           placeholder='{"Authorization": "Bearer xyz"}' />
       </div>
       <div className="space-y-1">
-        <label className="text-xs p-text-3">Allowed tools (optional, comma-separated; leave empty for all)</label>
+        <label className="t-meta p-text-3">Allowed tools (optional, comma-separated; leave empty for all)</label>
         <input value={allowedTools} onChange={(e) => setAllowedTools(e.target.value)} className={inputCls}
           placeholder="create_issue, list_pulls" />
       </div>
-      {err && <p className="text-xs p-danger">{err}</p>}
+      {err && <p className="t-meta p-danger">{err}</p>}
       <div className="flex items-center justify-end gap-2 pt-1">
         <button
           onClick={save}
           disabled={saving || !name.trim() || !serverUrl.trim()}
-          className="px-3 py-1.5 rounded-md p-accent-bg p-accent text-xs font-medium disabled:opacity-50 hover:opacity-90"
+          className="t-status px-3 py-1.5 rounded-md p-accent-bg p-accent disabled:opacity-50 hover:opacity-90"
         >{saving ? 'Adding…' : 'Add server'}</button>
       </div>
     </section>

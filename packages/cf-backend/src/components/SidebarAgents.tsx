@@ -33,7 +33,7 @@ export function SidebarAgents({ panel, onBack }: { panel: WorkspaceAgentsPanel; 
     <div className="flex h-full min-h-0 flex-col" data-sidebar-agents={panel.workspace}>
       <div className="px-2 pb-1 pt-2">
         <button ref={back} type="button" onClick={onBack} data-agents-back
-          className={`flex w-full items-center gap-2 rounded-lg px-3 py-[7px] p-row-text transition-colors ${navRowCls(false, "p-text-3")}`}>
+          className={`t-body flex w-full items-center gap-2 rounded-lg px-3 py-[7px] transition-colors ${navRowCls(false, "p-text-3")}`}>
           <ArrowLeftIcon size={14} aria-hidden="true" /> Workspaces
         </button>
       </div>
@@ -81,7 +81,7 @@ function AgentRow({ agent, panel }: { agent: PanelAgent; panel: WorkspaceAgentsP
       {agent.tab || agent.category === "hired" || agent.category === "user"
         ? <ChatMascot seed={look.seed} colour={look.colour} activity={agent.activity} />
         : <span className="flex w-4 shrink-0 justify-center"><AgentStatusMark activity={agent.activity} /></span>}
-      <span className="p-status-label min-w-0 flex-1 truncate p-row-text">{agent.label}</span>
+      <span className="t-body p-status-label min-w-0 flex-1 truncate">{agent.label}</span>
     </button>
   );
 }
@@ -95,9 +95,9 @@ function AgentGroup({ title, members, panel }: { title: string; members: readonl
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
         className={`flex w-full items-center gap-2 rounded-lg py-[6px] pl-2.5 pr-3 text-left transition-colors ${navRowCls(false, "p-text-3")}`}>
         <CaretRightIcon size={11} className={`w-[13px] shrink-0 transition-transform duration-150 ${open ? "rotate-90" : ""}`} aria-hidden />
-        <span className="min-w-0 flex-1 truncate p-t-control">{title}</span>
+        <span className="t-control min-w-0 flex-1 truncate">{title}</span>
         {busy && <AgentStatusMark activity="working" />}
-        <span className="p-meta tabular-nums p-text-3">{members.length}</span>
+        <span className="t-meta tabular-nums p-text-3">{members.length}</span>
       </button>
       <div className="p-fold" data-folded={open ? undefined : ""}>
         <div inert={!open}>

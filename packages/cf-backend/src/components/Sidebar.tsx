@@ -28,7 +28,7 @@ function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
     <Link
       to={to}
       aria-current={active ? "page" : undefined}
-      className={`flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 p-t-control transition-colors ${navRowCls(active)}`}
+      className={`t-control flex items-center gap-2.5 rounded-lg py-[7px] pl-3 pr-3 transition-colors ${navRowCls(active)}`}
     >
       <Icon size={15} className={active ? 'p-accent-mark' : 'p-text-3'} />
       <span>{label}</span>
@@ -82,7 +82,7 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
             event.preventDefault();
             onDone();
           }}
-          className="min-w-0 flex-1 rounded-sm px-1.5 py-1 text-xs p-fill p-text border p-border"
+          className="t-meta min-w-0 flex-1 rounded-sm px-1.5 py-1 p-fill p-text border p-border"
           aria-label={label}
         />
         <button
@@ -101,7 +101,7 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
       </div>
       {said !== null && (
         <div role={error !== null || waiting?.failed === true ? "alert" : "status"} title={error ?? undefined}
-          className={`px-1 pt-1 p-meta truncate ${error !== null || waiting?.failed === true ? "p-danger" : "p-text-3"}`}>
+          className={`t-meta px-1 pt-1 truncate ${error !== null || waiting?.failed === true ? "p-danger" : "p-text-3"}`}>
           {said}
         </div>
       )}
@@ -178,16 +178,16 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
       <div className="relative min-h-0 flex-1 overflow-clip">
       <div className="p-slide" data-drilled={drilled || undefined}>
       <div className="h-full overflow-y-auto pt-2 pb-3" inert={drilled}>
-        <div className="px-5 pb-2 pt-4 p-eyebrow p-label-sm p-text-3">
+        <div className="t-label px-5 pb-2 pt-4 p-text-3">
           Workspaces{workspaceTotal > workspaces.length ? ` · ${workspaces.length}/${workspaceTotal}` : ""}
         </div>
         {!listLoading && workspaces.length === 0 && !listError && (
-          <div className="px-5 py-3 text-xs p-text-3">No workspaces yet.</div>
+          <div className="t-meta px-5 py-3 p-text-3">No workspaces yet.</div>
         )}
         {listError && (
           <button
             onClick={refreshWorkspaces}
-            className="w-full text-left px-5 py-2 text-xs p-warning rounded-md p-card-hover transition-colors"
+            className="t-meta w-full text-left px-5 py-2 p-warning rounded-md p-card-hover transition-colors"
           >Could not load workspaces. Retry</button>
         )}
         <ul className="space-y-1" aria-busy={listLoading && !listError}>
@@ -216,8 +216,8 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
                           <WorkspaceLogo title={shown} logo={a.logo} />
                           <span className="p-logo-badge"><WorkspaceDot entry={a} /></span>
                         </span>
-                        <span className={`min-w-0 flex-1 truncate p-row-text font-semibold ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? `italic ${isActive ? '' : 'p-text-3'}` : ''}`}>{shown}</span>
-                        {age && <span className="w-[30px] shrink-0 text-right p-meta tabular-nums p-text-3 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
+                        <span className={`t-label min-w-0 flex-1 truncate ${isPlaceholderWorkspaceTitle(a.displayName, a.name) ? `italic ${isActive ? '' : 'p-text-3'}` : ''}`}>{shown}</span>
+                        {age && <span className="t-meta w-[30px] shrink-0 text-right tabular-nums p-text-3 opacity-0 transition-opacity lg:opacity-100 lg:group-hover:opacity-0 lg:group-focus-within:opacity-0">{age}</span>}
                       </NavLink>
                       <button
                         onClick={() => setEditingWorkspace(a.name)}
@@ -271,17 +271,17 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
         </li>
       ))}
       <li>
-        <Link to={`/workspace/${panel.workspace}/new`} className={`flex items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 p-row-text transition-colors ${navRowCls(false, "p-text-3")}`}>
+        <Link to={`/workspace/${panel.workspace}/new`} className={`t-body flex items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 transition-colors ${navRowCls(false, "p-text-3")}`}>
           <PlusIcon size={12} className="w-[13px] shrink-0" aria-hidden /> New agent
         </Link>
       </li>
       <li>
         <button ref={trigger} type="button" onClick={onAgents} data-agents-counter
-          className={`flex w-full items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left p-row-text transition-colors ${navRowCls(false, "p-text-3")}`}>
+          className={`t-body flex w-full items-center gap-2 rounded-lg py-[6px] pl-2 pr-3 text-left transition-colors ${navRowCls(false, "p-text-3")}`}>
           <UsersThreeIcon size={13} className="w-[13px] shrink-0" aria-hidden />
           <span className="flex-1">All agents</span>
           {working && <AgentStatusMark activity="working" />}
-          {others > 0 && <span className="p-meta tabular-nums p-text-3">{others}</span>}
+          {others > 0 && <span className="t-meta tabular-nums p-text-3">{others}</span>}
           <CaretRightIcon size={11} aria-hidden />
         </button>
       </li>
@@ -301,7 +301,7 @@ function ChatRow({ chat, panel, onRename }: { chat: PanelAgent; panel: Workspace
         aria-current={panel.shown === chat.key ? "page" : undefined}
         className={`p-halo relative flex w-full min-w-0 items-center gap-2 rounded-lg py-[6px] pl-2 text-left transition-colors ${remove ? "pr-12 lg:pr-3 lg:group-hover/chat:pr-12 lg:group-focus-within/chat:pr-12" : "pr-7 lg:pr-3 lg:group-hover/chat:pr-7 lg:group-focus-within/chat:pr-7"} ${navRowCls(panel.shown === chat.key)}`}>
         <ChatMascot seed={look.seed} colour={look.colour} activity={chat.activity} />
-        <span className="p-status-label min-w-0 flex-1 truncate p-row-text">{chat.label}</span>
+        <span className="t-body p-status-label min-w-0 flex-1 truncate">{chat.label}</span>
       </button>
       <button type="button" onClick={onRename} title="Rename" aria-label={`Rename chat ${chat.label}`}
         className={`absolute top-1/2 -translate-y-1/2 p-1 p-text-3 hover:p-text ${remove ? "right-6" : "right-1"} ${reveal}`}>

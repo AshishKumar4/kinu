@@ -15,7 +15,7 @@ import { NAV_HOVER } from "./nav";
 /** Kinu's source. */
 const KINU_REPOSITORY = "https://github.com/AshishKumar4/kinu";
 
-const MENU_ROW = "flex items-center gap-2 px-2 py-1.5 text-sm rounded-sm p-card-hover";
+const MENU_ROW = "t-body flex items-center gap-2 px-2 py-1.5 rounded-sm p-card-hover";
 
 /** Where the mail the assistant reads lands; Important is its first view. */
 const MAIL_ROUTE = "/mail";
@@ -26,7 +26,7 @@ function CountBadge({ count, label }: { count: number; label: string }) {
 
   return (
     <span aria-label={label} data-count-badge={count}
-      className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--c-accent)] px-1 text-[10px] font-semibold leading-none text-[var(--c-accent-on)] ring-2 ring-[var(--c-sidebar)]">
+      className="t-micro absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--c-accent)] px-1 text-[var(--c-accent-on)] ring-2 ring-[var(--c-sidebar)]">
       {count > 9 ? "9+" : count}
     </span>
   );
@@ -67,8 +67,8 @@ export function AccountMenu({ onClose, className }: { onClose: () => void; class
       <div className="mb-1 flex items-center gap-2.5 border-b p-border px-2 pb-2 pt-1">
         <Avatar name={profile?.displayName ?? profile?.email ?? "?"} size={28} />
         <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate p-row-text font-medium p-text">{profile?.displayName ?? profile?.email ?? (failed ? "Could not load your profile" : "Loading…")}</span>
-          {profile?.displayName !== undefined && profile.displayName !== null && <span className="truncate p-meta p-text-3">{profile.email}</span>}
+          <span className="t-item truncate p-text">{profile?.displayName ?? profile?.email ?? (failed ? "Could not load your profile" : "Loading…")}</span>
+          {profile?.displayName !== undefined && profile.displayName !== null && <span className="t-meta truncate p-text-3">{profile.email}</span>}
         </span>
       </div>
       <Link to={APP_ROUTES.userSettings} onClick={onClose} className={MENU_ROW}><GearIcon size={14} /><span>Settings</span></Link>
@@ -114,7 +114,7 @@ export function SidebarFooter({ initiallyOpen = false }: { initiallyOpen?: boole
       <button type="button" onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" data-account-menu
         className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg py-1.5 pl-1.5 pr-2 text-left transition-colors ${open ? "bg-[var(--c-hover)]" : "hover:bg-[var(--c-hover)]"}`}>
         <Avatar name={name === "" ? "?" : name} size={24} />
-        <span className="min-w-0 flex-1 truncate p-row-text font-medium p-text">{name === "" ? "Account" : name}</span>
+        <span className="t-item min-w-0 flex-1 truncate p-text">{name === "" ? "Account" : name}</span>
       </button>
       <FooterIcons />
       {open && <AccountMenu onClose={close} className="absolute bottom-full left-2 right-2 mb-1" />}

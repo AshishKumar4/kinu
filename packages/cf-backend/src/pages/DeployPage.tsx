@@ -81,9 +81,9 @@ function NotConfigured({ reason }: { reason: string }) {
   return (
     <section className="space-y-3" aria-label="Deploying to Cloudflare is not set up">
       <div className="p-card px-5 py-4">
-        <h2 className="p-title p-text">Deploying to Cloudflare is not set up here</h2>
-        <p className="mt-1 text-sm p-text-2">{reason}</p>
-        <p className="mt-3 p-meta p-text-3">
+        <h2 className="t-title p-text">Deploying to Cloudflare is not set up here</h2>
+        <p className="t-body mt-1 p-text-2">{reason}</p>
+        <p className="t-meta mt-3 p-text-3">
           The owner of this Kinu registers the OAuth client once. Until then, this page cannot
           deploy into a Cloudflare account.
         </p>
@@ -211,7 +211,7 @@ function Answered({ options, runId, onStarted }: {
                 {zoneOptions}
               </select>
               {answers.mailZoneId !== "" && (
-                <label className="flex items-center gap-2 text-sm p-text-2">
+                <label className="t-body flex items-center gap-2 p-text-2">
                   <input type="checkbox" checked={answers.mailEveryone} onChange={(event) => setAnswers({ ...answers, mailEveryone: event.target.checked })} />
                   Every account may have an address, not only yours
                 </label>
@@ -231,9 +231,9 @@ function Answered({ options, runId, onStarted }: {
           </Field>
         ))}
       </div>
-      {err !== null && <div className="p-notice-danger rounded-md px-3 py-2 text-xs" role="alert">{err}</div>}
+      {err !== null && <div className="t-meta p-notice-danger rounded-md px-3 py-2" role="alert">{err}</div>}
       <div className="flex items-center justify-between gap-3">
-        <p className="p-meta p-text-3">Kinu {options.version} will be uploaded into your account.</p>
+        <p className="t-meta p-text-3">Kinu {options.version} will be uploaded into your account.</p>
         <Button variant="primary" size="md"
           onClick={() => detach(deploy())}
           disabled={busy || answers.accountId === "" || answers.ownerEmail === ""}
@@ -252,19 +252,19 @@ function Done({ snapshot, email }: { snapshot: DeploySnapshot; email: string }) 
   return (
     <section className="space-y-3" aria-label="Your Kinu is deployed">
       <div className="p-card px-5 py-4">
-        <h2 className="p-title p-text">Your Kinu is live</h2>
-        <p className="mt-1 text-sm p-text-2">
+        <h2 className="t-title p-text">Your Kinu is live</h2>
+        <p className="t-body mt-1 p-text-2">
           <a className="underline" href={origin}>{snapshot.address}</a>
         </p>
-        <p className="mt-2 p-meta p-text-3">
+        <p className="t-meta mt-2 p-text-3">
           Sign in with {email === "" ? "the email you gave" : email}. Cloudflare Access sends you a
           one-time PIN. It is running Kinu {snapshot.version}; install new versions from its
           Updates page.
         </p>
       </div>
       <div className="p-card px-5 py-4">
-        <h2 className="p-title p-text">Connect this machine</h2>
-        <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--c-surface)] px-3 py-2 font-mono text-xs p-text">
+        <h2 className="t-title p-text">Connect this machine</h2>
+        <pre className="t-meta t-mono mt-2 overflow-x-auto rounded-md bg-[var(--c-surface)] px-3 py-2 p-text">
           curl -fsSL {origin}/install.sh | bash
         </pre>
       </div>
@@ -341,24 +341,24 @@ export default function DeployPage({ fixture, fixtureOptions }: {
     <div className="min-h-screen p-bg p-text">
       <header className="flex h-14 items-center justify-between border-b p-border px-5">
         <a href="/" aria-label="Kinu home" className="flex items-center"><KinuLogo /></a>
-        <span className="p-meta p-text-3">Deploy your own Kinu</span>
+        <span className="t-meta p-text-3">Deploy your own Kinu</span>
       </header>
       <main className="mx-auto max-w-3xl space-y-6 px-6 py-8">
         <div>
-          <h1 className="p-display text-2xl">Your own Kinu, in your own account</h1>
-          <p className="mt-1 text-sm p-text-2">
+          <h1 className="t-page-title">Your own Kinu, in your own account</h1>
+          <p className="t-body mt-1 p-text-2">
             Sign in with Cloudflare, answer four questions, and watch it deploy. Nothing is built on
             your side, and kinu.run keeps no credential of yours.
           </p>
         </div>
-        {err !== null && <div className="p-notice-danger rounded-md px-3 py-2 text-xs" role="alert">{err}</div>}
+        {err !== null && <div className="t-meta p-notice-danger rounded-md px-3 py-2" role="alert">{err}</div>}
         {options === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
         {options !== null && !options.cloudflare && <NotConfigured reason={options.reason} />}
         {options !== null && options.cloudflare && (snapshot === null || snapshot.state === "expired") && (
           <section className="space-y-3" aria-label="Sign in with Cloudflare">
             <div className="p-card px-5 py-4">
-              <h2 className="p-title p-text">Sign in with Cloudflare</h2>
-              <p className="mt-1 text-sm p-text-2">
+              <h2 className="t-title p-text">Sign in with Cloudflare</h2>
+              <p className="t-body mt-1 p-text-2">
                 {snapshot?.state === "expired"
                   ? "Your Cloudflare sign-in for this run expired. It lasts an hour after the last"
                     + " step. Sign in again and the run picks up from the step it reached."
@@ -370,7 +370,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
                 Sign in with Cloudflare
               </Button>
             </div>
-            <p className="p-meta p-text-3">This installs Kinu {options.version}.</p>
+            <p className="t-meta p-text-3">This installs Kinu {options.version}.</p>
           </section>
         )}
         {options !== null && collecting && (
@@ -380,7 +380,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
           <>
             {snapshot.state === "done" && <Done snapshot={snapshot} email={ownerEmail} />}
             <section className="space-y-2" aria-label="Deployment steps">
-              <h2 className="p-eyebrow">{snapshot.state === "done" ? "What it did" : "Deploying"}</h2>
+              <h2 className="t-label">{snapshot.state === "done" ? "What it did" : "Deploying"}</h2>
               <ul className="space-y-2">
                 {snapshot.steps.map((row) => <StepRow key={row.id} row={row} onRetry={retry} />)}
               </ul>

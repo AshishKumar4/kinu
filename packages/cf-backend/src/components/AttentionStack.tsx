@@ -105,7 +105,7 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
     return (
       <>
         <MailSendBody send={mail} text={mail.text} />
-        <div className="mt-1 p-meta p-text-3">Approving sends exactly this, once · asked {timeAgo(action.at)}</div>
+        <div className="t-meta mt-1 p-text-3">Approving sends exactly this, once · asked {timeAgo(action.at)}</div>
       </>
     );
   }
@@ -117,11 +117,11 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
 
     return (
       <>
-        <div className="p-row-text p-text">{asks}</div>
-        {action.detail !== null && <code className="mt-1 block max-h-28 overflow-auto rounded-sm px-2 py-1 p-t-code p-text-2 break-all whitespace-pre-wrap p-fill">{revealMisrepresenting(action.detail)}</code>}
-        {action.where !== undefined && <div className="mt-1 p-meta p-text-2 break-all">Runs {revealMisrepresenting(action.where)}</div>}
+        <div className="t-body p-text">{asks}</div>
+        {action.detail !== null && <code className="t-code mt-1 block max-h-28 overflow-auto rounded-sm px-2 py-1 p-text-2 break-all whitespace-pre-wrap p-fill">{revealMisrepresenting(action.detail)}</code>}
+        {action.where !== undefined && <div className="t-meta mt-1 p-text-2 break-all">Runs {revealMisrepresenting(action.where)}</div>}
         {action.write && <div className="mt-1.5"><ParkedWriteChange id={action.id} rpc={rpc} /></div>}
-        <div className="mt-1 p-meta p-text-3">
+        <div className="t-meta mt-1 p-text-3">
           {action.write ? "Approving writes exactly these bytes." : action.title.replace(/^Approve: /u, "")} · asked {timeAgo(action.at)}
         </div>
         {action.effect !== undefined && <div className="mt-1"><AlwaysLine action={action} /></div>}
@@ -131,8 +131,8 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
 
   return (
     <>
-      <div className="p-row-text p-text">{action.title}</div>
-      <div className="mt-0.5 p-meta p-text-3">{action.detail ?? "Your agent"} · {timeAgo(action.at)} · read it in its review</div>
+      <div className="t-body p-text">{action.title}</div>
+      <div className="t-meta mt-0.5 p-text-3">{action.detail ?? "Your agent"} · {timeAgo(action.at)} · read it in its review</div>
     </>
   );
 }
@@ -142,9 +142,9 @@ function ConsentBody({ consent }: { consent: PendingConsent }) {
 
   return (
     <>
-      <div className="p-row-text p-text">Use <span className="font-medium">{consent.deviceLabel}</span> for {forWhom}?</div>
-      <code className="mt-1 block rounded-sm px-2 py-1 p-t-code p-text-2 break-all p-fill">{revealMisrepresenting(consent.command || "(command)")}</code>
-      <div className="mt-1 p-meta p-text-3">Commands use {consent.deviceLabel}'s Sandbox setting. Revoke access on the Devices page.</div>
+      <div className="t-body p-text">Use <span className="font-medium">{consent.deviceLabel}</span> for {forWhom}?</div>
+      <code className="t-code mt-1 block rounded-sm px-2 py-1 p-text-2 break-all p-fill">{revealMisrepresenting(consent.command || "(command)")}</code>
+      <div className="t-meta mt-1 p-text-3">Commands use {consent.deviceLabel}'s Sandbox setting. Revoke access on the Devices page.</div>
     </>
   );
 }
@@ -156,9 +156,9 @@ function MemoryBody({ memory }: { memory: AccountMemoryProposal }) {
 
   return (
     <>
-      <div className="p-row-text p-text">Remember this for every workspace?</div>
-      <code className="mt-1 block max-h-28 overflow-auto rounded-sm px-2 py-1 p-t-code p-text-2 break-all whitespace-pre-wrap p-fill">{remembered(memory)}</code>
-      <div className="mt-1 p-meta p-text-3">{by}{where} asked {timeAgo(memory.createdAt)}. Forget it any time under Settings → Memory.</div>
+      <div className="t-body p-text">Remember this for every workspace?</div>
+      <code className="t-code mt-1 block max-h-28 overflow-auto rounded-sm px-2 py-1 p-text-2 break-all whitespace-pre-wrap p-fill">{remembered(memory)}</code>
+      <div className="t-meta mt-1 p-text-3">{by}{where} asked {timeAgo(memory.createdAt)}. Forget it any time under Settings → Memory.</div>
     </>
   );
 }
@@ -342,7 +342,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
       <div key={front.key} className="p-attention-card animate-fade-in" data-attention-card={front.key} data-attention-kind={kindOf(front)}
         {...(front.kind === "consent" ? { "data-device-bind": front.consent.consentId } : {})}
         aria-live="polite">
-        <div className="mb-1 flex items-center gap-1.5 p-meta p-text-3">
+        <div className="t-meta mb-1 flex items-center gap-1.5 p-text-3">
           <FrontIcon size={12} className="shrink-0 p-warning" weight="fill" aria-hidden />
           <span>{answerOwed ? "Answer sent" : "Waiting on you"}</span>
           {cards > 1 && <span className="tabular-nums" data-attention-position>· 1 of {cards}</span>}
@@ -357,7 +357,7 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
             onAnswer={(answers) => detach(answer({ label: "Answer", weight: "primary", run: async () => rpc("answerOwnerQuestions", [front.question.asked.id, answers, front.question.actor]) }))}
             onDismiss={() => detach(answer({ label: "Dismiss", weight: "quiet", run: async () => { await rpc("dismissOwnerQuestions", [front.question.asked.id, front.question.actor]); } }))} />
         )}
-        {error?.key === front.key && <div className="mt-1.5 p-t-status p-danger" role="alert">{error.message}</div>}
+        {error?.key === front.key && <div className="t-status mt-1.5 p-danger" role="alert">{error.message}</div>}
         {!batched && (
           <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
             {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy === front.key} onAnswer={answer} />)}

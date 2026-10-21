@@ -5,7 +5,7 @@ export function AttachmentChip({ part, onRemove }: { part: FileUIPart; onRemove?
   const name = part.filename ?? "file";
 
   return (
-    <span className="inline-flex max-w-56 items-center gap-1.5 rounded-md border p-border p-fill px-1.5 py-1 p-meta p-text-2">
+    <span className="t-meta inline-flex max-w-56 items-center gap-1.5 rounded-md border p-border p-fill px-1.5 py-1 p-text-2">
       {part.mediaType.startsWith("image/")
         ? <img src={part.url} alt={name} className="size-5 shrink-0 rounded-sm object-cover" />
         : <FileIcon size={13} className="shrink-0 p-text-3" />}

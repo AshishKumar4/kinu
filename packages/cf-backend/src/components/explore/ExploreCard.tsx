@@ -58,7 +58,7 @@ export function Maker({ maker, size = 18 }: { maker: { readonly name: string; re
 
 /** What it reaches of yours: each connection's mark, and a key for each secret. Nothing at all says so. */
 export function Needs({ needs }: { needs: readonly ExploreNeed[] }) {
-  if (needs.length === 0) return <span className="p-meta p-text-3">Needs nothing of yours</span>;
+  if (needs.length === 0) return <span className="t-meta p-text-3">Needs nothing of yours</span>;
 
   const words = needs.map((need) => `${need.connection ?? need.secret ?? "?"} (${need.access})`).join(", ");
 
@@ -120,8 +120,8 @@ function Card({ href, kind, id, title, line, typeset, picture, maker, numbers }:
             <KindBadge kind={kind} onPicture className="absolute left-2.5 top-2.5" />
           </>
         )}>
-          {!typeset && <span className="line-clamp-1 p-meta p-text-2">{line}</span>}
-          <span className="flex min-w-0 items-center gap-2 p-meta p-text-3">
+          {!typeset && <span className="t-meta line-clamp-1 p-text-2">{line}</span>}
+          <span className="t-meta flex min-w-0 items-center gap-2 p-text-3">
             {maker}
             <span className="ml-auto inline-flex shrink-0 items-center gap-1 tabular-nums">{numbers}</span>
           </span>

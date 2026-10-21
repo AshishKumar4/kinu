@@ -19,7 +19,7 @@ export function CliInstallCard() {
 function CommandCopy({ command }: { command: string }) {
   return (
     <div className="flex items-start gap-2 rounded-md p-fill border p-border p-3">
-      <code className="p-t-code p-text flex-1 break-all select-all">{command}</code>
+      <code className="t-code p-text flex-1 break-all select-all">{command}</code>
       <CopyButton value={command} what="the install command" size={13} className="p-text-3 hover:p-text shrink-0" />
     </div>
   );

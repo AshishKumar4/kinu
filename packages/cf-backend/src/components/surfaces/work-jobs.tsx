@@ -73,7 +73,7 @@ export function InspectedRow({ work, now }: { work: InspectedWork; now: number }
 
   return (
     <div className="flex items-start gap-2 py-1" data-inspected={work.kind} data-phase={work.phase}>
-      <span className="p-row-text">{work.actor === null ? work.label : `${work.actor} · ${work.label}`} <span className="p-text-3">· {notes.join(" · ")}</span></span>
+      <span className="t-body">{work.actor === null ? work.label : `${work.actor} · ${work.label}`} <span className="p-text-3">· {notes.join(" · ")}</span></span>
     </div>
   );
 }
@@ -125,23 +125,23 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
           weight={live ? "bold" : "fill"} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="p-row-text font-medium p-text truncate" title={name.title}>{name.title}</span>
-            <code className="p-annotation p-text-3 shrink-0">{name.shortId}</code>
+            <span className="t-item p-text truncate" title={name.title}>{name.title}</span>
+            <code className="t-meta t-mono p-text-3 shrink-0">{name.shortId}</code>
           </div>
-          <div className="p-meta p-text-3">
+          <div className="t-meta p-text-3">
             {m.label} · started {timeAgo(job.createdAt)}{job.settledAt ? ` · settled ${timeAgo(job.settledAt)}` : ""}
           </div>
           {interrupted && (
-            <div className="p-t-status p-warning">{interrupted}</div>
+            <div className="t-status p-warning">{interrupted}</div>
           )}
           {job.retriedBy && (
-            <div className="mt-1 p-annotation p-accent">
+            <div className="t-meta t-mono mt-1 p-accent">
               Retried as {shortJobId(job.retriedBy)}
             </div>
           )}
-          {printed && <pre className="p-annotation p-text-2 mt-1 whitespace-pre-wrap break-words font-mono" aria-label="Latest output">{printed}</pre>}
-          {detail && <div className="p-annotation p-text-2 mt-1 line-clamp-3 whitespace-pre-wrap break-words">{detail}</div>}
-          {err && <div className="p-t-status p-danger mt-1">{err}</div>}
+          {printed && <pre className="t-meta t-mono p-text-2 mt-1 whitespace-pre-wrap break-words" aria-label="Latest output">{printed}</pre>}
+          {detail && <div className="t-meta t-mono p-text-2 mt-1 line-clamp-3 whitespace-pre-wrap break-words">{detail}</div>}
+          {err && <div className="t-status p-danger mt-1">{err}</div>}
         </div>
         <div className="grid auto-cols-max grid-flow-col items-center gap-1 justify-self-end">
           {live ? (

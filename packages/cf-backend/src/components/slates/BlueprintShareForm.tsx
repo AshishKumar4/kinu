@@ -32,7 +32,7 @@ export interface BlueprintFixture {
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-3">
-      <dt className="shrink-0 p-meta p-text-3 sm:w-24 sm:pt-1.5">{label}</dt>
+      <dt className="t-meta shrink-0 p-text-3 sm:w-24 sm:pt-1.5">{label}</dt>
       <dd className="min-w-0 flex-1">{children}</dd>
     </div>
   );
@@ -139,7 +139,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
 
     return (
       <>
-        <div className="space-y-3 text-xs">
+        <div className="t-meta space-y-3">
           <p className="p-notice-success rounded-md px-3 py-2" data-blueprint-published>
             Published. Anyone with the link can read it and fork a copy.{published.listing === "pending" && " The list will catch up."}
           </p>
@@ -159,7 +159,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
       <div className="space-y-4">
         <Lead>People get their own copy to fork. Nothing of yours comes with it: no connections, chats or data.</Lead>
         {versions === null && err === null && <div className="flex justify-center py-2"><Loader size="sm" /></div>}
-        {versions !== null && versions.length === 0 && <div className="p-notice-info rounded-md px-3 py-2 text-xs">Commit this slate first: a blueprint is cut from a committed version.</div>}
+        {versions !== null && versions.length === 0 && <div className="t-meta p-notice-info rounded-md px-3 py-2">Commit this slate first: a blueprint is cut from a committed version.</div>}
         {versions !== null && versions.length > 0 && (
           <dl className="space-y-3">
             <Field label="Version">
@@ -171,7 +171,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
               <Field label="Includes">
                 <span className="flex flex-wrap gap-1.5">
                   {topLevel.map((name) => (
-                    <label key={name} className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs ${includes(name) ? "p-border p-text" : "border-dashed p-border p-text-3"}`}>
+                    <label key={name} className={`t-meta inline-flex items-center gap-1.5 rounded-md border px-2 py-1 ${includes(name) ? "p-border p-text" : "border-dashed p-border p-text-3"}`}>
                       <input type="checkbox" checked={includes(name)} onChange={() => toggle(name)} disabled={busy || name === "package.json"} className="accent-[var(--c-accent)]" />
                       <span className="font-mono">{name}</span>
                     </label>
@@ -181,7 +181,7 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
             )}
             {inspection !== null && inspection.reaches.length > 0 && (
               <Field label="They connect">
-                <span className="block pt-1.5 p-meta p-text-2" data-blueprint-connect>
+                <span className="t-meta block pt-1.5 p-text-2" data-blueprint-connect>
                   Their own {inspection.reaches.join(", ")}, when they fork it.
                 </span>
               </Field>
@@ -194,14 +194,14 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
           </SecretWarning>
         )}
         <EmailsField value={emails} onChange={setEmails} disabled={busy} placeholder="Add people by email (optional)" />
-        <p className="p-meta p-text-3">Anyone with the link can read it; a fork needs a Kinu account.</p>
+        <p className="t-meta p-text-3">Anyone with the link can read it; a fork needs a Kinu account.</p>
         {shares.length > 0 && (
           <div className="space-y-1.5">
-            <p className="p-meta font-medium p-text-3">Published</p>
+            <p className="t-status p-text-3">Published</p>
             <ul className="p-group">
               {shares.map((share) => (
                 <li key={share.id} data-blueprint-share={share.id} className="flex items-center gap-3 px-3.5 py-2">
-                  <span className="min-w-0 flex-1 truncate p-meta p-text-2">
+                  <span className="t-meta min-w-0 flex-1 truncate p-text-2">
                     {new Date(share.createdAt).toLocaleDateString()}{share.users.length > 0 ? ` · ${share.users.join(", ")}` : ""}
                   </span>
                   <StopButton onStop={() => unshare(share.id)} disabled={busy} />

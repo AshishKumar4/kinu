@@ -11,7 +11,7 @@ interface LoadFailureProps {
 
 export function LoadFailure({ what, message, onRetry, className }: LoadFailureProps) {
   return (
-    <div className={`flex items-start gap-2 text-xs leading-5 p-danger ${className ?? ""}`}>
+    <div className={`t-meta flex items-start gap-2 p-danger ${className ?? ""}`}>
       <WarningCircleIcon size={13} className="mt-[3px] shrink-0" />
       {/* Its words wrap: a cut sentence says less than none. */}
       <span data-failure className="min-w-0 break-words" title={message}>

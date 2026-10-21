@@ -72,11 +72,11 @@ export function Segmented<T extends string>({ label, segments, value, onChange, 
             onFocus={() => setFocusId(segment.id)}
             aria-label={segment.icon === undefined ? undefined : segment.label}
             title={segment.icon === undefined ? undefined : segment.label}
-            className={`flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border text-[13px] font-medium leading-5 ${segment.icon === undefined ? SEGMENT_BOX[size] : "size-7"}${selected ? " border-[var(--c-button-line)] bg-[var(--c-button-bg)] p-text shadow-[var(--shadow-button)]" : " border-transparent p-text-3 hover:p-text"}`}
+            className={`t-item flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border ${segment.icon === undefined ? SEGMENT_BOX[size] : "size-7"}${selected ? " border-[var(--c-button-line)] bg-[var(--c-button-bg)] p-text shadow-[var(--shadow-button)]" : " border-transparent p-text-3 hover:p-text"}`}
           >
             {segment.icon ?? segment.label}
             {segment.count !== undefined && (
-              <span className={`p-meta tabular-nums ${selected ? "p-text-2" : "p-text-3"}`}>{segment.count}</span>
+              <span className={`t-meta tabular-nums ${selected ? "p-text-2" : "p-text-3"}`}>{segment.count}</span>
             )}
           </button>
         );

@@ -12,7 +12,7 @@ export default function ConnectedPage() {
   useEffect(() => { announceConnected(next); }, [next]);
 
   return (
-    <div className="flex h-screen items-center justify-center p-bg p-text-3 text-sm">
+    <div className="t-body flex h-screen items-center justify-center p-bg p-text-3">
       Connected. You can close this window.
     </div>
   );

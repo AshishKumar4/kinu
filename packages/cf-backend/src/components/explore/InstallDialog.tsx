@@ -63,7 +63,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
           </>
         )}
         <div>
-          <div className="mb-2 p-row-text font-medium p-text">What it reaches</div>
+          <div className="t-item mb-2 p-text">What it reaches</div>
           <ul className="divide-y divide-[var(--c-border)] overflow-hidden rounded-xl border p-border">
             {page.workspace.needs.map((need) => {
               const brand = presetBrand(need.connection);
@@ -76,18 +76,18 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
                     {brand !== undefined ? <BrandMark brand={brand} size={12} bare /> : <KeyIcon size={12} className="p-text-2" />}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block p-row-text p-text">{title} <span className="p-meta p-text-3">{need.access === "read" ? "to read" : "to read and write"}</span></span>
+                    <span className="t-body block p-text">{title} <span className="t-meta p-text-3">{need.access === "read" ? "to read" : "to read and write"}</span></span>
                   </span>
                   {has
                     ? <Status tone="success">Connected</Status>
-                    : <a href={`${APP_ROUTES.plugins}?add=${need.connection ?? ""}`} className="shrink-0 p-meta p-accent hover:underline">Connect</a>}
+                    : <a href={`${APP_ROUTES.plugins}?add=${need.connection ?? ""}`} className="t-meta shrink-0 p-accent hover:underline">Connect</a>}
                 </li>
               );
             })}
           </ul>
-          <p className="mt-2 p-meta p-text-3">Install now and connect the rest later: it asks for what it can't reach yet.</p>
+          <p className="t-meta mt-2 p-text-3">Install now and connect the rest later: it asks for what it can't reach yet.</p>
         </div>
-        {failure !== null && <p className="text-xs p-danger">{failure}</p>}
+        {failure !== null && <p className="t-meta p-danger">{failure}</p>}
       </div>
     </Modal>
   );

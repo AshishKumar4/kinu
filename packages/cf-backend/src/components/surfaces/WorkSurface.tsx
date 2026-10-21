@@ -156,7 +156,7 @@ function ListingStatus({ error, starting = [], onRetry }: { error: string | null
   if (starting.length === 0) return null;
 
   return (
-    <div role="status" className={`flex items-center gap-2 text-xs p-text-3 ${LISTING_STRIP}`} data-preview-starting>
+    <div role="status" className={`t-meta flex items-center gap-2 p-text-3 ${LISTING_STRIP}`} data-preview-starting>
       <Loader size="sm" />
       <span className="min-w-0 truncate">{starting.map(executorLabel).join(" and ")} starting…</span>
     </div>
@@ -292,7 +292,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             data-preview-ready
             title={chip.title}
             aria-label={`Preview ready: ${chip.title}`}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border p-border p-selected px-2 py-1 text-[11px] font-medium p-accent transition-colors hover:p-hover @[28rem]:px-2.5"
+            className="t-micro inline-flex shrink-0 items-center gap-1.5 rounded-full border p-border p-selected px-2 py-1 p-accent transition-colors hover:p-hover @[28rem]:px-2.5"
           >
             <StatusDot tone="live" />
             {/* A narrow column keeps the pulse and gives its words to the pages; the name is the control's either way. */}

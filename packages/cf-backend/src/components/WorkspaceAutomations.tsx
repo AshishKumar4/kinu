@@ -54,20 +54,20 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: WorkspaceRpc; wo
       {dialog}
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <LightningIcon size={16} className="p-accent" />
-        <h2 className="text-sm font-semibold p-text">Automations</h2>
+        <h2 className="t-label p-text">Automations</h2>
         {triggers && <Badge variant="secondary">{active}/{triggers.length} active</Badge>}
-        {nextFire && <span className="p-meta p-text-3 tabular-nums">next {new Date(nextFire).toLocaleString()}</span>}
+        {nextFire && <span className="t-meta p-text-3 tabular-nums">next {new Date(nextFire).toLocaleString()}</span>}
         <Button size="sm" variant="secondary" className="ml-auto" icon={<PlusIcon size={12} />}
           onClick={() => { setShowCreate(true); setCreated(null); }}>New webhook</Button>
       </div>
-      <p className="text-xs p-text-3 mb-3">Webhooks and timers: what wakes this workspace's agent from outside.</p>
+      <p className="t-meta p-text-3 mb-3">Webhooks and timers: what wakes this workspace's agent from outside.</p>
       {created && <NewWebhookCard result={created} onDismiss={() => setCreated(null)} />}
       {triggers === null && (resource.status === "error"
         ? <LoadFailure what="automations" message={resource.message} onRetry={reload} />
         : <div className="flex justify-center py-6"><Loader size="sm" /></div>)}
-      {triggers !== null && triggers.length === 0 && <p className="text-xs p-text-3">No webhooks or timers yet. Use New webhook to let another system wake this agent.</p>}
+      {triggers !== null && triggers.length === 0 && <p className="t-meta p-text-3">No webhooks or timers yet. Use New webhook to let another system wake this agent.</p>}
       {triggers !== null && triggers.length > 0 && (
-        <div className="rounded-md border p-border overflow-hidden text-xs">
+        <div className="t-meta rounded-md border p-border overflow-hidden">
           {triggers.map((t) => (
             <TriggerLine key={t.id} trigger={t} onRevoke={() => revoke(t.id)} rpc={rpc} onMoved={reload} />
           ))}
@@ -202,33 +202,33 @@ export function NewWebhookCard({ result, onDismiss }: {
     <div className="p-card p-5 space-y-3 border p-border mb-3">
       <div className="flex items-center gap-2">
         <CheckIcon size={16} className="p-success" />
-        <span className="text-sm font-semibold">Webhook created</span>
-        <button className="ml-auto text-xs p-text-3 hover:p-text" onClick={onDismiss}>Dismiss</button>
+        <span className="t-label">Webhook created</span>
+        <button className="t-meta ml-auto p-text-3 hover:p-text" onClick={onDismiss}>Dismiss</button>
       </div>
-      <p className="text-xs p-text-2">
+      <p className="t-meta p-text-2">
         {result.secret ? "Save the secret now. Kinu shows it only once. " : ""}The URL works until you revoke this webhook.
       </p>
       <div className="space-y-2">
         <div>
-          <div className="p-eyebrow mb-1">URL</div>
+          <div className="t-label mb-1">URL</div>
           <div className="flex items-center gap-2">
-            <code className="text-xs p-fill px-2 py-1.5 rounded-sm font-mono flex-1 break-all">{url}</code>
+            <code className="t-meta t-mono p-fill px-2 py-1.5 rounded-sm flex-1 break-all">{url}</code>
             <CopyButton value={url} what="the webhook URL" className="p-2 rounded-sm p-card p-card-hover" />
           </div>
         </div>
         {result.secret && (
           <div>
-            <div className="p-eyebrow mb-1">Secret <span className="p-danger">(shown once)</span></div>
+            <div className="t-label mb-1">Secret <span className="p-danger">(shown once)</span></div>
             <div className="flex items-center gap-2">
               <SecretValue value={result.secret}
-                className="text-xs p-fill px-2 py-1.5 rounded-sm font-mono flex-1 break-all" />
+                className="t-meta t-mono p-fill px-2 py-1.5 rounded-sm flex-1 break-all" />
               <CopyButton value={result.secret} what="the secret" className="p-2 rounded-sm p-card p-card-hover" />
             </div>
           </div>
         )}
         <div>
-          <div className="p-eyebrow mb-1">Test with curl</div>
-          <pre className="p-meta p-fill p-3 rounded-sm font-mono overflow-x-auto whitespace-pre">
+          <div className="t-label mb-1">Test with curl</div>
+          <pre className="t-meta t-mono p-fill p-3 rounded-sm overflow-x-auto whitespace-pre">
             {curl.before}
             {curl.secret !== null && <SecretValue value={curl.secret} />}
             {curl.after}
@@ -307,12 +307,12 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
     >
       <div className="space-y-2">
         <label className="block">
-          <div className="text-xs p-text-2 mb-1">Label</div>
+          <div className="t-meta p-text-2 mb-1">Label</div>
           <input value={label} onChange={(e) => setLabel(e.target.value)} className={inputCls}
             placeholder="github-pr-events" />
         </label>
         <label className="block">
-          <div className="text-xs p-text-2 mb-1">Authentication</div>
+          <div className="t-meta p-text-2 mb-1">Authentication</div>
           <select value={authMode} onChange={(e) => setAuthMode(v.parse(AuthModeSchema, e.target.value))} className={inputCls}>
             <option value="hmac">HMAC (signed body)</option>
             <option value="bearer">Bearer token (Authorization header)</option>
@@ -321,7 +321,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
         </label>
         {authMode !== "mtls" && (
           <label className="block">
-            <div className="text-xs p-text-2 mb-1">Secret</div>
+            <div className="t-meta p-text-2 mb-1">Secret</div>
             {/* Marked for redaction too, so a later reveal toggle to `text` cannot undo it. */}
             <input {...SECRET_REGION} type="password" value={secret}
               onChange={(e) => setSecret(e.target.value)} className={inputCls}
@@ -329,18 +329,18 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
           </label>
         )}
         <label className="block">
-          <div className="text-xs p-text-2 mb-1">Accepted content type</div>
+          <div className="t-meta p-text-2 mb-1">Accepted content type</div>
           <input value={contentType} onChange={(e) => setContentType(e.target.value)} className={inputCls} placeholder="application/json" />
         </label>
       </div>
-      {err && <div className="text-xs p-danger">{err}</div>}
+      {err && <div className="t-meta p-danger">{err}</div>}
       {stepUp && (
-        <div role="status" className="flex items-center gap-2 text-xs p-text-2">
+        <div role="status" className="t-meta flex items-center gap-2 p-text-2">
           <span className="min-w-0 flex-1">Creating a webhook needs a sign-in from the last five minutes.</span>
           <Button size="sm" variant="secondary" onClick={signInAgain}>Sign in again</Button>
         </div>
       )}
-      <p className="p-meta p-text-3 flex items-start gap-1.5">
+      <p className="t-meta p-text-3 flex items-start gap-1.5">
         <WarningIcon size={11} className="mt-0.5 shrink-0" />
         <span>Creating a webhook needs a sign-in from the last five minutes. Sign in again if it fails.</span>
       </p>

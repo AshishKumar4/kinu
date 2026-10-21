@@ -89,7 +89,7 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
 
   if (isNaN(d.getTime())) return null;
 
-  return <span className="p-annotation p-text-3 mt-1 block">{clockTime(d)}</span>;
+  return <span className="t-meta t-mono p-text-3 mt-1 block">{clockTime(d)}</span>;
 }
 
 // A settled call takes a line's gap, prose and grouped cards a section's. The block carries
@@ -221,7 +221,7 @@ function HelperChatLink({ output }: { output?: JsonValue }) {
 
   return (
     <Link to={`${base.base}${encodeURIComponent(name)}${base.parent === null ? "" : `?parent=${encodeURIComponent(base.parent)}`}`} aria-label={`Open ${name}'s conversation`}
-      className="ml-10 inline-block p-annotation p-accent hover:underline">{name}</Link>
+      className="t-meta t-mono ml-10 inline-block p-accent hover:underline">{name}</Link>
   );
 }
 
@@ -231,10 +231,10 @@ function ToolOutput({ output }: { output: JsonValue }) {
 
   return (
     <div>
-      <div className="p-eyebrow mb-1">Output</div>
+      <div className="t-label mb-1">Output</div>
       {printed.trim() === ""
-        ? <p className="p-meta p-text-3">Nothing printed.</p>
-        : <pre className="p-t-code p-text-2 max-h-40 overflow-auto whitespace-pre-wrap break-words m-0">{printed}</pre>}
+        ? <p className="t-meta p-text-3">Nothing printed.</p>
+        : <pre className="t-code p-text-2 max-h-40 overflow-auto whitespace-pre-wrap break-words m-0">{printed}</pre>}
     </div>
   );
 }
@@ -311,18 +311,18 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
           {toolIcon(toolName)}
         </span>
         <span className="flex min-w-0 items-baseline gap-2">
-          <strong className="min-w-0 truncate p-row-text font-medium p-text-2">{description || toolLabel(toolName)}</strong>
-          <span className="min-w-0 flex-1 truncate p-annotation p-text-3" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
-          {runtime && <span className="shrink-0 p-annotation p-text-3">{runtime}</span>}
+          <strong className="t-item min-w-0 truncate p-text-2">{description || toolLabel(toolName)}</strong>
+          <span className="t-meta t-mono min-w-0 flex-1 truncate p-text-3" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
+          {runtime && <span className="t-meta t-mono shrink-0 p-text-3">{runtime}</span>}
         </span>
-        <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 p-t-status ${stateTone}`}>
+        <span className={`t-status inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 ${stateTone}`}>
           {stateBadge}
         </span>
         <CaretRightIcon size={11} aria-hidden className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
       </button>
       {toolName === "agents" && <HelperChatLink output={output} />}
       {expanded && provisionErr && (
-        <div className="p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 text-xs p-text-2 flex items-start gap-2">
+        <div className="t-meta p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 p-text-2 flex items-start gap-2">
           <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />
           <div className="space-y-1">
             <div>
@@ -340,8 +340,8 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
         <div className="border-t border-dashed border-[var(--c-dash)] px-4 py-3 space-y-2 animate-scale-in bg-[var(--c-sunken)]">
           {errorText && (
             <div>
-              <div className="p-eyebrow mb-1 p-danger">Error</div>
-              <pre className="p-t-code p-danger max-h-40 overflow-auto whitespace-pre-wrap m-0">{redactSecrets(errorText)}</pre>
+              <div className="t-label mb-1 p-danger">Error</div>
+              <pre className="t-code p-danger max-h-40 overflow-auto whitespace-pre-wrap m-0">{redactSecrets(errorText)}</pre>
             </div>
           )}
           {/* eval and shell args render as source, not JSON: JSON escapes every quote and newline. */}
@@ -350,7 +350,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
           )}
           {codePreview === null && input != null && (
             <div>
-              <div className="p-eyebrow mb-1">Input</div>
+              <div className="t-label mb-1">Input</div>
               <div className="max-h-40 overflow-auto"><CodeBlock wrap className="language-json">{JSON.stringify(redactPayload(input), null, 2)}</CodeBlock></div>
             </div>
           )}
@@ -415,7 +415,7 @@ export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<Unavailab
       tone="p-warning"
       label="Machine"
       body={offline}
-      action={devices.length === 0 ? <Link to={settingsPath("devices")} className="mt-1 mr-2 shrink-0 p-row-text p-accent hover:underline">Connect</Link> : undefined}
+      action={devices.length === 0 ? <Link to={settingsPath("devices")} className="t-body mt-1 mr-2 shrink-0 p-accent hover:underline">Connect</Link> : undefined}
       hooks={{ "data-device-offline": String(devices.length) }}
     />
   );
@@ -458,7 +458,7 @@ export function SteerBubble({ steer, onFork }: {
 
 function SteeredMark({ state }: { state: "queued" | "landed" }) {
   return (
-    <span className="mt-1 inline-flex items-center gap-1 p-meta p-text-3">
+    <span className="t-meta mt-1 inline-flex items-center gap-1 p-text-3">
       <ArrowBendUpRightIcon size={10} weight="bold" />
       {state === "queued" ? "queued for the next step" : "steered mid-turn"}
     </span>
@@ -804,7 +804,7 @@ function MessageFeedback({
         title="Mark this response poor. Feeds evolution scoring."
         aria-label="Mark this response poor"
       ><ThumbsDownIcon size={12} weight={current === 'negative' ? 'fill' : 'regular'} /></button>
-      {failed && <span className="p-t-status p-danger">Could not save. Try again.</span>}
+      {failed && <span className="t-status p-danger">Could not save. Try again.</span>}
     </div>
   );
 }

@@ -157,7 +157,7 @@ export function WorkspaceBarActions({ workspace, working, view, inspector, onAge
         <UsersThreeIcon size={16} />
         {/* The agents at work out of sight, those with no tab of their own, counted where the owner can open them. */}
         {working > 0 && (
-          <span data-working-agents={working} className="p-agents-badge absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full px-[3px] text-center text-[9px] font-semibold leading-[14px] tabular-nums">
+          <span data-working-agents={working} className="t-micro p-agents-badge absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full px-[3px] text-center tabular-nums">
             {working}
           </span>
         )}
@@ -192,8 +192,8 @@ export function FocusBar({ workspace, agent, line, leading, trailing, tabs }: {
           title={`${workspace.title}: its agents, slates and plan`} data-focus-identity>
           <ChatMascot seed={agent.seed} colour={agent.colour} activity={agent.activity} size={24} />
           <span className="flex min-w-0 flex-col leading-tight">
-            <span className="truncate text-[14px] font-semibold tracking-[-0.01em] p-text">{agent.label}</span>
-            <span className="truncate text-[11.5px] p-text-3" data-focus-line>{line}</span>
+            <span className="t-label truncate p-text">{agent.label}</span>
+            <span className="t-meta truncate p-text-3" data-focus-line>{line}</span>
           </span>
         </Link>
       </div>
@@ -201,7 +201,7 @@ export function FocusBar({ workspace, agent, line, leading, trailing, tabs }: {
         {tabs !== undefined && (
           <button type="button" onClick={tabs.show} className="p-bar-icon relative" aria-label={`Show the ${String(tabs.count)} chats`} title="Show chats" data-focus-tabs>
             <ChatsCircleIcon size={16} />
-            <span className="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-[var(--c-fill)] px-[3px] text-center text-[9px] font-semibold leading-[14px] tabular-nums p-text-2">{tabs.count}</span>
+            <span className="t-micro absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-[var(--c-fill)] px-[3px] text-center tabular-nums p-text-2">{tabs.count}</span>
           </button>
         )}
         {trailing}

@@ -278,7 +278,7 @@ function MoreRow({ next, more }: { next: number | undefined; more: () => Promise
   return (
     <button type="button" data-files-more onClick={() => detach(Effect.promise(more))}
       className={`grid ${COLUMNS} ${ROW_HEIGHT} w-full text-left p-text-3 hover:p-text p-row-hover`}
-    ><CaretDownIcon size={16} /><span className="p-row-text">Load more</span></button>
+    ><CaretDownIcon size={16} /><span className="t-body">Load more</span></button>
   );
 }
 
@@ -487,7 +487,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
 
       <div className="flex-1 min-w-0 flex flex-col relative">
         {/* Only the crumbs scroll: a scrolling row would clip the view menu that opens under it. */}
-        <div className="px-3 py-2 border-b p-border flex items-center gap-1 text-xs font-mono shrink-0">
+        <div className="t-meta t-mono px-3 py-2 border-b p-border flex items-center gap-1 shrink-0">
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
             <button data-files-crumb onClick={() => setPath("/")}
               className="p-text-3 hover:p-text shrink-0" title="Workspace root">/</button>
@@ -538,7 +538,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             value={filter}
             onChange={(e) => { setFilter(e.currentTarget.value); setSelected(0); }}
             placeholder="Filter this folder…"
-            className="flex-1 bg-transparent text-xs p-text outline-hidden placeholder:p-text-3"
+            className="t-meta flex-1 bg-transparent p-text outline-hidden placeholder:p-text-3"
           />
           {filter && (
             <button onClick={() => setFilter("")} className="p-text-3 hover:p-text" aria-label="Clear filter">
@@ -551,7 +551,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           <LoadFailure what="the environments" message={mountsResource.message} onRetry={reloadMounts} className="px-3 py-2" />
         )}
         {notice && (
-          <div data-files-notice className="px-3 py-1.5 text-xs p-danger border-b p-border flex items-start gap-1.5">
+          <div data-files-notice className="t-meta px-3 py-1.5 p-danger border-b p-border flex items-start gap-1.5">
             <WarningIcon size={13} className="shrink-0 mt-px" />
             <span className="break-words min-w-0">{notice}</span>
             <button onClick={() => setNotice(null)} className="ml-auto p-text-3 hover:p-text shrink-0" aria-label="Dismiss">
@@ -567,7 +567,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             data-files-list
             tabIndex={0}
             onKeyDown={onKeyDown}
-            className={`group/list flex-1 min-w-0 overflow-y-auto pb-1 text-xs ${dragOver ? "outline-dashed outline-2 -outline-offset-2 outline-[var(--c-accent)]" : ""}`}
+            className={`t-meta group/list flex-1 min-w-0 overflow-y-auto pb-1 ${dragOver ? "outline-dashed outline-2 -outline-offset-2 outline-[var(--c-accent)]" : ""}`}
             {...listDrop}
           >
             {columns}
@@ -577,9 +577,9 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               const name = parentDir(u.target) === path ? u.target.slice(u.target.lastIndexOf("/") + 1) : u.target;
 
               return (
-                <div key={u.target} className={`flex items-center gap-2.5 px-3 ${ROW_HEIGHT} p-row-text`} data-upload={u.status} data-upload-target={u.target}>
-                  {u.status === "uploading" && <><Loader size="sm" /><span className="p-text-2 truncate">{name}</span><span className="ml-auto p-meta p-text-3 shrink-0">uploading…</span></>}
-                  {u.status === "error" && <><WarningIcon size={16} className="p-danger shrink-0" /><span className="p-text-2 truncate">{name}</span><span className="p-meta p-danger truncate">{u.error}</span></>}
+                <div key={u.target} className={`flex items-center gap-2.5 px-3  ${ROW_HEIGHT} t-body`} data-upload={u.status} data-upload-target={u.target}>
+                  {u.status === "uploading" && <><Loader size="sm" /><span className="p-text-2 truncate">{name}</span><span className="t-meta ml-auto p-text-3 shrink-0">uploading…</span></>}
+                  {u.status === "error" && <><WarningIcon size={16} className="p-danger shrink-0" /><span className="p-text-2 truncate">{name}</span><span className="t-meta p-danger truncate">{u.error}</span></>}
                   {u.status === "exists" && (
                     <ReplacePrompt name={name} onReplace={() => detach(Effect.promise(() => replaceUpload(u)))} onKeep={() => keepExisting(u.target)} />
                   )}
@@ -592,7 +592,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
                 data-files-up-row
                 onClick={() => setPath(parentDir(path))}
                 className={`grid ${COLUMNS} ${ROW_HEIGHT} w-full text-left p-text-3 hover:p-text p-row-hover`}
-              ><ArrowUpIcon size={16} /><span className="p-row-text">..</span></button>
+              ><ArrowUpIcon size={16} /><span className="t-body">..</span></button>
             )}
             {!loading && (
               <div data-files-layout={view.layout} className={grid}>
@@ -632,7 +632,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               <div className="p-text-3 italic px-3 py-1.5">This folder is empty. Drop files here to upload.</div>
             )}
             {!loading && filtered.length > 0 && (
-              <div className="px-3 pt-1.5 pb-1 p-text-3 p-meta border-t p-border mt-1">
+              <div className="t-meta px-3 pt-1.5 pb-1 p-text-3 border-t p-border mt-1">
                 {filter ? `${String(filtered.length)} of ${String(entries.length)} match` : folderCount(dirCount, filtered.length - dirCount, folder.next !== undefined)}
                 <span className="ml-2 hidden @[44rem]:inline p-text-3">{LAYOUTS[view.layout].moves} move · Enter open · Backspace up · F2 rename · Del delete</span>
               </div>
@@ -681,7 +681,7 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
     <div>
       <div
         data-files-tree-node={dir}
-        className={`flex items-center gap-1 pr-2 py-0.5 text-xs cursor-pointer p-row-hover ${active ? "p-fill p-text font-medium" : "p-text-2"} ${hidden ? HIDDEN_FACE : ""}`}
+        className={`t-meta flex items-center gap-1 pr-2 py-0.5 cursor-pointer p-row-hover ${active ? "p-fill p-text font-medium" : "p-text-2"}  ${hidden ? HIDDEN_FACE : ""}`}
         style={{ paddingLeft: `${8 + depth * 12}px` }}
         onClick={() => onNavigate(dir)}
       >
@@ -700,11 +700,11 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
           : <FolderIcon data-entry-face size={13} className="p-info shrink-0" weight="fill" />}
         <span data-entry-face className="truncate">{label}</span>
         {depth === 1 && badgeFor(label) && (
-          <span data-mount-badge className="truncate p-meta p-text-3">{badgeFor(label)}</span>
+          <span data-mount-badge className="t-meta truncate p-text-3">{badgeFor(label)}</span>
         )}
       </div>
       {isOpen && children === undefined && (
-        <div className="p-text-3 p-meta" style={{ paddingLeft: `${28 + depth * 12}px` }}>loading…</div>
+        <div className="t-meta p-text-3" style={{ paddingLeft: `${28 + depth * 12}px` }}>loading…</div>
       )}
       {isOpen && children?.map((row) => {
         if (!("entry" in row)) return <OfflineTreeRow key={`offline-${row.name}`} row={row} depth={depth + 1} />;
@@ -741,15 +741,15 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
 function OfflineTreeRow({ row, depth }: { row: OfflineRow; depth: number }) {
   return (
     <div data-files-tree-offline={row.name} title={`${row.label ?? row.name}: ${row.reason}`}
-      className="group flex items-center gap-1 pr-2 py-0.5 text-xs p-text-3"
+      className="t-meta group flex items-center gap-1 pr-2 py-0.5 p-text-3"
       style={{ paddingLeft: `${22 + depth * 12}px` }}>
       {/* Where a folder's icon stands beside its caret. */}
       <PlugIcon size={13} className="shrink-0" />
       <span className="truncate">{row.name}</span>
-      <span className="ml-1 truncate p-meta">offline</span>
+      <span className="t-meta ml-1 truncate">offline</span>
       {row.onConnect && (
         <button type="button" data-files-tree-connect onClick={row.onConnect}
-          className="ml-auto shrink-0 p-meta font-medium p-accent hover:underline opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100">
+          className="t-status ml-auto shrink-0 p-accent hover:underline opacity-0 group-hover:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100">
           Connect
         </button>
       )}
@@ -763,15 +763,15 @@ function OfflineMountRow({ row }: { row: OfflineRow }) {
     <div data-files-offline-mount title={row.reason} className={`grid ${COLUMNS} ${ROW_HEIGHT}`}>
       <PlugIcon size={16} className="p-text-3" />
       <span className="flex min-w-0 items-baseline gap-2">
-        <span className="truncate p-row-text p-text-3">{row.name}</span>
-        <span data-mount-badge className="truncate p-meta p-text-3">
+        <span className="t-body truncate p-text-3">{row.name}</span>
+        <span data-mount-badge className="t-meta truncate p-text-3">
           {row.label === null ? "offline" : `${row.label} · offline`}
         </span>
       </span>
       <span className="text-right @[26rem]:col-span-2">
         {row.onConnect && (
           <button type="button" data-files-connect onClick={row.onConnect}
-            className="p-meta font-medium p-accent hover:underline">Connect</button>
+            className="t-status p-accent hover:underline">Connect</button>
         )}
       </span>
     </div>
@@ -859,7 +859,7 @@ function RenameField({ draft, onRenameDraft, onRenameCommit, onRenameCancel, cla
         if (e.key === "Escape") onRenameCancel();
       }))}
       onBlur={onRenameCancel}
-      className={`min-w-0 bg-transparent border p-border rounded-xs px-1.5 py-0 p-row-text p-text ${className}`}
+      className={`t-body min-w-0 bg-transparent border p-border rounded-xs px-1.5 py-0 p-text ${className}`}
     />
   );
 }
@@ -871,7 +871,7 @@ function DeleteChoice({ name, onDelete, onCancelDelete, className }: {
   className: string;
 }) {
   return (
-    <span className={`flex items-center gap-2.5 p-meta ${className}`} onClick={(e) => e.stopPropagation()}>
+    <span className={`t-meta flex items-center gap-2.5 ${className}`} onClick={(e) => e.stopPropagation()}>
       <button data-files-delete-confirm onClick={() => detach(Effect.promise(onDelete))}
         className="font-medium p-danger hover:underline" aria-label={`Delete ${name}`}>Delete</button>
       <button onClick={onCancelDelete} className="p-text-3 hover:p-text" aria-label="Keep it">Keep</button>
@@ -907,16 +907,16 @@ function EntryRow(props: EntryProps) {
       <span data-entry-face className="flex min-w-0 items-baseline gap-2">
         {renaming !== null
           ? <RenameField draft={renaming} {...props} className="w-full" />
-          : <span className={`truncate p-row-text ${previewing ? "font-medium" : ""}`}>{entry.name}</span>}
-        {badge && <span data-mount-badge className="truncate p-meta p-text-3">{badge}</span>}
+          : <span className={`t-body truncate ${previewing ? "font-medium" : ""}`}>{entry.name}</span>}
+        {badge && <span data-mount-badge className="t-meta truncate p-text-3">{badge}</span>}
       </span>
       {confirming ? (
         <DeleteChoice name={entry.name} {...props} className="justify-end @[26rem]:col-span-2" />
       ) : (
         <>
-          <span className="hidden truncate text-right p-meta p-text-3 @[26rem]:block">{size}</span>
-          <span className={`hidden text-right p-meta p-text-3 @[26rem]:block ${UNDER_MENU}`} title={changed}>{age}</span>
-          <span className={`whitespace-nowrap text-right p-meta p-text-3 @[26rem]:hidden ${UNDER_MENU}`} title={changed}>
+          <span className="t-meta hidden truncate text-right p-text-3 @[26rem]:block">{size}</span>
+          <span className={`t-meta hidden text-right p-text-3 @[26rem]:block ${UNDER_MENU}`} title={changed}>{age}</span>
+          <span className={`t-meta whitespace-nowrap text-right p-text-3 @[26rem]:hidden ${UNDER_MENU}`} title={changed}>
             {[size, age].filter((part) => part !== null).join(" · ")}
           </span>
         </>
@@ -943,11 +943,11 @@ function EntryTile(props: EntryProps) {
       <EntryIcon entry={entry} size={32} />
       {renaming !== null
         ? <RenameField draft={renaming} {...props} className="w-full text-center" />
-        : <span data-entry-face className={`line-clamp-2 w-full break-words text-center p-row-text ${previewing ? "font-medium" : ""}`}>{entry.name}</span>}
-      {badge && <span data-mount-badge className="max-w-full truncate p-meta p-text-3">{badge}</span>}
+        : <span data-entry-face className={`t-body line-clamp-2 w-full break-words text-center ${previewing ? "font-medium" : ""}`}>{entry.name}</span>}
+      {badge && <span data-mount-badge className="t-meta max-w-full truncate p-text-3">{badge}</span>}
       {confirming
         ? <DeleteChoice name={entry.name} {...props} className="justify-center" />
-        : <span className="max-w-full truncate p-meta p-text-3" title={changed}>{[size, age].filter((part) => part !== null).join(" · ")}</span>}
+        : <span className="t-meta max-w-full truncate p-text-3" title={changed}>{[size, age].filter((part) => part !== null).join(" · ")}</span>}
       <EntryMenu props={props} className="absolute right-1 top-1" />
     </div>
   );
@@ -958,9 +958,9 @@ function OfflineMountTile({ row }: { row: OfflineRow }) {
   return (
     <div data-files-offline-mount title={row.reason} className="flex min-w-0 flex-col items-center gap-1 rounded-lg px-2 pb-2 pt-3">
       <PlugIcon size={32} className="p-text-3" />
-      <span className="max-w-full truncate p-row-text p-text-3">{row.name}</span>
-      {row.label !== null && <span data-mount-badge className="max-w-full truncate p-meta p-text-3">{row.label}</span>}
-      <span className="flex items-baseline gap-1.5 p-meta">
+      <span className="t-body max-w-full truncate p-text-3">{row.name}</span>
+      {row.label !== null && <span data-mount-badge className="t-meta max-w-full truncate p-text-3">{row.label}</span>}
+      <span className="t-meta flex items-baseline gap-1.5">
         <span className="p-text-3">offline</span>
         {row.onConnect && (
           <button type="button" data-files-connect onClick={row.onConnect} className="font-medium p-accent hover:underline">Connect</button>
@@ -972,7 +972,7 @@ function OfflineMountTile({ row }: { row: OfflineRow }) {
 
 /** The list's column heads, from 26rem where it has columns. */
 const COLUMN_HEADS = (
-  <div aria-hidden="true" className={`sticky top-0 z-[1] hidden @[26rem]:grid ${COLUMNS} h-7 border-b p-border p-sidebar p-meta p-text-3`}>
+  <div aria-hidden="true" className={`sticky top-0 z-[1] hidden @[26rem]:grid  ${COLUMNS} t-meta h-7 border-b p-border p-sidebar p-text-3`}>
     <span /><span>Name</span><span className="text-right">Size</span><span className="text-right">Modified</span>
   </div>
 );

@@ -93,14 +93,14 @@ function PartFrame({ workspace, slate, part, args }: { workspace: string; slate:
   let body: ReactNode = <PartOutsideItsSlate />;
 
   if (!outside && answer === null) {
-    body = <div className="flex flex-1 items-center justify-center">{failure === null ? <Loader size="sm" /> : <p role="alert" className="p-meta p-danger">{failure}</p>}</div>;
+    body = <div className="flex flex-1 items-center justify-center">{failure === null ? <Loader size="sm" /> : <p role="alert" className="t-meta p-danger">{failure}</p>}</div>;
   }
 
   if (drawn !== null) {
     body = (
       <>
         <PartView answer={drawn} slate={bridge?.title ?? slate} controls={{ act: (action) => run(action, false), decide, signIn: () => bridge?.signIn(), retry: () => run(null, false) }} />
-        {failure !== null && <p role="alert" className="p-meta p-danger">{failure}</p>}
+        {failure !== null && <p role="alert" className="t-meta p-danger">{failure}</p>}
       </>
     );
   }

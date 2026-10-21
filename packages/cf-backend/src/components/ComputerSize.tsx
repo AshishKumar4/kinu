@@ -66,19 +66,19 @@ export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSi
     <>
       {state.startRefused !== null && (
         <div data-env-start-refused className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1">
-          <span className="p-meta p-danger">{startRefusedNote(state.startRefused)}</span>
+          <span className="t-meta p-danger">{startRefusedNote(state.startRefused)}</span>
           <button type="button" data-env-start-again onClick={() => detach(act("start", "starting the computer", () => rpc("startComputer", [])))}
             disabled={pending !== null} className="p-env-action">{pending === "start" ? "Starting…" : "Start again"}</button>
         </div>
       )}
       {state.stalled !== null && (
         <div data-env-stalled className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1">
-          <span className="p-meta p-danger">{stalledNote(state.stalled)}</span>
+          <span className="t-meta p-danger">{stalledNote(state.stalled)}</span>
           <button type="button" data-env-stop-stalled onClick={() => detach(act("stop", "stopping the computer", () => rpc("stopStalledComputer", [])))}
             disabled={pending !== null} className="p-env-action">{pending === "stop" ? "Stopping…" : "Stop"}</button>
         </div>
       )}
-      {note !== null && <p className={`px-4 pb-1 p-meta ${failure === null ? "p-text-3" : "p-danger"}`}>{note}</p>}
+      {note !== null && <p className={`t-meta px-4 pb-1 ${failure === null ? "p-text-3" : "p-danger"}`}>{note}</p>}
     </>
   );
 

@@ -112,17 +112,17 @@ function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }
       </>}
     >
       <div className="space-y-2" data-revert-dialog={checked ? "ready" : "checking"}>
-        <p className="text-xs p-text-2 leading-relaxed">
+        <p className="t-meta p-text-2">
           The messages from here on are removed from the conversation. Files in the workspace, its computer
           and your devices stay as they are.
         </p>
-        {historyNote && <p data-device-history className="text-xs p-text-3 leading-relaxed">{historyNote}</p>}
+        {historyNote && <p data-device-history className="t-meta p-text-3">{historyNote}</p>}
         {deviceFailure && (
-          <p className="text-xs p-warning leading-relaxed">
+          <p className="t-meta p-warning">
             Your devices' file history could not be read: {deviceFailure}
           </p>
         )}
-        {failure && <p className="text-xs p-danger leading-relaxed">{failure}</p>}
+        {failure && <p className="t-meta p-danger">{failure}</p>}
       </div>
     </Modal>
   );
@@ -204,11 +204,11 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
       </>}
     >
       <div className="space-y-2">
-        <p className="text-xs p-text-2 leading-relaxed">
+        <p className="t-meta p-text-2">
           This changes files under <span className="font-mono p-text">{plan.dirs.join(", ")}</span> on your
           device: {counts}. Kinu creates a safety snapshot first. Restore again to undo this change.
         </p>
-        <ul className="rounded-md border p-border p-fill max-h-52 overflow-y-auto p-annotation">
+        <ul className="t-meta t-mono rounded-md border p-border p-fill max-h-52 overflow-y-auto">
           {shown.map((f) => {
             const { mark, tone } = RESTORE_MARK[f.kind];
 

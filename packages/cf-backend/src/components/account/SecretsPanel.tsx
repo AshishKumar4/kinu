@@ -38,7 +38,7 @@ export function SecretsPanel() {
       <Card title="Your secrets">
         <CardSlot resource={resource} what="your secrets" onRetry={reload}>
           {(secrets) => (secrets.length === 0
-            ? <p className="p-row-text p-text-3" data-secrets-empty>No secrets yet. Add one below, or paste a .env file.</p>
+            ? <p className="t-body p-text-3" data-secrets-empty>No secrets yet. Add one below, or paste a .env file.</p>
             : (
               <ul className="-mx-5 -my-5 divide-y divide-[var(--c-border)]" data-secrets-list>
                 {secrets.map((secret) => <SecretItem key={secret.name} secret={secret} onChanged={reload} />)}
@@ -69,12 +69,12 @@ function SecretItem({ secret, onChanged }: { secret: SecretSummary; onChanged: (
       <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
         className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-left hover:bg-[var(--c-hover)]">
         <Caret size={12} className="shrink-0 p-text-3" />
-        <span className="font-mono p-row-text font-medium p-text">{secret.name}</span>
+        <span className="t-item t-mono p-text">{secret.name}</span>
         <span className="flex min-w-0 flex-wrap gap-1">
-          {secret.hosts.map((host) => <span key={host} className="rounded-sm p-sunken px-1.5 py-0.5 font-mono p-meta p-text-2">{host}</span>)}
-          {secret.position.kind !== "authorization" && <span className="self-center p-meta p-text-3">in {positionWords(secret.position)}</span>}
+          {secret.hosts.map((host) => <span key={host} className="t-meta t-mono rounded-sm p-sunken px-1.5 py-0.5 p-text-2">{host}</span>)}
+          {secret.position.kind !== "authorization" && <span className="t-meta self-center p-text-3">in {positionWords(secret.position)}</span>}
         </span>
-        <span className="ml-auto p-meta p-text-3">
+        <span className="t-meta ml-auto p-text-3">
           {grantedWhere(secret)}
           {secret.grants.some((grant) => grant.reveal) && <span className="p-warning"> · value readable</span>}
         </span>
@@ -128,9 +128,9 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
         <div className="space-y-2">
           {secret.grants.map((grant) => (
             <div key={grant.workspace} className="flex flex-wrap items-center gap-x-3 gap-y-1.5" data-secret-grant={grant.workspace}>
-              <span className="min-w-0 truncate p-row-text p-text">{grant.title}</span>
-              <span className="font-mono p-meta p-text-3">{grant.workspace}</span>
-              <label className="ml-auto flex items-center gap-2 p-meta p-text-2">
+              <span className="t-body min-w-0 truncate p-text">{grant.title}</span>
+              <span className="t-meta t-mono p-text-3">{grant.workspace}</span>
+              <label className="t-meta ml-auto flex items-center gap-2 p-text-2">
                 Agents may read the value
                 <Switch on={grant.reveal} label={`Agents in ${grant.title} may read ${secret.name}`} disabled={busy !== null} data-secret-reveal={grant.workspace}
                   onChange={(on) => (on
@@ -141,7 +141,7 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
                     : run(`reveal:${grant.workspace}`, async () => { await grantSecret(secret.name, grant.workspace, false); }))} />
               </label>
               <button type="button" disabled={busy !== null} onClick={() => run(`revoke:${grant.workspace}`, async () => { await revokeSecretGrant(secret.name, grant.workspace); })}
-                className="p-meta p-text-3 hover:p-danger">Remove</button>
+                className="t-meta p-text-3 hover:p-danger">Remove</button>
             </div>
           ))}
           <WorkspaceAdder held={secret.grants.map(({ workspace }) => workspace)} placeholder="Allow in another workspace…"
@@ -150,7 +150,7 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
       </Field>
 
       <div className="flex items-center justify-between gap-3">
-        {error === null ? <span /> : <p role="alert" className="p-meta p-danger">{error}</p>}
+        {error === null ? <span /> : <p role="alert" className="t-meta p-danger">{error}</p>}
         <Button size="sm" variant="ghost" icon={<TrashIcon size={12} />} disabled={busy !== null}
           onClick={() => ask({
             title: `Delete ${secret.name}?`, action: "Delete",
@@ -215,7 +215,7 @@ function AddSecrets({ onSaved }: { onSaved: () => void }) {
       </Field>
 
       <div className="flex items-center justify-between gap-3">
-        {error === null ? <span /> : <p role="alert" className="p-meta p-danger">{error}</p>}
+        {error === null ? <span /> : <p role="alert" className="t-meta p-danger">{error}</p>}
         <Button variant="primary" size="sm" type="submit" disabled={!ready || saving}>
           {action}
         </Button>

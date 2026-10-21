@@ -43,9 +43,9 @@ function read<Schema extends v.GenericSchema>(
 function Build({ label, build }: { label: string; build: UpdateBuild | null }) {
   return (
     <div>
-      <p className="p-eyebrow">{label}</p>
-      <p className="mt-0.5 p-row-text p-text">{build === null ? "unknown" : build.version}</p>
-      {build !== null && <p className="p-meta p-text-3">built {build.builtAt}</p>}
+      <p className="t-label">{label}</p>
+      <p className="t-body mt-0.5 p-text">{build === null ? "unknown" : build.version}</p>
+      {build !== null && <p className="t-meta p-text-3">built {build.builtAt}</p>}
     </div>
   );
 }
@@ -108,15 +108,15 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-6 py-8">
       <div>
-        <h1 className="p-display text-2xl">Updates</h1>
-        <p className="mt-1 text-sm p-text-2">
+        <h1 className="t-page-title">Updates</h1>
+        <p className="t-body mt-1 p-text-2">
           This Kinu installs its own updates. It reads the release channel and runs the same steps
           that first put it here, with its own Cloudflare key.
         </p>
       </div>
       {err !== null && (err.includes(NOT_OWNER)
-        ? <p className="text-sm p-text-2" data-updates="not-owner">{NOT_OWNER}</p>
-        : <div className="p-notice-danger rounded-md px-3 py-2 text-xs" role="alert">{err}</div>)}
+        ? <p className="t-body p-text-2" data-updates="not-owner">{NOT_OWNER}</p>
+        : <div className="t-meta p-notice-danger rounded-md px-3 py-2" role="alert">{err}</div>)}
       {offer === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
       {offer !== null && (
         <section className="space-y-4" aria-label="This deployment's build">
@@ -125,14 +125,14 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
               <Build label="Running" build={offer.current} />
               <Build label="Published" build={offer.available} />
               <div>
-                <p className="p-eyebrow">Channel</p>
-                <p className="mt-0.5 p-meta p-text-3">
+                <p className="t-label">Channel</p>
+                <p className="t-meta mt-0.5 p-text-3">
                   {offer.channelOrigin === "" ? "none" : offer.channelOrigin}
                 </p>
               </div>
             </div>
-            {offer.reason !== "" && <p className="text-sm p-text-2">{offer.reason}</p>}
-            {offer.upToDate && <p className="p-row-text p-text" data-updates="up-to-date">Up to date.</p>}
+            {offer.reason !== "" && <p className="t-body p-text-2">{offer.reason}</p>}
+            {offer.upToDate && <p className="t-body p-text" data-updates="up-to-date">Up to date.</p>}
             {offer.installable && (
               <Button variant="primary" size="md" onClick={apply} disabled={busy || going} >
                 <ArrowUpIcon size={15} /> Install {offer.available?.version ?? ""}
@@ -143,9 +143,9 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
       )}
       {run !== null && run.steps.length > 0 && (
         <section className="space-y-2" aria-label="Update steps">
-          <h2 className="p-eyebrow">{run.state === "done" ? "What it did" : "Installing"}</h2>
+          <h2 className="t-label">{run.state === "done" ? "What it did" : "Installing"}</h2>
           {restarting !== null && (
-            <p className="p-meta p-text-3" data-updates="restarting">
+            <p className="t-meta p-text-3" data-updates="restarting">
               This deployment is restarting on the new version, so the last steps may show up late.
               The last check failed with: {restarting}
             </p>
@@ -154,7 +154,7 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
             {run.steps.map((row) => <StepRow key={row.id} row={row} />)}
           </ul>
           {run.state === "done" && (
-            <p className="p-row-text p-text" data-updates="installed">
+            <p className="t-body p-text" data-updates="installed">
               Kinu {run.version} is now running.
             </p>
           )}

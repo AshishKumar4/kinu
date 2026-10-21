@@ -14,7 +14,7 @@ import { rootWords, serverWords } from "./words";
 /** What leaves, as it will leave: the payload's own JSON, never a summary of it. */
 function Payload({ value, ...data }: { value: JsonValue; [attribute: `data-${string}`]: string | boolean | undefined }) {
   return (
-    <pre {...data} className="max-h-56 overflow-auto rounded-lg p-sunken px-3 py-2 font-mono text-xs leading-5 p-text whitespace-pre-wrap break-words">
+    <pre {...data} className="t-meta t-mono max-h-56 overflow-auto rounded-lg p-sunken px-3 py-2 p-text whitespace-pre-wrap break-words">
       {JSON.stringify(value, null, 2)}
     </pre>
   );
@@ -22,7 +22,7 @@ function Payload({ value, ...data }: { value: JsonValue; [attribute: `data-${str
 
 function Lets({ yes, no }: { yes: readonly ReactNode[]; no: readonly ReactNode[] }) {
   return (
-    <ul className="space-y-1.5 p-row-text">
+    <ul className="t-body space-y-1.5">
       {yes.map((line, at) => <li key={`yes-${String(at)}`} className="flex gap-2 p-text"><CheckIcon size={15} weight="bold" className="mt-0.5 shrink-0 p-success" />{line}</li>)}
       {no.map((line, at) => <li key={`no-${String(at)}`} className="flex gap-2 p-text-2"><XIcon size={15} weight="bold" className="mt-0.5 shrink-0 p-text-3" />{line}</li>)}
     </ul>
@@ -45,7 +45,7 @@ export function ConsentDecision({ slate, ask, changed, onAllow, onClose }: {
   return (
     <Modal title={changed ? `${slate} changed since you allowed it` : `Let ${slate} use your ${server}?`} icon={<PlugIcon size={18} className="p-accent" />} onClose={onClose}
       footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose} data-consent-dismiss>Not now</Button><Button variant="primary" size="sm" data-consent-allow onClick={onAllow}>{changed ? "Allow again" : "Allow"}</Button></div>}>
-      {changed && <p data-consent-changed className="p-row-text p-text-2">Its code changed after you allowed it to use your {server}. Allow it again to keep seeing your part.</p>}
+      {changed && <p data-consent-changed className="t-body p-text-2">Its code changed after you allowed it to use your {server}. Allow it again to keep seeing your part.</p>}
       <Lets
         yes={[
           <span key="reads">Read through your {server}{ask.tools.length > 0 ? <>: {ask.tools.join(", ")}</> : null}</span>,
@@ -56,7 +56,7 @@ export function ConsentDecision({ slate, ask, changed, onAllow, onClose }: {
           <span key="others">Show what it reads to anyone but you</span>,
           ...(ask.effects ? [] : [<span key="act">Make any change</span>]),
         ]} />
-      <p className="p-meta p-text-3">For this slate, at this version of its code. Take it back in Settings → Connections.</p>
+      <p className="t-meta p-text-3">For this slate, at this version of its code. Take it back in Settings → Connections.</p>
     </Modal>
   );
 }
@@ -71,9 +71,9 @@ export function ApprovalDecision({ slate, ask, onApprove, onDecline }: {
   return (
     <Modal title={`${slate} wants to make a change`} icon={<WarningCircleIcon size={18} className="p-warning" />} onClose={onDecline}
       footer={<div className="flex justify-end gap-2"><Button size="sm" variant="secondary" data-approval-decline onClick={onDecline}>Decline</Button><Button variant="primary" size="sm" data-approval-approve onClick={onApprove}>Approve once</Button></div>}>
-      <p className="p-row-text p-text-2"><strong data-approval-tool className="font-medium p-text">{ask.toolTitle ?? ask.tool}</strong> on your {serverWords(ask)}, within {rootWords(ask.root)}, with:</p>
+      <p className="t-body p-text-2"><strong data-approval-tool className="font-medium p-text">{ask.toolTitle ?? ask.tool}</strong> on your {serverWords(ask)}, within {rootWords(ask.root)}, with:</p>
       <Payload data-approval-payload value={ask.payload} />
-      <p className="p-meta p-text-3">Only this change, with exactly this. It asks again for any other.</p>
+      <p className="t-meta p-text-3">Only this change, with exactly this. It asks again for any other.</p>
     </Modal>
   );
 }
@@ -88,9 +88,9 @@ export function ShowDecision({ label, value, onShow, onClose }: {
   return (
     <Modal title="Show to everyone?" icon={<EyeIcon size={18} className="p-accent" />} onClose={onClose}
       footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose}>Not now</Button><Button variant="primary" size="sm" data-show-confirm onClick={onShow}>Show to everyone</Button></div>}>
-      <p className="p-row-text p-text-2">{label}</p>
+      <p className="t-body p-text-2">{label}</p>
       <Payload data-show-payload value={value} />
-      <p data-show-final className="flex gap-2 p-row-text p-text"><WarningCircleIcon size={15} className="mt-0.5 shrink-0 p-warning" />Everyone who can open this slate sees exactly this. You can't take it back once it's shown.</p>
+      <p data-show-final className="t-body flex gap-2 p-text"><WarningCircleIcon size={15} className="mt-0.5 shrink-0 p-warning" />Everyone who can open this slate sees exactly this. You can't take it back once it's shown.</p>
     </Modal>
   );
 }

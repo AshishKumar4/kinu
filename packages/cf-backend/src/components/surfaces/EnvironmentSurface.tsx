@@ -272,7 +272,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
       {resource.status === "error" && (
         <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="mx-4 mb-3 p-card px-3 py-2" />
       )}
-      {account.failure !== null && <p data-failure className="mx-4 mb-3 p-meta p-danger">Could not read your machines: {account.failure}</p>}
+      {account.failure !== null && <p data-failure className="t-meta mx-4 mb-3 p-danger">Could not read your machines: {account.failure}</p>}
     </div>
   );
 }
@@ -355,12 +355,12 @@ function MachineRow({ environments, execByName, selected, chosen, onSelect, onCo
         className="p-env-chip border-dashed p-text-3">
         <PlusIcon size={13} className="shrink-0" aria-hidden /><span className="hidden @[56rem]:inline">Connect a PC</span>
       </button>
-      {empty && <span className="p-meta p-text-3">No environments available.</span>}
+      {empty && <span className="t-meta p-text-3">No environments available.</span>}
       {loading && <Loader size="sm" />}
       {/* The chosen machine's state in words, then what it offers: the chips are named by their machines alone. */}
       {chosen !== null && (
         <div className="ml-auto flex min-w-0 items-center gap-1.5">
-          <span data-env-status className="mr-1 shrink-0 p-meta" data-tone={chosen.status.tone}>{chosen.status.word}</span>
+          <span data-env-status className="t-meta mr-1 shrink-0" data-tone={chosen.status.tone}>{chosen.status.word}</span>
           {chosen.actions}
         </div>
       )}
@@ -399,10 +399,10 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
     <section aria-label={name} className="flex min-h-0 flex-1 flex-col">
       {machineRow({ status, actions: <MachineActions mount={mount} name={name} size={computer ? <ComputerSize state={size} /> : null} onOpenFiles={onOpenFiles} /> })}
       {computer && size.notice}
-      {machineSessions?.failure != null && <p className="px-4 pb-1 p-meta p-danger">{machineSessions.failure}</p>}
+      {machineSessions?.failure != null && <p className="t-meta px-4 pb-1 p-danger">{machineSessions.failure}</p>}
       {device !== null && !device.connected && (
         <Absence icon={DesktopTowerIcon} title={`${name} is offline`}>
-          Its Kinu daemon is not running. Run <code className="p-annotation">kinu connect</code> on it to bring it back.
+          Its Kinu daemon is not running. Run <code className="t-meta t-mono">kinu connect</code> on it to bring it back.
         </Absence>
       )}
       {device !== null && device.connected && !device.granted && <GiveAccess name={name} onGive={() => grant(device.id)} />}
@@ -433,7 +433,7 @@ function MachineActions({ mount, name, size, onOpenFiles }: {
       {filesRoot !== null && (
         <button type="button" data-env-files onClick={() => onOpenFiles(filesRoot)} aria-label={`${name}'s files`} title={`Browse ${name}'s files at ${filesRoot}`} className="p-env-action">
           <FolderOpenIcon size={13} aria-hidden /><span className="hidden @[56rem]:inline">Files</span>
-          <span data-env-mount className="hidden p-annotation p-text-3 @[56rem]:inline">{filesRoot}</span>
+          <span data-env-mount className="t-meta t-mono hidden p-text-3 @[56rem]:inline">{filesRoot}</span>
         </button>
       )}
     </>
@@ -632,7 +632,7 @@ function DesktopView({ name, src, width, height }: { name: string; src: string; 
   return (
     <div data-desktop-view={cover === null ? undefined : "expanded"} style={cover ?? undefined}
       className={`p-terminal-ground flex min-h-0 flex-1 flex-col ${cover === null ? "" : "fixed z-40"}`}>
-      <div className={`flex shrink-0 items-center gap-3 pr-3 pl-4 p-meta p-text-3 ${cover === null ? "h-9" : "h-11 border-b p-border"}`}>
+      <div className={`t-meta flex shrink-0 items-center gap-3 pr-3 pl-4 p-text-3 ${cover === null ? "h-9" : "h-11 border-b p-border"}`}>
         {cover !== null && <span className="inline-flex min-w-0 items-center gap-1.5 font-medium p-text-2"><DesktopIcon size={13} aria-hidden /><span className="truncate">{title}</span></span>}
         <span className="shrink-0">{String(width)} × {String(height)}</span>
         {area !== null && cover === null && (
@@ -689,8 +689,8 @@ function Restarting({ to }: { to: string | null }) {
     <div role="status" className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <span className="p-dot-pulse"><DesktopIcon size={24} className="p-accent" aria-hidden /></span>
       <div className="space-y-1">
-        <p className="p-row-text font-semibold p-text">{to === null ? "Restarting" : `Restarting at ${to}`}</p>
-        <p className="p-meta p-text-3">Your files stay and services start again; open terminals start fresh.</p>
+        <p className="t-label p-text">{to === null ? "Restarting" : `Restarting at ${to}`}</p>
+        <p className="t-meta p-text-3">Your files stay and services start again; open terminals start fresh.</p>
       </div>
     </div>
   );
@@ -719,11 +719,11 @@ function GiveAccess({ name, onGive }: { name: string; onGive: () => Effect.Effec
       <div className="max-w-sm space-y-3 text-center">
         <LockSimpleIcon size={22} className="mx-auto p-text-3" aria-hidden />
         <div className="space-y-1">
-          <p className="p-row-text font-semibold p-text">{name} is connected</p>
-          <p className="p-meta p-text-2">This workspace can&apos;t use it yet.</p>
+          <p className="t-label p-text">{name} is connected</p>
+          <p className="t-meta p-text-2">This workspace can&apos;t use it yet.</p>
         </div>
         <Button variant="primary" size="sm" onClick={() => detach(give)} disabled={giving}>{giving ? "Giving access…" : "Give this workspace access"}</Button>
-        {failure !== null && <p className="p-meta p-danger">{failure}</p>}
+        {failure !== null && <p className="t-meta p-danger">{failure}</p>}
       </div>
     </div>
   );
@@ -735,8 +735,8 @@ function Absence({ icon: Mark, title, children }: { icon: Icon; title: string; c
     <div className="flex min-h-0 flex-1 items-center justify-center border-t p-border px-8">
       <div className="max-w-sm space-y-2 text-center">
         <Mark size={22} className="mx-auto p-text-3" aria-hidden />
-        <p className="p-row-text font-semibold p-text">{title}</p>
-        <p className="p-meta p-text-2">{children}</p>
+        <p className="t-label p-text">{title}</p>
+        <p className="t-meta p-text-2">{children}</p>
       </div>
     </div>
   );

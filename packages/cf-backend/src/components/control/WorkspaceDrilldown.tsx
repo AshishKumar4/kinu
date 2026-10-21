@@ -23,11 +23,11 @@ function PanelBlock(
 ): ReactNode {
   return (
     <section className="p-card p-4 space-y-2">
-      <div className="p-eyebrow">{title}</div>
+      <div className="t-label">{title}</div>
       {panel.status === 'ok'
         ? children ?? <Rows value={panel.value} />
         : (
-          <div className="text-xs p-danger flex items-start gap-1.5">
+          <div className="t-meta p-danger flex items-start gap-1.5">
             <WarningIcon size={12} className="mt-0.5 shrink-0" />
             <span className="min-w-0">{panel.reason}</span>
           </div>
@@ -42,10 +42,10 @@ function Rows({ value }: { value: JsonValue }): ReactNode {
 
   return (
     <>
-      <div className="text-lg p-display tabular-nums">
+      <div className="t-page-title tabular-nums">
         {count ?? '—'}
       </div>
-      <pre className="p-annotation p-text-3 overflow-x-auto max-h-40 whitespace-pre-wrap">
+      <pre className="t-meta t-mono p-text-3 overflow-x-auto max-h-40 whitespace-pre-wrap">
         {JSON.stringify(value, null, 2)}
       </pre>
     </>
@@ -203,7 +203,7 @@ export function WorkspaceDrilldown(
                     body: 'This removes the workspace and everything in it: its conversation, model, scaffold, triggers, and computer. It belongs to another account and cannot be undone.',
                     danger: true,
                   })}
-                  className="text-xs p-danger hover:underline flex items-center gap-1 px-2 py-1"
+                  className="t-meta p-danger hover:underline flex items-center gap-1 px-2 py-1"
                 >
                   <TrashIcon size={12} /> Remove workspace
                 </button>
@@ -251,12 +251,12 @@ export function WorkspaceDrilldown(
           </>}
         >
           <div className="space-y-3">
-            <p className="text-xs p-text-2 leading-relaxed">{pending.body}</p>
-            <p className="p-meta p-text-3">
+            <p className="t-meta p-text-2">{pending.body}</p>
+            <p className="t-meta p-text-3">
               Account <span className="font-mono p-text">{pending.action.userId}</span>
             </p>
             {retypeRequired && (
-              <label className="block text-xs p-text-3">
+              <label className="t-meta block p-text-3">
                 Type <span className="font-mono p-text">{workspace}</span> to confirm
                 <input
                   className={`${inputCls} mt-1`}
@@ -289,29 +289,29 @@ function JobRows(
   },
 ): ReactNode {
   if (rows === null) {
-    return <div className="text-xs p-text-3">This job list could not be read.</div>;
+    return <div className="t-meta p-text-3">This job list could not be read.</div>;
   }
 
-  if (rows.length === 0) return <div className="text-xs p-text-3">No background jobs.</div>;
+  if (rows.length === 0) return <div className="t-meta p-text-3">No background jobs.</div>;
 
   return (
     <ul className="space-y-2">
       {rows.map((job) => (
         <li key={job.id} className="space-y-1 border-b p-border last:border-b-0 pb-2 last:pb-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="p-annotation p-text-2">{job.kind}</span>
+            <span className="t-meta t-mono p-text-2">{job.kind}</span>
             <Status tone={JOB_TONE[job.status]}>{job.status}</Status>
-            <span className="p-meta p-text-3">{when(job.createdAt)}</span>
+            <span className="t-meta p-text-3">{when(job.createdAt)}</span>
             {(job.epoch ?? 0) > 0 && (
-              <span className="p-t-status p-warning">
+              <span className="t-status p-warning">
                 interrupted {job.epoch}x
                 {job.resumeAfter != null && job.resumeAfter > Date.now()
                   ? `, next attempt ${when(job.resumeAfter)}` : ''}
               </span>
             )}
           </div>
-          {job.label !== null && <div className="text-xs p-text-2">{job.label}</div>}
-          {job.error !== null && <div className="p-row-text p-danger">{job.error}</div>}
+          {job.label !== null && <div className="t-meta p-text-2">{job.label}</div>}
+          {job.error !== null && <div className="t-body p-danger">{job.error}</div>}
           <div className="flex gap-1.5">
             {JOB_CONTROLS.map((control) => (
               <Button
@@ -345,10 +345,10 @@ function ApprovalRows(
   },
 ): ReactNode {
   if (rows === null) {
-    return <div className="text-xs p-text-3">This approval list could not be read.</div>;
+    return <div className="t-meta p-text-3">This approval list could not be read.</div>;
   }
 
-  if (rows.length === 0) return <div className="text-xs p-text-3">No command is waiting on the owner.</div>;
+  if (rows.length === 0) return <div className="t-meta p-text-3">No command is waiting on the owner.</div>;
 
   return (
     <ul className="space-y-2">
@@ -369,13 +369,13 @@ function ApprovalRow({ approval, busy, userId, workspace, onPick }: {
   return (
     <li className="space-y-1 border-b p-border last:border-b-0 pb-2 last:pb-0">
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="p-t-status p-text-3">{approval.status}</span>
-        <span className="p-annotation p-text-2">{executorLabel(approval.executor)}</span>
-        <span className="p-meta p-text-3">{when(approval.requestedAt)}</span>
+        <span className="t-status p-text-3">{approval.status}</span>
+        <span className="t-meta t-mono p-text-2">{executorLabel(approval.executor)}</span>
+        <span className="t-meta p-text-3">{when(approval.requestedAt)}</span>
       </div>
-      <div className="font-mono text-xs p-text whitespace-pre-wrap break-all">{revealMisrepresenting(approval.command)}</div>
-      {where !== '' && <div className="text-xs p-text-2 break-all">Runs {revealMisrepresenting(where)}</div>}
-      <div className="p-row-text p-text-3">{approval.reason}</div>
+      <div className="t-meta t-mono p-text whitespace-pre-wrap break-all">{revealMisrepresenting(approval.command)}</div>
+      {where !== '' && <div className="t-meta p-text-2 break-all">Runs {revealMisrepresenting(where)}</div>}
+      <div className="t-body p-text-3">{approval.reason}</div>
       <div className="flex gap-1.5">
         {APPROVAL_ANSWERS.map(({ decision, label, body }) => (
           <Button

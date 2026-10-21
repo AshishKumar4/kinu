@@ -17,7 +17,7 @@ const TILE_COVER = "relative block aspect-[16/10] w-full shrink-0 overflow-hidde
 
 const TILE_BODY = "flex min-h-0 flex-1 flex-col gap-1 px-4 pb-3.5 pt-3";
 
-const TILE_TITLE = "truncate text-sm font-semibold leading-5 p-text";
+const TILE_TITLE = "t-label truncate p-text";
 
 /**
  * A cover for a thing with no picture: its mark at the top left, and what it is for set large at the bottom left, as a
@@ -29,7 +29,7 @@ export function TypesetCover({ title, line, logo = null, mark }: { title: string
   return (
     <span data-typeset-cover className="absolute inset-0 flex flex-col justify-between bg-[var(--c-fill)] p-5">
       <span className="flex">{mark === undefined ? <WorkspaceLogo title={title} logo={logo} size={32} /> : mark}</span>
-      <span className="line-clamp-3 text-[17px] font-medium leading-6 text-[var(--c-text-2)]">{line ?? title}</span>
+      <span className="t-title line-clamp-3 text-[var(--c-text-2)]">{line ?? title}</span>
     </span>
   );
 }

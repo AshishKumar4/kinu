@@ -84,13 +84,13 @@ function TerminalCloseBoundary({ close, onRetry }: {
   return (
     <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
       <WarningCircleIcon size={28} className="p-danger" />
-      <p className="text-sm p-text">
+      <p className="t-body p-text">
         {close.code === 1008 ? "Access to this workspace was denied" : "This workspace is unavailable"}
       </p>
-      <p className="p-meta p-text-3 max-w-sm break-words">{close.reason || close.message}</p>
+      <p className="t-meta p-text-3 max-w-sm break-words">{close.reason || close.message}</p>
       <div className="flex items-center gap-3">
-        <button type="button" onClick={onRetry} className="text-xs p-accent hover:underline">Try again</button>
-        <Link to="/" className="text-xs p-accent hover:underline">Back to your workspaces</Link>
+        <button type="button" onClick={onRetry} className="t-meta p-accent hover:underline">Try again</button>
+        <Link to="/" className="t-meta p-accent hover:underline">Back to your workspaces</Link>
       </div>
     </div>
   );
@@ -135,7 +135,7 @@ function ForkModal({
         </Button>
       </>}
     >
-      <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
+      <div className="t-meta p-text-2 space-y-1.5">
         <p>Create a new workspace from <span className="font-mono p-text">{sourceName}</span>, with its own conversation and its own copy of the files.</p>
         <ul className="list-disc list-inside space-y-0.5 p-text-3">
           <li>Conversation: the {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"} up to this one</li>
@@ -147,20 +147,20 @@ function ForkModal({
       </div>
 
       <div className="space-y-1">
-        <label className="p-meta p-text-3 block">Fork name (optional)</label>
+        <label className="t-meta p-text-3 block">Fork name (optional)</label>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="a generated address, e.g. quiet-harbor-3f9a2c1d"
           disabled={busy}
-          className="w-full px-3 py-1.5 border p-border p-card text-sm font-mono"
+          className="t-body t-mono w-full px-3 py-1.5 border p-border p-card"
         />
-        <p className="p-meta p-text-3">Lowercase letters, digits and hyphens, at most 31 characters</p>
+        <p className="t-meta p-text-3">Lowercase letters, digits and hyphens, at most 31 characters</p>
       </div>
 
       {err && (
-        <div className="p-notice-danger text-xs rounded-md px-3 py-2">
+        <div className="t-meta p-notice-danger rounded-md px-3 py-2">
           {err}
         </div>
       )}
@@ -177,7 +177,7 @@ function NestedAgentColumn({ workspace, path, rpc, ids, input }: { workspace: st
   if (resource.status === "error") return <LoadFailure className="p-4" what={`${path}'s place in its roster`} message={resource.message} onRetry={reload} />;
   const agent = resource.value;
 
-  if (agent === null) return <p className="p-4 text-sm p-text-3">No agent is at {path} in this workspace.</p>;
+  if (agent === null) return <p className="t-body p-4 p-text-3">No agent is at {path} in this workspace.</p>;
 
   return (
     <HelperChatBase.Provider value={{ base: helperBase(workspace, path), parent: agent.actorId }}>
@@ -205,7 +205,7 @@ function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`node/${runId}/${nodeId}`}>
       <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 py-4">
-        {agent.parent !== null && <p className="p-meta p-text-3">Swarm worker from {agent.parent}</p>}
+        {agent.parent !== null && <p className="t-meta p-text-3">Swarm worker from {agent.parent}</p>}
         {/* Main's socket reads every journal and carries every head's stream. */}
         <NodeTranscript selection={{ runId, nodeId }} ownerPath={ownerPath} trees={trees} rpc={main.rpc} headActivity={main.headActivity}
           headDeltas={main.headDeltas} onSelect={() => undefined} />
@@ -292,7 +292,7 @@ function SwarmNodePane({ main, node, ownerPath, agent, rosterLoaded }: {
 
   if (agent === undefined) {
     return (
-      <div className="flex flex-1 items-center justify-center px-6 text-center p-meta p-text-3" data-agent-pane={`node/${node}`}>
+      <div className="t-meta flex flex-1 items-center justify-center px-6 text-center p-text-3" data-agent-pane={`node/${node}`}>
         {rosterLoaded ? "This swarm worker is no longer listed. Open the Agents panel to pick another." : "Loading this swarm worker…"}
       </div>
     );
@@ -465,7 +465,7 @@ function SubordinateChatColumn({
   if (state.connectionStatus === "connecting" && !state.actorSnapshot) {
     return (
       <div className="flex flex-1 items-center justify-center">
-        <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting…</span></div>
+        <div className="t-body flex items-center gap-2 p-text-2"><Loader size="sm" /><span>Connecting…</span></div>
       </div>
     );
   }
@@ -481,7 +481,7 @@ function SubordinateChatColumn({
       empty={
         <div className="flex h-full flex-col items-center justify-center text-center">
           <KinuMark size={30} className="mb-3 text-[var(--c-accent)] opacity-60" />
-          <p className="text-sm p-text-3">This agent's conversation starts here.</p>
+          <p className="t-body p-text-3">This agent's conversation starts here.</p>
         </div>
       }
       asked={asked} answerSlates={answerChat} layout={{ startFirst: false, padClass: "pt-5 pb-12" }} extras={{ opening: true }} />
@@ -594,9 +594,9 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
 function GoneWorkspace() {
   return (
     <div className="h-full flex flex-col items-center justify-center gap-2 px-6 text-center" data-workspace-gone>
-      <p className="text-sm p-text">This workspace no longer exists</p>
-      <p className="p-meta p-text-3">It was deleted, here or somewhere else.</p>
-      <Link to="/" className="mt-1 text-xs p-accent hover:underline">Back to your workspaces</Link>
+      <p className="t-body p-text">This workspace no longer exists</p>
+      <p className="t-meta p-text-3">It was deleted, here or somewhere else.</p>
+      <Link to="/" className="t-meta mt-1 p-accent hover:underline">Back to your workspaces</Link>
     </div>
   );
 }
@@ -905,7 +905,7 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
   if (state.connectionStatus === "connecting" && !state.actorSnapshot) return (
     <div className="h-full flex flex-col">
       {bar}
-      <div className="flex flex-1 items-center justify-center"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
+      <div className="flex flex-1 items-center justify-center"><div className="t-body flex items-center gap-2 p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
     </div>
   );
 
@@ -919,12 +919,12 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
     <div className="h-full flex flex-col" data-workbench>
       {/* The chat stays mounted through reconnect so the in-flight turn survives. */}
       {state.connectionStatus === "disconnected" && !state.terminalClose && (
-        <div className="flex items-center justify-center gap-2 px-3 py-1.5 text-xs p-warning border-b p-border" style={{ background: "var(--c-warning-tint)" }}>
+        <div className="t-meta flex items-center justify-center gap-2 px-3 py-1.5 p-warning border-b p-border" style={{ background: "var(--c-warning-tint)" }}>
           <ArrowsClockwiseIcon size={12} className="animate-spin" />Reconnecting...
         </div>
       )}
       {state.terminalClose && (
-        <div className="flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 text-xs p-danger border-b p-border" style={{ background: "var(--c-danger-tint)" }}>
+        <div className="t-meta flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 p-danger border-b p-border" style={{ background: "var(--c-danger-tint)" }}>
           <WarningCircleIcon size={12} className="shrink-0" />
           <span className="break-words">
             {state.terminalClose.code === 1008

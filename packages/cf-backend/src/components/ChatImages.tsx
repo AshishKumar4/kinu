@@ -238,7 +238,7 @@ function Lightbox({ pictures, index, onIndex, onClose }: {
       <div className="p-lightbox-bar">
         <span className="min-w-0 truncate font-mono p-text">{name}</span>
         {picture.kind === "file" && <Where machine={picture.machine} device={picture.device} />}
-        {many && <span className="shrink-0 p-meta p-text-3 tabular-nums">{index + 1} of {pictures.length}</span>}
+        {many && <span className="t-meta shrink-0 p-text-3 tabular-nums">{index + 1} of {pictures.length}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {picture.kind === "file" && (
             <>

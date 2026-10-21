@@ -75,7 +75,7 @@ export function MailAddressField({ domain, username, state, onChange, disabled }
         <input value={username} onChange={(event) => onChange(event.target.value.trim().toLowerCase())} aria-label="Username"
           autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={20} disabled={disabled}
           className={`${inputCls} min-w-0 flex-1 font-mono`} />
-        <span className="shrink-0 font-mono p-row-text p-text-2">@{domain}</span>
+        <span className="t-body t-mono shrink-0 p-text-2">@{domain}</span>
       </div>
       <div className="min-h-5">{said !== null && <Status tone={said[0]} hooks={{ "data-mail-address-state": state }}>{said[1]}</Status>}</div>
     </div>

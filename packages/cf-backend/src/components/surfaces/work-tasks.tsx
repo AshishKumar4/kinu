@@ -21,10 +21,10 @@ function OwnerMark({ owner, onOpenOwner }: TaskOwnership) {
 
   const path = owner.path ?? [];
 
-  if (onOpenOwner === undefined || path.length === 0) return <span className="p-meta p-text-3"> · {owner.title}</span>;
+  if (onOpenOwner === undefined || path.length === 0) return <span className="t-meta p-text-3"> · {owner.title}</span>;
 
   return (
-    <> · <button type="button" className="p-meta p-accent hover:underline" aria-label={`Open ${owner.title}'s conversation`}
+    <> · <button type="button" className="t-meta p-accent hover:underline" aria-label={`Open ${owner.title}'s conversation`}
       onClick={() => void onOpenOwner(path.join("/"), owner.actorId)}>{owner.title}</button></>
   );
 }
@@ -44,11 +44,11 @@ function TaskRow({ task, depth, owner, onOpenOwner }: { task: AgentTask; depth: 
         weight={meta.weight}
         className={`${meta.tone} shrink-0 mt-0.5`}
       />
-      <code className="p-annotation p-text-3 shrink-0 mt-[3px] w-7">{task.id}</code>
-      <span className={`p-row-text min-w-0 break-words ${meta.text}`}>
+      <code className="t-meta t-mono p-text-3 shrink-0 mt-[3px] w-7">{task.id}</code>
+      <span className={`t-body min-w-0 break-words ${meta.text}`} data-task-title>
         {task.title}
         <OwnerMark owner={owner} onOpenOwner={onOpenOwner} />
-        {task.note && <span className="block p-meta p-text-3 mt-0.5">{task.note}</span>}
+        {task.note && <span className="t-meta block p-text-3 mt-0.5">{task.note}</span>}
       </span>
     </div>
   );
@@ -72,7 +72,7 @@ export function PlanProgress({ tasks }: { tasks: AgentTaskTree[] }) {
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs p-text-2 font-medium">{remaining.length} of {counted} still to do</span>
+      <span className="t-status p-text-2">{remaining.length} of {counted} still to do</span>
       {active.length > 0 && <Badge variant="secondary">{active.length} active</Badge>}
     </div>
   );
@@ -92,7 +92,7 @@ export function HelperRow({ agent, onOpen }: { agent: PanelAgent; onOpen?: (agen
   const text = (
     <>
       <SparkleIcon size={14} className="mt-0.5 shrink-0 p-text-2" />
-      <span className="p-row-text">{agent.label} <span className="p-text-3">· {HELPER_ACTIVITY[agent.activity]}</span></span>
+      <span className="t-body">{agent.label} <span className="p-text-3">· {HELPER_ACTIVITY[agent.activity]}</span></span>
     </>
   );
 

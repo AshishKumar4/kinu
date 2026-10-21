@@ -15,13 +15,13 @@ export function ViewOnlyBar({ running, onStop }: { running: boolean; onStop: () 
 
   return (
     <div className="border-t p-border p-sidebar flex min-h-12 items-center gap-2 px-4 py-2" data-view-only>
-      <span className="flex-1 p-meta p-text-3">This agent takes no messages.</span>
+      <span className="t-meta flex-1 p-text-3">This agent takes no messages.</span>
       {running && (
         <button type="button" disabled={stopping} onClick={() => { setStopping(true); onStop(); }}
           className={buttonClass()}
           aria-label="Stop this agent" title="Stop this agent's work">
           <StopIcon size={14} weight="fill" />
-          <span className="p-meta">{stopping ? "Stopping…" : "Stop"}</span>
+          <span className="t-meta">{stopping ? "Stopping…" : "Stop"}</span>
         </button>
       )}
     </div>

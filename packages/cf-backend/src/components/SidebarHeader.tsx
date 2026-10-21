@@ -14,7 +14,7 @@ export function SidebarHeader({ onCollapse }: { onCollapse?: () => void }) {
       <Link to={APP_ROUTES.home} aria-label="Kinu home" data-sidebar-home
         className="flex min-w-0 items-center gap-2 rounded-lg py-1.5 pl-2 pr-2 transition-colors hover:bg-[var(--c-hover)]">
         <KinuMark size={20} />
-        <span className="text-[16px] font-medium p-text">Kinu</span>
+        <span className="t-title p-text">Kinu</span>
       </Link>
       <span className="flex-1" />
       {onCollapse && (

@@ -109,7 +109,7 @@ function Notice({ notice }: { notice: ComposerNotice }) {
             {dismiss}
           </span>
         </div>
-        {detail?.summary && <p className="mt-1 ml-6 p-row-text p-text-3">{detail.summary}</p>}
+        {detail?.summary && <p className="t-body mt-1 ml-6 p-text-3">{detail.summary}</p>}
         {detail?.facts && detail.facts.length > 0 && (
           <dl className="p-pill-facts">
             {detail.facts.map(([label, value]) => <Fragment key={label}><dt>{label}</dt><dd>{value}</dd></Fragment>)}
@@ -374,7 +374,7 @@ export function Composer({
                 aria-label="Recover this turn"
                 title="This turn's worker stopped without finishing. Settle it so the agent takes work again.">
                 <ArrowsClockwiseIcon size={14} />
-                <span className="hidden @[30rem]:inline p-meta">{recoverLabel}</span>
+                <span className="t-meta hidden @[30rem]:inline">{recoverLabel}</span>
               </button>
             )}
             {canBranch && (
@@ -383,7 +383,7 @@ export function Composer({
                 aria-label="Run the draft as a parallel branch"
                 title="Answer beside the live turn, then compare. Neither turn interrupts the other.">
                 <GitBranchIcon size={15} />
-                <span className="hidden @[30rem]:inline p-meta">Branch</span>
+                <span className="t-meta hidden @[30rem]:inline">Branch</span>
               </button>
             )}
             <SendControls streaming={streaming} empty={empty} blocked={disabled} stopping={stopping}

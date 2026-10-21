@@ -87,8 +87,8 @@ function ChoiceCards<T extends string>({ label, marker, options, value, onChange
           className={`flex w-full items-start gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-hover)] ${value === option.id ? "bg-[var(--c-fill)]" : ""}`}>
           <span className={`mt-0.5 flex shrink-0 ${value === option.id ? "p-accent" : "p-text-3"}`}>{option.icon}</span>
           <span className="min-w-0 flex-1">
-            <span className="block p-row-text font-medium p-text">{option.label}</span>
-            <span className="block p-meta p-text-3">{option.detail}</span>
+            <span className="t-item block p-text">{option.label}</span>
+            <span className="t-meta block p-text-3">{option.detail}</span>
           </span>
           <span className={`mt-1 flex size-4 shrink-0 items-center justify-center rounded-full border ${value === option.id ? "border-[var(--c-accent)]" : "border-[var(--c-border-strong)]"}`}>
             {value === option.id && <span className="size-2 rounded-full bg-[var(--c-accent)]" />}
@@ -140,7 +140,7 @@ function StartChoice({ value, onChange, disabled }: { value: ShareStart; onChang
 /** What "My access" lets the people it is shared with do, said before it is chosen; it is never listed. */
 function OwnerWarning() {
   return (
-    <p data-share-owner-warning className="flex gap-2 rounded-lg p-tint-warning px-3 py-2 p-meta p-text">
+    <p data-share-owner-warning className="t-meta flex gap-2 rounded-lg p-tint-warning px-3 py-2 p-text">
       <WarningIcon size={14} className="mt-0.5 shrink-0 p-warning" />
       <span>Everyone you share it with acts as you, within this reach: what it reads of yours, they see. Any change it makes waits for you to approve it, and a change to its code stops it until you approve the new reach. It can't be listed in the Gallery.</span>
     </p>
@@ -201,7 +201,7 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
   let members: ReactNode;
 
   if (row.problem !== undefined) {
-    members = <p className="p-badge-danger inline-block rounded px-2 py-0.5 text-[11px]">{row.problem}</p>;
+    members = <p className="t-meta p-badge-danger inline-block rounded px-2 py-0.5">{row.problem}</p>;
   } else if (row.members.length === 0) {
     members = <p className="p-text-3">No members.</p>;
   } else {
@@ -243,7 +243,7 @@ function NamespaceRow({ row, visibility, approved, onToggle, disabled }: {
   return (
     <li className="space-y-1.5 py-2">
       <div className="flex flex-wrap items-baseline gap-x-2">
-        <span className="font-mono text-xs font-medium p-text">{row.namespace}</span>
+        <span className="t-status t-mono p-text">{row.namespace}</span>
         {row.title !== row.namespace && <span className="p-text-3">{row.title}</span>}
       </div>
       {members}
@@ -275,15 +275,15 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
     <div className="p-group">
       <button type="button" aria-expanded={open} data-share-reach onClick={() => setOpen((shown) => !shown)}
         className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--c-hover)]">
-        <span className="w-14 shrink-0 p-row-text font-medium p-text">Reach</span>
-        <span className="flex min-w-0 flex-1 p-meta p-text-3">
+        <span className="t-item w-14 shrink-0 p-text">Reach</span>
+        <span className="t-meta flex min-w-0 flex-1 p-text-3">
           <span className="truncate">{names}</span>
           <span className="shrink-0 whitespace-pre"> · {changes}</span>
         </span>
         {open ? <CaretDownIcon size={13} className="shrink-0 p-text-3" /> : <CaretRightIcon size={13} className="shrink-0 p-text-3" />}
       </button>
       {open && (
-        <div className="space-y-2 border-t p-border px-3.5 py-2 text-xs">
+        <div className="t-meta space-y-2 border-t p-border px-3.5 py-2">
           <p className="p-text-3">Everything here uses your connections. Reading is on; each change stays off until you tick it.</p>
           {graph.slates.map((slateId) => {
             const rows = graph.namespaces.filter((row) => row.slate === slateId);
@@ -345,14 +345,14 @@ function PeopleRoles({ people, editors, onRole, ownerAccess, disabled }: {
       <ul className="p-group">
         {people.map((email) => (
           <li key={email} data-share-person={email} className="flex items-center gap-3 px-3.5 py-2">
-            <span className="min-w-0 flex-1 truncate p-meta p-text-2">{email}</span>
+            <span className="t-meta min-w-0 flex-1 truncate p-text-2">{email}</span>
             <div role="radiogroup" aria-label={`What ${email} can do`} className="flex shrink-0 rounded-md p-fill p-0.5">
               {([["use", "Use"], ["edit", "Edit"]] as const).map(([role, label]) => {
                 const on = (role === "edit") === editors.has(email);
 
                 return (
                   <button key={role} type="button" role="radio" aria-checked={on} data-share-person-role={role} disabled={disabled} onClick={() => onRole(email, role === "edit")}
-                    className={`rounded px-2.5 py-0.5 text-xs ${on ? "p-surface font-medium p-text shadow-sm" : "p-text-3"}`}>{label}</button>
+                    className={`t-meta rounded px-2.5 py-0.5 ${on ? "p-surface font-medium p-text shadow-sm" : "p-text-3"}`}>{label}</button>
                 );
               })}
             </div>
@@ -360,7 +360,7 @@ function PeopleRoles({ people, editors, onRole, ownerAccess, disabled }: {
         ))}
       </ul>
       {anyEditor && (
-        <p data-share-editors-note className="p-meta p-text-3">
+        <p data-share-editors-note className="t-meta p-text-3">
           People who edit change it from their own workspace&apos;s agent, here in yours.
           {ownerAccess && " Each change stops it on your access until you approve its reach again."}
         </p>
@@ -376,7 +376,7 @@ function PeopleRoles({ people, editors, onRole, ownerAccess, disabled }: {
 function NotRunning({ reason, shared }: { reason: string | null; shared: boolean }) {
   if (reason === null || !shared) return null;
 
-  return <p role="status" data-share-broken className="flex gap-2 rounded-lg p-tint-warning px-3 py-2 p-meta p-text"><WarningIcon size={14} className="mt-0.5 shrink-0 p-warning" /><span>{reason}</span></p>;
+  return <p role="status" data-share-broken className="t-meta flex gap-2 rounded-lg p-tint-warning px-3 py-2 p-text"><WarningIcon size={14} className="mt-0.5 shrink-0 p-warning" /><span>{reason}</span></p>;
 }
 
 /** A share's numbers, as its owner reads them: who opened it through its link, and how often; never who. */
@@ -448,13 +448,13 @@ function SharedRow({ row, actions }: { row: OwnedLiveShare; actions: SharedRowAc
       <div className="flex items-start gap-3">
         <span className="flex shrink-0 pt-0.5 p-text-3">{row.visibility === "public" ? <GlobeIcon size={14} /> : <UsersIcon size={14} />}</span>
         <span className="min-w-0 flex-1 space-y-0.5">
-          <span className="flex min-w-0 p-meta p-text-2"><WhoLine row={row} /></span>
-          <span className="block p-meta p-text-3">
+          <span className="t-meta flex min-w-0 p-text-2"><WhoLine row={row} /></span>
+          <span className="t-meta block p-text-3">
             <span data-live-share-mode={row.mode}>{modeWords(row)}</span>
             {row.paused && <span className="p-warning"> · paused today: limit reached</span>}
             {row.gallery !== null && <span data-live-share-listed> · In the Gallery</span>}
           </span>
-          <span data-live-share-views className="block p-meta p-text-3">{viewsWords(row)}</span>
+          <span data-live-share-views className="t-meta block p-text-3">{viewsWords(row)}</span>
         </span>
         <TileMenu name={who} items={rowMenu(row, actions, () => setListing((open) => !open))} className="relative shrink-0" />
       </div>
@@ -471,7 +471,7 @@ function SharedRow({ row, actions }: { row: OwnedLiveShare; actions: SharedRowAc
 function SharedNow({ shares, actions }: { shares: readonly OwnedLiveShare[]; actions: SharedRowActions }) {
   return (
     <div className="space-y-1.5">
-      <p className="p-meta font-medium p-text-3">Shared now</p>
+      <p className="t-status p-text-3">Shared now</p>
       <ul className="p-group">
         {shares.map((row) => <SharedRow key={row.id} row={row} actions={actions} />)}
       </ul>
@@ -501,21 +501,21 @@ function AlwaysAllowed({ standing, graph, onWithdraw, disabled }: {
 
   return (
     <details data-share-always className="group space-y-1.5">
-      <summary className="flex cursor-pointer list-none items-center gap-1.5 p-meta font-medium p-text-3">
+      <summary className="t-status flex cursor-pointer list-none items-center gap-1.5 p-text-3">
         <CaretRightIcon size={12} className="transition-transform group-open:rotate-90" />Always allowed ({standing.length})
       </summary>
       <ul className="p-group">
         {standing.map((entry) => (
           <li key={JSON.stringify([standingKey(entry), entry.root])} data-share-always-entry={standingKey(entry)} className="flex items-center gap-3 px-3.5 py-2">
             <span className="min-w-0 flex-1">
-              <span className="block truncate p-meta p-text-2"><span className="font-mono">{entry.member}</span> on {titleOf(entry)}</span>
-              {Object.keys(entry.root).length > 0 && <span className="block truncate p-meta p-text-3">{rootWords(entry.root)}</span>}
+              <span className="t-meta block truncate p-text-2"><span className="font-mono">{entry.member}</span> on {titleOf(entry)}</span>
+              {Object.keys(entry.root).length > 0 && <span className="t-meta block truncate p-text-3">{rootWords(entry.root)}</span>}
             </span>
             <Button size="sm" variant="ghost" data-share-always-withdraw onClick={() => onWithdraw(entry)} disabled={disabled}>Revoke</Button>
           </li>
         ))}
       </ul>
-      <p className="p-meta p-text-3">These go ahead without asking you, on every share of it on your access, until its code changes.</p>
+      <p className="t-meta p-text-3">These go ahead without asking you, on every share of it on your access, until its code changes.</p>
     </details>
   );
 }
@@ -590,8 +590,8 @@ function ForkChoice({ value, onChange, disabled }: { value: boolean; onChange: (
         <input type="checkbox" checked={value} onChange={(event) => onChange(event.target.checked)} disabled={disabled} data-share-fork className="size-4 accent-[var(--c-accent)]" />
       </span>
       <span>
-        <span className="block p-row-text font-medium p-text">Let them fork it</span>
-        <span className="block p-meta p-text-3">A fork is their own copy, on their own connections.</span>
+        <span className="t-item block p-text">Let them fork it</span>
+        <span className="t-meta block p-text-3">A fork is their own copy, on their own connections.</span>
       </span>
     </label>
   );
@@ -609,7 +609,7 @@ function choicesWords(choices: { mode: ShareMode; start: ShareStart | null; fork
 /** The choices, said in one line until asked for, then each in place: the safe ones are the defaults. */
 function ChoicesSummary({ words, open, onToggle, disabled }: { words: string; open: boolean; onToggle: () => void; disabled: boolean }) {
   return (
-    <p data-share-summary className="flex flex-wrap items-baseline gap-x-2 p-meta p-text-3">
+    <p data-share-summary className="t-meta flex flex-wrap items-baseline gap-x-2 p-text-3">
       <span>{words}</span>
       <button type="button" data-share-options aria-expanded={open} onClick={onToggle} disabled={disabled} className="font-medium p-accent hover:underline">
         {open ? "Done" : "Change"}
@@ -662,7 +662,7 @@ function Choices({ choices, set, first, reviewing, reach, busy }: {
           }} />}
           <ModeChoice value={mode} onChange={set.mode} disabled={busy || reviewing} unbuilt={graph !== null && graph.revision === null} emptyCopy={start === "empty"} />
           {mode === "owner" && <OwnerReach graph={graph} failed={reach.failed} visibility={reach.visibility} approved={reach.approved} onToggle={reach.onToggle} disabled={busy} />}
-          {graph !== null && <p className="p-meta p-text-3" data-share-limits>{limitsWords(graph)}</p>}
+          {graph !== null && <p className="t-meta p-text-3" data-share-limits>{limitsWords(graph)}</p>}
         </div>
       )}
     </>
@@ -797,13 +797,13 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   if (created !== null) {
     return (
       <>
-        <div className="space-y-3 text-xs">
+        <div className="t-meta space-y-3">
           <p className="p-notice-success rounded-md px-3 py-2" data-share-created>
             Shared. {whoCanOpen(created.share)}
             {created.listing === "pending" && " The list will catch up."}
           </p>
           {created.url === null ? (
-            <p className="p-meta p-text-3">This deployment cannot make share links: it has no preview host or signing secret.</p>
+            <p className="t-meta p-text-3">This deployment cannot make share links: it has no preview host or signing secret.</p>
           ) : (
             <div className="flex items-center gap-2">
               <a href={created.url} className="min-w-0 flex-1 break-all font-mono p-accent" target="_blank" rel="noopener noreferrer">{created.url}</a>

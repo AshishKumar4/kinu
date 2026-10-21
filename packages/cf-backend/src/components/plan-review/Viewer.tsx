@@ -45,7 +45,7 @@ const FrontmatterCard = ({ frontmatter }: { frontmatter: Frontmatter }) => {
 
   return (
     <div className="mt-4 mb-6 rounded-lg border border-border/50 bg-muted/30 p-4">
-      <div className="grid gap-2 text-sm">
+      <div className="t-body grid gap-2">
         {entries.map(([key, value]) => (
           <div key={key} className="flex gap-2">
             <span className="min-w-[80px] font-medium text-muted-foreground">{key}:</span>
@@ -122,9 +122,9 @@ const planDirectiveKind = (value: string | undefined): string => {
 
 /** A heading's classes by level; 3 and deeper share the last. */
 const HEADING_CLASS = [
-  'mb-4 mt-6 text-2xl font-bold tracking-tight first:mt-0',
-  'mb-3 mt-8 text-xl font-semibold text-foreground/90',
-  'mb-2 mt-6 text-base font-semibold text-foreground/80',
+  't-page-title mb-4 mt-6 first:mt-0',
+  't-title mb-3 mt-8 text-foreground/90',
+  't-title mb-2 mt-6 text-foreground/80',
 ] as const;
 
 /** A checkbox for a task item, its number in an ordered list, else a bullet. */
@@ -168,7 +168,7 @@ const PlanBlock = React.memo(({
 
     return (
       <blockquote data-block-id={block.id} className={`my-4 border-l-2 pl-4 text-muted-foreground ${alert ? `alert-${alert}` : 'border-primary/50 italic'}`}>
-        {alert && <div className="alert-title mb-1 text-xs font-semibold uppercase tracking-wide">{alert}</div>}
+        {alert && <div className="t-status alert-title mb-1 uppercase">{alert}</div>}
         <PlanInlineMarkdown text={block.content} />
       </blockquote>
     );
@@ -178,7 +178,7 @@ const PlanBlock = React.memo(({
     const marker = listMarker(block.checked, listIndex);
 
     return (
-      <div data-block-id={block.id} className="my-1.5 flex items-start gap-3 text-sm leading-relaxed" style={{ marginLeft: `${(block.level ?? 0) * 1.25}rem` }}>
+      <div data-block-id={block.id} className="t-body my-1.5 flex items-start gap-3" style={{ marginLeft: `${(block.level ?? 0) * 1.25}rem` }}>
         <span className="select-none text-muted-foreground">{marker}</span>
         <span className={block.checked ? 'text-muted-foreground line-through' : 'text-foreground/90'}><PlanInlineMarkdown text={block.content} /></span>
       </div>
@@ -205,7 +205,7 @@ const PlanBlock = React.memo(({
 
   if (block.type === 'code') {
     return (
-      <pre data-block-id={block.id} className="my-5 overflow-x-auto rounded-lg border border-border/30 bg-muted/50 p-4 text-[13px]">
+      <pre data-block-id={block.id} className="t-body my-5 overflow-x-auto rounded-lg border border-border/30 bg-muted/50 p-4">
         <code className={`pn-code font-mono${block.language ? ` language-${block.language}` : ''}`}>{block.content}</code>
       </pre>
     );
@@ -216,8 +216,8 @@ const PlanBlock = React.memo(({
 
     return (
       <aside data-block-id={block.id} className={`directive directive-${kind} my-4 rounded-lg border p-4`}>
-        <div className="directive-title mb-1 text-xs font-semibold uppercase tracking-wide">{kind}</div>
-        <p className="text-sm leading-relaxed text-foreground/90"><PlanInlineMarkdown text={block.content} /></p>
+        <div className="t-status directive-title mb-1 uppercase">{kind}</div>
+        <p className="t-body text-foreground/90"><PlanInlineMarkdown text={block.content} /></p>
       </aside>
     );
   }
@@ -229,7 +229,7 @@ const PlanBlock = React.memo(({
 
     return (
       <div data-block-id={block.id} className="my-4 overflow-x-auto">
-        <table className="w-full border-collapse text-sm">
+        <table className="t-body w-full border-collapse">
           <thead><tr>{header.map((cell, index) => <th key={index} className="border border-border bg-muted/40 px-3 py-2 text-left font-medium"><PlanInlineMarkdown text={cell} /></th>)}</tr></thead>
           <tbody>{body.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex} className="border border-border px-3 py-2"><PlanInlineMarkdown text={cell} /></td>)}</tr>)}</tbody>
         </table>
@@ -240,7 +240,7 @@ const PlanBlock = React.memo(({
   if (block.type === 'hr') return <hr data-block-id={block.id} className="my-8 border-border/30" />;
 
   return (
-    <p data-block-id={block.id} className="mb-4 text-[15px] leading-relaxed text-foreground/90">
+    <p data-block-id={block.id} className="t-body mb-4 text-foreground/90">
       <PlanInlineMarkdown text={block.content} />
     </p>
   );
@@ -321,7 +321,7 @@ const PlanAnnotationToolbar = ({
     >
       <button
         type="button"
-        className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+        className="t-meta rounded-md px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
         onClick={() => detach(Effect.promise(async () => settleLogged('plan_review.copy_failed', { doing: 'copying the selected text', otherwise: 'io' }, async () => {
           setCopied(await copyTextToClipboard(selectionText));
         })))}
@@ -330,21 +330,21 @@ const PlanAnnotationToolbar = ({
       </button>
       <button
         type="button"
-        className="rounded-md px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
+        className="t-meta rounded-md px-2 py-1 text-destructive hover:bg-destructive/10"
         onClick={onDelete}
       >
         Remove
       </button>
       <button
         type="button"
-        className="rounded-md px-2 py-1 text-xs text-annotation-comment hover:bg-muted"
+        className="t-meta rounded-md px-2 py-1 text-annotation-comment hover:bg-muted"
         onClick={onComment}
       >
         Comment
       </button>
       <button
         type="button"
-        className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+        className="t-meta rounded-md px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
         onClick={onClose}
         aria-label="Cancel annotation"
       >
@@ -438,7 +438,7 @@ const PlanCommentPopover = ({
       onPointerDown={(event) => event.stopPropagation()}
     >
       <div className="flex items-center justify-between gap-3 border-b border-border/50 px-3 py-2">
-        <span className="truncate text-xs text-muted-foreground">
+        <span className="t-meta truncate text-muted-foreground">
           {isGlobal ? 'Global comment' : contextText || 'Comment'}
         </span>
         <button
@@ -463,22 +463,22 @@ const PlanCommentPopover = ({
               submit();
             }
           }}
-          className="min-h-24 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+          className="t-body min-h-24 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-foreground"
           placeholder={isGlobal ? 'Add a global comment…' : 'Add a comment…'}
         />
       </div>
       <div className="flex items-center justify-end gap-2 border-t border-border/50 px-3 py-2">
-        <span className="mr-auto text-[10px] text-muted-foreground">Ctrl/⌘ + Enter</span>
+        <span className="t-meta mr-auto text-muted-foreground">Ctrl/⌘ + Enter</span>
         <button
           type="button"
-          className="rounded-md px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="t-meta rounded-md px-3 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
           onClick={onClose}
         >
           Cancel
         </button>
         <button
           type="button"
-          className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-40"
+          className="t-status rounded-md bg-primary px-3 py-1.5 text-primary-foreground disabled:opacity-40"
           onClick={submit}
           disabled={!text.trim()}
         >
@@ -560,7 +560,7 @@ export const Viewer = ({
             <button
               ref={globalCommentButtonRef}
               type="button"
-              className="rounded-md bg-muted/50 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="t-status rounded-md bg-muted/50 px-2.5 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={() => setGlobalCommentOpen(true)}
             >
               Global comment

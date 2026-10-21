@@ -34,9 +34,9 @@ function CreateAddress({ domain, suggested, onCreated }: { domain: string; sugge
 
   return (
     <form data-mail-create onSubmit={create} className="p-card mt-5 max-w-md space-y-3 p-4">
-      <h2 className="p-row-text font-medium p-text">Your email address</h2>
+      <h2 className="t-item p-text">Your email address</h2>
       <MailAddressField domain={domain} username={username} state={state} onChange={setUsername} disabled={busy !== null} />
-      {error !== null && <p role="alert" className="p-row-text p-danger">{error}</p>}
+      {error !== null && <p role="alert" className="t-body p-danger">{error}</p>}
       <Button variant="primary" size="md" type="submit" disabled={busy !== null || state !== "available"}>{busy === null ? "Create address" : "Creating…"}</Button>
     </form>
   );
@@ -46,7 +46,7 @@ function InstallAssistant({ address, onClose }: { address: string; onClose: () =
   return (
     <Modal title="Your personal assistant" icon={<SparkleIcon size={18} weight="fill" className="p-accent" />} onClose={onClose}
       footer={<><Button variant="ghost" size="sm" onClick={onClose}>Not now</Button><Link to={APP_ROUTES.explore} className={buttonClass({ variant: "primary", size: "sm" })}>Install</Link></>}>
-      <p data-mail-install className="p-row-text p-text-2">Kinu reads <span className="font-mono p-text">{address}</span>, picks what's important, and drafts your replies.</p>
+      <p data-mail-install className="t-body p-text-2">Kinu reads <span className="font-mono p-text">{address}</span>, picks what's important, and drafts your replies.</p>
     </Modal>
   );
 }
@@ -87,7 +87,7 @@ function ThreadList({ resource, view, boxes, path, owner, reading, onOpen, onRet
           ? <ImportantMailRow key={thread.id} open={reading === thread.id} onOpen={() => onOpen(thread.id)} mail={{ thread: thread.id, from: { name: from?.name ?? from?.address ?? "", address: from?.address ?? "" }, to: box?.address ?? "", subject: thread.subject, reason: thread.important ?? "", at: thread.at, unread: thread.unread }} />
           : <MailRow key={thread.id} thread={thread} open={reading === thread.id} onOpen={() => onOpen(thread.id)} owner={owner} drafts={view === "drafts"} box={path === undefined && box?.kind !== "person" ? box : undefined} />;
       })}
-      {threads.length === 0 && <p className="px-4 py-8 text-center p-row-text p-text-3">Nothing here.</p>}
+      {threads.length === 0 && <p className="t-body px-4 py-8 text-center p-text-3">Nothing here.</p>}
     </div>}
   </>;
 }
@@ -213,9 +213,9 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
       )}
 >
       <section className={`min-w-0 overflow-y-auto p-border lg:w-[400px] lg:shrink-0 lg:border-r ${opened === null ? "flex-1 lg:flex-none" : "hidden lg:block"}`}>
-        {navigation.error !== null && <p role="alert" className="px-4 pt-3 p-row-text p-danger">{navigation.error}</p>}
+        {navigation.error !== null && <p role="alert" className="t-body px-4 pt-3 p-danger">{navigation.error}</p>}
         {waiting ? <div data-mail-no-assistant className="flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
-          <p className="p-row-text p-text-2">No assistant yet</p><Button variant="primary" size="md" onClick={() => setInstalling(true)}>Set up your assistant</Button>
+          <p className="t-body p-text-2">No assistant yet</p><Button variant="primary" size="md" onClick={() => setInstalling(true)}>Set up your assistant</Button>
         </div> : <>
           <ThreadList resource={inbox.resource} view={view} boxes={account.boxes} path={path} owner={owner} reading={reading} onOpen={choose} onRetry={inbox.reload} />
           {loaded !== null && <div className="flex justify-between gap-2 px-2 py-2">
@@ -245,11 +245,11 @@ export default function MailPage() {
     <div data-mail-page className="h-full">
       {account?.address != null ? <MailInbox account={account} owner={person?.email ?? ""} /> : <ToolPage icon={<EnvelopeSimpleIcon size={18} />} title="Mail"><div className="flex-1 overflow-y-auto p-6">
         {boxes.resource.status === "loading" && <div role="status" aria-label="Loading mail" className="mt-5"><Loader /></div>}
-        {account !== null && !account.enabled && <p data-mail-off className="mt-5 p-row-text p-text-2">Mail is off on this deployment.</p>}
+        {account !== null && !account.enabled && <p data-mail-off className="t-body mt-5 p-text-2">Mail is off on this deployment.</p>}
         {account?.enabled === true && account.canCreate && person !== null && (
           <CreateAddress domain={account.domain ?? ""} suggested={suggestedMailUsername(person)} onCreated={boxes.reload} />
         )}
-        {account?.enabled === true && !account.canCreate && <p className="mt-5 p-row-text p-text-2">Addresses on this deployment are its operators' only.</p>}
+        {account?.enabled === true && !account.canCreate && <p className="t-body mt-5 p-text-2">Addresses on this deployment are its operators' only.</p>}
         {boxes.resource.status === "error" && <LoadFailure what="your addresses" message={boxes.resource.message} onRetry={boxes.reload} className="mt-5" />}
       </div></ToolPage>}
     </div>

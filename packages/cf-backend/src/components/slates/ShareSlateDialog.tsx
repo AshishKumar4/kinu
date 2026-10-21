@@ -31,7 +31,7 @@ export function ShareSlateDialog({ workspace, slate, title, rpc, onClose, onList
         ? <LiveShareForm workspace={workspace} slate={slate} rpc={rpc} onClose={onClose} onBusy={setBusy} onListingPending={onListingPending} fixture={fixture?.live} />
         : <BlueprintShareForm workspace={workspace} slate={slate} rpc={rpc} onClose={onClose} onBusy={setBusy} onListingPending={onListingPending} fixture={fixture?.blueprint} />}
       <button type="button" data-share-switch={mode === "live" ? "blueprint" : "live"} disabled={busy} onClick={() => setMode(mode === "live" ? "blueprint" : "live")}
-        className="self-start p-meta p-text-3 underline-offset-2 hover:underline">
+        className="t-meta self-start p-text-3 underline-offset-2 hover:underline">
         {mode === "live" ? "Share a copy instead" : "Share it live instead"}
       </button>
     </Modal>

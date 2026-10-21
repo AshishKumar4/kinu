@@ -120,7 +120,7 @@ function LogoField({ title, logo, rpc }: { title: string; logo: string | null | 
           {drawing ? <><Loader size="sm" /> Drawing…</> : "Draw a new one"}
         </button>
       </div>
-      {note && <p className="text-xs p-text-3">{note}</p>}
+      {note && <p className="t-meta p-text-3">{note}</p>}
     </Field>
   );
 }
@@ -241,7 +241,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
 
   if (connectionStatus !== "connected") {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-sm p-text-2">
+      <div className="t-body flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-text-2">
         {connectionStatus === "connecting" ? (
           <><Loader size="base" /><span>Connecting to {agentId}…</span></>
         ) : (
@@ -254,7 +254,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   return (
     <Page fill icon={<GearSixIcon size={22} />} title="Settings" data-workspace-settings
       actions={<Link to="/user/settings" className={buttonClass({ variant: "ghost" })}><KeyIcon size={14} />Account settings</Link>}>
-      {err && <div className="p-notice-danger px-4 py-3 text-xs">{err}</div>}
+      {err && <div className="t-meta p-notice-danger px-4 py-3">{err}</div>}
 
       <div className="space-y-5">
       <Card title="Identity">
@@ -297,14 +297,14 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
           {(value) => (
             <>
               <div className="space-y-1.5">
-                <label className="block text-xs p-text-2 font-medium">Second opinion</label>
+                <label className="t-status block p-text-2">Second opinion</label>
                 <div className="flex">
                   <Segmented label="Second opinion" value={value.advisorEnabled ? "on" : "off"} segments={ADVISOR_SWITCH}
                     onChange={(id) => advisor.edit({ ...value, advisorEnabled: id === "on" })} />
                 </div>
               </div>
               <div className="space-y-1.5">
-                <label className="block text-xs p-text-2 font-medium">Minimum severity</label>
+                <label className="t-status block p-text-2">Minimum severity</label>
                 <div className="flex">
                   <Segmented label="Minimum severity" value={value.advisorMinSeverity}
                     segments={ADVISOR_SEVERITIES.map((severity) => ({ id: severity, label: ADVISOR_SEVERITY_LABEL[severity] }))}
@@ -339,7 +339,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
 
       <Card title="Main's conversation">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="p-meta p-text-3">Clearing removes Main's messages. Memory, SOUL.md, learned tools and evolution stay.</p>
+          <p className="t-meta p-text-3">Clearing removes Main's messages. Memory, SOUL.md, learned tools and evolution stay.</p>
           <Button size="sm" variant="secondary" icon={<TrashIcon size={12} />} onClick={clearMain}>Clear history</Button>
         </div>
       </Card>
@@ -379,18 +379,18 @@ export function StandingApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
 
   return (
     <Card title="Standing approvals">
-      <p className="p-meta p-text-3">
+      <p className="t-meta p-text-3">
         “Always” stops Kinu asking about this check in this environment. It does not give the agent any more access.
       </p>
       {resource.status === "error" && grants === null && (
         <LoadFailure what="your standing approvals" message={resource.message} onRetry={reload} />
       )}
-      {resource.status !== "error" && grants === null && <p className="text-xs p-text-3">Loading…</p>}
+      {resource.status !== "error" && grants === null && <p className="t-meta p-text-3">Loading…</p>}
       {grants !== null && (
         <div className="space-y-1">
           {grants.map((grant) => (
             <div key={`${grant.rule}@${grant.executor}`}
-              className="flex items-center gap-2 text-xs rounded-md px-2 py-1.5 p-card">
+              className="t-meta flex items-center gap-2 rounded-md px-2 py-1.5 p-card">
               <code className="font-mono p-text">{grant.rule}</code>
               <span className="p-text-3">on</span>
               <span className="p-text-2">{executorLabel(grant.executor)}</span>
@@ -405,7 +405,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
           ))}
         </div>
       )}
-      {err && <div className="p-meta p-danger mt-1">{err}</div>}
+      {err && <div className="t-meta p-danger mt-1">{err}</div>}
     </Card>
   );
 }
@@ -490,14 +490,14 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
 
   return (
     <Card title="Workspace instruction files">
-      <p className="p-meta p-text-3">
+      <p className="t-meta p-text-3">
         Your agent can write these files. Kinu follows a file as instructions only when you approve its
         contents. After any edit it becomes reference material again until you approve it again.
       </p>
       {resource.status === "error" && rows === null && (
         <LoadFailure what="this workspace's instruction files" message={resource.message} onRetry={reload} />
       )}
-      {resource.status !== "error" && rows === null && <p className="text-xs p-text-3">Loading…</p>}
+      {resource.status !== "error" && rows === null && <p className="t-meta p-text-3">Loading…</p>}
       {rows !== null && (
         <div className="space-y-1">
           {rows.map((row) => {
@@ -508,7 +508,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
 
             return (
               <div key={row.path} className="rounded-md px-2 py-1.5 p-card space-y-1">
-                <div className="flex items-center gap-2 text-xs">
+                <div className="t-meta flex items-center gap-2">
                   <code className="font-mono p-text truncate" title={row.path}>{row.path}</code>
                   <span className="p-text-3 shrink-0">
                     {row.kind === "skill" ? "skill" : "AGENTS.md"} · {row.bytes} bytes
@@ -545,7 +545,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
                   <>
                     <pre className="p-t-code p-text-2 whitespace-pre-wrap break-words
                       max-h-64 overflow-auto rounded-sm px-2 py-1.5 p-card-hover">{opened.preview}</pre>
-                    <div className="p-meta p-text-3 font-mono break-all">{opened.digest}</div>
+                    <div className="t-meta t-mono p-text-3 break-all">{opened.digest}</div>
                   </>
                 )}
               </div>
@@ -557,15 +557,15 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
         <div className="flex gap-2 pt-1">
           {cursor && (
             <button type="button" onClick={() => { setCursor(undefined); setOpen(null); }}
-              className="p-meta px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text">First page</button>
+              className="t-meta px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text">First page</button>
           )}
           {page?.status === "more" && (
             <button type="button" onClick={() => { setCursor(page.next); setOpen(null); }}
-              className="p-meta px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text">More</button>
+              className="t-meta px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text">More</button>
           )}
         </div>
       )}
-      {err && <div className="p-meta p-danger mt-1">{err}</div>}
+      {err && <div className="t-meta p-danger mt-1">{err}</div>}
     </Card>
   );
 }
@@ -621,7 +621,7 @@ function WorkspaceBackupCard({
 
   return (
     <Card title="Backup">
-      <p className="p-meta p-text-3">
+      <p className="t-meta p-text-3">
         Download an archive of this workspace: transcripts, memory, files and evolution history. Restore it
         with <code className="font-mono">kinu import &lt;file&gt;</code>. Download one before you delete a
         workspace. The archive holds everything in the workspace, so keep it as safe as a password.
@@ -629,8 +629,8 @@ function WorkspaceBackupCard({
       <Button variant="primary" size="sm" onClick={() => detach(Effect.promise(async () => { await download(); }))} disabled={busy || !workspace}>
         {busy ? "Exporting…" : "Download archive"}
       </Button>
-      {status && <div className="p-meta p-text-2 mt-1">{status}</div>}
-      {err && <div className="p-meta p-danger mt-1">Export failed: {err}</div>}
+      {status && <div className="t-meta p-text-2 mt-1">{status}</div>}
+      {err && <div className="t-meta p-danger mt-1">Export failed: {err}</div>}
     </Card>
   );
 }
@@ -679,15 +679,15 @@ function AlwaysActiveSkillsCard({
 
   return (
     <Card title="Always-active skills">
-      <p className="p-meta p-text-3">
+      <p className="t-meta p-text-3">
         Pin a workflow skill, such as <code className="font-mono">audit-implementation</code>, and it runs
         every turn without you typing /name.
       </p>
       <div className="flex flex-wrap gap-1.5">
         {names.length === 0
-          ? <span className="p-meta p-text-3">No skills pinned.</span>
+          ? <span className="t-meta p-text-3">No skills pinned.</span>
           : names.map(n => (
-            <span key={n} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm p-card p-meta font-mono">
+            <span key={n} className="t-meta t-mono inline-flex items-center gap-1 px-2 py-0.5 rounded-sm p-card">
               {n}
               <button type="button" onClick={() => detach(Effect.promise(async () => { await remove(n); }))} aria-label={`Unpin ${n}`} className="p-text-3 hover:p-text">×</button>
             </span>
@@ -700,11 +700,11 @@ function AlwaysActiveSkillsCard({
           placeholder="skill-name"
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => detach(Effect.promise(async () => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }))}
-          className={inputCls + " text-xs"}
+          className={inputCls + " t-meta"}
         />
         <Button variant="primary" size="sm" onClick={() => detach(Effect.promise(async () => { await add(); }))} disabled={busy || !input.trim()}>Pin</Button>
       </div>
-      {err && <div className="p-meta p-danger mt-1">{err}</div>}
+      {err && <div className="t-meta p-danger mt-1">{err}</div>}
     </Card>
   );
 }

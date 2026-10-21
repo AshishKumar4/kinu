@@ -58,8 +58,8 @@ function NoLines({ file, onOpenInFiles }: { file: FileDiff; onOpenInFiles: (() =
 
   return (
     <div className="m-3 rounded-lg p-sunken px-3.5 py-3" data-no-lines={body.kind}>
-      <p className="p-row-text p-text-2">{text}</p>
-      {onOpenInFiles !== null && <button type="button" onClick={onOpenInFiles} className="mt-1.5 p-meta p-accent-fg hover:underline">Open in Files</button>}
+      <p className="t-body p-text-2">{text}</p>
+      {onOpenInFiles !== null && <button type="button" onClick={onOpenInFiles} className="t-meta mt-1.5 p-accent-fg hover:underline">Open in Files</button>}
     </div>
   );
 }
@@ -70,7 +70,7 @@ function CappedNote({ file }: { file: FileDiff }) {
   if (body.kind !== "capped") return null;
 
   return (
-    <p className="border-t p-border px-4 py-2.5 p-meta p-text-3" data-capped>
+    <p className="t-meta border-t p-border px-4 py-2.5 p-text-3" data-capped>
       The diff stops here{body.hidden > 0 ? `, ${count(body.hidden)} ${body.hidden === 1 ? "change" : "changes"} short` : ""}. The counts above cover the whole file.
     </p>
   );
@@ -105,8 +105,8 @@ function NextFile({ next, reviewable, onOpen, onReviewed, onList }: {
   if (next === undefined) {
     return (
       <div className="mx-3 mb-6 mt-4 flex items-center gap-3 rounded-lg border p-border px-3.5 py-3">
-        <span className="min-w-0 flex-1 p-row-text p-text-2">That is every change.</span>
-        {reviewable ? <MarkReviewed onClick={onReviewed} /> : <button type="button" onClick={onList} className="p-meta p-accent-fg hover:underline">All files</button>}
+        <span className="t-body min-w-0 flex-1 p-text-2">That is every change.</span>
+        {reviewable ? <MarkReviewed onClick={onReviewed} /> : <button type="button" onClick={onList} className="t-meta p-accent-fg hover:underline">All files</button>}
       </div>
     );
   }
@@ -114,9 +114,9 @@ function NextFile({ next, reviewable, onOpen, onReviewed, onList }: {
   return (
     <button type="button" onClick={() => onOpen(next.path)} data-next-file
       className="mx-3 mb-6 mt-4 flex w-[calc(100%-1.5rem)] items-center gap-2.5 rounded-lg border p-border px-3.5 py-2.5 text-left transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-hover)]">
-      <span className="shrink-0 p-meta p-text-3">Next</span>
+      <span className="t-meta shrink-0 p-text-3">Next</span>
       <ChangeMark status={next.status} />
-      <span className="min-w-0 flex-1 truncate p-row-text p-text">{vfsBasename(next.path)}</span>
+      <span className="t-body min-w-0 flex-1 truncate p-text">{vfsBasename(next.path)}</span>
       <Counts added={next.added} removed={next.removed} />
       <ArrowRightIcon size={13} className="shrink-0 p-text-3" />
     </button>
@@ -157,11 +157,11 @@ function ListHeader({ sets, set, now, menuOpen, reviewable, hint, layout, onPick
       <div className="flex items-center gap-2">
         {read
           ? <Summary set={set} />
-          : <span className="flex min-w-0 items-center gap-2 p-row-text font-medium p-text"><WarningCircleIcon size={15} className="shrink-0 p-warning" />Can't read {set.label}</span>}
+          : <span className="t-item flex min-w-0 items-center gap-2 p-text"><WarningCircleIcon size={15} className="shrink-0 p-warning" />Can't read {set.label}</span>}
         {layout !== null && <div className="-my-1 ml-auto">{layout}</div>}
       </div>
       {(sets.length > 1 || read) && (
-        <div className="mt-1.5 flex min-h-7 items-center gap-1.5 p-meta p-text-3">
+        <div className="t-meta mt-1.5 flex min-h-7 items-center gap-1.5 p-text-3">
           <SourceMenu sets={sets} source={set.source} initiallyOpen={menuOpen} onPick={onPick} />
           {sets.length > 1 && read && <span aria-hidden="true">·</span>}
           {read && <Since set={set} now={now} />}
@@ -181,7 +181,7 @@ function NotesBar({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   return (
     <footer className="flex shrink-0 items-center gap-2 border-t p-border px-3 py-2.5" data-notes-bar>
       <button type="button" onClick={onToggle} aria-expanded={open}
-        className={`-ml-1.5 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 p-meta transition-colors ${open ? "bg-[var(--c-fill)] p-text" : "p-text-2 hover:bg-[var(--c-hover)] hover:p-text"}`}>
+        className={`t-meta -ml-1.5 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 transition-colors ${open ? "bg-[var(--c-fill)] p-text" : "p-text-2 hover:bg-[var(--c-hover)] hover:p-text"}`}>
         <ChatCircleDotsIcon size={14} className="p-info" />
         {notes.notes.length} {notes.notes.length === 1 ? "note" : "notes"} for the agent
       </button>
@@ -205,11 +205,11 @@ function FileHeader({ files, at, onGo }: {
       <div className="flex items-center gap-1">
         <IconButton label="All files" onClick={() => onGo(null)}><CaretLeftIcon size={15} /></IconButton>
         <ChangeMark status={open.status} />
-        <span className="ml-1 min-w-0 flex-1 truncate p-row-text font-medium p-text" data-open-file>{vfsBasename(open.path)}</span>
+        <span className="t-item ml-1 min-w-0 flex-1 truncate p-text" data-open-file>{vfsBasename(open.path)}</span>
         <IconButton label="Previous file (k)" onClick={() => onGo(files[at - 1]?.path ?? null)} disabled={at === 0}><CaretUpIcon size={14} /></IconButton>
         <IconButton label="Next file (j)" onClick={() => onGo(files[at + 1]?.path ?? null)} disabled={at === files.length - 1}><CaretDownIcon size={14} /></IconButton>
       </div>
-      <div className="flex items-center gap-2 pl-[34px] pr-2 p-meta p-text-3">
+      <div className="t-meta flex items-center gap-2 pl-[34px] pr-2 p-text-3">
         <span className="min-w-0 truncate">{vfsDirname(open.path) || "Top level"}</span>
         <Counts added={open.added} removed={open.removed} />
         <span className="ml-auto shrink-0 tabular-nums">{at + 1} of {files.length}</span>
@@ -267,8 +267,8 @@ function FileCard({ file, split, register, onOpenInFiles }: {
           <CaretDownIcon size={12} className={`transition-transform ${folded ? "-rotate-90" : ""}`} />
         </IconButton>
         <ChangeMark status={file.status} />
-        <span className="shrink-0 p-row-text font-medium p-text">{vfsBasename(file.path)}</span>
-        <span className="min-w-0 truncate p-meta p-text-3">{vfsDirname(file.path)}</span>
+        <span className="t-item shrink-0 p-text">{vfsBasename(file.path)}</span>
+        <span className="t-meta min-w-0 truncate p-text-3">{vfsDirname(file.path)}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1 pl-2">
           <Counts added={file.added} removed={file.removed} />
           <FileNotes path={file.path} />
@@ -286,7 +286,7 @@ function Stepper({ files, current, onShow }: { files: readonly FileDiff[]; curre
 
   return (
     <div className="flex shrink-0 items-center gap-0.5">
-      <span className="mr-1 p-meta tabular-nums p-text-3">{at + 1} of {files.length}</span>
+      <span className="t-meta mr-1 tabular-nums p-text-3">{at + 1} of {files.length}</span>
       <IconButton label="Previous file (k)" onClick={() => { if (before !== undefined) onShow(before.path); }} disabled={before === undefined}><CaretUpIcon size={13} /></IconButton>
       <IconButton label="Next file (j)" onClick={() => { if (after !== undefined) onShow(after.path); }} disabled={after === undefined}><CaretDownIcon size={13} /></IconButton>
     </div>
@@ -363,7 +363,7 @@ function Expanded({ files, repositories, file, split, tree, notesShown, onNotes,
       {tree && (
         <nav aria-label="Changed files" style={{ width: COLUMN_PX.tree }} className="flex shrink-0 flex-col border-r p-border">
           <div className="flex h-10 shrink-0 items-center border-b p-border pl-3.5 pr-1.5">
-            <span className="min-w-0 flex-1 p-meta font-medium p-text-2">Files</span>
+            <span className="t-status min-w-0 flex-1 p-text-2">Files</span>
             <Stepper files={files} current={current} onShow={show} />
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -392,13 +392,13 @@ function Reviewed({ sets, source, at, now, menuOpen, onSource, onUndo }: {
 }) {
   return (
     <div className="px-4 py-4" data-changes="reviewed">
-      <p className="flex items-center gap-2 p-row-text font-medium p-text">
+      <p className="t-item flex items-center gap-2 p-text">
         <CheckCircleIcon size={15} weight="fill" className="p-success" />Reviewed at {sinceLabel(at, now)}
-        {onUndo !== null && <button type="button" onClick={onUndo} data-undo-reviewed className="ml-auto p-meta font-normal p-accent-fg hover:underline">Undo</button>}
+        {onUndo !== null && <button type="button" onClick={onUndo} data-undo-reviewed className="t-meta ml-auto p-accent-fg hover:underline">Undo</button>}
       </p>
-      <p className="mt-1 pl-[23px] p-meta p-text-3">New changes show here as they happen.</p>
+      <p className="t-meta mt-1 pl-[23px] p-text-3">New changes show here as they happen.</p>
       {sets.length > 1 && (
-        <div className="mt-2.5 flex min-h-7 items-center pl-[23px] p-meta p-text-3">
+        <div className="t-meta mt-2.5 flex min-h-7 items-center pl-[23px] p-text-3">
           <SourceMenu sets={sets} source={source} initiallyOpen={menuOpen} onPick={onSource} />
         </div>
       )}
@@ -423,10 +423,10 @@ function NarrowBody({ set, files, at, path, reviewable, onGo, onReviewed, onOpen
       <div className="min-h-0 flex-1 overflow-y-auto">
         {set.error === undefined ? (
           <>
-            {path !== null && <p className="px-4 pt-3 p-meta p-text-3" data-changes-gone>{vfsBasename(path)} has no changes now.</p>}
+            {path !== null && <p className="t-meta px-4 pt-3 p-text-3" data-changes-gone>{vfsBasename(path)} has no changes now.</p>}
             <FileTree files={files} repositories={set.repositories} current={null} onOpen={onGo} />
           </>
-        ) : <p className="px-4 py-3.5 p-row-text p-text-2" data-changes-error>{set.error}</p>}
+        ) : <p className="t-body px-4 py-3.5 p-text-2" data-changes-error>{set.error}</p>}
       </div>
     );
   }

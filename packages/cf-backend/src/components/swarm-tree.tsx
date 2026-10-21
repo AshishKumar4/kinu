@@ -596,7 +596,7 @@ export function SwarmTree({
 				name.title = meta?.title ?? "";
 				const note = document.createElement("span");
 				// The note shrinks faster: the name identifies the band.
-				note.className = "min-w-0 shrink-[4] truncate p-annotation p-text-3";
+				note.className = "t-meta t-mono min-w-0 shrink-[4] truncate p-text-3";
 				note.textContent = meta?.note ?? "";
 				note.title = meta?.note ?? "";
 				el.appendChild(name);
@@ -916,7 +916,7 @@ export function SwarmTree({
 				{/* Overlay, not in flow: an in-flow line changes scene height, refits, and could toggle itself. */}
 				{viewNote !== null && (
 					<div aria-live="polite"
-					className="absolute left-0 right-0 flex justify-end pr-4 pointer-events-none select-none p-meta p-text-3"
+					className="t-meta absolute left-0 right-0 flex justify-end pr-4 pointer-events-none select-none p-text-3"
 						style={{ top: RULER_H, fontFamily: "var(--font-mono)" }}
 					>{viewNote}</div>
 				)}
@@ -926,7 +926,7 @@ export function SwarmTree({
 
 			<div ref={attachLegend} data-tree-legend
 				className="shrink-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2 pt-1 pb-1.5">
-				<div className="min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 p-meta p-text-3 select-none">
+				<div className="t-meta min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 p-text-3 select-none">
 					{competedSelected ? (
 						<>
 							<span className="flex items-center gap-1.5">
@@ -1047,7 +1047,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 
 	return (
 		<div
-			className="absolute z-50 pointer-events-none p-surface p-border border rounded-lg px-3 py-2 p-shadow-menu text-xs animate-scale-in"
+			className="t-meta absolute z-50 pointer-events-none p-surface p-border border rounded-lg px-3 py-2 p-shadow-menu animate-scale-in"
 			style={{
 				width: TIP_W,
 				left: flip ? undefined : tip.x + 16,
@@ -1061,7 +1061,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 			<div className="flex items-center gap-2 tabular-nums">
 				{(node.status === "failed" || node.value !== null) && (
 					<span
-						className="text-base font-semibold leading-none"
+						className="t-title"
 						style={{ color: node.status === "failed" ? "var(--c-danger)" : BAND_TOKEN[scoreBand(node.value ?? 0)] }}
 					>
 						{node.status === "failed" ? "failed" : `${Math.round(Math.min(1, Math.max(0, node.value ?? 0)) * 100)}%`}
@@ -1079,7 +1079,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 			</div>
 			{fanIn !== null && (
 				<div className="mt-1.5 flex items-baseline gap-1.5 p-accent-fg">
-					<span className="p-annotation">⋈{fanIn}</span>
+					<span className="t-meta t-mono p-accent-fg">⋈{fanIn}</span>
 					<span className="leading-snug">
 						fan-in vertex, aggregating {fanIn} parents. The edge above it is the
 						selection parent; the other {fanIn - 1} are not in this tree.

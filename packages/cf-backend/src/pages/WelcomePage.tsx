@@ -76,8 +76,8 @@ function ShowcaseStep({ revealed }: { revealed: boolean }) {
             <Icon size={18} className="p-accent" />
           </div>
           <div>
-            <div className="text-sm font-semibold p-text">{title}</div>
-            <p className="p-meta p-text-3 mt-0.5">{copy}</p>
+            <div className="t-label p-text">{title}</div>
+            <p className="t-meta p-text-3 mt-0.5">{copy}</p>
           </div>
         </div>
       ))}
@@ -210,7 +210,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
     <div className="fixed inset-0 p-bg overflow-y-auto">
       <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-4 py-8">
         <div className="mb-6 flex justify-center"><KinuLogo /></div>
-        <h1 className="p-page-title text-center">Let's set up your account</h1>
+        <h1 className="t-page-title text-center">Let's set up your account</h1>
 
         <ol aria-label="Setup steps" className="mt-6 mb-5 flex items-center justify-center gap-1.5">
           {steps.map((s, i) => (
@@ -238,17 +238,17 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                 inert={i !== step}
                 ref={i === step ? stepSize.attach : undefined}
               >
-                <h2 className="p-title p-text mb-5">{s.title}</h2>
+                <h2 className="t-title p-text mb-5">{s.title}</h2>
 
                 {s.id === 'profile' && (
                   <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-                    <div data-avatar className="size-16 rounded-full p-selected text-[22px] font-semibold p-accent-mark flex items-center justify-center">
+                    <div data-avatar className="t-page-title size-16 rounded-full p-selected p-accent-mark flex items-center justify-center">
                       {letter}
                     </div>
                     <div className="w-full flex-1">
                       <DisplayNameField value={displayName} onChange={setName} saving={busy} bare />
                       {profile !== null && !profile.displayName && provider !== null && (
-                        <p className="mt-2 text-xs p-text-3">{provider} didn't share a name.</p>
+                        <p className="t-meta mt-2 p-text-3">{provider} didn't share a name.</p>
                       )}
                     </div>
                   </div>
@@ -272,7 +272,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
                 {s.id === 'tools' && (
                   <div className="space-y-4">
-                    <p className="text-sm p-text-3">MCP servers give every agent you own their tools. Connect one now, or any time in settings.</p>
+                    <p className="t-body p-text-3">MCP servers give every agent you own their tools. Connect one now, or any time in settings.</p>
                     {i <= reached && <McpServersSection />}
                   </div>
                 )}
@@ -285,7 +285,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
           </div>
           </div>
 
-          {error && <p className="text-xs p-danger px-5 sm:px-8 pt-3">{error}</p>}
+          {error && <p className="t-meta p-danger px-5 sm:px-8 pt-3">{error}</p>}
 
           <div className="flex items-center justify-between gap-3 border-t p-border px-5 py-4 sm:px-8">
             {step > 0 ? (

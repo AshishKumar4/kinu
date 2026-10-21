@@ -35,7 +35,7 @@ function refusalWords(id: string, refusal: { readonly reason: string; readonly e
 
 /** Shown over a slate whose latest edit does not build: the version under it is the last that did. */
 function BrokenNotice({ title }: { title: string }) {
-  return <span role="status" data-slate-broken className="block p-notice-warning px-3 py-1.5 text-xs">{title} has a build error; showing the last working version.</span>;
+  return <span role="status" data-slate-broken className="t-meta block p-notice-warning px-3 py-1.5">{title} has a build error; showing the last working version.</span>;
 }
 
 const SavedSlateSchema = v.object({ id: v.string(), title: v.string() });
@@ -197,8 +197,8 @@ function SlateCard({ id, block, measure, save, children }: {
         <button type="button" onClick={() => setHand(!folded)} aria-expanded={!folded} aria-controls={body} title={folded ? `Show ${name}` : `Fold ${name}`}
           className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left transition-colors hover:bg-[var(--c-hover)]">
           <CaretRightIcon size={10} weight="bold" className={`shrink-0 p-text-3 p-fold-turn ${folded ? "" : "rotate-90"}`} />
-          {folded && <code className="p-annotation p-text-3 truncate">{name}</code>}
-          {why !== null && <span className="ml-auto shrink-0 pl-2 p-meta p-text-3">{why}</span>}
+          {folded && <code className="t-meta t-mono p-text-3 truncate">{name}</code>}
+          {why !== null && <span className="t-meta ml-auto shrink-0 pl-2 p-text-3">{why}</span>}
         </button>
         {save !== undefined && <SaveControl name={name} save={save} open={openSlate} />}
         {openSlate !== undefined && (
@@ -373,7 +373,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
       />
     ) : (
       <div className="flex-1 flex items-center justify-center p-4 text-center">
-        <span className="p-annotation p-text-3 break-all">
+        <span className="t-meta t-mono p-text-3 break-all">
           Refused to preview a URL that is not a Kinu preview: {previewUrl}
         </span>
       </div>
@@ -387,7 +387,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
         {notice}
         {decision}
         {refusal !== null && (
-          <div className="p-notice-danger rounded-lg px-3 py-2 text-xs">
+          <div className="t-meta p-notice-danger rounded-lg px-3 py-2">
             <p className="break-words m-0">{refusal}</p>
           </div>
         )}
@@ -409,7 +409,7 @@ export function InlineSlate({ id, block, rpc, display, reloadKey = 0, onReady }:
       {notice}
       {decision}
       {refusal !== null && (
-        <span className="block p-notice-danger px-3 py-2 text-xs">
+        <span className="t-meta block p-notice-danger px-3 py-2">
           <span className="block break-words m-0">{refusal}</span>
         </span>
       )}

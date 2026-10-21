@@ -100,7 +100,7 @@ export function Notice(
   },
 ): ReactNode {
   return (
-    <div className={`p-card p-3 text-xs flex items-start gap-2 ${NOTICE_TONE[tone]}`}>
+    <div className={`t-meta p-card p-3 flex items-start gap-2 ${NOTICE_TONE[tone]}`}>
       {icon}<div className="min-w-0">{children}</div>
     </div>
   );
@@ -109,9 +109,9 @@ export function Notice(
 export function Stat({ label, value, hint }: { label: string; value: string; hint?: string }): ReactNode {
   return (
     <div className="p-card p-4">
-      <div className="p-eyebrow">{label}</div>
-      <div className="text-2xl p-display tabular-nums mt-1">{value}</div>
-      {hint !== undefined && <div className="p-meta p-text-3 mt-1">{hint}</div>}
+      <div className="t-label">{label}</div>
+      <div className="t-page-title tabular-nums mt-1">{value}</div>
+      {hint !== undefined && <div className="t-meta p-text-3 mt-1">{hint}</div>}
     </div>
   );
 }
@@ -124,15 +124,15 @@ export function SectionHeader(
   return (
     <div className="flex items-start justify-between gap-4">
       <div className="min-w-0">
-        <h2 className="text-sm font-medium">{title}</h2>
-        {hint !== undefined && <p className="text-xs p-text-3 mt-0.5">{hint}</p>}
+        <h2 className="t-item">{title}</h2>
+        {hint !== undefined && <p className="t-meta p-text-3 mt-0.5">{hint}</p>}
       </div>
       <div className="flex items-center gap-2 shrink-0">
         {actions}
         {onRefresh !== undefined && (
           <button
             onClick={onRefresh}
-            className="text-xs p-text-3 hover:p-text flex items-center gap-1 px-2 py-1"
+            className="t-meta p-text-3 hover:p-text flex items-center gap-1 px-2 py-1"
             title="Refresh"
           >
             <ArrowClockwiseIcon size={12} /> Refresh
@@ -150,7 +150,7 @@ export function PageWalker(
   },
 ): ReactNode {
   return (
-    <div className="flex items-center justify-between text-xs p-text-3 pt-1">
+    <div className="t-meta flex items-center justify-between p-text-3 pt-1">
       <span>page {page + 1}</span>
       <div className="flex items-center gap-3">
         {page > 0 && (

@@ -248,7 +248,7 @@ export function NotesFailure() {
 
   if (notes?.failure == null) return null;
 
-  return <p role="alert" className="min-w-0 truncate p-meta p-danger" data-notes-failure title={notes.failure}>{notes.failure}</p>;
+  return <p role="alert" className="t-meta min-w-0 truncate p-danger" data-notes-failure title={notes.failure}>{notes.failure}</p>;
 }
 
 export function SendFeedback({ className = "" }: { className?: string }) {

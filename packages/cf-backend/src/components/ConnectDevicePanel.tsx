@@ -93,7 +93,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
 
   if (state.kind === "connected") {
     return (
-      <div data-connect-state="connected" className="flex items-center gap-2 text-xs p-success">
+      <div data-connect-state="connected" className="t-meta flex items-center gap-2 p-success">
         <DesktopTowerIcon size={14} /> {state.device.label} is connected.
       </div>
     );
@@ -102,21 +102,21 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
   if (state.kind === "handed") {
     return (
       <div data-connect-state="handed" className="space-y-3">
-        <p className="text-xs p-text-2">
+        <p className="t-meta p-text-2">
           Run this on the machine you want to connect. It installs the CLI, signs you in, and starts
           the daemon:
         </p>
         <div className="flex items-start gap-2 rounded-md p-fill border p-border p-3">
-          <code data-connect-command className="p-t-code p-text flex-1 break-all select-all">
+          <code data-connect-command className="t-code p-text flex-1 break-all select-all">
             {state.command}
           </code>
           <CopyButton value={state.command} what="the connect command" size={13} className="p-text-3 hover:p-text shrink-0" />
         </div>
-        <div data-connect-waiting className="flex items-center gap-2 text-xs p-text-3">
+        <div data-connect-waiting className="t-meta flex items-center gap-2 p-text-3">
           <Loader size="sm" /> Waiting for this machine. This panel closes when it connects.
         </div>
         {/* The prose is one flex item: a `code` sibling would become its own column and split the sentence. */}
-        <p className="p-meta p-text-3 flex items-start gap-1.5">
+        <p className="t-meta p-text-3 flex items-start gap-1.5">
           <WarningIcon size={11} className="mt-0.5 shrink-0" />
           <span>
             <code className="font-mono">kinu connect</code> writes the device secrets on that machine.
@@ -131,19 +131,19 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
   return (
     <div data-connect-state={state.kind} className="space-y-3">
       {/* Joined: the array is wrapped for an 80-column terminal, so its line breaks are not paragraph breaks. */}
-      <p className="text-xs p-text-2 leading-relaxed">{DEVICE_CONNECT_DISCLOSURE.join(" ")}</p>
+      <p className="t-meta p-text-2">{DEVICE_CONNECT_DISCLOSURE.join(" ")}</p>
       {/* Said before the command is made (L111 #6): a machine connected from a workspace is that workspace's at once. */}
       {workspace !== null && (
-        <p data-connect-grant className="text-xs p-text-1 leading-relaxed">
+        <p data-connect-grant className="t-meta p-text-1">
           Connected from here, it is <span className="font-medium">{workspace}</span>'s at once: its agents use this machine
           without asking, until you take it back under Account settings → Devices. Before it links, the command shows the folder it shares.
         </p>
       )}
       {rosterError !== null && (
-        <p className="p-meta p-danger">{rosterError}</p>
+        <p className="t-meta p-danger">{rosterError}</p>
       )}
       {state.kind === "failed" && (
-        <p data-connect-error className="text-xs p-danger">Could not register this device: {state.message}</p>
+        <p data-connect-error className="t-meta p-danger">Could not register this device: {state.message}</p>
       )}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <input
@@ -151,7 +151,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
           onChange={(event) => setLabel(event.target.value)}
           placeholder="Name this machine (optional)"
           aria-label="Device name"
-          className={`${inputCls} text-xs`}
+          className={`${inputCls} t-meta`}
           disabled={state.kind === "registering"}
         />
         <Button variant="primary" size="md"

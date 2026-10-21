@@ -298,7 +298,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
       <div {...{ [FEEDBACK_OMIT_ATTR]: "1" }}>
         <Modal title="Feedback sent" onClose={onClose} icon={<MegaphoneIcon size={16} className="p-accent" />}
           footer={<Button variant="primary" size="md" onClick={onClose} data-feedback-done>Done</Button>}>
-          <p className="text-sm p-text-2" data-feedback-sent={send.id}>
+          <p className="t-body p-text-2" data-feedback-sent={send.id}>
             Thank you. Your report is with us{send.id.length > 0 ? ` as ${send.id.slice(0, 8)}` : ""}.
           </p>
         </Modal>
@@ -328,7 +328,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
         }
       >
         <label className="block space-y-1.5">
-          <span className="text-xs font-medium p-text-2">What happened?</span>
+          <span className="t-status p-text-2">What happened?</span>
           <textarea
             autoFocus
             rows={4}
@@ -342,7 +342,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
         </label>
 
         <div className="space-y-2">
-          <label className="flex cursor-pointer items-center gap-2 text-sm p-text-2">
+          <label className="t-body flex cursor-pointer items-center gap-2 p-text-2">
             <input
               type="checkbox"
               checked={wanted}
@@ -354,11 +354,11 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
           </label>
 
           {shot.phase === "capturing" && (
-            <p className="text-xs p-text-3" data-feedback-shot="capturing">Taking the screenshot…</p>
+            <p className="t-meta p-text-3" data-feedback-shot="capturing">Taking the screenshot…</p>
           )}
 
           {shot.phase === "failed" && (
-            <p className="text-xs p-warn" data-feedback-shot="failed">
+            <p className="t-meta p-warn" data-feedback-shot="failed">
               No screenshot: {shot.reason}. Your note can still be sent on its own.
             </p>
           )}
@@ -381,7 +381,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
                 <Button type="button" size="sm" variant="ghost" onClick={take} data-feedback-retake>
                   <ArrowCounterClockwiseIcon size={14} /> Retake
                 </Button>
-                <span className="ml-auto p-meta p-text-3" data-feedback-shot-meta={String(shot.capture.redacted)}>
+                <span className="t-meta ml-auto p-text-3" data-feedback-shot-meta={String(shot.capture.redacted)}>
                   {shot.capture.width}×{shot.capture.height}
                   {shot.capture.redacted > 0
                     ? ` · ${String(shot.capture.redacted)} field${shot.capture.redacted === 1 ? "" : "s"} hidden`
@@ -396,7 +396,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
                 className="block w-full cursor-crosshair rounded-md border p-border touch-none"
                 data-feedback-canvas
               />
-              <p className="p-meta p-text-3">
+              <p className="t-meta p-text-3">
                 Drag on the image to {tool === "hide" ? "cover something" : "draw a box"}.
               </p>
             </div>
@@ -404,12 +404,12 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
         </div>
 
         {send.phase === "failed" && (
-          <p className="text-xs p-warn" data-feedback-error>
+          <p className="t-meta p-warn" data-feedback-error>
             Not sent: {send.reason}. Your note and screenshot are still here, so you can retry.
           </p>
         )}
 
-        <p className="p-meta p-text-3" data-feedback-consent>
+        <p className="t-meta p-text-3" data-feedback-consent>
           Sending shares your note, the page address, your account email, and the screenshot if you
           include one. Password fields are blacked out before upload. Use{" "}
           <span className="p-text-2">Hide</span> for anything else.

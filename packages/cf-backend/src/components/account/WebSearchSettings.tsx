@@ -191,10 +191,10 @@ function Tile({ billing, opened, onPick, disabled, title, badge, about }: {
       <input type="radio" name="web-search-billing" value={billing} checked={opened === billing} disabled={disabled}
         onChange={() => detach(onPick(billing))} className="sr-only" />
       <span className="flex items-baseline justify-between gap-2">
-        <span className="p-row-text font-medium p-text">{title}</span>
-        {badge !== undefined && <span className="p-meta p-text-3">{badge}</span>}
+        <span className="t-item p-text">{title}</span>
+        {badge !== undefined && <span className="t-meta p-text-3">{badge}</span>}
       </span>
-      <span className="mt-1 block p-meta p-text-3">{about}</span>
+      <span className="t-meta mt-1 block p-text-3">{about}</span>
     </label>
   );
 }
@@ -263,7 +263,7 @@ function KeyEntry({ primary, stored, disabled, onSaved, onRemoved }: {
           {action}
         </button>
       </form>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 p-meta p-text-3">
+      <div className="t-meta flex flex-wrap items-center gap-x-3 gap-y-1 p-text-3">
         {has && <Status tone="success">Key stored</Status>}
         {has && (
           <button type="button" disabled={saving || disabled} onClick={() => detach(remove())} className="p-danger hover:underline">Remove key</button>
@@ -274,7 +274,7 @@ function KeyEntry({ primary, stored, disabled, onSaved, onRemoved }: {
           </a>
         )}
       </div>
-      {failure !== null && <p className="text-xs p-danger">{failure}</p>}
+      {failure !== null && <p className="t-meta p-danger">{failure}</p>}
     </div>
   );
 }
@@ -297,7 +297,7 @@ function Backups({ backups, chain, stored, disabled, onChange }: {
       <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Web search backups">
         {backups.map((route, at) => (
           <span key={`${route.provider}|${route.billing}`} data-web-search-backup={`${route.provider}|${route.billing}`}
-            className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 text-xs p-text">
+            className="t-meta inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 p-text">
             <span className="p-text-3">{at + 1}.</span>
             {routeLabel(route)}
             <button type="button" disabled={disabled} className="p-text-3 hover:p-text" aria-label={`Remove ${routeLabel(route)} from the backups`}
@@ -315,7 +315,7 @@ function Backups({ backups, chain, stored, disabled, onChange }: {
               if (route !== undefined) onChange([...backups, route]);
             }} />
         )}
-        {candidates.length === 0 && backups.length === 0 && <span className="p-meta p-text-3">None.</span>}
+        {candidates.length === 0 && backups.length === 0 && <span className="t-meta p-text-3">None.</span>}
       </div>
     </Field>
   );
@@ -354,10 +354,10 @@ function SearchTest({ route }: { route: WebSearchRoute }) {
       {outcome?.kind === "answered" && (
         <div className="flex min-w-0 flex-col gap-0.5" data-web-search-tested="answered">
           <Status tone="success">{outcome.answer.results.length} results from {WEB_SEARCH_PROVIDERS[outcome.answer.source].label} in {(outcome.ms / 1000).toFixed(1)} s</Status>
-          {outcome.answer.results[0] !== undefined && <span className="truncate p-meta p-text-3">First: {outcome.answer.results[0].title}</span>}
+          {outcome.answer.results[0] !== undefined && <span className="t-meta truncate p-text-3">First: {outcome.answer.results[0].title}</span>}
         </div>
       )}
-      {outcome?.kind === "refused" && <p className="rounded-md px-3 py-2 text-xs p-notice-danger" data-web-search-tested="refused">{outcome.words}</p>}
+      {outcome?.kind === "refused" && <p className="t-meta rounded-md px-3 py-2 p-notice-danger" data-web-search-tested="refused">{outcome.words}</p>}
     </div>
   );
 }

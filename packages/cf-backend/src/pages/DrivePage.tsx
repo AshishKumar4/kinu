@@ -79,7 +79,7 @@ function PlaceSwitch({ tab, places, unseen }: { tab: DriveTab; places: readonly 
     <nav aria-label="Drive" className="flex w-fit items-center gap-0.5 rounded-[var(--r-control)] p-sunken p-0.5">
       {PLACES.filter((each) => places.includes(each.id)).map((each) => (
         <Link key={each.id} to={each.to} state={{ chosen: true }} aria-current={each.id === tab ? "page" : undefined} data-drive-tab={each.id}
-          className={`flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-px text-[13px] font-medium leading-5 ${each.id === tab ? "border-[var(--c-button-line)] bg-[var(--c-button-bg)] p-text shadow-[var(--shadow-button)]" : "border-transparent p-text-3 hover:p-text"}`}>
+          className={`t-item flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-px ${each.id === tab ? "border-[var(--c-button-line)] bg-[var(--c-button-bg)] p-text shadow-[var(--shadow-button)]" : "border-transparent p-text-3 hover:p-text"}`}>
           {each.label}
           {each.id === "shared" && unseen && each.id !== tab && <NewDot />}
         </Link>
@@ -88,7 +88,7 @@ function PlaceSwitch({ tab, places, unseen }: { tab: DriveTab; places: readonly 
   );
 }
 
-const PLACE_ROW = "flex h-8 items-center gap-2.5 rounded-lg px-2 p-t-control transition-colors";
+const PLACE_ROW = "t-control flex h-8 items-center gap-2.5 rounded-lg px-2 transition-colors";
 
 /** A folder's own folders, Skills first: the tree draws only what can be walked into. */
 function subfolders(entries: readonly DriveEntry[] | undefined, parent: string): DriveEntry[] {
@@ -124,7 +124,7 @@ function FolderTree({ listings, parent, current, depth }: {
           <li key={path}>
             <Link to={folderHref(path)} aria-current={path === current ? "page" : undefined} data-drive-tree={path}
               style={{ paddingLeft: `${String(10 + depth * 14)}px` }}
-              className={`flex items-center gap-1.5 rounded-lg py-[5px] pr-2 p-row-text transition-colors ${navRowCls(path === current)}`}>
+              className={`t-body flex items-center gap-1.5 rounded-lg py-[5px] pr-2 transition-colors ${navRowCls(path === current)}`}>
               <span className="flex w-3 shrink-0 justify-center p-text-3">{caret}</span>
               {skills
                 ? <BookOpenIcon size={15} weight="fill" className="shrink-0 p-success" />
@@ -207,7 +207,7 @@ function DriveHead({ tab, path, subtitle }: { tab: DriveTab; path: string; subti
   return (
     <div className="mb-6 min-w-0">
       {tab === "mine" && !isRoot && <Crumbs path={path} />}
-      {subtitle !== null && <p className={`p-meta p-text-3 ${isRoot ? "" : "mt-1"}`}>{subtitle}</p>}
+      {subtitle !== null && <p className={`t-meta p-text-3 ${isRoot ? "" : "mt-1"}`}>{subtitle}</p>}
     </div>
   );
 }
@@ -251,7 +251,7 @@ function Crumbs({ path }: { path: string }) {
   const segments = path.slice(1).split("/");
 
   return (
-    <nav aria-label="Folder" className="flex min-w-0 flex-wrap items-center gap-1.5 p-heading text-[15px] sm:text-[17px]">
+    <nav aria-label="Folder" className="t-title flex min-w-0 flex-wrap items-center gap-1.5">
       <Link to={APP_ROUTES.drive} state={{ chosen: true }} data-drive-crumb className="shrink-0 p-text-3 transition-colors hover:p-text">My stuff</Link>
       {segments.map((segment, index) => (
         <span key={index} className="flex min-w-0 items-center gap-1.5">
@@ -267,7 +267,7 @@ function Crumbs({ path }: { path: string }) {
 }
 
 /** A heading that names a kind of thing in a place is quiet; one that names who a share came from or went to leads. */
-const SECTION_HEADING = { quiet: "mb-2.5 p-meta font-medium p-text-3", lead: "mb-3 p-heading text-[15px] p-text" } as const;
+const SECTION_HEADING = { quiet: "t-status mb-2.5 p-text-3", lead: "t-title mb-3 p-text" } as const;
 
 /** A titled group: tiles in the grid, or `rows` in one `p-group` (things with no picture, docs/APP-CONSISTENCY.md). */
 function Section({ label, titled = true, heading = "quiet", rows = false, children }: {
@@ -355,7 +355,7 @@ function SheetCover({ rows }: { rows: readonly (readonly string[])[] }) {
   const grid = { gridTemplateColumns: `repeat(${String(columns)}, minmax(0, 1fr))` };
 
   return (
-    <span className="absolute inset-0 overflow-hidden p-surface text-[8.5px] leading-[1.45]">
+    <span className="t-meta absolute inset-0 overflow-hidden p-surface">
       {rows.map((row, index) => (
         <span key={index} data-drive-sheet-row style={grid}
           className={`grid gap-2 px-4 ${index === 0 ? "p-sunken py-2 font-semibold p-text-2" : "border-t p-border py-[5px] font-mono p-text-3"}`}>
@@ -368,7 +368,7 @@ function SheetCover({ rows }: { rows: readonly (readonly string[])[] }) {
 
 function CodeCover({ lines }: { lines: readonly string[] }) {
   return (
-    <span className="absolute inset-0 overflow-hidden p-sunken px-3 pt-3 font-mono text-[8.5px] leading-[1.6]">
+    <span className="t-meta t-mono absolute inset-0 overflow-hidden p-sunken px-3 pt-3">
       {lines.map((line, index) => (
         <span key={index} data-drive-code-line className="flex gap-2.5">
           <span className="min-w-3 shrink-0 text-right tabular-nums p-text-3">{index + 1}</span>
@@ -391,8 +391,8 @@ function TextPage({ text, name }: { text: string | null; name: string }) {
 
   return (
     <span className="absolute inset-0 overflow-hidden p-sunken px-[14%] pt-[5%]">
-      <span className="block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2.5 text-[8.5px] leading-[1.45] p-text-3">
-        {heading !== null && <span data-drive-page-heading className="mb-1 block truncate text-[11px] font-semibold p-text">{heading}</span>}
+      <span className="t-meta block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2.5 p-text-3">
+        {heading !== null && <span data-drive-page-heading className="t-micro mb-1 block truncate p-text">{heading}</span>}
         {lines.map((line, index) => (
           <span key={index} data-drive-page-line className={`block truncate ${line.heading ? "mt-0.5 font-semibold p-text-2" : ""}`}>
             {line.text === "" ? "\u00a0" : line.text}
@@ -460,7 +460,7 @@ function TransferPicture({ status, progress }: { status: Transfer["status"]; pro
 
   return (
     <span className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 p-sunken">
-      <span className="p-meta tabular-nums p-text-2">{percent}%</span>
+      <span className="t-meta tabular-nums p-text-2">{percent}%</span>
       <span role="progressbar" aria-label="Uploading" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}
         className="h-1 w-1/2 overflow-hidden rounded-full bg-[var(--c-border-strong)]">
         <span className="block h-full rounded-full bg-[var(--c-accent-mark)] transition-[width]" style={{ width: `${String(percent)}%` }} />
@@ -634,8 +634,8 @@ function MineBody({ resource, onRetry, empty, children }: {
       <span className="flex size-14 items-center justify-center rounded-2xl p-text-3 bg-[color-mix(in_srgb,var(--c-text)_7%,transparent)]">
         <FolderSimpleIcon size={26} />
       </span>
-      <h2 className="mt-5 p-heading text-[19px] p-text">This folder is empty</h2>
-      <p className="mt-2 max-w-[26rem] p-row-text p-text-3">Drop files here, or use New.</p>
+      <h2 className="t-title mt-5 p-text">This folder is empty</h2>
+      <p className="t-body mt-2 max-w-[26rem] p-text-3">Drop files here, or use New.</p>
     </div>
   );
 }
@@ -651,7 +651,7 @@ function DropZone({ label, onFiles, children }: { label: string; onFiles: (files
       {children}
       {over && (
         <div aria-hidden="true" className="pointer-events-none absolute -inset-3 z-20 flex items-center justify-center rounded-[18px] border-2 border-dashed border-[var(--c-accent)] bg-[color-mix(in_srgb,var(--c-bg)_74%,transparent)]">
-          <span className="flex items-center gap-2 rounded-full bg-[var(--c-accent)] px-4 py-2 text-sm font-semibold text-[var(--c-accent-on)] p-shadow-menu">
+          <span className="t-label flex items-center gap-2 rounded-full bg-[var(--c-accent)] px-4 py-2 text-[var(--c-accent-on)] p-shadow-menu">
             <UploadSimpleIcon size={15} weight="bold" /> Drop to add to {label}
           </span>
         </div>
@@ -671,17 +671,17 @@ function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource
   return (
     <>
       {notice !== null && (
-        <div role="alert" data-drive-notice className="p-notice-danger mt-4 flex items-start gap-2 rounded-md px-3 py-2 text-xs">
+        <div role="alert" data-drive-notice className="t-meta p-notice-danger mt-4 flex items-start gap-2 rounded-md px-3 py-2">
           <WarningIcon size={13} className="mt-px shrink-0" />
           <span className="min-w-0 break-words">{notice}</span>
           <button type="button" onClick={onDismissNotice} className="ml-auto shrink-0 p-text-3 hover:p-text" aria-label="Dismiss"><XIcon size={12} /></button>
         </div>
       )}
-      {listingPending && <p role="status" data-drive-listing-pending className="mt-4 p-meta p-text-3">Saved. The list will catch up.</p>}
+      {listingPending && <p role="status" data-drive-listing-pending className="t-meta mt-4 p-text-3">Saved. The list will catch up.</p>}
       {libraryResource.status === "error" && (
         <LoadFailure what="your slates and shares" message={libraryResource.message} onRetry={onRetryLibrary} className="mt-4" />
       )}
-      {copyStatus !== "idle" && <p role="status" className="mt-4 p-meta p-text-3">{copyStatus === "copied" ? "Link copied." : "Could not copy the link."}</p>}
+      {copyStatus !== "idle" && <p role="status" className="t-meta mt-4 p-text-3">{copyStatus === "copied" ? "Link copied." : "Could not copy the link."}</p>}
     </>
   );
 }

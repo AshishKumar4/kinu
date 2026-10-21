@@ -43,11 +43,11 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
       <div className={`flex h-14 items-center gap-3 px-4 transition-colors p-card-hover ${first ? "" : "border-t p-border"}`}>
         <Link to={to} className="flex min-w-0 flex-1 items-center gap-3">
           <span className="min-w-0 flex-1">
-            <span className="block truncate p-row-text font-medium p-text">{title}</span>
-            {mission !== null && <span className="block truncate p-meta p-text-3">{mission}</span>}
+            <span className="t-item block truncate p-text">{title}</span>
+            {mission !== null && <span className="t-meta block truncate p-text-3">{mission}</span>}
           </span>
           <StatusChip workspace={workspace} />
-          {age !== null && <span className="shrink-0 p-meta p-text-3 tabular-nums">{age}</span>}
+          {age !== null && <span className="t-meta shrink-0 p-text-3 tabular-nums">{age}</span>}
         </Link>
       </div>
     );
@@ -64,9 +64,9 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
       <TileShell cover={cover} title={title}>
         <span className="flex min-w-0 items-center gap-2">
           <StatusChip workspace={workspace} />
-          {age !== null && <span className="ml-auto shrink-0 p-meta p-text-3 tabular-nums">{age}</span>}
+          {age !== null && <span className="t-meta ml-auto shrink-0 p-text-3 tabular-nums">{age}</span>}
         </span>
-        {pictured !== undefined && mission !== null && <span className="line-clamp-1 p-meta p-text-3">{mission}</span>}
+        {pictured !== undefined && mission !== null && <span className="t-meta line-clamp-1 p-text-3">{mission}</span>}
       </TileShell>
     </Link>
   );

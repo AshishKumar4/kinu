@@ -55,7 +55,7 @@ function ProfileNameEditor({ profile, onSaved }: {
           {saving ? <Loader size="sm" /> : null} Save
         </Button>
       </div>
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {error && <p className="t-meta p-danger">{error}</p>}
     </div>
   );
 }
@@ -97,12 +97,12 @@ export default function UserSettingsPage() {
                     <ProfileNameEditor profile={p} onSaved={set} />
                     <dl className="grid gap-5 sm:grid-cols-2">
                       <div>
-                        <dt className="p-meta p-text-3">Email</dt>
-                        <dd className="mt-1 font-mono p-row-text p-text">{p?.email ?? 'Not available'}</dd>
+                        <dt className="t-meta p-text-3">Email</dt>
+                        <dd className="t-body t-mono mt-1 p-text">{p?.email ?? 'Not available'}</dd>
                       </div>
                       <div>
-                        <dt className="p-meta p-text-3">Member since</dt>
-                        <dd className="mt-1 p-row-text p-text">{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</dd>
+                        <dt className="t-meta p-text-3">Member since</dt>
+                        <dd className="t-body mt-1 p-text">{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</dd>
                       </div>
                     </dl>
                   </div>

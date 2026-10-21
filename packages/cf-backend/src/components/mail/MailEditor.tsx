@@ -14,7 +14,7 @@ function saving(event: FormEvent<HTMLFormElement>): boolean {
 }
 
 function Failure({ message }: { message: string | null }) {
-  return message === null ? null : <p role="alert" className="p-row-text p-danger">{message}</p>;
+  return message === null ? null : <p role="alert" className="t-body p-danger">{message}</p>;
 }
 
 export function Compose({ boxes, initialPath, onClose, onSaved }: {
@@ -49,7 +49,7 @@ export function Compose({ boxes, initialPath, onClose, onSaved }: {
         <Button variant="primary" size="md" type="submit" form={form} name="intent" value="send" disabled={disabled}><PaperPlaneTiltIcon size={14} />{busy === "Sending" ? "Sending…" : "Send"}</Button>
       </>}>
       <form id={form} onSubmit={submit} data-mail-compose-form className="space-y-2">
-        <div className="flex items-center gap-2 p-meta p-text-3" data-mail-from>From
+        <div className="t-meta flex items-center gap-2 p-text-3" data-mail-from>From
           <div className="min-w-0 flex-1"><Choice label="From" value={path} onChange={setPath} disabled={disabled} options={boxes.map((box) => ({ value: box.path, label: box.address }))} /></div>
         </div>
         <input value={to} onChange={(event) => setTo(event.target.value)} type="email" multiple required placeholder="To" aria-label="To" disabled={disabled} className={inputCls} />
@@ -112,8 +112,8 @@ export function ReplyBox({ mail, box, drafts, onChanged, onSent }: {
 
   return (
     <form onSubmit={submit} data-mail-reply-box className="space-y-2">
-      <p className="p-meta p-text-3 break-words">From {box.address}</p>
-      <p className="p-meta p-text-3 break-words">To {to.join(", ")}</p>
+      <p className="t-meta p-text-3 break-words">From {box.address}</p>
+      <p className="t-meta p-text-3 break-words">To {to.join(", ")}</p>
       <textarea value={text} onChange={(event) => setEditor({ text: event.target.value, draft: editor?.draft === true })} rows={9} aria-label="Reply" required disabled={busy !== null} className={`${inputCls} font-[inherit] leading-6`} />
       <Failure message={error} />
       <div className="flex flex-wrap gap-2">

@@ -52,7 +52,7 @@ export function GitHubSection({ rpc, readMoves, agents }: { rpc: WorkspaceRpc; r
             : github.items.map((item) => <ItemRow key={`${item.repo}#${String(item.number)}`} item={item} nameOf={nameOf} />))}
         </Panel>
       </div>
-      {github !== null && <p className="p-meta p-text-3" data-github-checked={github.refresh}>{checkedLine(github)}</p>}
+      {github !== null && <p className="t-meta p-text-3" data-github-checked={github.refresh}>{checkedLine(github)}</p>}
     </div>
   );
 }
@@ -70,8 +70,8 @@ function Panel({ icon, title, count, children }: { icon: ReactNode; title: strin
     <section className="flex min-w-0 flex-col rounded-xl border p-border">
       <header className="flex items-center gap-2 px-4 pb-2 pt-3">
         <span className="p-text-3">{icon}</span>
-        <span className="text-[13.5px] font-medium p-text-2">{title}</span>
-        {count !== undefined && count > 0 && <span className="ml-auto p-meta tabular-nums p-text-3">{count}</span>}
+        <span className="t-item p-text-2">{title}</span>
+        {count !== undefined && count > 0 && <span className="t-meta ml-auto tabular-nums p-text-3">{count}</span>}
       </header>
       <ul className="flex flex-col pb-1.5">{children}</ul>
     </section>
@@ -79,7 +79,7 @@ function Panel({ icon, title, count, children }: { icon: ReactNode; title: strin
 }
 
 function Empty({ text }: { text: string }) {
-  return <li className="px-4 pb-2.5 text-[12.5px] leading-[18px] p-text-3">{text}</li>;
+  return <li className="t-meta px-4 pb-2.5 p-text-3">{text}</li>;
 }
 
 function RepoRow({ repo }: { repo: Repo }) {
@@ -87,9 +87,9 @@ function RepoRow({ repo }: { repo: Repo }) {
 
   return (
     <li className="flex min-w-0 items-center gap-3 px-4 py-1.5" data-github-repo={repo.repo}>
-      <a href={`https://github.com/${repo.repo}`} target="_blank" rel="noopener noreferrer" className="min-w-0 truncate text-[13px] p-text hover:underline">{repo.repo}</a>
-      {repo.branch && <span className="min-w-0 truncate font-mono text-[11.5px] p-text-3">{repo.branch}</span>}
-      <span className="ml-auto flex shrink-0 items-center gap-2.5 p-meta p-text-3">
+      <a href={`https://github.com/${repo.repo}`} target="_blank" rel="noopener noreferrer" className="t-body min-w-0 truncate p-text hover:underline">{repo.repo}</a>
+      {repo.branch && <span className="t-meta t-mono min-w-0 truncate p-text-3">{repo.branch}</span>}
+      <span className="t-meta ml-auto flex shrink-0 items-center gap-2.5 p-text-3">
         {repo.lastPush && <span title={repo.lastPush.ref}>pushed {shortAge(repo.lastPush.at)} ago</span>}
         {ci && <span className={`inline-flex items-center gap-1 ${ci.tone}`}><ci.Icon size={12} weight="fill" aria-hidden />{ci.word}</span>}
       </span>
@@ -107,10 +107,10 @@ function ItemRow({ item, nameOf }: { item: Item; nameOf: (actorId: string) => st
       {merged
         ? <GitMergeIcon size={14} className="shrink-0 p-accent" aria-label="merged" />
         : <Icon size={14} className={`shrink-0 ${STATE_TONE.get(item.state ?? "") ?? "p-text-3"}`} aria-label={item.state ?? "state unknown"} />}
-      <a href={item.url} target="_blank" rel="noopener noreferrer" className="min-w-0 truncate text-[13px] p-text hover:underline">
+      <a href={item.url} target="_blank" rel="noopener noreferrer" className="t-body min-w-0 truncate p-text hover:underline">
         {item.title ?? `${item.repo}#${String(item.number)}`}
       </a>
-      <span className="ml-auto shrink-0 p-meta p-text-3">{`#${String(item.number)}`}{who && ` · ${who}`}</span>
+      <span className="t-meta ml-auto shrink-0 p-text-3">{`#${String(item.number)}`}{who && ` · ${who}`}</span>
     </li>
   );
 }

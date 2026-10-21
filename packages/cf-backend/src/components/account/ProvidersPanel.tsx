@@ -35,7 +35,7 @@ function ConnectedBadge({ detail }: { detail?: ReactNode }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Status tone="success">Connected</Status>
-      {detail && <span className="p-meta p-text-3">{detail}</span>}
+      {detail && <span className="t-meta p-text-3">{detail}</span>}
     </div>
   );
 }
@@ -76,7 +76,7 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
     <>
       {chatgptWelcome && <ChatGptWelcome onClose={() => setChatgptWelcome(false)} />}
       {unrevoked !== null && (
-        <p role="status" className="rounded-md px-3 py-2 text-xs p-notice-warning">
+        <p role="status" className="t-meta rounded-md px-3 py-2 p-notice-warning">
           {unrevoked.name} is disconnected from Kinu but not revoked. {unrevoked.words}
         </p>
       )}
@@ -141,7 +141,7 @@ export function ProvidersPanel({ returnTo, framed = true }: { returnTo: string; 
                   <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
                     {(providers) => storedEntries(credentials, providers).map((entry) => (
                       <ProviderEntry key={entry.key} provider={entry.provider} name={entry.name} method={entry.method}
-                        detail={<><span className="p-annotation">{entry.key}</span> {loginEnds(credentials, entry.key)}</>}
+                        detail={<><span className="t-meta t-mono">{entry.key}</span> {loginEnds(credentials, entry.key)}</>}
                         connected
                         disconnect={async (revoke) => {
                           answered(entry.name, await deleteCredential(entry.key, revoke));
@@ -230,12 +230,12 @@ function ProviderEntry({ provider, name, method, connected, detail, disconnect, 
 
   return (
     <div className="space-y-3 px-4 py-3" data-provider={name}>
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+      <div className="t-meta flex flex-wrap items-center gap-x-2 gap-y-1">
         {brand !== undefined && <BrandMark brand={brand} size={13} bare />}
-        <span className="p-row-text font-medium p-text">{name}</span>
-        <span className="p-meta p-text-3">{method}</span>
+        <span className="t-item p-text">{name}</span>
+        <span className="t-meta p-text-3">{method}</span>
         <span className="ml-auto flex items-center gap-2">
-          {connected ? <ConnectedBadge detail={detail} /> : <span className="p-meta p-text-3">Not connected</span>}
+          {connected ? <ConnectedBadge detail={detail} /> : <span className="t-meta p-text-3">Not connected</span>}
           {connected && disconnect !== undefined && (
             <button type="button" onClick={leave} className={dangerQuietCls} aria-label={`Disconnect ${name}`}>Disconnect</button>
           )}
@@ -276,7 +276,7 @@ function CloudflareAccountSection({ status, onChanged }: {
           ...status.accounts.map((account) => ({ value: account.id, label: account.name })),
         ]}
         onChange={(id) => detach(choose(id))} />
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {error && <p className="t-meta p-danger">{error}</p>}
     </Field>
   );
 }
@@ -309,14 +309,14 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
 
   if (status.gateways.length === 0) {
     return (
-      <span className="p-meta p-text-3">No AI Gateway</span>
+      <span className="t-meta p-text-3">No AI Gateway</span>
     );
   }
 
   return (
     <Field label="AI Gateway">
       {status.gateways.length === 1 && status.selectedId === status.gateways[0].id ? (
-        <div className="flex items-center gap-2 text-xs">
+        <div className="t-meta flex items-center gap-2">
           <CheckIcon size={13} className="p-success" />
           <span className="font-mono p-text">{status.selectedId}</span>
         </div>
@@ -328,7 +328,7 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
           options={[{ value: '', label: '(no gateway selected)' }, ...status.gateways.map((gw) => ({ value: gw.id, label: gw.id }))]}
           onChange={(id) => detach(choose(id))} />
       )}
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {error && <p className="t-meta p-danger">{error}</p>}
     </Field>
   );
 }
@@ -364,7 +364,7 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
 
   return (
     <div className="space-y-3">
-      <p className="rounded-md px-3 py-2 text-xs p-notice-warning">
+      <p className="t-meta rounded-md px-3 py-2 p-notice-warning">
         Signing in with a Claude subscription runs Kinu on your own Claude plan. Anthropic&apos;s terms limit subscription use to its own apps, so you connect at your own risk.
       </p>
       {authorizeUrl === null ? (
@@ -388,7 +388,7 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
           </form>
         </Field>
       )}
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {error && <p className="t-meta p-danger">{error}</p>}
     </div>
   );
 }
@@ -481,7 +481,7 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
                 aria-label="Base URL" className={`${inputCls} min-w-0 flex-1`} />
               <span className="basis-full" aria-hidden />
               <label data-invalid={windowValid ? undefined : ""}
-                data-focus-box className="flex h-9 w-full max-w-72 cursor-text items-center gap-2 rounded-md border border-[var(--c-field-border)] bg-[var(--c-surface)] px-3 text-sm p-text transition-all data-[invalid]:border-[var(--c-danger)]">
+                data-focus-box className="t-body flex h-9 w-full max-w-72 cursor-text items-center gap-2 rounded-md border border-[var(--c-field-border)] bg-[var(--c-surface)] px-3 p-text transition-all data-[invalid]:border-[var(--c-danger)]">
                 <span className="shrink-0 p-text-3">Context window</span>
                 <input value={compatWindow} onChange={(e) => setCompatWindow(e.target.value)} inputMode="numeric" placeholder="optional"
                   aria-label="Context window in tokens" aria-invalid={windowValid ? undefined : true}
@@ -505,8 +505,8 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
             className={buttonClass()}>{saving ? '...' : saveWord}</button>
         </form>
       )}
-      {compat && !windowValid && <p className="mb-1 text-xs p-danger">The context window is a whole number of tokens, or blank.</p>}
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {compat && !windowValid && <p className="t-meta mb-1 p-danger">The context window is a whole number of tokens, or blank.</p>}
+      {error && <p className="t-meta p-danger">{error}</p>}
     </Field>
   );
 }
@@ -559,7 +559,7 @@ function DefaultAccounts({ keys, catalog }: { keys: readonly string[]; catalog: 
           <div className="space-y-2">
             {held.map(({ name, provider, accounts }) => (
               <div key={provider} className="flex items-center gap-3">
-                <span className="p-row-text p-text w-32 shrink-0 truncate">{name}</span>
+                <span className="t-body p-text w-32 shrink-0 truncate">{name}</span>
                 <Choice
                   label={`${name} default account`}
                   value={envelope.catalog.accounts?.[provider] ?? (accounts.includes(MAIN_ACCOUNT) ? MAIN_ACCOUNT : '')}

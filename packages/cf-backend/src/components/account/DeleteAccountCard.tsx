@@ -67,7 +67,7 @@ export function DeleteAccountCard({ email }: { email: string }) {
               aria-label="Confirm your email"
             />
           </Field>
-          {error && <p className="text-xs p-danger">{error}</p>}
+          {error && <p className="t-meta p-danger">{error}</p>}
         </Modal>
       )}
     </Card>

@@ -16,7 +16,7 @@ export function KeptTranscript({ entries, unavailable, before }: {
           {before?.(message.id)}
           {unavailable.has(message.id)
             ? (
-              <p role="note" className="rounded-md border border-dashed p-border px-3 py-2 text-xs p-text-3">
+              <p role="note" className="t-meta rounded-md border border-dashed p-border px-3 py-2 p-text-3">
                 This message is unavailable: it was stored in the agent's private files, which close when it is dismissed.
               </p>
             )

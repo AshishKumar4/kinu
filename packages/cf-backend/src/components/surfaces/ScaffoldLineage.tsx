@@ -28,7 +28,7 @@ function versionStatus(status: string): VersionStatus {
 function DiffView({ diff }: { diff: ScaffoldDiff }) {
   return (
     <div className="rounded-md border p-border overflow-hidden">
-      <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border p-annotation p-text-3">
+      <div className="t-meta t-mono flex items-center gap-3 px-3 py-1.5 border-b p-border p-text-3">
         <span>v{diff.previousVersion ?? "∅"} → v{diff.version}</span>
         <span className="p-success">+{diff.added}</span>
         <span className="p-danger">−{diff.removed}</span>
@@ -92,13 +92,13 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   } else if (lineage.status === "loading") {
     notice = <div className="flex justify-center py-4"><Loader size="sm" /></div>;
   } else if (versions.length === 0) {
-    notice = <p className="p-row-text p-text-3">No other versions yet.</p>;
+    notice = <p className="t-body p-text-3">No other versions yet.</p>;
   }
 
   return (
     <section className="space-y-1.5">
       <div className="flex items-baseline gap-2">
-        <span className="p-meta p-text-3">Prompt versions</span>
+        <span className="t-meta p-text-3">Prompt versions</span>
         <Badge variant="secondary">live v{currentVersion}</Badge>
       </div>
       {notice ?? (
@@ -107,10 +107,10 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
             {versions.map((v) => (
               <button key={v.version} onClick={() => select(v.version)}
                 className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${selected === v.version ? "p-fill" : "p-card-hover"}`}>
-                <span className="font-mono text-xs p-text shrink-0">v{v.version}</span>
+                <span className="t-meta t-mono p-text shrink-0">v{v.version}</span>
                 <Status tone={versionStatus(v.status).tone}>{versionStatus(v.status).word}</Status>
-                <span className="p-row-text p-text-2 truncate flex-1" title={v.rationale}>{v.rationale}</span>
-                <span className="p-meta p-text-3 shrink-0">{new Date(v.written_at).toLocaleDateString()}</span>
+                <span className="t-body p-text-2 truncate flex-1" title={v.rationale}>{v.rationale}</span>
+                <span className="t-meta p-text-3 shrink-0">{new Date(v.written_at).toLocaleDateString()}</span>
               </button>
             ))}
           </div>
@@ -123,14 +123,14 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
                 <div className="flex items-center gap-2">
                   <input value={previewTask} onChange={(e) => setPreviewTask(e.target.value)}
                     placeholder={`Run a task under v${selected} to preview it…`}
-                    className="flex-1 rounded-md border p-border p-fill px-2.5 py-1.5 text-xs p-text" />
+                    className="t-meta flex-1 rounded-md border p-border p-fill px-2.5 py-1.5 p-text" />
                   <Button size="sm" variant="secondary" disabled={!previewTask.trim() || busy === "preview"}
                     onClick={runPreview} icon={busy === "preview" ? <Loader size="sm" /> : <PlayIcon size={12} />}>
                     Preview
                   </Button>
                 </div>
                 {previewOut && (
-                  <pre className="p-t-code p-fill border p-border rounded-md p-2.5 max-h-40 overflow-auto whitespace-pre-wrap p-text-2">{previewOut}</pre>
+                  <pre className="t-code p-fill border p-border rounded-md p-2.5 max-h-40 overflow-auto whitespace-pre-wrap p-text-2">{previewOut}</pre>
                 )}
               </div>
 

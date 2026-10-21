@@ -79,8 +79,8 @@ export function DesktopScreen({ src, title }: { src: string; title: string }) {
         <div role="status" className="p-desktop-veil absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
           <KinuMark size={34} className={phase === "idle" ? undefined : "p-dot-pulse"} />
           <div className="space-y-1">
-            <p className="p-title p-text">{SAYS[phase].title}</p>
-            <p className="p-meta p-text-3">{SAYS[phase].detail}</p>
+            <p className="t-title p-text">{SAYS[phase].title}</p>
+            <p className="t-meta p-text-3">{SAYS[phase].detail}</p>
           </div>
           {phase === "idle" && (
             <button type="button" onClick={() => { setPhase("opening"); setUnanswered(0); setOpened((count) => count + 1); }}

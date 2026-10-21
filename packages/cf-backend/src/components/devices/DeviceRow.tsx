@@ -67,7 +67,7 @@ export function DeviceRow({
 
     return (
       <div data-device-incident={device.id} role="alert"
-        className="p-notice-danger rounded-none border-0 px-4 py-3 text-xs">
+        className="t-meta p-notice-danger rounded-none border-0 px-4 py-3">
         <div className="flex items-start gap-2">
           <WarningIcon size={14} className="mt-0.5 shrink-0" />
           <div className="min-w-0 flex-1 space-y-1">
@@ -84,7 +84,7 @@ export function DeviceRow({
                 <p>{countLine}</p>
               </>
             )}
-            <p className="p-meta">{unstopped ? "Acknowledge clears this warning. It does not stop commands." : "Acknowledge clears this warning."}</p>
+            <p className="t-meta">{unstopped ? "Acknowledge clears this warning. It does not stop commands." : "Acknowledge clears this warning."}</p>
           </div>
           <button type="button" disabled={acknowledging}
             onClick={() => {
@@ -207,7 +207,7 @@ export function DeviceRow({
           <>
             <UpdateBadge device={device} />
             {/* Named beside it, so it reads as the sandbox and not as the connection the status before it names. */}
-            <span className="p-row-text font-medium p-text-2" aria-hidden>Sandbox</span>
+            <span className="t-item p-text-2" aria-hidden>Sandbox</span>
             <Switch on={sandboxOn} label={`Sandbox on ${device.label}`} disabled={switching || device.wholeMachine}
               onChange={() => detach(sandboxOn ? Effect.sync(sandboxOff) : sandboxOnAgain())} />
           </>
@@ -218,7 +218,7 @@ export function DeviceRow({
             { label: "Revoke", title: "Revoke device", icon: TrashIcon, run: onRevoke, danger: true },
           ]} />
         )}
-        below={notes.length === 0 ? undefined : <div className="space-y-1 p-meta p-text-3">{notes}</div>} />
+        below={notes.length === 0 ? undefined : <div className="t-meta space-y-1 p-text-3">{notes}</div>} />
       {dialog}
     </>
   );

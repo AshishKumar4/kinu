@@ -15,7 +15,7 @@ export function CloudflareAIConnectNotice({
   action = "Connect Cloudflare Workers AI",
 }: CloudflareAIConnectNoticeProps) {
   return (
-    <div className="rounded-md px-3 py-2 text-xs p-notice-warning">
+    <div className="t-meta rounded-md px-3 py-2 p-notice-warning">
       <div className="flex items-start gap-2">
         <WarningCircleIcon size={14} className="mt-0.5 shrink-0 p-warning" />
         <div className="min-w-0 space-y-2">
@@ -23,7 +23,7 @@ export function CloudflareAIConnectNotice({
           <a
             href={cloudflareReconnectPath(returnTo)}
             onClick={(event) => { if (connectCloudflareInHelper(returnTo)) event.preventDefault(); }}
-            className="inline-flex items-center rounded-md border p-border px-2 py-1 p-t-control p-warning p-card-hover"
+            className="t-control inline-flex items-center rounded-md border p-border px-2 py-1 p-warning p-card-hover"
           >
             {action}
           </a>

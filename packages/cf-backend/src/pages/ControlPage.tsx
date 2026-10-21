@@ -58,8 +58,8 @@ export default function ControlPage(): ReactNode {
     <div className="h-full overflow-y-auto">
       <div className="max-w-6xl mx-auto px-6 py-8 space-y-6">
         <header className="space-y-1">
-          <h1 className="p-display text-2xl">Control plane</h1>
-          <p className="text-xs p-text-3">
+          <h1 className="t-page-title">Control plane</h1>
+          <p className="t-meta p-text-3">
             Every account and workspace on this deployment. Each operator action runs through an
             owner RPC and is written to the audit log before its result shows.
           </p>
@@ -83,7 +83,7 @@ export default function ControlPage(): ReactNode {
           <div className="space-y-3">
             <button
               onClick={() => go({ workspace: null })}
-              className="text-xs p-text-3 hover:p-text flex items-center gap-1"
+              className="t-meta p-text-3 hover:p-text flex items-center gap-1"
             >
               <ArrowLeftIcon size={12} /> Back
             </button>
@@ -218,7 +218,7 @@ function UserDetailView(
 
   return (
     <div className="space-y-3">
-      <button onClick={onBack} className="text-xs p-text-3 hover:p-text flex items-center gap-1">
+      <button onClick={onBack} className="t-meta p-text-3 hover:p-text flex items-center gap-1">
         <ArrowLeftIcon size={12} /> All accounts
       </button>
       <Panel load={load}>
@@ -242,8 +242,8 @@ function UserDetailView(
                 cells: [
                   workspaceDisplayTitle(w), when(w.createdAt), when(w.lastSeenAt),
                   w.removedAt === null
-                    ? <span className="p-success p-t-status">live</span>
-                    : <span className="p-text-3 p-t-status">removed {when(w.removedAt)}</span>,
+                    ? <span className="t-status p-success">live</span>
+                    : <span className="t-status p-text-3">removed {when(w.removedAt)}</span>,
                 ],
               }))}
               empty="This account owns no workspaces."
@@ -276,7 +276,7 @@ function WorkspacesView(
         title="Workspaces" hint="Across every account, most recently seen first."
         onRefresh={reload}
         actions={
-          <label className="flex items-center gap-1.5 text-xs p-text-3">
+          <label className="t-meta flex items-center gap-1.5 p-text-3">
             <input
               type="checkbox" checked={includeRemoved}
               onChange={(e) => { setIncludeRemoved(e.target.checked); first(); }}
@@ -294,11 +294,11 @@ function WorkspacesView(
                 key: `${w.userId}/${w.name}`,
                 onClick: () => onOpen(w.name, w.userId),
                 cells: [
-                  <span className="font-mono text-xs">{w.name}</span>,
+                  <span className="t-meta t-mono">{w.name}</span>,
                   workspaceDisplayTitle(w), when(w.lastSeenAt),
                   w.removedAt === null
-                    ? <span className="p-success p-t-status">live</span>
-                    : <span className="p-text-3 p-t-status">removed</span>,
+                    ? <span className="t-status p-success">live</span>
+                    : <span className="t-status p-text-3">removed</span>,
                 ],
               }))}
               empty="No workspaces in the index yet."
@@ -332,13 +332,13 @@ function IncidentsView(): ReactNode {
             rows={answer.incidents.map((i) => ({
               key: i.probe,
               cells: [
-                <span className="font-mono text-xs">{i.probe}</span>,
+                <span className="t-meta t-mono">{i.probe}</span>,
                 when(i.openedAt),
                 <span className="tabular-nums">{i.failures}</span>,
                 i.alertedAt === null
-                  ? <span className="p-accent p-t-status">alert owed</span>
+                  ? <span className="t-status p-accent">alert owed</span>
                   : when(i.alertedAt),
-                <span className="p-text-2 text-xs">{i.detail}</span>,
+                <span className="t-meta p-text-2">{i.detail}</span>,
               ],
             }))}
             empty="Every probe is green."
@@ -369,12 +369,12 @@ function FeedbackView(): ReactNode {
                 key: f.id,
                 cells: [
                   when(f.createdAt), f.email,
-                  <span className="font-mono text-xs">{f.route}</span>,
+                  <span className="t-meta t-mono">{f.route}</span>,
                   f.workspace ?? <span className="p-text-3">—</span>,
                   f.bytes === null
-                    ? <span className="p-text-3 p-t-status">note only</span>
-                    : <span className="p-meta tabular-nums">{formatBytes(f.bytes)}</span>,
-                  <span className="p-text-2 text-xs whitespace-pre-wrap">{f.note}</span>,
+                    ? <span className="t-status p-text-3">note only</span>
+                    : <span className="t-meta tabular-nums">{formatBytes(f.bytes)}</span>,
+                  <span className="t-meta p-text-2 whitespace-pre-wrap">{f.note}</span>,
                 ],
               }))}
               empty="No feedback has been filed yet."
@@ -406,7 +406,7 @@ function MetricsView(): ReactNode {
           <select
             value={hours}
             onChange={(e) => setHours(Number(e.target.value))}
-            className="text-xs p-card px-2 py-1 rounded-sm"
+            className="t-meta p-card px-2 py-1 rounded-sm"
           >
             {METRICS_WINDOWS.map((w) => (
               <option key={w} value={w}>{w < 24 ? `${String(w)}h` : `${String(w / 24)}d`}</option>
@@ -424,7 +424,7 @@ function MetricsView(): ReactNode {
           <div className="grid gap-3 md:grid-cols-2">
             {Object.entries(metrics.panels).map(([name, panel]) => (
               <section key={name} className="p-card p-4 space-y-2">
-                <div className="p-eyebrow">{name}</div>
+                <div className="t-label">{name}</div>
                 <PanelBody panel={panel} />
               </section>
             ))}
@@ -438,18 +438,18 @@ function MetricsView(): ReactNode {
 function PanelBody({ panel }: { panel: AnalyticsResult }): ReactNode {
   if (panel.status === 'ok') return <MetricTable rows={panel.rows} />;
 
-  if (panel.status === 'unconfigured') return <div className="text-xs p-text-3">{panel.missing.join(', ')} not set</div>;
+  if (panel.status === 'unconfigured') return <div className="t-meta p-text-3">{panel.missing.join(', ')} not set</div>;
 
-  return <div className="text-xs p-danger">{panel.reason}</div>;
+  return <div className="t-meta p-danger">{panel.reason}</div>;
 }
 
 function MetricTable({ rows }: { rows: Extract<AnalyticsResult, { status: 'ok' }>['rows'] }): ReactNode {
   const columns = useMemo(() => Object.keys(rows[0] ?? {}), [rows]);
 
-  if (rows.length === 0) return <div className="text-xs p-text-3">No events in this window.</div>;
+  if (rows.length === 0) return <div className="t-meta p-text-3">No events in this window.</div>;
 
   return (
-    <table className="w-full text-xs">
+    <table className="t-meta w-full">
       <thead className="p-text-3 border-b p-border">
         <tr>{columns.map((c) => <th key={c} className="text-left py-1 font-medium">{c}</th>)}</tr>
       </thead>
@@ -470,10 +470,10 @@ function MetricTable({ rows }: { rows: Extract<AnalyticsResult, { status: 'ok' }
 
 /** `pending` is a never-recorded settlement and reads as a failure. */
 const AUDIT_TONE: Record<ControlAuditRow['outcome'], string> = {
-  ok: 'p-success p-t-status',
-  denied: 'p-accent p-t-status',
-  failed: 'p-danger p-t-status',
-  pending: 'p-danger p-t-status',
+  ok: 't-status p-success',
+  denied: 't-status p-accent',
+  failed: 't-status p-danger',
+  pending: 't-status p-danger',
 };
 
 function AuditView(): ReactNode {
@@ -496,12 +496,12 @@ function AuditView(): ReactNode {
                 key: a.id,
                 cells: [
                   when(a.at), a.actorEmail,
-                  <span className="font-mono text-xs">{a.operation}</span>,
-                  <span className="font-mono text-xs">{a.target}</span>,
+                  <span className="t-meta t-mono">{a.operation}</span>,
+                  <span className="t-meta t-mono">{a.target}</span>,
                   <span className={AUDIT_TONE[a.outcome]}>
                     {a.outcome}
                   </span>,
-                  <span className="p-text-2 text-xs">{a.detail}</span>,
+                  <span className="t-meta p-text-2">{a.detail}</span>,
                 ],
               }))}
               empty="No operator has acted on this deployment."
@@ -528,13 +528,13 @@ function Table(
   { head, rows, empty }: { head: string[]; rows: TableRow[]; empty: string },
 ): ReactNode {
   if (rows.length === 0) {
-    return <section className="p-card p-8 text-center text-xs p-text-3">{empty}</section>;
+    return <section className="t-meta p-card p-8 text-center p-text-3">{empty}</section>;
   }
 
   return (
     <section className="p-card overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead className="text-xs p-text-3 border-b p-border">
+      <table className="t-body w-full">
+        <thead className="t-meta p-text-3 border-b p-border">
           <tr>{head.map((h) => <th key={h} className="text-left px-4 py-2 font-medium">{h}</th>)}</tr>
         </thead>
         <tbody>

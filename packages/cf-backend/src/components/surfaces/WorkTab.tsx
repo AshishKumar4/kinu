@@ -84,8 +84,8 @@ export function WorkTab({
   if (nothingAtAll) {
     return (
       <p className="py-1">
-        <span className="block p-row-text p-text-2">No work yet</span>
-        <span className="mt-1 block p-meta p-text-3">Plans, tasks and jobs show here while they run, and stay in the Journal once they finish.</span>
+        <span className="t-body block p-text-2">No work yet</span>
+        <span className="t-meta mt-1 block p-text-3">Plans, tasks and jobs show here while they run, and stay in the Journal once they finish.</span>
       </p>
     );
   }
@@ -215,7 +215,7 @@ function WorkJournal({ journal, rpc, onRefreshJobs, onOpenOwner }: {
       <div className="space-y-3.5">
         {days.map(({ label, rows }) => (
           <div key={label} className="space-y-1.5">
-            <p className="p-eyebrow">{label}</p>
+            <p className="t-label">{label}</p>
             <div className="p-group">
               {rows.map((row) => (
                 <div key={row.key} data-journal-row={row.kind}>
@@ -260,11 +260,11 @@ function PendingRow(
 
   const content = (
     <div className="min-w-0">
-      <div className="p-row-text p-text">{action.title}</div>
+      <div className="t-body p-text">{action.title}</div>
       {action.detail && (
-        <div className="mt-0.5 line-clamp-2 break-words p-meta p-text-3">{action.detail}</div>
+        <div className="t-meta mt-0.5 line-clamp-2 break-words p-text-3">{action.detail}</div>
       )}
-      <div className="mt-0.5 p-meta p-text-3">
+      <div className="t-meta mt-0.5 p-text-3">
         {timeAgo(action.at)}{home.cta === null ? "" : ` · ${home.cta}`}
       </div>
     </div>

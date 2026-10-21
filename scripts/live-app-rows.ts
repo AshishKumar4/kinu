@@ -1466,7 +1466,7 @@ interface PlanTasksVerdict {
   readonly unlinked: readonly string[];
 }
 
-const TASK_TITLE = `(row) => row.querySelector('.p-row-text')?.firstChild?.textContent ?? ''`;
+const TASK_TITLE = `(row) => row.querySelector('[data-task-title]')?.firstChild?.textContent ?? ''`;
 
 const PLAN_CARDS = `[...document.querySelectorAll('[data-plan-card]')].map((card) => [...card.querySelectorAll('[data-task-depth]')]
   .map((row) => [(${TASK_TITLE})(row), Number(row.getAttribute('data-task-depth'))]))`;

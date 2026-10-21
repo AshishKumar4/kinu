@@ -77,18 +77,18 @@ const AnnotationCard = ({
       onClick={onSelect}
     >
       <div className="flex items-center gap-2">
-        <span className={`text-[10px] font-semibold uppercase tracking-wide ${annotationKind(annotation.type).color}`}>
+        <span className={`t-micro uppercase ${annotationKind(annotation.type).color}`}>
           {annotationKind(annotation.type).label}
         </span>
-        <span className="ml-auto text-[10px] text-muted-foreground">
+        <span className="t-meta ml-auto text-muted-foreground">
           {new Date(annotation.createdA).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </span>
       </div>
       {place !== undefined && place !== null && (
-        <div data-annotation-place className="mt-1 truncate font-mono text-[10.5px] text-muted-foreground">{place}</div>
+        <div data-annotation-place className="t-meta t-mono mt-1 truncate text-muted-foreground">{place}</div>
       )}
       {annotation.originalText && (
-        <blockquote className="mt-2 line-clamp-3 border-l-2 border-border pl-2 text-[11px] text-muted-foreground">
+        <blockquote className="t-meta mt-2 line-clamp-3 border-l-2 border-border pl-2 text-muted-foreground">
           {annotation.originalText}
         </blockquote>
       )}
@@ -97,24 +97,24 @@ const AnnotationCard = ({
           <textarea
             value={text}
             onChange={(event) => setText(event.target.value)}
-            className="min-h-20 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground"
+            className="t-meta min-h-20 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-foreground"
             autoFocus
           />
           <div className="mt-2 flex justify-end gap-2">
-            <button type="button" className="rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted" onClick={() => { setText(annotation.text ?? ''); setEditing(false); }}>Cancel</button>
-            <button type="button" className="rounded bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground disabled:opacity-40" disabled={!text.trim()} onClick={save}>Save</button>
+            <button type="button" className="t-meta rounded px-2 py-1 text-muted-foreground hover:bg-muted" onClick={() => { setText(annotation.text ?? ''); setEditing(false); }}>Cancel</button>
+            <button type="button" className="t-micro rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-40" disabled={!text.trim()} onClick={save}>Save</button>
           </div>
         </div>
       ) : annotation.text && (
-        <p className="mt-2 whitespace-pre-wrap text-xs text-foreground/90">{annotation.text}</p>
+        <p className="t-meta mt-2 whitespace-pre-wrap text-foreground/90">{annotation.text}</p>
       )}
       {thread}
       {!readOnly && !editing && (
         <div className="mt-2 flex justify-end gap-1" onClick={(event) => event.stopPropagation()}>
           {annotation.type !== AnnotationType.DELETION && onEdit && (
-            <button type="button" className="rounded px-2 py-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setEditing(true)}>Edit</button>
+            <button type="button" className="t-meta rounded px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setEditing(true)}>Edit</button>
           )}
-          <button type="button" className="rounded px-2 py-1 text-[10px] text-destructive hover:bg-destructive/10" onClick={onDelete}>Delete</button>
+          <button type="button" className="t-meta rounded px-2 py-1 text-destructive hover:bg-destructive/10" onClick={onDelete}>Delete</button>
         </div>
       )}
     </article>
@@ -160,8 +160,8 @@ export const AnnotationPanel = ({
     >
       <div className="flex h-11 items-center justify-between border-b border-border/50 px-3">
         <div className="flex items-center gap-2">
-          <h2 className="text-xs font-medium text-foreground">{title}</h2>
-          <span className="rounded-full bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">{annotations.length}</span>
+          <h2 className="t-status text-foreground">{title}</h2>
+          <span className="t-meta t-mono rounded-full bg-primary/10 px-1.5 py-0.5 text-primary">{annotations.length}</span>
         </div>
         {isMobile && onClose && (
           <button type="button" className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={onClose} aria-label={`Close ${title.toLowerCase()}`}>×</button>
@@ -170,7 +170,7 @@ export const AnnotationPanel = ({
       <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2">
         {sorted.length === 0 && !onAddGlobal ? (
           <div className="grid flex-1 place-items-center px-4 text-center">
-            <div><p className="text-xs text-muted-foreground">No {title.toLowerCase()} yet</p><p className="mt-1 text-[11px] text-muted-foreground/70">Select text to annotate</p></div>
+            <div><p className="t-meta text-muted-foreground">No {title.toLowerCase()} yet</p><p className="t-meta mt-1 text-muted-foreground/70">Select text to annotate</p></div>
           </div>
         ) : sorted.map((annotation) => (
           <AnnotationCard
@@ -189,7 +189,7 @@ export const AnnotationPanel = ({
           <button
             type="button"
             data-annotation-add-global
-            className="rounded-lg border border-dashed border-border px-3 py-2.5 text-left text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+            className="t-meta rounded-lg border border-dashed border-border px-3 py-2.5 text-left text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
             onClick={onAddGlobal}
           >
             {globalLabel}

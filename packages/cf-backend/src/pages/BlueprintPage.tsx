@@ -22,7 +22,7 @@ export function SecretWarning({ warnings, children }: { warnings: BlueprintView[
   if (warnings.length === 0) return null;
 
   return (
-    <div className="p-notice-warning rounded-md px-3 py-2.5 text-xs" role="alert">
+    <div className="t-meta p-notice-warning rounded-md px-3 py-2.5" role="alert">
       <p className="flex items-center gap-1.5 font-medium"><WarningIcon size={14} /> Possible secrets in the source</p>
       <p className="mt-1 opacity-90">{children}</p>
       <ul className="mt-1.5 space-y-0.5 font-mono">
@@ -44,15 +44,15 @@ function BlueprintBody({ view }: { view: BlueprintView }) {
   return (
     <>
       <section className="space-y-2" aria-label="What it reaches">
-        <h2 className="p-eyebrow">What a fork calls, as you</h2>
+        <h2 className="t-label">What a fork calls, as you</h2>
         {personReaches(view.reaches).length === 0 ? (
-          <p className="text-xs p-text-3">It was published calling nothing of its publisher&apos;s. A fork runs on its own.</p>
+          <p className="t-meta p-text-3">It was published calling nothing of its publisher&apos;s. A fork runs on its own.</p>
         ) : (
           <ul className="p-card space-y-1 px-4 py-3">
             {personReaches(view.reaches).map((namespace) => (
-              <li key={namespace} className="flex flex-wrap items-baseline gap-x-2 text-sm">
+              <li key={namespace} className="t-body flex flex-wrap items-baseline gap-x-2">
                 <span className="font-mono p-text">{namespace}</span>
-                <span className="p-text-2 text-xs">{reachConnection(namespace).text}</span>
+                <span className="t-meta p-text-2">{reachConnection(namespace).text}</span>
               </li>
             ))}
           </ul>
@@ -62,8 +62,8 @@ function BlueprintBody({ view }: { view: BlueprintView }) {
         A blueprint never carries your connected credentials, but it can carry text someone pasted into the source. These lines look like secrets. Check them before you use this blueprint.
       </SecretWarning>
       <section className="space-y-2" aria-label="Files">
-        <h2 className="p-eyebrow">Files</h2>
-        <ul className="p-card px-4 py-3 font-mono text-xs">
+        <h2 className="t-label">Files</h2>
+        <ul className="t-meta t-mono p-card px-4 py-3">
           {view.entries.map((entry) => {
             const depth = entry.path.split("/").length - 1;
             const EntryIcon = ENTRY_ICON[entry.kind];
@@ -121,7 +121,7 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
     <div className="min-h-screen p-bg p-text">
       <header className="flex h-14 items-center justify-between border-b p-border px-5">
         <a href="/" aria-label="Kinu home" className="flex items-center"><KinuLogo /></a>
-        <span className="p-meta p-text-3">Shared blueprint</span>
+        <span className="t-meta p-text-3">Shared blueprint</span>
       </header>
       <main className={FRAME_PAGE}>
         <PageHeader icon={<GitBranchIcon size={22} />} title={view?.title ?? "Blueprint"}>
@@ -132,13 +132,13 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
           )}
         </PageHeader>
         <div className="mt-8 space-y-6">
-          {err && <div className="p-notice-danger rounded-md px-3 py-2 text-xs">{err}</div>}
+          {err && <div className="t-meta p-notice-danger rounded-md px-3 py-2">{err}</div>}
           {view === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
           {view !== null && (
             <>
               <div>
-                {view.description && <p className="p-row-text p-text-2">{view.description}</p>}
-                <p className="mt-1 p-meta p-text-3">A fork runs in your workspace, as you, on your own connections. Nothing of the publisher's comes with it.</p>
+                {view.description && <p className="t-body p-text-2">{view.description}</p>}
+                <p className="t-meta mt-1 p-text-3">A fork runs in your workspace, as you, on your own connections. Nothing of the publisher's comes with it.</p>
               </div>
               <BlueprintBody view={view} />
             </>
