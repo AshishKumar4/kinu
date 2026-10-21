@@ -38,6 +38,7 @@ import { getProfileCatalog, listAvailableModels, testModel, updateProfileCatalog
 import { AccountPicker, ModelPicker, reasoningEffortLabel, specOnAccount } from './ModelPicker';
 import { Card, Choice, Field, composing, inputCls, tabCls } from './ui/form';
 import { Segmented } from './ui/Segmented';
+import { Pressable } from "@/components/ui/Pressable";
 
 const EMPTY_MENU: ModelMenuResponse = { models: [], failures: [] };
 
@@ -529,12 +530,11 @@ function Disclosure(props: { label: string; summary: string; section: string; ch
 
   return (
     <div className="border-t p-border pt-3" data-section={props.section}>
-      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
-        className="flex w-full min-w-0 items-center gap-2 text-left">
+      <Pressable className="flex min-w-0 items-center gap-2" aria-expanded={open} onClick={() => setOpen(!open)}>
         <CaretRightIcon size={12} className={`shrink-0 p-fold-turn p-text-3 ${open ? 'rotate-90' : ''}`} />
         <span className="t-item shrink-0 p-text">{props.label}</span>
         <span className="t-meta min-w-0 truncate p-text-3">{props.summary}</span>
-      </button>
+      </Pressable>
       {open && <div className="mt-4 space-y-5 md:pl-5">{props.children}</div>}
     </div>
   );
@@ -747,14 +747,13 @@ function Allowance(props: {
 
   return (
     <div className="border-t p-border py-2 first:border-t-0" data-allowance={props.label}>
-      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)}
-        className="flex w-full min-w-0 items-center gap-3 text-left">
+      <Pressable className="flex min-w-0 items-center gap-3" aria-expanded={open} onClick={() => setOpen(!open)}>
         <span className="t-body w-20 shrink-0 p-text">{props.label}</span>
         <span className="t-meta min-w-0 flex-1 truncate p-text-3">
           {count}{current.length > 0 && current.length < all.length ? `: ${current.join(', ')}` : ''}
         </span>
         <CaretRightIcon size={12} className={`shrink-0 p-fold-turn p-text-3 ${open ? 'rotate-90' : ''}`} />
-      </button>
+      </Pressable>
       {open && (
         <div role="group" aria-label={props.label} className="mt-2 flex flex-wrap gap-2">
           {props.options.map((option) => {

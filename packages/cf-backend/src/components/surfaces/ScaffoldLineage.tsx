@@ -11,6 +11,7 @@ import { showing, detach } from "@kinu.run/core/obs";
 import { Status, type StatusTone } from "@/components/ui/Status";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import type { OrchestratorAgent } from "@/orchestrator";
+import { Pressable } from "@/components/ui/Pressable";
 
 type ScaffoldDiff = Awaited<ReturnType<OrchestratorAgent["getScaffoldDiff"]>>;
 
@@ -106,13 +107,12 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
         <div className="space-y-2">
           <div className="space-y-1">
             {versions.map((v) => (
-              <button key={v.version} onClick={() => select(v.version)}
-                className={`w-full flex items-center gap-2 px-2 py-1 rounded-md text-left transition-colors ${selected === v.version ? "p-fill" : "p-card-hover"}`}>
+              <Pressable selected={selected === v.version} className="flex items-center gap-2 px-2 py-1" key={v.version} onClick={() => select(v.version)}>
                 <span className="t-meta t-mono p-text shrink-0">v{v.version}</span>
                 <Status tone={versionStatus(v.status).tone}>{versionStatus(v.status).word}</Status>
                 <span className="t-body p-text-2 truncate flex-1" title={v.rationale}>{v.rationale}</span>
                 <span className="t-meta p-text-3 shrink-0">{new Date(v.written_at).toLocaleDateString()}</span>
-              </button>
+              </Pressable>
             ))}
           </div>
 

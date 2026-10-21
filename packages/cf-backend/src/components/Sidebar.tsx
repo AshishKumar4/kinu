@@ -20,6 +20,7 @@ import { composing } from "@/components/ui/form";
 import { StatusDot } from "@/components/ui/Status";
 import { workspaceStatusTone } from "@/components/workspaces/workspace-status-tone";
 import { Button } from "@/components/ui/Button";
+import { Pressable } from "@/components/ui/Pressable";
 
 function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
   const { to, label, Icon } = item;
@@ -175,10 +176,7 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
           <div className="t-meta px-5 py-3 p-text-3">No workspaces yet.</div>
         )}
         {listError && (
-          <button
-            onClick={refreshWorkspaces}
-            className="t-meta w-full text-left px-5 py-2 p-warning rounded-md p-card-hover transition-colors"
-          >Could not load workspaces. Retry</button>
+          <Pressable className="t-meta px-5 py-2 p-warning" onClick={refreshWorkspaces}>Could not load workspaces. Retry</Pressable>
         )}
         <ul className="space-y-1" aria-busy={listLoading && !listError}>
           {workspaces.map((a) => {

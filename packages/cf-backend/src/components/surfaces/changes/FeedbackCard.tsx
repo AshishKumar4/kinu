@@ -2,6 +2,7 @@ import { ChatCircleTextIcon, ListBulletsIcon, MinusCircleIcon } from "@phosphor-
 import type { ChangeNotesCard, DiffAnchor } from "@kinu.run/core";
 import { sinceLabel } from "./diff";
 import { placeLabel } from "./notes";
+import { Pressable } from "@/components/ui/Pressable";
 
 type CardNote = ChangeNotesCard["notes"][number];
 
@@ -54,10 +55,9 @@ export function FeedbackCard({ card, sentAt, now, onOpen }: {
               {onOpen === undefined
                 ? <div className="flex items-start gap-3 py-2"><NoteRow note={note} /></div>
                 : (
-                  <button type="button" onClick={() => onOpen(note.anchor)} data-feedback-note={note.id}
-                    className="group flex w-full items-start gap-3 py-2 text-left">
+                  <Pressable className="group flex items-start gap-3 py-2" onClick={() => onOpen(note.anchor)} data-feedback-note={note.id}>
                     <NoteRow note={note} />
-                  </button>
+                  </Pressable>
                 )}
             </li>
           ))}

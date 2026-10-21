@@ -1,6 +1,7 @@
 /** Opens setup as a modal so a half-typed mission on the page behind is not lost. */
 import { useState } from "react";
 import { AccountPanelModal, type AccountPanel } from "@/components/account/AccountPanelModal";
+import { Pressable } from "@/components/ui/Pressable";
 
 export function SetupCard({ returnTo }: { returnTo: string }) {
   const [open, setOpen] = useState<AccountPanel | null>(null);
@@ -9,18 +10,15 @@ export function SetupCard({ returnTo }: { returnTo: string }) {
     <>
       <div className="rounded-[14px] border p-border p-surface px-[18px] py-4">
         <div className="t-status mb-3 p-text-3">Setup</div>
-        <button type="button" onClick={() => setOpen('providers')}
-          className="t-control block w-full py-[5px] text-left p-accent-fg">
+        <Pressable className="t-control py-[5px] p-accent-fg" onClick={() => setOpen('providers')}>
           Connect providers →
-        </button>
-        <button type="button" onClick={() => setOpen('mcp')}
-          className="t-control block w-full py-[5px] text-left p-accent-fg">
+        </Pressable>
+        <Pressable className="t-control py-[5px] p-accent-fg" onClick={() => setOpen('mcp')}>
           Add MCP servers →
-        </button>
-        <button type="button" onClick={() => setOpen('cli')}
-          className="t-control block w-full py-[5px] text-left p-accent-fg">
+        </Pressable>
+        <Pressable className="t-control py-[5px] p-accent-fg" onClick={() => setOpen('cli')}>
           Install the CLI →
-        </button>
+        </Pressable>
       </div>
       {open !== null && (
         <AccountPanelModal panel={open} returnTo={returnTo} onClose={() => setOpen(null)} />

@@ -33,6 +33,7 @@ import {
 } from "./fork-runs";
 import { fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf, type RunLevel, type RunLiveness, type RunRefusal, type SwarmAxis, type SwarmResolution } from "@kinu.run/core/swarm-view";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Pressable } from "@/components/ui/Pressable";
 
 export interface ExplorationSurfaceProps {
   /** Live trees from `mcts-progress`, keyed by search; they replace polled rows so a
@@ -175,9 +176,7 @@ function ForkRunRow(
   },
 ) {
   return (
-    <button type="button" onClick={onSelect} aria-current={selected ? "true" : undefined}
-      data-fork-run={run.id}
-      className={`w-full flex items-start gap-2 text-left rounded-md px-2 py-1 transition-colors ${selected ? "p-fill" : "p-card-hover"}`}>
+    <Pressable selected={selected} className="flex items-start gap-2 px-2 py-1" onClick={onSelect} aria-current={selected ? "true" : undefined} data-fork-run={run.id}>
       <StatusDot className="mt-1" tone={RUN_TONE[run.status]} />
       <div className="min-w-0 flex-1">
         <div className="t-body p-text truncate" title={run.task}>
@@ -192,7 +191,7 @@ function ForkRunRow(
           {new Date(run.startedAt).toLocaleString()}
         </div>
       </div>
-    </button>
+    </Pressable>
   );
 }
 
@@ -416,15 +415,14 @@ export function FrontierPanel({ frontier, onOpen }: {
       </div>
       <div className="mt-1 space-y-px">
         {frontier.candidates.map((candidate) => (
-          <button key={candidate.nodeId} type="button" onClick={() => onOpen(candidate.nodeId)}
-            className="t-meta t-mono w-full flex flex-wrap items-baseline gap-x-3 gap-y-px rounded-md px-1 py-px text-left p-card-hover transition-colors cursor-pointer">
+          <Pressable className="t-meta t-mono flex flex-wrap items-baseline gap-x-3 gap-y-px px-1 py-px" key={candidate.nodeId} onClick={() => onOpen(candidate.nodeId)}>
             <span className="p-text-2 truncate max-w-[10rem]" title={candidate.nodeId}>{candidate.nodeId}</span>
             {frontier.axes.map((axis) => (
               <span key={axis.id} className="whitespace-nowrap p-text-3" title={`${axis.id}: ${axis.direction}`}>
                 {axis.id} <span className="p-text-2">{formatEvidenceValue(candidate.evidence[axis.id])}</span>
               </span>
             ))}
-          </button>
+          </Pressable>
         ))}
       </div>
     </div>
@@ -490,8 +488,7 @@ function RunNodeRow({ node, score, moving, onOpen }: {
   const live = node.status === "running";
 
   return (
-    <button type="button" onClick={onOpen} data-run-node={node.id}
-      className="w-full flex items-start gap-2 text-left rounded-md px-2 py-1 p-card-hover transition-colors">
+    <Pressable className="flex items-start gap-2 px-2 py-1" onClick={onOpen} data-run-node={node.id}>
       <StatusDot className="mt-1" tone={statusTone(shownHeadStatus(node.status, node.errorMessage))}
         {...(moving && { title: "Working now" })} />
       <div className="min-w-0 flex-1">
@@ -514,7 +511,7 @@ function RunNodeRow({ node, score, moving, onOpen }: {
           </div>
         )}
       </div>
-    </button>
+    </Pressable>
   );
 }
 

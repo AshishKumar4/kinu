@@ -20,6 +20,7 @@ import { ForkDialog } from "@/components/shared/ForkDialog";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { Notice } from "@/components/ui/Notice";
+import { Pressable } from "@/components/ui/Pressable";
 
 function relativePathOf(file: File): string {
   return file.webkitRelativePath === "" ? file.name : file.webkitRelativePath;
@@ -186,10 +187,9 @@ function NewMenu({ onFiles, onFolder, onZip, onNewFolder, onNewSkill }: NewProps
           {items.map((item) => (
             <div key={item.label}>
               {item.apart === true && <div className="mx-1 my-2 border-t p-border" />}
-              <button type="button" role="menuitem" {...{ [item.marker]: "" }} onClick={() => { setOpen(false); item.run(); }}
-                className="t-body flex w-full items-center gap-3 rounded-md px-2 py-1 text-left p-text transition-colors hover:bg-[var(--c-hover)]">
+              <Pressable className="t-body flex items-center gap-3 px-2 py-1 p-text" role="menuitem" {...{ [item.marker]: "" }} onClick={() => { setOpen(false); item.run(); }}>
                 <span className="flex shrink-0 p-text-3">{item.icon}</span>{item.label}
-              </button>
+              </Pressable>
             </div>
           ))}
         </div>

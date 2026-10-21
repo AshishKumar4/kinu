@@ -10,6 +10,7 @@ import { ephemeralSlateId, slateUiSegments, type EphemeralSlateAddress, type Sla
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
+import { Pressable } from "@/components/ui/Pressable";
 
 const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
   add: { tone: "p-badge-success px-3", mark: "+" },
@@ -284,12 +285,7 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
 
   return (
     <section data-section={id}>
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={open}
-        className="group/section flex w-full items-center gap-2 rounded-md py-1 text-left cursor-pointer p-row-hover transition-colors"
-      >
+      <Pressable className="group/section flex items-center gap-2 py-1" onClick={toggle} aria-expanded={open}>
         <CaretRightIcon
           size={12}
           className={`shrink-0 p-text-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
@@ -297,7 +293,7 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
         {icon}
         <span className="t-label" data-section-title>{title}</span>
         {badge && <span className="ml-auto inline-flex shrink-0" data-section-badge>{badge}</span>}
-      </button>
+      </Pressable>
       {open && <div className="mt-3">{children}</div>}
     </section>
   );

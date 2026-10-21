@@ -5,6 +5,7 @@ import { sandboxedHtml, splitQuotedReply, type MailBox, type MailMessageView } f
 import { Avatar } from "@/components/ui/Avatar";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { mailTime } from "./ImportantMailRow";
+import { Pressable } from "@/components/ui/Pressable";
 
 export function mailExcerpt(text: string): string {
   const lines = splitQuotedReply(text).own.split("\n").map((line) => line.trim()).filter(Boolean);
@@ -42,7 +43,7 @@ export function SealedMailHtml({ html }: { html: string }) {
 
 function MessageHeader({ mail, name, onToggle }: { mail: MailMessageView; name: string; onToggle: () => void }) {
   return (
-      <button type="button" onClick={onToggle} aria-expanded="true" className="flex w-full items-start gap-3 text-left">
+      <Pressable className="flex items-start gap-3" onClick={onToggle} aria-expanded="true">
         <Avatar name={name} size={30} />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
@@ -56,7 +57,7 @@ function MessageHeader({ mail, name, onToggle }: { mail: MailMessageView; name: 
           {mail.cc.length > 0 && <span className="t-meta block truncate p-text-3">cc {mail.cc.map((party) => party.address).join(", ")}</span>}
         </span>
         <span className="t-meta shrink-0 tabular-nums p-text-3">{mailTime(mail.at)}</span>
-      </button>
+      </Pressable>
   );
 }
 
@@ -70,12 +71,12 @@ export function MailMessage({ mail, box, owner, open, onToggle }: {
   const chat = box?.workspace === null || box?.workspace === undefined ? null : `/workspace/${encodeURIComponent(box.workspace)}${box.kind === "agent" ? `/agents/${encodeURIComponent(reader)}` : ""}`;
 
   if (!open) return (
-    <button type="button" onClick={onToggle} data-mail-message={mail.id} data-folded="" className="flex w-full items-center gap-3 px-4 py-2 text-left p-row-hover">
+    <Pressable className="flex items-center gap-3 px-4 py-2" onClick={onToggle} data-mail-message={mail.id} data-folded="">
       <Avatar name={name} size={22} />
       <span className="t-item shrink-0 p-text-2">{name}</span>
       <span className="t-body min-w-0 flex-1 truncate p-text-3">{mailExcerpt(mail.text)}</span>
       <span className="t-meta shrink-0 tabular-nums p-text-3">{mailTime(mail.at)}</span>
-    </button>
+    </Pressable>
   );
 
   return (

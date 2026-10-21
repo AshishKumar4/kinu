@@ -3,6 +3,7 @@ import { CaretDownIcon, CheckIcon, FolderSimpleIcon, GitBranchIcon } from "@phos
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { changeBody, changeTotals, changeTree, type ChangeSet, type FileDiff } from "@kinu.run/core";
 import { ChangeMark, count, Counts, fullTime, sinceLabel } from "./diff";
+import { Pressable } from "@/components/ui/Pressable";
 
 function Tag({ file }: { file: FileDiff }) {
   const body = changeBody(file);
@@ -108,13 +109,11 @@ export function SourceMenu({ sets, source, initiallyOpen = false, onPick }: {
         <div role="menu" className="absolute left-0 top-8 z-30 w-56 p-card border p-border p-1 p-shadow-menu animate-fade-in">
           <p className="t-meta px-2 pb-1 pt-1 p-text-3">Show changes in</p>
           {sets.map((set) => (
-            <button key={set.source} type="button" role="menuitemradio" aria-checked={set.source === source}
-              onClick={() => { setOpen(false); onPick(set.source); }}
-              className="t-body flex w-full items-center gap-2 rounded-md px-2 py-1 text-left p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
+            <Pressable className="t-body flex items-center gap-2 px-2 py-1 p-text-2 hover:p-text" key={set.source} role="menuitemradio" aria-checked={set.source === source} onClick={() => { setOpen(false); onPick(set.source); }}>
               <span className="flex size-3.5 shrink-0 items-center justify-center p-accent-fg">{set.source === source && <CheckIcon size={12} weight="bold" />}</span>
               <span className="min-w-0 flex-1 truncate">{set.label}</span>
               <span className={`t-meta shrink-0 ${set.error === undefined ? "p-text-3" : "p-warning"}`}>{sourceNote(set)}</span>
-            </button>
+            </Pressable>
           ))}
         </div>
       )}

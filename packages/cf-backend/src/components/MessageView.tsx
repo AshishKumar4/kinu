@@ -43,6 +43,7 @@ import { StatusDot } from "@/components/ui/Status";
 import { ChatDisclosure, ToolRun, TurnRollup, usePhaseLinesOnSeen, useSeenRunning, WorkLabel } from "@/components/ChatDisclosure";
 import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
 import { Button } from "@/components/ui/Button";
+import { Pressable } from "@/components/ui/Pressable";
 
 const MessageCreatedAtSchema = v.looseObject({
   createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),
@@ -300,14 +301,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={onToggleExpand}
-        aria-expanded={expanded}
-        data-tool-state={stateName}
-        data-tool-effect={effect}
-        className="group/tool grid w-full cursor-pointer grid-cols-[20px_minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--c-hover)]"
-      >
+      <Pressable className="group/tool grid grid-cols-[20px_minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-2" onClick={onToggleExpand} aria-expanded={expanded} data-tool-state={stateName} data-tool-effect={effect}>
         <span className="flex size-5 items-center justify-center p-text-3">
           {toolIcon(toolName)}
         </span>
@@ -320,7 +314,7 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
           {stateBadge}
         </span>
         <CaretRightIcon size={11} aria-hidden className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
-      </button>
+      </Pressable>
       {toolName === "agents" && <HelperChatLink output={output} />}
       {expanded && provisionErr && (
         <div className="t-meta p-tint-warning mt-2 ml-5 rounded-lg border px-3 py-2 p-text-2 flex items-start gap-2">

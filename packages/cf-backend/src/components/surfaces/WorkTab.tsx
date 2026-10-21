@@ -24,6 +24,7 @@ import { WorkPlans } from "./WorkPlans";
 import type { WorkspaceWorkRead } from "./use-workspace-work";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Group } from "@/components/ui/Group";
+import { Pressable } from "@/components/ui/Pressable";
 
 /** Kinds the attention stack decides: their rows open its card. */
 const STACKED: ReadonlySet<PendingActionKind> = new Set(["deferred_action"]);
@@ -281,16 +282,11 @@ function PendingRow(
   }
 
   return (
-    <button
-      type="button"
-      onClick={open}
-      data-pending-action={action.id}
-      className="grid w-full grid-cols-[14px_minmax(0,1fr)_16px] items-start gap-2 rounded-md py-2 text-left transition-colors hover:p-hover"
-    >
+    <Pressable className="grid grid-cols-[14px_minmax(0,1fr)_16px] items-start gap-2 py-2" onClick={open} data-pending-action={action.id}>
       {icon}
       {content}
       <CaretRightIcon size={12} className="mt-1 shrink-0 justify-self-end p-text-3" />
-    </button>
+    </Pressable>
   );
 }
 

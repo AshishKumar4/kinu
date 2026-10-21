@@ -732,6 +732,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-pressable:is(:hover, [data-force="hover"]) { background: var(--c-hover); }
 .p-pressable:is(:active, [data-force="active"]) { background: var(--c-pressed); }
+.p-pressable[data-selected] { background: var(--c-selected); }
 
 /* A busy button's spinner, in the icon's place. */
 .p-button-spinner {

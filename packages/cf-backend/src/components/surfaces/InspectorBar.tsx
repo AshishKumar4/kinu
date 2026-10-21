@@ -11,6 +11,7 @@ import {
 import { Tooltip } from "@/components/ui/Tooltip";
 import { ACTIVITY_SURFACE, type SURFACES, type SurfaceKind } from "@kinu.run/core";
 import { AgentFaceIcon } from "@/components/Marks";
+import { Pressable } from "@/components/ui/Pressable";
 
 interface ToolSpec { readonly name: string; readonly Icon: Icon | typeof AgentFaceIcon; readonly about?: string }
 
@@ -70,11 +71,10 @@ function PagesMenu({ pages, open, choose }: { readonly pages: readonly PageTab[]
   return (
     <div className="p-pages-menu p-overlay border p-border animate-fade-in" role="menu">
       {pages.map((page) => (
-        <button key={page.key} type="button" role="menuitem" aria-current={page.key === open ? "true" : undefined} onClick={() => choose(page.key)}
-          className="t-body flex w-full items-center gap-2 rounded-md px-2 py-1 text-left p-text-2 hover:bg-[var(--c-hover)] hover:p-text">
+        <Pressable className="t-body flex items-center gap-2 px-2 py-1 p-text-2 hover:p-text" key={page.key} role="menuitem" aria-current={page.key === open ? "true" : undefined} onClick={() => choose(page.key)}>
           <page.Icon size={14} className="shrink-0 p-text-3" aria-hidden /><span className="min-w-0 flex-1 truncate">{page.title}</span>
           {page.key === open && <CheckIcon size={12} className="shrink-0 p-accent-fg" aria-hidden />}
-        </button>
+        </Pressable>
       ))}
     </div>
   );

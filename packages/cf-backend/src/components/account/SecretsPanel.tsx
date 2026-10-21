@@ -21,6 +21,7 @@ import {
   BLANK, hostList, PositionField, rowsReady, secretEntries, SecretRows, takeDotenvLines, WorkspaceAdder, WorkspaceChooser,
   type ChosenWorkspace, type SecretDraft,
 } from "@/components/secrets/SecretRows";
+import { Pressable } from "@/components/ui/Pressable";
 
 
 /** What turning reading on lets an agent do; said where the switch is turned, and again as it is asked. */
@@ -66,8 +67,7 @@ function SecretItem({ secret, onChanged }: { secret: SecretSummary; onChanged: (
 
   return (
     <li data-secret={secret.name}>
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open}
-        className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 text-left hover:bg-[var(--c-hover)]">
+      <Pressable className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3" onClick={() => setOpen(!open)} aria-expanded={open}>
         <Caret size={12} className="shrink-0 p-text-3" />
         <span className="t-item t-mono p-text">{secret.name}</span>
         <span className="flex min-w-0 flex-wrap gap-1">
@@ -78,7 +78,7 @@ function SecretItem({ secret, onChanged }: { secret: SecretSummary; onChanged: (
           {grantedWhere(secret)}
           {secret.grants.some((grant) => grant.reveal) && <span className="p-warning"> · value readable</span>}
         </span>
-      </button>
+      </Pressable>
       {open && <SecretDetails secret={secret} onChanged={onChanged} />}
     </li>
   );

@@ -5,6 +5,7 @@ import { planTitle } from '@kinu.run/core';
 import { Section } from './shared';
 import { PlanProgress, TaskTree } from './work-tasks';
 import { Group } from "@/components/ui/Group";
+import { Pressable } from "@/components/ui/Pressable";
 
 const keyOf = ({ owner, plan }: OwnedPlan) => `${owner.name}:${plan.id}:${plan.revision}`;
 
@@ -37,15 +38,14 @@ function PlanCard({ item, onOpen }: { item: OwnedPlan; onOpen: () => void }) {
 
   return (
     <Group data-plan-card={plan.revision}>
-      <button type="button" onClick={onOpen}
-        className="w-full rounded-t-md px-3 pt-2 pb-2 text-left transition-colors hover:p-hover">
+      <Pressable className="px-3 pt-2 pb-2" onClick={onOpen}>
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="t-body p-text min-w-0 truncate">{planTitle(plan.content)}</span>
           <span className="t-meta p-text-3 shrink-0">r{plan.revision} · {plan.status}</span>
         </div>
         {/* The workspace's own plans are its own: the root's registered name is the workspace's slug, never shown. */}
         {owner.path?.length !== 0 && <div className="t-meta p-text-3 mt-px">{owner.name}{owner.retired ? " · retained" : ""}</div>}
-      </button>
+      </Pressable>
       {tasks.length > 0 && (
         <div className="space-y-2 px-3 pb-2">
           <PlanProgress tasks={tasks} />

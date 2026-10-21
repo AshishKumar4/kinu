@@ -10,6 +10,7 @@ import { toolRunSummary, type RunStep, type ToolRunSummary } from "@kinu.run/cor
 import { detach, diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { Effect } from "effect";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Pressable } from "@/components/ui/Pressable";
 
 /** The dot and words a piece of work is headed by: pulsing and shimmering while it runs. */
 export function WorkLabel({ live, failed = false, children }: { live: boolean; failed?: boolean; children: ReactNode }) {
@@ -154,8 +155,7 @@ export function ChatDisclosure({ label, after, live, failed = false, folded, fol
   return (
     <div ref={root} className="t-body py-px p-text-3" {...data}>
       {/* The whole line is the control, its chevron turning as it opens: a quiet mark, as a tool row's is. */}
-      <button type="button" onClick={() => setOpen(!open)} disabled={!canOpen} aria-expanded={canOpen ? open : undefined}
-        className="group/disclosure flex w-full items-center gap-2 text-left enabled:cursor-pointer">
+      <Pressable className="group/disclosure flex items-center gap-2" onClick={() => setOpen(!open)} disabled={!canOpen} aria-expanded={canOpen ? open : undefined}>
         <span className="min-w-0" data-disclosure-label {...(live && liveIndicator !== undefined ? { "data-live-indicator": liveIndicator } : {})}>
           <WorkLabel live={live} failed={failed}>{label}</WorkLabel>
         </span>
@@ -164,7 +164,7 @@ export function ChatDisclosure({ label, after, live, failed = false, folded, fol
           <CaretRightIcon size={11} aria-hidden data-disclosure-turn
             className={`shrink-0 p-text-3 p-fold-turn group-hover/disclosure:p-text-2 ${open ? "rotate-90" : ""}`} />
         )}
-      </button>
+      </Pressable>
       <div ref={body} className={`mt-1 ml-4 ${bodyClass} ${shown}`} data-disclosure-body={bodyState}
         data-folded={!live && !open && folded === "preview" ? "" : undefined} data-overflows={long ? "" : undefined}>
         {children}

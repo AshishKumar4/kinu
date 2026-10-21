@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/Badge";
 import { CircleIcon, CircleDashedIcon, CheckCircleIcon, ProhibitIcon, SparkleIcon } from "@phosphor-icons/react";
 import { taskSettled, type AgentTask, type AgentTaskTree, type PanelAgent, type TaskStatus, type WorkspaceWorkOwner } from "@kinu.run/core";
 import { toneInk } from "@/components/ui/Status";
+import { Pressable } from "@/components/ui/Pressable";
 
 const STATUS_META = {
   open: { icon: CircleDashedIcon, tone: toneInk("neutral"), label: "Open", weight: "regular", text: "p-text-2" },
@@ -99,8 +100,8 @@ export function HelperRow({ agent, onOpen }: { agent: PanelAgent; onOpen?: (agen
   if (!onOpen) return <div className="flex items-start gap-2 py-1" data-helper-row={agent.key}>{text}</div>;
 
   return (
-    <button type="button" data-helper-row={agent.key} onClick={() => onOpen(agent)} className="flex w-full items-start gap-2 rounded-md py-1 text-left transition-colors hover:p-hover">
+    <Pressable className="flex items-start gap-2 py-1" data-helper-row={agent.key} onClick={() => onOpen(agent)}>
       {text}
-    </button>
+    </Pressable>
   );
 }
