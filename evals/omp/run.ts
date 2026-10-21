@@ -175,6 +175,18 @@ async function prepare(arm: Arm, train: readonly OwnerTurn[], last: number): Pro
 }
 
 /** One request on its own copy of the prepared workspace at `prepared`, as the line its answers file keeps. */
+/** The held-out turns a copy's answers file already holds: a copy restarted after its process died asks only the rest. A
+ *  line the dead process left torn is no answer, and its request is asked again. */
+export function answeredTurnIds(answers: string): Set<string> {
+  if (!existsSync(answers)) return new Set();
+
+  return new Set(readFileSync(answers, 'utf8').split('\n').flatMap((line) => {
+    const row = v.safeParse(v.pipe(v.string(), v.parseJson(), v.object({ turnId: v.string() })), line);
+
+    return row.success ? [row.output.turnId] : [];
+  }));
+}
+
 async function answered(arm: Arm, prepared: string, turn: OwnerTurn) {
   // The kept calls of the request, what its own record answers a kept shell command with, and where its time went.
   const kept: Kept[] = [];
@@ -269,9 +281,11 @@ if (import.meta.main) {
       });
 
       const answering: Arm = { arm, spec, snapshot, llm: workersAi(account, token, model), space: join(base, `copy-${String(copy)}`) };
+      const answers = join(base, `answers-${String(copy)}.jsonl`);
+      const done = answeredTurnIds(answers);
 
-      for (const turn of requests) {
-        appendFileSync(join(base, `answers-${String(copy)}.jsonl`), `${JSON.stringify(await answered(answering, join(base, 'base'), turn))}\n`);
+      for (const turn of requests.filter((request) => request.turn.turnId === undefined || !done.has(request.turn.turnId))) {
+        appendFileSync(answers, `${JSON.stringify(await answered(answering, join(base, 'base'), turn))}\n`);
       }
     }
 
