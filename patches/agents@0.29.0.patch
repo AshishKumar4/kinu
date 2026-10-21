@@ -1,8 +1,8 @@
 diff --git a/dist/chat/react.js b/dist/chat/react.js
-index 535743d..7f6c14c 100644
+index fc70660c814fb6267faa9ab0b333bfe71024ceb4..60f4f92f9ceb233c7e00581f3baac4b0deb8d946 100644
 --- a/dist/chat/react.js
 +++ b/dist/chat/react.js
-@@ -947,6 +947,10 @@ function useAgentChat(options) {
+@@ -948,6 +948,10 @@ function useAgentChat(options) {
  						}
  					}
  					if (!resumingToolContinuationRef.current) pendingReplayResumeRequestIdsRef.current.add(data.id);
@@ -13,8 +13,14 @@ index 535743d..7f6c14c 100644
  					if (customTransport.handleStreamResuming(data)) return;
  					if (localRequestIdsRef.current.has(data.id)) return;
  					if (fallbackAckedResumeRequestIdsRef.current.has(data.id)) return;
-@@ -1120,10 +1124,16 @@ function useAgentChat(options) {
+@@ -1119,13 +1123,20 @@ function useAgentChat(options) {
+ 			sawClose = true;
+ 			serverReportsRecovery = false;
  			fallbackAckedResumeRequestIds.clear();
+-			protectedStreamingAssistantRef.current = null;
++			// Kinu patch: 0.29.0 clears the protection here and leaves the answer where protection moved it; restoring
++			// clears it too, after putting the answer back at its anchor (cloudflare/agents#2344 leaves this open).
++			restoreProtectedStreamingAssistant();
  			const unfinishedTurnId = customTransport.activeServerTurnId;
  			if (unfinishedTurnId !== null) setUnresolvedObservedRequestId(unfinishedTurnId);
 +			const observedStream = streamStateRef.current;
@@ -28,14 +34,13 @@ index 535743d..7f6c14c 100644
 +				streamId: observedStream.streamId,
 +				messageId: observedStream.accumulator.messageId
 +			}).state;
-+			restoreProtectedStreamingAssistant();
  		}
  		function onAgentOpen() {
  			socketIsOpen = true;
-diff --git a/dist/client-fyQrLGkD.js b/dist/client-fyQrLGkD.js
-index 56a8647..bc1e0de 100644
---- a/dist/client-fyQrLGkD.js
-+++ b/dist/client-fyQrLGkD.js
+diff --git a/dist/client-BnYbNT3z.js b/dist/client-BnYbNT3z.js
+index 961430c148f8d6a43e69f7cb6b4815a0f9b6238e..2b499bf04d3ea2168aa687797a0311613610dd9c 100644
+--- a/dist/client-BnYbNT3z.js
++++ b/dist/client-BnYbNT3z.js
 @@ -5,9 +5,40 @@ import { n as callV2Tool } from "./invoker-CHMnoxIA.js";
  import { DurableObjectOAuthClientProvider } from "./mcp/client/do-oauth-client-provider.js";
  import { nanoid } from "nanoid";
@@ -218,7 +223,7 @@ index 56a8647..bc1e0de 100644
  					kind: "modern",
  					discover: this.options.discoverResult
  				} : void 0;
-@@ -1623,6 +1666,7 @@ var MCPClientManager = class extends LifecycleCapability {
+@@ -1622,6 +1665,7 @@ var MCPClientManager = class extends LifecycleCapability {
  			this._isRestored = true;
  			return;
  		}
@@ -226,7 +231,7 @@ index 56a8647..bc1e0de 100644
  		for (const server of servers) {
  			if (server.server_url.startsWith("rpc:")) continue;
  			const existingConn = this.mcpConnections[server.id];
-@@ -1740,6 +1784,7 @@ var MCPClientManager = class extends LifecycleCapability {
+@@ -1739,6 +1783,7 @@ var MCPClientManager = class extends LifecycleCapability {
  	* @returns Object with server ID, auth URL (if OAuth), and client ID (if OAuth)
  	*/
  	async connect(url, options = {}) {
@@ -234,7 +239,7 @@ index 56a8647..bc1e0de 100644
  		const id = options.reconnect?.id ?? nanoid(8);
  		if (options.transport?.authProvider) {
  			options.transport.authProvider.serverId = id;
-@@ -1851,6 +1896,7 @@ var MCPClientManager = class extends LifecycleCapability {
+@@ -1850,6 +1895,7 @@ var MCPClientManager = class extends LifecycleCapability {
  	* @returns Server ID
  	*/
  	async registerServer(id, options) {
@@ -242,10 +247,10 @@ index 56a8647..bc1e0de 100644
  		if (isBlockedUrl(options.url)) throw new Error(`Blocked URL: ${options.url} — MCP client connections to private/internal addresses are not allowed`);
  		const authProvider = options.transport?.authProvider ?? (options.callbackUrl ? this._createAuthProviderFn?.(options.callbackUrl) ?? this.createAuthProvider(id, options.callbackUrl, this._name, options.clientId) : void 0);
  		if (authProvider) {
-diff --git a/dist/src-BZeu-SCD.js b/dist/src-BZeu-SCD.js
-index 84c6dbf..96d5a4d 100644
---- a/dist/src-BZeu-SCD.js
-+++ b/dist/src-BZeu-SCD.js
+diff --git a/dist/src-6lr7MtM_.js b/dist/src-6lr7MtM_.js
+index 0630467a8586994f1247be69154b632c19d870c4..19e3cde04671271adf5809749179861b84d1cec1 100644
+--- a/dist/src-6lr7MtM_.js
++++ b/dist/src-6lr7MtM_.js
 @@ -27,6 +27,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
  import { DurableObject, RpcTarget, exports } from "cloudflare:workers";
  import { nanoid } from "nanoid";

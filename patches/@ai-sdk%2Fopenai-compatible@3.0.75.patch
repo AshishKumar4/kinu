@@ -1,10 +1,10 @@
 diff --git a/dist/index.js b/dist/index.js
-index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..c3e76b5f8f12c74fa90db0dbc19031421848365a 100644
+index 44f33db4634a0d069df9eb56edd4842ed3d8abda..b5ae37c9dc07596701db3f78fa6f82e31428246d 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -136,9 +136,57 @@ function convertToolContentPart(part) {
+@@ -143,9 +143,57 @@ function convertToolContentPart(part, provider) {
  	if (part.type === "custom") throw new UnsupportedFunctionalityError({ functionality: "custom tool content parts" });
- 	return convertToOpenAICompatibleContentPart(part);
+ 	return convertToOpenAICompatibleContentPart(part, provider);
  }
 +/**
 +* Kinu patch: each step re-converts the whole history, though only its tail is new. A prompt message frozen to its
@@ -32,13 +32,13 @@ index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..c3e76b5f8f12c74fa90db0dbc1903142
 +	for (const item of Object.values(value)) freezeWireTree(item);
 +	return Object.freeze(value);
 +}
- function convertToOpenAICompatibleChatMessages(prompt, { providerOptionsKey = "google", supportsMultiPartToolContent = false } = {}) {
-+	const key = `${providerOptionsKey}\u0000${supportsMultiPartToolContent}`;
+ function convertToOpenAICompatibleChatMessages(prompt, { provider = "openaiCompatible", providerOptionsKey = "google", supportsMultiPartToolContent = false } = {}) {
++	const key = `${provider}\u0000${providerOptionsKey}\u0000${supportsMultiPartToolContent}`;
  	const messages = [];
 -	for (const { role, content, ...message } of prompt) {
 +	for (const entry of prompt) {
 +		if (!isFrozenPromptTree(entry)) {
-+			messages.push(...convertOneChatMessage(entry, providerOptionsKey, supportsMultiPartToolContent));
++			messages.push(...convertOneChatMessage(entry, provider, providerOptionsKey, supportsMultiPartToolContent));
 +			continue;
 +		}
 +		let byKey = convertedChatMessages.get(entry);
@@ -48,25 +48,25 @@ index 4e8b3427efd3be44ad8d856aa21f1640ecdc0afe..c3e76b5f8f12c74fa90db0dbc1903142
 +		}
 +		let converted = byKey.get(key);
 +		if (converted === void 0) {
-+			converted = freezeWireTree(convertOneChatMessage(entry, providerOptionsKey, supportsMultiPartToolContent));
++			converted = freezeWireTree(convertOneChatMessage(entry, provider, providerOptionsKey, supportsMultiPartToolContent));
 +			byKey.set(key, converted);
 +		}
 +		messages.push(...converted);
 +	}
 +	return messages;
 +}
-+function convertOneChatMessage({ role, content, ...message }, providerOptionsKey, supportsMultiPartToolContent) {
++function convertOneChatMessage({ role, content, ...message }, provider, providerOptionsKey, supportsMultiPartToolContent) {
 +	const messages = [];
 +	{
  		const metadata = getOpenAIMetadata({ ...message });
  		switch (role) {
  			case "system":
-@@ -820,7 +868,7 @@ const chunkBaseSchema = z.looseObject({
+@@ -828,7 +876,7 @@ const chunkBaseSchema = () => z.looseObject({
  			})).nullish()
  		}).nullish(),
  		finish_reason: z.string().nullish()
 -	})),
 +	})).default([]),
- 	usage: openaiCompatibleTokenUsageSchema
+ 	usage: openaiCompatibleTokenUsageSchema()
  });
- const createOpenAICompatibleChatChunkSchema = (errorSchema) => z.union([chunkBaseSchema, errorSchema]);
+ const createOpenAICompatibleChatChunkSchema = (errorSchema) => z.union([chunkBaseSchema(), errorSchema]);

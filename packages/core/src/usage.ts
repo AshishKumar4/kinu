@@ -115,12 +115,14 @@ export function normalizeAnthropicUsage(raw: JsonObject): Usage {
   return out;
 }
 
-/** `raw` decides whether each field was reported; the SDK value is preferred for what it is. Without `raw`, the SDK
- *  field's presence decides. */
+/** `raw` decides whether each field was reported; the SDK value is preferred for what it is. Without `raw`, or with a
+ *  `raw` that names none of the counts (ai's V2 adapter writes `{ totalTokens }` there itself), the SDK field's presence
+ *  decides. */
 export function normalizeUsage(usage: LanguageModelUsage | undefined): Usage {
   if (usage === undefined) return {};
   const provider = v.safeParse(RawProviderUsageSchema, usage.raw);
-  const fromProvider = provider.success ? reportedByProvider(provider.output) : undefined;
+  const reported = provider.success ? reportedByProvider(provider.output) : undefined;
+  const fromProvider = reported !== undefined && USAGE_FIELDS.some((field) => reported[field] !== undefined) ? reported : undefined;
 
   const sdk: Usage = {
     input: usage.inputTokens,

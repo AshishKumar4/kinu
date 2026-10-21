@@ -1,5 +1,5 @@
 diff --git a/dist/index.mjs b/dist/index.mjs
-index 764cbf5325502a9836710b1c218e03d2356cd192..039a5a636e789259155a69f9da7cf59932ba0a81 100644
+index 6e20d872f9e34bd4c38aa413d80a8a96bc955fcd..edb2910dc4467b57360c3cd22e875ece5c686087 100644
 --- a/dist/index.mjs
 +++ b/dist/index.mjs
 @@ -46,6 +46,24 @@ function apiCallErrorFromResponse(response, errorBody, context) {

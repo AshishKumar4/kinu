@@ -324,6 +324,21 @@ describe('normalizeUsage without a provider report', () => {
     expect(u).toEqual({ input: 10, output: 4 });
   });
 
+  // ai 7.0.148's adapter for a V2-spec model sets `raw` to `{ totalTokens }` itself: no provider's payload, and naming
+  // none of the counts, so it witnessed none of them and the report read as unmeasured.
+  test("a report whose raw names no count, as the SDK's V2 adapter writes it, is taken at its word", () => {
+    const u = normalizeUsage({
+      inputTokens: 5,
+      outputTokens: 7,
+      inputTokenDetails: { noCacheTokens: undefined, cacheReadTokens: undefined, cacheWriteTokens: undefined },
+      outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
+      totalTokens: 12,
+      raw: { totalTokens: 12 },
+    });
+
+    expect(u).toEqual({ input: 5, output: 7 });
+  });
+
   test('an all-undefined report reports nothing', () => {
     const u = normalizeUsage({
       inputTokens: undefined,

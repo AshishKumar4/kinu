@@ -287,7 +287,9 @@ describe('a chat request through the production gate', () => {
         opened.resolve();
 
         // The brief's turn holds at its model until it is stopped, and its call ends only once Continue reached the
-        // agent: a stopped turn is still ending when the next words come, as over staging's network.
+        // agent: the stopped call is still out when the next words come, as over staging's network. Since ai 7.0.148 a
+        // stopped stream ends at the abort, not when its call settles, so the turn may be settling by then rather than
+        // streaming, and Continue is queued rather than steered; either way it runs as a turn of its own.
         return new Promise((_resolve, reject) => {
           options.abortSignal?.addEventListener('abort', () => { unwound.promise.then(() => { reject(options.abortSignal?.reason); }, reject); });
         });
@@ -305,7 +307,7 @@ describe('a chat request through the production gate', () => {
       gate(wire, chatRequest('req-continue', 'Continue')),
     ];
 
-    await driveUntil(harness, "Continue's words never reached the agent", () => sentWords(ownDatabase(harness, workspaceMainActor(harness.db).actorId), 'input-req-continue'));
+    await driveUntil(harness, "Continue's words never reached the agent", () => sentWords(ownDatabase(harness, workspaceMainActor(harness.db).actorId), 'input-req-continue') || asked.includes('continue after the brief'));
     unwound.resolve();
 
     await frame((frames) => doneFrames(frames).some((done) => done.id === 'req-continue'));
@@ -337,7 +339,8 @@ describe('a chat request through the production gate', () => {
       asked.push('brief');
       opened.resolve();
 
-      // The brief's turn holds at its model until it is stopped, and its call ends only once Continue reached the agent.
+      // The brief's turn holds at its model until it is stopped, and its call ends only once Continue reached the agent,
+      // as a steer of the stopped turn or as its own turn (the first test says why either).
       return new Promise<Response>((_resolve, reject) => {
         run.signal?.addEventListener('abort', () => { unwound.promise.then(() => { reject(run.signal?.reason); }, reject); });
       });
@@ -361,7 +364,7 @@ describe('a chat request through the production gate', () => {
       gate(wire, chatRequest('req-continue', 'Continue')),
     ];
 
-    await driveUntil(workspace, "Continue's words never reached the agent", () => sentWords(ownDatabase(workspace, actorId), 'input-req-continue'));
+    await driveUntil(workspace, "Continue's words never reached the agent", () => sentWords(ownDatabase(workspace, actorId), 'input-req-continue') || asked.includes('continue after the brief'));
     unwound.resolve();
     await frame((frames) => doneFrames(frames).some((done) => done.id === 'req-continue'));
     await Promise.all([opening, ...handled]);
