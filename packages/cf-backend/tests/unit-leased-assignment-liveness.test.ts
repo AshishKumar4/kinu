@@ -163,7 +163,7 @@ test('an evolution subagent whose answer was stored for its lane is not run agai
   const actorId = await hire(workspace, 'task', 'evolution');
 
   // A refiner's answer goes to its lane's durable inbox, never the root's rail.
-  rosterOver(workspace.db).subagents.record('summariser', { requestId: 'refine-1' }, Date.now());
+  rosterOver(workspace.db).evolution.record('summariser', { requestId: 'refine-1' }, Date.now());
 
   const mark = Object.getOwnPropertyDescriptor(EventLog.prototype, 'markTurnCompleted');
 
@@ -177,7 +177,7 @@ test('an evolution subagent whose answer was stored for its lane is not run agai
 
   const first = asked(gateway);
 
-  expect(rosterOver(workspace.db).subagents.answerFor({ requestId: 'refine-1' })).toMatchObject({ state: 'answered' });
+  expect(rosterOver(workspace.db).evolution.answerFor({ requestId: 'refine-1' })).toMatchObject({ state: 'answered' });
   await nextActivation(workspace, gateway);
   expect(asked(gateway) - first).toBe(0);
 });

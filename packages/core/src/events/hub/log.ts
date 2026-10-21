@@ -251,13 +251,13 @@ const OpenAssignmentRowSchema = v.object({ id: v.string() });
 export class EventLog {
   private readonly actorId: string;
 
-  private readonly subagents: EvolutionSubagentStore;
+  private readonly evolution: EvolutionSubagentStore;
 
   /** `actorId` is captured once so a re-pointed handle cannot move the log; `assertCurrent()` runs
    *  before every statement so a retired actor stops at once. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
-    this.subagents = new EvolutionSubagentStore(sql, actor);
+    this.evolution = new EvolutionSubagentStore(sql, actor);
   }
 
   /** Without `caused_by` the event roots its own trace. */
@@ -433,7 +433,7 @@ export class EventLog {
   readonly isEvolutionReport = (event: KinuEvent): boolean =>
     event.variant === 'subagent_report'
     && (event.payload_visibility === 'full' || event.payload_visibility === 'redact')
-    && this.subagents.has(event.payload.from_subagent);
+    && this.evolution.has(event.payload.from_subagent);
 
   markConsumed(eventId: EventId, turnId: TurnId, stepIdx: number, now = Date.now()): void {
     this.actor.assertCurrent();

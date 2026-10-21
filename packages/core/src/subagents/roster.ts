@@ -149,12 +149,12 @@ export function initSubagentRosterTable(sql: SqlExec): void {
 export class SubagentRosterStore {
   private readonly actorId: string;
 
-  readonly subagents: EvolutionSubagentStore;
+  readonly evolution: EvolutionSubagentStore;
 
   /** Scoped to one parent actor: subagent names are unique only per parent. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
-    this.subagents = new EvolutionSubagentStore(sql, actor);
+    this.evolution = new EvolutionSubagentStore(sql, actor);
   }
 
   ensureSchema(): void {
@@ -267,7 +267,7 @@ export class SubagentRosterStore {
       this.sql.exec(`DELETE FROM actor_subagents WHERE actor_id = ? AND name = ?
         AND json_extract(actor_reference, '$.actorId') = ? AND json_extract(actor_reference, '$.workspaceId') = ?
         AND json_extract(actor_reference, '$.parentActorId') IS ?`, this.actorId, name, reference.actorId, reference.workspaceId, reference.parentActorId);
-      this.subagents.remove(name);
+      this.evolution.remove(name);
     }));
   }
 
@@ -288,7 +288,7 @@ export class SubagentRosterStore {
   remove(name: string): void {
     this.actor.assertCurrent();
     this.sql.exec(`DELETE FROM actor_subagents WHERE actor_id = ? AND name = ?`, this.actorId, name);
-    this.subagents.remove(name);
+    this.evolution.remove(name);
   }
 
   get(name: string): SubagentRosterEntry | null {

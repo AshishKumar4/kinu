@@ -192,7 +192,7 @@ export function createTemporaryAgentPort(deps: {
 
       if (deps.roster.get(name)) return outcome('failed', 'The generated actor name is already in use.', 'none', 'denied');
 
-      if (request.lane) deps.roster.subagents.record(name, request.lane, startedAt);
+      if (request.lane) deps.roster.evolution.record(name, request.lane, startedAt);
 
       const birth: SubagentBirthRequest = {
         seed: {
@@ -223,9 +223,9 @@ export function createTemporaryAgentPort(deps: {
       deps.afterTurn(actor, async () => { await deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor); });
     },
 
-    reclaim: (request) => deps.roster.subagents.answerFor(request),
-    answered: () => deps.roster.subagents.answered(),
-    forget: (name) => { deps.roster.subagents.remove(name); },
+    reclaim: (request) => deps.roster.evolution.answerFor(request),
+    answered: () => deps.roster.evolution.answered(),
+    forget: (name) => { deps.roster.evolution.remove(name); },
   };
 }
 

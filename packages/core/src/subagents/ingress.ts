@@ -118,7 +118,7 @@ export async function receiveSubagentEvent(
     }
 
     const queued = deps.transaction(() => {
-      deps.roster.subagents.storeAnswer(input.fromSubagent, input.status === 'blocked' ? 'blocked' : 'completed', answer);
+      deps.roster.evolution.storeAnswer(input.fromSubagent, input.status === 'blocked' ? 'blocked' : 'completed', answer);
       deps.roster.applyReport(input.fromSubagent, input.status, input.origin, now);
 
       return deps.evolutionAnswerStored();
