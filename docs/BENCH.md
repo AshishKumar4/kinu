@@ -371,8 +371,8 @@ harbor run \
 `bench.harbor.omp_agent:OmpAgent` runs OMP headless, so a comparison of models keeps one harness and varies only `-m`.
 It is built for the private kinu-envs review tasks: OMP runs inside the task's container, never on this host, and
 takes the operator's own OMP binary. Its login is read from OMP's store, read-only. Only the access token and the
-account ids leave the store, never a refresh token, and a token that would expire before the run's timeout is refused,
-not renewed. The token enters the container as a 0600 file, is imported into a home that belongs to the run, and
+account ids leave the store, never a refresh token, and a token that would expire within the run's 45-minute limit
+(every model's, for parity) is refused, not renewed. The token enters the container as a 0600 file, is imported into a home that belongs to the run, and
 that home is deleted before Harbor collects artifacts. Allow egress only to the provider's API host:
 
 ```bash
