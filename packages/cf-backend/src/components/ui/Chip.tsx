@@ -2,7 +2,7 @@
  * A small named thing a row holds, with its one control (docs/DESIGN-SYSTEM.md §2; a device's grant to a workspace):
  * 24 tall and round, on the hover wash, or a tone's tint in its ink.
  */
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { XIcon } from "@phosphor-icons/react";
 
 export type ChipTone = "neutral" | "success" | "warning" | "danger" | "info" | "accent";
@@ -36,4 +36,9 @@ export function Chip({ tone = "neutral", icon, children, onRemove, removeLabel, 
       )}
     </span>
   );
+}
+
+/** A chip that is a choice, pressed while chosen: a machine to work on. A dashed one offers to add another. */
+export function ChipToggle({ className, type = "button", ...rest }: ComponentProps<"button">) {
+  return <button type={type} className={`p-chip-toggle${className === undefined ? "" : ` ${className}`}`} {...rest} />;
 }

@@ -38,6 +38,7 @@ import {
 } from "./EnvironmentSessions";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { IconControl } from "@/components/ui/IconControl";
+import { ChipToggle } from "@/components/ui/Chip";
 
 /** The terminal (xterm, 333 KB of the workspace's first chunk on 2026-10-08) loads with a command lane's first view. */
 const TerminalPane = lazyRoute<TerminalPaneProps>(async () => {
@@ -343,19 +344,18 @@ function MachineRow({ environments, execByName, selected, chosen, onSelect, onCo
         return (
           <div key={m.key} data-env-card={m.mount.name} className="min-w-0">
             {/* A narrow column names only the chosen machine; the others keep their icon and state. */}
-            <button type="button" data-env-select onClick={() => onSelect(m.key)} aria-pressed={active} title={`${machineLabel(m, exec)}: ${about}`} className="p-env-chip">
+            <ChipToggle data-env-select onClick={() => onSelect(m.key)} aria-pressed={active} title={`${machineLabel(m, exec)}: ${about}`}>
               <KindIcon size={14} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden />
               <span className={active ? "truncate" : "sr-only @[30rem]:not-sr-only @[30rem]:truncate"}>{machineLabel(m, exec)}</span>
               {m.mount.policy.readOnly && <LockSimpleIcon size={11} className="shrink-0 p-text-3" aria-label="Read-only" />}
               <Dot tone={waiting.has(m.key) ? "attention" : status.tone} />
-            </button>
+            </ChipToggle>
           </div>
         );
       })}
-      <button type="button" data-env-connect onClick={onConnectDevice} aria-label="Connect a PC" title="Connect a PC"
-        className="p-env-chip border-dashed p-text-3">
-        <PlusIcon size={13} className="shrink-0" aria-hidden /><span className="hidden @[56rem]:inline">Connect a PC</span>
-      </button>
+      <ChipToggle data-env-connect onClick={onConnectDevice} aria-label="Connect a PC" title="Connect a PC" className="border-dashed p-text-3">
+        <PlusIcon size={14} className="shrink-0" aria-hidden /><span className="hidden @[56rem]:inline">Connect a PC</span>
+      </ChipToggle>
       {empty && <span className="t-meta p-text-3">No environments available.</span>}
       {loading && <Loader size="sm" />}
       {/* The chosen machine's state in words, then what it offers: the chips are named by their machines alone. */}
@@ -432,10 +432,10 @@ function MachineActions({ mount, name, size, onOpenFiles }: {
     <>
       {size}
       {filesRoot !== null && (
-        <button type="button" data-env-files onClick={() => onOpenFiles(filesRoot)} aria-label={`${name}'s files`} title={`Browse ${name}'s files at ${filesRoot}`} className="p-env-action">
-          <FolderOpenIcon size={13} aria-hidden /><span className="hidden @[56rem]:inline">Files</span>
+        <Button size="sm" icon={<FolderOpenIcon size={14} aria-hidden />} data-env-files onClick={() => onOpenFiles(filesRoot)} aria-label={`${name}'s files`} title={`Browse ${name}'s files at ${filesRoot}`}>
+          <span className="hidden @[56rem]:inline">Files</span>
           <span data-env-mount className="t-meta t-mono hidden p-text-3 @[56rem]:inline">{filesRoot}</span>
-        </button>
+        </Button>
       )}
     </>
   );
@@ -637,16 +637,12 @@ function DesktopView({ name, src, width, height }: { name: string; src: string; 
         {cover !== null && <span className="inline-flex min-w-0 items-center gap-2 font-medium p-text-2"><DesktopIcon size={13} aria-hidden /><span className="truncate">{title}</span></span>}
         <span className="shrink-0">{String(width)} × {String(height)}</span>
         {area !== null && cover === null && (
-          <button type="button" data-desktop-expand onClick={() => setExpanded(true)} aria-label={`Expand ${title}`} title="Expand over the workspace"
-            className="ml-auto inline-flex items-center gap-2 hover:p-text">
-            <ArrowsOutIcon size={13} aria-hidden />Expand
-          </button>
+          <Button variant="ghost" size="sm" icon={<ArrowsOutIcon size={14} aria-hidden />} data-desktop-expand onClick={() => setExpanded(true)} aria-label={`Expand ${title}`}
+            title="Expand over the workspace" className="ml-auto">Expand</Button>
         )}
         {cover !== null && (
-          <button type="button" data-desktop-return onClick={() => setExpanded(false)} aria-label="Back to the Environment panel"
-            className="p-env-action ml-auto">
-            <ArrowsInIcon size={13} aria-hidden />Back to panel
-          </button>
+          <Button size="sm" icon={<ArrowsInIcon size={14} aria-hidden />} data-desktop-return onClick={() => setExpanded(false)} aria-label="Back to the Environment panel"
+            className="ml-auto">Back to panel</Button>
         )}
       </div>
       {/* The screen at its own shape, as large as its place allows, so the client draws it edge to edge; expanded, on

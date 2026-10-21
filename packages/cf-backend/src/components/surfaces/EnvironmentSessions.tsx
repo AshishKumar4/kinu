@@ -10,6 +10,7 @@ import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { IconControl } from "@/components/ui/IconControl";
+import { SessionButton, SessionRename } from "@/components/ui/SessionTabs";
 
 /** A read is one exec in the box (about 150 ms there, 10 ms of it tmux, staging 2026-10-13); a few seconds keeps the
  *  marks current while the tab is open, and nothing reads while it is closed or hidden. */
@@ -160,16 +161,16 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
         data-hidden-start={hidden.start || undefined} data-hidden-end={hidden.end || undefined}
         onWheel={(event) => { if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) event.currentTarget.scrollLeft += event.deltaY; }}>
         {sessions === null && (
-          <button type="button" role="tab" aria-selected={current === ONE_SHELL} className="p-session-tab" onClick={() => onChoose(ONE_SHELL)}>
+          <SessionButton part="tab" aria-selected={current === ONE_SHELL} onClick={() => onChoose(ONE_SHELL)}>
             <Dot tone="ready" />{ONE_SHELL}
-          </button>
+          </SessionButton>
         )}
         {sessions?.map((session) => {
           const { tone, word } = sessionTone(session);
 
           return renaming === session.id ? (
-            <input key={session.id} autoFocus defaultValue={session.name} aria-label={`Rename ${session.name}`} maxLength={40}
-              className="p-session-rename" onBlur={(event) => { setRenaming(null); detach(onRename(session.id, event.currentTarget.value)); }}
+            <SessionRename key={session.id} autoFocus defaultValue={session.name} aria-label={`Rename ${session.name}`} maxLength={40}
+              onBlur={(event) => { setRenaming(null); detach(onRename(session.id, event.currentTarget.value)); }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") event.currentTarget.blur();
 
@@ -177,22 +178,22 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
               }} />
           ) : (
             <span key={session.id} className="p-session-tab-slot">
-              <button type="button" role="tab" aria-selected={current === session.id} className="p-session-tab" data-session={session.id}
+              <SessionButton part="tab" aria-selected={current === session.id} data-session={session.id}
                 title={`${session.name}: ${word}. Double-click to rename.`} onClick={() => onChoose(session.id)}
                 onDoubleClick={() => setRenaming(session.id)}>
                 <Dot tone={tone} />{session.job !== undefined && <AgentMark />}{session.name}
-              </button>
+              </SessionButton>
               {sessions.length > 1 && (
-                <button type="button" aria-label={`Close ${session.name}`} title={`Close ${session.name}: its shell ends`} className="p-session-close"
-                  onClick={() => detach(onClose(session.id))}><XIcon size={10} weight="bold" /></button>
+                <SessionButton part="close" aria-label={`Close ${session.name}`} title={`Close ${session.name}: its shell ends`}
+                  onClick={() => detach(onClose(session.id))}><XIcon size={10} weight="bold" /></SessionButton>
               )}
             </span>
           );
         })}
         {desktop && (
-          <button type="button" role="tab" aria-selected={current === "desktop"} className="p-session-tab" onClick={onDesktop}>
+          <SessionButton part="tab" aria-selected={current === "desktop"} onClick={onDesktop}>
             <DesktopIcon size={14} aria-hidden />Desktop
-          </button>
+          </SessionButton>
         )}
       </div>
       {onOpen !== null && (

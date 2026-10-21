@@ -2523,7 +2523,7 @@ body > .annotation-toolbar {
 /* Environment: one surface on the column's ground. The machines are a row of equal chips, the chosen one on the
    accent's wash; the chosen machine's head sits on the ground itself; its terminal or screen runs from one hairline
    to the column's foot. */
-.p-env-chip {
+.p-chip-toggle {
   display: inline-flex;
   max-width: 100%;
   align-items: center;
@@ -2539,13 +2539,13 @@ body > .annotation-toolbar {
   letter-spacing: -0.005em;
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out, border-color var(--dur-state) ease-out;
 }
-.p-env-chip:hover { border-color: var(--c-border-strong); color: var(--c-text); }
-.p-env-chip[aria-pressed="true"] {
+.p-chip-toggle:hover { border-color: var(--c-border-strong); color: var(--c-text); }
+.p-chip-toggle[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--c-accent) 38%, transparent);
   background: var(--c-selected);
   color: var(--c-text);
 }
-.p-env-chip[aria-pressed="true"] > svg { color: var(--c-accent-mark); }
+.p-chip-toggle[aria-pressed="true"] > svg { color: var(--c-accent-mark); }
 /* One status language for machines and terminals: the dot's colour says the state, its motion says work. */
 .p-env-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: var(--r-pill); background: var(--c-success); }
 .p-env-dot[data-tone="working"] { background: var(--c-accent-mark); animation: dot-pulse 1.4s ease-in-out infinite; }
@@ -2557,22 +2557,6 @@ body > .annotation-toolbar {
 [data-env-status] { color: var(--c-text-3); }
 [data-env-status][data-tone="attention"] { color: var(--c-warning); font-weight: 500; }
 [data-env-status][data-tone="danger"] { color: var(--c-danger); font-weight: 500; }
-.p-env-action {
-  display: inline-flex;
-  height: 28px;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid var(--c-border);
-  border-radius: var(--r-control);
-  background: var(--c-surface);
-  color: var(--c-text-2);
-  font-size: 13px;
-  font-weight: 500;
-}
-.p-env-action:hover { color: var(--c-text); border-color: var(--c-border-strong); }
-.p-env-action:disabled { opacity: 0.6; }
 /* A machine's sessions as tabs (D90): a name and its dot; the open one carries the accent's underline down onto the
    rule its terminal starts under. Tabs that do not fit fade at the edge and scroll. */
 .p-session-tabs {
