@@ -49,7 +49,7 @@ export {
 export { ForkNotices, forkNoticeDeliveries, initForkNoticeTable, type ForkNotice } from './fork-notices';
 
 export {
-  reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
+  reconcileInterruptedForks, reclaimSettledRunActors, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   type RunEventLedger,
 } from './reconcile';

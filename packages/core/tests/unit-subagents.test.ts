@@ -1,5 +1,5 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
-import { unlistedTree } from './helpers-agents';
+import { unlistedTree, ROOT_DELEGATION_BUDGET } from './helpers-agents';
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -12,7 +12,6 @@ import {
   spillEventContent,
   SubagentRosterStore,
   DELEGATION_MAX_DEPTH,
-  ROOT_DELEGATION_BUDGET,
   delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,

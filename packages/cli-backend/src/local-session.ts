@@ -143,7 +143,7 @@ import {
 import { cleanupFacetScratch, makeSqlExec, soulIn, writeTransaction, type CLIRuntime } from './runtime';
 import { createLocalActorHost } from './actor-host';
 import { createLocalOrchestration, type LocalOrchestration } from './orchestration';
-import { localActorDirectory, nodeWorkspace, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
+import { localActorDirectory, nodeWorkspace, reclaimSettledRunActors, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
 import { osLeaseProcess } from './agent-host/lease-process';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
@@ -1495,6 +1495,7 @@ export class LocalAgentSession {
       }),
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
     });
+    await this.reclaimSettledRunActors();
     // An advisor that answered while this process was gone.
     await this.deliverAdvisorAnswers();
     const reviews = await this.actorSession.orchestrator.runDeferredTurnReviews();
@@ -2632,18 +2633,31 @@ export class LocalAgentSession {
       this.loopOrigins.set(actorId, input.loop);
     }, { kind: 'head', writes });
 
-    return {
-      ...seat,
-      release: async () => {
-        this.actorHost.release(binding.reference);
-        this.loopOrigins.delete(binding.reference.actorId);
-        await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
-          const agentName = actorHomeName(binding);
+    return { ...seat, release: () => this.retireRunActor(binding) };
+  }
 
-          cleanupFacetScratch(this.rt.space, agentName);
-        });
-      },
-    };
+  /** A head's or a node's actor, once its run is done: unseated, its loop forgotten, retired with its scratch. */
+  private async retireRunActor(binding: Pick<LocalActorBinding, 'reference' | 'name' | 'origin' | 'storageKey'>): Promise<void> {
+    this.actorHost.release(binding.reference);
+    this.loopOrigins.delete(binding.reference.actorId);
+    await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
+      cleanupFacetScratch(this.rt.space, actorHomeName(binding));
+    });
+  }
+
+  /** Run actors a process left behind, heads and nodes alike (a node's is retired by no release of its own). */
+  private async reclaimSettledRunActors(): Promise<void> {
+    // Only the local root owns the actor directory.
+    if (this.rt.actor.parentActorId !== null) return;
+
+    const { retired } = await reclaimSettledRunActors({
+      actors: localActorDirectory(this.rt.actor).directory.list(),
+      resumable: new Set(this.actorHost.resumable(Number.MAX_SAFE_INTEGER).map((turn) => turn.reference.actorId)),
+      ledger: { readHead: (id) => this.headJournal.readHead(id), hasLiveExploration: () => this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms() },
+      retire: (actor) => this.retireRunActor({ ...actor, reference: actorReferenceOf(actor) }),
+    });
+
+    if (retired > 0) diagnostics.event('actor.settled_retired', { retired });
   }
 
   /** The session's own job seams: a node's or head's output reaches the same listeners its chat's does. */
@@ -2737,8 +2751,9 @@ export class LocalAgentSession {
   }
 
   /**
-   * Seat one swarm node as a logical actor; a factory per node (see core's `HostedNodeSeat`). No release:
-   * retirement belongs to the owning search. Public so an eval can seat nodes through this session.
+   * Seat one swarm node as a logical actor; a factory per node (see core's `HostedNodeSeat`). No release: it is
+   * retired once its row is settled, by the next start's reclaim, as the cloud's are. Public so an eval can seat nodes
+   * through this session.
    */
   async hostNode(node: NodeIdentity): Promise<HostedNodeSeat<HostedActor>> {
     return (await this.seatRunActor(node.nodeId, () => {}, { kind: 'node' })).seat;

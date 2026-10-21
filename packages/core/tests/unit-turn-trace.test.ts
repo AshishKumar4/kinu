@@ -4,13 +4,13 @@
  * object starts another invocation is force-closed with its attributes dropped (11 of 59 turns on
  * staging, 2026-09-26), and a detached turn's work straddles alarms and messages.
  */
-import { lonelyTree } from './helpers-agents';
+import { lonelyTree, ROOT_DELEGATION_BUDGET } from './helpers-agents';
 import { expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import { scriptedTurnModel, type ScriptedTurnResult, admitTestClaim, createRecordingTracer } from '@kinu.run/test-utils';
 import { sessionFixture } from './helpers-session';
 import { recoverActorTurns } from '../src/state/actor-host';
-import { createAgentsTool, ROOT_DELEGATION_BUDGET, type SubagentHandoff, type SubagentRosterEntry, type TeamToolDeps } from '../src/index';
+import { createAgentsTool, type SubagentHandoff, type SubagentRosterEntry, type TeamToolDeps } from '../src/index';
 import {
   createAgentTracing,
 } from '../src/obs/index';

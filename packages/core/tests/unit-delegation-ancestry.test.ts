@@ -41,7 +41,6 @@ function hirerWith(corrupt: (sql: ReturnType<typeof createTestSql>, ids: { reado
   const lifecycle = hireLifecycle({
     parent: () => ({ reference: actorReferenceOf(record), record }),
     directory,
-    describe: (actorId) => directory.retained(actorId),
     born: unused, asHire: unused, deliver: unused, hirerName: () => 'second', announce: () => {}, retireJobs: unused, roster: () => { throw new Error('no roster is read'); }, retire: unused,
   });
 
