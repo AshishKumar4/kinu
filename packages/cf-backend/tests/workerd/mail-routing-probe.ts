@@ -4,14 +4,17 @@
  * that fake, whose state is shared across workers.
  */
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import type { MailRulesState } from './mail-rules-fake';
+import { KinuError } from '@kinu.run/core/obs';
+import { MAIL_RULES_WORKER, type MailRulesState } from './mail-rules-fake';
 
 import { MailboxDO } from '../../src/mail/mailbox-do';
 import { MailNameDO, type MailNameClaim } from '../../src/mail/mailname-do';
 
 /**
- * The mail names as deployed, whose first answer for a label a test names is lost: `lostbefore…` before the claim is
- * made, as a reset would, and `lostafter…` once it is, as a dropped reply would. Neither is MailName's own refusal.
+ * The mail names as deployed, whose first answer for a label a test names goes wrong: `lostbefore…` is lost before the
+ * claim is made, as a reset would, `lostrouted…` once Cloudflare has made its rule but before the claim is written,
+ * and `lostafter…` once the claim is; `refusedstore…` is refused by a store that cannot be read, MailName's own refusal
+ * but no denial.
  */
 export class LossyMailNameDO extends MailNameDO {
   private readonly answered = new Set<string>();
@@ -22,6 +25,22 @@ export class LossyMailNameDO extends MailNameDO {
     this.answered.add(label);
 
     if (first && label.startsWith('lostbefore')) throw new Error('Network connection lost.');
+
+    if (first && label.startsWith('refusedstore')) throw new KinuError('unavailable', 'This mail name\'s storage predates the release.');
+
+    if (first && label.startsWith('lostrouted')) {
+      await fetch(`https://api.cloudflare.com/client/v4/zones/${this.env.KINU_MAIL_ZONE ?? ''}/email/routing/rules`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${this.env.KINU_MAIL_ROUTING_TOKEN ?? ''}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: `Kinu ${label}`, enabled: true,
+          matchers: [{ type: 'literal', field: 'to', value: `${label}@${this.env.EMAIL_DOMAIN ?? ''}` }], actions: [{ type: 'worker', value: [MAIL_RULES_WORKER] }],
+        }),
+      });
+
+      throw new Error('Network connection lost.');
+    }
+
     const claimed = await super.claim(label, userId, kind, targetPath);
 
     if (first && label.startsWith('lostafter')) throw new Error('Network connection lost.');

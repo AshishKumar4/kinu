@@ -151,10 +151,20 @@ export class MailStore {
     return settleSync(this.written(''));
   }
 
-  /** A box just opened whose name could not be claimed, closed again: nothing routed to it, so nothing reached it. */
-  unopen(): void {
+  /**
+   * A box whose name was never claimed, closed again: nothing routed to it, so nothing reached it. Whether it was: a box
+   * that holds anything (a thread, an allowed sender, another box) is left as it is.
+   */
+  unopen(): boolean {
+    const held = this.deps.sql.exec(
+      "SELECT 1 FROM mail_threads UNION ALL SELECT 1 FROM mail_allow UNION ALL SELECT 1 FROM mail_addresses WHERE path != '' LIMIT 1",
+    ).toArray().length > 0;
+
+    if (held) return false;
     this.deps.sql.exec("DELETE FROM mail_addresses WHERE path = ''");
     this.deps.sql.exec('DELETE FROM mail_box WHERE id = 1');
+
+    return true;
   }
 
   /** The Personal assistant the owner has now reads their box, in place of one they had before (docs/MAIL.md §7). */

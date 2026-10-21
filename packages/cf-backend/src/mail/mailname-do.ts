@@ -75,9 +75,33 @@ export class MailNameDO extends DurableObject<Env> {
   }
 
   /**
+   * The label let go as `userId`'s account is deleted (docs/MAIL.md §11), serialized with claims so none under way is
+   * unrouted beneath it. Held by that account: the rules of its address and of every box under it deleted, then the
+   * label retired. Held by no one: a claim cut off after its rule was made may have left that rule, which goes too.
+   * Another account's: nothing. Answered outside the block, where a thrown refusal would reset the object.
+   */
+  release(label: string, userId: string): Promise<void> {
+    if (this.storageRefusal !== undefined) return settle(Effect.fail(this.storageRefusal));
+
+    const releasing = Effect.promise(async () => this.ctx.blockConcurrencyWhile(async (): Promise<Exit.Exit<void, KinuError>> => {
+      const held = await this.lookup();
+
+      if (held !== null && held.user_id !== userId) return Exit.void;
+      const unrouted = this.routes === null ? Exit.void : await hold(this.routes.unrouted(label, this.env.EMAIL_DOMAIN ?? ''));
+
+      if (Exit.isFailure(unrouted)) return unrouted;
+
+      if (held !== null) await this.retire(userId);
+
+      return Exit.void;
+    }));
+
+    return settle(Effect.flatMap(releasing, (exit) => exit));
+  }
+
+  /**
    * The label retired for good, as its account is deleted (docs/MAIL.md §11): its row stays, owned by no one, so it never
-   * routes and is never claimed again. A label `userId` does not hold is not its to retire. Its rules are the Mailbox's
-   * to delete first, which knows every box under it.
+   * routes and is never claimed again. A label `userId` does not hold is not its to retire.
    */
   async retire(userId: string): Promise<void> {
     this.ctx.storage.sql.exec(`UPDATE mail_name SET user_id = '' WHERE user_id = ?`, userId);

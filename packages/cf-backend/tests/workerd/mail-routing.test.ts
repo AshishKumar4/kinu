@@ -142,6 +142,27 @@ describe('mail on a subdomain of its zone, each address by a rule of its own', (
     expect(await name('lostbefore2').lookup()).toMatchObject({ user_id: 'u-dana-3' });
   });
 
+  // Last review, 2026-10-21: any refusal MailName wrote unwrote the rows, a store it could not read among them, and a
+  // claim cut off after its rule was made left that rule to no one.
+  it('a refusal that is no denial keeps the rows, and the next call claims again', async () => {
+    expect(await refusalOf(async () => mailbox('u-store-1').open({ userId: 'u-store-1', email: 'priya.raman@example.com', username: 'refusedstore1', assistant: null })))
+      .toMatchObject({ code: 'unavailable' });
+
+    expect((await mailbox('u-store-1').boxes()).map((box) => box.address)).toEqual([`refusedstore1@${DOMAIN}`]);
+    expect(await name('refusedstore1').lookup()).toMatchObject({ user_id: 'u-store-1' });
+  });
+
+  it("deleting an account whose claim was cut off after its rule was made deletes that rule, which no one's claim holds", async () => {
+    expect(await refusalOf(async () => mailbox('u-routed-1').open({ userId: 'u-routed-1', email: 'priya.raman@example.com', username: 'lostrouted1', assistant: null })))
+      .toMatchObject({ code: 'io', message: 'claiming lostrouted1' });
+    expect((await env.MAIL_RULES_FAKE.state()).addresses).toEqual([`lostrouted1@${DOMAIN}`]);
+
+    await mailbox('u-routed-1').deleteBox('u-routed-1');
+
+    expect((await env.MAIL_RULES_FAKE.state()).addresses).toEqual([]);
+    expect(await name('lostrouted1').lookup()).toBeNull();
+  });
+
   it("deletes every rule under the account's root as the account is, and never disables the zone's routing", async () => {
     await priyaOpened('praman', 'u-priya-3');
     await mailbox('u-priya-3').readableBy(caller('triage'));

@@ -37,8 +37,11 @@ const ROUTED_UNDER = 'mail:routed-under';
  */
 const CLAIMED = 'mail:claimed';
 
-/** MailName's own refusal, across RPC: it proves no claim was made. A lost reply, or a reset, proves nothing. */
-const AuthoredRefusal = v.object({ remote: v.literal(true), _tag: v.literal('KinuError') });
+/**
+ * MailName's own denial, across RPC: the name another account's, or Cloudflare's rule for it refused. Only that proves no
+ * claim was made; a lost reply, a reset or a store that could not be read proves nothing.
+ */
+const ClaimDenied = v.object({ remote: v.literal(true), _tag: v.literal('KinuError'), code: v.literal('denied') });
 
 export class MailboxDO extends DurableObject<Env> implements MailboxCalls, MailboxAgentCalls {
   private readonly store: MailStore;
@@ -164,8 +167,8 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
   /**
    * The box's name claimed (MailName's `claim`, which routes it on a subdomain), and acknowledged once it is. MailName's
-   * own refusal (the name another account's, or Cloudflare's rule refused) proves no claim was made, so the rows that
-   * recorded the name go; a lost reply proves nothing, so they stay and the next call claims again.
+   * denial proves no claim was made, so the rows that recorded the name go, where they hold nothing yet; anything else
+   * proves nothing, so they stay and the next call claims again.
    */
   private async claimed(username: string, userId: string): Promise<Exit.Exit<void, KinuError>> {
     const [answered] = await Promise.allSettled([objectNamed(this.env.MAILNAME, username).claim(username, userId)]);
@@ -176,7 +179,7 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
       return Exit.void;
     }
 
-    if (v.is(AuthoredRefusal, answered.reason)) this.store.unopen();
+    if (v.is(ClaimDenied, answered.reason)) this.store.unopen();
 
     return Exit.fail(authoredRefusal({ doing: `claiming ${username}`, cause: answered.reason }));
   }
@@ -222,20 +225,11 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     this.deleting = true;
     const [box] = this.ctx.storage.sql.exec('SELECT username FROM mail_box WHERE id = 1').toArray();
 
-    const recorded = box === undefined ? undefined : v.parse(v.object({ username: v.string() }), box).username;
+    const username = box === undefined ? undefined : v.parse(v.object({ username: v.string() }), box).username;
 
-    // Only a name its claim finished for, or MailName says is its: a box whose open was interrupted may record one
-    // another account holds, whose rules are not this account's to delete.
-    const username = recorded !== undefined && (this.ctx.storage.kv.get(CLAIMED) === recorded || (await objectNamed(this.env.MAILNAME, recorded).lookup())?.user_id === userId)
-      ? recorded
-      : undefined;
-
-    // Its rules first, the person's and every box's under it, while the box still records the name.
-    const unrouted = username === undefined || this.routes === null ? Exit.void : await hold(this.routes.unrouted(username, this.env.EMAIL_DOMAIN ?? ''));
-
-    if (Exit.isFailure(unrouted)) return settleSync(Effect.failCause(unrouted.cause));
-
-    if (username !== undefined) await objectNamed(this.env.MAILNAME, username).retire(userId);
+    // Its name let go while the box still records it, so a retry finds it again: MailName decides, serialized with any
+    // claim, whether it was this account's to unroute and retire (`release`).
+    if (username !== undefined) await objectNamed(this.env.MAILNAME, username).release(username, userId);
     await Promise.all(this.working);
     const bucket = this.bucket ?? undefined;
 
