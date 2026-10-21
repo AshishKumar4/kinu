@@ -42,7 +42,7 @@ export const CHAT_FACES = {
       ".p-heading": "-0.008em",
       ".prose-chat :is(h1,h2,h3)": "-0.006em",
       // Body sizes, 11 to 15px: none.
-      ".p-title, .p-row-text, .p-meta, .p-btn, .p-btn-danger, .p-btn-quiet, .p-pill, .p-tool, .p-env-chip, .p-page-link, .p-bar-sizer, .p-bar-link, .p-bar-tab[data-title] :is(.p-bar-sizer, .p-bar-link)": "0em",
+      ".p-title, .p-row-text, .p-meta, .p-button, .p-pill, .p-tool, .p-env-chip, .p-page-link, .p-bar-sizer, .p-bar-link, .p-bar-tab[data-title] :is(.p-bar-sizer, .p-bar-link)": "0em",
     },
   },
   geist: { label: "Geist", family: "Gallery Geist", url: geistUrl, xHeight: 0.53, leading: 1.7, tracking: "0em" },

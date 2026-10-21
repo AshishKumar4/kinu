@@ -73,13 +73,13 @@ function NewDot() {
   return <span data-drive-unseen className="size-1.5 shrink-0 rounded-full p-dot-accent" title="Something new" />;
 }
 
-/** Below `lg`, the places as a switch at the top. */
+/** Below `lg`, the places as a switch in the row under the bar, as `Segmented` draws one at 28. */
 function PlaceSwitch({ tab, places, unseen }: { tab: DriveTab; places: readonly DriveTab[]; unseen: boolean }) {
   return (
-    <nav aria-label="Drive" className="flex w-fit items-center gap-0.5 rounded-lg p-recessed p-0.5">
+    <nav aria-label="Drive" className="flex w-fit items-center gap-0.5 rounded-[var(--r-control)] p-recessed p-0.5">
       {PLACES.filter((each) => places.includes(each.id)).map((each) => (
         <Link key={each.id} to={each.to} state={{ chosen: true }} aria-current={each.id === tab ? "page" : undefined} data-drive-tab={each.id}
-          className={`flex items-center gap-1.5 whitespace-nowrap rounded-md px-3.5 py-1.5 p-t-control ${each.id === tab ? "p-surface p-text shadow-[0_1px_2px_var(--c-shadow-drop)]" : "p-text-3 hover:p-text"}`}>
+          className={`flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-px text-[13px] font-medium leading-5 ${each.id === tab ? "border-[var(--c-button-line)] bg-[var(--c-button-bg)] p-text shadow-[var(--shadow-button)]" : "border-transparent p-text-3 hover:p-text"}`}>
           {each.label}
           {each.id === "shared" && unseen && each.id !== tab && <NewDot />}
         </Link>
@@ -88,7 +88,7 @@ function PlaceSwitch({ tab, places, unseen }: { tab: DriveTab; places: readonly 
   );
 }
 
-const PLACE_ROW = "flex items-center gap-2.5 rounded-lg py-[7px] pl-2.5 pr-2 p-t-control transition-colors";
+const PLACE_ROW = "flex h-8 items-center gap-2.5 rounded-lg px-2 p-t-control transition-colors";
 
 /** A folder's own folders, Skills first: the tree draws only what can be walked into. */
 function subfolders(entries: readonly DriveEntry[] | undefined, parent: string): DriveEntry[] {
@@ -150,7 +150,7 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
   if (!drawn) return null;
 
   return (
-    <aside className="hidden w-52 shrink-0 flex-col overflow-y-auto border-r p-border px-3 pb-6 pt-8 lg:flex">
+    <aside className="hidden w-[220px] shrink-0 flex-col overflow-y-auto border-r p-border p-2 lg:flex">
       <nav aria-label="Drive places" className="space-y-0.5">
         {PLACES.filter((each) => places.includes(each.id)).map((each) => {
           const active = each.id === tab;
@@ -177,29 +177,16 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
   );
 }
 
-/**
- * The page's head, one tree laid out twice: below `lg` the title, the switch, the search and the crumbs stack; from
- * `lg` the title and the places are the column's, and the crumbs share a row with New or the search.
- */
-function DriveHead({ tab, path, subtitle, places, unseen, search }: {
-  tab: DriveTab; path: string; subtitle: ReactNode; places: readonly DriveTab[]; unseen: boolean;
-  search: { readonly query: string; readonly set: (query: string) => void };
-}) {
+/** Where in My stuff the page is: the crumbs under a folder, and the root's line; nothing on another place. */
+function DriveHead({ tab, path, subtitle }: { tab: DriveTab; path: string; subtitle: ReactNode }) {
   const isRoot = path === "/";
 
+  if (isRoot && subtitle === null) return null;
+
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center lg:grid-cols-[minmax(0,1fr)_auto_auto] [grid-template-areas:'title_action'_'places_places'_'search_search'_'crumbs_crumbs'] lg:[grid-template-areas:'crumbs_action_search']">
-      {places.length > 1 && <div className="mt-5 [grid-area:places] lg:hidden"><PlaceSwitch tab={tab} places={places} unseen={unseen} /></div>}
-      {tab === "shared" && (
-        <input value={search.query} onChange={(event) => search.set(event.target.value)} placeholder="Search shared" aria-label="Search shared"
-          data-drive-search className={`${inputCls} mt-3 w-full [grid-area:search] sm:w-60 lg:mt-0`} />
-      )}
-      {(!isRoot || subtitle !== null) && (
-        <div className={`min-w-0 [grid-area:crumbs] lg:mt-0 ${isRoot ? "mt-4" : "mt-6"}`}>
-          {tab === "mine" && !isRoot && <Crumbs path={path} />}
-          {subtitle !== null && <p className={`p-meta p-text-3 lg:leading-8 ${isRoot ? "" : "mt-1"}`}>{subtitle}</p>}
-        </div>
-      )}
+    <div className="mb-6 min-w-0">
+      {tab === "mine" && !isRoot && <Crumbs path={path} />}
+      {subtitle !== null && <p className={`p-meta p-text-3 ${isRoot ? "" : "mt-1"}`}>{subtitle}</p>}
     </div>
   );
 }
@@ -636,7 +623,7 @@ function DropZone({ label, onFiles, children }: { label: string; onFiles: (files
   const [over, setOver] = useState(false);
 
   return (
-    <div data-drive-list className="relative mt-6"
+    <div data-drive-list className="relative"
       onDragOver={(event) => { event.preventDefault(); setOver(true); }}
       onDragLeave={() => setOver(false)}
       onDrop={(event) => { event.preventDefault(); setOver(false); onFiles([...event.dataTransfer.files]); }}>
@@ -970,23 +957,33 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const builtin = contents.builtins.find((name) => name === search.get("skill"));
   const subtitle = subtitleOf(tab, path);
 
-  // A tool: the header row spans the places column and the content, as Mail's spans its list; each tab's body starts
-  // under it at the same y.
-  return (
-    <ToolPage icon={<HardDrivesIcon size={22} />} title="Drive" scrolls={false} actions={tab === "mine" && (
-      <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
-        onFolder={(picks) => { if (picks.length > 0) uploadPicked(picks); }}
-        onZip={(file) => {
-          const unpacked = file.name.replace(/\.zip$/iu, "");
+  const searchShared = (
+    <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search shared" aria-label="Search shared"
+      data-drive-search className={`${inputCls} h-7 w-60 min-w-0 shrink rounded-[var(--r-control)] py-0`} />
+  );
 
-          transfer({ folder: path, name: file.name, size: file.size, lands: unpacked }, (watch) => uploadZip(joinDir(path, unpacked), file, watch));
-        }}
-        onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
-    )}>
+  // A tool (design review 2026-10-20, A2): the chat bar's band, the places column from `lg` (below it, the places are the
+  // row under the bar), and the content padded 24 inside its own column.
+  return (
+    <ToolPage icon={<HardDrivesIcon size={18} />} title="Drive" actions={(
+      <>
+        {tab === "shared" && searchShared}
+        {tab === "mine" && (
+          <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
+            onFolder={(picks) => { if (picks.length > 0) uploadPicked(picks); }}
+            onZip={(file) => {
+              const unpacked = file.name.replace(/\.zip$/iu, "");
+
+              transfer({ folder: path, name: file.name, size: file.size, lands: unpacked }, (watch) => uploadZip(joinDir(path, unpacked), file, watch));
+            }}
+            onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
+        )}
+      </>
+    )} below={places.length > 1 && <div className="p-tool-row lg:hidden"><PlaceSwitch tab={tab} places={places} unseen={unseen} /></div>}>
       <DriveColumn tab={tab} path={path} shown={lastValue(listing.resource)} places={places} unseen={unseen} />
       <div className="min-w-0 flex-1 overflow-y-auto">
-      <div className="px-5 pb-20 pt-8 sm:px-8">
-        <DriveHead tab={tab} path={path} subtitle={subtitle} places={places} unseen={unseen} search={{ query, set: setQuery }} />
+      <div className="p-5 pb-20 sm:p-6 sm:pb-20">
+        <DriveHead tab={tab} path={path} subtitle={subtitle} />
 
         <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} listingPending={listingPending} libraryResource={library.resource} onRetryLibrary={library.reload}
           copyStatus={copier.status} />
@@ -1001,9 +998,8 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
             </MineBody>
           </DropZone>
         )}
-        {/* From `lg` Slates has no head of its own: the column names the place. */}
-        {tab === "slates" && <div className="mt-6 lg:mt-0"><SlatesBody slates={shared?.slates ?? null} tile={slateTile} /></div>}
-        {tab === "shared" && <div className="mt-6"><SharedBody shared={shared} query={query} tile={shareTile} /></div>}
+        {tab === "slates" && <SlatesBody slates={shared?.slates ?? null} tile={slateTile} />}
+        {tab === "shared" && <SharedBody shared={shared} query={query} tile={shareTile} />}
       </div>
 
       </div>

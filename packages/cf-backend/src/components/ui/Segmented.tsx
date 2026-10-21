@@ -10,11 +10,16 @@ interface SegmentOption<T extends string> {
 }
 
 
-export function Segmented<T extends string>({ label, segments, value, onChange }: {
+/** A segment's box by size, at 13/20 wherever it sits (a workbench's smaller control text included): `md` 32, `sm` 24 for a
+ *  28 track inside a 46 bar (a tool's view). */
+const SEGMENT_BOX = { md: "px-2.5 py-[5px]", sm: "px-2 py-px" } as const;
+
+export function Segmented<T extends string>({ label, segments, value, onChange, size = "md" }: {
   label: string;
   segments: readonly SegmentOption<T>[];
   value: T;
   onChange: (id: T) => void;
+  size?: keyof typeof SEGMENT_BOX;
 }) {
   const strip = useRef<HTMLDivElement>(null);
   // The tab a keystroke or click focused; null means "the selected one".
@@ -67,7 +72,7 @@ export function Segmented<T extends string>({ label, segments, value, onChange }
             onFocus={() => setFocusId(segment.id)}
             aria-label={segment.icon === undefined ? undefined : segment.label}
             title={segment.icon === undefined ? undefined : segment.label}
-            className={`flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md p-t-control ${segment.icon === undefined ? "px-2.5 py-1.5" : "size-7"}${selected ? " p-surface p-text shadow-[0_1px_2px_var(--c-shadow-drop)]" : " p-text-3 hover:p-text"}`}
+            className={`flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border text-[13px] font-medium leading-5 ${segment.icon === undefined ? SEGMENT_BOX[size] : "size-7"}${selected ? " border-[var(--c-button-line)] bg-[var(--c-button-bg)] p-text shadow-[var(--shadow-button)]" : " border-transparent p-text-3 hover:p-text"}`}
           >
             {segment.icon ?? segment.label}
             {segment.count !== undefined && (

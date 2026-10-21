@@ -28,8 +28,10 @@ const TEXT_ROLES = [
 ] as const;
 
 const FILLS: readonly (readonly [ink: string, fill: string, what: string])[] = [
-  ['--c-accent-on', '--c-accent', 'p-btn label on brass'],
-  ['--c-bg', '--c-danger', 'p-btn-danger label on danger'],
+  ['--c-accent-on', '--c-accent', 'primary button label on brass'],
+  ['--c-danger-on', '--c-danger', 'destructive button label on danger'],
+  ['--c-text', '--c-button-bg', 'secondary button label on its fill'],
+  ['--c-danger', '--c-button-bg', 'danger button label on its fill'],
   ['--c-bg', '--c-success', 'MCTS node score label on the score ramp'],
   ['--c-bg', '--c-warning', 'MCTS node score label on the score ramp'],
   ['--c-text', '--c-user-bg', 'user turn'],
@@ -45,7 +47,7 @@ const NON_TEXT = TEST_REQUIREMENTS.wcagNonTextContrast.values.minimum;
 const ASKED = [
   ...SURFACES, ...TEXT_ROLES, ...FILLS.flatMap(([ink, fill]) => [ink, fill]),
   ...STATUSES.flatMap((status) => [`--c-${status}`, `--c-${status}-tint`]),
-  '--c-accent-mark', '--c-accent-subtle', '--c-input-border',
+  '--c-accent-mark', '--c-accent-subtle', '--c-input-border', '--c-focus',
 ];
 
 /** What one theme and mode compute: the mode it landed on, and each asked token as a probe's `color` resolves it. */
@@ -205,9 +207,11 @@ describe.each(LOOKS)('the %s palette, %s', (theme, mode) => {
     expect(twins).toEqual([]);
   });
 
-  test("a control's edge stands out on every ground beside it", () => {
-    const failures = CONTROL_GROUNDS.map((ground) => ({ ground, ratio: contrast(colour('--c-input-border'), colour(ground)) }))
-      .filter((row) => row.ratio < NON_TEXT);
+  // A field's edge shows where an empty field is; the focus ring shows where the keyboard is.
+  test("a control's edge and the focus ring stand out on every ground beside them", () => {
+    const failures = (['--c-input-border', '--c-focus'] as const).flatMap((line) => CONTROL_GROUNDS.map((ground) => ({
+      line, ground, ratio: contrast(colour(line), colour(ground)),
+    }))).filter((row) => row.ratio < NON_TEXT);
 
     expect(failures).toEqual([]);
   });

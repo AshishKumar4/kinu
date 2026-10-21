@@ -72,19 +72,34 @@ export function Page({ icon, back, title, actions, fill = false, rule, children,
   );
 }
 
-/** A tool's page at the full width, at the rhythm's top and foot, for a tool that draws its own header (Mail). */
-export const TOOL_FRAME = "w-full px-5 pb-16 pt-6 sm:px-8 lg:pt-12";
-
-/** A tool page: the same header row, spanning the tool at the full width; the tool's own columns start under it. */
-export function ToolPage({ icon, title, actions, children, scrolls = true }: {
-  icon: ReactNode; title: string; actions?: ReactNode; children: ReactNode;
-  /** A tool whose columns scroll on their own (Drive) holds the page still and lets them. */
-  scrolls?: boolean;
-}) {
+/**
+ * A tool's bar (Mail, Drive; design review 2026-10-20, A2): a tool is a working surface like a chat, so it gets the
+ * chat bar's 46 px band, not a page's header. The tool's icon and name at its left, then its view; its search, filter and
+ * primary at its right, every control 28 high. A hairline under it, since the tool's columns meet it.
+ */
+export function ToolBar({ icon, title, view, actions }: { icon: ReactNode; title: string; view?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className={`h-full ${scrolls ? "overflow-y-auto" : "flex min-h-0 flex-col"}`}>
-      <div className="w-full px-5 pt-6 sm:px-8 lg:pt-12"><PageHeader icon={icon} title={title}>{actions}</PageHeader></div>
-      <div className={scrolls ? "w-full px-5 pb-16 pt-8 sm:px-8" : "flex min-h-0 flex-1"}>{children}</div>
+    <header className="p-tool-bar" data-tool-bar>
+      <span className="flex shrink-0 p-text-3 [&>svg]:size-[18px]" aria-hidden>{icon}</span>
+      <h1 className="p-tool-title">{title}</h1>
+      {view !== undefined && <div className="ml-4 flex min-w-0">{view}</div>}
+      {actions !== undefined && <div className="ml-auto flex min-w-0 items-center gap-2">{actions}</div>}
+    </header>
+  );
+}
+
+/**
+ * A tool page: its bar, then `below` (what moves out of the bar on a narrow screen, a scrolling row of its own), then
+ * its columns filling the rest. No top inset and no gutter: each column pads itself.
+ */
+export function ToolPage({ icon, title, view, actions, below, children, ...attributes }: {
+  icon: ReactNode; title: string; view?: ReactNode; actions?: ReactNode; below?: ReactNode; children: ReactNode;
+} & Readonly<Record<`data-${string}`, string | boolean>>) {
+  return (
+    <div className="flex h-full min-h-0 flex-col" {...attributes}>
+      <ToolBar icon={icon} title={title} view={view} actions={actions} />
+      {below}
+      <div className="flex min-h-0 flex-1">{children}</div>
     </div>
   );
 }

@@ -12,7 +12,7 @@ export function AttachmentChip({ part, onRemove }: { part: FileUIPart; onRemove?
       <span className="truncate font-mono">{name}</span>
       {onRemove && (
         <button type="button" onClick={onRemove} aria-label={`Remove ${name}`}
-          className="p-btn-ghost cursor-pointer p-0.5">
+          className="p-button-ghost cursor-pointer rounded-sm p-0.5">
           <XIcon size={11} />
         </button>
       )}

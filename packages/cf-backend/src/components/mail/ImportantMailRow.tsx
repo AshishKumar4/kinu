@@ -20,7 +20,7 @@ export function mailTime(at: number, now = Date.now()): string {
 
 /** A row's ground: the open one raised a step, the rest lit only under the pointer. */
 export const mailRowCls = (open: boolean): string =>
-  `flex w-full items-start gap-3 px-3.5 py-3 text-left transition-colors ${open ? "bg-[var(--c-elevated)]" : "p-row-hover"}`;
+  `flex w-full items-start gap-3 px-4 py-3 text-left transition-colors ${open ? "bg-[var(--c-neutral-tint)]" : "p-row-hover"}`;
 
 export function ImportantMailRow({ mail, open = false, onOpen }: { mail: ImportantMail; open?: boolean; onOpen: () => void }) {
   return (

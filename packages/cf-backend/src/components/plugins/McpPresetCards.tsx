@@ -14,7 +14,7 @@ import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
 import { PluginRow, PLUGIN_ACTION } from "@/components/plugins/PluginRow";
 import { Status } from "@/components/ui/Status";
-import { RowMenu, type RowMenuItem } from "@/components/ui/RowMenu";
+import { RowMenu } from "@/components/ui/RowMenu";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
 
@@ -54,16 +54,11 @@ export function hostBrand(server: McpServerSummary): BrandName | undefined {
   return host === null ? undefined : HOST_BRANDS.find(([domain]) => host === domain || host.endsWith(`.${domain}`))?.[1];
 }
 
-/** A connected row's end, the same on every row: its plain status, then what it offers in ⋯. */
-export function ConnectedEnd({ status, name, items }: { status: McpServerSummary['status']; name: string; items: readonly RowMenuItem[] }) {
+/** A connected row's status cell: the plain `Status` its tone and words name, as every view reads them. */
+export function ServerStatus({ status }: { status: McpServerSummary['status'] }) {
   const shown = mcpServerStatus(status);
 
-  return (
-    <span className="flex shrink-0 items-center gap-2">
-      <Status tone={shown.tone}>{shown.label}</Status>
-      <RowMenu label={`More for ${name}`} items={items} />
-    </span>
-  );
+  return <Status tone={shown.tone}>{shown.label}</Status>;
 }
 
 export function PresetRow({ preset, server, appConfigured, onChanged }: {
@@ -133,7 +128,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged }: {
 
   if (server !== undefined) {
     trailing = (
-      <ConnectedEnd status={server.status} name={preset.title} items={[
+      <RowMenu label={`More for ${preset.title}`} items={[
         { label: "Docs", icon: ArrowSquareOutIcon, run: () => { window.open(preset.docsUrl, "_blank", "noopener,noreferrer"); } },
         { label: "Remove", icon: TrashIcon, run: remove, danger: true },
       ]} />
@@ -158,12 +153,13 @@ export function PresetRow({ preset, server, appConfigured, onChanged }: {
   return (
     <>
     {dialog}
-    <PluginRow source={preset.id} state={server === undefined ? 'Not added' : mcpServerStatus(server.status).label}
-      name={preset.title} description={preset.description}
-      tile={<BrandMark brand={brand} size={22} />}
-      trailing={trailing}
+    <PluginRow attributes={{ "data-plugin": preset.title, "data-plugin-source": preset.id, "data-plugin-state": server === undefined ? 'Not added' : mcpServerStatus(server.status).label }}
+      title={preset.title} meta={preset.description}
+      tile={<BrandMark brand={brand} size={18} />}
+      status={server === undefined ? undefined : <ServerStatus status={server.status} />}
+      action={trailing}
       below={asking || err !== null ? (
-        <div className="mt-2 space-y-1 pl-[52px]">
+        <div className="space-y-1">
           {asking && (
             <div className="flex items-center gap-2">
               {/* Credential region: the marker keeps the value out of feedback screenshots. */}

@@ -3,7 +3,7 @@ import { Effect } from 'effect';
 import { useState } from "react";
 import { startTransition } from "react";
 import {
-  DesktopTowerIcon, PencilSimpleIcon, TrashIcon, WarningIcon, XIcon,
+  DesktopTowerIcon, PencilSimpleIcon, TrashIcon, WarningIcon,
 } from "@phosphor-icons/react";
 import {
   renameDevice, revokeDeviceConsent, setDeviceSandboxTier,
@@ -13,8 +13,9 @@ import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode } from "@kinu.run/core";
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
 import { composing, inputCls } from "@/components/ui/form";
-import { PluginTile } from "@/components/plugins/PluginRow";
+import { PluginRow, PluginTile } from "@/components/plugins/PluginRow";
 import { RowMenu } from "@/components/ui/RowMenu";
+import { Chip } from "@/components/ui/Chip";
 import { Switch } from "@/components/ui/Switch";
 import { Status } from "@/components/ui/Status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
@@ -150,80 +151,75 @@ export function DeviceRow({
   const gpu = mode === "sandboxed" && sandbox.gpu.length > 0 ? describeGpuNodes(sandbox.gpu) : null;
   const where = [device.hostname, device.os].filter((part) => part !== null && part !== "").join(" · ");
 
-  // A row as Plugins draws a connected server (design review 2026-10-20): its tile, name, one meta line, its status and
-  // its controls; what it reaches is under it.
+  const nameField = (
+    <input
+      autoFocus
+      value={editing ?? ""}
+      onChange={(e) => setEditing(e.target.value)}
+      onBlur={(...args: Parameters<typeof save>) => detach(Effect.promise(async () => save(...args)))}
+      onKeyDown={(e) => detach(Effect.promise(async () => {
+        if (composing(e.nativeEvent)) return;
+
+        if (e.key === "Enter") {
+          e.preventDefault();
+          setEditing(null);
+          await save();
+        }
+
+        if (e.key === "Escape") setEditing(null);
+      }))}
+      aria-label="Device name"
+      className={`${inputCls} h-7 w-52`}
+    />
+  );
+
+  const notes = [
+    device.update === "refused" && <p key="refused">Update to {device.servedVersion} refused: {device.updateRefusal}</p>,
+    device.wholeMachine && <p key="whole">{WHOLE_MACHINE_COPY}</p>,
+    cannotSandbox && <p key="cannot"><Status tone="warning">Cannot sandbox</Status></p>,
+    grants.length > 0 && (
+      <div key="grants" className="flex flex-wrap items-center gap-2" data-device-grants>
+        {grants.map((g) => (
+          <Chip key={g.agentName} tone={g.policy === "allow" ? "neutral" : "danger"} onRemove={() => detach(dropGrant(g.agentName))}
+            removeLabel={g.policy === "allow" ? `Revoke ${g.agentName}'s access` : `Remove the saved denial for ${g.agentName}`}>
+            {g.policy === "allow" ? g.agentName : `${g.agentName} · denied`}
+          </Chip>
+        ))}
+      </div>
+    ),
+  ].filter(Boolean);
+
+  // Plugins' row grid (design review 2026-10-20, A3), the Sandbox switch a track of its own; what it reaches is under it.
   return (
-    <div data-device={device.id} className="py-3">
-      <div className="flex items-center gap-3">
-        <PluginTile icon={DesktopTowerIcon} />
-        <div className="min-w-0 flex-1">
-          {editing === null ? (
-            <div className="truncate p-row-text font-medium p-text">{device.label}</div>
-          ) : (
-            <input
-              autoFocus
-              value={editing}
-              onChange={(e) => setEditing(e.target.value)}
-              onBlur={(...args: Parameters<typeof save>) => detach(Effect.promise(async () => save(...args)))}
-              onKeyDown={(e) => detach(Effect.promise(async () => {
-                if (composing(e.nativeEvent)) return;
-
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  setEditing(null);
-                  await save();
-                }
-
-                if (e.key === "Escape") setEditing(null);
-              }))}
-              aria-label="Device name"
-              className={`${inputCls} h-7 w-52`}
-            />
-          )}
-          <div className="truncate p-meta p-text-3" data-sandbox-mode={mode} data-whole-machine={device.wholeMachine || undefined}>
+    <>
+      <PluginRow attributes={{ "data-device": device.id }} tile={<PluginTile icon={DesktopTowerIcon} />}
+        title={editing === null ? device.label : nameField}
+        meta={(
+          <span data-sandbox-mode={mode} data-whole-machine={device.wholeMachine ? "true" : undefined}>
             {where}
             {gpu !== null && <>{where === "" ? "" : " · "}<span data-device-gpu>{gpu}</span></>}
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-3">
-          {device.update === "required"
-            ? <span role="status" data-device-update="required"><Status tone="warning">{DEVICE_UPDATE_COPY.required}</Status></span>
-            : <Status tone={device.connected ? "success" : "neutral"}>{device.connected ? "Connected" : "Offline"}</Status>}
-          <UpdateBadge device={device} />
-          {/* Named beside it, so it reads as the sandbox and not as the connection the status before it names. */}
-          <span className="flex items-center gap-2">
+          </span>
+        )}
+        status={device.update === "required"
+          ? <span role="status" data-device-update="required"><Status tone="warning">{DEVICE_UPDATE_COPY.required}</Status></span>
+          : <Status tone={device.connected ? "success" : "neutral"}>{device.connected ? "Connected" : "Offline"}</Status>}
+        control={(
+          <>
+            <UpdateBadge device={device} />
+            {/* Named beside it, so it reads as the sandbox and not as the connection the status before it names. */}
             <span className="p-row-text font-medium p-text-2" aria-hidden>Sandbox</span>
             <Switch on={sandboxOn} label={`Sandbox on ${device.label}`} disabled={switching || device.wholeMachine}
               onChange={() => detach(sandboxOn ? Effect.sync(sandboxOff) : sandboxOnAgain())} />
-          </span>
+          </>
+        )}
+        action={(
           <RowMenu label={`${device.label} options`} items={[
             { label: "Rename", title: "Rename this device", icon: PencilSimpleIcon, run: () => setEditing(device.label) },
             { label: "Revoke", title: "Revoke device", icon: TrashIcon, run: onRevoke, danger: true },
           ]} />
-        </div>
-      </div>
-      <div className="mt-1.5 space-y-1 pl-[52px] p-meta p-text-3">
-        {device.update === "refused" && <p>Update to {device.servedVersion} refused: {device.updateRefusal}</p>}
-        {device.wholeMachine && <p>{WHOLE_MACHINE_COPY}</p>}
-        {cannotSandbox && <p><Status tone="warning">Cannot sandbox</Status></p>}
-        {grants.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span>Workspace access:</span>
-            {grants.map((g) => (
-              <span key={g.agentName} className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 p-fill">
-                {g.agentName}
-                <span className={g.policy === "allow" ? "p-text-3" : "p-danger"}>{g.policy === "allow" ? "Allowed" : "Denied"}</span>
-                <button onClick={() => detach(dropGrant(g.agentName))}
-                  title={g.policy === "allow" ? `Revoke ${g.agentName}'s access` : `Remove the saved denial for ${g.agentName}`}
-                  className="p-text-3 hover:p-danger">
-                  <XIcon size={10} />
-                </button>
-              </span>
-            ))}
-          </div>
         )}
-      </div>
+        below={notes.length === 0 ? undefined : <div className="space-y-1 p-meta p-text-3">{notes}</div>} />
       {dialog}
-    </div>
+    </>
   );
 }

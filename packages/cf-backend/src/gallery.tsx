@@ -332,7 +332,8 @@ const mcpSecrets = (() => {
 
 function pluginsFixture(path: string): Response | null {
   if (path === "/api/user/devices/consents") {
-    return fixtureJson(frame === "devices"
+    // The Devices frame and the whole app: one workspace the Workstation is allowed for, one it refused.
+    return fixtureJson(frame === "devices" || frame === "whole"
       ? [
         { agentName: "api-worker", deviceId: "dev-1", policy: "allow", lastMethod: "exec", lastSummary: "bun test" },
         { agentName: "landing-page", deviceId: "dev-1", policy: "denied", lastMethod: "exec", lastSummary: null },
@@ -4650,9 +4651,8 @@ function Controls() {
         <Button variant="destructive" size="md">danger</Button>
         <Button variant="secondary" size="sm">Kumo secondary</Button>
         <Button variant="ghost" size="sm">Kumo ghost</Button>
-        <button className="p-btn-quiet inline-flex h-6.5 items-center gap-1 px-2 text-xs">p-btn-quiet</button>
-        <button className="p-btn-ghost inline-flex h-6.5 items-center gap-1 px-2 text-xs">p-btn-ghost</button>
-        <button className="p-btn inline-flex h-9 items-center gap-2 px-3 text-sm font-medium">p-btn at 36px</button>
+        <Button variant="danger" size="sm">Danger</Button>
+        <Button variant="secondary" size="md" disabled>Disabled</Button>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-neutral">workspace</span>
@@ -5092,14 +5092,8 @@ function HistoryAuthorityFrame() {
     <div data-history-authority className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
         <GalleryWorkspaceHeader />
-        <button data-history-release type="button" onClick={() => hold.resolve()}
-          className="p-btn-quiet m-2 self-start px-2 py-1 text-xs">
-          Release first page
-        </button>
-        <button data-history-reset type="button" onClick={history.reset}
-          className="p-btn-quiet m-2 self-start px-2 py-1 text-xs">
-          Clear fetched history
-        </button>
+        <Button size="sm" data-history-release onClick={() => hold.resolve()} className="m-2 self-start">Release first page</Button>
+        <Button size="sm" data-history-reset onClick={history.reset} className="m-2 self-start">Clear fetched history</Button>
         <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
           <ConversationStartBoundary
             hasEntries={false}
@@ -5198,11 +5192,7 @@ function ClientContinuityFrame() {
         <div data-image-failure>
           <MarkdownContent content="![Request flow diagram](/assets/missing-continuity-image.png)" />
         </div>
-        <button data-continuity-reset type="button"
-          onClick={() => { setDraft(""); setSends(0); setFiles([]); }}
-          className="p-btn-quiet px-2 py-1 text-xs">
-          Reset fixture
-        </button>
+        <Button size="sm" data-continuity-reset onClick={() => { setDraft(""); setSends(0); setFiles([]); }}>Reset fixture</Button>
         <div data-continuity-probe className="hidden"
           data-draft={draft}
           data-sends={sends}
@@ -5420,9 +5410,9 @@ function Palette() {
       <div>
         <div className="p-eyebrow mb-2">The accent carries intent only</div>
         <div className="flex items-center gap-3 flex-wrap">
-          <button className="p-btn px-3.5 h-9 p-row-text inline-flex items-center gap-2">Primary action</button>
-          <button className="p-btn-quiet px-3.5 h-8 p-row-text inline-flex items-center">Secondary</button>
-          <button className="p-btn-ghost px-3 h-8 p-row-text inline-flex items-center">Ghost</button>
+          <Button variant="primary">Primary action</Button>
+          <Button>Secondary</Button>
+          <Button variant="ghost">Ghost</Button>
           <a className="p-accent p-row-text underline underline-offset-2" href="#top">A link</a>
           <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full p-accent-subtle">
             <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />

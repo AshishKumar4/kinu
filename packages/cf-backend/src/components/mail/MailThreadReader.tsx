@@ -32,8 +32,8 @@ export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }
   return (
     <div className="min-w-0">
       {mail === null && <button type="button" data-mail-back onClick={onBack} className="mb-3 flex items-center gap-1 p-meta p-text-3 hover:p-text lg:hidden"><CaretLeftIcon size={13} />Mail</button>}
-      {resource.status === "loading" && <div className="p-card p-5" role="status" aria-label="Loading thread"><Loader /></div>}
-      {resource.status === "error" && <LoadFailure what="this thread" message={resource.message} onRetry={reload} className="p-card p-4" />}
+      {resource.status === "loading" && <div role="status" aria-label="Loading thread"><Loader /></div>}
+      {resource.status === "error" && <LoadFailure what="this thread" message={resource.message} onRetry={reload} />}
       {mail !== null && <Reader key={`${id}:${String(drafts)}`} mail={mail} box={boxes.find((box) => box.path === mail.thread.path)} owner={owner} drafts={drafts} onBack={onBack} onChanged={reload} />}
     </div>
   );
@@ -72,7 +72,7 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
   if (box?.kind === "person") reader = box.workspace === null ? "no assistant yet" : "Kinu";
 
   return (
-    <article data-mail-reader={thread.id} aria-busy={busy !== null} className="p-card min-w-0 space-y-4 px-5 py-5 lg:px-6">
+    <article data-mail-reader={thread.id} aria-busy={busy !== null} className="min-w-0 max-w-[760px] space-y-4">
       <button type="button" data-mail-back onClick={onBack} className="flex items-center gap-1 p-meta p-text-3 hover:p-text lg:hidden"><CaretLeftIcon size={13} />Mail</button>
       <header className="space-y-2">
         <div className="flex items-start gap-2">
@@ -89,7 +89,7 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
         <ShieldWarningIcon size={15} weight="fill" className="shrink-0 p-warning" />
         {last.from.address.toLowerCase() === owner.toLowerCase() ? "Not verified · claims to be you" : "Not verified"}
       </p>}
-      {messages.length > 0 && <div className="p-group">
+      {messages.length > 0 && <div className="divide-y divide-dashed divide-[var(--c-dash)] border-y border-dashed border-[var(--c-dash)]">
         {messages.map((message) => <MailMessage key={message.id} mail={message} box={box} owner={owner} open={opened.get(message.id) ?? message.id === last?.id} onToggle={() => toggle(message.id)} />)}
       </div>}
       {error !== null && <p role="alert" className="p-row-text p-danger">{error}</p>}

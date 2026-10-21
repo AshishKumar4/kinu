@@ -36,7 +36,9 @@ export type ColourToken =
   | '--c-success-tint' | '--c-warning-tint' | '--c-danger-tint' | '--c-info-tint' | '--c-neutral-tint'
   | '--c-code' | '--c-user-bg' | '--c-user-border' | '--c-input-bg'
   | '--c-composer-bg' | '--c-composer-line' | '--c-composer-line-focus' | '--c-scrim' | '--c-shadow-drop'
-  | '--shadow-overlay' | '--shadow-card' | '--shadow-menu' | '--shadow-composer';
+  | '--shadow-overlay' | '--shadow-card' | '--shadow-menu' | '--shadow-composer'
+  | '--c-button-bg' | '--c-button-bg-hover' | '--c-button-bg-active' | '--c-button-line' | '--c-button-line-hover'
+  | '--shadow-button' | '--c-danger-on' | '--c-focus';
 
 /** Every block declares the complete set: an omitted token would resolve by source order. */
 export type TokenSet = Readonly<Record<ColourToken, string>>;
@@ -93,6 +95,16 @@ const GRAPHITE_DARK = {
   '--shadow-card': 'none',
   '--shadow-menu': '0 10px 28px -10px rgba(0, 0, 0, 0.5)',
   '--shadow-composer': '0 12px 32px -12px rgba(0, 0, 0, 0.6), 0 2px 6px -2px rgba(0, 0, 0, 0.35)',
+  // A button's own fill, edge and lift (design review 2026-10-20, A4): quieter than an input's 3:1 edge.
+  '--c-button-bg': '#232221',
+  '--c-button-bg-hover': '#2A2928',
+  '--c-button-bg-active': '#1E1D1C',
+  '--c-button-line': 'rgba(237, 235, 232, 0.09)',
+  '--c-button-line-hover': 'rgba(237, 235, 232, 0.15)',
+  '--shadow-button': 'inset 0 1px 0 rgba(255, 255, 255, 0.04)',
+  '--c-danger-on': '#1A0B08',
+  // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
+  '--c-focus': '#E0A458',
 } satisfies TokenSet;
 
 const GRAPHITE_LIGHT = {
@@ -138,6 +150,16 @@ const GRAPHITE_LIGHT = {
   '--shadow-card': 'none',
   '--shadow-menu': '0 10px 24px -10px rgba(25, 24, 22, 0.18), 0 1px 3px rgba(25, 24, 22, 0.06)',
   '--shadow-composer': '0 12px 32px -14px rgba(25, 24, 22, 0.24), 0 1px 3px rgba(25, 24, 22, 0.07)',
+  // A button's own fill, edge and lift (design review 2026-10-20, A4): quieter than an input's 3:1 edge.
+  '--c-button-bg': '#FFFFFF',
+  '--c-button-bg-hover': '#F4F4F3',
+  '--c-button-bg-active': '#ECECEA',
+  '--c-button-line': 'rgba(25, 24, 22, 0.13)',
+  '--c-button-line-hover': 'rgba(25, 24, 22, 0.2)',
+  '--shadow-button': '0 1px 2px rgba(25, 24, 22, 0.06)',
+  '--c-danger-on': '#FFFFFF',
+  // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
+  '--c-focus': '#9D691C',
 } satisfies TokenSet;
 
 const WARM_DARK = {
@@ -183,6 +205,16 @@ const WARM_DARK = {
   '--shadow-card': 'none',
   '--shadow-menu': '0 10px 28px -10px rgba(0, 0, 0, 0.5)',
   '--shadow-composer': '0 12px 32px -12px rgba(0, 0, 0, 0.6), 0 2px 6px -2px rgba(0, 0, 0, 0.35)',
+  // A button's own fill, edge and lift (design review 2026-10-20, A4): quieter than an input's 3:1 edge.
+  '--c-button-bg': '#201B16',
+  '--c-button-bg-hover': '#27211A',
+  '--c-button-bg-active': '#1B1713',
+  '--c-button-line': 'rgba(237, 229, 216, 0.09)',
+  '--c-button-line-hover': 'rgba(237, 229, 216, 0.15)',
+  '--shadow-button': 'inset 0 1px 0 rgba(255, 240, 220, 0.04)',
+  '--c-danger-on': '#1A0B08',
+  // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
+  '--c-focus': '#E0A458',
 } satisfies TokenSet;
 
 const WARM_LIGHT = {
@@ -228,6 +260,16 @@ const WARM_LIGHT = {
   '--shadow-card': 'none',
   '--shadow-menu': '0 10px 24px -10px rgba(43, 26, 4, 0.18), 0 1px 3px rgba(43, 26, 4, 0.06)',
   '--shadow-composer': '0 12px 32px -14px rgba(43, 26, 4, 0.24), 0 1px 3px rgba(43, 26, 4, 0.07)',
+  // A button's own fill, edge and lift (design review 2026-10-20, A4): quieter than an input's 3:1 edge.
+  '--c-button-bg': '#FBF8F1',
+  '--c-button-bg-hover': '#F3EEE2',
+  '--c-button-bg-active': '#ECE5D5',
+  '--c-button-line': 'rgba(43, 36, 25, 0.15)',
+  '--c-button-line-hover': 'rgba(43, 36, 25, 0.22)',
+  '--shadow-button': '0 1px 2px rgba(43, 26, 4, 0.07)',
+  '--c-danger-on': '#FFFFFF',
+  // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
+  '--c-focus': '#936212',
 } satisfies TokenSet;
 
 /** Each theme's token values by mode, for a reader that needs one colour outside the cascade. */

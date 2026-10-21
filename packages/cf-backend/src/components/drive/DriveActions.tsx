@@ -176,7 +176,7 @@ function NewMenu({ onFiles, onFolder, onZip, onNewFolder, onNewSkill }: NewProps
 
   return (
     <div ref={menu} className="relative">
-      <Button variant="primary" size="md" className={ICON_ON_PHONE} aria-label="New" aria-haspopup="menu" aria-expanded={open}
+      <Button variant="primary" size="sm" className={ICON_ON_PHONE} aria-label="New" aria-haspopup="menu" aria-expanded={open}
         data-drive-new onClick={() => setOpen((value) => !value)}>
         <PlusIcon size={14} weight="bold" /><span className="max-sm:hidden">New</span>
       </Button>

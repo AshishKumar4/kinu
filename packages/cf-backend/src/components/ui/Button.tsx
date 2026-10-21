@@ -19,8 +19,8 @@ export function buttonClass({ variant = "secondary", size = "md", iconOnly = fal
   return `p-button p-button-${size} p-button-${variant}${iconOnly ? " p-button-icon" : ""}`;
 }
 
-/** A page's primary action on a phone: the 32 square of its icon, its label hidden (`max-sm:hidden` on the label). */
-export const ICON_ON_PHONE = "max-sm:!w-8 max-sm:!px-0";
+/** A page's or a tool's primary on a phone: the 32 square of its icon, its label hidden (`max-sm:hidden` on the label). */
+export const ICON_ON_PHONE = "max-sm:!size-8 max-sm:!px-0";
 
 export function Button({ variant = "secondary", size = "md", icon, className, type = "button", children, ...rest }: {
   variant?: ButtonVariant;

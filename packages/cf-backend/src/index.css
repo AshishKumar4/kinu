@@ -166,7 +166,7 @@ html, body, #root {
   --color-kumo-tint: var(--c-surface);
   --color-kumo-recessed: var(--c-recessed);
   --color-kumo-overlay: var(--c-overlay);
-  --color-kumo-control: var(--c-surface);
+  --color-kumo-control: var(--c-button-bg);
   --color-kumo-contrast: var(--c-text);
   --color-kumo-interact: var(--c-fill);
   /* `fill` is a chip/track tone (Kumo's Badge, Combobox and Meter), so it has
@@ -174,8 +174,8 @@ html, body, #root {
      disappears the moment the container is that same step, which is exactly
      where badges live. An ink alpha composes over any rung of the ladder. */
   --color-kumo-fill: var(--c-neutral-tint);
-  --color-kumo-fill-hover: var(--c-border-strong);
-  --color-kumo-line: var(--c-border);
+  --color-kumo-fill-hover: var(--c-button-bg-hover);
+  --color-kumo-line: var(--c-button-line);
   --color-kumo-hairline: var(--c-input-border);
   --color-kumo-brand: var(--c-accent);
   --color-kumo-brand-hover: color-mix(in srgb, var(--c-accent) 92%, #000);
@@ -597,26 +597,14 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-tabstrip::-webkit-scrollbar { display: none; }
 
-/* Buttons — one hierarchy.
-   p-btn        primary: brass fill + ink, both modes
-   p-btn-danger destructive confirm: danger fill + ink
-   p-btn-quiet  secondary: hairline + surface
-   p-btn-ghost  tertiary: text only, surface on hover
-
-   Filled buttons carry their own ink rather than white: brass is a LIGHT
-   fill (white on it measures 2.4:1), and so is the dark-mode danger tone.
-   Kumo's `primary`/`destructive` variants hardcode `!text-white` and are
-   therefore the one part of its library we do not use — the call sites
-   render `FilledButton` (components/ui/FilledButton.tsx), which pairs these
-   looks with Kumo's own `size="sm"` box. */
 /* ── The one button (components/ui/Button.tsx; design review 2026-10-20) ──
-   md 32 / sm 28, r8, 13/500; primary brass at 600, one per view. The legacy
-   .p-btn* names below draw the same shapes until their last caller moves. */
+   md 32 / sm 28, r8, 13/500; primary brass at 600, one per view. Filled buttons carry their own ink rather than
+   white: brass is a light fill (white on it measures 2.4:1), and so is the dark-mode danger tone (`--c-danger-on`). */
 .p-button {
   display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px;
-  border: 1px solid transparent; border-radius: 8px; white-space: nowrap; cursor: pointer;
-  font-family: var(--font-ui); font-size: 0.8125rem; line-height: 1.25rem; font-weight: 500;
-  transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out, transform 120ms ease-out;
+  border: 1px solid transparent; border-radius: var(--r-control); white-space: nowrap; cursor: pointer;
+  font: 500 13px/20px var(--font-ui);
+  transition: background-color 120ms ease-out, border-color 120ms ease-out, box-shadow 120ms ease-out, color 120ms ease-out;
 }
 .p-button-md { height: 32px; padding: 0 14px; }
 .p-button-sm { height: 28px; padding: 0 10px; }
@@ -625,78 +613,79 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* A page's header actions are md whatever a call site asks: one height on every header row (PageHeader). */
 .p-page-actions .p-button { height: 32px; padding: 0 14px; }
 .p-page-actions .p-button.p-button-icon { width: 32px; padding: 0; }
-.p-button-primary { background: var(--c-accent); color: var(--c-accent-on); font-weight: 600; }
-.p-button-primary:hover { background: color-mix(in srgb, var(--c-accent) 92%, #000); }
-.p-button-primary:active { transform: scale(0.98); }
-.p-button-secondary, .p-button-danger { background: var(--c-surface); border-color: var(--c-input-border); color: var(--c-text); }
-.p-button-secondary:hover, .p-button-danger:hover { background: var(--c-elevated); border-color: var(--c-border-strong); }
-.p-button-danger { color: var(--c-danger); }
-.p-button-ghost { color: var(--c-text-2); }
+/* A button is known by its label and its fill step: a quiet edge and lift (A4), never an input's 3:1 outline. Pressed is
+   the darker fill alone; a shrink on a 28 px button reads as jitter. */
+.p-button-secondary { background: var(--c-button-bg); border-color: var(--c-button-line); color: var(--c-text); box-shadow: var(--shadow-button); }
+.p-button-secondary:hover { background: var(--c-button-bg-hover); border-color: var(--c-button-line-hover); }
+.p-button-secondary:active { background: var(--c-button-bg-active); box-shadow: none; }
+
+.p-button-primary { background: var(--c-accent); color: var(--c-accent-on); font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), var(--shadow-button); }
+[data-mode="light"] .p-button-primary:hover { background: color-mix(in srgb, var(--c-accent) 92%, #000); }
+[data-mode="light"] .p-button-primary:active { background: color-mix(in srgb, var(--c-accent) 86%, #000); box-shadow: none; }
+[data-mode="dark"] .p-button-primary:hover { background: color-mix(in srgb, var(--c-accent) 90%, #fff); }
+[data-mode="dark"] .p-button-primary:active { background: color-mix(in srgb, var(--c-accent) 92%, #000); box-shadow: none; }
+
+.p-button-ghost { background: transparent; color: var(--c-text-2); }
 .p-button-ghost:hover { background: var(--c-neutral-tint); color: var(--c-text); }
-.p-button-ghost[aria-pressed="true"] { background: var(--c-neutral-tint); color: var(--c-text); }
-.p-button-destructive { background: var(--c-danger); color: var(--c-accent-on); font-weight: 600; }
-.p-button-destructive:hover { background: color-mix(in srgb, var(--c-danger) 88%, #000); }
-.p-button:disabled { opacity: 0.45; cursor: default; transform: none; }
-.p-button-primary:disabled, .p-button-destructive:disabled { opacity: 1; background: var(--c-neutral-tint); color: var(--c-text-3); }
-.p-button:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) { .p-button:active { transform: none; } }
+.p-button-ghost:active, .p-button-ghost[aria-pressed="true"] { background: color-mix(in srgb, var(--c-text) 10%, transparent); color: var(--c-text); }
 
-.p-btn {
-  background: var(--c-accent);
-  color: var(--c-accent-on);
-  border: none;
+.p-button-danger { background: var(--c-button-bg); border-color: var(--c-button-line); color: var(--c-danger); box-shadow: var(--shadow-button); }
+.p-button-danger:hover { background: var(--c-danger-tint); border-color: color-mix(in srgb, var(--c-danger) 30%, transparent); }
+
+.p-button-destructive { background: var(--c-danger); color: var(--c-danger-on); font-weight: 600; box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12); }
+.p-button-destructive:hover { background: color-mix(in srgb, var(--c-danger) 90%, #000); }
+
+.p-button:disabled { cursor: default; box-shadow: none; }
+.p-button-secondary:disabled, .p-button-ghost:disabled, .p-button-danger:disabled { color: var(--c-text-4); background: transparent; border-color: var(--c-button-line); }
+.p-button-primary:disabled, .p-button-destructive:disabled { background: var(--c-neutral-tint); color: var(--c-text-3); }
+
+.p-button:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
+
+/* A form's save bar (ui/SaveBar.tsx): floating at its column's foot, in and out over 220 ms. */
+.p-save-bar {
+  position: sticky; bottom: 16px; z-index: 10; display: flex; align-items: center; gap: 12px;
+  height: 48px; margin-top: 24px; padding: 8px 8px 8px 16px;
+  border: 1px solid var(--c-border); border-radius: var(--r-card); background: var(--c-overlay); box-shadow: var(--shadow-menu);
+  animation: p-save-bar-in 220ms var(--ease-out-strong);
+  transition: opacity 220ms var(--ease-out-strong), transform 220ms var(--ease-out-strong);
+}
+.p-save-bar[data-state="closed"] { opacity: 0; transform: translateY(8px); }
+@keyframes p-save-bar-in { from { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: reduce) { .p-save-bar { animation: none; transition: none; } }
+
+/* A tool's bar and its narrow-screen row (ui/PageHeader.tsx ToolBar): the chat bar's height, every control 28. */
+.p-tool-bar {
+  display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 46px; padding: 0 16px;
+  border-bottom: 1px solid var(--c-border); background: var(--c-bg);
+}
+.p-tool-title { font: 600 15px/22px var(--font-display); letter-spacing: -0.006em; color: var(--c-text); white-space: nowrap; }
+.p-tool-row {
+  display: flex; flex-shrink: 0; align-items: center; gap: 8px; height: 44px; padding: 0 16px;
+  border-bottom: 1px solid var(--c-border); overflow-x: auto; scrollbar-width: none;
+}
+.p-tool-row::-webkit-scrollbar { display: none; }
+/* The row scrolls rather than squeezing what it holds. */
+.p-tool-row > * { flex-shrink: 0; }
+@media (max-width: 639px) {
+  .p-tool-bar { height: 48px; }
+  .p-tool-title { font-size: 17px; line-height: 24px; }
+}
+
+/* A connected or addable thing's row (components/plugins/PluginRow.tsx): tile · name and meta · status · ⋯ or +. */
+.p-plugin-row {
+  display: grid; align-items: center; column-gap: 12px; min-height: 56px; padding: 0 8px;
+  grid-template-columns: 32px minmax(0, 1fr) 120px 28px;
   border-radius: var(--r-row);
-  font-weight: 600;
-  letter-spacing: -0.008em;
-  transition: background-color var(--dur-base) ease-out, transform var(--dur-fast) var(--ease-out-strong);
+  transition: background-color 120ms ease-out;
 }
-.p-btn:hover { background: color-mix(in srgb, var(--c-accent) 92%, #000); }
-.p-btn:active { transform: scale(0.98); }
-/* A filled button cannot fade to disabled: 45% brass over a warm canvas is
-   the canvas, and HomePage's primary action disappeared until you typed.
-   Disabled drops the fill entirely and becomes a neutral chip — still an
-   object, visibly not actionable. */
-.p-btn:disabled { background: var(--c-neutral-tint); color: var(--c-text-3); cursor: default; transform: none; }
-
-/* Brass is the same light object in both modes, so its ink is fixed. Danger
-   is not — it is a light salmon on umber and a deep red on paper — so its ink
-   is the ground, which is that tone's opposite in either mode. */
-.p-btn-danger {
-  background: var(--c-danger);
-  color: var(--c-bg);
-  border: none;
-  border-radius: var(--r-row);
-  font-weight: 600;
-  letter-spacing: -0.008em;
-  transition: background-color var(--dur-base) ease-out, transform var(--dur-fast) var(--ease-out-strong);
+.p-plugin-row:hover { background: var(--c-neutral-tint); }
+.p-plugin-row-control { grid-template-columns: 32px minmax(0, 1fr) 120px auto 28px; }
+.p-plugin-row-state { display: contents; }
+@media (max-width: 639px) {
+  .p-plugin-row-control { grid-template-columns: 32px minmax(0, 1fr) 28px; }
+  .p-plugin-row-control .p-plugin-row-state { display: flex; align-items: center; gap: 12px; grid-row: 2; grid-column: 2 / -1; padding-bottom: 8px; }
 }
-.p-btn-danger:hover { background: color-mix(in srgb, var(--c-danger) 88%, #000); }
-.p-btn-danger:active { transform: scale(0.98); }
-.p-btn-danger:disabled { background: var(--c-neutral-tint); color: var(--c-text-3); cursor: default; transform: none; }
-
-.p-btn-quiet {
-  background: var(--c-surface);
-  color: var(--c-text);
-  border: 1px solid var(--c-input-border);
-  border-radius: var(--r-row);
-  font-weight: 500;
-  letter-spacing: -0.008em;
-  transition: background-color var(--dur-base) ease-out, border-color var(--dur-base) ease-out, transform var(--dur-fast) var(--ease-out-strong);
-}
-.p-btn-quiet:hover { background: var(--c-elevated); border-color: var(--c-border-strong); }
-.p-btn-quiet:active { transform: scale(0.98); }
-.p-btn-quiet:disabled { opacity: 0.45; cursor: default; transform: none; }
-
-.p-btn-ghost {
-  background: transparent;
-  color: var(--c-text-2);
-  border: none;
-  border-radius: var(--r-control);
-  font-weight: 500;
-  transition: background-color var(--dur-base) ease-out, color var(--dur-base) ease-out;
-}
-.p-btn-ghost:hover { background: var(--c-neutral-tint); color: var(--c-text); }
-.p-btn-ghost:disabled { opacity: 0.45; cursor: default; }
 
 /* Composer — the one place the user acts; a distinct raised surface that
    lifts a touch on focus. */
@@ -1266,7 +1255,6 @@ body { background: var(--c-bg); color: var(--c-text); }
   .p-busy-bar::after { animation: none; left: 30%; }
   /* The caret still marks where the text is being written; it just holds. */
   .p-streaming > :last-child::after { animation: none; }
-  .p-btn:active, .p-btn-quiet:active { transform: none; }
   /* The dot still marks the run as in progress; it just holds. */
   .p-dot-pulse { animation: none; }
   /* The dashboard is drawn settled: every bar at its height, every line whole. */
@@ -1673,6 +1661,13 @@ body > .annotation-toolbar {
 }
 [data-mode="light"] .p-bar { --bar-line: var(--c-border); }
 .p-bar > :not(.p-bar-strip) { border-bottom: 1px solid var(--bar-line); }
+/* A bar draws its hairline only where something below needs a baseline (tabs opening onto the chat, columns meeting
+   it). The chat alone (`focus`, Home's assistant) has neither: what scrolls under its bar fades out instead. */
+.p-bar[data-layout="focus"] > :not(.p-bar-strip) { border-bottom: 0; }
+.p-bar[data-layout="focus"]::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 20px; z-index: 1;
+  pointer-events: none; background: linear-gradient(var(--bar-ground), transparent);
+}
 .p-bar-menu { display: none; align-items: center; padding-left: 8px; }
 @media (max-width: 767px) { .p-bar-menu { display: flex; } }
 .p-bar-strip { position: relative; display: flex; min-width: 0; flex: 1; }
