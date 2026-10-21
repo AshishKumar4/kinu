@@ -1013,6 +1013,10 @@ export class UserMcpServers {
         return { run, service: this.serverName(result.serverId), error: null };
       }
 
+      // Declined or refused, the server still waits for a sign-in, as it did before this one began: dialled again, it
+      // offers a fresh one, and its row the way to it. Left failed, its row offered none (the `connect` live row).
+      if (result.serverId !== undefined) await hold(this.dialForSignIn(result.serverId));
+
       return { run, service: this.serverName(result.serverId), error: result.authError ?? 'The MCP server refused the sign-in.' };
     } catch (cause) {
       const error = toKinuError({ doing: 'completing an MCP sign-in', cause, otherwise: 'unavailable' });
@@ -1021,6 +1025,14 @@ export class UserMcpServers {
       // No server named, so no run: the page that began it learns nothing, and the finish page says so.
       return { run: null, service: 'the MCP server', error: renderThrownChain({ cause: error }) };
     }
+  }
+
+  /** Dials `serverId` again, so a server whose sign-in ended unsigned offers a fresh one; a dial that fails leaves it as
+   *  the callback did, and says why. */
+  private dialForSignIn(serverId: string): Effect.Effect<void> {
+    return Effect.promise(async () => this.host.mcp.connectToServer(serverId)).pipe(Effect.asVoid, Effect.catchCause(recording({
+      doing: 'dialling an MCP server again after its sign-in ended unsigned', otherwise: 'unavailable',
+    }, (failure) => { diagnostics.failure('mcp.connect_failed', failure, { serverId }); })));
   }
 
   /** The run a sign-in of `serverId` was begun for, taken: one callback ends one run. */
