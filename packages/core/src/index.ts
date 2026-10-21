@@ -1073,7 +1073,7 @@ export {
 } from './execution/shell-session';
 
 export {
-  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
+  createSandboxExecutor, type ComputerProcessEnd, type ComputerProcessJobs, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
   sandboxSizeLabel, WORKSPACE_BACKUP_DIR, sandboxFiles,
 } from './execution/sandbox';
 

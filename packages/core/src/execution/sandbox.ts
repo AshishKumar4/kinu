@@ -10,7 +10,8 @@ import { shellCall } from './command-call';
 import { callJob, createShellSession, machineShellCall, machineShellCwd, reportsCwd, shellExecOptions, type MachineShells, type ShellSession } from './shell-session';
 import { namedShellCall } from '../safety/approval-gate';
 import type { CheckpointFiles, OutputSink, VfsDigestWrite } from '../types/primitives';
-import { JOB_STAMP_ENV } from '../types/jobs';
+import { JOB_STAMP_ENV, newJobId, type AdoptsJobs } from '../types/jobs';
+import { currentWorkMode } from './work-mode';
 import { commandAnswer, ExecPartsSchema, type ExecOutcome } from './exec-result';
 import { classifyErrorCode, KinuError, refusalOf, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
@@ -93,7 +94,7 @@ export interface SandboxHandle {
    * restart. `reveal`: the owner started it, so at each start and restart the box asks the account for the values this
    * workspace's agents may read, and the process holds them in memory only.
    */
-  startSupervisedProcess(command: string, opts?: { cwd?: string; env?: Readonly<Record<string, string>>; reveal?: boolean }):
+  startSupervisedProcess(command: string, opts?: { cwd?: string; env?: Readonly<Record<string, string>>; reveal?: boolean; job?: string }):
     Promise<{ processId: string }>;
   stopSupervisedProcess(processId: string): Promise<{ stopped: boolean }>;
   /** What a supervised job wrote most recently, both streams as its terminal showed them. */
@@ -283,12 +284,31 @@ export interface SandboxExecutorOptions {
   readonly desktop?: { readonly driver: string; readonly screen: DesktopScreen };
   /** The owner's secrets granted to this workspace, as each command's variables; without it a command gets none. */
   readonly environment?: CommandEnvironment;
+  /**
+   * The actor's jobs, a process `startProcess` starts among them, and each one's end as the box tells it
+   * (`process-ended`); without them a process is no job.
+   */
+  readonly processJobs?: ComputerProcessJobs;
 }
 
 /** What every member of the computer's surface works over: its handle (none: not configured), its named shells, and
  *  the one way a call through it marks the computer in use. */
+/** A computer's process as its job's: its end, as the box tells it. */
+export interface ComputerProcessEnd {
+  /** Absent where the box kept none (the process was lost). */
+  readonly exitCode?: number;
+  /** The last of what it wrote, which says why it ended. */
+  readonly tail: string;
+}
+
+/** The actor's jobs, and the box's word on when a job's process ends. */
+export interface ComputerProcessJobs extends AdoptsJobs {
+  ended(jobId: string): Promise<ComputerProcessEnd>;
+}
+
 interface Computer {
   readonly handle: SandboxHandle | undefined;
+  readonly processJobs: ComputerProcessJobs | undefined;
   readonly names: ShellSession;
   readonly shells: MachineShells | undefined;
   readonly touch: <T>(fn: () => Promise<T>) => Promise<T>;
@@ -372,8 +392,11 @@ function execMember({ handle, names, shells, touch, environment }: Computer): Ex
   );
 }
 
-/** `computer.startProcess`. */
-function startProcessMember({ handle, touch, environment }: Computer): ExecutorTool {
+/**
+ * `computer.startProcess`. With the actor's jobs, the process is one of them from its start (as the workspace's is):
+ * its end, which the box tells, completes the job and wakes the agent; one no job took is stopped.
+ */
+function startProcessMember({ handle, touch, environment, processJobs }: Computer): ExecutorTool {
   return commandTool(
     'Start a SUPERVISED background process in the computer. Supervision records a restart ' +
       'spec, so the process COMES BACK when the container restarts; a bare `nohup ... &` does ' +
@@ -401,19 +424,51 @@ function startProcessMember({ handle, touch, environment }: Computer): ExecutorT
           const caller = secretsCaller();
           const env = environment === undefined ? undefined : await environment('keep', caller);
 
+          // Its job's id before it starts: its spec names it, and its variables carry it, as a job's commands do.
+          const jobId = processJobs === undefined ? undefined : newJobId();
+          const stamped = jobId === undefined ? env : { ...env, [JOB_STAMP_ENV]: jobId };
+
           const started = await touch(async () => {
             await withSandboxRetry(() => handle.ensureReady());
 
-            return handle.startSupervisedProcess(command, env === undefined ? { cwd } : { cwd, env, reveal: caller === 'owner' });
+            return handle.startSupervisedProcess(command, {
+              cwd, ...(stamped !== undefined && { env: stamped }), ...(env !== undefined && { reveal: caller === 'owner' }), ...(jobId !== undefined && { job: jobId }),
+            });
           });
 
-          return { processId: started.processId };
+          if (processJobs === undefined || jobId === undefined) return { processId: started.processId };
+
+          return await adoptedProcess({ handle, touch, jobs: processJobs, jobId, command, cwd, processId: started.processId });
         } catch (err) {
           return refusalOf(sandboxFailure({ doing: `computer.startProcess \`${command}\``, cause: err }));
         }
       } };
     },
   );
+}
+
+/**
+ * A started process made its job's: taken, it answers its job; refused, it is stopped, and the call says it ran and was
+ * stopped (`cancelled` spends an approval, as the workspace's does). Its job's cancel reaches it through the actor's
+ * own cancel path, which a stop that fails leaves running.
+ */
+async function adoptedProcess(input: {
+  readonly handle: SandboxHandle; readonly touch: Computer['touch']; readonly jobs: ComputerProcessJobs;
+  readonly jobId: string; readonly command: string; readonly cwd: string; readonly processId: string;
+}): Promise<JsonValue> {
+  const { handle, touch, jobs, jobId, command, cwd, processId } = input;
+  const doing = `computer.startProcess \`${command}\``;
+
+  const adopted = await jobs.adopt({
+    jobId, kind: 'startProcess', mode: currentWorkMode(), controller: new AbortController(),
+    promise: jobs.ended(jobId).then((end) => ({ processId, ...end })),
+    input: { command, cwd, processId, machine: 'computer', job: jobId },
+  });
+
+  if (adopted.detached) return { processId, jobId: adopted.jobId };
+  await touch(() => handle.stopSupervisedProcess(processId));
+
+  return refusalOf(new KinuError('cancelled', `${doing}: ${adopted.reason}, so the process was stopped`));
 }
 
 /** `computer.stopProcess`. */
@@ -557,7 +612,7 @@ export function createSandboxExecutor(handle?: SandboxHandle, options: SandboxEx
     return { supported: true, url: exposed.url, port, name, route: exposed.route };
   };
 
-  const computer: Computer = { handle, names, shells, touch, environment: options.environment };
+  const computer: Computer = { handle, names, shells, touch, environment: options.environment, processJobs: options.processJobs };
 
   const tools: ExecutorProvider['tools'] = {
     exec: execMember(computer),
