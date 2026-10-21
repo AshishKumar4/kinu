@@ -16,7 +16,6 @@ import {
   createAgentsCodemodeProvider,
   type AgentsToolDeps,
 } from '../src/index';
-import { ROOT_DELEGATION_BUDGET } from '../src/subagents/depth';
 import { runChat } from '../src/chat';
 import { sessionFixture } from './helpers-session';
 import type { SubagentHandoff } from '../src/index';
@@ -28,7 +27,7 @@ function handoff(): SubagentHandoff {
 
 import { buildDrainBatch } from '../src/events/hub/drain';
 import type { KinuEvent } from '../src/events/hub/types';
-import { temporaryPortStub, lonelyTree } from './helpers-agents';
+import { temporaryPortStub, lonelyTree, ROOT_DELEGATION_BUDGET } from './helpers-agents';
 
 function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   const db = new Database(':memory:');

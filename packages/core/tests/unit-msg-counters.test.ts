@@ -11,7 +11,7 @@
 // Delivery itself is pinned next door, in unit-agents-tool.test.ts, and that
 // suite is deliberately untouched: an instrument that changed what it measures
 // would be worse than no instrument.
-import { lonelyTree } from './helpers-agents';
+import { lonelyTree, ROOT_DELEGATION_BUDGET } from './helpers-agents';
 import { describe, test, expect, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestRuntime, toolExecute, createTestActorsOver, type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
@@ -19,7 +19,6 @@ import {
   createAgentsTool,
   type AgentsToolDeps,
   type PeersToolDeps, type TeamToolDeps,
-  ROOT_DELEGATION_BUDGET,
   type SubagentDelivery, type SubagentRosterEntry,
 } from '../src/index';
 import { setDiagnosticsSink } from '../src/obs/index';

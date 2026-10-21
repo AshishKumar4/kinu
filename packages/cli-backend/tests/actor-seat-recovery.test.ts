@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
-import { HeadCapture, REAL_CLOCK, sha256Hex, type HeadInput, type HostedActor } from '@kinu.run/core';
+import { HeadCapture, localActorDirectory, REAL_CLOCK, sha256Hex, type HeadInput, type HostedActor } from '@kinu.run/core';
 import { scratchDir, scriptedTurnModel, workspaceDatabase, admitTestClaim, servedStoresOf } from '@kinu.run/test-utils';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { workspaceHome, type CLIRuntime } from '../src/runtime';
@@ -91,6 +91,43 @@ test('startup claim recovery leaves a restarted node available to re-drive on th
     });
 
     expect(result.status).toBe('completed');
+  } finally {
+    await cold.close();
+  }
+});
+
+// The cloud retires a run actor once its row is settled, at its next start; the CLI seated its nodes and never retired one.
+test('a node whose row has settled is retired at the next start, as the cloud retires it; one still running is kept', async () => {
+  const workspace = await reopenableWorkspace('node-reclaim');
+  const first = new LocalAgentHost(workspace.options);
+  const owner = await first.acquire('root');
+  const settled = await owner.hostNode({ nodeId: 'settled-node', rootId: 'reclaim-work', depth: 1 });
+  const working = await owner.hostNode({ nodeId: 'working-node', rootId: 'reclaim-work', depth: 1 });
+  const root = workspace.runtimes.get('root');
+
+  if (root === undefined) throw new Error('the owner runtime must be open');
+
+  const row = (id: string, status: string) => root.storage.sql`INSERT INTO head_journal
+    (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+    VALUES (${root.actor.actorId}, ${id}, 'reclaim-work', 'reclaim-work', 1, 'Try one way', 'r', ${status}, 1, 'synthesize')`;
+
+  void row('settled-node', 'completed');
+  void row('working-node', 'running');
+
+  await interrupted(working.actor);
+  await first.close();
+
+  const cold = new LocalAgentHost(workspace.options);
+
+  try {
+    await cold.acquire('root');
+    const reopened = workspace.runtimes.get('root');
+
+    if (reopened === undefined) throw new Error('the reopened owner runtime must be open');
+    const { directory } = localActorDirectory(reopened.actor);
+
+    expect(directory.retained(settled.actor.reference.actorId)?.deletedAt).not.toBeNull();
+    expect(directory.retained(working.actor.reference.actorId)?.deletedAt).toBeNull();
   } finally {
     await cold.close();
   }
@@ -201,6 +238,8 @@ test('a retained child without its owned program bytes names the required local 
   const first = new LocalAgentHost(workspace.options);
   const owner = await first.acquire('root');
   const node = await owner.hostNode({ nodeId: 'old-program', rootId: 'old-layout', depth: 1 });
+  // Its turn outlives the process, so the start's reclaim of settled run actors keeps it.
+  await interrupted(node.actor);
   const program = node.actor.runtime.identity.scaffold;
   const version = await program.version();
   const files = node.actor.runtime.agentStateVfs;
@@ -229,6 +268,8 @@ test('refusing a head layout happens before it can leave an observer on the pare
   const first = new LocalAgentHost(workspace.options);
   const owner = await first.acquire('root');
   const branch = await owner.hostHead(head('invalid-head-layout'), new HeadCapture().files);
+  // Its turn outlives the process, so the start's reclaim of settled run actors keeps it.
+  await interrupted(branch.actor);
   const actorId = branch.actor.reference.actorId;
   const program = branch.actor.runtime.identity.scaffold;
   const version = await program.version();

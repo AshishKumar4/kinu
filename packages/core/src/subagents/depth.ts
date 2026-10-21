@@ -22,12 +22,6 @@ export interface DelegationBudget {
   readonly ancestry?: 'missing' | 'cycle';
 }
 
-/** The orchestrator's budget: the root, with the whole cap below it. */
-export const ROOT_DELEGATION_BUDGET: DelegationBudget = {
-  depth: 0,
-  maxDepth: DELEGATION_MAX_DEPTH,
-};
-
 /**
  * Budget from the actor's directory record, walked up to the root. A walk that cannot reach the root fails closed: a
  * hirer the directory does not describe leaves the depth unknown, and a line of hirers that returns to one already
