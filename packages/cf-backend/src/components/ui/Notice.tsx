@@ -9,10 +9,12 @@ export type NoticeTone = "info" | "success" | "warning" | "danger";
 
 const ICON = { info: InfoIcon, success: CheckCircleIcon, warning: WarningIcon, danger: WarningCircleIcon } as const;
 
-export function Notice({ tone, children, action, phrasing = false, className, ...data }: {
+export function Notice({ tone, children, action, alert = tone === "danger", phrasing = false, className, ...data }: {
   tone: NoticeTone;
   children: ReactNode;
   action?: ReactNode;
+  /** Read out at once: every danger notice, and a warning to hear before going on (possible secrets in a blueprint). */
+  alert?: boolean;
   /** Inside running text, such as a slate in a chat answer: the same notice, built of spans. */
   phrasing?: boolean;
   /** Placement only (`mt-4`, `mx-6 mb-4`). */
@@ -22,7 +24,7 @@ export function Notice({ tone, children, action, phrasing = false, className, ..
   const Box = phrasing ? "span" : "div";
 
   return (
-    <Box role={tone === "danger" ? "alert" : "status"} className={`p-notice p-notice-tone-${tone}${className === undefined ? "" : ` ${className}`}`} {...data}>
+    <Box role={alert ? "alert" : "status"} className={`p-notice p-notice-tone-${tone}${className === undefined ? "" : ` ${className}`}`} {...data}>
       <Icon size={16} className="mt-0.5 shrink-0" />
       <Box className="min-w-0 flex-1 t-body">{children}</Box>
       {action}

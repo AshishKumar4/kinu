@@ -23,7 +23,7 @@ export function SecretWarning({ warnings, children }: { warnings: BlueprintView[
   if (warnings.length === 0) return null;
 
   return (
-    <Notice tone="warning">
+    <Notice tone="warning" alert>
       <p className="t-item">Possible secrets in the source</p>
       <p className="mt-1">{children}</p>
       <ul className="mt-2 space-y-px t-mono">
