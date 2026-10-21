@@ -10,6 +10,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import type { Node } from 'oxc-parser';
+import postcss from 'postcss';
 import { parse, walk } from './syntax';
 import type { SyntaxNode } from './syntax';
 
@@ -206,24 +207,33 @@ function scanSource(file: string, text: string): DesignFinding[] {
   return findings;
 }
 
-/** `index.css` (§4.3): no colour literal, no font size outside the role table, no radius but a token. */
+/** A `font` shorthand's size: the one length before its `/` line height. */
+const FONT_SIZE = /^([\d.]+(?:px|em|rem))(?:\/|$)/u;
+
+/** A radius that is only tokens, or none. */
+const RADIUS_TOKENS = /^(?:var\(--r-[\w-]+\)\s*)+$|^(?:0|inherit)$/u;
+
+/** `index.css` (§4.3), read by postcss: no colour literal, no font size outside the role table, no radius but a token. */
 function scanCss(text: string): DesignFinding[] {
   const findings: DesignFinding[] = [];
-  const lines = text.replace(/\/\*[\s\S]*?\*\//gu, (comment) => comment.replace(/[^\n]/gu, ' ')).split('\n');
 
-  for (const [index, line] of lines.entries()) {
-    const add = (rule: DesignRule, token: string) => findings.push({ file: 'index.css', line: index + 1, rule, token });
+  postcss.parse(text).walkDecls((decl) => {
+    const add = (rule: DesignRule, token: string) => findings.push({ file: 'index.css', line: decl.source?.start?.line ?? 0, rule, token });
 
-    for (const match of line.match(new RegExp(HEX, 'gu')) ?? []) add('css-colour', match);
+    for (const match of decl.value.match(new RegExp(HEX, 'gu')) ?? []) add('css-colour', match);
 
-    if (FUNCTION_COLOUR.test(line)) add('css-colour', FUNCTION_COLOUR.exec(line)?.[0] ?? '');
+    if (FUNCTION_COLOUR.test(decl.value)) add('css-colour', FUNCTION_COLOUR.exec(decl.value)?.[0] ?? '');
 
-    for (const [, size] of line.matchAll(/font-size:\s*([^;!}]+)/gu)) if (!ROLE_FONT_SIZES.has((size ?? '').trim())) add('css-font-size', (size ?? '').trim());
+    if (decl.prop === 'font-size' && !ROLE_FONT_SIZES.has(decl.value)) add('css-font-size', decl.value);
 
-    for (const [, size] of line.matchAll(/font:\s*(?:\d{3}\s+)?([\d.]+(?:px|em|rem))/gu)) if (!ROLE_FONT_SIZES.has(size ?? '')) add('css-font-size', size ?? '');
+    if (decl.prop === 'font') {
+      const size = decl.value.split(/\s+/u).map((part) => FONT_SIZE.exec(part)?.[1]).find((found) => found !== undefined);
 
-    for (const [, radius] of line.matchAll(/border-radius:\s*([^;!}]+)/gu)) if (!/^(?:var\(--r-[\w-]+\)\s*)+$|^(?:0|inherit)$/u.test((radius ?? '').trim())) add('css-radius', (radius ?? '').trim());
-  }
+      if (size !== undefined && !ROLE_FONT_SIZES.has(size)) add('css-font-size', size);
+    }
+
+    if (/^border(?:-(?:top|bottom|start|end)-(?:left|right|start|end))?-radius$/u.test(decl.prop) && !RADIUS_TOKENS.test(decl.value)) add('css-radius', decl.value);
+  });
 
   return findings;
 }
