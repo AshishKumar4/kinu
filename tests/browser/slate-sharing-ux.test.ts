@@ -275,24 +275,32 @@ describe('slate sharing surfaces', () => {
       const page = await freshPage(gallery, 'sharedialog', 'light', 'mobile');
 
       try {
-        // The exit as a loaded machine draws it: long enough that the next press lands while the menu is still leaving.
-        await page.addStyleTag({ content: '.p-menu { transition: opacity 2s linear !important; }' });
         await page.click('[data-live-share="live-board-1"] [data-live-share-review]');
         await page.waitForSelector('[data-share-approve-reach]');
         await page.click('[data-share-approve-reach]');
         await page.waitForFunction(() => document.querySelector('[data-live-share="live-board-1"] [data-live-share-review]') === null);
         await page.click('[data-live-share="live-board-1"] [data-row-menu]');
         await page.waitForSelector('[role="menu"][data-open] [data-live-share-own]');
-        await page.click('[role="menu"][data-open] [data-live-share-own]');
-        await page.waitForSelector('[data-ending-style]');
 
-        const under = await page.$eval('[data-live-share="live-board-1"] [data-row-menu]', (trigger) => {
-          const box = trigger.getBoundingClientRect();
+        // Read at the moment the menu starts leaving, in the page itself: however fast this machine draws, it is there.
+        await page.evaluate(() => {
+          const observer = new MutationObserver(() => {
+            if (document.querySelector('[data-closed]') === null) return;
 
-          return document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.closest('[data-row-menu]') === trigger;
+            observer.disconnect();
+            const trigger = document.querySelector('[data-live-share="live-board-1"] [data-row-menu]');
+            const box = trigger?.getBoundingClientRect();
+            const under = box === undefined ? null : document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+
+            document.body.dataset.closingPress = under?.closest('[data-row-menu]') === trigger ? 'the row' : `${under?.tagName ?? 'nothing'} ${under?.getAttribute('role') ?? ''}`;
+          });
+
+          observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['data-closed'] });
         });
+        await page.click('[role="menu"][data-open] [data-live-share-own]');
+        await page.waitForFunction(() => document.body.dataset.closingPress !== undefined);
 
-        expect(under).toBe(true);
+        expect(await page.evaluate(() => document.body.dataset.closingPress)).toBe('the row');
       } finally {
         await page.close();
       }
