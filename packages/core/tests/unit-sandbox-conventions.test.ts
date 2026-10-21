@@ -3,7 +3,8 @@
  * Worker) as prelude source. These hold the source to the functions, value for value.
  */
 import { expect, test } from 'bun:test';
-import { createToolArguments, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE, shownConsoleValue } from '../src/tools/sandbox-contract';
+import * as v from 'valibot';
+import { programNamespace, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE, shownConsoleValue } from '../src/tools/sandbox-contract';
 
 /** A value JSON cannot hold: it contains itself. */
 interface Circular { self?: Circular }
@@ -24,7 +25,7 @@ test('the sandbox console shows every value as the in-process console does', () 
   expect(shownConsoleValue({ value: 10n })).toStartWith('[unserializable: ');
 });
 
-test('the sandbox createTool sends every function argument as its source, as the in-process one does', () => {
+test('the sandbox createTool sends every function argument as its source, as the in-process one does', async () => {
   const received: unknown[][] = [];
   const workspace = { createTool: (...args: unknown[]) => { received.push(args); } };
   const body = function body(input: string) { return input; };
@@ -33,6 +34,16 @@ test('the sandbox createTool sends every function argument as its source, as the
 
   new Function('workspace', `${SANDBOX_CREATE_TOOL_PRELUDE}\nworkspace.createTool(...arguments[1]);`)(workspace, args);
 
-  expect(received).toEqual([createToolArguments(args)]);
-  expect(createToolArguments(args)).toEqual(['name', 'description', String(body), { schema: true }, '() => 2']);
+  // The in-process shape (`programNamespace`) sends the same, so a program saves the same tool in either sandbox.
+  const inProcess = programNamespace('workspace', {
+    createTool: async (...sent) => {
+      received.push(sent);
+
+      return null;
+    },
+  });
+
+  await v.parse(v.function(), inProcess['createTool'])(...args);
+
+  expect(received).toEqual([['name', 'description', String(body), { schema: true }, '() => 2'], ['name', 'description', String(body), { schema: true }, '() => 2']]);
 });

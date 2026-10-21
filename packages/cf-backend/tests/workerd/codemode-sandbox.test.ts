@@ -293,6 +293,20 @@ describe('the eval sandbox under workerd', () => {
     expect(created).toEqual([String.raw`async (args) => 'it\'s ' + args.name`]);
   });
 
+  // Duplication audit, 2026-10-20 (InternalFish #12): one namespace shape for the sandbox and in-process programs. A
+  // member a namespace serves is its own, so the shim binds slates only where they are served; any other name refuses.
+  test("a namespace's own members are what it serves, and a name it does not serve is refused by name", async () => {
+    const served = await executor.execute(
+      "return ['exec' in workspace, 'slates' in workspace, 'nope' in workspace, (await workspace) === workspace];",
+      [toolsProvider([]), { name: 'workspace', fns: { exec: async () => 'ran' } }],
+    );
+
+    const missing = await executor.execute('return await workspace.nope();', [toolsProvider([]), { name: 'workspace', fns: { exec: async () => 'ran' } }]);
+
+    expect(served).toMatchObject({ result: [true, false, false, true] });
+    expect(missing.error).toContain('Tool "nope" not found');
+  });
+
   test('private db scratch survives between two programs, and a host failure is attributed to its namespace member', async () => {
     const first = await executor.execute(`${SCRATCH_TABLE}\nawait db.insert('scratch', [{ key: 'n', value: 41 }]); return 'saved'`, [toolsProvider([]), dbProvider, workspace]);
     expect(first.result).toBe('saved');
