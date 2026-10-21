@@ -2,9 +2,9 @@ import { Effect, Cause, Data } from 'effect';
 import * as oauth from 'oauth4webapi';
 import { Hono } from 'hono';
 import { AuthError, authenticateRequest, devIdentityEmail, readSessionToken, requestIdentity } from './session';
-import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, readCookie, sessionCookie, setCookie } from './cookies';
+import { oauthStateCookieName, SESSION_COOKIE_NAME, readCookie, sessionCookie, setCookie } from './cookies';
 import {
-  bindingsCookie, consumeOAuthState, createOAuthState, createSession, heldBindings, OAUTH_HANDOFF_LIFETIME_MS, revokeSession,
+  consumeOAuthState, createOAuthState, createSession, revokeSession,
   type OAuthProfile, type SessionAuthority,
 } from './store';
 import { connectedPath, ConnectRunSchema, objectNamed, sanitizeReturnTo } from '@kinu.run/core';
@@ -264,14 +264,14 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
     // KV holds only the binding's hash; this cookie is what the callback proves the sign-in with, beside the bindings of
     // this browser's other starts still under way.
     const headers = new Headers({ 'cache-control': 'no-store' });
-    headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, bindingsCookie(heldBindings(readCookie(request, OAUTH_STATE_COOKIE_NAME)), { add: binding }), lifetimeMs));
+    headers.append('set-cookie', setCookie(oauthStateCookieName(yield* Effect.promise(async () => sha256Hex(state))), binding, lifetimeMs));
 
     return redirect(authorizationUrl.toString(), { headers });
   });
 }
 
-/** A provider's callback. The binding it spends leaves the handoff cookie whatever the outcome (its state record is
- *  spent), and the browser's other starts keep theirs; the cookie goes with its last one. */
+/** A provider's callback. Its handoff's own binding cookie is cleared whatever the outcome (its state record is spent);
+ *  the browser's other starts keep theirs. */
 function completeOAuth<Id>(
   request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'>, providerId: string,
 ): Effect.Effect<Response, KinuError> {
@@ -291,14 +291,13 @@ function completeOAuth<Id>(
     // A connect whose handoff this browser holds ends on the finish page, naming its run, whatever fails after: its
     // state expired or another provider's included.
     let connecting: { readonly run: string | null } | null = null;
-    const held = heldBindings(readCookie(request, OAUTH_STATE_COOKIE_NAME));
-    let spent: string | null = null;
+    // This handoff's own cookie, spent with it whatever the outcome; the browser's other starts keep theirs.
+    const handoffCookie = oauthStateCookieName(yield* Effect.promise(async () => sha256Hex(state)));
 
     const response = yield* Effect.catchCause(Effect.gen(function* () {
-      const consumed = yield* Effect.promise(async () => consumeOAuthState(env.AUTH_KV, state, provider.id, held));
+      const consumed = yield* Effect.promise(async () => consumeOAuthState(env.AUTH_KV, state, provider.id, readCookie(request, handoffCookie)));
       const savedState = consumed.record;
 
-      spent = consumed.binding;
       connecting = savedState.connectFor === null ? null : { run: savedState.connectRun };
 
       if (consumed.refusal !== null) return yield* Effect.die(new Error(consumed.refusal));
@@ -379,9 +378,7 @@ function completeOAuth<Id>(
     `, { status: 400 });
     }));
 
-    const kept = spent === null ? held.join('.') : bindingsCookie(held, { spent });
-
-    response.headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, kept, kept === '' ? 0 : OAUTH_HANDOFF_LIFETIME_MS));
+    response.headers.append('set-cookie', setCookie(handoffCookie, '', 0));
 
     return response;
   });

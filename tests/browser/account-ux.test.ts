@@ -808,6 +808,27 @@ describe('account panels', () => {
     });
   });
 
+  // Sol's review (2026-10-23): a finish page claimed "Connected to Cloudflare" from its address alone, which anyone can
+  // write. Naming a run this tab never began, it claims nothing.
+  test('a finish page naming a run this tab never began claims no outcome', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.newPage();
+
+      try {
+        await page.goto(`${gallery.origin}/gallery.html?frame=connected&run=${crypto.randomUUID()}&service=Cloudflare`, { waitUntil: 'load' });
+        await page.waitForSelector('[data-connect-finished] p');
+
+        // It tells whoever began the run, and says nothing of the service its address names.
+        expect({
+          finished: await page.$eval('[data-connect-finished]', (node) => node.getAttribute('data-connect-finished')),
+          namesService: (await page.$eval('[data-connect-finished]', (node) => node.textContent ?? '')).includes('Cloudflare'),
+        }).toEqual({ finished: 'told', namesService: false });
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   // Its address names no run, so no connect this browser began ended there: nothing in it is followed, a `next` someone
   // wrote into it, off this site or not, included.
   test('a finish page that names no run reports no connect and stays, never routing into the app', async () => {

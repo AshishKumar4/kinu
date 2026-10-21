@@ -275,6 +275,70 @@ describe('MCP presets', () => {
     });
   });
 
+  // Sol's review (2026-10-23): every connect opened one named window, so two begun together shared it, each sending it
+  // elsewhere and closing it under the other.
+  test('two preset sign-ins begun together each get a helper window of their own', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'plugins', 'dark', 'desktop');
+
+      try {
+        await page.waitForFunction(() => ['cloudflare', 'github'].every((id) => document.querySelector(`[data-plugin-source="${id}"] [data-plugin-add]`) !== null));
+        // Each window a connect opens, by its target name.
+        await page.evaluate(() => {
+          const open = window.open.bind(window);
+
+          window.open = (url, target, features) => {
+            localStorage.setItem('gallery-opened', `${localStorage.getItem('gallery-opened') ?? ''}${String(target)}\n`);
+
+            return open(url, target, features);
+          };
+        });
+        // Two clicks in one task: the second begins before the first's add has answered.
+        await page.evaluate(() => {
+          for (const id of ['cloudflare', 'github']) document.querySelector<HTMLElement>(`[data-plugin-source="${id}"] [data-plugin-add]`)?.click();
+        });
+        await page.waitForFunction(() => (localStorage.getItem('gallery-opened') ?? '').split('\n').filter(Boolean).length === 2);
+
+        const targets = (await page.evaluate(() => localStorage.getItem('gallery-opened') ?? '')).split('\n').filter(Boolean);
+
+        expect({ windows: targets.length, distinct: new Set(targets).size }).toEqual({ windows: 2, distinct: 2 });
+      } finally {
+        for (const opened of await page.browser().pages()) if (opened !== page) await opened.close();
+        await page.close();
+      }
+    });
+  });
+
+  // Sol's review (2026-10-23): the Plugins page passes no outcome handler, so a sign-in that did not connect closed its
+  // finish page with the only copy of why.
+  test('a preset whose sign-in did not connect says why on its row', async () => {
+    await withGallery(async (gallery) => {
+      const page = await freshPage(gallery, 'plugins', 'dark', 'desktop');
+      const row = '[data-plugin-source="cloudflare"]';
+
+      try {
+        await page.waitForSelector(`${row} [data-plugin-add]`);
+        const opened = page.browser().waitForTarget((target) => target.opener() === page.target());
+
+        await page.click(`${row} [data-plugin-add]`);
+        const helper = await (await opened).page();
+
+        if (helper === null) throw new Error('the sign-in opened no tab');
+        await page.waitForFunction(() => (localStorage.getItem('gallery-mcp-connects') ?? '') !== '');
+        const [run = ''] = await begunRuns(page);
+
+        // Where the callback sends the helper once the provider declines: the finish page, for this run.
+        await Promise.allSettled([helper.goto(`${gallery.origin}/gallery.html?frame=connected&${new URLSearchParams({ run, service: 'Cloudflare', error: 'access_denied: the person declined' }).toString()}`)]);
+        await page.waitForSelector(`${row} [data-plugin-error]`);
+
+        // The provider's own reason, as the finish page carried it.
+        expect(await page.$eval(`${row} [data-plugin-error]`, (node) => node.textContent ?? '')).toContain('access_denied: the person declined');
+      } finally {
+        await page.close();
+      }
+    });
+  });
+
   test('the preset row renders in the account modal and on the plugins page at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
       

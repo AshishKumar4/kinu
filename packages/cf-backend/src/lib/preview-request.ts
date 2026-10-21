@@ -1,4 +1,4 @@
-import { KINU_COOKIE_NAMES } from '../auth/cookies';
+import { KINU_COOKIE_FAMILIES, KINU_COOKIE_NAMES } from '../auth/cookies';
 import { bearerOf, parseCliBearer } from '../cli/auth-store';
 
 /**
@@ -13,7 +13,9 @@ export function sanitizePreviewRequestHeaders(input: Headers): Headers {
     const guestCookies = cookie.split(';').map((part) => part.trim()).filter((part) => {
       const separator = part.indexOf('=');
 
-      return separator > 0 && !KINU_COOKIE_NAMES.includes(part.slice(0, separator));
+      const name = part.slice(0, separator);
+
+      return separator > 0 && !KINU_COOKIE_NAMES.includes(name) && !KINU_COOKIE_FAMILIES.some((family) => name.startsWith(`${family}_`));
     });
 
     if (guestCookies.length > 0) headers.set('cookie', guestCookies.join('; '));

@@ -94,6 +94,14 @@ function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // A sign-in's end: the list read again, and a failure kept on this row, its finish page having closed with the only copy.
+  const ended = (end: ConnectEnded) => {
+    onChanged();
+    onConnected?.(end);
+
+    if (end.error !== null) setErr(`${end.service} did not connect: ${end.error}`);
+  };
+
   const brand = PRESET_MARK[preset.id];
   const added = server !== undefined;
 
@@ -113,7 +121,7 @@ function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
       const result = await addMcpServer(input);
 
       if (result.authUrl && connect !== undefined) {
-        const failed = await signInMcpServer(connect, result.id, (ended) => { onChanged(); onConnected?.(ended); });
+        const failed = await signInMcpServer(connect, result.id, ended);
 
         if (failed !== null) setErr(failed);
       } else {
@@ -157,7 +165,7 @@ function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
     // A preset that signs in and is not connected keeps the way to its sign-in: begun again for a run of its own, in a
     // tab opened now, whether its last one waits, was declined or failed.
     const signInAgain = !signIn || server.status === 'ready' ? null : async () => {
-      const failed = await signInMcpServer(beginConnect(), server.id, (ended) => { onChanged(); onConnected?.(ended); });
+      const failed = await signInMcpServer(beginConnect(), server.id, ended);
 
       if (failed !== null) setErr(failed);
     };
@@ -207,7 +215,7 @@ function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
               </button>
             </div>
           )}
-          {err !== null && <p className="p-t-status p-danger">{err}</p>}
+          {err !== null && <p className="p-t-status p-danger" data-plugin-error>{err}</p>}
         </div>
       ) : undefined}
     />

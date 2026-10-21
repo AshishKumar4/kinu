@@ -69,7 +69,7 @@ describe('an MCP preset add', () => {
     const [listed] = await h.userDO.userMcp_list(await testOwner());
     expect(listed?.presetId).toBe('cloudflare');
     expect(listed?.status).toBe('authenticating');
-    expect(listed?.authUrl).toBe('https://mcp.cloudflare.com/authorize?test');
+    expect(listed?.signIn).toBe(true);
     h.close();
   });
 

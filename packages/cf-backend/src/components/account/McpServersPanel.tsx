@@ -99,7 +99,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
                   <span className="p-row-text font-medium p-text">{s.name}</span>
                   <Status tone={mcpServerStatus(s.status).tone}>{mcpServerStatus(s.status).label}</Status>
                   <div className="ml-auto flex items-center gap-2">
-                    {s.authUrl && (
+                    {s.signIn && (
                       <button
                         type="button" data-mcp-sign-in onClick={() => detach(Effect.promise(async () => {
                           const failed = await signInMcpServer(beginConnect(), s.id, connected);

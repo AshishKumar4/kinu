@@ -1,6 +1,6 @@
 // Every connect run in another tab ends on the one finish page, which tells the page that started it and closes; the
 // owner's report (2026-10-20): an MCP sign-in from setup's tools step ended inside the app, on setup's first step.
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 import { APP_ROUTES, connectEndedOf, type UserCaller } from '@kinu.run/core';
 import { serveFamily } from './helpers/api';
 import { createTestUserDO, sqlExec, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
@@ -94,6 +94,37 @@ describe('an MCP server\'s sign-in ends on the finish page', () => {
       expect({ forged: await ended('forged.srv1'), first: await ended('minted0.srv1'), second: await ended('minted1.srv1'), replayed: await ended('minted0.srv1') })
         .toEqual({ forged: null, first: runs[0], second: runs[1], replayed: null });
     } finally {
+      woken.close();
+      first.close();
+    }
+  });
+
+  // Sol's review (2026-10-23): a consent left open past the SDK's ten minutes lost its run, so the page that began it
+  // never heard; and a decline was dialled again inside the callback, though the row's own sign-in begins a fresh one.
+  test('a declined sign-in names its run however late, is not dialled again, and its row still offers a sign-in', async () => {
+    const callback = 'https://kinu.example.com/api/user/mcp/callback';
+    const first = createTestUserDO();
+    const owner = await testOwner();
+
+    await first.userDO.userMcp_list(owner);
+    seedConfiguredMcpServer(sqlExec(first.db), 'srv1', { name: 'linear', url: 'https://mcp.linear.example/mcp', transport: 'streamable-http' });
+    // Its OAuth client registered, as a sign-in registers one before it sends the person to the provider.
+    seedSdkMcpServer('srv1', { type: 'streamable-http' }, { name: 'linear', url: 'https://mcp.linear.example/mcp', callbackUrl: callback, clientId: 'client-1', authUrl: 'https://auth.example/authorize?state=before.srv1' });
+
+    const woken = createTestUserDO({ storage: first.db });
+    const run = crypto.randomUUID();
+
+    try {
+      requireMcpSignIn('srv1', 'https://auth.example/authorize?state=late.srv1');
+      await woken.userDO.userMcp_beginConnect(owner, 'srv1', run);
+      setSystemTime(new Date(Date.now() + 11 * 60_000));
+
+      const ended = await woken.userDO.userMcp_handleOAuthCallback(owner, `${callback}?state=late.srv1&error=access_denied`);
+      const [listed] = await woken.userDO.userMcp_list(owner);
+
+      expect({ run: ended.run, status: listed?.status, signIn: listed?.signIn }).toEqual({ run, status: 'failed', signIn: true });
+    } finally {
+      setSystemTime();
       woken.close();
       first.close();
     }

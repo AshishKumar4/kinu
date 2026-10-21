@@ -34,7 +34,8 @@ export function beginConnect(): ConnectRun {
 
   // Cleared first: a helper starts with a copy of this tab's session storage, and must not take a stale return home.
   sessionStorage.removeItem(RETURN_KEY);
-  const helper = window.open("", "kinu-connect", "popup,width=520,height=720");
+  // Named by its run: one name would hand two connects begun together the same window, each sending it elsewhere.
+  const helper = window.open("", `kinu-connect-${id}`, "popup,width=520,height=720");
 
   if (helper === null) {
     return {

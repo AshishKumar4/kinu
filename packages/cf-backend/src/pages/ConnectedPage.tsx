@@ -4,7 +4,9 @@ import { useSearchParams } from "react-router-dom";
 import { connectEndedOf } from "@kinu.run/core";
 import { finishConnect, type FinishedConnect } from "@/lib/connect-window";
 
-/** What the page says once it is done: nothing while it goes back, else the end in its own words. */
+/** What the page says once it is done: nothing while it goes back, its failure where this tab began the connect, and
+ *  otherwise no outcome at all. Its address is anyone's to write, so it claims nothing it says: the page that began the
+ *  connect is told, and shows the end itself. */
 function said(finished: FinishedConnect, service: string, error: string | null) {
   if (finished.kind === "returning") return null;
 
@@ -14,11 +16,7 @@ function said(finished: FinishedConnect, service: string, error: string | null) 
     return <p className="max-w-md text-center">{service} did not connect: {error} <a className="underline" href={finished.back}>Go back</a></p>;
   }
 
-  return (
-    <p className="max-w-md text-center">
-      {error === null ? `Connected to ${service}.` : `${service} did not connect: ${error}`} You can close this tab.
-    </p>
-  );
+  return <p className="max-w-md text-center">You can close this tab.</p>;
 }
 
 export default function ConnectedPage() {
@@ -29,10 +27,8 @@ export default function ConnectedPage() {
   // The address names a run, a service and an error; the run is the starting page's own, and nothing here follows the rest.
   useEffect(() => { setFinished(finishConnect(ended)); }, [ended.run, ended.service, ended.error]);
 
-  const outcome = ended.error === null ? "connected" : "failed";
-
   return (
-    <div className="flex h-screen items-center justify-center p-6 p-bg p-text-2 text-sm" data-connect-finished={finished.kind === "unknown" ? "unknown" : outcome}>
+    <div className="flex h-screen items-center justify-center p-6 p-bg p-text-2 text-sm" data-connect-finished={finished.kind}>
       {said(finished, ended.service, ended.error)}
     </div>
   );

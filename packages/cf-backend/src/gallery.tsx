@@ -271,18 +271,18 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
   {
     id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
     transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
-    authUrl: null, error: null, presetId: null,
+    signIn: false, error: null, presetId: null,
   },
   {
     id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
     transport: "sse", status: "authenticating", toolsCount: 0,
-    allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
+    allowedTools: ["create_issue"], signIn: true,
     error: null, presetId: null,
   },
   {
     id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.example/sse",
     transport: "sse", status: "failed", toolsCount: 0, allowedTools: null,
-    authUrl: null, error: "The server refused the connection.", presetId: null,
+    signIn: false, error: "The server refused the connection.", presetId: null,
   },
 ];
 
@@ -302,12 +302,12 @@ if (mcpPresetVariant === "connected") {
     {
       id: "srv-preset-github", name: "GitHub", serverUrl: "https://api.githubcopilot.com/mcp/",
       transport: "streamable-http", status: "ready", toolsCount: 21, allowedTools: null,
-      authUrl: null, error: null, presetId: "github",
+      signIn: false, error: null, presetId: "github",
     },
     {
       id: "srv-preset-cloudflare", name: "Cloudflare", serverUrl: "https://mcp.cloudflare.com/mcp",
       transport: "streamable-http", status: "authenticating", toolsCount: 0, allowedTools: null,
-      authUrl: "https://mcp.cloudflare.com/authorize?srv-preset-cloudflare", error: null,
+      signIn: true, error: null,
       presetId: "cloudflare",
     },
     ...GALLERY_UNCLAIMED_MCP,
@@ -674,7 +674,8 @@ function mcpConnectFixture(path: string, method: string, body: BodyInit | null |
 
   if (MCP_SIGN_IN_REFUSED) return fixtureJson({ error: "The MCP server's sign-in could not begin." }, 502);
 
-  return row?.authUrl ? fixtureJson({ authUrl: row.authUrl }) : fixtureJson({ error: "waits for no sign-in" }, 400);
+  // On this origin, so a tab sent to the sign-in loads nothing from a provider.
+  return row?.signIn === true ? fixtureJson({ authUrl: `${location.origin}/gallery-sign-in/${row.id}` }) : fixtureJson({ error: "waits for no sign-in" }, 400);
 }
 
 /** Whether an add signs in: only where an authorize URL exists, DCR always, oauth-app only while the frame claims the app;
@@ -725,7 +726,7 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
       status: authUrl === null ? "ready" : "authenticating",
       toolsCount: authUrl === null ? 21 : 0,
       allowedTools: addBody.output.allowedTools ?? null,
-      authUrl, error: null,
+      signIn: authUrl !== null, error: null,
       presetId: preset?.id ?? null,
     }];
 

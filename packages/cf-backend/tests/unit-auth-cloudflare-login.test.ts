@@ -5,9 +5,9 @@ import { describe, expect, setSystemTime, test } from 'bun:test';
 import { authPageRoutes, type AuthRoutesAuthority, type AuthRoutesEnv } from '../src/auth/routes';
 import { bootstrappedProfile, workerContext } from './helpers/bindings';
 import { serveFamily } from './helpers/api';
-import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
+import { oauthStateCookieName, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import { calculatePKCECodeChallenge } from 'oauth4webapi';
-import { cloudflareConnectPath, CLOUDFLARE_WORKERS_AI_SCOPES, connectedPath, connectEndedOf } from '@kinu.run/core';
+import { cloudflareConnectPath, CLOUDFLARE_WORKERS_AI_SCOPES, connectedPath, connectEndedOf, sha256Hex } from '@kinu.run/core';
 import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { makeKv } from './helpers/kv';
 import type { BrowserSessionIdentity } from '../src/user/sessions';
@@ -152,8 +152,8 @@ async function startCloudflareLogin(
   const state = authorize.searchParams.get('state');
   const codeChallenge = authorize.searchParams.get('code_challenge');
 
-  const setCookie = response.headers.getSetCookie()
-    .find((value) => value.startsWith(`${OAUTH_STATE_COOKIE_NAME}=`));
+  const handoffName = oauthStateCookieName(await sha256Hex(state ?? ''));
+  const setCookie = response.headers.getSetCookie().find((value) => value.startsWith(`${handoffName}=`));
 
   if (!state || !codeChallenge || !setCookie) {
     throw new Error(`sign-in start handed out no bound handoff: ${location}`);
@@ -328,26 +328,30 @@ describe('connecting Cloudflare attaches to the account that asked, and signs no
 // Second review (2026-10-23): the handoff cookie held one binding, so a second sign-in or connect begun in the same
 // browser, in any tab, replaced the first one's, whose callback was then refused as not this browser's.
 describe('two starts in one browser each finish', () => {
-  test('the first start\'s callback, arriving after a second start, signs in, and leaves the second its binding', async () => {
+  // Sol's review (2026-10-23): a cookie holding four bindings evicted the first start's at the fifth, so its callback
+  // was refused as another browser's. Each handoff has its own cookie now.
+  test('five starts in one browser each finish, every callback with only its own cookie', async () => {
     const { env } = setupEnv();
     const originalFetch = globalThis.fetch;
-    const handoffCookie = (response: Response | null | undefined) => response?.headers.getSetCookie().find((value) => value.startsWith(`${OAUTH_STATE_COOKIE_NAME}=`)) ?? '';
 
     try {
       globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-a', refresh_token: 'cf-a-refresh' }, 'a@example.com').fetchFake;
-      const first = await startCloudflareLogin(env);
-      const again = await authPages(new Request(`${ORIGIN}/auth/cloudflare/start`, { headers: { cookie: first.setCookie.split(';')[0] ?? '' } }), env);
-      const second = new URL(again?.headers.get('location') ?? '').searchParams.get('state') ?? '';
-      const firstDone = await completeCloudflareLogin(env, { state: first.state, setCookie: handoffCookie(again) });
-      // The browser's cookie as the first callback left it.
-      const secondDone = await completeCloudflareLogin(env, { state: second, setCookie: handoffCookie(firstDone) });
+      const starts = [];
 
-      expect([firstDone, secondDone].map((done) => ({ status: done.status, signedIn: sessionCookieIn(done) !== undefined, cookie: /Max-Age=\d+/u.exec(handoffCookie(done))?.[0] })))
-        .toEqual([{ status: 302, signedIn: true, cookie: `Max-Age=${String(60 * 60)}` }, { status: 302, signedIn: true, cookie: 'Max-Age=0' }]);
+      for (let n = 0; n < 5; n += 1) starts.push(await startCloudflareLogin(env));
+
+      const names = new Set(starts.map((start) => start.setCookie.split('=')[0]));
+      const done = [];
+
+      for (const start of starts) done.push(await completeCloudflareLogin(env, start));
+
+      expect({ cookies: names.size, signedIn: done.map((answer) => sessionCookieIn(answer) !== undefined) })
+        .toEqual({ cookies: 5, signedIn: [true, true, true, true, true] });
     } finally {
       globalThis.fetch = originalFetch;
     }
   });
+
 
   // Third review (2026-10-23): a callback whose handoff could not be read, in a connect's helper tab, offered "Return to
   // sign in" with a forced prompt, and signing in there switched the browser into another account.
@@ -465,9 +469,8 @@ describe('a sign-in cannot be planted in another browser', () => {
 
       const done = await completeCloudflareLogin(env, handoff);
       expect(done.status).toBe(302);
-      expect(done.headers.getSetCookie()).toContain(
-        `${OAUTH_STATE_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`,
-      );
+      // Its own cookie is cleared, by the name the start set.
+      expect(done.headers.getSetCookie()).toContain(`${handoff.setCookie.split('=')[0] ?? ''}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
     } finally {
       globalThis.fetch = originalFetch;
     }

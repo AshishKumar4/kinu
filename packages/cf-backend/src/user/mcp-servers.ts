@@ -180,9 +180,10 @@ function connectRunKey(serverId: string, state?: string): string {
   return `mcp-connect-run:${serverId}:${state ?? ''}`;
 }
 
-/** How long a sign-in's state stays redeemable, as the SDK keeps it (`do-oauth-client-provider.js`, STATE_EXPIRATION_MS):
- *  a run older than this can end no sign-in. */
-const CONNECT_RUN_MS = 600_000;
+/** How long a sign-in's run is kept for its callback, which takes it: storage hygiene, not authorization. Whether a
+ *  callback's code is still redeemable is the SDK's to judge (STATE_EXPIRATION_MS, 10 minutes); a late one still names
+ *  its run, so the page that began it hears its failure. A sign-in left open a day has no page waiting on it. */
+const CONNECT_RUN_KEPT_MS = 24 * 60 * 60_000;
 
 const StoredConnectRunSchema = v.object({ run: ConnectRunSchema, at: v.number() });
 
@@ -410,6 +411,8 @@ export class UserMcpServers {
     await this.joinActivation();
     await this.redialUnusable('unlinked');
     const catalog = this.catalog();
+    // A server holds an OAuth client once a sign-in registered one (or its preset's app named one): it signs in.
+    const oauthClients = new Set(this.host.mcp.listServers().filter((row) => (row.client_id ?? '') !== '').map((row) => row.id));
 
     const rows = withCatalog(this.host.sqlx<{ id: string; allowed_tools: string | null; preset_id: McpPresetId | null }>(
       `SELECT id, allowed_tools, preset_id FROM user_mcp_servers`,
@@ -441,10 +444,9 @@ export class UserMcpServers {
 
       const toolsCount = allowed ? tools.filter((t: { name: string }) => allowed.includes(t.name)).length : tools.length;
 
-      // authUrl is exposed only while pending, so the UI knows whether to render the authorize link.
-      const authUrl = status === 'authenticating'
-        ? (conn?.options?.transport?.authProvider?.authUrl ?? null)
-        : null;
+      // Waiting on a sign-in, or declined one and holding its OAuth client: either way the row offers a sign-in, which
+      // the person begins for a fresh address. A declined sign-in is not dialled again on its own.
+      const signIn = status !== 'ready' && (status === 'authenticating' || oauthClients.has(r.id));
 
       return {
         id: r.id,
@@ -455,7 +457,7 @@ export class UserMcpServers {
         error: conn?.connectionError ?? (problems.length === 0 ? null : problems.join('; ')),
         toolsCount,
         presetId: r.preset_id,
-        authUrl,
+        signIn,
         allowedTools: allowed,
       };
     });
@@ -1026,11 +1028,8 @@ export class UserMcpServers {
         return { run, service: this.serverName(result.serverId), error: null };
       }
 
-      // Declined or refused, the server still waits for a sign-in, as it did before this one began: dialled again, it
-      // offers a fresh one, and its row the way to it. Left failed, its row offered none (the `connect` live row). Only a
-      // sign-in begun here: a callback whose state names no run is no sign-in of this account's to answer.
-      if (result.serverId !== undefined && run !== null) await hold(this.dialForSignIn(result.serverId));
-
+      // Declined or refused: said at once. Its row still offers a sign-in (`signIn`, by its OAuth client), which the
+      // person begins again for a fresh address.
       return { run, service: this.serverName(result.serverId), error: result.authError ?? 'The MCP server refused the sign-in.' };
     } catch (cause) {
       const error = toKinuError({ doing: 'completing an MCP sign-in', cause, otherwise: 'unavailable' });
@@ -1041,28 +1040,21 @@ export class UserMcpServers {
     }
   }
 
-  /** Dials `serverId` again, so a server whose sign-in ended unsigned offers a fresh one; a dial that fails leaves it as
-   *  the callback did, and says why. */
-  private dialForSignIn(serverId: string): Effect.Effect<void> {
-    return Effect.promise(async () => this.host.mcp.connectToServer(serverId)).pipe(Effect.asVoid, Effect.catchCause(recording({
-      doing: 'dialling an MCP server again after its sign-in ended unsigned', otherwise: 'unavailable',
-    }, (failure) => { diagnostics.failure('mcp.redial_after_sign_in_failed', failure, { serverId }); })));
-  }
-
-  /** Keeps `run` for the sign-in of `serverId` the SDK minted `state` for, and drops this server's runs whose states
-   *  have expired: one tab's begin never replaces another's. */
+  /** Keeps `run` for the sign-in of `serverId` the SDK minted `state` for, and drops this server's runs kept past their
+   *  hygiene horizon: one tab's begin never replaces another's. */
   private async keepConnectRun(serverId: string, state: string, run: string): Promise<void> {
     const storage = this.host.ctx.storage;
     const now = Date.now();
     const kept = await storage.list({ prefix: connectRunKey(serverId) });
-    const expired = [...kept].filter(([, stored]) => !v.is(StoredConnectRunSchema, stored) || now - stored.at > CONNECT_RUN_MS).map(([key]) => key);
+    const expired = [...kept].filter(([, stored]) => !v.is(StoredConnectRunSchema, stored) || now - stored.at > CONNECT_RUN_KEPT_MS).map(([key]) => key);
 
     if (expired.length > 0) await storage.delete(expired);
     await storage.put(connectRunKey(serverId, state), { run, at: now });
   }
 
   /** The run the sign-in `req` ends was begun for, taken: found by the exact state it carries, so one callback ends one
-   *  run, and a callback with a state this account never minted ends none. */
+   *  run, and a callback with a state this account never minted ends none. Its age is not judged here: an expired
+   *  sign-in is refused by the SDK, and its run still hears so. */
   private async connectRun(serverId: string | null | undefined, req: Request): Promise<string | null> {
     const state = new URL(req.url).searchParams.get('state');
 
@@ -1072,7 +1064,7 @@ export class UserMcpServers {
 
     await this.host.ctx.storage.delete(key);
 
-    return stored.success && Date.now() - stored.output.at <= CONNECT_RUN_MS ? stored.output.run : null;
+    return stored.success ? stored.output.run : null;
   }
 
 

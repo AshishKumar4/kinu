@@ -1302,7 +1302,7 @@ class FakeMCPClientManager {
   /**
    * A sign-in's callback, answered as the vendor answers it at the depth the account reads: the server its state names
    * (`{nonce}.{serverId}`), whether or not the state was one it minted (`client-fyQrLGkD.js:1582,2034`); a provider's
-   * refusal as its error; a server with no connection as a failure; anything else as signed in.
+   * refusal as its error, the connection failed; a server with no connection as a failure; anything else as signed in.
    */
   async handleCallbackRequest(req: Request): Promise<{ serverId?: string; authSuccess: boolean; authError?: string }> {
     const url = new URL(req.url);
@@ -1310,6 +1310,14 @@ class FakeMCPClientManager {
 
     if (serverId === undefined || serverId === '') return { authSuccess: false, authError: 'No serverId found in state parameter.' };
     const error = url.searchParams.get('error');
+    const connection = this.mcpConnections[serverId];
+
+    // A provider's refusal fails the connection and spends its link, as the vendor's `failConnection` does.
+    if (error !== null && connection !== undefined) {
+      connection.connectionState = 'failed';
+      connection.connectionError = url.searchParams.get('error_description') ?? error;
+      this.changed();
+    }
 
     if (error !== null) return { serverId, authSuccess: false, authError: url.searchParams.get('error_description') ?? error };
 
