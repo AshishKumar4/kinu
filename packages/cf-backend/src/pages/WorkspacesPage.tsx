@@ -6,13 +6,13 @@ import * as v from "valibot";
 import { APP_ROUTES } from "@kinu.run/core";
 import { useFilteredRoster, useWorkspaceRoster, type RosterFilter } from "@/hooks/use-workspace-roster";
 import type { RosterFilterBucket } from "@/lib/user-api";
-import { inputCls } from "@/components/ui/form";
 import { Segmented } from "@/components/ui/Segmented";
 import { Page } from "@/components/ui/PageHeader";
 import { TILE_GRID } from "@/components/ui/Tiles";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
 import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
+import { TextInput } from "@/components/ui/Field";
 
 const VIEW_KEY = "kinu:workspaces-view";
 
@@ -109,13 +109,7 @@ export default function WorkspacesPage() {
               {roster.counts.unreported > 0 && `${String(roster.counts.unreported)} not yet reported`}
             </span>
           )}
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search by name"
-            aria-label="Search workspaces"
-            className={`${inputCls} w-full sm:ml-auto sm:w-64`}
-          />
+          <TextInput className="w-full sm:ml-auto sm:w-64" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by name" aria-label="Search workspaces" />
         </div>
 
         {error !== null && (

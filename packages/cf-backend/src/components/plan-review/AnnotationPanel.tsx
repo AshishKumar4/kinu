@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Annotation } from '@plannotator/ui/types';
 import { AnnotationType } from '@plannotator/ui/types';
 import { useIsMobile } from '@plannotator/ui/hooks/useIsMobile';
+import { TextArea } from "@/components/ui/Field";
 
 interface PanelProps {
   isOpen: boolean;
@@ -94,12 +95,7 @@ const AnnotationCard = ({
       )}
       {editing ? (
         <div className="mt-2" onClick={(event) => event.stopPropagation()}>
-          <textarea
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            className="t-meta min-h-20 w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-foreground"
-            autoFocus
-          />
+          <TextArea className="min-h-20 w-full resize-y" value={text} onChange={(event) => setText(event.target.value)} autoFocus />
           <div className="mt-2 flex justify-end gap-2">
             <button type="button" className="t-meta rounded px-2 py-1 text-muted-foreground hover:bg-muted" onClick={() => { setText(annotation.text ?? ''); setEditing(false); }}>Cancel</button>
             <button type="button" className="t-micro rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-40" disabled={!text.trim()} onClick={save}>Save</button>

@@ -4,7 +4,6 @@ import { useLocation } from "react-router-dom";
 import { ArrowCounterClockwiseIcon, CameraIcon, MegaphoneIcon, RectangleIcon, EyeSlashIcon } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "./ui/Modal";
-import { inputCls } from "./ui/form";
 import { Cause, Effect } from "effect";
 import { detach, diagnostics, renderThrownChain, toKinuError, tolerateAsync } from "@kinu.run/core/obs";
 import * as v from "valibot";
@@ -24,6 +23,7 @@ import {
   FEEDBACK_OMIT_ATTR,
   FEEDBACK_SCREENSHOT_TYPE,
 } from "@kinu.run/core";
+import { TextArea } from "@/components/ui/Field";
 
 const FeedbackReplySchema = v.object({
   id: v.optional(v.string()),
@@ -329,16 +329,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
       >
         <label className="block space-y-2">
           <span className="t-status p-text-2">What happened?</span>
-          <textarea
-            autoFocus
-            rows={4}
-            value={note}
-            maxLength={FEEDBACK_MAX_NOTE_CHARS}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder="What you expected, and what happened instead."
-            className={`${inputCls} resize-y`}
-            data-feedback-note
-          />
+          <TextArea className="resize-y" autoFocus rows={4} value={note} maxLength={FEEDBACK_MAX_NOTE_CHARS} onChange={(event) => setNote(event.target.value)} placeholder="What you expected, and what happened instead." data-feedback-note />
         </label>
 
         <div className="space-y-2">

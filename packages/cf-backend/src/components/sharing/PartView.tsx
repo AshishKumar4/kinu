@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/Button";
 import { EyeIcon, LockSimpleIcon, PlugIcon, SignInIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import type { PartAction, PartRunAnswer } from "@kinu.run/core";
 import { serverWords } from "./words";
+import { TextInput } from "@/components/ui/Field";
 
 /** What the frame does for its viewer; the decisions among them open in the top page. */
 export interface PartControls {
@@ -60,8 +61,7 @@ function ActionControl({ action, onAct }: { action: PartAction; onAct: PartContr
 
   return (
     <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); onAct({ id: action.id, input: text }); }}>
-      <input value={text} onChange={(event) => setText(event.target.value)} aria-label={action.label} data-part-action-input={action.id}
-        className="t-meta h-7 min-w-0 flex-1 rounded-md border p-border p-surface px-2 p-text" />
+      <TextInput size="sm" className="min-w-0 flex-1" value={text} onChange={(event) => setText(event.target.value)} aria-label={action.label} data-part-action-input={action.id} />
       <PartButton data-part-action={action.id} onClick={() => onAct({ id: action.id, input: text })}>{action.label}</PartButton>
     </form>
   );

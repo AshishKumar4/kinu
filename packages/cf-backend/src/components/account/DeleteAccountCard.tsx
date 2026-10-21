@@ -7,8 +7,9 @@ import { WarningIcon } from "@phosphor-icons/react";
 import { confirmsAccountDelete } from "@kinu.run/core";
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { deleteAccount } from "@/lib/user-api";
-import { Card, Field, composing, inputCls } from "@/components/ui/form";
+import { Card, Field, composing } from "@/components/ui/form";
 import { Modal } from "@/components/ui/Modal";
+import { TextInput } from "@/components/ui/Field";
 
 export function DeleteAccountCard({ email }: { email: string }) {
   const [open, setOpen] = useState(false);
@@ -57,15 +58,7 @@ export function DeleteAccountCard({ email }: { email: string }) {
           }
         >
           <Field label="Type your email to confirm">
-            <input
-              autoFocus
-              autoComplete="off"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !composing(e.nativeEvent) && confirmed && !busy) startTransition(run); }}
-              className={inputCls}
-              aria-label="Confirm your email"
-            />
+            <TextInput autoFocus autoComplete="off" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !composing(e.nativeEvent) && confirmed && !busy) startTransition(run); }} aria-label="Confirm your email" />
           </Field>
           {error && <p className="t-meta p-danger">{error}</p>}
         </Modal>

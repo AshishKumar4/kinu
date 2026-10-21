@@ -2,7 +2,7 @@
  * A labelled control and the text controls (docs/DESIGN-SYSTEM.md §2): the label as an item, a one-line hint, and an
  * error in its place when the value is refused. Fields are md 32 or sm 28, on the field ground with its 3:1 edge.
  */
-import type { InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { Input } from "@cloudflare/kumo/primitives/input";
 
 export type FieldSize = "md" | "sm";
@@ -41,7 +41,7 @@ export function Field({ label, hint, error = null, inline = false, children }: {
 }
 
 /** A one-line text field; `invalid` draws its edge in danger. */
-export function TextInput({ size = "md", invalid = false, className, ...rest }: Omit<InputHTMLAttributes<HTMLInputElement>, "size"> & {
+export function TextInput({ size = "md", invalid = false, className, ...rest }: Omit<ComponentProps<"input">, "size"> & {
   size?: FieldSize;
   invalid?: boolean;
 }) {
@@ -49,7 +49,7 @@ export function TextInput({ size = "md", invalid = false, className, ...rest }: 
 }
 
 /** Text over several lines, at least 80 high; `mono` for text that is code (SOUL.md). */
-export function TextArea({ mono = false, invalid = false, className, ...rest }: TextareaHTMLAttributes<HTMLTextAreaElement> & {
+export function TextArea({ mono = false, invalid = false, className, ...rest }: ComponentProps<"textarea"> & {
   mono?: boolean;
   invalid?: boolean;
 }) {

@@ -20,7 +20,7 @@ import {
 } from "@/lib/user-api";
 import type { ProfileCatalogEnvelope } from '@kinu.run/core';
 import { Notice } from '@/components/ui/Notice';
-import { Card, Choice, Field, inputCls } from "@/components/ui/form";
+import { Card, Choice, Field } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
@@ -32,6 +32,7 @@ import {
   CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, revokingProviderOf, storedAccounts, type CredentialSummary, type ProviderCatalogEntry,
 } from '@kinu.run/core';
 import { Group } from "@/components/ui/Group";
+import { TextInput } from "@/components/ui/Field";
 
 function ConnectedBadge({ detail }: { detail?: ReactNode }) {
   return (
@@ -375,14 +376,7 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
         <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-accent-fg underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
           hint="The code Claude shows, or the address your browser ended on if the page did not load.">
           <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); detach(finish()); }}>
-            <input
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="Code or address"
-              aria-label="Claude sign-in code"
-              autoComplete="off"
-              className={`${inputCls} min-w-0 flex-1`}
-            />
+            <TextInput className="min-w-0 flex-1" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Code or address" aria-label="Claude sign-in code" autoComplete="off" />
             <Button type="submit" disabled={busy || code.trim() === ''}>{busy ? '...' : 'Connect'}</Button>
             <Button onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))} disabled={busy}>Start again</Button>
           </form>
@@ -475,10 +469,8 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
         }}>
           {compat ? (
             <>
-              <input value={compatName} onChange={(e) => setCompatName(e.target.value)} placeholder="name (e.g. groq)"
-                aria-label="Endpoint name" className={`${inputCls} max-w-44`} />
-              <input value={compatBaseURL} onChange={(e) => setCompatBaseURL(e.target.value)} placeholder="https://api.example.com/v1"
-                aria-label="Base URL" className={`${inputCls} min-w-0 flex-1`} />
+              <TextInput className="max-w-44" value={compatName} onChange={(e) => setCompatName(e.target.value)} placeholder="name (e.g. groq)" aria-label="Endpoint name" />
+              <TextInput className="min-w-0 flex-1" value={compatBaseURL} onChange={(e) => setCompatBaseURL(e.target.value)} placeholder="https://api.example.com/v1" aria-label="Base URL" />
               <span className="basis-full" aria-hidden />
               <label data-invalid={windowValid ? undefined : ""}
                 data-focus-box className="t-body flex h-9 w-full max-w-72 cursor-text items-center gap-2 rounded-md border border-[var(--c-field-border)] bg-[var(--c-surface)] px-3 p-text transition-all data-[invalid]:border-[var(--c-danger)]">
@@ -490,17 +482,9 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
               </label>
             </>
           ) : (
-            <input value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="account (blank: main)"
-              aria-label="Account name" className={`${inputCls} max-w-44`} />
+            <TextInput className="max-w-44" value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="account (blank: main)" aria-label="Account name" />
           )}
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={saveWord === 'Replace' ? '••••••• (stored, paste to replace)' : `${selected.name} API key`}
-            aria-label="API key"
-            className={`${inputCls} min-w-0 flex-1`}
-          />
+          <TextInput className="min-w-0 flex-1" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={saveWord === 'Replace' ? '••••••• (stored, paste to replace)' : `${selected.name} API key`} aria-label="API key" />
           <Button type="submit" disabled={saving || !ready}>{saving ? '...' : saveWord}</Button>
         </form>
       )}

@@ -13,6 +13,7 @@ import { copyTextToClipboard } from '@plannotator/ui/utils/clipboard';
 import { useAnnotationHighlighter } from '@plannotator/ui/hooks/useAnnotationHighlighter';
 import type { GeneralNote, PassageNote } from '@kinu.run/core';
 import { editorAnnotationOf, reviewNoteOf } from './notes';
+import { TextArea } from "@/components/ui/Field";
 
 interface ViewerProps {
   blocks: Block[];
@@ -451,21 +452,14 @@ const PlanCommentPopover = ({
         </button>
       </div>
       <div className="p-3">
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
+        <TextArea className="min-h-24 w-full resize-y" ref={textareaRef} value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => {
             if (event.key === 'Escape') onClose();
 
             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
               event.preventDefault();
               submit();
             }
-          }}
-          className="t-body min-h-24 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-foreground"
-          placeholder={isGlobal ? 'Add a global comment…' : 'Add a comment…'}
-        />
+          }} placeholder={isGlobal ? 'Add a global comment…' : 'Add a comment…'} />
       </div>
       <div className="flex items-center justify-end gap-2 border-t border-border/50 px-3 py-2">
         <span className="t-meta mr-auto text-muted-foreground">Ctrl/⌘ + Enter</span>

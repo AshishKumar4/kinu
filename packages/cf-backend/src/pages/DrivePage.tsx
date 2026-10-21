@@ -30,7 +30,6 @@ import { useAsyncResource, lastValue, type AsyncResource, type AsyncResourceCont
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useCopy } from "@/hooks/use-copy";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { inputCls } from "@/components/ui/form";
 import {
   FileCover, FOLDER_ICON, FolderTile, GRID, LINK_ICON, SHARE_ICON, SKILLS_ICON, SLATE_ICON, Tile, fileIcon, type MenuItem,
 } from "@/components/drive/DriveTiles";
@@ -41,6 +40,7 @@ import { SlatePicture } from "@/components/slates/SlatePicture";
 import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
 import { Dot } from "@/components/ui/Dot";
+import { TextInput } from "@/components/ui/Field";
 
 export type DriveTab = "slates" | "mine" | "shared";
 
@@ -196,8 +196,7 @@ function BarActions({ tab, search, primary }: {
   if (tab !== "shared") return null;
 
   return (
-    <input value={search.query} onChange={(event) => search.set(event.target.value)} placeholder="Search shared" aria-label="Search shared"
-      data-drive-search className={`${inputCls} h-7 w-60 min-w-0 shrink rounded-[var(--r-control)] py-0`} />
+    <TextInput size="sm" className="w-60 min-w-0" value={search.query} onChange={(event) => search.set(event.target.value)} placeholder="Search shared" aria-label="Search shared" data-drive-search />
   );
 }
 

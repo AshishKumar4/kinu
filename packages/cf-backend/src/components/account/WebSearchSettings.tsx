@@ -17,13 +17,14 @@ import {
   deleteCredential, getProfileCatalog, listCloudflareAccounts, listCredentials, setCredential, testWebSearch, updateProfileCatalog,
   type CloudflareAccountStatus, type WebSearchAnswer,
 } from "@/lib/user-api";
-import { Choice, Field, inputCls } from "@/components/ui/form";
+import { Choice, Field } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { Segmented } from "@/components/ui/Segmented";
 import { Status } from "@/components/ui/Status";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { Notice } from "@/components/ui/Notice";
+import { TextInput } from "@/components/ui/Field";
 
 /** What a Test searches for: a question an agent of the owner's asks. */
 const TEST_QUERY = "Cloudflare Durable Objects alarms API";
@@ -257,9 +258,7 @@ function KeyEntry({ primary, stored, disabled, onSaved, onRemoved }: {
           }} />
       </Field>
       <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => { event.preventDefault(); detach(store()); }}>
-        <input type="password" value={key} onChange={(event) => setKey(event.target.value)} aria-label={`${WEB_SEARCH_PROVIDERS[provider].label} API key`}
-          placeholder={has ? "••••••• (stored, paste to replace)" : `${WEB_SEARCH_PROVIDERS[provider].label} API key`}
-          className={`${inputCls} h-9 min-w-0 flex-1`} />
+        <TextInput className="min-w-0 flex-1" type="password" value={key} onChange={(event) => setKey(event.target.value)} aria-label={`${WEB_SEARCH_PROVIDERS[provider].label} API key`} placeholder={has ? "••••••• (stored, paste to replace)" : `${WEB_SEARCH_PROVIDERS[provider].label} API key`} />
         <Button type="submit" disabled={saving || disabled || key.trim() === ""}>
           {action}
         </Button>

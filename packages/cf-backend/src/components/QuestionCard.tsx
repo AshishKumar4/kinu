@@ -8,6 +8,7 @@ import * as v from "valibot";
 import { Button } from "@/components/ui/Button";
 import { ChatCircleTextIcon, CheckIcon, XIcon } from "@phosphor-icons/react";
 import { AskOwnerInputSchema, OTHER_OPTION, timeAgo, type AskedQuestions, type AskingAgent, type OwnerAnswer, type OwnerQuestion } from "@kinu.run/core";
+import { TextArea } from "@/components/ui/Field";
 
 interface AnswerDraft {
   readonly selected: readonly string[];
@@ -82,9 +83,7 @@ function QuestionField({ question, draft, onDraft, busy }: {
             <span className="min-w-0 flex-1">
               <span className="t-body p-text">{OTHER_OPTION}</span>
               {draft.other !== null && (
-                <textarea value={draft.other} onChange={(event) => onDraft({ ...draft, other: event.target.value })} aria-label={`Your answer to: ${question.question}`}
-                  placeholder="Write your answer" rows={2} autoFocus data-question-other
-                  className="t-meta mt-1 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-foreground" />
+                <TextArea className="mt-1 w-full resize-y" value={draft.other} onChange={(event) => onDraft({ ...draft, other: event.target.value })} aria-label={`Your answer to: ${question.question}`} placeholder="Write your answer" rows={2} autoFocus data-question-other />
               )}
             </span>
           </label>
@@ -152,9 +151,7 @@ export function QuestionCard({ asking, busy, owed = false, onAnswer, onDismiss }
       {unsent.note === null ? (
         <Button variant="ghost" size="sm" className="mt-2" disabled={busy} onClick={() => keep({ ...unsent, note: "" })}>Add a note</Button>
       ) : (
-        <textarea disabled={busy} value={unsent.note} onChange={(event) => keep({ ...unsent, note: event.target.value })} rows={2} placeholder="A note for the agent"
-          aria-label="A note for the agent"
-          className="t-meta mt-2 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-foreground" />
+        <TextArea className="mt-2 w-full resize-y" disabled={busy} value={unsent.note} onChange={(event) => keep({ ...unsent, note: event.target.value })} rows={2} placeholder="A note for the agent" aria-label="A note for the agent" />
       )}
       {owed ? (
         <div role="status" className="t-meta mt-1 p-text-3">Your answer is on its way. The agent takes it when it next wakes.</div>

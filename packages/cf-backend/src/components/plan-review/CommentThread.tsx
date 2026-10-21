@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { NoteReply } from "@kinu.run/core";
+import { TextArea } from "@/components/ui/Field";
 
 /** The replies under one comment, oldest first, and the owner's composer while the revision is open for review. */
 export function CommentThread({ replies, agentName, seenAt, onReply, onDelete }: {
@@ -49,17 +50,9 @@ export function CommentThread({ replies, agentName, seenAt, onReply, onDelete }:
       })}
       {onReply !== undefined && (writing ? (
         <div>
-          <textarea
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            onKeyDown={(event) => {
+          <TextArea className="min-h-16 w-full resize-y" value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => {
               if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) send();
-            }}
-            aria-label="Reply"
-            placeholder="Reply"
-            className="t-meta min-h-16 w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-foreground"
-            autoFocus
-          />
+            }} aria-label="Reply" placeholder="Reply" autoFocus />
           <div className="mt-2 flex justify-end gap-2">
             <button type="button" className="t-meta rounded px-2 py-1 text-muted-foreground hover:bg-muted" onClick={() => { setText(""); setWriting(false); }}>Cancel</button>
             <button type="button" className="t-micro rounded bg-primary px-2 py-1 text-primary-foreground disabled:opacity-40" disabled={text.trim() === ""} onClick={send}>Reply</button>

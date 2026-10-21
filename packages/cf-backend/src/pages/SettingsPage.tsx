@@ -17,7 +17,7 @@ import { executorLabel } from "@kinu.run/core";
 import type { ConnectionStatus } from "@/hooks/use-chat-owner";
 import type { AgentStatus, WorkspaceLayout, WorkspaceNotice } from "@kinu.run/core";
 import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
-import { Card, Field, composing, inputCls } from "@/components/ui/form";
+import { Card, Field, composing } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Segmented } from "@/components/ui/Segmented";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -27,6 +27,7 @@ import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResou
 import { showing, detach, settle } from '@kinu.run/core/obs';
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
+import { TextArea, TextInput } from "@/components/ui/Field";
 
 const APPROVAL_LABEL: Record<ShellApprovalMode, string> = {
   strict: "Strict",
@@ -262,14 +263,14 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
         <LogoField title={title} logo={logo} rpc={rpc} />
         <Field label="Address">
           <div className="flex items-center gap-2">
-            <input value={agentId} readOnly aria-label="The workspace's address" className={`${inputCls} font-mono p-text-2`} />
+            <TextInput value={agentId} readOnly aria-label="The workspace's address" />
             <CopyButton value={agentId} what="the workspace's address" size={13} className="shrink-0 rounded-[var(--r-control)] p-2 p-text-3 transition-colors hover:p-text" />
           </div>
         </Field>
         <Field label="Display name">
           <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
             {(value) => (
-              <input value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} className={inputCls} />
+              <TextInput value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} />
             )}
           </FieldState>
         </Field>
@@ -285,8 +286,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
         <Field label="SOUL.md">
           <FieldState field={soul} what="SOUL.md" onRetry={retryLoad}>
             {(value) => (
-              <textarea value={value} onChange={(e) => soul.edit(e.target.value)} rows={8}
-                className={`${inputCls} font-mono`} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
+              <TextArea mono value={value} onChange={(e) => soul.edit(e.target.value)} rows={8} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
             )}
           </FieldState>
         </Field>
@@ -695,14 +695,7 @@ function AlwaysActiveSkillsCard({
           ))}
       </div>
       <div className="flex gap-2 mt-2">
-        <input
-          type="text"
-          value={input}
-          placeholder="skill-name"
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => detach(Effect.promise(async () => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }))}
-          className={inputCls + " t-meta"}
-        />
+        <TextInput size="sm" value={input} placeholder="skill-name" onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => detach(Effect.promise(async () => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }))} />
         <Button variant="primary" size="sm" onClick={() => detach(Effect.promise(async () => { await add(); }))} disabled={busy || !input.trim()}>Pin</Button>
       </div>
       {err && <div className="t-meta p-danger mt-1">{err}</div>}

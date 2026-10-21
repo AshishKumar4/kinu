@@ -5,10 +5,11 @@ import { Effect } from "effect";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { builtinAuthStatus, createBuiltinLink, listBuiltinAccounts } from "@/lib/user-api";
 import { useAsyncResource } from "@/hooks/use-async-resource";
-import { Card, Field, inputCls } from "@/components/ui/form";
+import { Card, Field } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Group } from "@/components/ui/Group";
+import { TextInput } from "@/components/ui/Field";
 
 export function InviteCard() {
   const status = useAsyncResource(builtinAuthStatus);
@@ -40,8 +41,7 @@ export function InviteCard() {
     <Card title="Invite people">
       <Field label="Invite by email" hint="The link signs up this address only, once, within 7 days.">
         <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); }}>
-          <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com"
-            aria-label="Email to invite" autoComplete="off" className={`${inputCls} min-w-0 flex-1`} />
+          <TextInput className="min-w-0 flex-1" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" aria-label="Email to invite" autoComplete="off" />
           <Button type="submit" variant="secondary" size="sm" disabled={busy || email.trim() === ""} onClick={() => detach(create(false, email.trim()))}>
             {busy ? <Loader size="sm" /> : null} Create invite link
           </Button>

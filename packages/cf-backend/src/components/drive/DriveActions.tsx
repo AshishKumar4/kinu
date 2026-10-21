@@ -15,12 +15,12 @@ import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { useWorkspaceRpc } from "@/hooks/use-chat-owner";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { inputCls } from "@/components/ui/form";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { Notice } from "@/components/ui/Notice";
 import { Pressable } from "@/components/ui/Pressable";
+import { TextArea, TextInput } from "@/components/ui/Field";
 
 function relativePathOf(file: File): string {
   return file.webkitRelativePath === "" ? file.name : file.webkitRelativePath;
@@ -67,8 +67,7 @@ function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: 
       </>}>
       <form onSubmit={(event) => { event.preventDefault(); submit(); }} className="space-y-2">
         <label className="t-meta block p-text-3" htmlFor="drive-name">{label}</label>
-        <input id="drive-name" autoFocus value={value} onChange={(event) => setValue(event.target.value)}
-          onFocus={(event) => event.currentTarget.select()} className={inputCls} aria-invalid={value !== "" && !valid} />
+        <TextInput id="drive-name" autoFocus value={value} onChange={(event) => setValue(event.target.value)} onFocus={(event) => event.currentTarget.select()} aria-invalid={value !== "" && !valid} />
         {error !== null && <Notice tone="danger">{error}</Notice>}
       </form>
     </Modal>
@@ -114,9 +113,7 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
         <p className="t-body p-text-2">
           Paste a <span className="font-mono p-text">SKILL.md</span>: front matter that names it, then the steps. Every workspace you own uses it from its next turn.
         </p>
-        <textarea data-drive-skill-text value={text} onChange={(event) => setText(event.target.value)} rows={9} spellCheck={false}
-          placeholder={"---\nname: deploy\ndescription: Ship the current branch\n---\nSteps…"}
-          aria-label="SKILL.md" className={`${inputCls} t-meta t-mono`} />
+        <TextArea mono data-drive-skill-text value={text} onChange={(event) => setText(event.target.value)} rows={9} spellCheck={false} placeholder={"---\nname: deploy\ndescription: Ship the current branch\n---\nSteps…"} aria-label="SKILL.md" />
         <div className="flex flex-wrap items-center gap-2">
           <span className="t-meta p-text-3">or pick</span>
           <Button size="sm" disabled={busy}

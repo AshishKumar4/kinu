@@ -3,7 +3,7 @@
  * letter. Approving sends exactly these bytes, once (docs/MAIL.md §3); to change them, the owner writes in Mail.
  */
 import type { MailSend } from "@kinu.run/core";
-import { inputCls } from "@/components/ui/form";
+import { TextArea } from "@/components/ui/Field";
 
 /** The message's envelope, as the approval holds it: `by` is the agent that wrote it. */
 type MailEnvelope = Pick<MailSend, "by" | "from" | "to" | "cc" | "subject">;
@@ -20,7 +20,7 @@ export function MailSendBody({ send, text, onText }: { send: MailEnvelope; text:
         <dt className="p-text-3">Subject</dt><dd className="truncate p-text-2">{send.subject}</dd>
       </dl>
       {onText !== undefined
-        ? <textarea value={text} onChange={(event) => onText(event.target.value)} rows={8} aria-label="The mail" className={`${inputCls} mt-2 font-[inherit]`} />
+        ? <TextArea className="mt-2" value={text} onChange={(event) => onText(event.target.value)} rows={8} aria-label="The mail" />
         : <p className="t-body mt-2 max-h-36 overflow-y-auto whitespace-pre-wrap break-words rounded-sm px-2 py-1 p-text-2 p-fill" data-mail-send-body>{text}</p>}
     </>
   );

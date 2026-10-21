@@ -3,8 +3,8 @@ import { Effect, Cause } from 'effect';
 import { useEffect, useState, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
-import { Button } from "@/components/ui/Button";
-import { PlugIcon, PlusIcon, TrashIcon, ArrowSquareOutIcon, CheckIcon, WarningIcon } from "@phosphor-icons/react";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { PlugIcon, PlusIcon, TrashIcon, ArrowSquareOutIcon } from "@phosphor-icons/react";
 import type { McpTransport } from "@kinu.run/core";
 import { addMcpServer, removeMcpServer } from "@/lib/user-api";
 import { McpPresetCards } from "@/components/plugins/McpPresetCards";
@@ -12,7 +12,12 @@ import { Status } from "@/components/ui/Status";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { Choice, inputCls } from "@/components/ui/form";
+import { Choice, Field } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
+import { Empty } from "@/components/ui/Empty";
+import { Group } from "@/components/ui/Group";
+import { Notice } from "@/components/ui/Notice";
+import { TextArea, TextInput } from "@/components/ui/Field";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { lastValue } from "@/hooks/use-async-resource";
 import { useMcpServers, useMcpWatch, type McpServers } from "@/hooks/use-mcp-servers";
@@ -72,14 +77,10 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
       </div>
 
       {authResult === 'ok' && (
-        <div className="t-meta p-card p-3 flex items-center gap-2 p-success">
-          <CheckIcon size={14} /> Authorization complete. Discovering tools…
-        </div>
+        <Notice tone="success">Authorization complete. Discovering tools…</Notice>
       )}
       {authResult === 'failed' && (
-        <div className="t-meta p-card p-3 flex items-center gap-2 p-danger">
-          <WarningIcon size={14} /> Authorization failed{authError ? `: ${authError}` : ''}.
-        </div>
+        <Notice tone="danger">Authorization failed{authError ? `: ${authError}` : ''}.</Notice>
       )}
       {resource.status === "error" && <LoadFailure what="your MCP servers" message={resource.message} onRetry={reload} />}
 
@@ -93,13 +94,9 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
       {resource.status === "loading" && <div className="flex items-center justify-center py-12"><Loader size="base" /></div>}
 
       {resource.status !== "loading" && (servers.length === 0 ? (
-        <section className="p-card p-8 text-center space-y-2">
-          <PlugIcon size={28} className="p-text-3 mx-auto" />
-          <div className="t-item">No MCP servers yet</div>
-        </section>
+        <Card><Empty icon={PlugIcon} title="No MCP servers yet" /></Card>
       ) : (
-        <section className="p-card overflow-hidden">
-          <div className="t-meta p-group">
+        <Group>
             {servers.map((s) => (
               <div key={s.id} className="px-4 py-3" data-mcp-server={s.id}>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-2">
@@ -107,24 +104,15 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
                   <Status tone={mcpServerStatus(s.status).tone}>{mcpServerStatus(s.status).label}</Status>
                   <div className="ml-auto flex items-center gap-2">
                     {s.authUrl && (
-                      <a
-                        href={s.authUrl} target="_blank" rel="noopener noreferrer"
-                        className="t-meta px-2 py-1 rounded-sm p-card p-card-hover flex items-center gap-1"
-                      >
-                        <ArrowSquareOutIcon size={11} /> Authorize
+                      <a href={s.authUrl} target="_blank" rel="noopener noreferrer" className={buttonClass({ size: "sm" })}>
+                        <ArrowSquareOutIcon size={14} /> Authorize
                       </a>
                     )}
-                    <button
-                      onClick={() => remove(s.id, s.name)}
-                      className="t-meta p-text-3 hover:p-danger flex items-center gap-1 px-2 py-1"
-                      title="Remove server"
-                    >
-                      <TrashIcon size={11} /> Remove
-                    </button>
+                    <Button variant="danger" size="sm" icon={<TrashIcon size={14} />} onClick={() => remove(s.id, s.name)} title="Remove server">Remove</Button>
                   </div>
                 </div>
                 <div className="t-meta t-mono mt-1 flex flex-wrap items-center gap-x-2 p-text-3">
-                  <span className="truncate max-w-full font-mono" title={s.serverUrl}>{s.serverUrl}</span>
+                  <span className="truncate max-w-full" title={s.serverUrl}>{s.serverUrl}</span>
                   <span>·</span>
                   <span>{s.transport}</span>
                   <span>·</span>
@@ -140,8 +128,7 @@ export function McpServersPanel({ mcp }: { mcp: McpServers }) {
                 )}
               </div>
             ))}
-          </div>
-        </section>
+        </Group>
       ))}
     </div>
   );
@@ -191,50 +178,27 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
   })), [name, serverUrl, transport, headersText, allowedTools, onAdded]);
 
   return (
-    <section className="p-card p-5 space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="t-label">Add MCP server</h2>
-        <button onClick={onCancel} className="t-meta p-text-3 hover:p-text">Cancel</button>
-      </div>
+    <Card title="Add MCP server" actions={<Button variant="ghost" size="sm" onClick={onCancel}>Cancel</Button>}>
       <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1">
-          <label className="t-meta p-text-3">Name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} placeholder="github" />
-        </div>
-        <div className="space-y-1">
-          <label className="t-meta p-text-3">Transport</label>
-          <Choice label="Transport" value={transport} onChange={setTransport} options={MCP_TRANSPORTS} />
-        </div>
+        <Field label="Name"><TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="github" /></Field>
+        <Field label="Transport"><Choice label="Transport" value={transport} onChange={setTransport} options={MCP_TRANSPORTS} /></Field>
       </div>
-      <div className="space-y-1">
-        <label className="t-meta p-text-3">Server URL</label>
-        <input value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} className={inputCls}
-          placeholder="https://mcp.example.com/v1" />
-      </div>
-      <div className="space-y-1">
-        <label className="t-meta p-text-3">
-          Static headers for private servers (optional JSON)
-        </label>
+      <Field label="Server URL">
+        <TextInput value={serverUrl} onChange={(e) => setServerUrl(e.target.value)} placeholder="https://mcp.example.com/v1" />
+      </Field>
+      <Field label="Static headers for private servers" hint="Optional, as JSON.">
         {/* Credential region: the marker keeps the typed value out of feedback screenshots. */}
-        <textarea {...SECRET_REGION} value={headersText}
-          onChange={(e) => setHeadersText(e.target.value)}
-          rows={2} className={inputCls + ' font-mono'}
+        <TextArea mono {...SECRET_REGION} value={headersText} onChange={(e) => setHeadersText(e.target.value)} rows={2}
           placeholder='{"Authorization": "Bearer xyz"}' />
-      </div>
-      <div className="space-y-1">
-        <label className="t-meta p-text-3">Allowed tools (optional, comma-separated; leave empty for all)</label>
-        <input value={allowedTools} onChange={(e) => setAllowedTools(e.target.value)} className={inputCls}
-          placeholder="create_issue, list_pulls" />
-      </div>
+      </Field>
+      <Field label="Allowed tools" hint="Optional, comma-separated; leave it empty for all.">
+        <TextInput value={allowedTools} onChange={(e) => setAllowedTools(e.target.value)} placeholder="create_issue, list_pulls" />
+      </Field>
       {err && <p className="t-meta p-danger">{err}</p>}
-      <div className="flex items-center justify-end gap-2 pt-1">
-        <button
-          onClick={save}
-          disabled={saving || !name.trim() || !serverUrl.trim()}
-          className="t-status px-3 py-1 rounded-md p-accent-bg p-accent-fg disabled:opacity-50 hover:opacity-90"
-        >{saving ? 'Adding…' : 'Add server'}</button>
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="primary" size="sm" busy={saving} disabled={!name.trim() || !serverUrl.trim()} onClick={save}>Add server</Button>
       </div>
-    </section>
+    </Card>
   );
 }
 

@@ -7,7 +7,7 @@ import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { CaretDownIcon, CaretRightIcon, TrashIcon } from "@phosphor-icons/react";
 import { positionWords } from "@kinu.run/core";
-import { Card, Field, inputCls } from "@/components/ui/form";
+import { Card, Field } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { Segmented } from "@/components/ui/Segmented";
 import { Switch } from "@/components/ui/Switch";
@@ -22,6 +22,7 @@ import {
   type ChosenWorkspace, type SecretDraft,
 } from "@/components/secrets/SecretRows";
 import { Pressable } from "@/components/ui/Pressable";
+import { TextArea, TextInput } from "@/components/ui/Field";
 
 
 /** What turning reading on lets an agent do; said where the switch is turned, and again as it is asked. */
@@ -101,8 +102,7 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
           run("destination", async () => { await setSecretDestination(secret.name, hostList(hosts), position); });
         }}>
           <div className="flex gap-2">
-            <input value={hosts} onChange={(e) => setHosts(e.target.value)} spellCheck={false} aria-label={`Hosts ${secret.name} may be sent to`}
-              className={`${inputCls} h-9 min-w-0 flex-1 font-mono`} />
+            <TextInput className="min-w-0 flex-1" value={hosts} onChange={(e) => setHosts(e.target.value)} spellCheck={false} aria-label={`Hosts ${secret.name} may be sent to`} />
             <Button type="submit" disabled={!destinationMoved || busy !== null}>
               {busy === "destination" ? "Saving…" : "Save"}
             </Button>
@@ -116,8 +116,7 @@ function SecretDetails({ secret, onChanged }: { secret: SecretSummary; onChanged
           event.preventDefault();
           run("value", async () => { await putSecrets([{ name: secret.name, hosts: secret.hosts, position: secret.position, value }], []); setValue(""); });
         }}>
-          <input type="password" value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off" placeholder="Paste a new value"
-            aria-label={`New value of ${secret.name}`} className={`${inputCls} h-9 min-w-0 flex-1`} />
+          <TextInput className="min-w-0 flex-1" type="password" value={value} onChange={(e) => setValue(e.target.value)} autoComplete="off" placeholder="Paste a new value" aria-label={`New value of ${secret.name}`} />
           <Button type="submit" disabled={value === "" || busy !== null}>
             {busy === "value" ? "Replacing…" : "Replace"}
           </Button>
@@ -202,10 +201,7 @@ function AddSecrets({ onSaved }: { onSaved: () => void }) {
         onChange={(next) => { setMode(next); setRows(next === "one" ? [BLANK] : []); setTyping(""); }} />
 
       {mode === "env" && (
-        <textarea {...SECRET_REGION} value={typing} rows={5} spellCheck={false} aria-label="A .env file"
-          placeholder={"OPENAI_API_KEY=sk-…\nDATABASE_PASSWORD=…"}
-          onChange={(e) => { take(e.target.value, false); }} onBlur={(e) => { take(e.target.value, true); }}
-          className={`${inputCls} font-mono`} />
+        <TextArea mono {...SECRET_REGION} value={typing} rows={5} spellCheck={false} aria-label="A .env file" placeholder={"OPENAI_API_KEY=sk-…\nDATABASE_PASSWORD=…"} onChange={(e) => { take(e.target.value, false); }} onBlur={(e) => { take(e.target.value, true); }} />
       )}
 
       {(mode === "one" || rows.length > 0) && <SecretRows rows={rows} onChange={setRows} removable={mode === "env"} />}

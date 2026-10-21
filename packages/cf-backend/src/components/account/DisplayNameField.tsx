@@ -1,6 +1,7 @@
 /** Controlled by the caller, which decides when "changed" is saved. */
 import { DISPLAY_NAME_MAX } from "@kinu.run/core";
-import { Field, inputCls } from "@/components/ui/form";
+import { Field } from "@/components/ui/form";
+import { TextInput } from "@/components/ui/Field";
 
 export function DisplayNameField({ value, onChange, saving, bare = false }: {
   value: string;
@@ -10,16 +11,7 @@ export function DisplayNameField({ value, onChange, saving, bare = false }: {
   bare?: boolean;
 }) {
   const input = (
-      <input
-        aria-label="Your name"
-        className={inputCls}
-        maxLength={DISPLAY_NAME_MAX}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={saving === true}
-        placeholder="What should Kinu call you?"
-        autoComplete="name"
-      />
+      <TextInput aria-label="Your name" maxLength={DISPLAY_NAME_MAX} value={value} onChange={(e) => onChange(e.target.value)} disabled={saving === true} placeholder="What should Kinu call you?" autoComplete="name" />
   );
 
   return bare ? input : <Field label="Name">{input}</Field>;

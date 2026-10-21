@@ -8,7 +8,6 @@ import {
   MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId, type McpServerSummary,
 } from "@kinu.run/core";
 import { addMcpServer, removeMcpServer, type McpServerInput } from "@/lib/user-api";
-import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { BrandMark, type BrandName } from "@/components/ui/BrandMark";
@@ -17,6 +16,7 @@ import { Status } from "@/components/ui/Status";
 import { Menu } from "@/components/ui/Menu";
 import { mcpServerStatus } from "@/components/plugins/mcp-status";
 import { renderThrownChain, detach } from "@kinu.run/core/obs";
+import { TextInput } from "@/components/ui/Field";
 
 const PRESET_MARK: Record<McpPresetId, BrandName> = {
   github: "github",
@@ -163,10 +163,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged }: {
           {asking && (
             <div className="flex items-center gap-2">
               {/* Credential region: the marker keeps the value out of feedback screenshots. */}
-              <input {...SECRET_REGION} type="password" autoComplete="off"
-                value={token} onChange={(e) => setToken(e.target.value)}
-                aria-label={tokenLabel} placeholder={tokenLabel}
-                className={inputCls + ' min-w-0 flex-1'} />
+              <TextInput className="min-w-0 flex-1" {...SECRET_REGION} type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} aria-label={tokenLabel} placeholder={tokenLabel} />
               <button
                 onClick={() => detach(Effect.promise(async () => { await add({
                   presetId: preset.id,

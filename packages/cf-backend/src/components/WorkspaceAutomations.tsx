@@ -20,6 +20,7 @@ import * as v from "valibot";
 import { showing, detach } from '@kinu.run/core/obs';
 import { dailyTimeOf } from "@kinu.run/core";
 import type { WorkspaceAnswer, WorkspaceRpc } from "@/lib/workspace-rpc";
+import { TextInput } from "@/components/ui/Field";
 
 type TriggerRow = WorkspaceAnswer<"listTriggers">["triggers"][number];
 
@@ -304,8 +305,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
       <div className="space-y-2">
         <label className="block">
           <div className="t-meta p-text-2 mb-1">Label</div>
-          <input value={label} onChange={(e) => setLabel(e.target.value)} className={inputCls}
-            placeholder="github-pr-events" />
+          <TextInput value={label} onChange={(e) => setLabel(e.target.value)} placeholder="github-pr-events" />
         </label>
         <label className="block">
           <div className="t-meta p-text-2 mb-1">Authentication</div>
@@ -319,14 +319,12 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
           <label className="block">
             <div className="t-meta p-text-2 mb-1">Secret</div>
             {/* Marked for redaction too, so a later reveal toggle to `text` cannot undo it. */}
-            <input {...SECRET_REGION} type="password" value={secret}
-              onChange={(e) => setSecret(e.target.value)} className={inputCls}
-              placeholder="Leave blank and Kinu generates one" />
+            <TextInput {...SECRET_REGION} type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Leave blank and Kinu generates one" />
           </label>
         )}
         <label className="block">
           <div className="t-meta p-text-2 mb-1">Accepted content type</div>
-          <input value={contentType} onChange={(e) => setContentType(e.target.value)} className={inputCls} placeholder="application/json" />
+          <TextInput value={contentType} onChange={(e) => setContentType(e.target.value)} placeholder="application/json" />
         </label>
       </div>
       {err && <div className="t-meta p-danger">{err}</div>}

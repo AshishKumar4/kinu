@@ -7,7 +7,6 @@ import { Button } from "@/components/ui/Button";
 import { DeferredApprovalSchema, describeExecutionContext, executorLabel, revealMisrepresenting, type DeferredApproval } from '@kinu.run/core';
 import { TrashIcon, WarningIcon } from '@phosphor-icons/react';
 import { Modal } from '../ui/Modal';
-import { inputCls } from '../ui/form';
 import { Status } from '../ui/Status';
 import { JOB_TONE } from '../surfaces/work-jobs';
 import {
@@ -16,6 +15,7 @@ import {
   type Panel as PanelValue,
 } from '../../lib/control-api';
 import { Notice, Panel, SectionHeader, useControlRead, when } from './panels';
+import { TextInput } from "@/components/ui/Field";
 
 /** Every panel arrives in this shape so one down surface never blanks the page. */
 function PanelBlock(
@@ -254,17 +254,12 @@ export function WorkspaceDrilldown(
             {retypeRequired && (
               <label className="t-meta block p-text-3">
                 Type <span className="font-mono p-text">{workspace}</span> to confirm
-                <input
-                  className={`${inputCls} mt-1`}
-                  value={typedName}
-                  onChange={(e) => {
+                <TextInput className="mt-1" value={typedName} onChange={(e) => {
                     setTypedName(e.target.value);
                     setPending((current) => current === null || current.action.action !== 'workspace.remove'
                       ? current
                       : { ...current, action: { ...current.action, confirm: e.target.value } });
-                  }}
-                  autoFocus
-                />
+                  }} autoFocus />
               </label>
             )}
           </div>

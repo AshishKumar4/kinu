@@ -12,13 +12,14 @@ import { DownloadSimpleIcon, KeyIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { Modal } from "@/components/ui/Modal";
-import { Choice, Field, inputCls } from "@/components/ui/form";
+import { Choice, Field } from "@/components/ui/form";
 import { Switch } from "@/components/ui/Switch";
 import { Status } from "@/components/ui/Status";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { presetBrand } from "@/components/plugins/McpPresetCards";
 import { installBlueprint, type BlueprintPage } from "@/lib/explore-api";
 import { DEFAULT_ASSISTANT } from "@/components/assistant/AssistantStep";
+import { TextInput } from "@/components/ui/Field";
 
 /** The brief times Install offers; the blueprint's own is 08:00. */
 const BRIEF_TIMES = ["07:00", "07:30", "08:00", "08:30", "09:00", "09:30"] as const;
@@ -50,7 +51,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
       )}>
       <div className="space-y-4" data-install-dialog={page.workspace.id}>
         <Field label={assistant ? "Its name" : "Workspace name"} hint={assistant ? "What you call it; its workspace is “Personal assistant”." : undefined}>
-          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={60} className={`${inputCls} h-9`} aria-label={assistant ? "Its name" : "Workspace name"} />
+          <TextInput value={name} onChange={(event) => setName(event.target.value)} maxLength={60} aria-label={assistant ? "Its name" : "Workspace name"} />
         </Field>
         {assistant && (
           <>

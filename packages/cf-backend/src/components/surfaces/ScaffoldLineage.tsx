@@ -12,6 +12,7 @@ import { Status, type StatusTone } from "@/components/ui/Status";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import type { OrchestratorAgent } from "@/orchestrator";
 import { Pressable } from "@/components/ui/Pressable";
+import { TextInput } from "@/components/ui/Field";
 
 type ScaffoldDiff = Awaited<ReturnType<OrchestratorAgent["getScaffoldDiff"]>>;
 
@@ -122,9 +123,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
 
               <div className="space-y-2">
                 <div className="flex items-center gap-2">
-                  <input value={previewTask} onChange={(e) => setPreviewTask(e.target.value)}
-                    placeholder={`Run a task under v${selected} to preview it…`}
-                    className="t-meta flex-1 rounded-md border p-border p-fill px-2 py-1 p-text" />
+                  <TextInput size="sm" className="flex-1" value={previewTask} onChange={(e) => setPreviewTask(e.target.value)} placeholder={`Run a task under v${selected} to preview it…`} />
                   <Button size="sm" variant="secondary" disabled={!previewTask.trim() || busy === "preview"}
                     onClick={runPreview} icon={busy === "preview" ? <Loader size="sm" /> : <PlayIcon size={12} />}>
                     Preview

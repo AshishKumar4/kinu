@@ -14,8 +14,8 @@ import {
 import { BrandMark } from "@/components/ui/BrandMark";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Modal } from "@/components/ui/Modal";
-import { inputCls } from "@/components/ui/form";
 import { Notice } from "@/components/ui/Notice";
+import { TextInput } from "@/components/ui/Field";
 
 /** How often a waiting sign-in is read. */
 const SIGN_IN_POLL_MS = 2_000;
@@ -224,8 +224,7 @@ function SignInHere({ onDone, onFailed }: { onDone: (first: boolean) => void; on
       <div className="space-y-2">
         <p className="t-meta p-text-2">2. Your browser then lands on a page that does not load, at an address starting with <code className="font-mono">{started.redirectUri}</code>. Copy that whole address and paste it here.</p>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <input value={pasted} onChange={(event) => setPasted(event.target.value)} placeholder={`${started.redirectUri}?code=…`}
-            aria-label="Address the sign-in landed on" className={`${inputCls} t-meta`} disabled={busy} />
+          <TextInput size="sm" value={pasted} onChange={(event) => setPasted(event.target.value)} placeholder={`${started.redirectUri}?code=…`} aria-label="Address the sign-in landed on" disabled={busy} />
           <Button variant="primary" size="sm" onClick={finish} disabled={busy || pasted.trim() === ""} className="shrink-0">{busy ? "Finishing…" : "Finish"}</Button>
         </div>
       </div>

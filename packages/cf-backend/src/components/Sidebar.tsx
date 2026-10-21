@@ -21,6 +21,7 @@ import { StatusDot } from "@/components/ui/Status";
 import { workspaceStatusTone } from "@/components/workspaces/workspace-status-tone";
 import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
+import { TextInput } from "@/components/ui/Field";
 
 function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
   const { to, label, Icon } = item;
@@ -73,20 +74,11 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
   return (
     <form onSubmit={submit} className="p-card px-1 py-1">
       <div className="flex items-center gap-1">
-        <input
-          autoFocus
-          value={draft}
-          maxLength={WORKSPACE_TITLE_MAX}
-          onFocus={(event) => event.currentTarget.select()}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
+        <TextInput size="sm" className="min-w-0 flex-1" autoFocus value={draft} maxLength={WORKSPACE_TITLE_MAX} onFocus={(event) => event.currentTarget.select()} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => {
             if (event.key !== "Escape" || composing(event.nativeEvent) || saving) return;
             event.preventDefault();
             onDone();
-          }}
-          className="t-meta min-w-0 flex-1 rounded-sm px-1 py-1 p-fill p-text border p-border"
-          aria-label={label}
-        />
+          }} aria-label={label} />
         <Button variant="ghost" size="sm" icon={<CheckIcon size={14} />} type="submit" disabled={!draft.trim() || saving || waiting !== null} aria-label={saveLabel} />
         <Button variant="ghost" size="sm" icon={<XIcon size={14} />} onClick={onDone} disabled={saving} aria-label="Cancel rename" />
       </div>

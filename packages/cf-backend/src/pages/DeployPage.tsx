@@ -15,6 +15,7 @@ import { KinuLogo } from "@/components/ui/KinuLogo";
 import { Field, inputCls } from "@/components/ui/form";
 import { StepRow } from "@/components/deploy/DeployStepRow";
 import { Notice } from "@/components/ui/Notice";
+import { TextInput } from "@/components/ui/Field";
 
 /** The run key is a capability: `sessionStorage` under the run id, sent in an `authorization` header, never a URL. */
 function heldRunKey(runId: string): string {
@@ -154,21 +155,10 @@ function Answered({ options, runId, onStarted }: {
           </select>
         </Field>
         <Field label="Instance name" hint="Lower-case letters, numbers and dashes. It names the Worker and its resources.">
-          <input
-            className={inputCls}
-            aria-label="Instance name"
-            value={answers.instanceName}
-            onChange={(event) => setAnswers({ ...answers, instanceName: event.target.value })}
-          />
+          <TextInput aria-label="Instance name" value={answers.instanceName} onChange={(event) => setAnswers({ ...answers, instanceName: event.target.value })} />
         </Field>
         <Field label="Your email" hint="This address owns the deployment and gets the one-time PIN when you sign in.">
-          <input
-            className={inputCls}
-            type="email"
-            aria-label="Your email"
-            value={answers.ownerEmail}
-            onChange={(event) => setAnswers({ ...answers, ownerEmail: event.target.value })}
-          />
+          <TextInput type="email" aria-label="Your email" value={answers.ownerEmail} onChange={(event) => setAnswers({ ...answers, ownerEmail: event.target.value })} />
         </Field>
         <Field
           label="Address"
@@ -188,13 +178,7 @@ function Answered({ options, runId, onStarted }: {
                 {zoneOptions}
               </select>
               {answers.zoneId !== "" && (
-                <input
-                  className={inputCls}
-                  aria-label="Hostname"
-                  placeholder="kinu.example.com"
-                  value={answers.hostname}
-                  onChange={(event) => setAnswers({ ...answers, hostname: event.target.value })}
-                />
+                <TextInput aria-label="Hostname" placeholder="kinu.example.com" value={answers.hostname} onChange={(event) => setAnswers({ ...answers, hostname: event.target.value })} />
               )}
             </div>
           )}
@@ -222,13 +206,7 @@ function Answered({ options, runId, onStarted }: {
         )}
         {options.prompts.map((name) => (
           <Field key={name} label={name} hint="Optional. Stored as a secret on your deployment, never here.">
-            <input
-              className={inputCls}
-              type="password"
-              aria-label={name}
-              value={answers.keys[name] ?? ""}
-              onChange={(event) => setAnswers({ ...answers, keys: { ...answers.keys, [name]: event.target.value } })}
-            />
+            <TextInput type="password" aria-label={name} value={answers.keys[name] ?? ""} onChange={(event) => setAnswers({ ...answers, keys: { ...answers.keys, [name]: event.target.value } })} />
           </Field>
         ))}
       </div>

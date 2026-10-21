@@ -10,7 +10,7 @@ import { MailThreadReader } from "@/components/mail/MailThreadReader";
 import { Compose } from "@/components/mail/MailEditor";
 import { ToolPage } from "@/components/ui/PageHeader";
 import { Segmented } from "@/components/ui/Segmented";
-import { Choice, inputCls } from "@/components/ui/form";
+import { Choice } from "@/components/ui/form";
 import { Modal } from "@/components/ui/Modal";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
@@ -19,6 +19,7 @@ import { useAccount } from "@/hooks/use-account";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { createMailAddress, listMailThreads, readMailBoxes, type MailBoxes } from "@/lib/mail-api";
 import { MailAddressField, useMailUsername } from "@/components/mail/MailAddressField";
+import { TextInput } from "@/components/ui/Field";
 
 
 
@@ -189,8 +190,7 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   const search = (
     <label className="relative w-60 min-w-0 shrink">
       <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 p-text-3" aria-hidden />
-      <input value={query} onChange={(event) => { setQuery(event.target.value); at({ q: event.target.value || null }); }} placeholder="Search mail" aria-label="Search mail" data-mail-search
-        className={`${inputCls} h-7 rounded-[var(--r-control)] py-0 pl-6`} />
+      <TextInput size="sm"  value={query} onChange={(event) => { setQuery(event.target.value); at({ q: event.target.value || null }); }} placeholder="Search mail" aria-label="Search mail" data-mail-search />
     </label>
   );
 

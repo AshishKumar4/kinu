@@ -8,10 +8,10 @@ import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { registerDevice, type UserDevice } from "@/lib/user-api";
 import { Modal } from "@/components/ui/Modal";
 import { CopyButton } from "@/components/ui/CopyButton";
-import { inputCls } from "@/components/ui/form";
 import { useDeviceRoster } from "@/hooks/use-device-roster";
 import { lastValue } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { TextInput } from "@/components/ui/Field";
 
 type ConnectState =
   | { readonly kind: "ready" }
@@ -146,14 +146,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null, workspac
         <p data-connect-error className="t-meta p-danger">Could not register this device: {state.message}</p>
       )}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-        <input
-          value={label}
-          onChange={(event) => setLabel(event.target.value)}
-          placeholder="Name this machine (optional)"
-          aria-label="Device name"
-          className={`${inputCls} t-meta`}
-          disabled={state.kind === "registering"}
-        />
+        <TextInput size="sm" value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Name this machine (optional)" aria-label="Device name" disabled={state.kind === "registering"} />
         <Button variant="primary" size="md"
           data-connect-start
           onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))}
