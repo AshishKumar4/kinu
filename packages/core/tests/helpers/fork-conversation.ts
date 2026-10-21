@@ -28,10 +28,11 @@ export const SOURCE_ARTIFACTS = agentArtifactDirectory(agentHome(MAIN_AGENT));
  *  own root: the fork sink writes as the session user, and only the kernel makes a home under `/home`. */
 export const TARGET_ARTIFACTS = `${WORKSPACE_ROOT}/.kinu/fork-context`;
 
-/** Above the inline ceiling (half of `do.sqlite.row_bytes`), so it spills to a file. */
-export const SPILLED_BYTES = 1_100_000;
-
+/** The inline ceiling: half of `do.sqlite.row_bytes`. */
 export const INLINE_PAYLOAD_BYTES = Math.floor(PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value / 2);
+
+/** Above the inline ceiling, so it spills to a file. */
+export const SPILLED_BYTES = INLINE_PAYLOAD_BYTES + 100_000;
 
 export class ForkConversation {
   readonly actor: ActorHandle;

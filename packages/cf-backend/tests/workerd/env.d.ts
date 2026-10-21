@@ -439,6 +439,7 @@ interface SlateDurabilityProbeRpc extends Rpc.DurableObjectBranded {
   openWorkspace(workspace: string, owner: string): Promise<void>;
   runInWorkspace(workspace: string, command: string): Promise<{ exitCode: number; stdout: string }>;
   executorOutputs(workspace: string): Promise<Array<{ stdout: string; stdout_len: number }>>;
+  storedStreamChars(workspace: string): Promise<number>;
   readWorkspaceFile(workspace: string, path: string): Promise<string | null>;
   driveTerminal(workspace: string, line: string, until: string): Promise<
     | { ok: true; frames: string[]; output: string }

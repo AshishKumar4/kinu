@@ -117,6 +117,13 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return (await this.getExecutorOutput('workspace')).map(({ stdout, stdout_len }) => ({ stdout, stdout_len }));
   }
 
+  /** The widest stream any of the executor's rows stores, as SQLite holds it rather than as a reader reads it. */
+  async storedStreamChars(): Promise<number> {
+    return this.ctx.storage.sql.exec<{ widest: number | null }>(
+      "SELECT MAX(MAX(length(stdout)), MAX(length(stderr))) AS widest FROM executor_output WHERE executor = 'workspace'",
+    ).one().widest ?? 0;
+  }
+
   /** Nimbus's pending tasks as this object's Lifecycle holds them, and the alarm that wakes the next. */
   async pendingNimbusTasks(): Promise<{ tasks: Array<{ id: string; time: number }>; alarm: number | null }> {
     const tasks = this.ctx.storage.sql.exec<{ id: string; time: number }>(
@@ -194,7 +201,7 @@ export { ObservedOrchestrator as OrchestratorAgent };
  *  reaches it through `workspaceOwner()`, as production's actor does. */
 type SlateTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'writeExecutorFileChunk' | 'executeInExecutor' | 'routeSlateShare'> & Pick<ObservedOrchestrator,
-  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'runShell' | 'previewTabs' | 'failingSlates'
+  'portReservations' | 'runProgram' | 'forgetActivation' | 'pendingNimbusTasks' | 'executorRows' | 'storedStreamChars' | 'runShell' | 'previewTabs' | 'failingSlates'
   | 'wakeOnce' | 'approveWaitingEffects'> & Pick<ProductionOrchestrator, 'setLiveShareMode'>;
 
 /** `ObservedOrchestrator` is installed under the `OrchestratorAgent` name, so every stub carries
@@ -1010,6 +1017,10 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
 
   async executorOutputs(workspace: string): Promise<Array<{ stdout: string; stdout_len: number }>> {
     return (await this.workspaceTarget(workspace)).executorRows();
+  }
+
+  async storedStreamChars(workspace: string): Promise<number> {
+    return (await this.workspaceTarget(workspace)).storedStreamChars();
   }
 
   /** The workspace's own pass to its preview (`selfPreviewPass`): what its own browsers and fetches carry. */
