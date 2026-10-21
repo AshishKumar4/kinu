@@ -445,7 +445,9 @@ function planDeclined(record) {
  * one replaced having exited, so an update's overlap submits no refresh token twice. A call to auth.openai.com
  * ends when its answer does, or when `abort` (a forced stop) ends it.
  */
-function createDeviceSession({ home, fetch: baseFetch = globalThis.fetch, now = Date.now, predecessorExited = null }) {
+// The global fetch as it is at each call, not at the session's creation: the daemon makes its session as the module
+// loads, before it installs the trust its fetch carries (daemon/trust.js).
+function createDeviceSession({ home, fetch: baseFetch = (input, init) => globalThis.fetch(input, init), now = Date.now, predecessorExited = null }) {
   const file = path.join(home, DEVICE_RECORD_FILE);
   /** The sign-in waiting for the browser: its abort, whether it was cancelled, and its landing. */
   let signingIn = null;
