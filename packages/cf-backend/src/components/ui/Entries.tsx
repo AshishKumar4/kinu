@@ -49,7 +49,7 @@ export function EntriesHead({ className, ...rest }: ComponentProps<"div">) {
  * A row of a tree, `depth` steps in. A folder's caret is its own press: open or close it, where the row's press goes
  * into it. A file stands where a folder's caret would, so names line up.
  */
-export function TreeRow({ depth, open, cursor, hidden, inert, fold, onOpen, title, className, children, ...data }: {
+export function TreeRow({ depth, open, cursor, hidden, inert, fold, onFold, onOpen, title, className, children, ...data }: {
   depth: number;
   open?: boolean;
   cursor?: boolean;
@@ -57,7 +57,9 @@ export function TreeRow({ depth, open, cursor, hidden, inert, fold, onOpen, titl
   inert?: boolean;
   /** Placement only: a row whose controls show on hover is a `group`. */
   className?: string;
-  fold?: { readonly open: boolean; readonly label: string; readonly onToggle: () => void };
+  /** A folder's caret: whether it is open, and its name for a reader. */
+  fold?: { readonly open: boolean; readonly label: string };
+  onFold?: () => void;
   onOpen?: () => void;
   title?: string;
   children: ReactNode;
@@ -68,7 +70,7 @@ export function TreeRow({ depth, open, cursor, hidden, inert, fold, onOpen, titl
     <div {...entryProps({ open, cursor, hidden, inert }, className)} {...data} title={title} style={indent} onClick={onOpen} data-tree-row="">
       {fold === undefined ? <span className="p-tree-gap" aria-hidden="true" /> : (
         <button type="button" className="p-tree-fold" aria-label={fold.label} aria-expanded={fold.open}
-          onClick={(event) => { event.stopPropagation(); fold.onToggle(); }}>
+          onClick={(event) => { event.stopPropagation(); onFold?.(); }}>
           {fold.open ? <CaretDownIcon size={14} /> : <CaretRightIcon size={14} />}
         </button>
       )}

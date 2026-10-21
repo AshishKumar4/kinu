@@ -660,7 +660,7 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
   return (
     <div>
       <TreeRow depth={depth} open={active} hidden={hidden} data-files-tree-node={dir} onOpen={() => onNavigate(dir)}
-        fold={{ open: isOpen, label: isOpen ? `Collapse ${label}` : `Expand ${label}`, onToggle: () => detach(Effect.promise(() => onToggle(dir))) }}>
+        fold={{ open: isOpen, label: isOpen ? `Collapse ${label}` : `Expand ${label}` }} onFold={() => detach(Effect.promise(() => onToggle(dir)))}>
         {isOpen ? <FolderOpenIcon data-entry-face size={14} className="p-info shrink-0" weight="fill" />
           : <FolderIcon data-entry-face size={14} className="p-info shrink-0" weight="fill" />}
         <span data-entry-face className="truncate">{label}</span>
