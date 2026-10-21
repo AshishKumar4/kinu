@@ -16,7 +16,15 @@
 const { createHelperSource } = require('./screen-helper.js');
 
 const LINUX_SCREEN_PY = String.raw`
-import json, os, struct, sys
+import ctypes, json, os, struct, sys
+
+# Ends with the daemon that started it (PR_SET_PDEATHSIG, SIGKILL): a daemon killed while this waited on the desktop
+# portal left it running, its GStreamer scanner writing a cache under a home already removed (2026-10-21).
+_parent = os.getppid()
+ctypes.CDLL(None).prctl(1, 9)
+if os.getppid() != _parent:
+    sys.exit(1)
+
 import gi
 gi.require_version('Gio', '2.0')
 gi.require_version('Gst', '1.0')
