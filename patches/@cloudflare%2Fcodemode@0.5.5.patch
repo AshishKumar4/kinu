@@ -27,7 +27,7 @@ index 0000000000000000000000000000000000000000..dcf795c5e4e6b6bde56e983e3eef0879
 @@ -0,0 +1 @@
 +export { s as normalizeCode } from "./json-schema-types-D_m9tVnI.js";
 diff --git a/package.json b/package.json
-index 2a16cf87ffb7d0c56238c01eeafb2aa224405aaa..758e86a846609b50095bdb3d00937f5a1e302c60 100644
+index 03bab304d0f29fecd3a726232774b4c3c617df0f..4f8e5f74d081e9560f1120b2dd778bfc643df6f4 100644
 --- a/package.json
 +++ b/package.json
 @@ -48,6 +48,16 @@
