@@ -2,6 +2,7 @@
  * A thing on Explore, as a card that says at a glance what it is: an app you open (a listed slate) or a workspace you
  * install (a workspace blueprint); what it does, who made it, and how many use it. What it needs of yours is on its page.
  */
+import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { Link } from "react-router-dom";
 import { AppWindowIcon, DownloadSimpleIcon, EyeIcon, KeyIcon, SealCheckIcon, SquaresFourIcon, StarIcon } from "@phosphor-icons/react";
 import { galleryPicturePath } from "@kinu.run/core";
@@ -34,17 +35,13 @@ const KIND_WORDS: Record<ExploreKind, { label: string; verb: string }> = {
 };
 
 /** What it is, in a word. `onPicture`: solid, so it reads over any picture. */
-export function KindBadge({ kind, onPicture = false, className = "" }: { kind: ExploreKind; onPicture?: boolean; className?: string }) {
+export function KindBadge({ kind, onPicture = false, className }: { kind: ExploreKind; onPicture?: boolean; className?: string }) {
   const Icon = kind === "app" ? AppWindowIcon : SquaresFourIcon;
-  let ground = kind === "workspace" ? "bg-[var(--c-selected)] p-accent" : "bg-[var(--c-hover)] p-text-2";
+  let tone: BadgeTone = kind === "workspace" ? "accent" : "neutral";
 
-  if (onPicture) ground = `border p-border bg-[var(--c-surface)] shadow-sm ${kind === "workspace" ? "p-accent" : "p-text"}`;
+  if (onPicture) tone = "onPicture";
 
-  return (
-    <span data-explore-kind={kind} className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-semibold tracking-[0.01em] ${ground} ${className}`}>
-      <Icon size={12} weight="bold" />{KIND_WORDS[kind].label}
-    </span>
-  );
+  return <Badge tone={tone} icon={<Icon size={12} weight="bold" />} className={className} data-explore-kind={kind}>{KIND_WORDS[kind].label}</Badge>;
 }
 
 /** Who made it: a person by their initial, or Kinu, which keeps its own. */

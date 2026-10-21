@@ -85,9 +85,9 @@
    The reference is `~/kinu-landing-design/Kinu App v2.dc.html`, drawn by
    the owner himself: dark grounds, solid hairlines instead of alpha glows,
    one gold accent rationed to intent, silk as the bright end of the same
-   thread, and three self-hosted faces — Schibsted Grotesk for everything
-   that reads, Newsreader for slates that ask for a serif, Fragment Mono
-   for labels and commands. Two palettes wear it (core's `web/theme.ts`):
+   thread, and self-hosted faces — Inter for everything that reads
+   (docs/DESIGN-SYSTEM.md §1.3), Newsreader for slates that ask for a
+   serif, Fragment Mono for code. Two palettes wear it (core's `web/theme.ts`):
    Graphite, near-neutral so brass is the only colour on screen, and Warm,
    the mock's umber at half its tint.
 
@@ -117,7 +117,9 @@ html, body, #root {
   font-family: var(--font-ui);
 }
 
-:root {
+/* Every element that names a look (a swatch, a quadrant of the system frame) resolves these again, so Kumo's colours
+   and the code ground follow the look they sit in rather than the page's. */
+:root, [data-theme], [data-mode] {
   /* Radii — the mock's own measures, stated as roles. Outer cards and the
      composer are 14px; the grouped cards INSIDE a surface (tool rows,
      journal, key-value tables) stay at Tailwind's 12px rung; rows and
@@ -348,7 +350,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 .t-micro      { font: 600 11px/14px var(--font-ui); letter-spacing: 0.01em; }
 .t-composer   { font: 400 15.5px/24px var(--font-ui); color: var(--c-text); }
 .t-code       { font: 400 13px/20px var(--font-mono); color: var(--c-accent-fg); }
-:not(pre) > .t-code { font-size: 0.92em; }
+/* Code inside running text sits a step under the words around it. */
+:is(p, li, .t-body, .t-item, .prose-chat) > .t-code { font-size: 0.92em; }
 .t-mono       { font-family: var(--font-mono); }
 
 /* ── Type roles — the scale lives here, not in per-component literals ─ */
@@ -649,28 +652,33 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* A button is known by its label and its fill step: a quiet edge and lift (A4), never an input's 3:1 outline. Pressed is
    the darker fill alone; a shrink on a 28 px button reads as jitter. */
 .p-button-secondary { background: var(--c-button-bg); border-color: var(--c-button-line); color: var(--c-text); box-shadow: var(--shadow-button); }
-.p-button-secondary:hover { background: var(--c-button-bg-hover); border-color: var(--c-button-line-hover); }
-.p-button-secondary:active { background: var(--c-button-bg-active); box-shadow: none; }
+.p-button-secondary:is(:hover, [data-force="hover"]) { background: var(--c-button-bg-hover); border-color: var(--c-button-line-hover); }
+.p-button-secondary:is(:active, [data-force="active"]) { background: var(--c-button-bg-active); box-shadow: none; }
 
 .p-button-primary { background: var(--c-accent); color: var(--c-accent-on); font-weight: 600; box-shadow: var(--shadow-primary); }
-.p-button-primary:hover { background: var(--c-accent-hover); }
-.p-button-primary:active { background: var(--c-accent-active); box-shadow: none; }
+.p-button-primary:is(:hover, [data-force="hover"]) { background: var(--c-accent-hover); }
+.p-button-primary:is(:active, [data-force="active"]) { background: var(--c-accent-active); box-shadow: none; }
 
 .p-button-ghost { background: transparent; color: var(--c-text-2); }
-.p-button-ghost:hover { background: var(--c-hover); color: var(--c-text); }
-.p-button-ghost:active, .p-button-ghost[aria-pressed="true"] { background: color-mix(in srgb, var(--c-text) 10%, transparent); color: var(--c-text); }
+.p-button-ghost:is(:hover, [data-force="hover"]) { background: var(--c-hover); color: var(--c-text); }
+.p-button-ghost:is(:active, [data-force="active"]), .p-button-ghost[aria-pressed="true"] { background: color-mix(in srgb, var(--c-text) 10%, transparent); color: var(--c-text); }
 
 .p-button-danger { background: var(--c-button-bg); border-color: var(--c-button-line); color: var(--c-danger); box-shadow: var(--shadow-button); }
-.p-button-danger:hover { background: var(--c-danger-tint); border-color: color-mix(in srgb, var(--c-danger) 30%, transparent); }
+.p-button-danger:is(:hover, [data-force="hover"]) { background: var(--c-danger-tint); border-color: color-mix(in srgb, var(--c-danger) 30%, transparent); }
 
 .p-button-destructive { background: var(--c-danger); color: var(--c-danger-on); font-weight: 600; box-shadow: var(--shadow-destructive); }
-.p-button-destructive:hover { background: var(--c-danger-hover); }
+.p-button-destructive:is(:hover, [data-force="hover"]) { background: var(--c-danger-hover); }
 
 .p-button:disabled { cursor: default; box-shadow: none; }
-.p-button-secondary:disabled, .p-button-ghost:disabled, .p-button-danger:disabled { color: var(--c-text-3); background: transparent; border-color: var(--c-button-line); }
-.p-button-primary:disabled, .p-button-destructive:disabled { background: var(--c-hover); color: var(--c-text-3); }
+/* A busy button is disabled only to the pointer: it keeps its look and width, a spinner in its icon's place. */
+.p-button[aria-busy="true"] { cursor: progress; }
+.p-button-secondary:disabled:not([aria-busy]), .p-button-ghost:disabled:not([aria-busy]), .p-button-danger:disabled:not([aria-busy]) {
+  color: var(--c-text-3); background: transparent; border-color: var(--c-button-line);
+}
+.p-button-primary:disabled:not([aria-busy]), .p-button-destructive:disabled:not([aria-busy]) { background: var(--c-hover); color: var(--c-text-3); }
 
-.p-button:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
+/* `data-force` draws a state at rest for the system frame (?frame=system), in place of the pointer and the keyboard. */
+.p-button:is(:focus-visible, [data-force="focus"]) { outline: 2px solid var(--c-focus); outline-offset: 2px; }
 
 /* A form's save bar (ui/SaveBar.tsx): floating at its column's foot, in and out over 220 ms. */
 .p-save-bar {
@@ -698,7 +706,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* The row scrolls rather than squeezing what it holds. */
 .p-tool-row > * { flex-shrink: 0; }
 @media (max-width: 639px) {
-  :root { --layout-gutter: 20px; --layout-bar: 48px; }
+  :root, [data-theme], [data-mode] { --layout-gutter: 20px; --layout-bar: 48px; }
   .p-tool-bar { height: 48px; }
   .p-tool-title { font-size: 17px; line-height: 24px; }
 }
@@ -712,7 +720,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   border-radius: var(--r-row);
   transition: background-color var(--dur-state) ease-out;
 }
-.p-row:hover { background: var(--c-hover); }
+.p-row:is(:hover, [data-force="hover"]) { background: var(--c-hover); }
 .p-row[aria-current="true"] { background: var(--c-selected); }
 .p-row:focus-within:has(:focus-visible) { outline: 2px solid var(--c-focus); outline-offset: -2px; }
 .p-row-control { grid-template-columns: 32px minmax(0, 1fr) 120px auto 28px; }
@@ -729,7 +737,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   display: flex; width: 28px; height: 28px; flex-shrink: 0; align-items: center; justify-content: center;
   border-radius: var(--r-control); color: var(--c-text-3); transition: background-color var(--dur-state) ease-out, color var(--dur-state) ease-out;
 }
-.p-row-action:hover, .p-menu-trigger:hover, .p-menu-trigger[data-popup-open] { background: var(--c-hover); color: var(--c-text); }
+.p-row-action:is(:hover, [data-force="hover"]), .p-menu-trigger:is(:hover, [data-force="hover"]), .p-menu-trigger[data-popup-open] { background: var(--c-hover); color: var(--c-text); }
 .p-row-action:disabled { opacity: 0.4; }
 .p-row-action:focus-visible, .p-menu-trigger:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
 
@@ -742,8 +750,8 @@ body { background: var(--c-bg); color: var(--c-text); }
   display: block; width: 100%; text-align: left; background: transparent; border: 0; padding: 0; color: inherit; font: inherit;
   border-radius: var(--r-row); cursor: pointer; transition: background-color var(--dur-state) ease-out;
 }
-.p-pressable:hover { background: var(--c-hover); }
-.p-pressable:active { background: var(--c-pressed); }
+.p-pressable:is(:hover, [data-force="hover"]) { background: var(--c-hover); }
+.p-pressable:is(:active, [data-force="active"]) { background: var(--c-pressed); }
 .p-pressable:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
 
 /* A busy button's spinner, in the icon's place. */
@@ -760,8 +768,8 @@ body { background: var(--c-bg); color: var(--c-text); }
   transition: border-color var(--dur-state) ease-out;
 }
 .p-field::placeholder { color: var(--c-text-3); }
-.p-field:hover { border-color: var(--c-border-strong); }
-.p-field:focus { outline: none; border-color: var(--c-focus); }
+.p-field:is(:hover, [data-force="hover"]) { border-color: var(--c-border-strong); }
+.p-field:is(:focus, [data-force="focus"]) { outline: none; border-color: var(--c-focus); }
 .p-field[aria-invalid="true"] { border-color: var(--c-danger); }
 .p-field:disabled { opacity: 0.5; cursor: default; }
 .p-field-md { height: 32px; }
@@ -872,8 +880,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 /* Popover and tooltip (ui/Popover.tsx, ui/Tooltip.tsx). */
 .p-popover { padding: 12px !important; border-radius: var(--r-card) !important; box-shadow: var(--shadow-menu) !important; }
-.p-tooltip {
-  padding: 4px 8px !important; border-radius: var(--r-control) !important; background: var(--c-text) !important;
+.p-tooltip, :has(> [data-tooltip-body]) {
+  padding: 4px 8px !important; border: 0 !important; border-radius: var(--r-control) !important; background: var(--c-text) !important;
   color: var(--c-bg) !important; font: 400 12px/16px var(--font-ui) !important; box-shadow: none !important;
 }
 

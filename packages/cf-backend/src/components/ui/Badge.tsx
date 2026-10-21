@@ -4,6 +4,14 @@
  */
 import type { ReactNode } from "react";
 
-export function Badge({ tone = "neutral", icon, children }: { tone?: "neutral" | "accent" | "onPicture"; icon?: ReactNode; children: ReactNode }) {
-  return <span className={`p-badge p-badge-${tone}`}>{icon}{children}</span>;
+export type BadgeTone = "neutral" | "accent" | "onPicture";
+
+export function Badge({ tone = "neutral", icon, children, className, ...data }: {
+  tone?: BadgeTone;
+  icon?: ReactNode;
+  children: ReactNode;
+  /** Placement only (`absolute left-2.5 top-2.5` on a cover). */
+  className?: string;
+} & Readonly<Record<`data-${string}`, string>>) {
+  return <span className={`p-badge p-badge-${tone}${className === undefined ? "" : ` ${className}`}`} {...data}>{icon}{children}</span>;
 }

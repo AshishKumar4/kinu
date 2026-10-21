@@ -105,7 +105,8 @@ function WholeApp({ transcript }: { transcript: (name: string) => void }) {
     <>
       <Seeder transcript={transcript} />
       <KeepPlace />
-      {device === "phone" ? <PhoneWindow><DesignBar /></PhoneWindow> : <><Pages /><DesignBar /></>}
+      {/* `bar=off`: a page drawn inside another review page (the system frame's page kinds) without its own switches. */}
+      {device === "phone" ? <PhoneWindow><DesignBar /></PhoneWindow> : <><Pages />{new URLSearchParams(location.search).get("bar") === "off" ? null : <DesignBar />}</>}
     </>
   );
 }

@@ -40,12 +40,12 @@ export function markDocument(): string {
 }
 
 /** Self-hosted latin subsets (OFL in `public/assets/fonts/`). */
-const UI_FONT_PATH = '/assets/fonts/schibsted-latin-var.woff2';
+const UI_FONT_PATH = '/assets/fonts/inter-latin-opsz.woff2';
 
 const MONO_FONT_PATH = '/assets/fonts/fragmentmono-latin.woff2';
 
 const FONT_FACES = [
-  `@font-face{font-family:"Schibsted Grotesk";src:url("${UI_FONT_PATH}") format("woff2-variations");font-weight:400 900;font-style:normal;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}`,
+  `@font-face{font-family:"Inter";src:url("${UI_FONT_PATH}") format("woff2-variations");font-weight:100 900;font-style:normal;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}`,
   `@font-face{font-family:"Fragment Mono";src:url("${MONO_FONT_PATH}") format("woff2");font-weight:400;font-style:normal;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}`,
 ].join('\n');
 
@@ -53,8 +53,8 @@ const SHELL_CSS = `
 ${FONT_FACES}
 *,::before,::after{box-sizing:border-box}
 :root{color-scheme:light dark;
---font-display:"Schibsted Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
---font-ui:"Schibsted Grotesk",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif,"Apple Color Emoji","Segoe UI Emoji";
+--font-display:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+--font-ui:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif,"Apple Color Emoji","Segoe UI Emoji";
 --font-mono:"Fragment Mono",ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
 --gutter:clamp(20px,4.6vw,54px);--rule:1px solid var(--c-border);
 --ease:cubic-bezier(.23,1,.32,1)}
