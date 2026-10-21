@@ -466,7 +466,25 @@ describe('the model list', () => {
   });
   // Each window as the plan's catalog gives it on 2026-10-02 (OMP's generated `openai-codex` catalog): `context_window`
   // is the standard-priced window, `max_context_window` the most the model takes.
-  test('a model\'s window is the most its catalog row allows, and the rows it hides are logged once, by slug', async () => {
+  test('a listing that hides nothing is logged all the same, naming what it shows', async () => {
+    const api = openai(Response.json({ models: [{ slug: 'gpt-6.1-sol', visibility: 'list' }, { slug: 'gpt-6-luna', visibility: 'list' }] }));
+    const logger = createRecordingLogger();
+    const restore = setDiagnosticsSink(logger);
+
+    try {
+      await createChatGptProvider().listModels(signedIn(api.fetch).deps);
+
+      expect(logger.emitted.filter((r) => r.event === 'provider.catalog_listed').map((r) => r.fields))
+        .toEqual([{ provider: 'chatgpt', shown: 'gpt-6.1-sol,gpt-6-luna', hidden: '' }]);
+    } finally {
+      restore();
+    }
+  });
+
+  // m2074a: a model left out of the menu is told apart from one the account's catalog withholds, and from one it lacks,
+  // only when each listing names what it shows beside what it hides (production 2026-10-16 to -21: 100 listings hid
+  // gpt-reserve and codex-auto-review alone, which says nothing of whether Sol was shown).
+  test('a model\'s window is the most its catalog row allows, and each listing is logged once: what it shows and what it hides', async () => {
     const api = openai(Response.json({
       models: [
         { slug: 'gpt-5.6-sol', display_name: 'GPT-5.6-Sol', visibility: 'list', priority: 1, context_window: 272_000, max_context_window: 872_000 },
@@ -483,8 +501,8 @@ describe('the model list', () => {
       const models = await createChatGptProvider().listModels(signedIn(api.fetch).deps);
 
       expect(models.map((model) => [model.id, model.contextWindow ?? null])).toEqual([['gpt-5.6-sol', 872_000], ['gpt-5.5', 272_000]]);
-      expect(logger.emitted.filter((r) => r.event === 'provider.catalog_hidden').map((r) => r.fields))
-        .toEqual([{ provider: 'chatgpt', hidden: 'gpt-6.1-sol:hide,gpt-6.1-sol-wm:experimental' }]);
+      expect(logger.emitted.filter((r) => r.event === 'provider.catalog_listed').map((r) => r.fields))
+        .toEqual([{ provider: 'chatgpt', shown: 'gpt-5.6-sol,gpt-5.5', hidden: 'gpt-6.1-sol:hide,gpt-6.1-sol-wm:experimental' }]);
     } finally {
       restore();
     }
