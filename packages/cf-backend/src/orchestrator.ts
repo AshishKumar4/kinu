@@ -389,6 +389,9 @@ interface SourcePlanes {
   /** The account's facts its turn reads once, which never rejects (a failed read is logged and answers none); null with
    *  no turn, whose every read asks. */
   readonly facts: Promise<readonly Fact[]> | null;
+  /** Whether the owner holds a mail address, read once for its turn, which never rejects: null with no turn, on a
+   *  deployment with no mail, or where the read failed (logged), each leaving the last answer standing. */
+  readonly mail: Promise<boolean | null> | null;
 }
 
 /** An assignment's delivery, as its metadata names it. */
@@ -1998,7 +2001,24 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       descriptors: turn && reach.kind === 'workspace' ? this.userMcpDescriptors() : null,
       device: reach.kind === 'workspace' ? runtime.deviceTransport.refreshStatus() : Promise.resolve(),
       facts: turn ? this.account.factsForTurn(this.actorHandle().name) : null,
+      mail: turn ? this.ownerMailRead() : null,
     };
+  }
+
+  /** Whether the owner holds a mail address now, read off the account's boxes without making one; null where this
+   *  deployment has no mail, or the read failed, which is logged. */
+  private ownerMailRead(): Promise<boolean | null> {
+    const owner = this.getOwnerUserId();
+
+    if ((this.env.EMAIL_DOMAIN ?? '') === '' || owner === null) return Promise.resolve(null);
+    const read = attempt({ doing: 'reading whether the owner holds a mail address', otherwise: 'unavailable' }, async () => (await objectNamed(this.env.MAILBOX, owner).boxes()).length > 0);
+
+    return hold(read).then((exit) => {
+      if (Exit.isSuccess(exit)) return exit.value;
+      diagnostics.failure('mail.boxes_read_failed', toKinuError({ doing: 'reading whether the owner holds a mail address', cause: Cause.squash(exit.cause), otherwise: 'unavailable' }), { workspace: this.name });
+
+      return null;
+    });
   }
 
   /**
@@ -2027,12 +2047,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // The remote catalog is admitted against the context budget left after the turn's own tools; a failed read answers
     // no tools and the turn runs on its own. The hub's device check refreshes the workspace's executors.
-    const [mcp] = await Promise.all([
+    const [mcp, , mailHeld] = await Promise.all([
       planes.descriptors !== null && turn !== null
         ? this.buildUserMcpTools(turn.tools, Promise.resolve(this.modelCatalog.at(providers.normalizeSpecSync(turn.resolved.profile.tier.model))), planes.descriptors)
         : Promise.resolve({}),
       planes.device,
+      planes.mail,
     ]);
+
+    // Before the turn's surface is built: its agents hold `mail` only while the owner holds an address to read.
+    if (mailHeld !== null && mailHeld !== undefined) this.ownerHoldsMail = mailHeld;
 
     const external: ToolSet = reach.kind === 'workspace' ? { ...this.extensions.tools(), ...mcp } : {};
 
@@ -2617,10 +2641,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._replyChannels;
   }
 
+  /** Whether the owner held a mail address at the last turn's read; null before any read answered. */
+  private ownerHoldsMail: boolean | null = null;
+
+  /** An agent's mail, where the deployment has mail and the owner holds an address: an account with none has no mail
+   *  to read, so its agents are offered none (rc29 F7: the assistant offered mail help to an account that had none). */
   protected override mailFor(actorId: string, name: string): MailDeps | null {
     const owner = this.getOwnerUserId();
 
-    if ((this.env.EMAIL_DOMAIN ?? '') === '' || owner === null) return null;
+    if ((this.env.EMAIL_DOMAIN ?? '') === '' || owner === null || this.ownerHoldsMail === false) return null;
 
     return {
       caller: () => ({ workspace: this.name, title: this.safeDisplayName(), mainActorId: this.actorHandle().actorId, actorId, name }),
