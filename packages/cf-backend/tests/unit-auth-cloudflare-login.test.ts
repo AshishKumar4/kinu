@@ -349,6 +349,33 @@ describe('two starts in one browser each finish', () => {
     }
   });
 
+  // Third review (2026-10-23): a callback whose handoff could not be read, in a connect's helper tab, offered "Return to
+  // sign in" with a forced prompt, and signing in there switched the browser into another account.
+  test('a callback no handoff can be read for offers a signed-in browser no sign-in, and a signed-out one its sign-in', async () => {
+    const { env } = setupEnv();
+    const originalFetch = globalThis.fetch;
+
+    try {
+      globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-a', refresh_token: 'cf-a-refresh' }, 'a@example.com').fetchFake;
+      const signedIn = await completeCloudflareLogin(env, await startCloudflareLogin(env));
+      const session = (sessionCookieIn(signedIn) ?? '').split(';')[0] ?? '';
+
+      const offered = async (cookie?: string) => {
+        const lost = await authPages(new Request(`${ORIGIN}/auth/cloudflare/callback?state=spent-or-lost&code=c`, cookie === undefined ? {} : { headers: { cookie } }), env);
+        const page = await lost?.text() ?? '';
+
+        return { status: lost?.status, signIn: page.includes('/login'), action: /Return to (?:sign in|Kinu)/u.exec(page)?.[0] ?? null };
+      };
+
+      expect({ signedIn: await offered(session), signedOut: await offered() }).toEqual({
+        signedIn: { status: 400, signIn: false, action: 'Return to Kinu' },
+        signedOut: { status: 400, signIn: true, action: 'Return to sign in' },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test('a connect whose callback comes after its state expired still ends on the finish page for its run', async () => {
     const { env } = setupEnv();
     const originalFetch = globalThis.fetch;

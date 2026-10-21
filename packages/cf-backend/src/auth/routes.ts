@@ -348,7 +348,7 @@ function completeOAuth<Id>(
       return redirect(destination, {
         headers,
       });
-    }), (failed) => Effect.sync(() => {
+    }), (failed) => Effect.gen(function* () {
       const e = Cause.squash(failed);
       const failure = summarizeOAuthFailure({ cause: e });
       diagnostics.failure('auth.oauth_callback_failed', toKinuError({
@@ -362,11 +362,19 @@ function completeOAuth<Id>(
         return redirect(new URL(connectedPath({ run: connecting.run, service: provider.label, error: failure.reason }), url.origin).toString());
       }
 
-      return html('Sign in failed', `
-      <p class="lede">Kinu could not finish signing you in. Return to sign in and try again.</p>
+      // Signed in, this browser needs no sign-in, and one offered here could switch it into another account: a connect
+      // whose handoff could not be read ends here in its helper tab. It is told to start again from Kinu instead.
+      const signedIn = (yield* Effect.promise(async () => requestIdentity(request, env))) !== null;
+
+      const action = signedIn
+        ? '<div class="actions"><a class="provider" href="/">Return to Kinu</a></div>'
+        : '<div class="actions"><a class="provider" href="/login?prompt=login">Return to sign in</a></div>';
+
+      return html(signedIn ? 'Could not finish' : 'Sign in failed', `
+      <p class="lede">${signedIn ? 'Kinu could not finish this. Close this tab and start again from Kinu.' : 'Kinu could not finish signing you in. Return to sign in and try again.'}</p>
       <p class="muted">Failure stage: <code>${escapeHtml(stage)}</code></p>
       <p class="muted">Reason: <code>${escapeHtml(failure.reason)}</code></p>
-      <div class="actions"><a class="provider" href="/login?prompt=login">Return to sign in</a></div>
+      ${action}
     `, { status: 400 });
     }));
 
