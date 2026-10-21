@@ -17,13 +17,31 @@ const SYSTEM_BUNDLE = '/etc/ssl/certs/ca-certificates.system.crt';
 export const CONTAINER_ENV = { NODE_EXTRA_CA_CERTS: CA_PATH, REQUESTS_CA_BUNDLE: BUNDLE, DISPLAY: ':0' };
 
 /**
+ * The one way the box runs a command in its container. workerd ends the stdin of an exec given none with a task nobody
+ * can await (`Container::exec`: "If stdin is undefined, the JS API promises immediate EOF"), and on a lost connection
+ * that task failed the box's request as an uncaught "Network connection lost." (staging rc29, 2026-10-21), as the
+ * platform's kill had (rc23). So every exec owns its stdin: a caller that writes none has it closed here before the
+ * exec is answered, as the platform's immediate EOF would, and a lost connection fails the exec, where its caller reads
+ * it. A caller's own stdin stays the caller's: the box passes only a pipe it writes and closes, never a stream for the
+ * platform to pump (another task of its own).
+ */
+export async function containerExec(container: Pick<Container, 'exec'>, argv: readonly string[], options: ContainerExecOptions = {}): Promise<ExecProcess> {
+  if (options.stdin !== undefined) return container.exec([...argv], options);
+  const process = await container.exec([...argv], { ...options, stdin: 'pipe' });
+
+  await process.stdin?.close();
+
+  return process;
+}
+
+/**
  * Ends `pid` in the container with an exec of `kill`, whose failure the box reads and says. The platform's own kill
  * (`ExecProcess.kill()`, or aborting the signal an exec was given) is a task workerd adds and nobody can await: on a
  * container whose connection was lost it failed the box's request as an uncaught "Network connection lost." (staging
  * rc23, 2026-10-19; `connection-lost.test.ts`). So no exec of the box's is given a signal or killed by the platform.
  */
 export function endProcess(container: Pick<Container, 'exec'>, pid: number, doing: string): () => void {
-  return observe(attempt('process', async () => await (await container.exec(['kill', '-KILL', String(pid)])).output(), doing), {
+  return observe(attempt('process', async () => await (await containerExec(container, ['kill', '-KILL', String(pid)])).output(), doing), {
     success: () => undefined,
     failure: (cause) => { console.error(`[devbox] ${cause.message}`); },
   });
@@ -91,7 +109,7 @@ export interface BoxNaming { readonly named: boolean; readonly detail: string }
  * name, and starts.
  */
 export function nameBox(container: Container, name: string): Promise<BoxNaming> {
-  return settle(attempt('process', async () => await (await container.exec(['sh', '-c', NAME_BOX, 'name-box', name])).output()).pipe(
+  return settle(attempt('process', async () => await (await containerExec(container, ['sh', '-c', NAME_BOX, 'name-box', name])).output()).pipe(
     Effect.map((ran): BoxNaming => {
       const said = new TextDecoder().decode(ran.stdout).trim();
 
@@ -278,7 +296,7 @@ export class Processes {
   incarnation(): Promise<string> {
     return settle(Effect.gen({ self: this }, function* () {
       this.trace('incarnation.exec.enter', {});
-      const read = yield* attempt('process', () => this.container.exec([...KERNEL_READ]));
+      const read = yield* attempt('process', () => containerExec(this.container, [...KERNEL_READ]));
       this.trace('incarnation.exec.exit', {});
       const output = yield* attempt('process', () => read.output());
       this.trace('incarnation.output.exit', { exitCode: output.exitCode });
@@ -295,9 +313,7 @@ export class Processes {
 
     return new Processes({
       get running() { return native.running; },
-      exec: (argv, options) => native.exec([
-        '/bin/sh', '-c', IN_KERNEL, 'devbox-incarnation', kernel, ...argv,
-      ], options),
+      exec: (argv, options) => containerExec(native, ['/bin/sh', '-c', IN_KERNEL, 'devbox-incarnation', kernel, ...argv], options),
     }, kernel, this.trace);
   }
 
@@ -355,7 +371,7 @@ export class Processes {
         ...(Object.keys(revealed).length > 0 && { DEVBOX_REVEALED: Object.keys(revealed).join(' ') }),
       };
 
-      const launched = yield* Effect.result(whileCurrent(options.current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {
+      const launched = yield* Effect.result(whileCurrent(options.current, () => attempt('process', () => containerExec(this.container, ['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {
         env, stdout: 'ignore', stderr: 'ignore',
       }))));
 
@@ -402,7 +418,7 @@ export class Processes {
   logs(id: string, limits: { readonly lines?: number | undefined; readonly bytes?: number | undefined }): Promise<string> {
     return settle(Effect.gen({ self: this }, function* () {
       const dir = yield* directory(id);
-      const ran = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', LOGS, 'devbox-logs', dir, String(limits.lines ?? LOG_LINES), String(limits.bytes ?? 0)]));
+      const ran = yield* attempt('process', () => containerExec(this.container, ['/bin/sh', '-c', LOGS, 'devbox-logs', dir, String(limits.lines ?? LOG_LINES), String(limits.bytes ?? 0)]));
       const output = yield* attempt('process', () => ran.output());
 
       if (output.exitCode === 3) return yield* Effect.fail(new DevboxError('missing', `no process ${id}`));
@@ -426,17 +442,17 @@ export class Processes {
 
       if (Result.isFailure(token) && !(SandboxFileError.is(token.failure.cause) && token.failure.cause.code === 'ENOENT')) return yield* Effect.fail(token.failure);
 
-      const ended = yield* whileCurrent(options.current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', `dir=$1; expected=$2
-[ -f "$dir/process.json" ] || exit 0
-if [ -n "$expected" ]; then [ "$(cat "$dir/pid" 2>/dev/null)" = "$expected" ] || exit 0; fi
-set -- "$dir"
-${UNLAUNCH} && exit 0
-while [ ! -f "$dir/pid" ] && [ ! -f "$dir/exit" ]; do sleep 0.1; done
-[ -f "$dir/exit" ] && exit 0
-${LIVE}
-pid=$(live "$dir") || exit 0
-${END_TREE}
-end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir, expected])));
+      const ended = yield* whileCurrent(options.current, () => attempt('process', () => containerExec(this.container, ['/bin/sh', '-c', `dir=$1; expected=$2
+      [ -f "$dir/process.json" ] || exit 0
+      if [ -n "$expected" ]; then [ "$(cat "$dir/pid" 2>/dev/null)" = "$expected" ] || exit 0; fi
+      set -- "$dir"
+      ${UNLAUNCH} && exit 0
+      while [ ! -f "$dir/pid" ] && [ ! -f "$dir/exit" ]; do sleep 0.1; done
+      [ -f "$dir/exit" ] && exit 0
+      ${LIVE}
+      pid=$(live "$dir") || exit 0
+      ${END_TREE}
+      end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir, expected])));
 
       const result = yield* attempt('process', () => ended.output());
 
@@ -447,7 +463,7 @@ end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir, expected])));
   /** `true`: the launch in `dir` never ran, and never will. */
   #unlaunched(dir: string, current?: () => boolean): Effect.Effect<boolean, DevboxError> {
     return Effect.gen({ self: this }, function* () {
-      const claim = yield* whileCurrent(current, () => attempt('process', () => this.container.exec(['/bin/sh', '-c', UNLAUNCH, 'devbox-unlaunch', dir])));
+      const claim = yield* whileCurrent(current, () => attempt('process', () => containerExec(this.container, ['/bin/sh', '-c', UNLAUNCH, 'devbox-unlaunch', dir])));
       const result = yield* attempt('process', () => claim.output());
 
       if (result.exitCode > 1) return yield* Effect.fail(new DevboxError('process', `the launch claim failed: ${new TextDecoder().decode(result.stderr)}`));
@@ -460,7 +476,7 @@ end_tree "$pid" || [ $? -eq 3 ]`, 'devbox-kill', dir, expected])));
     return Effect.gen({ self: this }, function* () {
       if (dirs.length === 0 || !this.container.running) return [];
       this.trace('status.exec.enter', { dirs: dirs.length });
-      const process = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', STATUS, 'devbox-status', ...dirs]));
+      const process = yield* attempt('process', () => containerExec(this.container, ['/bin/sh', '-c', STATUS, 'devbox-status', ...dirs]));
       this.trace('status.exec.exit', {});
       const result = yield* attempt('process', () => process.output());
       this.trace('status.output.exit', { exitCode: result.exitCode });
