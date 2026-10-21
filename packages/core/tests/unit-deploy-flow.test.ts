@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
-  CLOUDFLARE_DEPLOY_SCOPES, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET,
+  CLOUDFLARE_DEPLOY_CLIENT, CLOUDFLARE_DEPLOY_SCOPES, deployClientDrift, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET,
   HeldBytes, LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS, promptedSecrets,
   FACT_VERSION_ID, REFRESH_TOKEN_KEY, deployDoor, deployPlan, deployRunView, domainsMatching, factsFrom,
   judgeRefusal, localLayout, mailPreview, parseReleaseManifest, plannedRun, preflight, releaseDir,
@@ -1052,6 +1052,25 @@ describe('what a run asks, makes and hands over', () => {
     // kinu.run 2026-10-20: the authorize endpoint refused `account:read` with invalid_scope.
     expect(CLOUDFLARE_DEPLOY_SCOPES.filter((scope) => scope.includes(':'))).toEqual([]);
     expect(CLOUDFLARE_DEPLOY_SCOPES).toContain('offline_access');
+    // Its optional scopes are among its scopes, as Cloudflare requires of a registration.
+    expect(CLOUDFLARE_DEPLOY_CLIENT.optional.filter((scope) => !CLOUDFLARE_DEPLOY_SCOPES.includes(scope))).toEqual([]);
+  });
+
+  // f44999, 2026-10-21: the registration held zone-settings.write and registrar-domains.admin, which no consent asked
+  // for, and Cloudflare refused the first as zonesettings.write at the owner's consent.
+  test('a registration that differs from the list is named scope by scope, and one that matches is not', () => {
+    const registered = {
+      scopes: [...CLOUDFLARE_DEPLOY_SCOPES, 'zone-settings.write', 'registrar-domains.admin'].filter((scope) => scope !== 'aig.write'),
+      optional: [...CLOUDFLARE_DEPLOY_CLIENT.optional, 'zone-settings.write'],
+    };
+
+    expect(deployClientDrift(registered)).toEqual([
+      'scope aig.write is not registered',
+      'scope zone-settings.write is registered and not asked for',
+      'scope registrar-domains.admin is registered and not asked for',
+      'optional scope zone-settings.write is registered and not asked for',
+    ]);
+    expect(deployClientDrift({ scopes: CLOUDFLARE_DEPLOY_SCOPES, optional: CLOUDFLARE_DEPLOY_CLIENT.optional })).toEqual([]);
   });
 
   test('a run that would stop at a missing secret stops before it makes anything', async () => {

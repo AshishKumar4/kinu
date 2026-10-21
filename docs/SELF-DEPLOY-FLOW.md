@@ -144,14 +144,17 @@ has been exercised yet.
 
 ## 9. Permissions
 
-The OAuth client asks only for what its steps use, in the catalog's current ids (PersistentKite, 2026-10-20):
-`user-details.read`, `account-settings.read`, `workers-scripts.write`, `workers-routes.write`,
-`workers-kv-storage.write`, `workers-r2.write`, `vectorize.write`, `ai.write`, `aig.write`, `aig.run`,
-`secrets-store.write`, `zone.read`, `dns.write` (which also adds a zone); for mail `zone-settings.write`,
-`email-routing-rule.write`, `email-sending.write`; for Access sign-in `access.write`, `access-acct.write`; for buying a
-domain in the page `registrar-domains.admin`, asked for only when the person chooses that, by a second consent. The
-refresh grant gives the deployment its own token for updates, as today. Billing is not in the catalog, so no payment is
-ever taken by the page.
+The OAuth client asks only for what its steps use, in the catalog's ids. The list, and which scopes are optional, is
+`CLOUDFLARE_DEPLOY_CLIENT` in core `deploy/pkce.ts`. The client's registration is synced from it, and the deploy checks
+it (`scripts/deploy-oauth-client.ts`). The required scopes are the Worker's, its storage's and the zone's. The optional
+ones are mail's (`email-routing-rule.write`, `email-sending.write`) and the computer's (`containers.write`,
+`account-api-tokens.write`), which the person may decline. Two scopes are left out:
+- `zone-settings.write`, which enabling Email Routing needs. Cloudflare refused it at the owner's consent as
+  `zonesettings.write` (f44999, 2026-10-21), so the mail step asks the person to enable routing in the dashboard.
+- `registrar-domains.admin`, which no step uses yet.
+
+The refresh grant gives the deployment its own token for updates, as today. Billing is not in the catalog, so no payment
+is ever taken by the page.
 
 Decisions, taken 2026-10-20:
 1. **The owner's first sign-in.** Taken: built-in sign-in with a one-time setup link minted by the run and shown

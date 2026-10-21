@@ -22,7 +22,7 @@ export {
 } from './local';
 
 export {
-  CLI_DEPLOY_REDIRECT_PORT, CLI_DEPLOY_REDIRECT_URI, CLOUDFLARE_DEPLOY_SCOPES,
+  CLI_DEPLOY_REDIRECT_PORT, CLI_DEPLOY_REDIRECT_URI, CLOUDFLARE_DEPLOY_CLIENT, CLOUDFLARE_DEPLOY_SCOPES, deployClientDrift,
   authorizeUrl, exchangeDeployCode, refreshDeployToken,
   type AuthorizeRequest, type DeployToken, type TokenExchange,
 } from './pkce';
