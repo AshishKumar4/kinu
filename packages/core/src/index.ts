@@ -2418,7 +2418,7 @@ export {
   gatewayWireModel,
 } from './providers/my-gateway';
 
-export { createWorkersAIProvider } from './providers/workers-ai-provider';
+export { WORKERS_AI_STREAMS_GENERATE, createWorkersAIProvider } from './providers/workers-ai-provider';
 
 export { createWireModel, deferredModel, sdkWire, withModelStack, type WireProtocol } from './providers/wire-model';
 

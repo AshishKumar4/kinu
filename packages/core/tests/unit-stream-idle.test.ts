@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, jest, test } from 'bun:test';
 import * as v from 'valibot';
 import { createChatModel, ProviderPacer, createProviderRegistry, runChat, type ChatEvent, type ChatFallback, type ModelCallDeps } from '../src/index';
-import { APICallError, streamText } from 'ai';
+import { APICallError, generateText, streamText } from 'ai';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { callRetries } from '../src/providers/middleware/retry';
 import { withModelStack } from '../src/providers/wire-model';
@@ -354,6 +354,32 @@ describe('keepalives reach the bound on every transport a model answers through'
 
     expect({ text: await result.text, runs }).toEqual({ text: 'thought it through', runs: 1 });
     await fed;
+  });
+});
+
+// Workers AI ends a request that has answered nothing for ten minutes (408, 3046), so a generate a model reasons through
+// must be read from its stream: the turn's review `complete` was refused so (2026-10-20).
+describe('a generate on Workers AI', () => {
+  test('is asked of the provider as a stream and read whole from it', async () => {
+    const asked: boolean[] = [];
+
+    const binding = {
+      run: async (_model: string, inputs: { readonly stream?: boolean }) => {
+        asked.push(inputs.stream === true);
+
+        if (inputs.stream !== true) return { response: 'answered unstreamed', usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } };
+        const answer = [frame(JSON.stringify({ response: 'reasoned, then answered' })), frame(JSON.stringify({ response: '', usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } })), frame('[DONE]')];
+
+        return new Response(new Blob(answer.map((chunk) => new Uint8Array(chunk))), { headers: { 'content-type': 'text/event-stream' } });
+      },
+    };
+
+    const registry = createProviderRegistry();
+    registry.register(createWorkersAIProvider(Object.create(binding)));
+    const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-stub', workspaceAffinity: 'kinu-stub', getAuth: async () => null, hasCredential: async () => false };
+    const { text } = await generateText({ model: registry.resolve('workers-ai/@cf/stub/model', deps), prompt: 'go', maxRetries: 0 });
+
+    expect({ text, asked }).toEqual({ text: 'reasoned, then answered', asked: [true] });
   });
 });
 
