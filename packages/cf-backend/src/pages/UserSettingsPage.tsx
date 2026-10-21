@@ -133,7 +133,7 @@ export default function UserSettingsPage() {
 
         {section === "providers" && (
           <>
-            <ProvidersPanel returnTo="/user/settings" />
+            <ProvidersPanel />
 
             <Card title="MCP servers" icon={PlugsConnectedIcon}>
               <Link
@@ -148,7 +148,7 @@ export default function UserSettingsPage() {
 
         {section === "models" && <ProfileCatalogSettings />}
 
-        {section === "search" && <WebSearchSettings place="settings" returnTo="/user/settings#search" />}
+        {section === "search" && <WebSearchSettings place="settings" />}
 
         {section === "computer" && <ComputerSizeSettings />}
 

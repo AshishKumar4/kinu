@@ -30,12 +30,14 @@ describe('the inline slate card', () => {
 });
 
 /** An answer whose turn changed `slates`, rendered where a card can be hosted. */
-function answer(text: string, slates: string[]): string {
+async function answer(text: string, slates: string[]): Promise<string> {
+  const changed = await slatesToPreview(slates, new Set(), [text]);
+
   return renderToStaticMarkup(createElement(
     SlateInlineContext.Provider,
     { value: { rpc: noopRpc, openSlate: () => {} } },
     createElement(MessageView, {
-      message: { id: 'a-1', role: 'assistant', metadata: { [SLATES_CHANGED_METADATA_KEY]: slatesToPreview(slates, new Set(), [text]) }, parts: [{ type: 'text', text }] },
+      message: { id: 'a-1', role: 'assistant', metadata: { [SLATES_CHANGED_METADATA_KEY]: changed }, parts: [{ type: 'text', text }] },
     }),
   ));
 }
@@ -44,8 +46,8 @@ const cards = (html: string): string[] => [...html.matchAll(/data-slate-inline="
 
 // The producer's metadata and the rendered answer must agree about which addresses draw cards.
 describe("an answer's changed slates", () => {
-  test('each is previewed after the answer, in order', () => {
-    expect(cards(answer('Added the column.', ['board', 'notes']))).toEqual(['board', 'notes']);
+  test('each is previewed after the answer, in order', async () => {
+    expect(cards(await answer('Added the column.', ['board', 'notes']))).toEqual(['board', 'notes']);
   });
 
   test.each([
@@ -61,9 +63,9 @@ describe("an answer's changed slates", () => {
     { kind: 'an indented code block', text: '    slate://board', linked: false },
     { kind: 'a command in inline code', text: '`open slate://board`', linked: false },
     { kind: 'an unused reference definition', text: '[board]: slate://board', linked: false },
-  ])('$kind leaves exactly one card, with literal code left intact', ({ text, linked }) => {
-    expect(slatesToPreview(['board'], new Set(), [text])).toEqual(linked ? [] : ['board']);
-    const html = answer(text, ['board']);
+  ])('$kind leaves exactly one card, with literal code left intact', async ({ text, linked }) => {
+    expect(await slatesToPreview(['board'], new Set(), [text])).toEqual(linked ? [] : ['board']);
+    const html = await answer(text, ['board']);
 
     expect(cards(html)).toEqual(['board']);
 

@@ -758,6 +758,30 @@ describe('account panels', () => {
     });
   });
 
+  // Setup holds its step in the address by id (2026-10-23 review fix), so the step list shrinking when Mail is not
+  // offered after all moves no one: a step opened on keeps its place, and a named Mail gives way to the step after it.
+  test('a step setup opened on keeps its place when Mail is not offered, and a named Mail gives way to the next', async () => {
+    await withGallery(async (gallery) => {
+      const opened = [
+        { query: `welcome&mail=off&step=${String(ONBOARDING_STEP_IDS.indexOf('tools'))}`, shown: 'tools' },
+        { query: `welcome&mail=off&route=${encodeURIComponent('/welcome?step=mail')}`, shown: 'providers' },
+      ];
+
+      for (const { query, shown } of opened) {
+        const page = await freshPage(gallery, query, 'dark', 'mobile');
+
+        try {
+          await page.waitForFunction((count) => document.querySelectorAll('[aria-label="Setup steps"] li').length === count, {}, ONBOARDING_STEP_IDS.length - 1);
+          const at = await page.evaluate(() => document.querySelector('[data-welcome-step]:not([aria-hidden="true"])')?.getAttribute('data-welcome-step') ?? null);
+
+          expect({ query, at }).toEqual({ query, at: shown });
+        } finally {
+          await page.close();
+        }
+      }
+    });
+  });
+
   test('setup offers tools to connect, and every step can be passed by', async () => {
     await withGallery(async (gallery) => {
       const page = await freshPage(gallery, 'welcome&step=1', 'light', 'mobile');
@@ -784,108 +808,45 @@ describe('account panels', () => {
     });
   });
 
-  // Production, 2026-10-08: connecting Cloudflare during setup ended on the setup's first step, in a new tab.
-  test('connecting Cloudflare runs in a helper window that closes itself, and setup returns to the step it was on', async () => {
+  // Sol's review (2026-10-23): a finish page claimed "Connected to Cloudflare" from its address alone, which anyone can
+  // write. Naming a run this tab never began, it claims nothing.
+  test('a finish page naming a run this tab never began claims no outcome', async () => {
     await withGallery(async (gallery) => {
-      const route = '/welcome?step=providers';
-      const page = await freshPage(gallery, `welcome&cloudflare=off&route=${encodeURIComponent(route)}`, 'dark', 'desktop');
-
-      try {
-        // The wizard opens on the step its address names, as a sign-in returning to it reads it.
-        await page.waitForFunction(() => document.querySelector('[data-welcome-step="providers"]')?.getAttribute('aria-hidden') !== 'true');
-
-        // The connect a reader sees on this step: the one drawn, of the links into Cloudflare's sign-in.
-        const connect = '[data-welcome-step="providers"] a[href*="/auth/cloudflare/start"]';
-        await page.waitForFunction((links) => [...document.querySelectorAll(links)].some((link) => link.getClientRects().length > 0), {}, connect);
-        const opened = page.browser().waitForTarget((target) => target.opener() === page.target() && target.url().includes('/auth/cloudflare/start'));
-
-        await page.evaluate((links) => {
-          const link = [...document.querySelectorAll(links)].find((each) => each.getClientRects().length > 0);
-
-          if (link instanceof HTMLElement) link.click();
-        }, connect);
-        const helper = await opened;
-
-        // The sign-in is told to end on the connected page, and that page to send the owner back to this step.
-        const started = new URL(helper.url());
-        expect({ path: started.pathname, ends: started.searchParams.get('return_to') })
-          .toEqual({ path: '/auth/cloudflare/start', ends: `/connected?${new URLSearchParams({ next: route }).toString()}` });
-
-        const helperPage = await helper.page();
-
-        if (helperPage === null) throw new Error('the helper window has no page');
-        const closed = new Promise<void>((resolve) => { helperPage.once('close', () => { resolve(); }); });
-
-        const back = page.waitForRequest((request) => request.isNavigationRequest() && request.frame() === page.mainFrame());
-
-        // Where Cloudflare sends the helper once the owner has signed in.
-        await Promise.allSettled([helperPage.goto(`${gallery.origin}/gallery.html?frame=connected&next=${encodeURIComponent(route)}`)]);
-        await closed;
-        const returned = new URL((await back).url());
-
-        expect(`${returned.pathname}${returned.search}`).toBe(route);
-      } finally {
-        await page.close();
-      }
-    });
-  });
-
-  test('a sign-in that ends in a tab the browser opened sends that tab to the step it began on', async () => {
-    await withGallery(async (gallery) => {
-      const route = '/welcome?step=providers';
       const page = await gallery.newPage();
 
       try {
-        // Not a window this page's script opened, so it may not close itself: it goes where the connect began.
-        const onward = page.waitForRequest((request) => request.isNavigationRequest() && !request.url().includes('frame=connected'));
-        // The page leaves as soon as it has drawn, so its own load may be cut short.
-        await Promise.allSettled([page.goto(`${gallery.origin}/gallery.html?frame=connected&next=${encodeURIComponent(route)}`, { waitUntil: 'load' })]);
-        const reached = new URL((await onward).url());
+        await page.goto(`${gallery.origin}/gallery.html?frame=connected&run=${crypto.randomUUID()}&service=Cloudflare`, { waitUntil: 'load' });
+        await page.waitForSelector('[data-connect-finished] p');
 
-        expect(`${reached.pathname}${reached.search}`).toBe(route);
+        // It tells whoever began the run, and says nothing of the service its address names.
+        expect({
+          finished: await page.$eval('[data-connect-finished]', (node) => node.getAttribute('data-connect-finished')),
+          namesService: (await page.$eval('[data-connect-finished]', (node) => node.textContent ?? '')).includes('Cloudflare'),
+        }).toEqual({ finished: 'told', namesService: false });
       } finally {
         await page.close();
       }
     });
   });
 
-  // Each starts with one slash and names this origin, yet the browser lands elsewhere: a URL parser reads the backslash
-  // as a second slash, and a dot segment, spelled or percent-encoded, climbs out to leave `//evil.example`. The last
-  // three have no host a URL parser accepts, so reading them must refuse rather than throw the page away.
-  test.each(['/\\evil.example', '/a/..//evil.example', '/a/%2e%2e//evil.example', '/a/%2E%2E//evil.example', '//', '//evil.example:65536', '/a/..//'])(
-    'a `next` of %s sends the tab home on this site',
-    async (next) => {
-      await withGallery(async (gallery) => {
-        const page = await gallery.newPage();
+  // Its address names no run, so no connect this browser began ended there: nothing in it is followed, a `next` someone
+  // wrote into it, off this site or not, included.
+  test('a finish page that names no run reports no connect and stays, never routing into the app', async () => {
+    await withGallery(async (gallery) => {
+      const page = await gallery.newPage();
+      const at = '?frame=connected&service=Cloudflare&next=%2F%2Fevil.example';
 
-        try {
-          // Where the tab is sent is the subject, so that document is answered blank rather than loaded.
-          const onward = (request: HTTPRequest) => request.isNavigationRequest() && !request.url().includes('frame=connected');
-          const landed = Promise.withResolvers<string>();
+      try {
+        await page.goto(`${gallery.origin}/gallery.html${at}`, { waitUntil: 'load' });
+        await page.waitForSelector('[data-connect-finished="unknown"]');
 
-          await page.setRequestInterception(true);
-          // The tab is closed only once the blank document it was sent to has loaded: closed while its answer was
-          // still being fulfilled, `page.close()` waited forever (#78, the account-ux row's silent hangs).
-          page.on('request', (request) => detach(Effect.promise(async () => {
-            if (!onward(request)) return await request.continue();
-            const loaded = page.waitForNavigation({ waitUntil: 'load' });
-
-            await request.respond({ status: 200, contentType: 'text/html', body: '' });
-            await loaded;
-            landed.resolve(request.url());
-          })));
-
-          // A page that threw on the input never sends the tab anywhere, and this wait never ends.
-          await Promise.allSettled([page.goto(`${gallery.origin}/gallery.html?frame=connected&next=${encodeURIComponent(next)}`, { waitUntil: 'load' })]);
-          const reached = new URL(await landed.promise);
-
-          expect({ origin: reached.origin, path: reached.pathname }).toEqual({ origin: gallery.origin, path: '/' });
-        } finally {
-          await page.close();
-        }
-      });
-    },
-  );
+        expect({ finished: await page.$eval('[data-connect-finished]', (node) => node.getAttribute('data-connect-finished')), at: new URL(page.url()).search })
+          .toEqual({ finished: 'unknown', at });
+      } finally {
+        await page.close();
+      }
+    });
+  });
 
   // Production, 2026-10-08: its one sign-in, Cloudflare, shares no name for most accounts; nothing guesses one.
   test('an account its provider shared no name for starts blank, says which provider, wears its email\'s letter, and saves no empty name', async () => {

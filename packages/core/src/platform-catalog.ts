@@ -2057,12 +2057,22 @@ export const PLATFORM_CATALOG = {
     date: DOCS_READ,
     trigger: 'module top-level evaluation exceeding 1 second',
     onBreach: 'the deploy or the isolate start fails',
-    observable: [],
+    observable: [{ context: 'a script or version upload, code 10021', message: 'Error: Script startup exceeded CPU time limit.\n' }],
     firstPartySignal: true,
+    measurements: [
+      { scenario: 'rc30 (b04fac742) upload, the fast reading', value: 363, unit: 'ms' },
+      { scenario: 'rc30 (b04fac742) upload, the slow reading', value: 949, unit: 'ms' },
+      { scenario: 'rc30 (b04fac742) local `wrangler check startup`, median of 5', value: 202, unit: 'ms' },
+    ],
     notes:
       'The practical ceiling on bundle size, and the reason module top level is the only place '
       + 'codegen is permitted (isolate.codegen_blocked): the startup window is short by '
-      + 'construction. Every cold activation of every Durable Object pays it.',
+      + 'construction. Every cold activation of every Durable Object pays it. The upload validator '
+      + 'reads it in two modes (f44999, 2026-10-21, eight uploads of one rc30 bundle, each '
+      + '`startup_time_ms`): 363, 364, 371 and 377 ms, then 777, 794 and 949 ms, and one upload '
+      + 'refused 10021. The same bundle passed on retry four times in four (0.2.0+62b6c90c6, the same '
+      + 'day). A refusal is surfaced in these words with a retry the person presses, never retried '
+      + 'by itself: the self-deploy page, and deploy.sh, which fails the upload for its operator.',
   },
 
   'facet.module_text_bytes': {

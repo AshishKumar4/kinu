@@ -8,7 +8,7 @@ import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
-import { mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
+import { connectedPath, connectEndedOf, mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
 import { delegatedTaskMetadata, followJobOutput, summarizeSteps, SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, JOB_OUTPUT_EVENT, type JobOutputTail } from "@kinu.run/core";
 import {
   COMPLETION_GATE_EVENT, FORK_INTERRUPTED_SIGNAL, OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
@@ -29,7 +29,7 @@ import {
 import "virtual:kinu-theme.css";
 import "./index.css";
 import { markDocument, codenameFor, mintAgentName, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
+import { ephemeralSlateAddress, hostedActorSocketPath, mcpPresetById, type McpPreset, READS_CHANGED_EVENT, readsWrittenBy, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, OwnerAnswersSchema, PositionCursorSchema, sanitizeWorkspaceLogoSvg } from "@kinu.run/core";
 import type { AlternateTakeSet, AskingAgent, OwedOwnerIntent, OwnerAnswer, ParkedWriteReview, ReasoningEffort, TakePickOutcome } from "@kinu.run/core";
 import { OwedOwnerIntentSchema } from "@kinu.run/core";
@@ -271,18 +271,18 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
   {
     id: "srv-github", name: "github", serverUrl: "https://mcp.github.example/v1",
     transport: "auto", status: "ready", toolsCount: 14, allowedTools: null,
-    authUrl: null, error: null, presetId: null,
+    signIn: false, error: null, presetId: null,
   },
   {
     id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
     transport: "sse", status: "authenticating", toolsCount: 0,
-    allowedTools: ["create_issue"], authUrl: "https://linear.example/oauth",
+    allowedTools: ["create_issue"], signIn: true,
     error: null, presetId: null,
   },
   {
     id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.example/sse",
     transport: "sse", status: "failed", toolsCount: 0, allowedTools: null,
-    authUrl: null, error: "The server refused the connection.", presetId: null,
+    signIn: false, error: "The server refused the connection.", presetId: null,
   },
 ];
 
@@ -294,23 +294,36 @@ let galleryMcpRows: McpServerSummary[] = [...GALLERY_CUSTOM_MCP];
 
 const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset");
 
+/** `&mcp-sign-in=refused`: a custom server's add needs a sign-in, and the account refuses to begin it. */
+const MCP_SIGN_IN_REFUSED = new URLSearchParams(location.search).get("mcp-sign-in") === "refused";
+
 if (mcpPresetVariant === "connected") {
   galleryMcpRows = [
     {
       id: "srv-preset-github", name: "GitHub", serverUrl: "https://api.githubcopilot.com/mcp/",
       transport: "streamable-http", status: "ready", toolsCount: 21, allowedTools: null,
-      authUrl: null, error: null, presetId: "github",
+      signIn: false, error: null, presetId: "github",
     },
     {
       id: "srv-preset-cloudflare", name: "Cloudflare", serverUrl: "https://mcp.cloudflare.com/mcp",
       transport: "streamable-http", status: "authenticating", toolsCount: 0, allowedTools: null,
-      authUrl: "https://mcp.cloudflare.com/authorize?srv-preset-cloudflare", error: null,
+      signIn: true, error: null,
       presetId: "cloudflare",
     },
     ...GALLERY_UNCLAIMED_MCP,
   ];
 } else if (mcpPresetVariant === "open") {
   galleryMcpRows = [...GALLERY_UNCLAIMED_MCP];
+} else if (mcpPresetVariant === "token-failed") {
+  // GitHub added with a personal access token, which the server refused: it authenticates by its token, never a sign-in.
+  galleryMcpRows = [
+    {
+      id: "srv-preset-github", name: "GitHub", serverUrl: "https://api.githubcopilot.com/mcp/",
+      transport: "streamable-http", status: "failed", toolsCount: 0, allowedTools: null,
+      signIn: false, error: "The server refused the token.", presetId: "github",
+    },
+    ...GALLERY_UNCLAIMED_MCP,
+  ];
 }
 
 /** `mcp-secrets=github` means GitHub alone; absent means every oauth-app preset is configured (production-shaped). */
@@ -432,8 +445,9 @@ const WORKERS_AI_MODELS = CLOUDFLARE_OFF ? [] : [{ spec: "workers-ai/llama-4", l
 /** `&route=` is the app's own address for the wizard (`/welcome?step=providers`), as a sign-in returns to it. */
 const WELCOME_ROUTE = new URLSearchParams(location.search).get("route") ?? "/welcome";
 
-/** Where a sign-in ending on the connected page began (`&next=`). */
-const CONNECTED_NEXT = new URLSearchParams(location.search).get("next") ?? "/";
+/** The finish page's own address (`&run=`, `&service=`, `&error=`), as a connect's callback writes it. A visual fixture:
+ *  the connects themselves run through the Worker's own callbacks, in the live-app rows. */
+const CONNECTED_AT = connectedPath(connectEndedOf(new URLSearchParams(location.search)));
 
 const WORKSPACE_GONE = new URLSearchParams(location.search).get("gone") === "1";
 
@@ -658,6 +672,30 @@ function mcpPresetsFixture(): Response {
   ]);
 }
 
+/** A sign-in begun from a page: the row's own sign-in address, as the account answers it. Each begin's body is exposed so
+ *  the gate can check which run it was begun for, newest last. */
+function mcpConnectFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  const connecting = /^\/api\/user\/mcp\/servers\/([^/]+)\/connect$/u.exec(path);
+
+  if (connecting === null || method !== "POST") return null;
+  const row = galleryMcpRows.find((each) => each.id === decodeURIComponent(connecting[1] ?? ""));
+
+  localStorage.setItem("gallery-mcp-connects", `${localStorage.getItem("gallery-mcp-connects") ?? ""}${typeof body === "string" ? body : ""}\n`);
+
+  if (MCP_SIGN_IN_REFUSED) return fixtureJson({ error: "The MCP server's sign-in could not begin." }, 502);
+
+  // On this origin, so a tab sent to the sign-in loads nothing from a provider.
+  return row?.signIn === true ? fixtureJson({ authUrl: `${location.origin}/gallery-sign-in/${row.id}` }) : fixtureJson({ error: "waits for no sign-in" }, 400);
+}
+
+/** Whether an add signs in: only where an authorize URL exists, DCR always, oauth-app only while the frame claims the app;
+ *  a custom server only where the frame refuses its sign-in. */
+function gallerySignsIn(preset: McpPreset | undefined): boolean {
+  if (preset === undefined) return MCP_SIGN_IN_REFUSED;
+
+  return preset.auth === 'oauth' || (preset.auth === 'oauth-app' && mcpSecrets.has(preset.id));
+}
+
 function mcpServersFixture(path: string, method: string, body: BodyInit | null | undefined): Response | null {
   if (path === "/api/user/mcp/presets") return mcpPresetsFixture();
 
@@ -677,9 +715,7 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
       return fixtureJson({ error: `An MCP server named '${name}' already exists.` }, 400);
     }
 
-    // Sign-in only where an authorize URL exists: DCR always, oauth-app only while the frame claims the app.
-    const signIn = preset?.auth === 'oauth'
-      || (preset?.auth === 'oauth-app' && mcpSecrets.has(preset.id));
+    const signIn = gallerySignsIn(preset);
 
     if (preset?.auth === 'oauth-app' && !signIn && addBody.output.headers === undefined) {
       return fixtureJson({ error: `'${preset.title}' needs either the deployment's OAuth app or a token in \`headers\`.` }, 400);
@@ -687,9 +723,8 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
 
     const id = `srv-add-${String(galleryMcpRows.length + 1)}`;
 
-    const authUrl = signIn
-      ? `${new URL(preset.serverUrl).origin}/authorize?${id}`
-      : null;
+    // On this origin, so a tab sent to the sign-in loads nothing from a provider.
+    const authUrl = signIn ? `${location.origin}/gallery-sign-in/${id}` : null;
 
     // Exposed so the gate can check the posted payload.
     localStorage.setItem("gallery-mcp-add", JSON.stringify(addBody.output));
@@ -701,7 +736,7 @@ function mcpServersFixture(path: string, method: string, body: BodyInit | null |
       status: authUrl === null ? "ready" : "authenticating",
       toolsCount: authUrl === null ? 21 : 0,
       allowedTools: addBody.output.allowedTools ?? null,
-      authUrl, error: null,
+      signIn: authUrl !== null, error: null,
       presetId: preset?.id ?? null,
     }];
 
@@ -893,6 +928,7 @@ const SETTINGS_SLICES: readonly SettingsSlice[] = [
   accountProfileFixture,
   settingsSectionsFixture,
   workspaceRosterFixture,
+  mcpConnectFixture,
   mcpServersFixture,
   deviceRowsFixture,
   pluginsFixture,
@@ -7277,7 +7313,8 @@ function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
               onDismiss={() => { /* the card stays up for the capture */ }}
             />
             <AddServerCard onCancel={() => { /* the form stays up for the capture */ }}
-              onAdded={() => { /* nothing is added; the gate never submits */ }} />
+              onAdded={() => { /* nothing is added; the gate never submits */ }}
+              onConnected={() => { /* nothing connects; the gate never submits */ }} />
           </>
         )}
       </div>
@@ -8029,8 +8066,8 @@ async function mount() {
     ["setupmodal", { node: <SetupModalFrame />, entries: ["/"] }],
     // `&step=0..3` picks the wizard panel.
     ["welcome", { node: <WelcomeFrame />, entries: [WELCOME_ROUTE] }],
-    // Where a sign-in ends in its helper window.
-    ["connected", { node: <ConnectedPage />, entries: [`${APP_ROUTES.connected}?${new URLSearchParams({ next: CONNECTED_NEXT }).toString()}`] }],
+    // Where every connect ends, as a server's callback sends its tab there.
+    ["connected", { node: <ConnectedPage />, entries: [CONNECTED_AT] }],
     // `&view=list` seeds the workspaces page's stored choice.
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],

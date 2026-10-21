@@ -3,12 +3,13 @@ import { Effect } from 'effect';
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import {
-  ArrowSquareOutIcon, CaretDownIcon, PlusIcon, TrashIcon, XIcon,
+  ArrowSquareOutIcon, CaretDownIcon, PlusIcon, SignInIcon, TrashIcon, XIcon,
 } from "@phosphor-icons/react";
 import {
-  MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId, type McpServerSummary,
+  MCP_PRESETS, mcpPresetById, type ConnectEnded, type McpPreset, type McpPresetId, type McpServerSummary,
 } from "@kinu.run/core";
 import { addMcpServer, removeMcpServer, type McpServerInput } from "@/lib/user-api";
+import { beginConnect, signInMcpServer, type ConnectRun } from "@/lib/connect-window";
 import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
@@ -35,9 +36,11 @@ export function presetBrand(presetId: string | null): BrandName | undefined {
 }
 
 /** A preset card's own words for a server's state; the tone is every view's (`mcpServerStatus`). */
-function PresetMenu({ preset, status, onRemove }: {
+function PresetMenu({ preset, status, onSignIn, onRemove }: {
   preset: McpPreset;
   status: McpServerSummary['status'];
+  /** Present while the server waits for its sign-in: runs it again, as Add did. */
+  onSignIn: (() => Promise<void>) | null;
   onRemove: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -58,6 +61,12 @@ function PresetMenu({ preset, status, onRemove }: {
       </button>
       {open && (
         <div role="menu" className="absolute right-0 z-10 mt-1 w-40 p-card border p-border p-1.5 p-shadow-menu">
+          {onSignIn !== null && (
+            <button type="button" role="menuitem" data-plugin-sign-in className={item}
+              onClick={() => { setOpen(false); detach(Effect.promise(onSignIn)); }}>
+              <SignInIcon size={14} /> Sign in
+            </button>
+          )}
           <a role="menuitem" href={preset.docsUrl} target="_blank" rel="noopener noreferrer"
             className={item} onClick={() => setOpen(false)}>
             <ArrowSquareOutIcon size={14} /> Docs
@@ -72,43 +81,60 @@ function PresetMenu({ preset, status, onRemove }: {
   );
 }
 
-function PresetRow({ preset, server, appConfigured, onChanged }: {
+function PresetRow({ preset, server, appConfigured, onChanged, onConnected }: {
   preset: McpPreset;
   server: McpServerSummary | undefined;
   /** `undefined` while loading, treated as configured so a row never flickers to its fallback. */
   appConfigured: boolean | undefined;
   onChanged: () => void;
+  onConnected?: (ended: ConnectEnded) => void;
 }) {
   const [openToken, setOpenToken] = useState(false);
   const [token, setToken] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // A sign-in's end: the list read again, and its outcome kept on this row, its finish page having closed with the only
+  // copy of a failure. A later success clears an earlier failure.
+  const ended = (end: ConnectEnded) => {
+    onChanged();
+    onConnected?.(end);
+    setErr(end.error === null ? null : `${end.service} did not connect: ${end.error}`);
+  };
+
   const brand = PRESET_MARK[preset.id];
   const added = server !== undefined;
 
   // 'oauth' always signs in; 'oauth-app' only with the deployment's registration, else token fallback.
+  // Whether adding it signs in, from its kind and the deployment's app: for a row not yet added. An added one's own
+  // state says whether it offers a sign-in (`server.signIn`).
   const signIn = preset.auth === 'oauth' || (preset.auth === 'oauth-app' && appConfigured !== false);
 
   const tokenLabel = preset.auth === 'oauth-app'
     ? preset.tokenFallback?.label ?? 'Access token'
     : preset.tokenLabel ?? 'Access token';
 
-  const add = async (input: McpServerInput) => {
+  /** `connect` is the sign-in begun at the click, before the add's await, for a preset that signs in. */
+  const add = async (input: McpServerInput, connect?: ConnectRun) => {
     setErr(null);
     setBusy(true);
 
     try {
       const result = await addMcpServer(input);
 
-      if (result.authUrl) {
-        window.open(result.authUrl, '_blank', 'noopener,noreferrer');
+      if (result.authUrl && connect !== undefined) {
+        const failed = await signInMcpServer(connect, result.id, ended);
+
+        if (failed !== null) setErr(failed);
+      } else {
+        connect?.cancel();
       }
 
       setOpenToken(false);
       setToken('');
       onChanged();
     } catch (e) {
+      connect?.cancel();
       setErr(renderThrownChain({ cause: e }));
     } finally {
       setBusy(false);
@@ -117,7 +143,7 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
 
   const connect = async (): Promise<void> => {
     if (signIn) {
-      await add({ presetId: preset.id });
+      await add({ presetId: preset.id }, beginConnect());
     } else {
       setOpenToken(true);
     }
@@ -138,7 +164,15 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
   let trailing: ReactNode;
 
   if (server !== undefined) {
-    trailing = <PresetMenu preset={preset} status={server.status} onRemove={remove} />;
+    // An added server offers its sign-in where the account says it does (`server.signIn`): begun again for a run of its
+    // own, in a tab opened now. An earlier failure stays until a sign-in connects (`ended`), not while one is pending.
+    const signInAgain = !server.signIn ? null : async () => {
+      const failed = await signInMcpServer(beginConnect(), server.id, ended);
+
+      if (failed !== null) setErr(failed);
+    };
+
+    trailing = <PresetMenu preset={preset} status={server.status} onSignIn={signInAgain} onRemove={remove} />;
   } else if (asking) {
     trailing = (
       <button type="button" data-plugin-cancel onClick={() => setOpenToken(false)}
@@ -183,7 +217,7 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
               </button>
             </div>
           )}
-          {err !== null && <p className="p-t-status p-danger">{err}</p>}
+          {err !== null && <p className="p-t-status p-danger" data-plugin-error>{err}</p>}
         </div>
       ) : undefined}
     />
@@ -193,10 +227,12 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
 
 /** Fragment so the caller owns layout. An unconfigured `oauth-app` preset without a token
  *  fallback appears only once added; while loading it renders as configured. */
-export function McpPresetCards({ servers, availability, onChanged }: {
+export function McpPresetCards({ servers, availability, onChanged, onConnected }: {
   servers: readonly McpServerSummary[];
   availability: readonly { id: string; appConfigured: boolean }[] | undefined;
   onChanged: () => void;
+  /** Hears how a preset's sign-in ended, beside the reread `onChanged` runs. */
+  onConnected?: (ended: ConnectEnded) => void;
 }) {
   return (
     <>
@@ -211,7 +247,7 @@ export function McpPresetCards({ servers, availability, onChanged }: {
 
         return (
           <PresetRow key={preset.id} preset={preset} server={server}
-            appConfigured={appConfigured} onChanged={onChanged} />
+            appConfigured={appConfigured} onChanged={onChanged} onConnected={onConnected} />
         );
       })}
     </>

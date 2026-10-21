@@ -1,13 +1,13 @@
 import { Effect, Cause, Data } from 'effect';
 import * as oauth from 'oauth4webapi';
 import { Hono } from 'hono';
-import { AuthError, authenticateRequest, devIdentityEmail, readSessionToken } from './session';
-import { OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, readCookie, sessionCookie, setCookie } from './cookies';
+import { AuthError, authenticateRequest, devIdentityEmail, readSessionToken, requestIdentity } from './session';
+import { handoffCookie, oauthStateCookieName, readCookie, readHandoff, SESSION_COOKIE_NAME, sessionCookie, setCookie, startedHere } from './cookies';
 import {
   consumeOAuthState, createOAuthState, createSession, revokeSession,
   type OAuthProfile, type SessionAuthority,
 } from './store';
-import { objectNamed, sanitizeReturnTo } from '@kinu.run/core';
+import { connectedPath, ConnectRunSchema, objectNamed, sanitizeReturnTo } from '@kinu.run/core';
 import { escapeHtml, json, KINU_USER_AGENT, nonEmptyString, scopeList, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
 import { builtinAccounts } from './builtin';
@@ -129,7 +129,7 @@ authPageRoutes.get('/auth/:provider/start', noHead<AuthPagesEnv>((c) => Effect.s
   startOAuth(c.req.raw, c.env, decodeURIComponent(rawParam(c, 'provider'))))));
 
 authPageRoutes.get('/auth/:provider/callback', noHead<AuthPagesEnv>((c) => Effect.suspend(() =>
-  finishOAuth(c.req.raw, c.env, c.executionCtx, decodeURIComponent(rawParam(c, 'provider'))))));
+  completeOAuth(c.req.raw, c.env, c.executionCtx, decodeURIComponent(rawParam(c, 'provider'))))));
 
 function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Effect.Effect<Response, KinuError> {
   return Effect.gen(function* () {
@@ -227,9 +227,29 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
 
     if (!env.AUTH_KV) return html('Sign in unavailable', '<p>This deployment has no sign-in storage (<code>AUTH_KV</code>) set up, so no one can sign in yet.</p>', { status: 503 });
 
+    // Minted only for a start begun here: a sibling origin (a guest's preview) could otherwise mint handoffs in the
+    // person's browser, each a cookie of its own, until the browser drops the oldest, the session among them.
+    if (!startedHere(request)) {
+      return html('Start from Kinu', '<p>Signing in and connecting start from Kinu itself: <a href="/login">sign in</a>.</p>', { status: 403 });
+    }
+
     const url = new URL(request.url);
     const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
     const redirectUri = new URL(`/auth/${provider.id}/callback`, url.origin).toString();
+    // A connect attaches what the provider grants to the account asking, and signs nobody in.
+    const connecting = url.searchParams.get('intent') === 'connect';
+    // The starting page's run, kept in the state alone: the provider never sees it, so it cannot name it.
+    const run = v.safeParse(ConnectRunSchema, url.searchParams.get('run'));
+
+    if (connecting && !run.success) return html('Nothing to connect', '<p>A connect starts from the page that asks for it.</p>', { status: 400 });
+    // A connect refused before it reaches the provider ends where every connect ends, for the run that asked.
+    const refused = (error: string) => redirect(new URL(connectedPath({ run: run.success ? run.output : null, service: provider.label, error }), url.origin).toString());
+
+    if (connecting && !CONNECTS.has(provider.id)) return refused(`Kinu keeps nothing from ${provider.label} to connect.`);
+    const connectFor = connecting ? (yield* Effect.promise(async () => requestIdentity(request, env)))?.userId ?? null : null;
+
+    if (connecting && connectFor === null) return refused('Connecting a service needs the Kinu account it is for: sign in, then connect again.');
+
     const as = yield* Effect.promise(async () => getAuthorizationServer(provider));
 
     if (!as.authorization_endpoint) return yield* Effect.die(new Error(`${provider.label} OAuth metadata has no authorization endpoint.`));
@@ -238,12 +258,14 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
     const codeChallenge = yield* Effect.promise(async () => oauth.calculatePKCECodeChallenge(codeVerifier));
     const nonce = provider.kind === 'oidc' ? oauth.generateRandomNonce() : null;
 
-    const { state, binding, lifetimeMs } = yield* Effect.promise(async () => createOAuthState(env.AUTH_KV, {
+    const { state, binding } = yield* Effect.promise(async () => createOAuthState(env.AUTH_KV, {
       provider: provider.id,
       codeVerifier,
       nonce,
       returnTo,
       redirectUri,
+      connectFor,
+      connectRun: run.success ? run.output : null,
     }));
 
     const authorizationUrl = new URL(as.authorization_endpoint);
@@ -261,26 +283,17 @@ function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: st
       addProviderPrompt(authorizationUrl, provider);
     }
 
-    // KV holds only the binding's hash; this cookie is what the callback proves the sign-in with.
+    // KV holds only the binding's hash; this cookie is what the callback proves the sign-in with, beside the bindings of
+    // this browser's other starts still under way.
     const headers = new Headers({ 'cache-control': 'no-store' });
-    headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, binding, lifetimeMs));
+    headers.append('set-cookie', handoffCookie(oauthStateCookieName(yield* Effect.promise(async () => sha256Hex(state))), { binding, run: run.success && connecting ? run.output : null }));
 
     return redirect(authorizationUrl.toString(), { headers });
   });
 }
 
-/** Burns the handoff cookie whatever the outcome; its state record is already spent. */
-function finishOAuth<Id>(
-  request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'>, providerId: string,
-): Effect.Effect<Response, KinuError> {
-  return Effect.gen(function* () {
-    const response = yield* completeOAuth(request, env, ctx, providerId);
-    response.headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, '', 0));
-
-    return response;
-  });
-}
-
+/** A provider's callback. Its handoff's own binding cookie is cleared whatever the outcome (its state record is spent);
+ *  the browser's other starts keep theirs. */
 function completeOAuth<Id>(
   request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'>, providerId: string,
 ): Effect.Effect<Response, KinuError> {
@@ -297,11 +310,22 @@ function completeOAuth<Id>(
     if (!state) return html('Sign in failed', '<p>The sign-in response came back without its state. Return to <a href="/login">sign in</a> and try again.</p>', { status: 400 });
 
     let stage = 'state';
+    // A connect whose handoff this browser holds ends on the finish page, naming its run, whatever fails after: its
+    // state expired or another provider's included.
+    // This handoff's own cookie, spent with it whatever the outcome; the browser's other starts keep theirs. A connect's
+    // names its run, so a callback its record no longer names (expired, already used) still ends that run.
+    const handoffName = oauthStateCookieName(yield* Effect.promise(async () => sha256Hex(state)));
+    const held = readHandoff(readCookie(request, handoffName));
+    const heldRun = v.safeParse(ConnectRunSchema, held?.run);
+    let connecting: { readonly run: string | null } | null = heldRun.success ? { run: heldRun.output } : null;
 
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      const savedState = yield* Effect.promise(async () => consumeOAuthState(
-        env.AUTH_KV, state, provider.id, readCookie(request, OAUTH_STATE_COOKIE_NAME),
-      ));
+    const response = yield* Effect.catchCause(Effect.gen(function* () {
+      const consumed = yield* Effect.promise(async () => consumeOAuthState(env.AUTH_KV, state, provider.id, held?.binding ?? null));
+      const savedState = consumed.record;
+
+      connecting = savedState.connectFor === null ? null : { run: savedState.connectRun };
+
+      if (consumed.refusal !== null) return yield* Effect.die(new Error(consumed.refusal));
 
       stage = 'metadata';
       const as = yield* Effect.promise(async () => getAuthorizationServer(provider));
@@ -321,13 +345,24 @@ function completeOAuth<Id>(
 
       stage = 'token_response';
       const tokens = yield* processOAuthTokenResponse({ provider, as, client, response: tokenResponse, nonce: savedState.nonce ?? null });
+
+      if (savedState.connectFor !== null) {
+        stage = 'connect';
+
+        return yield* connectGranted({ request, env, ctx, account: savedState.connectFor, run: savedState.connectRun, tokens, provider });
+      }
+
       stage = 'profile';
       const profile = yield* fetchOAuthProfile(provider, as, client, tokens);
       stage = 'session';
       const session = yield* Effect.promise(async () => createSession(env, profile));
 
       if (provider.id === 'cloudflare') {
-        yield* attachCloudflareWorkersAI(env, ctx, session.identity.userId, tokens);
+        // Never fails the sign-in: the person is signed in, and the "Connect Cloudflare Workers AI" notice reports an
+        // unusable credential.
+        yield* Effect.catch(attachCloudflareWorkersAI(env, ctx, session.identity.userId, tokens), (failure) => Effect.sync(() => {
+          diagnostics.failure('auth.workers_ai_credential_unavailable', failure);
+        }));
       }
 
       const destination = new URL(savedState.returnTo, url.origin).toString();
@@ -346,41 +381,75 @@ function completeOAuth<Id>(
         otherwise: 'unavailable',
       }), { provider: providerId, stage, reason: failure.reason, detail: failure.log });
 
-      return html('Sign in failed', `
-      <p class="lede">Kinu could not finish signing you in. Return to sign in and try again.</p>
+      // A connect ends on the finish page whatever happened, in its own words.
+      if (connecting !== null) {
+        return redirect(new URL(connectedPath({ run: connecting.run, service: provider.label, error: failure.reason }), url.origin).toString());
+      }
+
+      // A browser holding a session needs no sign-in, and one forced here could switch it into another account: a
+      // connect whose handoff could not be read ends here in its helper tab. It is told to start again from Kinu. Read
+      // off the cookie alone, so an account object that cannot answer neither fails this page nor holds it up.
+      const signedIn = readSessionToken(request) !== null;
+
+      const action = signedIn
+        ? '<div class="actions"><a class="provider" href="/">Return to Kinu</a></div>'
+        : '<div class="actions"><a class="provider" href="/login?prompt=login">Return to sign in</a></div>';
+
+      return html(signedIn ? 'Could not finish' : 'Sign in failed', `
+      <p class="lede">${signedIn ? 'Kinu could not finish this. Close this tab and start again from Kinu.' : 'Kinu could not finish signing you in. Return to sign in and try again.'}</p>
       <p class="muted">Failure stage: <code>${escapeHtml(stage)}</code></p>
       <p class="muted">Reason: <code>${escapeHtml(failure.reason)}</code></p>
-      <div class="actions"><a class="provider" href="/login?prompt=login">Return to sign in</a></div>
+      ${action}
     `, { status: 400 });
     }));
+
+    response.headers.append('set-cookie', setCookie(handoffName, '', 0));
+
+    return response;
   });
 }
 
-/** Never throws: the operator is already signed in, and a billing lookup must not undo that. An unusable
- *  credential is reported by the "Connect Cloudflare Workers AI" notice. */
+/** The providers whose grant Kinu keeps for an account, so a connect can attach it: each one's attach. */
+const CONNECTS = new Map([['cloudflare', attachCloudflareWorkersAI]]);
+
+/**
+ * A connect's end: what the provider granted is attached to the account that started it, whose session this browser
+ * must still hold; no session is minted and no cookie set, so connecting a provider login under another email cannot
+ * move the person into another account. It ends on the finish page, which tells the tab that started it (or, run in
+ * that tab, returns it to its step).
+ */
+function connectGranted<Id>(input: {
+  readonly request: Request; readonly env: AuthRoutesEnv<Id>; readonly ctx: Pick<ExecutionContext, 'waitUntil'>;
+  readonly account: string; readonly run: string | null; readonly tokens: CloudflareTokenPayload; readonly provider: OAuthProviderConfig;
+}): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const { request, env, provider } = input;
+    const origin = new URL(request.url).origin;
+    const signedIn = yield* Effect.promise(async () => requestIdentity(request, env));
+    const attach = CONNECTS.get(provider.id) ?? (() => Effect.fail(new KinuError('unsupported', `Kinu keeps nothing from ${provider.label} to connect.`)));
+
+    const error = signedIn?.userId === input.account
+      ? yield* Effect.match(attach(env, input.ctx, input.account, input.tokens), { onFailure: (failure) => failure.message, onSuccess: () => null })
+      : 'The Kinu account that started connecting is no longer signed in here.';
+
+    return redirect(new URL(connectedPath({ run: input.run, service: provider.label, error }), origin).toString(), { headers: { 'cache-control': 'no-store' } });
+  });
+}
+
+/** The Workers AI credential a Cloudflare grant carries, attached to `userId`; fails in its own words. */
 function attachCloudflareWorkersAI<Id>(
   env: AuthRoutesEnv<Id>,
   ctx: Pick<ExecutionContext, 'waitUntil'>,
   userId: string,
   tokens: CloudflareTokenPayload,
 ): Effect.Effect<void, KinuError> {
-  return Effect.gen(function* () {
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      const credential = yield* Effect.promise(async () => cloudflareTokenToCredential(tokens));
-      const userDO = objectNamed(env.UserDO, userId);
-      yield* Effect.promise(async () => userDO.setCredential(await ownerCaller(env), CLOUDFLARE_OAUTH_CRED_KEY, credential));
-      // No model seeding: the built-in default tier already names the native Workers AI model.
-      notifyWorkspacesModelSettingsChanged(env, userDO, ctx);
-    }), (failed) => Effect.sync(() => {
-      const e = Cause.squash(failed);
-      const failure = summarizeOAuthFailure({ cause: e });
-      diagnostics.failure('auth.workers_ai_credential_unavailable', toKinuError({
-        doing: 'attaching the Workers AI credential to a Cloudflare sign-in',
-        cause: e,
-        otherwise: 'unavailable',
-      }), { reason: failure.reason, detail: failure.log });
-    }));
-  });
+  return Effect.catchCause(Effect.gen(function* () {
+    const credential = yield* Effect.promise(async () => cloudflareTokenToCredential(tokens));
+    const userDO = objectNamed(env.UserDO, userId);
+    yield* Effect.promise(async () => userDO.setCredential(await ownerCaller(env), CLOUDFLARE_OAUTH_CRED_KEY, credential));
+    // No model seeding: the built-in default tier already names the native Workers AI model.
+    notifyWorkspacesModelSettingsChanged(env, userDO, ctx);
+  }), (failed) => Effect.fail(toKinuError({ doing: 'attaching the Workers AI credential Cloudflare granted', cause: Cause.squash(failed), otherwise: 'unavailable' })));
 }
 
 interface OAuthTokenExchange {

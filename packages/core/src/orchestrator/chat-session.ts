@@ -1484,9 +1484,14 @@ export class ChatSession {
     await this.actorSession.orchestrator.drainPendingEvents();
   }
 
-  /** Once at startup, before the recovery drain; see {@link NO_STRANDED_DELIVERY_GRACE}. Answered deliveries' leases are already closed. */
+  /**
+   * Once at startup, before the recovery drain; see {@link NO_STRANDED_DELIVERY_GRACE}. Answered deliveries' leases are
+   * already closed. A drained turn this process restored (`restoreChat`) still owes its events: one held behind an open
+   * question, or the one the last process left open. Re-pending theirs would deliver them again with the next drain.
+   */
   reclaimStrandedEventDeliveries(): void {
-    const reclaimed = this.eventLog.unbindStale(NO_STRANDED_DELIVERY_GRACE);
+    const restored = new Set(this.queue.flatMap((item) => (item.idempotencyKey === undefined ? [] : [item.idempotencyKey])));
+    const reclaimed = this.eventLog.unbindStale(NO_STRANDED_DELIVERY_GRACE, Date.now(), restored);
 
     if (reclaimed.length === 0) return;
     diagnostics.event('event.deliveries_reclaimed', { count: reclaimed.length });

@@ -2573,6 +2573,13 @@ export {
 
 export {
   APP_ROUTES,
+  cloudflareConnectPath,
+  CONNECT_CHANNEL,
+  connectedPath,
+  connectEndedOf,
+  type ConnectEnded,
+  ConnectEndedSchema,
+  ConnectRunSchema,
   type ReportedRoute,
   REPORTED_ROUTES,
   routeTemplateOf,

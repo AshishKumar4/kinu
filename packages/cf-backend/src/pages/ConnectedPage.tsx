@@ -1,19 +1,35 @@
-/** Where a provider's sign-in ends in its helper window: it tells the tab that opened it, then closes itself. */
-import { useEffect } from "react";
+/** Where every connect ends (`connectedPath`): it tells the tab that started it and closes, or says what happened. */
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { announceConnected } from "@/lib/connect-window";
-import { sanitizeReturnTo } from "@kinu.run/core";
+import { connectEndedOf } from "@kinu.run/core";
+import { finishConnect, type FinishedConnect } from "@/lib/connect-window";
+
+/** What the page says once it is done: nothing while it goes back, its failure where this tab began the connect, and
+ *  otherwise no outcome at all. Its address is anyone's to write, so it claims nothing it says: the page that began the
+ *  connect is told, and shows the end itself. */
+function said(finished: FinishedConnect, service: string, error: string | null) {
+  if (finished.kind === "returning") return null;
+
+  if (finished.kind === "unknown") return <p className="max-w-md text-center">This page has no connect to report. You can close this tab.</p>;
+
+  if (finished.kind === "failed-here") {
+    return <p className="max-w-md text-center">{service} did not connect: {error} <a className="underline" href={finished.back}>Go back</a></p>;
+  }
+
+  return <p className="max-w-md text-center">You can close this tab.</p>;
+}
 
 export default function ConnectedPage() {
   const [search] = useSearchParams();
-  // `next` comes off a URL anyone can write.
-  const next = sanitizeReturnTo(search.get("next") ?? "/", window.location.origin);
+  const ended = connectEndedOf(search);
+  const [finished, setFinished] = useState<FinishedConnect>({ kind: "returning" });
 
-  useEffect(() => { announceConnected(next); }, [next]);
+  // The address names a run, a service and an error; the run is the starting page's own, and nothing here follows the rest.
+  useEffect(() => { setFinished(finishConnect(ended)); }, [ended.run, ended.service, ended.error]);
 
   return (
-    <div className="flex h-screen items-center justify-center p-bg p-text-3 text-sm">
-      Connected. You can close this window.
+    <div className="flex h-screen items-center justify-center p-6 p-bg p-text-2 text-sm" data-connect-finished={finished.kind}>
+      {said(finished, ended.service, ended.error)}
     </div>
   );
 }
