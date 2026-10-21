@@ -6,7 +6,7 @@
 
 import { missingSubordinateHistory, readSubordinateInspection, SubordinateInspectionRequestSchema, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './inspection';
 import * as v from 'valibot';
-import { tableExists } from '../identity/schema';
+import { tableExists } from '../utils/sql';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';

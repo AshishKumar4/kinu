@@ -5,7 +5,9 @@ export {
 
 export { AskOwnerInputSchema, OTHER_OPTION, OWNER_ANSWER_SIGNAL, type OwnerQuestion } from './types/owner-questions';
 
-export { initFiberTable, tableExists } from './identity/schema';
+export { initFiberTable } from './identity/schema';
+
+export { tableExists } from './utils/sql';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
 

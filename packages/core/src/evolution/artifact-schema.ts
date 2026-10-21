@@ -1,5 +1,5 @@
 /** The artifact store's table (docs/EVOLUTION-REDESIGN.md §3), apart from its logic so a workspace's schema reaches no tool module. */
-import { sqlCheckList } from '../identity/schema';
+import { sqlCheckList } from '../utils/sql';
 import type { RawSqlExec } from '../types/primitives';
 
 /** `staged` waits for a turn whose prompt cache is cold (`turnArtifacts`); `current` is what turns assemble from. */

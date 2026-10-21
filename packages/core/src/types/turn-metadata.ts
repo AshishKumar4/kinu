@@ -12,7 +12,7 @@ import type { JsonObject } from '../utils/json';
 import { TierIdSchema, type TierId } from './profile';
 import { OWNER_ANSWER_SIGNAL } from './owner-questions';
 import { SIGNAL_ID_METADATA_KEY } from './signals';
-import { TurnReasonSchema, type TurnAuthorship, type TurnReason, type WorkMode } from './turn';
+import { TurnReasonSchema, WorkModeSchema, type TurnAuthorship, type TurnReason, type WorkMode } from './turn';
 
 /** Who wrote a turn's words, stamped at enqueue. Defaults to harness, so a new event kind never renders as the operator's. */
 export const TURN_AUTHOR_METADATA_KEY = 'kinuAuthor';
@@ -42,7 +42,7 @@ const TurnMetadataSchema = v.looseObject({
   askTurn: lenient(v.string()),
   /** The reason of the turn that asked, which the turn its answer opens runs for. */
   askedReason: lenient(TurnReasonSchema),
-  kinuMode: lenient(v.picklist(['plan', 'build'])),
+  kinuMode: lenient(WorkModeSchema),
   profile_tier: lenient(TierIdSchema),
   kinuRun: lenient(v.string()),
   [SIGNAL_ID_METADATA_KEY]: lenient(v.string()),

@@ -10,7 +10,7 @@ import { initSessionContextTables } from '../session/schema';
 import { initSessionTranscriptTables } from '../session/transcript-schema';
 import { initTurnFactsTables } from './turn-facts';
 import { AgentSequence, initAgentSequenceTable } from '../subordinates/report-sequence';
-import { sqlCheckList } from '../identity/schema';
+import { sqlCheckList } from '../utils/sql';
 import type { ActorTurnProgram } from './actor-program';
 import type { SessionHistory } from '../session/history';
 import { admissionRequestId, type ClaimFences } from '../session/messages';
