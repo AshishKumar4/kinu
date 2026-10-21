@@ -117,6 +117,22 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
 
 const HEAD_PROMPT_TOOL_NAMES = ['record_evidence', 'record_decision', 'split_subheads'] as const;
 
+/**
+ * Each head writes in a checkout of its own: concurrent commits in one checkout fail on its index lock. The cloud
+ * workspace's git has no `git worktree` and clones only over http(s), so a head copies the repository into its own
+ * folder there; a real git (the computer, a device, the CLI's machine) takes a linked worktree. Measured on staging,
+ * 2026-10-21: `git worktree` is "not a git command" on the workspace, a local-path clone fails, and `cp -r` then a
+ * commit works; on the computer all three work.
+ */
+function gitIsolation(headId: string): string {
+  const own = `head-${headId.slice(0, 8)}`;
+
+  return 'Never commit in a git checkout a sibling may also write: commits from several heads in one checkout fail on '
+    + 'its index lock, so make your own before you change anything. Where git has no worktrees (the cloud workspace\'s '
+    + `git has none and clones only over http), copy the repository into your own folder: \`cp -r <repo> ~/${own}\`, `
+    + `then work there. Where git is real (the computer, a device), add a worktree: \`git worktree add ../${own} <branch>\`.`;
+}
+
 /** Only what is a head's own: the tools every agent has are described by the system prompt and their schemas. */
 function renderHeadConventions(input: HeadInput, availableToolNames?: readonly string[]): string[] {
   const tools = new Set(availableToolNames ?? HEAD_PROMPT_TOOL_NAMES);
@@ -137,7 +153,7 @@ function renderHeadConventions(input: HeadInput, availableToolNames?: readonly s
 
   return [...lines, '', input.mode === 'plan'
     ? 'You are ONE OF SEVERAL Plan research heads with read access to the parent workspace. Inspect it read-only, do not create scratch files or worktrees, and return evidence and recommendations to the parent plan.'
-    : `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/...\` in the parent workspace). Read-only inspection of shared resources is always fine.`];
+    : `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling. ${gitIsolation(input.id)} For shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/...\` in the parent workspace). Read-only inspection of shared resources is always fine.`];
 }
 
 export function buildHeadSystemPrompt(input: HeadInput, availableToolNames?: readonly string[]): string {
