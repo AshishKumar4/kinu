@@ -56,6 +56,8 @@ export interface ToolScope {
   /** The metadata its turn was admitted under, which judges its plans. */
   readonly driving: JsonObject | undefined;
   readonly report?: ReportDeps;
+  /** Its owner holds no mail address, read as its turn opened: its programs and prompt are offered no `mail`. */
+  readonly withoutMail?: true;
 }
 
 /** The turn an agent's sources are read for: the surface it runs under, its resolution, its evolved text and the tools
