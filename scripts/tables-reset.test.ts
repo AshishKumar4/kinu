@@ -98,6 +98,24 @@ test('the plan says what each reset does: drop and make anew, with what refers t
   expect(confirmation(verdicts.filter((verdict) => verdict.does === 'local'))).toBeNull();
 });
 
+// Review of the consolidation (2026-10-21): a contentless FTS index keyed by a dropped table's rowids outlived it, and
+// the new rows took the old rowids' tokens. No lock holds a virtual table, so its mark is what names it.
+test('a virtual table derived from a dropped one is named by its mark, in the classes of the table it goes with', () => {
+  const { changed } = changedTables(FROM, CANDIDATE);
+  const direct = changed.map((table) => verdictOf(table, { to: CANDIDATE, classes: CLASSES }));
+
+  const source = `
+    sql.exec(\`
+      CREATE VIRTUAL TABLE IF NOT EXISTS tails_fts USING fts5 ( /* derived from tails: its rowids are theirs */
+        body, content = ''
+      )
+    \`);`;
+
+  expect(derivedIn(source)).toEqual(new Map([['tails_fts', ['tails']]]));
+  expect(referrersOf(direct, { to: CANDIDATE, classes: CLASSES, derived: derivedIn(source) }).filter(({ table }) => table === 'tails_fts'))
+    .toEqual([{ table: 'tails_fts', classes: ['agent'], does: 'drop', why: 'dropped with tails, which it is derived from' }]);
+});
+
 const REPAIR: Repair = {
   schema: 'account', dropped: ['device_joins'], retired: ['user_peer_grants'], unchecked: [],
   tables: [{ table: 'device_joins', before: 2, after: 0 }, { table: 'user_peer_grants', before: 1, after: null }], refused: null,
