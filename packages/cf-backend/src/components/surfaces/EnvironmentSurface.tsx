@@ -54,6 +54,9 @@ export interface EnvironmentSurfaceProps {
   onOpenFiles: (root: string) => void;
   /** Owned by the work surface, so the Files drive's offline row opens the same panel. */
   onConnectDevice: () => void;
+  /** Open on the chosen machine's desktop, once it is listed (the desktop's old address, D99). */
+  desktopLanding?: boolean;
+  onDesktopLanded?: () => void;
 }
 
 /** Null for an environment the drive does not mount (a fork's parent). */
@@ -188,7 +191,7 @@ function Dot({ tone }: { tone: Tone }) {
 }
 
 export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
-  const { rpc, executors, executorOutputs, lastActiveExecutor, onExecute, onOpenFiles, onConnectDevice } = props;
+  const { rpc, executors, executorOutputs, lastActiveExecutor, onExecute, onOpenFiles, onConnectDevice, desktopLanding = false, onDesktopLanded } = props;
   const [selected, setSelected] = useState<string | null>(null);
   // Each machine's open tab: a session's id, the desktop, or its one shell.
   const [tabs, setTabs] = useState<Readonly<Record<string, string>>>({});
@@ -235,6 +238,16 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
 
     if (machine !== selectedMachine?.key) setSplit(null);
   };
+
+  // The desktop's old address: once the chosen machine is listed, its desktop tab is the one shown, if it has a desktop.
+  const landOn = selectedMachine !== null && machineDesktop(selectedMachine, workspaceName) !== null ? selectedMachine.key : null;
+
+  useEffect(() => {
+    if (!desktopLanding || selectedMachine === null) return;
+
+    if (landOn !== null) setTabs((was) => ({ ...was, [landOn]: "desktop" }));
+    onDesktopLanded?.();
+  }, [desktopLanding, selectedMachine, landOn, onDesktopLanded]);
 
   const shown: Shown = {
     tab: (machine) => tabs[machine] ?? (machine === "computer" ? sessions.sessions?.[0]?.id ?? FIRST_SESSION_ID : ONE_SHELL),

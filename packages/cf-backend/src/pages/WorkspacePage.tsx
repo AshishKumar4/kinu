@@ -22,7 +22,8 @@ import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useAgentsNav } from "@/hooks/use-agents-nav";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
-import { useWorkbenchSurfaces } from "@/hooks/use-workbench-surfaces";
+import { DESKTOP_LANDING, useWorkbenchSurfaces } from "@/hooks/use-workbench-surfaces";
+import NotFoundPage from "@/pages/NotFoundPage";
 import { useTurnAnnotations } from "@/hooks/use-turn-annotations";
 import { touchWorkspace } from "@/lib/user-api";
 import { useAsyncResource } from "@/hooks/use-async-resource";
@@ -586,6 +587,11 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
 
   if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubordinate} />;
 
+  // The desktop's own page went with D99: its address lands on the desktop where it lives now, the Environment surface.
+  if (view === "desktop") return <Navigate to={`/workspace/${encodeURIComponent(workspace)}?${DESKTOP_LANDING}`} replace />;
+
+  if (view !== "overview") return <NotFoundPage />;
+
   return <WorkspaceOverview workspace={workspace} title={title} logo={logo} rpc={state.rpc} readMoves={state.readMoves}
     plan={state.activePlan} arrival={state.workspacePlanArrival}
     lineage={state.status?.forkLineage ?? null} agents={agents} open={open} />;
@@ -717,8 +723,12 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
   const visiblePlan = reviewed.plan;
 
   // Which surface the inspector shows, and every way the chat, the stack and a landing ask for one.
-  const { workbench, surface, setSurface, show, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened } = useWorkbenchSurfaces({
+  const {
+    workbench, surface, setSurface, show, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened,
+    desktopLanding, desktopLanded,
+  } = useWorkbenchSurfaces({
     workspace: agentId ?? "", executors: state.executors, slates: state.slates, search: location.search,
+    inspectorReady: inspectorControl?.ready === true,
   });
 
   const { shownAgent, rosterLoaded, panel: agentsPanel } = useAgentsPanel({ listed: state.workspaceAgents, live, workspace: agentId, node: shownNode, subName, workbench });
@@ -1072,6 +1082,8 @@ function OpenWorkspace({ onGone, workspace, identity, layout }: WorkspacePagePro
             workspace={agentId}
             forkLanding={forkLanding}
             onForkLandingOpened={forkLandingOpened}
+            desktopLanding={desktopLanding}
+            onDesktopLanded={desktopLanded}
           />
         )}
       />

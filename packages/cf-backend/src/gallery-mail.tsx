@@ -818,7 +818,7 @@ function WorkspaceScene() {
   const [pane, setPane] = useState<"chat" | "workspace">(params.get("pane") === "workspace" ? "workspace" : "chat");
   const [answered, setAnswered] = useState<"sent" | "denied" | null>(null);
   const unread = threads.filter((each) => each.box === BOX_OF[agent] && each.unread && each.trashed === undefined).length;
-  const inspector = { collapsed: false, toggle: () => setPane(pane === "chat" ? "workspace" : "chat"), beside: wide, waiting: 1 };
+  const inspector = { collapsed: false, toggle: () => setPane(pane === "chat" ? "workspace" : "chat"), beside: wide, waiting: 1, ready: true };
 
   const openMail = (id: string | null): void => {
     setOpen(id);

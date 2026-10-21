@@ -33,6 +33,8 @@ export interface InspectorControl {
   readonly toggle: () => void;
   readonly beside: boolean;
   readonly waiting: number;
+  /** The layout is decided: a reveal now stands, where one before would be undone by the decision. */
+  readonly ready: boolean;
 }
 
 /** Shows or hides the inspector; on a phone, swaps the chat for the workspace. */
@@ -86,9 +88,9 @@ export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspect
   const waiting = contents.pendingActions.length;
 
   const control = useMemo<InspectorControl>(() => (desktopPanels
-    ? { collapsed: layout.collapsed, toggle: layout.toggleCollapsed, beside: true, waiting }
-    : { collapsed: mobilePane === "chat", toggle: () => setMobilePane((pane) => (pane === "chat" ? "workspace" : "chat")), beside: false, waiting }),
-  [desktopPanels, layout.collapsed, layout.toggleCollapsed, mobilePane, waiting]);
+    ? { collapsed: layout.collapsed, toggle: layout.toggleCollapsed, beside: true, waiting, ready: layout.ready }
+    : { collapsed: mobilePane === "chat", toggle: () => setMobilePane((pane) => (pane === "chat" ? "workspace" : "chat")), beside: false, waiting, ready: true }),
+  [desktopPanels, layout.collapsed, layout.toggleCollapsed, layout.ready, mobilePane, waiting]);
 
   useEffect(() => {
     onInspector?.(control);
