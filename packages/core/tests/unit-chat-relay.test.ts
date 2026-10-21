@@ -89,6 +89,21 @@ test("the relay shows the SDK's own UI chunks for the parts the loop read, less 
   expect(sdk.some(ofSummary)).toBe(true);
 });
 
+// Re-review, 2026-10-21: a tool's failure shown live was described as a model call's is, windowed and reworded, so a
+// failed program's record in its words was not what the owner saw until a reload.
+test("a tool's failure is shown live as it is stored, a failed program's record whole in its words", async () => {
+  const shown: UIMessageChunk[] = [];
+  const relay = new ChatRelay(async (chunks) => { shown.push(...await readAll(chunks)); }, { tools, describe });
+  const files = Array.from({ length: 12 }, (_, n) => ({ path: `notes/plan-${String(n)}.md`, change: 'created' }));
+  const words = JSON.stringify({ success: false, reason: null, error: 'half done', effects: { call: 'c1', files } });
+
+  relay.push({ type: 'tool-error', toolCallId: 'c1', toolName: 'run', input: { command: 'ls' }, error: new Error(words) });
+  relay.end();
+  await relay.observed;
+
+  expect(shown).toEqual([expect.objectContaining({ type: 'tool-output-error', toolCallId: 'c1', errorText: words })]);
+});
+
 test('a call that failed fails what the owner reads, after what was queued; one the owner let go queues nothing', async () => {
   const [first] = await partsOfACall();
 

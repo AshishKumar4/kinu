@@ -328,9 +328,14 @@ export function programSurface(input: Parameters<typeof programProviders>[0] & {
   return { providers, describe: describeProgramSource(programDeclarations(providers)) };
 }
 
-/** Each member's declared impact, by the operation it serves in `providers`, for its binding (`codemodeFunction`). */
+/**
+ * Each member's declared impact, by the operation it serves in `providers`, for its binding (`codemodeFunction`). Not
+ * `tools.*`: a tool's operation there says only whether Plan reaches it (`toolOperation`), not what it does; a native
+ * tool says that per call (`NATIVE_ACTION_EFFECTS`).
+ */
 export function servedImpacts(providers: readonly CodemodeProvider[]): MemberImpacts {
-  const declared = new Map(providers.flatMap((provider) => (provider.operations ?? []).map((served) => [`${provider.name}/${served.op.name}`, served.op.impact] as const)));
+  const served = providers.filter((provider) => provider.name !== CRAFTED_TOOL_NAMESPACE);
+  const declared = new Map(served.flatMap((provider) => (provider.operations ?? []).map((each) => [`${provider.name}/${each.op.name}`, each.op.impact] as const)));
 
   return (namespace, member) => declared.get(`${namespace}/${member}`) ?? null;
 }

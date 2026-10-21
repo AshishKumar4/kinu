@@ -20,30 +20,20 @@ export function toolErrorOutput(
   if (input.cause instanceof McpToolError) return { type: 'error-json', value: input.cause.response };
   const failure = outcome ?? failedToolOutcome(input);
   const error = renderThrownChain(input);
-  // A failed program's record of what it changed, beside its error: the host's, never parsed from the error's words.
-  const effects = programRecord(input);
 
-  if (failure.reason === null && effects === undefined) return { type: 'error-text', value: error };
-  const value: JsonObject = { ...(failure.reason !== null && { reason: failure.reason }), error };
+  if (failure.reason === null) return { type: 'error-text', value: error };
+  const value: JsonObject = { reason: failure.reason, error };
 
   if (failure.execution !== undefined) value.execution = failure.execution;
-
-  if (effects !== undefined) value.effects = effects;
 
   return { type: 'error-json', value };
 }
 
-/** The record a failed program's error carries (`withCodemodeProgram`), wherever it sits in the chain. */
-function programRecord(input: Parameters<typeof renderThrownChain>[0]): JsonValue | undefined {
-  const seen = new Set<Error>();
+/** {@link toolErrorOutput} as the text a tool part's `errorText` holds, live or reloaded. */
+export function toolErrorText(input: Parameters<typeof renderThrownChain>[0]): string {
+  const { value } = toolErrorOutput(input);
 
-  for (let link = input.cause; link instanceof Error && !seen.has(link); link = link.cause) {
-    seen.add(link);
-
-    if (link instanceof CodemodeProgramError && link.effects !== undefined) return link.effects;
-  }
-
-  return undefined;
+  return v.is(v.string(), value) ? value : JSON.stringify(value);
 }
 
 /** Read only producer-owned error metadata; output and diagnostic wording are not status. */
@@ -130,13 +120,7 @@ export function successfulToolOutcome(name: string, result: { output: unknown })
 }
 
 class CodemodeProgramError extends Data.TaggedError('CodemodeProgramError')<{ readonly message: string; readonly cause?: unknown }> {
-  constructor(
-    readonly outcome: Extract<ToolOutcome, { success: false }>,
-    message: string,
-    options?: ErrorOptions,
-    /** What the program changed before it failed, as the host recorded it; absent where it changed nothing. */
-    readonly effects?: JsonValue,
-  ) {
+  constructor(readonly outcome: Extract<ToolOutcome, { success: false }>, message: string, options?: ErrorOptions) {
     super({ message, ...(options?.cause !== undefined && { cause: options.cause }) });
   }
 }
@@ -197,7 +181,8 @@ export async function withCodemodeProgram<Result extends { result?: unknown; log
 
   const settled = Effect.promise(() => Promise.all(active.pending));
   const effects = () => active.effects.record(call.call);
-  // A failed program carries its record on its error, where it changed something (`toolErrorOutput`); its words stand.
+  // A failed program that changed something answers in the host's envelope, its record in it: the words are what every
+  // boundary keeps whole (an RPC hop keeps no error class, the live relay renders the words), so they are the envelope.
   const changedOnFailure = () => (active.effects.changed ? v.parse(JsonValueSchema, effects()) : undefined);
 
   return program.run(active, () => settle(Effect.gen(function* () {
@@ -209,12 +194,11 @@ export async function withCodemodeProgram<Result extends { result?: unknown; log
         if (active.failures.length === 0 && changed === undefined) return Effect.die(cause);
         const propagated = v.safeParse(ToolFailureValueSchema, cause);
         const outcome = propagated.success ? propagated.output : failedToolOutcome({ cause });
+        const failures = active.failures.length === 0 ? {} : { failures: active.failures };
+        const words = JSON.stringify({ ...outcome, error: renderThrownChain({ cause }), ...failures, ...(changed !== undefined && { effects: changed }) });
 
-        // Its own words, which the chain renders once: a link the chain already ends with is skipped (`renderCauseChain`).
-        if (active.failures.length === 0) return Effect.die(new CodemodeProgramError(outcome, cause instanceof Error ? cause.message : String(cause), { cause }, changed));
-
-        return Effect.die(new CodemodeProgramError({ ...outcome, failures: active.failures },
-          JSON.stringify({ ...outcome, error: renderThrownChain({ cause }), failures: active.failures }), { cause }, changed));
+        // With a record, no cause: its rendered chain is the envelope alone, which a reader parses whole.
+        return Effect.die(new CodemodeProgramError({ ...outcome, ...failures }, words, changed === undefined ? { cause } : undefined));
       })),
     );
 
@@ -224,7 +208,9 @@ export async function withCodemodeProgram<Result extends { result?: unknown; log
     if (propagated.success && active.failures.some((failure) => failure.reason === propagated.output.reason && failure.error === propagated.output.error)) {
       const outcome = { ...propagated.output, failures: active.failures };
 
-      return yield* Effect.die(new CodemodeProgramError(outcome, JSON.stringify({ ...result, ...outcome }), undefined, changedOnFailure()));
+      const changed = changedOnFailure();
+
+      return yield* Effect.die(new CodemodeProgramError(outcome, JSON.stringify({ ...result, ...outcome, ...(changed !== undefined && { effects: changed }) })));
     }
 
     return { ...result, ...(active.failures.length > 0 && { failures: active.failures }), effects: effects() };

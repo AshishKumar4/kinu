@@ -6,6 +6,8 @@
  */
 import { toUIMessageChunk, type TextStreamPart, type ToolSet, type UIMessageChunk } from 'ai';
 import { isServerCompaction } from './providers/server-compaction';
+import { redactSecrets } from './safety/secret-patterns';
+import { toolErrorText } from './tools/outcome';
 
 export class ChatRelay {
   /** Settles once its observer has read to the end; at once where nothing observes the call. */
@@ -56,7 +58,13 @@ export class ChatRelay {
   /** A part the loop read, as the owner sees it. */
   push(part: TextStreamPart<ToolSet>): void {
     if (this.#cancelled || this.#end !== undefined) return;
-    const chunk = toUIMessageChunk(part, { tools: this.options.tools, onError: (cause) => this.options.describe({ cause }) });
+
+    // A tool's failure as it is stored and sent to the model (`toolErrorOutput`), so a reload shows what was shown live;
+    // the owner never sees a secret it echoes. Any other failure is described.
+    const chunk = toUIMessageChunk(part, {
+      tools: this.options.tools,
+      onError: part.type === 'tool-error' ? (cause) => redactSecrets(toolErrorText({ cause })) : (cause) => this.options.describe({ cause }),
+    });
 
     if (chunk === undefined) return;
 

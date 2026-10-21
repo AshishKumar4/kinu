@@ -22,8 +22,6 @@ const COMMANDS_MAX = 20;
 
 const COMMAND_CHARS = 200;
 
-const PATH_CHARS = 300;
-
 /** The most a record takes of its answer's room, an eighth of a program's default bound (`tools/clamp.ts`). */
 const RECORD_CHARS = 1_000;
 
@@ -63,17 +61,16 @@ export class EffectLog {
   private unclassified = 0;
   private more = 0;
 
+  /** A file by its exact path, which rewind names to the agent: never shortened. */
   file(path: string, change: v.InferOutput<typeof FileChangeSchema>): void {
-    const named = oneLineClip(path, PATH_CHARS);
-
-    if (!this.files.has(named) && this.files.size >= FILES_MAX) {
+    if (!this.files.has(path) && this.files.size >= FILES_MAX) {
       this.more += 1;
 
       return;
     }
 
     // A file the program made, then edited, it made.
-    this.files.set(named, this.files.get(named) === 'created' ? 'created' : change);
+    this.files.set(path, this.files.get(path) === 'created' ? 'created' : change);
   }
 
   command(machine: string, command: string, exitCode: number): void {
@@ -109,7 +106,8 @@ export class EffectLog {
 
   /**
    * The record for call `call`, each list only where it holds something, within `RECORD_CHARS`: past it, commands go
-   * first, then files and operations past their first, each counted in `more`, so a change is never what is dropped.
+   * first, then files and operations past their first, so a change is never what is dropped. `more` counts what went:
+   * each file and command, and every call an operation entry stood for. Its first file stays whatever its length.
    */
   record(call: string): ProgramEffectsRecord {
     const files = [...this.files].map(([path, change]) => ({ path, change }));
@@ -126,14 +124,19 @@ export class EffectLog {
       ...(more > 0 && { more }),
     });
 
-    for (const list of [commands, files, operations]) {
-      const keep = list === commands ? 0 : 1;
+    const over = () => JSON.stringify(built()).length > RECORD_CHARS;
 
-      while (list.length > keep && JSON.stringify(built()).length > RECORD_CHARS) {
-        list.pop();
-        more += 1;
-      }
+    while (commands.length > 0 && over()) {
+      commands.pop();
+      more += 1;
     }
+
+    while (files.length > 1 && over()) {
+      files.pop();
+      more += 1;
+    }
+
+    while (operations.length > 1 && over()) more += operations.pop()?.[1] ?? 0;
 
     return built();
   }
@@ -227,8 +230,8 @@ const TextPartSchema = v.object({ type: v.literal('text'), text: v.string() });
 
 /**
  * The host envelopes an answer holds, however it is kept: as the program answered, as its JSON text, as an image
- * result's carrier, or as the content parts the model was sent (a carrier's text and its images). Only an envelope's
- * own top level is read: never the program's result inside it.
+ * result's carrier, as the content parts the model was sent (a carrier's text and its images), or as a failure's words.
+ * Only an envelope's own top level is read: never the program's result inside it.
  */
 function envelopes(output: JsonValue | undefined): JsonObject[] {
   if (v.is(v.string(), output)) {
@@ -242,8 +245,14 @@ function envelopes(output: JsonValue | undefined): JsonObject[] {
 
   if (!object.success) return [];
   const carrier = v.safeParse(ImageCarrierSchema, object.output);
+  // A failure stored with its reason holds the failure's words under `error`: a failed program's are its envelope.
+  const words = object.output['error'];
 
-  return carrier.success ? [object.output, ...envelopes(carrier.output.output)] : [object.output];
+  return [
+    object.output,
+    ...v.is(v.string(), words) ? envelopes(words) : [],
+    ...carrier.success ? envelopes(carrier.output.output) : [],
+  ];
 }
 
 /**

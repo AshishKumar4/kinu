@@ -14,7 +14,7 @@ import { imageModelOutput } from '../src/tools/image-results';
 import { commandAnswer } from '../src/execution/exec-result';
 import { computerDesktop } from '../src/operations/executors';
 import { servedImpacts } from '../src/tools/sandbox-contract';
-import { toolErrorOutput } from '../src/tools/outcome';
+import { toolErrorOutput, toolErrorText } from '../src/tools/outcome';
 import { KinuError } from '../src/obs/index';
 import { rewoundWork } from '../src/orchestrator/rewind-notice';
 import { EffectLog, noteFileChange } from '../src/execution/call-effects';
@@ -119,6 +119,25 @@ describe('a record says what the chip shows', () => {
     expect(record.commands).toBeUndefined();
     expect((record.files?.length ?? 0) + (record.more ?? 0)).toBe(50 + 10 + 30);
   });
+
+  // Re-review, 2026-10-21: paths were clipped as display text, which rewind then named as files that do not exist; and
+  // an operation entry dropped counted as one call whatever it stood for.
+  test('a file is kept by its exact path, and a dropped operation counts every call it stood for', () => {
+    const log = new EffectLog();
+    const odd = `notes/my  plan ${'deep/'.repeat(120)}end.md`;
+
+    log.file(odd, 'created');
+
+    for (let n = 0; n < 40; n += 1) {
+      for (let call = 0; call < 3; call += 1) log.operation(`db.insert_into_a_table_with_a_long_name_${String(n)}`);
+    }
+
+    const record = log.record('c');
+    const kept = Object.values(record.operations ?? {}).reduce((sum, count) => sum + count, 0);
+
+    expect(record.files).toEqual([{ path: odd, change: 'created' }]);
+    expect(kept + (record.more ?? 0)).toBe(20 * 3 + 20 * 3);
+  });
 });
 
 describe("a rewind's notice reads what a rewound program did from its record", () => {
@@ -161,19 +180,29 @@ describe("a program's record survives every shape its answer is kept in", () => 
     return toolErrorOutput({ cause: settled?.status === 'rejected' ? settled.reason : null });
   };
 
-  test("a failed program's record is stored beside its error, and its words stand", async () => {
-    const output = await stored(failing(() => { throw new Error('half done', { cause: new Error('disk full') }); }));
+  // Re-review, 2026-10-21: an RPC hop keeps no error class, and the live relay renders the words, so the record is in
+  // the failure's words, the envelope the host writes, which every boundary keeps whole.
+  test("a failed program answers in the host's envelope, its own words and its record in it, wherever it is read", async () => {
+    const [settled] = await Promise.allSettled([failing(() => { throw new Error('half done', { cause: new Error('disk full') }); })]);
+    const failure = v.parse(v.instance(Error), settled?.status === 'rejected' ? settled.reason : null);
+    const output = toolErrorOutput({ cause: failure });
 
-    expect(output).toEqual({ type: 'error-json', value: { error: 'half done: disk full', effects: { call: 'call-failed', files: [{ path: 'notes/plan.md', change: 'replaced' }] } } });
-    // Read back as the chat shows it, its error as text, and as rewind reads it.
-    expect(programEffectsOf('call-failed', JSON.stringify(output.value))?.files).toEqual([{ path: 'notes/plan.md', change: 'replaced' }]);
-    expect(programEffectsOf('call-failed', output.value)?.files).toHaveLength(1);
+    expect(v.parse(JsonValueSchema, JSON.parse(v.parse(v.string(), output.value)))).toEqual({
+      success: false, reason: null, error: 'half done: disk full', effects: { call: 'call-failed', files: [{ path: 'notes/plan.md', change: 'replaced' }] },
+    });
+
+    // As stored, as the live relay shows it, and as the facet holds it across the hop: a plain error with its words.
+    for (const kept of [output.value, toolErrorText({ cause: failure }), toolErrorText({ cause: new Error(failure.message) })]) {
+      expect(programEffectsOf('call-failed', kept)?.files).toEqual([{ path: 'notes/plan.md', change: 'replaced' }]);
+    }
   });
 
-  test('one that failed with a classified refusal keeps its reason, and its record beside it', async () => {
+  test('one that failed with a classified refusal keeps its reason, and its record in its words', async () => {
     const output = await stored(failing(() => { throw new KinuError('denied', 'not yours'); }));
 
-    expect(output).toMatchObject({ type: 'error-json', value: { reason: 'denied', error: 'not yours', effects: { call: 'call-failed' } } });
+    expect(output).toMatchObject({ type: 'error-json', value: { reason: 'denied' } });
+    expect(programEffectsOf('call-failed', output.value)?.files).toHaveLength(1);
+    expect(programEffectsOf('call-failed', JSON.stringify(output.value))?.files).toHaveLength(1);
   });
 
   test('one that changed nothing fails in its own words alone', async () => {
@@ -210,6 +239,14 @@ describe("a program's calls are read by what each serves", () => {
     expect(answered.effects).toEqual({ call: 'call-desk', operations: { [`computer.${desktop.click.name}`]: 1 } });
   });
 
+  // Re-review, 2026-10-21: a tool's operation under tools.* declares only whether Plan reaches it, so tools.report, which
+  // sends, read as one that only looks.
+  test("tools.* is classified by a native tool's own operations, never by Plan permission", () => {
+    const desktop = computerDesktop({ width: 1280, height: 768, sheet: { percent: 50, columns: [1, 2, 2, 2, 4, 4, 4, 4] } });
+
+    expect(servedImpacts([{ name: 'tools', tools: {}, operations: [{ op: desktop.screenshot, run: async () => ({ value: null }) }] }])('tools', desktop.screenshot.name)).toBeNull();
+  });
+
   test('a command refused before it ran is not recorded as having run', async () => {
     const answered = await withCodemodeProgram(async () => {
       await codemodeFunction('workspace', 'exec', async () => commandAnswer({ refusal: { success: false, reason: 'denied', error: 'not approved' } }, false, false, { machine: 'workspace', command: 'rm -rf build' }))();
@@ -230,6 +267,19 @@ describe("a program's record keeps its answer within its bound", () => {
 
     expect(answer.result).not.toContain('effects');
     expect(answer.effects).toEqual(record);
-    expect(JSON.stringify(output).length).toBeLessThanOrEqual(600 + 40);
+    expect(JSON.stringify(output).length).toBeLessThanOrEqual(600);
+  });
+
+  // Re-review, 2026-10-21: a record that left less room than the truncation marker sliced from the end, keeping nearly
+  // all of a long answer; and the escaping of a cut text inside `result` was outside the bound.
+  test('a record that leaves little room still cuts the rest, and escaping stays within the bound', async () => {
+    const big = recorded('call-cut', { files: Array.from({ length: 12 }, (_, n) => ({ path: `notes/${'x'.repeat(50)}-${String(n)}.md`, change: 'edited' as const })) });
+
+    const run = async (result: string, maxChars: number) => toolExecute<{ code: string }, JsonValue>(withClampedToolResult(
+      tool({ inputSchema: jsonSchema<{ code: string }>({ type: 'object' }), execute: async () => ({ result, logs: [], effects: big }) }), { producer: 'eval', maxChars },
+    ))({ code: '' });
+
+    expect(JSON.stringify(await run('y'.repeat(20_000), 600)).length).toBeLessThan(2_000);
+    expect(JSON.stringify(await run('"\\'.repeat(5_000), 4_000)).length).toBeLessThanOrEqual(4_000);
   });
 });
