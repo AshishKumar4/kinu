@@ -50,12 +50,13 @@ interface AgentRowInput {
 }
 
 /** A row as the diagnostics path reads it from log fields: its classifications are text, and it alone carries a
- *  `reason` and an `activation`. */
+ *  `reason`, an `activation` and a `facets` count. */
 export interface AgentRowFields extends Omit<AgentRowInput, 'outcome' | 'agentKind'> {
   outcome?: string;
   agentKind?: string;
   reason?: string;
   activation?: number;
+  facets?: number;
 }
 
 /** Every `AGENT_METRICS_SCHEMA` slot, absent ones at `''`/0: the one row builder for typed writers and diagnostics. */
@@ -92,6 +93,7 @@ export function agentRow(input: AgentRowFields): AgentRow {
     usd: input.usd ?? 0,
     priced: input.usd === undefined ? 0 : 1,
     activation: input.activation ?? 0,
+    facets: input.facets ?? 0,
   };
 }
 

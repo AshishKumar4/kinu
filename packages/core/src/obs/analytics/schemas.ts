@@ -163,6 +163,9 @@ export const AGENT_METRICS_SCHEMA = defineSchema({
     // `actor.startup` only: the workspace's activation ordinal (`identity/activations.ts`). Activations are counted as
     // its deltas, so a dropped row loses no count; 0 on every other row.
     { name: 'activation' },
+    // `actor.startup` only: the facet names the workspace has given out (`identity/workspace-actors.ts`
+    // `facetNamesGiven`), the ceiling of the ids `do.facet.count` bounds for the object's life; 0 on every other row.
+    { name: 'facets' },
   ],
 });
 

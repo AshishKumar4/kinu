@@ -1781,35 +1781,57 @@ export const PLATFORM_CATALOG = {
     provenance: '~/Nimbus/scratchpad/do-sqlite-fork-feasibility.md:308 (workerd FacetTreeIndex format)',
     date: '2026-07-24',
     trigger: 'the 65,537th facet name ever used beneath one root object',
-    onBreach: 'unknown: the ceiling was read in the index format, not reached',
+    onBreach: 'unknown at the cap, which was read in the index format, not reached; creation fails long before it (do.facet.creation_degrades)',
     observable: [],
     firstPartySignal: false,
+    measurements: [
+      { scenario: 'facets created beneath one root object, none refused for count (f44999, 2026-10-21)', value: 31_773, unit: 'count' },
+    ],
     notes:
-      'LIFETIME, not concurrent. A per-run or per-head facet name burns one permanently, so a '
-      + 'long-lived workspace object doing thousands of explorations has a finite budget that '
-      + 'nothing in this repo counts. Read in source; deliberately not probed, because reaching '
-      + 'it would cost 65,536 facet creations. '
-      + 'THIS IS THE BINDING CONSTRAINT FOR THE LEAK, NOT do.storage.bytes. A fresh facet '
-      + 'database is 4096 bytes and a leaked head writes kilobytes, so at 15 permanent facets per '
-      + 'default MCTS search this cap arrives at roughly 4,400 searches: an order of magnitude '
-      + 'before 10 GB is threatened. A byte-based dashboard therefore reads healthy for the '
-      + 'ENTIRE LIFE of the defect and then the object hits a hard facet-id wall the telemetry '
-      + 'never mentioned: the same "true number answering the wrong question" shape as '
-      + 'do.storage.size_is_per_object. '
-      + 'HEADROOM IS ALREADY QUERYABLE, no new bookkeeping needed. The agents SDK writes a row '
-      + 'per facet into `cf_agents_sub_agents` at spawn, and `abortSubAgent` does NOT call '
-      + '`_forgetSubAgent` while `deleteSubAgent` does (verified in node_modules/agents/dist/'
-      + 'index.js: abortSubAgent at :5765 with no forget, deleteSubAgent forgetting at :5793). So '
-      + '`SELECT COUNT(*) FROM cf_agents_sub_agents` IS the leak counter, and once a terminal-only '
-      + 'delete lands it should go flat instead of monotonic. It is DISTRIBUTED like the journal: '
-      + 'the root holds depth-1 heads and each depth-1 facet holds its own depth-2, so a '
-      + 'root-only count under-reports a recursive split.'
-      + ' '
-      + 'The facet implementation recorded at git 4ebb58082:packages/cf-backend/src/facet-spawn.ts:61 '
-      + 'aborts without wiping storage and deletes hired actors only, a combination that leaks head '
-      + 'and branch SQLite at 15 fresh facet IDs per default search unless terminal deletion covers '
-      + 'them. Kinu binds every logical actor through state/actor-host.ts to the workspace SQLite, '
-      + 'so the facet measurements are preventive platform knowledge, not the storage topology.',
+      'LIFETIME, not concurrent: deleting a facet does not free its id, and re-creating a name under '
+      + 'the same parent reuses that name\'s id (workerd facet-tree-index.h, read again 2026-10-21). '
+      + 'Kinu gives every agent its own facet (D9): main by its id, every other agent by a fresh '
+      + 'storage key. So each reviewed turn\'s advisor, each head, swarm node, steer branch and hire '
+      + 'uses one id for good, and no name is reused. Counted per workspace on actor.startup\'s '
+      + '`facets` (identity/workspace-actors.ts facetNamesGiven): a ceiling, as an actor that never '
+      + 'ran used no id. The SDK\'s `cf_agents_sub_agents` does not count them: Kinu calls '
+      + 'ctx.facets.get itself (agent-facets.ts). '
+      + 'Not what binds first: creation degrades from about 31,300 (do.facet.creation_degrades), and '
+      + 'the 10 concurrent Dynamic Workers (worker_loader.do_dynamic_worker_concurrency) bind before '
+      + 'either. Bytes give no warning: a fresh facet database is 4096 bytes, so a byte dashboard '
+      + 'reads healthy up to the wall, the shape of do.storage.size_is_per_object.',
+  },
+
+  'do.facet.creation_degrades': {
+    subject: 'Facet creation beneath one Durable Object slows with its count, and fails long before do.facet.count',
+    limit: { value: 31_300, unit: 'count' },
+    origin: 'platform',
+    bounds: 'count',
+    evidence: 'proven-by-probe',
+    provenance: '/mnt/local/kinu/tmp/agent-placement/DESIGN.md §2.6',
+    date: '2026-10-21',
+    trigger: 'creating facets beneath a root object that has created about 31,300 of them',
+    onBreach:
+      'most creations are cut by a storage reset of the root, or answered 1101; the root still answers '
+      + 'a plain read, and resumes from what it stored',
+    observable: [
+      { context: 'a batch of facet creations past about 31,300 in one root object', message: 'Internal error in Durable Object storage caused object to be reset' },
+    ],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: '2,000 facets created from zero', value: 19_000, unit: 'ms' },
+      { scenario: '500 facets created at about 10,850', value: 29_000, unit: 'ms' },
+      { scenario: '500 facets created at 25,000-27,000, fastest', value: 70_000, unit: 'ms' },
+      { scenario: 'one facet created at 31,772', value: 8_100, unit: 'ms' },
+      { scenario: '20 facets created in a fresh object, fastest', value: 12_800, unit: 'ms' },
+    ],
+    notes:
+      'Creation cost grows with the count, from about 105 a second at zero to 6.7 a second at '
+      + '27,000. So a workspace that has made tens of thousands of agents makes every new agent\'s '
+      + 'first call slower, long before any refusal. Aborting each facet right after its write reset '
+      + 'the root (2 trials), so the climb kept its instances; the root was reset 8 times on the way '
+      + 'and resumed from its stored count. Read with do.facet.count, which this precedes; Kinu\'s '
+      + 'per-workspace count is actor.startup\'s `facets`.',
   },
 
   'do.facet.clone_name_unvalidated': {

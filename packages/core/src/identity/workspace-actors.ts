@@ -184,6 +184,16 @@ export function initWorkspaceActorTable(execRaw: RawSqlExec): void {
     ON workspace_actors(parent_actor_id, created_at, name)`);
 }
 
+/**
+ * The facet names this workspace has given out, which bound the facet ids its object has used (`do.facet.count`: 65,536
+ * for the object's life, never freed). Every row names one facet and no other row names it: main by its id, any other
+ * agent by its storage key (`orchestrator.ts` `agentOf`). Rows are never deleted. An actor that never ran used no id, so
+ * this is a ceiling; ids a reset of these tables forgot are not counted.
+ */
+export function facetNamesGiven(sql: SqlExecutor): number {
+  return sql<{ given: number }>`SELECT COUNT(*) AS given FROM workspace_actors`[0]?.given ?? 0;
+}
+
 function requiredIdentity(value: string): string {
   if (value.trim().length === 0) throw new KinuError('bad_input', 'Actor identity and name must not be empty.');
 
