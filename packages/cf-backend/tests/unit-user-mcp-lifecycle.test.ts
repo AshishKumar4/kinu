@@ -614,7 +614,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
     // The `authUrl` the SDK reads back while AUTHENTICATING (`client-zqKcsyFa.js:1704-1706`).
-    seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
+    await seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
     // A POST 401 with no auth provider to retry through.
     failNextMcpToolCall(await refusedToolCall({ status: 401, body: 'nope' }));
     // In production the dispatch and the `discoverIfConnected` probe are two failing requests.
@@ -635,7 +635,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
-    seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
+    await seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
     // An auth provider that cannot recover the token.
     failNextMcpToolCall(await refusedToolCall({ status: 401, body: 'nope', authProvider: { token: () => Promise.resolve('stale') } }));
     failNextMcpDiscovery(await refusedToolCall({ status: 401, body: 'nope' }));
@@ -654,7 +654,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
-    seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
+    await seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
     // An auth provider that re-authenticated, and the retry answered 401 again.
     const reauthenticated = { token: () => Promise.resolve('stale'), onUnauthorized: () => Promise.resolve() };
     failNextMcpToolCall(new Error('MCP request failed', {
@@ -695,7 +695,7 @@ describe('an authorization failure converges to the reconnect state', () => {
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
-    seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
+    await seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
     failNextMcpToolCall(await refusedSseConnect({ status: 401 }));
     failNextMcpDiscovery(await refusedSseConnect({ status: 401 }));
 

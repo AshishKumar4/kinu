@@ -1,4 +1,5 @@
 // Preset adds on the real UserDO; `queueMcpAuthUrl` stands in for the authorization redirect the harness cannot perform.
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import { asFetchFunction, createCredentialCipher, mcpPresetById, type JsonObject, type JsonValue } from '@kinu.run/core';
@@ -10,10 +11,9 @@ import {
 import {
   lastOAuthStorage, liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedMcpAnswer, seedMcpTools, seedSdkMcpServer,
 } from './helpers/agents-sdk';
-import { kvOf } from './helpers/platform-context';
+import { kvOf, makeCtx } from './helpers/platform-context';
 import { auth } from '@modelcontextprotocol/client';
 
-import { durableObjectStorage } from './helpers/programmatic-host';
 
 // Imported after `mockAgentsSdk` registers: mcp.ts binds the provider class at load.
 const { RegisteredAppOAuthClientProvider } = await import('../src/user/user-do');
@@ -410,7 +410,7 @@ describe('the registered-app provider against the real SDK auth flow', () => {
     };
 
     const provider = new RegisteredAppOAuthClientProvider({
-      storage: durableObjectStorage({}),
+      storage: makeCtx(new Database(':memory:')).storage,
       clientName: 'test-client',
       baseRedirectUrl: 'https://kinu.example/api/user/mcp/callback',
       clientId: 'test-github-client-id',
@@ -470,7 +470,7 @@ describe('the registered-app provider against the real SDK auth flow', () => {
     const preset = present(mcpPresetById('github'), 'the GitHub preset');
 
     const provider = new RegisteredAppOAuthClientProvider({
-      storage: durableObjectStorage({}), clientName: 'test-client', baseRedirectUrl: 'https://kinu.example/api/user/mcp/callback',
+      storage: makeCtx(new Database(':memory:')).storage, clientName: 'test-client', baseRedirectUrl: 'https://kinu.example/api/user/mcp/callback',
       clientId: 'test-github-client-id', clientSecret: 'test-github-client-secret', scope: preset.scope,
     });
 
