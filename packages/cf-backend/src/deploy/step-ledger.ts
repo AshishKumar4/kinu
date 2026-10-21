@@ -1,5 +1,7 @@
 // A run's ledger in its object's SQLite (`deploy_step`, made by deploy-do.ts `initSchema`): one row per step, which a
 // reload renders and an eviction resumes. The run object tells its page of each change (`broadcast`).
+// cf-only by design (scripts/capability-parity.lock.json): a browser run must outlive a closed tab and resume, which a
+// terminal `kinu deploy` does not need, so a copy in the CLI would be dead code.
 import * as v from 'valibot';
 import { DeployStepRowSchema, type DeployLedger, type DeployStepFailure, type DeployStepRow, type DeployStepSeed } from '@kinu.run/core/deploy';
 

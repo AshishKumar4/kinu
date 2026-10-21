@@ -16,7 +16,7 @@ import {
   FIRST_OWNER_LINK_SECRET, MINTED_SECRETS, REFRESH_TOKEN_KEY, resourceName,
   type DeployInputs, type DeploymentRecord,
 } from './inputs';
-import { HealthAnswerSchema } from './update';
+import { HealthAnswerSchema, type UpdateBuild } from './update';
 import type { ArtifactMember, HeldBytes } from './artifact';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { bytesToBase64 } from '../utils/base64';
@@ -305,7 +305,8 @@ function gatewayStep(): DeployStep {
             {
               method: 'POST',
               path: base,
-              body: { id, cache_ttl: 0, collect_logs: true, rate_limiting_interval: 0, rate_limiting_limit: 0 },
+              // Every field the reference requires: one missing is refused, code 7001 "Required" (f44999, 2026-10-21).
+              body: { id, cache_invalidate_on_update: false, cache_ttl: 0, collect_logs: true, rate_limiting_interval: 0, rate_limiting_limit: 0 },
             },
             v.object({ id: v.optional(v.string()) }),
           ));
@@ -534,6 +535,35 @@ function addressStep(inputs: DeployInputs): DeployStep {
   };
 }
 
+/** How long the smoke asks again while the address does not answer as the version under test yet, and how often.
+ *  Cloudflare carries a deployment everywhere within a couple of seconds (docs, "Version overrides"), and a workers.dev
+ *  address bound a moment before answered 404 for about 30 s (f44999, 2026-10-21): both are a change still arriving,
+ *  never the version's own answer. Past this the step fails in the last answer's words, and the run can be retried. */
+const SMOKE_PATIENCE_MS = 120_000;
+
+const SMOKE_INTERVAL_MS = 3_000;
+
+/** One ask of the version under test: its health, `arriving` while the address or the override is still being
+ *  carried, or why it failed. */
+type SmokeAnswer = { readonly kind: 'answered'; readonly build: UpdateBuild | null } | { readonly kind: 'arriving' | 'failed'; readonly why: string };
+
+function askVersion(context: DeployContext, url: string, version: string): Effect.Effect<SmokeAnswer> {
+  return Effect.gen(function* () {
+    const response = yield* Effect.promise(async () => context.http(url, { [VERSION_OVERRIDE_HEADER]: `${context.inputs.instanceName}="${version}"` }));
+
+    if (response.status === 404) return { kind: 'arriving', why: `${url} answered HTTP 404` };
+
+    if (!response.ok) return { kind: 'failed', why: `${url} answered HTTP ${response.status}` };
+
+    const { build, versionId } = v.parse(HealthAnswerSchema, yield* Effect.promise(async () => response.json()));
+
+    // An override not yet carried reaches the serving version, which may be this build.
+    if (versionId !== version) return { kind: 'arriving', why: `${url} was answered by version ${versionId ?? 'unnamed'}, and the version under test is ${version}` };
+
+    return { kind: 'answered', build };
+  });
+}
+
 function smokeStep(): DeployStep {
   return {
     id: 'smoke',
@@ -547,16 +577,15 @@ function smokeStep(): DeployStep {
 
         if (version === undefined) return yield* Effect.die(new Error('no version was uploaded, so nothing can be checked'));
         const url = `https://${address}/api/health`;
-        const response = yield* Effect.promise(async () => context.http(url, { [VERSION_OVERRIDE_HEADER]: `${context.inputs.instanceName}="${version}"` }));
+        let answer = yield* askVersion(context, url, version);
 
-        if (!response.ok) return yield* Effect.die(new Error(`${url} answered HTTP ${response.status}`));
-
-        const { build, versionId } = v.parse(HealthAnswerSchema, yield* Effect.promise(async () => response.json()));
-
-        // An unapplied override reaches the serving version, which may be this build.
-        if (versionId !== version) {
-          return yield* Effect.die(new Error(`${url} was answered by version ${versionId ?? 'unnamed'}, and the version under test is ${version}`));
+        for (let waited = 0; answer.kind === 'arriving' && waited < SMOKE_PATIENCE_MS; waited += SMOKE_INTERVAL_MS) {
+          yield* Effect.promise(async () => context.wait(SMOKE_INTERVAL_MS));
+          answer = yield* askVersion(context, url, version);
         }
+
+        if (answer.kind !== 'answered') return yield* Effect.die(new Error(answer.why));
+        const { build } = answer;
 
         if (build === null || build.version !== context.manifest.version || build.sha !== context.manifest.sha) {
           return yield* Effect.die(new Error(

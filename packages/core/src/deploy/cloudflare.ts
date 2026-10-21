@@ -67,13 +67,14 @@ export class CloudflareApiError extends Data.TaggedError('CloudflareApiError')<{
   }
 }
 
+// Absent, empty or null alike: the assets session answers `errors: null, messages: null` (f44999, 2026-10-21).
 const EnvelopeSchema = v.object({
   success: v.optional(v.boolean()),
-  errors: v.optional(v.array(v.object({
+  errors: v.nullish(v.array(v.object({
     code: v.optional(v.number()),
     message: v.optional(v.string()),
   }))),
-  messages: v.optional(v.array(JsonValueSchema)),
+  messages: v.nullish(v.array(JsonValueSchema)),
   result: v.optional(JsonValueSchema),
 });
 

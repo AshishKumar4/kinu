@@ -838,7 +838,8 @@ function workerScriptApi(
     held.assetsWanted = new Set(wanted);
     held.assetsUploaded = new Set<string>();
 
-    return envelope({ jwt: 'session-token', buckets: [wanted] });
+    // Its errors and messages null, not empty, as f44999 answered it on 2026-10-21.
+    return Response.json({ result: { jwt: 'session-token', buckets: [wanted] }, success: true, errors: null, messages: null });
   }
 
   return undefined;
