@@ -72,6 +72,31 @@ describe('mail on a subdomain of its zone, each address by a rule of its own', (
     expect(await name('dana').lookup()).toBeNull();
   });
 
+  // Review, 2026-10-21: a box was made before its rule, so a refusal on the second box of a call left the first's rule
+  // spent on a box unmade, and a box whose rule was never made could be read.
+  it('makes each box only once its rule is, and keeps those whose rules were made when a later one is refused', async () => {
+    await priyaOpened('priyar', 'u-priya-4');
+    await env.MAIL_RULES_FAKE.cap(2);
+
+    expect(await refusalOf(async () => mailbox('u-priya-4').readableBy(caller('triage')))).toMatchObject({
+      code: 'denied', message: `routing triage.northwind-api.priyar@${DOMAIN}: Cloudflare answered: Rule limit reached`,
+    });
+    expect((await mailbox('u-priya-4').boxes()).map((box) => box.address).sort()).toEqual([`northwind-api.priyar@${DOMAIN}`, `priyar@${DOMAIN}`]);
+    expect([...(await env.MAIL_RULES_FAKE.state()).addresses].sort()).toEqual([`northwind-api.priyar@${DOMAIN}`, `priyar@${DOMAIN}`]);
+  });
+
+  // Review, 2026-10-21: a deployment that moved its mail onto a subdomain left the addresses it had already made unrouted.
+  it('routes every address it already has again when they were last routed under another grant', async () => {
+    await priyaOpened('pr', 'u-priya-5');
+    await mailbox('u-priya-5').readableBy(caller('triage'));
+    await env.MAIL_RULES_FAKE.reset();
+    await mailbox('u-priya-5').routedUnder('zone-west kinu-northwind mail.west.dev');
+
+    await mailbox('u-priya-5').boxes();
+
+    expect([...(await env.MAIL_RULES_FAKE.state()).addresses].sort()).toEqual([`northwind-api.pr@${DOMAIN}`, `pr@${DOMAIN}`, `triage.northwind-api.pr@${DOMAIN}`]);
+  });
+
   it("deletes every rule under the account's root as the account is, and never disables the zone's routing", async () => {
     await priyaOpened('praman', 'u-priya-3');
     await mailbox('u-priya-3').readableBy(caller('triage'));

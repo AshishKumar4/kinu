@@ -989,8 +989,7 @@ describe('a guided run', () => {
     const dmarc = { method: 'GET', path: '/zones/zone-raman/dns_records?type=TXT&name=_dmarc.raman.dev&per_page=100' };
 
     expect(cloudflare.calls.filter((call) => call.path.startsWith('/zones')).map(({ method, path, body }) => (body === undefined ? { method, path } : { method, path, body }))).toEqual([
-      // The routing token's step reads the zone, finds an apex, and writes nothing.
-      lookup,
+      // Read once, by the routing token's step, which finds an apex and writes nothing; the mail step asks no second time.
       lookup,
       { method: 'POST', path: '/zones/zone-raman/email/routing/dns', body: {} },
       {
@@ -1018,11 +1017,11 @@ describe('a guided run', () => {
     expect(cloudflare.calls.filter((call) => call.path.endsWith('/email/routing/dns')).map((call) => call.body)).toEqual([{ name: 'mail.raman.dev' }]);
     expect(cloudflare.routing.catchAll.size).toBe(0);
     expect(cloudflare.calls.find((call) => call.method === 'POST' && call.path.endsWith('/tokens'))?.body).toEqual({
-      name: 'kinu mail (Kinu)',
+      name: 'kinu mail raman.dev (Kinu)',
       policies: [{ effect: 'allow', resources: { 'com.cloudflare.api.account.zone.zone-raman': '*' }, permission_groups: [{ id: 'group-email-routing-rules-write' }] }],
     });
     expect(uploadedBindings(upload).find((binding) => binding.name === 'KINU_MAIL_ROUTING')).toEqual({
-      type: 'secret_text', name: 'KINU_MAIL_ROUTING', text: JSON.stringify({ zone: 'zone-raman', worker: 'kinu', token: 'minted-token' }),
+      type: 'secret_text', name: 'KINU_MAIL_ROUTING', text: JSON.stringify({ zone: 'zone-raman', worker: 'kinu', domain: 'mail.raman.dev', token: 'minted-token' }),
     });
     expect(cloudflare.dns.map((record) => `${record.type} ${record.name}`)).toEqual(['MX cf-bounce.mail.raman.dev', 'TXT cf-bounce._domainkey.mail.raman.dev', 'TXT _dmarc.mail.raman.dev']);
     expect(rows.find((row) => row.id === 'mail')?.detail).toBe('Mail onboarded on mail.raman.dev: each address routed to kinu by a rule of its own, sending, and DMARC at p=none.');
@@ -1033,7 +1032,7 @@ describe('a guided run', () => {
     await run({ ...INPUTS, mailDomain: 'eu.mail.raman.dev' });
 
     expect(cloudflare.calls.filter((call) => call.path.startsWith('/zones?name=')).map((call) => decodeURIComponent(/name=([^&]+)/u.exec(call.path)?.[1] ?? ''))).toEqual([
-      'eu.mail.raman.dev', 'mail.raman.dev', 'raman.dev', 'eu.mail.raman.dev', 'mail.raman.dev', 'raman.dev',
+      'eu.mail.raman.dev', 'mail.raman.dev', 'raman.dev',
     ]);
     expect(cloudflare.calls.filter((call) => call.path.endsWith('/email/routing/dns')).map((call) => call.body)).toEqual([{ name: 'eu.mail.raman.dev' }]);
   });
@@ -1047,19 +1046,26 @@ describe('a guided run', () => {
     expect(rows.every((row) => row.state === 'done')).toBe(true);
     expect(rows.find((row) => row.id === 'mail-routing')?.detail).toBe('No routing token: Cloudflare refused minting one for raman.dev.');
     expect(asked).toEqual([expect.stringContaining('allow "Email Routing Rules" and "API Tokens"')]);
-    expect(await vault.read('KINU_MAIL_ROUTING')).toBeNull();
+    // Bound with no token, so the deployment refuses addresses it could not route rather than take itself for an apex.
+    expect(uploadedBindings(cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'))).find((binding) => binding.name === 'KINU_MAIL_ROUTING')?.text)
+      .toBe(JSON.stringify({ zone: 'zone-raman', worker: 'kinu', domain: 'mail.raman.dev', token: null }));
   });
 
-  test('an update keeps the routing token its running version holds, and rolls nothing', async () => {
+  // Review, 2026-10-21: an update kept a grant whose name did not say its zone, so a domain moved to another zone kept
+  // routing under the one it left.
+  test('every run binds a grant of its own: an update rolls the token for its zone, and deletes the one for a zone it left', async () => {
     cloudflare.zones.set('raman.dev', 'zone-raman');
-    cloudflare.tokens.set('kinu mail (Kinu)', ['minted-token']);
+    cloudflare.tokens.set('kinu mail raman.dev (Kinu)', ['minted-token']);
+    cloudflare.tokens.set('kinu mail northwind.dev (Kinu)', ['minted-token']);
     updating = true;
     const inputs = { ...INPUTS, mailDomain: 'mail.raman.dev' };
     const step = deployPlan(MANIFEST, inputs).find((each) => each.id === 'mail-routing');
 
-    expect(await settle(step?.run(await contextFor(inputs)) ?? Effect.succeed(''))).toBe('The routing token for mail.raman.dev is held.');
-    expect(cloudflare.calls.filter((call) => call.method !== 'GET')).toEqual([]);
-    expect([...cloudflare.tokens]).toEqual([['kinu mail (Kinu)', ['minted-token']]]);
+    expect(await settle(step?.run(await contextFor(inputs)) ?? Effect.succeed(''))).toBe(
+      'Rolled "kinu mail raman.dev (Kinu)", which may edit raman.dev\'s routing rules and nothing else; 1 for a zone it left deleted.',
+    );
+    expect(await vault.read('KINU_MAIL_ROUTING')).toBe(JSON.stringify({ zone: 'zone-raman', worker: 'kinu', domain: 'mail.raman.dev', token: 'rolled-1' }));
+    expect(cloudflare.calls.filter((call) => call.method === 'DELETE').map((call) => call.path)).toEqual([`/accounts/${INPUTS.accountId}/tokens/token-kinu mail northwind.dev (Kinu)`]);
   });
 
   test('a deployment whose owner gave no mail answers has no mail domain, and only its operators may claim', async () => {

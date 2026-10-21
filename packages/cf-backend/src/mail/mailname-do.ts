@@ -7,8 +7,7 @@ import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { Effect, Exit } from 'effect';
 import { hold, KinuError, settle, settleSync } from '@kinu.run/core/obs';
-import type { MailRoutes } from '@kinu.run/core/deploy';
-import { mailRoutesOf } from './routing';
+import { mailRoutesOf, type MailRoutes } from '@kinu.run/core/deploy';
 import { durableStamps, initMailNameTables, mailUsernameRefusal, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp } from '@kinu.run/core';
 
 const ClaimRow = v.object({
@@ -20,12 +19,12 @@ export type MailNameClaim = v.InferOutput<typeof ClaimRow>;
 export class MailNameDO extends DurableObject<Env> {
   private readonly storageRefusal: StoragePredatesReleaseError | undefined;
 
-  /** Null where the deployment's mail is on its zone's apex, whose catch-all routes every address (routing.ts). */
+  /** Null where the deployment's mail is on its zone's apex, whose catch-all routes every address (core deploy/mail-rules.ts). */
   private readonly routes: MailRoutes | null;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    this.routes = mailRoutesOf(env);
+    this.routes = mailRoutesOf(env.KINU_MAIL_ROUTING, env.EMAIL_DOMAIN ?? '');
     const stamps = durableStamps(ctx.storage.kv);
     const unmade = readStamp(stamps, ctx.storage.sql, 'mailname') === 'unmade';
     const init = (): void => { initMailNameTables(ctx.storage.sql); };
@@ -56,12 +55,14 @@ export class MailNameDO extends DurableObject<Env> {
   claim(label: string, userId: string, kind: 'username' | 'alias' = 'username', targetPath: string | null = null): Promise<MailNameClaim> {
     if (mailUsernameRefusal(label) !== null) return settle(Effect.fail(new KinuError('bad_input', `"${label}" cannot be an address.`)));
 
+    if (this.storageRefusal !== undefined) return settle(Effect.fail(this.storageRefusal));
+
     // Answered outside the block: a refusal thrown inside it would reset the object.
     const claimed = Effect.promise(async () => this.ctx.blockConcurrencyWhile(async (): Promise<Exit.Exit<MailNameClaim, KinuError>> => {
       const held = await this.lookup();
 
       if (held !== null) return held.user_id === userId ? Exit.succeed(held) : Exit.fail(new KinuError('denied', `"${label}" is taken.`));
-      const routed = this.routes === null ? Exit.void : await hold(this.routes.routed(`${label}@${this.env.EMAIL_DOMAIN ?? ''}`));
+      const routed = this.routes === null ? Exit.void : await hold(this.routes.routed([`${label}@${this.env.EMAIL_DOMAIN ?? ''}`]));
 
       if (Exit.isFailure(routed)) return Exit.failCause(routed.cause);
       this.ctx.storage.sql.exec('INSERT INTO mail_name (label, user_id, kind, target_path) VALUES (?, ?, ?, ?)',

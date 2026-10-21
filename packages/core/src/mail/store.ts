@@ -99,6 +99,14 @@ const bare = (id: string): string => id.trim().replace(/^<|>$/gu, '');
 
 const snippetOf = (text: string): string => text.replace(/\s+/gu, ' ').trim().slice(0, 200);
 
+/** Whose box: a workspace's, read by its main agent, or one of its other agents'. */
+export interface MailBoxOwner {
+  readonly kind: 'workspace' | 'agent';
+  readonly workspace: string;
+  readonly name: string;
+  readonly actorId: string;
+}
+
 export class MailStore {
   constructor(private readonly deps: MailStoreDeps) {}
 
@@ -148,43 +156,72 @@ export class MailStore {
     return this.box('');
   }
 
-  /** The box a workspace's main agent or one of its other agents reads; made on first ask. */
-  boxFor(owner: { kind: 'workspace' | 'agent'; workspace: string; name: string; actorId: string }): MailBox {
+  /**
+   * Where `owner`'s box is: made, or the path it would be made at, where nothing is written. `workspacePath` is its
+   * workspace's box's, where that is only planned.
+   */
+  private placed(owner: MailBoxOwner, workspacePath?: string): { readonly made: MailBox } | { readonly path: string } {
     // By kind too: the Personal assistant's main agent reads the person's box and its workspace's.
     const [held] = rows(BoxRow, this.deps.sql.exec(
       'SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND kind = ?', owner.workspace, owner.actorId, owner.kind,
     ));
 
-    if (held !== undefined) return this.boxOf(held);
+    if (held !== undefined) return { made: this.boxOf(held) };
 
     const label = mailLabelOf(owner.name) ?? (owner.kind === 'workspace' ? 'workspace' : 'agent');
 
-    const workspacePath = rows(v.object({ path: v.string() }), this.deps.sql.exec("SELECT path FROM mail_addresses WHERE kind = 'workspace' AND workspace = ?", owner.workspace))[0]?.path
+    const under = workspacePath
+      ?? rows(v.object({ path: v.string() }), this.deps.sql.exec("SELECT path FROM mail_addresses WHERE kind = 'workspace' AND workspace = ?", owner.workspace))[0]?.path
       ?? mailLabelOf(owner.workspace) ?? 'workspace';
 
-    const at = (own: string) => (owner.kind === 'workspace' ? own : `${own}.${workspacePath}`);
+    const at = (own: string) => (owner.kind === 'workspace' ? own : `${own}.${under}`);
     let path = at(label);
 
     // A label is unique per person: a clash numbers its own label, inside its 20 characters, and keeps its workspace (§1).
     for (let n = 2; this.deps.sql.exec('SELECT 1 FROM mail_addresses WHERE path = ?', path).toArray().length > 0; n += 1) path = at(mailLabelNumbered(label, n));
 
-    this.deps.sql.exec('INSERT INTO mail_addresses (path, kind, workspace, actor_id) VALUES (?, ?, ?, ?)', path, owner.kind, owner.workspace, owner.actorId);
-
-    return settleSync(this.written(path));
+    return { path };
   }
 
-  /** Whether `caller`'s next call makes no box: each it reads is made, or the person has no address yet to make them under. */
-  madeFor(caller: MailCaller): boolean {
-    const made = (kind: 'workspace' | 'agent', actorId: string) => this.deps.sql.exec(
-      'SELECT 1 FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND kind = ?', caller.workspace, actorId, kind,
-    ).toArray().length > 0;
+  /** The box a workspace's main agent or one of its other agents reads; made on first ask. */
+  boxFor(owner: MailBoxOwner): MailBox {
+    const placed = this.placed(owner);
 
-    return this.identity() === null || (made('workspace', caller.mainActorId) && (caller.actorId === caller.mainActorId || made('agent', caller.actorId)));
+    if ('made' in placed) return placed.made;
+    this.deps.sql.exec('INSERT INTO mail_addresses (path, kind, workspace, actor_id) VALUES (?, ?, ?, ?)', placed.path, owner.kind, owner.workspace, owner.actorId);
+
+    return settleSync(this.written(placed.path));
   }
 
-  /** Boxes just made, unmade: their address could not be routed, so nothing may read or write them (mail-rules.ts). */
-  unmake(paths: readonly string[]): void {
-    for (const path of paths) this.deps.sql.exec("DELETE FROM mail_addresses WHERE path = ? AND kind != 'person'", path);
+  /** The boxes `caller` reads of its own, its workspace's first, as `readableBy` makes them. */
+  ownersOf(caller: MailCaller): readonly MailBoxOwner[] {
+    const home = { kind: 'workspace', workspace: caller.workspace, name: caller.title, actorId: caller.mainActorId } as const;
+
+    return caller.actorId === caller.mainActorId ? [home] : [home, { kind: 'agent', workspace: caller.workspace, name: caller.name, actorId: caller.actorId }];
+  }
+
+  /**
+   * Of `owners`, in order, those whose box is not made yet, each with the address it would be made at: nothing is
+   * written, so each address can be routed before its box exists (core deploy/mail-rules.ts). None before the person
+   * has an address of their own.
+   */
+  unmade(owners: readonly MailBoxOwner[]): readonly { readonly owner: MailBoxOwner; readonly address: string }[] {
+    const username = this.identity()?.username;
+
+    if (username === undefined) return [];
+    const planned: { owner: MailBoxOwner; address: string }[] = [];
+    let workspacePath: string | undefined;
+
+    for (const owner of owners) {
+      const placed = this.placed(owner, owner.kind === 'agent' ? workspacePath : undefined);
+      const path = 'made' in placed ? placed.made.path : placed.path;
+
+      if (owner.kind === 'workspace') workspacePath = path;
+
+      if (!('made' in placed)) planned.push({ owner, address: mailAddressOf(username, path, this.deps.domain) });
+    }
+
+    return planned;
   }
 
   /**
@@ -196,8 +233,9 @@ export class MailStore {
     if (this.identity() === null) return [];
 
     // The workspace's box first, so an agent's address sits under the workspace's label whoever asked first.
-    const home = this.boxFor({ kind: 'workspace', workspace: caller.workspace, name: caller.title, actorId: caller.mainActorId });
-    const own = caller.actorId === caller.mainActorId ? home : this.boxFor({ kind: 'agent', workspace: caller.workspace, name: caller.name, actorId: caller.actorId });
+    const [home, own = home] = this.ownersOf(caller).map((owner) => this.boxFor(owner));
+
+    if (home === undefined) return [];
     const others = this.boxes().filter((box) => box.path !== own.path && box.workspace === caller.workspace && (box.kind === 'workspace' || box.actorId === caller.actorId));
 
     return [own, ...others];

@@ -399,12 +399,12 @@ const auxiliaryWorkers = new Map<string, () => Promise<AuxiliaryWorker>>([
 ['mail-routing-probe', async () => ({ ...workerCompatibility, modules: probeModules('mail-routing-probe.ts', { ...probeRuntime, keepNames: true }),
         bindings: {
           EMAIL_DOMAIN: MAIL_RULES_DOMAIN,
-          KINU_MAIL_ROUTING: JSON.stringify({ zone: MAIL_RULES_ZONE, worker: MAIL_RULES_WORKER, token: MAIL_RULES_TOKEN }),
+          KINU_MAIL_ROUTING: JSON.stringify({ zone: MAIL_RULES_ZONE, worker: MAIL_RULES_WORKER, domain: MAIL_RULES_DOMAIN, token: MAIL_RULES_TOKEN }),
         },
         outboundService: mailRulesOutbound,
         r2Buckets: ['MAIL_BUCKET'],
         durableObjects: {
-          MAILBOX: { className: 'MailboxDO', useSQLite: true },
+          MAILBOX: { className: 'RoutedMailboxDO', useSQLite: true },
           MAILNAME: { className: 'MailNameDO', useSQLite: true },
         }, })],
 // Account deletion's census: every store the account has, each under the binding name production code reaches it by.
@@ -616,7 +616,7 @@ const runnerOptions = {
           SEALED_USER_DO: { className: 'UserDO', scriptName: 'public-surface-probe', useSQLite: true },
           DEPLOY_RUN_PROBE: { className: 'DeployRunProbeDO', scriptName: 'deploy-probe', useSQLite: true },
           REQUEST_SIGNAL_PROBE: { className: 'RequestSignalProbeDO', scriptName: 'request-signal-probe', useSQLite: true },
-          ROUTED_MAILBOX: { className: 'MailboxDO', scriptName: 'mail-routing-probe', useSQLite: true },
+          ROUTED_MAILBOX: { className: 'RoutedMailboxDO', scriptName: 'mail-routing-probe', useSQLite: true },
           ROUTED_MAILNAME: { className: 'MailNameDO', scriptName: 'mail-routing-probe', useSQLite: true },
         },
       } satisfies NonNullable<Parameters<typeof getDurableObjectDesignators>[0]['miniflare']>;

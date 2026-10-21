@@ -345,6 +345,7 @@ interface RoutedMailboxRpc extends Rpc.DurableObjectBranded {
   readableBy(caller: import('@kinu.run/core').MailCaller): Promise<readonly import('@kinu.run/core').MailBox[]>;
   boxes(): Promise<readonly import('@kinu.run/core').MailBox[]>;
   deleteBox(userId: string): Promise<void>;
+  routedUnder(grant: string): Promise<void>;
 }
 
 interface RoutedMailNameRpc extends Rpc.DurableObjectBranded {

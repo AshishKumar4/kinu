@@ -146,11 +146,23 @@ const scopeRefused = (failed: Cause.Cause<KinuError>): boolean => {
   return cause instanceof CloudflareApiError && (cause.status === 401 || cause.status === 403);
 };
 
+/** The zone the mail host is in, as the routing step found it, so the mail step asks for it no second time. */
+const FACT_MAIL_ZONE = 'mail.zone';
+
+/** The zone a fact holds: `id name`, or empty where the host is in no zone this token can read. */
+function factZone(held: string): MailZone | null {
+  const [id = '', name = ''] = held.split(' ');
+
+  return id === '' ? null : { id, name };
+}
+
 /**
  * Mail on a subdomain routes each address by a rule the deployment makes as it makes the address, so the run mints it a
- * token that may edit that zone's routing rules and nothing else, from the person's grant, and keeps it with the zone
- * and this Worker as `KINU_MAIL_ROUTING`. Before the upload, which binds it. An apex needs none: its catch-all routes
- * every address, and kinu.run's is untouched by this.
+ * token that may edit that zone's routing rules and nothing else, from the person's grant, and binds it with the zone,
+ * this Worker and the domain as `KINU_MAIL_ROUTING`. Before the upload, which binds it; every run binds its own, so a
+ * moved domain never keeps a grant for the zone it left. Where Cloudflare will not mint it, the grant holds no token and
+ * the deployment refuses addresses it could not route. An apex needs none: its catch-all routes every address, and
+ * kinu.run's is untouched by this.
  */
 export function mailRoutingStep(inputs: DeployInputs): DeployStep {
   return {
@@ -163,30 +175,51 @@ export function mailRoutingStep(inputs: DeployInputs): DeployStep {
         if (domain === '') return 'No mail domain was given, so there is nothing to route.';
         const zone = yield* Effect.promise(async () => zoneOf(context.transport, inputs.accountId, domain));
 
+        context.facts.set(FACT_MAIL_ZONE, zone === null ? '' : `${zone.id} ${zone.name}`);
+
         // The mail step says what it needs.
         if (zone === null) return `${domain} is in no zone this token can read.`;
 
         if (zone.name === domain) return `${domain} is its zone's apex, whose catch-all routes every address.`;
-        const name = `${inputs.instanceName} mail (Kinu)`;
+        const name = `${inputs.instanceName} mail ${zone.name} (Kinu)`;
+        const grant = (token: string | null) => mailRoutingGrant({ zone: zone.id, worker: inputs.instanceName, domain, token });
 
         const outcome = yield* instanceToken(context, {
-          name, permission: EMAIL_ROUTING_RULES_WRITE, resource: `com.cloudflare.api.account.zone.${zone.id}`, secret: MAIL_ROUTING_SECRET, keep: context.update,
-          stored: (token) => mailRoutingGrant({ zone: zone.id, worker: inputs.instanceName, token }),
+          name, permission: EMAIL_ROUTING_RULES_WRITE, resource: `com.cloudflare.api.account.zone.${zone.id}`, secret: MAIL_ROUTING_SECRET, stored: grant,
         }).pipe(Effect.catchCause((failed) => (scopeRefused(failed) ? Effect.succeed('refused' as const) : Effect.failCause(failed))));
 
         if (outcome === 'refused') {
+          yield* Effect.promise(async () => context.vault.write(MAIL_ROUTING_SECRET, grant(null)));
           context.note(`Mail on ${domain} routes each address by a rule of its own, which this deployment makes with a token it mints. `
-            + 'Sign in again and allow "Email Routing Rules" and "API Tokens", then run the update; until then no new address receives mail.');
+            + 'Sign in again and allow "Email Routing Rules" and "API Tokens", then run the update; until then no address can be made.');
 
           return `No routing token: Cloudflare refused minting one for ${zone.name}.`;
         }
 
+        const retired = yield* retiredRoutingTokens(context, name);
+
         if (outcome === 'kept') return `The routing token for ${domain} is held.`;
 
-        return `${outcome === 'minted' ? 'Minted' : 'Rolled'} "${name}", which may edit ${zone.name}'s routing rules and nothing else.`;
+        return `${outcome === 'minted' ? 'Minted' : 'Rolled'} "${name}", which may edit ${zone.name}'s routing rules and nothing else`
+          + `${retired === 0 ? '' : `; ${String(retired)} for a zone it left deleted`}.`;
       });
     },
   };
+}
+
+/** This deployment's routing tokens for any other zone, deleted: no token outlives the zone it was for. */
+function retiredRoutingTokens(context: DeployContext, kept: string): Effect.Effect<number, KinuError> {
+  return Effect.promise(async () => {
+    const account = context.inputs.accountId;
+    const prefix = `${context.inputs.instanceName} mail `;
+
+    const tokens = await cloudflareResult(context.transport, { method: 'GET', path: `/accounts/${account}/tokens?per_page=50` }, v.array(v.object({ id: v.string(), name: v.string() })));
+    const left = tokens.filter((token) => token.name !== kept && token.name.startsWith(prefix) && token.name.endsWith(' (Kinu)'));
+
+    for (const token of left) await cloudflareResult(context.transport, { method: 'DELETE', path: `/accounts/${account}/tokens/${token.id}` }, v.unknown());
+
+    return left.length;
+  });
 }
 
 const recordLine = (record: DnsRecord): string => `${record.type} ${record.name} ${record.priority === undefined ? '' : `${String(record.priority)} `}${record.content}`;
@@ -201,7 +234,8 @@ export function mailStep(inputs: DeployInputs) {
 
         if (domain === '') return 'No mail domain was given, so this deployment has no mail addresses.';
 
-        const zoned = await zoneOf(context.transport, inputs.accountId, domain);
+        const found = context.facts.get(FACT_MAIL_ZONE);
+        const zoned = found === undefined ? await zoneOf(context.transport, inputs.accountId, domain) : factZone(found);
 
         if (zoned === null) {
           context.note(`Mail needs ${domain} in a zone of this Cloudflare account, readable by the deploy's token. Add it, then run the update.`);

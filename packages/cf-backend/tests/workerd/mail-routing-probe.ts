@@ -6,9 +6,17 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import type { MailRulesState } from './mail-rules-fake';
 
-export { MailboxDO } from '../../src/mail/mailbox-do';
+import { MailboxDO } from '../../src/mail/mailbox-do';
 
 export { MailNameDO } from '../../src/mail/mailname-do';
+
+/** The account's Mailbox as deployed, which a test can tell its addresses were last routed under another grant. */
+export class RoutedMailboxDO extends MailboxDO {
+  /** As a deployment whose mail domain moved onto this grant leaves it: the key is the one MailboxDO keeps it under. */
+  routedUnder(grant: string): void {
+    this.ctx.storage.kv.put('mail:routed-under', grant);
+  }
+}
 
 export class MailRulesFakeControl extends WorkerEntrypoint {
   async reset(): Promise<MailRulesState> {
