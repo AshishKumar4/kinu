@@ -19,8 +19,8 @@ function sources(over: Partial<OwnerWaitSources> = {}): OwnerWaitSources {
     plans: [{ actor: 'hire-id', id: 'p1', revision: 2, content: '# Migrate the billing tables\n\nSteps…', updatedAt: 30 }],
     consents: [{ consentId: 'd1', deviceLabel: 'laptop', method: 'exec', command: 'brew install jq', createdAt: 50 }],
     questions: [
-      { agent: 'scout', actor: 'hire-id', asked: { id: 'q1', actor: 'hire-id', callId: 'c', turnId: 't', mode: 'build', questions: [{ id: 'db', question: 'Which database?', options: [{ label: 'Postgres' }, { label: 'SQLite' }] }], status: 'open', answers: null, askedAt: 60, closedAt: null } },
-      { agent: 'scout', actor: 'hire-id', asked: { id: 'q0', actor: 'hire-id', callId: 'c', turnId: 't', mode: 'build', questions: [{ id: 'x', question: 'Old?', options: [{ label: 'a' }, { label: 'b' }] }], status: 'answered', answers: null, askedAt: 1, closedAt: 2 } },
+      { agent: 'scout', actor: 'hire-id', asked: { id: 'q1', actor: 'hire-id', callId: 'c', turnId: 't', mode: 'build', questions: [{ id: 'db', question: 'Which database?', options: [{ label: 'Postgres' }, { label: 'SQLite' }] }], status: 'open', answers: null, askedAt: 60} },
+      { agent: 'scout', actor: 'hire-id', asked: { id: 'q0', actor: 'hire-id', callId: 'c', turnId: 't', mode: 'build', questions: [{ id: 'x', question: 'Old?', options: [{ label: 'a' }, { label: 'b' }] }], status: 'answered', answers: null, askedAt: 1} },
     ],
     nameOf: (actorId) => (actorId === 'hire-id' ? 'scout' : 'main'),
     ...over,

@@ -39,6 +39,7 @@
     "tests/workerd/mailbox-probe.ts",
     "tests/workerd/slate-share-probe.ts",
     "tests/workerd/account-reset-probe.ts",
+    "tests/workerd/account-census-probe.ts",
     "tests/workerd/store-reset-probe.ts",
     "tests/workerd/addressed-name-probe.ts",
     "tests/workerd/attribution-probe.ts",

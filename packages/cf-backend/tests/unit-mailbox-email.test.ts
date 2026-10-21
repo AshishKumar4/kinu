@@ -6,7 +6,7 @@ import { refuseUnlistedHeaders } from './helpers/email-service';
 
 const REPLY = {
   from: 'ashish@kinu.run', to: ['dana@northwind.io'], cc: ['priya@raman.dev'], subject: 'Re: Webhook deliveries to /hooks/v2 failing with 500',
-  text: 'It is on our side; the fix goes out today.', headerId: '5c1f0e6e@kinu.run', inReplyTo: '<hooks-v2@northwind.io>',
+  text: 'It is on our side; the fix goes out today.', headerId: '5c1f0e6e@kinu.run', inReplyTo: '<hooks-v2@northwind.io>', references: null,
 };
 
 test('the binding takes it: no Message-ID of our own, which the service refuses and writes itself', () => {

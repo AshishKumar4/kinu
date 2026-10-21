@@ -73,7 +73,7 @@ export interface WorkspaceHostSeams {
   readonly boxUse: WorkspaceBoxUse;
   readonly modelOperations: ModelOperationSink;
   tracing(): AgentTracing;
-  slate(actor: ActorHandle, operation: SlateOperation): Promise<SlateCallResult>;
+  slate(actor: ActorHandle, operation: SlateOperation, turn?: string): Promise<SlateCallResult>;
   /** The owner's needs-you queue: one per workspace, which each actor parks on as itself. */
   deferrals(actorId: string): DeferredApprovalChannel | undefined;
   /** The runner `actor`'s calls become jobs on, a process it starts among them. */
@@ -205,7 +205,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
         liveReadsMoved: (reads) => { seams.liveReadsMoved(reads); },
         servingMoved: () => seams.servingMoved(),
         boxUse: seams.boxUse,
-        slate: (operation) => seams.slate(bound.handle, operation),
+        slate: (operation, turn) => seams.slate(bound.handle, operation, turn),
         // The workspace's own actor's, or a hire's: a decision wakes either. A swarm head has none, as no drain resumes it.
         deferrals: () => (bound.record.origin === 'swarm' ? undefined : seams.deferrals(bound.handle.actorId)),
         jobs: () => seams.jobs(bound),

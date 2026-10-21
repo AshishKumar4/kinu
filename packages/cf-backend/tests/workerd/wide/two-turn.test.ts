@@ -508,10 +508,12 @@ describe('two real turns over the HTTP model seam', () => {
     const out = await root.exercise();
     const http = v.parse(HttpSchema, out.http);
 
-    // No streamed turn reached the binding, and no run it was asked went unanswered. `calls` is suite-wide.
+    // No turn reached the binding, and no run it was asked went unanswered: a turn, or a call the fake cannot place, is no
+    // lane. Streaming is no sign of a turn: the memory lane's structured call streams too (667221f68), whenever its pass
+    // lands in this suite. `calls` is suite-wide.
     const calls = v.parse(v.array(CallRecordSchema), out.calls);
 
-    expect(calls.filter((c) => c.stream || c.lane === null)).toEqual([]);
+    expect(calls.filter((c) => c.lane === null)).toEqual([]);
 
     // The real prompt appends harness `<dynamic_context>` user rows after the typed text, hence `toContain`.
     expect(http.every((h) => h.host === 'fake-models.invalid')).toBe(true);

@@ -28,6 +28,7 @@ import { namespaceDeclaration, nestedMembers } from '../src/tools/operation-surf
 import { describeProgramSource, programDeclarations } from '../src/tools/registry';
 import { KINU_NODE_MODULE_SOURCE } from '../src/execution/codemode-node-shim';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
+import { hostedToolFiles } from '../src/execution/approval';
 import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils/vfs';
 
 /** A tool nothing has offered yet: chosen once in two offers, rated 3 of 5, by the smoothing. */
@@ -83,7 +84,11 @@ describe("a program's child_process runs on the machine its cwd is on", () => {
     const computerFiles = createMemoryVfs().vfs;
     await seedFiles(computerFiles, { '/workspace/app/package.json': '{}' });
     await writeText(rt.storage.vfs, 'notes/n.md', 'n');
-    const plane = withMountTable(rt.storage.vfs, standardMounts((name) => (name === 'computer' ? { files: computerFiles, isAvailable: () => true } : undefined)));
+    const mounted = withMountTable(rt.storage.vfs, standardMounts((name) => (name === 'computer' ? { files: computerFiles, isAvailable: () => true } : undefined)));
+
+    // As the hosted runtime hands it to the file operations: gated (staging rc29, 2026-10-21: the gate passed `resolve`
+    // on and not `owner`, so a program's cwd under /computer ran in the workspace).
+    const plane = hostedToolFiles(mounted, cloudPlanes(WORKSPACE_ROOT), { mode: () => 'strict' });
 
     const exec = createInlineExecutor({
       filesOwner: 'agent', vfs: rt.storage.vfs, craftStore: rt.craftStore, sql: rt.storage.sql, shell: { exec: answer('workspace') },

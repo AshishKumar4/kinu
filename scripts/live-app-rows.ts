@@ -14,7 +14,7 @@ import type { Page, Target } from 'puppeteer';
 import * as v from 'valibot';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { ChatHistoryEntrySchema, rowText, TurnClaimFrameSchema } from '@kinu.run/core';
+import { ChatHistoryEntrySchema, JsonValueSchema, rowText, TurnClaimFrameSchema, type JsonValue } from '@kinu.run/core';
 import { renderThrownChain, tolerate, detach } from '@kinu.run/core/obs';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
@@ -25,7 +25,7 @@ import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src
 import { CHAT_COMPOSER_LIVE, CHATS, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import { registerScriptedModel, startScriptedModel } from './scripted-model';
-import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, HANDED_BACK_ASK, StopProbe, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn } from './live-app-scripts';
+import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, HANDED_BACK_ASK, StopProbe, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, slateUiTurn, SLATE_ASK_ID, SLATE_ASK_PROBE, SlateAskProbe, slateAskTurn } from './live-app-scripts';
 import { FALLBACK_ANSWER, type ScriptedRequest } from './scripted-protocol';
 import { openPublicSocket } from '../tests/first-run/public-socket';
 import { drivePlanReview, type WalkthroughVerdict } from './plan-demo-film';
@@ -182,6 +182,17 @@ interface ConnectVerdict {
   readonly retried: { readonly said: ConnectSaid; readonly status: string } | null;
 }
 
+/** The slate-ask row: what a slate's `agent.ask` answered from the agent's own program, and from the person's page. */
+interface SlateAskVerdict {
+  /** The program's result: the ask's reply or the slate's fallback, the refusal, and the ask's time in the slate; or
+   *  the handle of a job it was moved into. */
+  readonly program: JsonValue;
+  /** How long the program held the turn, from the step that asked for it to the step that read its result. */
+  readonly programMs: number;
+  /** The page's call: the agent's own reply, in a turn the question opened. */
+  readonly page: JsonValue;
+}
+
 export interface TierVerdicts {
   bootFailure: string | null;
   connect: ConnectVerdict | null;
@@ -206,6 +217,7 @@ export interface TierVerdicts {
   stopThenSend: StopThenSendVerdict | null;
   newChatStop: NewChatStopVerdict | null;
   slateUi: SlateUiVerdict | null;
+  slateAsk: SlateAskVerdict | null;
   providerWait: ProviderWaitVerdict | null;
   state: StateVerdict | null;
 }
@@ -1890,6 +1902,35 @@ async function measureConnect(newPage: LiveApp['newPage'], origin: string): Prom
   }
 }
 
+/**
+ * A slate whose method asks the agent, called first from the agent's own program in its turn, then from the person's
+ * page with no turn running. The program's call is read off the turn's last request, its time off the run's ledger.
+ */
+async function measureSlateAsk(newPage: LiveApp['newPage'], origin: string, probe: SlateAskProbe): Promise<SlateAskVerdict> {
+  const workspace = await createWorkspace(origin, LOOPBACK_IDENTITY, { name: `live-row-slate-ask-${RUN_ID}`, purpose: 'slate ask probe', model: SCRIPTED_MODEL_SPEC });
+  const page = await openRecorded(newPage, origin, workspace);
+  const socket = openPublicSocket(origin, { kind: 'loopback' }, `/agents/orchestrator-agent/${workspace}`, new AbortController().signal);
+
+  try {
+    if (!(await socket.opened)) throw new Error('the slate-ask socket did not open');
+    await sendInChat(page, SLATE_ASK_PROBE);
+    const { request, programMs } = await named('the program\'s result', () => probe.heard);
+    await until(page, 'the probe turn to end', `!(${STOP_OFFERED})`);
+    const ran = request.calls.find((call) => call.name === 'eval');
+
+    if (ran === undefined) throw new Error('the probe turn ran no program');
+
+    // From the page, as the person's own call: no turn of the agent's waits on it.
+    const answered = v.parse(v.looseObject({ ok: v.boolean(), value: v.optional(JsonValueSchema) }),
+      await socket.rpc('slate', [{ op: 'call', id: SLATE_ASK_ID, method: 'ask' }]));
+
+    return { program: v.parse(JsonValueSchema, JSON.parse(ran.result)), programMs, page: answered.value ?? null };
+  } finally {
+    socket.close('slate-ask');
+    await page.close();
+  }
+}
+
 /** Presses the button showing `words` among those `buttons` selects. */
 async function pressButton(page: Page, buttons: string, words: string): Promise<void> {
   await page.$$eval(buttons, (found, label) => {
@@ -2293,7 +2334,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'unanswered-probe', 'slept', 'watched-slept', 'answered',
   'unsent-answer', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
-  'stop-then-send', 'new-chat-stop', 'slate-ui', 'provider-wait', 'connect', 'state',
+  'stop-then-send', 'new-chat-stop', 'slate-ui', 'slate-ask', 'provider-wait', 'connect', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -2314,7 +2355,7 @@ export interface LiveRows extends Pick<RowVerdicts, 'verdictOf'> {
 export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, unansweredProbe: null, slept: null, watchedSlept: null, answered: null,
-    unsentAnswer: null, bootFailure: null, connect: null,
+    unsentAnswer: null, bootFailure: null, slateAsk: null, connect: null,
     controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, stopThenSend: null, newChatStop: null, slateUi: null, providerWait: null, state: null,
   };
 
@@ -2339,6 +2380,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const openingHeld = heldCall();
     const toldBack = Promise.withResolvers<ScriptedRequest>();
     const slateHeard = Promise.withResolvers<ScriptedRequest>();
+    const askProbe = new SlateAskProbe();
     const waitProbe = new ProviderWaitProbe();
 
     // The watched turn follows the answered one in its conversation, so it is matched first, by the latest ask.
@@ -2349,7 +2391,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
       ?? reconnectTurn(request, UNANSWERED_PROBE_TURN_ASK, probeWaitHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
       ?? unsentFirstTurn(request, unsentHeld) ?? reconnectTurn(request, CLEARED_TURN_ASK, clearedHeld)
-      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, stopProbe, openingHeld) ?? slateUiTurn(request, slateHeard.resolve) ?? planWalkthrough(request));
+      ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planTasksProbe(request) ?? stopProbeTurn(request, stopProbe, openingHeld) ?? slateUiTurn(request, slateHeard.resolve) ?? slateAskTurn(request, askProbe) ?? planWalkthrough(request));
 
     await withLiveApp(async (app) => {
       const { newPage, origin } = app;
@@ -2385,6 +2427,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'stop-then-send': async () => { observed.stopThenSend = await attempt('stop-then-send', () => measureStopThenSend(newPage, origin, stopProbe)); },
         'new-chat-stop': async () => { observed.newChatStop = await attempt('new-chat-stop', () => measureNewChatStop(newPage, origin, openingHeld)); },
         'slate-ui': async () => { observed.slateUi = await attempt('slate-ui', () => measureSlateUi(newPage, origin, slateHeard.promise)); },
+        'slate-ask': async () => { observed.slateAsk = await attempt('slate-ask', () => measureSlateAsk(newPage, origin, askProbe)); },
         'connect': async () => { observed.connect = await attempt('connect', () => measureConnect(newPage, origin)); },
         'provider-wait': async () => { observed.providerWait = await attempt('provider-wait', () => measureProviderWait(newPage, origin, waitProbe)); },
         'state': async () => { observed.state = await attempt('state', () => measureState(app)); },

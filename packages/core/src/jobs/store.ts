@@ -81,20 +81,17 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec): void {
     retry_of TEXT,
     created_at  INTEGER NOT NULL,
     settled_at  INTEGER,
+    serves_port INTEGER,
     PRIMARY KEY (actor_id, id)
   )`);
   // Status-leading index serves workspace-wide reads; the actor index serves owned reads.
   execRaw(`CREATE INDEX IF NOT EXISTS idx_background_jobs_status ON background_jobs(status)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_background_jobs_actor_status ON background_jobs(actor_id, status, created_at DESC)`);
+  // The jobs serving a port, which every detach, settle and port reconciliation reads: a few among the whole history.
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_background_jobs_serving ON background_jobs(actor_id, id, serves_port) WHERE serves_port IS NOT NULL`);
   // One retry per source within an owner; table-wide uniqueness would collide across actors' ids.
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_background_jobs_retry_of
     ON background_jobs(actor_id, retry_of) WHERE retry_of IS NOT NULL`);
-  execRaw(`CREATE TABLE IF NOT EXISTS background_job_serves (
-    actor_id TEXT NOT NULL,
-    job_id   TEXT NOT NULL,
-    port     INTEGER NOT NULL,
-    PRIMARY KEY (actor_id, job_id)
-  )`);
 }
 
 export class BackgroundJobStore {
@@ -227,11 +224,10 @@ export class BackgroundJobStore {
     const rows = this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
       job.epoch, job.attempt_started_at, job.resume_after,
-      replacement.id AS retried_by, serving.port AS serves
+      replacement.id AS retried_by, job.serves_port AS serves
       FROM background_jobs job
       LEFT JOIN background_jobs replacement
         ON replacement.actor_id=job.actor_id AND replacement.retry_of=job.id
-      LEFT JOIN background_job_serves serving ON serving.actor_id=job.actor_id AND serving.job_id=job.id
       WHERE job.actor_id=${this.actorId} AND job.id=${id} LIMIT 1`;
 
     return rows[0] ? toJob(rows[0]) : null;
@@ -243,11 +239,10 @@ export class BackgroundJobStore {
     return this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
       job.epoch, job.attempt_started_at, job.resume_after,
-      replacement.id AS retried_by, serving.port AS serves
+      replacement.id AS retried_by, job.serves_port AS serves
       FROM background_jobs job
       LEFT JOIN background_jobs replacement
         ON replacement.actor_id=job.actor_id AND replacement.retry_of=job.id
-      LEFT JOIN background_job_serves serving ON serving.actor_id=job.actor_id AND serving.job_id=job.id
       WHERE job.actor_id=${this.actorId}
       ORDER BY job.created_at DESC LIMIT ${limit}`.map(toJob);
   }
@@ -267,18 +262,19 @@ export class BackgroundJobStore {
       return port === undefined ? [] : [[`${job.actor_id}/${job.id}`, { ...job, port }] as const];
     }));
 
-    for (const row of this.sql<{ actor_id: string; job_id: string; port: number }>`SELECT actor_id, job_id, port FROM background_job_serves`) {
-      const key = `${row.actor_id}/${row.job_id}` as const;
+    for (const row of this.sql<{ actor_id: string; id: string; port: number }>`SELECT actor_id, id, serves_port AS port FROM background_jobs
+      WHERE serves_port IS NOT NULL`) {
+      const key = `${row.actor_id}/${row.id}` as const;
       const kept = wanted.get(key);
 
       if (kept?.port === row.port) wanted.delete(key);
-      else if (kept === undefined && (!live.has(key) || scope === null || scope({ job: row.job_id, port: row.port }))) {
-        void this.sql`DELETE FROM background_job_serves WHERE actor_id=${row.actor_id} AND job_id=${row.job_id}`;
+      else if (kept === undefined && (!live.has(key) || scope === null || scope({ job: row.id, port: row.port }))) {
+        void this.sql`UPDATE background_jobs SET serves_port=NULL WHERE actor_id=${row.actor_id} AND id=${row.id}`;
       }
     }
 
     for (const job of wanted.values()) {
-      void this.sql`INSERT OR REPLACE INTO background_job_serves (actor_id, job_id, port) VALUES (${job.actor_id}, ${job.id}, ${job.port})`;
+      void this.sql`UPDATE background_jobs SET serves_port=${job.port} WHERE actor_id=${job.actor_id} AND id=${job.id}`;
     }
   }
 

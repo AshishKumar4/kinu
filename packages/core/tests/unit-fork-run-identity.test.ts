@@ -195,7 +195,7 @@ describe('a re-driven fork job stays one run', () => {
 
     expect(listForkRuns(sql, actor, null, 30).items).toHaveLength(1);
     expect(sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM head_merge_results WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(1);
+      SELECT COUNT(*) AS n FROM head_runs WHERE actor_id = ${actor.actorId} AND merged_narrative IS NOT NULL`[0]?.n).toBe(1);
     await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
 
@@ -250,14 +250,12 @@ describe('a re-driven fork job stays one run', () => {
     });
 
     expect(compiled).toHaveLength(1);
-    // `cacheMerge` is keyed on the root, so a fresh id would add a row rather than replace one.
-    expect(sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM head_merge_results WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(1);
+    // `cacheMerge` is keyed on the root, so a fresh id would add a run rather than settle this one.
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM head_runs WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(1);
 
-    const [row] = sql<{ merged_narrative: string }>`
-      SELECT merged_narrative FROM head_merge_results WHERE actor_id = ${actor.actorId}`;
+    const [row] = sql<{ merged_narrative: string | null }>`
+      SELECT merged_narrative FROM head_runs WHERE actor_id = ${actor.actorId}`;
 
     expect(row?.merged_narrative).toBe(MERGE.narrative);
     await settleInterruptedRuns(pendingHeads, interruptedRuns);

@@ -26,6 +26,7 @@
     "./device-user-probe.ts",
     "./mailbox-probe.ts",
     "./account-reset-probe.ts",
+    "./account-census-probe.ts",
     "./store-reset-probe.ts",
     "./addressed-name-probe.ts",
     "./attribution-probe.ts",

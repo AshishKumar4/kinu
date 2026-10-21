@@ -18,11 +18,12 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import {
   BoundedOutput, COMMAND_OUTPUT_LIMITS, DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
-  type DeviceStatus, type DeviceTransport, type TunnelSocket, DEVICE_ERRORS, DEVICE_METHOD, KINU_NODE_MODULE_SOURCE, TurnContextBudget,
+  type DeviceStatus, type DeviceTransport, type TunnelSocket, DEVICE_ERRORS, DEVICE_METHOD, TurnContextBudget,
   WORKSPACE_ROOT, cloudPlanes, executorNamespace, nestedMembers, serveFile, standardMounts, withMountTable, type ExecutorProviderSurface,
 } from '@kinu.run/core';
 import { TurnFileLedger } from '../../core/src/vfs/file-ledger';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
+import { runProgram } from './helpers/codemode-program';
 
 const require_ = createRequire(import.meta.url);
 
@@ -1105,14 +1106,13 @@ describe('a program\'s command whose cwd is on the user\'s machine runs there', 
     const members = (surface: ExecutorProviderSurface) => nestedMembers(Object.fromEntries(Object.entries(executorNamespace(surface, files).tools)
       .map(([name, entry]) => [name, entry.execute])));
 
-    const kinu: unknown = await import(`data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`);
-
-    const run = new Function('__kinu', 'workspace', 'machines', `const cp = __kinu.createRequire({ workspace, machines, builtins: {}, cwd: "/" })("child_process");
-      return cp.execFile("pwd", [], { cwd: ${JSON.stringify(`/pc/laptop${dir}`)} });`);
-
     const earlier = new Set(existsSync(pcAgent.INFLIGHT_ROOT) ? readdirSync(pcAgent.INFLIGHT_ROOT) : []);
 
-    expect(await run(kinu, members(workspace), { computer: null, device: members(provider) })).toEqual({ stdout: `${dir}\n`, stderr: '' });
+    // Under the prelude every eval program runs with, the namespaces bound as the sandbox binds them.
+    const ran = await runProgram(`return await require("child_process").execFile("pwd", [], { cwd: ${JSON.stringify(`/pc/laptop${dir}`)} });`,
+      { workspace: members(workspace), device: members(provider) }, WORKSPACE_ROOT, v.object({ stdout: v.string(), stderr: v.string() }));
+
+    expect(ran).toEqual({ stdout: `${dir}\n`, stderr: '' });
 
     // As the hub does once it holds a result: it acknowledges it, and the request's supervisor ends.
     for (const requestId of readdirSync(pcAgent.INFLIGHT_ROOT).filter((id) => !earlier.has(id))) {

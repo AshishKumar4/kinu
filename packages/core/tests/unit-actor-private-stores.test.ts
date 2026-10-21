@@ -357,6 +357,8 @@ describe('two actors, one database: the head journal', () => {
     const w = world();
     const a = new HeadJournal(w.sql, w.a);
     const b = new HeadJournal(w.sql, w.b);
+    a.recordSplit('root-1', 'A branch', 100);
+    b.recordSplit('root-1', 'B branch', 100);
     a.insertSpawn(headInput('h0', 'root-1', 'A branch', 100));
     b.insertSpawn(headInput('h0', 'root-1', 'B branch', 100));
 

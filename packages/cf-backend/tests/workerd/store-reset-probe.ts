@@ -41,11 +41,12 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     const { sql } = this.ctx.storage;
 
     if (planted === 'stale') {
-      sql.exec('ALTER TABLE turn_struggles ADD COLUMN arm TEXT');
-      sql.exec("INSERT INTO turn_struggles (actor_id, turn_id, errors, steps, struggles, created_at, arm) VALUES ('main', 'turn', 1, 2, '[]', 1, 'candidate')");
+      sql.exec('ALTER TABLE tool_lessons ADD COLUMN arm TEXT');
+      sql.exec(`INSERT INTO tool_lessons (actor_id, id, tool, text, revision, helpful, harmful, turn_ids, status, created_at, updated_at, arm)
+        VALUES ('main', 'lesson', 'file', 'Read before writing.', 1, 0, 0, '[]', 'active', 1, 1, 'candidate')`);
     } else {
-      sql.exec('DROP INDEX idx_turn_struggles_actor');
-      sql.exec('CREATE TABLE idx_turn_struggles_actor (id TEXT)');
+      sql.exec('DROP INDEX idx_tool_lessons_actor');
+      sql.exec('CREATE TABLE idx_tool_lessons_actor (id TEXT)');
     }
 
     this.ctx.storage.kv.put('kinu.schema_stamp', 1);

@@ -16,8 +16,7 @@ import { OWNER_STOPPED } from '../src/heads/types';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { initAgentFiguresTable, readAgentFigures } from '../src/read-models/agent-figures';
 import { EventLog, initEventsHubTables, type EmailPayload } from '../src/events/hub/index';
-import { initDeferredApprovalsTable } from '../src/safety/deferred-approval';
-import { initDeviceConsentAsksTable } from '../src/safety/device-consent';
+import { initOwnerRequestsTable } from '../src/safety/owner-requests';
 
 const EMAIL: EmailPayload = {
   from: 'owner@example.com', to: 'kinu@agents.example.com', subject: 'Status?', body_text: 'Is staging green?',
@@ -37,8 +36,7 @@ function workspace() {
   initRunEventTables(execRaw);
   initAgentFiguresTable(execRaw);
   // The read model's tables, as the workspace's genesis creates them.
-  initDeferredApprovalsTable(execRaw);
-  initDeviceConsentAsksTable(execRaw);
+  initOwnerRequestsTable(execRaw);
   const actors = createTestActors(sql, execRaw);
   new SubordinateRosterStore(exec, actors.main).ensureSchema();
 
@@ -183,13 +181,14 @@ describe('the Agents panel lists every agent in the workspace', () => {
     const activity = async () => Object.fromEntries((await read()).map((agent) => [agent.label, agent.activity]));
 
     openTurn(alice);
-    db.query(`INSERT INTO deferred_approvals (actor_id, id, command, reason, status, requested_at) VALUES (?, 'd1', 'rm -rf build', 'deletes files', 'queued', 1)`).run(alice.actorId);
+    db.query(`INSERT INTO owner_requests (kind, actor_id, id, command, executor, context, reason, status, requested_at, spend_seq, rule_hits)
+      VALUES ('action', ?, 'd1', 'rm -rf build', '', '{}', 'deletes files', 'queued', 1, 0, '[]')`).run(alice.actorId);
     rests(main, { planPending: true });
     rests(scout, { lastFailed: true });
 
     expect(await activity()).toEqual({ Main: 'waiting', alice: 'waiting', scout: 'failed' });
 
-    db.query(`UPDATE deferred_approvals SET status = 'approved'`).run();
+    db.query(`UPDATE owner_requests SET status = 'approved' WHERE kind = 'action'`).run();
     rests(main);
     openTurn(scout);
 
@@ -203,12 +202,12 @@ describe('the Agents panel lists every agent in the workspace', () => {
     const { db, read } = workspace();
     const main = async () => (await read()).find((agent) => agent.key === 'main')?.activity;
 
-    db.query(`INSERT INTO device_consent_asks (consent_id, actor_id, device_id, device_label, method, command, workspace_name, created_at, epoch)
-      VALUES ('c1', NULL, 'd1', 'laptop', 'exec', 'bun test', 'kiln', ?, 0)`).run(Date.now());
+    db.query(`INSERT INTO owner_requests (kind, id, actor_id, device_id, device_label, method, command, workspace_name, requested_at, epoch, status)
+      VALUES ('device', 'c1', NULL, 'd1', 'laptop', 'exec', 'bun test', 'kiln', ?, 0, 'queued')`).run(Date.now());
 
     expect(await main()).toBe('waiting');
 
-    db.query(`UPDATE device_consent_asks SET status = 'once', decided_at = ?`).run(Date.now());
+    db.query(`UPDATE owner_requests SET status = 'once', decided_at = ? WHERE kind = 'device'`).run(Date.now());
     expect(await main()).toBe('idle');
   });
 

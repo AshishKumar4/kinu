@@ -320,6 +320,100 @@ export function slateUiTurn(request: ScriptedRequest, heard: (request: ScriptedR
   };
 }
 
+/* ── A slate asking the agent ─────────────────────────────────────────── */
+
+/** The slate-ask row's ask: the agent writes a slate whose method asks the agent, then runs it from its own program. */
+export const SLATE_ASK_PROBE = 'Slate ask probe: ask yourself through a slate.';
+
+/** The slate's id, and the question its method asks the agent. */
+export const SLATE_ASK_ID = 'asker';
+
+export const SLATE_ASK_QUESTION = 'slate-ask-question-2b7e';
+
+/** What the agent answers the slate's question with, when the question reaches a turn of its own. */
+export const SLATE_ASK_REPLY = 'slate-ask-reply-6f2c';
+
+/** What the slate answers on its own when its ask is refused. */
+export const SLATE_ASK_FALLBACK = 'slate-ask-fallback-91d0';
+
+/**
+ * The slate: `ask()` asks the agent and reports how long the answer took, or its own fallback with the refusal;
+ * `askWithin(ms)` races the same ask against its own timer, which says whether a slate's timer fires while it waits.
+ */
+const SLATE_ASK_SERVER = [
+  'import { SlateObject } from "kinu:slate";',
+  'export class Slate extends SlateObject {',
+  '  async asked() {',
+  `    const answered = await this.env.workspace.agent.ask({ text: ${JSON.stringify(SLATE_ASK_QUESTION)} });`,
+  '    const reply = answered.reply;',
+  '    return (typeof reply === "string" ? reply : await new Response(reply).text()).trim();',
+  '  }',
+  '  async ask() {',
+  '    const started = Date.now();',
+  '    try {',
+  '      return { reply: await this.asked(), ms: Date.now() - started };',
+  '    } catch (error) {',
+  `      return { reply: ${JSON.stringify(SLATE_ASK_FALLBACK)}, refused: String(error instanceof Error ? error.message : error), ms: Date.now() - started };`,
+  '    }',
+  '  }',
+  '  async askWithin(ms) {',
+  '    const started = Date.now();',
+  '    const timer = new Promise((resolve) => { setTimeout(() => resolve("timer"), ms); });',
+  '    const won = await Promise.race([this.asked().then(() => "ask", () => "ask"), timer]);',
+  '    return { won, ms: Date.now() - started };',
+  '  }',
+  '}',
+].join("\n");
+
+/** The program the agent runs: the slate's ask, then its timer race, each as the agent's own call. */
+export const SLATE_ASK_PROGRAM = `const asked = await workspace.slates.${SLATE_ASK_ID}.ask();\nconst timed = await workspace.slates.${SLATE_ASK_ID}.askWithin(3000);\nreturn { asked, timed };`;
+
+/** What the slate-ask row reads of its turn: the last request, which carries the program's result, and how long the
+ *  program's call held the turn, from the step that asked for it to the step that read its result. */
+export class SlateAskProbe {
+  readonly #heard = Promise.withResolvers<{ readonly request: ScriptedRequest; readonly programMs: number }>();
+  #askedAt: number | null = null;
+
+  get heard(): Promise<{ readonly request: ScriptedRequest; readonly programMs: number }> {
+    return this.#heard.promise;
+  }
+
+  asked(): void {
+    this.#askedAt ??= Date.now();
+  }
+
+  read(request: ScriptedRequest): void {
+    this.#heard.resolve({ request, programMs: this.#askedAt === null ? -1 : Date.now() - this.#askedAt });
+  }
+}
+
+/**
+ * The agent writes the slate and runs it from its own program, then says done; `probe` is told the turn's last request
+ * and how long the program held the turn. A turn the slate's question opens answers it.
+ */
+export function slateAskTurn(request: ScriptedRequest, probe: SlateAskProbe): ScriptedAnswer | null {
+  // The first request that carries the program's result, whatever else arrived with it.
+  if (request.calls.some((call) => call.name === 'eval' && call.arguments.includes(`slates.${SLATE_ASK_ID}.ask()`))) probe.read(request);
+  const question = [request.ask, ...request.delivered].some((text) => text.includes(SLATE_ASK_QUESTION));
+
+  if (request.ask !== SLATE_ASK_PROBE || request.available.length === 0) return question ? { text: SLATE_ASK_REPLY } : null;
+  const made = request.askTurn.filter((call) => call.name === 'file' || call.name === 'eval').length;
+  const root = `${SLATES_ROOT}/${SLATE_ASK_ID}`;
+
+  if (made === 0) return { toolCall: { name: 'file', arguments: { op: 'write', path: `${root}/package.json`, content: JSON.stringify({ main: 'server.ts', slate: { title: 'Asker' } }) } } };
+
+  if (made === 1) return { toolCall: { name: 'file', arguments: { op: 'write', path: `${root}/server.ts`, content: SLATE_ASK_SERVER } } };
+
+  if (made === 2) {
+    probe.asked();
+
+    return { toolCall: { name: 'eval', arguments: { code: SLATE_ASK_PROGRAM } } };
+  }
+
+  // A question spliced into this turn is answered in it, the turn it landed in.
+  return { text: question ? `${SLATE_ASK_REPLY}\n\nDone.` : 'Done.' };
+}
+
 /* ── Stop, then a send ─────────────────────────────────────────────────── */
 
 /** The stop-then-send row's asks, numbered per attempt. One tab's turn runs, its call held until its attempt is done;

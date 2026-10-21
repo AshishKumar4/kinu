@@ -90,11 +90,11 @@ export class UserWorkspaces {
     const task = (async () => {
       const { token, tokenHash } = await freshWorkspaceCapability();
 
-      if (!this.workspaceMintable(workspaceName)) {
+      // Admits fork reservations, refuses rows mid-teardown and names absent from the registry.
+      if (!commitWorkspaceCapability(this.host.ctx.storage.sql, workspaceName, tokenHash)) {
         throw new KinuError('unavailable', `Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
       }
 
-      commitWorkspaceCapability(this.host.ctx.storage.sql, workspaceName, tokenHash);
       const workspace = objectNamed(this.host.env.OrchestratorAgent, workspaceName);
       await workspace.installWorkspaceCapability(token);
     })();
@@ -102,14 +102,6 @@ export class UserWorkspaces {
     this._provisioning.set(workspaceName, task);
 
     try { await task; } finally { this._provisioning.delete(workspaceName); }
-  }
-
-  /** Like {@link workspaceRegistered} but also admits fork reservations (`create_pending = 1`);
-   *  refuses rows mid-teardown and names absent from the registry. */
-  private workspaceMintable(name: string): boolean {
-    return this.host.sqlx(
-      `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 0`, name,
-    ).length > 0;
   }
 
   /** Same predicate as `listWorkspaces`' `total`: pending reservations and teardowns don't count. */
@@ -140,6 +132,16 @@ export class UserWorkspaces {
     if (sockets.length === 0) return;
     const sql = this.host.ctx.storage.sql;
     sendRosterFrame(sockets, { type: 'workspace', name, entry: rosterRow(sql, name), counts: rosterCounts(sql) }, this.host.sessionStands);
+  }
+
+  /** A deleted account's email gone from every share in this account's overviews, as the next push would leave them. */
+  forgetShareUser(email: string): void {
+    for (const { name, overview } of this.host.sqlx<{ name: string; overview: string }>('SELECT name, overview FROM workspace_overviews')) {
+      const parsed = v.parse(WorkspaceOverviewSchema, JSON.parse(overview));
+      const shares = parsed.shares.map((share) => ({ ...share, users: share.users.filter((user) => user.trim().toLowerCase() !== email) }));
+
+      this.host.sqlx('UPDATE workspace_overviews SET overview = ? WHERE name = ?', JSON.stringify({ ...parsed, shares }), name);
+    }
   }
 
   /** A repeat writes and sends nothing. */
@@ -420,8 +422,8 @@ export class UserWorkspaces {
     )[0];
 
     if (!row || row.created_at !== createdAt) return false;
+    // Its identity goes with the row.
     this.host.sqlx(`DELETE FROM user_workspaces WHERE name = ? AND created_at = ?`, name, createdAt);
-    revokeWorkspaceCapability(this.host.ctx.storage.sql, name);
     // A row the use feed saw while it was reserved goes with it.
     await unindexWorkspace(this.host.env, { userId: this.host.ownerId(), name });
 
@@ -530,8 +532,6 @@ export class UserWorkspaces {
     await this.host.deletions.ended(name);
     // Every deletion's, whichever entrance asked for it: only once the registry row is gone.
     await unindexWorkspace(this.host.env, { userId: this.host.ownerId(), name });
-    // Re-run for a resumed row whose identity a pre-fence delete could have left registered.
-    revokeWorkspaceCapability(this.host.ctx.storage.sql, name);
   }
 
   private deleteWorkspaceRows(name: string, when: 'before-destroy' | 'after-destroy'): void {

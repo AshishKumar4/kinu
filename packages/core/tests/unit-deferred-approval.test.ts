@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import { Database } from 'bun:sqlite';
 import { createMemoryVfs, fakeCommandMember, fakeMossaic, toolExecute, createRecordingLogger, NO_JOBS } from '@kinu.run/test-utils';
 import { sessionFilesOver, type SessionBox } from '@kinu.run/test-utils/vfs';
-import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ExecutionContext, type ParkedWrites, type ShellApprovalPolicy, type ShellApprovalOutcome, type ShellApprovalRequest, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT, createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell } from '../src/index';
+import { DeferredApprovalQueue, DeferredApprovalStore, initOwnerRequestsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, reviewCommand, actorReferenceOf, type DeferredApprovalChannel, formatApprovalGrant, createShellSession, hostedToolFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ExecutionContext, type ParkedWrites, type ShellApprovalPolicy, type ShellApprovalOutcome, type ShellApprovalRequest, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT, createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell } from '../src/index';
 import type { BoundFileWrite } from '../src/safety/bound-write';
 import { RESUMED_SURFACE, type InvocationSurface } from '../src/types/jobs';
 import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
@@ -23,12 +23,12 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 import { cloudPlanes } from '../src/vfs/resolve';
 
-/** Approvals db + actor. `deferred_approvals` is keyed `(actor_id, id)`, so a re-opened store must name the same actor. */
+/** Approvals db + actor. An action in `owner_requests` is keyed `(actor_id, id)`, so a re-opened store must name the same actor. */
 function approvalsDb() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  initDeferredApprovalsTable(execRaw);
+  initOwnerRequestsTable(execRaw);
 
   return { db, sql, actor: createTestActors(sql, execRaw).main } satisfies {
     db: Database; sql: SqlExecutor; actor: ActorHandle;
@@ -627,7 +627,7 @@ describe('what an approval actually buys', () => {
     // A row parked under older reason wording.
     const { shellTool, queue, store, granted, sql } = setup();
     await expect(shellTool.execute({ command: GATED })).rejects.toBeInstanceOf(KinuError);
-    void sql`UPDATE deferred_approvals SET reason = ${'Needs approval: force-pushing rewrites the remote.'}`;
+    void sql`UPDATE owner_requests SET reason = ${'Needs approval: force-pushing rewrites the remote.'} WHERE kind = 'action'`;
 
     expect(store.get('defer-1')?.reason).toBe('Needs approval: force-pushing rewrites the remote.');
     await expect(shellTool.execute({ command: GATED })).rejects.toMatchObject({ message: expect.stringContaining('git-force-push') });
@@ -702,7 +702,7 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
     store.create({ id: 'defer-blessed', command: `${GATED} --twice`, executor: 'workspace', context: {}, reason: 'gate', requestedAt: 2 }, []);
     expect(store.decide('defer-blessed', 'approved', 3)?.status).toBe('approved');
 
-    initDeferredApprovalsTable(makeExecRaw(db));
+    initOwnerRequestsTable(makeExecRaw(db));
     const reopened = new DeferredApprovalStore(sql, actor);
     expect(reopened.get('defer-parked')?.status).toBe('queued');
     expect(reopened.get('defer-blessed')?.status).toBe('approved');
@@ -782,7 +782,7 @@ describe('a hired agent parks on its workspace\'s one queue, as itself', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
-    initDeferredApprovalsTable(execRaw);
+    initOwnerRequestsTable(execRaw);
     const actors = createTestActors(sql, execRaw);
     const hire = actors.sibling('courier');
     const woken: Array<[string, string]> = [];
@@ -1267,7 +1267,7 @@ async function driveWithQueue(perform: (plane: VFS, write: BoundFileWrite, bytes
   });
 
   const policy: ShellApprovalPolicy = { mode: () => 'strict', deferrals: queue.channel };
-  const files = withApprovalGatedFiles(plane, 'workspace', { planes: cloudPlanes(WORKSPACE_ROOT), resolve: (path, follow, creating) => plane.resolve(path, { follow, creating }), userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, policy);
+  const files = hostedToolFiles(plane, cloudPlanes(WORKSPACE_ROOT), policy);
 
   return { drive, files, queue, store, woken, kernel };
 }

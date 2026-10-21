@@ -69,7 +69,7 @@ export { standingFileLedger, turnLedgers, type TurnLedgers } from './orchestrato
 
 // Records that keyed work happened, kept after its row is retired.
 export {
-  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
+  initEffectTombstoneTable, effectAlreadyDone, prepareOutput, recordEffectDone,
 } from './identity/effect-tombstones';
 
 export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
@@ -89,7 +89,7 @@ export {
   censusOf, OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, requireOps, type OpsCaller, type StoreCensus, type TableRows, type TablesAnswer,
 } from './state/ops-tables';
 
-export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS } from './state/user-schema';
+export { ACCOUNT_EPOCH_FIELDS, type ConnectionTicketPurpose, initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS } from './state/user-schema';
 
 export { initMailNameTables, initMailboxTables } from './state/mail-schema';
 
@@ -352,7 +352,7 @@ export type {
 } from './slates/room-api';
 
 export {
-  GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GallerySlateSchema, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
+  GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GallerySlateSchema, galleryPagePath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
   GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GallerySlate, type GallerySort, type GalleryStar,
   type GalleryReport,
   EXPLORE_KINDS, ExplorePageSchema, BlueprintPageSchema, explorePath, workspaceBlueprintPath,
@@ -1064,7 +1064,7 @@ export {
 } from './execution/router';
 
 export {
-  withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, type FileReach,
+  withApprovalGatedShell, withApprovalGatedFiles, hostedToolFiles, gateProviderExec, type FileReach,
 } from './execution/approval';
 
 export {
@@ -1169,7 +1169,7 @@ export {
 } from './execution/parent';
 
 export {
-  createInlineExecutor, createNimbusWorkspaceExecutor, workspaceCapabilities,
+  createInlineExecutor, createNimbusWorkspaceExecutor, workspaceCapabilities, SlateProgramSchema,
   type InlineExecutorDeps,
 } from './tools/inline-executor';
 
@@ -1554,8 +1554,10 @@ export {
 
 export { egressAuthority, type EgressAuthority, type EgressPrincipal } from './safety/egress-principal';
 
+export { initOwnerRequestsTable } from './safety/owner-requests';
+
 export {
-  DeferredApprovalQueue, decideDeferredApprovals, DeferredApprovalStore, initDeferredApprovalsTable,
+  DeferredApprovalQueue, decideDeferredApprovals, DeferredApprovalStore,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, DeferredApprovalSchema, type DeferredApproval,
   type DeferredApprovalAnswer,
   type DeferredApprovalNotice, type ParkedWrites, type SlateEffectVerdict,
@@ -1569,7 +1571,7 @@ export {
 } from './safety/egress-vault';
 
 export {
-  ownerCaller, OwnerCapabilityUnavailableError, CapabilityDeniedError, initWorkspaceCapabilityTables,
+  ownerCaller, OwnerCapabilityUnavailableError, CapabilityDeniedError,
   workspaceCapabilityHash, freshWorkspaceCapability, commitWorkspaceCapability, revokeWorkspaceCapability,
   requireTier, type WorkspaceCapability, type UserCaller, type ResolvedCaller,
   type OwnerCapabilityEnv,
@@ -2263,7 +2265,7 @@ export {
 } from './preview/preview-ports';
 
 export {
-  sandboxPreviewExposure, sandboxPreviewExposures,
+  sandboxPreviewExposure, sandboxPreviewExposures, forgetSandboxPreviews, type ListedKv,
   type SandboxPreviewExposures,
 } from './preview/preview-exposures';
 
@@ -2638,7 +2640,7 @@ export {
 } from './http/health-route';
 
 export {
-  adaptMemory,
+  adaptMemory, forgetMemoryVectors,
   backfillMemoryVectors,
 } from './memory/vector-sync';
 
