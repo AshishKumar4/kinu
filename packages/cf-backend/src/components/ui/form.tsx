@@ -5,7 +5,7 @@ export { Card } from '@/components/ui/Card';
 
 export { Field } from '@/components/ui/Field';
 
-export const inputCls = "t-body w-full rounded-md px-3 py-2 p-text transition-all"
+export const inputCls = "t-body w-full rounded-[var(--r-control)] px-3 py-2 p-text transition-all"
   + " border border-[var(--c-field-border)] bg-[var(--c-surface)]"
   + " placeholder:p-text-3";
 

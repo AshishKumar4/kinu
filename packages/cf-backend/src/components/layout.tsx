@@ -75,13 +75,13 @@ function Shell() {
       <header className={`h-14 shrink-0 items-center justify-between border-b p-border p-sidebar px-3 md:hidden ${ownBar ? "hidden" : "flex"}`}>
         <div className="flex items-center gap-1">
           <Button variant="ghost" size="sm" icon={<ListIcon size={14} />} aria-label="Open menu" onClick={() => setDrawerOpen(true)} />
-          <Link to="/" aria-label="Kinu home" className="flex items-center rounded-md px-2 py-1">
+          <Link to="/" aria-label="Kinu home" className="flex items-center px-2 py-1">
             <KinuLogo compact />
           </Link>
         </div>
         <div className="flex items-center gap-1">
           <FeedbackButton compact />
-          <NewWorkspaceIconButton className="size-9 rounded-full" />
+          <NewWorkspaceIconButton className="size-9" />
         </div>
       </header>
 

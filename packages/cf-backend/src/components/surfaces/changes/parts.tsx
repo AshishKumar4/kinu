@@ -4,6 +4,7 @@ import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { changeBody, changeTotals, changeTree, type ChangeSet, type FileDiff } from "@kinu.run/core";
 import { ChangeMark, count, Counts, fullTime, sinceLabel } from "./diff";
 import { Pressable } from "@/components/ui/Pressable";
+import { Surface } from "@/components/ui/Surface";
 import { IconControl } from "@/components/ui/IconControl";
 import { Button } from "@/components/ui/Button";
 
@@ -37,7 +38,7 @@ export function FileTree({ files, repositories, current, onOpen }: {
               {row.repository
                 ? <GitBranchIcon size={13} weight="bold" className="shrink-0 p-text-3" />
                 : <FolderSimpleIcon size={13} weight="fill" className="shrink-0 p-text-3 opacity-70" />}
-              <span className={`min-w-0 truncate ${row.repository ? "font-medium p-text-2" : ""}`}>{row.name}</span>
+              {row.repository ? <strong className="min-w-0 truncate p-text-2">{row.name}</strong> : <span className="min-w-0 truncate">{row.name}</span>}
             </li>
           );
         }
@@ -46,14 +47,14 @@ export function FileTree({ files, repositories, current, onOpen }: {
 
         return (
           <li key={row.file.path}>
-            <button type="button" onClick={() => onOpen(row.file.path)} style={inset} data-file-row={row.file.path} aria-current={selected ? "true" : undefined}
-              className={`flex h-8 w-full items-center gap-2 pr-3 text-left transition-colors max-md:h-10 ${selected ? "bg-[var(--c-fill)] p-text" : "p-text-2 hover:bg-[var(--c-hover)] hover:p-text"}`}>
+            <Pressable look="flush" onClick={() => onOpen(row.file.path)} style={inset} data-file-row={row.file.path} aria-current={selected ? "true" : undefined}
+              className={`flex h-8 items-center gap-2 pr-3 max-md:h-10 ${selected ? "p-text" : "p-text-2 hover:p-text"}`}>
               <ChangeMark status={row.file.status} />
-              <span className={`t-body min-w-0 flex-1 truncate ${row.file.status === "removed" ? "line-through decoration-[color-mix(in_srgb,currentColor_45%,transparent)]" : ""}`}>
+              <span className={`t-body min-w-0 flex-1 truncate ${row.file.status === "removed" ? "p-struck" : ""}`}>
                 {row.file.path.slice(row.file.path.lastIndexOf("/") + 1)}
               </span>
               <Tag file={row.file} />
-            </button>
+            </Pressable>
           </li>
         );
       })}
@@ -102,13 +103,13 @@ export function SourceMenu({ sets, source, initiallyOpen = false, onPick }: {
 
   return (
     <div ref={box} className="relative shrink-0">
-      <button type="button" onClick={() => setOpen((value) => !value)} aria-haspopup="menu" aria-expanded={open} data-source-menu
-        className="flex items-center gap-1 rounded-md px-1 py-px -mx-2 p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
+      <Pressable look="compact" onClick={() => setOpen((value) => !value)} aria-haspopup="menu" aria-expanded={open} data-source-menu
+        className="flex items-center gap-1 px-1 py-px -mx-2 p-text-2 hover:p-text">
         {sets.find((set) => set.source === source)?.label}
         <CaretDownIcon size={10} />
-      </button>
+      </Pressable>
       {open && (
-        <div role="menu" className="absolute left-0 top-8 z-30 w-56 p-card border p-border p-1 p-shadow-menu animate-fade-in">
+        <Surface look="panel" role="menu" className="absolute left-0 top-8 z-30 w-56 p-1 p-shadow-menu animate-fade-in">
           <p className="t-meta px-2 pb-1 pt-1 p-text-3">Show changes in</p>
           {sets.map((set) => (
             <Pressable className="t-body flex items-center gap-2 px-2 py-1 p-text-2 hover:p-text" key={set.source} role="menuitemradio" aria-checked={set.source === source} onClick={() => { setOpen(false); onPick(set.source); }}>
@@ -117,7 +118,7 @@ export function SourceMenu({ sets, source, initiallyOpen = false, onPick }: {
               <span className={`t-meta shrink-0 ${set.error === undefined ? "p-text-3" : "p-warning"}`}>{sourceNote(set)}</span>
             </Pressable>
           ))}
-        </div>
+        </Surface>
       )}
     </div>
   );

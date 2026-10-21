@@ -43,7 +43,7 @@ export function Row({ tile, title, meta, status, control, action, below, selecte
         </div>
       )}
       <div className="flex justify-end">{action}</div>
-      {below !== undefined && <div className="col-start-2 col-end-[-1] min-w-0 pb-2">{below}</div>}
+      {below !== undefined && <div className="col-start-2 -col-end-1 min-w-0 pb-2">{below}</div>}
     </div>
   );
 }

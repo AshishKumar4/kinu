@@ -86,7 +86,7 @@ export default function SwarmExplorer() {
     <Surface look="page" className="h-full flex flex-col">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 border-b p-border">
         <Link to={`/workspace/${agentId}`} className="shrink-0"><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
-        <div className="hidden sm:block h-4 w-px shrink-0 bg-[var(--c-border)]" />
+        <div className="hidden sm:block h-4 shrink-0 border-l p-border" />
         <GitForkIcon size={16} className="p-accent-fg shrink-0" />
         <span className="t-label p-text shrink-0">Swarm explorer</span>
         {run && <span className="t-meta min-w-0 flex-1 p-text-2 truncate" title={run.task} data-explorer-run>{run.name}</span>}
@@ -162,8 +162,9 @@ function ExplorerBody({
       <div className="flex-1 min-h-0 flex flex-col md:flex-row">
         <Surface look="sheet" className="flex-1 min-h-0 relative overflow-hidden" ref={attach}>
           {tree && resource.status === "error" && (
-            <LoadFailure what="the latest fork tree" message={resource.message} onRetry={reload}
-              className="absolute z-10 left-4 right-4 top-4 p-surface border p-border rounded-md px-3 py-2" />
+            <Surface look="panel" className="absolute z-10 left-4 right-4 top-4 px-3 py-2">
+              <LoadFailure what="the latest fork tree" message={resource.message} onRetry={reload} />
+            </Surface>
           )}
           {!tree && (
             <CanvasNotice
@@ -184,7 +185,7 @@ function ExplorerBody({
             </div>
           ))}
         </Surface>
-        <div className={`${selectedId === null ? "hidden md:flex" : "flex"} w-full max-h-[55%] shrink-0 flex-col min-h-0 border-t p-border p-2 md:h-auto md:max-h-none md:w-[28rem] md:border-t-0 md:border-l`}>
+        <div className={`${selectedId === null ? "hidden md:flex" : "flex"} w-full max-h-[var(--layout-transcript-phone)] shrink-0 flex-col min-h-0 border-t p-border p-2 md:h-auto md:max-h-none md:w-112 md:border-t-0 md:border-l`}>
           <NodeTranscript
             selection={selection}
             trees={state.mctsTrees} rpc={state.rpc} headActivity={state.headActivity}
@@ -194,13 +195,13 @@ function ExplorerBody({
       </div>
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 px-5 py-2 border-t p-border">
         <div className="t-meta flex flex-wrap items-center gap-x-6 gap-y-1">
-          <span className="p-text-2">Branches: <span className="p-text font-medium" data-tree-branches>{Math.max(0, (stats?.nodes ?? 1) - 1)}</span></span>
-          <span className="p-text-2">Depth: <span className="p-text font-medium" data-tree-depth>{stats?.depth ?? 0}</span></span>
+          <span className="p-text-2">Branches: <strong className="p-text" data-tree-branches>{Math.max(0, (stats?.nodes ?? 1) - 1)}</strong></span>
+          <span className="p-text-2">Depth: <strong className="p-text" data-tree-depth>{stats?.depth ?? 0}</strong></span>
           {winner?.value != null && (
-            <span className="p-text-2">Winner: <span className="p-success font-medium" data-tree-winner>{formatScore(winner.value)}</span></span>
+            <span className="p-text-2">Winner: <strong className="p-success" data-tree-winner>{formatScore(winner.value)}</strong></span>
           )}
           {frontier !== null && (
-            <span className="p-text-2">Front: <span className="p-text font-medium">{frontier.candidates.length} {frontier.candidates.length === 1 ? "candidate" : "candidates"}</span></span>
+            <span className="p-text-2">Front: <strong className="p-text">{frontier.candidates.length} {frontier.candidates.length === 1 ? "candidate" : "candidates"}</strong></span>
           )}
           {run.status === "running" && (
             <span className="flex items-center gap-1 p-accent-fg">
@@ -211,7 +212,7 @@ function ExplorerBody({
         {selected && (selected.value !== null || selected.visits !== null) && (
           <div className="t-meta flex items-center gap-4 animate-fade-in">
             <TreeStructureIcon size={13} className="p-text-3" />
-            {selected.value !== null && <span className="p-text-2">score <span className="p-text font-medium">{formatScore(selected.value)}</span></span>}
+            {selected.value !== null && <span className="p-text-2">score <strong className="p-text">{formatScore(selected.value)}</strong></span>}
             {selected.visits !== null && <span className="p-text-2">n={selected.visits}</span>}
           </div>
         )}

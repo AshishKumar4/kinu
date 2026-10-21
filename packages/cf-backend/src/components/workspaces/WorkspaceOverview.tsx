@@ -12,6 +12,7 @@ import { GitHubSection } from "@/components/workspaces/GitHubSection";
 import { WorkspaceLogo } from "@/components/Marks";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Surface } from "@/components/ui/Surface";
+import { Pressable } from "@/components/ui/Pressable";
 import { ProgressBar } from "@/components/ui/Meter";
 
 type Lane = "todo" | "doing" | "waiting" | "done";
@@ -145,13 +146,13 @@ function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; wor
   );
 }
 
-const CARD_CLASS = "group flex flex-col gap-3 rounded-xl border p-border bg-[var(--c-bg)] px-3 py-2 text-left transition-colors hover:border-[var(--c-border-strong)]";
+const CARD_CLASS = "p-task-card group flex flex-col gap-3 px-3 py-2";
 
 function TaskCard({ card, workspace, open }: { card: Card; workspace: string; open: (agent: PanelAgent) => void }) {
   const { agent } = card;
 
   if (agent !== undefined) {
-    return <button type="button" data-task-card onClick={() => open(agent)} className={CARD_CLASS}><TaskBody card={card} /></button>;
+    return <Pressable data-task-card onClick={() => open(agent)} className={CARD_CLASS}><TaskBody card={card} /></Pressable>;
   }
 
   const path = card.owner.path;
@@ -163,7 +164,7 @@ function TaskCard({ card, workspace, open }: { card: Card; workspace: string; op
 function TaskBody({ card }: { card: Card }) {
   return (
     <>
-      <span className={`t-body ${card.lane === "done" ? "p-text-3 line-through decoration-[var(--c-border-strong)]" : "p-text"}`}>{card.title}</span>
+      <span className={`t-body ${card.lane === "done" ? "p-text-3 p-struck" : "p-text"}`}>{card.title}</span>
       <span className="t-meta flex items-center gap-2 p-text-3">
         {card.agent && <AgentStatusMark activity={card.agent.activity} />}
         <span className="min-w-0 truncate">{card.agent?.label ?? card.owner.title}</span>

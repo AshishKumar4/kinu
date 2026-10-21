@@ -279,11 +279,11 @@ function PendingRow(
   const open = onOpen ?? (surface === null ? null : () => onOpenSurface(surface));
 
   if (open === null) {
-    return <div className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-2 py-2" data-pending-action={action.id}>{icon}{content}</div>;
+    return <div className="grid grid-cols-[var(--layout-mark-row)] items-start gap-2 py-2" data-pending-action={action.id}>{icon}{content}</div>;
   }
 
   return (
-    <Pressable className="grid grid-cols-[14px_minmax(0,1fr)_16px] items-start gap-2 py-2" onClick={open} data-pending-action={action.id}>
+    <Pressable className="grid grid-cols-[var(--layout-mark-row-mark)] items-start gap-2 py-2" onClick={open} data-pending-action={action.id}>
       {icon}
       {content}
       <CaretRightIcon size={12} className="mt-1 shrink-0 justify-self-end p-text-3" />

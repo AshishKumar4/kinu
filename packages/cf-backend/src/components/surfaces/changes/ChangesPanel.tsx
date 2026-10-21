@@ -13,6 +13,7 @@ import { FileTree, IconButton, MarkReviewed, Since, SourceMenu, Summary, typing 
 import { NotesFailure, SendFeedback, useNotes } from "./notes";
 import { Button } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
+import { Pressable } from "@/components/ui/Pressable";
 
 // Lazy: plannotator's panel loads only with the first note.
 const NotesPanel = lazy(() => import("./notes-panel"));
@@ -114,14 +115,15 @@ function NextFile({ next, reviewable, onOpen, onReviewed, onList }: {
   }
 
   return (
-    <button type="button" onClick={() => onOpen(next.path)} data-next-file
-      className="mx-3 mb-6 mt-4 flex w-[calc(100%-1.5rem)] items-center gap-3 rounded-lg border p-border px-3 py-2 text-left transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-hover)]">
-      <span className="t-meta shrink-0 p-text-3">Next</span>
-      <ChangeMark status={next.status} />
-      <span className="t-body min-w-0 flex-1 truncate p-text">{vfsBasename(next.path)}</span>
-      <Counts added={next.added} removed={next.removed} />
-      <ArrowRightIcon size={13} className="shrink-0 p-text-3" />
-    </button>
+    <div className="mx-3 mb-6 mt-4">
+      <Pressable onClick={() => onOpen(next.path)} data-next-file className="flex items-center gap-3 border p-border px-3 py-2">
+        <span className="t-meta shrink-0 p-text-3">Next</span>
+        <ChangeMark status={next.status} />
+        <span className="t-body min-w-0 flex-1 truncate p-text">{vfsBasename(next.path)}</span>
+        <Counts added={next.added} removed={next.removed} />
+        <ArrowRightIcon size={13} className="shrink-0 p-text-3" />
+      </Pressable>
+    </div>
   );
 }
 
@@ -182,11 +184,11 @@ function NotesBar({ open, onToggle }: { open: boolean; onToggle: () => void }) {
 
   return (
     <footer className="flex shrink-0 items-center gap-2 border-t p-border px-3 py-2" data-notes-bar>
-      <button type="button" onClick={onToggle} aria-expanded={open}
-        className={`t-meta -ml-2 inline-flex items-center gap-2 rounded-md px-1 py-1 transition-colors ${open ? "bg-[var(--c-fill)] p-text" : "p-text-2 hover:bg-[var(--c-hover)] hover:p-text"}`}>
+      <Pressable look="compact" onClick={onToggle} aria-expanded={open}
+        className={`t-meta -ml-2 inline-flex items-center gap-2 px-1 py-1 ${open ? "p-text" : "p-text-2 hover:p-text"}`}>
         <ChatCircleDotsIcon size={14} className="p-info" />
         {notes.notes.length} {notes.notes.length === 1 ? "note" : "notes"} for the agent
-      </button>
+      </Pressable>
       <NotesFailure />
       <SendFeedback className="ml-auto" />
     </footer>
@@ -211,7 +213,7 @@ function FileHeader({ files, at, onGo }: {
         <IconButton label="Previous file (k)" onClick={() => onGo(files[at - 1]?.path ?? null)} disabled={at === 0}><CaretUpIcon size={14} /></IconButton>
         <IconButton label="Next file (j)" onClick={() => onGo(files[at + 1]?.path ?? null)} disabled={at === files.length - 1}><CaretDownIcon size={14} /></IconButton>
       </div>
-      <div className="t-meta flex items-center gap-2 pl-[34px] pr-2 p-text-3">
+      <div className="t-meta flex items-center gap-2 pl-[var(--layout-file-meta)] pr-2 p-text-3">
         <span className="min-w-0 truncate">{vfsDirname(open.path) || "Top level"}</span>
         <Counts added={open.added} removed={open.removed} />
         <span className="ml-auto shrink-0 tabular-nums">{at + 1} of {files.length}</span>
@@ -257,7 +259,7 @@ function FileCard({ file, split, register, onOpenInFiles }: {
 
   return (
     <Surface look="chrome" as="section" className="scroll-mt-3 overflow-clip border p-border" ref={(element) => register(file.path, element)} data-file-card={file.path} aria-label={file.path}>
-      <header className={`sticky top-0 z-[1] flex h-10 items-center gap-2 p-sidebar pl-2 pr-2 ${folded ? "" : "border-b p-border"}`}>
+      <Surface look="chrome" as="header" className={`sticky top-0 z-1 flex h-10 items-center gap-2 pl-2 pr-2 ${folded ? "" : "border-b p-border"}`}>
         <IconButton label={folded ? `Show ${file.path}` : `Fold ${file.path}`} onClick={() => setFolded((value) => !value)}>
           <CaretDownIcon size={12} className={`transition-transform ${folded ? "-rotate-90" : ""}`} />
         </IconButton>
@@ -268,7 +270,7 @@ function FileCard({ file, split, register, onOpenInFiles }: {
           <Counts added={file.added} removed={file.removed} />
           <FileNotes path={file.path} />
         </span>
-      </header>
+      </Surface>
       {!folded && <FileBody file={file} stacked split={split} onOpenInFiles={onOpenInFiles === null ? null : () => onOpenInFiles(file.path)} />}
     </Surface>
   );
@@ -366,7 +368,7 @@ function Expanded({ files, repositories, file, split, tree, notesShown, onNotes,
           </div>
         </nav>
       )}
-      <Surface look="page" className="min-w-0 flex-1 overflow-y-auto outline-none" ref={stack} onScroll={follow} tabIndex={-1} data-review-stack>
+      <Surface look="page" className="min-w-0 flex-1 overflow-y-auto" ref={stack} onScroll={follow} tabIndex={-1} data-review-stack>
         <div className="space-y-4 px-5 py-4 max-md:px-2 max-md:py-3">
           {files.map((each) => <FileCard key={each.path} file={each} split={split} register={register} onOpenInFiles={onOpenInFiles} />)}
         </div>
@@ -391,9 +393,9 @@ function Reviewed({ sets, source, at, now, menuOpen, onSource, onUndo }: {
         <CheckCircleIcon size={15} weight="fill" className="p-success" />Reviewed at {sinceLabel(at, now)}
         {onUndo !== null && <Button variant="ghost" size="sm" className="ml-auto" onClick={onUndo} data-undo-reviewed>Undo</Button>}
       </p>
-      <p className="t-meta mt-1 pl-[23px] p-text-3">New changes show here as they happen.</p>
+      <p className="t-meta mt-1 pl-[var(--layout-under-icon)] p-text-3">New changes show here as they happen.</p>
       {sets.length > 1 && (
-        <div className="t-meta mt-3 flex min-h-7 items-center pl-[23px] p-text-3">
+        <div className="t-meta mt-3 flex min-h-7 items-center pl-[var(--layout-under-icon)] p-text-3">
           <SourceMenu sets={sets} source={source} initiallyOpen={menuOpen} onPick={onSource} />
         </div>
       )}

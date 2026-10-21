@@ -14,7 +14,7 @@ export function MailSendBody({ send, text, onText }: { send: MailEnvelope; text:
   return (
     <>
       <div className="t-body p-text">{send.by} wants to send this mail</div>
-      <dl className="t-meta mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3">
+      <dl className="t-meta mt-1 grid grid-cols-[var(--layout-label-auto)] gap-x-3">
         <dt className="p-text-3">From</dt><dd className="truncate p-text-2">{send.from}</dd>
         <dt className="p-text-3">To</dt><dd className="truncate p-text-2">{send.to.join(", ")}</dd>
         {send.cc.length > 0 && <><dt className="p-text-3">Cc</dt><dd className="truncate p-text-2" data-mail-send-cc>{send.cc.join(", ")}</dd></>}

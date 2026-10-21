@@ -1,5 +1,5 @@
 /** A box to tick and a set to choose one from (docs/DESIGN-SYSTEM.md §2): 16 square, on Kumo's primitives' keys and ARIA. */
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { CheckIcon, MinusIcon } from "@phosphor-icons/react";
 import { Checkbox as Box } from "@cloudflare/kumo/primitives/checkbox";
 import { Radio } from "@cloudflare/kumo/primitives/radio";
@@ -47,5 +47,23 @@ export function RadioGroup<Value extends string>({ label, value, options, onChan
         </label>
       ))}
     </Group>
+  );
+}
+
+/** One answer among a question's, a row to press: the platform's own radio or box in the accent beside its words, the
+ *  fill under the pointer. `many` takes a box, for a question that takes more than one. */
+export function ChoiceOption({ many, name, checked, onChange, onFocus, children, ...label }: {
+  many: boolean;
+  name: string;
+  checked: boolean;
+  onChange: () => void;
+  onFocus?: () => void;
+  children: ReactNode;
+} & Omit<ComponentProps<"label">, "onChange" | "onFocus" | "children" | "className">) {
+  return (
+    <label className="p-choice-option" {...label}>
+      <input type={many ? "checkbox" : "radio"} name={name} className="p-choice-option-mark" checked={checked} onChange={onChange} onFocus={onFocus} />
+      {children}
+    </label>
   );
 }

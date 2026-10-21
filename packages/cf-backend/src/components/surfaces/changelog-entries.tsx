@@ -78,7 +78,7 @@ export function ChangelogFailure(
 
 function EntryField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="t-meta grid grid-cols-[64px_minmax(0,1fr)] gap-2">
+    <div className="t-meta grid grid-cols-[var(--layout-label-row)] gap-2">
       <span className="p-text-3">{label}</span>
       <span className="p-text-2 min-w-0 break-words">{children}</span>
     </div>
@@ -209,7 +209,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
 
   return (
     <div className={`${grouped ? "p-3" : "p-group p-3"} ${kept ? "opacity-70" : ""}`}>
-      <div className="grid grid-cols-[14px_minmax(0,1fr)_auto] items-start gap-2">
+      <div className="grid grid-cols-[var(--layout-mark-row-end)] items-start gap-2">
         <Icon size={14} className={`mt-px shrink-0 ${fresh ? "p-accent-fg" : "p-text-3"}`} />
         {hasDetails ? (
           <button

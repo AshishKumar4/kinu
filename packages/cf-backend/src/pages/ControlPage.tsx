@@ -21,6 +21,8 @@ import { WorkspaceDrilldown } from '../components/control/WorkspaceDrilldown';
 import { Button } from "@/components/ui/Button";
 import { Select } from "@/components/ui/Select";
 import { Checkbox } from "@/components/ui/Check";
+import { Surface } from "@/components/ui/Surface";
+import { Tabs } from "@/components/ui/Tabs";
 
 const TABS = {
   overview: { label: 'Overview', Icon: ShieldCheckIcon },
@@ -68,19 +70,8 @@ export default function ControlPage(): ReactNode {
           </p>
         </header>
 
-        <nav className="flex flex-wrap gap-1 border-b p-border pb-2">
-          {Object.entries(TABS).map(([key, { label, Icon }]) => (
-            <button
-              key={key}
-              onClick={() => go({ tab: key, user: null, workspace: null })}
-              className={`flex items-center gap-2 rounded-md px-2 py-1 t-meta transition-colors ${
-                key === tab ? 'p-accent-bg p-accent-fg' : 'p-text-3 hover:p-text'
-              }`}
-            >
-              <Icon size={13} /> {label}
-            </button>
-          ))}
-        </nav>
+        <Tabs label="Control" current={tab} onChoose={(key) => go({ tab: key, user: null, workspace: null })}
+          items={Object.entries(TABS).map(([key, { label, Icon }]) => ({ id: key, label, icon: Icon }))} />
 
         {workspace !== null && (
           <div className="space-y-3">
@@ -181,7 +172,7 @@ function UsersView({ onOpen }: { onOpen: (userId: string) => void }): ReactNode 
                 key: u.userId,
                 onClick: () => onOpen(u.userId),
                 cells: [
-                  <span className="font-medium">{u.email}</span>,
+                  <strong>{u.email}</strong>,
                   <span className="tabular-nums">{u.workspaces}</span>,
                   when(u.firstSeenAt), when(u.lastSeenAt),
                 ],
@@ -415,10 +406,10 @@ function MetricsView(): ReactNode {
         ) : (
           <div className="grid gap-3 md:grid-cols-2">
             {Object.entries(metrics.panels).map(([name, panel]) => (
-              <section key={name} className="p-card p-4 space-y-2">
+              <Surface look="panel" as="section" key={name} className="p-4 space-y-2">
                 <div className="t-label">{name}</div>
                 <PanelBody panel={panel} />
-              </section>
+              </Surface>
             ))}
           </div>
         )}
@@ -443,7 +434,7 @@ function MetricTable({ rows }: { rows: Extract<AnalyticsResult, { status: 'ok' }
   return (
     <table className="t-meta w-full">
       <thead className="p-text-3 border-b p-border">
-        <tr>{columns.map((c) => <th key={c} className="text-left py-1 font-medium">{c}</th>)}</tr>
+        <tr>{columns.map((c) => <th key={c} className="t-status text-left py-1">{c}</th>)}</tr>
       </thead>
       <tbody>
         {rows.map((row, index) => (
@@ -520,23 +511,22 @@ function Table(
   { head, rows, empty }: { head: string[]; rows: TableRow[]; empty: string },
 ): ReactNode {
   if (rows.length === 0) {
-    return <section className="t-meta p-card p-8 text-center p-text-3">{empty}</section>;
+    return <Surface look="panel" as="section" className="t-meta p-8 text-center p-text-3">{empty}</Surface>;
   }
 
   return (
-    <section className="p-card overflow-x-auto">
+    <Surface look="panel" as="section" className="overflow-x-auto">
       <table className="t-body w-full">
         <thead className="t-meta p-text-3 border-b p-border">
-          <tr>{head.map((h) => <th key={h} className="text-left px-4 py-2 font-medium">{h}</th>)}</tr>
+          <tr>{head.map((h) => <th key={h} className="t-status text-left px-4 py-2">{h}</th>)}</tr>
         </thead>
         <tbody>
           {rows.map((row) => (
             <tr
               key={row.key}
               onClick={row.onClick}
-              className={`border-b p-border last:border-b-0 ${
-                row.onClick === undefined ? '' : 'cursor-pointer p-card-hover'
-              }`}
+              data-opens={row.onClick === undefined ? undefined : ''}
+              className="border-b p-border last:border-b-0"
             >
               {row.cells.map((cell, index) => (
                 <td key={index} className="px-4 py-3 align-top">{cell}</td>
@@ -545,6 +535,6 @@ function Table(
           ))}
         </tbody>
       </table>
-    </section>
+    </Surface>
   );
 }

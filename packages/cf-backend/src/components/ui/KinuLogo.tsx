@@ -26,7 +26,7 @@ interface KinuLogoProps {
 /** The mark and the name, set plainly in the UI face. */
 export function KinuLogo({ className, compact = false }: KinuLogoProps): ReactElement {
   return (
-    <span className={`inline-flex items-center gap-2 font-medium p-text  ${compact ? 'text-[17px]' : 'text-[18px]'}${className ? ` ${className}` : ''}`}>
+    <span className={`p-wordmark inline-flex items-center gap-2 p-text${className ? ` ${className}` : ''}`} data-compact={compact ? '' : undefined}>
       <KinuMark size={compact ? 20 : 22} />
       <span>Kinu</span>
     </span>

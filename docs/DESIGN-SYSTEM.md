@@ -189,6 +189,7 @@ Define every role for all four looks in `theme.ts`. Each value below is today's 
 | `role.code-workbench` | `--t-code-workbench` | 12.5 | the code block inside the workbench (approved) |
 | `role.workspace-tab` | `--t-workspace-tab` | 13.5 | the workspace tab's title (settled) |
 | `role.field-touch` | `--t-field-touch` | `max(16px, 1em)` | a field's value on a touch screen: iOS Safari zooms the page into any field under 16 px |
+| `role.wordmark` | `--t-wordmark` | 18 | the name beside Kinu's mark (17 in the app's sidebar) |
 | `role.public-body` | `--t-public-body` (theme.ts), `t-public-body` | 15 / 1.7 | a signed-out public page's body (landing, /privacy, /terms, the deploy flow), and with 500 a row's name there (`t-public-item`) |
 | `role.public-lede` | `--t-public-lede` (theme.ts), `t-public-lede` | 17 / 1.62 | a public page's lede |
 | `role.public-control` | `--t-public-control` (theme.ts), `Button size="lg"` | 14, 38 tall | a public page's call to action |
@@ -231,7 +232,7 @@ read one definition: someone not yet in the app reads at the public pages' size,
 
 | token | px | for |
 |---|---|---|
-| `--r-check` | 4 | checkbox only |
+| `--r-check` | 4 | a checkbox; a changed word's wash in a diff |
 | `--r-inner` | 6 | a segmented thumb, an image inside a mat, a code chip |
 | `--r-control` | 8 | button, field, select, segmented track, icon button, ⋯, badge, tooltip |
 | `--r-row` | 12 | nav rows, list rows, menus, notices |
@@ -244,6 +245,8 @@ Named variants, in `theme.ts` beside the six, for the approved composer and the 
 |---|---|---|---|
 | `radius.composer` | `--r-composer` | 24 | the composer (approved) |
 | `radius.workspace-tab` | `--r-workspace-tab`, `--r-workspace-tab-outline`, `--r-workspace-tab-flare` | 7, 10, 8 | the tab's rename field, its outline's top corners, its flared feet (settled) |
+| `radius.bubble` | `--r-bubble`, `--r-bubble-tail` | 16, 4 | the person's chat bubble and the corner that points at them (settled) |
+| `radius.prompt` | `--r-prompt` | 16 | the prompt card on Home and a new chat (approved) |
 
 `--r-overlay` merges into `--r-card`. These six and the named variants are the only radii: no `rounded-*` utility and no `rounded-[…]` outside `ui/`.
 

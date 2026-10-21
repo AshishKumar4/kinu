@@ -155,7 +155,7 @@ export default function GallerySlatePage() {
           <a href={listing.url} data-gallery-open className={buttonClass({ variant: "primary" })}><PlayIcon size={14} weight="fill" />Open</a>
         </>
       )}>
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+      <div className="grid gap-6 lg:grid-cols-[var(--layout-detail)]">
         <Surface look="outlined" className="relative aspect-[2/1] overflow-hidden" data-gallery-hero>
           <SlatePicture workspace={listing.workspace} slate={{ id: listing.slate, title: listing.title, picture: listing.picture }} at={galleryPicturePath}
             className="absolute inset-0 size-full object-cover object-left-top" fallback={<TypesetCover title={listing.title} line={listing.line} />} />

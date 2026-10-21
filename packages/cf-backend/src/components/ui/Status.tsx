@@ -33,7 +33,7 @@ export function Status({ tone, children, hooks }: {
 }) {
   return (
     <span className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap t-status ${TONE[tone].ink}`} {...hooks}>
-      <span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${TONE[tone].dot}`} />
+      <span aria-hidden="true" className={`size-1.5 shrink-0 rounded-[var(--r-pill)] ${TONE[tone].dot}`} />
       {children}
     </span>
   );
@@ -41,5 +41,14 @@ export function Status({ tone, children, hooks }: {
 
 /** The dot alone, for a row that already names its state; `title` says it on hover. */
 export function StatusDot({ tone, title, className = "" }: { tone: StatusTone; title?: string; className?: string }) {
-  return <span aria-hidden={title === undefined} title={title} className={`size-1.5 shrink-0 rounded-full ${TONE[tone].dot} ${className}`} />;
+  return <span aria-hidden={title === undefined} title={title} className={`size-1.5 shrink-0 rounded-[var(--r-pill)] ${TONE[tone].dot} ${className}`} />;
+}
+
+export type StatePillTone = "done" | "live" | "quiet";
+
+const PILL_TONE = { done: "p-badge-success", live: "p-state-pill-live", quiet: "p-state-pill-quiet" } satisfies Record<StatePillTone, string>;
+
+/** A run's state on its row, as a pill: `done` in the success tint, `live` on the selected ground, `quiet` on the fill. */
+export function StatePill({ tone, children }: { tone: StatePillTone; children: React.ReactNode }) {
+  return <span className={`t-status p-state-pill ${PILL_TONE[tone]}`}>{children}</span>;
 }

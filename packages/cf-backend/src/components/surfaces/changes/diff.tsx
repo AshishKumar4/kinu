@@ -7,6 +7,7 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { AnnotationType } from "@plannotator/ui/types";
 import { colorOf, piecesOf, tintsOf, type Piece, type Tints } from "./highlight";
 import { pickSelection, selectLines, spansOn, useNotes, type NoteSpan } from "./notes";
+import { Pressable } from "@/components/ui/Pressable";
 
 const COUNT = new Intl.NumberFormat("en-US");
 
@@ -64,17 +65,9 @@ export function Counts({ added, removed, className = "" }: { added: number; remo
   );
 }
 
-const ROW_TINT: Record<ChangeRow["kind"], string> = {
-  add: "bg-[color-mix(in_srgb,var(--c-success)_10%,transparent)] shadow-[inset_2px_0_0_var(--c-success)]",
-  del: "bg-[color-mix(in_srgb,var(--c-danger)_10%,transparent)] shadow-[inset_2px_0_0_var(--c-danger)]",
-  ctx: "",
-};
+const ROW_TINT: Record<ChangeRow["kind"], string> = { add: "p-diff-add", del: "p-diff-del", ctx: "" };
 
-const WORD_TINT: Record<ChangeRow["kind"], string> = {
-  add: "bg-[color-mix(in_srgb,var(--c-success)_30%,transparent)]",
-  del: "bg-[color-mix(in_srgb,var(--c-danger)_30%,transparent)]",
-  ctx: "",
-};
+const WORD_TINT: Record<ChangeRow["kind"], string> = { add: "p-diff-word-add", del: "p-diff-word-del", ctx: "" };
 
 const GUTTER_TONE: Record<ChangeRow["kind"], string> = {
   add: "p-success",
@@ -82,7 +75,7 @@ const GUTTER_TONE: Record<ChangeRow["kind"], string> = {
   ctx: "p-text-3",
 };
 
-const QUIET_ROW = "bg-[color-mix(in_srgb,var(--c-text)_3.5%,transparent)]";
+const QUIET_ROW = "p-diff-quiet";
 
 interface Run {
   readonly marked: boolean;
@@ -116,7 +109,7 @@ function Code({ row, tints, notes }: { row: ChangeRow; tints: Tints | null; note
   const runs = runsOf(piecesOf(row.text, colours, row.marks, notes));
 
   return (
-    <code data-code className="min-w-0 flex-1 whitespace-pre-wrap py-px pl-2 pr-4 [overflow-wrap:anywhere] [tab-size:2]">
+    <code data-code className="p-diff-code min-w-0 flex-1 whitespace-pre-wrap py-px pl-2 pr-4">
       {runs.length === 0 && "\u200b"}
       {runs.map((run, index) => {
         const words = run.pieces.map((piece, at) => (
@@ -124,7 +117,7 @@ function Code({ row, tints, notes }: { row: ChangeRow; tints: Tints | null; note
         ));
 
         const marked = run.marked
-          ? <span className={`rounded-[3px] [box-decoration-break:clone] ${WORD_TINT[row.kind]}`}>{words}</span>
+          ? <span className={`p-diff-word ${WORD_TINT[row.kind]}`}>{words}</span>
           : <>{words}</>;
 
         if (run.note === null) return <Fragment key={index}>{marked}</Fragment>;
@@ -132,7 +125,7 @@ function Code({ row, tints, notes }: { row: ChangeRow; tints: Tints | null; note
         const id = run.note.id;
 
         return (
-          <span key={index} data-note-mark={id} className={`[box-decoration-break:clone] ${noteClass(run.note, context?.selected ?? null)}`}
+          <span key={index} data-note-mark={id} className={`p-diff-note ${noteClass(run.note, context?.selected ?? null)}`}
             onClick={id === "draft" ? undefined : () => context?.select(id)}>
             {marked}
           </span>
@@ -153,7 +146,7 @@ function Gutter({ children, tone, width, noted = false, onPick }: {
 
   return (
     <span style={{ width }} onMouseDown={onPick} onDoubleClick={onPick} data-noted={noted ? "" : undefined}
-      className={`shrink-0 select-none py-px pr-1 text-right tabular-nums ${noted ? "font-semibold p-info" : tone} ${pickable}`}>
+      className={`p-diff-gutter shrink-0 select-none py-px pr-1 text-right tabular-nums ${noted ? "p-info" : tone} ${pickable}`}>
       {children}
     </span>
   );
@@ -227,11 +220,11 @@ function Fold({ label, context, gutter, onOpen }: { label: string; context: stri
     </>
   );
 
-  const className = `flex h-7 w-full items-center gap-2 text-left ${QUIET_ROW} p-text-3`;
+  const className = `flex h-7 w-full items-center gap-2 ${QUIET_ROW} p-text-3`;
 
   if (onOpen === null) return <div className={className}>{inner}</div>;
 
-  return <button type="button" onClick={onOpen} className={`${className} transition-colors hover:p-text`} data-diff-fold>{inner}</button>;
+  return <Pressable look="flush" onClick={onOpen} className={`${className} hover:p-text`} data-diff-fold>{inner}</Pressable>;
 }
 
 function Blocks({ blocks, draw, open, onOpen }: {
@@ -249,11 +242,11 @@ function Blocks({ blocks, draw, open, onOpen }: {
           if (open.has(block.id)) return <Blocks key={index} blocks={block.blocks} draw={draw} open={open} onOpen={onOpen} />;
 
           return (
-            <button key={index} type="button" onClick={() => onOpen(block.id)} data-diff-fold
-              className={`flex h-8 w-full items-center gap-2 text-left ${QUIET_ROW} p-text-2 transition-colors hover:p-text`}>
+            <Pressable look="flush" key={index} onClick={() => onOpen(block.id)} data-diff-fold
+              className={`flex h-8 items-center gap-2 ${QUIET_ROW} p-text-2 hover:p-text`}>
               <span style={{ width: draw.gutter }} className="flex shrink-0 justify-end pr-1 p-text-3"><CaretDownIcon size={12} /></span>
               <span className="t-meta pl-2 font-sans">{block.deleted ? `Show the ${count(block.count)} deleted lines` : `Show ${count(block.count)} more lines`}</span>
-            </button>
+            </Pressable>
           );
         }
 
@@ -320,7 +313,7 @@ export function DiffBody({ path, blocks, split }: { path: string; blocks: readon
 
   return (
     <div ref={root} data-note-root onMouseDown={notes === null ? undefined : onMouseDown} onMouseUp={notes === null ? undefined : onMouseUp}
-      className="t-meta t-mono overflow-hidden [font-variant-ligatures:none]" data-diff-tinted={tintedState(resource.status, tints)}>
+      className="p-diff t-meta t-mono overflow-hidden" data-diff-tinted={tintedState(resource.status, tints)}>
       <Blocks blocks={blocks} draw={{ split, tints, gutter, path, onPick: notes === null ? undefined : onPick }} open={open}
         onOpen={(id) => setOpen((prior) => new Set([...prior, id]))} />
     </div>

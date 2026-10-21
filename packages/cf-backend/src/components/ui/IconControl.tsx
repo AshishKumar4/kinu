@@ -2,12 +2,13 @@
  * An icon that is a control in the app's own chrome (docs/DESIGN-SYSTEM.md §2, IconButton): the workspace bar, a tab, a
  * chat pill, the composer. The third ink until the pointer or the keys are on it, then the text's on the hover wash; a
  * `danger` one turns danger. One shape per place: `bar` a 28 square, `tab` a 22 square inside a tab (20 inside a
- * page's), `pill` a 26 circle, `composer` a 32 circle. A button where it acts, a link where it goes somewhere.
+ * page's), `pill` a 26 circle, `composer` a 32 circle, `inline` the icon and 4 round it beside a line of text (a reply's
+ * thumbs, a slate's pin). A button where it acts, a link where it goes somewhere.
  */
 import type { ComponentProps } from "react";
 import { Link } from "react-router-dom";
 
-export type IconPlace = "bar" | "tab" | "pill" | "composer";
+export type IconPlace = "bar" | "tab" | "pill" | "composer" | "inline";
 
 const look = (place: IconPlace, className: string | undefined) => `p-icon-control p-icon-control-${place}${className === undefined ? "" : ` ${className}`}`;
 

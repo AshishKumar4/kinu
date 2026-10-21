@@ -120,7 +120,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
 
   return (
     <div className={grouped ? "p-3" : "p-group p-3"}>
-      <div className="grid grid-cols-[15px_minmax(0,1fr)_auto] items-start gap-2">
+      <div className="grid grid-cols-[var(--layout-mark-row-end)] items-start gap-2">
         <Icon size={15} className={`${m.tone} shrink-0 mt-px ${m.spin ? "animate-spin" : ""}`}
           weight={live ? "bold" : "fill"} />
         <div className="min-w-0 flex-1">

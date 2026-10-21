@@ -97,12 +97,15 @@ function classRules(token: string, ui: boolean): DesignRule[] {
   if (PALETTE.test(name)) broken.push('colour-literal');
 
   const bracket = /\[[^\]]*\]/u.exec(name);
+  // An attribute selector alone (`[data-note-row]`, a string handed to `closest`) is no class at all.
+  const selector = bracket !== null && bracket[0] === name && !name.includes(':');
 
-  if (bracket !== null && !(ui ? TOKEN_VALUE : LAYOUT_VALUE).test(bracket[0])) broken.push('arbitrary-value');
+  if (bracket !== null && !selector && !(ui ? TOKEN_VALUE : LAYOUT_VALUE).test(bracket[0])) broken.push('arbitrary-value');
 
   if (bracket === null && TYPE_UTILITY.test(name)) broken.push('type-utility');
 
-  if (bracket === null && BOX_UTILITY.test(name) && !(ui && name === 'outline-none')) broken.push('box-utility');
+  // `ui/` may take the focus outline off a control it rings itself, and keep an edge's width with no colour.
+  if (bracket === null && BOX_UTILITY.test(name) && !(ui && (name === 'outline-none' || name === 'border-transparent'))) broken.push('box-utility');
 
   const spacing = SPACING.exec(name);
 
@@ -223,7 +226,7 @@ const SIZE_VARIANTS: ReadonlyMap<string, string> = new Map([
   ['--t-chat-heading-1', '22px'], ['--t-chat-heading-2', '19px'], ['--t-chat-heading-3', '17px'],
   ['--t-chat-heading-workbench-1', '1.1em'], ['--t-chat-heading-workbench-2', '1.05em'], ['--t-chat-heading-workbench-3', '1em'],
   ['--t-code-workbench', '12.5px'], ['--t-workspace-tab', '13.5px'], ['--t-field-touch', 'max(16px, 1em)'],
-  ['--t-public-body', '15px'], ['--t-public-lede', '17px'], ['--t-public-control', '14px'],
+  ['--t-public-body', '15px'], ['--t-public-lede', '17px'], ['--t-public-control', '14px'], ['--t-wordmark', '18px'],
 ]);
 
 /** A size that is a variant's name. */

@@ -1,19 +1,21 @@
 /**
  * What a thing is, in a word (docs/DESIGN-SYSTEM.md §2): 20 tall at the control radius, in the micro role. `onPicture`
- * reads over any cover; `accent` marks the one featured thing.
+ * reads over any cover; `accent` marks the one featured thing; `info` says where a figure comes from.
  */
 import type { ReactNode } from "react";
 
-export type BadgeTone = "neutral" | "accent" | "onPicture";
+export type BadgeTone = "neutral" | "accent" | "info" | "onPicture";
 
-export function Badge({ tone = "neutral", icon, children, className, ...data }: {
+export function Badge({ tone = "neutral", icon, title, children, className, ...data }: {
   tone?: BadgeTone;
   icon?: ReactNode;
+  /** What it means, on hover. */
+  title?: string;
   children: ReactNode;
   /** Placement only (`absolute left-3 top-3` on a cover). */
   className?: string;
 } & Readonly<Record<`data-${string}`, string>>) {
-  return <span className={`p-badge p-badge-${tone}${className === undefined ? "" : ` ${className}`}`} {...data}>{icon}{children}</span>;
+  return <span className={`p-badge p-badge-${tone}${className === undefined ? "" : ` ${className}`}`} title={title} {...data}>{icon}{children}</span>;
 }
 
 /** A count over a mark (an avatar's unread, a bar icon's open runs): `accent` filled and ringed in the ground it sits on,

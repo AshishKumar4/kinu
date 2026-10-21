@@ -13,6 +13,7 @@ import {
 } from "@kinu.run/core";
 import { Button } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
+import { TextArea } from "@/components/ui/Field";
 
 export function FileViewer({ path, read, revision, rawHref, downloadHref, onSaved, onClose }: {
   path: string;
@@ -204,13 +205,13 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
 
   if (body === "edit") {
     return (
-      <textarea
+      <TextArea bare
         data-files-editor
         autoFocus
         value={draft ?? ""}
         onChange={(e) => onDraft(e.currentTarget.value)}
         spellCheck={false}
-        className="t-code w-full h-full resize-none bg-transparent p-3 p-text outline-hidden"
+        className="t-code h-full p-3 p-text"
       />
     );
   }

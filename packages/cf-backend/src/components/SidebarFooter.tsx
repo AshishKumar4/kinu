@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useLocation } from "react-router-dom";
 import { DesktopTowerIcon, EnvelopeSimpleIcon, GearIcon, GithubLogoIcon, ShieldCheckIcon, SignOutIcon } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
 import { settingsPath, settingsSection } from "@/components/SettingsRail";
@@ -10,14 +10,16 @@ import { useImportantMail } from "@/hooks/use-important-mail";
 import { Avatar } from "./ui/Avatar";
 import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
-import { NAV_HOVER } from "./nav";
-import { Pressable } from "@/components/ui/Pressable";
+import { Pressable, PressableAnchor, PressableLink } from "@/components/ui/Pressable";
+import { NavRow } from "@/components/ui/NavRow";
+import { Surface } from "@/components/ui/Surface";
 import { Count } from "@/components/ui/Badge";
 
 /** Kinu's source. */
 const KINU_REPOSITORY = "https://github.com/AshishKumar4/kinu";
 
-const MENU_ROW = "t-body flex items-center gap-2 px-2 py-1 rounded-sm p-card-hover";
+/** A row of the account menu, as its theme and feedback rows are. */
+const MENU_ROW = "t-body flex items-center gap-2 px-2 py-1";
 
 /** Where the mail the assistant reads lands; Important is its first view. */
 const MAIL_ROUTE = "/mail";
@@ -35,7 +37,6 @@ function CountBadge({ count, label }: { count: number; label: string }) {
 export function FooterIcons({ vertical = false }: { vertical?: boolean }) {
   const { pathname, hash } = useLocation();
   const { enabled, unread } = useImportantMail();
-  const cls = (open: boolean) => `relative flex size-8 items-center justify-center rounded-lg transition-colors ${open ? "bg-[var(--c-selected)] p-accent-fg" : `p-text-3 ${NAV_HOVER}`}`;
   const at = (root: string) => pathname === root || pathname.startsWith(`${root}/`);
   // Devices is a Settings section: its icon is the open page while that section is.
   const devicesOpen = at(APP_ROUTES.userSettings) && settingsSection(hash) === "devices";
@@ -43,14 +44,13 @@ export function FooterIcons({ vertical = false }: { vertical?: boolean }) {
 
   return (
     <div className={`flex items-center gap-px ${vertical ? "flex-col" : ""}`}>
-      {enabled && <Link to={MAIL_ROUTE} aria-label={mailWords} title={mailWords} aria-current={at(MAIL_ROUTE) ? "page" : undefined} data-footer-mail className={cls(at(MAIL_ROUTE))}>
+      {enabled && <NavRow size="icon-sm" quiet current={at(MAIL_ROUTE)} to={MAIL_ROUTE} aria-label={mailWords} title={mailWords} data-footer-mail>
         <EnvelopeSimpleIcon size={17} />
         <CountBadge count={unread} label={`${String(unread)} important unread`} />
-      </Link>}
-      <Link to={settingsPath("devices")} aria-label="Devices" title="Devices" aria-current={devicesOpen ? "page" : undefined} data-footer-devices
-        className={cls(devicesOpen)}>
+      </NavRow>}
+      <NavRow size="icon-sm" quiet current={devicesOpen} to={settingsPath("devices")} aria-label="Devices" title="Devices" data-footer-devices>
         <DesktopTowerIcon size={17} />
-      </Link>
+      </NavRow>
     </div>
   );
 }
@@ -62,7 +62,7 @@ export function AccountMenu({ onClose, className }: { onClose: () => void; class
   const failed = account.profile.status === "error";
 
   return (
-    <div className={`z-30 p-card p-1 p-shadow-menu border p-border ${className}`} data-account-panel role="menu">
+    <Surface look="panel" className={`z-30 p-1 p-shadow-menu ${className}`} data-account-panel role="menu">
       <div className="mb-1 flex items-center gap-3 border-b p-border px-2 pb-2 pt-1">
         <Avatar name={profile?.displayName ?? profile?.email ?? "?"} size={28} />
         <span className="flex min-w-0 flex-1 flex-col">
@@ -70,16 +70,16 @@ export function AccountMenu({ onClose, className }: { onClose: () => void; class
           {profile?.displayName !== undefined && profile.displayName !== null && <span className="t-meta truncate p-text-3">{profile.email}</span>}
         </span>
       </div>
-      <Link to={APP_ROUTES.userSettings} onClick={onClose} className={MENU_ROW}><GearIcon size={14} /><span>Settings</span></Link>
+      <PressableLink to={APP_ROUTES.userSettings} onClick={onClose} className={MENU_ROW}><GearIcon size={14} /><span>Settings</span></PressableLink>
       {profile?.controlPlane === true && (
-        <Link to={APP_ROUTES.control} onClick={onClose} className={MENU_ROW}><ShieldCheckIcon size={14} /><span>Control plane</span></Link>
+        <PressableLink to={APP_ROUTES.control} onClick={onClose} className={MENU_ROW}><ShieldCheckIcon size={14} /><span>Control plane</span></PressableLink>
       )}
       <ModeToggle />
       <FeedbackButton />
       {/* Help: the source, here rather than in the phone's app bar (design review 2026-10-20). */}
-      <a href={KINU_REPOSITORY} target="_blank" rel="noopener noreferrer" className={MENU_ROW}><GithubLogoIcon size={14} /><span>GitHub</span></a>
-      <a href="/logout" className={MENU_ROW}><SignOutIcon size={14} /><span>Sign out</span></a>
-    </div>
+      <PressableAnchor href={KINU_REPOSITORY} target="_blank" rel="noopener noreferrer" className={MENU_ROW}><GithubLogoIcon size={14} /><span>GitHub</span></PressableAnchor>
+      <PressableAnchor href="/logout" className={MENU_ROW}><SignOutIcon size={14} /><span>Sign out</span></PressableAnchor>
+    </Surface>
   );
 }
 

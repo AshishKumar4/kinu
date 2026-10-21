@@ -85,14 +85,14 @@ function inputsFrom(answers: Answers, zones: readonly { id: string; name: string
 function NotConfigured({ reason }: { reason: string }) {
   return (
     <section className="space-y-3" aria-label="Deploying to Cloudflare is not set up">
-      <div className="p-card px-5 py-4">
+      <Surface look="panel" className="px-5 py-4">
         <h2 className="t-title p-text">Deploying to Cloudflare is not set up here</h2>
         <p className="t-body mt-1 p-text-2">{reason}</p>
         <p className="t-meta mt-3 p-text-3">
           The owner of this Kinu registers the OAuth client once. Until then, this page cannot
           deploy into a Cloudflare account.
         </p>
-      </div>
+      </Surface>
     </section>
   );
 }
@@ -146,7 +146,7 @@ function Answered({ options, runId, onStarted }: {
 
   return (
     <section className="space-y-4" aria-label="Your deployment">
-      <div className="p-card space-y-5 px-5 py-5">
+      <Surface look="panel" className="space-y-5 px-5 py-5">
         <Field label="Cloudflare account" hint="Where Kinu is created. Everything it creates belongs to you.">
           <Select label="Cloudflare account" value={answers.accountId} onChange={(accountId) => setAnswers({ ...answers, accountId })}
             options={accounts.map((account) => ({ value: account.id, label: account.name }))} />
@@ -190,14 +190,13 @@ function Answered({ options, runId, onStarted }: {
             <TextInput type="password" aria-label={name} value={answers.keys[name] ?? ""} onChange={(event) => setAnswers({ ...answers, keys: { ...answers.keys, [name]: event.target.value } })} />
           </Field>
         ))}
-      </div>
+      </Surface>
       {err !== null && <Notice tone="danger">{err}</Notice>}
       <div className="flex items-center justify-between gap-3">
         <p className="t-meta p-text-3">Kinu {options.version} will be uploaded into your account.</p>
-        <Button variant="primary" size="md"
+        <Button variant="primary" size="lg"
           onClick={() => detach(deploy())}
           disabled={busy || answers.accountId === "" || answers.ownerEmail === ""}
-          className="!h-9 !px-4 !text-sm"
         >
           <CloudArrowUpIcon size={15} /> Deploy my Kinu
         </Button>
@@ -211,7 +210,7 @@ function Done({ snapshot, email }: { snapshot: DeploySnapshot; email: string }) 
 
   return (
     <section className="space-y-3" aria-label="Your Kinu is deployed">
-      <div className="p-card px-5 py-4">
+      <Surface look="panel" className="px-5 py-4">
         <h2 className="t-title p-text">Your Kinu is live</h2>
         <p className="t-body mt-1 p-text-2">
           <a className="underline" href={origin}>{snapshot.address}</a>
@@ -221,13 +220,13 @@ function Done({ snapshot, email }: { snapshot: DeploySnapshot; email: string }) 
           one-time PIN. It is running Kinu {snapshot.version}; install new versions from its
           Updates page.
         </p>
-      </div>
-      <div className="p-card px-5 py-4">
+      </Surface>
+      <Surface look="panel" className="px-5 py-4">
         <h2 className="t-title p-text">Connect this machine</h2>
         <Surface look="sheet" as="pre" className="t-meta t-mono mt-2 overflow-x-auto px-3 py-2 p-text">
           curl -fsSL {origin}/install.sh | bash
         </Surface>
-      </div>
+      </Surface>
     </section>
   );
 }
@@ -316,7 +315,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
         {options !== null && !options.cloudflare && <NotConfigured reason={options.reason} />}
         {options !== null && options.cloudflare && (snapshot === null || snapshot.state === "expired") && (
           <section className="space-y-3" aria-label="Sign in with Cloudflare">
-            <div className="p-card px-5 py-4">
+            <Surface look="panel" className="px-5 py-4">
               <h2 className="t-title p-text">Sign in with Cloudflare</h2>
               <p className="t-body mt-1 p-text-2">
                 {snapshot?.state === "expired"
@@ -326,10 +325,10 @@ export default function DeployPage({ fixture, fixtureOptions }: {
                     + " its sign-in. The token stays with this run and is deleted when the run ends."
                     + " After that, your deployment uses its own."}
               </p>
-              <Button variant="primary" size="md" onClick={() => detach(signIn())} className="mt-4 !h-9 !px-4 !text-sm">
+              <Button variant="primary" size="lg" onClick={() => detach(signIn())} className="mt-4">
                 Sign in with Cloudflare
               </Button>
-            </div>
+            </Surface>
             <p className="t-meta p-text-3">This installs Kinu {options.version}.</p>
           </section>
         )}

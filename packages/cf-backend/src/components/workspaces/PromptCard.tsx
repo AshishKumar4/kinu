@@ -5,6 +5,7 @@ import { composing } from "@/components/ui/form";
 import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl } from "@/components/Attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { Notice } from "@/components/ui/Notice";
+import { TextArea } from "@/components/ui/Field";
 
 const NO_DROP = () => {};
 
@@ -42,10 +43,10 @@ export function PromptCard({ id, label, placeholder, action, value, onChange, on
   return (
     <form onSubmit={submit} {...(attachments && handlers)} data-drag-over={dragOver || undefined}
       onPaste={(e) => { if (attachments) pasteAttachments(e, attachments, (text) => onChange(value === "" ? text : `${value}\n${text}`)); }}
-      className="p-focus min-w-0 overflow-hidden rounded-2xl border p-border bg-[var(--c-field)] shadow-[0_18px_55px_-42px_rgba(0,0,0,.75)] transition-[border-color,box-shadow] data-[drag-over]:border-[var(--c-accent)]">
+      className="p-prompt-card p-focus min-w-0 border p-border">
       <div className="px-6 pt-5">
         <label htmlFor={id} className="t-status block p-text-3">{label}</label>
-        <textarea
+        <TextArea bare
           id={id}
           value={value}
           onChange={(event) => onChange(event.currentTarget.value)}
@@ -59,7 +60,7 @@ export function PromptCard({ id, label, placeholder, action, value, onChange, on
           rows={4}
           ref={field}
           disabled={busy}
-          className="block min-h-[128px] w-full resize-none bg-transparent pb-4 pt-3 t-composer p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
+          className="block min-h-32 pb-4 pt-3 t-composer p-text disabled:opacity-60"
         />
       </div>
       {attachments && <div className="px-3 pb-3 [&>[data-attachments]]:pt-0"><AttachmentTray attachments={attachments} /></div>}

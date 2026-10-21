@@ -149,7 +149,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
   return (
     <Page back={{ to: "/explore?kind=workspace", label: "Back to Explore" }} icon={null} title={workspace.title} data-blueprint-page={workspace.id}
       actions={<BlueprintActions workspace={workspace} onInstall={() => setInstalling(true)} />}>
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+      <div className="grid gap-6 lg:grid-cols-[var(--layout-detail)]">
         <Surface look="well" className="relative aspect-[16/10] overflow-hidden border p-border">
           {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
         </Surface>
@@ -164,7 +164,7 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
         </div>
       </div>
 
-      <div className="grid gap-12 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+      <div className="grid gap-12 lg:grid-cols-[var(--layout-detail)]">
         <div className="space-y-8">
           <Section title="What it does">
             <div className="grid gap-3 sm:grid-cols-2">

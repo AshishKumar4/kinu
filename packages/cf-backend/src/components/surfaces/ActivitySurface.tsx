@@ -19,6 +19,8 @@ import type {
 import { breakdownView, shareOfMeasured, type BreakdownPlane, type BreakdownRow } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Surface } from "@/components/ui/Surface";
+import { Badge } from "@/components/ui/Badge";
+import { ShareBar, StackedBar as Stacked, Swatch, type ShareTone } from "@/components/ui/Meter";
 
 const STREAMING_POLL_MS = 1500;
 
@@ -88,12 +90,12 @@ function Num(
 
 function Source({ kind }: { kind: "API" | "local" }) {
   return (
-    <span
-      className={`px-1 py-px rounded-sm uppercase tracking-wide ${kind === "API" ? "p-badge-info" : "p-badge-neutral"}`}
+    <Badge
+      tone={kind === "API" ? "info" : "neutral"}
       title={kind === "API"
         ? "The provider's own count for this step."
         : "Character counts from the prompt Kinu composed, not provider tokens."}
-    >{kind}</span>
+    >{kind === "API" ? "API" : "Local"}</Badge>
   );
 }
 
@@ -151,7 +153,7 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
 
       {windowShare !== null ? (
         <>
-          <Meter value={windowShare} />
+          <ShareBar share={windowShare} tone={windowTone(windowShare)} />
           <p className="t-meta p-text-3 mt-1">
             {fmtPct(windowShare, 1)} of the window{step === null ? "" : ` · ${cacheRead === undefined
               ? "the provider reported no cache-read count for this step"
@@ -167,16 +169,11 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
   );
 }
 
-function Meter({ value }: { value: number }) {
-  const pct = Math.min(Math.max(value, 0), 1) * 100;
-  const belowDanger = value >= 0.7 ? "var(--c-warning)" : "var(--c-accent)";
-  const tone = value >= 0.9 ? "var(--c-danger)" : belowDanger;
+/** A context window reads as a warning from 70% full and as danger from 90%. */
+function windowTone(share: number): ShareTone {
+  if (share >= 0.9) return "danger";
 
-  return (
-    <Surface look="round" className="h-1.5 overflow-hidden" style={{ background: "var(--c-hover)" }}>
-      <Surface look="round" className="h-full" style={{ width: `${pct}%`, background: tone }} />
-    </Surface>
-  );
+  return share >= 0.7 ? "warning" : "accent";
 }
 
 function Breakdown({ context }: { context: ContextComposition | null }) {
@@ -219,26 +216,19 @@ function Breakdown({ context }: { context: ContextComposition | null }) {
   );
 }
 
-const swatch = "w-2 h-2 rounded-xs inline-block shrink-0 border p-border";
-
 function StackedBar(
   { planes, span }: { planes: readonly BreakdownPlane[]; span: number },
 ) {
   return (
     <div>
-      <Surface look="clip" className="flex h-3 overflow-hidden" style={{ background: "var(--c-hover)" }}>
-        {planes.map((row) => (
-          <div
-            key={row.plane}
-            style={{ width: `${(row.chars / span) * 100}%`, background: planeFill(row.plane) }}
-            title={`${PLANE_LABEL[row.plane]}: ${row.chars.toLocaleString()} composed characters`}
-          />
-        ))}
-      </Surface>
+      <Stacked parts={planes.map((row) => ({
+        key: row.plane, share: row.chars / span, fill: planeFill(row.plane),
+        title: `${PLANE_LABEL[row.plane]}: ${row.chars.toLocaleString()} composed characters`,
+      }))} />
       <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
         {planes.map((row) => (
           <span key={row.plane} className="t-meta flex items-center gap-1 p-text-3">
-            <span className={swatch} style={{ background: planeFill(row.plane) }} />
+            <Swatch fill={planeFill(row.plane)} />
             {PLANE_LABEL[row.plane]}
           </span>
         ))}
@@ -258,7 +248,7 @@ function PlaneRows({ plane, measuredChars }: { plane: BreakdownPlane; measuredCh
       <tr className="border-t p-border">
         <td className={`py-1 ${labelCell}`}>
           <span className="flex items-center gap-2">
-            <span className={swatch} style={{ background: planeFill(plane.plane) }} />
+            <Swatch fill={planeFill(plane.plane)} />
             <span className="t-item p-text truncate">{PLANE_LABEL[plane.plane]}</span>
           </span>
         </td>
@@ -269,7 +259,7 @@ function PlaneRows({ plane, measuredChars }: { plane: BreakdownPlane; measuredCh
       </tr>
       {plane.rows.map((row: BreakdownRow) => (
         <tr key={`${plane.plane}:${row.label}`}>
-          <td className={`py-px pl-[14px] ${labelCell}`}>
+          <td className={`py-px pl-4 ${labelCell}`}>
             <span className="t-body p-text-3 truncate block" title={row.label}>
               {row.label}
               {row.items > 1 && <span className="p-text-3"> ×{row.items}</span>}
@@ -368,20 +358,20 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
           <table className="w-full border-collapse">
             <thead>
               <tr className="t-meta p-text-3 uppercase">
-                <th className="text-left font-normal pb-1">Producer</th>
+                <th className="t-meta text-left pb-1">Producer</th>
                 <th
-                  className="text-right font-normal pb-1 w-20"
+                  className="t-meta text-right pb-1 w-20"
                   title="Input plus output, as the provider reported them. Cache reads are inside input."
                 >Tokens</th>
-                <th className="text-right font-normal pb-1 w-12" title="Share of the tokens this workspace measured.">Share</th>
+                <th className="t-meta text-right pb-1 w-12" title="Share of the tokens this workspace measured.">Share</th>
                 {neurons && (
                   <th
-                    className="text-right font-normal pb-1 w-16"
+                    className="t-meta text-right pb-1 w-16"
                     title="Cloudflare's billing unit, reported on every Workers AI call."
                   >Neurons</th>
                 )}
                 <th
-                  className="text-right font-normal pb-1 w-16"
+                  className="t-meta text-right pb-1 w-16"
                   title="Priced from the models.dev catalog. Absent means unpriced."
                 >USD</th>
               </tr>
@@ -399,7 +389,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                     </span>
                   </td>
                   <SpendCells
-                    row={producer} measuredTokens={measuredTokens} neurons={neurons} className="p-text"
+                    row={producer} measuredTokens={measuredTokens} neurons={neurons} className="t-body p-text"
                   />
                 </tr>
               ))}
@@ -412,7 +402,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
                 </td>
                 <SpendCells
                   row={total} measuredTokens={measuredTokens} neurons={neurons}
-                  className="font-semibold p-text"
+                  className="t-label p-text"
                 />
               </tr>
             </tbody>
@@ -557,7 +547,7 @@ function AccountSpendRow(
           </span>
         )}
       </td>
-      <SpendCells row={row} measuredTokens={measuredTokens} neurons={neurons} className="p-text" />
+      <SpendCells row={row} measuredTokens={measuredTokens} neurons={neurons} className="t-body p-text" />
     </tr>
   );
 }
@@ -600,7 +590,7 @@ function SpendCells(
     <>
       <td className="py-1 text-right w-20">
         <Num
-          className={`t-body ${className}`}
+          className={className}
           title={countNote(tokens, row, "No call here reported an input or output count.")}
         >
           {fmtTokens(tokens)}
@@ -613,7 +603,7 @@ function SpendCells(
       {neurons && (
         <td className="py-1 text-right w-16">
           <Num
-            className={`t-body ${className}`}
+            className={className}
             title={countNote(
               row.usage.neurons, row,
               "No call from this producer reported neurons.",

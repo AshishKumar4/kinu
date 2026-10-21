@@ -12,7 +12,7 @@ import { Link } from "react-router-dom";
 import { ArrowLeftIcon } from "@phosphor-icons/react";
 
 /** The frame every non-tool page shares; its content is 1088 wide on a desktop. */
-const PAGE_FRAME = "mx-auto w-full max-w-[1152px] px-5 sm:px-8";
+const PAGE_FRAME = "mx-auto w-full max-w-[var(--layout-frame)] px-5 sm:px-8";
 
 /** Top inset and foot, for a frame page and a tool alike. */
 const PAGE_RHYTHM = "pt-6 pb-16 lg:pt-12";
@@ -80,7 +80,7 @@ export function Page({ icon, back, title, actions, fill = false, rule, children,
 function ToolBar({ icon, title, view, actions }: { icon: ReactNode; title: string; view?: ReactNode; actions?: ReactNode }) {
   return (
     <header className="p-tool-bar" data-tool-bar>
-      <span className="flex shrink-0 p-text-3 [&>svg]:size-[18px]" aria-hidden>{icon}</span>
+      <span className="flex shrink-0 p-text-3 [&>svg]:size-4.5" aria-hidden>{icon}</span>
       <h1 className="p-tool-title">{title}</h1>
       {view !== undefined && <div className="ml-4 flex min-w-0">{view}</div>}
       {actions !== undefined && <div className="ml-auto flex min-w-0 items-center gap-2">{actions}</div>}
