@@ -1,9 +1,9 @@
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
-import { SubordinateRosterStore, subordinateTitle } from '../subordinates/roster';
+import { isSubagentOrigin, type WorkspaceActor } from '../identity/workspace-actors';
+import { SubagentRosterStore, subagentTitle } from '../subagents/roster';
 import { codenameFor } from '../identity/naming';
-import type { SubordinateRosterEntry } from '../delegation/agents-tool';
+import type { SubagentRosterEntry } from '../delegation/agents-tool';
 import { headStatusUnsettled, shownHeadStatus } from '../heads/types';
 import { HeadJournal } from '../heads/journal';
 import type { HeadRunView } from '../heads/types';
@@ -42,7 +42,7 @@ export interface PanelAgent {
 
 const SWARM_RUNS = 20;
 
-function subordinateCategory(entry: SubordinateRosterEntry): AgentCategory {
+function subagentCategory(entry: SubagentRosterEntry): AgentCategory {
   if (entry.origin === 'user') return 'user';
 
   return entry.origin === 'evolution' ? 'background' : 'hired';
@@ -76,7 +76,7 @@ function deviceAsks(sql: SqlExecutor): boolean {
     WHERE c.kind = 'device' AND c.status = 'queued' AND (c.actor_id IS NULL OR (a.retiring_at IS NULL AND a.deleted_at IS NULL AND a.actor_id IS NOT NULL)) LIMIT 1`.length > 0;
 }
 
-function subordinateActivity(walk: Pick<Walk, 'sql' | 'chat'>, entry: SubordinateRosterEntry, actorId: string, running: boolean): AgentActivity {
+function subagentActivity(walk: Pick<Walk, 'sql' | 'chat'>, entry: SubagentRosterEntry, actorId: string, running: boolean): AgentActivity {
   if (entry.status === 'dismissed') return 'dismissed';
 
   // A hire's blocked report waits on the agent that hired it; a chat the person opened waits on the person.
@@ -98,7 +98,7 @@ function treeOrder(rootId: string, actors: readonly WorkspaceActor[]): Workspace
   const children = new Map<string, WorkspaceActor[]>();
 
   for (const row of actors) {
-    if (!isSubordinateOrigin(row.origin) || row.deletedAt !== null || row.parentActorId === null) continue;
+    if (!isSubagentOrigin(row.origin) || row.deletedAt !== null || row.parentActorId === null) continue;
     children.set(row.parentActorId, [...children.get(row.parentActorId) ?? [], row]);
   }
 
@@ -153,19 +153,19 @@ function rosterAgents(walk: Walk): Uncoloured[] {
     const parentPath = parentRow === null ? '' : paths.get(row.parentActorId ?? '');
 
     if (parentRow === undefined || parentPath === undefined) continue;
-    const entry = new SubordinateRosterStore(exec, parentRow === null ? root : handleOf(parentRow)).get(row.name);
+    const entry = new SubagentRosterStore(exec, parentRow === null ? root : handleOf(parentRow)).get(row.name);
 
     if (entry === null || entry.actorReference?.actorId !== row.actorId) continue;
     const path = parentPath === '' ? row.name : `${parentPath}/${row.name}`;
-    const { displayName } = subordinateTitle(entry, handleOf(row).config);
+    const { displayName } = subagentTitle(entry, handleOf(row).config);
     const label = displayName.trim() === '' ? codenameFor(row.name) : displayName;
     paths.set(row.actorId, path);
-    const category = subordinateCategory(entry);
+    const category = subagentCategory(entry);
 
     const running = turnOwed({ exec, now, queued }, handleOf(row));
 
     agents.push({
-      key: row.actorId, label, category, activity: subordinateActivity(walk, entry, row.actorId, running), parent: row.parentActorId === root.actorId ? 'main' : row.parentActorId,
+      key: row.actorId, label, category, activity: subagentActivity(walk, entry, row.actorId, running), parent: row.parentActorId === root.actorId ? 'main' : row.parentActorId,
       open: { kind: 'chat', path }, tab: category === 'user' && row.parentActorId === root.actorId && entry.status !== 'dismissed',
       input: category !== 'background', actorId: row.actorId, figures: NO_FIGURES,
     });
@@ -177,7 +177,7 @@ function rosterAgents(walk: Walk): Uncoloured[] {
 function swarmAgents({ sql, root, actors, paths, handleOf }: Walk): Uncoloured[] {
   const agents: Uncoloured[] = [];
 
-  for (const owner of [root, ...actors.filter((row) => isSubordinateOrigin(row.origin) && row.deletedAt === null).map(handleOf)]) {
+  for (const owner of [root, ...actors.filter((row) => isSubagentOrigin(row.origin) && row.deletedAt === null).map(handleOf)]) {
     const ownerKey = owner.actorId === root.actorId ? 'main' : owner.actorId;
     const ownerPath = paths.get(owner.actorId) ?? null;
 
@@ -224,7 +224,7 @@ export function mainPanelAgent({ label = 'Main', activity, actorId, figures = NO
 /** Each agent's birth rank ({@link PanelAgent.colour}); a swarm worker takes its search owner's. */
 function coloured(actors: readonly WorkspaceActor[], agents: readonly Uncoloured[]): PanelAgent[] {
   // Every chat and hire ever born here, retired ones too, so a rank never moves once given.
-  const born = actors.filter((row) => isSubordinateOrigin(row.origin))
+  const born = actors.filter((row) => isSubagentOrigin(row.origin))
     .sort((a, b) => a.createdAt - b.createdAt || a.actorId.localeCompare(b.actorId));
 
   const rank = new Map<string, number>([['main', 0], ...born.map((row, index): [string, number] => [row.actorId, index + 1])]);

@@ -21,8 +21,8 @@ function Answer({ chosen, onChoose, value, title, badge }: {
     <label data-assistant-tile={value}
       className="flex cursor-pointer items-center justify-between gap-2 rounded-xl border p-border px-4 py-3 transition-colors hover:border-[var(--c-border-strong)] has-[:checked]:border-[var(--c-accent)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--c-selected)]">
       <input type="radio" name="assistant" value={value} checked={chosen} onChange={onChoose} className="sr-only" />
-      <span className="p-row-text font-medium p-text">{title}</span>
-      {badge !== undefined && <span className="p-meta p-text-3">{badge}</span>}
+      <span className="t-item p-text">{title}</span>
+      {badge !== undefined && <span className="t-meta p-text-3">{badge}</span>}
     </label>
   );
 }
@@ -41,17 +41,17 @@ export function AssistantStep({ choice, onChange, person }: {
         <ChatMascot seed={look.seed} colour={look.colour} activity="idle" size={48} />
         <div className="min-w-0 flex-1">
           {/* Reads as its name until pressed; an edit is optional, never asked for. */}
-          <label className="group/name flex w-fit max-w-full items-center gap-1.5">
+          <label className="group/name flex w-fit max-w-full items-center gap-2">
             <input value={choice.name} maxLength={40} onChange={(event) => onChange({ ...choice, name: event.target.value })}
               aria-label="Its name" size={Math.max(4, choice.name.length + 1)}
-              className="min-w-0 rounded-md border border-transparent bg-transparent px-1 -mx-1 text-[17px] font-semibold p-text outline-none transition-colors hover:border-[var(--c-border)] focus:border-[var(--c-accent)]" />
+              className="t-title min-w-0 rounded-md border border-transparent bg-transparent px-1 -mx-1 p-text transition-colors hover:border-[var(--c-border)]" />
             <PencilSimpleIcon size={13} aria-hidden className="shrink-0 p-text-3 opacity-60 group-hover/name:opacity-100" />
           </label>
-          <p className="mt-0.5 p-row-text p-text-2">An assistant that lives on Home: it reads your mail, tells you each morning what needs you, and takes on bigger jobs.</p>
+          <p className="t-body mt-px p-text-2">An assistant that lives on Home: it reads your mail, tells you each morning what needs you, and takes on bigger jobs.</p>
         </div>
       </div>
 
-      <div role="radiogroup" aria-label="A personal assistant" className="grid gap-2.5 sm:grid-cols-2">
+      <div role="radiogroup" aria-label="A personal assistant" className="grid gap-3 sm:grid-cols-2">
         <Answer value="yes" chosen={choice.install} onChoose={() => onChange({ ...choice, install: true })} title="Set it up" badge="Recommended" />
         <Answer value="no" chosen={!choice.install} onChoose={() => onChange({ ...choice, install: false })} title="Not now" />
       </div>

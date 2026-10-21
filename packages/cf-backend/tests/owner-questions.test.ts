@@ -244,11 +244,11 @@ describe("an agent the owner added asks them on the owner's turns", () => {
     const workspace = await namedWorkspace(gateway);
 
     await workspace.agent.setSoul('# Purpose\n\nKeep the ledger.');
-    const { subordinate } = await workspace.agent.createSubordinateAgent();
-    const actorId = subordinate.actorId ?? '';
+    const { subagent } = await workspace.agent.createSubagentAgent();
+    const actorId = subagent.actorId ?? '';
 
     // Named by the owner, as the workspace is, so its first turn names it nothing new.
-    await workspace.agent.renameSubordinateAgent(subordinate.name, 'Ledger keeper');
+    await workspace.agent.renameSubagentAgent(subagent.name, 'Ledger keeper');
 
     await asPane([actorConnectionTag(actorId)], () => workspace.agent.send(TASK, crypto.randomUUID()));
     await driveUntil(workspace, 'the agent never asked', () => sent.length >= 1);
@@ -274,15 +274,15 @@ describe("an agent the owner added asks them on the owner's turns", () => {
     const workspace = await namedWorkspace(gateway);
 
     await workspace.agent.setSoul('# Purpose\n\nKeep the ledger.');
-    const { subordinate } = await workspace.agent.createSubordinateAgent();
-    const actorId = subordinate.actorId ?? '';
+    const { subagent } = await workspace.agent.createSubagentAgent();
+    const actorId = subagent.actorId ?? '';
 
     await asPane([actorConnectionTag(actorId)], () => workspace.agent.send(TASK, crypto.randomUUID()));
     await driveUntil(workspace, 'the agent never asked', () => sent.length >= 1);
     await workspace.agent.harnessAgentsIdle();
     expect((await workspace.agent.foldOverview()).decisionsWaiting).toBe(1);
 
-    await workspace.agent.dismissSubordinate(subordinate.name, false);
+    await workspace.agent.dismissSubagent(subagent.name, false);
 
     expect((await workspace.agent.foldOverview()).decisionsWaiting).toBe(0);
   });

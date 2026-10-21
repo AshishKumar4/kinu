@@ -59,11 +59,11 @@ export function ReviewBar() {
         <nav aria-label="Design states" className="mb-2 max-h-[70vh] w-72 overflow-y-auto p-card border p-border p-2 p-shadow-overlay animate-fade-in">
           {GROUPS.map((group) => (
             <div key={group}>
-              <p className="px-2 pb-1 pt-2 p-eyebrow">{group}</p>
+              <p className="px-2 pb-1 pt-2 t-label">{group}</p>
               {DESIGN_VIEWS.filter((view) => view.group === group).map((view) => (
                 <a key={view.id} href={`${location.pathname}?frame=diff-design${view.query}&theme=${mode}`}
                   data-design-view={view.id} data-design-query={view.query} data-design-width={view.width ?? "both"}
-                  className="block rounded-md px-2 py-1.5 text-sm p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
+                  className="block rounded-md px-2 py-1.5 t-body p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
                   {view.label}
                 </a>
               ))}
@@ -73,7 +73,7 @@ export function ReviewBar() {
       )}
       <div className="flex items-center gap-0.5 rounded-full border p-border p-overlay p-1 p-shadow-menu">
         <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} data-design-review
-          className="rounded-full px-3 py-1.5 text-xs font-medium p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
+          className="rounded-full px-3 py-1.5 t-status p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
           Diff design · {DESIGN_VIEWS.length} states
         </button>
         <button type="button" onClick={toggleMode} aria-label="Switch theme"

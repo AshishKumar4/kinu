@@ -28,7 +28,7 @@ export default function ConnectedPage() {
   useEffect(() => { setFinished(finishConnect(ended)); }, [ended.run, ended.service, ended.error]);
 
   return (
-    <div className="flex h-screen items-center justify-center p-6 p-bg p-text-2 text-sm" data-connect-finished={finished.kind}>
+    <div className="t-body flex h-screen items-center justify-center p-6 p-bg" data-connect-finished={finished.kind}>
       {said(finished, ended.service, ended.error)}
     </div>
   );

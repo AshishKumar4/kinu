@@ -427,6 +427,32 @@ describe('createNodeCodemodeToolFactory — native tools under tools.<name>', ()
     expect(seen).toEqual(['ls']);
   });
 
+  // Duplication audit, 2026-10-20 (InternalFish #12): the local factory declared only the namespaces it was given, so a
+  // program's describe('tools.shell') threw where the cloud's, describing what the call reaches, answered.
+  test("a program's describe answers for tools.* as the cloud's does", async () => {
+    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined) })({
+      cwd: WORKSPACE_ROOT, stores: freshServedStores(), native: surfaceWith(async () => 'ran'), external: () => ({}), craftedTools: () => [],
+    });
+
+    const out = await toolExecute<{ code: string }, ExecuteToolResult>(built)({ code: "return describe('tools.shell');" });
+
+    expect(out.error).toBeUndefined();
+    expect(out.result).toEqual(expect.stringContaining('shell('));
+  });
+
+  // Duplication audit, 2026-10-20 (InternalFish #12): eval held a namespace as a plain object, so a member it does not
+  // serve was a TypeError where the cloud's sandbox refuses it by name.
+  test('a namespace is held as the cloud sandbox holds one: a member it does not serve is refused by name', async () => {
+    const built = createNodeCodemodeToolFactory({ reach: narrowToolSurface(undefined), namespaces: [{
+      name: 'workspace', tools: { exec: { description: 'run', execute: async () => 'ran' } },
+    }] })({ cwd: WORKSPACE_ROOT, stores: freshServedStores(), native: {}, external: () => ({}), craftedTools: () => [] });
+
+    const run = toolExecute<{ code: string }, ExecuteToolResult>(built);
+
+    await expect(run({ code: 'return await workspace.nope();' })).rejects.toThrow('Tool "nope" not found');
+    expect((await run({ code: "return ['exec' in workspace, 'slates' in workspace, (await workspace) === workspace];" })).result).toEqual([true, false, true]);
+  });
+
   test('the sandbox does not bind its own entry', async () => {
     let calls = 0;
     const native = surfaceWith(async () => '');
@@ -618,7 +644,8 @@ test('each workspace.slates member reaches the slate host as one operation, and 
     'answers.push(await board.$preview(), await board.$methods(), await board.$commit(), await board.$history(), await board.$graph());',
     "answers.push(await board.$restore('v1'), await slates.$list(), await slates.$fork('v1'));",
     'const refused = await board.$remove();',
-    "const envelope = [typeof workspace.slate, await Promise.resolve().then(() => workspace.slates({ op: 'list' })).then(() => 'called', () => 'not callable')];",
+    // Served is a member's own: a name the workspace does not serve is no member of it, as in the cloud's sandbox.
+    "const envelope = ['slate' in workspace, await Promise.resolve().then(() => workspace.slates({ op: 'list' })).then(() => 'called', () => 'not callable')];",
     'return { answers, refused, envelope, awaited: (await board) === board };',
   ].join('\n');
 
@@ -629,7 +656,7 @@ test('each workspace.slates member reaches the slate host as one operation, and 
       'call', 'call', 'preview', 'methods', 'commit', 'history', 'graph', 'restore', 'list', 'fork',
     ],
     refused: { success: false, reason: 'denied', error: 'not yours' },
-    envelope: ['undefined', 'not callable'],
+    envelope: [false, 'not callable'],
     awaited: true,
   });
 

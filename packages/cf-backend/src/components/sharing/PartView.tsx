@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/Button";
 import { EyeIcon, LockSimpleIcon, PlugIcon, SignInIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import type { PartAction, PartRunAnswer } from "@kinu.run/core";
 import { serverWords } from "./words";
+import { TextInput } from "@/components/ui/Field";
 
 /** What the frame does for its viewer; the decisions among them open in the top page. */
 export interface PartControls {
@@ -28,10 +29,7 @@ function PartButton({ children, onClick, ...data }: {
   [attribute: `data-${string}`]: string | boolean | undefined;
 }) {
   return (
-    <button type="button" onClick={onClick} {...data}
-      className="inline-flex min-h-7 items-center gap-1 rounded-md border p-border p-surface px-2.5 py-1 text-left text-xs font-medium leading-4 p-text transition-colors hover:bg-[var(--c-hover)]">
-      {children}
-    </button>
+    <Button size="sm" onClick={onClick} {...data} className="text-left">{children}</Button>
   );
 }
 
@@ -44,9 +42,9 @@ function InPlace({ icon, said, action, onAct, ...data }: {
   [attribute: `data-${string}`]: string | boolean | undefined;
 }) {
   return (
-    <div {...data} className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2.5 rounded-lg p-sunken px-4 py-6 text-center">
+    <div {...data} className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 rounded-lg p-sunken px-4 py-6 text-center">
       <span className="shrink-0 p-text-3">{icon}</span>
-      <p className="max-w-sm p-row-text p-text-2">{said}</p>
+      <p className="t-body max-w-sm p-text-2">{said}</p>
       {action !== null && <Button variant="primary" size="sm" onClick={onAct}>{action}</Button>}
     </div>
   );
@@ -59,9 +57,8 @@ function ActionControl({ action, onAct }: { action: PartAction; onAct: PartContr
   if (action.input === undefined) return <PartButton data-part-action={action.id} onClick={() => onAct({ id: action.id, input: null })}>{action.label}</PartButton>;
 
   return (
-    <form className="flex items-center gap-1.5" onSubmit={(event) => { event.preventDefault(); onAct({ id: action.id, input: text }); }}>
-      <input value={text} onChange={(event) => setText(event.target.value)} aria-label={action.label} data-part-action-input={action.id}
-        className="h-7 min-w-0 flex-1 rounded-md border p-border p-surface px-2 text-xs p-text" />
+    <form className="flex items-center gap-2" onSubmit={(event) => { event.preventDefault(); onAct({ id: action.id, input: text }); }}>
+      <TextInput size="sm" className="min-w-0 flex-1" value={text} onChange={(event) => setText(event.target.value)} aria-label={action.label} data-part-action-input={action.id} />
       <PartButton data-part-action={action.id} onClick={() => onAct({ id: action.id, input: text })}>{action.label}</PartButton>
     </form>
   );
@@ -90,7 +87,7 @@ export function PartView({ answer, slate, controls }: { answer: PartRunAnswer; s
       if (answer.actions.length === 0 && answer.show === null) return null;
 
       return (
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
           {answer.actions.map((action) => <ActionControl key={action.id} action={action} onAct={controls.act} />)}
           {answer.show !== null && (
             <PartButton data-part-show onClick={() => controls.decide("show")}><EyeIcon size={13} />Show to everyone…</PartButton>
@@ -130,7 +127,7 @@ export function PartView({ answer, slate, controls }: { answer: PartRunAnswer; s
 export function PartOutsideItsSlate() {
   return (
     <div data-part-outside className="flex flex-1 items-center justify-center px-4 text-center">
-      <p className="max-w-sm p-row-text p-text-2">This part shows only inside its slate, opened from Kinu.</p>
+      <p className="t-body max-w-sm p-text-2">This part shows only inside its slate, opened from Kinu.</p>
     </div>
   );
 }

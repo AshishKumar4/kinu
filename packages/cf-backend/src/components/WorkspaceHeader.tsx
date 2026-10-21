@@ -11,6 +11,8 @@ import { ChatMascot, WorkspaceLogo } from "./Marks";
 import { useMascotOf } from "@/hooks/use-chat-mascot";
 import type { ChatActions } from "@/hooks/use-agents-nav";
 import { InspectorToggle, type InspectorControl } from "@/components/WorkbenchPanels";
+import { IconControl, IconLink } from "@/components/ui/IconControl";
+import { PressableLink } from "@/components/ui/Pressable";
 
 type Rename = (name: string) => Promise<void>;
 
@@ -70,7 +72,7 @@ export function WorkspaceHeader({ workspace, chats, active, newChat, leading, tr
             <BarTab key={item.key} item={item} active={item.key === active} afterActive={index > 0 && items[index - 1]?.key === active} />
           ))}
           <li className="p-bar-new">
-            <Link to={newChat} className="p-bar-icon" aria-label="New chat" title="New chat"><PlusIcon size={15} /></Link>
+            <IconLink place="bar" to={newChat} aria-label="New chat" title="New chat"><PlusIcon size={15} /></IconLink>
           </li>
           <TabOutline outline={outline} />
         </ul>
@@ -104,12 +106,10 @@ function BarTab({ item, active, afterActive }: { item: BarItem; active: boolean;
           {(item.rename !== undefined || item.remove !== undefined) && (
             <span className="p-bar-actions">
               {item.rename && (
-                <button type="button" className="p-bar-action" onClick={() => setEditing(true)}
-                  aria-label={`Rename ${item.label}`} title="Rename"><PencilSimpleIcon size={12} /></button>
+                <IconControl place="tab" onClick={() => setEditing(true)} aria-label={`Rename ${item.label}`} title="Rename"><PencilSimpleIcon size={12} /></IconControl>
               )}
               {item.remove && (
-                <button type="button" className="p-bar-action" data-danger onClick={item.remove}
-                  aria-label={`${item.clears === true ? "Clear" : "Delete"} ${item.label}`} title={item.clears === true ? "Clear" : "Delete"}><XIcon size={12} /></button>
+                <IconControl place="tab" danger onClick={item.remove} aria-label={`${item.clears === true ? "Clear" : "Delete"} ${item.label}`} title={item.clears === true ? "Clear" : "Delete"}><XIcon size={12} /></IconControl>
               )}
             </span>
           )}
@@ -153,17 +153,16 @@ export function WorkspaceBarActions({ workspace, working, view, inspector, onAge
 }) {
   return (
     <>
-      <button type="button" onClick={onAgents} className="p-bar-icon relative" aria-label="All agents" title="All agents">
+      <IconControl place="bar" className="relative" onClick={onAgents} aria-label="All agents" title="All agents">
         <UsersThreeIcon size={16} />
         {/* The agents at work out of sight, those with no tab of their own, counted where the owner can open them. */}
         {working > 0 && (
-          <span data-working-agents={working} className="p-agents-badge absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full px-[3px] text-center text-[9px] font-semibold leading-[14px] tabular-nums">
+          <span data-working-agents={working} className="t-micro p-agents-badge absolute -right-px -top-px min-w-[14px] rounded-full px-[3px] text-center tabular-nums">
             {working}
           </span>
         )}
-      </button>
-      <Link to={`/workspace/${workspace}/settings`} className="p-bar-icon" aria-current={view === "settings" ? "page" : undefined}
-        aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></Link>
+      </IconControl>
+      <IconLink place="bar" to={`/workspace/${workspace}/settings`} aria-current={view === "settings" ? "page" : undefined} aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></IconLink>
       {view === undefined && inspector && <InspectorToggle control={inspector} />}
     </>
   );
@@ -188,21 +187,21 @@ export function FocusBar({ workspace, agent, line, leading, trailing, tabs }: {
     <header className="p-bar" data-workspace-bar data-layout="focus">
       {leading && <div className="p-bar-menu">{leading}</div>}
       <div className="flex min-w-0 flex-1 items-center gap-3 pl-4">
-        <Link to={workspace.to} className="flex min-w-0 items-center gap-2.5 rounded-lg py-1 pr-2 transition-colors hover:bg-[var(--c-hover)]"
+        <PressableLink to={workspace.to} className="flex w-auto min-w-0 items-center gap-3 py-1 pr-2"
           title={`${workspace.title}: its agents, slates and plan`} data-focus-identity>
           <ChatMascot seed={agent.seed} colour={agent.colour} activity={agent.activity} size={24} />
           <span className="flex min-w-0 flex-col leading-tight">
-            <span className="truncate text-[14px] font-semibold tracking-[-0.01em] p-text">{agent.label}</span>
-            <span className="truncate text-[11.5px] p-text-3" data-focus-line>{line}</span>
+            <span className="t-label truncate p-text">{agent.label}</span>
+            <span className="t-meta truncate p-text-3" data-focus-line>{line}</span>
           </span>
-        </Link>
+        </PressableLink>
       </div>
       <div className="p-bar-trailing">
         {tabs !== undefined && (
-          <button type="button" onClick={tabs.show} className="p-bar-icon relative" aria-label={`Show the ${String(tabs.count)} chats`} title="Show chats" data-focus-tabs>
+          <IconControl place="bar" className="relative" onClick={tabs.show} aria-label={`Show the ${String(tabs.count)} chats`} title="Show chats" data-focus-tabs>
             <ChatsCircleIcon size={16} />
-            <span className="absolute -right-0.5 -top-0.5 min-w-[14px] rounded-full bg-[var(--c-fill)] px-[3px] text-center text-[9px] font-semibold leading-[14px] tabular-nums p-text-2">{tabs.count}</span>
-          </button>
+            <span className="t-micro absolute -right-px -top-px min-w-[14px] rounded-full bg-[var(--c-fill)] px-[3px] text-center tabular-nums p-text-2">{tabs.count}</span>
+          </IconControl>
         )}
         {trailing}
       </div>

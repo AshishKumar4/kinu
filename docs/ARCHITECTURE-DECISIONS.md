@@ -350,7 +350,7 @@ schema genesis moved with it, so a local database from before is refused, not
 opened without its soul. Pinned by "an agent with its own uid edits SOUL.md"
 (red at 0644, the soul at 0664) and its cloud and CLI flows. The owner's write
 is uid 0's, so it replaces a link an agent left at `SOUL.md` rather than
-writing through it, and a hired subordinate's turn reads the file as it stands.
+writing through it, and a hired subagent's turn reads the file as it stands.
 
 W4. A workspace delete is the object's own storage wipe (`destroy()`, whose
 `deleteAll()` takes every agent facet's database with the workspace's), with
@@ -521,27 +521,27 @@ D1. One delegation surface, `agents`, with `hire` (durable or task lifetime),
 `swarm`, `msg`, `list`, `dismiss`. A hire starts fresh on role and mission; a
 swarm node may inherit the parent's conversation
 (`config.context:'inherit'`). Decided 2026-09-03. Being extended 2026-09-13:
-`hire` gains the same `context` field so a subordinate can be forked when the
+`hire` gains the same `context` field so a subagent can be forked when the
 work depends on the conversation (`feat/hire-fork`). Later note: `feat/hire-fork`
 merged as 8216dc82b.
 
 D2. The root actor delegates across roles in the fusion pattern from the
 owner's oh-my-pi fork: dedicated streams to a durable specialist hire,
 research to a researcher task hire, general work to a task hire. Coupled,
-dependent or single-context work stays with the root. Subordinates keep their
+dependent or single-context work stays with the root. Subagents keep their
 role prompts. Decided 2026-09-13; lands with `feat/delegation-prompts`. Later
 note: merged as 550ee2dac.
 
 D3. An assignment is not an external event, so no reactor drains one. A
-`subordinate_task` row is the whole turn input of the subordinate it names, and
+`subagent_task` row is the whole turn input of the subagent it names, and
 one runner owns it: core `drainAssignments`
-(`core/src/subordinates/assignments.ts`), driven by the cloud sweep
+(`core/src/subagents/assignments.ts`), driven by the cloud sweep
 (`drainAdmittedDelegations`) and by the local host's pass
 (`drainAssignedWork`). `wakesADrain` states the exclusion once, for the batch,
 the wake fold and the runner. Decided 2026-09-17, commit 8946319e3. Measured
 the same day in the workerd pool (`tests/workerd/hire.test.ts`, "one brief
 produces exactly one child turn"). Before: one hire brief produced 242
-`subordinate_task` rows with bodies nesting 253 -> 850 characters. The
+`subagent_task` rows with bodies nesting 253 -> 850 characters. The
 reactor digested the row into "1 event arrived while you were idle …", the
 hosted turn admission re-published that digest as a new assignment, and the
 durable sweep ran the raw brief beside it. After: 1 row whose body is the
@@ -554,7 +554,7 @@ two wake chains and only one of them reaches the sweep.
 `drainAdmittedDelegations` runs from `maintenanceWork`, whose only caller is
 `_kinuTerminalRetryTick`. `nextWakeAt` feeds `armTimer`, whose
 `_kinuTimerTick` fires due triggers, the peer outbox and the email reconcile
-and reads no `subordinate_task` row. So `admitHostedTask`'s arm woke a frame
+and reads no `subagent_task` row. So `admitHostedTask`'s arm woke a frame
 that could not take the row and re-armed itself from the same fold, and the
 assignment waited for whatever unrelated obligation next put a row on the retry
 chain. `armWake` now arms that chain (`armDelegationWake`) and the fold is out
@@ -562,7 +562,7 @@ of `nextWakeAt`. The predicate was already in the right place, since
 `owedUntimedWork` counts an admitted delegation. Measured the same day on the
 hire file's own rows, with only the arm changed. Under the fold, cases 1-4 took
 60,722 / 67,002 / 61,003 / 60,988 ms (one per unrelated 60-second recovery
-row), and case 6's two `subordinate_task` rows stood `turn_id NULL, consumed_at
+row), and case 6's two `subagent_task` rows stood `turn_id NULL, consumed_at
 NULL` for the 45 s a probe sampled, with the child opening no run. Under the
 arm the same four take 640 / 6,995 / 1,006 / 983 ms, the child opens both
 runs, and all six rows pass in 31 s. The local host arms nothing and
@@ -573,21 +573,21 @@ and no drain runs it.
 D4. A delegated turn brackets its run in the durable ledger, like every other
 turn. The local host already did this: an assignment is admitted there as
 the child's own chat turn, and `ChatSession.processTurn` calls `openTurnRun`
-(`caused_by: subordinate_task`). The cloud runner drives `runHeadInference`
+(`caused_by: subagent_task`). The cloud runner drives `runHeadInference`
 directly, which never enters that queue, so it wrote no bracket. Decided
 2026-09-17: the stricter side wins, and the delegated turn opens and closes the
 run with the same cause and the same input text. Measured the same day in the
 workerd pool. Before, a hired child's ledger held `step_finish` alone (one run
 id, no `run_start`, no `run_end`), so `getRunSummaries` answered
 `causedBy: null, userMessage: null, status: null` for it, which is what
-`subordinateInspection`'s `runs` view shows a reader of a hired child.
+`subagentInspection`'s `runs` view shows a reader of a hired child.
 
 D5. There is one inherited-context kind, `fork`. The `digest` kind rendered the
 parent's recent conversation as prose for a fresh hire. Its only reader was
 the reactor's rendering of the assignment row, which D3 removed: both turn
 runners read the messages and answered `[]` for a digest, so from 69ef79b17 it
 reached nobody. Deleted end to end 2026-09-17 (schema arm, both producers, the
-`renderSubordinateInheritedContext` renderer and the visibility prefix)
+`renderSubagentInheritedContext` renderer and the visibility prefix)
 rather than spliced into the turn, because the product's own pin refuses it:
 `cf-backend/tests/unit-hire-fork.test.ts`, "a cf hire context=fresh starts from
 its birth-time conversation", requires a fresh hire's first message to be its

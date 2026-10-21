@@ -8,6 +8,9 @@ import { getAccountUsage } from "@/lib/user-api";
 import { Card } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { useAsyncResource } from "@/hooks/use-async-resource";
+import { Group } from "@/components/ui/Group";
+import { Meter } from "@/components/ui/Meter";
+import { Button } from "@/components/ui/Button";
 
 function usedShare(window: LimitWindow): number | undefined {
   if (window.usedPercent !== undefined) return Math.min(1, Math.max(0, window.usedPercent / 100));
@@ -17,21 +20,18 @@ function usedShare(window: LimitWindow): number | undefined {
 
 function LimitRow({ report, now }: { report: LimitReport; now: number }) {
   return (
-    <div className="px-4 py-2.5" title={report.undocumented === true ? "Read from a route the provider does not document; it may change without notice." : undefined}>
-      <div className="p-row-text font-medium p-text">{limitHeading(report, now)}</div>
-      {report.windows.length === 0 && <p className="p-meta p-text-3">No limit reported.</p>}
-      <ul className="mt-1 space-y-1.5">
+    <div className="px-4 py-2" title={report.undocumented === true ? "Read from a route the provider does not document; it may change without notice." : undefined}>
+      <div className="t-item p-text">{limitHeading(report, now)}</div>
+      {report.windows.length === 0 && <p className="t-meta p-text-3">No limit reported.</p>}
+      <ul className="mt-1 space-y-2">
         {report.windows.map((window) => {
           const share = usedShare(window);
 
           return (
-            <li key={window.name} className="space-y-0.5">
-              <p className="p-meta p-text-2">{limitWindowText(window, now)}</p>
-              {share !== undefined && (
-                <div className="h-1 overflow-hidden rounded-full bg-[var(--c-fill)]" aria-hidden="true">
-                  <div className={`h-full rounded-full ${share >= 0.9 ? "bg-[var(--c-danger)]" : "bg-[var(--c-accent)]"}`} style={{ width: `${String(Math.round(share * 100))}%` }} />
-                </div>
-              )}
+            <li key={window.name} className="space-y-px">
+              {share === undefined
+                ? <p className="t-meta p-text-2">{limitWindowText(window, now)}</p>
+                : <Meter label={limitWindowText(window, now)} value={Math.round(share * 100)} />}
             </li>
           );
         })}
@@ -44,9 +44,9 @@ function AccountRow({ row, now, live }: { row: AccountSpend; now: number; live: 
   const cost = row.usd === undefined ? "unpriced" : `${fmtUsd(row.usd)}${row.unpricedCalls > 0 ? "+" : ""}`;
 
   return (
-    <div className="px-4 py-2.5">
-      <div className="flex items-baseline gap-2 p-row-text">
-        <span className="min-w-0 flex-1 break-words font-medium p-text">
+    <div className="px-4 py-2">
+      <div className="t-body flex items-baseline gap-2">
+        <span className="t-item min-w-0 flex-1 break-words">
           {row.provider === null ? "No account recorded" : `${row.provider} · ${row.account ?? ""}`}
         </span>
         <span className="p-text-3 shrink-0">×{row.calls}</span>
@@ -54,7 +54,7 @@ function AccountRow({ row, now, live }: { row: AccountSpend; now: number; live: 
         <span className="w-20 shrink-0 text-right p-text tabular-nums">{cost}</span>
       </div>
       {row.quota !== undefined && !live && (
-        <ul className="mt-1 space-y-0.5 p-meta p-text-3" title={`As the provider reported it ${timeAgo(row.quota.at)}.`}>
+        <ul className="t-meta mt-1 space-y-px p-text-3" title={`As the provider reported it ${timeAgo(row.quota.at)}.`}>
           {row.quota.windows.map((window) => <li key={window.measure}>{quotaWindowText(window, now)}</li>)}
         </ul>
       )}
@@ -69,18 +69,16 @@ function LimitsTable({ usage, onRefresh }: { usage: AccountUsage; onRefresh: () 
 
   return (
     <div className="space-y-3">
-      {limits.length === 0 && unread.length === 0 && <p className="p-row-text p-text-3">No connected account reports its limits.</p>}
+      {limits.length === 0 && unread.length === 0 && <p className="t-body p-text-3">No connected account reports its limits.</p>}
       {(limits.length > 0 || unread.length > 0) && (
-        <div className="p-group">
+        <Group>
           {limits.map((report) => <LimitRow key={`${report.provider}@${report.account}`} report={report} now={now} />)}
           {unread.map((entry) => (
-            <p key={`${entry.provider}@${entry.account}`} className="px-4 py-2.5 p-row-text p-warning">{limitUnreadText(entry)}</p>
+            <p key={`${entry.provider}@${entry.account}`} className="t-body px-4 py-2 p-warning">{limitUnreadText(entry)}</p>
           ))}
-        </div>
+        </Group>
       )}
-      <button type="button" onClick={onRefresh} className="inline-flex items-center gap-1 p-meta p-text-3 hover:p-text-2">
-        <ArrowsClockwiseIcon size={11} /> Read again
-      </button>
+      <Button variant="ghost" size="sm" icon={<ArrowsClockwiseIcon size={14} />} onClick={onRefresh}>Read again</Button>
     </div>
   );
 }
@@ -92,20 +90,20 @@ function SpendTable({ usage }: { usage: AccountUsage }) {
   return (
     <div className="space-y-3">
       {usage.accounts.length === 0
-        ? <p className="p-row-text p-text-3">No model call has been recorded yet.</p>
+        ? <p className="t-body p-text-3">No model call has been recorded yet.</p>
         : (
-          <div className="p-group">
+          <Group>
             {usage.accounts.map((row) => (
               <AccountRow key={`${row.provider ?? ""}@${row.account ?? ""}`} row={row} now={now} live={live.has(`${row.provider ?? ""}@${row.account ?? ""}`)} />
             ))}
-          </div>
+          </Group>
         )}
-      <p className="p-meta p-text-3">
+      <p className="t-meta p-text-3">
         Across {usage.workspaces} workspace{usage.workspaces === 1 ? "" : "s"}, at API rates from the models.dev catalog;
         a subscription is billed by its plan instead.
       </p>
       {usage.unread.length > 0 && (
-        <p className="p-meta p-danger">Not counted, could not be read: {usage.unread.join(", ")}.</p>
+        <p className="t-meta p-danger">Not counted, could not be read: {usage.unread.join(", ")}.</p>
       )}
     </div>
   );

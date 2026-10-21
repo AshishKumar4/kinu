@@ -9,6 +9,8 @@ import { DesktopIcon, FolderOpenIcon, GitBranchIcon, PlusIcon, SparkleIcon, XIco
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { IconControl } from "@/components/ui/IconControl";
+import { SessionButton, SessionRename } from "@/components/ui/SessionTabs";
 
 /** A read is one exec in the box (about 150 ms there, 10 ms of it tmux, staging 2026-10-13); a few seconds keeps the
  *  marks current while the tab is open, and nothing reads while it is closed or hidden. */
@@ -159,16 +161,16 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
         data-hidden-start={hidden.start || undefined} data-hidden-end={hidden.end || undefined}
         onWheel={(event) => { if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) event.currentTarget.scrollLeft += event.deltaY; }}>
         {sessions === null && (
-          <button type="button" role="tab" aria-selected={current === ONE_SHELL} className="p-session-tab" onClick={() => onChoose(ONE_SHELL)}>
+          <SessionButton part="tab" aria-selected={current === ONE_SHELL} onClick={() => onChoose(ONE_SHELL)}>
             <Dot tone="ready" />{ONE_SHELL}
-          </button>
+          </SessionButton>
         )}
         {sessions?.map((session) => {
           const { tone, word } = sessionTone(session);
 
           return renaming === session.id ? (
-            <input key={session.id} autoFocus defaultValue={session.name} aria-label={`Rename ${session.name}`} maxLength={40}
-              className="p-session-rename" onBlur={(event) => { setRenaming(null); detach(onRename(session.id, event.currentTarget.value)); }}
+            <SessionRename key={session.id} autoFocus defaultValue={session.name} aria-label={`Rename ${session.name}`} maxLength={40}
+              onBlur={(event) => { setRenaming(null); detach(onRename(session.id, event.currentTarget.value)); }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") event.currentTarget.blur();
 
@@ -176,28 +178,28 @@ export function SessionTabs({ label, sessions, current, desktop, onChoose, onDes
               }} />
           ) : (
             <span key={session.id} className="p-session-tab-slot">
-              <button type="button" role="tab" aria-selected={current === session.id} className="p-session-tab" data-session={session.id}
+              <SessionButton part="tab" aria-selected={current === session.id} data-session={session.id}
                 title={`${session.name}: ${word}. Double-click to rename.`} onClick={() => onChoose(session.id)}
                 onDoubleClick={() => setRenaming(session.id)}>
                 <Dot tone={tone} />{session.job !== undefined && <AgentMark />}{session.name}
-              </button>
+              </SessionButton>
               {sessions.length > 1 && (
-                <button type="button" aria-label={`Close ${session.name}`} title={`Close ${session.name}: its shell ends`} className="p-session-close"
-                  onClick={() => detach(onClose(session.id))}><XIcon size={10} weight="bold" /></button>
+                <SessionButton part="close" aria-label={`Close ${session.name}`} title={`Close ${session.name}: its shell ends`}
+                  onClick={() => detach(onClose(session.id))}><XIcon size={10} weight="bold" /></SessionButton>
               )}
             </span>
           );
         })}
         {desktop && (
-          <button type="button" role="tab" aria-selected={current === "desktop"} className="p-session-tab" onClick={onDesktop}>
+          <SessionButton part="tab" aria-selected={current === "desktop"} onClick={onDesktop}>
             <DesktopIcon size={14} aria-hidden />Desktop
-          </button>
+          </SessionButton>
         )}
       </div>
       {onOpen !== null && (
-        <button type="button" aria-label="New session" title="New session" className="p-bar-icon mb-1 shrink-0" onClick={() => detach(onOpen())}>
+        <IconControl place="bar" className="mb-1 shrink-0" aria-label="New session" title="New session" onClick={() => detach(onOpen())}>
           <PlusIcon size={14} />
-        </button>
+        </IconControl>
       )}
     </div>
   );
@@ -250,21 +252,21 @@ function useHiddenEdges(strip: RefObject<HTMLDivElement | null>, shown: string):
 export function SessionDetails({ session, name }: { session: TerminalSession | null; name?: string }): ReactNode {
   const now = Date.now();
 
-  if (session === null) return name === undefined ? null : <span className="p-row-text font-medium p-text">{name}</span>;
+  if (session === null) return name === undefined ? null : <span className="t-item p-text">{name}</span>;
   const detail = sessionDetail(session, now);
   const failed = session.last !== null && session.last.exit !== 0 && session.running === null;
 
   return (
-    <span className="flex min-w-0 items-center gap-3 p-meta p-text-3">
-      {name !== undefined && <span className="inline-flex shrink-0 items-center gap-2 p-row-text font-medium p-text"><Dot tone={sessionTone(session).tone} />{name}</span>}
+    <span className="t-meta flex min-w-0 items-center gap-3 p-text-3">
+      {name !== undefined && <span className="t-item inline-flex shrink-0 items-center gap-2 p-text"><Dot tone={sessionTone(session).tone} />{name}</span>}
       {/* A narrow pane keeps its ports and state: the branch goes first, then the folder shows its last part. The text
           holds both forms, so the folder itself is named on the element. */}
-      <span data-session-cwd={session.cwd} title={session.cwd} className="inline-flex min-w-0 items-center gap-1.5">
+      <span data-session-cwd={session.cwd} title={session.cwd} className="inline-flex min-w-0 items-center gap-2">
         <FolderOpenIcon size={12} className="shrink-0" aria-hidden />
         <span className="hidden truncate @[34rem]:inline">{session.cwd}</span>
         <span className="truncate @[34rem]:hidden">{folderTail(session.cwd)}</span>
       </span>
-      {session.branch !== null && <span className="hidden min-w-0 items-center gap-1.5 @[38rem]:inline-flex"><GitBranchIcon size={12} className="shrink-0" aria-hidden /><span className="truncate">{session.branch}</span></span>}
+      {session.branch !== null && <span className="hidden min-w-0 items-center gap-2 @[38rem]:inline-flex"><GitBranchIcon size={12} className="shrink-0" aria-hidden /><span className="truncate">{session.branch}</span></span>}
       {session.ports.map((port) => <span key={port} data-session-port className="p-term-port shrink-0">:{port}</span>)}
       {session.needsInput && <span data-session-waiting className="shrink-0 font-medium p-warning">Waiting for input</span>}
       {detail !== null && <span className={`hidden min-w-0 truncate @[42rem]:inline ${failed ? "p-danger" : ""}`}>{detail}</span>}

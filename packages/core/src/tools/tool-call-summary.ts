@@ -274,14 +274,14 @@ function describeAgents(input: JsonObject): string {
 
       if (str(input, "lifetime") === "task") return name ? `Asked ${name} for one answer` : "Asked one agent for one answer";
 
-      return name ? `Hired ${name}` : "Hired a subordinate";
+      return name ? `Hired ${name}` : "Hired a subagent";
     }
 
     case "hireWorkspace": return "Hired a workspace";
-    case "assign":  return agent ? `Asked ${agent}` : "Asked a subordinate";
+    case "assign":  return agent ? `Asked ${agent}` : "Asked a subagent";
     case "message": return agent ? `Messaged ${agent}` : "Messaged an agent";
     case "reply":   return "Answered an agent message";
-    case "dismiss": return agent ? `Dismissed ${agent}` : "Dismissed a subordinate";
+    case "dismiss": return agent ? `Dismissed ${agent}` : "Dismissed a subagent";
     case "list":    return "Listed the roster";
     default:        return "";
   }

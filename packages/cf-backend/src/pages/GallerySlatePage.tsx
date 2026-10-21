@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { FlagIcon, FolderIcon, GitForkIcon, GithubLogoIcon, PlayIcon, PlugIcon, SparkleIcon, StarIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, galleryPicturePath, type GalleryListing, type GallerySlate, type RoomService } from "@kinu.run/core";
@@ -23,6 +23,7 @@ import { hereAsking, signInAndReturn } from "@/lib/sign-in";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { readExplore, type ExploreItem } from "@/lib/explore-api";
 import { readGallerySlate, reportListing, starListing } from "@/lib/gallery-api";
+import { Group } from "@/components/ui/Group";
 
 function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; onClose: () => void; onSent: () => void }) {
   const [reason, setReason] = useState("");
@@ -38,17 +39,17 @@ function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; o
   }, [listing, reason, onSent]);
 
   return (
-    <Modal title={`Report ${listing.title}`} icon={<FlagIcon size={18} className="p-accent" />} onClose={onClose} busy={busy}
+    <Modal title={`Report ${listing.title}`} icon={<FlagIcon size={18} className="p-accent-fg" />} onClose={onClose} busy={busy}
       footer={(
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
           <Button variant="primary" size="md" disabled={reason.trim() === "" || busy} data-gallery-report-send onClick={send}>Report</Button>
         </div>
       )}>
-      <p className="p-row-text p-text-2">Say what is wrong with it. The people who run Kinu read every report.</p>
+      <p className="t-body p-text-2">Say what is wrong with it. The people who run Kinu read every report.</p>
       <textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={3} maxLength={500} aria-label="What is wrong" data-gallery-report-reason
-        className="w-full rounded-md border p-border bg-[var(--c-field)] px-2.5 py-1.5 p-row-text p-text outline-none placeholder:text-[var(--c-text-3)]" />
-      {failure !== null && <p role="alert" className="p-meta p-danger">{failure}</p>}
+        className="t-body w-full rounded-md border p-border bg-[var(--c-field)] px-2 py-1 p-text outline-none placeholder:p-text-3" />
+      {failure !== null && <p role="alert" className="t-meta p-danger">{failure}</p>}
     </Modal>
   );
 }
@@ -71,17 +72,17 @@ const SERVICE_ICON: Record<RoomService["kind"], typeof PlugIcon> = { github: Git
 function UsesYours({ needs }: { needs: readonly RoomService[] }) {
   return (
     <div data-gallery-needs className="pt-2">
-      <h2 className="mb-2 p-meta font-medium p-text-2">Uses your own</h2>
+      <h2 className="t-status mb-2 p-text-2">Uses your own</h2>
       {needs.length === 0 ? (
-        <p className="p-row-text p-text-2">Nothing of yours.</p>
+        <p className="t-body p-text-2">Nothing of yours.</p>
       ) : (
-        <ul className="p-group">
+        <Group list>
           {needs.map((need) => {
             const Icon = SERVICE_ICON[need.kind];
 
-            return <li key={`${need.kind}:${need.title}`} data-gallery-need={need.kind} className="flex items-center gap-3 px-3.5 py-2.5 p-row-text p-text"><Icon size={16} className="shrink-0 p-text-3" />{need.title}</li>;
+            return <li key={`${need.kind}:${need.title}`} data-gallery-need={need.kind} className="t-body flex items-center gap-3 px-3 py-2 p-text"><Icon size={16} className="shrink-0 p-text-3" />{need.title}</li>;
           })}
-        </ul>
+        </Group>
       )}
     </div>
   );
@@ -145,7 +146,7 @@ export default function GallerySlatePage() {
       actions={(
         <>
           <Button variant="secondary" aria-pressed={star.on} data-gallery-star data-gallery-stars={star.count} onClick={signedIn ? toggleStar : () => signInAndReturn()}>
-            <StarIcon size={15} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : ""} />{star.on ? "Starred" : "Star"} · {star.count.toLocaleString("en-US")}
+            <StarIcon size={15} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent-fg" : ""} />{star.on ? "Starred" : "Star"} · {star.count.toLocaleString("en-US")}
           </Button>
           <Button variant="secondary" data-gallery-fork onClick={() => (signedIn ? setDialog("fork") : signInAndReturn(hereAsking("fork")))}>
             <GitForkIcon size={15} />Fork
@@ -159,23 +160,23 @@ export default function GallerySlatePage() {
             className="absolute inset-0 size-full object-cover object-left-top" fallback={<TypesetCover title={listing.title} line={listing.line} />} />
         </div>
         <div className="min-w-0 space-y-4">
-          <p className="flex items-center gap-2 p-row-text p-text-3"><Avatar name={listing.owner.name} size={20} />{listing.owner.name} · {CATEGORY_WORDS[listing.category]}</p>
-          <p className="p-row-text p-text-2">{listing.line}</p>
-          {starFailure !== null && <p role="alert" className="p-meta p-danger">{starFailure}</p>}
-          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 p-meta p-text-3">
+          <p className="t-body flex items-center gap-2 p-text-3"><Avatar name={listing.owner.name} size={20} />{listing.owner.name} · {CATEGORY_WORDS[listing.category]}</p>
+          <p className="t-body p-text-2">{listing.line}</p>
+          {starFailure !== null && <p role="alert" className="t-meta p-danger">{starFailure}</p>}
+          <p className="t-meta flex flex-wrap items-center gap-x-3 gap-y-1 p-text-3">
             <span data-gallery-viewers={listing.viewers}>{listing.viewers === 1 ? "Opened by 1 person" : `Opened by ${listing.viewers.toLocaleString("en-US")} people`}</span>
             {read.people !== undefined && <span data-gallery-people>Used by about {read.people.toLocaleString("en-US")} people this week</span>}
             {read.forks !== undefined && <span data-gallery-forks>{read.forks === 1 ? "1 fork" : `${read.forks.toLocaleString("en-US")} forks`}</span>}
             {reported
               ? <span data-gallery-reported className="ml-auto inline-flex items-center gap-1"><FlagIcon size={12} />Reported</span>
-              : <button type="button" data-gallery-report onClick={() => (signedIn ? setDialog("report") : signInAndReturn())} className="ml-auto inline-flex items-center gap-1 hover:underline"><FlagIcon size={12} />Report</button>}
+              : <Button variant="ghost" size="sm" className="ml-auto" data-gallery-report onClick={() => (signedIn ? setDialog("report") : signInAndReturn())}><FlagIcon size={12} />Report</Button>}
           </p>
           {read.needs !== undefined && <UsesYours needs={read.needs} />}
         </div>
       </div>
       {like.length > 0 && (
         <section data-gallery-like>
-          <h2 className="mb-3 p-label">More like it</h2>
+          <h2 className="t-label mb-3">More like it</h2>
           <ul className={TILE_GRID}>{like.map((each) => <ExploreCard key={each.kind === "app" ? `${each.app.workspace}/${each.app.slate}` : each.workspace.id} item={each} />)}</ul>
         </section>
       )}

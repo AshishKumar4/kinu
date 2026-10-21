@@ -1,8 +1,10 @@
 /** Read-only: the agent re-reads this plan every step, so an owner edit would swap it under a running turn. */
-import { Badge } from "@cloudflare/kumo";
+import { Badge } from "@/components/ui/Badge";
 import { CircleIcon, CircleDashedIcon, CheckCircleIcon, ProhibitIcon, SparkleIcon } from "@phosphor-icons/react";
 import { taskSettled, type AgentTask, type AgentTaskTree, type PanelAgent, type TaskStatus, type WorkspaceWorkOwner } from "@kinu.run/core";
 import { toneInk } from "@/components/ui/Status";
+import { Pressable } from "@/components/ui/Pressable";
+import { InlineAction } from "@/components/ui/InlineAction";
 
 const STATUS_META = {
   open: { icon: CircleDashedIcon, tone: toneInk("neutral"), label: "Open", weight: "regular", text: "p-text-2" },
@@ -21,11 +23,10 @@ function OwnerMark({ owner, onOpenOwner }: TaskOwnership) {
 
   const path = owner.path ?? [];
 
-  if (onOpenOwner === undefined || path.length === 0) return <span className="p-meta p-text-3"> · {owner.title}</span>;
+  if (onOpenOwner === undefined || path.length === 0) return <span className="t-meta p-text-3"> · {owner.title}</span>;
 
   return (
-    <> · <button type="button" className="p-meta p-accent hover:underline" aria-label={`Open ${owner.title}'s conversation`}
-      onClick={() => void onOpenOwner(path.join("/"), owner.actorId)}>{owner.title}</button></>
+    <> · <InlineAction aria-label={`Open ${owner.title}'s conversation`} onClick={() => void onOpenOwner(path.join("/"), owner.actorId)}>{owner.title}</InlineAction></>
   );
 }
 
@@ -42,13 +43,13 @@ function TaskRow({ task, depth, owner, onOpenOwner }: { task: AgentTask; depth: 
       <Icon
         size={13}
         weight={meta.weight}
-        className={`${meta.tone} shrink-0 mt-0.5`}
+        className={`${meta.tone} shrink-0 mt-px`}
       />
-      <code className="p-annotation p-text-3 shrink-0 mt-[3px] w-7">{task.id}</code>
-      <span className={`p-row-text min-w-0 break-words ${meta.text}`}>
+      <code className="t-meta t-mono p-text-3 shrink-0 mt-[3px] w-7">{task.id}</code>
+      <span className={`t-body min-w-0 break-words ${meta.text}`} data-task-title>
         {task.title}
         <OwnerMark owner={owner} onOpenOwner={onOpenOwner} />
-        {task.note && <span className="block p-meta p-text-3 mt-0.5">{task.note}</span>}
+        {task.note && <span className="t-meta block p-text-3 mt-px">{task.note}</span>}
       </span>
     </div>
   );
@@ -72,13 +73,13 @@ export function PlanProgress({ tasks }: { tasks: AgentTaskTree[] }) {
 
   return (
     <div className="flex items-center gap-2">
-      <span className="text-xs p-text-2 font-medium">{remaining.length} of {counted} still to do</span>
-      {active.length > 0 && <Badge variant="secondary">{active.length} active</Badge>}
+      <span className="t-status p-text-2">{remaining.length} of {counted} still to do</span>
+      {active.length > 0 && <Badge>{active.length} active</Badge>}
     </div>
   );
 }
 
-const HELPER_ACTIVITY: Record<PanelAgent["activity"], string> = {
+const SUBAGENT_ACTIVITY: Record<PanelAgent["activity"], string> = {
   working: "refining from recent turns",
   waiting: "waiting",
   idle: "answered",
@@ -88,19 +89,19 @@ const HELPER_ACTIVITY: Record<PanelAgent["activity"], string> = {
   failed: "failed",
 };
 
-export function HelperRow({ agent, onOpen }: { agent: PanelAgent; onOpen?: (agent: PanelAgent) => void }) {
+export function SubagentRow({ agent, onOpen }: { agent: PanelAgent; onOpen?: (agent: PanelAgent) => void }) {
   const text = (
     <>
-      <SparkleIcon size={14} className="mt-0.5 shrink-0 p-text-2" />
-      <span className="p-row-text">{agent.label} <span className="p-text-3">· {HELPER_ACTIVITY[agent.activity]}</span></span>
+      <SparkleIcon size={14} className="mt-px shrink-0 p-text-2" />
+      <span className="t-body">{agent.label} <span className="p-text-3">· {SUBAGENT_ACTIVITY[agent.activity]}</span></span>
     </>
   );
 
-  if (!onOpen) return <div className="flex items-start gap-2 py-1" data-helper-row={agent.key}>{text}</div>;
+  if (!onOpen) return <div className="flex items-start gap-2 py-1" data-subagent-row={agent.key}>{text}</div>;
 
   return (
-    <button type="button" data-helper-row={agent.key} onClick={() => onOpen(agent)} className="flex w-full items-start gap-2 rounded-md py-1 text-left transition-colors hover:p-hover">
+    <Pressable className="flex items-start gap-2 py-1" data-subagent-row={agent.key} onClick={() => onOpen(agent)}>
       {text}
-    </button>
+    </Pressable>
   );
 }

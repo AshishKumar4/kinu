@@ -29,7 +29,7 @@ export function AccountPanelModal({ panel, onClose, mcp }: {
     <Modal
       title={title}
       onClose={onClose}
-      icon={<Icon size={18} className="p-accent" />}
+      icon={<Icon size={18} className="p-accent-fg" />}
       maxWidthClass="max-w-2xl"
       footer={<Button variant="ghost" size="sm" onClick={onClose}>Done</Button>}
     >

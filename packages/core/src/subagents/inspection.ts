@@ -1,0 +1,172 @@
+import * as v from 'valibot';
+import { JsonObjectSchema } from '../utils/json';
+import { RunEventRecorder, RunEventSchema, RUN_EVENT_LIMIT_MAX } from '../events/recorder';
+import { getRunSummaries } from '../read-models/runs';
+import { getChatHistoryPage } from '../read-models/status';
+import { keptMediaName } from '../session/chat-media';
+import type { SessionTranscriptReader } from '../session/transcript';
+import { pageSchema, positionPageSchema, PositionPageRequestSchema, SeekCursorSchema, type Page, type PageRequest } from '../session/page';
+import { ChatHistoryEntrySchema } from '../types/chat';
+import type { RunEvent } from '../events/types';
+import { ERROR_CODES, KinuError, refusalOf } from '../obs/error';
+import { UsageSchema } from '../usage';
+import type { SqlExec, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../identity/actor-handle';
+import { SubagentRosterEntrySchema, SubagentRosterStore, subagentTitle } from './roster';
+import { createAgentConfigStore } from '../config/store';
+import { DELEGATION_MAX_DEPTH } from './depth';
+import { PlanReviewStore, PlanReviewSchema } from '../plans/review';
+import { readPlanTasks, AgentTaskTreeSchema } from '../tools/task-store';
+
+const PathSchema = v.pipe(v.array(v.pipe(v.string(), v.nonEmpty(), v.regex(/^[^/\0]+$/))), v.maxLength(DELEGATION_MAX_DEPTH));
+
+const PageRequestSchema: v.GenericSchema<PageRequest> = v.strictObject({
+  cursor: v.optional(SeekCursorSchema),
+  limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(200))),
+});
+
+const IndexSchema = v.pipe(v.number(), v.integer(), v.minValue(0));
+
+const EventQuerySchema = v.strictObject({
+  since: v.optional(IndexSchema),
+  limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(RUN_EVENT_LIMIT_MAX))),
+});
+
+const ActorIdSchema = v.optional(v.pipe(v.string(), v.nonEmpty()));
+
+export const WorkspacePlanReferenceSchema = v.strictObject({
+  path: PathSchema, id: v.pipe(v.string(), v.nonEmpty()),
+  revision: v.pipe(v.number(), v.integer(), v.minValue(1)),
+});
+
+export type WorkspacePlanReference = v.InferOutput<typeof WorkspacePlanReferenceSchema>;
+
+export const SubagentInspectionRequestSchema = v.variant('view', [
+  v.strictObject({ path: PathSchema, view: v.literal('plans'), page: PageRequestSchema }),
+  v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('plan') }),
+  v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('planTasks') }),
+  v.strictObject({ path: PathSchema, view: v.literal('children'), page: PageRequestSchema, actor: ActorIdSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('history'), page: PositionPageRequestSchema, actor: ActorIdSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('runs'), page: PageRequestSchema, actor: ActorIdSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('events'), runId: v.pipe(v.string(), v.nonEmpty()), query: EventQuerySchema, actor: ActorIdSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('step'), runId: v.pipe(v.string(), v.nonEmpty()), eventIndex: IndexSchema,
+    from: v.optional(IndexSchema), actor: ActorIdSchema }),
+]);
+
+export type SubagentInspectionRequest = v.InferOutput<typeof SubagentInspectionRequestSchema>;
+
+const SummarySchema = v.object({
+  runId: v.string(), eventCount: v.number(), startedAt: v.number(),
+  causedBy: v.nullable(v.string()), userMessage: v.nullable(v.string()), status: v.nullable(v.string()),
+  usage: UsageSchema, turnsWithoutUsage: v.number(),
+});
+
+const ChildSchema = v.object({
+  ...SubagentRosterEntrySchema.entries, displayName: v.string(), nameOrigin: v.picklist(['user', 'auto']), role: v.string(),
+});
+
+export type SubagentChild = v.InferOutput<typeof ChildSchema>;
+
+const EventPageSchema: v.GenericSchema<Page<RunEvent, number>> = v.variant('status', [
+  v.object({ status: v.literal('more'), items: v.array(RunEventSchema), next: IndexSchema }),
+  v.object({ status: v.literal('end'), items: v.array(RunEventSchema) }),
+]);
+
+export const StepOutputInspectionSchema = v.object({ view: v.literal('step'), path: PathSchema, runId: v.string(), eventIndex: IndexSchema,
+  messages: v.array(JsonObjectSchema), nextFrom: v.nullable(IndexSchema) });
+
+export const SubagentInspectionResultSchema = v.variant('view', [
+  v.object({ view: v.literal('plans'), path: PathSchema, page: pageSchema(PlanReviewSchema) }),
+  v.object({ view: v.literal('plan'), path: PathSchema, plan: PlanReviewSchema }),
+  v.object({ view: v.literal('planTasks'), path: PathSchema, tasks: v.array(AgentTaskTreeSchema) }),
+  v.object({ view: v.literal('children'), path: PathSchema, page: pageSchema(ChildSchema) }),
+  v.object({ view: v.literal('history'), path: PathSchema, page: positionPageSchema(ChatHistoryEntrySchema) }),
+  v.object({ view: v.literal('runs'), path: PathSchema, page: pageSchema(SummarySchema) }),
+  v.object({ view: v.literal('events'), path: PathSchema, runId: v.string(), page: EventPageSchema }),
+  StepOutputInspectionSchema,
+  v.object({ reason: v.picklist(ERROR_CODES), error: v.string(), view: v.literal('missing'), path: PathSchema }),
+]);
+
+export type SubagentInspectionResult = v.InferOutput<typeof SubagentInspectionResultSchema>;
+
+export function missingSubagentHistory(path: string[]): SubagentInspectionResult {
+  return { ...refusalOf(new KinuError('missing', 'The requested subagent or retained history is unavailable.')), view: 'missing', path };
+}
+
+/** Where one inspected actor's rows are read from. */
+export interface SubagentInspectionSource {
+  /** The workspace database every actor's rows live in. */
+  readonly sql: SqlExecutor;
+  readonly raw: SqlExec;
+  /** The actor the views are read for: the resolved target of the walk, not the caller. */
+  readonly actor: ActorHandle;
+  readonly transcriptFor: (actor: ActorHandle) => SessionTranscriptReader;
+}
+
+/** Reads existing actor tables. No schema initialization or live actor state. */
+export async function readSubagentInspection(
+  source: SubagentInspectionSource,
+  request: SubagentInspectionRequest,
+): Promise<SubagentInspectionResult> {
+  const { sql, actor, raw, transcriptFor } = source;
+  const path = request.path;
+
+  switch (request.view) {
+    case 'plans':
+      return { view: 'plans', path, page: new PlanReviewStore(sql, actor).listPage('default', request.page) };
+    case 'plan':
+    case 'planTasks': {
+      const plan = new PlanReviewStore(sql, actor).get(request.id, request.revision);
+
+      if (!plan || plan.sessionId !== 'default') return missingSubagentHistory(path);
+
+      if (request.view === 'plan') return { view: 'plan', path, plan };
+
+      return { view: 'planTasks', path, tasks: readPlanTasks(sql, actor, plan) };
+    }
+
+    case 'children': {
+      const page = new SubagentRosterStore(raw, actor).listPage(request.page);
+
+      const items = page.items.map((entry) => ({
+        ...entry,
+        ...subagentTitle(entry, entry.actorReference === null ? null : createAgentConfigStore(sql, entry.actorReference.actorId, actor.assertCurrent)),
+      }));
+
+      return { view: 'children', path, page: { ...page, items } };
+    }
+
+    case 'history':
+      return { view: 'history', path, page: await getChatHistoryPage(transcriptFor(actor), request.page, keptMediaName) };
+    case 'runs':
+      return { view: 'runs', path, page: getRunSummaries(new RunEventRecorder(sql, actor), request.page.cursor, request.page.limit) };
+    case 'events': {
+      const recorder = new RunEventRecorder(sql, actor);
+
+      if (recorder.runSeq(request.runId) === null) return missingSubagentHistory(path);
+      const limit = request.query.limit ?? 200;
+      const fetched = recorder.read(request.runId, { since: request.query.since, limit: limit + 1 });
+      const items = fetched.slice(0, limit);
+      const last = items.at(-1);
+
+      const page = fetched.length > limit && last
+        ? { status: 'more', items, next: last.eventIndex + 1 } satisfies v.InferOutput<typeof EventPageSchema>
+        : { status: 'end', items } satisfies v.InferOutput<typeof EventPageSchema>;
+
+      return { view: 'events', path, runId: request.runId, page };
+    }
+
+    case 'step': return readStepInspection(sql, actor, transcriptFor, request);
+  }
+}
+
+/** A sealed output read is independent of roster, plan and timeline projections. */
+async function readStepInspection(sql: SqlExecutor, actor: ActorHandle, transcriptFor: SubagentInspectionSource['transcriptFor'], request: Extract<SubagentInspectionRequest, { view: 'step' }>): Promise<SubagentInspectionResult> {
+  const event = new RunEventRecorder(sql, actor).read(request.runId, { since: request.eventIndex, limit: 1 })[0];
+
+  if (event?.type !== 'step_finish' || event.eventIndex !== request.eventIndex) return missingSubagentHistory(request.path);
+
+  const output = await transcriptFor(actor).stepOutput(event.parts, request.from ?? 0);
+
+  return { view: 'step', path: request.path, runId: request.runId, eventIndex: event.eventIndex, ...output };
+}

@@ -4,7 +4,7 @@
  * THE ASK (SEC-3, the object-capability model). Reaching an address inside
  * the host's private network is the forbidden operation: the metadata service
  * and every RFC 1918 range sit behind one destination rule. The deployed agent
- * tries it through its own `web` tool, through `eval`, and through a helper it
+ * tries it through its own `web` tool, through `eval`, and through a subagent it
  * hires; a slate the owner authored tries it from its resident code. Every path
  * must be refused by that rule, named in its words, before any socket opens.
  * The row asks for 10.0.0.1 because a model declines outright to fetch the
@@ -143,7 +143,7 @@ export class Slate extends SlateObject {
         if (!(await room.opened)) throw new Error(`the workspace room ${room.path} refused the upgrade`);
 
         try {
-          // Registered before the hire is sent, so the turn the helper's answer opens cannot close unseen.
+          // Registered before the hire is sent, so the turn the subagent's answer opens cannot close unseen.
           const closed = room.turnClosed();
           const turn = await session.prompt(ASK);
 
@@ -161,7 +161,7 @@ export class Slate extends SlateObject {
           goals.push(refusedThrough('eval-fetch-refused', calls.filter((call) => call.name === 'eval'),
             (call) => !textOf(call.result).includes('reached') && closedWith(call).includes(REFUSED)));
 
-          // A hire returns at once (cafab2bfc): the helper's answer arrives as a message that opens the next turn.
+          // A hire returns at once (cafab2bfc): the subagent's answer arrives as a message that opens the next turn.
           const [hire] = taskHires(events);
 
           const heard = hire !== undefined

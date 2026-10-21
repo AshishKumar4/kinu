@@ -12,12 +12,13 @@ import { slateFrameSrc, type LiveShareOpen } from "@kinu.run/core";
 import { Effect } from "effect";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { useSlateHostContext } from "@/components/slates/InlineSlate";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { usePartHost } from "@/hooks/use-part-host";
 import { openLiveShare } from "@/lib/shared-api";
 import { signInAndReturn } from "@/lib/sign-in";
+import { Notice } from "@/components/ui/Notice";
 
 /**
  * The share's slate, framed with its host context as the owner's previews frame it, so its page knows the app it answers
@@ -43,7 +44,7 @@ function SharedSlate({ workspace, opened }: { workspace: string; opened: LiveSha
 function SignInToOpen() {
   return (
     <main data-shared-sign-in className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-      <p className="max-w-sm p-row-text p-text-2">This slate is shared with people by name. Sign in to open it.</p>
+      <p className="t-body max-w-sm p-text-2">This slate is shared with people by name. Sign in to open it.</p>
       <Button variant="primary" size="md" onClick={() => signInAndReturn()}>Sign in</Button>
     </main>
   );
@@ -75,12 +76,12 @@ export default function LiveSharePage() {
     <div className="flex h-dvh flex-col p-bg p-text">
       <header className="flex h-11 shrink-0 items-center gap-3 border-b p-border px-4">
         <a href="/" aria-label="Kinu home" className="flex shrink-0 items-center"><KinuLogo /></a>
-        <span className="min-w-0 flex-1 truncate p-row-text font-medium" data-shared-title>{opened?.title ?? "Shared slate"}</span>
+        <span className="t-item min-w-0 flex-1 truncate" data-shared-title>{opened?.title ?? "Shared slate"}</span>
       </header>
       {opened !== null && <SharedSlate workspace={workspace} opened={opened} />}
       {signedOut && <SignInToOpen />}
       {opened === null && !signedOut && err === null && <div className="flex flex-1 items-center justify-center"><Loader size="base" /></div>}
-      {err !== null && <main className="mx-auto w-full max-w-3xl px-6 py-8"><div className="p-notice-danger rounded-md px-3 py-2 text-xs">{err}</div></main>}
+      {err !== null && <main className="mx-auto w-full max-w-3xl px-6 py-8"><Notice tone="danger">{err}</Notice></main>}
     </div>
   );
 }

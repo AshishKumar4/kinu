@@ -3,13 +3,16 @@ import { CaretDownIcon, CheckIcon, FolderSimpleIcon, GitBranchIcon } from "@phos
 import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
 import { changeBody, changeTotals, changeTree, type ChangeSet, type FileDiff } from "@kinu.run/core";
 import { ChangeMark, count, Counts, fullTime, sinceLabel } from "./diff";
+import { Pressable } from "@/components/ui/Pressable";
+import { IconControl } from "@/components/ui/IconControl";
+import { Button } from "@/components/ui/Button";
 
 function Tag({ file }: { file: FileDiff }) {
   const body = changeBody(file);
 
-  if (body.kind === "binary") return <span className="shrink-0 text-[11px] p-text-3">binary</span>;
+  if (body.kind === "binary") return <span className="t-meta shrink-0 p-text-3">binary</span>;
 
-  if (body.kind === "uncompared") return <span className="shrink-0 text-[11px] p-text-3">too large</span>;
+  if (body.kind === "uncompared") return <span className="t-meta shrink-0 p-text-3">too large</span>;
 
   return <Counts added={file.added} removed={file.removed} />;
 }
@@ -23,13 +26,13 @@ export function FileTree({ files, repositories, current, onOpen }: {
   onOpen: (path: string) => void;
 }) {
   return (
-    <ul role="list" className="py-1.5" data-file-tree>
+    <ul role="list" className="py-1" data-file-tree>
       {changeTree(files, repositories).map((row) => {
         const inset = { paddingLeft: `${String(14 + row.depth * INDENT)}px` };
 
         if (row.kind === "folder") {
           return (
-            <li key={`d:${row.path}`} style={inset} className="flex h-7 items-center gap-1.5 pr-3.5 text-[12.5px] p-text-3" data-folder-row
+            <li key={`d:${row.path}`} style={inset} className="t-meta flex h-7 items-center gap-2 pr-3 p-text-3" data-folder-row
               data-repository-row={row.repository ? row.path : undefined} title={row.repository ? `Git repository ${row.path}` : undefined}>
               {row.repository
                 ? <GitBranchIcon size={13} weight="bold" className="shrink-0 p-text-3" />
@@ -44,9 +47,9 @@ export function FileTree({ files, repositories, current, onOpen }: {
         return (
           <li key={row.file.path}>
             <button type="button" onClick={() => onOpen(row.file.path)} style={inset} data-file-row={row.file.path} aria-current={selected ? "true" : undefined}
-              className={`flex h-8 w-full items-center gap-2 pr-3.5 text-left transition-colors max-md:h-10 ${selected ? "bg-[var(--c-fill)] p-text" : "p-text-2 hover:bg-[var(--c-hover)] hover:p-text"}`}>
+              className={`flex h-8 w-full items-center gap-2 pr-3 text-left transition-colors max-md:h-10 ${selected ? "bg-[var(--c-fill)] p-text" : "p-text-2 hover:bg-[var(--c-hover)] hover:p-text"}`}>
               <ChangeMark status={row.file.status} />
-              <span className={`min-w-0 flex-1 truncate p-row-text ${row.file.status === "removed" ? "line-through decoration-[color-mix(in_srgb,currentColor_45%,transparent)]" : ""}`}>
+              <span className={`t-body min-w-0 flex-1 truncate ${row.file.status === "removed" ? "line-through decoration-[color-mix(in_srgb,currentColor_45%,transparent)]" : ""}`}>
                 {row.file.path.slice(row.file.path.lastIndexOf("/") + 1)}
               </span>
               <Tag file={row.file} />
@@ -63,7 +66,7 @@ export function Summary({ set }: { set: ChangeSet }) {
 
   return (
     <span className="flex min-w-0 items-baseline gap-2">
-      <span className="truncate p-row-text font-medium p-text">
+      <span className="t-item truncate p-text">
         {set.files.length === 0 ? "No changes" : `${count(set.files.length)} ${set.files.length === 1 ? "file" : "files"} changed`}
       </span>
       <Counts added={sum.added} removed={sum.removed} />
@@ -100,21 +103,19 @@ export function SourceMenu({ sets, source, initiallyOpen = false, onPick }: {
   return (
     <div ref={box} className="relative shrink-0">
       <button type="button" onClick={() => setOpen((value) => !value)} aria-haspopup="menu" aria-expanded={open} data-source-menu
-        className="flex items-center gap-1 rounded-md px-1.5 py-0.5 -mx-1.5 p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
+        className="flex items-center gap-1 rounded-md px-1 py-px -mx-2 p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
         {sets.find((set) => set.source === source)?.label}
         <CaretDownIcon size={10} />
       </button>
       {open && (
-        <div role="menu" className="absolute left-0 top-7 z-30 w-56 p-card border p-border p-1 p-shadow-menu animate-fade-in">
-          <p className="px-2.5 pb-1 pt-1.5 p-meta p-text-3">Show changes in</p>
+        <div role="menu" className="absolute left-0 top-8 z-30 w-56 p-card border p-border p-1 p-shadow-menu animate-fade-in">
+          <p className="t-meta px-2 pb-1 pt-1 p-text-3">Show changes in</p>
           {sets.map((set) => (
-            <button key={set.source} type="button" role="menuitemradio" aria-checked={set.source === source}
-              onClick={() => { setOpen(false); onPick(set.source); }}
-              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left p-row-text p-text-2 transition-colors hover:bg-[var(--c-hover)] hover:p-text">
-              <span className="flex size-3.5 shrink-0 items-center justify-center p-accent">{set.source === source && <CheckIcon size={12} weight="bold" />}</span>
+            <Pressable className="t-body flex items-center gap-2 px-2 py-1 p-text-2 hover:p-text" key={set.source} role="menuitemradio" aria-checked={set.source === source} onClick={() => { setOpen(false); onPick(set.source); }}>
+              <span className="flex size-3.5 shrink-0 items-center justify-center p-accent-fg">{set.source === source && <CheckIcon size={12} weight="bold" />}</span>
               <span className="min-w-0 flex-1 truncate">{set.label}</span>
-              <span className={`shrink-0 p-meta ${set.error === undefined ? "p-text-3" : "p-warning"}`}>{sourceNote(set)}</span>
-            </button>
+              <span className={`t-meta shrink-0 ${set.error === undefined ? "p-text-3" : "p-warning"}`}>{sourceNote(set)}</span>
+            </Pressable>
           ))}
         </div>
       )}
@@ -134,19 +135,14 @@ export function IconButton({ label, onClick, disabled = false, children, classNa
   className?: string;
 }) {
   return (
-    <button type="button" aria-label={label} title={label} onClick={onClick} disabled={disabled}
-      className={`flex size-7 shrink-0 items-center justify-center rounded-md p-text-3 transition-colors hover:bg-[var(--c-hover)] hover:p-text disabled:opacity-35 disabled:hover:bg-transparent ${className}`}>
+    <IconControl place="bar" aria-label={label} title={label} onClick={onClick} disabled={disabled} className={`shrink-0 disabled:opacity-35 ${className}`}>
       {children}
-    </button>
+    </IconControl>
   );
 }
 
 export function MarkReviewed({ onClick, className = "" }: { onClick: () => void; className?: string }) {
   return (
-    <button type="button" onClick={onClick} data-mark-reviewed
-      className={`inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border p-border px-2.5 text-xs font-medium p-text-2 transition-colors hover:border-[var(--c-border-strong)] hover:bg-[var(--c-hover)] hover:p-text ${className}`}>
-      <CheckIcon size={12} weight="bold" />
-      Mark reviewed
-    </button>
+    <Button size="sm" icon={<CheckIcon size={14} weight="bold" />} onClick={onClick} data-mark-reviewed className={`shrink-0 ${className}`}>Mark reviewed</Button>
   );
 }

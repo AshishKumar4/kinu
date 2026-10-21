@@ -173,7 +173,7 @@ export function DeployLive({ run, asked, refusal, actions, onAddDomain }: {
         <h2 className="mt-3 t-page-title">{liveTitle(asked, setupLink)}</h2>
         <div className="mt-2 inline-flex max-w-full items-center gap-1.5">
           <a href={url} target="_blank" rel="noopener noreferrer" data-deploy-live-address className="truncate t-title hover:underline">{host}</a>
-          <CopyButton value={url} what="the address" size={13} className="p-1 p-text-3 hover:p-text" />
+          <CopyButton value={url} what="the address" />
         </div>
         <div className="mt-6 w-full max-w-xs">
           <a href={setupLink === "" ? url : setupLink} target="_blank" rel="noopener noreferrer" data-deploy-open className={`${buttonClass({ variant: "primary" })} w-full`}>

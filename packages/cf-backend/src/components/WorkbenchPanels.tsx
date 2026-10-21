@@ -7,6 +7,7 @@ import { DESKTOP_QUERY, useMediaQuery } from "@/hooks/use-media-query";
 import { needsTheUser, type PersonAsks } from "@kinu.run/core";
 
 import { useInspectorLayout } from "@/hooks/use-inspector-layout";
+import { IconControl } from "@/components/ui/IconControl";
 
 interface WorkbenchPanelsProps {
   /** `undefined` for a sample workbench: the policy decides on every mount. */
@@ -44,19 +45,10 @@ function toggleLabel({ collapsed, beside }: InspectorControl): string {
 
 export function InspectorToggle({ control }: { control: InspectorControl }) {
   return (
-    <button
-      type="button"
-      onClick={control.toggle}
-      aria-label={toggleLabel(control)}
-      title={toggleLabel(control)}
-      aria-pressed={!control.collapsed}
-      data-inspector-toggle
-      {...(control.collapsed ? { "data-inspector-expand": "" } : { "data-inspector-collapse": "" })}
-      className="p-bar-icon relative"
-    >
+    <IconControl place="bar" className="relative" onClick={control.toggle} aria-label={toggleLabel(control)} title={toggleLabel(control)} aria-pressed={!control.collapsed} data-inspector-toggle {...(control.collapsed ? { "data-inspector-expand": "" } : { "data-inspector-collapse": "" })}>
       <SidebarSimpleIcon size={16} style={{ transform: "scaleX(-1)" }} />
       {control.waiting > 0 && control.collapsed && <span className="p-bar-icon-dot" aria-hidden />}
-    </button>
+    </IconControl>
   );
 }
 
@@ -123,7 +115,7 @@ export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspect
               layout.toggleCollapsed();
             }}
             onDoubleClick={layout.resetToDefault}
-            className="group z-[2] -ml-[5px] -mr-[8px] w-[13px] shrink-0 cursor-col-resize bg-transparent touch-none select-none focus:outline-none"
+            className="group z-[2] -ml-[5px] -mr-[8px] w-[13px] shrink-0 cursor-col-resize bg-transparent touch-none select-none"
           >
             {/* The library's `focus` state is any focus, a drag's too, which left the accent rule standing after it. */}
             <span aria-hidden="true" className="mx-auto block h-full w-[3px] bg-transparent transition-colors group-hover:bg-[var(--c-accent)]/60 group-focus-visible:bg-[var(--c-accent)] group-data-[separator=hover]:bg-[var(--c-accent)]/60 group-data-[separator=active]:bg-[var(--c-accent)]" />

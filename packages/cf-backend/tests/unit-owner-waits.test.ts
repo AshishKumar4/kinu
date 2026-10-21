@@ -3,7 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 import { DeferredApprovalStore, formatApproval, type JsonValue, type OperationCaller } from '@kinu.run/core';
 import { wrapDatabase } from '@kinu.run/core/identity';
-import { agentSql, hostedSubordinateHarness, orchestratorHarness, reactivateOrchestratorHarness, until, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { agentSql, hostedSubagentHarness, orchestratorHarness, reactivateOrchestratorHarness, until, workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 /** `agent.<member>(args)` as `actorId`'s own programs reach it: the public operation call its isolate's eval makes. */
 async function agentCall(workspace: ActorHarness<HarnessOrchestratorAgent>, actorId: string, member: string, args: JsonValue = {}): Promise<JsonValue> {
@@ -27,7 +27,7 @@ function park(workspace: ActorHarness<HarnessOrchestratorAgent>, actorId: string
 describe('agent.waitingOnOwner and agent.wakeWhenOwnerDone', () => {
   test("the workspace agent reads every ask, a hire only its own; a hire's wake comes once, when its own are decided", async () => {
     const workspace = orchestratorHarness();
-    const hire = await hostedSubordinateHarness(workspace, { name: 'scout', displayName: 'Scout', nameOrigin: 'user', roleId: 'task', mission: 'look around' });
+    const hire = await hostedSubagentHarness(workspace, { name: 'scout', displayName: 'Scout', nameOrigin: 'user', roleId: 'task', mission: 'look around' });
     const hireId = hire.actor.handle.actorId;
 
     park(workspace, workspaceMainActor(workspace.db).actorId, 'bun run deploy');

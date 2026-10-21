@@ -43,8 +43,13 @@ async function pick(page: Page, label: string, words: string): Promise<void> {
   throw new Error(`no choice ${words}`);
 }
 
+/** An action by its words: a button, a link, or an item of the menu that is open (it draws once its trigger is pressed). */
 async function action(page: Page, words: string): Promise<void> {
-  await page.$$eval('button, a', (buttons, wanted) => {
+  const shown = (wanted: string) => [...document.querySelectorAll('button, a, [role="menu"][data-open] [role="menuitem"]')]
+    .some((item) => item.textContent?.trim() === wanted && item instanceof HTMLElement && item.offsetParent !== null);
+
+  await page.waitForFunction(shown, {}, words);
+  await page.$$eval('button, a, [role="menu"][data-open] [role="menuitem"]', (buttons, wanted) => {
     const button = buttons.find((item) => item.textContent?.trim() === wanted && item instanceof HTMLElement && item.offsetParent !== null);
 
     if (!(button instanceof HTMLElement)) throw new Error(`no action ${wanted}`);

@@ -5,13 +5,14 @@
  */
 import { useRef, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/Button";
-import { KeyIcon, ShieldWarningIcon } from "@phosphor-icons/react";
+import { KeyIcon } from "@phosphor-icons/react";
 import { pastedSecrets, type PastedSecret } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
 import { Switch } from "@/components/ui/Switch";
 import { putSecrets } from "@/lib/user-api";
 import { rowsReady, secretEntries, SecretRows, type SecretDraft } from "@/components/secrets/SecretRows";
+import { Notice } from "@/components/ui/Notice";
 
 /** What the found secrets look like, in the offer's words. */
 function described(found: readonly PastedSecret[]): string {
@@ -67,22 +68,21 @@ export function usePastedSecretGuard(input: {
   };
 
   const offer = waiting.length === 0 ? null : (
-    <div className="mx-1 mb-2 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border p-border p-overlay px-3 py-2.5" role="status" data-secret-offer>
-      <ShieldWarningIcon size={16} className="shrink-0 p-warning" />
-      <p className="min-w-[14rem] flex-1 p-row-text p-text">
-        This looks like {described(waiting)}. Keep it out of the chat: move it to Secrets and your agents use it without seeing it.
-      </p>
-      <div className="ml-auto flex shrink-0 items-center gap-2">
+    <>
+    <Notice tone="warning" className="mx-1 mb-2" data-secret-offer="" action={
+      <div className="flex shrink-0 items-center gap-2">
         <Button size="sm" variant="ghost" data-secret-offer-send onClick={() => {
           setSendAsIs(draft);
           setHeld(null);
 
           if (held !== null) acts.current.get(held.key)?.();
         }}>Send anyway</Button>
-        <Button variant="primary" size="sm" data-secret-offer-move onClick={() => setMoving(true)}><KeyIcon size={12} /> Move to Secrets</Button>
-      </div>
-      {moving && <MoveToSecrets found={waiting} workspace={workspace} onClose={() => setMoving(false)} onMoved={moved} />}
-    </div>
+        <Button variant="primary" size="sm" icon={<KeyIcon size={14} />} data-secret-offer-move onClick={() => setMoving(true)}>Move to Secrets</Button>
+      </div>}>
+      This looks like {described(waiting)}. Keep it out of the chat: move it to Secrets and your agents use it without seeing it.
+    </Notice>
+    {moving && <MoveToSecrets found={waiting} workspace={workspace} onClose={() => setMoving(false)} onMoved={moved} />}
+    </>
   );
 
   return { guarded, offer };
@@ -120,17 +120,17 @@ function MoveToSecrets({ found, workspace, onClose, onMoved }: {
           onMoved(new Map(rows.flatMap((row): [string, string][] => (row.found === undefined || row.name.trim() === "" ? [] : [[row.found, row.name.trim()]]))));
         })}>{saving ? "Saving…" : `Save and use ${said}`}</Button>
       </>}>
-      <p className="p-row-text p-text-2">
+      <p className="t-body p-text-2">
         Stored sealed in your account. Your message will say <code>{said}</code> instead, and agents use the stand-in it holds, which becomes the value only when sent over https to these hosts.
       </p>
       <SecretRows rows={rows} onChange={setRows} removable={rows.length > 1} />
       {workspace !== undefined && (
-        <label className="flex items-center gap-2 p-row-text p-text">
+        <label className="t-body flex items-center gap-2 p-text">
           <Switch on={allowHere} onChange={setAllowHere} label="Allow in this workspace" data-secret-move-here />
           Allow in this workspace
         </label>
       )}
-      {error !== null && <div role="alert" className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
+      {error !== null && <Notice tone="danger">{error}</Notice>}
     </Modal>
   );
 }

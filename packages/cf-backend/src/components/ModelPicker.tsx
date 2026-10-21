@@ -1,6 +1,6 @@
 /** The one model picker for every surface; groups follow server order (connected-provider preference). */
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Combobox, Select } from "@cloudflare/kumo";
+import { Badge } from "@/components/ui/Badge";
 import { ArrowsClockwiseIcon, BrainIcon, EyeIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import {
   formatContextWindow, formatModelSpec, isReasoningEffort, modelTestText, offeredReasoningEfforts, parseModelSpec, providerName,
@@ -17,6 +17,9 @@ import { BrandMark, providerBrand } from "./ui/BrandMark";
 import { ChatGptPlanUsage } from "./account/ChatGptConnect";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { lastValue, useAsyncResource } from "../hooks/use-async-resource";
+import { Combobox, Select } from "@/components/ui/Select";
+import { Loader } from "@/components/ui/Loader";
+import { Button } from "@/components/ui/Button";
 
 type PickerValue = ModelMenuEntry | { value: string; items: ModelMenuEntry[] };
 
@@ -43,21 +46,12 @@ function EffortPicker({ options, value, onChange, disabled }: {
 }) {
   if (options.length === 0) return null;
 
+  const levels: readonly (ReasoningEffort | typeof DEFAULT_EFFORT)[] = [DEFAULT_EFFORT, ...options];
+
   return (
-    <Select
-      aria-label="Thinking level"
-      size="xs"
-      className="shrink-0 !bg-transparent !shadow-none !ring-0 transition-colors hover:!bg-[var(--c-hover)] focus-visible:!bg-[var(--c-hover)]"
-      value={value ?? DEFAULT_EFFORT}
-      disabled={disabled}
-      onValueChange={(next) => { onChange(isReasoningEffort(next) ? next : null); }}
-      renderValue={(picked) => (
-        <span className="p-text-2">{effortLabel(isReasoningEffort(picked) ? picked : DEFAULT_EFFORT)}</span>
-      )}
-    >
-      <Select.Option value={DEFAULT_EFFORT}>{effortLabel(DEFAULT_EFFORT)}</Select.Option>
-      {options.map((effort) => <Select.Option key={effort} value={effort}>{effortLabel(effort)}</Select.Option>)}
-    </Select>
+    <Select label="Thinking level" size="xs" quiet className="shrink-0" value={value ?? DEFAULT_EFFORT} disabled={disabled}
+      onChange={(next) => { onChange(isReasoningEffort(next) ? next : null); }}
+      options={levels.map((effort) => ({ value: effort, label: effortLabel(effort) }))} />
   );
 }
 
@@ -77,18 +71,9 @@ export function AccountPicker({ spec, accounts, onChange, disabled, label }: {
   if (accounts.length < 2) return null;
 
   return (
-    <Select
-      aria-label={label}
-      size="xs"
-      className="shrink-0 !bg-transparent !shadow-none !ring-0 transition-colors hover:!bg-[var(--c-hover)] focus-visible:!bg-[var(--c-hover)]"
-      value={parseModelSpec(spec).account ?? ''}
-      disabled={disabled}
-      onValueChange={(next) => { onChange(specOnAccount(spec, accounts.find((account) => account === next) ?? '')); }}
-      renderValue={(picked) => <span className="p-text-2">{accounts.find((account) => account === picked) ?? 'Default account'}</span>}
-    >
-      <Select.Option value="">Default account</Select.Option>
-      {accounts.map((account) => <Select.Option key={account} value={account}>{account}</Select.Option>)}
-    </Select>
+    <Select label={label} size="xs" quiet className="shrink-0" value={parseModelSpec(spec).account ?? ''} disabled={disabled}
+      onChange={(next) => { onChange(specOnAccount(spec, next)); }}
+      options={[{ value: '', label: 'Default account' }, ...accounts.map((account) => ({ value: account, label: account }))]} />
   );
 }
 
@@ -152,13 +137,13 @@ export function ModelPicker({
       size={size}
     >
       <Combobox.TriggerValue className={`min-w-0 max-w-full ${className ?? ""}`}>
-        <span className="flex min-w-0 items-center gap-1.5" data-model-picker={label}>
+        <span className="flex min-w-0 items-center gap-2" data-model-picker={label}>
           <span className="sr-only">{label}: </span>
           {selected !== null && <ProviderIcon provider={selected.provider} />}
           <span className={`min-w-0 truncate ${selected === null ? "p-text-3" : ""}`}>{selected?.label ?? (value === '' ? placeholder : listed)}</span>
         </span>
       </Combobox.TriggerValue>
-      <Combobox.Content className="w-[min(28rem,calc(100vw-1rem))]">
+      <Combobox.Content className="w-[var(--layout-picker)]">
         <Combobox.Input placeholder={tests.enabled ? "Search models · Alt+T tests" : "Search models"} aria-label={`Search ${label.toLowerCase()}`}
           {...(tests.enabled && { "aria-keyshortcuts": "Alt+T" })}
           onKeyDown={(event) => {
@@ -167,7 +152,7 @@ export function ModelPicker({
             tests.toggle(highlighted.spec);
           }} />
         <Combobox.Empty>No models match</Combobox.Empty>
-        <Combobox.List className="max-h-[min(24rem,60vh)]">
+        <Combobox.List className="max-h-[var(--layout-picker-list)]">
           {(group: { value: string; items: ModelMenuEntry[] }) => (
             <Combobox.Group key={group.value} items={group.items}>
               <Combobox.GroupLabel>
@@ -183,10 +168,7 @@ export function ModelPicker({
         </Combobox.List>
         <ProviderFailureNotice failures={failures} models={models} />
         {clearable && value !== '' && (
-          <button type="button" className="mx-1.5 mt-1 rounded px-2 py-1.5 text-left p-t-control p-text-2 hover:bg-[var(--c-hover)]"
-            onClick={() => onChange("")}>
-            Use default model
-          </button>
+          <Button variant="ghost" size="sm" className="mx-2 mt-1" onClick={() => onChange("")}>Use default model</Button>
         )}
       </Combobox.Content>
     </Combobox>
@@ -243,23 +225,15 @@ export function ConnectedModelPicker({
 
   if (resource.status === "loading") {
     return (
-      <span className="inline-flex items-center rounded-md border p-border px-1.5 py-1 p-t-status p-text-3" aria-label="Loading models">
-        …
-      </span>
+      <Badge icon={<Loader size="sm" />}><span className="sr-only">Loading models</span></Badge>
     );
   }
 
   if (menu === null) {
     return (
-      <button
-        type="button"
-        onClick={reload}
-        className="inline-flex min-w-0 items-center gap-1 rounded-md border p-border px-2 py-1 p-t-control p-text-3 hover:p-text-2"
-        title={resource.status === "error" ? resource.message : undefined}
-      >
-        <ArrowsClockwiseIcon size={11} className="shrink-0" />
+      <Button size="sm" icon={<ArrowsClockwiseIcon size={14} />} onClick={reload} title={resource.status === "error" ? resource.message : undefined}>
         <span className="truncate">Couldn't load the model list. Retry</span>
-      </button>
+      </Button>
     );
   }
 
@@ -267,15 +241,7 @@ export function ConnectedModelPicker({
     // Empty because every provider failed is not an unconnected account; skip the OAuth CTA.
     if (menu.failures.length > 0) {
       return (
-        <button
-          type="button"
-          onClick={reload}
-          className="p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 p-t-status hover:opacity-80"
-          title={failureTitle(menu.failures)}
-        >
-          <WarningCircleIcon size={12} />
-          providers unavailable
-        </button>
+        <Button size="sm" className="p-warning" icon={<WarningCircleIcon size={14} />} onClick={reload} title={failureTitle(menu.failures)}>providers unavailable</Button>
       );
     }
 
@@ -283,16 +249,11 @@ export function ConnectedModelPicker({
 
     return (
       <span className="inline-flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => { setConnectFailed(null); connectCloudflare(reload, setConnectFailed); }}
-          className="p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 p-t-status hover:opacity-80"
-          title="Connect Cloudflare with Workers AI permissions"
-        >
-          <WarningCircleIcon size={12} />
+        <Button size="sm" className="p-warning" icon={<WarningCircleIcon size={14} />} title="Connect Cloudflare with Workers AI permissions"
+          onClick={() => { setConnectFailed(null); connectCloudflare(reload, setConnectFailed); }}>
           Connect Workers AI
-        </button>
-        {connectFailed !== null && <span data-connect-failed className="p-danger p-t-status">Cloudflare did not connect: {connectFailed}</span>}
+        </Button>
+        {connectFailed !== null && <span data-connect-failed className="t-status p-danger">Cloudflare did not connect: {connectFailed}</span>}
       </span>
     );
   }
@@ -319,10 +280,10 @@ function ProviderFailureNotice({ failures, models }: { failures?: ProviderFailur
   if (!failures?.length) return null;
 
   return (
-    <div className="border-t p-border px-2 py-1.5">
+    <div className="border-t p-border px-2 py-1">
       {failures.map((failure) => (
-        <p key={failure.provider} className="p-warning flex items-start gap-1.5 p-t-status" title={failure.reason}>
-          <WarningCircleIcon size={12} className="mt-0.5 shrink-0" />
+        <p key={failure.provider} className="t-status p-warning flex items-start gap-2" title={failure.reason}>
+          <WarningCircleIcon size={12} className="mt-px shrink-0" />
           <span className="min-w-0">
             {models.some((model) => model.provider === failure.provider)
               ? `${providerName(failure.provider)}'s model list couldn't load. Showing the built-in list.`
@@ -346,7 +307,7 @@ function ProviderIcon({ provider }: { provider: string }) {
 
 function ProviderLabel({ provider, label }: { provider: string; label: string | undefined }) {
   return (
-    <span className="flex items-center gap-1.5">
+    <span className="flex items-center gap-2">
       <ProviderIcon provider={provider} />
       {label ?? providerName(provider)}
     </span>
@@ -405,7 +366,7 @@ function TestStatus({ state, provider, className = "" }: { state: TestState | un
   else if (!state.result.ok) detail = state.result.message;
 
   return (
-    <span role="status" title={detail} className={`block p-t-status ${className}`}>
+    <span role="status" title={detail} className={`t-status block ${className}`}>
       <span className={failed ? "p-warning" : "p-success"}>{text}</span>
       <span className="block p-text-3">Tests from the web aren't counted in Usage.</span>
     </span>
@@ -419,8 +380,7 @@ function TestButton({ spec, tests, inMenu }: { spec: string; tests: ModelTests; 
   const stop = (event: React.SyntheticEvent) => { if (inMenu) event.stopPropagation(); };
 
   return (
-    <button type="button"
-      className="shrink-0 rounded border p-border px-1.5 py-0.5 p-t-status p-text-2 hover:p-text"
+    <Button variant="secondary" size="sm" className="shrink-0"
       aria-label={running ? `Cancel the test of ${spec}` : `Test ${spec}`}
       title={inMenu ? "Test (Alt+T)" : "Test"}
       {...(inMenu && { tabIndex: -1, "aria-keyshortcuts": "Alt+T" })}
@@ -428,7 +388,7 @@ function TestButton({ spec, tests, inMenu }: { spec: string; tests: ModelTests; 
       onMouseDown={stop}
       onClick={(event) => { stop(event); event.preventDefault(); tests.toggle(spec); }}>
       {running ? "Testing… Cancel" : "Test"}
-    </button>
+    </Button>
   );
 }
 
@@ -445,7 +405,7 @@ function ModelPickerItem({ model, unavailable, tests }: {
         <span className={`min-w-0 flex-1 truncate ${unavailable === undefined ? "" : "p-text-3"}`}>{model.label}</span>
         <span className="flex shrink-0 items-center gap-1">
           {unavailable !== undefined && (
-            <span className="inline-flex items-center gap-0.5 p-t-status p-warning" title={unavailable}><WarningCircleIcon size={11} />unavailable</span>
+            <span className="t-status inline-flex items-center gap-px p-warning" title={unavailable}><WarningCircleIcon size={11} />unavailable</span>
           )}
           {badgeCapabilities(model).map((cap) => {
             const Icon = cap === "vision" ? EyeIcon : BrainIcon;
@@ -453,7 +413,7 @@ function ModelPickerItem({ model, unavailable, tests }: {
 
             return <Icon key={cap} size={13} className="p-text-3" aria-label={words}><title>{words}</title></Icon>;
           })}
-          {context && <Badge variant="secondary">{context}</Badge>}
+          {context && <Badge>{context}</Badge>}
           {tests.enabled && <TestButton spec={model.spec} tests={tests} inMenu />}
         </span>
       </span>

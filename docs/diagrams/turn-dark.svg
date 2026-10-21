@@ -163,7 +163,7 @@
   <rect x="500" y="691" width="384" height="122" rx="7" fill="var(--pinkFill)" stroke="var(--pinkLine)"/>
   <text class="b" x="512" y="711" text-anchor="start" fill="var(--pink)">Signals — the one async wake path</text>
   <text class="xs" x="512" y="727" text-anchor="start">webhook · email · timer · peer message · file change ·</text>
-  <text class="xs" x="512" y="743" text-anchor="start">subordinate report · MCP task · job completion · retry</text>
+  <text class="xs" x="512" y="743" text-anchor="start">subagent report · MCP task · job completion · retry</text>
   <text class="xs" x="512" y="759" text-anchor="start"></text>
   <text class="xs" x="512" y="775" text-anchor="start">Compatible live turn → spliced in as one synthetic user</text>
   <text class="xs" x="512" y="791" text-anchor="start">message at the step tail, replayed at that index.</text>

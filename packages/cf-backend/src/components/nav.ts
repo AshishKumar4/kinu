@@ -34,15 +34,6 @@ export const NAV_HOVER = "hover:bg-[color-mix(in_srgb,var(--c-text)_6%,transpare
 
 /** A sidebar row's ground and ink: the open one in the accent, any other in `rest` until hovered. */
 export function navRowCls(open: boolean, rest = "p-text-2"): string {
-  return open ? "bg-[var(--c-selected)] p-accent" : `${rest} ${NAV_HOVER}`;
+  return open ? "bg-[var(--c-selected)] p-accent-fg" : `${rest} ${NAV_HOVER}`;
 }
 
-/**
- * The same recipe for a rail that is a tab strip below `lg` (Settings): its row from `lg` up, at the sidebar's radius.
- * Literal here so Tailwind sees each class; one recipe, read by the sidebar, the Settings rail and Drive's places.
- */
-export function navRowClsLg(open: boolean): string {
-  return open
-    ? "lg:rounded-lg lg:bg-[var(--c-selected)] lg:text-[var(--c-accent-fg)]"
-    : "lg:rounded-lg lg:text-[var(--c-text-2)] lg:hover:bg-[color-mix(in_srgb,var(--c-text)_6%,transparent)] lg:hover:text-[var(--c-text)]";
-}

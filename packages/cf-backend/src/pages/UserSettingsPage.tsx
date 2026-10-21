@@ -2,7 +2,7 @@
 import { Effect } from 'effect';
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { ArrowSquareOutIcon, GearSixIcon } from "@phosphor-icons/react";
 import { setDisplayName, type UserProfile } from "../lib/user-api";
@@ -55,7 +55,7 @@ function ProfileNameEditor({ profile, onSaved }: {
           {saving ? <Loader size="sm" /> : null} Save
         </Button>
       </div>
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {error && <p className="t-meta p-danger">{error}</p>}
     </div>
   );
 }
@@ -72,7 +72,7 @@ export default function UserSettingsPage() {
     return (
       <Page icon={<GearSixIcon size={22} />} title="Settings">
         {profile.resource.status === "loading"
-          ? <div className="flex justify-center py-10"><Loader size="base" /></div>
+          ? <div className="flex justify-center py-8"><Loader size="base" /></div>
           : <LoadFailure what="your account" message={profile.resource.message} onRetry={profile.reload} />}
       </Page>
     );
@@ -81,7 +81,7 @@ export default function UserSettingsPage() {
   return (
     <Page icon={<GearSixIcon size={22} />} title="Settings" rule="wide">
         {/* The rail and the section's column fill the frame: 192 + 48 + 848. The active rail item names the section. */}
-        <div className="flex flex-col gap-7 lg:flex-row lg:gap-12">
+        <div className="flex flex-col gap-8 lg:flex-row lg:gap-12">
           <div className="lg:sticky lg:top-8 lg:w-48 lg:shrink-0 lg:self-start">
             <SettingsRail active={section} />
           </div>
@@ -97,12 +97,12 @@ export default function UserSettingsPage() {
                     <ProfileNameEditor profile={p} onSaved={set} />
                     <dl className="grid gap-5 sm:grid-cols-2">
                       <div>
-                        <dt className="p-meta p-text-3">Email</dt>
-                        <dd className="mt-1 font-mono p-row-text p-text">{p?.email ?? 'Not available'}</dd>
+                        <dt className="t-meta p-text-3">Email</dt>
+                        <dd className="t-body t-mono mt-1 p-text">{p?.email ?? 'Not available'}</dd>
                       </div>
                       <div>
-                        <dt className="p-meta p-text-3">Member since</dt>
-                        <dd className="mt-1 p-row-text p-text">{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</dd>
+                        <dt className="t-meta p-text-3">Member since</dt>
+                        <dd className="t-body mt-1 p-text">{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</dd>
                       </div>
                     </dl>
                   </div>

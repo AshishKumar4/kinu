@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import type { QualityDay } from "@kinu.run/core";
 import { toneFill, type StatusTone } from "@/components/ui/Status";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -32,7 +32,7 @@ export function QualityView({ rpc, moved }: { rpc: WorkspaceRpc; moved: number }
   const { week, days } = read;
   const ratedDays = days.filter((day) => day.rated > 0).length;
 
-  if (ratedDays === 0) return <p className="p-row-text p-text-3">No rated turns yet.</p>;
+  if (ratedDays === 0) return <p className="t-body p-text-3">No rated turns yet.</p>;
 
   const corrected = Math.round(week.corrected.mean * week.rated);
   const thumbs = week.thumbs > 0 ? `, ${String(week.thumbs)} by your thumbs` : "";
@@ -40,21 +40,21 @@ export function QualityView({ rpc, moved }: { rpc: WorkspaceRpc; moved: number }
   return (
     <div className="space-y-3 animate-fade-in" data-quality-verdict>
       {week.rated === 0 ? (
-        <p className="p-row-text p-text-3">No rated turns in the last 7 days.</p>
+        <p className="t-body p-text-3">No rated turns in the last 7 days.</p>
       ) : (
-        <div className="flex items-baseline gap-2.5" title={`95% interval ${week.satisfaction.lo.toFixed(2)}–${week.satisfaction.hi.toFixed(2)}, ${week.from} to ${week.to} (UTC)`}>
+        <div className="flex items-baseline gap-3" title={`95% interval ${week.satisfaction.lo.toFixed(2)}–${week.satisfaction.hi.toFixed(2)}, ${week.from} to ${week.to} (UTC)`}>
           <span className="size-2 shrink-0 self-center rounded-full" style={{ background: toneFill(toneOf(week.satisfaction.mean)) }} aria-hidden />
-          <span className="shrink-0 whitespace-nowrap text-[20px] font-semibold leading-none tabular-nums p-text">
-            {week.satisfaction.mean.toFixed(1)}<span className="text-[13px] font-normal p-text-3"> / 5</span>
+          <span className="t-title shrink-0 whitespace-nowrap tabular-nums p-text">
+            {week.satisfaction.mean.toFixed(1)}<span className="t-body p-text-3"> / 5</span>
           </span>
-          <span className="min-w-0 p-meta p-text-3">
+          <span className="t-meta min-w-0 p-text-3">
             over the last 7 days · {week.rated} of {week.turns} {week.turns === 1 ? "turn" : "turns"} rated{thumbs}
             {corrected > 0 ? ` · corrected ${String(corrected)} ${corrected === 1 ? "time" : "times"}` : ""}
           </span>
         </div>
       )}
       {ratedDays < TREND_DAYS
-        ? <p className="p-meta p-text-3">A trend shows once three days have ratings.</p>
+        ? <p className="t-meta p-text-3">A trend shows once three days have ratings.</p>
         : <SatisfactionDays days={days} />}
     </div>
   );
@@ -81,7 +81,7 @@ function SatisfactionDays({ days }: { days: readonly QualityDay[] }) {
   return (
     <div className="p-card px-3 pt-3 pb-2">
       <div className="grid grid-cols-[14px_minmax(0,1fr)] gap-2">
-        <div className="relative h-24 p-annotation p-text-3" aria-hidden>
+        <div className="t-meta t-mono relative h-24 p-text-3" aria-hidden>
           <span className="absolute top-0 -translate-y-1/2">5</span>
           <span className="absolute top-1/2 -translate-y-1/2">3</span>
           <span className="absolute bottom-0 translate-y-1/2">1</span>
@@ -108,7 +108,7 @@ function SatisfactionDays({ days }: { days: readonly QualityDay[] }) {
           </div>
         </div>
       </div>
-      <div className="mt-1.5 flex justify-between pl-[22px] p-annotation p-text-3">
+      <div className="t-meta t-mono mt-2 flex justify-between pl-[22px] p-text-3">
         <span>{label(days[0]?.day ?? "")}</span><span>{label(days.at(-1)?.day ?? "")}</span>
       </div>
     </div>

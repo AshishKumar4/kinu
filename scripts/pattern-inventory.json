@@ -4,7 +4,7 @@
       "file": "evals/src/insights.ts",
       "kind": "hand-parser",
       "owner": "extractInsights",
-      "sourceSha256": "7638d096a0d93778bdd4e34229bee6833080b58e77f10586d7a073ba8e55afc7",
+      "sourceSha256": "8ae4b64d74b99e48634f79b316ba091860a8b1006d08f76c893d18a35caefca9",
       "decision": "traversal"
     },
     {
@@ -762,6 +762,41 @@
       "owner": "parseDotenv",
       "sourceSha256": "0ed4736a8d709af37ebc9e48685b709235483404fc8cefc7ee444a0ec4e974db",
       "decision": "grammar"
+    },
+    {
+      "file": "scripts/design-system-scan.ts",
+      "kind": "regex-literal",
+      "owner": "CLASS_NAME",
+      "sourceSha256": "f70068b4333f89a27a37d4702bce6bfcb2c025235e2044b7dd99067dc322d25e",
+      "decision": "lexical"
+    },
+    {
+      "file": "scripts/design-system-scan.ts",
+      "kind": "regex-literal",
+      "owner": "namedAsClasses",
+      "sourceSha256": "bebe232223f0d9a6fdcfd1672e231ac4a98e051abbccb674e0db93cd418c601a",
+      "decision": "lexical"
+    },
+    {
+      "file": "scripts/design-system-scan.ts",
+      "kind": "hand-parser",
+      "owner": "scanSource",
+      "sourceSha256": "5351e1c2b9d63c41f6574d397c710ba391b0bb6963a69a8ab3ad99cc69099d42",
+      "decision": "traversal"
+    },
+    {
+      "file": "scripts/design-system-scan.ts",
+      "kind": "hand-parser",
+      "owner": "scanCss",
+      "sourceSha256": "7582ab2a96af38a4a92d4b8eb9d92c69c703fcbe6a28139216ab066e86df5b78",
+      "decision": "traversal"
+    },
+    {
+      "file": "scripts/design-system-scan.ts",
+      "kind": "hand-parser",
+      "owner": "scanCss",
+      "sourceSha256": "35f35d506da9de173ca88a4bd3950497809f8257eadb75700965831b229ecf9b",
+      "decision": "traversal"
     }
   ]
 }

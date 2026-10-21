@@ -96,18 +96,18 @@ export function WorkspaceOverview({ workspace, title, logo, rpc, readMoves, plan
 
   return (
     <Page fill icon={<WorkspaceLogo title={title} logo={logo} size={20} />} title={title} data-workspace-overview>
-      <p className="p-row-text p-text-3" data-overview-summary>
+      <p className="t-body p-text-3" data-overview-summary>
         {work === null ? "Reading the workspace…" : summaryOf(agents, cards)}
-        {lineage && <> · forked from <Link to={`/workspace/${lineage.sourceWorkspaceName}`} className="p-accent hover:underline">its parent</Link></>}
+        {lineage && <> · forked from <Link to={`/workspace/${lineage.sourceWorkspaceName}`} className="p-accent-fg hover:underline">its parent</Link></>}
       </p>
 
       <section aria-labelledby="overview-github" className="flex flex-col gap-3">
-        <h2 id="overview-github" className="p-eyebrow">GitHub</h2>
+        <h2 id="overview-github" className="t-label">GitHub</h2>
         <GitHubSection rpc={rpc} readMoves={readMoves} agents={agents} />
       </section>
 
       <section aria-labelledby="overview-tasks" className="flex flex-col gap-3">
-        <h2 id="overview-tasks" className="p-eyebrow">Tasks</h2>
+        <h2 id="overview-tasks" className="t-label">Tasks</h2>
         {resource.status === "error" && work === null
           ? <LoadFailure what="this workspace's tasks" message={resource.message} onRetry={reload} />
           : <Board cards={cards} workspace={workspace} loaded={work !== null} open={open} />}
@@ -118,7 +118,7 @@ export function WorkspaceOverview({ workspace, title, logo, rpc, readMoves, plan
 
 function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; workspace: string; loaded: boolean; open: (agent: PanelAgent) => void }) {
   if (loaded && cards.length === 0) {
-    return <p className="rounded-xl border border-dashed p-border px-4 py-6 text-center p-meta p-text-3">No tasks yet. When an agent plans its work with the tasks tool, each task lands here.</p>;
+    return <p className="t-meta rounded-xl border border-dashed p-border px-4 py-6 text-center p-text-3">No tasks yet. When an agent plans its work with the tasks tool, each task lands here.</p>;
   }
 
   // The lanes reflow with the page's width, never past it: four abreast, two by two, then one under another on a phone.
@@ -130,9 +130,9 @@ function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; wor
 
           return (
             <div key={lane} className="flex min-w-0 flex-col gap-2 rounded-2xl bg-[var(--c-hover)] p-2" data-lane={lane}>
-              <div className="flex items-baseline justify-between px-2 pb-0.5 pt-1.5">
-                <span className={`text-[13px] font-medium ${lane === "waiting" && shown.length > 0 ? "p-accent" : "p-text-2"}`}>{title}</span>
-                <span className="p-meta tabular-nums p-text-3">{shown.length}</span>
+              <div className="flex items-baseline justify-between px-2 pb-px pt-1">
+                <span className={`t-item ${lane === "waiting" && shown.length > 0 ? "p-accent-fg" : "p-text-2"}`}>{title}</span>
+                <span className="t-meta tabular-nums p-text-3">{shown.length}</span>
               </div>
               {shown.map((card) => <TaskCard key={card.id} card={card} workspace={workspace} open={open} />)}
             </div>
@@ -143,7 +143,7 @@ function Board({ cards, workspace, loaded, open }: { cards: readonly Card[]; wor
   );
 }
 
-const CARD_CLASS = "group flex flex-col gap-2.5 rounded-xl border p-border bg-[var(--c-bg)] px-3 py-2.5 text-left transition-colors hover:border-[var(--c-border-strong)]";
+const CARD_CLASS = "group flex flex-col gap-3 rounded-xl border p-border bg-[var(--c-bg)] px-3 py-2 text-left transition-colors hover:border-[var(--c-border-strong)]";
 
 function TaskCard({ card, workspace, open }: { card: Card; workspace: string; open: (agent: PanelAgent) => void }) {
   const { agent } = card;
@@ -161,12 +161,12 @@ function TaskCard({ card, workspace, open }: { card: Card; workspace: string; op
 function TaskBody({ card }: { card: Card }) {
   return (
     <>
-      <span className={`text-[13.5px] leading-snug ${card.lane === "done" ? "p-text-3 line-through decoration-[var(--c-border-strong)]" : "p-text"}`}>{card.title}</span>
-      <span className="flex items-center gap-2 text-[12px] p-text-3">
+      <span className={`t-body ${card.lane === "done" ? "p-text-3 line-through decoration-[var(--c-border-strong)]" : "p-text"}`}>{card.title}</span>
+      <span className="t-meta flex items-center gap-2 p-text-3">
         {card.agent && <AgentStatusMark activity={card.agent.activity} />}
         <span className="min-w-0 truncate">{card.agent?.label ?? card.owner.title}</span>
         {card.progress && (
-          <span className="ml-auto flex shrink-0 items-center gap-1.5 tabular-nums" aria-label={`${card.progress.done} of ${card.progress.total} steps done`}>
+          <span className="ml-auto flex shrink-0 items-center gap-2 tabular-nums" aria-label={`${card.progress.done} of ${card.progress.total} steps done`}>
             <span className="relative h-1 w-10 overflow-hidden rounded-full bg-[var(--c-hover)]">
               <span className="absolute inset-y-0 left-0 rounded-full bg-[var(--c-accent-mark)]" style={{ width: `${(100 * card.progress.done) / card.progress.total}%` }} />
             </span>

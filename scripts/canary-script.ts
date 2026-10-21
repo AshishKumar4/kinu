@@ -7,7 +7,7 @@
  *  - inline: each step sleeps under the interactive detach threshold (`BACKGROUND_POLICY`, 30 s), so the root turn
  *    itself stays open for steps x sleep;
  *  - detached: a few steps sleep past it, so each becomes a background job that must settle on its own.
- * The root also starts one swarm and hires one task helper whose own steps sleep the same way.
+ * The root also starts one swarm and hires one task subagent whose own steps sleep the same way.
  *
  * The ask names its own load, so the model stays a pure function of the request, as every tier model is.
  */
@@ -23,17 +23,17 @@ export interface CanaryLoad {
   /** Steps that sleep past the threshold and so detach into background jobs. */
   readonly jobs: number;
   readonly jobSleepSeconds: number;
-  /** Inline steps the hired helper and each swarm node take. */
-  readonly helperSteps: number;
-  /** Characters the helper's and each node's final answer is padded with: an end past a stored row (#77). */
+  /** Inline steps the hired subagent and each swarm node take. */
+  readonly subagentSteps: number;
+  /** Characters the subagent's and each node's final answer is padded with: an end past a stored row (#77). */
   readonly answerBytes?: number;
 }
 
-type Who = 'root' | 'helper' | 'node';
+type Who = 'root' | 'subagent' | 'node';
 
 function loadText(who: Who, load: CanaryLoad): string {
   return `${CANARY_PREFIX} ${who} steps=${String(load.steps)} sleep=${String(load.sleepSeconds)} jobs=${String(load.jobs)} `
-    + `jobsleep=${String(load.jobSleepSeconds)} helper=${String(load.helperSteps)}`
+    + `jobsleep=${String(load.jobSleepSeconds)} subagent=${String(load.subagentSteps)}`
     + (load.answerBytes === undefined ? '' : ` bytes=${String(load.answerBytes)}`);
 }
 
@@ -45,7 +45,7 @@ export function canaryMarker(who: Who | 'job', step: number): string {
   return `${CANARY_PREFIX}_${who.toUpperCase()}_STEP_${String(step)}`;
 }
 
-const CANARY_LOAD = /KINU_CANARY (root|helper|node) steps=(\d+) sleep=(\d+) jobs=(\d+) jobsleep=(\d+) helper=(\d+)(?: bytes=(\d+))?/;
+const CANARY_LOAD = /KINU_CANARY (root|subagent|node) steps=(\d+) sleep=(\d+) jobs=(\d+) jobsleep=(\d+) subagent=(\d+)(?: bytes=(\d+))?/;
 
 function sleepStep(who: Who | 'job', step: number, sleepSeconds: number): ScriptedAnswer {
   return {
@@ -54,7 +54,7 @@ function sleepStep(who: Who | 'job', step: number, sleepSeconds: number): Script
   };
 }
 
-/** The load a conversation's own opening message names, else the only one its context names. A helper's context can
+/** The load a conversation's own opening message names, else the only one its context names. A subagent's context can
  *  quote its hirer's ask, so the opening message decides. */
 function loadOf(request: ScriptedRequest): { who: Who; load: CanaryLoad } | null {
   const opening = CANARY_LOAD.exec(request.userTexts[0] ?? '');
@@ -63,10 +63,10 @@ function loadOf(request: ScriptedRequest): { who: Who; load: CanaryLoad } | null
   if (match === null) return null;
 
   return {
-    who: match[1] === 'helper' || match[1] === 'node' ? match[1] : 'root',
+    who: match[1] === 'subagent' || match[1] === 'node' ? match[1] : 'root',
     load: {
       steps: Number(match[2]), sleepSeconds: Number(match[3]), jobs: Number(match[4]),
-      jobSleepSeconds: Number(match[5]), helperSteps: Number(match[6]),
+      jobSleepSeconds: Number(match[5]), subagentSteps: Number(match[6]),
       ...(match[7] !== undefined && { answerBytes: Number(match[7]) }),
     },
   };
@@ -85,12 +85,12 @@ export function canaryScript(request: ScriptedRequest): ScriptedAnswer | null {
   if (who !== 'root') {
     const padding = load.answerBytes === undefined ? '' : ` ${'x'.repeat(load.answerBytes)}`;
 
-    return made < load.helperSteps ? sleepStep(who, made, load.sleepSeconds) : { text: `${CANARY_PREFIX}_${who.toUpperCase()}_DONE${padding}` };
+    return made < load.subagentSteps ? sleepStep(who, made, load.sleepSeconds) : { text: `${CANARY_PREFIX}_${who.toUpperCase()}_DONE${padding}` };
   }
 
   if (made === 0) return { text: 'Starting the swarm.', toolCall: { name: 'agents', arguments: { op: 'swarm', preset: 'ideate', task: loadText('node', load) } } };
 
-  if (made === 1) return { text: 'Hiring the helper.', toolCall: { name: 'agents', arguments: { op: 'hire', lifetime: 'task', role: 'task', message: loadText('helper', load) } } };
+  if (made === 1) return { text: 'Hiring the subagent.', toolCall: { name: 'agents', arguments: { op: 'hire', lifetime: 'task', role: 'task', message: loadText('subagent', load) } } };
 
   const job = made - 2;
 

@@ -1,9 +1,9 @@
-import { buttonClass } from "@/components/ui/Button";
+import { Button } from "@/components/ui/Button";
 import { Effect } from 'effect';
 import { useState } from "react";
 import { startTransition } from "react";
 import {
-  DesktopTowerIcon, PencilSimpleIcon, TrashIcon, WarningIcon,
+  DesktopTowerIcon, PencilSimpleIcon, TrashIcon,
 } from "@phosphor-icons/react";
 import {
   renameDevice, revokeDeviceConsent, setDeviceSandboxTier,
@@ -12,13 +12,15 @@ import {
 import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode } from "@kinu.run/core";
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
-import { composing, inputCls } from "@/components/ui/form";
+import { composing } from "@/components/ui/form";
 import { Row, RowTile } from "@/components/ui/Row";
 import { Menu } from "@/components/ui/Menu";
 import { Chip } from "@/components/ui/Chip";
 import { Switch } from "@/components/ui/Switch";
 import { Status } from "@/components/ui/Status";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
+import { Notice } from "@/components/ui/Notice";
+import { TextInput } from "@/components/ui/Field";
 
 const WHOLE_MACHINE_COPY = "Linked from /, so the agent has this whole machine: every file you can open, and its commands "
   + "run as you. The Sandbox switch applies again once you run kinu connect in a narrower folder.";
@@ -66,12 +68,23 @@ export function DeviceRow({
     const unstopped = device.unstoppedAt !== null;
 
     return (
-      <div data-device-incident={device.id} role="alert"
-        className="p-notice-danger rounded-none border-0 px-4 py-3 text-xs">
-        <div className="flex items-start gap-2">
-          <WarningIcon size={14} className="mt-0.5 shrink-0" />
-          <div className="min-w-0 flex-1 space-y-1">
-            <div className="font-medium">{device.label}</div>
+      <Notice tone="danger" data-device-incident={device.id} className="m-2" action={
+        <Button size="sm" disabled={acknowledging}
+          onClick={() => {
+            setAcknowledging(true);
+            startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+              yield* Effect.promise(async () => onAcknowledge());
+            }), showing((chain) => {
+              // A rejection escaping `onError` still leaves the row visibly unacknowledged.
+              onError(`Could not acknowledge the device warning: ${chain}`);
+            })), Effect.sync(() => {
+              setAcknowledging(false);
+            }))));
+          }}>
+          {acknowledging ? "Acknowledging…" : "Acknowledge"}
+        </Button>}>
+          <div className="space-y-1">
+            <div className="t-item">{device.label}</div>
             {device.reuseDetectedAt !== null && (
               <>
                 <p>Kinu revoked this device: its key was used after it had been replaced, so a copy of this machine&apos;s ~/.kinu/device.json exists somewhere else.</p>
@@ -84,25 +97,9 @@ export function DeviceRow({
                 <p>{countLine}</p>
               </>
             )}
-            <p className="p-meta">{unstopped ? "Acknowledge clears this warning. It does not stop commands." : "Acknowledge clears this warning."}</p>
+            <p className="t-meta">{unstopped ? "Acknowledge clears this warning. It does not stop commands." : "Acknowledge clears this warning."}</p>
           </div>
-          <button type="button" disabled={acknowledging}
-            onClick={() => {
-              setAcknowledging(true);
-              startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-                yield* Effect.promise(async () => onAcknowledge());
-              }), showing((chain) => {
-                // A rejection escaping `onError` still leaves the row visibly unacknowledged.
-                onError(`Could not acknowledge the device warning: ${chain}`);
-              })), Effect.sync(() => {
-                setAcknowledging(false);
-              }))));
-            }}
-            className={buttonClass({ size: "sm" })}>
-            {acknowledging ? "Acknowledging…" : "Acknowledge"}
-          </button>
-        </div>
-      </div>
+      </Notice>
     );
   }
 
@@ -152,12 +149,7 @@ export function DeviceRow({
   const where = [device.hostname, device.os].filter((part) => part !== null && part !== "").join(" · ");
 
   const nameField = (
-    <input
-      autoFocus
-      value={editing ?? ""}
-      onChange={(e) => setEditing(e.target.value)}
-      onBlur={(...args: Parameters<typeof save>) => detach(Effect.promise(async () => save(...args)))}
-      onKeyDown={(e) => detach(Effect.promise(async () => {
+    <TextInput size="sm" className="w-52" autoFocus value={editing ?? ""} onChange={(e) => setEditing(e.target.value)} onBlur={(...args: Parameters<typeof save>) => detach(Effect.promise(async () => save(...args)))} onKeyDown={(e) => detach(Effect.promise(async () => {
         if (composing(e.nativeEvent)) return;
 
         if (e.key === "Enter") {
@@ -167,10 +159,7 @@ export function DeviceRow({
         }
 
         if (e.key === "Escape") setEditing(null);
-      }))}
-      aria-label="Device name"
-      className={`${inputCls} h-7 w-52`}
-    />
+      }))} aria-label="Device name" />
   );
 
   const notes = [
@@ -207,18 +196,18 @@ export function DeviceRow({
           <>
             <UpdateBadge device={device} />
             {/* Named beside it, so it reads as the sandbox and not as the connection the status before it names. */}
-            <span className="p-row-text font-medium p-text-2" aria-hidden>Sandbox</span>
+            <span className="t-item p-text-2" aria-hidden>Sandbox</span>
             <Switch on={sandboxOn} label={`Sandbox on ${device.label}`} disabled={switching || device.wholeMachine}
               onChange={() => detach(sandboxOn ? Effect.sync(sandboxOff) : sandboxOnAgain())} />
           </>
         )}
         action={(
-          <Menu label={`${device.label} options`} items={[
-            { label: "Rename", marker: "data-device-rename", title: "Rename this device", icon: PencilSimpleIcon, run: () => setEditing(device.label) },
-            { label: "Revoke", marker: "data-device-revoke", title: "Revoke device", icon: TrashIcon, run: onRevoke, danger: true },
+          <Menu name={device.label} items={[
+            { label: "Rename", title: "Rename this device", icon: <PencilSimpleIcon size={16} />, onSelect: () => setEditing(device.label) },
+            { label: "Revoke", title: "Revoke device", icon: <TrashIcon size={16} />, onSelect: onRevoke, danger: true },
           ]} />
         )}
-        below={notes.length === 0 ? undefined : <div className="space-y-1 p-meta p-text-3">{notes}</div>} />
+        below={notes.length === 0 ? undefined : <div className="t-meta space-y-1 p-text-3">{notes}</div>} />
       {dialog}
     </>
   );

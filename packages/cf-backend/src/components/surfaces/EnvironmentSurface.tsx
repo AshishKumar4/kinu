@@ -23,7 +23,7 @@ import type { TerminalSession } from "@kinu.run/devbox";
 import type { ExecutorOutput } from "@/hooks/use-chat-owner";
 import { lazyRoute } from "@/lazy-route";
 import type { TerminalPaneProps } from "@/components/TerminalPane";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { lastValue } from "@/hooks/use-async-resource";
 import { useMounts } from "@/hooks/use-mounts";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -37,6 +37,8 @@ import {
   ONE_SHELL, SessionDetails, SessionTabs, openSession, useMachineSessions, type MachineSessions,
 } from "./EnvironmentSessions";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { IconControl } from "@/components/ui/IconControl";
+import { ChipToggle } from "@/components/ui/Chip";
 
 /** The terminal (xterm, 333 KB of the workspace's first chunk on 2026-10-08) loads with a command lane's first view. */
 const TerminalPane = lazyRoute<TerminalPaneProps>(async () => {
@@ -272,7 +274,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
       {resource.status === "error" && (
         <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="mx-4 mb-3 p-card px-3 py-2" />
       )}
-      {account.failure !== null && <p data-failure className="mx-4 mb-3 p-meta p-danger">Could not read your machines: {account.failure}</p>}
+      {account.failure !== null && <p data-failure className="t-meta mx-4 mb-3 p-danger">Could not read your machines: {account.failure}</p>}
     </div>
   );
 }
@@ -332,7 +334,7 @@ function MachineRow({ environments, execByName, selected, chosen, onSelect, onCo
   loading: boolean;
 }) {
   return (
-    <div role="group" aria-label="Environments" className="flex shrink-0 flex-wrap items-center gap-1.5 px-4 pt-3 pb-2.5">
+    <div role="group" aria-label="Environments" className="flex shrink-0 flex-wrap items-center gap-2 px-4 pt-3 pb-2">
       {environments.map((m) => {
         const exec = execByName.get(m.mount.name);
         const { Icon: KindIcon, about } = environmentOf(m.mount.name);
@@ -342,25 +344,24 @@ function MachineRow({ environments, execByName, selected, chosen, onSelect, onCo
         return (
           <div key={m.key} data-env-card={m.mount.name} className="min-w-0">
             {/* A narrow column names only the chosen machine; the others keep their icon and state. */}
-            <button type="button" data-env-select onClick={() => onSelect(m.key)} aria-pressed={active} title={`${machineLabel(m, exec)}: ${about}`} className="p-env-chip">
+            <ChipToggle data-env-select onClick={() => onSelect(m.key)} aria-pressed={active} title={`${machineLabel(m, exec)}: ${about}`}>
               <KindIcon size={14} weight={active ? "fill" : "regular"} className="shrink-0" aria-hidden />
               <span className={active ? "truncate" : "sr-only @[30rem]:not-sr-only @[30rem]:truncate"}>{machineLabel(m, exec)}</span>
               {m.mount.policy.readOnly && <LockSimpleIcon size={11} className="shrink-0 p-text-3" aria-label="Read-only" />}
               <Dot tone={waiting.has(m.key) ? "attention" : status.tone} />
-            </button>
+            </ChipToggle>
           </div>
         );
       })}
-      <button type="button" data-env-connect onClick={onConnectDevice} aria-label="Connect a PC" title="Connect a PC"
-        className="p-env-chip border-dashed p-text-3">
-        <PlusIcon size={13} className="shrink-0" aria-hidden /><span className="hidden @[56rem]:inline">Connect a PC</span>
-      </button>
-      {empty && <span className="p-meta p-text-3">No environments available.</span>}
+      <ChipToggle data-env-connect onClick={onConnectDevice} aria-label="Connect a PC" title="Connect a PC" className="border-dashed p-text-3">
+        <PlusIcon size={14} className="shrink-0" aria-hidden /><span className="hidden @[56rem]:inline">Connect a PC</span>
+      </ChipToggle>
+      {empty && <span className="t-meta p-text-3">No environments available.</span>}
       {loading && <Loader size="sm" />}
       {/* The chosen machine's state in words, then what it offers: the chips are named by their machines alone. */}
       {chosen !== null && (
-        <div className="ml-auto flex min-w-0 items-center gap-1.5">
-          <span data-env-status className="mr-1 shrink-0 p-meta" data-tone={chosen.status.tone}>{chosen.status.word}</span>
+        <div className="ml-auto flex min-w-0 items-center gap-2">
+          <span data-env-status className="t-meta mr-1 shrink-0" data-tone={chosen.status.tone}>{chosen.status.word}</span>
           {chosen.actions}
         </div>
       )}
@@ -399,10 +400,10 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
     <section aria-label={name} className="flex min-h-0 flex-1 flex-col">
       {machineRow({ status, actions: <MachineActions mount={mount} name={name} size={computer ? <ComputerSize state={size} /> : null} onOpenFiles={onOpenFiles} /> })}
       {computer && size.notice}
-      {machineSessions?.failure != null && <p className="px-4 pb-1 p-meta p-danger">{machineSessions.failure}</p>}
+      {machineSessions?.failure != null && <p className="t-meta px-4 pb-1 p-danger">{machineSessions.failure}</p>}
       {device !== null && !device.connected && (
         <Absence icon={DesktopTowerIcon} title={`${name} is offline`}>
-          Its Kinu daemon is not running. Run <code className="p-annotation">kinu connect</code> on it to bring it back.
+          Its Kinu daemon is not running. Run <code className="t-meta t-mono">kinu connect</code> on it to bring it back.
         </Absence>
       )}
       {device !== null && device.connected && !device.granted && <GiveAccess name={name} onGive={() => grant(device.id)} />}
@@ -431,10 +432,10 @@ function MachineActions({ mount, name, size, onOpenFiles }: {
     <>
       {size}
       {filesRoot !== null && (
-        <button type="button" data-env-files onClick={() => onOpenFiles(filesRoot)} aria-label={`${name}'s files`} title={`Browse ${name}'s files at ${filesRoot}`} className="p-env-action">
-          <FolderOpenIcon size={13} aria-hidden /><span className="hidden @[56rem]:inline">Files</span>
-          <span data-env-mount className="hidden p-annotation p-text-3 @[56rem]:inline">{filesRoot}</span>
-        </button>
+        <Button size="sm" icon={<FolderOpenIcon size={14} aria-hidden />} data-env-files onClick={() => onOpenFiles(filesRoot)} aria-label={`${name}'s files`} title={`Browse ${name}'s files at ${filesRoot}`}>
+          <span className="hidden @[56rem]:inline">Files</span>
+          <span data-env-mount className="t-meta t-mono hidden p-text-3 @[56rem]:inline">{filesRoot}</span>
+        </Button>
       )}
     </>
   );
@@ -583,16 +584,16 @@ function SplitToggle({ sessions, shown, showing }: { sessions: MachineSessions; 
   const others = (sessions.sessions ?? []).filter((session) => session.id !== showing);
 
   if (shown.split === showing) {
-    return <button type="button" aria-label="One pane" title="One pane" className="p-bar-icon" onClick={() => shown.setSplit(null)}><XIcon size={13} /></button>;
+    return <IconControl place="bar" aria-label="One pane" title="One pane" onClick={() => shown.setSplit(null)}><XIcon size={13} /></IconControl>;
   }
 
   if (shown.split !== null || others[0] === undefined) return null;
   const next = others[0].id;
 
   return (
-    <button type="button" aria-label="Split" title={`Split: ${others[0].name} beside it`} className="p-bar-icon" onClick={() => shown.setSplit(next)}>
+    <IconControl place="bar" aria-label="Split" title={`Split: ${others[0].name} beside it`} onClick={() => shown.setSplit(next)}>
       <SplitHorizontalIcon size={14} />
-    </button>
+    </IconControl>
   );
 }
 
@@ -632,20 +633,16 @@ function DesktopView({ name, src, width, height }: { name: string; src: string; 
   return (
     <div data-desktop-view={cover === null ? undefined : "expanded"} style={cover ?? undefined}
       className={`p-terminal-ground flex min-h-0 flex-1 flex-col ${cover === null ? "" : "fixed z-40"}`}>
-      <div className={`flex shrink-0 items-center gap-3 pr-3 pl-4 p-meta p-text-3 ${cover === null ? "h-9" : "h-11 border-b p-border"}`}>
-        {cover !== null && <span className="inline-flex min-w-0 items-center gap-1.5 font-medium p-text-2"><DesktopIcon size={13} aria-hidden /><span className="truncate">{title}</span></span>}
+      <div className={`t-meta flex shrink-0 items-center gap-3 pr-3 pl-4 p-text-3 ${cover === null ? "h-9" : "h-11 border-b p-border"}`}>
+        {cover !== null && <span className="inline-flex min-w-0 items-center gap-2 font-medium p-text-2"><DesktopIcon size={13} aria-hidden /><span className="truncate">{title}</span></span>}
         <span className="shrink-0">{String(width)} × {String(height)}</span>
         {area !== null && cover === null && (
-          <button type="button" data-desktop-expand onClick={() => setExpanded(true)} aria-label={`Expand ${title}`} title="Expand over the workspace"
-            className="ml-auto inline-flex items-center gap-1.5 hover:p-text">
-            <ArrowsOutIcon size={13} aria-hidden />Expand
-          </button>
+          <Button variant="ghost" size="sm" icon={<ArrowsOutIcon size={14} aria-hidden />} data-desktop-expand onClick={() => setExpanded(true)} aria-label={`Expand ${title}`}
+            title="Expand over the workspace" className="ml-auto">Expand</Button>
         )}
         {cover !== null && (
-          <button type="button" data-desktop-return onClick={() => setExpanded(false)} aria-label="Back to the Environment panel"
-            className="p-env-action ml-auto">
-            <ArrowsInIcon size={13} aria-hidden />Back to panel
-          </button>
+          <Button size="sm" icon={<ArrowsInIcon size={14} aria-hidden />} data-desktop-return onClick={() => setExpanded(false)} aria-label="Back to the Environment panel"
+            className="ml-auto">Back to panel</Button>
         )}
       </div>
       {/* The screen at its own shape, as large as its place allows, so the client draws it edge to edge; expanded, on
@@ -687,10 +684,10 @@ function useCover(area: WorkspaceArea | null, expanded: boolean): CSSProperties 
 function Restarting({ to }: { to: string | null }) {
   return (
     <div role="status" className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-      <span className="p-dot-pulse"><DesktopIcon size={24} className="p-accent" aria-hidden /></span>
+      <span className="p-dot-pulse"><DesktopIcon size={24} className="p-accent-fg" aria-hidden /></span>
       <div className="space-y-1">
-        <p className="p-row-text font-semibold p-text">{to === null ? "Restarting" : `Restarting at ${to}`}</p>
-        <p className="p-meta p-text-3">Your files stay and services start again; open terminals start fresh.</p>
+        <p className="t-label p-text">{to === null ? "Restarting" : `Restarting at ${to}`}</p>
+        <p className="t-meta p-text-3">Your files stay and services start again; open terminals start fresh.</p>
       </div>
     </div>
   );
@@ -719,11 +716,11 @@ function GiveAccess({ name, onGive }: { name: string; onGive: () => Effect.Effec
       <div className="max-w-sm space-y-3 text-center">
         <LockSimpleIcon size={22} className="mx-auto p-text-3" aria-hidden />
         <div className="space-y-1">
-          <p className="p-row-text font-semibold p-text">{name} is connected</p>
-          <p className="p-meta p-text-2">This workspace can&apos;t use it yet.</p>
+          <p className="t-label p-text">{name} is connected</p>
+          <p className="t-meta p-text-2">This workspace can&apos;t use it yet.</p>
         </div>
         <Button variant="primary" size="sm" onClick={() => detach(give)} disabled={giving}>{giving ? "Giving access…" : "Give this workspace access"}</Button>
-        {failure !== null && <p className="p-meta p-danger">{failure}</p>}
+        {failure !== null && <p className="t-meta p-danger">{failure}</p>}
       </div>
     </div>
   );
@@ -735,8 +732,8 @@ function Absence({ icon: Mark, title, children }: { icon: Icon; title: string; c
     <div className="flex min-h-0 flex-1 items-center justify-center border-t p-border px-8">
       <div className="max-w-sm space-y-2 text-center">
         <Mark size={22} className="mx-auto p-text-3" aria-hidden />
-        <p className="p-row-text font-semibold p-text">{title}</p>
-        <p className="p-meta p-text-2">{children}</p>
+        <p className="t-label p-text">{title}</p>
+        <p className="t-meta p-text-2">{children}</p>
       </div>
     </div>
   );
@@ -751,7 +748,7 @@ function UnavailableMount({ mount, exec }: { mount: EnvironmentInfo; exec: Execu
 
   return (
     <Absence icon={PlugIcon} title={`${executorLabel(mount.name)} is not available here`}>
-      {text}{" "}<a href={EXECUTION_DOCS} target="_blank" rel="noreferrer" className="p-accent hover:underline">Learn more</a>
+      {text}{" "}<a href={EXECUTION_DOCS} target="_blank" rel="noreferrer" className="p-accent-fg hover:underline">Learn more</a>
     </Absence>
   );
 }

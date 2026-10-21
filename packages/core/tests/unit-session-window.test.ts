@@ -9,7 +9,7 @@ import type { JsonObject } from '../src/utils/json';
 import type { SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
-/** One actor's window: a subordinate's turn is not in the root's window. */
+/** One actor's window: a subagent's turn is not in the root's window. */
 function newStore(): CompletedTurnStore {
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw);

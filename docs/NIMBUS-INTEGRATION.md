@@ -131,7 +131,7 @@ Durable Object of its own.
 
 `createHostedWorkspace()` is the only constructor, and the object's own name is
 the workspace's, so execution, export, forking, preview routing and destruction
-all address one place. A subordinate, head, swarm node or branch actor is a
+all address one place. A subagent, head, swarm node or branch actor is a
 logical entry in that same `ctx.storage.sql`, acquired from the workspace's one
 `ActorHost`. It never composes a filesystem, which would be a second, empty
 workspace.
@@ -202,13 +202,13 @@ workspace over `bun:sqlite` state.
 
 ## Actor isolation inside a shared workspace
 
-The orchestrator, its durable subordinates, and exploration heads share the
+The orchestrator, its durable subagents, and exploration heads share the
 workspace's files, processes, and ports. They do not share mutable shell cwd or
 exported environment state. `ActorRuntimeIdentity.shellId`
 (`cf-backend/src/runtime.ts`) is a stable actor-specific key. It reads
 `agent:<name>` for the main actor (`ActorAgent.shellId()`,
 `cf-backend/src/actor-agent.ts`) and `<kind>:<storage-key>` for every hosted
-logical actor (subordinate, head, swarm node and branch alike) from
+logical actor (subagent, head, swarm node and branch alike) from
 `hostedActorShellId` in `cf-backend/src/actor-hosting.ts`, keyed on the
 immutable storage key rather than the registered name.
 `HostedWorkspace.box(scope)` is one box per actor. A call that names a shell

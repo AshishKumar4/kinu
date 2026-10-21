@@ -10,13 +10,15 @@ import { toolRunSummary, type RunStep, type ToolRunSummary } from "@kinu.run/cor
 import { detach, diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { Effect } from "effect";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Pressable } from "@/components/ui/Pressable";
+import { Dot } from "@/components/ui/Dot";
 
 /** The dot and words a piece of work is headed by: pulsing and shimmering while it runs. */
 export function WorkLabel({ live, failed = false, children }: { live: boolean; failed?: boolean; children: ReactNode }) {
   return (
     <span className="flex min-w-0 items-center gap-2">
-      <span className={`size-1.5 shrink-0 rounded-full ${failed ? "p-dot-danger" : "p-dot-accent"}${live ? " p-dot-pulse" : ""}`} aria-hidden />
-      <span className={`min-w-0 truncate p-row-text font-medium${live ? " p-shimmer" : ""}`}>{children}</span>
+      <Dot tone={failed ? "danger" : "accent"} pulse={live} />
+      <span className={`t-item min-w-0 truncate${live ? " p-shimmer" : ""}`}>{children}</span>
     </span>
   );
 }
@@ -152,10 +154,9 @@ export function ChatDisclosure({ label, after, live, failed = false, folded, fol
   else if (!open && folded === "hidden") shown = "hidden";
 
   return (
-    <div ref={root} className="py-0.5 p-row-text p-text-3" {...data}>
+    <div ref={root} className="t-body py-px p-text-3" {...data}>
       {/* The whole line is the control, its chevron turning as it opens: a quiet mark, as a tool row's is. */}
-      <button type="button" onClick={() => setOpen(!open)} disabled={!canOpen} aria-expanded={canOpen ? open : undefined}
-        className="group/disclosure flex w-full items-center gap-2 text-left enabled:cursor-pointer">
+      <Pressable className="group/disclosure flex items-center gap-2" onClick={() => setOpen(!open)} disabled={!canOpen} aria-expanded={canOpen ? open : undefined}>
         <span className="min-w-0" data-disclosure-label {...(live && liveIndicator !== undefined ? { "data-live-indicator": liveIndicator } : {})}>
           <WorkLabel live={live} failed={failed}>{label}</WorkLabel>
         </span>
@@ -164,8 +165,8 @@ export function ChatDisclosure({ label, after, live, failed = false, folded, fol
           <CaretRightIcon size={11} aria-hidden data-disclosure-turn
             className={`shrink-0 p-text-3 p-fold-turn group-hover/disclosure:p-text-2 ${open ? "rotate-90" : ""}`} />
         )}
-      </button>
-      <div ref={body} className={`mt-1 ml-3.5 ${bodyClass} ${shown}`} data-disclosure-body={bodyState}
+      </Pressable>
+      <div ref={body} className={`mt-1 ml-4 ${bodyClass} ${shown}`} data-disclosure-body={bodyState}
         data-folded={!live && !open && folded === "preview" ? "" : undefined} data-overflows={long ? "" : undefined}>
         {children}
       </div>
@@ -247,7 +248,7 @@ function PhaseAfter({ now, failed, span }: { now: string | null; failed: number;
   if (now === null && failed === 0 && span === null) return null;
 
   return (
-    <span className="shrink-0 p-row-text p-text-3">
+    <span className="t-body shrink-0 p-text-3">
       {now !== null && <> · <span data-tool-run-now>{now}…</span></>}
       {failed > 0 && <> · <span className="p-danger" data-tool-run-failed={failed}>{failed} failed</span></>}
       {span !== null && <> · {span}</>}
@@ -287,7 +288,7 @@ export function TurnRollup({ line, phases, written, onSeen, children }: { line: 
   return (
     <ChatDisclosure live={false} folded="hidden" follow={String(phases)} viewport="max-h-36"
       label={<span key={written ?? ""} className={written === null ? undefined : "animate-fade-in"}>{written ?? line}</span>}
-      after={<span className="shrink-0 p-row-text p-text-3"> · {phases} {phases === 1 ? "phase" : "phases"}</span>}
+      after={<span className="t-body shrink-0 p-text-3"> · {phases} {phases === 1 ? "phase" : "phases"}</span>}
       data-turn-rollup={phases} data-phase-title={written === null ? "calls" : "model"} onSeen={onSeen}>
       {children}
     </ChatDisclosure>

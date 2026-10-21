@@ -1,13 +1,10 @@
 /** The URL hash names the section; an unknown hash opens the first one. */
-import { useEffect, useRef } from "react";
-import { Link } from "react-router-dom";
 import { APP_ROUTES } from "@kinu.run/core";
 import {
   BrainIcon, ChartBarIcon, DesktopIcon, DesktopTowerIcon, FlaskIcon, KeyIcon, MagnifyingGlassIcon, NotebookIcon, PaintBrushIcon, PlugIcon, TerminalIcon, UserCircleIcon,
   type Icon,
 } from "@phosphor-icons/react";
-import { tabCls } from "@/components/ui/form";
-import { navRowClsLg } from "@/components/nav";
+import { Rail } from "@/components/ui/Rail";
 
 /** A section: its rail label, which names it on the page too (no head repeats it), and its icon. */
 interface SettingsSectionSpec {
@@ -48,31 +45,10 @@ export function settingsSection(hash: string): SettingsSection {
 }
 
 export function SettingsRail({ active }: { active: SettingsSection }) {
-  const nav = useRef<HTMLElement>(null);
+  const items = Object.entries(SETTINGS_SECTIONS).map(([id, { label, Icon }]) => ({
+    id, label, icon: <Icon size={16} />, to: { hash: `#${id}` }, data: { "data-settings-section": id },
+  }));
 
-  // A deep link to the last entry would otherwise open with the active tab off-screen.
-  useEffect(() => {
-    nav.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ inline: "nearest", block: "nearest" });
-  }, [active]);
-
-  return (
-    <nav ref={nav} aria-label="Settings sections"
-      className="p-tabstrip -mx-5 flex border-b p-border px-5 sm:-mx-8 sm:px-8 max-lg:[mask-image:linear-gradient(to_right,black_calc(100%-24px),transparent)] lg:mx-0 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:border-0 lg:px-0">
-      {Object.entries(SETTINGS_SECTIONS).map(([id, { label, Icon }]) => {
-        const current = id === active;
-
-        return (
-          <Link
-            key={id}
-            to={{ hash: `#${id}` }}
-            data-settings-section={id}
-            aria-current={current ? "true" : undefined}
-            className={`${tabCls} ${current ? "p-tab-active" : ""} lg:mb-0 lg:border-b-0 lg:px-3 lg:py-[7px] ${navRowClsLg(current)}`}
-          >
-            <Icon size={15} className={current ? "" : "p-text-3"} /> {label}
-          </Link>
-        );
-      })}
-    </nav>
-  );
+  // Edge to edge on a phone and a tablet, as the page's own gutter runs.
+  return <Rail label="Settings sections" items={items} current={active} className="-mx-5 px-5 sm:-mx-8 sm:px-8 lg:mx-0 lg:px-0" />;
 }

@@ -5,19 +5,23 @@
  * typeset cover, never an empty box.
  */
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { WorkspaceLogo } from "@/components/Marks";
 
 export const TILE_GRID = "grid gap-5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))]";
 
 /** The tile's own box: the card radius and edge, its border darkening on hover. */
-export const TILE = "group flex h-full min-w-0 flex-col overflow-hidden rounded-[var(--r-card)] border p-border p-surface transition-[border-color] duration-[var(--dur-state)] ease-out hover:border-[var(--c-border-strong)] data-[force=hover]:border-[var(--c-border-strong)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--c-accent)]";
+export const TILE = "group flex h-full min-w-0 flex-col overflow-hidden rounded-[var(--r-card)] border p-border p-surface transition-[border-color] duration-[var(--dur-state)] ease-out hover:border-[var(--c-border-strong)] data-[force=hover]:border-[var(--c-border-strong)]";
+
+/** A folder among the tiles: the tile's edge and ground, one 48 line high, its name beside its glyph. */
+export const FOLDER_TILE = "flex h-12 min-w-0 items-center gap-3 rounded-[var(--r-card)] border p-border p-surface pl-3 pr-8 transition-[border-color] duration-[var(--dur-state)] ease-out hover:border-[var(--c-border-strong)]";
 
 /** The cover's frame: 16:10, over a hairline; a picture or a typeset cover fills it. */
 const TILE_COVER = "relative block aspect-[16/10] w-full shrink-0 overflow-hidden border-b p-border";
 
-const TILE_BODY = "flex min-h-0 flex-1 flex-col gap-1 px-4 pb-3.5 pt-3";
+const TILE_BODY = "flex min-h-0 flex-1 flex-col gap-1 px-4 pb-3 pt-3";
 
-const TILE_TITLE = "truncate text-sm font-semibold leading-5 p-text";
+const TILE_TITLE = "t-label truncate p-text";
 
 /**
  * A cover for a thing with no picture: its mark at the top left, and what it is for set large at the bottom left, as a
@@ -29,7 +33,7 @@ export function TypesetCover({ title, line, logo = null, mark }: { title: string
   return (
     <span data-typeset-cover className="absolute inset-0 flex flex-col justify-between bg-[var(--c-fill)] p-5">
       <span className="flex">{mark === undefined ? <WorkspaceLogo title={title} logo={logo} size={32} /> : mark}</span>
-      <span className="line-clamp-3 text-[17px] font-medium leading-6 text-[var(--c-text-2)]">{line ?? title}</span>
+      <span className="t-title line-clamp-3 text-[var(--c-text-2)]">{line ?? title}</span>
     </span>
   );
 }
@@ -57,4 +61,19 @@ export function TileShell({ cover, title, children }: { cover: ReactNode; title:
       </span>
     </>
   );
+}
+
+/** What a tile opens as: a link where it has an address, a press where opening it is the page's own act, else nothing. */
+export function TileOpener({ href, onOpen, className, label, children }: {
+  href?: string;
+  onOpen?: () => void;
+  className: string;
+  label: string;
+  children: ReactNode;
+}) {
+  if (href !== undefined) return <Link to={href} aria-label={label} className={className}>{children}</Link>;
+
+  if (onOpen === undefined) return <div className={className}>{children}</div>;
+
+  return <button type="button" aria-label={label} onClick={onOpen} className={`w-full text-left ${className}`}>{children}</button>;
 }

@@ -131,7 +131,7 @@ page imports it from `kinu:slate`. A path that names no other namespace is the
 workspace executor's own member, so `workspace.fs.text(path)` reads as it does
 in a program. Each call passes one of the calling actor's own capabilities, under
 that actor's existing gates. The workspace root acts as the session user with
-the root providers. A hosted actor (a subordinate, a head, a swarm node) acts as
+the root providers. A hosted actor (a subagent, a head, a swarm node) acts as
 its own provisioned uid with its own role-narrowed providers, and has no `mcp`,
 `reads` or `agent` surface: those calls refuse for it. The open turn profile
 sets reach while that turn is in flight. Between turns the role resolves again

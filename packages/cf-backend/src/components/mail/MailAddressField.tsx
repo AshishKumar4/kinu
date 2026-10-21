@@ -6,9 +6,9 @@ import { useEffect, useState } from "react";
 import { Effect } from "effect";
 import { attempt, detach, diagnostics } from "@kinu.run/core/obs";
 import { mailUsernameRefusal } from "@kinu.run/core";
-import { inputCls } from "@/components/ui/form";
 import { Status, type StatusTone } from "@/components/ui/Status";
 import { checkMailUsername } from "@/lib/mail-api";
+import { TextInput } from "@/components/ui/Field";
 
 export type MailUsernameState = "checking" | "available" | "taken" | "reserved" | "invalid" | "unchecked";
 
@@ -70,12 +70,10 @@ export function MailAddressField({ domain, username, state, onChange, disabled }
   const said = state === "unchecked" ? null : SAID[state];
 
   return (
-    <div data-mail-address className="space-y-1.5">
-      <div className="flex items-center gap-1.5">
-        <input value={username} onChange={(event) => onChange(event.target.value.trim().toLowerCase())} aria-label="Username"
-          autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={20} disabled={disabled}
-          className={`${inputCls} min-w-0 flex-1 font-mono`} />
-        <span className="shrink-0 font-mono p-row-text p-text-2">@{domain}</span>
+    <div data-mail-address className="space-y-2">
+      <div className="flex items-center gap-2">
+        <TextInput className="min-w-0 flex-1" value={username} onChange={(event) => onChange(event.target.value.trim().toLowerCase())} aria-label="Username" autoComplete="off" autoCapitalize="none" spellCheck={false} maxLength={20} disabled={disabled} />
+        <span className="t-body t-mono shrink-0 p-text-2">@{domain}</span>
       </div>
       <div className="min-h-5">{said !== null && <Status tone={said[0]} hooks={{ "data-mail-address-state": state }}>{said[1]}</Status>}</div>
     </div>

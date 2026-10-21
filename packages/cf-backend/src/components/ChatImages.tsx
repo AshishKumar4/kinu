@@ -14,6 +14,9 @@ import * as v from "valibot";
 import type { UIMessage } from "ai";
 import { isToolUIPart } from "ai";
 import { drawnText, namedImages, type ImageMachine, type NamedImage } from "@kinu.run/core";
+import { IconAnchor, IconControl } from "@/components/ui/IconControl";
+import { PillButton } from "@/components/ui/Pill";
+import { LightboxStep, ShotFrame } from "@/components/ui/Lightbox";
 
 /** Where the chat reads a workspace file's bytes, and where Files shows it. Absent, the chat names pictures only. */
 export interface ChatImageSource {
@@ -156,7 +159,7 @@ function Shot({ picture, size, onOpen }: { readonly picture: Picture; readonly s
 
   if (picture.kind === "web" && !asked) {
     return (
-      <Note icon={GlobeIcon} action={<button type="button" className="p-pill-action" onClick={() => setAsked(true)}>Show image</button>}>
+      <Note icon={GlobeIcon} action={<PillButton part="action" onClick={() => setAsked(true)}>Show image</PillButton>}>
         An image from <span className="p-text-2">{picture.host}</span>. It loads from that site when you show it.
       </Note>
     );
@@ -175,21 +178,21 @@ function Shot({ picture, size, onOpen }: { readonly picture: Picture; readonly s
 
   return (
     <figure className="p-shot my-2" data-size={size} data-chat-image={picture.kind}>
-      <button type="button" className="p-shot-frame" aria-label={`Open ${name}`} onClick={onOpen}>
+      <ShotFrame aria-label={`Open ${name}`} onClick={onOpen}>
         {state === "loading" && <span className="p-shot-wait p-skeleton-bar !rounded-none" aria-hidden />}
         <img src={src} alt={name} loading="lazy" decoding="async" {...(picture.kind === "web" && { referrerPolicy: "no-referrer" as const })}
           className={state === "loading" ? "absolute size-px opacity-0" : undefined}
           onLoad={() => setState("shown")} onError={() => setState("missing")} />
-      </button>
+      </ShotFrame>
       <figcaption className="p-shot-caption">
         <span className="p-shot-name" title={name}>{name}</span>
         {picture.kind === "file" && (
           <>
             <Where machine={picture.machine} device={picture.device} />
-            <button type="button" className="p-pill-icon" aria-label="Show in Files" title="Show in Files" onClick={() => at.reveal(picture.path)}>
+            <IconControl place="pill" aria-label="Show in Files" title="Show in Files" onClick={() => at.reveal(picture.path)}>
               <FolderSimpleIcon size={13} />
-            </button>
-            <a className="p-pill-icon" href={at.src(picture.path, true)} aria-label="Download" title="Download"><DownloadSimpleIcon size={13} /></a>
+            </IconControl>
+            <IconAnchor place="pill" href={at.src(picture.path, true)} aria-label="Download" title="Download"><DownloadSimpleIcon size={13} /></IconAnchor>
           </>
         )}
       </figcaption>
@@ -238,30 +241,30 @@ function Lightbox({ pictures, index, onIndex, onClose }: {
       <div className="p-lightbox-bar">
         <span className="min-w-0 truncate font-mono p-text">{name}</span>
         {picture.kind === "file" && <Where machine={picture.machine} device={picture.device} />}
-        {many && <span className="shrink-0 p-meta p-text-3 tabular-nums">{index + 1} of {pictures.length}</span>}
+        {many && <span className="t-meta shrink-0 p-text-3 tabular-nums">{index + 1} of {pictures.length}</span>}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {picture.kind === "file" && (
             <>
-              <button type="button" className="p-pill-action !bg-transparent p-text-2" onClick={() => { onClose(); at.reveal(picture.path); }}>
+              <PillButton part="action" quiet className="p-text-2" onClick={() => { onClose(); at.reveal(picture.path); }}>
                 <FolderSimpleIcon size={14} />Show in Files
-              </button>
-              <a className="p-pill-icon" href={at.src(picture.path, true)} aria-label="Download" title="Download"><DownloadSimpleIcon size={15} /></a>
+              </PillButton>
+              <IconAnchor place="pill" href={at.src(picture.path, true)} aria-label="Download" title="Download"><DownloadSimpleIcon size={15} /></IconAnchor>
             </>
           )}
-          <button type="button" className="p-pill-icon" aria-label="Close" onClick={onClose}><XIcon size={15} weight="bold" /></button>
+          <IconControl place="pill" aria-label="Close" onClick={onClose}><XIcon size={15} weight="bold" /></IconControl>
         </span>
       </div>
       <div className="p-lightbox-stage relative" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
         {many && (
-          <button type="button" className="p-lightbox-step left-4" aria-label="Previous" onClick={() => onIndex((index - 1 + pictures.length) % pictures.length)}>
+          <LightboxStep side="left" aria-label="Previous" onClick={() => onIndex((index - 1 + pictures.length) % pictures.length)}>
             <ArrowLeftIcon size={15} />
-          </button>
+          </LightboxStep>
         )}
         <img src={src} alt={name} {...(picture.kind === "web" && { referrerPolicy: "no-referrer" as const })} />
         {many && (
-          <button type="button" className="p-lightbox-step right-4" aria-label="Next" onClick={() => onIndex((index + 1) % pictures.length)}>
+          <LightboxStep side="right" aria-label="Next" onClick={() => onIndex((index + 1) % pictures.length)}>
             <ArrowRightIcon size={15} />
-          </button>
+          </LightboxStep>
         )}
       </div>
     </div>,

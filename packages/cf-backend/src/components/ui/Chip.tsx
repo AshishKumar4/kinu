@@ -2,7 +2,7 @@
  * A small named thing a row holds, with its one control (docs/DESIGN-SYSTEM.md §2; a device's grant to a workspace):
  * 24 tall and round, on the hover wash, or a tone's tint in its ink.
  */
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { XIcon } from "@phosphor-icons/react";
 
 export type ChipTone = "neutral" | "success" | "warning" | "danger" | "info" | "accent";
@@ -16,7 +16,7 @@ const GROUND: Record<ChipTone, string> = {
   accent: "p-chip-accent",
 };
 
-export function Chip({ tone = "neutral", icon, children, onRemove, removeLabel }: {
+export function Chip({ tone = "neutral", icon, children, onRemove, removeLabel, ...data }: {
   tone?: ChipTone;
   /** A 14 icon before the words. */
   icon?: ReactNode;
@@ -24,9 +24,9 @@ export function Chip({ tone = "neutral", icon, children, onRemove, removeLabel }
   /** The chip's own control, a 16 ghost ×; `removeLabel` names what it does. */
   onRemove?: () => void;
   removeLabel?: string;
-}) {
+} & Readonly<Record<`data-${string}`, string>>) {
   return (
-    <span className={`p-chip ${GROUND[tone]}${onRemove === undefined ? "" : " p-chip-removable"}`}>
+    <span className={`p-chip ${GROUND[tone]}${onRemove === undefined ? "" : " p-chip-removable"}`} {...data}>
       {icon}
       <span className="truncate">{children}</span>
       {onRemove !== undefined && (
@@ -36,4 +36,9 @@ export function Chip({ tone = "neutral", icon, children, onRemove, removeLabel }
       )}
     </span>
   );
+}
+
+/** A chip that is a choice, pressed while chosen: a machine to work on. A dashed one offers to add another. */
+export function ChipToggle({ className, type = "button", ...rest }: ComponentProps<"button">) {
+  return <button type={type} className={`p-chip-toggle${className === undefined ? "" : ` ${className}`}`} {...rest} />;
 }

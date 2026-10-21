@@ -1,9 +1,10 @@
 /** A control-plane read has five outcomes: value, not operator, stale sign-in, no control plane, failure. */
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { Loader } from '@cloudflare/kumo';
+import { Loader } from '@/components/ui/Loader';
 import { ArrowClockwiseIcon, LockKeyIcon, WarningIcon } from '@phosphor-icons/react';
 import type { ControlAnswer } from '../../lib/control-api';
+import { Button } from "@/components/ui/Button";
 
 export type Load<Value> =
   | { phase: 'loading' }
@@ -87,7 +88,7 @@ export function Panel<Value>(
 
 const NOTICE_TONE = {
   muted: 'p-text-3',
-  warn: 'p-accent',
+  warn: 'p-accent-fg',
   danger: 'p-danger',
   ok: 'p-success',
 } as const;
@@ -100,7 +101,7 @@ export function Notice(
   },
 ): ReactNode {
   return (
-    <div className={`p-card p-3 text-xs flex items-start gap-2 ${NOTICE_TONE[tone]}`}>
+    <div className={`t-meta p-card p-3 flex items-start gap-2 ${NOTICE_TONE[tone]}`}>
       {icon}<div className="min-w-0">{children}</div>
     </div>
   );
@@ -109,9 +110,9 @@ export function Notice(
 export function Stat({ label, value, hint }: { label: string; value: string; hint?: string }): ReactNode {
   return (
     <div className="p-card p-4">
-      <div className="p-eyebrow">{label}</div>
-      <div className="text-2xl p-display tabular-nums mt-1">{value}</div>
-      {hint !== undefined && <div className="p-meta p-text-3 mt-1">{hint}</div>}
+      <div className="t-label">{label}</div>
+      <div className="t-page-title tabular-nums mt-1">{value}</div>
+      {hint !== undefined && <div className="t-meta p-text-3 mt-1">{hint}</div>}
     </div>
   );
 }
@@ -124,19 +125,14 @@ export function SectionHeader(
   return (
     <div className="flex items-start justify-between gap-4">
       <div className="min-w-0">
-        <h2 className="text-sm font-medium">{title}</h2>
-        {hint !== undefined && <p className="text-xs p-text-3 mt-0.5">{hint}</p>}
+        <h2 className="t-item">{title}</h2>
+        {hint !== undefined && <p className="t-meta p-text-3 mt-px">{hint}</p>}
       </div>
       <div className="flex items-center gap-2 shrink-0">
         {actions}
         {onRefresh !== undefined && (
-          <button
-            onClick={onRefresh}
-            className="text-xs p-text-3 hover:p-text flex items-center gap-1 px-2 py-1"
-            title="Refresh"
-          >
-            <ArrowClockwiseIcon size={12} /> Refresh
-          </button>
+          <Button variant="ghost" size="sm" onClick={onRefresh} title="Refresh" icon={<ArrowClockwiseIcon size={14} />}> Refresh
+          </Button>
         )}
       </div>
     </div>
@@ -150,14 +146,14 @@ export function PageWalker(
   },
 ): ReactNode {
   return (
-    <div className="flex items-center justify-between text-xs p-text-3 pt-1">
+    <div className="t-meta flex items-center justify-between p-text-3 pt-1">
       <span>page {page + 1}</span>
       <div className="flex items-center gap-3">
         {page > 0 && (
-          <button onClick={onFirst} className="hover:p-text">Back to first</button>
+          <Button variant="ghost" size="sm" onClick={onFirst}>Back to first</Button>
         )}
         {status === 'more'
-          ? <button onClick={onNext} className="hover:p-text">Next page →</button>
+          ? <Button variant="ghost" size="sm" onClick={onNext}>Next page →</Button>
           : <span>end of list</span>}
       </div>
     </div>

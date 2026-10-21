@@ -196,7 +196,7 @@ export function assistantRpc(base: SocketCall): SocketCall {
     if (method === "listWorkspaceAgents") return answer(v.parse(v.array(JsonObjectSchema), [mainPanelAgent({ label: "Kinu", activity: "idle", actorId: `actor-${ASSISTANT_WORKSPACE}` })]));
 
     // It asks nothing of its own: it creates workspaces itself, and only an external or cross-tenant step would ask.
-    if (method === "listPendingActions" || method === "listSubordinates" || method === "listBackgroundJobs" || method === "inspectWork") return answer([]);
+    if (method === "listPendingActions" || method === "listSubagents" || method === "listBackgroundJobs" || method === "inspectWork") return answer([]);
 
     return base<T>(method, args);
   };

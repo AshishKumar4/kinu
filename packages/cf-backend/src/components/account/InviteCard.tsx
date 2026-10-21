@@ -1,13 +1,15 @@
 import { useState } from "react";
-import { Loader } from "@cloudflare/kumo";
-import { Button, buttonClass } from "@/components/ui/Button";
+import { Loader } from "@/components/ui/Loader";
+import { Button } from "@/components/ui/Button";
 import { Effect } from "effect";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { builtinAuthStatus, createBuiltinLink, listBuiltinAccounts } from "@/lib/user-api";
 import { useAsyncResource } from "@/hooks/use-async-resource";
-import { Card, Field, inputCls } from "@/components/ui/form";
+import { Card, Field } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
-import { CopyButton } from "@/components/ui/CopyButton";
+import { Group } from "@/components/ui/Group";
+import { TextInput } from "@/components/ui/Field";
+import { CopyField } from "@/components/ui/CopyField";
 
 export function InviteCard() {
   const status = useAsyncResource(builtinAuthStatus);
@@ -39,26 +41,22 @@ export function InviteCard() {
     <Card title="Invite people">
       <Field label="Invite by email" hint="The link signs up this address only, once, within 7 days.">
         <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); }}>
-          <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com"
-            aria-label="Email to invite" autoComplete="off" className={`${inputCls} min-w-0 flex-1`} />
+          <TextInput className="min-w-0 flex-1" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" aria-label="Email to invite" autoComplete="off" />
           <Button type="submit" variant="secondary" size="sm" disabled={busy || email.trim() === ""} onClick={() => detach(create(false, email.trim()))}>
             {busy ? <Loader size="sm" /> : null} Create invite link
           </Button>
         </form>
       </Field>
       {invite !== null && (
-        <div className="mt-3 flex items-center gap-2" data-invite-link>
-          <code className="min-w-0 flex-1 truncate rounded-md border p-border p-fill px-3 py-2 font-mono p-row-text p-text select-all">{invite.url}</code>
-          <CopyButton value={invite.url} what="the invite link" size={14} className={buttonClass({ iconOnly: true })} />
-        </div>
+        <div className="mt-3" data-invite-link><CopyField value={invite.url} what="the invite link" /></div>
       )}
       {invite !== null && (
-        <p className="mt-2 p-meta p-text-3">
+        <p className="t-meta mt-2 p-text-3">
           {invite.reset ? "Reset link" : "Invite"} for {invite.email}, until {new Date(invite.expiresAt).toLocaleString()}.
         </p>
       )}
       <Accounts busy={busy} onReset={(address) => detach(create(true, address))} />
-      {error && <p role="alert" className="mt-2 text-xs p-danger">{error}</p>}
+      {error && <p role="alert" className="t-meta mt-2 p-danger">{error}</p>}
     </Card>
   );
 }
@@ -70,16 +68,16 @@ function Accounts({ busy, onReset }: { busy: boolean; onReset: (email: string) =
     <CardSlot resource={accounts.resource} what="this deployment's accounts" onRetry={accounts.reload}>
       {({ accounts: list }) => (
         <Field label="Accounts" hint="A reset link replaces that account's password and passkeys, once, within 7 days, and signs it out everywhere.">
-          <ul className="p-group">
+          <Group list>
             {list.map((account) => (
               <li key={account.email} className="flex items-center gap-3 px-3 py-2" data-account={account.email}>
-                <span className="min-w-0 flex-1 truncate p-row-text p-text">{account.email}</span>
-                <span className="p-meta p-text-3">{account.role === "owner" ? "Owner" : "Member"}</span>
+                <span className="t-body min-w-0 flex-1 truncate p-text">{account.email}</span>
+                <span className="t-meta p-text-3">{account.role === "owner" ? "Owner" : "Member"}</span>
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => onReset(account.email)}
                   aria-label={`Create a reset link for ${account.email}`}>Reset link</Button>
               </li>
             ))}
-          </ul>
+          </Group>
         </Field>
       )}
     </CardSlot>

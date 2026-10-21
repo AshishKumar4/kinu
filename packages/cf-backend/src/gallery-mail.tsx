@@ -31,7 +31,7 @@ import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Segmented } from "@/components/ui/Segmented";
 import { Choice, inputCls } from "@/components/ui/form";
-import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
+import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ImportantMailRow, mailRowCls, mailTime } from "@/components/mail/ImportantMailRow";
 import { MailSendBody } from "@/components/mail/MailSendBody";
@@ -342,13 +342,13 @@ const readerOf = (box: Address): string => (box.id === "ashish" ? ASSISTANT ?? "
 
 /** A quiet fact beside a heading, as the Agent tab's chips are. */
 function Chip({ children, mono = false }: { children: ReactNode; mono?: boolean }) {
-  return <span className={`inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-hover)] px-2.5 p-meta p-text-2 ${mono ? "font-mono" : ""}`}>{children}</span>;
+  return <span className={`inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-hover)] px-2.5 t-meta p-text-2 ${mono ? "font-mono": ""}`}>{children}</span>;
 }
 
 function Verified({ mail }: { mail: Mail }) {
   return mail.verified
-    ? <span data-mail-verified title={mail.auth} className="inline-flex shrink-0 items-center gap-1 p-meta p-text-3"><SealCheckIcon size={13} weight="fill" className="p-accent" />Verified</span>
-    : <span data-mail-unverified title={mail.auth} className="inline-flex shrink-0 items-center gap-1 p-meta p-warning"><ShieldWarningIcon size={13} weight="fill" />Not verified</span>;
+    ? <span data-mail-verified title={mail.auth} className="inline-flex shrink-0 items-center gap-1 t-meta p-text-3"><SealCheckIcon size={13} weight="fill" className="p-accent-fg" />Verified</span>
+    : <span data-mail-unverified title={mail.auth} className="inline-flex shrink-0 items-center gap-1 t-meta p-warning"><ShieldWarningIcon size={13} weight="fill" />Not verified</span>;
 }
 
 /** Whom a mail's arrival woke. */
@@ -370,15 +370,15 @@ function MailRow({ thread, open, box, draft = false, onOpen }: { thread: Thread;
       <Avatar name={outgoing || draft ? "Ashish" : sender(thread).name} size={26} />
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-baseline gap-2">
-          <span className={`min-w-0 truncate p-row-text ${thread.unread ? "font-semibold p-text" : "p-text-2"}`}>{who}</span>
+          <span className={`min-w-0 truncate t-body ${thread.unread ? "font-semibold p-text": "p-text-2"}`}>{who}</span>
           {thread.unread && <span className="size-1.5 shrink-0 -translate-y-px self-center rounded-full p-dot-accent" aria-label="Unread" />}
           {!last.verified && <ShieldWarningIcon size={13} weight="fill" className="shrink-0 self-center p-warning" aria-label="Not verified" />}
-          <span className="ml-auto shrink-0 p-meta tabular-nums p-text-3">{mailTime(last.at)}</span>
+          <span className="ml-auto shrink-0 t-meta tabular-nums p-text-3">{mailTime(last.at)}</span>
         </span>
-        <span className={`block truncate p-row-text ${thread.unread ? "p-text" : "p-text-2"}`}>
+        <span className={`block truncate t-body ${thread.unread ? "p-text": "p-text-2"}`}>
           {thread.subject}{thread.mail.length > 1 && <span className="p-text-3"> · {thread.mail.length}</span>}
         </span>
-        <span className="flex min-w-0 items-baseline gap-1.5 p-meta p-text-3">
+        <span className="flex min-w-0 items-baseline gap-1.5 t-meta p-text-3">
           {box !== null && <span className="shrink-0 rounded-sm bg-[var(--c-hover)] px-1 p-text-2">{box}</span>}
           {thread.mail.some((mail) => mail.attachments !== undefined) && <PaperclipIcon size={11} className="shrink-0 self-center" aria-label="Attachment" />}
           <span className={`truncate ${draft ? "p-warning" : ""}`}>{gist}</span>
@@ -404,9 +404,9 @@ function Message({ mail, box, open, inChat, onToggle }: { mail: Mail; box: Addre
     return (
       <button type="button" onClick={onToggle} data-mail-message={mail.id} data-folded="" className="flex w-full items-center gap-3 px-4 py-2.5 text-left p-row-hover">
         <Avatar name={mail.from.name} size={22} />
-        <span className="shrink-0 p-row-text font-medium p-text-2">{name}</span>
-        <span className="min-w-0 flex-1 truncate p-row-text p-text-3">{firstLine(mail.text)}</span>
-        <span className="shrink-0 p-meta tabular-nums p-text-3">{mailTime(mail.at)}</span>
+        <span className="shrink-0 t-item p-text-2">{name}</span>
+        <span className="min-w-0 flex-1 truncate t-body p-text-3">{firstLine(mail.text)}</span>
+        <span className="shrink-0 t-meta tabular-nums p-text-3">{mailTime(mail.at)}</span>
       </button>
     );
   }
@@ -417,18 +417,18 @@ function Message({ mail, box, open, inChat, onToggle }: { mail: Mail; box: Addre
         <Avatar name={mail.from.name} size={30} />
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-            <span className="p-row-text font-medium p-text">{name}</span>
-            <span className="min-w-0 truncate p-meta p-text-3">{mail.from.address}</span>
+            <span className="t-item p-text">{name}</span>
+            <span className="min-w-0 truncate t-meta p-text-3">{mail.from.address}</span>
             <Verified mail={mail} />
           </span>
-          <span className="block truncate p-meta p-text-3">
+          <span className="block truncate t-meta p-text-3">
             to {mail.to.join(", ")}
           </span>
         </span>
-        <span className="shrink-0 p-meta tabular-nums p-text-3">{mailTime(mail.at)}</span>
+        <span className="shrink-0 t-meta tabular-nums p-text-3">{mailTime(mail.at)}</span>
       </button>
       {woke !== null && (
-        <p data-mail-woke={mail.woke?.as} className="flex items-center gap-1.5 p-meta p-text-3">
+        <p data-mail-woke={mail.woke?.as} className="flex items-center gap-1.5 t-meta p-text-3">
           <AgentFaceIcon size={13} className="shrink-0" />
           {woke}
           {!inChat && <> · <Link to={chat} className="inline-flex items-center gap-0.5 p-accent-fg hover:underline">Open chat<ArrowUpRightIcon size={11} /></Link></>}
@@ -465,7 +465,7 @@ function ReplyBox({ thread, opened, onSend }: { thread: Thread; opened: boolean;
 
   return (
     <div data-mail-reply-box className="space-y-2">
-      <p className="p-meta p-text-3">From {box.address}</p>
+      <p className="t-meta p-text-3">From {box.address}</p>
       <textarea value={text} onChange={(event) => setText(event.target.value)} rows={9} aria-label="Reply" className={`${inputCls} font-[inherit] leading-6`} />
       <div className="flex gap-2">
         <Button variant="primary" size="md" data-mail-send disabled={text.trim() === ""} onClick={() => { onSend(text); setText(null); }}><PaperPlaneTiltIcon size={14} />Send</Button>
@@ -493,19 +493,19 @@ function Reader({ thread, panel, draft = false, onBack, onChange }: {
 
   return (
     <article data-mail-reader={thread.id} className={panel ? "space-y-3" : "p-card space-y-4 px-5 py-5 lg:px-6"}>
-      <button type="button" onClick={onBack} className={`flex items-center gap-1 p-meta p-text-3 hover:p-text ${panel ? "" : "lg:hidden"}`}>
+      <button type="button" onClick={onBack} className={`flex items-center gap-1 t-meta p-text-3 hover:p-text ${panel ? "": "lg:hidden"}`}>
         <CaretLeftIcon size={13} />{panel ? "Back" : "Mail"}
       </button>
       <header className="space-y-2">
         <div className="flex items-start gap-2">
-          <h2 data-mail-subject className={`min-w-0 flex-1 p-heading p-text ${panel ? "text-[15px] leading-[22px]" : "text-[19px] leading-7"}`}>{thread.subject}</h2>
-          <TileMenu name="Thread" items={menu} className="relative shrink-0" />
+          <h2 data-mail-subject className={`min-w-0 flex-1 t-title p-text ${panel ? "text-[15px] leading-[22px]": "text-[19px] leading-7"}`}>{thread.subject}</h2>
+          <Menu name="Thread" items={menu} className="relative shrink-0" />
         </div>
         {!panel && <div className="flex flex-wrap gap-1.5"><Chip mono>{box.address}</Chip><Chip>{readerOf(box)}</Chip></div>}
       </header>
-      {thread.important !== undefined && ASSISTANT !== null && <p data-mail-why className="p-row-text p-text-2">{thread.important}</p>}
+      {thread.important !== undefined && ASSISTANT !== null && <p data-mail-why className="t-body p-text-2">{thread.important}</p>}
       {!last.verified && (
-        <p data-mail-unverified-banner className="flex items-center gap-2 rounded-lg bg-[var(--c-warning-tint)] px-3 py-2 p-row-text p-text">
+        <p data-mail-unverified-banner className="flex items-center gap-2 rounded-lg bg-[var(--c-warning-tint)] px-3 py-2 t-body p-text">
           <ShieldWarningIcon size={15} weight="fill" className="shrink-0 p-warning" />
           {last.from.address === OWNER.address ? "Not verified · claims to be you" : "Not verified"}
         </p>
@@ -534,7 +534,7 @@ function Compose({ onClose }: { onClose: () => void }) {
     <Modal title="New message" icon={<NotePencilIcon size={18} />} onClose={onClose} maxWidthClass="max-w-xl"
       footer={<div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={onClose}>Discard</Button><Button variant="primary" size="md" onClick={onClose}><PaperPlaneTiltIcon size={14} />Send</Button></div>}>
       <div data-mail-compose-form className="space-y-2">
-        <div className="flex items-center gap-2 p-meta p-text-3" data-mail-from>From
+        <div className="flex items-center gap-2 t-meta p-text-3" data-mail-from>From
           <div className="min-w-0 flex-1"><Choice label="From" value={from} onChange={setFrom} options={ADDRESSES.map((each) => ({ value: each.address, label: each.address }))} /></div>
         </div>
         <input placeholder="To" aria-label="To" className={inputCls} />
@@ -548,9 +548,9 @@ function Compose({ onClose }: { onClose: () => void }) {
 /** With no assistant, what needs one offers it: the Personal assistant blueprint, installed as a workspace. */
 function InstallAssistant({ onClose }: { onClose: () => void }) {
   return (
-    <Modal title="Your personal assistant" icon={<SparkleIcon size={18} weight="fill" className="p-accent" />} onClose={onClose}
+    <Modal title="Your personal assistant" icon={<SparkleIcon size={18} weight="fill" className="p-accent-fg" />} onClose={onClose}
       footer={<div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={onClose}>Not now</Button><Button variant="primary" size="md" onClick={onClose}>Install</Button></div>}>
-      <p data-mail-install className="p-row-text p-text-2">Kinu reads <span className="font-mono p-text">ashish@kinu.run</span>, picks what's important, and drafts your replies.</p>
+      <p data-mail-install className="t-body p-text-2">Kinu reads <span className="font-mono p-text">ashish@kinu.run</span>, picks what's important, and drafts your replies.</p>
     </Modal>
   );
 }
@@ -600,7 +600,7 @@ function MailPage() {
       <div className="w-full px-4 pb-16 pt-6 lg:px-8 lg:pt-8">
         <header className="flex items-center gap-3">
           <EnvelopeSimpleIcon size={22} className="shrink-0 p-text-3" />
-          <h1 className="p-display text-2xl">Mail</h1>
+          <h1 className="t-page-title">Mail</h1>
           <Button variant="primary" size="md" data-mail-compose onClick={() => setComposing(true)} className="ml-auto inline-flex items-center gap-1.5">
             <NotePencilIcon size={15} />Compose
           </Button>
@@ -625,7 +625,7 @@ function MailPage() {
           <section aria-label={MAIL_VIEW_LABEL[view]} className={thread === null ? "" : "hidden lg:block"}>
             {waiting ? (
               <div data-mail-no-assistant className="p-card flex flex-wrap items-center justify-between gap-3 px-4 py-3.5">
-                <p className="p-row-text p-text-2">No assistant yet</p>
+                <p className="t-body p-text-2">No assistant yet</p>
                 <Button variant="primary" size="md" onClick={() => setInstalling(true)}>Set up your assistant</Button>
               </div>
             ) : (
@@ -634,7 +634,7 @@ function MailPage() {
                   ? <ImportantMailRow key={each.id} mail={importantOf(each)} open={each.id === reading?.id} onOpen={() => choose(each.id)} />
                   : <MailRow key={each.id} thread={each} open={each.id === reading?.id} draft={view === "drafts"} onOpen={() => choose(each.id)}
                     box={address === "all" && each.box !== "ashish" ? addressOf(each.box).label : null} />)}
-                {shown.length === 0 && <p className="px-4 py-8 text-center p-row-text p-text-3">Nothing here.</p>}
+                {shown.length === 0 && <p className="px-4 py-8 text-center t-body p-text-3">Nothing here.</p>}
               </div>
             )}
           </section>
@@ -679,9 +679,9 @@ function AgentPanel({ agent, threads, open, onOpen, onChange }: {
             <ChatMascot seed={mascotSeed(WORKSPACE, panelAgent.key)} colour={mascotColour(WORKSPACE, panelAgent.colour)} activity="idle" size={30} />
           </span>
           <div className="min-w-0">
-            <div className="p-title truncate p-text">{agent === "main" ? "API Worker" : "scout"}</div>
-            <div className="truncate font-mono p-meta p-text-2" data-agent-address>{box.address}</div>
-            <div className="truncate p-meta p-text-3">{agent === "main" ? "Its own agent · since 12 Oct" : "Hired by main · since 15 Oct"}</div>
+            <div className="t-title truncate p-text">{agent === "main" ? "API Worker" : "scout"}</div>
+            <div className="truncate t-meta t-mono p-text-2" data-agent-address>{box.address}</div>
+            <div className="truncate t-meta p-text-3">{agent === "main" ? "Its own agent · since 12 Oct" : "Hired by main · since 15 Oct"}</div>
           </div>
         </div>
       </Section>
@@ -698,13 +698,13 @@ function AgentPanel({ agent, threads, open, onOpen, onChange }: {
         </Section>
       )}
       <Section id="memory" title="Memory" icon={<BrainIcon size={14} className="p-text-2" />} defaultOpen={false}>
-        <p className="p-row-text p-text-3">Notes and facts.</p>
+        <p className="t-body p-text-3">Notes and facts.</p>
       </Section>
       <Section id="agent-doing" title="Activity" icon={<ChartLineUpIcon size={14} className="p-text-2" />} defaultOpen={false}>
-        <p className="p-row-text p-text-3">Ratings.</p>
+        <p className="t-body p-text-3">Ratings.</p>
       </Section>
       <Section id="evolution" title="Evolution" icon={<GitBranchIcon size={14} className="p-text-2" />} defaultOpen={false}>
-        <p className="p-row-text p-text-3">Prompt versions.</p>
+        <p className="t-body p-text-3">Prompt versions.</p>
       </Section>
     </div>
   );
@@ -717,7 +717,7 @@ function MailPill({ thread, mail, onOpen }: { thread: Thread; mail: Mail; onOpen
   const owner = isOwner(mail);
 
   return (
-    <EventRow icon={EnvelopeSimpleIcon} tone={owner ? "p-accent" : "p-text-3"} label={owner ? "Your mail" : "Mail"}
+    <EventRow icon={EnvelopeSimpleIcon} tone={owner ? "p-accent-fg" : "p-text-3"} label={owner ? "Your mail" : "Mail"}
       source={owner ? undefined : mail.from.name}
       body={owner ? firstLine(mail.text) : thread.subject} detail={cardWords(splitQuotedReply(mail.text).own)} state="seen"
       hooks={{ "data-mail-pill": owner ? "owner" : "input" }}
@@ -738,7 +738,7 @@ function SendCard({ onAnswer }: { onAnswer: (answer: "sent" | "denied", text: st
   return (
     <section aria-label="Waiting on you" data-attention-stack className="p-attention">
       <div className="p-attention-card" data-attention-kind="mail_send">
-        <div className="mb-1 flex items-center gap-1.5 p-meta p-text-3">
+        <div className="mb-1 flex items-center gap-1.5 t-meta p-text-3">
           <PaperPlaneTiltIcon size={12} className="shrink-0 p-warning" weight="fill" aria-hidden /><span>Waiting on you</span>
         </div>
         <MailSendBody send={SCOUT_REPLY} text={text} {...editing && { onText: setText }} />
@@ -788,8 +788,8 @@ function ChatPane({ agent, threads, onOpenMail, answered, onAnswer }: {
         <EventRow icon={PaperPlaneTiltIcon} tone={answered === "sent" ? "p-success" : "p-warning"} label={answered === "sent" ? "Mail sent" : "Mail draft"}
           source={`to ${SCOUT_REPLY.to.join(", ")}`} body={SCOUT_REPLY.subject} detail={cardWords(SCOUT_REPLY.text)} hooks={{ "data-mail-draft-pill": answered ?? "waiting" }}
           badge={answered === null
-            ? <span className="shrink-0 rounded-sm px-1 p-meta p-badge-warning">waiting on you</span>
-            : <span className="shrink-0 px-1 p-meta p-text-3">{answered === "sent" ? "sent" : "denied"}</span>} />
+            ? <span className="shrink-0 rounded-sm px-1 t-meta p-badge-warning">waiting on you</span>
+            : <span className="shrink-0 px-1 t-meta p-text-3">{answered === "sent" ? "sent" : "denied"}</span>} />
       </>
     );
 

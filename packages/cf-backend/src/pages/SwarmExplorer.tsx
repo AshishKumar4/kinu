@@ -1,7 +1,7 @@
 /** One search full screen. `?run=<rootId>` names it; with no `run` it opens the newest. */
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { ArrowLeftIcon, GitForkIcon, TreeStructureIcon } from "@phosphor-icons/react";
 import { SwarmTree } from "@/components/swarm-tree";
@@ -34,7 +34,7 @@ function CanvasNotice({ failure, loading, what, waiting, empty, onRetry }: {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
-        <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />{waiting}</div>
+        <div className="t-body flex items-center gap-2 p-text-2"><Loader size="sm" />{waiting}</div>
       </div>
     );
   }
@@ -83,12 +83,12 @@ export default function SwarmExplorer() {
 
   return (
     <div className="h-full flex flex-col p-bg">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3.5 border-b p-border">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 border-b p-border">
         <Link to={`/workspace/${agentId}`} className="shrink-0"><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
         <div className="hidden sm:block h-4 w-px shrink-0 bg-[var(--c-border)]" />
-        <GitForkIcon size={16} className="p-accent shrink-0" />
-        <span className="font-semibold text-sm p-text shrink-0">Swarm explorer</span>
-        {run && <span className="min-w-0 flex-1 text-xs p-text-2 truncate" title={run.task} data-explorer-run>{run.name}</span>}
+        <GitForkIcon size={16} className="p-accent-fg shrink-0" />
+        <span className="t-label p-text shrink-0">Swarm explorer</span>
+        {run && <span className="t-meta min-w-0 flex-1 p-text-2 truncate" title={run.task} data-explorer-run>{run.name}</span>}
       </div>
       {run && selectionResource.status === "error" && (
         <LoadFailure what="fresh exploration runs" message={selectionResource.message} onRetry={reloadSelection} className="px-5 py-2 border-b p-border" />
@@ -150,7 +150,7 @@ function ExplorerBody({
 
   return (
     <>
-      <div className="shrink-0 border-b p-border px-5 py-1.5">
+      <div className="shrink-0 border-b p-border px-5 py-1">
         <SwarmConfigDisclosure resolution={resolution}
           paramRows={forkParamRows(params)} judges={judgeEnsembleLabel(params)} />
       </div>
@@ -179,7 +179,7 @@ function ExplorerBody({
           ) : (
             // A zero measurement must never render as nothing: a blank canvas reads as an empty tree.
             <div className="h-full flex items-center justify-center">
-              <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Sizing canvas…</div>
+              <div className="t-body flex items-center gap-2 p-text-2"><Loader size="sm" />Sizing canvas…</div>
             </div>
           ))}
         </div>
@@ -191,8 +191,8 @@ function ExplorerBody({
             onSelect={setSelectedId} />
         </div>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 px-5 py-2.5 border-t p-border">
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs">
+      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 px-5 py-2 border-t p-border">
+        <div className="t-meta flex flex-wrap items-center gap-x-6 gap-y-1">
           <span className="p-text-2">Branches: <span className="p-text font-medium" data-tree-branches>{Math.max(0, (stats?.nodes ?? 1) - 1)}</span></span>
           <span className="p-text-2">Depth: <span className="p-text font-medium" data-tree-depth>{stats?.depth ?? 0}</span></span>
           {winner?.value != null && (
@@ -202,13 +202,13 @@ function ExplorerBody({
             <span className="p-text-2">Front: <span className="p-text font-medium">{frontier.candidates.length} {frontier.candidates.length === 1 ? "candidate" : "candidates"}</span></span>
           )}
           {run.status === "running" && (
-            <span className="flex items-center gap-1 p-accent">
+            <span className="flex items-center gap-1 p-accent-fg">
               <span className="size-1.5 rounded-full bg-current p-dot-pulse" />still running
             </span>
           )}
         </div>
         {selected && (selected.value !== null || selected.visits !== null) && (
-          <div className="flex items-center gap-4 text-xs animate-fade-in">
+          <div className="t-meta flex items-center gap-4 animate-fade-in">
             <TreeStructureIcon size={13} className="p-text-3" />
             {selected.value !== null && <span className="p-text-2">score <span className="p-text font-medium">{formatScore(selected.value)}</span></span>}
             {selected.visits !== null && <span className="p-text-2">n={selected.visits}</span>}

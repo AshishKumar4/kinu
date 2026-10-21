@@ -53,9 +53,9 @@ function MissionHome() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:content-center md:px-10 lg:grid-cols-[minmax(0,680px)_300px]">
+      <main className="mx-auto grid min-h-full w-full max-w-[1080px] grid-cols-1 content-start gap-6 px-6 py-[clamp(72px,12vh,132px)] md:content-center md:px-8 lg:grid-cols-[minmax(0,680px)_300px]">
         <header className="col-span-full mb-3">
-          <h1 className="p-display text-[clamp(38px,4vw,46px)] font-semibold leading-[1.12] p-text">
+          <h1 className="t-page-title text-[clamp(38px,4vw,46px)] p-text">
             What do you wanna work on?
           </h1>
         </header>
@@ -80,9 +80,9 @@ function MissionHome() {
 
         {(listFailed || workspaces.length > 0) && (
           <section aria-label="Recent workspaces" className="order-2 min-w-0 lg:order-none">
-            <div className="mb-2.5 flex items-center justify-between gap-3 px-1">
-              <span className="p-eyebrow">Recent</span>
-              {listFailed && <span className="p-t-status p-warning">could not load</span>}
+            <div className="mb-3 flex items-center justify-between gap-3 px-1">
+              <span className="t-label">Recent</span>
+              {listFailed && <span className="t-status p-warning">could not load</span>}
             </div>
             <div className="overflow-hidden rounded-[14px] border p-border p-surface">
               {workspaces.slice(0, RECENT_WORKSPACES).map((agent, index) => (

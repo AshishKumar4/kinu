@@ -289,7 +289,7 @@ Six blobs are absent from `main`'s history, measured 2026-08-19. Read their tag 
 | `4fa27d58` | `archive/stability-audit` | `docs/STABILITY-AUDIT.md` | 18-finding 2026-04-24 audit. Current source cites its IDs; its `file:line` pointers are stale. |
 | `6a7dec61` `859726b7` `174d731b` `f6f19ee2` | `archive/stability-audit` | `docs/REQUIREMENTS-AUDIT.md`, four revisions | 2026-04-24 tracker contradicting current `workspace` architecture. It cites deleted `docs/EXECUTOR-V2.md` (two `main` commits still touch it) and pre-rewrite SHAs. |
 
-The recovered A4 account is speculative. `packages/core/src/platform-catalog.ts:2067` records that a "documented 100s reap" claim cites no URL. The client's 25-second subordinate-socket ping is at `packages/cf-backend/src/hooks/use-kinu.ts:1532`. Read the archived text with `git show <sha>:<path>`.
+The recovered A4 account is speculative. `packages/core/src/platform-catalog.ts:2067` records that a "documented 100s reap" claim cites no URL. The client's 25-second subagent-socket ping is at `packages/cf-backend/src/hooks/use-kinu.ts:1532`. Read the archived text with `git show <sha>:<path>`.
 
 `archive/nimbus-measure` holds a 185-252 ms Worker startup range, measured 2026-08-04 against Cloudflare's 1-second startup limit, and a 6,254.64 KiB gzip bundle reading. AGENTS.md § Deploy now says to measure startup, not cite it, so treat both as history.
 

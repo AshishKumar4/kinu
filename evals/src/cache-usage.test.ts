@@ -34,12 +34,12 @@ test('a partial provider report keeps totals unknown, while reported cache zeros
 
 test('requests from separate actors retain their identities and use chronological Activity statistics', () => {
   const usage = measurePromptUsage([
-    { actor: 'helper', events: [events[1]] },
+    { actor: 'subagent', events: [events[1]] },
     { actor: 'main', events: [events[0]] },
   ]);
 
   expect(usage.metadata.steps.map(({ actor, runId, stepIndex }) => ({ actor, runId, stepIndex }))).toEqual([
-    { actor: 'main', runId: 'trial-run', stepIndex: 1 }, { actor: 'helper', runId: 'trial-run', stepIndex: 2 },
+    { actor: 'main', runId: 'trial-run', stepIndex: 1 }, { actor: 'subagent', runId: 'trial-run', stepIndex: 2 },
   ]);
   expect(usage.inputTokens).toBe(300);
   expect(usage.outputTokens).toBe(40);
@@ -54,7 +54,7 @@ test('the steady cache leaves each actor\u2019s first request out, and its p5 na
   });
 
   const warm = Array.from({ length: 19 }, (_, index) => step('main', index + 1, 1000, 990));
-  const runs = [[step('main', 0, 1000, 0), ...warm, step('main', 20, 1000, 0)], [step('helper', 0, 1000, 0)]];
+  const runs = [[step('main', 0, 1000, 0), ...warm, step('main', 20, 1000, 0)], [step('subagent', 0, 1000, 0)]];
 
   expect(steadyCacheShare(runs)).toBeCloseTo((19 * 990) / 20_000, 12);
   expect(steadyCacheP5(runs)).toBe(0);
@@ -66,6 +66,6 @@ test('a plan window is read from the first call\u2019s quota to the last call\u2
   const finish = (index: number, at: number, usedPercent: number): RunEvent => ({ type: 'step_finish', parts: [], runId: 'run', eventIndex: index, stepIndex: index, timestamp: '2026-10-08T00:00:00Z',
   account: { provider: 'chatgpt', name: 'owner', quota: { at, windows: [{ measure: 'primary', usedPercent }, { measure: 'tokens' }] } }, });
 
-  expect(measurePlanUsage([{ actor: 'main', events: [finish(2, 2000, 14), finish(1, 1000, 12)] }, { actor: 'helper', events: [finish(3, 3000, 15)] }]))
+  expect(measurePlanUsage([{ actor: 'main', events: [finish(2, 2000, 14), finish(1, 1000, 12)] }, { actor: 'subagent', events: [finish(3, 3000, 15)] }]))
     .toEqual([{ account: 'chatgpt@owner', measure: 'primary', from: 12, to: 15 }]);
 });

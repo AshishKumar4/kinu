@@ -10,7 +10,7 @@ import { settingsPath } from "./components/SettingsRail";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { lastValue } from "./hooks/use-async-resource";
 import { lazyRoute } from "./lazy-route";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 
 // Split routes go through `lazyRoute`, not `lazy`, to recover from a chunk gone stale across a deploy.
 
@@ -92,7 +92,7 @@ function Page({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-// Remount (and reconnect useAgent) per workspace; subordinate routes keep the key so the main socket stays mounted.
+// Remount (and reconnect useAgent) per workspace; subagent routes keep the key so the main socket stays mounted.
 function KeyedWorkspace() {
   const { agentId } = useParams();
 

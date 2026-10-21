@@ -18,7 +18,7 @@ export function DeleteChatDialog({ title, clears = false, onConfirm, onClose }: 
   return (
     <ConfirmDialog title={`${ending.action} ${title}?`} icon={<TrashIcon size={18} className="p-danger" />} action={ending.action}
       failed={ending.failed} onConfirm={onConfirm} onClose={onClose}>
-      <p className="text-xs p-text-2 leading-relaxed">{ending.says}</p>
+      <p className="t-meta p-text-2">{ending.says}</p>
     </ConfirmDialog>
   );
 }

@@ -1,12 +1,12 @@
 import * as v from 'valibot';
-import { ephemeralSlateId, JsonValueSchema, projectJsonValue, rowText, slateUiSegments, type JsonValue, type RunEvent, type SubordinateInspectionRequest } from '@kinu.run/core';
+import { ephemeralSlateId, JsonValueSchema, projectJsonValue, rowText, slateUiSegments, type JsonValue, type RunEvent, type SubagentInspectionRequest } from '@kinu.run/core';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicMessage, PublicSlateListing, PublicSwarmRun, WorkBoard } from './session';
 import { browserOwner, openPreviewAsOwner, type WorkspaceWeb } from './workspace-roster';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { browsing, DRAW_MS, type WorkspaceBrowser } from './browser';
-import { helperAddress, type HelperAddress, type RosterHelper } from './helper-address';
+import { subagentAddress, type SubagentAddress, type RosterSubagent } from './subagent-address';
 import { judge, type Judgement } from './judge';
 import { WorkspaceHeld } from './workspace-completion';
 import { redact, redactJson } from './redact';
@@ -45,44 +45,44 @@ export type VerifierSession = {
   memoryContent(): Promise<string>;
   memoryFacts(): Promise<readonly { key: string; value: JsonValue }[]>;
   workspaceWork(): Promise<WorkBoard>;
-  inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer>;
+  inspect(request: SubagentInspectionRequest): Promise<InspectionAnswer>;
   swarmRuns(): Promise<PublicSwarmRun[]>;
   execute(executor: string, command: string): Promise<PublicExecutorResult>;
   exposedPorts(executor: string): Promise<readonly { port: number; url: string }[]>;
 };
 
-/** A helper and its runs, as the inspector lists them: how each run ended, and the message that started it. */
-export type HelperWork = { name: string; status: string; runs: { startedAt: number; endedAt?: number | null; status: string | null; userMessage: string | null }[] };
+/** A subagent and its runs, as the inspector lists them: how each run ended, and the message that started it. */
+export type SubagentWork = { name: string; status: string; runs: { startedAt: number; endedAt?: number | null; status: string | null; userMessage: string | null }[] };
 
 /**
  * A run naming `subject` assigns the work; that run or a later continuation must finish it.
- * On staging, 2026-10-01, refused helpers still held their briefs while the lead did their work.
+ * On staging, 2026-10-01, refused subagents still held their briefs while the lead did their work.
  */
-export function finishedWork(helpers: readonly HelperWork[], subject: string): string[] {
-  return helpers
-    .filter((helper) => helper.runs.some((assignment) => (assignment.userMessage ?? '').includes(subject)
-      && helper.runs.some((run) => run.status === 'completed' && run.startedAt >= assignment.startedAt)))
-    .map((helper) => helper.name);
+export function finishedWork(subagents: readonly SubagentWork[], subject: string): string[] {
+  return subagents
+    .filter((subagent) => subagent.runs.some((assignment) => (assignment.userMessage ?? '').includes(subject)
+      && subagent.runs.some((run) => run.status === 'completed' && run.startedAt >= assignment.startedAt)))
+    .map((subagent) => subagent.name);
 }
 
 type Inspecting = Pick<VerifierSession, 'inspect'>;
 
-/** Different helpers completed the assigned work while their observed runs overlapped, not just during one turn. */
-export function parallelFinishedWork(helpers: readonly HelperWork[], subjects: readonly string[]): boolean {
-  const runs = helpers.flatMap((helper) => helper.runs.flatMap((run) => {
+/** Different subagents completed the assigned work while their observed runs overlapped, not just during one turn. */
+export function parallelFinishedWork(subagents: readonly SubagentWork[], subjects: readonly string[]): boolean {
+  const runs = subagents.flatMap((subagent) => subagent.runs.flatMap((run) => {
     const endedAt = run.endedAt;
-    const assigned = subjects.some((subject) => finishedWork([{ ...helper, runs: [run] }], subject).length > 0);
+    const assigned = subjects.some((subject) => finishedWork([{ ...subagent, runs: [run] }], subject).length > 0);
 
     return assigned && endedAt !== undefined && endedAt !== null && endedAt > run.startedAt
-      ? [{ helper: helper.name, startedAt: run.startedAt, endedAt }] : [];
+      ? [{ subagent: subagent.name, startedAt: run.startedAt, endedAt }] : [];
   }));
 
-  return runs.some((first) => runs.some((other) => first.helper !== other.helper
+  return runs.some((first) => runs.some((other) => first.subagent !== other.subagent
     && first.startedAt < other.endedAt && other.startedAt < first.endedAt));
 }
 
-/** The closed run's last journal row, not the helper's report status or the time the lead received it. */
-async function runEndedAt(session: Inspecting, address: HelperAddress, run: { runId: string; eventCount?: number }): Promise<number | null> {
+/** The closed run's last journal row, not the subagent's report status or the time the lead received it. */
+async function runEndedAt(session: Inspecting, address: SubagentAddress, run: { runId: string; eventCount?: number }): Promise<number | null> {
   if (run.eventCount === undefined) return null;
 
   const answer = await session.inspect({ ...address, path: [...address.path], view: 'events', runId: run.runId,
@@ -95,30 +95,30 @@ async function runEndedAt(session: Inspecting, address: HelperAddress, run: { ru
   return Number.isFinite(at) ? at : null;
 }
 
-/** The lead's helpers, retired ones included, as the Agents surface lists them. */
-export async function rosterOf(session: Inspecting): Promise<(RosterHelper & { lifetime: string })[]> {
-  const helpers: (RosterHelper & { lifetime: string })[] = [];
+/** The lead's subagents, retired ones included, as the Agents surface lists them. */
+export async function rosterOf(session: Inspecting): Promise<(RosterSubagent & { lifetime: string })[]> {
+  const subagents: (RosterSubagent & { lifetime: string })[] = [];
 
   for (let cursor: { after: string } | undefined; ;) {
     const answer = await session.inspect({ path: [], view: 'children', page: cursor === undefined ? {} : { cursor } });
 
-    if (answer.view !== 'children') throw new Error(`the lead's helpers could not be listed: ${JSON.stringify(answer)}`);
-    helpers.push(...answer.page.items);
+    if (answer.view !== 'children') throw new Error(`the lead's subagents could not be listed: ${JSON.stringify(answer)}`);
+    subagents.push(...answer.page.items);
 
-    if (answer.page.status === 'end') return helpers;
+    if (answer.page.status === 'end') return subagents;
     cursor = answer.page.next;
   }
 }
 
 /** Full assignments from the actor's canonical conversation, keyed only by the run that stored them: a run's first entry
  *  that is not its answer, `system` as a hirer's brief projects and `user` as a person's words do. */
-async function briefsOf(session: Inspecting, address: HelperAddress): Promise<ReadonlyMap<string, string>> {
+async function briefsOf(session: Inspecting, address: SubagentAddress): Promise<ReadonlyMap<string, string>> {
   const briefs = new Map<string, { position: number; role: string; parts: readonly { readonly type?: unknown; readonly text?: unknown }[] }>();
 
   for (let cursor: { before: number } | undefined; ;) {
     const answer = await session.inspect({ ...address, path: [...address.path], view: 'history', page: cursor === undefined ? {} : { cursor } });
 
-    if (answer.view !== 'history') throw new Error(`the helper's assignments could not be read: ${JSON.stringify(answer)}`);
+    if (answer.view !== 'history') throw new Error(`the subagent's assignments could not be read: ${JSON.stringify(answer)}`);
 
     for (const entry of answer.page.items) {
       if (entry.role === 'assistant' || typeof entry.runId !== 'string') continue;
@@ -132,16 +132,16 @@ async function briefsOf(session: Inspecting, address: HelperAddress): Promise<Re
   }
 }
 
-/** One helper's runs started at or after `since`: how each ended, and the message that started it. */
-async function runsOf(session: Inspecting, helper: RosterHelper, since: number): Promise<HelperWork['runs']> {
-  const runs: HelperWork['runs'] = [];
-  const address = helperAddress(helper);
+/** One subagent's runs started at or after `since`: how each ended, and the message that started it. */
+async function runsOf(session: Inspecting, subagent: RosterSubagent, since: number): Promise<SubagentWork['runs']> {
+  const runs: SubagentWork['runs'] = [];
+  const address = subagentAddress(subagent);
   const briefs = await briefsOf(session, address);
 
   for (let cursor: { after: string } | undefined; ;) {
     const answer = await session.inspect({ ...address, path: [...address.path], view: 'runs', page: cursor === undefined ? {} : { cursor } });
 
-    if (answer.view !== 'runs') throw new Error(`${helper.name}'s runs could not be listed: ${JSON.stringify(answer)}`);
+    if (answer.view !== 'runs') throw new Error(`${subagent.name}'s runs could not be listed: ${JSON.stringify(answer)}`);
 
     for (const run of answer.page.items.filter((item) => item.startedAt >= since)) {
       runs.push({ startedAt: run.startedAt, endedAt: run.status === 'completed' ? await runEndedAt(session, address, run) : null,
@@ -153,10 +153,10 @@ async function runsOf(session: Inspecting, helper: RosterHelper, since: number):
   }
 }
 
-/** The lead's helpers with the runs they started at or after `since`. */
-export async function helperWorkSince(session: Inspecting, since: number): Promise<HelperWork[]> {
-  return Promise.all((await rosterOf(session)).map(async (helper) => ({
-    name: helper.name, status: helper.status, runs: await runsOf(session, helper, since),
+/** The lead's subagents with the runs they started at or after `since`. */
+export async function subagentWorkSince(session: Inspecting, since: number): Promise<SubagentWork[]> {
+  return Promise.all((await rosterOf(session)).map(async (subagent) => ({
+    name: subagent.name, status: subagent.status, runs: await runsOf(session, subagent, since),
   })));
 }
 
@@ -480,26 +480,26 @@ export class EvalVerifier {
     return this.#session.workspaceWork();
   }
 
-  /** The lead's helpers, retired ones included, as the Agents surface lists them. */
-  helpers(): Promise<(RosterHelper & { lifetime: string })[]> {
+  /** The lead's subagents, retired ones included, as the Agents surface lists them. */
+  subagents(): Promise<(RosterSubagent & { lifetime: string })[]> {
     return rosterOf(this.#session);
   }
 
-  /** The lead's helpers, with only runs started during this turn. */
-  helperWork(): Promise<HelperWork[]> {
-    return helperWorkSince(this.#session, this.#startedAt);
+  /** The lead's subagents, with only runs started during this turn. */
+  subagentWork(): Promise<SubagentWork[]> {
+    return subagentWorkSince(this.#session, this.#startedAt);
   }
 
   /**
    * The lead's own tasks and their subtasks, in one list. Its board entries are those whose owner's path is empty,
-   * or, on a build whose owners carry no path, whose owner is none of its helpers.
+   * or, on a build whose owners carry no path, whose owner is none of its subagents.
    */
   async leadTasks(): Promise<{ title: string; status: string }[]> {
-    const [work, helpers] = await Promise.all([this.workspaceWork(), this.helpers()]);
-    const helperNames = new Set(helpers.map((helper) => helper.name));
+    const [work, subagents] = await Promise.all([this.workspaceWork(), this.subagents()]);
+    const subagentNames = new Set(subagents.map((subagent) => subagent.name));
 
     return [...work.plans, ...work.tasks]
-      .filter((entry) => (entry.owner.path === undefined ? !helperNames.has(entry.owner.name) : entry.owner.path === null || entry.owner.path.length === 0))
+      .filter((entry) => (entry.owner.path === undefined ? !subagentNames.has(entry.owner.name) : entry.owner.path === null || entry.owner.path.length === 0))
       .flatMap((entry) => entry.tasks.flatMap((task) => [task, ...task.subtasks]))
       .map(({ title, status }) => ({ title, status }));
   }

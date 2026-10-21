@@ -35,7 +35,7 @@ export type ColourToken =
   | '--c-accent' | '--c-accent-fg' | '--c-accent-on' | '--c-accent-mark' | '--c-focus'
   | '--c-success' | '--c-warning' | '--c-danger' | '--c-info'
   | '--c-success-tint' | '--c-warning-tint' | '--c-danger-tint' | '--c-info-tint' | '--c-danger-on'
-  | '--c-button-bg' | '--c-button-bg-hover' | '--c-button-bg-active' | '--c-button-line' | '--c-button-line-hover'
+  | '--c-button-bg' | '--c-button-bg-hover' | '--c-button-bg-active' | '--c-button-line'
   | '--c-user-bg' | '--c-user-border'
   | '--c-composer-bg' | '--c-composer-line' | '--c-composer-line-focus' | '--c-scrim' | '--c-shadow-drop'
   | '--c-accent-hover' | '--c-accent-active' | '--c-danger-hover'
@@ -100,7 +100,6 @@ const GRAPHITE_DARK = {
   '--c-button-bg-hover': '#2A2928',
   '--c-button-bg-active': '#1E1D1C',
   '--c-button-line': 'rgba(237, 235, 232, 0.09)',
-  '--c-button-line-hover': 'rgba(237, 235, 232, 0.15)',
   '--shadow-button': 'inset 0 1px 0 rgba(255, 255, 255, 0.04)',
   '--c-danger-on': '#1A0B08',
   // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
@@ -161,7 +160,6 @@ const GRAPHITE_LIGHT = {
   '--c-button-bg-hover': '#F4F4F3',
   '--c-button-bg-active': '#ECECEA',
   '--c-button-line': 'rgba(25, 24, 22, 0.13)',
-  '--c-button-line-hover': 'rgba(25, 24, 22, 0.2)',
   '--shadow-button': '0 1px 2px rgba(25, 24, 22, 0.06)',
   '--c-danger-on': '#FFFFFF',
   // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
@@ -222,7 +220,6 @@ const WARM_DARK = {
   '--c-button-bg-hover': '#27211A',
   '--c-button-bg-active': '#1B1713',
   '--c-button-line': 'rgba(237, 229, 216, 0.09)',
-  '--c-button-line-hover': 'rgba(237, 229, 216, 0.15)',
   '--shadow-button': 'inset 0 1px 0 rgba(255, 240, 220, 0.04)',
   '--c-danger-on': '#1A0B08',
   // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
@@ -283,7 +280,6 @@ const WARM_LIGHT = {
   '--c-button-bg-hover': '#F3EEE2',
   '--c-button-bg-active': '#ECE5D5',
   '--c-button-line': 'rgba(43, 36, 25, 0.15)',
-  '--c-button-line-hover': 'rgba(43, 36, 25, 0.22)',
   '--shadow-button': '0 1px 2px rgba(43, 26, 4, 0.07)',
   '--c-danger-on': '#FFFFFF',
   // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
@@ -304,10 +300,12 @@ export const THEME_TOKENS: Readonly<Record<ThemeName, Readonly<Record<Mode, Toke
   warm: { dark: WARM_DARK, light: WARM_LIGHT },
 };
 
-export type RadiusRole = '--r-check' | '--r-inner' | '--r-control' | '--r-row' | '--r-card' | '--r-pill';
+export type RadiusRole = '--r-check' | '--r-inner' | '--r-control' | '--r-row' | '--r-card' | '--r-pill'
+  | '--r-composer' | '--r-workspace-tab' | '--r-workspace-tab-outline' | '--r-workspace-tab-flare';
 
 /** The only radii (design system §1.5): a checkbox; an inner piece; a control; a row, menu or notice; a card, tile or
- *  dialog; and a pill. */
+ *  dialog; and a pill. Then the named variants of the approved composer and the settled workspace tab: its rename
+ *  field, the outline's top corners and its flared feet. */
 const RADII = {
   '--r-check': '4px',
   '--r-inner': '6px',
@@ -315,6 +313,10 @@ const RADII = {
   '--r-row': '12px',
   '--r-card': '14px',
   '--r-pill': '999px',
+  '--r-composer': '24px',
+  '--r-workspace-tab': '7px',
+  '--r-workspace-tab-outline': '10px',
+  '--r-workspace-tab-flare': '8px',
 } satisfies Readonly<Record<RadiusRole, string>>;
 
 /**
@@ -339,12 +341,25 @@ function selectors(theme: ThemeName, mode: Mode): string {
   return `${mode === 'dark' ? ':root' : '[data-mode="light"]'},${named}`;
 }
 
+/**
+ * The public pages' type (design system §1.3, the public variants): the landing, /privacy, /terms and the deploy flow
+ * are read by someone not yet in the app, at a reading size, not the app chrome's 13. Body 15, lede 17 and the
+ * call to action's 14, each with its leading; the public shell's CSS and the app's t-public-* roles read these.
+ */
+const PUBLIC_TYPE = {
+  '--t-public-body': '15px',
+  '--t-public-body-leading': '1.7',
+  '--t-public-lede': '17px',
+  '--t-public-lede-leading': '1.62',
+  '--t-public-control': '14px',
+} satisfies Readonly<Record<`--t-public-${string}`, string>>;
+
 const declarations = (tokens: Readonly<Record<string, string>>): string => Object.entries(tokens).map(([name, value]) => `${name}:${value}`).join(';');
 
 const ORDERED: readonly ThemeName[] = [DEFAULT_THEME, ...THEME_NAMES.filter((name) => name !== DEFAULT_THEME)];
 
 export const THEME_CSS = [
-  `:root{${declarations(RADII)}}`,
+  `:root{${declarations(RADII)};${declarations(PUBLIC_TYPE)}}`,
   ...ORDERED.flatMap((theme) => (['dark', 'light'] as const).map((mode) => `${selectors(theme, mode)}{${declarations(THEME_TOKENS[theme][mode])}}`)),
 ].join('\n');
 

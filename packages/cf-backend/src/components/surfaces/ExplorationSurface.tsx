@@ -4,7 +4,7 @@
  */
 import { useState, useCallback, useMemo } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import {
   GitForkIcon, TreeStructureIcon, ArrowsOutIcon, ArrowLeftIcon, CaretRightIcon, CaretDownIcon,
@@ -33,6 +33,8 @@ import {
 } from "./fork-runs";
 import { fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf, type RunLevel, type RunLiveness, type RunRefusal, type SwarmAxis, type SwarmResolution } from "@kinu.run/core/swarm-view";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Pressable } from "@/components/ui/Pressable";
+import { Dot } from "@/components/ui/Dot";
 
 export interface ExplorationSurfaceProps {
   /** Live trees from `mcts-progress`, keyed by search; they replace polled rows so a
@@ -90,7 +92,7 @@ export function ExplorationSurface({
           stacked, the list is height-capped. */}
       <div className="flex-1 min-h-0 grid gap-3 grid-rows-[auto_minmax(0,1fr)] @3xl:grid-rows-1 @3xl:grid-cols-[minmax(220px,280px)_minmax(0,1fr)] @6xl:grid-cols-[minmax(200px,250px)_minmax(0,1fr)_minmax(330px,400px)]">
         <div ref={listRef}
-          className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto rounded-xl border p-border p-surface p-1.5 space-y-0.5">
+          className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto rounded-xl border p-border p-surface p-1 space-y-px">
           {runs.map((run) => (
             <ForkRunRow key={run.id} run={run}
               kind={runKind(resolutions.get(run.id))}
@@ -175,24 +177,22 @@ function ForkRunRow(
   },
 ) {
   return (
-    <button type="button" onClick={onSelect} aria-current={selected ? "true" : undefined}
-      data-fork-run={run.id}
-      className={`w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 transition-colors ${selected ? "p-fill" : "p-card-hover"}`}>
+    <Pressable selected={selected} className="flex items-start gap-2 px-2 py-1" onClick={onSelect} aria-current={selected ? "true" : undefined} data-fork-run={run.id}>
       <StatusDot className="mt-1" tone={RUN_TONE[run.status]} />
       <div className="min-w-0 flex-1">
-        <div className="p-row-text p-text truncate" title={run.task}>
+        <div className="t-body p-text truncate" title={run.task}>
           {run.name}
           {kind !== null && <span className="p-text-3"> · {kind}</span>}
         </div>
-        <div className="p-meta p-text-3 tabular-nums truncate"
+        <div className="t-meta p-text-3 tabular-nums truncate"
           title={refusal === null ? undefined : refusal.error}>
           {runStateLine(run, liveness, refusal)}
         </div>
-        <div className="p-meta p-text-3 tabular-nums">
+        <div className="t-meta p-text-3 tabular-nums">
           {new Date(run.startedAt).toLocaleString()}
         </div>
       </div>
-    </button>
+    </Pressable>
   );
 }
 
@@ -314,16 +314,16 @@ function RunDetailView({
   return (
     <div className="h-full min-h-0 flex flex-col rounded-xl border p-border p-surface overflow-hidden">
       <div className="shrink-0 flex items-start gap-2 border-b p-border px-3 py-2">
-        <StatusDot className="mt-1.5" tone={RUN_TONE[run.status]} />
+        <StatusDot className="mt-2" tone={RUN_TONE[run.status]} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-1.5 min-w-0">
-            <span className="p-row-text font-medium p-text truncate" title={run.task}>{run.name}</span>
+          <div className="flex items-baseline gap-2 min-w-0">
+            <span className="t-item p-text truncate" title={run.task}>{run.name}</span>
             {runKind(resolution) !== null && (
-              <span className="p-annotation p-text-3 shrink-0">· {runKind(resolution)}</span>
+              <span className="t-meta t-mono p-text-3 shrink-0">· {runKind(resolution)}</span>
             )}
           </div>
           <RunObjective task={run.task} />
-          <div className="mt-0.5 p-meta p-text-3 tabular-nums">
+          <div className="t-meta mt-px p-text-3 tabular-nums">
             {/* The tally is in the liveness panel; the header carries outcome and winner only. */}
             {runStateLine(run, null, refusal)}
           </div>
@@ -336,7 +336,7 @@ function RunDetailView({
       {refusal !== null && <RunRefusalNote refusal={refusal} />}
       {liveness !== null && <RunLivenessPanel live={liveness} running={run.status === "running"} />}
       {frontier !== null && <FrontierPanel frontier={frontier} onOpen={onOpenBranch} />}
-      <div className="shrink-0 border-b p-border px-3 py-1.5">
+      <div className="shrink-0 border-b p-border px-3 py-1">
         <SwarmConfigDisclosure resolution={resolution}
           paramRows={forkParamRows(params)} judges={judgeEnsembleLabel(params)} />
       </div>
@@ -358,15 +358,14 @@ function RunObjective({ task }: { task: string }) {
 
   return (
     <>
-      <div className={`p-row-text p-text-2 break-words ${long && !expanded ? "line-clamp-2" : ""}`}>
+      <div className={`t-body p-text-2 break-words ${long && !expanded ? "line-clamp-2" : ""}`}>
         {task}
       </div>
       {long && (
-        <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
-          className="mt-0.5 inline-flex items-center gap-1 p-t-control p-text-3 hover:p-text transition-colors cursor-pointer">
+        <Button variant="ghost" size="sm" className="mt-px" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
           {expanded ? <CaretDownIcon size={9} /> : <CaretRightIcon size={9} />}
           {expanded ? "collapse" : "expand"}
-        </button>
+        </Button>
       )}
     </>
   );
@@ -379,7 +378,7 @@ function RunObjective({ task }: { task: string }) {
 export function RunLivenessPanel({ live, running }: { live: RunLiveness; running: boolean }) {
   return (
     <div data-run-liveness {...countMarks(live)} className="shrink-0 border-b p-border px-3 py-2">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 p-meta tabular-nums">
+      <div className="t-meta flex flex-wrap items-baseline gap-x-3 gap-y-px tabular-nums">
         <span className="p-text-2">{nodeTally(live)}</span>
         <span className="p-text-3">
           {running ? "last step " : "last activity "}{timeAgo(live.lastEventAt)}
@@ -387,7 +386,7 @@ export function RunLivenessPanel({ live, running }: { live: RunLiveness; running
       </div>
       {/* Per-level rows only when there is more than one level. */}
       {live.levels.length > 1 && (
-        <div className="mt-1 space-y-0.5">
+        <div className="mt-1 space-y-px">
           {live.levels.map((level) => <RunLevelRow key={level.depth} level={level} />)}
         </div>
       )}
@@ -397,7 +396,7 @@ export function RunLivenessPanel({ live, running }: { live: RunLiveness; running
 
 function RunLevelRow({ level }: { level: RunLevel }) {
   return (
-    <div data-run-level={level.depth} {...countMarks(level)} className="flex items-baseline gap-2 p-meta tabular-nums">
+    <div data-run-level={level.depth} {...countMarks(level)} className="t-meta flex items-baseline gap-2 tabular-nums">
       <span className="w-12 shrink-0 p-text-3">level {level.depth}</span>
       <span className="min-w-0 p-text-2">{nodeTally(level)}</span>
     </div>
@@ -411,20 +410,19 @@ export function FrontierPanel({ frontier, onOpen }: {
 }) {
   return (
     <div data-frontier className="shrink-0 border-b p-border px-3 py-2">
-      <div className="p-meta p-text-2 tabular-nums">
+      <div className="t-meta p-text-2 tabular-nums">
         front · {frontier.candidates.length === 1 ? "1 candidate" : `${frontier.candidates.length} candidates`}
       </div>
-      <div className="mt-1 space-y-0.5">
+      <div className="mt-1 space-y-px">
         {frontier.candidates.map((candidate) => (
-          <button key={candidate.nodeId} type="button" onClick={() => onOpen(candidate.nodeId)}
-            className="w-full flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-md px-1.5 py-0.5 text-left p-annotation p-card-hover transition-colors cursor-pointer">
+          <Pressable className="t-meta t-mono flex flex-wrap items-baseline gap-x-3 gap-y-px px-1 py-px" key={candidate.nodeId} onClick={() => onOpen(candidate.nodeId)}>
             <span className="p-text-2 truncate max-w-[10rem]" title={candidate.nodeId}>{candidate.nodeId}</span>
             {frontier.axes.map((axis) => (
               <span key={axis.id} className="whitespace-nowrap p-text-3" title={`${axis.id}: ${axis.direction}`}>
                 {axis.id} <span className="p-text-2">{formatEvidenceValue(candidate.evidence[axis.id])}</span>
               </span>
             ))}
-          </button>
+          </Pressable>
         ))}
       </div>
     </div>
@@ -456,7 +454,7 @@ function RunNodeList({ journal, tree, activity, onOpen }: {
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto p-1.5 space-y-0.5">
+    <div className="min-h-0 flex-1 overflow-y-auto p-1 space-y-px">
       {nodes.map((node) => (
         <RunNodeRow key={node.id} node={node} score={scores.get(node.id) ?? null}
           moving={activity.has(node.id)} onOpen={() => onOpen(node.id)} />
@@ -490,15 +488,14 @@ function RunNodeRow({ node, score, moving, onOpen }: {
   const live = node.status === "running";
 
   return (
-    <button type="button" onClick={onOpen} data-run-node={node.id}
-      className="w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 p-card-hover transition-colors">
+    <Pressable className="flex items-start gap-2 px-2 py-1" onClick={onOpen} data-run-node={node.id}>
       <StatusDot className="mt-1" tone={statusTone(shownHeadStatus(node.status, node.errorMessage))}
         {...(moving && { title: "Working now" })} />
       <div className="min-w-0 flex-1">
-        <div className="p-row-text p-text-2 truncate" title={node.task}>
+        <div className="t-body p-text-2 truncate" title={node.task}>
           {cleanNodeLabel(node.task, node.id)}
         </div>
-        <div className="p-meta p-text-3 tabular-nums truncate">
+        <div className="t-meta p-text-3 tabular-nums truncate">
           {shownHeadStatus(node.status, node.errorMessage)}
           {score !== null && ` · ${formatScore(score)}`}
           {live
@@ -506,15 +503,15 @@ function RunNodeRow({ node, score, moving, onOpen }: {
             : node.wallClockMs > 0 && ` · ${Math.round(node.wallClockMs / 1000)}s`}
         </div>
         {node.summary !== null && (
-          <div className="mt-0.5 p-row-text p-text-2 line-clamp-2">{node.summary}</div>
+          <div className="t-body mt-px p-text-2 line-clamp-2">{node.summary}</div>
         )}
         {node.errorMessage !== null && (
-          <div data-node-reason="failed" className="mt-0.5 p-row-text line-clamp-2 p-danger">
+          <div data-node-reason="failed" className="t-body mt-px line-clamp-2 p-danger">
             {node.errorMessage}
           </div>
         )}
       </div>
-    </button>
+    </Pressable>
   );
 }
 
@@ -537,10 +534,8 @@ function ForkBranchView({
   return (
     <div className="min-h-0 flex-1 flex flex-col">
       <div className="shrink-0 flex items-center gap-1 border-b p-border px-2 py-1">
-        <button type="button" onClick={onBack}
-          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 p-t-control p-text-3 hover:p-text transition-colors cursor-pointer">
-          <ArrowLeftIcon size={10} />all {nodeCount === 1 ? "1 node" : `${nodeCount} nodes`}
-        </button>
+        <Button variant="ghost" size="sm" onClick={onBack} icon={<ArrowLeftIcon size={14} />}>all {nodeCount === 1 ? "1 node" : `${nodeCount} nodes`}
+        </Button>
       </div>
       <NodeTranscript
         selection={{ runId: run.id, nodeId: branchId }}
@@ -623,7 +618,7 @@ function ForkCanvas({
         {/* Remaining height capped at the scene's 1:1 size; `flex-1` alone over-sizes small trees. */}
         <div ref={attach} className="relative shrink-0 min-h-0" style={{ height: canvasH }}>
           {regions.length === 0 && (
-            <div className="h-full flex items-center justify-center px-6 text-center p-t-status p-text-3">
+            <div className="t-status h-full flex items-center justify-center px-6 text-center p-text-3">
               {/* Present tense for a running search; past tense would report it as dead. */}
               {focused?.status === "running"
                 ? "The search has not written a branch yet."
@@ -639,11 +634,11 @@ function ForkCanvas({
               onSelectNode={onSelectNode}
             />
           ) : (
-            <div className="h-full flex items-center justify-center p-t-status p-text-3">Sizing canvas…</div>
+            <div className="t-status h-full flex items-center justify-center p-text-3">Sizing canvas…</div>
           ))}
           {expandTo && (
             <Link to={expandTo} title="Open the selected search full-screen"
-              className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border p-border p-surface px-2 py-0.5 p-t-control p-text-3 hover:p-text transition-colors">
+              className="t-control absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border p-border p-surface px-2 py-px p-text-3 hover:p-text transition-colors">
               <ArrowsOutIcon size={11} />Expand
             </Link>
           )}
@@ -669,7 +664,7 @@ export function SwarmConfigDisclosure(
   return (
     <details data-swarm-config className="group shrink-0 min-w-0">
       <summary
-        className="flex cursor-pointer list-none items-center gap-1 rounded-md px-1.5 py-0.5 p-t-control p-text-3 hover:p-text transition-colors [&::-webkit-details-marker]:hidden"
+        className="t-control flex cursor-pointer list-none items-center gap-1 rounded-md px-1 py-px p-text-3 hover:p-text transition-colors [&::-webkit-details-marker]:hidden"
         title="The preset this run resolved, its axes, and its dispatch arguments.">
         <CaretRightIcon size={9} className="shrink-0 transition-transform group-open:rotate-90" />
         <span className="font-mono p-text-2 truncate max-w-[10rem]">{name}</span>
@@ -705,14 +700,14 @@ function SwarmResolutionBody(
       {resolution !== undefined && (
         <>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <span className="p-eyebrow shrink-0">
+        <span className="t-label shrink-0">
           {resolution.kind === "custom" ? "composition" : "preset"}
         </span>
-        <span className="p-annotation font-medium p-accent-fg min-w-0 break-words">
+        <span className="t-status t-mono p-accent-fg min-w-0 break-words">
           {resolution.kind === "custom" ? resolution.label : resolution.preset}
         </span>
         {resolution.kind === "preset" && (
-          <span className="ml-auto shrink-0 rounded-sm px-1.5 py-0.5 p-badge-neutral"
+          <span className="ml-auto shrink-0 rounded-sm px-1 py-px p-badge-neutral"
             title="Derived from the score and advance axes.">
               settle {resolution.settle}
           </span>
@@ -721,18 +716,18 @@ function SwarmResolutionBody(
 
       {/* `auto-fit` grid so each axis value wraps rather than truncates. */}
       {resolution.kind === "preset" && (
-        <dl className="mt-1.5 grid gap-x-3 gap-y-1.5 [grid-template-columns:repeat(auto-fit,minmax(5.25rem,1fr))]">
+        <dl className="mt-2 grid gap-x-3 gap-y-2 [grid-template-columns:repeat(auto-fit,minmax(5.25rem,1fr))]">
           {swarmAxisRows(resolution.config).map((row) => (
             <div key={row.axis} className="min-w-0" title={`${row.axis}: ${AXIS_MEANING[row.axis]}`}>
-              <dt className="p-eyebrow">{row.axis}</dt>
-              <dd className="p-annotation p-text break-words">{row.value}</dd>
+              <dt className="t-label">{row.axis}</dt>
+              <dd className="t-meta t-mono p-text break-words">{row.value}</dd>
             </div>
           ))}
         </dl>
       )}
 
       {resolution.kind === "custom" && (
-        <p className="mt-1.5 p-meta p-text-3">
+        <p className="t-meta mt-2 p-text-3">
           This composition recorded only its provenance label.
         </p>
       )}
@@ -740,7 +735,7 @@ function SwarmResolutionBody(
       )}
 
       {(caps !== null || judges !== null) && (
-        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 p-annotation p-text-3">
+        <div className="t-meta t-mono mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-px p-text-3">
           {caps !== null && (
             <span className="whitespace-nowrap" title="The caps the preset resolved.">
               caps <span className="p-text-2">{caps}</span>
@@ -756,7 +751,7 @@ function SwarmResolutionBody(
 
       {/* Dispatch parameters beside the preset's stated caps; they differ. */}
       {paramRows.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-t p-border pt-1.5 p-annotation p-text-3">
+        <div className="t-meta t-mono mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-px border-t p-border pt-1 p-text-3">
           {paramRows.map((row) => (
             <span key={row.label} className="whitespace-nowrap">
               {row.label} <span className="p-text-2">{row.value}</span>
@@ -785,8 +780,8 @@ const AXIS_MEANING = {
 export function RunRefusalNote({ refusal }: { refusal: RunRefusal }) {
   return (
     <div data-run-refusal={refusal.reason}
-      className="shrink-0 flex items-baseline gap-2 px-3 py-1.5 border-b p-border p-meta">
-      <span aria-hidden className="mt-1 size-1.5 rounded-full p-dot-danger shrink-0" />
+      className="t-meta shrink-0 flex items-baseline gap-2 px-3 py-1 border-b p-border">
+      <Dot tone="danger" className="mt-1" />
       <span className="font-mono p-danger shrink-0">{refusal.reason}</span>
       <span className="p-text-2 leading-snug min-w-0">{refusal.error}</span>
     </div>

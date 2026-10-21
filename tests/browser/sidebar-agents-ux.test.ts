@@ -1,6 +1,6 @@
 /**
  * A workspace's agents live in the left sidebar, reached from its All agents row: the person's chats, each with the
- * agents it started nested under it, then swarms and helpers in folded groups. A row opens that agent's chat in the
+ * agents it started nested under it, then swarms and subagents in folded groups. A row opens that agent's chat in the
  * main area, a swarm worker opens view only, and Back returns the workspace list and focus. On a phone the sidebar is
  * the drawer.
  */
@@ -51,7 +51,7 @@ describe('the sidebar drills into a workspace\'s agents', () => {
       expect(await parentOf('a-check')).toBe('a-scout');
       expect(await parentOf('a-copy')).toBe('actor-docs');
 
-      // Swarms and helpers are their own groups, folded until asked for; a helper's own hires nest under it there.
+      // Swarms and subagents are their own groups, folded until asked for; a subagent's own hires nest under it there.
       const groups = await page.$$eval(`${LIST} section`, (all) => all.map((section) => [section.getAttribute('aria-label'), section.querySelector('[aria-expanded]')?.getAttribute('aria-expanded')]));
       expect(groups).toEqual([['Swarms', 'false'], ['Background', 'false']]);
       expect(await parentOf('a-sampler')).toBe('a-refine');

@@ -7,7 +7,7 @@ import { Button, buttonClass } from "@/components/ui/Button";
 import { Page } from "@/components/ui/PageHeader";
 import { Link, useParams } from "react-router-dom";
 import { Effect } from "effect";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { ClockIcon, HandPalmIcon, HouseIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
@@ -33,7 +33,7 @@ const ago = (at: number) => {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-3">
-      <h2 className="p-eyebrow">{title}</h2>
+      <h2 className="t-label">{title}</h2>
       {children}
     </section>
   );
@@ -42,13 +42,13 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function Row({ icon, title, meta, children }: { icon: ReactNode; title: string; meta?: ReactNode; children?: ReactNode }) {
   return (
     <li className="flex items-start gap-3 px-4 py-3">
-      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-hover)] p-text-2">{icon}</span>
+      <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-hover)] p-text-2">{icon}</span>
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-baseline gap-x-2">
-          <span className="p-row-text font-medium p-text">{title}</span>
-          {meta !== undefined && <span className="p-meta p-text-3">{meta}</span>}
+          <span className="t-item p-text">{title}</span>
+          {meta !== undefined && <span className="t-meta p-text-3">{meta}</span>}
         </span>
-        {children !== undefined && <span className="block p-meta p-text-2">{children}</span>}
+        {children !== undefined && <span className="t-meta block p-text-2">{children}</span>}
       </span>
     </li>
   );
@@ -62,17 +62,17 @@ function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean })
 
   return (
     <li className="flex items-start gap-3 px-4 py-3" data-blueprint-need={need.connection ?? need.secret}>
-      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-hover)]">
+      <span className="mt-px flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-hover)]">
         {brand !== undefined ? <BrandMark brand={brand} size={14} bare /> : <KeyIcon size={14} className="p-text-2" />}
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-x-2">
-          <span className="p-row-text font-medium p-text">{name}</span>
-          <span className="p-meta p-text-3">{need.access === "read" ? "to read" : "to read and write"}</span>
+          <span className="t-item p-text">{name}</span>
+          <span className="t-meta p-text-3">{need.access === "read" ? "to read" : "to read and write"}</span>
         </span>
-        <span className="block p-meta p-text-2">{need.why}</span>
+        <span className="t-meta block p-text-2">{need.why}</span>
       </span>
-      {connected ? <Status tone="success">Connected</Status> : <span className="shrink-0 p-meta p-text-3">At install</span>}
+      {connected ? <Status tone="success">Connected</Status> : <span className="t-meta shrink-0 p-text-3">At install</span>}
     </li>
   );
 }
@@ -96,9 +96,9 @@ function BlueprintActions({ workspace, onInstall }: { workspace: WorkspaceCard; 
   // The page's header actions: Star, then the one primary.
   return (
     <>
-      {failure !== null && <span role="alert" className="max-w-64 truncate p-meta p-danger" title={failure}>{failure}</span>}
+      {failure !== null && <span role="alert" className="t-meta max-w-64 truncate p-danger" title={failure}>{failure}</span>}
       <Button onClick={() => detach(signedIn ? toggle(!star.on) : Effect.sync(() => signInAndReturn()))} aria-pressed={star.on} data-blueprint-star>
-        <StarIcon size={14} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : undefined} />
+        <StarIcon size={14} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent-fg" : undefined} />
         {star.on ? "Starred" : "Star"}<span className="tabular-nums p-text-3">{star.count.toLocaleString("en-US")}</span>
       </Button>
       {installed
@@ -153,9 +153,9 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
           {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
         </div>
         <div className="flex min-w-0 flex-col gap-3">
-          <span className="flex flex-wrap items-center gap-2"><KindBadge kind="workspace" /><span className="p-meta p-text-3">{CATEGORY_WORDS[workspace.category]}</span></span>
-          <p className="p-row-text p-text-2">{workspace.line}</p>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 p-meta p-text-3">
+          <span className="flex flex-wrap items-center gap-2"><KindBadge kind="workspace" /><span className="t-meta p-text-3">{CATEGORY_WORDS[workspace.category]}</span></span>
+          <p className="t-body p-text-2">{workspace.line}</p>
+          <div className="t-meta flex flex-wrap items-center gap-x-4 gap-y-1 p-text-3">
             <Maker maker={workspace.maker} size={20} />
             <span className="inline-flex items-center gap-1"><DownloadSimpleIcon size={13} />{workspace.installs.toLocaleString("en-US")} {workspace.installs === 1 ? "install" : "installs"}</span>
             <span className="tabular-nums">Version {page.version} · updated {ago(page.updatedAt)}</span>
@@ -163,14 +163,14 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
         </div>
       </div>
 
-      <div className="grid gap-10 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+      <div className="grid gap-12 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
         <div className="space-y-8">
           <Section title="What it does">
             <div className="grid gap-3 sm:grid-cols-2">
               {page.about.map((item) => (
                 <div key={item.title} className="rounded-[var(--r-card)] border p-border p-surface px-4 py-3">
-                  <div className="p-row-text font-medium p-text">{item.title}</div>
-                  <div className="mt-1 p-meta p-text-2">{item.body}</div>
+                  <div className="t-item p-text">{item.title}</div>
+                  <div className="t-meta mt-1 p-text-2">{item.body}</div>
                 </div>
               ))}
             </div>
@@ -185,8 +185,8 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
                 {inside.layout === "focus" ? "Its chat alone; its agents, tabs and inspector a click away." : "Chats as tabs, beside the inspector."}
               </Row>
             </ul>
-            <button type="button" onClick={() => setSoul((shown) => !shown)} aria-expanded={soul} className="p-meta p-accent hover:underline">{soul ? "Hide its soul" : "Read its soul"}</button>
-            {soul && <pre className="max-h-64 overflow-auto rounded-[var(--r-card)] border p-border p-sunken p-4 p-t-code whitespace-pre-wrap p-text-2" data-blueprint-soul>{inside.soul}</pre>}
+            <Button variant="ghost" size="sm" onClick={() => setSoul((shown) => !shown)} aria-expanded={soul}>{soul ? "Hide its soul" : "Read its soul"}</Button>
+            {soul && <pre className="t-code max-h-64 overflow-auto rounded-[var(--r-card)] border p-border p-sunken p-4 whitespace-pre-wrap p-text-2" data-blueprint-soul>{inside.soul}</pre>}
           </Section>
         </div>
 
@@ -194,13 +194,13 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
           <Section title="What it needs of yours">
             <ul className="divide-y divide-[var(--c-border)] overflow-hidden rounded-[var(--r-card)] border p-border p-surface">
               {workspace.needs.map((need) => <NeedRow key={`${need.connection ?? ""}${need.secret ?? ""}`} need={need} connected={has(need.connection)} />)}
-              {workspace.needs.length === 0 && <li className="px-4 py-3 p-meta p-text-3">Nothing: it works with what any workspace has.</li>}
+              {workspace.needs.length === 0 && <li className="t-meta px-4 py-3 p-text-3">Nothing: it works with what any workspace has.</li>}
             </ul>
           </Section>
           <Section title="It asks you first">
             <ul className="space-y-2">
               {page.asks.map((ask) => (
-                <li key={ask} className="flex items-start gap-2.5 p-row-text p-text-2"><HandPalmIcon size={14} className="mt-0.5 shrink-0 p-accent" />{ask}</li>
+                <li key={ask} className="t-body flex items-start gap-3 p-text-2"><HandPalmIcon size={14} className="mt-px shrink-0 p-accent-fg" />{ask}</li>
               ))}
             </ul>
           </Section>

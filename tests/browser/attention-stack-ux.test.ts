@@ -40,7 +40,7 @@ async function press(page: Page, words: string): Promise<void> {
 
 /** Unticks a parked command in the open card's batch. */
 async function untick(page: Page, id: string): Promise<void> {
-  await page.click(`[data-attention-card] [data-parked-command="${id}"] input`);
+  await page.click(`[data-attention-card] [data-parked-command="${id}"] [role="checkbox"]`);
 }
 
 /** The decisions sent to the agent, in order, as `[id, decision]`. */
@@ -57,7 +57,7 @@ async function openWork(page: Page): Promise<void> {
 
 /** Work's own count of what waits, or 0 once its Needs you section is gone. */
 function workCount(page: Page): Promise<number> {
-  return page.evaluate(() => Number(document.querySelector('[data-section="work-needs-you"] .p-label + span')?.textContent ?? '0'));
+  return page.evaluate(() => Number(document.querySelector('[data-section="work-needs-you"] [data-section-badge]')?.textContent ?? '0'));
 }
 
 async function opened(page: Page, origin: string, query: string): Promise<void> {
@@ -74,7 +74,7 @@ test('two parked commands are one card: some are chosen and decided, the rest st
     // Both are on the newer one's card, each ticked; none waits behind it, and one card has no place to count.
     expect(await stacked(page)).toEqual(['action:park-publish']);
     expect(await page.$('[data-attention-position]')).toBeNull();
-    expect(await page.$$eval('[data-attention-card] [data-parked-command] input', (boxes) => boxes.map((box) => box instanceof HTMLInputElement && box.checked)))
+    expect(await page.$$eval('[data-attention-card] [data-parked-command] [role="checkbox"]', (boxes) => boxes.map((box) => box.getAttribute('aria-checked') === 'true')))
       .toEqual([true, true]);
     expect(await page.$eval('[data-attention-card]', (card) => card.textContent)).toContain('npm publish --access public');
     // The Work tab reads the same queue: what it counts is what the stack holds.
@@ -290,7 +290,7 @@ test('a refused answer keeps its card open and says why; the next try lands', as
     await press(page, 'Approve 1');
     await page.waitForFunction(() => (document.querySelector('[data-attention-card]')?.textContent ?? '').includes('the approval store is unavailable'));
     // The choice stands: the refused one is still the one ticked.
-    expect(await page.$$eval('[data-attention-card] [data-parked-command] input', (boxes) => boxes.map((box) => box instanceof HTMLInputElement && box.checked)))
+    expect(await page.$$eval('[data-attention-card] [data-parked-command] [role="checkbox"]', (boxes) => boxes.map((box) => box.getAttribute('aria-checked') === 'true')))
       .toEqual([true, false]);
 
     await press(page, 'Approve 1');

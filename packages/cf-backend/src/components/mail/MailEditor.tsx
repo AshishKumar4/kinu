@@ -4,8 +4,9 @@ import { ArrowBendUpLeftIcon, NotePencilIcon, PaperPlaneTiltIcon } from "@phosph
 import { replySubject, type MailBox, type MailMessageView, type MailThreadView } from "@kinu.run/core";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
 import { Modal } from "@/components/ui/Modal";
-import { Choice, inputCls } from "@/components/ui/form";
+import { Choice } from "@/components/ui/form";
 import { saveMailDraft, sendMail, type MailWrite } from "@/lib/mail-api";
+import { TextArea, TextInput } from "@/components/ui/Field";
 
 const recipients = (text: string): string[] => text.split(",").map((part) => part.trim()).filter(Boolean);
 
@@ -14,7 +15,7 @@ function saving(event: FormEvent<HTMLFormElement>): boolean {
 }
 
 function Failure({ message }: { message: string | null }) {
-  return message === null ? null : <p role="alert" className="p-row-text p-danger">{message}</p>;
+  return message === null ? null : <p role="alert" className="t-body p-danger">{message}</p>;
 }
 
 export function Compose({ boxes, initialPath, onClose, onSaved }: {
@@ -49,13 +50,13 @@ export function Compose({ boxes, initialPath, onClose, onSaved }: {
         <Button variant="primary" size="md" type="submit" form={form} name="intent" value="send" disabled={disabled}><PaperPlaneTiltIcon size={14} />{busy === "Sending" ? "Sending…" : "Send"}</Button>
       </>}>
       <form id={form} onSubmit={submit} data-mail-compose-form className="space-y-2">
-        <div className="flex items-center gap-2 p-meta p-text-3" data-mail-from>From
+        <div className="t-meta flex items-center gap-2 p-text-3" data-mail-from>From
           <div className="min-w-0 flex-1"><Choice label="From" value={path} onChange={setPath} disabled={disabled} options={boxes.map((box) => ({ value: box.path, label: box.address }))} /></div>
         </div>
-        <input value={to} onChange={(event) => setTo(event.target.value)} type="email" multiple required placeholder="To" aria-label="To" disabled={disabled} className={inputCls} />
-        <input value={cc} onChange={(event) => setCc(event.target.value)} type="email" multiple placeholder="Cc" aria-label="Cc" disabled={disabled} className={inputCls} />
-        <input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Subject" aria-label="Subject" disabled={disabled} className={inputCls} />
-        <textarea value={text} onChange={(event) => setText(event.target.value)} rows={8} required placeholder="Message" aria-label="Message" disabled={disabled} className={`${inputCls} font-[inherit] leading-6`} />
+        <TextInput value={to} onChange={(event) => setTo(event.target.value)} type="email" multiple required placeholder="To" aria-label="To" disabled={disabled} />
+        <TextInput value={cc} onChange={(event) => setCc(event.target.value)} type="email" multiple placeholder="Cc" aria-label="Cc" disabled={disabled} />
+        <TextInput value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Subject" aria-label="Subject" disabled={disabled} />
+        <TextArea value={text} onChange={(event) => setText(event.target.value)} rows={8} required placeholder="Message" aria-label="Message" disabled={disabled} />
         <Failure message={error} />
       </form>
     </Modal>
@@ -112,9 +113,9 @@ export function ReplyBox({ mail, box, drafts, onChanged, onSent }: {
 
   return (
     <form onSubmit={submit} data-mail-reply-box className="space-y-2">
-      <p className="p-meta p-text-3 break-words">From {box.address}</p>
-      <p className="p-meta p-text-3 break-words">To {to.join(", ")}</p>
-      <textarea value={text} onChange={(event) => setEditor({ text: event.target.value, draft: editor?.draft === true })} rows={9} aria-label="Reply" required disabled={busy !== null} className={`${inputCls} font-[inherit] leading-6`} />
+      <p className="t-meta p-text-3 break-words">From {box.address}</p>
+      <p className="t-meta p-text-3 break-words">To {to.join(", ")}</p>
+      <TextArea value={text} onChange={(event) => setEditor({ text: event.target.value, draft: editor?.draft === true })} rows={9} aria-label="Reply" required disabled={busy !== null} />
       <Failure message={error} />
       <div className="flex flex-wrap gap-2">
         <Button variant="primary" size="md" data-mail-send type="submit" name="intent" value="send" disabled={busy !== null || text.trim() === ""}><PaperPlaneTiltIcon size={14} />{busy === "Sending" ? "Sending…" : "Send"}</Button>

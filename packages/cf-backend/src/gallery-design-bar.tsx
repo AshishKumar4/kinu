@@ -231,7 +231,7 @@ export function DesignBar() {
               {/* The real page, read again from the start in each: its door answers the state's fixtures. */}
               {DEPLOY_FIXTURE_STATES.map((state) => (
                 <li key={state.id}>
-                  <a href={deployStateHref(state.id)} data-deploy-state={state.id} className="block w-full rounded-md px-2 py-1 text-left text-xs p-text-2 hover:bg-[var(--c-hover)] hover:p-text">{state.label}</a>
+                  <a href={deployStateHref(state.id)} data-deploy-state={state.id} className="block w-full rounded-md px-2 py-1 text-left t-meta p-text-2 hover:bg-[var(--c-hover)] hover:p-text">{state.label}</a>
                 </li>
               ))}
             </ul>

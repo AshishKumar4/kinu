@@ -40,7 +40,7 @@ import type { SendOutcome } from '../types/signals';
 import { USER_MESSAGE_SIGNAL_KIND } from '../types/signals';
 
 import { ActorAdvisor, type ActorAdvisorContext } from '../advisor/actor-advisor';
-import type { TemporaryAgentPort } from '../types/subordinates';
+import type { TemporaryAgentPort } from '../types/subagents';
 import { SessionHistory, type MaterializedHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
@@ -48,7 +48,7 @@ import { saveUploads } from '../prompting/attachment-sanitizer';
 import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
 import { decideInterruptedTurn, type InterruptedTurnVerdict } from './turn-recovery';
 import { scaffoldSource } from '../scaffold/versions';
-import type { ReportedTurn } from '../subordinates/turn-reports';
+import type { ReportedTurn } from '../subagents/turn-reports';
 import { lostRemoteCall, lostToolCall } from '../tools/effect-claim';
 import { unpairedToolCalls } from '../prompting/interrupted-tool-calls';
 import type { ReceiptExecution, RemoteReceipt } from '../tools/effect-claim';

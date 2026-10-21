@@ -1,21 +1,18 @@
-import { FileIcon, XIcon } from "@phosphor-icons/react";
+import { FileIcon } from "@phosphor-icons/react";
+import { Chip } from "@/components/ui/Chip";
 import type { FileUIPart } from "ai";
 
 export function AttachmentChip({ part, onRemove }: { part: FileUIPart; onRemove?: () => void }) {
   const name = part.filename ?? "file";
 
   return (
-    <span className="inline-flex max-w-56 items-center gap-1.5 rounded-md border p-border p-fill px-1.5 py-1 p-meta p-text-2">
-      {part.mediaType.startsWith("image/")
-        ? <img src={part.url} alt={name} className="size-5 shrink-0 rounded-sm object-cover" />
-        : <FileIcon size={13} className="shrink-0 p-text-3" />}
-      <span className="truncate font-mono">{name}</span>
-      {onRemove && (
-        <button type="button" onClick={onRemove} aria-label={`Remove ${name}`}
-          className="p-button-ghost cursor-pointer rounded-sm p-0.5">
-          <XIcon size={11} />
-        </button>
-      )}
+    <span className="inline-flex max-w-56 min-w-0">
+      <Chip removeLabel={`Remove ${name}`} onRemove={onRemove}
+        icon={part.mediaType.startsWith("image/")
+          ? <img src={part.url} alt={name} className="size-5 shrink-0 rounded-[var(--r-check)] object-cover" />
+          : <FileIcon size={14} className="shrink-0 p-text-3" />}>
+        <span className="truncate t-mono">{name}</span>
+      </Chip>
     </span>
   );
 }

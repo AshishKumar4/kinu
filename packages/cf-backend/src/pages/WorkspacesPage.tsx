@@ -6,11 +6,13 @@ import * as v from "valibot";
 import { APP_ROUTES } from "@kinu.run/core";
 import { useFilteredRoster, useWorkspaceRoster, type RosterFilter } from "@/hooks/use-workspace-roster";
 import type { RosterFilterBucket } from "@/lib/user-api";
-import { inputCls } from "@/components/ui/form";
 import { Segmented } from "@/components/ui/Segmented";
 import { Page } from "@/components/ui/PageHeader";
 import { TILE_GRID } from "@/components/ui/Tiles";
 import { WorkspaceOverviewCard } from "@/components/workspaces/WorkspaceOverviewCard";
+import { Notice } from "@/components/ui/Notice";
+import { Button } from "@/components/ui/Button";
+import { TextInput } from "@/components/ui/Field";
 
 const VIEW_KEY = "kinu:workspaces-view";
 
@@ -101,32 +103,23 @@ export default function WorkspacesPage() {
           <Segmented label="Workspace state" value={filter} onChange={setFilter} segments={SEGMENTS} />
           {/* The count says what a filter or search left out; with nothing left out it has nothing to say. */}
           {total > 0 && (matching < total || roster.counts.unreported > 0) && (
-            <span className="p-meta p-text-3 tabular-nums">
+            <span className="t-meta p-text-3 tabular-nums">
               {matching < total ? `${String(matching)} of ${String(total)}` : ""}
               {matching < total && roster.counts.unreported > 0 ? " · " : ""}
               {roster.counts.unreported > 0 && `${String(roster.counts.unreported)} not yet reported`}
             </span>
           )}
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search by name"
-            aria-label="Search workspaces"
-            className={`${inputCls} w-full sm:ml-auto sm:w-64`}
-          />
+          <TextInput className="w-full sm:ml-auto sm:w-64" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by name" aria-label="Search workspaces" />
         </div>
 
         {error !== null && (
-          <div className="p-notice-danger flex items-center justify-between gap-3 rounded-md px-3 py-2 text-xs">
-            <span className="min-w-0 truncate">{error}</span>
-            <button type="button" onClick={refresh} className="shrink-0 underline">Retry</button>
-          </div>
+          <Notice tone="danger" action={<Button variant="ghost" size="sm" onClick={refresh}>Retry</Button>}>{error}</Notice>
         )}
 
         {!roster.loading && entries.length === 0 && error === null && (
           <div className="p-card px-5 py-8 text-center">
-            <p className="p-row-text p-text-3">No workspaces yet.</p>
-            <Link to={APP_ROUTES.newWorkspace} className="mt-2 inline-block p-t-control p-accent">Create one →</Link>
+            <p className="t-body p-text-3">No workspaces yet.</p>
+            <Link to={APP_ROUTES.newWorkspace} className="t-control mt-2 inline-block p-accent-fg">Create one →</Link>
           </div>
         )}
 

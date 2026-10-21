@@ -51,9 +51,9 @@ async function firstTask(answer: (run: RecordedGatewayRun) => Response): Promise
   }));
 
   await workspace.agent.setSoul('# Purpose\n\nGreet whoever asks.');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
+  const { subagent } = await workspace.agent.createSubagentAgent();
 
-  if (subordinate.actorId === null) throw new Error('the added agent has no actor');
+  if (subagent.actorId === null) throw new Error('the added agent has no actor');
 
   Object.defineProperty(workspace.agent, 'broadcast', {
     configurable: true,
@@ -72,7 +72,7 @@ async function firstTask(answer: (run: RecordedGatewayRun) => Response): Promise
     },
   });
 
-  await runDelegatedTask(workspace, subordinate.actorId, 'Say hello.');
+  await runDelegatedTask(workspace, subagent.actorId, 'Say hello.');
 
   return { seen, shown };
 }
@@ -110,14 +110,14 @@ test('a task admitted while the agent runs another is run after it', async () =>
   }));
 
   await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
+  const { subagent } = await workspace.agent.createSubagentAgent();
 
-  if (subordinate.actorId === null) throw new Error('the added agent has no actor');
+  if (subagent.actorId === null) throw new Error('the added agent has no actor');
 
-  await wakeForDelegatedTask(workspace, subordinate.actorId, 'First task.');
+  await wakeForDelegatedTask(workspace, subagent.actorId, 'First task.');
   await parked.promise;
   // The second task reaches the agent while it runs the first.
-  await wakeForDelegatedTask(workspace, subordinate.actorId, 'Second task.');
+  await wakeForDelegatedTask(workspace, subagent.actorId, 'Second task.');
   release.resolve();
   await joinHarnessFibers();
   await workspace.agent.harnessAgentsIdle();

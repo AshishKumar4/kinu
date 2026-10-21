@@ -4,7 +4,7 @@
  */
 
 import { normalizeCode } from '@cloudflare/codemode/normalize';
-import { decodeJsonValue, JsonValueSchema, nestedMembers, type NestedMembers } from '@kinu.run/core';
+import { decodeJsonValue, JsonValueSchema, programNamespace, type ProgramNamespace } from '@kinu.run/core';
 import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu.run/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,7 +22,6 @@ const subprocessResultSchema = v.variant('ok', [
 type ProviderFunction = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
 
 /** A namespace as a program holds it: each member by its name, a member group (`fs.read`) as an object of its members. */
-type ExecutorNamespace = NestedMembers<ProviderFunction>;
 
 const INTERPRETERS: ReadonlyMap<string, { readonly command: string; readonly extension: string }> = new Map([
   ['python', { command: 'python3', extension: '.py' }],
@@ -181,30 +180,8 @@ export function programBody(code: string, prelude = ''): string {
 async function executeInProcess(
   code: string, providers: ResolvedProvider[],
 ): Promise<ExecuteResult> {
-  const context: Record<string, ExecutorNamespace> = {};
-
-  for (const p of providers) {
-    // A member group (`fs.read`) is an object of its members, as in CLI eval and the CF sandbox.
-    const members = nestedMembers(p.fns);
-
-    context[p.name] = new Proxy<ExecutorNamespace>({}, {
-      get: (_target, toolName) => {
-        // Never a thenable: `await agents` would call `then` as a member and wait on an answer nothing gives.
-        if (typeof toolName !== 'string' || toolName === 'then') return undefined;
-
-        const member = Object.hasOwn(members, toolName) ? members[toolName] : undefined;
-
-        if (member !== undefined && typeof member !== 'function') return member;
-
-        // Forward every argument: host bridge calls are multi-arg.
-        return async (...args: JsonValue[]) => {
-          if (member === undefined) throw new Error(`Tool "${toolName}" not found in "${p.name}"`);
-
-          return member(...args);
-        };
-      },
-    });
-  }
+  // As the cloud's sandbox holds a namespace, and eval here too (`programNamespace`).
+  const context: Record<string, ProgramNamespace> = Object.fromEntries(providers.map((p) => [p.name, programNamespace(p.name, p.fns)]));
 
   const argNames = Object.keys(context);
   const argValues = argNames.map(k => context[k]);

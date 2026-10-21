@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getCliSetup, type CliSetup } from "@/lib/user-api";
 import { Card } from "@/components/ui/form";
-import { CopyButton } from "@/components/ui/CopyButton";
+import { CopyField } from "@/components/ui/CopyField";
 
 export function CliInstallCard() {
   const [cliSetup, setCliSetup] = useState<CliSetup | null>(null);
@@ -18,9 +18,6 @@ export function CliInstallCard() {
 
 function CommandCopy({ command }: { command: string }) {
   return (
-    <div className="flex items-start gap-2 rounded-md p-fill border p-border p-3">
-      <code className="p-t-code p-text flex-1 break-all select-all">{command}</code>
-      <CopyButton value={command} what="the install command" size={13} className="p-text-3 hover:p-text shrink-0" />
-    </div>
+    <CopyField value={command} what="the install command" />
   );
 }

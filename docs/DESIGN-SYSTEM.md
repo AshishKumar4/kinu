@@ -174,12 +174,27 @@ Define every role for all four looks in `theme.ts`. Each value below is today's 
 | meta | `t-meta` | 12 / 16 | 400 | 0 | text-3 | time, count, hint, caption (`tabular-nums` included) |
 | status | `t-status` | 12 / 16 | 500 | 0 | tone | `Status`, `Chip` |
 | micro | `t-micro` | 11 / 14 | 600 | 0.01em | per use | `Badge` and counters only |
-| chat | `prose-chat` | 15.5 / 26 (workbench 14 / 24) | 400 | 0 | text | assistant prose |
-| composer | `t-composer` | 15.5 / 24 | 400 | 0 | text | composer input |
+| chat | `prose-chat` | 15.5 / 26 (workbench 14 / 24) | 400 | 0 | text | assistant prose, the person's bubble |
+| composer | `t-composer` | 15 / 24 (16 on a touch screen, the field floor) | 400 | 0 | text | composer input, as the approved composer ships |
 | code | `t-code` | Fragment Mono 13 / 20; inline 0.92em | 400 | 0 | accent-fg | code, paths, keys, env names |
 
 - **Font sizes:** 14 roles replace today's spread. That spread is 15 role classes, 317 Tailwind size utilities, 71 `text-[…]` literals in 16 sizes (8.5, 9, 9.5, 10, 10.5, 11, 11.5, 12, 12.5, 13, 13.5, 14, 15, 16, 17, 22 px), and 25 distinct `font-size` values in `index.css`.
 - **Weights:** only 400, 500 and 600, each set by its role. 700 is not used.
+- **Named variants:** approved and settled parts keep their own sizes, each named for what it is and written once, as a
+  `--t-*` property in `index.css`. Nothing else writes these sizes.
+
+| variant | property | size | for |
+|---|---|---|---|
+| `role.chat-heading` | `--t-chat-heading-1/2/3` | 22, 19, 17 (workbench 1.1, 1.05, 1 em of its 14) | a report's headings: assistant prose (approved), and the plan document's h2 |
+| `role.code-workbench` | `--t-code-workbench` | 12.5 | the code block inside the workbench (approved) |
+| `role.workspace-tab` | `--t-workspace-tab` | 13.5 | the workspace tab's title (settled) |
+| `role.field-touch` | `--t-field-touch` | `max(16px, 1em)` | a field's value on a touch screen: iOS Safari zooms the page into any field under 16 px |
+| `role.public-body` | `--t-public-body` (theme.ts), `t-public-body` | 15 / 1.7 | a signed-out public page's body (landing, /privacy, /terms, the deploy flow), and with 500 a row's name there (`t-public-item`) |
+| `role.public-lede` | `--t-public-lede` (theme.ts), `t-public-lede` | 17 / 1.62 | a public page's lede |
+| `role.public-control` | `--t-public-control` (theme.ts), `Button size="lg"` | 14, 38 tall | a public page's call to action |
+
+The public variants are theme.ts's, in `THEME_CSS`, so the server-rendered public shell and the app's deploy flow
+read one definition: someone not yet in the app reads at the public pages' size, never the app chrome's 13.
 
 ### 1.4 Spacing
 - **Scale:** 4, 8, 12, 16, 20, 24, 32, 48, 64. Tailwind units 1, 2, 3, 4, 5, 6, 8, 12, 16, plus 0 and `px`.
@@ -223,7 +238,14 @@ Define every role for all four looks in `theme.ts`. Each value below is today's 
 | `--r-card` | 14 | card, tile, dialog, popover, save bar |
 | `--r-pill` | 999 | chip, status pill, avatar, switch, meter |
 
-`--r-overlay` merges into `--r-card`. These six are the only radii: no `rounded-*` utility and no `rounded-[…]` outside `ui/`.
+Named variants, in `theme.ts` beside the six, for the approved composer and the settled workspace tab:
+
+| variant | token | px | for |
+|---|---|---|---|
+| `radius.composer` | `--r-composer` | 24 | the composer (approved) |
+| `radius.workspace-tab` | `--r-workspace-tab`, `--r-workspace-tab-outline`, `--r-workspace-tab-flare` | 7, 10, 8 | the tab's rename field, its outline's top corners, its flared feet (settled) |
+
+`--r-overlay` merges into `--r-card`. These six and the named variants are the only radii: no `rounded-*` utility and no `rounded-[…]` outside `ui/`.
 
 ### 1.6 Elevation
 
@@ -261,8 +283,9 @@ Kumo is imported in exactly one place per component: its `ui/` wrapper.
 
 | component | file | base | sizes and variants | states |
 |---|---|---|---|---|
-| **Button** | `ui/Button.tsx` | ours, on the Kumo `button` primitive. Kumo's styled `Button` hard-codes `!text-white` on primary and destructive (white on brass measures 3.42 in Graphite light, 3.87 in Warm light and 2.18 on the dark brass; all fail 4.5 for 13 px text) and is 26/36 tall. | md 32, sm 28 (lg 40 only if the flows take it, both flows). primary, secondary, ghost, danger, destructive (confirm only). | rest, hover, active, focus-visible, disabled, busy (spinner replaces the icon, width held) |
+| **Button** | `ui/Button.tsx` | ours, on the Kumo `button` primitive. Kumo's styled `Button` hard-codes `!text-white` on primary and destructive (white on brass measures 3.42 in Graphite light, 3.87 in Warm light and 2.18 on the dark brass; all fail 4.5 for 13 px text) and is 26/36 tall. | md 32, sm 28 (lg 40 only if the flows take it, both flows). primary, secondary, ghost, danger, destructive (confirm only). | rest, hover, active, focus-visible, disabled, busy (spinner replaces the icon, width held). Disabled is the variant's own shape, muted: a filled variant takes the flat `--c-hover` fill, a ghost stays unfilled, both in text-3 ink, so a disabled control never reads as pressed |
 | **IconButton** | `ui/Button.tsx` (`iconOnly`) | as Button | 32, 28; and 22 inside the workspace tab only | as Button; always `aria-label` + tooltip |
+| **InlineAction** | `ui/InlineAction.tsx` | ours | the sentence's own type, accent-fg ink | rest, hover (underline), disabled (text-3). An action inside running text: a file named in an answer, the agent a task belongs to. A link to a page stays an `<a>` |
 | **Field** (label, hint, error) | `ui/Field.tsx` | ours. Layout only: label `t-item`, hint `t-meta` one line, error `t-meta` danger. | stacked, inline (control right) | — |
 | **TextInput / TextArea** | `ui/Field.tsx` | Kumo `Input` / `InputArea`, wrapper sets the height | md 32, sm 28; TextArea min 80, `mono` for SOUL.md | rest, hover (border-strong), focus (border `--c-focus`), invalid (border danger), disabled (.5) |
 | **Select / Combobox** | `ui/Select.tsx` | Kumo `Select` / `Combobox` | md 32, sm 28 | as TextInput; menu as **Menu** |
@@ -276,7 +299,7 @@ Kumo is imported in exactly one place per component: its `ui/` wrapper.
 | **Avatar / WorkspaceLogo / ChatMascot** | `ui/Avatar.tsx`, `Marks.tsx` | ours | 20, 24, 32 | an agent is **always** its mascot; a workspace its logo or letter; a person their initials |
 | **Row** (the connected-thing row) | `ui/Row.tsx` (from `PluginRow`) | ours | grid `32px 1fr 120px 28px` (REREVIEW-2 A3), min-h 56, px 8, `--r-row`; one-line variant min-h 40; phone collapses to `32px 1fr 28px` | rest, hover `--c-hover`, selected `--c-selected`, focus-within ring |
 | **Group** (rows in one box) | `ui/Group.tsx` (from `.p-group`) | ours | `--c-surface`, 1 px border, `--r-card`, rows split by 1 px dashed `--c-dash` | — |
-| **Menu / RowMenu** | `ui/Menu.tsx` | Kumo `DropdownMenu` (keys, typeahead, focus) | min-w 180, padding 4, items 32 tall px 8 `--r-control`, icon 16 text-3, separator 1 px | highlight `--c-hover`; danger item danger ink on `--c-danger-tint`; enter `--dur-enter` |
+| **Menu / RowMenu** | `ui/Menu.tsx` (Drive's TileMenu merged in) | Base UI's menu through `@cloudflare/kumo/primitives/menu` (keys, typeahead, focus, ARIA) | min-w 180, padding 4, items 32 tall px 8 `--r-control`, icon 16 text-3, separator 1 px; on a phone a sheet from the bottom edge over a scrim, items 40, titled by what it is for | highlight `--c-hover`; danger item danger ink on `--c-danger-tint`; refused item disabled with its reason under the label; checked and radio items are the library's; a choice closes it; enter `--dur-enter` |
 | **Card** | `ui/Card.tsx` (from `form.tsx`) | ours | `t-label` above (8 gap), optional sm actions on the label row; body `--c-surface`, border, `--r-card`, padding 20, gap 20 | **never contains a Card, Group or tinted box** |
 | **Tile** (`TILE_GRID`, `TileShell`) | `ui/Tiles.tsx` | ours | grid min 300, gap 20; 16:10 cover over a hairline; body px 16 pt 12 pb 14, `t-title` + up to two `t-meta` lines | rest, hover (border-strong, `--dur-state`), focus-visible ring |
 | **Cover: Capture** | `ui/Tiles.tsx` | ours | `--c-sunken` mat, 12 inset, picture `--r-inner` | captured in the viewer's mode once both captures exist |
@@ -421,6 +444,7 @@ This means everything outside `components/ui/`, `theme.ts` and `index.css`.
 **May not write:**
 1. A colour literal of any kind: `#…`, `rgb(`, `rgba(`, `hsl(`, `oklch(`, `oklab(`, a named colour, or a Tailwind palette colour (`bg-white`, `text-purple-500`).
 2. An arbitrary value in brackets other than `[var(--layout-*)]`. That covers `text-[…]`, `w-[76px]`, `bg-[var(--c-…)]` and `[mask-image:…]`.
+   A ground utility (`p-bg`, `p-sunken`, `p-sidebar`, `p-surface`, `p-fill`, `p-hover`, `p-selected`, `p-card-hover`, `p-row-hover`, `p-accent-bg`) is rule 2 by another name: a ground comes from the component that draws the box, row or state (`Card`, `Group`, `Pressable`, `Row`, `Choices`).
 3. Any `text-{xs,sm,base,lg,xl,…}`, `font-{weight}`, `leading-*` or `tracking-*` utility.
 4. Any `rounded*`, `shadow*`, `ring*`, `outline-*` (other than `outline-none` inside `ui/`) or `border-{color}` utility.
 5. Spacing units 0.5, 1.5, 2.5, 3.5, 7, 9, 10, 11, 14, or any unit above 16.

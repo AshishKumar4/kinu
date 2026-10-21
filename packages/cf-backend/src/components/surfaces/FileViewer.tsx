@@ -1,6 +1,6 @@
 /** Text rides the viewer RPC; images, PDFs and saves (PUT) ride the raw-bytes route. */
 import { useCallback, useEffect, useState } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import {
   CheckIcon, DownloadSimpleIcon, FileIcon, PencilSimpleIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
@@ -11,6 +11,7 @@ import {
   FileWriteConflict, fileTextEditable, MarkdownFrontmatterError, parseMarkdownFrontmatter, putFileBytes, sandboxedHtml, textRenderOf,
   viewerKindOf, type FileText, type TextRender,
 } from "@kinu.run/core";
+import { Button } from "@/components/ui/Button";
 
 export function FileViewer({ path, read, revision, rawHref, downloadHref, onSaved, onClose }: {
   path: string;
@@ -89,64 +90,54 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
     >
       <div className="px-3 py-2 border-b p-border flex items-center gap-2 shrink-0">
         <FileIcon size={13} className="p-text-3 shrink-0" />
-        <span className="text-xs font-mono p-text truncate" title={path}>{name}</span>
+        <span className="t-meta t-mono p-text truncate" title={path}>{name}</span>
         <div className="ml-auto flex items-center gap-1 shrink-0">
           {draft === null && render !== "source" && (
-            <button data-files-render-toggle onClick={() => setAsSource((s) => !s)}
-              className="p-t-control p-text-2 hover:p-text p-1"
-              title={asSource ? `Show the rendered ${render === "markdown" ? "Markdown" : "page"}` : "Show the source"}
-            >{asSource ? "Rendered" : "Source"}</button>
+            <Button variant="ghost" size="sm" data-files-render-toggle onClick={() => setAsSource((s) => !s)} title={asSource ? `Show the rendered ${render === "markdown" ? "Markdown" : "page"}` : "Show the source"}>{asSource ? "Rendered" : "Source"}</Button>
           )}
           {draft === null ? (
             editable && (
-              <button data-files-edit onClick={() => setDraft(content)}
-                className="flex items-center gap-1 p-t-control p-text-2 hover:p-text p-1" title={`Edit ${name}`}>
-                <PencilSimpleIcon size={12} />Edit
-              </button>
+              <Button variant="ghost" size="sm" data-files-edit onClick={() => setDraft(content)} title={`Edit ${name}`} icon={<PencilSimpleIcon size={14} />}>Edit
+              </Button>
             )
           ) : (
             <>
-              <button data-files-save disabled={saving} onClick={() => void save(draft)}
-                className="flex items-center gap-1 p-t-control p-accent hover:underline p-1 disabled:opacity-50"
-                title={`Save ${name}`}>
+              <Button variant="ghost" size="sm" data-files-save disabled={saving} onClick={() => void save(draft)} title={`Save ${name}`}>
                 <CheckIcon size={12} />{saving ? "Saving…" : "Save"}
-              </button>
-              <button onClick={() => { setDraft(null); setSaveError(null); }}
-                className="p-t-control p-text-3 hover:p-text p-1">Cancel</button>
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setSaveError(null); }}>Cancel</Button>
             </>
           )}
-          <a data-files-download href={downloadHref} download={name} className="flex items-center gap-1 p-t-control p-text-2 hover:p-text p-1" title={`Download ${name}`}>
+          <a data-files-download href={downloadHref} download={name} className="t-control flex items-center gap-1 p-text-2 hover:p-text p-1" title={`Download ${name}`}>
             <DownloadSimpleIcon size={12} />Download
           </a>
-          <button onClick={onClose} className="p-text-3 hover:p-text p-1" title="Close preview" aria-label="Close preview">
-            <XIcon size={13} />
-          </button>
+          <Button variant="ghost" size="sm" icon={<XIcon size={14} />} onClick={onClose} title="Close preview" aria-label="Close preview" />
         </div>
       </div>
       {saveError && (
-        <div className="px-3 py-1.5 text-xs p-danger border-b p-border flex items-start gap-1.5">
+        <div className="t-meta px-3 py-1 p-danger border-b p-border flex items-start gap-2">
           <WarningIcon size={13} className="shrink-0 mt-px" />
           <span className="break-words min-w-0">{saveError}</span>
         </div>
       )}
       {conflict && (
-        <div data-files-conflict className="px-3 py-1.5 text-xs p-danger border-b p-border flex items-start gap-2">
+        <div data-files-conflict className="t-meta px-3 py-1 p-danger border-b p-border flex items-start gap-2">
           <WarningIcon size={13} className="shrink-0 mt-px" />
           <span className="min-w-0 break-words">This file changed after you opened it. Your draft is still here.</span>
-          <button type="button" onClick={() => {
+          <Button variant="ghost" size="sm" className="ml-auto shrink-0" onClick={() => {
             setDraft(null);
             setConflict(false);
             reload();
-          }} className="ml-auto shrink-0 p-accent hover:underline">Reload newer content</button>
+          }}>Reload newer content</Button>
         </div>
       )}
       {kind === "text" && file?.readOnlyReason && draft === null && (
-        <div className="px-3 py-1.5 p-t-status p-text-3 border-b p-border">
+        <div className="t-status px-3 py-1 p-text-3 border-b p-border">
           {file.readOnlyReason}
         </div>
       )}
       {kind === "text" && file?.truncated && draft === null && (
-        <div className="px-3 py-1.5 p-t-status p-text-3 border-b p-border">
+        <div className="t-status px-3 py-1 p-text-3 border-b p-border">
           Preview truncated. Download the full file to edit it.
         </div>
       )}
@@ -204,9 +195,9 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
 
   if (file.error) {
     return (
-      <div className="p-4 text-xs space-y-2">
+      <div className="t-meta p-4 space-y-2">
         <div className="p-danger break-words">{file.error}</div>
-        <a href={downloadHref} download={name} className="inline-flex items-center gap-1 p-accent hover:underline">
+        <a href={downloadHref} download={name} className="inline-flex items-center gap-1 p-accent-fg hover:underline">
           <DownloadSimpleIcon size={12} />Download instead
         </a>
       </div>
@@ -221,7 +212,7 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
         value={draft ?? ""}
         onChange={(e) => onDraft(e.currentTarget.value)}
         spellCheck={false}
-        className="w-full h-full resize-none bg-transparent p-3 p-t-code p-text outline-hidden"
+        className="t-code w-full h-full resize-none bg-transparent p-3 p-text outline-hidden"
       />
     );
   }
@@ -244,7 +235,7 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
   return (
     <div className="px-3">
       <CodeBlock className={`language-${name.slice(name.lastIndexOf(".") + 1)}`}>{content}</CodeBlock>
-      {file.truncated && <p className="text-xs p-text-3">… preview truncated. Download the full file.</p>}
+      {file.truncated && <p className="t-meta p-text-3">… preview truncated. Download the full file.</p>}
     </div>
   );
 }

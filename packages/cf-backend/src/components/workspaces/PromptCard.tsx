@@ -1,9 +1,10 @@
 import { Button } from "@/components/ui/Button";
 import { useEffect, useRef, type FormEvent, type ReactNode } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { composing } from "@/components/ui/form";
 import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl } from "@/components/Attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
+import { Notice } from "@/components/ui/Notice";
 
 const NO_DROP = () => {};
 
@@ -43,7 +44,7 @@ export function PromptCard({ id, label, placeholder, action, value, onChange, on
       onPaste={(e) => { if (attachments) pasteAttachments(e, attachments, (text) => onChange(value === "" ? text : `${value}\n${text}`)); }}
       className="p-focus min-w-0 overflow-hidden rounded-2xl border p-border bg-[var(--c-field)] shadow-[0_18px_55px_-42px_rgba(0,0,0,.75)] transition-[border-color,box-shadow] data-[drag-over]:border-[var(--c-accent)]">
       <div className="px-6 pt-5">
-        <label htmlFor={id} className="block p-t-status p-text-3">{label}</label>
+        <label htmlFor={id} className="t-status block p-text-3">{label}</label>
         <textarea
           id={id}
           value={value}
@@ -58,12 +59,12 @@ export function PromptCard({ id, label, placeholder, action, value, onChange, on
           rows={4}
           ref={field}
           disabled={busy}
-          className="block min-h-[128px] w-full resize-none bg-transparent pb-4 pt-3 p-t-composer p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
+          className="block min-h-[128px] w-full resize-none bg-transparent pb-4 pt-3 t-composer p-text outline-none focus-visible:!outline-none placeholder:p-text-3 disabled:opacity-60"
         />
       </div>
       {attachments && <div className="px-3 pb-3 [&>[data-attachments]]:pt-0"><AttachmentTray attachments={attachments} /></div>}
       {notice && <div className="px-6 pb-4">{notice}</div>}
-      {error && <div className="mx-6 mb-4 rounded-md px-3 py-2 text-xs p-notice-danger">{error}</div>}
+      {error && <Notice tone="danger" className="mx-6 mb-4">{error}</Notice>}
       <div className="flex items-center justify-end gap-2 px-6 pb-5">
         {attachments && <div className="-ml-2 mr-auto"><AttachButton attachments={attachments} disabled={busy} /></div>}
         <Button variant="primary" size="md" type="submit" disabled={busy || blocked} >

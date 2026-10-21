@@ -66,7 +66,7 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
     signIn: () => signInAndReturn(),
   }), [workspace, slate, title, slateFrame]);
 
-  if (open === null) return failure === null ? null : <p role="alert" className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-lg p-overlay px-3 py-2 p-meta p-danger">{failure}</p>;
+  if (open === null) return failure === null ? null : <p role="alert" className="t-meta fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-lg p-overlay px-3 py-2 p-danger">{failure}</p>;
 
   const close = (decided: Decided) => {
     open.settle(decided);

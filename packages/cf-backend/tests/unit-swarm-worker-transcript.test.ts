@@ -1,6 +1,6 @@
 // A swarm a hired agent starts: its workers are that agent's, in what they read and in what the panel opens.
 import { expect, test } from 'bun:test';
-import { gatewayWorkspace, hostedSubordinateHarness, runDelegatedTask } from './helpers/actor-harness';
+import { gatewayWorkspace, hostedSubagentHarness, runDelegatedTask } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 test('a hired agent\'s inheriting swarm starts each worker from that agent\'s conversation', async () => {
@@ -17,7 +17,7 @@ test('a hired agent\'s inheriting swarm starts each worker from that agent\'s co
   });
 
   const workspace = gatewayWorkspace(gateway);
-  const hire = await hostedSubordinateHarness(workspace, { name: 'namer', displayName: 'Namer', nameOrigin: 'user', mission: 'name things' });
+  const hire = await hostedSubagentHarness(workspace, { name: 'namer', displayName: 'Namer', nameOrigin: 'user', mission: 'name things' });
 
   await runDelegatedTask(workspace, hire.actor.handle.actorId, 'The codename is HERON-417. Run a swarm to name the release.');
 
@@ -31,14 +31,14 @@ test('a hired agent\'s inheriting swarm starts each worker from that agent\'s co
 test('a worker in a hired agent\'s swarm reads that agent\'s journal', async () => {
   const workspace = gatewayWorkspace(stubAiBinding((run) => chatCompletion(run, 'ok')));
   await workspace.agent.setSoul('# Purpose\n\nShip the coupon fix.');
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
+  const { subagent } = await workspace.agent.createSubagentAgent();
 
-  if (subordinate.actorId === null) throw new Error('the hired agent has no actor');
+  if (subagent.actorId === null) throw new Error('the hired agent has no actor');
 
-  workspace.db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)').run(subordinate.actorId, 'run-1', 'compare parsers', 1);
+  workspace.db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)').run(subagent.actorId, 'run-1', 'compare parsers', 1);
   workspace.db.query(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
-    VALUES (?, 'h-a', NULL, 'run-1', 0, 'Try the PEG parser', 'r', 'running', 2, 'synthesize')`).run(subordinate.actorId);
+    VALUES (?, 'h-a', NULL, 'run-1', 0, 'Try the PEG parser', 'r', 'running', 2, 'synthesize')`).run(subagent.actorId);
 
   expect(await workspace.agent.getNodeTranscript('run-1', 'h-a')).toBeNull();
-  expect((await workspace.agent.getNodeTranscript('run-1', 'h-a', {}, subordinate.name))?.task).toBe('Try the PEG parser');
+  expect((await workspace.agent.getNodeTranscript('run-1', 'h-a', {}, subagent.name))?.task).toBe('Try the PEG parser');
 });

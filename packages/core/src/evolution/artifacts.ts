@@ -25,7 +25,7 @@ import { fieldDescriptions, type ToolTextOverrides } from '../tools/tool-text';
 import { FILE } from '../operations/file';
 import { MEMORY } from '../operations/memory';
 import { nativeToolSchema } from '../tools/operation-surfaces';
-import { inputJsonSchema } from '../operations/operation';
+import { inputJsonSchema, type Operation } from '../operations/operation';
 import { REPORT } from '../operations/report';
 import { TASKS } from '../operations/tasks';
 import { WEB } from '../operations/web';
@@ -103,14 +103,17 @@ const versionOf = (row: ArtifactRow): ArtifactVersion => ({
   decidedAt: row.decided_at,
 });
 
+/** A catalog's operations its native tool offers: every one but a program's own (`tool: false`), as `nativeTool` serves. */
+const toolOperations = (catalog: Readonly<Record<string, Operation>>): Operation[] => Object.values(catalog).filter((op) => op.tool !== false);
+
 /** The built-in input schemas whose field text evolves; the agents tool's is built per account and does not. */
 const BUILTIN_INPUT_SCHEMAS = {
   eval: codemodeInputSchema(),
   shell: jsonSchema(inputJsonSchema(SHELL.run)),
-  file: jsonSchema(nativeToolSchema(Object.values(FILE))),
-  tasks: jsonSchema(nativeToolSchema(Object.values(TASKS))),
-  memory: jsonSchema(nativeToolSchema(Object.values(MEMORY))),
-  web: jsonSchema(nativeToolSchema([WEB.search, WEB.fetch, WEB.screenshot])),
+  file: jsonSchema(nativeToolSchema(toolOperations(FILE))),
+  tasks: jsonSchema(nativeToolSchema(toolOperations(TASKS))),
+  memory: jsonSchema(nativeToolSchema(toolOperations(MEMORY))),
+  web: jsonSchema(nativeToolSchema(toolOperations(WEB))),
   report: jsonSchema(inputJsonSchema(REPORT.send)),
 };
 

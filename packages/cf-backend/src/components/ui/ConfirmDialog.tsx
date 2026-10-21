@@ -71,7 +71,7 @@ export function ConfirmDialog({ title, icon, children, action, failed, onConfirm
       </>}>
       {children}
       {error !== null && (
-        <div role="alert" className="p-notice-danger text-xs rounded-md px-3 py-2">{failed === undefined ? error : `${failed}: ${error}`}</div>
+        <div role="alert" className="t-meta p-notice-danger rounded-md px-3 py-2">{failed === undefined ? error : `${failed}: ${error}`}</div>
       )}
     </Modal>
   );
@@ -96,7 +96,7 @@ export function useConfirmation() {
   const dialog = pending === null ? null : (
     <ConfirmDialog title={pending.title} action={pending.action} failed={pending.failed} danger={pending.danger}
       onConfirm={pending.run} onClose={close} alternate={pending.alternate}>
-      <p className="text-xs p-text-2 leading-relaxed">{pending.body}</p>
+      <p className="t-meta p-text-2">{pending.body}</p>
     </ConfirmDialog>
   );
 

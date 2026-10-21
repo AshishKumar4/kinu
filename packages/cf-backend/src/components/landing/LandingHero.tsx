@@ -83,7 +83,7 @@ function Typewriter(): ReactElement {
   }, []);
 
   return (
-    <span ref={elementRef} aria-hidden="true" className="grid p-accent">
+    <span ref={elementRef} aria-hidden="true" className="grid p-accent-fg">
       {/* Shared grid cells reserve the tallest phrase at every font and width. */}
       {PHRASES.map((sizer) => <span key={sizer} className="invisible col-start-1 row-start-1">{sizer}<span className="inline-block w-[.12em]" /></span>)}
       <span data-typewriter className="col-start-1 row-start-1">{phrase}<span className="ml-[.04em] inline-block h-[.8em] w-[.075em] translate-y-[.08em] bg-[var(--c-accent)] motion-reduce:hidden" /></span>
@@ -120,7 +120,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
                   Put agents to work on your files, with tools they write themselves. They get better as you correct them, and can run several attempts at once, keeping whichever one your objective scores highest.
                 </p>
                 <div className="flex max-w-[540px] items-center justify-between gap-4 rounded-xl border p-border p-sunken px-4 py-3.5">
-                  <code className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-[12.5px] leading-relaxed p-text-2"><span aria-hidden="true" className="p-accent">$</span> <span data-install-command>{install}</span></code>
+                  <code className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-[12.5px] leading-relaxed p-text-2"><span aria-hidden="true" className="p-accent-fg">$</span> <span data-install-command>{install}</span></code>
                   <Button type="button" variant="ghost" size="sm" onClick={() => copy(install)} aria-label="Copy install command">
                     {COPY_LABEL[status]}
                   </Button>

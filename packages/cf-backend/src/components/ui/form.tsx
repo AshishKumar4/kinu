@@ -5,9 +5,8 @@ export { Card } from '@/components/ui/Card';
 
 export { Field } from '@/components/ui/Field';
 
-export const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
+export const inputCls = "t-body w-full rounded-md px-3 py-2 p-text transition-all"
   + " border border-[var(--c-field-border)] bg-[var(--c-surface)]"
-  + " focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-selected)]"
   + " placeholder:p-text-3";
 
 /** An IME's own keystroke: the Enter that picks a candidate, the Escape that drops one. WebKit ends the composition
@@ -15,8 +14,6 @@ export const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outlin
 export function composing(event: KeyboardEvent): boolean {
   return event.isComposing || event.keyCode === 229;
 }
-
-export const tabCls = "p-tab -mb-px flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] p-t-control";
 
 /** Select under its older name and sizes (`base` is md), until every caller says `Select`. */
 export function Choice<Value extends string>({ size = "base", ...rest }: Omit<Parameters<typeof Select<Value>>[0], "size"> & { size?: "sm" | "base" }) {

@@ -12,6 +12,9 @@ import {
   forgetAccountFact, forgetAccountNote, getAccountMemory, putAccountFact,
   type AccountMemoryState, type MemoryOrigin,
 } from "../../lib/user-api";
+import { Button } from "@/components/ui/Button";
+import { Group } from "@/components/ui/Group";
+import { TextInput } from "@/components/ui/Field";
 
 /** "Said in Research, kept by Kinu" / "You, in Settings": where a value came from, in the owner's words. */
 function originText(origin: MemoryOrigin): string {
@@ -82,7 +85,7 @@ export function AccountMemoryCard() {
       <CardSlot resource={resource} what="your account memory" onRetry={reload}>
         {(state) => (
           <div className="space-y-4" data-account-memory>
-            {failure !== null && <div className="p-meta p-danger">{failure}</div>}
+            {failure !== null && <div className="t-meta p-danger">{failure}</div>}
             <Pending pending={accountProposals ?? state.pending} busy={busy} act={act} decide={decideAccountProposal} />
             <Facts state={state} busy={busy} act={act} />
             <Notes state={state} busy={busy} act={act} />
@@ -107,21 +110,23 @@ function Pending({ pending, busy, act, decide }: Omit<SectionProps, "state"> & {
 
   return (
     <section className="space-y-2" data-account-memory-pending>
-      <div className="p-t-label p-text-2">Waiting for you</div>
+      <div className="t-label">Waiting for you</div>
+      <Group>
       {pending.map((item) => (
-        <div key={item.id} className="rounded-md px-3 py-2 p-fill space-y-1" data-account-memory-proposal={item.id}>
-          <div className="p-row-text p-text break-words">
-            {item.proposal.kind === "fact" ? <><span className="font-mono">{item.proposal.key}</span>: {valueText(item.proposal.value)}</> : item.proposal.content}
+        <div key={item.id} className="px-3 py-2 space-y-1" data-account-memory-proposal={item.id}>
+          <div className="t-body p-text break-words">
+            {item.proposal.kind === "fact" ? <><span className="t-mono">{item.proposal.key}</span>: {valueText(item.proposal.value)}</> : item.proposal.content}
           </div>
-          <div className="p-meta p-text-3">{originText(item.origin)}</div>
-          <div className="flex gap-1.5">
-            <button type="button" disabled={busy !== null} className="px-2 py-1 rounded-md p-t-control p-accent-fill"
-              onClick={() => detach(act("keeping this for every workspace", () => decide(item.id, "accept")))}>Keep for every workspace</button>
-            <button type="button" disabled={busy !== null} className="px-2 py-1 rounded-md p-t-control p-text-2 p-fill hover:p-text"
-              onClick={() => detach(act("declining this proposal", () => decide(item.id, "decline")))}>Decline</button>
+          <div className="t-meta p-text-3">{originText(item.origin)}</div>
+          <div className="flex gap-2">
+            <Button variant="primary" size="sm" disabled={busy !== null}
+              onClick={() => detach(act("keeping this for every workspace", () => decide(item.id, "accept")))}>Keep for every workspace</Button>
+            <Button size="sm" disabled={busy !== null}
+              onClick={() => detach(act("declining this proposal", () => decide(item.id, "decline")))}>Decline</Button>
           </div>
         </div>
       ))}
+      </Group>
     </section>
   );
 }
@@ -132,15 +137,15 @@ function Facts({ state, busy, act }: SectionProps) {
 
   return (
     <section className="space-y-1" data-account-memory-facts>
-      <div className="p-t-label p-text-2">Facts</div>
-      {state.facts.length === 0 && <div className="p-meta p-text-3">None yet. A fact an agent proposes, or one you promote from a workspace's world model, appears here once kept.</div>}
+      <div className="t-label">Facts</div>
+      {state.facts.length === 0 && <div className="t-meta p-text-3">None yet. A fact an agent proposes, or one you promote from a workspace's world model, appears here once kept.</div>}
       {state.facts.map((fact) => (
-        <div key={fact.key} className="py-1.5 space-y-1" data-account-memory-fact={fact.key}>
+        <div key={fact.key} className="py-1 space-y-1" data-account-memory-fact={fact.key}>
           <div className="flex items-start gap-2">
-            <SealCheckIcon size={14} className="p-text-3 shrink-0 mt-0.5" />
+            <SealCheckIcon size={14} className="p-text-3 shrink-0 mt-px" />
             <div className="min-w-0 flex-1">
               {editing?.key === fact.key ? (
-                <form className="flex gap-1.5" onSubmit={(event) => {
+                <form className="flex gap-2" onSubmit={(event) => {
                   event.preventDefault();
                   const value = editedValue(fact.value, editing.text);
 
@@ -153,32 +158,29 @@ function Facts({ state, busy, act }: SectionProps) {
                   detach(act("saving this fact", async () => { await putAccountFact(fact.key, value); }));
                   setEditing(null);
                 }}>
-                  <span className="font-mono p-row-text">{fact.key}:</span>
-                  <input aria-label={`Value of ${fact.key}`} aria-invalid={editing.invalid} className="flex-1 min-w-0 px-1.5 rounded p-fill p-row-text" value={editing.text}
+                  <span className="t-body t-mono">{fact.key}:</span>
+                  <TextInput size="sm" aria-label={`Value of ${fact.key}`} invalid={editing.invalid} className="flex-1 min-w-0" value={editing.text}
                     title={editing.invalid ? "This fact holds JSON: write a number, true, false, null, a list or an object." : undefined}
                     onChange={(event) => setEditing({ key: fact.key, text: event.target.value, invalid: false })} />
-                  <button type="submit" disabled={busy !== null} className="px-2 rounded-md p-t-control p-accent-fill">Save</button>
+                  <Button variant="primary" size="sm" type="submit" disabled={busy !== null}>Save</Button>
                 </form>
               ) : (
-                <div className="p-row-text p-text break-words"><span className="font-mono">{fact.key}</span>: {valueText(fact.value)}</div>
+                <div className="t-body p-text break-words"><span className="t-mono">{fact.key}</span>: {valueText(fact.value)}</div>
               )}
-              <div className="p-meta p-text-3">{originText(fact.origin)}</div>
+              <div className="t-meta p-text-3">{originText(fact.origin)}</div>
             </div>
             <div className="flex gap-1 shrink-0">
-              <button type="button" className="px-1.5 rounded p-t-control p-text-2 hover:p-text" aria-expanded={opened === fact.key}
-                onClick={() => setOpened(opened === fact.key ? null : fact.key)} title="Every value it held">
-                <ClockCounterClockwiseIcon size={14} />
-              </button>
-              <button type="button" className="px-1.5 rounded p-t-control p-text-2 hover:p-text" disabled={busy !== null}
-                onClick={() => setEditing({ key: fact.key, text: valueText(fact.value), invalid: false })}>Edit</button>
-              <button type="button" className="px-1.5 rounded p-t-control p-danger" disabled={busy !== null}
-                onClick={() => detach(act("forgetting this fact", async () => { await forgetAccountFact(fact.key); }))}>Forget</button>
+              <Button variant="ghost" size="sm" icon={<ClockCounterClockwiseIcon size={14} />} aria-expanded={opened === fact.key} onClick={() => setOpened(opened === fact.key ? null : fact.key)} title="Every value it held" aria-label="Every value it held" />
+              <Button variant="ghost" size="sm" disabled={busy !== null}
+                onClick={() => setEditing({ key: fact.key, text: valueText(fact.value), invalid: false })}>Edit</Button>
+              <Button variant="danger" size="sm" disabled={busy !== null}
+                onClick={() => detach(act("forgetting this fact", async () => { await forgetAccountFact(fact.key); }))}>Forget</Button>
             </div>
           </div>
           {opened === fact.key && (
-            <ol className="ml-6 space-y-0.5" data-account-memory-history={fact.key}>
+            <ol className="ml-6 space-y-px" data-account-memory-history={fact.key}>
               {fact.history.map((revision) => (
-                <li key={revision.at} className="p-meta p-text-2">
+                <li key={revision.at} className="t-meta p-text-2">
                   {new Date(revision.at).toLocaleString()}: {revisionText(revision)} <span className="p-text-3">({originText(revision.origin)})</span>
                 </li>
               ))}
@@ -195,15 +197,15 @@ function Notes({ state, busy, act }: SectionProps) {
 
   return (
     <section className="space-y-1" data-account-memory-notes>
-      <div className="p-t-label p-text-2">Notes</div>
+      <div className="t-label">Notes</div>
       {state.notes.map((note) => (
         <div key={note.id} className="flex items-start gap-2 py-1">
           <div className="min-w-0 flex-1">
-            <div className="p-row-text p-text whitespace-pre-wrap break-words">{note.content}</div>
-            <div className="p-meta p-text-3">{originText(note.origin)}</div>
+            <div className="t-body p-text whitespace-pre-wrap break-words">{note.content}</div>
+            <div className="t-meta p-text-3">{originText(note.origin)}</div>
           </div>
-          <button type="button" className="px-1.5 rounded p-t-control p-danger shrink-0" disabled={busy !== null}
-            onClick={() => detach(act("forgetting this note", async () => { await forgetAccountNote(note.id); }))}>Forget</button>
+          <Button variant="danger" size="sm" className="shrink-0" disabled={busy !== null}
+            onClick={() => detach(act("forgetting this note", async () => { await forgetAccountNote(note.id); }))}>Forget</Button>
         </div>
       ))}
     </section>

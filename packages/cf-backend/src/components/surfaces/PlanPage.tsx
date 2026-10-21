@@ -1,12 +1,13 @@
 /** A plan's own page in the inspector: its newest revision, reviewed where it is read. */
 import { lazy, Suspense } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import type { OwedOwnerIntent, OwnedPlan, WorkspaceWork } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { PlanPages } from "./use-plan-pages";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { InlineAction } from "@/components/ui/InlineAction";
 
 const PlanReviewView = lazy(() => import("./PlanReviewView"));
 
@@ -60,8 +61,8 @@ function PlanPage({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry,
   return (
     <div data-plan-page={`${item.owner.name}:${item.plan.id}`} className="flex h-full min-h-0 flex-col space-y-3 animate-fade-in">
       {!mine && (
-        <span className="flex min-w-0 shrink-0 flex-col items-start gap-0.5 p-meta p-text-3">Read-only: {item.owner.name}'s plan
-          {onReviewActor && <button type="button" className="text-left p-accent" onClick={() => void onReviewActor(item.owner.name)}>Review in {item.owner.name}'s conversation</button>}
+        <span className="t-meta flex min-w-0 shrink-0 flex-col items-start gap-px p-text-3">Read-only: {item.owner.name}'s plan
+          {onReviewActor && <InlineAction className="text-left" onClick={() => void onReviewActor(item.owner.name)}>Review in {item.owner.name}'s conversation</InlineAction>}
         </span>
       )}
       {resource.status === "error" && (

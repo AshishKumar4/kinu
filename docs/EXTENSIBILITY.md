@@ -91,7 +91,7 @@ Three hooks are optional. `workspaceName()` returns `this.name`,
 `extraCodemodeProviders()` returns `[]`, and
 `isClientRpcMethodDenied(method)` returns `false`. Override the provider hook
 for extra sandbox namespaces: the orchestrator adds `agent.*` there, and a
-subordinate does not get it. Override the RPC hook for methods a
+subagent does not get it. Override the RPC hook for methods a
 browser socket must not reach.
 
 The tool surface follows from one decision, core's `surfaceReach`
@@ -123,10 +123,10 @@ built without one.
 `OwnedModelServices` (`packages/cf-backend/src/owned-model-services.ts`) holds
 per-actor model and provider state by composition: `providerRegistry()`,
 `resolveModel(spec)`, `getWebSearchProvider()`, `invalidate()`. `ActorAgent`
-constructs it with `ownerRequired: true`. Hosted exploration and subordinate
+constructs it with `ownerRequired: true`. Hosted exploration and subagent
 actors have no instance of their own. They bind model specs through the root's
 instance, via `ExplorationHostSeams.resolveModel` and
-`SubordinateHostSeams.resolveModel`.
+`SubagentHostSeams.resolveModel`.
 
 ## Adding a new ModelProvider
 
@@ -281,7 +281,7 @@ Inside `eval`, the LLM also sees:
   see identical state.
 - `agent.*`: no native tool. The orchestrator adds it in
   `extraCodemodeProviders()` (`packages/cf-backend/src/orchestrator.ts`). A
-  hosted subordinate's delegated turn gets only a `report` provider.
+  hosted subagent's delegated turn gets only a `report` provider.
 - Crafted tools: `tools.<name>(args)`, defined in the sandbox by the `tools`
   provider's prelude (`packages/cf-backend/src/codemode-sandbox.ts`) or bound as the
   `tools` argument of the evaluated function
@@ -415,17 +415,17 @@ delegation ladder. It adds no action, no table, no loop, and no actor builder.
    work to one that exists, in the advertised JSON Schema, the sandbox
    declaration and the dispatch.
 2. Reuse the child substrate. `createTemporaryAgentPort`
-   (`packages/core/src/subordinates/temporary.ts`) drives the same `SubordinateRuntime`
+   (`packages/core/src/subagents/temporary.ts`) drives the same `SubagentRuntime`
    a hire drives through spawn, assign and dismiss. The child is a real actor
    with its own window, tool loop and delegation surface until the depth cap.
    The three modules split by layer: `roster.ts` is the store, `support.ts` is
    the orchestration policy over it, and `temporary.ts` is this rung.
-3. Book it in the one roster. `workspace_subordinates` gains `lifetime` and the
+3. Book it in the one roster. `workspace_subagents` gains `lifetime` and the
    `task_event_id` of the open assignment. A task-lifetime row is listed while
    it works and archived when it answers. There is no second table and no
    second read model.
-4. Correlate through the event log. The assignment is a `subordinate_task`
-   event and the answer a `subordinate_report` citing it. A live waiter consumes
+4. Correlate through the event log. The assignment is a `subagent_task`
+   event and the answer a `subagent_report` citing it. A live waiter consumes
    that report inline so the asking call returns it. With no waiter the report
    stays an ordinary correlated event that wakes the parent.
 5. Teach the LLM through the prompt template, never a literal. The text is in

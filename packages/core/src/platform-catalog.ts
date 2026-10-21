@@ -1069,7 +1069,7 @@ export const PLATFORM_CATALOG = {
       + 'so an O(1) clone is free in time and not in quota. Causality was established by '
       + 'freeing 5 GiB and retrying successfully '
       + '(~/Nimbus/scratchpad/do-sqlite-fork-feasibility.md §4). Every Kinu fork and '
-      + 'subordinate is a facet, so this is one shared 10 GB across a whole exploration tree: '
+      + 'subagent is a facet, so this is one shared 10 GB across a whole exploration tree: '
       + 'and see do.storage.size_is_per_object, because NOTHING on the platform reports the '
       + 'shared total. Accounting is LOGICAL rather than physical: a 1.058 GB facet cloned nine '
       + 'times is roughly 10.58 GB logical across ten databases, and all of them succeeded before '
@@ -1737,7 +1737,7 @@ export const PLATFORM_CATALOG = {
     observable: [{ context: 'the setAlarm call', message: 'Error: Facets currently cannot set alarms.' }],
     firstPartySignal: true,
     notes:
-      'Directly constrains this repo: forks and subordinates are facets, so a head cannot '
+      'Directly constrains this repo: forks and subagents are facets, so a head cannot '
       + 'schedule its own resumption, its own timeout, or its own recovery sweep. Everything '
       + 'time-driven must route through the root\'s single alarm (see do.alarm.wall_ms), which '
       + 'is also the only alarm there is.',
@@ -1997,13 +1997,13 @@ export const PLATFORM_CATALOG = {
     date: '2026-08-17',
     trigger: 'mapping a Durable Object id to a class, or correlating telemetry on ctx.id, for a facet',
     onBreach:
-      'every facet is labelled as its root\'s class: every head and every subordinate reads as '
+      'every facet is labelled as its root\'s class: every head and every subagent reads as '
       + 'an OrchestratorAgent, and nothing contradicts the label',
     observable: [],
     firstPartySignal: false,
     notes:
       'A CORRECTNESS TRAP FOR ANY PER-AGENT VIEW, not just for tracing. Kinu spawns every '
-      + 'subordinate and every exploration head as a facet, so an id-keyed roster, an id-keyed '
+      + 'subagent and every exploration head as a facet, so an id-keyed roster, an id-keyed '
       + 'log field or an id-keyed UI grouping silently collapses the whole tree into one '
       + 'orchestrator. Correlate on selfPath. This is the "correct, wired, dead" shape at the '
       + 'identity layer: the map returns a class name, the name is wrong, and nothing fails.',

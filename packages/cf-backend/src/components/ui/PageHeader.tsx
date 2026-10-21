@@ -42,7 +42,7 @@ export function PageHeader({ icon, back, title, rule = "always", children, class
   className?: string;
 }) {
   return (
-    <header className={`flex min-h-9 flex-wrap items-center gap-x-2.5 gap-y-2 ${rule === "always" ? "border-b pb-5" : "lg:border-b lg:pb-5"} p-border ${className}`}>
+    <header className={`flex min-h-9 flex-wrap items-center gap-x-3 gap-y-2 ${rule === "always" ? "border-b pb-5" : "lg:border-b lg:pb-5"} p-border ${className}`}>
       {back === undefined
         ? <span className="flex shrink-0 p-text-3 [&>svg]:size-5" aria-hidden>{icon}</span>
         : (
@@ -51,7 +51,7 @@ export function PageHeader({ icon, back, title, rule = "always", children, class
             <ArrowLeftIcon size={18} />
           </Link>
         )}
-      <h1 className="p-page-title">{title}</h1>
+      <h1 className="t-page-title">{title}</h1>
       {children !== undefined && children !== null && children !== false && <div className="p-page-actions ml-auto flex items-center gap-2">{children}</div>}
     </header>
   );

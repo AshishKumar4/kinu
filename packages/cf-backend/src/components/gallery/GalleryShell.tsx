@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Outlet } from "react-router-dom";
 import { Effect } from "effect";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { detach, showing } from "@kinu.run/core/obs";
 import Layout from "@/components/layout";
 import { KinuLogo } from "@/components/ui/KinuLogo";

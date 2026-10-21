@@ -34,7 +34,7 @@ export function CharactersFrame() {
         <section key={size} className="space-y-3" data-mascot-size={size}>
           {STATES.map((state) => (
             <div key={state} className="flex flex-wrap items-center gap-3" data-mascot-state={state}>
-              <span className="w-20 p-meta p-text-3">{state}</span>
+              <span className="w-20 t-meta p-text-3">{state}</span>
               {COLOURS.map(({ colour, seed }) => <ChatMascot key={seed} seed={seed} colour={colour} activity={state} size={size} />)}
             </div>
           ))}

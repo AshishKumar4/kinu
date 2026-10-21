@@ -4,7 +4,8 @@
  * `listPendingActions` is host-owned and never a slate data source.
  */
 import { useCallback, useMemo } from "react";
-import { Badge, Loader } from "@cloudflare/kumo";
+import { Badge } from "@/components/ui/Badge";
+import { Loader } from "@/components/ui/Loader";
 import {
   ClockIcon, PulseIcon, WarningCircleIcon,
   CaretRightIcon, ShieldWarningIcon,
@@ -16,12 +17,14 @@ import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { Section } from "./shared";
-import { HelperRow, PlanProgress, TaskTree } from "./work-tasks";
+import { SubagentRow, PlanProgress, TaskTree } from "./work-tasks";
 import { InspectedRow, JobCard } from "./work-jobs";
 import type { SurfaceKind } from "@kinu.run/core";
 import { WorkPlans } from "./WorkPlans";
 import type { WorkspaceWorkRead } from "./use-workspace-work";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Group } from "@/components/ui/Group";
+import { Pressable } from "@/components/ui/Pressable";
 
 /** Kinds the attention stack decides: their rows open its card. */
 const STACKED: ReadonlySet<PendingActionKind> = new Set(["deferred_action"]);
@@ -71,7 +74,7 @@ export function WorkTab({
 
   const openTasks = taskRows.filter(({ task }) => taskTreePhase(task) !== "settled");
   const closedTasks = taskRows.filter(({ task }) => taskTreePhase(task) === "settled");
-  const helpers = useMemo(() => (agents?.list ?? []).filter((agent) => agent.category === "background"), [agents]);
+  const subagents = useMemo(() => (agents?.list ?? []).filter((agent) => agent.category === "background"), [agents]);
   const runningJobs = backgroundJobs.filter((job) => jobPhase(job, Date.now()) !== "settled");
   const settledJobs = backgroundJobs.filter((job) => jobPhase(job, Date.now()) === "settled");
 
@@ -84,8 +87,8 @@ export function WorkTab({
   if (nothingAtAll) {
     return (
       <p className="py-1">
-        <span className="block p-row-text p-text-2">No work yet</span>
-        <span className="mt-1 block p-meta p-text-3">Plans, tasks and jobs show here while they run, and stay in the Journal once they finish.</span>
+        <span className="t-body block p-text-2">No work yet</span>
+        <span className="t-meta mt-1 block p-text-3">Plans, tasks and jobs show here while they run, and stay in the Journal once they finish.</span>
       </p>
     );
   }
@@ -94,7 +97,7 @@ export function WorkTab({
     <div className="space-y-6 animate-fade-in">
       <WorkPlans work={work} onOpen={openPlan} />
       <NeedsYou pendingActions={pendingActions} onOpenAsk={onOpenAsk} onOpenSurface={onOpenSurface} onOpenPlan={onOpenPlan} />
-      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} inspected={inspectedWork} runningJobs={runningJobs} helpers={helpers} onOpenHelper={agents?.open} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
+      <WorkNow work={work} taskRows={taskRows} openTasks={openTasks} inspected={inspectedWork} runningJobs={runningJobs} subagents={subagents} onOpenSubagent={agents?.open} resource={taskResource} onRetry={reloadTasks} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} rpc={rpc} />
       <WorkJournal journal={journal} rpc={rpc} onRefreshJobs={onRefreshJobs} onOpenOwner={onReviewActor} />
     </div>
   );
@@ -118,10 +121,10 @@ function NeedsYou({ pendingActions, onOpenAsk, onOpenSurface, onOpenPlan }: {
   };
 
   return (
-    <div className="rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] bg-[var(--c-selected)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
+    <div className="rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] bg-[var(--c-selected)] px-[18px] pt-2 pb-3 [&_.p-label]:!text-[var(--c-accent-fg)]">
       <Section id="work-needs-you" title="Needs you"
         icon={<WarningCircleIcon size={14} className="p-warning" />}
-        badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
+        badge={<Badge>{pendingActions.length}</Badge>}>
         <div className="divide-y divide-dashed divide-[var(--c-dash)]">
           {pendingActions.map((action) => (
             <PendingRow key={action.id} action={action} onOpenSurface={onOpenSurface} onOpen={opener(action)} />
@@ -138,22 +141,22 @@ interface WorkTaskRow {
 }
 
 /** The read's tri-state gates only the work half, so a running job never waits behind the plan's spinner. */
-function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, helpers, onOpenHelper, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
+function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, subagents, onOpenSubagent, resource, onRetry, onRefreshJobs, onOpenOwner, rpc }: {
   work: WorkspaceWork | null;
   taskRows: WorkTaskRow[];
   openTasks: WorkTaskRow[];
   /** Turns and effects still owed, by their recorded phase. */
   inspected: readonly InspectedWork[];
   runningJobs: BackgroundJob[];
-  helpers: readonly PanelAgent[];
-  onOpenHelper?: (agent: PanelAgent) => void;
+  subagents: readonly PanelAgent[];
+  onOpenSubagent?: (agent: PanelAgent) => void;
   resource: AsyncResource<WorkspaceWork>;
   onRetry: () => void;
   onRefreshJobs: () => void;
   onOpenOwner?: (name: string, actorId: string) => void | Promise<void>;
   rpc: WorkspaceRpc;
 }) {
-  const nowEmpty = work !== null && openTasks.length === 0 && inspected.length === 0 && runningJobs.length === 0 && helpers.length === 0;
+  const nowEmpty = work !== null && openTasks.length === 0 && inspected.length === 0 && runningJobs.length === 0 && subagents.length === 0;
   const now = Date.now();
 
   if (nowEmpty && resource.status !== "error") return null;
@@ -188,9 +191,9 @@ function WorkNow({ work, taskRows, openTasks, inspected, runningJobs, helpers, o
             ))}
           </div>
         )}
-        {helpers.length > 0 && (
+        {subagents.length > 0 && (
           <div className="space-y-1">
-            {helpers.map((agent) => <HelperRow key={agent.key} agent={agent} onOpen={onOpenHelper} />)}
+            {subagents.map((agent) => <SubagentRow key={agent.key} agent={agent} onOpen={onOpenSubagent} />)}
           </div>
         )}
       </div>
@@ -211,19 +214,19 @@ function WorkJournal({ journal, rpc, onRefreshJobs, onOpenOwner }: {
   return (
     <Section id="work-journal" title="Journal"
       icon={<ClockIcon size={14} className="p-text-2" />}
-      badge={<Badge variant="secondary">{journal.length}</Badge>}>
-      <div className="space-y-3.5">
+      badge={<Badge>{journal.length}</Badge>}>
+      <div className="space-y-4">
         {days.map(({ label, rows }) => (
-          <div key={label} className="space-y-1.5">
-            <p className="p-eyebrow">{label}</p>
-            <div className="p-group">
+          <div key={label} className="space-y-2">
+            <p className="t-label">{label}</p>
+            <Group>
               {rows.map((row) => (
                 <div key={row.key} data-journal-row={row.kind}>
                   {row.kind === "job" && <JobCard grouped job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
                   {row.kind === "task" && <TaskTree grouped task={row.task} owner={row.owner} onOpenOwner={onOpenOwner} />}
                 </div>
               ))}
-            </div>
+            </Group>
           </div>
         ))}
       </div>
@@ -260,17 +263,17 @@ function PendingRow(
 
   const content = (
     <div className="min-w-0">
-      <div className="p-row-text p-text">{action.title}</div>
+      <div className="t-body p-text">{action.title}</div>
       {action.detail && (
-        <div className="mt-0.5 line-clamp-2 break-words p-meta p-text-3">{action.detail}</div>
+        <div className="t-meta mt-px line-clamp-2 break-words p-text-3">{action.detail}</div>
       )}
-      <div className="mt-0.5 p-meta p-text-3">
+      <div className="t-meta mt-px p-text-3">
         {timeAgo(action.at)}{home.cta === null ? "" : ` · ${home.cta}`}
       </div>
     </div>
   );
 
-  const icon = <Icon size={14} className="mt-0.5 shrink-0 p-warning" />;
+  const icon = <Icon size={14} className="mt-px shrink-0 p-warning" />;
   const surface = home.surface;
   const open = onOpen ?? (surface === null ? null : () => onOpenSurface(surface));
 
@@ -279,16 +282,11 @@ function PendingRow(
   }
 
   return (
-    <button
-      type="button"
-      onClick={open}
-      data-pending-action={action.id}
-      className="grid w-full grid-cols-[14px_minmax(0,1fr)_16px] items-start gap-2 rounded-md py-2 text-left transition-colors hover:p-hover"
-    >
+    <Pressable className="grid grid-cols-[14px_minmax(0,1fr)_16px] items-start gap-2 py-2" onClick={open} data-pending-action={action.id}>
       {icon}
       {content}
       <CaretRightIcon size={12} className="mt-1 shrink-0 justify-self-end p-text-3" />
-    </button>
+    </Pressable>
   );
 }
 
