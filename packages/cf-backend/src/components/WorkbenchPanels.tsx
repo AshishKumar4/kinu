@@ -123,7 +123,7 @@ export function WorkbenchPanels({ ref, workspace, scope, contents, chat, inspect
               layout.toggleCollapsed();
             }}
             onDoubleClick={layout.resetToDefault}
-            className="group z-[2] -ml-[5px] -mr-[8px] w-[13px] shrink-0 cursor-col-resize bg-transparent touch-none select-none focus:outline-none"
+            className="group z-[2] -ml-[5px] -mr-[8px] w-[13px] shrink-0 cursor-col-resize bg-transparent touch-none select-none"
           >
             {/* The library's `focus` state is any focus, a drag's too, which left the accent rule standing after it. */}
             <span aria-hidden="true" className="mx-auto block h-full w-[3px] bg-transparent transition-colors group-hover:bg-[var(--c-accent)]/60 group-focus-visible:bg-[var(--c-accent)] group-data-[separator=hover]:bg-[var(--c-accent)]/60 group-data-[separator=active]:bg-[var(--c-accent)]" />

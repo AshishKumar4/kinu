@@ -653,7 +653,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* A button is known by its label and its fill step: a quiet edge and lift (A4), never an input's 3:1 outline. Pressed is
    the darker fill alone; a shrink on a 28 px button reads as jitter. */
 .p-button-secondary { background: var(--c-button-bg); border-color: var(--c-button-line); color: var(--c-text); box-shadow: var(--shadow-button); }
-.p-button-secondary:is(:hover, [data-force="hover"]) { background: var(--c-button-bg-hover); border-color: var(--c-button-line-hover); }
+/* Hover steps the fill and keeps the edge: a darker edge over the lift read as a second outline in light. */
+.p-button-secondary:is(:hover, [data-force="hover"]) { background: var(--c-button-bg-hover); }
 .p-button-secondary:is(:active, [data-force="active"]) { background: var(--c-button-bg-active); box-shadow: none; }
 
 .p-button-primary { background: var(--c-accent); color: var(--c-accent-on); font-weight: 600; box-shadow: var(--shadow-primary); }
@@ -673,13 +674,10 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-button:disabled { cursor: default; box-shadow: none; }
 /* A busy button is disabled only to the pointer: it keeps its look and width, a spinner in its icon's place. */
 .p-button[aria-busy="true"] { cursor: progress; }
-.p-button-secondary:disabled:not([aria-busy]), .p-button-ghost:disabled:not([aria-busy]), .p-button-danger:disabled:not([aria-busy]) {
-  color: var(--c-text-3); background: transparent; border-color: var(--c-button-line);
-}
-.p-button-primary:disabled:not([aria-busy]), .p-button-destructive:disabled:not([aria-busy]) { background: var(--c-hover); color: var(--c-text-3); }
+/* One disabled look for every variant: a flat muted fill, muted ink, no edge and no lift. */
+.p-button:disabled:not([aria-busy]) { background: var(--c-hover); color: var(--c-text-3); border-color: transparent; box-shadow: none; }
 
 /* `data-force` draws a state at rest for the system frame (?frame=system), in place of the pointer and the keyboard. */
-.p-button:is(:focus-visible, [data-force="focus"]) { outline: 2px solid var(--c-focus); outline-offset: 2px; }
 
 /* A form's save bar (ui/SaveBar.tsx): floating at its column's foot, in and out over 220 ms. */
 .p-save-bar {
@@ -723,7 +721,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-row:is(:hover, [data-force="hover"]) { background: var(--c-hover); }
 .p-row[aria-current="true"] { background: var(--c-selected); }
-.p-row:focus-within:has(:focus-visible) { outline: 2px solid var(--c-focus); outline-offset: -2px; }
 .p-row-control { grid-template-columns: 32px minmax(0, 1fr) 120px auto 28px; }
 .p-row-state { display: contents; }
 @media (max-width: 639px) {
@@ -740,7 +737,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-row-action:is(:hover, [data-force="hover"]), .p-menu-trigger:is(:hover, [data-force="hover"]), .p-menu-trigger[data-popup-open] { background: var(--c-hover); color: var(--c-text); }
 .p-row-action:disabled { opacity: 0.4; }
-.p-row-action:focus-visible, .p-menu-trigger:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
 
 /* Menu: Kumo's dropdown at the row radius, items 32 (ui/Menu.tsx). */
 .p-menu { min-width: 180px !important; padding: 4px !important; border-radius: var(--r-row) !important; box-shadow: var(--shadow-menu) !important; }
@@ -753,7 +749,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-pressable:is(:hover, [data-force="hover"]) { background: var(--c-hover); }
 .p-pressable:is(:active, [data-force="active"]) { background: var(--c-pressed); }
-.p-pressable:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
 
 /* A busy button's spinner, in the icon's place. */
 .p-button-spinner {
@@ -770,7 +765,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-field::placeholder { color: var(--c-text-3); }
 .p-field:is(:hover, [data-force="hover"]) { border-color: var(--c-border-strong); }
-.p-field:is(:focus, [data-force="focus"]) { outline: none; border-color: var(--c-focus); }
 .p-field[aria-invalid="true"] { border-color: var(--c-danger); }
 .p-field:disabled { opacity: 0.5; cursor: default; }
 .p-field-md { height: 32px; }
@@ -794,7 +788,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-radio { border-radius: var(--r-pill); }
 .p-check[data-checked], .p-check[data-indeterminate], .p-radio[data-checked] { background: var(--c-accent); border-color: var(--c-accent); }
 .p-radio-dot { width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--c-accent-on); }
-.p-check:focus-visible, .p-radio:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
 .p-check[data-disabled], .p-radio[data-disabled] { opacity: 0.5; }
 
 /* Switch: a 32 by 18 track, a 14 thumb, white in both modes (ui/Switch.tsx). */
@@ -805,7 +798,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-switch[data-checked] { background: var(--c-accent); }
 .p-switch:disabled { opacity: 0.5; cursor: default; }
-.p-switch:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 2px; }
 .p-switch-thumb {
   width: 14px; height: 14px; border-radius: var(--r-pill); background: var(--c-button-bg);
   box-shadow: 0 1px 2px var(--c-shadow-drop); transition: transform var(--dur-state) var(--ease-glide);
@@ -823,7 +815,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-tabs-tab:hover { color: var(--c-text-2); }
 .p-tabs-tab[aria-current="page"] { color: var(--c-accent-fg); border-bottom-color: var(--c-accent); }
-.p-tabs-tab:focus-visible { outline: 2px solid var(--c-focus); outline-offset: -2px; }
 
 /* Chip: 24 tall and round, the status role (ui/Chip.tsx). */
 .p-chip {
@@ -842,7 +833,6 @@ body { background: var(--c-bg); color: var(--c-text); }
   border: 0; border-radius: var(--r-pill); background: transparent; color: inherit; opacity: 0.7; cursor: pointer;
 }
 .p-chip-remove:hover { opacity: 1; background: var(--c-hover); }
-.p-chip-remove:focus-visible { outline: 2px solid var(--c-focus); outline-offset: 1px; }
 
 /* Badge: what a thing is, 20 tall at the control radius (ui/Badge.tsx). */
 .p-badge {
@@ -1406,10 +1396,18 @@ body { background: var(--c-bg); color: var(--c-text); }
    sites carry `focus:outline-none` to suppress the browser's own ring
    before drawing their own border treatment; layered, that utility would
    win and leave those controls with no visible focus at all. */
-:focus-visible {
-  outline: 2px solid var(--c-accent);
-  outline-offset: 1px;
+:focus-visible, [data-force="focus"], [data-focus-box]:has(:focus-visible) {
+  /* Focus (docs/DESIGN-SYSTEM.md §1.1): one ring of --c-focus on every focusable, drawn here alone. On a control with an
+     edge (a secondary button, a field, a chip, a tab) it takes the edge's place and hugs it, so it reads as one outline,
+     never a grey hairline with a brass ring outside it. On a filled control it stands 2 px off: the page between is what
+     it contrasts with, since brass on a brass or danger fill measures 1.0 to 1.5:1 (palette-ux holds both). */
+  outline: 2px solid var(--c-focus);
+  outline-offset: var(--focus-gap, -1px);
+  border-color: var(--c-focus);
 }
+.p-button-primary, .p-button-destructive, .p-switch[data-checked], .p-check[data-checked], .p-radio[data-checked] { --focus-gap: 2px; }
+/* A field drawn as one box around its input and its icon (`data-focus-box`): the box takes the ring, the input none. */
+[data-focus-box] :focus-visible { outline: none; }
 
 /* Pressed: Kumo's controls carry no hook of their own, and a dim moves nothing, so a full-width row presses too. */
 :where(button, a[href], [role="button"], summary):not(:disabled, .p-tab):active {
@@ -1968,7 +1966,6 @@ body > .annotation-toolbar {
   transition: color var(--dur-state) ease-out, padding var(--dur-state) ease-out;
 }
 .p-bar-link:hover { color: var(--c-text-2); }
-.p-bar-link:focus-visible { outline: none; color: var(--c-text); text-decoration: underline; text-underline-offset: 4px; text-decoration-color: var(--c-accent); }
 .p-bar-tab[data-active] .p-bar-link { color: var(--c-text); font-weight: 500; }
 .p-bar-tab[data-title] .p-bar-link { color: var(--c-text); }
 .p-bar-tab[data-title]:not([data-active]) .p-bar-link:hover { color: var(--c-accent-fg); }
@@ -2006,7 +2003,7 @@ body > .annotation-toolbar {
   color: var(--c-text-3);
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
-.p-bar-action:hover, .p-bar-action:focus-visible { outline: none; background: var(--c-hover); color: var(--c-text); }
+.p-bar-action:is(:hover, :focus-visible) { background: var(--c-hover); color: var(--c-text); }
 .p-bar-action[data-danger]:hover, .p-bar-action[data-danger]:focus-visible { color: var(--c-danger); }
 .p-bar-rename { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 calc(var(--flare) + 6px) 2px; }
 .p-bar-rename input {
@@ -2015,12 +2012,10 @@ body > .annotation-toolbar {
   height: 26px;
   padding: 0 7px;
   border-radius: 7px;
-  border: 1px solid var(--c-accent);
+  border: 1px solid var(--c-field-border);
   background: var(--c-field);
   color: var(--c-text);
   font-size: 13px;
-  outline: none;
-  box-shadow: 0 0 0 3px var(--c-selected);
 }
 .p-bar-rename-error { font-size: 11px; color: var(--c-danger); white-space: nowrap; }
 .p-bar-new { position: relative; z-index: 1; display: flex; flex-shrink: 0; align-items: center; height: 38px; padding: 0 10px 2px 2px; }
@@ -2034,7 +2029,7 @@ body > .annotation-toolbar {
   color: var(--c-text-3);
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
-.p-bar-icon:hover, .p-bar-icon:focus-visible { outline: none; background: var(--c-hover); color: var(--c-text); }
+.p-bar-icon:is(:hover, :focus-visible) { background: var(--c-hover); color: var(--c-text); }
 /* The header's count of agents at work out of sight: the accent, so it reads in dark and light alike. */
 .p-agents-badge { background: var(--c-accent); color: var(--c-accent-on); box-shadow: 0 0 0 1.5px var(--c-bg); }
 .p-bar-icon[aria-current="page"], .p-bar-icon[aria-pressed="true"] { color: var(--c-text); }
@@ -2099,7 +2094,6 @@ body > .annotation-toolbar {
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out, box-shadow var(--dur-state) ease-out;
 }
 .p-tool:hover { color: var(--c-text); background: var(--c-hover); }
-.p-tool:focus-visible { outline: 1.5px solid var(--c-accent); outline-offset: 1px; }
 .p-tool[aria-current="true"] {
   padding: 0 9px 0 8px;
   color: var(--c-text);
@@ -2161,7 +2155,7 @@ body > .annotation-toolbar {
 }
 .p-page:hover { color: var(--c-text); background: var(--c-hover); }
 .p-page-link { display: flex; min-width: 0; align-items: center; gap: 6px; height: 100%; padding: 0 9px 0 8px; font-size: 12.5px; font-weight: 500; letter-spacing: -0.005em; white-space: nowrap; }
-.p-page-link:focus-visible { border-radius: 7px; outline: 1.5px solid var(--c-accent); outline-offset: 1px; }
+.p-page-link:focus-visible { border-radius: 7px; }
 .p-pages-row > .p-page:first-child, .p-page[data-open] { flex-shrink: 1; }
 .p-page[data-open] { color: var(--c-text); background: var(--c-surface); box-shadow: 0 0 0 1px var(--c-border), var(--shadow-tab); }
 .p-page[data-open] > .p-page-link > svg, .p-page-picker > svg:first-child { color: var(--c-accent-mark); }
@@ -2381,7 +2375,6 @@ body > .annotation-toolbar {
   transition: color var(--dur-state) ease-out, background-color var(--dur-state) ease-out, border-color var(--dur-state) ease-out;
 }
 .p-env-chip:hover { border-color: var(--c-border-strong); color: var(--c-text); }
-.p-env-chip:focus-visible { outline: 2px solid var(--c-accent); outline-offset: 1px; }
 .p-env-chip[aria-pressed="true"] {
   border-color: color-mix(in srgb, var(--c-accent) 38%, transparent);
   background: var(--c-selected);

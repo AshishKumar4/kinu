@@ -4670,8 +4670,8 @@ function Controls() {
         <div className="p-notice-info text-xs rounded-md px-3 py-2">Evolution changelog has 3 unseen entries.</div>
       </div>
       <div className="max-w-md space-y-2">
-        <input className="w-full px-3 py-1.5 border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]" placeholder="raw input (fork modal style)" />
-        <textarea rows={2} className="block w-full resize-y rounded-md border p-border p-bg px-3 py-3 text-sm leading-7 p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-selected)]" placeholder="mission textarea (home page style)" />
+        <input className="w-full px-3 py-1.5 border p-border p-card text-sm font-mono" placeholder="raw input (fork modal style)" />
+        <textarea rows={2} className="block w-full resize-y rounded-md border p-border p-bg px-3 py-3 text-sm leading-7 p-text placeholder:p-text-3 transition-all" placeholder="mission textarea (home page style)" />
       </div>
       <EmptyState icon={<BrainIcon size={32} />} title="No exploration trees yet" hint="Exploration trees appear when the agent runs agents.swarm with a depth to investigate subproblems." />
     </div>

@@ -82,7 +82,7 @@ function RowRenameEditor({ value, label, saveLabel, save, waiting, onDone }: {
             event.preventDefault();
             onDone();
           }}
-          className="min-w-0 flex-1 rounded-sm px-1.5 py-1 text-xs p-fill p-text border p-border focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-selected)]"
+          className="min-w-0 flex-1 rounded-sm px-1.5 py-1 text-xs p-fill p-text border p-border"
           aria-label={label}
         />
         <button

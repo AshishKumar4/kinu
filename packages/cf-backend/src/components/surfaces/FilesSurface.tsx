@@ -43,9 +43,9 @@ function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: (
       <span className="p-text-3 hidden @[30rem]:inline truncate">A file with this name is already here.</span>
       <span className="ml-auto flex shrink-0 gap-1">
         <button type="button" data-upload-keep onClick={onKeep}
-          className="rounded px-2 py-0.5 p-text-2 hover:p-text p-row-hover focus-visible:ring-1 focus-visible:ring-[var(--c-accent)] outline-hidden">Cancel</button>
+          className="rounded px-2 py-0.5 p-text-2 hover:p-text p-row-hover">Cancel</button>
         <button type="button" data-upload-confirm onClick={onReplace} autoFocus
-          className="rounded px-2 py-0.5 p-accent hover:underline focus-visible:ring-1 focus-visible:ring-[var(--c-accent)] outline-hidden">Replace</button>
+          className="rounded px-2 py-0.5 p-accent hover:underline">Replace</button>
       </span>
     </div>
   );
@@ -567,7 +567,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             data-files-list
             tabIndex={0}
             onKeyDown={onKeyDown}
-            className={`group/list flex-1 min-w-0 overflow-y-auto pb-1 text-xs outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--c-accent)] ${dragOver ? "outline-dashed outline-2 -outline-offset-2 outline-[var(--c-accent)]" : ""}`}
+            className={`group/list flex-1 min-w-0 overflow-y-auto pb-1 text-xs ${dragOver ? "outline-dashed outline-2 -outline-offset-2 outline-[var(--c-accent)]" : ""}`}
             {...listDrop}
           >
             {columns}

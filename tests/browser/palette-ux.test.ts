@@ -46,7 +46,10 @@ const AA = TEST_REQUIREMENTS.wcagTextContrast.values.normal;
 /** WCAG's floor for a graphic that carries meaning: the open sidebar row's icon on its wash. */
 const NON_TEXT = TEST_REQUIREMENTS.wcagNonTextContrast.values.minimum;
 
-type Ground = (typeof SURFACES)[number] | (typeof WASHES)[number];
+/** The fills a focus ring hugs: it takes a field's or a secondary button's edge (index.css's one focus rule). */
+const HUGGED = ['--c-field', '--c-button-bg'] as const;
+
+type Ground = (typeof SURFACES)[number] | (typeof WASHES)[number] | (typeof HUGGED)[number];
 
 type Floors = typeof TEST_REQUIREMENTS.designContrastFloors.values;
 
@@ -59,7 +62,8 @@ function floorsOf(floor: Floors): readonly { readonly role: string; readonly gro
     { role: '--c-accent-fg', grounds: ['--c-bg', '--c-surface', '--c-selected'], floor: floor.quiet },
     { role: '--c-accent', grounds: ['--c-bg'], floor: floor.fill },
     { role: '--c-field-border', grounds: ['--c-bg', '--c-surface'], floor: floor.fill },
-    { role: '--c-focus', grounds: ['--c-bg', '--c-surface'], floor: floor.fill },
+    // The ring hugs a field and a secondary button, and stands off a filled control on the page.
+    { role: '--c-focus', grounds: ['--c-bg', '--c-surface', ...HUGGED], floor: floor.fill },
     ...STATUSES.map((status) => ({ role: `--c-${status}`, grounds: ['--c-bg', '--c-surface'] satisfies Ground[], floor: floor.quiet })),
   ];
 }
@@ -67,7 +71,7 @@ function floorsOf(floor: Floors): readonly { readonly role: string; readonly gro
 const ASKED = [
   ...SURFACES, ...WASHES, ...TEXT_ROLES, ...FILLS.flatMap(([ink, fill]) => [ink, fill]),
   ...STATUSES.flatMap((status) => [`--c-${status}`, `--c-${status}-tint`]),
-  '--c-accent', '--c-accent-mark', '--c-field', '--c-field-border', '--c-focus', '--c-border',
+  '--c-accent', '--c-accent-mark', '--c-field', '--c-field-border', '--c-focus', '--c-border', '--c-button-bg',
 ];
 
 /** What one theme and mode compute: the mode it landed on, and each asked token as a probe's `color` resolves it. */

@@ -613,10 +613,12 @@ function Overlays() {
     <Section id="overlays" title="Overlays and waiting" note="The save bar in each state (the last one cycles); dialogs at rest; a popover and a tooltip; empty, loading, meters, a table and a copy field.">
       {() => (
         <div className="space-y-4">
+          <div className="space-y-4" data-system-savebars>
           <div className="relative h-16"><SaveBar dirty saving={false} onSave={() => undefined} onDiscard={() => undefined} /></div>
           <div className="relative h-16"><SaveBar dirty saving onSave={() => undefined} onDiscard={() => undefined} /></div>
           <div className="relative h-16"><SaveBar dirty saving={false} error="Could not save: the workspace is asleep." onSave={() => undefined} onDiscard={() => undefined} /></div>
           <SaveBarCycle />
+          </div>
           <div className="grid gap-3">
             <DialogBox title="Rename the workspace" width="sm" footer={<><Button size="sm" variant="ghost">Cancel</Button><Button variant="primary">Rename</Button></>}>
               <Field label="Name"><TextInput defaultValue="API Worker" /></Field>

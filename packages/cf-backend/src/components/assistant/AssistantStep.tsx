@@ -44,7 +44,7 @@ export function AssistantStep({ choice, onChange, person }: {
           <label className="group/name flex w-fit max-w-full items-center gap-1.5">
             <input value={choice.name} maxLength={40} onChange={(event) => onChange({ ...choice, name: event.target.value })}
               aria-label="Its name" size={Math.max(4, choice.name.length + 1)}
-              className="min-w-0 rounded-md border border-transparent bg-transparent px-1 -mx-1 text-[17px] font-semibold p-text outline-none transition-colors hover:border-[var(--c-border)] focus:border-[var(--c-accent)]" />
+              className="min-w-0 rounded-md border border-transparent bg-transparent px-1 -mx-1 text-[17px] font-semibold p-text transition-colors hover:border-[var(--c-border)]" />
             <PencilSimpleIcon size={13} aria-hidden className="shrink-0 p-text-3 opacity-60 group-hover/name:opacity-100" />
           </label>
           <p className="mt-0.5 p-row-text p-text-2">An assistant that lives on Home: it reads your mail, tells you each morning what needs you, and takes on bigger jobs.</p>

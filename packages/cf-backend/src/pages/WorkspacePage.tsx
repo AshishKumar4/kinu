@@ -154,7 +154,7 @@ function ForkModal({
           onChange={(e) => setName(e.target.value)}
           placeholder="a generated address, e.g. quiet-harbor-3f9a2c1d"
           disabled={busy}
-          className="w-full px-3 py-1.5 border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]"
+          className="w-full px-3 py-1.5 border p-border p-card text-sm font-mono"
         />
         <p className="p-meta p-text-3">Lowercase letters, digits and hyphens, at most 31 characters</p>
       </div>

@@ -481,7 +481,7 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
                 aria-label="Base URL" className={`${inputCls} min-w-0 flex-1`} />
               <span className="basis-full" aria-hidden />
               <label data-invalid={windowValid ? undefined : ""}
-                className="flex h-9 w-full max-w-72 cursor-text items-center gap-2 rounded-md border border-[var(--c-field-border)] bg-[var(--c-surface)] px-3 text-sm p-text transition-all focus-within:border-[var(--c-accent)] focus-within:ring-1 focus-within:ring-[var(--c-selected)] data-[invalid]:border-[var(--c-danger)]">
+                data-focus-box className="flex h-9 w-full max-w-72 cursor-text items-center gap-2 rounded-md border border-[var(--c-field-border)] bg-[var(--c-surface)] px-3 text-sm p-text transition-all data-[invalid]:border-[var(--c-danger)]">
                 <span className="shrink-0 p-text-3">Context window</span>
                 <input value={compatWindow} onChange={(e) => setCompatWindow(e.target.value)} inputMode="numeric" placeholder="optional"
                   aria-label="Context window in tokens" aria-invalid={windowValid ? undefined : true}

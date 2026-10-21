@@ -57,7 +57,7 @@ export function CommentThread({ replies, agentName, seenAt, onReply, onDelete }:
             }}
             aria-label="Reply"
             placeholder="Reply"
-            className="min-h-16 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring"
+            className="min-h-16 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground"
             autoFocus
           />
           <div className="mt-1.5 flex justify-end gap-2">

@@ -97,7 +97,7 @@ const AnnotationCard = ({
           <textarea
             value={text}
             onChange={(event) => setText(event.target.value)}
-            className="min-h-20 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring"
+            className="min-h-20 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground"
             autoFocus
           />
           <div className="mt-2 flex justify-end gap-2">

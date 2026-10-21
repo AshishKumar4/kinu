@@ -1,6 +1,7 @@
 /**
  * Unsaved changes, on every form that saves as a whole (design review 2026-10-20, D2): a bar floating at its column's
- * foot while there is something to save, "Saved" for a moment after, then gone. In and out over 220 ms.
+ * foot while there is something to save, with Discard and Save; "Saved" alone for a moment after, then gone. In and
+ * out over 220 ms.
  */
 import { useEffect, useRef, useState } from "react";
 import { CheckIcon } from "@phosphor-icons/react";
@@ -62,13 +63,18 @@ export function SaveBar({ dirty, saving, error = null, onSave, onDiscard }: {
   if (error !== null) said = <p role="alert" className="min-w-0 truncate p-row-text p-danger" title={error}>{error}</p>;
   else if (saved && !dirty) said = <span className="flex items-center gap-1.5 p-row-text font-medium p-text-2"><CheckIcon size={14} className="p-success" />Saved</span>;
 
+  // Its buttons only while there is something to save: saved, there is nothing to discard or save, so it says so alone.
+  const acting = dirty || saving || error !== null;
+
   return (
     <div className="p-save-bar" data-state={shown ? "open" : "closed"} data-save-bar>
       {said}
-      <div className="ml-auto flex shrink-0 gap-2">
-        {onDiscard !== undefined && <Button variant="ghost" size="sm" disabled={!dirty || saving} onClick={onDiscard}>Discard</Button>}
-        <Button variant="primary" size="sm" disabled={!dirty || saving} onClick={onSave}>{saving ? "Saving…" : "Save"}</Button>
-      </div>
+      {acting && (
+        <div className="ml-auto flex shrink-0 gap-2">
+          {onDiscard !== undefined && <Button variant="ghost" size="sm" disabled={saving} onClick={onDiscard}>Discard</Button>}
+          <Button variant="primary" size="sm" busy={saving} onClick={onSave}>Save</Button>
+        </div>
+      )}
     </div>
   );
 }

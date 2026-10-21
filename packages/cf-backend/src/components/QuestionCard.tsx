@@ -84,7 +84,7 @@ function QuestionField({ question, draft, onDraft, busy }: {
               {draft.other !== null && (
                 <textarea value={draft.other} onChange={(event) => onDraft({ ...draft, other: event.target.value })} aria-label={`Your answer to: ${question.question}`}
                   placeholder="Write your answer" rows={2} autoFocus data-question-other
-                  className="mt-1 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring" />
+                  className="mt-1 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground" />
               )}
             </span>
           </label>
@@ -154,7 +154,7 @@ export function QuestionCard({ asking, busy, owed = false, onAnswer, onDismiss }
       ) : (
         <textarea disabled={busy} value={unsent.note} onChange={(event) => keep({ ...unsent, note: event.target.value })} rows={2} placeholder="A note for the agent"
           aria-label="A note for the agent"
-          className="mt-2 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring" />
+          className="mt-2 block w-full resize-y rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground" />
       )}
       {owed ? (
         <div role="status" className="mt-1 p-meta p-text-3">Your answer is on its way. The agent takes it when it next wakes.</div>

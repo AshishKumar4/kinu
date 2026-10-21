@@ -5,9 +5,8 @@ export { Card } from '@/components/ui/Card';
 
 export { Field } from '@/components/ui/Field';
 
-export const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outline-none transition-all"
+export const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text transition-all"
   + " border border-[var(--c-field-border)] bg-[var(--c-surface)]"
-  + " focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-selected)]"
   + " placeholder:p-text-3";
 
 /** An IME's own keystroke: the Enter that picks a candidate, the Escape that drops one. WebKit ends the composition

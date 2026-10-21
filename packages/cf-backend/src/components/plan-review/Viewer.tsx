@@ -463,7 +463,7 @@ const PlanCommentPopover = ({
               submit();
             }
           }}
-          className="min-h-24 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring"
+          className="min-h-24 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
           placeholder={isGlobal ? 'Add a global comment…' : 'Add a comment…'}
         />
       </div>

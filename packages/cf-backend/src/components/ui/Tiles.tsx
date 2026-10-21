@@ -10,7 +10,7 @@ import { WorkspaceLogo } from "@/components/Marks";
 export const TILE_GRID = "grid gap-5 [grid-template-columns:repeat(auto-fill,minmax(min(100%,300px),1fr))]";
 
 /** The tile's own box: the card radius and edge, its border darkening on hover. */
-export const TILE = "group flex h-full min-w-0 flex-col overflow-hidden rounded-[var(--r-card)] border p-border p-surface transition-[border-color] duration-[var(--dur-state)] ease-out hover:border-[var(--c-border-strong)] data-[force=hover]:border-[var(--c-border-strong)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--c-accent)]";
+export const TILE = "group flex h-full min-w-0 flex-col overflow-hidden rounded-[var(--r-card)] border p-border p-surface transition-[border-color] duration-[var(--dur-state)] ease-out hover:border-[var(--c-border-strong)] data-[force=hover]:border-[var(--c-border-strong)]";
 
 /** The cover's frame: 16:10, over a hairline; a picture or a typeset cover fills it. */
 const TILE_COVER = "relative block aspect-[16/10] w-full shrink-0 overflow-hidden border-b p-border";

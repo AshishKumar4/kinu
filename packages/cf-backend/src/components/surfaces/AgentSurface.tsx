@@ -163,11 +163,11 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
     <Section id="memory" title="Memory" icon={<BrainIcon size={14} className="p-text-2" />}
       badge={facts.length + notes.length > 0 ? <Badge variant="secondary">{facts.length + notes.length}</Badge> : undefined}>
       <div className="space-y-3">
-        <label className="flex h-8 items-center gap-2 rounded-lg border p-border p-fill px-2.5 focus-within:ring-1 focus-within:ring-[var(--c-accent)]">
+        <label data-focus-box className="flex h-8 items-center gap-2 rounded-lg border p-border p-fill px-2.5">
           <MagnifyingGlassIcon size={13} className="shrink-0 p-text-3" aria-hidden />
           <input value={search} onChange={(event) => { setSearch(event.target.value); onSearchMemory(event.target.value); }}
             placeholder="Search memory" aria-label="Search memory"
-            className="min-w-0 flex-1 bg-transparent text-sm p-text placeholder:p-text-3 focus:outline-none" />
+            className="min-w-0 flex-1 bg-transparent text-sm p-text placeholder:p-text-3" />
         </label>
 
         {/* The page's notice gives the reason once; this offers the retry. */}
