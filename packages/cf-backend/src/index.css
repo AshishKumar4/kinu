@@ -641,6 +641,10 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-tree-fold { display: flex; flex-shrink: 0; padding: 0; border: 0; background: none; color: var(--c-text-3); cursor: pointer; }
 .p-tree-fold:hover { color: var(--c-text); }
 
+/* Preformatted (ui/Preformatted.tsx): text as it is, on the recessed ground, scrolling within its own height. */
+.p-preformatted { margin: 0; padding: 4px 8px; overflow: auto; border-radius: var(--r-inner); background: var(--c-sunken); color: var(--c-text-2); }
+.p-preformatted-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* Rail (ui/Rail.tsx): a strip of the tabs above below its breakpoint, fading at its scrolling edge; a column of rows
    from it up, the open row on the selected ground. */
 .p-rail { display: flex; border-bottom: 1px solid var(--c-border); mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }
