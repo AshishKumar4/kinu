@@ -46,10 +46,11 @@ async function pick(page: Page, label: string, words: string): Promise<void> {
 
 /** An action by its words: a button, a link, or an item of the menu that is open (it draws once its trigger is pressed). */
 async function action(page: Page, words: string): Promise<void> {
-  const shown = (wanted: string) => [...document.querySelectorAll(`button, a, ${OPEN_MENU} [role="menuitem"]`)]
+  // Page code: the shared open-menu selector reaches it as an argument.
+  const shown = (wanted: string, menu: string) => [...document.querySelectorAll(`button, a, ${menu} [role="menuitem"]`)]
     .some((item) => item.textContent?.trim() === wanted && item instanceof HTMLElement && item.offsetParent !== null);
 
-  await page.waitForFunction(shown, {}, words);
+  await page.waitForFunction(shown, {}, words, OPEN_MENU);
   await page.$$eval(`button, a, ${OPEN_MENU} [role="menuitem"]`, (buttons, wanted) => {
     const button = buttons.find((item) => item.textContent?.trim() === wanted && item instanceof HTMLElement && item.offsetParent !== null);
 
