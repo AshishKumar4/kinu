@@ -2,6 +2,7 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /** The `file` tool: exact-match editor, honest read, read-before-write gate. Asserts the model-facing contract. */
 
 import { describe, expect, test } from 'bun:test';
+import { renderThrownChain } from '../src/obs/index';
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { applyFileEdits, FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
@@ -513,6 +514,23 @@ function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
 }
 
 const StringResultSchema = v.string();
+
+// H3, 2026-10-21: 11 trials read `skills/slates/SKILL.md`, which starts at the home, for the
+// `vfs://skills/slates/SKILL.md` the prompt names. The refusal names the address that is there, and only that one.
+test("a relative path that named nothing is told the plane's address that names a file, if one does", async () => {
+  const { call } = toolFor(memoryVfs({ '/skills/slates/SKILL.md': '# Slates' }));
+
+  const refusal = async (path: string) => {
+    const [read] = await Promise.allSettled([call({ op: 'read', path })]);
+
+    return read.status === 'rejected' ? renderThrownChain({ cause: read.reason }) : 'it read';
+  };
+
+  expect({ skill: await refusal('skills/slates/SKILL.md'), nowhere: await refusal('skills/absent/SKILL.md') }).toEqual({
+    skill: expect.stringContaining('did you mean `vfs://skills/slates/SKILL.md`?'),
+    nowhere: expect.not.stringContaining('did you mean'),
+  });
+});
 
 test('a denied edit keeps its counter through the persisted file-edit event', async () => {
   const { stores, db } = createTestRuntime();
