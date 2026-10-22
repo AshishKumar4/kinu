@@ -1,7 +1,7 @@
 /**
  * `agents.list` on the cloud, through each agent's own `agents` tool: the caller's subtree, read from the read model the
- * person's sidebar draws. Main sees the whole three-level tree; the hire in the middle sees itself and its own hire,
- * never Main. And a search counts as starting agents: at the depth cap the tool offers no `swarm`, as it offers no hire.
+ * person's sidebar draws, then its peers. Main sees the whole three-level tree; the hire in the middle sees itself and
+ * its own hire, then Main as a peer, without what Main started. And a search counts as starting agents: at the depth cap the tool offers no `swarm`, as it offers no hire.
  * The CLI's twin is cli-backend/tests/agents-tree.test.ts.
  */
 import { describe, expect, test } from 'bun:test';
@@ -103,7 +103,7 @@ async function mainTurn(workspace: StartedHarness, text: string): Promise<void> 
 }
 
 describe('agents.list is the caller\'s own subtree', () => {
-  test('main lists all three levels; the hire in the middle lists itself and its hire, never main', async () => {
+  test('main lists all three levels; the hire in the middle lists itself and its hire, then main alone as a peer', async () => {
     const gateway = delegatingGateway();
     const workspace = gatewayWorkspace(gateway);
 
@@ -113,7 +113,8 @@ describe('agents.list is the caller\'s own subtree', () => {
     await runDelegatedTask(workspace, leadId, 'List your tree.');
     await mainTurn(workspace, 'List your tree.');
 
-    expect(positions(listed(gateway.runs, LEAD.name).tree)).toEqual([[LEAD.name, 1, true], [LEDGER.name, 2, false]]);
+    expect(positions(listed(gateway.runs, LEAD.name).tree)).toEqual([[LEAD.name, 1, true], [LEDGER.name, 2, false], ['main', 0, false]]);
+    expect(listed(gateway.runs, LEAD.name).tree[2]).toMatchObject({ peer: true });
     expect(positions(listed(gateway.runs, 'main').tree)).toEqual([['main', 0, true], [LEAD.name, 1, false], [LEDGER.name, 2, false]]);
     expect(listed(gateway.runs, 'main').tree[2]).toMatchObject({ kind: 'hired' });
   });

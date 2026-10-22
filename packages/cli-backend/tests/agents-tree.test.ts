@@ -1,7 +1,7 @@
 /**
  * `agents.list` on the CLI, through each agent's own `agents` tool: the caller's subtree, read from the read model the
- * cloud's sidebar draws, over the tree's one database. Main sees the whole three-level tree; the hire in the middle sees
- * itself and its own hire, never Main. And a search counts as starting agents: at the depth cap the tool offers no
+ * cloud's sidebar draws, over the tree's one database, then its peers. Main sees the whole three-level tree; the hire in
+ * the middle sees itself and its own hire, then Main as a peer, without what Main started. And a search counts as starting agents: at the depth cap the tool offers no
  * `swarm`, as it offers no hire. The cloud's twin is cf-backend/tests/unit-agents-tree.test.ts.
  */
 import { mkdirSync } from 'node:fs';
@@ -148,7 +148,7 @@ async function hosted(model: ReturnType<typeof delegatingModel>['model']): Promi
 const positions = (tree: ReadonlyArray<v.InferOutput<typeof RowSchema>>) => tree.map((row) => [row.name, row.depth, row.you === true]);
 
 describe('agents.list is the caller\'s own subtree', () => {
-  test('main lists all three levels; the hire in the middle lists itself and its hire, never main', async () => {
+  test('main lists all three levels; the hire in the middle lists itself and its hire, then main alone as a peer', async () => {
     const { model, trees } = delegatingModel();
     const host = await hosted(model);
 
@@ -160,7 +160,7 @@ describe('agents.list is the caller\'s own subtree', () => {
       await (await host.acquire('root')).send('List your tree.', { id: crypto.randomUUID() });
       await host.settle();
 
-      expect(positions(trees.get(LEAD.name)?.tree ?? [])).toEqual([[LEAD.name, 1, true], [LEDGER.name, 2, false]]);
+      expect(positions(trees.get(LEAD.name)?.tree ?? [])).toEqual([[LEAD.name, 1, true], [LEDGER.name, 2, false], ['main', 0, false]]);
       expect(positions(trees.get('main')?.tree ?? [])).toEqual([['main', 0, true], [LEAD.name, 1, false], [LEDGER.name, 2, false]]);
       expect(trees.get('main')?.tree[2]).toMatchObject({ kind: 'hired' });
     } finally {

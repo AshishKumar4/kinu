@@ -1,8 +1,9 @@
 /**
  * What `agents.list` shows: the caller's own subtree of the workspace's agents, from the read model the person's sidebar
- * draws (`readWorkspaceAgents`), so the tool and the sidebar read one walk. Main's subtree is the whole workspace; a
- * hire's is itself and what it started. The order and the cap are OMP's hub roster's: running before idle before
- * retired, each by its last activity, 32 rows unless asked for more, and what is retired only when asked.
+ * draws (`readWorkspaceAgents`), so the tool and the sidebar read one walk, then its peers. Main's subtree is the whole
+ * workspace; a hire's is itself and what it started, and its peers are Main and the agents the person made, each without
+ * what it started. The order and the cap are OMP's hub roster's: running before idle before retired, each by its last
+ * activity, 32 rows unless asked for more, and what is retired only when asked.
  */
 import type { AgentActivity, PanelAgent } from '../read-models/workspace-agents';
 import type { EventLog } from '../events/hub/log';
@@ -38,6 +39,8 @@ interface AgentTreeRow {
   /** Its reports to the caller that no turn of the caller's has read yet. */
   readonly unreadReports?: number;
   readonly you?: true;
+  /** Main, or an agent the person made, outside the caller's subtree: listed without what it started. */
+  readonly peer?: true;
 }
 
 export interface AgentTreeView {
@@ -136,20 +139,23 @@ export function agentTree(input: {
 
   const counts = { running: 0, waiting: 0, idle: 0, failed: 0, retired: 0 };
   const listed: AgentTreeRow[] = [];
+  const walked = new Set<string>();
+
+  const count = (agent: PanelAgent): void => {
+    if (retiredAgent(agent)) counts.retired += 1;
+    else if (agent.activity === 'working') counts.running += 1;
+    else if (agent.activity === 'waiting') counts.waiting += 1;
+    else if (agent.activity === 'failed') counts.failed += 1;
+    else counts.idle += 1;
+  };
 
   const visit = (agent: PanelAgent, own: boolean): void => {
-    const gone = retiredAgent(agent);
+    walked.add(agent.key);
 
-    if (!own) {
-      if (gone) counts.retired += 1;
-      else if (agent.activity === 'working') counts.running += 1;
-      else if (agent.activity === 'waiting') counts.waiting += 1;
-      else if (agent.activity === 'failed') counts.failed += 1;
-      else counts.idle += 1;
-    }
+    if (!own) count(agent);
 
     // Retired, it is counted and listed only when asked for; what it started is walked all the same.
-    if (own || !gone || input.retired) listed.push(row(agent));
+    if (own || !retiredAgent(agent) || input.retired) listed.push(row(agent));
 
     for (const child of ordered(agent.key)) visit(child, false);
   };
@@ -158,6 +164,17 @@ export function agentTree(input: {
 
   if (self !== undefined) visit(self, true);
   else for (const child of ordered(input.owner)) visit(child, false);
+
+  // Main and the agents the person made, where the walk did not reach them: one row each, what they started unwalked.
+  const peers = input.agents
+    .filter((agent) => (agent.category === 'main' || agent.category === 'user') && !walked.has(agent.key) && agent.key !== input.owner)
+    .sort((a, b) => Number(b.category === 'main') - Number(a.category === 'main') || rank(a) - rank(b) || lastActive(b) - lastActive(a) || a.label.localeCompare(b.label));
+
+  for (const peer of peers) {
+    count(peer);
+
+    if (!retiredAgent(peer) || input.retired) listed.push({ ...row(peer), peer: true });
+  }
 
   const limit = Math.min(Math.max(1, Math.floor(input.limit)), AGENT_TREE_MAX);
   const tree = listed.slice(0, limit);
