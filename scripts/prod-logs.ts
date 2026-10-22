@@ -81,7 +81,7 @@ import { ALARM_WORK, classifyErrorCode, HOSTED_ALARM_WORK } from '@kinu.run/core
 import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { recordStep } from './deploy-report';
 import { restAnswer } from './cloudflare-rest';
-import { deployLanded, listDeployments } from './worker-deployments';
+import { listDeployments, resetCause, type Deployment } from './worker-deployments';
 import { requireCloudflareAccountId } from './infra-cloudflare';
 import { INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig } from './infra-manifest';
 import {
@@ -420,9 +420,9 @@ export class Telemetry {
     return [eq('$metadata.service', this.args.worker), ...filters];
   }
 
-  /** Whether a deploy of the worker other than `version`'s own landed inside the window (worker-deployments.ts). */
-  async deployInside(version: string): Promise<boolean> {
-    return deployLanded(await listDeployments(this.args.worker, this.api), this.args, version);
+  /** The worker's newest deploys (worker-deployments.ts `resetCause`), which say whether a code-update reset was a deploy's. */
+  async deployments(): Promise<readonly Deployment[]> {
+    return await listDeployments(this.args.worker, this.api);
   }
 
   private async result(body: QueryBody): Promise<v.InferOutput<typeof TelemetryResult>['result']> {
@@ -1092,8 +1092,9 @@ function effectText(sample: EffectSample | undefined): string {
   return sample === undefined ? '' : `; e.g. object ${sample.object}, turn ${sample.sequence}: ${sample.detail}`;
 }
 
-/** The runtime's error for a call a code update cut off (platform-catalog.ts do.reset.transient): a deploy's only when
- *  one landed inside the window ({@link deployLanded}); otherwise the version's own (do.storage.write_await_reset). */
+/** The runtime's error for a call a code update cut off (platform-catalog.ts do.reset.transient): a deploy's only when one
+ *  landed at or before it within the rollover's span (worker-deployments.ts `resetCause`); otherwise the version's own
+ *  (do.storage.write_await_reset). */
 const CODE_UPDATE_RESET = PLATFORM_CATALOG['do.reset.transient'].observable.find((seen) => seen.context === 'code deploy')?.message ?? '';
 
 /** An entrypoint's uncaught exceptions, less those a code update caused. */
@@ -1199,7 +1200,16 @@ export function versionSignals(read: VersionRead): WindowSignal[] {
  *  held none of an entrypoint that threw 20 times beside two that threw 184 (staging, 2026-10-08). Its text is the last
  *  line the request logged, the error that ended it; the object is the invocation's, or, for an RPC entrypoint, the
  *  call's in its trace that has one. The first exception a code update did not cause is the one shown. */
-async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoints: ReadonlySet<string>, rolled: boolean): Promise<ExceptionSample[]> {
+/** How many of `items` share each key, in the order the keys first came. */
+function countBy<T>(items: readonly T[], keyFor: (item: T) => string): Map<string, number> {
+  const counts = new Map<string, number>();
+
+  for (const item of items) counts.set(keyFor(item), (counts.get(keyFor(item)) ?? 0) + 1);
+
+  return counts;
+}
+
+async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoints: ReadonlySet<string>, rolled: (at: number) => boolean): Promise<ExceptionSample[]> {
   const samples: ExceptionSample[] = [];
 
   for (const entrypoint of entrypoints) {
@@ -1211,8 +1221,8 @@ async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoi
   return samples;
 }
 
-/** `rolled`: a deploy landed inside the window, so a code update's words are its, and a sample passes over them. */
-async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoint: string, rolled: boolean): Promise<ExceptionSample | undefined> {
+/** `rolled`: whether a deploy caused a code-update reset at that instant; a sample passes over only such a reset's words. */
+async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoint: string, rolled: (at: number) => boolean): Promise<ExceptionSample | undefined> {
   const ended = await t.sampleEvents([
     ...scope, eq('$metadata.type', 'cf-worker-event'), eq('$workers.outcome', 'exception'), eq('$workers.entrypoint', entrypoint),
   ], 10);
@@ -1227,10 +1237,13 @@ async function exceptionSample(t: Telemetry, scope: readonly Filter[], entrypoin
     if (request === '') continue;
     const logged = await t.sampleEvents([eq('$metadata.requestId', request), eq('$metadata.type', 'cf-worker')], 20);
 
-    const message = [...logged].sort((a, b) => b.timestamp - a.timestamp)
-      .map((line) => line.$metadata.error ?? line.source.message ?? '').find((text) => text !== '') ?? '';
+    const said = [...logged].sort((a, b) => b.timestamp - a.timestamp)
+      .map((line) => ({ at: line.timestamp, text: line.$metadata.error ?? line.source.message ?? '' })).find((line) => line.text !== '');
 
-    if ((rolled && message === CODE_UPDATE_RESET) || (message === '' && textless !== undefined)) continue;
+    const message = said?.text ?? '';
+    const deployed = said !== undefined && message === CODE_UPDATE_RESET && rolled(said.at);
+
+    if (deployed || (message === '' && textless !== undefined)) continue;
     const own = event.$workers.durableObjectId ?? '';
     const trace = event.$metadata.traceId ?? '';
     const traced = own !== '' || trace === '' ? [] : await t.sampleEvents([eq('$metadata.traceId', trace), eq('$metadata.type', 'cf-worker-event')], 20);
@@ -1271,13 +1284,23 @@ export async function versionRead(t: Telemetry, around: Telemetry, versionId: st
   const ended = await t.count({ filters: [...invocations, notOk], groupBy: ['$workers.outcome', '$workers.entrypoint'], distinct: DO_ID, limit: 100 });
 
   // One runtime error line per invocation the reset ended; their request ids need not be theirs (staging 3fe2aa81: three
-  // KinuDevbox calls ended at 02:41:09.120Z, and all three lines named one request). They are a deploy's only when one
-  // landed in the window; with none they stay the version's own exceptions.
-  const rolled = await t.deployInside(versionId);
+  // KinuDevbox calls ended at 02:41:09.120Z, and all three lines named one request). Each is a deploy's only when a deploy
+  // landed at or before it, within the rollover's span; any other stays the version's own exception, even beside a
+  // deploy later in the window.
+  const { events: resets, sampling: resetSampling } = await t.events([...scope, eq('$metadata.type', 'cf-worker'), eq('$metadata.error', CODE_UPDATE_RESET)], EVENT_CAP);
 
-  const deployResets = rolled ? await t.count({
-    filters: [...scope, eq('$metadata.type', 'cf-worker'), eq('$metadata.error', CODE_UPDATE_RESET)], groupBy: ['$workers.entrypoint'], limit: 100,
-  }) : [];
+  if (resets.length === EVENT_CAP || resetSampling > 1) throw new Error('code-update resets are capped or sampled; narrow the window before attributing each to a deploy');
+  const deployments = resets.length === 0 ? [] : await t.deployments();
+
+  const rolled = (at: number): boolean => {
+    const cause = resetCause(deployments, at, versionId);
+
+    if (cause === 'unknown') throw new Error(`the deployments listed do not reach back to ${new Date(at).toISOString()}, so whether a deploy caused that reset is unknown`);
+
+    return cause === 'deploy';
+  };
+
+  const deployResets = countBy(resets.filter((reset) => rolled(reset.timestamp)), (reset) => reset.$workers.entrypoint ?? '');
 
   const failed = await t.count({ filters: [...scope, eq('event', 'turn.terminal_effect_failed')], groupBy: ['fields.sequence'], limit: 500 });
   // `turn.terminal_effect`: the sequences' owed and settled rows, and their effects' parks and failures.
@@ -1305,7 +1328,7 @@ export async function versionRead(t: Telemetry, around: Telemetry, versionId: st
 
   const read = {
     ended: ended.map((row) => ({ outcome: row.groups[0] ?? '', entrypoint: row.groups[1] ?? '', count: row.count, objects: row.distinct })),
-    deployResets: deployResets.map((row) => ({ entrypoint: row.groups[0] ?? '', count: row.count })),
+    deployResets: [...deployResets].map(([entrypoint, count]) => ({ entrypoint, count })),
   };
 
   const threw = new Set(read.ended.filter((row) => row.outcome === 'exception' && versionThrew(read.deployResets, row) > 0)

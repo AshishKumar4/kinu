@@ -5211,6 +5211,35 @@ Not measured: closing an exec's stdin after its process has exited. The seam clo
 the exec (`containerExec`), and a close that rejects fails the exec and ends its process. A platform that rejected
 that close would fail every quick exec. rc30's staging canary is the first run that exercises it.
 
+D108. A rest gives up its container snapshot after 60 s, and a request that would start the box while it saves and
+stops is held until it can, instead of refused. The snapshot only speeds the next wake (D51); the rest committed the
+chain before it.
+
+What was measured.
+- On f44999 (`kinu-sdtest-su-0243`, build `13505cc13`), on 2026-10-22, the heartbeat began a rest at 03:31:02. It
+  listed no processes, its commit was skipped (nothing had changed), and `snapshotContainer()` began at 03:31:02.649.
+  The box logged nothing after that. No exec ran, so the stop never began. The take had not answered at 03:45:43,
+  when a code update reset the object. The heartbeat's callback had then run for 881 s. Every terminal attach from
+  03:41:18 was refused "this devbox is quiescing", and the pane showed only "Not connected". The next start attached
+  at 03:46:45.
+- In the week to 2026-10-22, the snapshot and the stop after a rest's commit took 0.15 to 6.1 s in each of the 40
+  rests on staging, production and the contract deployments. That is the time from the commit's `checkpoint.bytes`
+  line to the box's next line.
+- D51 measured a save at 4.1 to 9.5 s on Medium.
+
+What follows.
+- The rest waits 60 s for the take, more than six times the slowest save measured. After that it records why, stops,
+  and the next wake recovers from the chain. A take that lands later is owed for deletion and never woken from
+  (`Snapshots.abandon`; `hybrid.test.ts`).
+- While the box saves and stops, its readiness says so (`quiescing`), in plain words. The workspace asks again each
+  second until the box has stopped, and its next ask starts the box. The hold lasts at most 180 s: the slowest commit
+  measured (76.9 s, D50), the 60 s snapshot wait and the 5 s stop wait add to 142 s
+  (`unit-sandbox-base-wait.test.ts`).
+
+Not measured: why the take did not answer. It is a single hang in 41 rests, and no platform error came with it.
+The first start after the reset was refused once ("mounting the recovered layers exited 255: Can't open squashfs image:
+Not a directory"), and the start a minute later attached. That refusal is not explained here.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

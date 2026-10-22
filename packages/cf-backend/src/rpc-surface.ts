@@ -288,6 +288,8 @@ const ORCHESTRATOR_METHODS = [
   'connectionsChanged',
   // The account, DO-to-DO, when an account it shared with is deleted (`user/share-cards.ts`).
   'forgetPerson',
+  // The account, DO-to-DO, confirming a workspace's deletion (`user/workspaces.ts`, core's `confirmedDeletion`).
+  'storedWorkspace',
   'blueprintBundle',
   'readBlueprint',
   'shareBlueprintWith',
@@ -395,7 +397,7 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
 
 /** Never gated: a deletion must work when start throws, and must not start a workspace to delete it; the deploy's
  *  tables walk reads tables alone, and must not start every workspace to reach them. */
-const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'quietForDeletion', 'evalAbortActivation', 'opsTables']);
+const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'storedWorkspace', 'quietForDeletion', 'evalAbortActivation', 'opsTables']);
 
 export const ORCHESTRATOR_STARTED_RPC: readonly string[] = [
   ...ACTOR_AGENT_RPC_SURFACE,

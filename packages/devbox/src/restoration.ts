@@ -71,7 +71,8 @@ export type RestoreAdmission =
  *  waits for its base snapshot to be built and starts once told, the build being at `step` (D79). */
 export type RestoreReadiness =
   | RestoreAdmission
-  | { readonly kind: 'pending'; readonly reason: string; readonly building?: { readonly step: string | null } };
+  // `quiescing`: the box is saving and stopping, a rest's or a resize's; asked again once it has, it starts.
+  | { readonly kind: 'pending'; readonly reason: string; readonly building?: { readonly step: string | null }; readonly quiescing?: true };
 
 /** `opened` once, each {@link RestorePhase} as it lands, then `settled` once. */
 export type RestoreClockPhase = 'opened' | RestorePhase | 'settled';

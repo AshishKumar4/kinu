@@ -1,6 +1,6 @@
 import { Telemetry, gapStats, readToken, type Filter, type TelemetryEvent } from './prod-logs';
 import type { CanaryFinding } from './durability-canary-ledger';
-import { listDeployments, type Deployment } from './worker-deployments';
+import { listDeployments, resetCause, type Deployment } from './worker-deployments';
 
 const EVENT_LIMIT = 2000;
 
@@ -158,20 +158,23 @@ function activationRows(rows: readonly TelemetryEvent[], at: {
 }
 
 /**
- * Whether a deploy ended the activation before `current`: a new build, a resume on one, or the code-updated reset when a
- * deploy of the worker landed between the two activations. With none, that reset is the build's own
- * (platform-catalog.ts do.storage.write_await_reset), `unexcused`.
+ * Whether a deploy ended the activation before `current`: a new build, a resume on one, or a code-updated reset a deploy
+ * of the worker caused, landing at or before it within the rollover's span (worker-deployments.ts `resetCause`). Any
+ * other such reset is the build's own (platform-catalog.ts do.storage.write_await_reset), `unexcused`, whatever deploy
+ * came after it.
  */
 function deployEvidence(previous: CanaryActivation, current: CanaryActivation, rows: { readonly before: readonly TelemetryEvent[]; readonly during: readonly TelemetryEvent[] }, deployments: readonly Deployment[]) {
   const changedVersion = previous.version !== null && current.version !== null && previous.version !== current.version;
   const resumedOnNewBuild = rows.during.filter((row) => row.source.event === 'turn.resumed' && row.source.fields.sameBuild === 'no');
   const resetRows = rows.before.filter(codeUpdated);
-  const from = previous.at ?? Number.NEGATIVE_INFINITY;
-  const to = current.at ?? Number.POSITIVE_INFINITY;
-  const landed = deployments.some((deployment) => deployment.at > from && deployment.at <= to);
-  const deployReset = landed && resetRows.length > 0;
+  // A list that cannot say excuses nothing: such a reset stays the build's own.
+  const deployResets = resetRows.filter((row) => resetCause(deployments, row.timestamp) === 'deploy');
 
-  return { changedVersion, resumedOnNewBuild, resetRows, unexcused: deployReset ? [] : resetRows, deploy: changedVersion || resumedOnNewBuild.length > 0 || deployReset };
+  return {
+    changedVersion, resumedOnNewBuild, resetRows,
+    unexcused: resetRows.filter((row) => !deployResets.includes(row)),
+    deploy: changedVersion || resumedOnNewBuild.length > 0 || deployResets.length > 0,
+  };
 }
 
 /** Each activation after the first, and how the one before it ended; `around`: the active window, the driver's touches,
@@ -220,11 +223,11 @@ export function activationDisruptions(rows: readonly TelemetryEvent[], activatio
   return disruptions;
 }
 
-/** How an activation ended: a deploy, the build's own code-updated reset with no deploy, or an eviction. */
+/** How an activation ended: the build's own code-updated reset (whatever else came), a deploy, or an eviction. */
 function endingOf(deploy: boolean, reset: boolean): 'deploy' | 'reset' | 'eviction' {
-  if (deploy) return 'deploy';
+  if (reset) return 'reset';
 
-  return reset ? 'reset' : 'eviction';
+  return deploy ? 'deploy' : 'eviction';
 }
 
 function idleReport(rows: readonly TelemetryEvent[], activations: readonly CanaryActivation[], window: CanaryWindow | null) {

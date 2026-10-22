@@ -91,8 +91,12 @@ export interface ReasoningEffortWrite<Effort extends ReasoningEffort | null> { o
 /** A reasoning-effort write as a client reads it: null when the write cleared it. */
 export const ReasoningEffortWriteSchema = v.object({ ok: v.literal(true), effort: v.nullable(ReasoningEffortSchema) });
 
+/** A level of the caller's own: the answer is that level. */
+export function setReasoningEffort(config: AgentConfigStore, effort: ReasoningEffort): ReasoningEffortWrite<ReasoningEffort>;
 /** Null clears the setting: the tier's level applies again. */
 export function setReasoningEffort(config: AgentConfigStore, effort: null): ReasoningEffortWrite<null>;
+/** A level or a clear, as the workspace's `setReasoningEffort` takes either: the answer says which it was. */
+export function setReasoningEffort(config: AgentConfigStore, effort: ReasoningEffort | null): ReasoningEffortWrite<ReasoningEffort | null>;
 /** Wire input: the parameter stays as wide as a transport can deliver, so this setter validates. */
 export function setReasoningEffort(config: AgentConfigStore, effort: JsonValue): ReasoningEffortWrite<ReasoningEffort>;
 export function setReasoningEffort(config: AgentConfigStore, effort: JsonValue): ReasoningEffortWrite<ReasoningEffort | null> {

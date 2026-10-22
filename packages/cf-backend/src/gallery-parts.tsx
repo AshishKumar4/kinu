@@ -31,7 +31,7 @@ import { SlateInlineContext } from "@/components/slates/context";
 import { PartView, SealedContent, shownMarkup } from "@/components/sharing/PartView";
 import { SLATE_GALLERY_URL } from "@/gallery-slate-fallback";
 import { usePartHost } from "@/hooks/use-part-host";
-import { workspaceRpc } from "@/lib/workspace-rpc";
+import { answeringRpc } from "@/lib/workspace-rpc";
 import LiveSharePage from "@/pages/LiveSharePage";
 import PartFramePage from "@/pages/PartFramePage";
 
@@ -263,11 +263,7 @@ export function SharedLiveFrame() {
 export const SHARED_LIVE_ENTRY = `/shared/live/${WORKSPACE}/share-1`;
 
 /** The workspace's previews ask where the slate's page is served; its preview host answers there. */
-const previewRpc = workspaceRpc(async <T,>(method: string): Promise<T> => {
-  if (method !== "previewSlate") throw new Error(`The previews fixture answers previewSlate alone, not ${method}`);
-
-  return new Response(JSON.stringify({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } })).json<T>();
-});
+const previewRpc = answeringRpc({ previewSlate: () => ({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } }) });
 
 /** The owner's own previews of the slate, in its workspace: in the column, and in an answer in the chat. */
 export function PartPreviewsFrame() {

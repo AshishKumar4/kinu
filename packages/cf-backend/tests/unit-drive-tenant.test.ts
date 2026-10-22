@@ -48,12 +48,12 @@ describe("an account's Drive deleted", () => {
     expect(tables()).toEqual({ 'vfs:default:u1': 0, 'vfs:default:u1:s0': 0, 'vfs:default:u1:s1': 0 });
   });
 
-  test('not, where an object still holds its tables: the failure names it, its deletion\'s error as the cause', async () => {
+  test('not, where an object still holds its tables: the failure is its deletion\'s, naming the object', async () => {
     const { env } = drive(2, new Set(['vfs:default:u1:s1']));
 
     const [outcome] = await Promise.allSettled([destroyDriveTenant(env, 'u1')]);
     const failed = outcome.status === 'rejected' ? renderThrownChain({ cause: outcome.reason }) : 'it answered';
 
-    expect(failed).toMatch(/^the Drive's shard 1 still holds 3 of its own after its deletion[\s\S]*the drive tenant was deleted/u);
+    expect(failed).toMatch(/the Drive's shard 1[\s\S]*the drive tenant was deleted/u);
   });
 });
