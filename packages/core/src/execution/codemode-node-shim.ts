@@ -119,12 +119,13 @@ function fromBase64(text) {
 }
 
 /**
- * A path as the host resolves it. One the program named under a root (\`vfs://notes/a.md\`) reaches here as Node's path
- * rules joined it onto the working directory (\`<cwd>/vfs:/notes/a.md\`), and goes to the host as it was written.
+ * A path as the host resolves it. One the program named under a root (\`vfs://notes/a.md\`) reaches here joined onto the
+ * working directory (\`<cwd>/vfs://notes/a.md\`, or \`<cwd>/vfs:/notes/a.md\` where the engine's path rules fold the
+ * slashes), and goes to the host as it was written.
  */
 function hostPath(path) {
   const at = path.search(/\/[^\s/:]+:\//);
-  return at < 0 ? path : path.slice(at + 1).replace(':/', '://');
+  return at < 0 ? path : path.slice(at + 1).replace(/^([^\s/:]+):\/+/, '$1://');
 }
 
 /**

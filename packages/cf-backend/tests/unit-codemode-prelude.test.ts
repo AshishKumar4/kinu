@@ -94,13 +94,16 @@ describe("an eval program's fs and child_process are Nimbus's node-compat over t
       '});',
       'const called = await new Promise((resolve) => { cp.exec("echo hi", (error, stdout) => resolve(error === null)); });',
       'let sync = null;',
-      'try { fs.readFileSync("a.txt"); } catch (error) { sync = error.code; }',
+      'try { fs.readFileSync("a.txt"); } catch (error) { sync = error.message; }',
       'return { read, missing, spawned, called, sync };',
     ].join('\n'), { workspace }, WORKSPACE_ROOT, v.object({
       read: v.string(), missing: v.tuple([v.string(), v.string()]), spawned: v.tuple([v.number(), v.string()]), called: v.boolean(), sync: v.string(),
     }));
 
-    expect(answer).toEqual({ read: 'alpha', missing: ['ENOENT', 'b.txt'], spawned: [0, 'a.txt\n'], called: true, sync: 'EAGAIN' });
+    expect(answer).toEqual({
+      read: 'alpha', missing: ['ENOENT', 'b.txt'], spawned: [0, 'a.txt\n'], called: true,
+      sync: 'fs.readFileSync cannot run here: this sandbox reaches your workspace only asynchronously. Write instead: await require("fs/promises").readFile("a.txt")',
+    });
     expect(ran).toEqual([
       [`mkdir -p -- '${WORKSPACE_ROOT}/out/deep'`, undefined],
       [`mv -- '${WORKSPACE_ROOT}/a.txt' '${WORKSPACE_ROOT}/out/a.txt'`, undefined],
