@@ -9,7 +9,7 @@ import type { ModelMessage, Tool, ToolSet } from 'ai';
 import { jsonSchema, tool } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { attempt, diagnostics, inItsWords, settle, type KinuError } from '../obs/index';
+import { attempt, diagnostics, inItsWords, renderThrownChain, settle, type KinuError } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { AgentConfigStore } from '../config/store';
 import type { KinuExtension } from '../extension';
@@ -387,14 +387,14 @@ export class SessionAdvisor {
       const result: unknown = await offered.execute?.(input, { toolCallId: 'advisor', messages: [], context: undefined });
 
       return shown(renderToolResult(result), MESSAGE_CHARS);
-    }).pipe(Effect.catch((failure) => Effect.succeed(`The read failed: ${failure.message}`)));
+    }).pipe(Effect.catch((failure) => Effect.succeed(shown(`The read failed: ${renderThrownChain({ cause: failure })}`, MESSAGE_CHARS))));
   }
 
   /** One `advise` call: judged as every note is, said where the judgement says, then recorded. A failure here, a store's
    *  included, is this call's result, so the round's every call is still answered. */
   private advise(reviewed: ReviewedTurn, input: JsonValue, guards: UpdateGuards): Effect.Effect<string> {
     return inItsWords('unavailable', Effect.suspend(() => this.adviseOnce(reviewed, input, guards)))
-      .pipe(Effect.catch((failure) => Effect.succeed(`Not said: ${failure.message}`)));
+      .pipe(Effect.catch((failure) => Effect.succeed(shown(`Not said: ${renderThrownChain({ cause: failure })}`, MESSAGE_CHARS))));
   }
 
   private adviseOnce(reviewed: ReviewedTurn, input: JsonValue, guards: UpdateGuards): Effect.Effect<string, KinuError> {
