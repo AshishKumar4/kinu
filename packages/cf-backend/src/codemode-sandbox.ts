@@ -111,6 +111,8 @@ export interface ProgramLaunch {
   run(source: string, providers: ResolvedProvider[], opts?: { readonly deadlineMs?: number }): Promise<ProgramResult>;
   /** Who its programs run as, which one that imports from the workspace runs as there (`node-program.ts`); absent, none does. */
   readonly principal?: NodeProgramPrincipal;
+  /** Told each time one of its programs runs there. */
+  readonly ranOnNode?: () => void;
 }
 
 export interface CodemodeLauncherProps {
@@ -240,6 +242,7 @@ export class KinuSandboxExecutor {
       return { result: undefined, error: 'Imports from the workspace run the program in the workspace, which this call cannot: inline what it imports.' };
     }
 
+    this.#inner.ranOnNode?.();
     const [ran] = await Promise.allSettled([runNodeProgram({ code, imports, providers, principal, cwd: this.#node.cwd, crafted: this.#node.crafted, prelude: this.#prelude })]);
 
     return ran.status === 'fulfilled' ? ran.value : { result: undefined, error: renderThrownChain({ cause: ran.reason }) };

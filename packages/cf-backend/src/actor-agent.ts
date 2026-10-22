@@ -410,6 +410,9 @@ export function unownedWorkspace(): KinuError {
   return new KinuError('unavailable', 'This workspace has no owner yet: open it from the app or the CLI first.');
 }
 
+/** Set once a program of this workspace has run on its node (`node-program.ts`): its turns then start node as they open. */
+const NODE_PROGRAMS_RAN_KEY = 'kinu:node-programs-ran';
+
 export abstract class ActorAgent extends Agent<Env> {
   // Actor profile: these members are the whole difference between actor kinds.
 
@@ -1558,14 +1561,16 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** This activation's start of the workspace's node, once: its runtime is compiled once per object (ask 71). */
-  private _nodeWarm: Promise<void> | null = null;
+  private _nodeWarm: Promise<unknown> | null = null;
 
   /**
    * The workspace's node, cold in a fresh activation (3-7 s on Cloudflare, 2026-10-22), started once as a turn opens,
-   * off its path: the turn's first program that imports from the workspace (`node-program.ts`) finds it compiled.
+   * off its path: the turn's first program that imports from the workspace (`node-program.ts`) finds it compiled. Only
+   * in a workspace whose programs have run there: a started node keeps about 7.6 MB in this object's isolate (worker-heap
+   * gate, 2026-10-23), which a workspace that never imports should not hold.
    */
   protected warmWorkspaceNodeInBackground(): void {
-    if (this._nodeWarm !== null) return;
+    if (this._nodeWarm !== null || this.ctx.storage.kv.get(NODE_PROGRAMS_RAN_KEY) !== true) return;
     this._nodeWarm = hold(Effect.catchCause(Effect.promise(() => this.keepAliveWhile(async () => {
       await this.workspaceBox(this.shellId()).exec('node -e 0');
     })), recording({ doing: "starting the workspace's node as a turn opens", otherwise: 'unavailable' }, (failure) => {
@@ -2676,13 +2681,17 @@ export abstract class ActorAgent extends Agent<Env> {
     // A viewer's program holds none of the owner's secrets, and its egress spends none.
     const owner = as === 'owner';
 
-    return (online) => codemodeLauncher(
-      {
-        kinuNode: true,
-        egress: online ? { principal: owner ? { as: 'owner', workspace, actorId: actor, ownerUserId: this.getOwnerUserId() } : { as: 'viewer', workspace, actorId: actor } } : null,
-      },
-      () => this.account.commandEnvironment('run', owner ? 'owner' : 'viewer'),
-    );
+    return (online) => ({
+      ...codemodeLauncher(
+        {
+          kinuNode: true,
+          egress: online ? { principal: owner ? { as: 'owner', workspace, actorId: actor, ownerUserId: this.getOwnerUserId() } : { as: 'viewer', workspace, actorId: actor } } : null,
+        },
+        () => this.account.commandEnvironment('run', owner ? 'owner' : 'viewer'),
+      ),
+      // From now on its turns start the workspace's node as they open (`warmWorkspaceNodeInBackground`).
+      ranOnNode: () => { this.ctx.storage.kv.put(NODE_PROGRAMS_RAN_KEY, true); },
+    });
   }
 
   /**
