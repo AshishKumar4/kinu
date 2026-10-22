@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { AGENTS_COUNTER } from '../../scripts/browser-page';
 
 const AUDITOR_PANE = '[data-agent-pane="api-worker/agents/binding-auditor"]';
 
@@ -29,7 +30,7 @@ async function workspace(gallery: Gallery, viewport: keyof typeof VIEWPORTS): Pr
  * in. A row pressed before then is under a panel still off to the side (tiers, 2026-10-10: the press hit the list).
  */
 async function openAgentsList(page: Page, scope: string): Promise<void> {
-  await page.click(`${scope} [data-agents-counter]`);
+  await page.click(`${scope} ${AGENTS_COUNTER}`);
   await page.waitForFunction((list) => {
     const shown = document.querySelector(list);
 

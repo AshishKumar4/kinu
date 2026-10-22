@@ -208,11 +208,11 @@ export function ChatMascot({ seed, colour, activity, size = 16 }: { seed: string
     </svg>
   );
 
-  if (status === undefined) return <span className="p-mascot" data-face={face} data-accessory={accessory ?? undefined} style={style}>{tile}</span>;
+  if (status === undefined) return <span className="p-mascot" data-mascot={seed} data-face={face} data-accessory={accessory ?? undefined} style={style}>{tile}</span>;
 
   return (
     <Tooltip content={status} side="bottom">
-      <span className="p-mascot" data-face={face} data-accessory={accessory ?? undefined} style={style} role="img" aria-label={status}>{tile}</span>
+      <span className="p-mascot" data-mascot={seed} data-face={face} data-accessory={accessory ?? undefined} style={style} role="img" aria-label={status}>{tile}</span>
     </Tooltip>
   );
 }

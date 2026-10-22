@@ -20,7 +20,7 @@ import {
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
   explorationActorKey, writesSnapshotRows,
   HeadController, REAL_CLOCK, runHeadSplit, SubagentRosterStore,
-  EventLog, actorReferenceOf, stoppedBelow, TEMPORARY_LIFETIME,
+  EventLog, actorReferenceOf, stoppedBelow, stopAgentsBelow,
   artifactOverrides, currentArtifacts,
   agentsActionsFor, agentsProfileContext, betaSwarms, buildActorTools, BACKGROUNDABLE_TOOLS,
   vfsTurnSkills, conversationKey, captureOperationProfile, type RunTurnSources,
@@ -29,8 +29,8 @@ import {
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
   type SubagentReportLedger, type ActorToolsets,
   invocationBackgroundPolicy, endedStepLoopJobs, inlineResultInbox, type ActorJobs, type BackgroundJobRunner, type JobAuthority,
-  createTeamToolDeps,
-  agentNamer,
+  teamToolDepsFor,
+  peersToolDeps,
   type ActorHost, type ActorToolsetDeps, type AgentsToolDeps, type BuiltinStoreInputs, type ServedStores,
   type BoundActor, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult,
@@ -90,10 +90,10 @@ import { initSlateBuildTable } from "@kinu.run/core/slates";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import type { MessageBlock } from "./slates/sources";
 import {
-  actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type CFSeat, type WorkspaceHostSeams,
+  createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type CFSeat, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
-  hostedDelegationBudget, hostedRetryTools, hostedSubagentRuntime, relayHostedReport, retireStalledTask,
+  hostedRetryTools, hostedSubagentRuntime, relayHostedReport, retireStalledTask,
   hostedOwedReport, hostedParentReport, hostedAutoTitle, reclaimSettledExplorationActors,
   ownerAnswersWait, type ActorSurface, type HostedActorSeams, type SourcesTurn, type SurfaceTurn, type ToolScope,
 } from "./hosted-actors";
@@ -160,7 +160,6 @@ import {
   measuredAt, readWorkspaceAgents, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, turnTags,
-  ROOT_DELEGATION_BUDGET, type DelegationBudget,
   missionOf, summarizeSoul, workspaceGenesisSignal, isPlaceholderMission, drawWorkspaceLogo,
   // Recovery has no live turn, so the owed answer is read from the transcript.
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
@@ -1933,31 +1932,29 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Built from this actor's own roster. */
   private hostedTeamToolDeps(actor: BoundActor): TeamToolDeps {
     const seams = this.hostedSeams();
-    const delegation = hostedDelegationBudget(seams, actor);
     const roster = seams.roster(actor);
     roster.ensureSchema();
 
-    return createTeamToolDeps({
-      delegation,
+    return teamToolDepsFor({
+      record: actor.record,
+      directory: this.workspaceActors(),
       roster,
       runtime: hostedSubagentRuntime(seams, () => actor),
       temporary: seams.temporary(actor),
-      now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(actor.handle),
       originContext: () => this.agentStores(actor.handle.actorId).workingContext(),
       // The workspace's purpose, shared by every actor in it.
       ownMission: () => this.ownMission(),
-      createName: agentNamer(this.workspaceActors(), roster),
       rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
       broadcastTask: (event) => this.broadcastSubagentEvent({
         kind: 'task',
         ...event,
       }),
       workspaceAgents: () => this.workspaceAgents(true),
-      treeOwner: actor.handle.actorId,
       events: new EventLog(this.watchedExec, actor.handle),
     });
   }
+
 
   /**
    * The account reads a turn's opening makes, each in flight beside its settings revision read rather than after it:
@@ -2333,54 +2330,40 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return Number.isFinite(at) ? at : null;
   }
 
-  /** One the owner added has its own Stop. */
+  /** One the owner added has its own Stop; the rest is core's `stopAgentsBelow`, its task agents retired with their hires. */
   protected override stopSubtree(actorId: string): void {
     const seams = this.hostedSeams();
     const directory = this.actorDirectoryStore();
-
-    const rosterOf = (actor: WorkspaceActor) => {
-      const hirer = directory.retained(actor.parentActorId ?? '');
-
-      return hirer === null ? null : { hirer, roster: seams.roster(this.actorHost().bindStores(actorReferenceOf(hirer))) };
-    };
-
-    const below = stoppedBelow(this.workspaceActors().list(), actorId);
+    const below = stoppedBelow(directory.list(), actorId);
 
     if (below.length === 0) return;
     // Each stopped agent's commands, through the sweep its own Stop makes.
     this.detachOwned(Effect.forEach(below, (actor) => this.stopAgentDevices(actor.actorId), { concurrency: 'unbounded', discard: true }));
 
-    this.detachOwned(Effect.promise(async () => {
-      for (const actor of below) {
-        const reference = actorReferenceOf(actor);
-
-        // What it was owed and had not taken is cancelled, and the work it carried dismissed.
+    this.detachOwned(Effect.promise(() => stopAgentsBelow(actorId, {
+      directory,
+      roster: (hirer) => seams.roster(this.actorHost().bindStores(hirer)),
+      retire: (owner, retirement) => this.actorHost().retire(owner, retirement),
+      // What it was owed and had not taken is cancelled, and the work it carried dismissed.
+      cancelOwed: (actor) => {
         for (const cancelled of this.deliveries.cancel(actor.actorId)) {
           for (const event of this.carried(actor.actorId, cancelled)?.events ?? []) event.log.dismiss(event.id, 'stopped by the owner', 'system');
         }
-
+      },
+      stopTurn: async (actor) => {
         if (await this.agentTurns.holdsTurn(actor.actorId)) {
           await this.agentTurns.beforeRetirement(actor.actorId, true);
-          continue;
+
+          return true;
         }
 
         // One that may hold a question to its owner is stopped though its wake does not stand: the queue a question holds
         // arms none, and an isolate that ended since keeps only the question, which the Stop dismisses.
         if (this.holdsQuestions(actor.actorId)) await this.agentTurns.interrupt(actor.actorId, null);
 
-        const held = rosterOf(actor);
-
-        if (held === null) continue;
-        const { hirer, roster } = held;
-
-        if (roster.get(actor.name)?.status !== 'working') continue;
-        roster.applyReport(actor.name, 'blocked', 'turn_end', Date.now());
-
-        if (actor.lifetime === TEMPORARY_LIFETIME) {
-          await this.actorHost().retire(actorReferenceOf(hirer), actorRetirementFor({ reference, name: actor.name, keepHistory: true, interrupt: true }));
-        }
-      }
-    }));
+        return false;
+      },
+    })));
   }
 
   /** A waiting hired agent holds no transcript; its rows reopen it. A running job keeps its runtime to the settle's turn,
@@ -3452,38 +3435,23 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   /** Owner resolution is lazy inside each action: the toolset is cached across turns (including
    *  pre-claim). */
   private getPeersToolDeps(): PeersToolDeps {
-    /** Same-owner roster check so a typo'd name errors instead of materializing an unowned DO. */
-    const requirePeer = async (agent: string): Promise<void> => {
-      this.requireOwner();
-
-      if (agent === this.name) throw new KinuError('bad_input', 'that is this agent: pick another peer (op:"list")');
-      const { stub, caller } = await this.userHub();
-      const known = await stub.hasWorkspace(caller, agent);
-
-      if (!known) throw new KinuError('missing', `unknown peer "${agent}": list your team with op:"list"`);
-    };
-
-    return {
-      listPeers: async () => {
+    return peersToolDeps(this.peerHub, {
+      self: this.name,
+      // The owner's other workspaces, self excluded.
+      peers: async () => {
         this.requireOwner();
         const { stub, caller } = await this.userHub();
 
-        // The owner's other workspaces, self excluded.
-        return (await stub.listActiveWorkspaces(caller))
-          .filter((peer) => peer.name !== this.name)
-          .map((peer) => ({ name: peer.name, displayName: peer.displayName }));
+        return (await stub.listActiveWorkspaces(caller)).filter((peer) => peer.name !== this.name);
       },
-      ask: async ({ agent, topic, message, mode, signal }) => {
-        await requirePeer(agent);
+      // Same-owner roster check so a typo'd name errors instead of materializing an unowned DO.
+      known: async (agent) => {
+        this.requireOwner();
+        const { stub, caller } = await this.userHub();
 
-        return this.peerHub.ask({ agent, userId: this.requireOwner(), topic, message, mode, signal });
+        return await stub.hasWorkspace(caller, agent);
       },
-      send: async ({ agent, topic, message, mode }) => {
-        await requirePeer(agent);
-
-        return this.peerHub.send({ agent, userId: this.requireOwner(), topic, message, mode });
-      },
-      reply: async ({ eventId, message }) => this.peerHub.reply({ eventId, message }),
+      userId: () => this.requireOwner(),
       spawnWorkspace: async ({ name, purpose, message, mode, signal }): Promise<PeerSpawnOutcome> => {
         const userId = this.requireOwner();
         const { stub: userDO, caller } = await this.userHub();
@@ -3505,12 +3473,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return { agent: agentName, created, ...outcome };
       },
-    };
-  }
-
-  /** A constant, not stored: the orchestrator is the root (depth 0), so eviction cannot lose it. */
-  protected delegationBudget(): DelegationBudget {
-    return ROOT_DELEGATION_BUDGET;
+    });
   }
 
   /** Reads its deps lazily so a mid-lifetime claimOwner lands without rebuilding eval. */

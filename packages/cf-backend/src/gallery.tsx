@@ -7883,10 +7883,17 @@ async function workspacePageFrame(): Promise<MountedFrame> {
 /** `&agent=<name>` opens on that agent's chat. */
 function workspaceShellFrame(): MountedFrame {
   serveGalleryRpc(workspacePageRpc);
-  const agent = new URLSearchParams(location.search).get("agent");
+  const params = new URLSearchParams(location.search);
+  const agent = params.get("agent");
+  // `&view=` opens one of the workspace's own addresses (`overview`, `settings`, `new`, or the desktop's old one).
+  const view = params.get("view");
+  let entry = `/workspace/${WORKSPACE_PAGE_NAME}`;
+
+  if (agent !== null) entry = `${entry}/agents/${agent}`;
+  else if (view !== null) entry = `${entry}/${view}`;
 
   return {
-    entries: [agent === null ? `/workspace/${WORKSPACE_PAGE_NAME}` : `/workspace/${WORKSPACE_PAGE_NAME}/agents/${agent}`],
+    entries: [entry],
     node: (
       <Routes>
         <Route element={<Layout />}>

@@ -32,6 +32,7 @@ import type { Page } from 'puppeteer';
 
 import { contrast, rgba, withGallery, type Gallery } from '../../scripts/gallery-harness';
 import { TEST_REQUIREMENTS } from '../../scripts/test-requirements';
+import { DRIVE_DIALOG_COMMIT, DRIVE_NEW, DRIVE_PLACE, drivePlace, OPEN_MENU, openRowMenu, ROW_MENU } from '../../scripts/browser-page';
 
 const SHOTS = evidenceDir('drive-ux');
 
@@ -56,8 +57,8 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
 async function myStuff(gallery: Gallery, theme: 'dark' | 'light'): Promise<Page> {
   const page = await freshPage(gallery, 'drive', theme, 'desktop');
 
-  await page.click('[data-drive-place="mine"]');
-  await page.waitForSelector('[data-drive-place="mine"][aria-current="page"]');
+  await page.click(drivePlace('mine'));
+  await page.waitForSelector(`${drivePlace('mine')}[aria-current="page"]`);
   await page.waitForSelector('[data-drive-section="Folders"]');
 
   return page;
@@ -102,15 +103,14 @@ function skillTiles(page: Page): Promise<{ name: string; builtin: boolean; meta:
 
 /** Open a tile's menu; each item by its accessible name, with the reason a refused one gives. */
 async function menuOf(page: Page, tile: string): Promise<{ label: string; refused: string | null }[]> {
-  if (await page.$('[role="menu"][data-open]') !== null) {
+  if (await page.$(OPEN_MENU) !== null) {
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => document.querySelector('[role="menu"][data-open]') === null);
   }
 
-  await page.click(`${tile} [data-row-menu]`);
-  await page.waitForSelector('[role="menu"][data-open] [role="menuitem"]');
+  await openRowMenu(page, tile);
 
-  return page.$$eval('[role="menu"][data-open] [role="menuitem"]', (items) => items.map((item) => {
+  return page.$$eval(`${OPEN_MENU} [role="menuitem"]`, (items) => items.map((item) => {
     const text = (id: string | null): string | null => (id === null ? null : document.getElementById(id)?.textContent?.trim() ?? null);
 
     return {
@@ -141,7 +141,7 @@ async function arrowTo(page: Page, label: string): Promise<{ disabled: string | 
 }
 
 /** The column's places: which, whether it is the page shown, and whether it holds something new. */
-const places = (page: Page) => page.$$eval('[data-drive-place]', (rows) => rows.map((row) => [
+const places = (page: Page) => page.$$eval(DRIVE_PLACE, (rows) => rows.map((row) => [
   row.getAttribute('data-drive-place'), row.getAttribute('aria-current'), row.querySelector('[data-drive-unseen]') !== null,
 ]));
 
@@ -157,7 +157,7 @@ async function drawn(page: Page): Promise<void> {
 }
 
 async function pressNew(page: Page, item: string): Promise<void> {
-  await page.click('[data-drive-new]');
+  await page.click(DRIVE_NEW);
   await page.waitForSelector(`[${item}]`);
   await page.click(`[${item}]`);
 }
@@ -179,19 +179,19 @@ describe('the Drive', () => {
       try {
         // A first visit lands on My stuff, files first (owner, 2026-10-19). The column places My stuff, Slates, then
         // Shared with something new in it.
-        await page.waitForSelector('[data-drive-place="mine"][aria-current="page"]');
+        await page.waitForSelector(`${drivePlace('mine')}[aria-current="page"]`);
         expect(await places(page)).toEqual([['mine', 'page', false], ['slates', null, false], ['shared', null, true]]);
 
         // Slates: every slate across the workspaces, each labelled with its workspace, opening in it on its own tab.
-        await page.click('[data-drive-place="slates"]');
-        await page.waitForSelector('[data-drive-place="slates"][aria-current="page"]');
+        await page.click(drivePlace('slates'));
+        await page.waitForSelector(`${drivePlace('slates')}[aria-current="page"]`);
         expect(await sections(page)).toEqual([{ title: 'Slates', tiles: ['Issue triage', 'Landing perf report', 'Standup notes'] }]);
         expect(await page.$eval('[data-drive-slate="issue-triage"] a', (a) => a.getAttribute('href')))
           .toBe('/workspace/api-worker?slate=issue-triage');
         await shoot(page, 'drive-slates-dark');
 
         // My stuff holds files and folders; Skills leads the folders, and the tree lists them.
-        await page.click('[data-drive-place="mine"]');
+        await page.click(drivePlace('mine'));
         await page.waitForSelector('[data-drive-section="Folders"]');
         expect(await sections(page)).toEqual([
           { title: 'Folders', tiles: ['Skills', 'data', 'notes', 'projects'] },
@@ -224,7 +224,7 @@ describe('the Drive', () => {
         await pressNew(page, 'data-drive-new-folder');
         await page.waitForSelector('[role="dialog"] input');
         await page.type('[role="dialog"] input', 'staging');
-        await page.click('[data-drive-dialog-commit]');
+        await page.click(DRIVE_DIALOG_COMMIT);
         await waitForEntry(page, 'staging');
         expect(await page.$('[role="dialog"]')).toBeNull();
         expect(await menuOf(page, '[data-drive-entry="staging"]')).toContainEqual({ label: 'Mark as skill', refused: 'no SKILL.md in /projects/ops/staging' });
@@ -336,10 +336,10 @@ describe('the Drive', () => {
         await page.goto(`${gallery.origin}/gallery.html?frame=drive&libraryHold=1`, { waitUntil: 'networkidle0' });
         // The listing has answered; the library has not. Neither the files place nor its New is drawn yet.
         await page.waitForFunction(() => document.querySelector('[data-drive-landing]') !== null || document.querySelector('[data-drive-new]') !== null);
-        expect(await page.$('[data-drive-new]')).toBeNull();
+        expect(await page.$(DRIVE_NEW)).toBeNull();
 
         await page.evaluate(() => { window.__releaseLibrary?.(); });
-        await page.waitForSelector('[data-drive-place="mine"][aria-current="page"]');
+        await page.waitForSelector(`${drivePlace('mine')}[aria-current="page"]`);
         expect(await page.$('[data-drive-landing]')).toBeNull();
       } finally {
         await page.close();
@@ -388,7 +388,7 @@ describe('the Drive', () => {
         await pressNew(page, 'data-drive-new-folder');
         await page.waitForSelector('[role="dialog"] input');
         await page.type('[role="dialog"] input', 'archive');
-        await page.click('[data-drive-dialog-commit]');
+        await page.click(DRIVE_DIALOG_COMMIT);
         await waitForEntry(page, 'archive');
         await page.click('[data-drive-entry="archive"] a');
         await page.waitForSelector('[data-drive-empty]');
@@ -421,7 +421,7 @@ describe('the Drive', () => {
 
         // Cancelled, the tile goes and the folder is empty again.
         await menuOf(page, '[data-drive-transfer="uploading"]');
-        await page.click('[role="menu"][data-open] [data-drive-cancel-upload]');
+        await page.click(`${OPEN_MENU} [data-drive-cancel-upload]`);
         await drawn(page);
         expect(await page.$('[data-drive-transfer]')).toBeNull();
         expect(await page.$('[data-drive-empty]')).not.toBeNull();
@@ -433,7 +433,7 @@ describe('the Drive', () => {
         expect(await page.$eval('[data-drive-transfer]', (tile) => [tile.getAttribute('data-drive-transfer'), tile.textContent?.includes('File too large for the Drive')]))
           .toEqual(['failed', true]);
         await menuOf(page, '[data-drive-transfer="failed"]');
-        await page.click('[role="menu"][data-open] [data-drive-dismiss-upload]');
+        await page.click(`${OPEN_MENU} [data-drive-dismiss-upload]`);
         await drawn(page);
         expect(await page.$('[data-drive-transfer]')).toBeNull();
       } finally {
@@ -482,7 +482,7 @@ describe('the Drive', () => {
         await zipInput.uploadFile(later);
         await page.waitForSelector('[data-drive-transfer="uploading"]');
         await menuOf(page, '[data-drive-transfer="uploading"]');
-        await page.click('[role="menu"][data-open] [data-drive-cancel-upload]');
+        await page.click(`${OPEN_MENU} [data-drive-cancel-upload]`);
         await drawn(page);
         expect(await transfers(page)).toEqual([]);
         expect(await page.$('[data-drive-entry="later"]')).toBeNull();
@@ -575,7 +575,7 @@ describe('the Drive', () => {
       try {
         const deploy = '[data-drive-entry="deploy"]';
         expect((await menuOf(page, deploy)).find((item) => item.label === 'Mark as skill')).toEqual({ label: 'Mark as skill', refused: null });
-        await page.click('[role="menu"][data-open] [data-drive-mark]');
+        await page.click(`${OPEN_MENU} [data-drive-mark]`);
 
         // Marking links it under /skills; the folder stays where it was.
         await page.click('[data-drive-crumb]');
@@ -622,7 +622,7 @@ describe('the Drive', () => {
 
         // A built-in is read only: no menu, and it opens as the SKILL.md agents read, with no edit and a download
         // of the same text.
-        expect(await page.$('[data-drive-builtin="audit-implementation"] [data-row-menu]')).toBeNull();
+        expect(await page.$(`[data-drive-builtin="audit-implementation"] ${ROW_MENU}`)).toBeNull();
         await page.click('[data-drive-builtin="audit-implementation"] button');
         await page.waitForFunction(() => (document.querySelector('[data-drive-viewer] [data-files-preview-body]')?.textContent ?? '').includes('Audit your implementation'));
         expect(await page.$('[data-drive-viewer] [data-files-edit]')).toBeNull();
@@ -689,10 +689,10 @@ describe('the Drive', () => {
           { title: 'Shared by you', tiles: ['Issue triage', 'Issue triage'] },
         ]);
         // Opening Shared sees what it holds: back on My stuff, Shared has nothing new.
-        await shared.click('[data-drive-place="mine"]');
-        await shared.waitForSelector('[data-drive-place="mine"][aria-current="page"]');
+        await shared.click(drivePlace('mine'));
+        await shared.waitForSelector(`${drivePlace('mine')}[aria-current="page"]`);
         await shared.waitForFunction(() => document.querySelector('[data-drive-place="shared"] [data-drive-unseen]') === null);
-        await shared.click('[data-drive-place="shared"]');
+        await shared.click(drivePlace('shared'));
         await shared.waitForSelector('[data-drive-section="Shared by you"]');
 
         // Newest first, though the owner's rows arrive oldest first.
@@ -722,7 +722,7 @@ describe('the Drive', () => {
         // Both forks where the sharer allows it; what the owner shared also stops.
         expect((await menuOf(shared, '[data-drive-share="live-mail-9"]')).map((item) => item.label)).toEqual(['Open', 'Fork…']);
         expect((await menuOf(shared, '[data-drive-share="live-board-1"]')).map((item) => item.label)).toEqual(['Open', 'Fork…', 'Stop sharing']);
-        await shared.click('[role="menu"][data-open] [data-drive-stop-sharing]');
+        await shared.click(`${OPEN_MENU} [data-drive-stop-sharing]`);
         await shared.waitForSelector('[role="dialog"]');
         // The confirmation names everyone the share was given to, the two people who lose it.
         const confirm = await shared.$eval('[role="dialog"]', (element) => element.textContent ?? '');

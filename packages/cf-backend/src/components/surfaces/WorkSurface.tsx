@@ -135,6 +135,9 @@ interface WorkSurfaceProps {
   /** A fork's landing opens on what it reaches, not the preview. */
   forkLanding?: { readonly slate: string; readonly reaches: readonly string[] } | null;
   onForkLandingOpened?: () => void;
+  /** The page opened on the desktop's address: Environment shows the chosen machine's desktop, once. */
+  desktopLanding?: boolean;
+  onDesktopLanded?: () => void;
 }
 
 /** The open Slate's pane: a fork's reach on landing, else its frame. */
@@ -355,6 +358,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 onExecute={props.onExecute}
                 onOpenFiles={openFiles}
                 onConnectDevice={openConnect}
+                desktopLanding={props.desktopLanding === true}
+                onDesktopLanded={props.onDesktopLanded}
               />
             )}
             {openPort && <div className="p-pane"><div className="p-pane-card"><PreviewFrame url={openPort.url} label={previewPortTitle(openPort)} publicLink={publicLink} /></div></div>}

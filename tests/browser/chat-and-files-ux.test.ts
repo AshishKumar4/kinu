@@ -32,7 +32,7 @@ import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
 import { withGallery } from '../../scripts/gallery-harness';
-import { settled as framesSettled } from '../../scripts/browser-page';
+import { CHATS, NEW_SESSION, OPEN_MENU, PAGES_NAV, pressRowMenu, ROW_MENU, settled as framesSettled } from '../../scripts/browser-page';
 import { ADVISOR_HEADER, executorLabel, FILES_PAGE_ENTRIES, OUTPUT_CONTINUATION_TEXT, OVERFLOW_RETRY_TEXT, parseJsonValue, redactPayload, type JsonObject } from '@kinu.run/core';
 import { evidenceDir, present } from '@kinu.run/test-utils';
 
@@ -491,9 +491,7 @@ async function run(): Promise<Observed> {
     );
 
     // Rename rides the real RPC against the frame's stateful fixture, from the row's menu.
-    await files.click(`${rowSelector('SOUL.md')} [data-row-menu]`);
-    await files.waitForSelector('[role="menu"][data-open] [data-files-rename]');
-    await files.click('[role="menu"][data-open] [data-files-rename]');
+    await pressRowMenu(files, rowSelector('SOUL.md'), '[data-files-rename]');
     await files.waitForSelector('[data-files-rename-input]');
     const renameInput = present(await files.$('[data-files-rename-input]'), 'the rename input');
 
@@ -504,9 +502,7 @@ async function run(): Promise<Observed> {
     const filesAfterRename = await rowNames();
 
     // Delete asks inline, then the row is gone.
-    await files.click(`${rowSelector('AGENTS.md')} [data-row-menu]`);
-    await files.waitForSelector('[role="menu"][data-open] [data-files-delete]');
-    await files.click('[role="menu"][data-open] [data-files-delete]');
+    await pressRowMenu(files, rowSelector('AGENTS.md'), '[data-files-delete]');
     await files.click(`${rowSelector('AGENTS.md')} [data-files-delete-confirm]`);
     await waitForRowGone('AGENTS.md');
     const filesAfterDelete = await rowNames();
@@ -1209,7 +1205,7 @@ describe('the shell rails collapse and reopen, and the choice survives a reload'
       // measured width, never a test hook.
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.reload({ waitUntil: 'networkidle0' });
-      await page.waitForSelector('nav[aria-label="Chats"]');
+      await page.waitForSelector(CHATS);
       await page.waitForSelector('button[aria-label="Hide inspector"]');
 
       const opened = await page.evaluate(() => Math.round(
@@ -1260,7 +1256,7 @@ describe('a hosted actor’s cards stay out of the workspace’s own chat', () =
       const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('nav[aria-label="Chats"]');
+      await page.waitForSelector(CHATS);
       await page.waitForSelector('.p-thread-column');
 
       // The refiner's own card first, stamped with its actor, then the
@@ -2133,9 +2129,7 @@ describe('a rename while an IME composes', () => {
       await page.waitForSelector(row('main'));
       await page.click(row('main'));
       await page.waitForSelector(row('SOUL.md'));
-      await page.click(`${row('SOUL.md')} [data-row-menu]`);
-      await page.waitForSelector('[role="menu"][data-open] [data-files-rename]');
-      await page.click('[role="menu"][data-open] [data-files-rename]');
+      await pressRowMenu(page, row('SOUL.md'), '[data-files-rename]');
       await page.waitForSelector('[data-files-rename-input]');
       await page.$eval('[data-files-rename-input]', (el) => { if (el instanceof HTMLInputElement) el.value = ''; });
       await page.type('[data-files-rename-input]', '魂');
@@ -2388,11 +2382,9 @@ describe('a revoked device whose command may still run', () => {
         (entry) => entry.getAttribute('aria-current'),
       )).toBe('true');
       // Revoke is in the row's menu, beside Rename.
-      await page.waitForSelector('[data-device="dev-1"] [data-row-menu]');
-      await page.click('[data-device="dev-1"] [data-row-menu]');
+      await page.waitForSelector(`[data-device="dev-1"] ${ROW_MENU}`);
       // The menu is a popup that opens on the press, so its item is there once it has.
-      await page.waitForSelector('[role="menuitem"][title="Revoke device"]');
-      await page.click('[role="menuitem"][title="Revoke device"]');
+      await pressRowMenu(page, '[data-device="dev-1"]', '[role="menuitem"][title="Revoke device"]');
       await page.waitForSelector('[role="dialog"]');
       expect(await page.$eval('[role="dialog"]', (dialog) => dialog.textContent ?? '')).toContain('Agents will lose access');
       await pressInDialog(page, 'Revoke');
@@ -2634,8 +2626,8 @@ describe('Files at every width it is drawn', () => {
 
       const pick = async (item: string) => {
         await page.click('[aria-label="View options"]');
-        await page.waitForSelector(`[role="menu"][data-open] [${item}]`);
-        await page.click(`[role="menu"][data-open] [${item}]`);
+        await page.waitForSelector(`${OPEN_MENU} [${item}]`);
+        await page.click(`${OPEN_MENU} [${item}]`);
         await page.waitForFunction(() => document.querySelector('[role="menu"][data-open]') === null);
       };
 
@@ -2659,8 +2651,8 @@ describe('Files at every width it is drawn', () => {
       await page.reload({ waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-files-layout="list"] [data-files-entry][title="usr"]');
       await page.click('[aria-label="View options"]');
-      await page.waitForSelector('[role="menu"][data-open] [role="menuitemradio"]');
-      const checked = await page.$$eval('[role="menu"][data-open] [aria-checked="true"]', (items) => items.map((item) => (item.textContent ?? '').trim()));
+      await page.waitForSelector(`${OPEN_MENU} [role="menuitemradio"]`);
+      const checked = await page.$$eval(`${OPEN_MENU} [aria-checked="true"]`, (items) => items.map((item) => (item.textContent ?? '').trim()));
 
       expect(checked.sort()).toEqual(['List', 'Show hidden items']);
       await page.close();
@@ -2699,7 +2691,7 @@ describe('Files at every width it is drawn', () => {
   test("a row's menu waits for the pointer, and a touch screen shows it on every row", async () => {
     await withGallery(async ({ newPage, origin }) => {
       const menuShown = (page: Page, name: string) => page.$eval(
-        `[data-files-entry][title="${name}"] [data-row-menu]`, (button) => button.checkVisibility({ opacityProperty: true }),
+        `[data-files-entry][title="${name}"] ${ROW_MENU}`, (button) => button.checkVisibility({ opacityProperty: true }),
       );
 
       const pointer = await newPage();
@@ -3607,7 +3599,7 @@ describe('the Work tab reads the workspace, not the actor', () => {
       await page.waitForSelector('[data-plan-review-root]');
       expect(await page.$eval('[data-plan-title]', (element) => element.textContent)).toContain('Gateway');
       expect(await page.$eval('[data-plan-decisions]', (decisions) => decisions.checkVisibility())).toBe(true);
-      expect(await page.$eval('nav[aria-label="Pages"] [aria-current="true"]', (tab) => tab.getAttribute('aria-label'))).toContain('Gateway');
+      expect(await page.$eval(`${PAGES_NAV} [aria-current="true"]`, (tab) => tab.getAttribute('aria-label'))).toContain('Gateway');
       expect(await page.$eval('[data-work-plans]', (list) => list.checkVisibility())).toBe(false);
 
       await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
@@ -4780,7 +4772,7 @@ describe('the Environment tab', () => {
       await page.waitForSelector('[data-session]');
       const before = await page.$$eval('[data-session]', (tabs) => tabs.length);
 
-      await page.click('button[aria-label="New session"]');
+      await page.click(NEW_SESSION);
       await page.waitForFunction((had: number) => document.querySelectorAll('[data-session]').length > had
         && document.querySelector('[data-session][aria-selected="true"]') === [...document.querySelectorAll('[data-session]')].at(-1), {}, before);
 

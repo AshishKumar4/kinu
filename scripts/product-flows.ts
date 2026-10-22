@@ -37,9 +37,7 @@ import {
   SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
-import {
-  ACTIVE_TAB_INDEX, CHATS, CHAT_COMPOSER_LIVE, CHAT_IDLE, FILES_FAILURE, type FlowTarget, type FrameLedger, INSPECTOR_WIDTH, PAGE_TABS, type RpcCounts, type SendSite, countRpc, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, pagesTraffic, painted, recordRenderTasks, removeFlowWorkspace, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn,
-} from './browser-page';
+import { ACTIVE_TAB_INDEX, AGENT_TAB, AGENTS_COUNTER, agentTab, ATTENTION_BEHIND, ATTENTION_CARD, attentionBehind, attentionCard, CHAT_COMPOSER_LIVE, CHAT_IDLE, CHATS, CHECKBOX, countRpc, createFlowWorkspace, DESKTOP_RETURN, DRIVE_DIALOG_COMMIT, DRIVE_NEW, DRIVE_PLACE, drivePlace, FILES_FAILURE, frameLedger, INSPECTOR_WIDTH, MARK_REVIEWED, NEW_SESSION, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, PAGE_TABS, pagesTraffic, painted, PARKED_COMMAND, parkedCommand, pressRowMenu, recordRenderTasks, removeFlowWorkspace, RENAME_BUTTON, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn, type FlowTarget, type FrameLedger, type RpcCounts, type SendSite } from './browser-page';
 
 
 /** The waits open now, `; `-joined: what a row stopped for being silent was waiting on (`endedNearSilence`). */
@@ -252,7 +250,7 @@ export interface ApprovalStackVerdict {
 
 /** The stack's cards, the open one first, then those behind it, nearest first. */
 const STACK_KEYS = `(() => {
-  const cards = [...document.querySelectorAll('[data-attention-card], [data-attention-behind]')];
+  const cards = [...document.querySelectorAll('${ATTENTION_CARD}, ${ATTENTION_BEHIND}')];
   const open = cards.filter((card) => card.hasAttribute('data-attention-card')).map((card) => card.getAttribute('data-attention-card'));
   const behind = cards.filter((card) => card.hasAttribute('data-attention-behind')).map((card) => card.getAttribute('data-attention-behind')).reverse();
 
@@ -267,9 +265,9 @@ const STACK_KEYS = `(() => {
  */
 function ownCard(key: string): string {
   return `(() => {
-    const open = () => document.querySelector(${JSON.stringify(`[data-attention-card=${JSON.stringify(key)}]`)});
+    const open = () => document.querySelector(${JSON.stringify(attentionCard(key))});
 
-    if (open() === null) document.querySelector(${JSON.stringify(`[data-attention-behind=${JSON.stringify(key)}]`)})?.click();
+    if (open() === null) document.querySelector(${JSON.stringify(attentionBehind(key))})?.click();
 
     return open();
   })()`;
@@ -289,23 +287,25 @@ export async function answerStackCard(page: Page, key: string, words: string): P
 /**
  * Unticks the parked command `row` on the flow's own batch card `key`, opening it first, until its box stands
  * unticked. On 2026-10-17 a card another run raised took the front between finding the box and pressing it, and the
- * press met a box no longer in the page ("Node is detached from document").
+ * press met a box no longer in the page ("Node is detached from document"). The box is the design system's checkbox,
+ * a `role="checkbox"` button that says its state in `aria-checked` (ui/Check.tsx): a flow that looked for an `input`
+ * waited on staging until its runner's bound (324bd728d, 2026-10-21).
  */
 export async function untickOwnRow(page: Page, key: string, row: string): Promise<void> {
   await until(page, `the flow's command ${row} unticked on its own card`, `(() => {
-    const box = ${ownCard(key)}?.querySelector(${JSON.stringify(`[data-parked-command=${JSON.stringify(row)}] input`)});
+    const box = ${ownCard(key)}?.querySelector(${JSON.stringify(`${parkedCommand(row)} ${CHECKBOX}`)});
 
-    if (!(box instanceof HTMLInputElement)) return false;
-    if (box.checked) box.click();
+    if (!(box instanceof HTMLElement)) return false;
+    if (box.getAttribute('aria-checked') === 'true') box.click();
 
-    return !box.checked;
+    return box.getAttribute('aria-checked') === 'false';
   })()`);
 }
 
 const CHAT_TEXT = `(document.querySelector('#chat')?.textContent ?? '')`;
 
 /** The parked commands the flow's batch card lists, newest first, as their asks' keys. */
-const PARKED_ROWS = `[...document.querySelectorAll('[data-attention-card] [data-parked-command]')].map((row) => 'action:' + row.getAttribute('data-parked-command'))`;
+const PARKED_ROWS = `[...document.querySelectorAll('${ATTENTION_CARD} ${PARKED_COMMAND}')].map((row) => 'action:' + row.getAttribute('data-parked-command'))`;
 
 /**
  * Row: one turn parks two commands for its owner. They wait together on one card docked to the composer, the newer
@@ -328,7 +328,7 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
       return false;
     })()`);
     const stacked = v.parse(v.tuple([v.string(), v.string()]), await page.evaluate(PARKED_ROWS));
-    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector('[data-attention-card]')?.textContent ?? ''`));
+    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector('${ATTENTION_CARD}')?.textContent ?? ''`));
     const remaining = `${STACK_KEYS}.filter((key) => ${JSON.stringify(stacked)}.includes(key))`;
 
     // The older unticked, the newer approved alone.
@@ -383,10 +383,10 @@ export async function hireParksAndRunsOnApproval(target: FlowTarget): Promise<Hi
     await until(page, "the new agent's own composer", agentComposer(workspace, agent));
     await sendAndSettle(page, HIRE_APPROVAL_ASK);
     await until(page, "the hire's ask stacked on its composer", `document.querySelector(${JSON.stringify(`${pane} [data-attention-stack]`)}) !== null`);
-    const paneStacked = v.parse(v.array(v.string()), await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${pane} [data-attention-card]`)})].map((card) => card.getAttribute('data-attention-card'))`));
-    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`${pane} [data-attention-card]`)})?.textContent ?? ''`));
+    const paneStacked = v.parse(v.array(v.string()), await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${pane} ${ATTENTION_CARD}`)})].map((card) => card.getAttribute('data-attention-card'))`));
+    const openWords = v.parse(v.string(), await page.evaluate(`document.querySelector(${JSON.stringify(`${pane} ${ATTENTION_CARD}`)})?.textContent ?? ''`));
 
-    await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${pane} [data-attention-card] button`)})].find((button) => button.textContent?.trim() === 'Approve')?.click()`);
+    await page.evaluate(`[...document.querySelectorAll(${JSON.stringify(`${pane} ${ATTENTION_CARD} button`)})].find((button) => button.textContent?.trim() === 'Approve')?.click()`);
     await until(page, "the hire's stack cleared", `document.querySelector(${JSON.stringify(`${pane} [data-attention-stack]`)}) === null`);
     await until(page, 'the hire, woken, saying its re-issue ran or did not', `/HIRE (RAN|STILL BLOCKED)/u.test(document.querySelector(${JSON.stringify(pane)})?.textContent ?? '')`);
     const ran = v.parse(v.boolean(), await page.evaluate(`(document.querySelector(${JSON.stringify(pane)})?.textContent ?? '').includes(${JSON.stringify(HIRE_RAN)})`));
@@ -573,8 +573,8 @@ export async function accountMemoryInTheStack(target: FlowTarget): Promise<Stack
 
     if (filed === undefined) throw new Error('the flow\'s workspace filed no stack-memory proposal');
     const key = `memory:${filed.id}`;
-    const card = `[data-attention-card=${JSON.stringify(key)}]`;
-    const behind = `[data-attention-behind=${JSON.stringify(key)}]`;
+    const card = attentionCard(key);
+    const behind = attentionBehind(key);
 
     await until(page, 'the flow\'s proposal in the attention stack', `document.querySelector(${JSON.stringify(`${card}, ${behind}`)}) !== null`);
     // Brought to the front if anything newer waits.
@@ -656,8 +656,8 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
 
     // Rename through the tab: its pencil opens the name field with the current
     // name selected, so typing replaces it.
-    await page.hover(`${CHATS} [data-agent-tab="${agent}"] a`);
-    await page.click(`${CHATS} [data-agent-tab="${agent}"] button[aria-label^="Rename "]`);
+    await page.hover(`${CHATS} ${agentTab(agent)} a`);
+    await page.click(`${CHATS} ${agentTab(agent)} ${RENAME_BUTTON}`);
     await until(page, "the chat's name field", `document.querySelector('input[aria-label="Chat name"]') !== null`);
     await page.keyboard.type(renamed);
     renameLedger.restart();
@@ -668,7 +668,7 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     await renameLedger.stop();
     // The counter is the sidebar's, drawn once its workspaces have arrived, as the return below waits for them too.
     await until(page, "the sidebar's workspace list", SIDEBAR_LISTED);
-    await page.click('[data-agents-counter]');
+    await page.click(AGENTS_COUNTER);
     await painted(page);
 
     // The current row belongs to the agent whose chat is open; its key is an actor id, not the URL name.
@@ -693,7 +693,7 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     await settledAfter(back, ledger, 'getWorkspaceOpening', 'getChatHistoryPage');
     // The sidebar's workspaces arrive over HTTP once the roster socket opens, which the ledger does not see.
     await until(back, "the sidebar's workspace list", SIDEBAR_LISTED);
-    await back.click('[data-agents-counter]');
+    await back.click(AGENTS_COUNTER);
     await painted(back);
 
     const after = await agentPresence(back, workspace, agent, actorId);
@@ -703,7 +703,7 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
 
     if (after.tab !== null) {
       ledger.restart();
-      await back.click(`nav[aria-label="Chats"] [data-agent-tab="${agent}"] a`);
+      await back.click(`${CHATS} ${agentTab(agent)} a`);
       await until(back, "the agent's page", `location.pathname === ${JSON.stringify(`${agentPath}${encodeURIComponent(agent)}`)}`);
       await until(back, "the agent's own composer", agentComposer(workspace, agent));
       await until(back, "the agent's conversation from its beginning", CHAT_FROM_ITS_BEGINNING);
@@ -724,12 +724,12 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
 /** Click the control; an absent control throws, and that is the finding. */
 const ClickScripts = {
   lastAgentTab: `(() => {
-    const target = [...document.querySelectorAll('nav[aria-label="Chats"] [data-agent-tab] a')].pop();
+    const target = [...document.querySelectorAll('${CHATS} ${AGENT_TAB} a')].pop();
     if (target === undefined) throw new Error('no chat tab to open');
     target.click();
   })()`,
   mainTab: `(() => {
-    const main = document.querySelector('nav[aria-label="Chats"] [data-agent-tab="main"] a');
+    const main = document.querySelector('${CHATS} ${agentTab('main')} a');
     if (main === null) throw new Error('no Main tab to return to');
     main.click();
   })()`,
@@ -948,7 +948,7 @@ export async function eachPaneKeepsItsTranscript(target: FlowTarget): Promise<St
 
     await startNewChat(page);
     await until(page, 'a second agent tab',
-      `[...document.querySelectorAll('nav[aria-label="Chats"] [data-agent-tab]')].length > 1`);
+      `[...document.querySelectorAll('${CHATS} ${AGENT_TAB}')].length > 1`);
     await page.evaluate(ClickScripts.lastAgentTab);
     await until(page, 'an agent tab after Main, current', `${ACTIVE_TAB_INDEX} > 0`);
     // The actor's pane is live when ITS column holds an enabled composer: a pane
@@ -1263,7 +1263,7 @@ export async function writtenFileShowsInFilesAndChanges(target: FlowTarget): Pro
     await until(page, "the shell's write in the change-set", `${CHANGED_PATHS}.some((path) => path.endsWith(${JSON.stringify(FLOW_SHELL_PROBE)}))`);
     const changedPaths = v.parse(v.array(v.string()), await page.evaluate(CHANGED_PATHS));
 
-    await page.click('#inspector [data-mark-reviewed]');
+    await page.click(`#inspector ${MARK_REVIEWED}`);
     await until(page, 'the reviewed change-set to empty', `${CHANGED_PATHS}.length === 0`);
     const afterReview = v.parse(v.array(v.string()), await page.evaluate(CHANGED_PATHS));
 
@@ -1549,16 +1549,16 @@ async function relisted(page: Page, act: () => Promise<void>, loadsDocument = fa
 }
 
 /** The Drive place a person's files are in, chosen where it is drawn: the column, or below `lg` the switch. */
-const MY_STUFF_PLACE = `[...document.querySelectorAll('[data-drive-place="mine"], [data-drive-tab="mine"]')].find((place) => place.getClientRects().length > 0)`;
+const MY_STUFF_PLACE = `[...document.querySelectorAll('${drivePlace('mine')}, [data-drive-tab="mine"]')].find((place) => place.getClientRects().length > 0)`;
 
 /**
  * Opens My stuff, where New is: a first visit to the Drive lands there unless My stuff holds nothing, as the approved
  * design does (owner, 2026-10-19). Below `lg` the switch names it; from `lg` the column does.
  */
 async function openMyStuff(page: Page): Promise<void> {
-  await until(page, 'My stuff or its place', `document.querySelector('[data-drive-new]') !== null || ${MY_STUFF_PLACE} !== undefined`);
-  await page.evaluate(`document.querySelector('[data-drive-new]') === null && ${MY_STUFF_PLACE}?.click()`);
-  await until(page, "My stuff's New", `document.querySelector('[data-drive-new]') !== null`);
+  await until(page, 'My stuff or its place', `document.querySelector('${DRIVE_NEW}') !== null || ${MY_STUFF_PLACE} !== undefined`);
+  await page.evaluate(`document.querySelector('${DRIVE_NEW}') === null && ${MY_STUFF_PLACE}?.click()`);
+  await until(page, "My stuff's New", `document.querySelector('${DRIVE_NEW}') !== null`);
 }
 
 /** Name a Drive entry through the page's name dialog: the field opens with
@@ -1567,7 +1567,7 @@ async function nameInDialog(page: Page, name: string): Promise<void> {
   await until(page, 'the name dialog', `document.querySelector('#drive-name') !== null`);
   await page.focus('#drive-name');
   await page.keyboard.type(name);
-  await page.click('[data-drive-dialog-commit]');
+  await page.click(DRIVE_DIALOG_COMMIT);
 }
 
 export interface DriveVerdict {
@@ -1615,7 +1615,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
     await relisted(page, async () => { await page.goto(`${target.origin}/drive`, { waitUntil: 'load' }); }, true);
     await openMyStuff(page);
     await relisted(page, async () => {
-      await page.click('[data-drive-new]');
+      await page.click(DRIVE_NEW);
       await page.click('[data-drive-new-folder]');
       await nameInDialog(page, folder);
     });
@@ -1641,8 +1641,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
     const droppedText = read.ok ? await read.text() : `(the Drive answered ${String(read.status)})`;
 
     await relisted(page, async () => {
-      await page.click(`[data-drive-entry="${folder}"] [data-drive-menu]`);
-      await page.click(`[data-drive-entry="${folder}"] [data-drive-rename]`);
+      await pressRowMenu(page, `[data-drive-entry="${folder}"]`, '[data-drive-rename]');
       await nameInDialog(page, renamed);
     });
 
@@ -1656,8 +1655,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
     // the verdict's finding, and the `finally` below removes what is left.
     for (const entry of [renamed, file, dropped].filter((listed) => afterRename.includes(listed))) {
       await relisted(page, async () => {
-        await page.click(`[data-drive-entry="${entry}"] [data-drive-menu]`);
-        await page.click(`[data-drive-entry="${entry}"] [data-drive-delete]`);
+        await pressRowMenu(page, `[data-drive-entry="${entry}"]`, '[data-drive-delete]');
         await until(page, 'the delete confirmation', `document.querySelector('[data-drive-delete-confirm]') !== null`);
         await page.click('[data-drive-delete-confirm]');
       });
@@ -1694,7 +1692,7 @@ const DRIVE_DRAWN = `document.querySelector('[data-drive-section], [data-drive-e
 
 /** My stuff's root is the place shown, from its column row or its switch, and its listing has answered. */
 const MINE_DRAWN = `location.pathname === '/drive'
-  && document.querySelector('[data-drive-place="mine"][aria-current="page"], [data-drive-tab="mine"][aria-current="page"]') !== null
+  && document.querySelector('${drivePlace('mine')}[aria-current="page"], [data-drive-tab="mine"][aria-current="page"]') !== null
   && ${DRIVE_DRAWN}`;
 
 /** My stuff's root lists something of the account's own: a file, or a folder besides the Skills folder every account has. */
@@ -1741,7 +1739,7 @@ export async function driveOpens(target: FlowTarget): Promise<DriveOpensVerdict>
     ));
 
     const places = v.parse(v.array(v.string()), await page.evaluate(
-      `[...new Set([...document.querySelectorAll('[data-drive-place], [data-drive-tab]')].map((place) => place.getAttribute('data-drive-place') ?? place.getAttribute('data-drive-tab') ?? ''))]`,
+      `[...new Set([...document.querySelectorAll('${DRIVE_PLACE}, [data-drive-tab]')].map((place) => place.getAttribute('data-drive-place') ?? place.getAttribute('data-drive-tab') ?? ''))]`,
     ));
 
     const landedAt = new URL(page.url()).pathname;
@@ -1905,8 +1903,8 @@ export async function slateSharesReachingNothing(target: FlowTarget): Promise<Sl
 
     await page.evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find((button) => (button.textContent ?? '').trim() === 'Done')?.click()`);
     // At the desktop width the Drive's places are its column's.
-    await until(page, 'the Shared place', `document.querySelector('[data-drive-place="shared"]') !== null`);
-    await page.click('[data-drive-place="shared"]');
+    await until(page, 'the Shared place', `document.querySelector('${drivePlace('shared')}') !== null`);
+    await page.click(drivePlace('shared'));
 
     const mine = `[data-drive-section="Shared by you"] [data-drive-share-kind="live"]`;
     await until(page, 'the share under Shared by you', `document.querySelector(${JSON.stringify(mine)}) !== null`);
@@ -1915,8 +1913,7 @@ export async function slateSharesReachingNothing(target: FlowTarget): Promise<Sl
     share = await page.$eval(mine, (element) => element.getAttribute('data-drive-share'));
     const tile = `[data-drive-share="${share ?? ''}"]`;
 
-    await page.click(`${tile} [data-drive-menu]`);
-    await page.click(`${tile} [data-drive-stop-sharing]`);
+    await pressRowMenu(page, tile, '[data-drive-stop-sharing]');
     await until(page, 'the stop confirmation', `document.querySelector('[data-drive-stop-confirm]') !== null`);
     await page.click('[data-drive-stop-confirm]');
     await until(page, 'the share to leave the Drive', `document.querySelector(${JSON.stringify(tile)}) === null`);
@@ -2127,7 +2124,7 @@ export async function computerSwitchKeepsItsScreens(target: FlowTarget): Promise
       expandedFill = Math.round(v.parse(v.number(), await page.evaluate(fill)) * 100) / 100;
       expandedRailFolded = v.parse(v.boolean(), await page.evaluate(`document.querySelector('[data-rail-collapsed]') !== null`));
       keptExpanded = v.parse(v.boolean(), await page.evaluate(`${DESKTOP_WINDOW}?.__kinuLeft === true`));
-      await page.evaluate(`document.querySelector('[data-desktop-return]').click()`);
+      await page.evaluate(`document.querySelector('${DESKTOP_RETURN}').click()`);
       await until(page, 'the desktop back in the column', `${fill} < 0.9`);
       keptReturned = v.parse(v.boolean(), await page.evaluate(`${DESKTOP_WINDOW}?.__kinuLeft === true`));
     }
@@ -2229,7 +2226,7 @@ export async function computerSessionsComeBackByName(target: FlowTarget): Promis
     await until(page, 'the computer in the Environment panel', `[...document.querySelectorAll('#inspector button')].some((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)})`);
     await page.evaluate(`[...document.querySelectorAll('#inspector button')].find((b) => (b.textContent ?? '').trim() === ${JSON.stringify(computer)}).click()`);
     await until(page, "the computer's first session", `${SESSION_TABS}.length === 1`);
-    await page.click('#inspector button[aria-label="New session"]');
+    await page.click(`#inspector ${NEW_SESSION}`);
     await until(page, 'a second session, open', `${SESSION_TABS}.length === 2 && document.querySelector('#inspector [role="tab"][aria-selected="true"]')?.textContent?.trim() === ${SESSION_TABS}[1]`);
     await until(page, "the new session's shell", `(${SHOWN_TERMINAL}?.textContent ?? '').includes('#')`);
     await clickShownTerminal(page);

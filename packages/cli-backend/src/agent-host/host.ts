@@ -16,7 +16,7 @@ import {
   SubagentRosterStore,
   admitHireWork,
   hireLifecycle,
-  retireHireSubtree,
+  stopAgentsBelow,
   type ActorRetirement,
   type HireLifecyclePorts,
   type SeatedHire,
@@ -24,27 +24,23 @@ import {
   type InProcessDeliveries,
   MAIN_AGENT,
   actorReferenceOf,
-  stoppedBelow,
   deliveryMetadata,
   childContextResolver, hostedChildTree,
   createLocalPeerEndpoint,
   defaultLoopOrigin,
   samePeerGroup,
-  createTeamToolDeps,
-  createTemporaryAgentPort,
-  delegationBudgetOf,
+  teamToolDepsFor,
+  temporaryPortFor,
   inheritedContextFromTranscript,
   actorHomeName,
   receiveSubagentEvent,
   publishSubagentReport,
   TurnReports,
   type SubagentReportLedger,
-  agentNamer,
   subagentDescriptorSource,
   missionOf,
   recoverSubagentLifecycles,
-  owedSubagentTurnReport,
-  taskAnswerIsLater,
+  hireTurnSettled,
   type ActorHost,
   type ActorReference, type AgentSignal, type SendOutcome,
   type AgentRuntime,
@@ -689,11 +685,10 @@ export class LocalAgentHost {
       eventLog: orchestration.eventLog,
       deliveries: orchestration.deliveries,
       roster,
-      temporary: createTemporaryAgentPort({
+      temporary: temporaryPortFor({
         roster,
         runtime: this.childRuntime(input.tree, input.key),
-        now: () => Date.now(),
-        createName: agentNamer(input.tree.directory, roster),
+        directory: input.tree.directory,
         afterTurn: (_child, work) => { this.retireOffTurn(input.key, work); },
       }),
       team: null,
@@ -1045,16 +1040,11 @@ export class LocalAgentHost {
       owed: async (turn) => {
         const parent = this.requireActorEntry(child.actor.record.parentActorId ?? '');
 
-        parent.roster.finishTurn(child.name, turn.ending, Date.now());
-
-        const state = child.relay;
-
-        if (state === null) return null;
-
-        return await owedSubagentTurnReport({
-          lifetime: child.actor.record.lifetime, ending: turn.ending, assistantText: turn.assistantText, narration: async () => turn.narration,
-          reports: state, ownerDriven: turn.ownerDriven,
-          delegating: taskAnswerIsLater({ roster: child.roster, log: child.eventLog, ...(turn.taskId !== null && { turnTaskId: turn.taskId }) }),
+        return await hireTurnSettled({
+          hirer: { roster: parent.roster, announce: () => { parent.tree.liveReads.moved(ROSTER_READS); } },
+          hire: { record: child.actor.record, roster: child.roster, log: child.eventLog },
+          // With no relay state the roster still moves, and nothing is owed.
+          turn: { reports: child.relay ?? { spoke: false, settled: true }, ownerDriven: turn.ownerDriven, taskId: turn.taskId }, ended: turn,
         });
       },
       sequenceId: (messageId) => `${child.key}:turn-end:${messageId}`,
@@ -1152,17 +1142,16 @@ export class LocalAgentHost {
   }
 
   private buildTeam(parent: HostEntry): TeamToolDeps {
-    const delegation = delegationBudgetOf((actorId) => parent.tree.host.describe(actorId), parent.actor.record);
-
-    const input: Parameters<typeof createTeamToolDeps>[0] = {
-      delegation,
+    // What a capped agent is offered is core's (`offered`): no team at all.
+    return teamToolDepsFor({
+      record: parent.actor.record,
+      directory: parent.tree.directory,
       roster: parent.roster,
       runtime: this.childRuntime(parent.tree, parent.key),
-      now: () => Date.now(),
+      temporary: parent.temporary,
       inheritedContext: (): Promise<SerializedMessage[]> => inheritedContextFromTranscript(parent.actor.session.canonical.transcript(parent.sessionId)),
       originContext: async () => parent.actor.session.history,
       ownMission: () => missionOf(soulOf(parent.tree.db)) ?? '',
-      createName: agentNamer(parent.tree.directory, parent.roster),
       rosterMoved: () => { parent.tree.liveReads.moved(ROSTER_READS); },
       broadcastTask: (event) => parent.session.host.broadcast(metadataBroadcastEvent(
         'subagent_event',
@@ -1170,12 +1159,8 @@ export class LocalAgentHost {
         { status: 'task', text: event.content },
       )),
       workspaceAgents: () => this.workspaceAgents(parent.tree),
-      treeOwner: parent.parentKey === null ? 'main' : parent.actor.record.actorId,
       events: parent.eventLog,
-    };
-
-    // What a capped agent is offered is core's (`offered`): no team at all.
-    return createTeamToolDeps({ ...input, temporary: parent.temporary });
+    });
   }
 
   /**
@@ -1202,7 +1187,6 @@ export class LocalAgentHost {
     return {
       ...this.treeRetirement(tree),
       parent: () => ({ reference: parentOf().actor.reference, record: parentOf().actor.record }),
-      describe: (actorId) => tree.host.describe(actorId),
       born: (reference, name, seed) => this.bornChild(parentOf(), reference, name, seed),
       asHire: async (_reference, name, body) => {
         const entry = await this.openChildEntry(parentOf(), name);
@@ -1389,41 +1373,26 @@ export class LocalAgentHost {
     }
   }
 
-  private hirerRoster(tree: HostTree, actor: WorkspaceActor): SubagentRosterStore | null {
-    const hirer = actor.parentActorId === null ? null : tree.directory.retained(actor.parentActorId);
-
-    if (hirer === null) return null;
-
-    return this.byActor.get(hirer.actorId)?.roster
-      ?? new SubagentRosterStore(makeSqlExec(tree.db), tree.host.bindStores(actorReferenceOf(hirer)).handle);
-  }
-
-  /** Stops the agents below `key` (core `stoppedBelow`): what each was owed and had not taken is cancelled with its
-   *  queued turns, whether or not a turn of its runs; one the owner added has its own Stop. */
+  /** Stops the agents below `key` (core `stopAgentsBelow`), off the Stop's turn and joined by close(): a session here has
+   *  its queued turns cancelled and its running turn cut off. */
   private stopSubtree(key: string): void {
     const entry = this.entries.get(key);
 
     if (entry === undefined || this.closed) return;
     const { tree } = entry;
 
-    for (const actor of stoppedBelow(tree.directory.list(), entry.actor.reference.actorId)) {
-      const live = this.byActor.get(actor.actorId);
-      const running = live?.actor.session.inFlight === true;
+    this.retireOffTurn(entry.name, () => stopAgentsBelow(entry.actor.reference.actorId, {
+      ...this.treeRetirement(tree),
+      cancelOwed: (actor) => { this.cancelOwed(tree, actor); },
+      stopTurn: async (actor) => {
+        const live = this.byActor.get(actor.actorId);
+        const running = live?.actor.session.inFlight === true;
 
-      // What it was owed and had not taken is cancelled and the work it carried dismissed, as the cloud's Stop does; a
-      // session here has its queued turns cancelled and its running turn cut off.
-      this.cancelOwed(tree, actor);
-      live?.session.interrupt();
+        live?.session.interrupt();
 
-      // A running turn reports its own end.
-      if (running) continue;
-      const roster = this.hirerRoster(tree, actor);
-
-      if (roster?.get(actor.name)?.status !== 'working') continue;
-      roster.applyReport(actor.name, 'blocked', 'turn_end', Date.now());
-
-      if (actor.lifetime === 'task') this.retireStopped(tree, actor);
-    }
+        return running;
+      },
+    }));
   }
 
   /** What a stopped agent was owed and had not taken: cancelled, and the work it carried dismissed with it. */
@@ -1439,19 +1408,6 @@ export class LocalAgentHost {
 
         for (const event of log.query({ turn_id: drained })) log.dismiss(event.id, 'stopped by the owner', 'system');
       }
-    });
-  }
-
-  /** A stopped task agent retired as a dismissal that keeps its history: its hires, then it. */
-  private retireStopped(tree: HostTree, actor: WorkspaceActor): void {
-    const reference = actorReferenceOf(actor);
-    const hirer = tree.directory.retained(actor.parentActorId ?? '');
-    const retirement = this.treeRetirement(tree);
-
-    this.retireOffTurn(actor.name, async () => {
-      if (hirer === null) return;
-      await retireHireSubtree(retirement, reference, true);
-      await retirement.retire(actorReferenceOf(hirer), { reference, name: actor.name, destroy: false, interrupt: true });
     });
   }
 

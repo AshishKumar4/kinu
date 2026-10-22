@@ -3,7 +3,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 
 import { actorPolicy, hireLifecycle, type HireLifecyclePorts, type SeatedHire, publishSubagentReport, type OwedAdmission, type ConversationRecall, type HeadReport, type SubagentReportLedger, type CodemodeBuilder, type SeatedActor, type ServedStores, type TierId } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
-import { EventLog, titleActorFromMessage, spawnSeatedHead, receiveSubagentEvent, subagentForkContext, type SubagentInheritedContext, inheritedAsModelMessage, explorationActorKey, parseActorKey, headStatusUnsettled, storedHeadReportStatus, registeredParent, terminalTaskReport, owedSubagentTurnReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, type ActorHost, type ActorReference, type BoundActor, type DelegationBudget, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubagentEventResult, type SubagentReportOrigin, type SubagentReportHandoff, type SubagentReportStatus, type SubagentRosterStore, type SubagentRuntime, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
+import { EventLog, titleActorFromMessage, spawnSeatedHead, receiveSubagentEvent, subagentForkContext, type SubagentInheritedContext, inheritedAsModelMessage, explorationActorKey, reclaimSettledRunActors, actorReferenceOf, registeredParent, terminalTaskReport, hireTurnSettled, defaultLoopOrigin, type ActorHost, type ActorReference, type BoundActor, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubagentEventResult, type SubagentReportOrigin, type SubagentReportHandoff, type SubagentReportStatus, type SubagentRosterStore, type SubagentRuntime, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
 import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
   AgentToolDescriptor, ArtifactOverrides, DiscoverOpts, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
@@ -173,12 +173,6 @@ export interface HostedActorSeams {
   oweAdvice(actor: BoundActor): Promise<void>;
 }
 
-export function hostedDelegationBudget(
-  seams: Pick<HostedActorSeams, 'host'>, actor: BoundActor,
-): DelegationBudget {
-  return delegationBudgetOf((actorId) => seams.host.describe(actorId), actor.record);
-}
-
 /**
  * One builder: recovery verifies the claim, so the runner and `taskTools` must share one `HeadInput`.
  * `maxDepth: 0` is containment (delegation is via `hire`/`ask`); a hire starts on the builtin loop.
@@ -224,7 +218,6 @@ function hostedLifecyclePorts(seams: HostedActorSeams, parent: () => BoundActor)
   return {
     parent: () => parent(),
     directory: seams.directory,
-    describe: (actorId) => seams.host.describe(actorId),
     born: async (reference, _name, seed) => {
       await seams.host.run(reference, { kind: 'actor' }, (actor) => {
         seed(actor.stores.config);
@@ -424,12 +417,10 @@ export function hostedOwedReport(
   return settle(Effect.gen(function* () {
     const hirer = hostedHirer(seams, actor);
 
-    if (seams.roster(hirer).finishTurn(actor.record.name, ended.ending, Date.now())) seams.announce(hirer);
-
-    return yield* Effect.promise(() => owedSubagentTurnReport({
-      lifetime: actor.record.lifetime, ending: ended.ending, assistantText: ended.assistantText, narration: async () => ended.narration,
-      reports: turn.reports, ownerDriven: turn.ownerDriven,
-      delegating: taskAnswerIsLater({ roster: seams.roster(actor), log: new EventLog(seams.exec, actor.handle), ...(turn.taskId !== null && { turnTaskId: turn.taskId }) }),
+    return yield* Effect.promise(() => hireTurnSettled({
+      hirer: { roster: seams.roster(hirer), announce: () => { seams.announce(hirer); } },
+      hire: { record: actor.record, roster: seams.roster(actor), log: new EventLog(seams.exec, actor.handle) },
+      turn, ended,
     }));
   }));
 }
@@ -575,12 +566,7 @@ export function nodeCodemodeTool(seams: HostedActorSeams, actor: SeatedActor): C
   return settleSync(cfRuntimeOf(actor, 'a swarm node').pipe(Effect.map((runtime) => seams.codemode(actor, runtime, seams.webSearch()))));
 }
 
-/**
- * Retire exploration actors whose work is provably finished. The ledger is the only
- * status authority: any reported status is terminal, unknown statuses are not, and
- * an unledgered actor is retired only when nothing live claims exploration work,
- * because a search creates its actor before its node row.
- */
+/** Retire exploration actors whose work is provably finished (core's `reclaimSettledRunActors` decides which). */
 export async function reclaimSettledExplorationActors(
   seams: HostedActorSeams,
   ledger: {
@@ -588,32 +574,10 @@ export async function reclaimSettledExplorationActors(
     hasLiveExploration(): boolean;
   },
 ): Promise<{ readonly retired: number; readonly retained: number }> {
-  let retired = 0;
-  let retained = 0;
-  const live = ledger.hasLiveExploration();
-
-  for (const reference of seams.host.list()) {
-    const record = seams.host.describe(reference.actorId);
-
-    if (record === null || record.origin !== 'swarm') {
-      retained += 1;
-      continue;
-    }
-
-    const head = ledger.readHead(parseActorKey(record.name).id);
-
-    const settled = head === null
-      ? !live
-      : !headStatusUnsettled(head.status) && storedHeadReportStatus(head.status) !== null;
-
-    if (!settled) {
-      retained += 1;
-      continue;
-    }
-
-    await retireExploration(seams, reference, record.name);
-    retired += 1;
-  }
-
-  return { retired, retained };
+  return await reclaimSettledRunActors({
+    actors: seams.host.list().flatMap((reference) => seams.host.describe(reference.actorId) ?? []),
+    resumable: new Set(seams.host.resumable(Number.MAX_SAFE_INTEGER).map((turn) => turn.reference.actorId)),
+    ledger,
+    retire: (actor) => retireExploration(seams, actorReferenceOf(actor), actor.name),
+  });
 }

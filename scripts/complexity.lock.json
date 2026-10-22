@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-21",
-  "files": 3757,
-  "functions": 98787,
+  "measuredAt": "2026-10-22",
+  "files": 3770,
+  "functions": 99102,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -435,10 +435,6 @@
     },
     {
       "key": "scripts/devbox-container-tier.ts#main",
-      "complexity": 25
-    },
-    {
-      "key": "scripts/durability-canary-telemetry.ts#activationDisruptions",
       "complexity": 25
     },
     {

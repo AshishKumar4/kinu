@@ -4,7 +4,7 @@
  * screen, from one hairline to the column's foot. Capability doctrine stays model-facing
  * (core/src/prompting/volatile-context.ts); file browsing lives in Files.
  */
-import { Suspense, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { Suspense, useContext, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { Button } from "@/components/ui/Button";
 import { useParams } from "react-router-dom";
 import {
@@ -23,6 +23,7 @@ import type { TerminalSession } from "@kinu.run/devbox";
 import type { ExecutorOutput } from "@/hooks/use-chat-owner";
 import { lazyRoute } from "@/lazy-route";
 import type { TerminalPaneProps } from "@/components/TerminalPane";
+import { TerminalReplay } from "@/components/terminal-replay";
 import { Loader } from "@/components/ui/Loader";
 import { lastValue } from "@/hooks/use-async-resource";
 import { useMounts } from "@/hooks/use-mounts";
@@ -57,6 +58,9 @@ export interface EnvironmentSurfaceProps {
   onOpenFiles: (root: string) => void;
   /** Owned by the work surface, so the Files drive's offline row opens the same panel. */
   onConnectDevice: () => void;
+  /** Open on the chosen machine's desktop, once it is listed (the desktop's old address, D99). */
+  desktopLanding?: boolean;
+  onDesktopLanded?: () => void;
 }
 
 /** Null for an environment the drive does not mount (a fork's parent). */
@@ -119,6 +123,11 @@ type MachineDesktop =
   | null;
 
 /** The computer's screen; a PC's as its daemon reports it (1014-t); none for the workspace. */
+/** The machine's screen as its pane shows it: none where its terminal is replayed (`TerminalReplay`), with no machine. */
+function shownDesktop(machine: Machine, workspace: string, replaying: boolean): MachineDesktop {
+  return replaying ? null : machineDesktop(machine, workspace);
+}
+
 function machineDesktop(machine: Machine, workspace: string): MachineDesktop {
   if (machine.mount.name === "computer") return { kind: "screen", src: desktopClientUrl(location, workspace, null), ...DESKTOP_SIZE };
   const desktop = machine.device?.desktop;
@@ -191,7 +200,7 @@ function Dot({ tone }: { tone: Tone }) {
 }
 
 export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
-  const { rpc, executors, executorOutputs, lastActiveExecutor, onExecute, onOpenFiles, onConnectDevice } = props;
+  const { rpc, executors, executorOutputs, lastActiveExecutor, onExecute, onOpenFiles, onConnectDevice, desktopLanding = false, onDesktopLanded } = props;
   const [selected, setSelected] = useState<string | null>(null);
   // Each machine's open tab: a session's id, the desktop, or its one shell.
   const [tabs, setTabs] = useState<Readonly<Record<string, string>>>({});
@@ -238,6 +247,17 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
 
     if (machine !== selectedMachine?.key) setSplit(null);
   };
+
+  // The desktop's old address: once the chosen machine is listed, its desktop tab is the one shown, if it has a desktop.
+  const replaying = useContext(TerminalReplay) !== null;
+  const landOn = selectedMachine !== null && shownDesktop(selectedMachine, workspaceName, replaying) !== null ? selectedMachine.key : null;
+
+  useEffect(() => {
+    if (!desktopLanding || selectedMachine === null) return;
+
+    if (landOn !== null) setTabs((was) => ({ ...was, [landOn]: "desktop" }));
+    onDesktopLanded?.();
+  }, [desktopLanding, selectedMachine, landOn, onDesktopLanded]);
 
   const shown: Shown = {
     tab: (machine) => tabs[machine] ?? (machine === "computer" ? sessions.sessions?.[0]?.id ?? FIRST_SESSION_ID : ONE_SHELL),
@@ -357,7 +377,7 @@ function MachineRow({ environments, execByName, selected, chosen, onSelect, onCo
       <ChipToggle data-env-connect onClick={onConnectDevice} aria-label="Connect a PC" title="Connect a PC" className="border-dashed p-text-3">
         <PlusIcon size={14} className="shrink-0" aria-hidden /><span className="hidden @[56rem]:inline">Connect a PC</span>
       </ChipToggle>
-      {empty && <span className="t-meta p-text-3">No environments available.</span>}
+      {empty && <span className="t-meta p-text-3" data-env-empty>No environments available.</span>}
       {loading && <Loader size="sm" />}
       {/* The chosen machine's state in words, then what it offers: the chips are named by their machines alone. */}
       {chosen !== null && (
@@ -387,6 +407,8 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
 }) {
   const { mount, device } = machine;
   const computer = mount.name === "computer";
+  // A replayed computer (the landing's sample) has no screen to show.
+  const replaying = useContext(TerminalReplay) !== null;
   // The computer's size, read here: its control sits in the head, its restart covers the view.
   const size = useComputerSize(rpc, computer && mount.live);
   const name = machineLabel(machine, exec);
@@ -410,7 +432,7 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
       {device !== null && device.connected && !device.granted && <GiveAccess name={name} onGive={() => grant(device.id)} />}
       {(device === null || (device.connected && device.granted)) && (
         <EnvironmentView mount={mount} machineKey={machine.key} device={device?.id ?? null} exec={exec} name={name} workspace={workspace}
-          desktop={machineDesktop(machine, workspace)}
+          desktop={shownDesktop(machine, workspace, replaying)}
           restartingTo={restarting ? size.restartingTo ?? "" : null} executorOutputs={executorOutputs} onExecute={onExecute}
           sessions={machineSessions} shown={shown} wide={wide} />
       )}
