@@ -1,3 +1,4 @@
+Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter)
 Copyright 2024 The Schibsted Grotesk Project Authors (https://github.com/Schibsted-Lab/shibsted-grotesk)
 Copyright 2011 The Newsreader Project Authors (https://github.com/the-type-founders/newsreader)
 Copyright 2022 The Fragment Mono Project Authors (https://github.com/fragment/fragment-mono)

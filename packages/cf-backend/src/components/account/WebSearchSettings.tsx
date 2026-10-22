@@ -5,8 +5,9 @@
  */
 import { useState, type ReactNode } from "react";
 import { Effect } from "effect";
-import { Button, Loader } from "@cloudflare/kumo";
-import { ArrowSquareOutIcon, XIcon } from "@phosphor-icons/react";
+import { Loader } from "@/components/ui/Loader";
+import { Button } from "@/components/ui/Button";
+import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import {
   DEFAULT_WEB_SEARCH_CHAIN, WEB_SEARCH_PROVIDER_IDS, WEB_SEARCH_PROVIDERS,
   type CredentialSummary, type ProfileCatalogEnvelope, type WebSearchBilling, type WebSearchProviderId, type WebSearchRoute,
@@ -16,12 +17,17 @@ import {
   deleteCredential, getProfileCatalog, listCloudflareAccounts, listCredentials, setCredential, testWebSearch, updateProfileCatalog,
   type CloudflareAccountStatus, type WebSearchAnswer,
 } from "@/lib/user-api";
-import { Choice, Field, inputCls } from "@/components/ui/form";
+import { Choice, Field } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { Segmented } from "@/components/ui/Segmented";
 import { Status } from "@/components/ui/Status";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import { useAsyncResource } from "@/hooks/use-async-resource";
+import { Notice } from "@/components/ui/Notice";
+import { TextInput } from "@/components/ui/Field";
+import { Card } from "@/components/ui/Card";
+import { Chip } from "@/components/ui/Chip";
+import { Choices, type Choice as Option } from "@/components/ui/Choices";
 
 /** What a Test searches for: a question an agent of the owner's asks. */
 const TEST_QUERY = "Cloudflare Durable Objects alarms API";
@@ -29,6 +35,13 @@ const TEST_QUERY = "Cloudflare Durable Objects alarms API";
 const CLOUDFLARE_INDEXES = WEB_SEARCH_PROVIDER_IDS.filter((id) => WEB_SEARCH_PROVIDERS[id].cloudflare);
 
 const KEYED_PROVIDERS = WEB_SEARCH_PROVIDER_IDS.filter((id) => WEB_SEARCH_PROVIDERS[id].direct !== null);
+
+/** Who pays for a search. Your own key is offered once a provider that takes a key is admitted; until then there is no
+ *  such choice to show. */
+const BILLINGS: readonly Option<WebSearchBilling>[] = [
+  { id: "cloudflare", label: "Cloudflare", aside: <span className="t-meta">Default</span>, detail: "Paid through your Cloudflare account." },
+  ...(KEYED_PROVIDERS.length > 0 ? [{ id: "key", label: "Your own key", detail: "Paid to the provider, with your API key." } satisfies Option<WebSearchBilling>] : []),
+];
 
 function routeLabel(route: WebSearchRoute): string {
   return `${WEB_SEARCH_PROVIDERS[route.provider].label} · ${route.billing === "cloudflare" ? "Cloudflare" : "your key"}`;
@@ -59,7 +72,7 @@ function shown<A>(doing: string, run: () => Promise<A>, on: {
 type Place = "settings" | "setup";
 
 function Framed({ place, children }: { place: Place; children: ReactNode }) {
-  return place === "settings" ? <section className="p-card overflow-hidden"><div className="px-5 py-5">{children}</div></section> : <>{children}</>;
+  return place === "settings" ? <Card>{children}</Card> : <>{children}</>;
 }
 
 export function WebSearchSettings({ place }: { place: Place }) {
@@ -131,17 +144,8 @@ function SearchChoice({ place, envelope, credentials, saved, onKeySaved, payer }
   return (
     <div className="space-y-6" data-web-search>
       <Field label="Search with" hint={failure ?? (saving ? "Saving…" : undefined)}>
-        <div role="radiogroup" aria-label="Search with" className="grid gap-3 sm:grid-cols-2">
-          <Tile billing="cloudflare" opened={opened} onPick={pick} disabled={saving}
-            title="Cloudflare" badge="Default"
-            about="Paid through your Cloudflare account." />
-          {/* Offered once a provider that takes a key is admitted; until then there is no such choice to show. */}
-          {KEYED_PROVIDERS.length > 0 && (
-            <Tile billing="key" opened={opened} onPick={pick} disabled={saving}
-              title="Your own key"
-              about="Paid to the provider, with your API key." />
-          )}
-        </div>
+        <Choices tiles label="Search with" marker="data-web-search-tile" value={opened} disabled={saving} onChange={(billing) => detach(pick(billing))}
+          options={BILLINGS} />
       </Field>
 
       {opened === "cloudflare" || KEYED_PROVIDERS.length === 0 ? (
@@ -172,29 +176,6 @@ function SearchChoice({ place, envelope, credentials, saved, onKeySaved, payer }
         </>
       )}
     </div>
-  );
-}
-
-function Tile({ billing, opened, onPick, disabled, title, badge, about }: {
-  billing: WebSearchBilling;
-  opened: WebSearchBilling;
-  onPick: (billing: WebSearchBilling) => Effect.Effect<void>;
-  disabled: boolean;
-  title: string;
-  badge?: string;
-  about: string;
-}) {
-  return (
-    <label data-web-search-tile={billing}
-      className="relative block cursor-pointer rounded-[14px] border p-border px-4 py-3 transition-colors hover:border-[var(--c-border-strong)] has-[:checked]:border-[var(--c-accent)] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-[var(--c-accent-subtle)] has-[:disabled]:cursor-default has-[:disabled]:opacity-60">
-      <input type="radio" name="web-search-billing" value={billing} checked={opened === billing} disabled={disabled}
-        onChange={() => detach(onPick(billing))} className="sr-only" />
-      <span className="flex items-baseline justify-between gap-2">
-        <span className="p-row-text font-medium p-text">{title}</span>
-        {badge !== undefined && <span className="p-meta p-text-3">{badge}</span>}
-      </span>
-      <span className="mt-1 block p-meta p-text-3">{about}</span>
-    </label>
   );
 }
 
@@ -255,25 +236,23 @@ function KeyEntry({ primary, stored, disabled, onSaved, onRemoved }: {
           }} />
       </Field>
       <form className="flex flex-wrap items-center gap-2" onSubmit={(event) => { event.preventDefault(); detach(store()); }}>
-        <input type="password" value={key} onChange={(event) => setKey(event.target.value)} aria-label={`${WEB_SEARCH_PROVIDERS[provider].label} API key`}
-          placeholder={has ? "••••••• (stored, paste to replace)" : `${WEB_SEARCH_PROVIDERS[provider].label} API key`}
-          className={`${inputCls} h-9 min-w-0 flex-1`} />
-        <button type="submit" disabled={saving || disabled || key.trim() === ""} className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">
+        <TextInput className="min-w-0 flex-1" type="password" value={key} onChange={(event) => setKey(event.target.value)} aria-label={`${WEB_SEARCH_PROVIDERS[provider].label} API key`} placeholder={has ? "••••••• (stored, paste to replace)" : `${WEB_SEARCH_PROVIDERS[provider].label} API key`} />
+        <Button type="submit" disabled={saving || disabled || key.trim() === ""}>
           {action}
-        </button>
+        </Button>
       </form>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 p-meta p-text-3">
+      <div className="t-meta flex flex-wrap items-center gap-x-3 gap-y-1 p-text-3">
         {has && <Status tone="success">Key stored</Status>}
         {has && (
-          <button type="button" disabled={saving || disabled} onClick={() => detach(remove())} className="p-danger hover:underline">Remove key</button>
+          <Button variant="danger" size="sm" disabled={saving || disabled} onClick={() => detach(remove())}>Remove key</Button>
         )}
         {direct !== null && (
-          <a href={direct.keyPage} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 p-accent hover:underline">
+          <a href={direct.keyPage} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 p-accent-fg hover:underline">
             Get a {WEB_SEARCH_PROVIDERS[provider].label} key <ArrowSquareOutIcon size={11} />
           </a>
         )}
       </div>
-      {failure !== null && <p className="text-xs p-danger">{failure}</p>}
+      {failure !== null && <p className="t-meta p-danger">{failure}</p>}
     </div>
   );
 }
@@ -293,17 +272,13 @@ function Backups({ backups, chain, stored, disabled, onChange }: {
 
   return (
     <Field label="If it fails" hint="Tried in order when the one before it fails.">
-      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Web search backups">
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Web search backups">
         {backups.map((route, at) => (
-          <span key={`${route.provider}|${route.billing}`} data-web-search-backup={`${route.provider}|${route.billing}`}
-            className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-0.5 text-xs p-text">
+          <Chip key={`${route.provider}|${route.billing}`} data-web-search-backup={`${route.provider}|${route.billing}`}
+            removeLabel={`Remove ${routeLabel(route)} from the backups`} onRemove={disabled ? undefined : () => onChange(backups.filter((entry) => !sameRoute(route)(entry)))}>
             <span className="p-text-3">{at + 1}.</span>
             {routeLabel(route)}
-            <button type="button" disabled={disabled} className="p-text-3 hover:p-text" aria-label={`Remove ${routeLabel(route)} from the backups`}
-              onClick={() => onChange(backups.filter((entry) => !sameRoute(route)(entry)))}>
-              <XIcon size={11} />
-            </button>
-          </span>
+          </Chip>
         ))}
         {candidates.length > 0 && (
           <Choice<string> label="Add a web search backup" size="sm" className="w-52" disabled={disabled} value=""
@@ -314,7 +289,7 @@ function Backups({ backups, chain, stored, disabled, onChange }: {
               if (route !== undefined) onChange([...backups, route]);
             }} />
         )}
-        {candidates.length === 0 && backups.length === 0 && <span className="p-meta p-text-3">None.</span>}
+        {candidates.length === 0 && backups.length === 0 && <span className="t-meta p-text-3">None.</span>}
       </div>
     </Field>
   );
@@ -351,12 +326,12 @@ function SearchTest({ route }: { route: WebSearchRoute }) {
         </Button>
       </Field>
       {outcome?.kind === "answered" && (
-        <div className="flex min-w-0 flex-col gap-0.5" data-web-search-tested="answered">
+        <div className="flex min-w-0 flex-col gap-px" data-web-search-tested="answered">
           <Status tone="success">{outcome.answer.results.length} results from {WEB_SEARCH_PROVIDERS[outcome.answer.source].label} in {(outcome.ms / 1000).toFixed(1)} s</Status>
-          {outcome.answer.results[0] !== undefined && <span className="truncate p-meta p-text-3">First: {outcome.answer.results[0].title}</span>}
+          {outcome.answer.results[0] !== undefined && <span className="t-meta truncate p-text-3">First: {outcome.answer.results[0].title}</span>}
         </div>
       )}
-      {outcome?.kind === "refused" && <p className="rounded-md px-3 py-2 text-xs p-notice-danger" data-web-search-tested="refused">{outcome.words}</p>}
+      {outcome?.kind === "refused" && <Notice tone="danger" data-web-search-tested="refused">{outcome.words}</Notice>}
     </div>
   );
 }

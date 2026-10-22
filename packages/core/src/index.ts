@@ -2321,7 +2321,7 @@ export {
 } from './http/public-shell';
 
 export {
-  accountTheme, DEFAULT_THEME, terminalPalette, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed,
+  accountTheme, avatarGround, DEFAULT_THEME, ILLUSTRATION, REDACTION_FILL, terminalPalette, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed,
   type ColourToken, type Mode, type TerminalPalette, type ThemeName,
 } from './web/theme';
 

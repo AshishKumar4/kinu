@@ -3,12 +3,12 @@
  * message written after it, not after everything since (production, 2026-10-08: they all collected at the bottom).
  */
 import { Fragment, type ReactNode } from "react";
-import { Link } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { ArrowUpRightIcon, CheckCircleIcon, ClockIcon, UserPlusIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import type { SubagentActivityEvent } from "@kinu.run/core";
 import { EventRow, foldRepeats } from "@/components/ProgrammaticTurnCard";
 import { eventTurnKey, messageTime } from "@/components/MessageView";
+import { IconLink } from "@/components/ui/IconControl";
 
 /** One event to place: when it happened, what makes a repeat of it, and how it draws `count` times in a row. */
 export interface PlacedEvent {
@@ -97,21 +97,17 @@ export function subagentEventRow(event: SubagentActivityEvent, workspace: string
     draw: (count) => (
       <EventRow
         icon={assigned ? UserPlusIcon : outcome.icon}
-        tone={assigned ? "p-accent" : outcome.tone}
+        tone={assigned ? "p-accent-fg" : outcome.tone}
         label={event.subagent}
         source={assigned ? "assigned" : outcome.verb}
         body={detail}
         count={count}
         hooks={{ "data-subagent-event": event.kind }}
         action={(
-          <Link
-            to={`/workspace/${workspace}/agents/${event.subagent}`}
-            title={`Open ${event.subagent}'s chat`}
-            aria-label={`Open ${event.subagent}'s chat`}
-            className="mt-1 mr-1 flex size-6 shrink-0 items-center justify-center rounded-md p-text-4 transition-colors hover:bg-[var(--c-elevated)] hover:p-text-2"
-          >
+          <IconLink place="pill" to={`/workspace/${workspace}/agents/${event.subagent}`} title={`Open ${event.subagent}'s chat`}
+            aria-label={`Open ${event.subagent}'s chat`} className="mt-1 mr-1">
             <ArrowUpRightIcon size={11} />
-          </Link>
+          </IconLink>
         )}
       />
     ),

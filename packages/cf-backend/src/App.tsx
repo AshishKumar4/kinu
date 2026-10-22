@@ -6,10 +6,11 @@ import HomePage, { NewWorkspacePage } from "./pages/HomePage";
 import WorkspacePage from "./pages/WorkspacePage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { APP_ROUTES, needsOnboarding, pageIsVisitors } from "@kinu.run/core";
+import { settingsPath } from "./components/SettingsRail";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { lastValue } from "./hooks/use-async-resource";
 import { lazyRoute } from "./lazy-route";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 
 // Split routes go through `lazyRoute`, not `lazy`, to recover from a chunk gone stale across a deploy.
 
@@ -40,7 +41,6 @@ const WorkspacesPage = lazyRoute(() => import("./pages/WorkspacesPage"));
 
 const PluginsPage = lazyRoute(() => import("./pages/PluginsPage"));
 
-const DevicesPage = lazyRoute(() => import("./pages/DevicesPage"));
 
 const MailPage = lazyRoute(() => import("./pages/MailPage"));
 
@@ -169,7 +169,8 @@ export default function App({ visitor = pageIsVisitors() }: { readonly visitor?:
             <Route path={APP_ROUTES.shared} element={<Page label="shared"><DrivePage tab="shared" /></Page>} />
             <Route path={APP_ROUTES.workspaces} element={<Page label="workspaces"><WorkspacesPage /></Page>} />
             <Route path={APP_ROUTES.plugins} element={<Page label="plugins"><PluginsPage /></Page>} />
-            <Route path={APP_ROUTES.devices} element={<Page label="devices"><DevicesPage /></Page>} />
+            {/* Devices is a Settings section; the old address still lands there. */}
+            <Route path={APP_ROUTES.devices} element={<Navigate to={settingsPath("devices")} replace />} />
             <Route path={`${APP_ROUTES.mail}/*`} element={<Page label="mail"><MailPage /></Page>} />
             <Route path={APP_ROUTES.workspace} element={<Page label="workspace"><KeyedWorkspace /></Page>} />
             <Route path={APP_ROUTES.workspaceAgent} element={<Page label="workspace-agent"><KeyedWorkspace /></Page>} />

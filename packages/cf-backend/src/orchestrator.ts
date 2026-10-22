@@ -173,7 +173,7 @@ import {
   acceptContainerEvent, type ContainerEventResult,
   initWebhookIngressTables,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
-  createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, type TrustLevel,
+  createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers, retimeDailyTrigger, type TrustLevel,
   type TriggerView,
   type MailAdmission, type MailArrival, type HandedMail, handedMailSignal, spillEventContent, unreadMailForTurn, MailTriageLane, triageMail,
   PeerHub, type PeerMessage, type ReceiveResult,
@@ -7261,6 +7261,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         secret: webhook.secret,
       };
     }));
+  }
+
+  /** The owner moves a daily schedule's time (the assistant's brief, say), in the time zone it keeps. Not a model tool. */
+  @callable()
+  async retimeDailySchedule(triggerId: string, at: string): Promise<{ readonly at: string; readonly nextFireAt: number }> {
+    return await retimeDailyTrigger({ registry: this.triggerRegistry, trigger_id: triggerId, at, now: Date.now() });
   }
 
   /** Revoke a trigger and delete its plaintext secret in the same host call.

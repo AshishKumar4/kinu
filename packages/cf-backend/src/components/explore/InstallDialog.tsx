@@ -6,25 +6,30 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Effect } from "effect";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
+import { Button } from "@/components/ui/Button";
 import { DownloadSimpleIcon, KeyIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { Modal } from "@/components/ui/Modal";
-import { FilledButton } from "@/components/ui/FilledButton";
-import { Choice, Field, inputCls } from "@/components/ui/form";
+import { Choice, Field } from "@/components/ui/form";
 import { Switch } from "@/components/ui/Switch";
 import { Status } from "@/components/ui/Status";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { presetBrand } from "@/components/plugins/McpPresetCards";
 import { installBlueprint, type BlueprintPage } from "@/lib/explore-api";
-import { BRIEF_TIMES, DEFAULT_ASSISTANT } from "@/components/assistant/AssistantStep";
+import { DEFAULT_ASSISTANT } from "@/components/assistant/AssistantStep";
+import { TextInput } from "@/components/ui/Field";
+import { Surface } from "@/components/ui/Surface";
+
+/** The brief times Install offers; the blueprint's own is 08:00. */
+const BRIEF_TIMES = ["07:00", "07:30", "08:00", "08:30", "09:00", "09:30"] as const;
 
 export function InstallDialog({ page, connected, onClose }: { page: BlueprintPage; connected: (preset: string | null) => boolean; onClose: () => void }) {
   const navigate = useNavigate();
   const assistant = page.workspace.id === PERSONAL_ASSISTANT_ID;
   const [name, setName] = useState(assistant ? DEFAULT_ASSISTANT.name : page.workspace.title);
-  const [brief, setBrief] = useState(DEFAULT_ASSISTANT.brief);
+  const [brief, setBrief] = useState<string>("08:00");
   const [home, setHome] = useState(true);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
@@ -32,22 +37,22 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
   const install = () => Effect.catchCause(Effect.gen(function* () {
     setBusy(true);
     setFailure(null);
-    const workspace = yield* Effect.promise(() => installBlueprint(page.workspace.id, assistant ? { agent: name, brief, home } : { displayName: name }));
+    const workspace = yield* Effect.promise(() => installBlueprint(page.workspace.id, assistant ? { displayName: name, agent: name, brief, home } : { displayName: name }));
 
     yield* Effect.promise(async () => navigate(assistant && home ? APP_ROUTES.home : `/workspace/${encodeURIComponent(workspace)}`));
   }), showing((chain) => { setFailure(chain); setBusy(false); }));
 
   return (
-    <Modal title={`Install ${page.workspace.title}`} icon={<DownloadSimpleIcon size={16} className="p-accent" />} onClose={onClose} busy={busy} maxWidthClass="max-w-lg"
+    <Modal title={`Install ${page.workspace.title}`} icon={<DownloadSimpleIcon size={16} className="p-accent-fg" />} onClose={onClose} busy={busy} maxWidthClass="max-w-lg"
       footer={(
         <>
           <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-          <FilledButton onClick={() => detach(install())} disabled={busy || name.trim() === ""} data-install-confirm>{busy && <Loader size="sm" />}Install</FilledButton>
+          <Button variant="primary" size="md" onClick={() => detach(install())} disabled={busy || name.trim() === ""} data-install-confirm>{busy && <Loader size="sm" />}Install</Button>
         </>
       )}>
       <div className="space-y-4" data-install-dialog={page.workspace.id}>
         <Field label={assistant ? "Its name" : "Workspace name"} hint={assistant ? "What you call it; its workspace is “Personal assistant”." : undefined}>
-          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={60} className={`${inputCls} h-9`} aria-label={assistant ? "Its name" : "Workspace name"} />
+          <TextInput value={name} onChange={(event) => setName(event.target.value)} maxLength={60} aria-label={assistant ? "Its name" : "Workspace name"} />
         </Field>
         {assistant && (
           <>
@@ -60,31 +65,31 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
           </>
         )}
         <div>
-          <div className="mb-2 p-row-text font-medium p-text">What it reaches</div>
-          <ul className="divide-y divide-[var(--c-border)] overflow-hidden rounded-xl border p-border">
+          <div className="t-item mb-2 p-text">What it reaches</div>
+          <Surface look="outlined" as="ul" className="p-rows-ruled overflow-hidden">
             {page.workspace.needs.map((need) => {
               const brand = presetBrand(need.connection);
               const title = need.connection === null ? (need.secret ?? "A secret") : (mcpPresetById(need.connection)?.title ?? need.connection);
               const has = connected(need.connection);
 
               return (
-                <li key={`${need.connection ?? ""}${need.secret ?? ""}`} className="flex items-center gap-3 px-3 py-2.5">
-                  <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-[var(--c-neutral-tint)]">
+                <li key={`${need.connection ?? ""}${need.secret ?? ""}`} className="flex items-center gap-3 px-3 py-2">
+                  <Surface look="wash" as="span" className="flex size-6 shrink-0 items-center justify-center">
                     {brand !== undefined ? <BrandMark brand={brand} size={12} bare /> : <KeyIcon size={12} className="p-text-2" />}
-                  </span>
+                  </Surface>
                   <span className="min-w-0 flex-1">
-                    <span className="block p-row-text p-text">{title} <span className="p-meta p-text-3">{need.access === "read" ? "to read" : "to read and write"}</span></span>
+                    <span className="t-body block p-text">{title} <span className="t-meta p-text-3">{need.access === "read" ? "to read" : "to read and write"}</span></span>
                   </span>
                   {has
                     ? <Status tone="success">Connected</Status>
-                    : <a href={`${APP_ROUTES.plugins}?add=${need.connection ?? ""}`} className="shrink-0 p-meta p-accent hover:underline">Connect</a>}
+                    : <a href={`${APP_ROUTES.plugins}?add=${need.connection ?? ""}`} className="t-meta shrink-0 p-accent-fg hover:underline">Connect</a>}
                 </li>
               );
             })}
-          </ul>
-          <p className="mt-2 p-meta p-text-3">Install now and connect the rest later: it asks for what it can't reach yet.</p>
+          </Surface>
+          <p className="t-meta mt-2 p-text-3">Install now and connect the rest later: it asks for what it can't reach yet.</p>
         </div>
-        {failure !== null && <p className="text-xs p-danger">{failure}</p>}
+        {failure !== null && <p className="t-meta p-danger">{failure}</p>}
       </div>
     </Modal>
   );

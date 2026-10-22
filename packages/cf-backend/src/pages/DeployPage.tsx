@@ -1,7 +1,8 @@
 /** `/deploy` (docs/SELF-DEPLOY.md § The Cloudflare door). Public: the run key minted in this tab authorizes everything. */
 import { Effect } from 'effect';
+import { Button } from "@/components/ui/Button";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { CloudArrowUpIcon } from "@phosphor-icons/react";
 import {
   DEFAULT_INSTANCE_NAME, DeployFrameSchema, FACT_OWNER_EMAIL,
@@ -11,9 +12,13 @@ import {
 import { showing, detach } from "@kinu.run/core/obs";
 import * as v from "valibot";
 import { KinuLogo } from "@/components/ui/KinuLogo";
-import { FilledButton } from "@/components/ui/FilledButton";
-import { Field, inputCls } from "@/components/ui/form";
+import { Field } from "@/components/ui/form";
 import { StepRow } from "@/components/deploy/DeployStepRow";
+import { Notice } from "@/components/ui/Notice";
+import { TextInput } from "@/components/ui/Field";
+import { Select } from "@/components/ui/Select";
+import { Checkbox } from "@/components/ui/Check";
+import { Surface } from "@/components/ui/Surface";
 
 /** The run key is a capability: `sessionStorage` under the run id, sent in an `authorization` header, never a URL. */
 function heldRunKey(runId: string): string {
@@ -80,14 +85,14 @@ function inputsFrom(answers: Answers, zones: readonly { id: string; name: string
 function NotConfigured({ reason }: { reason: string }) {
   return (
     <section className="space-y-3" aria-label="Deploying to Cloudflare is not set up">
-      <div className="p-card px-5 py-4">
-        <h2 className="p-title p-text">Deploying to Cloudflare is not set up here</h2>
-        <p className="mt-1 text-sm p-text-2">{reason}</p>
-        <p className="mt-3 p-meta p-text-3">
+      <Surface look="panel" className="px-5 py-4">
+        <h2 className="t-title p-text">Deploying to Cloudflare is not set up here</h2>
+        <p className="t-body mt-1 p-text-2">{reason}</p>
+        <p className="t-meta mt-3 p-text-3">
           The owner of this Kinu registers the OAuth client once. Until then, this page cannot
           deploy into a Cloudflare account.
         </p>
-      </div>
+      </Surface>
     </section>
   );
 }
@@ -137,37 +142,20 @@ function Answered({ options, runId, onStarted }: {
   });
 
   // The zones offered for the address and for mail: one list, drawn in both.
-  const zoneOptions = zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>);
+  const zoneOptions = zones.map((zone) => ({ value: zone.id, label: zone.name }));
 
   return (
     <section className="space-y-4" aria-label="Your deployment">
-      <div className="p-card space-y-5 px-5 py-5">
+      <Surface look="panel" className="space-y-5 px-5 py-5">
         <Field label="Cloudflare account" hint="Where Kinu is created. Everything it creates belongs to you.">
-          <select
-            className={inputCls}
-            aria-label="Cloudflare account"
-            value={answers.accountId}
-            onChange={(event) => setAnswers({ ...answers, accountId: event.target.value })}
-          >
-            {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
-          </select>
+          <Select label="Cloudflare account" value={answers.accountId} onChange={(accountId) => setAnswers({ ...answers, accountId })}
+            options={accounts.map((account) => ({ value: account.id, label: account.name }))} />
         </Field>
         <Field label="Instance name" hint="Lower-case letters, numbers and dashes. It names the Worker and its resources.">
-          <input
-            className={inputCls}
-            aria-label="Instance name"
-            value={answers.instanceName}
-            onChange={(event) => setAnswers({ ...answers, instanceName: event.target.value })}
-          />
+          <TextInput aria-label="Instance name" value={answers.instanceName} onChange={(event) => setAnswers({ ...answers, instanceName: event.target.value })} />
         </Field>
         <Field label="Your email" hint="This address owns the deployment and gets the one-time PIN when you sign in.">
-          <input
-            className={inputCls}
-            type="email"
-            aria-label="Your email"
-            value={answers.ownerEmail}
-            onChange={(event) => setAnswers({ ...answers, ownerEmail: event.target.value })}
-          />
+          <TextInput type="email" aria-label="Your email" value={answers.ownerEmail} onChange={(event) => setAnswers({ ...answers, ownerEmail: event.target.value })} />
         </Field>
         <Field
           label="Address"
@@ -177,23 +165,10 @@ function Answered({ options, runId, onStarted }: {
         >
           {zones.length > 0 && (
             <div className="space-y-2">
-              <select
-                className={inputCls}
-                aria-label="Zone"
-                value={answers.zoneId}
-                onChange={(event) => setAnswers({ ...answers, zoneId: event.target.value })}
-              >
-                <option value="">workers.dev</option>
-                {zoneOptions}
-              </select>
+              <Select label="Zone" value={answers.zoneId} onChange={(zoneId) => setAnswers({ ...answers, zoneId })}
+                options={[{ value: "", label: "workers.dev" }, ...zoneOptions]} />
               {answers.zoneId !== "" && (
-                <input
-                  className={inputCls}
-                  aria-label="Hostname"
-                  placeholder="kinu.example.com"
-                  value={answers.hostname}
-                  onChange={(event) => setAnswers({ ...answers, hostname: event.target.value })}
-                />
+                <TextInput aria-label="Hostname" placeholder="kinu.example.com" value={answers.hostname} onChange={(event) => setAnswers({ ...answers, hostname: event.target.value })} />
               )}
             </div>
           )}
@@ -201,46 +176,30 @@ function Answered({ options, runId, onStarted }: {
         {zones.length > 0 && (
           <Field label="Mail" hint="Optional. Addresses for you, your workspaces and their agents on a zone of yours; the deploy sets up its routing, sending and DNS.">
             <div className="space-y-2">
-              <select
-                className={inputCls}
-                aria-label="Mail domain"
-                value={answers.mailZoneId}
-                onChange={(event) => setAnswers({ ...answers, mailZoneId: event.target.value })}
-              >
-                <option value="">No mail</option>
-                {zoneOptions}
-              </select>
+              <Select label="Mail domain" value={answers.mailZoneId} onChange={(mailZoneId) => setAnswers({ ...answers, mailZoneId })}
+                options={[{ value: "", label: "No mail" }, ...zoneOptions]} />
               {answers.mailZoneId !== "" && (
-                <label className="flex items-center gap-2 text-sm p-text-2">
-                  <input type="checkbox" checked={answers.mailEveryone} onChange={(event) => setAnswers({ ...answers, mailEveryone: event.target.checked })} />
-                  Every account may have an address, not only yours
-                </label>
+                <Checkbox checked={answers.mailEveryone} onChange={(mailEveryone) => setAnswers({ ...answers, mailEveryone })}
+                  label="Every account may have an address, not only yours" />
               )}
             </div>
           </Field>
         )}
         {options.prompts.map((name) => (
           <Field key={name} label={name} hint="Optional. Stored as a secret on your deployment, never here.">
-            <input
-              className={inputCls}
-              type="password"
-              aria-label={name}
-              value={answers.keys[name] ?? ""}
-              onChange={(event) => setAnswers({ ...answers, keys: { ...answers.keys, [name]: event.target.value } })}
-            />
+            <TextInput type="password" aria-label={name} value={answers.keys[name] ?? ""} onChange={(event) => setAnswers({ ...answers, keys: { ...answers.keys, [name]: event.target.value } })} />
           </Field>
         ))}
-      </div>
-      {err !== null && <div className="p-notice-danger rounded-md px-3 py-2 text-xs" role="alert">{err}</div>}
+      </Surface>
+      {err !== null && <Notice tone="danger">{err}</Notice>}
       <div className="flex items-center justify-between gap-3">
-        <p className="p-meta p-text-3">Kinu {options.version} will be uploaded into your account.</p>
-        <FilledButton
+        <p className="t-meta p-text-3">Kinu {options.version} will be uploaded into your account.</p>
+        <Button variant="primary" size="lg"
           onClick={() => detach(deploy())}
           disabled={busy || answers.accountId === "" || answers.ownerEmail === ""}
-          className="!h-9 !px-4 !text-sm"
         >
           <CloudArrowUpIcon size={15} /> Deploy my Kinu
-        </FilledButton>
+        </Button>
       </div>
     </section>
   );
@@ -251,23 +210,23 @@ function Done({ snapshot, email }: { snapshot: DeploySnapshot; email: string }) 
 
   return (
     <section className="space-y-3" aria-label="Your Kinu is deployed">
-      <div className="p-card px-5 py-4">
-        <h2 className="p-title p-text">Your Kinu is live</h2>
-        <p className="mt-1 text-sm p-text-2">
+      <Surface look="panel" className="px-5 py-4">
+        <h2 className="t-title p-text">Your Kinu is live</h2>
+        <p className="t-body mt-1 p-text-2">
           <a className="underline" href={origin}>{snapshot.address}</a>
         </p>
-        <p className="mt-2 p-meta p-text-3">
+        <p className="t-meta mt-2 p-text-3">
           Sign in with {email === "" ? "the email you gave" : email}. Cloudflare Access sends you a
           one-time PIN. It is running Kinu {snapshot.version}; install new versions from its
           Updates page.
         </p>
-      </div>
-      <div className="p-card px-5 py-4">
-        <h2 className="p-title p-text">Connect this machine</h2>
-        <pre className="mt-2 overflow-x-auto rounded-md bg-[var(--c-surface)] px-3 py-2 font-mono text-xs p-text">
+      </Surface>
+      <Surface look="panel" className="px-5 py-4">
+        <h2 className="t-title p-text">Connect this machine</h2>
+        <Surface look="sheet" as="pre" className="t-meta t-mono mt-2 overflow-x-auto px-3 py-2 p-text">
           curl -fsSL {origin}/install.sh | bash
-        </pre>
-      </div>
+        </Surface>
+      </Surface>
     </section>
   );
 }
@@ -338,27 +297,27 @@ export default function DeployPage({ fixture, fixtureOptions }: {
     && snapshot.steps.length === 0;
 
   return (
-    <div className="min-h-screen p-bg p-text">
+    <Surface look="page" className="min-h-screen p-text">
       <header className="flex h-14 items-center justify-between border-b p-border px-5">
         <a href="/" aria-label="Kinu home" className="flex items-center"><KinuLogo /></a>
-        <span className="p-meta p-text-3">Deploy your own Kinu</span>
+        <span className="t-meta p-text-3">Deploy your own Kinu</span>
       </header>
       <main className="mx-auto max-w-3xl space-y-6 px-6 py-8">
         <div>
-          <h1 className="p-display text-2xl">Your own Kinu, in your own account</h1>
-          <p className="mt-1 text-sm p-text-2">
+          <h1 className="t-page-title">Your own Kinu, in your own account</h1>
+          <p className="t-body mt-1 p-text-2">
             Sign in with Cloudflare, answer four questions, and watch it deploy. Nothing is built on
             your side, and kinu.run keeps no credential of yours.
           </p>
         </div>
-        {err !== null && <div className="p-notice-danger rounded-md px-3 py-2 text-xs" role="alert">{err}</div>}
+        {err !== null && <Notice tone="danger">{err}</Notice>}
         {options === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
         {options !== null && !options.cloudflare && <NotConfigured reason={options.reason} />}
         {options !== null && options.cloudflare && (snapshot === null || snapshot.state === "expired") && (
           <section className="space-y-3" aria-label="Sign in with Cloudflare">
-            <div className="p-card px-5 py-4">
-              <h2 className="p-title p-text">Sign in with Cloudflare</h2>
-              <p className="mt-1 text-sm p-text-2">
+            <Surface look="panel" className="px-5 py-4">
+              <h2 className="t-title p-text">Sign in with Cloudflare</h2>
+              <p className="t-body mt-1 p-text-2">
                 {snapshot?.state === "expired"
                   ? "Your Cloudflare sign-in for this run expired. It lasts an hour after the last"
                     + " step. Sign in again and the run picks up from the step it reached."
@@ -366,11 +325,11 @@ export default function DeployPage({ fixture, fixtureOptions }: {
                     + " its sign-in. The token stays with this run and is deleted when the run ends."
                     + " After that, your deployment uses its own."}
               </p>
-              <FilledButton onClick={() => detach(signIn())} className="mt-4 !h-9 !px-4 !text-sm">
+              <Button variant="primary" size="lg" onClick={() => detach(signIn())} className="mt-4">
                 Sign in with Cloudflare
-              </FilledButton>
-            </div>
-            <p className="p-meta p-text-3">This installs Kinu {options.version}.</p>
+              </Button>
+            </Surface>
+            <p className="t-meta p-text-3">This installs Kinu {options.version}.</p>
           </section>
         )}
         {options !== null && collecting && (
@@ -380,7 +339,7 @@ export default function DeployPage({ fixture, fixtureOptions }: {
           <>
             {snapshot.state === "done" && <Done snapshot={snapshot} email={ownerEmail} />}
             <section className="space-y-2" aria-label="Deployment steps">
-              <h2 className="p-eyebrow">{snapshot.state === "done" ? "What it did" : "Deploying"}</h2>
+              <h2 className="t-label">{snapshot.state === "done" ? "What it did" : "Deploying"}</h2>
               <ul className="space-y-2">
                 {snapshot.steps.map((row) => <StepRow key={row.id} row={row} onRetry={retry} />)}
               </ul>
@@ -388,6 +347,6 @@ export default function DeployPage({ fixture, fixtureOptions }: {
           </>
         )}
       </main>
-    </div>
+    </Surface>
   );
 }

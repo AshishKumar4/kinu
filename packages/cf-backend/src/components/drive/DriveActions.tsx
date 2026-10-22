@@ -1,7 +1,7 @@
 /** What adds to or changes the Drive: New, and the dialogs its menus open. */
 import { Effect } from 'effect';
-import { startTransition, useCallback, useRef, useState, type ReactNode } from "react";
-import { Button } from "@cloudflare/kumo";
+import { startTransition, useRef, useState, type ReactNode } from "react";
+import { Button, ICON_ON_PHONE } from "@/components/ui/Button";
 import {
   BookOpenIcon, FileArchiveIcon, FolderPlusIcon, FolderSimpleIcon, PencilSimpleIcon, PlusIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
@@ -11,15 +11,16 @@ import {
   addSkillArchive, addSkillFolder, addSkillText, deleteEntry, makeFolder, renameEntry, type PickedFile,
 } from "@/lib/drive-api";
 import { revokeShare } from "@/lib/shared-api";
-import { useCloseOnOutsideClick } from "@/hooks/use-close-on-outside-click";
+import { Menu } from "@/components/ui/Menu";
 import { useWorkspaceRpc } from "@/hooks/use-chat-owner";
 import { Modal } from "@/components/ui/Modal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
-import { FilledButton } from "@/components/ui/FilledButton";
-import { inputCls } from "@/components/ui/form";
 import { ForkDialog } from "@/components/shared/ForkDialog";
 import { ShareSlateDialog } from "@/components/slates/ShareSlateDialog";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
+import { Notice } from "@/components/ui/Notice";
+import { TextArea, TextInput } from "@/components/ui/Field";
+import { FilePicker } from "@/components/ui/FilePicker";
 
 function relativePathOf(file: File): string {
   return file.webkitRelativePath === "" ? file.name : file.webkitRelativePath;
@@ -62,13 +63,12 @@ function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: 
     <Modal title={title} icon={icon} onClose={onClose} busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton data-drive-dialog-commit onClick={submit} disabled={!valid || busy}>{busy ? `${action}…` : action}</FilledButton>
+        <Button variant="primary" size="md" data-drive-dialog-commit onClick={submit} disabled={!valid || busy}>{busy ? `${action}…` : action}</Button>
       </>}>
       <form onSubmit={(event) => { event.preventDefault(); submit(); }} className="space-y-2">
-        <label className="block p-meta p-text-3" htmlFor="drive-name">{label}</label>
-        <input id="drive-name" autoFocus value={value} onChange={(event) => setValue(event.target.value)}
-          onFocus={(event) => event.currentTarget.select()} className={inputCls} aria-invalid={value !== "" && !valid} />
-        {error !== null && <div role="alert" className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
+        <label className="t-meta block p-text-3" htmlFor="drive-name">{label}</label>
+        <TextInput id="drive-name" autoFocus value={value} onChange={(event) => setValue(event.target.value)} onFocus={(event) => event.currentTarget.select()} aria-invalid={value !== "" && !valid} />
+        {error !== null && <Notice tone="danger">{error}</Notice>}
       </form>
     </Modal>
   );
@@ -102,34 +102,32 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
   };
 
   return (
-    <Modal title="New skill" icon={<BookOpenIcon size={18} className="p-accent" />} onClose={onClose} busy={busy} maxWidthClass="max-w-lg"
+    <Modal title="New skill" icon={<BookOpenIcon size={18} className="p-accent-fg" />} onClose={onClose} busy={busy} maxWidthClass="max-w-lg"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <FilledButton data-drive-add-skill-commit onClick={() => run(() => addSkillText(text))} disabled={busy || text.trim() === ""}>
+        <Button variant="primary" size="md" data-drive-add-skill-commit onClick={() => run(() => addSkillText(text))} disabled={busy || text.trim() === ""}>
           {busy ? "Adding…" : "Add"}
-        </FilledButton>
+        </Button>
       </>}>
       <div className="space-y-3">
-        <p className="p-row-text p-text-2">
+        <p className="t-body p-text-2">
           Paste a <span className="font-mono p-text">SKILL.md</span>: front matter that names it, then the steps. Every workspace you own uses it from its next turn.
         </p>
-        <textarea data-drive-skill-text value={text} onChange={(event) => setText(event.target.value)} rows={9} spellCheck={false}
-          placeholder={"---\nname: deploy\ndescription: Ship the current branch\n---\nSteps…"}
-          aria-label="SKILL.md" className={`${inputCls} font-mono text-xs leading-relaxed`} />
+        <TextArea mono data-drive-skill-text value={text} onChange={(event) => setText(event.target.value)} rows={9} spellCheck={false} placeholder={"---\nname: deploy\ndescription: Ship the current branch\n---\nSteps…"} aria-label="SKILL.md" />
         <div className="flex flex-wrap items-center gap-2">
-          <span className="p-meta p-text-3">or pick</span>
-          <button type="button" className="p-btn-quiet inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs" disabled={busy}
-            onClick={() => folderInput.current?.click()}><FolderSimpleIcon size={13} /> a folder</button>
-          <button type="button" className="p-btn-quiet inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs" disabled={busy}
-            onClick={() => zipInput.current?.click()}><FileArchiveIcon size={13} /> a zip</button>
-          <input ref={folderInput} type="file" className="hidden" {...{ webkitdirectory: "" }} data-drive-skill-folder
+          <span className="t-meta p-text-3">or pick</span>
+          <Button size="sm" disabled={busy}
+            onClick={() => folderInput.current?.click()}><FolderSimpleIcon size={13} /> a folder</Button>
+          <Button size="sm" disabled={busy}
+            onClick={() => zipInput.current?.click()}><FileArchiveIcon size={13} /> a zip</Button>
+          <FilePicker ref={folderInput} folder data-drive-skill-folder
             onChange={(event) => {
               const files = picked(event.currentTarget.files);
               event.currentTarget.value = "";
 
               if (files.length > 0) run(() => addSkillFolder(files, pickedFolderName(files)));
             }} />
-          <input ref={zipInput} type="file" accept=".zip,application/zip" className="hidden" data-drive-skill-zip
+          <FilePicker ref={zipInput} accept=".zip,application/zip" data-drive-skill-zip
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
               event.currentTarget.value = "";
@@ -137,7 +135,7 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
               if (file !== undefined) run(() => addSkillArchive(file, file.name.replace(/\.zip$/iu, "")));
             }} />
         </div>
-        {error !== null && <div role="alert" data-drive-skill-error className="p-notice-danger rounded-md px-3 py-2 text-xs">{error}</div>}
+        {error !== null && <Notice tone="danger" data-drive-skill-error="">{error}</Notice>}
       </div>
     </Modal>
   );
@@ -149,7 +147,6 @@ function DriveShareSheet({ slate, onClose, onListingPending }: { slate: OwnedSla
   return <ShareSlateDialog workspace={slate.workspace} slate={slate.id} title={slate.title} rpc={rpc} onClose={onClose} onListingPending={onListingPending} />;
 }
 
-const NEW_BUTTON = "h-8 gap-1.5 px-3 text-sm max-sm:!size-9 max-sm:rounded-full max-sm:!p-0";
 
 interface NewProps {
   readonly onFiles: (files: File[]) => void;
@@ -160,13 +157,9 @@ interface NewProps {
 }
 
 function NewMenu({ onFiles, onFolder, onZip, onNewFolder, onNewSkill }: NewProps) {
-  const [open, setOpen] = useState(false);
-  const menu = useRef<HTMLDivElement>(null);
   const filesInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const zipInput = useRef<HTMLInputElement>(null);
-  const close = useCallback(() => setOpen(false), []);
-  useCloseOnOutsideClick(open, menu, close);
 
   const items: readonly { label: string; icon: ReactNode; marker: `data-${string}`; run: () => void; apart?: boolean }[] = [
     { label: "Upload files", icon: <UploadSimpleIcon size={15} />, marker: "data-drive-upload-files", run: () => filesInput.current?.click() },
@@ -177,29 +170,16 @@ function NewMenu({ onFiles, onFolder, onZip, onNewFolder, onNewSkill }: NewProps
   ];
 
   return (
-    <div ref={menu} className="relative">
-      <FilledButton className={NEW_BUTTON} aria-label="New" aria-haspopup="menu" aria-expanded={open}
-        data-drive-new onClick={() => setOpen((value) => !value)}>
-        <PlusIcon size={14} weight="bold" /><span className="max-sm:hidden">New</span>
-      </FilledButton>
-      {open && (
-        <div role="menu" className="absolute right-0 top-full z-30 mt-1 w-52 p-card border p-border p-1.5 p-shadow-menu animate-fade-in">
-          {items.map((item) => (
-            <div key={item.label}>
-              {item.apart === true && <div className="mx-1 my-1.5 border-t p-border" />}
-              <button type="button" role="menuitem" {...{ [item.marker]: "" }} onClick={() => { setOpen(false); item.run(); }}
-                className="flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-sm p-text transition-colors hover:bg-[var(--c-elevated)]">
-                <span className="flex shrink-0 p-text-3">{item.icon}</span>{item.label}
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      <input ref={filesInput} type="file" multiple className="hidden" data-drive-files-input
+    <div>
+      <Menu name="New" items={items.map(({ run, ...item }) => ({ ...item, onSelect: run }))} trigger={{
+        label: "New",
+        control: <Button variant="primary" size="sm" className={ICON_ON_PHONE} data-drive-new><PlusIcon size={14} weight="bold" /><span className="max-sm:hidden">New</span></Button>,
+      }} />
+      <FilePicker ref={filesInput} multiple data-drive-files-input
         onChange={(event) => { const files = [...(event.currentTarget.files ?? [])]; event.currentTarget.value = ""; onFiles(files); }} />
-      <input ref={folderInput} type="file" className="hidden" {...{ webkitdirectory: "" }} data-drive-folder-input
+      <FilePicker ref={folderInput} folder data-drive-folder-input
         onChange={(event) => { const files = picked(event.currentTarget.files); event.currentTarget.value = ""; onFolder(files); }} />
-      <input ref={zipInput} type="file" accept=".zip,application/zip" className="hidden" data-drive-zip-input
+      <FilePicker ref={zipInput} accept=".zip,application/zip" data-drive-zip-input
         onChange={(event) => {
           const file = event.currentTarget.files?.[0];
           event.currentTarget.value = "";
@@ -215,9 +195,9 @@ export function PrimaryAction({ inSkills, ...rest }: NewProps & { readonly inSki
   if (!inSkills) return <NewMenu {...rest} />;
 
   return (
-    <FilledButton className={NEW_BUTTON} aria-label="New skill" data-drive-add-skill onClick={rest.onNewSkill}>
+    <Button variant="primary" size="md" className={ICON_ON_PHONE} aria-label="New skill" data-drive-add-skill onClick={rest.onNewSkill}>
       <PlusIcon size={14} weight="bold" /><span className="max-sm:hidden">New skill</span>
-    </FilledButton>
+    </Button>
   );
 }
 
@@ -271,7 +251,7 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
       return (
         <ConfirmDialog title={`Delete ${dialog.entry.name}?`} action="Delete" marker="data-drive-delete-confirm" maxWidthClass="max-w-sm"
           onConfirm={() => act(() => deleteEntry(joinDir(folder, dialog.entry.name)))} onClose={onClose}>
-          <p className="p-row-text p-text-2">This deletes <span className="font-medium p-text">{dialog.entry.name}</span>{DELETE_ALSO[dialog.entry.kind]}. It cannot be undone.</p>
+          <p className="t-body p-text-2">This deletes <span className="t-item">{dialog.entry.name}</span>{DELETE_ALSO[dialog.entry.kind]}. It cannot be undone.</p>
         </ConfirmDialog>
       );
     case "add-skill":
@@ -288,7 +268,7 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
             onSharesChanged((yield* Effect.promise(async () => revokeShare({ workspace, share: dialog.row.share }))).listing);
           }))}
           onClose={onClose}>
-          <p className="p-row-text p-text-2">{`${whoLoses(dialog.row)} access right away, and the link stops working. You can share it again later.`}</p>
+          <p className="t-body p-text-2">{`${whoLoses(dialog.row)} access right away, and the link stops working. You can share it again later.`}</p>
         </ConfirmDialog>
       );
     case "fork":

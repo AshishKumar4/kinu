@@ -2,18 +2,16 @@
 import { Effect } from 'effect';
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
-import {
-  PlugsConnectedIcon, UserCircleIcon, ArrowSquareOutIcon,
-  GearSixIcon,
-} from "@phosphor-icons/react";
+import { Loader } from "@/components/ui/Loader";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { ArrowSquareOutIcon, GearSixIcon } from "@phosphor-icons/react";
 import { setDisplayName, type UserProfile } from "../lib/user-api";
 import { Card } from "@/components/ui/form";
-import { PAGE_BODY, PageHeader } from "@/components/ui/PageHeader";
+import { Page } from "@/components/ui/PageHeader";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useAccount } from "@/hooks/use-account";
-import { SettingsRail, SettingsSectionHead, settingsSection } from "@/components/SettingsRail";
+import { SettingsRail, settingsSection } from "@/components/SettingsRail";
 import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
 import { SecretsPanel } from "@/components/account/SecretsPanel";
@@ -53,11 +51,11 @@ function ProfileNameEditor({ profile, onSaved }: {
         <div className="flex-1">
           <DisplayNameField value={name} onChange={setName} saving={saving} />
         </div>
-        <Button variant="secondary" size="sm" className="!h-[34px] px-3.5" disabled={!changed || saving} onClick={() => detach(save())}>
+        <Button variant="secondary" disabled={!changed || saving} onClick={() => detach(save())}>
           {saving ? <Loader size="sm" /> : null} Save
         </Button>
       </div>
-      {error && <p className="text-xs p-danger">{error}</p>}
+      {error && <p className="t-meta p-danger">{error}</p>}
     </div>
   );
 }
@@ -72,46 +70,39 @@ export default function UserSettingsPage() {
 
   if (profile.resource.status === "loading" || profile.resource.status === "error") {
     return (
-      <div className="h-full overflow-y-auto">
-        <div className={`max-w-5xl space-y-8 ${PAGE_BODY}`}>
-          <PageHeader icon={<GearSixIcon size={22} />} title="Settings" />
-          {profile.resource.status === "loading"
-            ? <div className="flex justify-center py-10"><Loader size="base" /></div>
-            : <LoadFailure what="your account" message={profile.resource.message} onRetry={profile.reload} />}
-        </div>
-      </div>
+      <Page icon={<GearSixIcon size={22} />} title="Settings">
+        {profile.resource.status === "loading"
+          ? <div className="flex justify-center py-8"><Loader size="base" /></div>
+          : <LoadFailure what="your account" message={profile.resource.message} onRetry={profile.reload} />}
+      </Page>
     );
   }
 
   return (
-    <div className="h-full overflow-y-auto">
-      {/* A page of forms: it starts on every page's left edge and stops at a reading width. */}
-      <div className={`max-w-5xl ${PAGE_BODY}`}>
-        <div className="flex flex-col gap-7 lg:flex-row lg:gap-10">
-          {/* The title heads the sections' column, as Drive's heads its places. */}
-          <div className="space-y-5 lg:sticky lg:top-8 lg:w-48 lg:shrink-0 lg:self-start">
-            <PageHeader icon={<GearSixIcon size={22} />} title="Settings" />
+    <Page icon={<GearSixIcon size={22} />} title="Settings" rule="wide">
+        {/* The rail and the section's column fill the frame: 192 + 48 + 848. The active rail item names the section. */}
+        <div className="flex flex-col gap-8 lg:flex-row lg:gap-12">
+          <div className="lg:sticky lg:top-8 lg:w-48 lg:shrink-0 lg:self-start">
             <SettingsRail active={section} />
           </div>
-          <div className="min-w-0 flex-1 lg:max-w-[820px]">
-            <SettingsSectionHead section={section} />
+          <div className="min-w-0 flex-1">
             <div className="space-y-5">
 
         {section === "account" && (
           <>
-            <Card title="Profile" icon={UserCircleIcon}>
+            <Card title="Profile">
               <CardSlot resource={profile.resource} what="your profile" onRetry={profile.reload}>
                 {(p) => (
                   <div className="space-y-5">
                     <ProfileNameEditor profile={p} onSaved={set} />
                     <dl className="grid gap-5 sm:grid-cols-2">
                       <div>
-                        <dt className="p-meta p-text-3">Email</dt>
-                        <dd className="mt-1 font-mono p-row-text p-text">{p?.email ?? 'Not available'}</dd>
+                        <dt className="t-meta p-text-3">Email</dt>
+                        <dd className="t-body t-mono mt-1 p-text">{p?.email ?? 'Not available'}</dd>
                       </div>
                       <div>
-                        <dt className="p-meta p-text-3">Member since</dt>
-                        <dd className="mt-1 p-row-text p-text">{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</dd>
+                        <dt className="t-meta p-text-3">Member since</dt>
+                        <dd className="t-body mt-1 p-text">{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</dd>
                       </div>
                     </dl>
                   </div>
@@ -135,10 +126,10 @@ export default function UserSettingsPage() {
           <>
             <ProvidersPanel />
 
-            <Card title="MCP servers" icon={PlugsConnectedIcon}>
+            <Card title="MCP servers">
               <Link
                 to="/user/settings/mcp"
-                className="p-btn-quiet inline-flex h-6.5 items-center gap-1 px-2.5 text-xs"
+                className={buttonClass({ size: "sm" })}
               >Manage MCP servers <ArrowSquareOutIcon size={12} /></Link>
             </Card>
           </>
@@ -160,7 +151,6 @@ export default function UserSettingsPage() {
             </div>
           </div>
         </div>
-      </div>
-    </div>
+    </Page>
   );
 }

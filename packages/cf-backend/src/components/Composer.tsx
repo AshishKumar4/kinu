@@ -5,7 +5,7 @@
 import { detach } from "@kinu.run/core/obs";
 import { Effect } from "effect";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { InputArea, Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import {
   StopIcon, GitBranchIcon, ArrowBendUpRightIcon, ArrowsClockwiseIcon, ArrowUpIcon, CaretDownIcon, CaretRightIcon, CaretUpIcon,
   CheckIcon, CopyIcon, WarningCircleIcon, InfoIcon, CheckCircleIcon, XIcon, type Icon,
@@ -16,6 +16,10 @@ import type { WorkspaceNotice } from "@kinu.run/core";
 import { composing } from "@/components/ui/form";
 import type { ProviderWaitShown } from "@/hooks/use-chat-owner";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
+import { TextArea } from "@/components/ui/Field";
+import { IconControl } from "@/components/ui/IconControl";
+import { PillButton } from "@/components/ui/Pill";
+import { ChromeButton } from "@/components/ui/ChromeButton";
 
 const CHAT_MODES: readonly WorkMode[] = ["build", "plan"];
 
@@ -83,13 +87,13 @@ function Notice({ notice }: { notice: ComposerNotice }) {
   const role = tone === "danger" ? "alert" : "status";
 
   const actionButton = action && (
-    <button type="button" onClick={action.onClick} disabled={action.disabled} className="p-pill-action disabled:opacity-50">
+    <PillButton part="action" onClick={action.onClick} disabled={action.disabled} className="disabled:opacity-50">
       {action.icon}{action.label}
-    </button>
+    </PillButton>
   );
 
   const dismiss = onDismiss && (
-    <button type="button" onClick={onDismiss} aria-label="Dismiss" className="p-pill-icon"><XIcon size={13} weight="bold" /></button>
+    <IconControl place="pill" onClick={onDismiss} aria-label="Dismiss"><XIcon size={13} weight="bold" /></IconControl>
   );
 
   if (open) {
@@ -103,13 +107,13 @@ function Notice({ notice }: { notice: ComposerNotice }) {
             {dim && <span className="p-pill-dim">{dim}</span>}
           </span>
           <span className="p-pill-controls">
-            <button type="button" className="p-pill-icon" aria-label="Show less" aria-expanded onClick={() => setOpen(false)}>
+            <IconControl place="pill" aria-label="Show less" aria-expanded onClick={() => setOpen(false)}>
               <CaretUpIcon size={13} weight="bold" />
-            </button>
+            </IconControl>
             {dismiss}
           </span>
         </div>
-        {detail?.summary && <p className="mt-1 ml-6 p-row-text p-text-3">{detail.summary}</p>}
+        {detail?.summary && <p className="t-body mt-1 ml-6 p-text-3">{detail.summary}</p>}
         {detail?.facts && detail.facts.length > 0 && (
           <dl className="p-pill-facts">
             {detail.facts.map(([label, value]) => <Fragment key={label}><dt>{label}</dt><dd>{value}</dd></Fragment>)}
@@ -140,9 +144,9 @@ function Notice({ notice }: { notice: ComposerNotice }) {
         {dim && <span className="p-pill-dim">{dim}</span>}
       </span>
       {opens && (
-        <button type="button" className="p-pill-icon" aria-label="Show more" aria-expanded={false} onClick={() => setOpen(true)}>
+        <IconControl place="pill" aria-label="Show more" aria-expanded={false} onClick={() => setOpen(true)}>
           <CaretDownIcon size={13} weight="bold" />
-        </button>
+        </IconControl>
       )}
       {actionButton}
       {dismiss}
@@ -155,10 +159,9 @@ function CopyRawButton({ text }: { text: string }) {
   const { status, copy } = useCopy();
 
   return (
-    <button type="button" onClick={() => copy(text)}
-      className={`p-pill-action !bg-transparent ${status === "failed" ? "p-danger" : "p-text-3"}`}>
+    <PillButton part="action" quiet onClick={() => copy(text)} className={status === "failed" ? "p-danger" : "p-text-3"}>
       {status === "copied" ? <CheckIcon size={13} /> : <CopyIcon size={13} />}{copyLabel(status)}
-    </button>
+    </PillButton>
   );
 }
 
@@ -172,9 +175,9 @@ function Notices({ notices }: { notices: readonly ComposerNotice[] }) {
   return (
     <div className="p-pills" aria-label="Notices">
       {folded > 0 && (
-        <button type="button" className="p-pill-more" onClick={() => setAll(true)}>
+        <PillButton part="more" onClick={() => setAll(true)}>
           <CaretUpIcon size={11} weight="bold" />{folded} more
-        </button>
+        </PillButton>
       )}
       {notices.slice(folded).map((n) => <Notice key={n.id} notice={n} />)}
     </div>
@@ -258,17 +261,9 @@ function ModeSegment({ value, onChange, disabled }: {
         const title = MODE_TITLE[mode];
 
         return (
-          <button
-            key={mode}
-            type="button"
-            onClick={() => onChange(mode)}
-            disabled={disabled}
-            aria-pressed={selected}
-            title={title}
-            className="p-composer-quiet disabled:opacity-40"
-          >
+          <ChromeButton part="word" key={mode} onClick={() => onChange(mode)} disabled={disabled} aria-pressed={selected} title={title} className="disabled:opacity-40">
             {build ? "Auto" : "Plan"}
-          </button>
+          </ChromeButton>
         );
       })}
     </div>
@@ -317,7 +312,7 @@ export function Composer({
 
   return (
     // @container: the action row collapses to icons in a narrow chat column.
-    <div data-composer-root className="@container mx-auto w-full max-w-[820px] px-3 pb-3 sm:px-5 sm:pb-4"
+    <div data-composer-root className="@container mx-auto w-full max-w-[var(--layout-composer)] px-3 pb-3 sm:px-5 sm:pb-4"
       onPaste={(e) => {
         if (attachments) pasteAttachments(e, attachments, (text) => onValueChange(value === "" ? text : `${value}\n${text}`));
       }}>
@@ -328,32 +323,17 @@ export function Composer({
       <div className="p-composer">
         {attachments && <AttachmentTray attachments={attachments} />}
 
-        <InputArea ref={textareaRef} value={value} onValueChange={onValueChange}
+        {/* Shift+Enter is the field's own line break; Enter alone sends. */}
+        <TextArea bare data-composer-field ref={textareaRef} value={value} onChange={(e) => onValueChange(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key !== "Enter") return;
-
-            if (composing(e.nativeEvent)) return;
-
-            if (e.shiftKey) {
-              // Kumo's controlled InputArea drops the native line break; insert it
-              // and restore the caret after React commits.
-              e.preventDefault();
-              const input = e.currentTarget;
-              const start = input.selectionStart;
-              const end = input.selectionEnd;
-              onValueChange(`${value.slice(0, start)}\n${value.slice(end)}`);
-              requestAnimationFrame(() => input.setSelectionRange(start + 1, start + 1));
-
-              return;
-            }
+            if (e.key !== "Enter" || e.shiftKey || composing(e.nativeEvent)) return;
 
             e.preventDefault();
             submit?.();
           }}
-          placeholder={placeholder} disabled={disabled} rows={1}
-          className="w-full max-h-56 resize-none overflow-y-auto !border-0 px-[18px] pt-3.5 pb-1 !bg-transparent !text-[15px] !leading-6 pointer-coarse:!text-[16px] !shadow-none !outline-none !ring-0 focus:!ring-0" />
+          placeholder={placeholder} disabled={disabled} rows={1} className="t-composer max-h-56 overflow-y-auto" />
 
-        <div className="flex flex-wrap items-center gap-x-1 gap-y-1.5 px-2.5 pt-1 pb-2.5">
+        <div className="flex flex-wrap items-center gap-x-1 gap-y-2 px-2 pt-1 pb-2">
           {attachments && <AttachButton attachments={attachments} disabled={disabled} />}
 
           {mode && (
@@ -363,28 +343,27 @@ export function Composer({
           <div className="ml-auto flex min-w-0 items-center gap-1">
             {modelPicker && <div className="p-composer-model">{modelPicker}</div>}
             {stranded && onRecover && (
-              <button type="button" disabled={recovering}
+              <ChromeButton part="word" disabled={recovering}
                 onClick={() => detach(Effect.promise(async () => {
                   setRecovering(true);
                   // The outcome is the workspace notice's to report; the button only waits.
                   await onRecover();
                   setRecovering(false);
                 }))}
-                className="p-composer-quiet disabled:opacity-50"
+                className="disabled:opacity-50"
                 aria-label="Recover this turn"
                 title="This turn's worker stopped without finishing. Settle it so the agent takes work again.">
                 <ArrowsClockwiseIcon size={14} />
-                <span className="hidden @[30rem]:inline p-meta">{recoverLabel}</span>
-              </button>
+                <span className="t-meta hidden @[30rem]:inline">{recoverLabel}</span>
+              </ChromeButton>
             )}
             {canBranch && (
-              <button type="button" onClick={onBranch}
-                className="p-composer-quiet"
+              <ChromeButton part="word" onClick={onBranch}
                 aria-label="Run the draft as a parallel branch"
                 title="Answer beside the live turn, then compare. Neither turn interrupts the other.">
                 <GitBranchIcon size={15} />
-                <span className="hidden @[30rem]:inline p-meta">Branch</span>
-              </button>
+                <span className="t-meta hidden @[30rem]:inline">Branch</span>
+              </ChromeButton>
             )}
             <SendControls streaming={streaming} empty={empty} blocked={disabled} stopping={stopping}
               onSend={onSend} onStop={() => { setStopping(true); onStop(); }} />
@@ -401,23 +380,29 @@ function SendControls({ streaming, empty, blocked, stopping, onSend, onStop }: {
 }) {
   if (!streaming) {
     return (
-      <button type="button" onClick={onSend} disabled={empty || blocked} className="p-composer-send" aria-label="Send" title="Send">
+      <ChromeButton part="send" onClick={onSend} disabled={empty || blocked} aria-label="Send" title="Send">
         <ArrowUpIcon size={16} weight="bold" />
-      </button>
+      </ChromeButton>
     );
   }
 
   return (
     <>
-      <button type="button" onClick={onStop} className={empty ? "p-composer-send" : "p-composer-round"} data-stop disabled={stopping}
-        aria-label="Stop this turn" title={stopping ? "Stopping…" : "Stop this turn. Queued messages run next."}>
-        <StopIcon size={13} weight="fill" />
-      </button>
+      {/* With nothing drafted Stop is the one filled circle; beside a draft, Steer is, and Stop steps back. */}
+      {empty ? (
+        <ChromeButton part="send" onClick={onStop} data-stop disabled={stopping} aria-label="Stop this turn" title={stopping ? "Stopping…" : "Stop this turn. Queued messages run next."}>
+          <StopIcon size={13} weight="fill" />
+        </ChromeButton>
+      ) : (
+        <IconControl place="composer" onClick={onStop} data-stop disabled={stopping} aria-label="Stop this turn" title={stopping ? "Stopping…" : "Stop this turn. Queued messages run next."}>
+          <StopIcon size={13} weight="fill" />
+        </IconControl>
+      )}
       {!empty && (
-        <button type="button" onClick={onSend} disabled={blocked} className="p-composer-send"
+        <ChromeButton part="send" onClick={onSend} disabled={blocked}
           aria-label="Steer the running turn" title="Send this to the running turn. It arrives at the agent's next step.">
           <ArrowBendUpRightIcon size={16} weight="bold" />
-        </button>
+        </ChromeButton>
       )}
     </>
   );

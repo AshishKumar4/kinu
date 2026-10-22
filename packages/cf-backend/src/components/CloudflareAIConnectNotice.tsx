@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { WarningCircleIcon } from "@phosphor-icons/react";
 import { cloudflareConnectPath, type ConnectEnded } from "@kinu.run/core";
 import { beginConnect } from "@/lib/connect-window";
+import { Notice } from "@/components/ui/Notice";
+import { Button } from "@/components/ui/Button";
 
 interface CloudflareAIConnectNoticeProps {
   /** Rereads what the connection changes, once the connect has connected. */
@@ -29,22 +30,12 @@ export function CloudflareAIConnectNotice({
   const [failed, setFailed] = useState<string | null>(null);
 
   return (
-    <div className="rounded-md px-3 py-2 text-xs p-notice-warning">
-      <div className="flex items-start gap-2">
-        <WarningCircleIcon size={14} className="mt-0.5 shrink-0 p-warning" />
-        <div className="min-w-0 space-y-2">
-          <p>{message}</p>
-          {failed !== null && <p data-connect-failed className="p-danger">Cloudflare did not connect: {failed}</p>}
-          <button
-            type="button"
-            data-connect-cloudflare
-            onClick={() => { setFailed(null); connectCloudflare(onConnected, setFailed); }}
-            className="inline-flex items-center rounded-md border p-border px-2 py-1 p-t-control p-warning p-card-hover"
-          >
-            {action}
-          </button>
-        </div>
-      </div>
-    </div>
+    <Notice tone="warning" action={
+      <Button size="sm" className="shrink-0" data-connect-cloudflare onClick={() => { setFailed(null); connectCloudflare(onConnected, setFailed); }}>
+        {action}
+      </Button>}>
+      <p>{message}</p>
+      {failed !== null && <p data-connect-failed className="p-danger">Cloudflare did not connect: {failed}</p>}
+    </Notice>
   );
 }

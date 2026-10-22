@@ -6,6 +6,9 @@ import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import { answerPictures } from "@kinu.run/core/web/picture-src";
+import { SystemFrame } from "@/gallery-system";
+import { galleryPicture } from "@/gallery-pictures";
 import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
 import { connectedPath, connectEndedOf, mainPanelAgent, restoredRows, sharedBuildRefusal, threadLiveTail, type PanelAgent, type TurnLiveness, type WorkspaceGitHubView, requestUrl, type ModelMenuEntry, type RosterCounts, type RosterEntry, type RosterFrame, type RosterPage, type WorkspaceEntry } from "@kinu.run/core";
@@ -21,8 +24,7 @@ const IDLE_TURN: TurnLiveness = { kind: "idle" };
 const LIVE_TURN: TurnLiveness = { kind: "live", turnId: null };
 
 import { diagnostics, renderThrownChain, toKinuError, tolerate, settle } from "@kinu.run/core/obs";
-import { Button } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { Button } from "@/components/ui/Button";
 import {
   TrashIcon, BrainIcon, ListIcon,
 } from "@phosphor-icons/react";
@@ -131,13 +133,13 @@ import { galleryChatStartsAt, galleryChatWindow, galleryClearChat, galleryServer
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
 
 /** `&env=computer`: the workspace shell with its computer up, so Environment shows its terminal and its desktop. */
-const SHELL_COMPUTER = frame === "workspaceshell" && new URLSearchParams(location.search).get("env") === "computer";
+const SHELL_COMPUTER = (frame === "workspaceshell" || frame === "whole") && new URLSearchParams(location.search).get("env") === "computer";
 
 /** The owner's PC in the Environment frames: the account's device row that `ENVIRONMENT_EXECUTORS`' device names. */
 const GALLERY_PC = { id: "dev-mac", label: "Ashish's MacBook" };
 
 /** `&pc=granted|ungranted|offline`: the owner's account holds a PC, which this workspace holds or not (EnvironmentMachines). */
-const SHELL_PC = frame === "workspaceshell" ? new URLSearchParams(location.search).get("pc") : null;
+const SHELL_PC = frame === "workspaceshell" || frame === "whole" ? new URLSearchParams(location.search).get("pc") : null;
 
 /**
  * `&pcdesktop=ready|setup|permission`: the PC's screen as its daemon reports it (1014-t); absent, it has none.
@@ -250,6 +252,12 @@ window.addEventListener("gallery:settings-heal", () => { settingsCodexHealthy = 
 
 window.addEventListener("gallery:settings-release", () => SETTINGS_GATEWAY_HOLD.resolve());
 
+// The whole app (gallery-app.tsx) shows every settings card settled, as the owner meets them.
+if (frame === "whole") {
+  settingsCodexHealthy = true;
+  SETTINGS_GATEWAY_HOLD.resolve();
+}
+
 function fixtureJson(body: JsonValue | ProfileCatalogEnvelope | AccountUsage, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -274,13 +282,13 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
     signIn: false, error: null, presetId: null,
   },
   {
-    id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.example/sse",
+    id: "srv-linear", name: "linear", serverUrl: "https://mcp.linear.app/sse",
     transport: "sse", status: "authenticating", toolsCount: 0,
     allowedTools: ["create_issue"], signIn: true,
     error: null, presetId: null,
   },
   {
-    id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.example/sse",
+    id: "srv-notion", name: "notion", serverUrl: "https://mcp.notion.com/sse",
     transport: "sse", status: "failed", toolsCount: 0, allowedTools: null,
     signIn: false, error: "The server refused the connection.", presetId: null,
   },
@@ -289,10 +297,11 @@ const GALLERY_CUSTOM_MCP: readonly McpServerSummary[] = [
 /** A name the account already claims refuses the preset's own add; 'github' is the GitHub preset's name. */
 const GALLERY_UNCLAIMED_MCP = GALLERY_CUSTOM_MCP.filter((row) => row.name !== "github");
 
-/** Mutable so the preset add is observable on the next GET. `mcp-preset=connected` swaps in the preset-tagged states; `mcp-preset=open` leaves every preset unclaimed. */
+/** Mutable so the preset add is observable on the next GET. `mcp-preset=connected` swaps in the preset-tagged states; `mcp-preset=open` leaves every preset unclaimed.
+ *  The whole app opens connected: a preset added is tagged, so the mockup shows GitHub once, under Connected. */
 let galleryMcpRows: McpServerSummary[] = [...GALLERY_CUSTOM_MCP];
 
-const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset");
+const mcpPresetVariant = new URLSearchParams(location.search).get("mcp-preset") ?? (frame === "whole" ? "connected" : null);
 
 /** `&mcp-sign-in=refused`: a custom server's add needs a sign-in, and the account refuses to begin it. */
 const MCP_SIGN_IN_REFUSED = new URLSearchParams(location.search).get("mcp-sign-in") === "refused";
@@ -337,7 +346,8 @@ const mcpSecrets = (() => {
 
 function pluginsFixture(path: string): Response | null {
   if (path === "/api/user/devices/consents") {
-    return fixtureJson(frame === "devices"
+    // The Devices frame and the whole app: one workspace the Workstation is allowed for, one it refused.
+    return fixtureJson(frame === "devices" || frame === "whole"
       ? [
         { agentName: "api-worker", deviceId: "dev-1", policy: "allow", lastMethod: "exec", lastSummary: "bun test" },
         { agentName: "landing-page", deviceId: "dev-1", policy: "denied", lastMethod: "exec", lastSummary: null },
@@ -1050,7 +1060,10 @@ const GALLERY_LOGO = sanitizeWorkspaceLogoSvg(
   + "6' height='7' rx='3.5' fill='#115e59'/></svg>",
 );
 
-const galleryRoster: RosterEntry[] = new URLSearchParams(location.search).get("roster") === "assistant"
+// The whole app opens on the assistant's account unless `&roster=` names another.
+const ROSTER_ASKED = new URLSearchParams(location.search).get("roster") ?? (frame === "whole" ? "assistant" : null);
+
+const galleryRoster: RosterEntry[] = ROSTER_ASKED === "assistant"
   // The workspaces the personal assistant runs and watches (gallery-assistant.tsx).
   ? ASSISTANT_ROSTER.map((entry) => ({ ...entry, logo: entry.name === "api-worker" ? GALLERY_LOGO : entry.logo }))
   : [
@@ -1328,6 +1341,9 @@ function userFixture(path: string, method: string, body: BodyInit | null | undef
   if (decided !== null) return Promise.resolve(decided);
 
   if (ACCOUNT_FIXTURE_FRAMES.has(frame) && path.startsWith("/api/user/")) return userSettingsFixture(path, method, body);
+
+  // The whole app: the account's own reads; the roster, profile and model menu stay the shell's.
+  if (frame === "whole" && path.startsWith("/api/user/") && !/^\/api\/user\/(?:workspaces(?:\/|$)|profile$|models$)/u.test(path)) return userSettingsFixture(path, method, body);
   const memory = accountMemoryFixture(path, method);
 
   return memory === null ? null : Promise.resolve(memory);
@@ -4673,7 +4689,7 @@ function Shell(
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="border-b p-border">
-      <h2 className="px-6 pt-6 pb-2 text-xs font-semibold uppercase tracking-wider p-text-3">{title}</h2>
+      <h2 className="px-6 pt-6 pb-2 t-status uppercase p-text-3">{title}</h2>
       <div className="px-6 pb-8">{children}</div>
     </section>
   );
@@ -4682,33 +4698,32 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Controls() {
   return (
     <div className="space-y-6 max-w-2xl">
-      {/* Kumo's `primary`/`destructive` force `!text-white` (2.4:1 on brass), so the filled action is FilledButton. */}
+      {/* The one Button's filled looks: primary, and the confirm dialog's destructive. */}
       <div className="flex flex-wrap items-center gap-3">
-        <FilledButton>FilledButton</FilledButton>
-        <FilledButton danger>danger</FilledButton>
+        <Button variant="primary" size="md">Primary</Button>
+        <Button variant="destructive" size="md">danger</Button>
         <Button variant="secondary" size="sm">Kumo secondary</Button>
         <Button variant="ghost" size="sm">Kumo ghost</Button>
-        <button className="p-btn-quiet inline-flex h-6.5 items-center gap-1 px-2 text-xs">p-btn-quiet</button>
-        <button className="p-btn-ghost inline-flex h-6.5 items-center gap-1 px-2 text-xs">p-btn-ghost</button>
-        <button className="p-btn inline-flex h-9 items-center gap-2 px-3 text-sm font-medium">p-btn at 36px</button>
+        <Button variant="danger" size="sm">Danger</Button>
+        <Button variant="secondary" size="md" disabled>Disabled</Button>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-neutral">workspace</span>
-        <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-success">sandbox</span>
-        <span className="px-1.5 py-0.5 rounded-sm text-[10px] font-mono p-badge-warning">device</span>
-        <span className="px-1.5 py-0.5 rounded-sm text-[10px] p-badge-danger">failed</span>
+        <span className="px-1.5 py-0.5 rounded-sm t-meta t-mono p-badge-neutral">workspace</span>
+        <span className="px-1.5 py-0.5 rounded-sm t-meta t-mono p-badge-success">sandbox</span>
+        <span className="px-1.5 py-0.5 rounded-sm t-meta t-mono p-badge-warning">device</span>
+        <span className="px-1.5 py-0.5 rounded-sm t-meta p-badge-danger">failed</span>
         <span className="size-1.5 rounded-full p-dot-success animate-pulse" title="working" />
         <span className="size-1.5 rounded-full p-dot-accent" title="unseen" />
       </div>
       <div className="space-y-2">
-        <div className="p-notice-success text-xs rounded-md px-3 py-2">Deployed to staging — 14 tests green.</div>
-        <div className="p-notice-warning text-xs rounded-md px-3 py-2">The device runtime is not provisioned yet.</div>
-        <div className="p-notice-danger text-xs rounded-md px-3 py-2">Could not remove: workspace has a live turn.</div>
-        <div className="p-notice-info text-xs rounded-md px-3 py-2">Evolution changelog has 3 unseen entries.</div>
+        <div className="p-notice-success t-meta rounded-md px-3 py-2">Deployed to staging — 14 tests green.</div>
+        <div className="p-notice-warning t-meta rounded-md px-3 py-2">The device runtime is not provisioned yet.</div>
+        <div className="p-notice-danger t-meta rounded-md px-3 py-2">Could not remove: workspace has a live turn.</div>
+        <div className="p-notice-info t-meta rounded-md px-3 py-2">Evolution changelog has 3 unseen entries.</div>
       </div>
       <div className="max-w-md space-y-2">
-        <input className="w-full px-3 py-1.5 border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]" placeholder="raw input (fork modal style)" />
-        <textarea rows={2} className="block w-full resize-y rounded-md border p-border p-bg px-3 py-3 text-sm leading-7 p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-accent-subtle)]" placeholder="mission textarea (home page style)" />
+        <input className="w-full px-3 py-1.5 border p-border p-card t-body t-mono" placeholder="raw input (fork modal style)" />
+        <textarea rows={2} className="block w-full resize-y rounded-md border p-border p-bg px-3 py-3 t-body p-text placeholder:p-text-3 transition-all" placeholder="mission textarea (home page style)" />
       </div>
       <EmptyState icon={<BrainIcon size={32} />} title="No exploration trees yet" hint="Exploration trees appear when the agent runs agents.swarm with a depth to investigate subproblems." />
     </div>
@@ -4920,16 +4935,16 @@ function ComposerFrame() {
     <div className="p-bg p-text min-h-screen flex justify-center">
       <div className="w-full max-w-[640px] space-y-8 py-10">
         <div className="space-y-1">
-          <div className="p-eyebrow px-4">At rest, with a draft</div>
+          <div className="t-label px-4">At rest, with a draft</div>
           <Composer {...shared} value={value} liveness={IDLE_TURN} modelPicker={picker()} />
         </div>
         <div className="space-y-1" data-gallery-composer="live">
-          <div className="p-eyebrow px-4">Mid-turn — Stop, Branch, Steer</div>
+          <div className="t-label px-4">Mid-turn — Stop, Branch, Steer</div>
           <Composer {...shared} value={value} liveness={LIVE_TURN} onBranch={() => {}}
             modelPicker={picker()} />
         </div>
         <div className="space-y-1" data-gallery-composer="notice">
-          <div className="p-eyebrow px-4">With a status row</div>
+          <div className="t-label px-4">With a status row</div>
           <Composer {...shared} value="" liveness={IDLE_TURN} modelPicker={picker()} notices={REFRESH_NOTICE} />
         </div>
         <ModelPickerStates />
@@ -4975,13 +4990,13 @@ function ModelPickerStates() {
   return (
     <div className="space-y-6 px-4" data-model-picker-states>
       <div className="space-y-1">
-        <div className="p-eyebrow">Model picker, a failed Codex list</div>
+        <div className="t-label">Model picker, a failed Codex list</div>
         <div className="flex items-center gap-1">
           <ModelPicker models={models} failures={failures} value={model} onChange={setModel} size="xs" test={test} label="Picker" />
         </div>
       </div>
       <div className="space-y-1">
-        <div className="p-eyebrow">Settings tier, inheriting the default</div>
+        <div className="t-label">Settings tier, inheriting the default</div>
         <ModelPicker models={models} failures={failures} value={tier} onChange={setTier} clearable size="sm"
           label="deep model" placeholder="Use default: GPT-5.5 (Codex)" test={test} />
       </div>
@@ -5130,14 +5145,8 @@ function HistoryAuthorityFrame() {
     <div data-history-authority className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
         <GalleryWorkspaceHeader />
-        <button data-history-release type="button" onClick={() => hold.resolve()}
-          className="p-btn-quiet m-2 self-start px-2 py-1 text-xs">
-          Release first page
-        </button>
-        <button data-history-reset type="button" onClick={history.reset}
-          className="p-btn-quiet m-2 self-start px-2 py-1 text-xs">
-          Clear fetched history
-        </button>
+        <Button size="sm" data-history-release onClick={() => hold.resolve()} className="m-2 self-start">Release first page</Button>
+        <Button size="sm" data-history-reset onClick={history.reset} className="m-2 self-start">Clear fetched history</Button>
         <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
           <ConversationStartBoundary
             hasEntries={false}
@@ -5236,11 +5245,7 @@ function ClientContinuityFrame() {
         <div data-image-failure>
           <MarkdownContent content="![Request flow diagram](/assets/missing-continuity-image.png)" />
         </div>
-        <button data-continuity-reset type="button"
-          onClick={() => { setDraft(""); setSends(0); setFiles([]); }}
-          className="p-btn-quiet px-2 py-1 text-xs">
-          Reset fixture
-        </button>
+        <Button size="sm" data-continuity-reset onClick={() => { setDraft(""); setSends(0); setFiles([]); }}>Reset fixture</Button>
         <div data-continuity-probe className="hidden"
           data-draft={draft}
           data-sends={sends}
@@ -5306,7 +5311,7 @@ function TabsFrame() {
       {TAB_STRIPS.map((one) => (
         <div key={`${one.open}-${one.width}`} data-tab-strip={one.open} className="flex flex-col overflow-hidden" style={{ width: one.width, height: 150 }}>
           <GalleryWorkspaceHeader active={one.open} />
-          <div className="flex-1 px-5 py-4 p-row-text p-text-3">Chat body</div>
+          <div className="flex-1 px-5 py-4 t-body p-text-3">Chat body</div>
         </div>
       ))}
     </div>
@@ -5357,7 +5362,7 @@ function MarkdownFrame() {
     <div className="p-bg min-h-screen p-8 flex flex-wrap gap-8 items-start">
       {[420, 720].map((w) => (
         <div key={w}>
-          <div className="p-eyebrow mb-2">{w}px</div>
+          <div className="t-label mb-2">{w}px</div>
           <div className="border p-border p-4 overflow-hidden" style={{ width: w }}>
             <div className="prose-chat p-text"><MarkdownContent content={MARKDOWN_SAMPLE} /></div>
           </div>
@@ -5404,7 +5409,7 @@ function GalleryModal() {
         onClose={() => {}}
         footer={<>
           <Button size="sm" variant="ghost">Cancel</Button>
-          <FilledButton danger>Remove</FilledButton>
+          <Button variant="destructive" size="md">Remove</Button>
         </>}
       >
         <p className="text-xs p-text-2 leading-relaxed">
@@ -5416,8 +5421,8 @@ function GalleryModal() {
 }
 
 const SURFACE_STEPS = [
-  ["recessed", "--c-recessed"], ["base", "--c-bg"], ["panel", "--c-sidebar"],
-  ["card", "--c-surface"], ["raised", "--c-elevated"], ["overlay", "--c-overlay"],
+  ["sunken", "--c-sunken"], ["base", "--c-bg"], ["panel", "--c-sidebar"],
+  ["card", "--c-surface"], ["fill", "--c-fill"], ["overlay", "--c-overlay"],
 ] as const;
 
 /** Role names only: per-theme contrast ratios are asserted by `scripts/palette-ux`. */
@@ -5433,43 +5438,43 @@ function Palette() {
   return (
     <div className="p-bg min-h-screen p-8 space-y-8 max-w-3xl">
       <div>
-        <div className="p-eyebrow mb-1">{mode}</div>
-        <h1 className="p-title p-text" style={{ fontSize: 22, lineHeight: "28px" }}>Surface ladder, text roles, accent intent, status</h1>
-        <p className="p-meta p-text-3 mt-1">The plate names the mode it is drawn in, and every value below is read from the live cascade — one palette, two modes.</p>
+        <div className="t-label mb-1">{mode}</div>
+        <h1 className="t-title p-text" style={{ fontSize: 22, lineHeight: "28px" }}>Surface ladder, text roles, accent intent, status</h1>
+        <p className="t-meta p-text-3 mt-1">The plate names the mode it is drawn in, and every value below is read from the live cascade — one palette, two modes.</p>
       </div>
       <div>
-        <div className="p-eyebrow mb-2">Surfaces — six steps</div>
+        <div className="t-label mb-2">Surfaces — six steps</div>
         <div className="flex rounded-lg overflow-hidden border p-border">
           {SURFACE_STEPS.map(([name, variable]) => (
             <div key={name} className="flex-1 h-24 flex items-end p-2" style={{ background: `var(${variable})` }}>
-              <span className="p-meta p-text-3">{name}</span>
+              <span className="t-meta p-text-3">{name}</span>
             </div>
           ))}
         </div>
       </div>
       <div>
-        <div className="p-eyebrow mb-2">Text roles</div>
+        <div className="t-label mb-2">Text roles</div>
         <div className="space-y-1.5">
           {TEXT_STEPS.map(([name, variable]) => (
-            <div key={name} className="p-body" style={{ color: `var(${variable})` }}>The agent resumed turn 41 from step 3 — {name}</div>
+            <div key={name} className="p-body" style={{ color: `var(${variable})`}}>The agent resumed turn 41 from step 3 — {name}</div>
           ))}
         </div>
       </div>
       <div>
-        <div className="p-eyebrow mb-2">The accent carries intent only</div>
+        <div className="t-label mb-2">The accent carries intent only</div>
         <div className="flex items-center gap-3 flex-wrap">
-          <button className="p-btn px-3.5 h-9 p-row-text inline-flex items-center gap-2">Primary action</button>
-          <button className="p-btn-quiet px-3.5 h-8 p-row-text inline-flex items-center">Secondary</button>
-          <button className="p-btn-ghost px-3 h-8 p-row-text inline-flex items-center">Ghost</button>
-          <a className="p-accent p-row-text underline underline-offset-2" href="#top">A link</a>
-          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full p-accent-subtle">
-            <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
-            <span className="p-meta p-accent font-medium">working</span>
+          <Button variant="primary">Primary action</Button>
+          <Button>Secondary</Button>
+          <Button variant="ghost">Ghost</Button>
+          <a className="p-accent-fg t-body underline underline-offset-2"href="#top">A link</a>
+          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full p-selected">
+            <span className="size-1.5 rounded-full p-dot-accent animate-pulse"/>
+            <span className="t-meta p-accent-fg font-medium">working</span>
           </span>
         </div>
       </div>
       <div>
-        <div className="p-eyebrow mb-2">Status — AA in every theme</div>
+        <div className="t-label mb-2">Status — AA in every theme</div>
         <div className="flex items-center gap-2 flex-wrap">
           {STATUS_STEPS.map((name) => (
             <span key={name} className={`px-2 py-0.5 p-badge-${name}`}>{name}</span>
@@ -5555,21 +5560,21 @@ function MarksFrame() {
     <div className="p-bg p-text min-h-screen p-10 space-y-8">
       <section className="flex flex-wrap items-end gap-10">
         <div className="space-y-2">
-          <div className="p-eyebrow">Favicon, 16px</div>
+          <div className="t-label">Favicon, 16px</div>
           {BROWSER_TABS.map((browser) => (
-            <div key={browser.strip} className="w-[300px] rounded-[10px] px-2 pt-2" style={{ background: browser.strip }}>
-              <div className="flex h-[34px] w-[200px] items-center gap-2 rounded-t-[8px] px-3 text-[12px]" style={{ background: browser.tab, color: browser.text, fontFamily: "Arial, sans-serif" }}>
-                <img src={favicon} width={16} height={16} alt="" />API Worker · Kinu
+            <div key={browser.strip} className="w-[300px] rounded-[10px] px-2 pt-2"style={{ background: browser.strip }}>
+              <div className="flex h-[34px] w-[200px] items-center gap-2 rounded-t-[8px] px-3 text-[12px]"style={{ background: browser.tab, color: browser.text, fontFamily: "Arial, sans-serif"}}>
+                <img src={favicon} width={16} height={16} alt=""/>API Worker · Kinu
               </div>
             </div>
           ))}
         </div>
         <div className="space-y-2">
-          <div className="p-eyebrow">16 and 32, pixel for pixel</div>
+          <div className="t-label">16 and 32, pixel for pixel</div>
           <div className="flex gap-3"><FaviconRaster size={16} /><FaviconRaster size={32} /></div>
         </div>
         <div className="space-y-2">
-          <div className="p-eyebrow">Mark</div>
+          <div className="t-label">Mark</div>
           <div className="flex items-end gap-6">
             {[16, 20, 32, 64, 112].map((size) => <KinuMark key={size} size={size} />)}
           </div>
@@ -5577,15 +5582,15 @@ function MarksFrame() {
       </section>
       <section className="flex flex-wrap items-start gap-10 border-t p-border pt-8">
         <div className="space-y-2">
-          <div className="p-eyebrow">Rail</div>
+          <div className="t-label">Rail</div>
           <div className="flex w-14 flex-col items-center gap-1 rounded-[10px] border p-border p-sidebar py-3"><span className="flex size-9 items-center justify-center"><KinuMark size={20} /></span></div>
         </div>
         <div className="space-y-2">
-          <div className="p-eyebrow">Sidebar</div>
+          <div className="t-label">Sidebar</div>
           <div className="h-[220px] w-60 overflow-hidden rounded-[10px] border p-border p-sidebar"><Sidebar onCollapse={() => {}} /></div>
         </div>
         <div className="space-y-2">
-          <div className="p-eyebrow">Phone bar</div>
+          <div className="t-label">Phone bar</div>
           <div className="flex h-14 w-[390px] items-center gap-1 rounded-[10px] border p-border p-sidebar px-3">
             <span className="flex size-9 items-center justify-center p-text-2"><ListIcon size={18} /></span>
             <span className="flex items-center rounded-md px-2 py-1.5"><KinuLogo compact /></span>
@@ -5593,8 +5598,8 @@ function MarksFrame() {
         </div>
       </section>
       <section className="space-y-2 border-t p-border pt-8">
-        <div className="p-eyebrow">Hero</div>
-        <span className="inline-flex items-center gap-5 text-[64px] font-medium p-text"><KinuMark size={76} /><span>Kinu</span></span>
+        <div className="t-label">Hero</div>
+        <span className="inline-flex items-center gap-5 t-page-title p-text"><KinuMark size={76} /><span>Kinu</span></span>
       </section>
     </div>
   );
@@ -5632,7 +5637,7 @@ function SlatePreviewFrame() {
   );
 }
 
-/* The thread ends on a bare `slate://` address: the markdown pass must turn it into the card, not a link. */
+/* The thread ends on a bare`slate://` address: the markdown pass must turn it into the card, not a link. */
 const SLATE_THREAD: UIMessage[] = [
   msg({
     id: "sl-u1", role: "user", createdAt: NOW - 4 * 60e3,
@@ -7084,7 +7089,7 @@ function AgentPanel(
 
   return (
     <section data-gallery-panel={label} className="space-y-3 border-t p-border pt-6 first:border-0 first:pt-0">
-      <div className="p-eyebrow">{label}</div>
+      <div className="t-label">{label}</div>
       <GalleryComposer notices={banner ? [workspaceLoadNotice(banner, () => {})] : []} />
       <AgentSurface
         snapshot={snapshot} memory={WORK_MEMORIES} memoryContent={memoryContent}
@@ -7231,7 +7236,7 @@ function OpenConfigDisclosures({ children }: { children: React.ReactNode }) {
 
 /**
  * The page a feedback screenshot is taken of: `[data-secret-input]` (a password, redacted without annotation), `[data-secret-token]`
- * (marked text), `[data-visible-copy]` (negative control: must not be uniform). `?noise=1` drives the oversized refusal with real bytes.
+ * (marked text), `[data-visible-copy]` (negative control: must not be uniform). `?noise=1`drives the oversized refusal with real bytes.
  */
 function FeedbackFrame({ noise }: { noise: boolean }) {
   const noiseRef = useRef<HTMLCanvasElement | null>(null);
@@ -7258,16 +7263,16 @@ function FeedbackFrame({ noise }: { noise: boolean }) {
   return (
     <div className="min-h-screen p-bg p-text">
       <header className="flex items-center justify-between border-b p-border p-sidebar px-4 py-3">
-        <span className="text-sm font-semibold">Account settings</span>
+        <span className="t-item t-mono font-semibold">Account settings</span>
         <FeedbackButton compact />
       </header>
       <div className="space-y-5 p-6">
-        <p data-visible-copy className="max-w-xl text-sm p-text-2">
+        <p data-visible-copy className="max-w-xl p-text-2">
           Connected providers bill to your own account. Rotating a key takes effect on the next
           turn; running turns keep the credential they started with.
         </p>
         <label className="block max-w-sm space-y-1.5">
-          <span className="text-xs font-medium p-text-2">Anthropic API key</span>
+          <span className="text-xs p-text-2">Anthropic API key</span>
           <input
             data-secret-input
             type="password"
@@ -7276,16 +7281,16 @@ function FeedbackFrame({ noise }: { noise: boolean }) {
           />
         </label>
         <div className="max-w-sm space-y-1.5">
-          <span className="text-xs font-medium p-text-2">Device token</span>
+          <span className="text-xs p-text-2">Device token</span>
           <code
             data-secret-token
             data-feedback-redact
-            className="block rounded-md border p-border px-3 py-2 font-mono text-[12.5px]"
+            className="block rounded-md border p-border px-3 py-2 text-[12.5px]"
           >
             ptc_LEAKED_IF_REDACTION_FAILS_0123456789
           </code>
         </div>
-        {/* Intrinsic size, not `w-full`: a scaled-down canvas resamples into pixels that compress back under the limit. */}
+        {/* Intrinsic size, not`w-full`: a scaled-down canvas resamples into pixels that compress back under the limit. */}
         {noise && <canvas ref={noiseRef} width={1280} height={4000} style={{ width: 1280, height: 4000 }} />}
       </div>
       <FeedbackButton />
@@ -7351,17 +7356,17 @@ function FeedbackScrollScene() {
   return (
     <div className="h-full overflow-hidden p-bg p-text">
       <div className="space-y-4 p-6">
-        <p data-visible-copy className="max-w-xl text-sm p-text-2">
+        <p data-visible-copy className="max-w-xl t-body p-text-2">
           A screenshot is taken of the page as the reporter left it. A pane they scrolled to the
           line that failed has to arrive on that line, not back at the top.
         </p>
         <div className="p-group max-w-fit">
-          <div className="border-b p-border px-3 py-2 p-label">Nested panes</div>
-          <div data-scroll-outer style={{ height: 180, width: 520, overflowY: "auto", overflowX: "hidden" }}>
+          <div className="border-b p-border px-3 py-2 t-label">Nested panes</div>
+          <div data-scroll-outer style={{ height: 180, width: 520, overflowY: "auto", overflowX: "hidden"}}>
             {SCROLL_BANDS.map((fill, band) => (
               <div key={fill} data-scroll-band={band} style={{ height: 180, background: fill }}>
                 {band === 2 && (
-                  <div data-scroll-inner style={{ height: 120, width: 480, overflowX: "auto", overflowY: "hidden" }}>
+                  <div data-scroll-inner style={{ height: 120, width: 480, overflowX: "auto", overflowY: "hidden"}}>
                     <div style={{ display: "flex", width: 480 * SCROLL_CELLS.length }}>
                       {SCROLL_CELLS.map((cell, index) => (
                         <div key={cell} data-scroll-cell={index} style={{ width: 480, height: 120, background: cell }} />
@@ -7378,7 +7383,7 @@ function FeedbackScrollScene() {
   );
 }
 
-/** Must never reach a log: V8 puts `${name}: ${message}` on the first line of `error.stack`. */
+/** Must never reach a log: V8 puts`${name}: ${message}` on the first line of `error.stack`. */
 const RENDER_FAULT_MESSAGE =
   "Cannot read properties of undefined (reading 'prepare') for session MESSAGE_LEAKS_IF_REPORTED_0001";
 
@@ -7415,9 +7420,9 @@ function RenderFailureScene() {
   const [broken, setBroken] = useState(false);
 
   return (
-    <div className="h-full overflow-y-auto p-bg p-text" data-render-failure>
+    <div className="h-full overflow-y-auto p-bg p-text"data-render-failure>
       <div className="space-y-4 p-6">
-        <p data-scene-copy className="max-w-xl text-sm p-text-2">
+        <p data-scene-copy className="max-w-xl t-body p-text-2">
           A view that throws while rendering is contained by its boundary. The other panes,
           this copy, and the control below all keep working.
         </p>
@@ -7428,7 +7433,7 @@ function RenderFailureScene() {
         >
           Break this view
         </button>
-        <div className="p-group max-w-2xl" style={{ height: 340 }}>
+        <div className="p-group max-w-2xl"style={{ height: 340 }}>
           <ErrorBoundary label="workspace"><BreakableView broken={broken} /></ErrorBoundary>
         </div>
       </div>
@@ -7473,7 +7478,7 @@ const StaleChunkRoute = lazyRoute(async () => {
   return { default: () => <p data-lazy-loaded className="text-sm p-text-2">The split route rendered.</p> };
 });
 
-/** A real code-split chunk (`gallery-lazy-healthy.tsx` says why); its attempt count shows a regenerated loader clears only its own memo. */
+/** A real code-split chunk (`gallery-lazy-healthy.tsx`says why); its attempt count shows a regenerated loader clears only its own memo. */
 const HealthyChunkRoute = lazyRoute(async () => {
   recordAttempt("healthy");
   const { default: LazyHealthyRoute } = await import("./gallery-lazy-healthy");
@@ -7483,22 +7488,22 @@ const HealthyChunkRoute = lazyRoute(async () => {
 
 function LazyRouteScene() {
   return (
-    <div className="h-full overflow-y-auto p-bg p-text" data-lazy-scene>
+    <div className="h-full overflow-y-auto p-bg p-text"data-lazy-scene>
       <div className="space-y-4 p-6">
-        <p data-scene-copy className="max-w-xl text-sm p-text-2">
+        <p data-scene-copy className="max-w-xl t-body p-text-2">
           A code-split route is a hashed asset. A tab held open across a deploy cannot load one,
           and reloading is the whole fix — once, and only when the origin really has moved.
         </p>
-        <div className="p-group max-w-2xl" style={{ height: 260 }}>
+        <div className="p-group max-w-2xl"style={{ height: 260 }}>
           <ErrorBoundary label="swarm-explorer">
-            <Suspense fallback={<p data-lazy-pending className="p-6 text-sm p-text-3">Loading…</p>}>
+            <Suspense fallback={<p data-lazy-pending className="p-6 p-text-3">Loading…</p>}>
               <StaleChunkRoute />
             </Suspense>
           </ErrorBoundary>
         </div>
-        <div className="p-group max-w-2xl" style={{ height: 120 }}>
+        <div className="p-group max-w-2xl"style={{ height: 120 }}>
           <ErrorBoundary label="control-plane">
-            <Suspense fallback={<p className="p-6 text-sm p-text-3">Loading…</p>}>
+            <Suspense fallback={<p className="p-6 p-text-3">Loading…</p>}>
               <HealthyChunkRoute />
             </Suspense>
           </ErrorBoundary>
@@ -7515,7 +7520,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
     createdAt: NOW - 30 * 864e5, lastSeenAt: NOW - 60e3, expiresAt: NOW + 60 * 864e5,
     replacedAt: null, revokedAt: null, unstoppedAt: null, reuseDetectedAt: null, wholeMachine: false,
     sandbox,
-    desktop: { state: "none" },
+    desktop: { state: "none"},
     version: "0.3.0+gallery", servedVersion: "0.3.0+gallery", update: "current", updateRefusal: null,
   };
 }
@@ -7528,7 +7533,7 @@ const SANDBOX_DEVICES: readonly UserDevice[] = [
 
 function DeviceSandboxFrame() {
   return (
-    <div className="p-6 max-w-2xl p-bg p-text" data-device-sandbox-frame>
+    <div className="p-6 max-w-2xl p-bg p-text"data-device-sandbox-frame>
       <div className="rounded-md border p-border overflow-hidden text-xs">
         {SANDBOX_DEVICES.map((device) => (
           <DeviceRow
@@ -7550,7 +7555,7 @@ function DeviceSandboxFrame() {
 
 /** The shipped shell as App.tsx composes it; the background's contrast and UX gate are measured here. */
 async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string[] }> {
-  const { default: HomePage } = await import("@/pages/HomePage");
+  const { default: HomePage, NewWorkspacePage } = await import("@/pages/HomePage");
 
   return {
     entries: [new URLSearchParams(location.search).get("path") ?? "/"],
@@ -7558,12 +7563,13 @@ async function appShellFrame(): Promise<{ node: React.ReactNode; entries: string
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
-          <Route path="/user/settings" element={<UserSettingsPage />} />
-          <Route path="/workspace/:agentId" element={<div className="h-full" data-gallery-blank />} />
-          <Route path={APP_ROUTES.drive} element={<DriveRoute tab="mine" />} />
-          <Route path={APP_ROUTES.driveFolder} element={<DriveRoute tab="mine" />} />
-          <Route path={APP_ROUTES.slates} element={<DriveRoute tab="slates" />} />
-          <Route path={APP_ROUTES.shared} element={<DriveRoute tab="shared" />} />
+          <Route path="/user/settings"element={<UserSettingsPage />} />
+          <Route path="/workspace/:agentId"element={<div className="h-full"data-gallery-blank />} />
+          <Route path={APP_ROUTES.drive} element={<DriveRoute tab="mine"/>} />
+          <Route path={APP_ROUTES.driveFolder} element={<DriveRoute tab="mine"/>} />
+          <Route path={APP_ROUTES.slates} element={<DriveRoute tab="slates"/>} />
+          <Route path={APP_ROUTES.shared} element={<DriveRoute tab="shared"/>} />
+          <Route path={APP_ROUTES.newWorkspace} element={<NewWorkspacePage />} />
         </Route>
       </Routes>
     ),
@@ -7813,6 +7819,7 @@ const DESIGN_FRAMES = new Map([
   ["tabs", <TabsFrame />],
   ["markdown", <MarkdownFrame />],
   ["coderendering", <CodeRenderingFrame />],
+  ["system", <SystemFrame />],
 ]);
 
 function lazyRouteFrame(): MountedFrame {
@@ -8024,6 +8031,8 @@ function snapshotRaceFrame(): MountedFrame {
 
 
 async function mount() {
+  // Every frame's pictures are the gallery's own files: its server holds no picture routes.
+  answerPictures(galleryPicture);
   const document_ = publicDocument(frame);
 
   if (document_ !== null) {
@@ -8087,10 +8096,10 @@ async function mount() {
     ["workspaces", { node: <WorkspacesFrame />, entries: ["/workspaces"] }],
     ["chatcode", { node: <ChatCodeFrame />, entries: ["/"] }],
     ["plugins", { node: <PluginsFrame />, entries: ["/plugins"] }],
-    ["devices", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["devices", { node: <DevicesFrame />, entries: ["/user/settings#devices"] }],
     ["usermcp", { node: <UserMcpFrame />, entries: ["/user/settings/mcp"] }],
     ["characters", { node: <CharactersFrame />, entries: ["/"] }],
-    ["devices-empty", { node: <DevicesFrame />, entries: ["/devices"] }],
+    ["devices-empty", { node: <DevicesFrame />, entries: ["/user/settings#devices"] }],
   ]);
 
   const fixture = fixtureFrames.get(frame);
@@ -8130,6 +8139,12 @@ async function mount() {
       return Promise.resolve({ entries: ["/"], node: <QualityLiveFrame /> });
     }],
     ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
+    // The whole app, every page through its own sidebar, with the design bar's live switches (gallery-app.tsx).
+    ["whole", async () => {
+      const { appFrame } = await import("@/gallery-app");
+
+      return appFrame(workspacePageRpc, seedFrameTranscript);
+    }],
     ["agenttab", () => Promise.resolve({ entries: ["/"], node: <AgentTabFrame /> })],
     ["assistant-home", () => Promise.resolve(assistantHomeFrame(workspacePageRpc))],
     ["explore", () => Promise.resolve(exploreFrame("explore"))],

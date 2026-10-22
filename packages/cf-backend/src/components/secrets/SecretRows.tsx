@@ -3,14 +3,16 @@
  * they go to. Settings adds them through these, and so does the chat's offer to move a pasted one out of the message.
  */
 import { useEffect, useState } from "react";
-import { Combobox } from "@cloudflare/kumo";
 import { TrashIcon } from "@phosphor-icons/react";
 import { detach, diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { parseDotenv, secretProvider } from "@kinu.run/core";
 import { Cause, Effect } from "effect";
-import { Choice, inputCls } from "@/components/ui/form";
+import { Choice } from "@/components/ui/form";
 import { listWorkspaces, type SecretEntry } from "@/lib/user-api";
 import { isSecretName, positionWords, type SecretPosition } from "@kinu.run/core";
+import { Button } from "@/components/ui/Button";
+import { TextInput } from "@/components/ui/Field";
+import { Combobox } from "@/components/ui/Select";
 
 /** A row being written: its hosts as typed, one or several, split on spaces and commas. */
 export interface SecretDraft {
@@ -111,9 +113,7 @@ export function PositionField({ position, onChange, label }: { position: SecretP
       <Choice<PositionKind> label={`Where ${label} is sent`} value={position.kind} options={POSITION_KINDS} className="sm:max-w-60"
         onChange={(kind) => onChange(kind === "authorization" ? AUTHORIZATION : { kind, name: position.kind === "authorization" ? "" : position.name })} />
       {position.kind !== "authorization" && (
-        <input value={position.name} onChange={(e) => onChange({ kind: position.kind, name: e.target.value })} spellCheck={false}
-          placeholder={position.kind === "header" ? "X-API-Key" : "key"} aria-label={`The ${position.kind === "header" ? "header" : "query parameter"} ${label} is sent in`}
-          className={`${inputCls} h-9 min-w-0 flex-1 font-mono sm:max-w-56`} />
+        <TextInput className="min-w-0 flex-1 sm:max-w-56" value={position.name} onChange={(e) => onChange({ kind: position.kind, name: e.target.value })} spellCheck={false} placeholder={position.kind === "header" ? "X-API-Key" : "key"} aria-label={`The ${position.kind === "header" ? "header" : "query parameter"} ${label} is sent in`} />
       )}
     </div>
   );
@@ -135,31 +135,24 @@ export function SecretRows({ rows, onChange, removable }: {
         const problem = rowProblem(row);
 
         return (
-          <div key={index} className="space-y-1.5" data-secret-row={index}>
+          <div key={index} className="space-y-2" data-secret-row={index}>
             <div className="flex flex-wrap gap-2 [&>input]:h-9">
-              <input value={row.name} onChange={(e) => edit(index, { ...row, name: e.target.value })} placeholder="NAME"
-                aria-label="Secret name" spellCheck={false} autoCapitalize="characters" className={`${inputCls} basis-full font-mono sm:basis-auto sm:max-w-56`} />
-              <input type="password" value={row.value} autoComplete="off"
-                onChange={(e) => edit(index, withProvider({ ...row, value: e.target.value }))}
-                placeholder="Value" aria-label={`Value of ${row.name || "this secret"}`} className={`${inputCls} min-w-0 flex-1 basis-full sm:basis-0`} />
-              <input value={row.hosts} onChange={(e) => edit(index, { ...row, hosts: e.target.value })} placeholder="api.example.com"
-                aria-label={`Hosts ${row.name || "this secret"} may be sent to`} spellCheck={false} className={`${inputCls} basis-full sm:basis-auto sm:max-w-64`} />
+              <TextInput className="basis-full sm:basis-auto sm:max-w-56" value={row.name} onChange={(e) => edit(index, { ...row, name: e.target.value })} placeholder="NAME" aria-label="Secret name" spellCheck={false} autoCapitalize="characters" />
+              <TextInput className="min-w-0 flex-1 basis-full sm:basis-0" type="password" value={row.value} autoComplete="off" onChange={(e) => edit(index, withProvider({ ...row, value: e.target.value }))} placeholder="Value" aria-label={`Value of ${row.name || "this secret"}`} />
+              <TextInput className="basis-full sm:basis-auto sm:max-w-64" value={row.hosts} onChange={(e) => edit(index, { ...row, hosts: e.target.value })} placeholder="api.example.com" aria-label={`Hosts ${row.name || "this secret"} may be sent to`} spellCheck={false} />
               {removable && (
-                <button type="button" onClick={() => onChange(rows.filter((_, at) => at !== index))} aria-label={`Leave out ${row.name || "this row"}`}
-                  className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-text-3 hover:p-danger">
-                  <TrashIcon size={14} />
-                </button>
+                <Button variant="danger" size="sm" icon={<TrashIcon size={14} />} className="shrink-0" onClick={() => onChange(rows.filter((_, at) => at !== index))} aria-label={`Leave out ${row.name || "this row"}`} />
               )}
             </div>
             {advanced.has(index) || row.position.kind !== "authorization"
               ? <PositionField position={row.position} label={row.name || "this secret"} onChange={(position) => edit(index, { ...row, position })} />
               : (
-                <button type="button" className="p-meta p-text-3 hover:p-text" data-secret-advanced={index}
+                <Button variant="ghost" size="sm" className="self-start" data-secret-advanced={index}
                   onClick={() => setAdvanced(new Set([...advanced, index]))}>
                   Sent in {positionWords(row.position)} · Advanced
-                </button>
+                </Button>
               )}
-            {problem !== null && <p className="p-meta p-warning">{problem}</p>}
+            {problem !== null && <p className="t-meta p-warning">{problem}</p>}
           </div>
         );
       })}
@@ -240,7 +233,7 @@ function WorkspaceOptions() {
           <Combobox.Item key={item.workspace} value={item}>
             <span className="flex w-full items-baseline gap-2">
               <span className="truncate">{item.title}</span>
-              <span className="ml-auto shrink-0 font-mono p-meta p-text-3">{item.workspace}</span>
+              <span className="t-meta t-mono ml-auto shrink-0 p-text-3">{item.workspace}</span>
             </span>
           </Combobox.Item>
         )}

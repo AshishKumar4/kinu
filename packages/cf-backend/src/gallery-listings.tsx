@@ -76,12 +76,13 @@ function apps(listings: readonly GalleryListing[], search: URLSearchParams): Res
   return Response.json({ items: listings.filter((each) => category === null || each.category === category).map((app) => ({ kind: "app", app, needs: [] })), next: null });
 }
 
-export function installGalleryFixture(frame: string): void {
-  if (frame !== "gallery-slate") return;
+/** `more`: listings past the slate page's own, Explore's apps in the whole app's frame (gallery-app.tsx). */
+export function installGalleryFixture(frame: string, more: readonly GalleryListing[] = []): void {
+  if (frame !== "gallery-slate" && frame !== "whole") return;
 
   const next = window.fetch.bind(window);
   // Stars as this person leaves them.
-  let listings = [...LISTINGS];
+  let listings = [...LISTINGS, ...more.filter((each) => !LISTINGS.some((own) => own.workspace === each.workspace && own.slate === each.slate))];
   // What the page asked the Gallery, in order, on the root for a test to read: its fetches never reach the network.
   const asked: { path: string; search: string; body: string | null }[] = [];
 
@@ -100,7 +101,8 @@ export function installGalleryFixture(frame: string): void {
 
     const found = listings.find((each) => each.workspace === workspace && each.slate === slate);
 
-    if (url.pathname === "/api/explore") return apps(listings, url.searchParams);
+    // The whole app's Explore answers its own feed.
+    if (url.pathname === "/api/explore" && frame !== "whole") return apps(listings, url.searchParams);
 
     if (api !== "api" || area !== "gallery") return next(input, init);
 
