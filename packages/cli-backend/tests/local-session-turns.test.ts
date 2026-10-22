@@ -124,15 +124,21 @@ test('a provider failing after a real tool result retains that completed call ex
   } finally { await session.end(); db.close(); }
 });
 
+
+/** A one-step turn's answer: `text`, at 7 tokens in and 2 out. */
+function oneStepAnswer(text: string) {
+  return {
+    content: [{ type: 'text' as const, text }], finishReason: { unified: 'stop' as const, raw: undefined },
+    usage: { inputTokens: { total: 7, noCache: 7, cacheRead: undefined, cacheWrite: undefined },
+      outputTokens: { total: 2, text: 2, reasoning: undefined } }, warnings: [],
+  };
+}
+
 test('a native ledger failure cannot finish an uncommitted step or add its usage to the turn', async () => {
   const { db, rt } = workspaceRuntime();
   const events: SessionEvent[] = [];
 
-  const model = scriptedTurnModel({ doGenerate: () => ({
-    content: [{ type: 'text', text: 'not a recorded step' }], finishReason: { unified: 'stop', raw: undefined },
-    usage: { inputTokens: { total: 7, noCache: 7, cacheRead: undefined, cacheWrite: undefined },
-      outputTokens: { total: 2, text: 2, reasoning: undefined } }, warnings: [],
-  }) });
+  const model = scriptedTurnModel({ doGenerate: () => oneStepAnswer('not a recorded step') });
 
   rt.actor.config.setLearning(false);
   const session = new LocalAgentSession({ rt, db, model, onEvent: (event) => { events.push(event); } });
@@ -148,6 +154,28 @@ test('a native ledger failure cannot finish an uncommitted step or add its usage
 
     if (ended?.type !== 'turn-end') throw new Error('the failed turn never closed');
     expect({ steps: ended.turn.steps, usage: ended.turn.usage, hadError: ended.turn.hadError }).toEqual({ steps: 0, usage: undefined, hadError: true });
+  } finally { await session.end(); db.close(); }
+});
+
+// FEAT-2 step 1 (docs/HARNESS-PROFILES.md): the workspace's `harness.mode`, its main actor's, is read as each step's
+// request leaves, and the step records the surface it resolved beside its usage.
+test("a turn's step records the workspace's harness mode and the surface it resolved", async () => {
+  const { db, rt } = workspaceRuntime();
+
+  const model = scriptedTurnModel({ doGenerate: () => oneStepAnswer('Counted.') });
+
+  rt.actor.config.setLearning(false);
+  rt.actor.config.setHarnessMode('codex');
+  const session = new LocalAgentSession({ rt, db, model, onEvent: () => {} });
+
+  try {
+    await session.send('Count the entries.', { id: crypto.randomUUID() });
+    const run = session.listRuns().items[0];
+
+    if (run === undefined) throw new Error('the turn left no run');
+
+    expect(session.getRunEvents(run.runId).flatMap((event) => event.type === 'step_finish' ? [event.harness] : []))
+      .toEqual([{ mode: 'codex', surface: 'codex' }]);
   } finally { await session.end(); db.close(); }
 });
 

@@ -21,7 +21,7 @@ import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
 import type {
   AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, EnqueueTurnResult, ProgrammaticTurn, SendLanding, TurnRequestAt,
-  DynamicContext, FactsKey, FrozenAuthority, JsonObject, PlanReview, PlanReviewResult, ReviewAnnotation, AskedQuestions,
+  DynamicContext, FactsKey, FrozenAuthority, HarnessMode, JsonObject, PlanReview, PlanReviewResult, ReviewAnnotation, AskedQuestions,
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
   ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
 } from '@kinu.run/core';
@@ -118,7 +118,7 @@ export interface AgentFacetCalls {
   frozen(snapshot: AgentSnapshot, key: FactsKey): Promise<FrozenAuthority | null>;
   /** Runs the turn's waiting model step under this call, and answers once it has ended (`StepPacer`). `dynamic`: the live
    *  block on the profile the step's pace bound, its turn's first. */
-  step(turnId: string, dynamic: DynamicContext | null): Promise<void>;
+  step(turnId: string, dynamic: DynamicContext | null, harnessMode: HarnessMode): Promise<void>;
   /** This chat's newest page, as a tab is sent it on connecting or a turn's end. */
   seed(snapshot: AgentSnapshot): Promise<ChatWindow>;
   /** One image a page of this chat named; each crosses alone, never inside a page. */
@@ -472,8 +472,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     await this.held?.idle();
   }
 
-  async step(turnId: string, dynamic: DynamicContext | null): Promise<void> {
-    await this.pacer.grant(turnId, dynamic);
+  async step(turnId: string, dynamic: DynamicContext | null, harnessMode: HarnessMode): Promise<void> {
+    await this.pacer.grant(turnId, dynamic, harnessMode);
   }
 
   async seed(snapshot: AgentSnapshot): Promise<ChatWindow> {

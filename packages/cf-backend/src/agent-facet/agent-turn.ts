@@ -18,7 +18,7 @@ import { compactionDiagnostics, hostedActorCompaction } from '@kinu.run/compacti
 import type { AgentDatabase } from './agent-database';
 import type { StepPacer } from './step-pacer';
 import type { ChatTurnRequest } from '../agent-turns';
-import type { AgentHeadDelta, AgentReview, AgentTurnActivity, ChatWindow, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, CacheWarmArm, OpenWork, PreparedAgentTurn, RunEndOutcome, TurnCapability } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnActivity, ChatWindow, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, CacheWarmArm, HarnessMode, OpenWork, PreparedAgentTurn, RunEndOutcome, TurnCapability } from '@kinu.run/core';
 
 /** The answer's metadata, unless the workspace reads the turn's narration before it can say it. One shape, not a union:
  *  a stub's promise of a union is a union of promises. */
@@ -315,6 +315,8 @@ function workspaceTools(
 
 export interface LiveTurn {
   dynamic: PreparedAgentTurn['dynamic'];
+  /** The workspace's `harness.mode`, as the grant its current step runs under carried it; native before the first. */
+  harnessMode: HarnessMode;
   /** A chat turn's open work, as its preparation and then each of its tools answered: its task reminder reads it. */
   openWork: OpenWork | null;
 }
@@ -449,6 +451,7 @@ export function facetTurnSources(turn: {
   const sources = turnSourcesFromBundle(prepared.sources, {
     rt: actor.runtime,
     config: actor.stores.config,
+    harnessMode: () => turn.live.harnessMode,
     models: { normalize: (spec) => registry.normalizeSpecSync(spec), resolve: (spec) => registry.resolveModel(spec, affinity), routed: routedModelReads(registry) },
     scaffoldSpend: { source: 'scaffold', report: spend.report, operations },
     operations,
@@ -461,6 +464,7 @@ export function facetTurnSources(turn: {
 
       // Its first step's grant carries the live block on the profile it bound, before the step reads it.
       if (granted.dynamic !== null) turn.live.dynamic = granted.dynamic;
+      turn.live.harnessMode = granted.harnessMode;
 
       return granted.ended;
     },
@@ -563,7 +567,7 @@ export async function deliveredRun(
 
     run.opened = bound;
     database.prepare(bound, prepared);
-    const live: LiveTurn = { dynamic: prepared.dynamic, openWork: null };
+    const live: LiveTurn = { dynamic: prepared.dynamic, harnessMode: 'native', openWork: null };
     const { sources, trigger } = facetTurnSources({ actor, workspace, models, prepared, spend, live, runId, turnId: task.sequenceId, epoch: bound.epoch, pacer, recordsIn: runId });
 
     const inference: HeadInferenceDeps = {
