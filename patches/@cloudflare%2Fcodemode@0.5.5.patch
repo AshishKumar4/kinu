@@ -241,7 +241,8 @@ diff --git a/dist/index.js b/dist/index.js
 index 170f2bf6ea1620301935ace18481cbee11e9b622..c237a4760d545c42c5d111128c7db6b74e83df58 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -1226,171 +1226,6 @@
+@@ -1288,172 +1288,7 @@
+ 	return current;
  }
  //#endregion
 -//#region src/connectors/search.ts
