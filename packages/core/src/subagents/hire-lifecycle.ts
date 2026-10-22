@@ -11,7 +11,7 @@ import type { SqlExec } from '../types/primitives';
 import type { WorkMode } from '../types/turn';
 import type { SubagentInheritedContext } from '../types/subagents';
 import { actorReferenceOf, type ActorHandle, type ActorReference } from '../identity/actor-handle';
-import { isSubagentOrigin, subagentDescendants, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
+import { isSubagentOrigin, stoppedBelow, subagentDescendants, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
 import { titleActorFromMessage } from '../identity/naming';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorRetirement } from '../state/actor-host';
@@ -21,6 +21,7 @@ import { delegationBudgetOf, delegationDepthRefusal, delegationExhausted } from 
 import type { SubagentRosterStore } from './roster';
 import type { SubagentSeed } from './birth';
 import { admitSubagentTask, describeSubagentHandoff, readSubagentLiveStatus, type SubagentRuntime } from './support';
+import { TEMPORARY_LIFETIME } from '../types/subagents';
 
 /** A hire as one call reaches it, where its backend runs it. */
 export interface SeatedHire {
@@ -104,11 +105,16 @@ export function admitHireWork<Seat extends SeatedHire>(ports: HireLifecyclePorts
     }))));
 }
 
+/** What a subtree's teardown reads and acts on: the directory's rows, each hirer's roster, and the retirement. */
+interface SubtreePorts {
+  readonly directory: Pick<WorkspaceActorDirectory, 'list' | 'retained'>;
+  roster(hirer: ActorReference): Pick<SubagentRosterStore, 'get' | 'dismiss' | 'applyReport'>;
+  retire(owner: ActorReference, retirement: ActorRetirement): Promise<void>;
+}
+
 /** Each hire below `below`, its row dismissed on its hirer's roster and retired under it: a dismissal's subtree, and a
  *  stopped task agent's. */
-export async function retireHireSubtree(
-  ports: Pick<HireLifecyclePorts, 'directory' | 'roster' | 'retire'>, below: ActorReference, keepHistory: boolean,
-): Promise<void> {
+async function retireHireSubtree(ports: SubtreePorts, below: ActorReference, keepHistory: boolean): Promise<void> {
   for (const descendant of subagentDescendants(ports.directory.list(), below.actorId)) {
     const hirer = ports.directory.retained(descendant.parentActorId ?? '');
 
@@ -117,6 +123,37 @@ export async function retireHireSubtree(
 
     if (roster.get(descendant.name)?.status !== 'dismissed') roster.dismiss(descendant.name, Date.now());
     await ports.retire(actorReferenceOf(hirer), retirementFor(actorReferenceOf(descendant), descendant.name, keepHistory, true));
+  }
+}
+
+/**
+ * What a Stop does below the agent it stops (`stoppedBelow`): what each was owed and had not taken is cancelled; a turn
+ * it runs is cut off and reports its own end; one that rests while its hirer counts it working reads blocked, and a task
+ * agent is then retired as a stopped dismissal that keeps its history, its hires before it. A host supplies how it
+ * cancels and cuts off; the rest is here, once.
+ */
+export async function stopAgentsBelow(actorId: string, ports: SubtreePorts & {
+  cancelOwed(actor: WorkspaceActor): void;
+  /** Cuts off its running turn and what it holds open; whether a turn was running, which then reports its own end. */
+  stopTurn(actor: WorkspaceActor): Promise<boolean>;
+}): Promise<void> {
+  for (const actor of stoppedBelow(ports.directory.list(), actorId)) {
+    ports.cancelOwed(actor);
+
+    if (await ports.stopTurn(actor)) continue;
+    const hirer = ports.directory.retained(actor.parentActorId ?? '');
+
+    if (hirer === null) continue;
+    const roster = ports.roster(actorReferenceOf(hirer));
+
+    if (roster.get(actor.name)?.status !== 'working') continue;
+    roster.applyReport(actor.name, 'blocked', 'turn_end', Date.now());
+
+    if (actor.lifetime !== TEMPORARY_LIFETIME) continue;
+    const reference = actorReferenceOf(actor);
+
+    await retireHireSubtree(ports, reference, true);
+    await ports.retire(actorReferenceOf(hirer), retirementFor(reference, actor.name, true, true));
   }
 }
 

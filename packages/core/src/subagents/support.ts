@@ -13,7 +13,7 @@ import type { DelegationBudget } from './depth';
 import { SubagentRosterStore } from './roster';
 import { requireSubagentActorName } from '../identity/actor-key';
 import { codenameFor, mintAgentName, type NameOrigin } from '../identity/naming';
-import type { WorkspaceActorDirectory } from '../identity/workspace-actors';
+import type { WorkspaceActor, WorkspaceActorDirectory } from '../identity/workspace-actors';
 import type { ActorReference } from '../identity/actor-handle';
 import { admitSubagentBirth, type SubagentSeed } from './birth';
 import type { WorkMode } from '../types/turn';
@@ -25,7 +25,7 @@ import type {
   SubagentRosterEntry,
   TeamToolDeps,
 } from '../delegation/agents-tool';
-import { TEMPORARY_LIFETIME, terminalTaskReport, type OwedReport, type SubagentLifetime, type TaskTurnEnding, type TemporaryAgentPort } from './temporary';
+import { TEMPORARY_LIFETIME, taskAnswerIsLater, terminalTaskReport, type OwedReport, type SubagentLifetime, type TaskTurnEnding, type TemporaryAgentPort } from './temporary';
 import { KinuError, renderThrownChain } from '../obs/index';
 import type { SubagentInheritedContext } from '../types/subagents';
 import type { ModelMessage } from 'ai';
@@ -232,7 +232,7 @@ function subagentRelaysTurnEnd(input: {
  * task's terminal answer, or any child's failure; else a durable child's turn-end progress, for a turn a queued signal
  * drove and that said nothing through `report`. The adapters keep the roster and the relay.
  */
-export async function owedSubagentTurnReport(input: {
+async function owedSubagentTurnReport(input: {
   readonly lifetime: SubagentLifetime;
   readonly ending: TaskTurnEnding;
   readonly assistantText: string;
@@ -255,6 +255,25 @@ export async function owedSubagentTurnReport(input: {
   return subagentRelaysTurnEnd({ reportedThisTurn: input.reports.spoke, ownerDriven: input.ownerDriven, assistantText: input.assistantText })
     ? { status: 'progress', content: input.assistantText }
     : null;
+}
+
+/**
+ * A hire's settled turn, as its hirer is told of it on either backend: the hirer's roster first (announced when it
+ * moved), then the report the turn owes ({@link owedSubagentTurnReport}), read against the hire's own roster and log.
+ */
+export async function hireTurnSettled(input: {
+  readonly hirer: { readonly roster: Pick<SubagentRosterStore, 'finishTurn'>; announce(): void };
+  readonly hire: { readonly record: Pick<WorkspaceActor, 'name' | 'lifetime'>; readonly roster: SubagentRosterStore; readonly log: EventLog };
+  readonly turn: { readonly reports: { readonly spoke: boolean; readonly settled: boolean }; readonly ownerDriven: boolean; readonly taskId: string | null };
+  readonly ended: { readonly ending: TaskTurnEnding; readonly assistantText: string; readonly narration: readonly string[] };
+}): Promise<OwedReport | null> {
+  if (input.hirer.roster.finishTurn(input.hire.record.name, input.ended.ending, Date.now())) input.hirer.announce();
+
+  return await owedSubagentTurnReport({
+    lifetime: input.hire.record.lifetime, ending: input.ended.ending, assistantText: input.ended.assistantText,
+    narration: async () => input.ended.narration, reports: input.turn.reports, ownerDriven: input.turn.ownerDriven,
+    delegating: taskAnswerIsLater({ roster: input.hire.roster, log: input.hire.log, ...(input.turn.taskId !== null && { turnTaskId: input.turn.taskId }) }),
+  });
 }
 
 /** Only the parent knows whether it is waiting: with no open assignment, no report may create a parent turn. */

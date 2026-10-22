@@ -615,7 +615,7 @@ export { SubagentInheritedContextSchema, type SubagentInheritedContext } from '.
 
 export { subagentForkContext, subagentTurnContext } from './subagents/support';
 
-export { admitHireWork, hireLifecycle, retireHireSubtree, type HireLifecyclePorts, type SeatedHire } from './subagents/hire-lifecycle';
+export { admitHireWork, hireLifecycle, stopAgentsBelow, type HireLifecyclePorts, type SeatedHire } from './subagents/hire-lifecycle';
 
 export { inheritedAsModelMessage } from './heads/head-inference';
 
@@ -694,7 +694,7 @@ export {
   parentAdmitsSubagentReport,
   readSubagentLiveStatus,
   subagentDescriptorSource,
-  owedSubagentTurnReport,
+  hireTurnSettled,
   type SubagentReportOrigin,
   type SubagentRuntime,
 } from './subagents/support';

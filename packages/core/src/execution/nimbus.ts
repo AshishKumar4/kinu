@@ -227,7 +227,7 @@ function startProcessMember({ box, touch, jobs }: NimbusReach): ExecutorTool {
 
         const adopting = attempt({ doing: `${doing}: holding the process as a job`, otherwise: 'io' }, () => jobs.adopt({
           jobId, kind: 'startProcess', mode: currentWorkMode(), controller, promise: ended,
-          input: options.cwd === undefined ? { command, processId } : { command, cwd: options.cwd, processId },
+          input: { command, ...(options.cwd !== undefined && { cwd: options.cwd }), processId, machine: 'workspace' },
         }));
 
         // A process no job took is stopped: none runs outside its actor's jobs. It ran, so its refusal is `cancelled`, which

@@ -162,7 +162,11 @@ export type WorkspaceJobPorts = Required<Pick<BackgroundJobRunnerDeps, 'jobOutpu
 
 const SearchJobInputSchema = v.object({ task: v.string() });
 
-const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()) });
+/** The jobs a command runs as, each on a machine its label names. */
+const COMMAND_JOB_KINDS: ReadonlySet<string> = new Set(['shell', 'startProcess']);
+
+/** A command's job: where it runs, as the machine that took it wrote it (`machine`), or the shell's runtime. */
+const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()), machine: v.optional(v.string()) });
 
 const ExecuteJobInputSchema = v.object({ code: v.string() });
 
@@ -175,13 +179,14 @@ function describeJobInput(kind: string, input: JsonValue): string | undefined {
     }
   }
 
-  if (kind === 'shell' || kind === 'startProcess') {
+  if (COMMAND_JOB_KINDS.has(kind)) {
     const parsed = v.safeParse(RunJobInputSchema, input);
 
     if (parsed.success) {
-      const runtime = parsed.output.runtime ? `${executorLabel(parsed.output.runtime)}: ` : '';
+      const ran = parsed.output.machine ?? parsed.output.runtime;
+      const where = ran ? `${executorLabel(ran)}: ` : '';
 
-      return `${runtime}${parsed.output.command.slice(0, 80)}`;
+      return `${where}${parsed.output.command.slice(0, 80)}`;
     }
   }
 
@@ -201,12 +206,16 @@ export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent
     ? ` (generation ${String(job.epoch + 1)}: it was interrupted and picked up again)`
     : '';
 
+  // A command's job is named by its label, which says where it ran: its output alone is no evidence of the machine
+  // (walkthrough F3, 2026-10-21: a process on the computer printed `/` and was reported as the workspace's).
+  const ranAs = COMMAND_JOB_KINDS.has(job.kind) && job.label !== null ? ` It ran as ${job.label}.` : '';
+
   if (job.status === 'completed') {
     const read = reader === 'inline'
       ? `Its result:\n${job.result ?? '(empty)'}\n\nSynthesize it / continue`
       : `Read the full result with agent.jobResult('${job.id}'), then synthesize it / continue`;
 
-    return `Background ${job.kind} job ${job.id} completed${generation}. ${read} the work you backgrounded. `
+    return `Background ${job.kind} job ${job.id} completed${generation}.${ranAs} ${read} the work you backgrounded. `
       + `The result says whether it is COMPLETE or PARTIAL: say which when you report it.`;
   }
 
@@ -226,7 +235,7 @@ export function wakeText(job: BackgroundJob, reader: 'agent' | 'inline' = 'agent
       + `retry continues that one rather than starting another, and an identical spawn is refused.`;
   }
 
-  return `Background ${job.kind} job ${job.id} failed${generation}${detail}. This is yours to fix: `
+  return `Background ${job.kind} job ${job.id} failed${generation}${detail}.${ranAs} This is yours to fix: `
     + `read the error, change what it names, and run the command again. Report what was wrong and `
     + `what you changed.`;
 }

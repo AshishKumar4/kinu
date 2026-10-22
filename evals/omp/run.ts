@@ -187,6 +187,25 @@ export function answeredTurnIds(answers: string): Set<string> {
   }));
 }
 
+/** How often a request the provider refused before any model call is asked again, and how many times at most: a declared
+ *  wait past the minute a call waits (Workers AI's, minutes long) is waited out, and an hour of refusals gives up. */
+const UNASKED_RETRY_MS = 60_000;
+
+const UNASKED_ATTEMPTS = 60;
+
+/** A request's answer row once it was asked: one the provider refused before any model call is no measurement, so it
+ *  is asked again (on a fresh copy, as every ask is) after `retryMs`, up to `attempts` times; the last row stands. */
+export async function askedRow<Row extends { readonly answer: string | null; readonly spent: { readonly modelCalls: number } }>(
+  ask: () => Promise<Row>, wait: (ms: number) => Promise<void>, retryMs = UNASKED_RETRY_MS, attempts = UNASKED_ATTEMPTS,
+): Promise<Row> {
+  for (let attempt = 1; ; attempt++) {
+    const row = await ask();
+
+    if (row.answer !== null || row.spent.modelCalls > 0 || attempt >= attempts) return row;
+    await wait(retryMs);
+  }
+}
+
 async function answered(arm: Arm, prepared: string, turn: OwnerTurn) {
   // The kept calls of the request, what its own record answers a kept shell command with, and where its time went.
   const kept: Kept[] = [];
@@ -285,7 +304,9 @@ if (import.meta.main) {
       const done = answeredTurnIds(answers);
 
       for (const turn of requests.filter((request) => request.turn.turnId === undefined || !done.has(request.turn.turnId))) {
-        appendFileSync(answers, `${JSON.stringify(await answered(answering, join(base, 'base'), turn))}\n`);
+        const row = await askedRow(() => answered(answering, join(base, 'base'), turn), (ms) => Bun.sleep(ms));
+
+        appendFileSync(answers, `${JSON.stringify(row)}\n`);
       }
     }
 
