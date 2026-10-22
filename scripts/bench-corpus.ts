@@ -40,7 +40,7 @@ export const BENCH_SUITES: Readonly<Record<BenchSuiteName, BenchSuite>> = Object
       { id: 'core-tests', command: ['bun', 'test', '--timeout=0', '--parallel=4', '--cwd', 'packages/core'], timeoutMs: 180_000 },
       // The vendored binary, not `bun x` — scoring must never depend on a
       // package fetch, and the sandbox runs with a pruned environment.
-      { id: 'core-typecheck', command: ['node_modules/.bin/tsc', '--noEmit', '-p', 'packages/core'], timeoutMs: 180_000 },
+      { id: 'core-typecheck', command: ['node_modules/.bin/tsrs', '--noEmit', '-p', 'packages/core'], timeoutMs: 180_000 },
     ],
     guarded: ['packages/core/tests', 'packages/core/src/**/*.test.ts'],
   },

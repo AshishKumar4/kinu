@@ -25,7 +25,7 @@
     "effect": "4.0.0-rc.117"
   },
   "scripts": {
-    "check": "tsc --noEmit"
+    "check": "tsrs --noEmit"
   },
   "devDependencies": {
     "ai": "7.0.148",
