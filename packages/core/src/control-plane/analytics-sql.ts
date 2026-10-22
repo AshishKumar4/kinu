@@ -14,6 +14,17 @@ export interface AnalyticsSqlEnv {
   ANALYTICS_SQL_API_TOKEN?: string;
   /** What this deployment appends to a dataset name on the read path (`analyticsDataset`). */
   ANALYTICS_DATASET_SUFFIX?: string;
+  /** The datasets a reader reads, by whether they are bound: their writes are what it would find. */
+  readonly AGENT_METRICS?: unknown;
+  readonly CONTROL_PLANE_OPS?: unknown;
+}
+
+/** What a reader says on a deployment bound to no dataset: one made on an account with Analytics Engine off, whose
+ *  door left them out (core deploy/steps.ts), and whose one writer then writes nothing (core obs/analytics/writer.ts). */
+export const ANALYTICS_OFF = 'Usage analytics are off on this deployment.';
+
+export function analyticsOff(env: AnalyticsSqlEnv): boolean {
+  return env.AGENT_METRICS === undefined && env.CONTROL_PLANE_OPS === undefined;
 }
 
 const AnalyticsRowSchema = v.record(v.string(), v.union([v.string(), v.number(), v.boolean(), v.null()]));
@@ -40,6 +51,9 @@ type SqlErrorEnvelope = v.InferOutput<typeof SqlErrorSchema>;
 
 export function analyticsMissingSettings(env: AnalyticsSqlEnv): readonly string[] {
   const missing: string[] = [];
+
+  // Nothing was written to read, which no setting changes.
+  if (analyticsOff(env)) return [ANALYTICS_OFF];
 
   if (!(env.CLOUDFLARE_ACCOUNT_ID ?? '').trim()) missing.push('CLOUDFLARE_ACCOUNT_ID');
 

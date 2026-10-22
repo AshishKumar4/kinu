@@ -14,6 +14,8 @@ export interface DeployStepFailure {
   /** 0 when the failure was not Cloudflare's. */
   readonly code: number;
   readonly status: number;
+  /** The path Cloudflare refused, which the refusal catalog reads where a code is shared. */
+  readonly endpoint?: string;
 }
 
 export interface DeployStepRow {
@@ -144,7 +146,7 @@ function stepOutcome(step: DeployStep, context: DeployContext): Effect.Effect<St
       const cause = Cause.squash(failed);
 
       return cause instanceof CloudflareApiError
-        ? { detail: '', failure: { detail: cause.detail, code: cause.code, status: cause.status } }
+        ? { detail: '', failure: { detail: cause.detail, code: cause.code, status: cause.status, endpoint: cause.path } }
         : { detail: '', failure: { detail: renderThrownChain({ cause }), code: 0, status: 0 } };
     },
   }));

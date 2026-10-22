@@ -22,7 +22,7 @@ import {
   isForeignAgentNamespacePath, hostedActorRoute, HOSTED_ACTOR_ID_HEADER,
 } from "@kinu.run/core";
 import { releaseArtifact, releaseArtifactHead } from "@kinu.run/core";
-import { DEPLOY_PAGE_PATH, RELEASE_ARTIFACT_NAME } from "@kinu.run/core/deploy";
+import { DEPLOY_PAGE_PATH, DEVBOX_TOOLS_PART, RELEASE_ARTIFACT_NAME } from "@kinu.run/core/deploy";
 import { servePreviewRequest } from "./preview-proxy";
 import { AGENT_BUNDLE_DIRECTORY } from "./agent-facets";
 import { mcpAgentResolver, mcpRoutes } from "./mcp-server";
@@ -55,6 +55,9 @@ import { beneath, familyMount, rawParam, rawPath, routeError, type ApiVariables,
 import { keepDevboxGolden } from './devbox-golden';
 
 const RELEASE_ARTIFACT_PATH = `/downloads/:artifact{${RELEASE_ARTIFACT_NAME}}`;
+
+/** The computer's tools parts a self-deployment copies into its store bucket (`ReleaseComputer`). */
+const DEVBOX_TOOLS_PATH = `/downloads/devbox-tools/:part{${DEVBOX_TOOLS_PART.slice('devbox-tools/'.length)}}`;
 
 // The one actor-bearing DO class: every actor in a workspace shares its SQLite.
 export { OrchestratorAgent } from "./orchestrator";
@@ -356,6 +359,8 @@ mount(cliPageRoutes);
 worker.get(RELEASE_ARTIFACT_PATH, async (c) => await (c.req.method === 'HEAD' ? releaseArtifactHead : releaseArtifact)(c.env.RELEASES_BUCKET, rawParam(c, 'artifact')));
 
 worker.all(RELEASE_ARTIFACT_PATH, async () => err(405, 'Method not allowed.'));
+
+worker.get(DEVBOX_TOOLS_PATH, async (c) => await (c.req.method === 'HEAD' ? releaseArtifactHead : releaseArtifact)(c.env.RELEASES_BUCKET, `devbox-tools/${rawParam(c, 'part')}`));
 
 mount(deployCallbackRoutes);
 

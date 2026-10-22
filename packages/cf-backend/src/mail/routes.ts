@@ -142,8 +142,7 @@ async function createAddress(c: MailContext): Promise<{ address: string } | Resp
   // Said in its own words here; one that races another account still fails, in MailName's.
   if (refusal !== null) return refused(refusal);
 
-  await objectNamed(c.env.MAILNAME, body.username).claim(body.username, identity.userId);
-
+  // The box records the name first, then claims it (MailboxDO.open).
   const box = await mailbox(c).open({ userId: identity.userId, email: identity.email, username: body.username, assistant: null });
 
   return { address: box.address };

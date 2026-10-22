@@ -211,6 +211,8 @@ html, body, #root {
   --layout-rail-menu: 60px;
   /* A capture shown zoomed in its cover: its top left, at 165% of the cover's width. */
   --layout-zoomed: 165%;
+  /* A flow's plan: a line's name, then what it is. */
+  --layout-plan-line: 7rem minmax(0, 1fr);
   /* The model picker's menu: as wide as its names, never past the screen; its list a scroll of its own. */
   --layout-picker: min(28rem, calc(100vw - 1rem));
   --layout-picker-list: min(24rem, 60vh);
@@ -799,6 +801,23 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-wordmark[data-compact] { font-size: 17px; }
 /* Emphasis in running text is `<strong>`: the item role's weight, at the sentence's own size and in its ink. */
 :where(strong) { font-weight: 500; }
+/* Callout (ui/Callout.tsx): what the page waits on the person for, on the selected ground. */
+.p-callout { border-radius: var(--r-row); background: var(--c-selected); padding: 12px 16px; }
+/* Skeleton (ui/Skeleton.tsx): a line still being read. */
+.p-skeleton { display: block; height: 12px; border-radius: var(--r-pill); background: var(--c-fill); }
+/* FlowPage (ui/FlowCard.tsx): a flow's whole page, over the app, on the page's ground. */
+.p-flow-page { position: fixed; inset: 0; overflow-y: auto; background: var(--c-bg); color: var(--c-text); }
+/* A partner's mark on its white tile (ui/BrandMark.tsx CloudflareTile). */
+.p-brand-tile { display: flex; width: 20px; height: 20px; flex-shrink: 0; align-items: center; justify-content: center; border-radius: var(--r-check); background: var(--c-brand-tile); }
+.p-icon-tile.size-9 { border-radius: var(--r-control); }
+/* A Kinu just live (deploy): a ring that widens twice and eight sparks, once, around its mark. */
+.kinu-live-ring { border-radius: var(--r-pill); border: 2px solid var(--c-accent); }
+.kinu-live-spark { width: 6px; height: 6px; border-radius: var(--r-pill); background: var(--c-accent); }
+@keyframes kinu-live-ring { from { transform: scale(0.7); opacity: 0.5; } to { transform: scale(1.45); opacity: 0; } }
+@keyframes kinu-live-spark { 0% { transform: translate(0, 0) scale(0.4); opacity: 0; } 20% { opacity: 1; } 100% { transform: translate(var(--dx), var(--dy)) scale(1); opacity: 0; } }
+[data-deploy-live] .kinu-live-ring { animation: kinu-live-ring 1.6s ease-out 0.2s 2 both; }
+[data-deploy-live] .kinu-live-spark { animation: kinu-live-spark 1.2s ease-out 0.35s 1 both; }
+@media (prefers-reduced-motion: reduce) { [data-deploy-live] .kinu-live-ring, [data-deploy-live] .kinu-live-spark { animation: none; opacity: 0; } }
 /* Rail (ui/Rail.tsx): a strip of the tabs above below its breakpoint, fading at its scrolling edge; a column of rows
    from it up, the open row on the selected ground. */
 .p-rail { display: flex; border-bottom: 1px solid var(--c-border); mask-image: linear-gradient(to right, black calc(100% - 24px), transparent); }
