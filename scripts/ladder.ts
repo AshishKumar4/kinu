@@ -2684,6 +2684,25 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'reads and writes the DEPLOYED staging build\'s fixture accounts, as their own sign-in.' },
   },
   {
+    run: 'bun scripts/staging-mail-inbound.ts',
+    label: 'Mail sent to the deployment arrives',
+    ciExempt: 'has nothing to send to at CI: its subject is the deployment that just went up, its routing rules and its '
+      + 'sending domain, as the eval identity, whose secret no pull request holds.',
+    phase: 'post-publish',
+    alone: 'runs after the upload, in the wave of the tiers whose subject is the build that just shipped (L18). It acts as '
+      + 'eval-service in its own mail box, which no other row reads, and writes one message there per run.',
+    tier: 'deploy',
+    // staging 2026-10-22: a message to the eval box's own alias was filed 3 s after it was sent.
+    seconds: 10,
+    catches: 'mail that no longer reaches the deployment: a routing rule that sends its address elsewhere or nowhere, an '
+      + 'address Email Sending suppressed after a bounce (refused at the send, in its own words), and a mail handler '
+      + 'that drops what arrives. Staging\'s inbound went unexercised from 2026-10-16 to 10-22, so none of these would '
+      + 'have shown.',
+    blind: 'mail from outside Cloudflare (another provider\'s MX path, SPF and DKIM as a stranger\'s mail meets them), '
+      + 'every address but the eval box\'s, and what the box\'s agent does with a message once it is filed.',
+    inputs: { kind: 'live', why: 'sends through the DEPLOYED build\'s Email Sending and reads what its mail handler filed.' },
+  },
+  {
     run: 'bash scripts/product-flows-tier.sh',
     label: 'Product flows in a browser, on the deployment',
     ciExempt: 'has nothing to run against at CI: its subject is the deployment that just went up, as the '

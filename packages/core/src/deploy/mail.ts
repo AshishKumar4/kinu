@@ -26,6 +26,11 @@ const ZonesSchema = v.array(v.object({ id: v.string(), name: v.string() }));
 
 const SendingDomainSchema = v.object({ tag: v.string(), name: v.string() });
 
+/** An address Email Sending refuses to send to from a domain, after a hard bounce or a complaint, until it lapses. */
+const SuppressionsSchema = v.array(v.object({
+  email: v.string(), reason: v.string(), expires_at: v.nullable(v.string()), scope: v.object({ type: v.string(), value: v.string() }),
+}));
+
 const DnsRecordsSchema = v.array(v.object({
   id: v.optional(v.string()), type: v.string(), name: v.string(), content: v.string(), priority: v.optional(v.number()), ttl: v.optional(v.number()),
 }));
@@ -382,6 +387,16 @@ export function mailStep(inputs: DeployInputs) {
         if (unwritten.length > 0) asks.push(`Add these DNS records to ${domain}: ${unwritten.map(recordLine).join('; ')}.`);
 
         for (const ask of asks) context.note(ask);
+
+        // A recipient that bounced once is refused on every later send from this domain until its suppression lapses,
+        // and a test sent before a routing rule took effect is such a bounce (staging, 2026-10-22). Said, never lifted.
+        const suppressions = await allowed(context.transport, { method: 'GET', path: `/accounts/${inputs.accountId}/email/sending/suppressions?per_page=100` }, SuppressionsSchema);
+        const refused = (suppressions ?? []).filter((each) => each.scope.value === domain);
+
+        if (refused.length > 0) {
+          context.note(`Mail from ${domain} is refused to ${refused.map((each) => `${each.email} (${each.reason}${each.expires_at === null ? '' : `, until ${each.expires_at}`})`).join(', ')}. `
+            + 'Lift any that should get mail in the dashboard: Email, then Email Sending, then Suppression list.');
+        }
 
         const routes = apex ? `routing to ${inputs.instanceName}` : `each address routed to ${inputs.instanceName} by a rule of its own`;
 
