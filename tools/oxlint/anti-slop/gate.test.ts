@@ -249,7 +249,7 @@ for (const [rule, setting, protects] of builtinRulePins) {
 assert.equal(packageJson.devDependencies.oxlint, packageJson.devDependencies["@oxlint/plugins"]);
 assert.equal(pluginPackage.private, true);
 assert.equal(pluginPackage.type, "module");
-assert.match(packageJson.scripts["test:anti-slop"], /tsc --noEmit -p tools\/oxlint\/anti-slop/u);
+assert.match(packageJson.scripts["test:anti-slop"], /tsrs --noEmit -p tools\/oxlint\/anti-slop/u);
 assert.match(packageJson.scripts["test:anti-slop"], /anti-slop\/rules\.test\.ts/u);
 assert.match(packageJson.scripts["test:anti-slop"], /anti-slop\/drift\.test\.ts/u);
 /**

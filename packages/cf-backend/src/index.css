@@ -2184,6 +2184,9 @@ body > .annotation-toolbar {
    words on a stronger wash, folds and blank sides on a quiet one. Code wraps anywhere at a tab of 2, ligatures off so an
    operator reads as typed; a noted line's number is set heavier. */
 .p-diff { font-variant-ligatures: none; }
+/* A terminal's inset is xterm's padding, which its fit subtracts from the room the host gives it (TerminalPane.tsx). */
+.p-terminal-host > .xterm { padding: 8px 0 0 16px; }
+.p-terminal-host[data-on-ground] > .xterm { padding-top: 4px; }
 /* An answer's slate open in the chat: its tools float over its top right on the tile. */
 .p-slate-tools { border-radius: var(--r-inner); background: var(--c-fill); }
 /* A computer's desktop expanded over the workspace, letterboxed on the screen's own black as a player does. */

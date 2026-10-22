@@ -5,7 +5,7 @@ import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
 import { INSPECTOR_SHUT_PX } from '../../scripts/browser-page';
 import { RAIL_SHUT_PX, liveRows } from '../../scripts/live-app-rows';
 
-const { observed, verdictOf, boot } = liveRows('live-app-layout', ['controls', 'state']);
+const { observed, verdictOf, boot } = liveRows('live-app-layout', ['controls', 'workspace-views', 'state']);
 
 beforeAll(boot);
 
@@ -30,6 +30,29 @@ describe('a collapsed right panel can be reopened and the left rail can be colla
 
     expect(lane).toBeGreaterThanOrEqual(0);
     expect(lane).toBeLessThanOrEqual(RAIL_SHUT_PX);
+  });
+});
+
+// rc29 walkthrough F2: the desktop's own page went with D99, and its address drew the overview in its place.
+describe("a workspace's own addresses draw what they name", () => {
+  test("the desktop's old address lands on the workspace with its Environment open, never on the overview", () => {
+    const views = verdictOf(observed.workspaceViews, 'workspace-views');
+
+    expect(views.desktopOverview).toBe(false);
+    expect(views.desktopEnvironment).toBe(true);
+    expect(views.desktopLandedAt).toMatch(/^\/workspace\/[^/]+\?environment=desktop$/u);
+  });
+
+  test('where the machine Environment chose has a desktop, it is the tab shown', () => {
+    expect(verdictOf(observed.workspaceViews, 'workspace-views').desktopTab).not.toBe('other');
+  });
+
+  test('a view no page answers says so, and the overview still answers at its own address', () => {
+    const views = verdictOf(observed.workspaceViews, 'workspace-views');
+
+    expect(views.unknownOverview).toBe(false);
+    expect(views.unknownNotFound).toBe(true);
+    expect(views.overviewDrawn).toBe(true);
   });
 });
 

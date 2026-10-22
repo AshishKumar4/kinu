@@ -97,7 +97,7 @@ export { initMailNameTables, initMailboxTables } from './state/mail-schema';
 
 export { mailVerdict } from './mail/verdict';
 
-export { mailAddressOf, mailLabelOf, mailUsernameRefusal, parseMailRecipient, suggestedMailUsername, type MailRecipient } from './mail/address';
+export { mailAddressOf, mailDeploymentAliases, mailLabelOf, mailUsernameRefusal, parseMailRecipient, suggestedMailUsername, type MailRecipient } from './mail/address';
 
 export type * from './mail/mailbox-api';
 

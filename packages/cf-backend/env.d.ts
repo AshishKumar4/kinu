@@ -143,6 +143,9 @@ declare global {
     CONTROL_PLANE_ADMINS?: string;
     /** `operators` (the default): only CONTROL_PLANE_ADMINS may claim a mail address; `everyone`: any account may. */
     MAIL_ACCOUNTS?: string;
+    /** The deployment's own addresses, JSON `{ "privacy": "<username>" }`: each delivered to that account's own box,
+     *  and no one's to claim (docs/MAIL.md §1). */
+    MAIL_ALIASES?: string;
     /** Cloudflare Access org for `/control*`: JWKS origin and pinned `iss`, else any org is a valid signer.
      *  Unset ⇒ 404 to everyone; `scripts/infra-verify.ts` requires it (control-plane/access-gate.ts). */
     CONTROL_PLANE_ACCESS_TEAM_DOMAIN?: string;
