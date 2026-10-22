@@ -102,10 +102,15 @@ function skillTiles(page: Page): Promise<{ name: string; builtin: boolean; meta:
 
 /** Open a tile's menu; each item by its accessible name, with the reason a refused one gives. */
 async function menuOf(page: Page, tile: string): Promise<{ label: string; refused: string | null }[]> {
-  await page.click(`${tile} [data-drive-menu]`);
-  await page.waitForSelector(`${tile} [role="menu"]`);
+  if (await page.$('[role="menu"][data-open]') !== null) {
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => document.querySelector('[role="menu"][data-open]') === null);
+  }
 
-  return page.$$eval(`${tile} [role="menuitem"]`, (items) => items.map((item) => {
+  await page.click(`${tile} [data-row-menu]`);
+  await page.waitForSelector('[role="menu"][data-open] [role="menuitem"]');
+
+  return page.$$eval('[role="menu"][data-open] [role="menuitem"]', (items) => items.map((item) => {
     const text = (id: string | null): string | null => (id === null ? null : document.getElementById(id)?.textContent?.trim() ?? null);
 
     return {
@@ -115,10 +120,10 @@ async function menuOf(page: Page, tile: string): Promise<{ label: string; refuse
   }));
 }
 
-/** Tab from the focus until an element named `label` has it: whether it says it is disabled, and why. */
-async function tabTo(page: Page, label: string): Promise<{ disabled: string | null; reason: string | null } | null> {
+/** Arrow down the open menu until an item named `label` has the focus: whether it says it is disabled, and why. */
+async function arrowTo(page: Page, label: string): Promise<{ disabled: string | null; reason: string | null } | null> {
   for (let press = 0; press < 12; press += 1) {
-    await page.keyboard.press('Tab');
+    await page.keyboard.press('ArrowDown');
 
     const reached = await page.evaluate((wanted) => {
       const element = document.activeElement;
@@ -224,7 +229,7 @@ describe('the Drive', () => {
         expect(await page.$('[role="dialog"]')).toBeNull();
         expect(await menuOf(page, '[data-drive-entry="staging"]')).toContainEqual({ label: 'Mark as skill', refused: 'no SKILL.md in /projects/ops/staging' });
         // The keyboard reaches the refused item too, and hears why.
-        expect(await tabTo(page, 'Mark as skill')).toEqual({ disabled: 'true', reason: 'no SKILL.md in /projects/ops/staging' });
+        expect(await arrowTo(page, 'Mark as skill')).toEqual({ disabled: 'true', reason: 'no SKILL.md in /projects/ops/staging' });
         await shoot(page, 'drive-folder-dark');
       } finally {
         await page.close();
@@ -416,7 +421,7 @@ describe('the Drive', () => {
 
         // Cancelled, the tile goes and the folder is empty again.
         await menuOf(page, '[data-drive-transfer="uploading"]');
-        await page.click('[data-drive-transfer="uploading"] [data-drive-cancel-upload]');
+        await page.click('[role="menu"][data-open] [data-drive-cancel-upload]');
         await drawn(page);
         expect(await page.$('[data-drive-transfer]')).toBeNull();
         expect(await page.$('[data-drive-empty]')).not.toBeNull();
@@ -428,7 +433,7 @@ describe('the Drive', () => {
         expect(await page.$eval('[data-drive-transfer]', (tile) => [tile.getAttribute('data-drive-transfer'), tile.textContent?.includes('File too large for the Drive')]))
           .toEqual(['failed', true]);
         await menuOf(page, '[data-drive-transfer="failed"]');
-        await page.click('[data-drive-transfer="failed"] [data-drive-dismiss-upload]');
+        await page.click('[role="menu"][data-open] [data-drive-dismiss-upload]');
         await drawn(page);
         expect(await page.$('[data-drive-transfer]')).toBeNull();
       } finally {
@@ -477,7 +482,7 @@ describe('the Drive', () => {
         await zipInput.uploadFile(later);
         await page.waitForSelector('[data-drive-transfer="uploading"]');
         await menuOf(page, '[data-drive-transfer="uploading"]');
-        await page.click('[data-drive-transfer="uploading"] [data-drive-cancel-upload]');
+        await page.click('[role="menu"][data-open] [data-drive-cancel-upload]');
         await drawn(page);
         expect(await transfers(page)).toEqual([]);
         expect(await page.$('[data-drive-entry="later"]')).toBeNull();
@@ -570,7 +575,7 @@ describe('the Drive', () => {
       try {
         const deploy = '[data-drive-entry="deploy"]';
         expect((await menuOf(page, deploy)).find((item) => item.label === 'Mark as skill')).toEqual({ label: 'Mark as skill', refused: null });
-        await page.click(`${deploy} [data-drive-mark]`);
+        await page.click('[role="menu"][data-open] [data-drive-mark]');
 
         // Marking links it under /skills; the folder stays where it was.
         await page.click('[data-drive-crumb]');
@@ -617,7 +622,7 @@ describe('the Drive', () => {
 
         // A built-in is read only: no menu, and it opens as the SKILL.md agents read, with no edit and a download
         // of the same text.
-        expect(await page.$('[data-drive-builtin="audit-implementation"] [data-drive-menu]')).toBeNull();
+        expect(await page.$('[data-drive-builtin="audit-implementation"] [data-row-menu]')).toBeNull();
         await page.click('[data-drive-builtin="audit-implementation"] button');
         await page.waitForFunction(() => (document.querySelector('[data-drive-viewer] [data-files-preview-body]')?.textContent ?? '').includes('Audit your implementation'));
         expect(await page.$('[data-drive-viewer] [data-files-edit]')).toBeNull();
@@ -717,7 +722,7 @@ describe('the Drive', () => {
         // Both forks where the sharer allows it; what the owner shared also stops.
         expect((await menuOf(shared, '[data-drive-share="live-mail-9"]')).map((item) => item.label)).toEqual(['Open', 'Fork…']);
         expect((await menuOf(shared, '[data-drive-share="live-board-1"]')).map((item) => item.label)).toEqual(['Open', 'Fork…', 'Stop sharing']);
-        await shared.click('[data-drive-share="live-board-1"] [data-drive-stop-sharing]');
+        await shared.click('[role="menu"][data-open] [data-drive-stop-sharing]');
         await shared.waitForSelector('[role="dialog"]');
         // The confirmation names everyone the share was given to, the two people who lose it.
         const confirm = await shared.$eval('[role="dialog"]', (element) => element.textContent ?? '');

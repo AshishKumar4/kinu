@@ -13,6 +13,7 @@ import { ApprovalDecision, ConsentDecision, ShowDecision } from "@/components/sh
 import { hostPartFrames, type Decided, type DecisionKind, type PartAddress } from "@/lib/part-bridge";
 import { decideEffect, giveConsent, readConsents, releasePart, runPart, showPart } from "@/lib/parts-api";
 import { signInAndReturn } from "@/lib/sign-in";
+import { Surface } from "@/components/ui/Surface";
 
 /** A decision open at the top: what it rests on, and how to tell the frame what came of it. */
 interface Open {
@@ -66,7 +67,7 @@ export function usePartHost({ workspace, slate, title, slateFrame }: {
     signIn: () => signInAndReturn(),
   }), [workspace, slate, title, slateFrame]);
 
-  if (open === null) return failure === null ? null : <p role="alert" className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md rounded-lg p-overlay px-3 py-2 p-meta p-danger">{failure}</p>;
+  if (open === null) return failure === null ? null : <Surface look="clip" as="p" className="t-meta fixed inset-x-3 bottom-3 z-50 mx-auto max-w-md p-overlay px-3 py-2 p-danger" role="alert">{failure}</Surface>;
 
   const close = (decided: Decided) => {
     open.settle(decided);

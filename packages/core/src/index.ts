@@ -615,7 +615,7 @@ export { SubagentInheritedContextSchema, type SubagentInheritedContext } from '.
 
 export { subagentForkContext, subagentTurnContext } from './subagents/support';
 
-export { admitHireWork, hireLifecycle, retireHireSubtree, type HireLifecyclePorts, type SeatedHire } from './subagents/hire-lifecycle';
+export { admitHireWork, hireLifecycle, stopAgentsBelow, type HireLifecyclePorts, type SeatedHire } from './subagents/hire-lifecycle';
 
 export { inheritedAsModelMessage } from './heads/head-inference';
 
@@ -694,7 +694,7 @@ export {
   parentAdmitsSubagentReport,
   readSubagentLiveStatus,
   subagentDescriptorSource,
-  owedSubagentTurnReport,
+  hireTurnSettled,
   type SubagentReportOrigin,
   type SubagentRuntime,
 } from './subagents/support';
@@ -2321,7 +2321,7 @@ export {
 } from './http/public-shell';
 
 export {
-  accountTheme, DEFAULT_THEME, terminalPalette, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed,
+  accountTheme, avatarGround, DEFAULT_THEME, ILLUSTRATION, REDACTION_FILL, terminalPalette, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed,
   type ColourToken, type Mode, type TerminalPalette, type ThemeName,
 } from './web/theme';
 

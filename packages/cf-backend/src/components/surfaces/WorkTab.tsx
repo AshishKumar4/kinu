@@ -4,7 +4,8 @@
  * `listPendingActions` is host-owned and never a slate data source.
  */
 import { useCallback, useMemo } from "react";
-import { Badge, Loader } from "@cloudflare/kumo";
+import { Badge } from "@/components/ui/Badge";
+import { Loader } from "@/components/ui/Loader";
 import {
   ClockIcon, PulseIcon, WarningCircleIcon,
   CaretRightIcon, ShieldWarningIcon,
@@ -22,6 +23,9 @@ import type { SurfaceKind } from "@kinu.run/core";
 import { WorkPlans } from "./WorkPlans";
 import type { WorkspaceWorkRead } from "./use-workspace-work";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Group } from "@/components/ui/Group";
+import { Pressable } from "@/components/ui/Pressable";
+import { Surface } from "@/components/ui/Surface";
 
 /** Kinds the attention stack decides: their rows open its card. */
 const STACKED: ReadonlySet<PendingActionKind> = new Set(["deferred_action"]);
@@ -84,8 +88,8 @@ export function WorkTab({
   if (nothingAtAll) {
     return (
       <p className="py-1">
-        <span className="block p-row-text p-text-2">No work yet</span>
-        <span className="mt-1 block p-meta p-text-3">Plans, tasks and jobs show here while they run, and stay in the Journal once they finish.</span>
+        <span className="t-body block p-text-2">No work yet</span>
+        <span className="t-meta mt-1 block p-text-3">Plans, tasks and jobs show here while they run, and stay in the Journal once they finish.</span>
       </p>
     );
   }
@@ -118,17 +122,17 @@ function NeedsYou({ pendingActions, onOpenAsk, onOpenSurface, onOpenPlan }: {
   };
 
   return (
-    <div className="rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_32%,transparent)] bg-[var(--c-accent-subtle)] px-[18px] pt-2.5 pb-3.5 [&_.p-label]:!text-[var(--c-accent-fg)]">
+    <Surface look="selected" className="p-needs-you px-[var(--layout-inset)] pt-2 pb-3">
       <Section id="work-needs-you" title="Needs you"
         icon={<WarningCircleIcon size={14} className="p-warning" />}
-        badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
-        <div className="divide-y divide-dashed divide-[var(--c-dash)]">
+        badge={<Badge>{pendingActions.length}</Badge>}>
+        <div className="p-rows-dashed">
           {pendingActions.map((action) => (
             <PendingRow key={action.id} action={action} onOpenSurface={onOpenSurface} onOpen={opener(action)} />
           ))}
         </div>
       </Section>
-    </div>
+    </Surface>
   );
 }
 
@@ -211,19 +215,19 @@ function WorkJournal({ journal, rpc, onRefreshJobs, onOpenOwner }: {
   return (
     <Section id="work-journal" title="Journal"
       icon={<ClockIcon size={14} className="p-text-2" />}
-      badge={<Badge variant="secondary">{journal.length}</Badge>}>
-      <div className="space-y-3.5">
+      badge={<Badge>{journal.length}</Badge>}>
+      <div className="space-y-4">
         {days.map(({ label, rows }) => (
-          <div key={label} className="space-y-1.5">
-            <p className="p-eyebrow">{label}</p>
-            <div className="p-group">
+          <div key={label} className="space-y-2">
+            <p className="t-label">{label}</p>
+            <Group>
               {rows.map((row) => (
                 <div key={row.key} data-journal-row={row.kind}>
                   {row.kind === "job" && <JobCard grouped job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
                   {row.kind === "task" && <TaskTree grouped task={row.task} owner={row.owner} onOpenOwner={onOpenOwner} />}
                 </div>
               ))}
-            </div>
+            </Group>
           </div>
         ))}
       </div>
@@ -260,35 +264,30 @@ function PendingRow(
 
   const content = (
     <div className="min-w-0">
-      <div className="p-row-text p-text">{action.title}</div>
+      <div className="t-body p-text">{action.title}</div>
       {action.detail && (
-        <div className="mt-0.5 line-clamp-2 break-words p-meta p-text-3">{action.detail}</div>
+        <div className="t-meta mt-px line-clamp-2 break-words p-text-3">{action.detail}</div>
       )}
-      <div className="mt-0.5 p-meta p-text-3">
+      <div className="t-meta mt-px p-text-3">
         {timeAgo(action.at)}{home.cta === null ? "" : ` · ${home.cta}`}
       </div>
     </div>
   );
 
-  const icon = <Icon size={14} className="mt-0.5 shrink-0 p-warning" />;
+  const icon = <Icon size={14} className="mt-px shrink-0 p-warning" />;
   const surface = home.surface;
   const open = onOpen ?? (surface === null ? null : () => onOpenSurface(surface));
 
   if (open === null) {
-    return <div className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-2 py-2" data-pending-action={action.id}>{icon}{content}</div>;
+    return <div className="grid grid-cols-[var(--layout-mark-row)] items-start gap-2 py-2" data-pending-action={action.id}>{icon}{content}</div>;
   }
 
   return (
-    <button
-      type="button"
-      onClick={open}
-      data-pending-action={action.id}
-      className="grid w-full grid-cols-[14px_minmax(0,1fr)_16px] items-start gap-2 rounded-md py-2 text-left transition-colors hover:p-elevated"
-    >
+    <Pressable className="grid grid-cols-[var(--layout-mark-row-mark)] items-start gap-2 py-2" onClick={open} data-pending-action={action.id}>
       {icon}
       {content}
       <CaretRightIcon size={12} className="mt-1 shrink-0 justify-self-end p-text-3" />
-    </button>
+    </Pressable>
   );
 }
 

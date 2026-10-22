@@ -1,4 +1,4 @@
-import { Tooltip } from "@cloudflare/kumo";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { WarningCircleIcon } from "@phosphor-icons/react";
 import type { AgentActivity } from "@kinu.run/core";
 
@@ -15,9 +15,10 @@ export function AgentStatusMark({ activity }: { activity: AgentActivity }) {
   if (signal === undefined) return null;
 
   return (
-    <Tooltip content={signal.label} side="bottom"
-      render={<span className="p-agent-status" data-status={signal.kind} role="img" aria-label={signal.label} />}>
-      {signal.kind === "failed" && <WarningCircleIcon size={13} weight="fill" aria-hidden />}
+    <Tooltip content={signal.label} side="bottom">
+      <span className="p-agent-status" data-status={signal.kind} role="img" aria-label={signal.label}>
+        {signal.kind === "failed" && <WarningCircleIcon size={13} weight="fill" aria-hidden />}
+      </span>
     </Tooltip>
   );
 }

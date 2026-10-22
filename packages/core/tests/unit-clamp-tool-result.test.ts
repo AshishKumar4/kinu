@@ -176,56 +176,6 @@ describe('clampSerializedToolResult', () => {
   });
 });
 
-// FEAT-11: the bounded format file list and search answer with, for every clamped result: how much of it is shown of
-// how much, and the lines of the saved whole that hold the rest.
-describe('a clamped result\'s marker', () => {
-  const MARKER = /\[truncated; showing (\d+) of (\d+) characters; lines (\d+)-(\d+) of (\d+) are left out: use ranged reads to read the full result at (\S+)\]/;
-
-  test('counts what it shows of the whole, and names the lines of the saved whole it left out', async () => {
-    const { rt } = createTestRuntime();
-    // Ended by a newline, which ends its last line rather than opening another (`lineCount`).
-    const original = Array.from({ length: 5_000 }, (_, index) => `line ${String(index + 1)}\n`).join('');
-    const clamped = await clampToolResult(original, { files: rt.storage });
-    const said = MARKER.exec(clamped);
-
-    if (said === null) throw new Error(`the marker counts nothing: ${clamped.slice(0, 200)}`);
-    const [marker, shown, total, from, to, of, path = ''] = said;
-    const [head = '', tail = ''] = clamped.split(`\n\n${marker}\n\n`);
-    const lines = (await readText(rt.storage.vfs, path)).split('\n');
-    const cutHead = head.lastIndexOf('\n');
-    const cutTail = tail.indexOf('\n');
-
-    expect({
-      shown: Number(shown), total: Number(total), of: Number(of),
-      // Every line before `from` and after `to` is shown whole; the two it cut through are among those left out.
-      before: head.slice(0, cutHead), cutFrom: lines[Number(from) - 1]?.startsWith(head.slice(cutHead + 1)),
-      after: tail.slice(cutTail + 1), cutTo: lines[Number(to) - 1]?.endsWith(tail.slice(0, cutTail)),
-    }).toEqual({
-      shown: head.length + tail.length, total: original.length, of: 5_000,
-      before: lines.slice(0, Number(from) - 1).join('\n'), cutFrom: true,
-      after: lines.slice(Number(to)).join('\n'), cutTo: true,
-    });
-  });
-
-  test('counts what it shows when the whole could not be saved', async () => {
-    const clamped = await clampToolResult('x'.repeat(100_000));
-    const said = /\[truncated; showing (\d+) of (\d+) characters; the full result was not saved: rerun with a filter \(grep\/head\/tail\)\]/.exec(clamped);
-
-    expect({ shown: Number(said?.[1]), total: Number(said?.[2]) }).toEqual({ shown: clamped.length - (said?.[0].length ?? 0) - 4, total: 100_000 });
-  });
-
-  // Review finding (2026-10-21): the counted marker was too long to sit beside a record that left room for the old one.
-  test('says it in fewer words where a record beside it leaves little room, and still counts', async () => {
-    const { rt } = createTestRuntime();
-    const clamped = await clampToolResult('z'.repeat(50_000), { files: rt.storage, maxChars: 120 });
-
-    const said = /\[truncated; (\d+)\/(\d+) chars; full result at \S+\]/.exec(clamped);
-
-    expect({ fits: clamped.length <= 120, shown: Number(said?.[1]), total: Number(said?.[2]) })
-      .toEqual({ fits: true, shown: clamped.length - (said?.[0].length ?? 0) - 4, total: 50_000 });
-  });
-});
-
 describe('tool result budget (behavior through the public tool surface)', () => {
   test('a huge stdout is clamped and the full output is readable back via the file surface', async () => {
     const { rt } = createTestRuntime();

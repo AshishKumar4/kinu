@@ -21,6 +21,11 @@ export function AccountProvider({ children }: { readonly children: ReactNode }) 
   );
 }
 
+/** The account, where a page has one: a frame drawn without the account's provider (the landing, a gallery frame) has none. */
+export function useAccountIfAny(): AccountValue | null {
+  return useContext(AccountContext);
+}
+
 export function useAccount(): AccountValue {
   const account = useContext(AccountContext);
 

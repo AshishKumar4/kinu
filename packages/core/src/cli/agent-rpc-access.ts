@@ -113,6 +113,8 @@ export const AGENT_RPC_ACCESS = {
   savePlanReviewAnnotations: 'interactive',
   dismissBackgroundJob: 'interactive',
   dismissSubagent: 'interactive',
+  // The owner's own choice of when a schedule fires.
+  retimeDailySchedule: 'interactive',
   // A CI token that runs tasks must not take the whole database.
   exportWorkspaceArchive: 'interactive',
   experienceAction: 'interactive',

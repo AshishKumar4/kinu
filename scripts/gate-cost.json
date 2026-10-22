@@ -1178,6 +1178,18 @@
       "loadAtStart": 2.76,
       "exit": 0,
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)"
+    },
+    "bun test --timeout=0 tests/design-system.test.ts": {
+      "wallSeconds": 1.84,
+      "cpuSeconds": 1.56,
+      "peakRssMb": 264.17,
+      "peakRunnable": 2,
+      "peakCpuThreads": 1.95,
+      "meanThreads": 0.85,
+      "samples": 31,
+      "loadAtStart": 53.96,
+      "exit": 0,
+      "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)"
     }
   }
 }

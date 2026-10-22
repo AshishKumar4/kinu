@@ -343,14 +343,18 @@ describe('the providers list', () => {
 
         if (llama instanceof HTMLElement) llama.click();
       });
-      // The tier is a draft until saved; saved, the button reads Save again, with nothing left to save.
-      await page.waitForFunction(() => [...document.querySelectorAll('button')].some((button) => button.textContent?.trim() === 'Save' && !button.disabled));
-      await page.$$eval('button', (buttons) => {
+      // The tier is a draft until saved: the save bar offers Save while it is; saved, it says so and leaves.
+      await page.waitForFunction(() => [...document.querySelectorAll<HTMLButtonElement>('[data-save-bar] button')].some((button) => button.textContent?.trim() === 'Save' && !button.disabled));
+      await page.$$eval('[data-save-bar] button', (buttons) => {
         const save = buttons.find((button) => button.textContent?.trim() === 'Save');
 
         if (save instanceof HTMLElement) save.click();
       });
-      await page.waitForFunction(() => [...document.querySelectorAll('button')].some((button) => button.textContent?.trim() === 'Save' && button.disabled));
+      await page.waitForFunction(() => {
+        const bar = document.querySelector('[data-save-bar]');
+
+        return bar === null || bar.textContent?.includes('Saved') === true;
+      });
       expect(await page.evaluate(async () => JSON.stringify(await (await fetch('/api/user/profile-catalog')).json())))
         .toContain('"default":{"model":"groq/llama-3.3-70b-versatile"');
 

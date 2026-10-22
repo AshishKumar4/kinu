@@ -8,6 +8,9 @@ import {
   ADVISOR_SEVERITY_LABEL, eventSourceLabel, eventVariantLabel, keptAdvisorNote, MAIL_HANDED_EVENT, MAIN_AGENT, parseDrainedEvents,
   type AdvisorSeverity, type ClassifiedProgrammaticTurn, type DrainedEvent, type SignalCard,
 } from "@kinu.run/core";
+import { IconControl } from "@/components/ui/IconControl";
+import { PillButton } from "@/components/ui/Pill";
+import { Surface } from "@/components/ui/Surface";
 
 export type CardState = SignalCard["state"];
 
@@ -66,29 +69,29 @@ export function EventRow({ icon: Mark, tone, label, source, body, detail, state,
   const who = (
     <span data-event-source className="p-pill-source">
       {label}
-      {source !== undefined && <span className="ml-1.5 font-normal p-text-3">{source}</span>}
+      {source !== undefined && <span className="p-pill-source-note">{source}</span>}
     </span>
   );
 
   return (
-    <div className="flex justify-center py-0.5 animate-fade-in" {...hooks}>
+    <div className="flex justify-center py-px animate-fade-in" {...hooks}>
       {open ? (
         <div className="p-pill" data-history data-open>
           <div className="p-pill-head">
             <span className="p-pill-mark"><Mark size={14} weight="fill" className={tone} aria-hidden /></span>
             <span className="p-pill-body">{who}{badge}</span>
             {tail}
-            <button type="button" className="p-pill-icon -my-1 -mr-1.5" aria-label="Show less" aria-expanded onClick={() => setOpen(false)}>
+            <IconControl place="pill" className="-my-1 -mr-2" aria-label="Show less" aria-expanded onClick={() => setOpen(false)}>
               <CaretUpIcon size={12} weight="bold" />
-            </button>
+            </IconControl>
           </div>
-          {body !== undefined && <p data-event-brief className="mt-1.5 ml-6 whitespace-pre-wrap break-words p-row-text p-text-2">{body}</p>}
-          {detail !== undefined && <p className="mt-1.5 ml-6 whitespace-pre-wrap break-words p-row-text p-text-3">{detail}</p>}
+          {body !== undefined && <p data-event-brief className="t-body mt-2 ml-6 whitespace-pre-wrap break-words p-text-2">{body}</p>}
+          {detail !== undefined && <p className="t-body mt-2 ml-6 whitespace-pre-wrap break-words p-text-3">{detail}</p>}
           {action !== undefined && <div className="mt-2 ml-6">{action}</div>}
         </div>
       ) : (
         <span className="p-pill-line">
-          <button type="button" className="p-pill" data-history aria-expanded={false} onClick={() => setOpen(true)}>
+          <PillButton data-history aria-expanded={false} onClick={() => setOpen(true)}>
             <span className="p-pill-mark"><Mark size={14} weight="fill" className={tone} aria-hidden /></span>
             <span className="p-pill-body">
               {who}
@@ -96,7 +99,7 @@ export function EventRow({ icon: Mark, tone, label, source, body, detail, state,
               {body !== undefined && <span data-event-brief className="p-pill-text truncate">{body}</span>}
             </span>
             {tail}
-          </button>
+          </PillButton>
           {action}
         </span>
       )}
@@ -135,7 +138,7 @@ function DrainedEvents({ text, state, count }: { text: string; state: CardState;
 
   // Format drift: what the agent was given is its own to read, so the person is told only that events came.
   if (events.length === 0) {
-    return <EventRow icon={LightningIcon} tone="p-accent" label="Events" state={state} count={count} />;
+    return <EventRow icon={LightningIcon} tone="p-accent-fg" label="Events" state={state} count={count} />;
   }
 
   return foldRepeats(events, drainedKey).map(({ item: event, count: repeats }, index) => (
@@ -149,7 +152,7 @@ function DrainedEvents({ text, state, count }: { text: string; state: CardState;
       state={state}
       count={repeats * count}
       badge={event.replyExpected && (
-        <span className="shrink-0 rounded-sm px-1 p-meta p-badge-warning" title="The sender is waiting on the agent's reply">reply expected</span>
+        <Surface look="clip" as="span" className="t-meta shrink-0 px-1 p-badge-warning" title="The sender is waiting on the agent's reply">reply expected</Surface>
       )}
       hooks={{ "data-drained-event": event.variant, "data-reply-expected": event.replyExpected ? "" : undefined }}
     />
@@ -213,7 +216,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
         icon={EyeIcon}
         tone={tone.icon}
         label="Advisor"
-        badge={<span className={`shrink-0 px-1.5 p-meta ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[turn.severity]}</span>}
+        badge={<span className={`t-meta shrink-0 px-1 ${tone.badge}`}>{ADVISOR_SEVERITY_LABEL[turn.severity]}</span>}
         body={turn.note ?? keptAdvisorNote(text, turn.severity) ?? undefined}
         state={state}
         count={count}
@@ -227,7 +230,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
   if (turn.kind === "delegated_task") {
     const from = `from ${turn.from === MAIN_AGENT ? "Main" : turn.from}`;
 
-    return <EventRow icon={GearSixIcon} tone="p-accent" label="Task" source={from} body={text} state={state} count={count} hooks={{ "data-system-event": from }} />;
+    return <EventRow icon={GearSixIcon} tone="p-accent-fg" label="Task" source={from} body={text} state={state} count={count} hooks={{ "data-system-event": from }} />;
   }
 
   if (turn.kind === "system_event") {
@@ -236,7 +239,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
     return (
       <EventRow
         icon={turn.event === MAIL_HANDED_EVENT ? EnvelopeSimpleIcon : GearSixIcon}
-        tone="p-accent"
+        tone="p-accent-fg"
         label={label}
         source={about}
         body={line}

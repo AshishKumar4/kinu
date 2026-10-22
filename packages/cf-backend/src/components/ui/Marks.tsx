@@ -1,6 +1,7 @@
 import type { IconWeight } from "@phosphor-icons/react";
+import { ILLUSTRATION } from "@kinu.run/core";
 import { useId, type CSSProperties } from "react";
-import { Tooltip } from "@cloudflare/kumo";
+import { Tooltip } from "@/components/ui/Tooltip";
 import { hueStops, rankHue, type AgentActivity } from "@kinu.run/core";
 
 function hashOf(seed: string): number {
@@ -15,6 +16,22 @@ function hashOf(seed: string): number {
 }
 
 export const mascotSeed = (workspace: string, chat: string): string => `${workspace}/${chat}`;
+
+/** A mascot's seed and hue. */
+export interface MascotLook {
+  readonly seed: string;
+  readonly colour: number;
+}
+
+/**
+ * The look of a person's own assistant, from the person's name: its hue and what it wears are the name's, the same on
+ * every page it appears on, and never Main's crown (a workspace's main chat), which means nothing to them.
+ */
+export function personMascot(name: string): MascotLook {
+  const seed = `person:${name.trim().toLowerCase()}`;
+
+  return { seed, colour: hashOf(seed) % 360 };
+}
 
 /**
  * The hue an agent's tile is drawn in: a workspace's agents step round the wheel in birth order (`PanelAgent.colour`)
@@ -66,9 +83,9 @@ export function mascotAccessory(seed: string): MascotAccessory | null {
 /** Each accessory's colours are its own, read on both themes; a ring of the ground keeps it apart from the tile. */
 const RING = { stroke: "var(--mascot-ring, var(--c-bg))", strokeWidth: 1.2, paintOrder: "stroke" } as const;
 
-const INK = "#4A4366";
+const INK = ILLUSTRATION.ink;
 
-const GOLD = "#F2BE45";
+const GOLD = ILLUSTRATION.gold;
 
 /** Drawn on the tile's 32-unit grid: its top edge runs at y 4 and its eyes at x 12 and 20. Hats sit left of centre,
  *  away from the waiting dot at the top right, which is drawn over anything that reaches it. */
@@ -78,22 +95,22 @@ function Accessory({ kind }: { kind: MascotAccessory }) {
       return (
         <g {...RING}>
           <path d="M9.6 6.8 9 -0.4l3.5 3 3.5-5 3.5 5 3.5-3-.6 7.2z" fill={GOLD} strokeLinejoin="round" />
-          <circle cx={16} cy={4.2} r={1.2} fill="#E0524F" stroke="none" />
+          <circle cx={16} cy={4.2} r={1.2} fill={ILLUSTRATION.red} stroke="none" />
         </g>
       );
     case "party":
       return (
         <g {...RING}>
           <path d="M9.4 6.8 20.8 5.6 14.2 -4.6z" fill={GOLD} strokeLinejoin="round" />
-          <path d="M12.1 2.2l4.6-.6M10.8 4.6l7.6-.9" stroke="#E0524F" strokeWidth={1.3} fill="none" paintOrder="normal" />
-          <circle cx={14.2} cy={-4.8} r={1.9} fill="#E0524F" />
+          <path d="M12.1 2.2l4.6-.6M10.8 4.6l7.6-.9" stroke={ILLUSTRATION.red} strokeWidth={1.3} fill="none" paintOrder="normal" />
+          <circle cx={14.2} cy={-4.8} r={1.9} fill={ILLUSTRATION.red} />
         </g>
       );
     case "beanie":
       return (
         <g {...RING}>
-          <path d="M8 7.4Q8-1.6 16-1.6t8 9z" fill="#4C86E0" />
-          <rect x={7.4} y={4.4} width={17.2} height={3.6} rx={1.8} fill="#3366B5" />
+          <path d="M8 7.4Q8-1.6 16-1.6t8 9z" fill={ILLUSTRATION.sky} />
+          <rect x={7.4} y={4.4} width={17.2} height={3.6} rx={1.8} fill={ILLUSTRATION.blue} />
           <circle cx={16} cy={-2.4} r={2.2} fill={GOLD} />
         </g>
       );
@@ -108,23 +125,23 @@ function Accessory({ kind }: { kind: MascotAccessory }) {
     case "cap":
       return (
         <g {...RING}>
-          <path d="M3 7.6q4-3 10-2.2V7.4q-6-.6-10 .2z" fill="#1F7A72" strokeLinejoin="round" />
-          <path d="M9.6 6.6q0-7.6 7.2-7.6t7.2 7.6z" fill="#2FA39A" />
-          <circle cx={16.8} cy={-1.1} r={1.1} fill="#1F7A72" stroke="none" />
+          <path d="M3 7.6q4-3 10-2.2V7.4q-6-.6-10 .2z" fill={ILLUSTRATION.teal} strokeLinejoin="round" />
+          <path d="M9.6 6.6q0-7.6 7.2-7.6t7.2 7.6z" fill={ILLUSTRATION.tealLight} />
+          <circle cx={16.8} cy={-1.1} r={1.1} fill={ILLUSTRATION.teal} stroke="none" />
         </g>
       );
     case "bow":
       return (
         <g {...RING} transform="rotate(-18 9.6 5.6)">
-          <path d="M9.6 5.6 3.4 1.2v8.8zM9.6 5.6l6.2-4.4v8.8z" fill="#EC6FA8" strokeLinejoin="round" />
-          <circle cx={9.6} cy={5.6} r={2.1} fill="#C94F88" />
+          <path d="M9.6 5.6 3.4 1.2v8.8zM9.6 5.6l6.2-4.4v8.8z" fill={ILLUSTRATION.pink} strokeLinejoin="round" />
+          <circle cx={9.6} cy={5.6} r={2.1} fill={ILLUSTRATION.berry} />
         </g>
       );
     case "flower":
       return (
         <g {...RING}>
           {[0, 72, 144, 216, 288].map((turn) => (
-            <circle key={turn} cx={9.4 + 2.8 * Math.cos((turn - 90) * Math.PI / 180)} cy={5.2 + 2.8 * Math.sin((turn - 90) * Math.PI / 180)} r={2.3} fill="#F07FAE" />
+            <circle key={turn} cx={9.4 + 2.8 * Math.cos((turn - 90) * Math.PI / 180)} cy={5.2 + 2.8 * Math.sin((turn - 90) * Math.PI / 180)} r={2.3} fill={ILLUSTRATION.rose} />
           ))}
           <circle cx={9.4} cy={5.2} r={1.8} fill={GOLD} stroke="none" />
         </g>
@@ -132,10 +149,10 @@ function Accessory({ kind }: { kind: MascotAccessory }) {
     case "headphones":
       return (
         <g>
-          <path d="M5.6 15Q5.6 1.4 16 1.4T26.4 15" stroke="#8C86A3" strokeWidth={2.2} fill="none" strokeLinecap="round" />
+          <path d="M5.6 15Q5.6 1.4 16 1.4T26.4 15" stroke={ILLUSTRATION.lilac} strokeWidth={2.2} fill="none" strokeLinecap="round" />
           <g {...RING}>
-            <rect x={2} y={11.6} width={4.8} height={8.4} rx={2.2} fill="#E0524F" />
-            <rect x={25.2} y={11.6} width={4.8} height={8.4} rx={2.2} fill="#E0524F" />
+            <rect x={2} y={11.6} width={4.8} height={8.4} rx={2.2} fill={ILLUSTRATION.red} />
+            <rect x={25.2} y={11.6} width={4.8} height={8.4} rx={2.2} fill={ILLUSTRATION.red} />
           </g>
         </g>
       );
@@ -191,12 +208,11 @@ export function ChatMascot({ seed, colour, activity, size = 16 }: { seed: string
     </svg>
   );
 
-  if (status === undefined) return <span className="p-mascot" data-face={face} data-accessory={accessory ?? undefined} style={style}>{tile}</span>;
+  if (status === undefined) return <span className="p-mascot" data-mascot={seed} data-face={face} data-accessory={accessory ?? undefined} style={style}>{tile}</span>;
 
   return (
-    <Tooltip content={status} side="bottom"
-      render={<span className="p-mascot" data-face={face} data-accessory={accessory ?? undefined} style={style} role="img" aria-label={status} />}>
-      {tile}
+    <Tooltip content={status} side="bottom">
+      <span className="p-mascot" data-mascot={seed} data-face={face} data-accessory={accessory ?? undefined} style={style} role="img" aria-label={status}>{tile}</span>
     </Tooltip>
   );
 }

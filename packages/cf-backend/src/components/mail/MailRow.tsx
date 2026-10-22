@@ -1,8 +1,11 @@
 import { PaperclipIcon, ShieldWarningIcon } from "@phosphor-icons/react";
 import type { MailBox, MailThreadSummary, MailView } from "@kinu.run/core";
 import { Avatar } from "@/components/ui/Avatar";
-import { mailRowCls, mailTime } from "./ImportantMailRow";
+import { MAIL_ROW, mailTime } from "./ImportantMailRow";
 import { mailExcerpt } from "./MailMessage";
+import { Dot } from "@/components/ui/Dot";
+import { Chip } from "@/components/ui/Chip";
+import { Pressable } from "@/components/ui/Pressable";
 
 /** Each view's name, as the page's views and lists say it. */
 export const MAIL_VIEW_LABEL: Record<MailView, string> = { important: "Important", all: "All", sent: "Sent", drafts: "Drafts", trash: "Trash" };
@@ -23,24 +26,24 @@ export function MailRow({ thread, open, box, drafts, owner, onOpen }: {
   const name = thread.from[0]?.name ?? thread.from[0]?.address ?? "Draft";
 
   return (
-    <button type="button" onClick={onOpen} data-mail-thread={thread.id} aria-current={open ? "true" : undefined} className={mailRowCls(open)}>
+    <Pressable look="flush" onClick={onOpen} data-mail-thread={thread.id} aria-current={open ? "true" : undefined} className={MAIL_ROW}>
       <Avatar name={name} size={26} />
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 items-baseline gap-2">
-          <span className={`min-w-0 truncate p-row-text ${thread.unread ? "font-semibold p-text" : "p-text-2"}`}>{who}</span>
-          {thread.unread && <span className="size-1.5 shrink-0 -translate-y-px self-center rounded-full p-dot-accent" aria-label="Unread" />}
+          <span className={`t-body min-w-0 truncate ${thread.unread ? "t-label p-text" : "p-text-2"}`}>{who}</span>
+          {thread.unread && <Dot tone="accent" label="Unread" className="-translate-y-px self-center" />}
           {!thread.verified && <ShieldWarningIcon size={13} weight="fill" className="shrink-0 self-center p-warning" aria-label="Not verified" />}
-          <span className="ml-auto shrink-0 p-meta tabular-nums p-text-3">{mailTime(thread.at)}</span>
+          <span className="t-meta ml-auto shrink-0 tabular-nums p-text-3">{mailTime(thread.at)}</span>
         </span>
-        <span className={`block truncate p-row-text ${thread.unread ? "p-text" : "p-text-2"}`}>
+        <span className={`t-body block truncate ${thread.unread ? "p-text" : "p-text-2"}`}>
           {thread.subject || "(No subject)"}{thread.count > 1 && <span className="p-text-3"> · {thread.count}</span>}
         </span>
-        <span className="flex min-w-0 items-baseline gap-1.5 p-meta p-text-3">
-          {box !== undefined && <span className="max-w-36 shrink-0 truncate rounded-sm bg-[var(--c-neutral-tint)] px-1 p-text-2">{mailBoxLabel(box)}</span>}
+        <span className="t-meta flex min-w-0 items-baseline gap-2 p-text-3">
+          {box !== undefined && <span className="max-w-36 shrink-0"><Chip><span className="truncate">{mailBoxLabel(box)}</span></Chip></span>}
           {thread.attachments && <PaperclipIcon size={11} className="shrink-0 self-center" aria-label="Attachment" />}
           <span className={`truncate ${drafts ? "p-warning" : ""}`}>{mailExcerpt(thread.snippet)}</span>
         </span>
       </span>
-    </button>
+    </Pressable>
   );
 }

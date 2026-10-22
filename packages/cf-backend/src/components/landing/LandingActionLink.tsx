@@ -18,7 +18,8 @@ export function LandingActionLink({
   primary = false,
   size = 'lg',
 }: LandingActionLinkProps): ReactElement {
-  const actionClass = `${primary ? 'p-btn !text-[var(--c-accent-on)]' : ''} !rounded-full`;
+  // Kumo's primary sets white ink, which brass cannot carry (2.2:1): the primary's own fill and ink win over it.
+  const actionClass = `${primary ? '!bg-[var(--c-accent)] !text-[var(--c-accent-on)] hover:!bg-[color-mix(in_srgb,var(--c-accent)_92%,#000)]' : ''} !rounded-full`;
 
   return (
     <LinkButton

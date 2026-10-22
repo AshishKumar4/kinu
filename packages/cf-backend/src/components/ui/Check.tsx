@@ -1,0 +1,69 @@
+/** A box to tick and a set to choose one from (docs/DESIGN-SYSTEM.md §2): 16 square, on Kumo's primitives' keys and ARIA. */
+import type { ComponentProps, ReactNode } from "react";
+import { CheckIcon, MinusIcon } from "@phosphor-icons/react";
+import { Checkbox as Box } from "@cloudflare/kumo/primitives/checkbox";
+import { Radio } from "@cloudflare/kumo/primitives/radio";
+import { RadioGroup as Group } from "@cloudflare/kumo/primitives/radio-group";
+
+/** `mixed` for a box standing for a set some of which are ticked. A label over two lines keeps the box on its first. */
+export function Checkbox({ checked, onChange, label, mixed = false, disabled = false, describedBy, ...data }: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: ReactNode;
+  mixed?: boolean;
+  disabled?: boolean;
+  /** The id of what the choice risks or means, read after its name. */
+  describedBy?: string;
+} & Readonly<Record<`data-${string}`, string>>) {
+  return (
+    <label className="inline-flex items-start gap-2 t-body">
+      <Box.Root nativeButton render={<button type="button" />} checked={checked} indeterminate={mixed} disabled={disabled}
+        onCheckedChange={(next) => onChange(next)} className="p-check mt-0.5" aria-describedby={describedBy} {...data}>
+        <Box.Indicator className="flex">{mixed ? <MinusIcon size={12} weight="bold" /> : <CheckIcon size={12} weight="bold" />}</Box.Indicator>
+      </Box.Root>
+      {label}
+    </label>
+  );
+}
+
+export function RadioGroup<Value extends string>({ label, value, options, onChange, disabled = false }: {
+  label: string;
+  value: Value;
+  options: ReadonlyArray<{ value: Value; label: ReactNode }>;
+  onChange: (value: Value) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Group aria-label={label} value={value} disabled={disabled} className="flex flex-col gap-2"
+      onValueChange={(next) => {
+        const picked = options.find((option) => option.value === next);
+
+        if (picked) onChange(picked.value);
+      }}>
+      {options.map((option) => (
+        <label key={option.value} className="inline-flex items-center gap-2 t-body">
+          <Radio.Root nativeButton render={<button type="button" />} value={option.value} className="p-radio"><Radio.Indicator className="p-radio-dot" /></Radio.Root>
+          {option.label}
+        </label>
+      ))}
+    </Group>
+  );
+}
+
+/** One answer among a question's, a row to press: the platform's own radio or box in the accent beside its words, the
+ *  fill under the pointer. `many` takes a box, for a question that takes more than one. */
+export function ChoiceOption({ many, name, checked, onChange, onFocus, children, ...label }: {
+  many: boolean;
+  name: string;
+  checked: boolean;
+  onChange: () => void;
+  onFocus?: () => void;
+  children: ReactNode;
+} & Omit<ComponentProps<"label">, "onChange" | "onFocus" | "children" | "className">) {
+  return (
+    <label className="p-choice-option" {...label}>
+      <input type={many ? "checkbox" : "radio"} name={name} className="p-choice-option-mark" checked={checked} onChange={onChange} onFocus={onFocus} />
+      {children}
+    </label>
+  );
+}

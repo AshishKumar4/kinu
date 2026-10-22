@@ -10,7 +10,7 @@ import * as v from 'valibot';
 
 import { nanoid } from '../utils/nanoid';
 import { admissionBytes } from '../token-estimate';
-import { headEnd, lineCount, tailStart } from '../utils/text';
+import { headEnd, tailStart } from '../utils/text';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
 import type { Storage } from '../types/primitives';
 import { assertJsonValue, JsonObjectSchema, JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json';
@@ -64,56 +64,11 @@ function offload(files: Pick<Storage, 'vfs' | 'home'>, text: string): Effect.Eff
   }));
 }
 
-/** What a cut kept of a result: its characters shown of all of them, and the lines of the saved whole it left out
- *  (`from` to `to` of `of`, as a ranged read counts them), the part of a line it cut through among them. */
-interface Kept {
-  readonly shown: number;
-  readonly total: number;
-  readonly from: number;
-  readonly to: number;
-  readonly of: number;
-}
-
-/** Lines counted as a ranged read counts them (`lineCount`): the first left out is the one the head cut into or the one
- *  after it, the last the one the tail starts in. */
-function keptOf(text: string, head: string, tail: string): Kept {
-  return {
-    shown: head.length + tail.length, total: text.length,
-    from: head.split('\n').length, to: lineCount(text.slice(0, text.length - tail.length)), of: lineCount(text),
-  };
-}
-
-/** The widest marker `text` can have: every count at its whole, which no cut's exceeds. */
-function widestKept(text: string): Kept {
-  const of = lineCount(text);
-
-  return { shown: text.length, total: text.length, from: of, to: of, of };
-}
-
-/**
- * Charged against the same cap as the output it replaces: the bounded format file list and search answer with (FEAT-11),
- * how much is shown of how much, and where the rest is. `compact` says it in fewer words, for a cut beside a record that
- * leaves little room (`recordedAnswer`).
- */
-function truncationMarker(saved: Offload | null, kept: Kept, compact = false): string {
-  const unsaved = saved === null || 'failure' in saved;
-
-  if (compact) {
-    return unsaved
-      ? `[truncated; ${String(kept.shown)}/${String(kept.total)} chars; not saved]`
-      : `[truncated; ${String(kept.shown)}/${String(kept.total)} chars; full result at ${saved.path}]`;
-  }
-
-  const shown = `showing ${String(kept.shown)} of ${String(kept.total)} characters`;
-
-  return unsaved
-    ? `[truncated; ${shown}; the full result was not saved: rerun with a filter (grep/head/tail)]`
-    : `[truncated; ${shown}; lines ${String(kept.from)}-${String(kept.to)} of ${String(kept.of)} are left out: use ranged reads to read the full result at ${saved.path}]`;
-}
-
-/** The marker a cut to `maxChars` has room for: in full where its widest fits, else compact. */
-function markerFits(text: string, saved: Offload | null, maxChars: number): boolean {
-  return truncationMarker(saved, widestKept(text)).length + MARKER_FENCE_CHARS <= maxChars;
+/** Charged against the same cap as the output it replaces. */
+function truncationMarker(saved: Offload | null): string {
+  return saved === null || 'failure' in saved
+    ? '[truncated; the full result was not saved: rerun with a filter (grep/head/tail)]'
+    : `[truncated; use ranged reads to read the full result at ${saved.path}]`;
 }
 
 export function clampToolResult(
@@ -135,16 +90,13 @@ function clampedText(text: string, opts: ClampToolResultOptions): Effect.Effect<
   return Effect.map(files ? offload(files, text) : Effect.succeed(null), (saved) => clampedAround(text, saved, opts));
 }
 
-/** `text` cut around its middle to `maxChars`, the marker where it was cut; what it omitted, counted off what was kept.
- *  Room is left for the widest marker, so the one that counts what was kept fits. */
-function cutAround(text: string, saved: Offload | null, maxChars: number) {
-  const compact = !markerFits(text, saved, maxChars);
+/** `text` cut around its middle to `maxChars`, the marker where it was cut; what it omitted, counted off what was kept. */
+function cutAround(text: string, marker: string, maxChars: number) {
   // A bound smaller than the marker keeps the marker alone: a negative room would slice from the end and keep it all.
-  const room = Math.max(0, maxChars - truncationMarker(saved, widestKept(text), compact).length - MARKER_FENCE_CHARS);
+  const room = Math.max(0, maxChars - marker.length - MARKER_FENCE_CHARS);
   const headLen = Math.floor(room * HEAD_FRACTION);
   const head = text.slice(0, headEnd(text, headLen));
   const tail = text.slice(tailStart(text, room - headLen));
-  const marker = truncationMarker(saved, keptOf(text, head, tail), compact);
 
   // Counted off what was kept: refusing to split a character can drop a unit.
   return { clamped: `${head}\n\n${marker}\n\n${tail}`, omitted: text.length - head.length - tail.length };
@@ -158,7 +110,7 @@ function chargedCut(chars: number, omitted: number, saved: Offload | null, opts:
 }
 
 function clampedAround(text: string, saved: Offload | null, opts: ClampToolResultOptions): string {
-  const { clamped, omitted } = cutAround(text, saved, opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS);
+  const { clamped, omitted } = cutAround(text, truncationMarker(saved), opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS);
 
   chargedCut(clamped.length, omitted, saved, opts);
 
@@ -221,16 +173,17 @@ async function recordedAnswer(
   // Saving never fails the answer: a failed save is the marker's to say (`offload`).
   const offloaded = opts.files === undefined ? null : await hold(offload(opts.files, text));
   const saved = offloaded !== null && Exit.isSuccess(offloaded) ? offloaded.value : null;
+  const marker = truncationMarker(saved);
   const answered = (clamped: string): JsonObject => ({ result: clamped, ...kept });
-  // The narrowest cut keeps the compact marker alone (`cutAround` with no room).
-  const floor = truncationMarker(saved, widestKept(text), true).length + MARKER_FENCE_CHARS;
+  // The narrowest cut keeps the marker alone (`cutAround` with no room).
+  const floor = marker.length + MARKER_FENCE_CHARS;
   let width = Math.max(floor, cap - JSON.stringify(answered('')).length);
-  let cut = cutAround(text, saved, width);
+  let cut = cutAround(text, marker, width);
 
   // Each pass narrows strictly, so it ends at a fit or at the marker alone.
   for (let over = JSON.stringify(answered(cut.clamped)).length - cap; over > 0 && width > floor; over = JSON.stringify(answered(cut.clamped)).length - cap) {
     width = Math.max(floor, width - over);
-    cut = cutAround(text, saved, width);
+    cut = cutAround(text, marker, width);
   }
 
   const answer = answered(cut.clamped);

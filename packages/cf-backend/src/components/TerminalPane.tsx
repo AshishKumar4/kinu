@@ -16,6 +16,7 @@ import {
 } from "@kinu.run/core";
 import type { ExecutorCommandResult } from "@kinu.run/core";
 import { WorkspaceTerminalOutputSchema } from "@kinu.run/core";
+import { IconControl } from "@/components/ui/IconControl";
 
 export type { TerminalPaneOutput };
 
@@ -64,10 +65,10 @@ function TerminalFrame({ leading, state, failure, copies, action, hostRef, barOn
     <div className="flex h-full w-full flex-col">
       <div className={`flex shrink-0 items-center gap-3 pr-3 pl-4 ${barOnGround ? "p-terminal-ground h-9" : "h-11"}`}>
         {leading}
-        <span className="ml-auto flex shrink-0 items-center gap-3 p-meta p-text-3">
-          {failure !== null && <span className="max-w-[16rem] truncate p-danger" title={failure}>{failure}</span>}
+        <span className="t-meta ml-auto flex shrink-0 items-center gap-3 p-text-3">
+          {failure !== null && <span className="max-w-64 truncate p-danger" title={failure}>{failure}</span>}
           {state !== null && (
-            <span data-terminal-state className="inline-flex shrink-0 items-center gap-1.5">
+            <span data-terminal-state className="inline-flex shrink-0 items-center gap-2">
               <span aria-hidden className="p-env-dot" data-tone={STATE_SAYS[state].tone} />{STATE_SAYS[state].word}
             </span>
           )}
@@ -334,13 +335,11 @@ function PtyTerminal({ workspace, executor, session, device: machine, frame }: {
     : { note: "⇧⌃C copies", title: "⌃C reaches a full-screen program. Suspend, fg and bg do not work here." };
 
   const restartShell = device ? null : (
-    <button type="button" aria-label="Restart the shell" title="Restart the shell: a new one, for after a shell exits"
-      onClick={() => detach(Effect.catchCause(Effect.gen(function* () {
+    <IconControl place="bar" className="shrink-0" aria-label="Restart the shell" title="Restart the shell: a new one, for after a shell exits" onClick={() => detach(Effect.catchCause(Effect.gen(function* () {
         yield* Effect.promise(async () => restart());
-      }), showing(setFailure)))}
-      className="p-bar-icon shrink-0">
+      }), showing(setFailure)))}>
       <ArrowCounterClockwiseIcon size={14} />
-    </button>
+    </IconControl>
   );
 
   return <TerminalFrame {...frame} state={state} failure={failure} copies={copies} action={restartShell} hostRef={hostRef} />;

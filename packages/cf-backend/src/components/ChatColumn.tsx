@@ -25,6 +25,8 @@ import type { useFileDrop } from "@/hooks/use-file-drop";
 import type { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useOpeningMessage } from "@/components/workspaces/NewChatView";
+import { Surface } from "@/components/ui/Surface";
+import { DropHint } from "@/components/ui/FilePicker";
 
 type ChatState = ReturnType<typeof useChatOwner>["chat"];
 
@@ -53,14 +55,14 @@ export function EmptyConversation({ mission }: { mission: string }) {
 
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 text-center">
-      <KinuMark size={34} className="mb-4 text-[var(--c-accent)] opacity-70" />
+      <KinuMark size={34} className="mb-4 p-accent opacity-70" />
       {brief && (
         <>
-          <p className="p-eyebrow">Mission</p>
-          <p className="mt-2 max-w-md whitespace-pre-wrap p-heading p-title p-text-2">{brief}</p>
+          <p className="t-label">Mission</p>
+          <p className="t-title mt-2 max-w-md whitespace-pre-wrap p-text-2">{brief}</p>
         </>
       )}
-      <p className="mt-4 text-sm p-text-3">Send the first message to start.</p>
+      <p className="t-body mt-4 p-text-3">Send the first message to start.</p>
     </div>
   );
 }
@@ -82,9 +84,9 @@ export function ConversationSkeleton() {
       <span className="sr-only">Loading this conversation…</span>
       {SKELETON_ROWS.map((row, index) => (
         <div key={index} className={`flex ${row.mine ? "justify-end" : "justify-start"}`} aria-hidden>
-          <div className="max-w-[82%] space-y-2" style={{ width: row.width }}>
-            <div className="p-skeleton-bar h-3.5 rounded-md" />
-            <div className="p-skeleton-bar h-3.5 w-[70%] rounded-md" />
+          <div className="max-w-4/5 space-y-2" style={{ width: row.width }}>
+            <Surface look="clip" className="p-skeleton-bar h-3.5" />
+            <Surface look="clip" className="p-skeleton-bar h-3.5 w-7/10" />
           </div>
         </div>
       ))}
@@ -166,12 +168,7 @@ const VERSION_NOTICE: ComposerNotice = {
 /** Files hovering over the column. */
 function DropOverlay() {
   return (
-    <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center rounded-lg border-2 border-dashed"
-      style={{ borderColor: "var(--c-accent)", background: "var(--c-accent-subtle)" }}>
-      <div className="flex items-center gap-2 text-sm p-text px-3 py-1.5 rounded-lg p-elevated border p-border">
-        <PaperclipIcon size={16} className="p-accent" />Drop files to attach
-      </div>
-    </div>
+    <DropHint flush><PaperclipIcon size={16} weight="bold" />Drop files to attach</DropHint>
   );
 }
 
