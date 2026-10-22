@@ -9,7 +9,7 @@ import type { ModelMessage, Tool, ToolSet } from 'ai';
 import { jsonSchema, tool } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { attempt, diagnostics, inItsWords, renderThrownChain, settle, type KinuError } from '../obs/index';
+import { attempt, diagnostics, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { AgentConfigStore } from '../config/store';
 import type { KinuExtension } from '../extension';
@@ -190,6 +190,11 @@ function adviseNote(input: JsonValue): AdvisorNote | null {
   return { note: parsed.output.note.slice(0, ADVISOR_NOTE_MAX_CHARS), severity: parsed.output.severity, class: parsed.output.class };
 }
 
+/** `effect` with a thrown defect (a store's throw, say) worded as its failure, so one catch handles both. */
+function worded<A>(doing: string, effect: Effect.Effect<A, KinuError>): Effect.Effect<A, KinuError> {
+  return Effect.catchDefect(effect, (cause) => Effect.fail(toKinuError({ doing, otherwise: 'unavailable', cause })));
+}
+
 function readToolNamed(tools: AdvisorReadTools, name: string): Tool | undefined {
   if (name === 'file') return tools.file;
 
@@ -332,7 +337,7 @@ export class SessionAdvisor {
     const { turn } = reviewed;
 
     // A throw anywhere in it, a store's included, is the review's failure: worded, logged, and never the turn's.
-    return inItsWords('unavailable', Effect.gen({ self: this }, function* () {
+    return worded('reviewing the agent\'s steps', Effect.gen({ self: this }, function* () {
       if (this.conversationChars > CONVERSATION_MAX_CHARS) [this.conversation, this.conversationChars] = [[], 0];
 
       for (const text of delta) this.append({ role: 'user', content: text });
@@ -393,7 +398,7 @@ export class SessionAdvisor {
   /** One `advise` call: judged as every note is, said where the judgement says, then recorded. A failure here, a store's
    *  included, is this call's result, so the round's every call is still answered. */
   private advise(reviewed: ReviewedTurn, input: JsonValue, guards: UpdateGuards): Effect.Effect<string> {
-    return inItsWords('unavailable', Effect.suspend(() => this.adviseOnce(reviewed, input, guards)))
+    return worded('judging the advisor\'s note', Effect.suspend(() => this.adviseOnce(reviewed, input, guards)))
       .pipe(Effect.catch((failure) => Effect.succeed(shown(`Not said: ${renderThrownChain({ cause: failure })}`, MESSAGE_CHARS))));
   }
 
