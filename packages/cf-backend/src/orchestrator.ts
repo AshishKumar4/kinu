@@ -1238,6 +1238,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       this.chatOpenedAt.set(actorId, Date.now());
       this.agentBound(actorId).stores.config.setHoldsTurns();
       this.claimPresented(actorId);
+      this.warmWorkspaceNodeInBackground();
 
       // The owner's words close the questions held open as the turn opens; none held, the next read is fresh.
       if (this.heldOpenQuestion(actorId) === true) this.hostedQuestionsMoved();

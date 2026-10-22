@@ -67,9 +67,10 @@ export interface NodeProgramAnswer {
 export async function serveNodeProgramCall(principal: EgressPrincipal | undefined, token: string | null, body: JsonValue): Promise<NodeProgramAnswer> {
   const program = token === null ? undefined : live.get(token);
 
-  // A token names one live program, and only its own principal's egress may use it; a viewer's egress names no actor.
+  // A token names one live program, and only its own principal's egress may use it; a viewer's egress, and a slate's
+  // program, name no actor.
   const own = principal !== undefined && program !== undefined && principal.as === program.principal.as
-    && (principal.actorId === null || principal.actorId === program.principal.actorId);
+    && (principal.actorId === null || program.principal.actorId === null || principal.actorId === program.principal.actorId);
 
   if (!own) return { status: 403, body: { thrown: 'This program is not running, or not as this caller.' } };
   const call = v.safeParse(CallSchema, body);

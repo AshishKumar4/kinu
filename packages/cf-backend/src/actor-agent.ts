@@ -1557,6 +1557,22 @@ export abstract class ActorAgent extends Agent<Env> {
     })));
   }
 
+  /** This activation's start of the workspace's node, once: its runtime is compiled once per object (ask 71). */
+  private _nodeWarm: Promise<void> | null = null;
+
+  /**
+   * The workspace's node, cold in a fresh activation (3-7 s on Cloudflare, 2026-10-22), started once as a turn opens,
+   * off its path: the turn's first program that imports from the workspace (`node-program.ts`) finds it compiled.
+   */
+  protected warmWorkspaceNodeInBackground(): void {
+    if (this._nodeWarm !== null) return;
+    this._nodeWarm = hold(Effect.catchCause(Effect.promise(() => this.keepAliveWhile(async () => {
+      await this.workspaceBox(this.shellId()).exec('node -e 0');
+    })), recording({ doing: "starting the workspace's node as a turn opens", otherwise: 'unavailable' }, (failure) => {
+      diagnostics.failure('node.prewarm_failed', failure);
+    })));
+  }
+
   /** This actor's ports and models for core's scaffold control plane (evolution/control.ts). */
   protected get scaffoldControl(): ScaffoldControl {
     return {
@@ -3537,6 +3553,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected workspaceTurnOpening(driving: JsonObject): void {
     this.engine.recoverInterruptedWork();
     this.budget.activate([...turnTags({ metadata: driving }).missionLabels]);
+    this.warmWorkspaceNodeInBackground();
   }
 
   /** A turn of the workspace agent's read here: its executors and folder are its own, its clock starts, and a fresh one's
