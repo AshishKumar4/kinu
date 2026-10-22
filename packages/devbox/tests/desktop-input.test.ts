@@ -122,12 +122,17 @@ describe("an agent's desktop action on the box", () => {
     expect(await box.desktop({ driver: 'main', action: { kind: 'click', at: [640, 92], button: 'right', count: 2, hold: ['ctrl', 'shift'] } })).toEqual({ kind: 'done' });
     expect(await box.desktop({ driver: 'main', action: { kind: 'scroll', at: [5, 6], dy: -3, dx: 2 } })).toEqual({ kind: 'done' });
     expect(await box.desktop({ driver: 'main', action: { kind: 'drag', from: [0, 0], to: [100, 50] } })).toEqual({ kind: 'done' });
+    // A captured pointer reads motion alone: a distance is sent as one, and a click with no point moves nothing first.
+    expect(await box.desktop({ driver: 'main', action: { kind: 'move', by: [0, -150] } })).toEqual({ kind: 'done' });
+    expect(await box.desktop({ driver: 'main', action: { kind: 'click', button: 'left', count: 1, hold: [] } })).toEqual({ kind: 'done' });
 
     expect(runs.map((run) => (run.argv[3] === 'devbox-desktop' ? 'check' : run.argv.join(' ').replace(/^\/bin\/bash -c .* devbox-screenshot$/su, 'capture')))).toEqual([
       'check', 'capture',
       'check', 'xdotool keydown ctrl keydown shift mousemove 640 92 click --repeat 2 --delay 80 3 keyup ctrl keyup shift',
       'check', 'xdotool mousemove 5 6 click --repeat 3 --delay 20 4 click --repeat 2 --delay 20 7',
       'check', 'xdotool mousemove 0 0 mousedown 1 sleep 0.05 mousemove 50 25 sleep 0.05 mousemove 100 50 sleep 0.05 mouseup 1',
+      'check', 'xdotool mousemove_relative -- 0 -150',
+      'check', 'xdotool click --repeat 1 --delay 80 1',
     ]);
     // Every run is in its own group, which its stop ends; a run that ended cleanly let up all it pressed itself.
     expect(runs.filter((run) => !run.grouped)).toEqual([]);

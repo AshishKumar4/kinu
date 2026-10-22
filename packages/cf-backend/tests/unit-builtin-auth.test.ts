@@ -17,6 +17,12 @@ const ORIGIN = 'https://kinu.example.com';
 
 const SETUP_TOKEN = 'the deployer set this secret';
 
+const FIRST_OWNER_TOKEN = 'the self-deploy run made this one-time link';
+
+const OWNER_EMAIL = 'first.owner@example.com';
+
+const SETUP_LINK_NOTICE = 'This setup link was already used or has expired. Open the deploy flow for this Kinu again to get a new one.';
+
 const harnesses: TestUserDO[] = [];
 
 afterEach(() => {
@@ -169,6 +175,152 @@ describe('the owner seat and the namespace', () => {
 const sessionOf = (answer: Response): string =>
   readCookie(new Request(ORIGIN, { headers: { cookie: answer.headers.get('set-cookie') ?? '' } }), SESSION_COOKIE_NAME) ?? '';
 
+function firstOwnerDeployment(expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000) {
+  const fixture = deployment();
+  const digest = createHash('sha256').update(FIRST_OWNER_TOKEN).digest('hex');
+
+  delete fixture.env.KINU_SETUP_TOKEN;
+  Object.assign(fixture.env, { KINU_FIRST_OWNER_LINK: `${digest}.${expiresAt}.${OWNER_EMAIL}` });
+
+  return fixture;
+}
+
+async function builtinForm(page: string): Promise<{
+  fields: Map<string, string>; mode: string | null; setupType: string | null; emailReadonly: boolean;
+}> {
+  const fields = new Map<string, string>();
+  let mode: string | null = null;
+  let setupType: string | null = null;
+  let emailReadonly = false;
+
+  await new HTMLRewriter().on('#builtin-sign-in', {
+    element(element) { mode = element.getAttribute('data-mode'); },
+  }).on('#builtin-sign-in input[name]', {
+    element(element) {
+      const name = element.getAttribute('name') ?? '';
+
+      fields.set(name, element.getAttribute('value') ?? '');
+
+      if (name === 'setup') setupType = element.getAttribute('type');
+
+      if (name === 'email') emailReadonly = element.hasAttribute('readonly');
+    },
+  }).transform(new Response(page)).text();
+
+  return { fields, mode, setupType, emailReadonly };
+}
+
+describe('the first-owner setup link', () => {
+  test('its served form creates the named owner once, without typing the recovery key', async () => {
+    const { env, page, post, registerOwner } = firstOwnerDeployment();
+    const ownerPage = await page(`/login?setup=${encodeURIComponent(FIRST_OWNER_TOKEN)}`);
+    const form = await builtinForm(ownerPage);
+
+    expect(form.mode).toBe('register');
+    expect(form.fields.get('email')).toBe(OWNER_EMAIL);
+    expect(form.emailReadonly).toBe(true);
+    expect(form.fields.get('setup')).toBe(FIRST_OWNER_TOKEN);
+    expect(form.setupType).toBe('hidden');
+    expect(ownerPage.split(FIRST_OWNER_TOKEN)).toHaveLength(2);
+    expect(ownerPage).not.toContain(SETUP_TOKEN);
+
+    const created = await post('/api/auth/builtin/password/register', {
+      email: form.fields.get('email') ?? '', setup: form.fields.get('setup') ?? '', password: 'a long enough password',
+    });
+
+    expect(created.status).toBe(200);
+    expect((await verifySession(env, sessionOf(created)))?.email).toBe(OWNER_EMAIL);
+    expect((await post('/api/user/builtin-auth/invites', { email: 'member@example.com' }, await identityOf(OWNER_EMAIL))).status).toBe(200);
+    expect((await registerOwner('another@example.com', FIRST_OWNER_TOKEN)).status).toBe(403);
+    expect((await registerOwner(OWNER_EMAIL, FIRST_OWNER_TOKEN)).status).toBe(403);
+
+    const spent = await page(`/login?setup=${encodeURIComponent(FIRST_OWNER_TOKEN)}`);
+
+    expect((await builtinForm(spent)).mode).toBe('sign-in');
+    expect(spent).toContain(SETUP_LINK_NOTICE);
+    expect(spent).not.toContain(FIRST_OWNER_TOKEN);
+    expect(spent).not.toContain(OWNER_EMAIL);
+  });
+
+  test('it admits a passkey registration through the same owner-only grant', async () => {
+    const { env, post } = firstOwnerDeployment();
+    const authenticator = await Authenticator.create();
+    const options = await post('/api/auth/builtin/passkey/register/options', { email: OWNER_EMAIL, setup: FIRST_OWNER_TOKEN });
+
+    expect(options.status).toBe(200);
+    const creation = v.parse(ChallengeSchema, await options.json());
+    const created = await post('/api/auth/builtin/passkey/register', { response: await authenticator.attest(creation.challenge) });
+
+    expect(created.status).toBe(200);
+    expect((await verifySession(env, sessionOf(created)))?.email).toBe(OWNER_EMAIL);
+    expect((await post('/api/auth/builtin/passkey/register/options', { email: OWNER_EMAIL, setup: FIRST_OWNER_TOKEN })).status).toBe(403);
+  });
+
+  test.each(['password/register', 'passkey/register/options'])('refuses a different email on %s without spending the link', async (path) => {
+    const { post, registerOwner } = firstOwnerDeployment();
+
+    const refused = await post(`/api/auth/builtin/${path}`, {
+      email: 'someone.else@example.com', setup: FIRST_OWNER_TOKEN, password: 'a long enough password',
+    });
+
+    expect(refused.status).toBe(403);
+    expect(v.parse(v.object({ error: v.string() }), await refused.json())).toEqual({ error: 'This setup link is for a different email address.' });
+    expect(refused.headers.get('set-cookie')).toBeNull();
+    expect((await registerOwner(OWNER_EMAIL, FIRST_OWNER_TOKEN)).status).toBe(200);
+  });
+
+  test.each([
+    ['expired', 'expired'], ['wrong token', 'wrong'], ['malformed secret', 'malformed'], ['absent secret', 'absent'], ['empty token', ''],
+  ])('%s is refused on both the login and registration routes', async (_label, kind) => {
+    const { env, page, registerOwner } = firstOwnerDeployment(1);
+    let token = FIRST_OWNER_TOKEN;
+
+    if (kind === 'wrong') {
+      Object.assign(env, { KINU_FIRST_OWNER_LINK: `${createHash('sha256').update('another token').digest('hex')}.9999999999999.${OWNER_EMAIL}` });
+    }
+
+    if (kind === 'malformed') Object.assign(env, { KINU_FIRST_OWNER_LINK: 'not a setup link' });
+
+    if (kind === 'absent') Object.assign(env, { KINU_FIRST_OWNER_LINK: undefined });
+
+    if (kind === '') token = '';
+    const signIn = await page(`/login?setup=${encodeURIComponent(token)}`);
+
+    expect((await builtinForm(signIn)).mode).toBe('sign-in');
+    expect(signIn).toContain(SETUP_LINK_NOTICE);
+    expect(signIn).not.toContain(FIRST_OWNER_TOKEN);
+    expect(signIn).not.toContain(OWNER_EMAIL);
+    const refused = await registerOwner(OWNER_EMAIL, token);
+
+    expect(refused.status).toBe(403);
+    expect(refused.headers.get('set-cookie')).toBeNull();
+  });
+
+  test('it grants neither password nor passkey recovery, before or after owner creation', async () => {
+    const { env, post, registerOwner } = firstOwnerDeployment();
+
+    expect((await post('/api/auth/builtin/password/reset', { setup: FIRST_OWNER_TOKEN, password: 'a brand new password' })).status).toBe(403);
+    const before = sessionOf(await registerOwner(OWNER_EMAIL, FIRST_OWNER_TOKEN));
+
+    expect(before).not.toBe('');
+
+    for (const path of ['password/reset', 'passkey/reset/options']) {
+      for (const field of ['setup', 'reset']) {
+        const refused = await post(`/api/auth/builtin/${path}`, { [field]: FIRST_OWNER_TOKEN, password: 'a brand new password' });
+
+        expect(refused.status).toBe(403);
+        expect(refused.headers.get('set-cookie')).toBeNull();
+      }
+    }
+
+    expect(await verifySession(env, before)).not.toBeNull();
+    expect((await post('/api/auth/builtin/password/sign-in', { email: OWNER_EMAIL, password: 'a brand new password' })).status).toBe(401);
+    expect((await post('/api/auth/builtin/password/sign-in', { email: OWNER_EMAIL, password: 'a long enough password' })).status).toBe(200);
+    env.KINU_SETUP_TOKEN = SETUP_TOKEN;
+    expect((await post('/api/auth/builtin/password/reset', { setup: SETUP_TOKEN, password: 'a brand new password' })).status).toBe(200);
+  });
+});
+
 describe('a reset link', () => {
   test("replaces a member's password once, and ends the sessions it had", async () => {
     const { env, post, register, registerOwner } = deployment();
@@ -239,13 +391,18 @@ describe('a reset and the sessions it ends are one transition', () => {
   });
 });
 
-test('the setup token never rides in a URL: /login takes it in a password field and never renders it back', async () => {
+test('the recovery key is typed by hand and is never accepted or echoed as a setup link', async () => {
   const { page, registerOwner } = deployment();
-  const owner = await page(`/login?setup=${encodeURIComponent(SETUP_TOKEN)}`);
+  const owner = await page('/login');
 
   expect(owner).toContain('<input type="password" name="setup"');
   expect(owner).not.toContain(SETUP_TOKEN);
   expect(owner).not.toContain(encodeURIComponent(SETUP_TOKEN));
+  const invalid = await page(`/login?setup=${encodeURIComponent(SETUP_TOKEN)}`);
+
+  expect((await builtinForm(invalid)).mode).toBe('sign-in');
+  expect(invalid).toContain(SETUP_LINK_NOTICE);
+  expect(invalid).not.toContain(SETUP_TOKEN);
   await registerOwner('owner@example.com');
   const signIn = await page(`/login?setup=${encodeURIComponent(SETUP_TOKEN)}`);
   expect(signIn).not.toContain('owner@example.com');

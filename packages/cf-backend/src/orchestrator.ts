@@ -1076,7 +1076,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         if (profile !== null) this.boundProfiles.set(actorId, profile);
         const dynamic = profile === null ? null : this.agentTurns.bind(actorId, bound, profile);
 
-        await this.stopJoined(actorId, (isolate) => isolate.step(bound.turnId, dynamic));
+        // The workspace's `harness.mode` as the grant leaves: its isolate's steps read it from there.
+        await this.stopJoined(actorId, (isolate) => isolate.step(bound.turnId, dynamic, this.config.getHarnessMode()));
       },
       resume: (bound) => this.agentTurns.resume(actorId, bound),
       guard: (bound, ...args) => this.agentTurns.guard(actorId, bound, ...args),
@@ -1709,12 +1710,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // A role imposing another mode (a planner on a Build message) runs that mode's tools.
     const { workMode } = resolved.profile;
-    let built = this.actorTools(actor, reach, workMode, scope);
-    const sources = await this.actorSources(actor, reach.actor, { surface, resolved, artifacts: overrides, tools: built.turn, hidesSkills }, planes);
+    const built = this.actorTools(actor, reach, workMode, scope);
+    const sources = await this.actorSources(actor, reach.actor, { surface, resolved, artifacts: overrides, hidesSkills }, planes);
 
-    // Eval declares the turn's external tools in the description it is built with, and the tools above were built
-    // before this turn read them.
-    if (Object.keys(surface.declared).length > 0) built = this.actorTools(actor, reach, workMode, { ...scope, served: built.stores });
     const held = { taskPlan: lane.taskPlan, surface, sql: runtime.storage.sql };
     const tools = this.turnTools(withToolText(built.turn, overrides.tools), held);
     // Its plans and questions commit in its own isolate's store, which builds these tools and keeps their receipts.
@@ -2070,11 +2068,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const inputs = turn?.resolved.inputs ?? await this.profileInputs();
     const choices = ownProfileChoices(actor.stores.config, inputs, this.ancestorProfiles(actor.handle), { explicitTier: turnTags({ metadata: driving }).tier });
 
-    // The remote catalog is admitted against the context budget left after the turn's own tools; a failed read answers
-    // no tools and the turn runs on its own. The hub's device check refreshes the workspace's executors.
+    // A failed catalog read answers no tools and the turn runs on its own. The hub's device check refreshes the
+    // workspace's executors.
     const [mcp, ownerMail] = await Promise.all([
       planes.descriptors !== null && turn !== null
-        ? this.buildUserMcpTools(turn.tools, Promise.resolve(this.modelCatalog.at(providers.normalizeSpecSync(turn.resolved.profile.tier.model))), planes.descriptors)
+        ? this.buildUserMcpTools(planes.descriptors)
         : Promise.resolve({}),
       planes.mail ?? Promise.resolve(null),
       planes.device,
@@ -2097,6 +2095,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       backend: 'cf',
       executors: () => runtime.executionRouter?.listExecutors() ?? [],
       config: actor.stores.config,
+      harnessMode: () => this.config.getHarnessMode(),
       models: {
         catalog: this.modelCatalog,
         normalize: (spec) => providers.normalizeSpecSync(spec),

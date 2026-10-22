@@ -31,6 +31,7 @@ import { withTaskPlan, type TaskPlanContext } from '../tools/task-plan-scope';
 import { withToolText, type ToolTextOverrides } from '../tools/tool-text';
 import { withFamilyToolNotes } from '../prompting/tool-families';
 import { resolvePromptModelProfile } from '../prompting/model-profile';
+import type { HarnessMode } from '../config/harness-mode';
 import { BUILTIN_TOOL_NAMES, type BuiltinToolName } from '../tools/registry';
 import type { AgentsOp } from '../operations/agents';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
@@ -65,6 +66,9 @@ export interface TurnAssemblySources {
   readonly rt: AgentRuntime;
   readonly backend: PromptBackend;
   readonly config: PinnedProfile & { getCacheRetention(): CacheRetention };
+  /** The workspace's `harness.mode`, read as each step's request leaves: the workspace's own store where the turn runs
+   *  beside it, and in an agent's isolate the mode its step's grant carried, so a change reaches it at its next grant. */
+  readonly harnessMode: () => HarnessMode;
   readonly models: TurnModelSources;
   skills(userText: string, roleSkills: readonly string[], limits: ModelWindow): Promise<TurnSkillSurface>;
   profileInputs(): Promise<ProfileAuthorityInputs>;
@@ -74,7 +78,7 @@ export interface TurnAssemblySources {
   /** The turn's tools in `workMode`, and the store operations they run. */
   toolset(workMode: WorkMode): TurnTools;
   /** MCP and extension tools, reachable only through `eval`. */
-  externalTools(window: ModelWindow): Promise<ToolSet>;
+  externalTools(): Promise<ToolSet>;
   /** Non-builtin tools of `toolset` (`report`, `submit_plan`, `reply_to_comment`). */
   wiredToolNames(workMode: WorkMode): readonly string[];
   /** Namespaces reachable only inside `eval`. */
@@ -239,7 +243,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const skilled = (offered: TurnTools): TurnTools => ({ ...offered, tools: filterToolSetBySkills(offered.tools, activeSkills) });
   const drafting = skilled(sources.toolset(drafted.workMode));
   const builtins = drafting.tools;
-  const external = await sources.externalTools(limits);
+  const external = await sources.externalTools();
 
   const profile = frozen?.profile ?? resolvedTurnProfile(sources, { profileInputs, choices, workMode: request.workMode, drafted, builtins, external, activeSkills });
 
@@ -296,6 +300,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     tools,
     conversationKey: sources.conversationKey(),
     cache: { providerId: provider, modelId, retention: sources.config.getCacheRetention() },
+    harnessMode: sources.harnessMode,
     ...(sources.budget !== undefined && { budget: sources.budget }),
     ...(sources.operations !== undefined && { operations: sources.operations }),
     ...(sources.observeStream !== undefined && { observeStream: sources.observeStream }),

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 
-import { BOX_CHROMIUM_POLICY, CHROMIUM_PROFILES } from '../src/desktop';
+import { BOX_CHROMIUM_POLICY, BOX_CHROMIUM_POLICY_KEYS, CHROMIUM_PROFILES } from '../src/desktop';
 import { X509Certificate } from 'node:crypto';
 import { KINU_BUN_VERSION } from '../../core/src/cli/bun-runtime';
 import { boxEnv, TRUST } from '../src/processes';
@@ -109,6 +109,9 @@ test("each start's trust names exactly its own CA to Chromium, and leaves a host
     writeFileSync(join(root, 'etc/cloudflare/certs/cloudflare-containers-ca.crt'), first);
     trustIn(root);
     expect(policy()).toEqual({ CACertificates: [derOf(first)], CommandLineFlagSecurityWarningsEnabled: false });
+    // Every key it writes is one the box names as its own, so an eval's audit of the browser allows exactly these.
+    expect(Object.keys(v.parse(v.record(v.string(), v.unknown()), JSON.parse(readFileSync(join(root, BOX_CHROMIUM_POLICY.replace('/etc/', 'etc/')), 'utf8')))).sort())
+      .toEqual([...BOX_CHROMIUM_POLICY_KEYS].sort());
 
     // A restart's CA replaces the last one, in the policy as in the bundle.
     const second = freshCa(root, 'second-start');

@@ -123,6 +123,23 @@ describe('AgentConfigStore — typed accessors', () => {
     expect(c.getShellApprovalMode()).toBe('strict');
   });
 
+  // FEAT-2 step 1 (docs/HARNESS-PROFILES.md): the workspace's `harness.mode`, native until set.
+  test('harnessMode: defaults to native, keeps each mode, and refuses what its getter would hide', () => {
+    const c = setup();
+    const read = [c.getHarnessMode()];
+    const bogus = JSON.parse('"bogus"');
+
+    for (const mode of ['auto', 'kinu', 'claude-code', 'codex', 'pi'] as const) {
+      c.setHarnessMode(mode);
+      read.push(c.getHarnessMode());
+    }
+
+    expect(() => c.setHarnessMode(bogus)).toThrow(/Invalid harness mode/);
+    c.set(AGENT_CONFIG_KEYS.harnessMode, 'bogus');
+
+    expect([...read, c.getHarnessMode()]).toEqual(['native', 'auto', 'kinu', 'claude-code', 'codex', 'pi', 'native']);
+  });
+
   test('role policy, shell mode and severity setters refuse what their getters would hide', () => {
     const c = setup();
     // Decoded, not written: runtime garbage arrives past the type boundary.
@@ -236,6 +253,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setRoleSelection('auditor'),
     (c) => c.setAssignedTier('deep'),
     (c) => c.setShellApprovalMode('allow_all'),
+    (c) => c.setHarnessMode('auto'),
     (c) => c.grantShellApproval([{ rule: 'rm-recursive', executor: 'device' }]),
     (c) => c.setSleepTimeComputeEnabled(false),
     (c) => c.setHoldsPlans(),

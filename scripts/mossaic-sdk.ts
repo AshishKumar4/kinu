@@ -114,7 +114,9 @@ export const PINNED_COMPILER_LINK = { key: 'rolldown-plugin-dts/typescript', tar
  * selects the `tsgo` generator, which passes `--rootDir <dirname(tsconfig)>`
  * — i.e. `sdk/` — while `sdk/tsconfig.json` includes `../shared` and
  * `../worker/core`. Every vendored file outside `sdk/` is then TS6059 and no
- * `.d.ts` is emitted at all.
+ * `.d.ts` is emitted at all. tsrs as that generator's binary fails the same
+ * way under the `rootDir` the plugin forces (measured 2026-10-22), so this one
+ * build stays on the SDK's own TypeScript 6 and its classic API.
  *
  * Upstream's own lock binds `tsdown@0.22.3(typescript@6.0.3)`, and
  * `sdk/package.json` pins `typescript: ^6.0.3`, which bun DOES install — nested

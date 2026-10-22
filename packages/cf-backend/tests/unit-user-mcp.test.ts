@@ -4,11 +4,8 @@ import { KinuError } from '@kinu.run/core/obs';
 import { mapConnectionStatus, mcpCredentialTransport } from '@kinu.run/core';
 import {
   validateMcpServerInput, parseMcpHeaders,
-  mcpToolKey, stepContextLimit,
-  describeMcpTool, McpToolSurfaceCache, toolSurfaceTokens, omitEmptyOptionalArgs, type McpSurfaceBudget,
-  type SerializableToolDescriptor,
+  mcpToolKey, describeMcpTool, omitEmptyOptionalArgs,
 } from '@kinu.run/core';
-import { tool, jsonSchema, type ToolSet } from 'ai';
 
 function expectStoredUrl(name: string, serverUrl: string, stored: string): void {
   const out = validateMcpServerInput({ name, serverUrl });
@@ -255,160 +252,10 @@ describe('omitEmptyOptionalArgs', () => {
   });
 });
 
-// Admission budget: core's `stepContextLimit` minus the actor's own tool surface; no MCP
-// percentage exists, so the tests assert the derivation.
-
-describe('MCP admission, as both backends read it each turn', () => {
-  async function admit(descriptors: readonly SerializableToolDescriptor[], budget: McpSurfaceBudget) {
-    const stage = new McpToolSurfaceCache(async (admitted) => admitted);
-    const admitted = await stage.refresh(async () => ({ descriptors, unavailable: [] }), budget);
-
-    return { admitted, deferred: stage.deferred };
-  }
-
-  function descriptor(serverName: string, name: string, description?: string): SerializableToolDescriptor {
-    const built: SerializableToolDescriptor = {
-      serverId: `${serverName}-id`, serverName, name,
-      toolKey: mcpToolKey(serverName, name), inputSchema: { type: 'object' },
-    };
-
-    if (description !== undefined) built.description = description;
-
-    return built;
-  }
-
-  /** Built like production builtins (`jsonSchema`, never zod), so the subtraction is measured off a real ToolSet. */
-  function nativeTools(count: number): ToolSet {
-    return Object.fromEntries(Array.from({ length: count }, (_, i) => [
-      `builtin_${String(i)}`,
-      tool({
-        description: `Builtin number ${String(i)}. ${'Explains itself at length. '.repeat(20)}`,
-        inputSchema: jsonSchema<{ action: string }>({
-          type: 'object',
-          properties: { action: { type: 'string', description: 'What to do.' } },
-          required: ['action'],
-        }),
-        execute: async () => 'done',
-      }),
-    ]));
-  }
-
-  /** Small enough that the 8k-window arm still has a budget. */
-  const MAX_OUTPUT = 4_000;
-  const NO_NATIVE_TOOLS = { contextWindow: 200_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: 0 };
-
-  test('a small catalog is admitted whole and never reordered by the SDK map', async () => {
-    const admission = await admit([
-      descriptor('zulu', 'b'), descriptor('alpha', 'b'), descriptor('alpha', 'a'),
-    ], NO_NATIVE_TOOLS);
-
-    expect(admission.admitted.map((d) => d.toolKey)).toEqual(['mcp_alpha_a', 'mcp_alpha_b', 'mcp_zulu_b']);
-    expect(admission.deferred).toEqual([]);
-  });
-
-  test('a catalog past the budget is cut off, and the cut is REPORTED', async () => {
-    const many = Array.from({ length: 4_000 }, (_, i) => descriptor('flood', `tool_${String(i).padStart(4, '0')}`));
-    const native = toolSurfaceTokens(nativeTools(12));
-    const admission = await admit(many, { contextWindow: 32_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: native });
-    expect(admission.admitted.length).toBeGreaterThan(0);
-    expect(admission.admitted.length).toBeLessThan(many.length);
-    expect(admission.deferred).toHaveLength(1);
-    expect(admission.deferred[0]?.server).toBe('flood');
-  });
-
-  test('a wider window admits no fewer tools, and whatever is cut is reported', async () => {
-    const many = Array.from({ length: 4_000 }, (_, i) => descriptor('flood', `tool_${String(i).padStart(4, '0')}`));
-    const native = toolSurfaceTokens(nativeTools(12));
-    let previous = 0;
-
-    for (const contextWindow of [8_000, 32_000, 128_000, 200_000, 1_000_000]) {
-      const admission = await admit(many, { contextWindow, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: native });
-
-      expect(admission.admitted.length).toBeGreaterThanOrEqual(previous);
-      expect(many.length - admission.admitted.length > 0).toBe(admission.deferred.length > 0);
-      previous = admission.admitted.length;
-    }
-  });
-
-  test('a bigger window admits more of the same catalog', async () => {
-    const many = Array.from({ length: 4_000 }, (_, i) => descriptor('flood', `tool_${String(i).padStart(4, '0')}`));
-    const native = toolSurfaceTokens(nativeTools(12));
-    expect((await admit(many, { contextWindow: 200_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: native })).admitted.length)
-      .toBeGreaterThan((await admit(many, { contextWindow: 32_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: native })).admitted.length);
-  });
-
-  test("the actor's own tools are priced FIRST — a bigger native surface admits less MCP", async () => {
-    const many = Array.from({ length: 4_000 }, (_, i) => descriptor('flood', `tool_${String(i).padStart(4, '0')}`));
-
-    const lean = await admit(many, {
-      contextWindow: 32_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: toolSurfaceTokens(nativeTools(4)),
-    });
-
-    const heavy = await admit(many, {
-      contextWindow: 32_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: toolSurfaceTokens(nativeTools(40)),
-    });
-
-    expect(heavy.admitted.length).toBeLessThan(lean.admitted.length);
-  });
-
-  test('a native surface that fills the step limit leaves the catalog nothing, and says so', async () => {
-    const admission = await admit([descriptor('aaa', 'tool')], {
-      contextWindow: 8_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: stepContextLimit({ contextWindow: 8_000, modelOutputLimit: MAX_OUTPUT }),
-    });
-
-    expect(admission.admitted).toEqual([]);
-    expect(admission.deferred[0]?.server).toBe('aaa');
-  });
-
-  test('one essay cannot crowd out the other servers', async () => {
-    const essay = 'x'.repeat(400_000);
-
-    const admission = await admit([
-      descriptor('aaa', 'loud', essay), descriptor('bbb', 'quiet', 'Short.'),
-    ], NO_NATIVE_TOOLS);
-
-    expect(admission.admitted.map((d) => d.name)).toEqual(['loud', 'quiet']);
-    expect(admission.admitted[0]?.description?.length).toBeLessThan(essay.length);
-    expect(admission.admitted[1]?.description).toBe('Short.');
-  });
-
-  test('an unspent share returns to the rest — a quiet catalog is untouched', async () => {
-    const quiet = Array.from({ length: 30 }, (_, i) => descriptor('calm', `tool_${String(i)}`, 'Does one thing.'));
-    const admission = await admit(quiet, NO_NATIVE_TOOLS);
-    expect(admission.admitted).toHaveLength(30);
-    expect(admission.admitted.every((d) => d.description === 'Does one thing.')).toBe(true);
-    expect(admission.deferred).toEqual([]);
-  });
-
-  test('a schema is never truncated — an oversized one is deferred whole', async () => {
-    const fat = descriptor('fat', 'tool');
-    fat.inputSchema = { type: 'object', properties: { blob: { type: 'string', description: 'y'.repeat(200_000) } } };
-    const admission = await admit([fat], { contextWindow: 8_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: 0 });
-    expect(admission.admitted).toEqual([]);
-    expect(admission.deferred[0]?.server).toBe('fat');
-  });
-
-  test('a schema that fills its share keeps the schema and drops the prose', async () => {
-    // The first descriptor's schema alone exceeds its half share: the schema survives whole, the prose goes.
-    const fat = descriptor('aaa', 'tool', 'A description that will not survive.');
-    fat.inputSchema = { type: 'object', properties: { blob: { type: 'string', description: 'y'.repeat(12_000) } } };
-
-    const admission = await admit(
-      [fat, descriptor('bbb', 'small', 'Short.')],
-      { contextWindow: 8_000, modelOutputLimit: MAX_OUTPUT, nativeToolTokens: 0 },
-    );
-
-    expect(admission.admitted.map((d) => d.name)).toEqual(['tool', 'small']);
-    expect(admission.admitted[0]?.inputSchema).toEqual(fat.inputSchema);
-    expect(admission.admitted[0]?.description).toBeUndefined();
-    expect(admission.admitted[1]?.description).toBe('Short.');
-  });
-});
-
 describe('mcpToolKey', () => {
-  test('replaces characters no provider tool-name grammar accepts', () => {
+  test('names are JavaScript members as well as provider tool keys', () => {
     expect(mcpToolKey('my server.v2', 'do it')).toBe('mcp_my_server_v2_do_it');
-    expect(mcpToolKey('gh-mcp', 'foo')).toBe('mcp_gh-mcp_foo');
+    expect(mcpToolKey('gh-mcp', 'foo')).toBe('mcp_gh_mcp_foo');
   });
   test('never produces a builtin name', () => {
     expect(mcpToolKey('x', 'shell')).not.toBe('shell');

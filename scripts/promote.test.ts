@@ -6,10 +6,12 @@ import * as v from 'valibot';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
   adoptDownloads, adoptTarball, adoptedRecord, artifactDigest, builtKey, downloadsServed, evalGateRefusal, evalsKey, imagesStagingNeverRan, overrideKey,
-  planRollback, readDailyVerdict, readDownloads, readEvalsVerdict, stagingReds, verifiedKey, verifyServing, withdraw, writeOverride, DailyOutcomeSchema, DailyVerdictSchema, dailyReplacementRefusal, type DailyVerdict, type Promotion, type Records,
+  planRollback, readDailyVerdict, readDownloads, readEvalsVerdict, stagingReds, verifiedKey, verifyServing, withdraw, writeOverride, DailyOutcomeSchema, DailyVerdictSchema, dailyReplacementRefusal, resultsOfTasks, type DailyVerdict, type Promotion, type Records,
   type Verified,
 } from './promote';
 import { ResetSchema, type Reset } from './reset';
+import { isEvalTask, trackedFiles } from './sources';
+import { suiteTasks } from './evals-suites';
 
 /** A build's dist, as Vite and the release scripts leave it. */
 function dist(files: Readonly<Record<string, string>>): string {
@@ -299,26 +301,29 @@ describe('the eval gate a promotion waits for', () => {
 
   const own = (pass: boolean) => ({ candidateBuild: sha, verdict: { pass, reason: pass ? 'Unchanged.' : 'Regressed.' } });
 
+  /** The two suites' verdicts as the gate reads them: the daily one, and no computer verdict yet unless given. */
+  const gate = (fast: DailyVerdict | undefined, computer?: DailyVerdict, computerChanged: readonly string[] = []) => ({ daily: fast, computer, computerChanged });
+
   test('a fresh daily verdict that is no regression lets any build through, with no run of its own', () => {
-    expect(['unchanged', 'improved', 'baseline', 'rebaselined'].map((outcome) => evalGateRefusal(sha, daily(v.parse(DailyOutcomeSchema, outcome), '2026-10-21T13:00:00.000Z'), undefined, now)))
+    expect(['unchanged', 'improved', 'baseline', 'rebaselined'].map((outcome) => evalGateRefusal(sha, gate(daily(v.parse(DailyOutcomeSchema, outcome), '2026-10-21T13:00:00.000Z')), undefined, now)))
       .toEqual([undefined, undefined, undefined, undefined]);
   });
 
   test('none at all holds every build, and says the daily run records the first', () => {
-    expect(evalGateRefusal(sha, undefined, undefined, now)).toContain('no eval verdict yet: no daily run has recorded one');
+    expect(evalGateRefusal(sha, gate(undefined), undefined, now)).toContain('no eval verdict yet: no daily run has recorded one');
   });
 
   // Review finding (2026-10-21): freshness is the trials' end, not when the run was recorded, and a time ahead of the
   // clock is no evidence of it.
   test('one whose trials ended more than 26 hours ago holds, saying how old, as does one dated ahead of the clock', () => {
     expect({
-      old: evalGateRefusal(sha, { ...daily('unchanged', '2026-10-21T09:00:00.000Z'), recordedAt: '2026-10-22T11:00:00.000Z' }, undefined, now),
-      ahead: evalGateRefusal(sha, daily('unchanged', '2026-10-23T12:00:00.000Z'), undefined, now),
+      old: evalGateRefusal(sha, gate({ ...daily('unchanged', '2026-10-21T09:00:00.000Z'), recordedAt: '2026-10-22T11:00:00.000Z' }), undefined, now),
+      ahead: evalGateRefusal(sha, gate(daily('unchanged', '2026-10-23T12:00:00.000Z')), undefined, now),
     }).toEqual({ old: expect.stringContaining('the latest daily eval verdict is 27.0 h old'), ahead: expect.stringContaining('h old') });
   });
 
   test('a regression holds as a P1, until a fix\'s own run passes on its very build', () => {
-    const regressed = daily('regressed', '2026-10-22T06:00:00.000Z');
+    const regressed = gate(daily('regressed', '2026-10-22T06:00:00.000Z'));
 
     expect({
       held: evalGateRefusal(sha, regressed, undefined, now), ownRed: evalGateRefusal(sha, regressed, own(false), now) !== undefined,
@@ -354,7 +359,43 @@ describe('the eval gate a promotion waits for', () => {
   });
 
   test('an inconclusive day holds as no evidence that nothing regressed, not as a P1', () => {
-    expect(evalGateRefusal(sha, daily('inconclusive', '2026-10-22T06:00:00.000Z'), undefined, now)).toContain('inconclusive, no evidence');
+    expect(evalGateRefusal(sha, gate(daily('inconclusive', '2026-10-22T06:00:00.000Z')), undefined, now)).toContain('inconclusive, no evidence');
+  });
+
+  // The owner, 2026-10-21, "Fast daily, Minecraft weekly": the gate reads both suites' verdicts, the computer one at most
+  // 8 days old and measuring every computer or desktop change the build has; a computer regression is a P1 as well.
+  test("the computer suite's verdict holds on a regression, on 8 days' age, and on a computer change it never measured", () => {
+    const fresh = daily('unchanged', '2026-10-22T06:00:00.000Z');
+
+    expect({
+      noneYet: evalGateRefusal(sha, gate(fresh), undefined, now),
+      green: evalGateRefusal(sha, gate(fresh, daily('unchanged', '2026-10-16T12:00:00.000Z')), undefined, now),
+      regressed: evalGateRefusal(sha, gate(fresh, daily('regressed', '2026-10-20T12:00:00.000Z')), undefined, now),
+      old: evalGateRefusal(sha, gate(fresh, daily('unchanged', '2026-10-14T06:00:00.000Z')), undefined, now),
+      changed: evalGateRefusal(sha, gate(fresh, daily('unchanged', '2026-10-20T12:00:00.000Z'), ['packages/devbox/src/desktop.ts']), undefined, now),
+      fixed: evalGateRefusal(sha, gate(fresh, daily('regressed', '2026-10-20T12:00:00.000Z')), own(true), now),
+    }).toEqual({
+      noneYet: undefined, green: undefined,
+      regressed: expect.stringContaining('the latest computer eval verdict is a regression, a P1'),
+      old: expect.stringContaining('the latest computer eval verdict is 198.0 h old'),
+      changed: expect.stringContaining('packages/devbox/src/desktop.ts changed the computer or the desktop since the computer suite measured'),
+      fixed: undefined,
+    });
+  });
+
+  test('the fast suite is every tracked task but the computer suite, Minecraft, and the two cover all of them once', () => {
+    const all = trackedFiles().filter(isEvalTask).sort();
+    const [fast, computer] = [suiteTasks('fast', all), suiteTasks('computer', all)];
+
+    expect({ computer, fast: fast.length, covered: [...fast, ...computer].sort() })
+      .toEqual({ computer: ['evals/tasks/minecraft.eval.ts'], fast: all.length - 1, covered: all });
+  });
+
+  test("a daily run's baseline is kept to the run's own tasks, as the whole matrix before the split ran more", () => {
+    const report = JSON.stringify({ numTotalTests: 2, testResults: [{ name: '/w/evals/tasks/chess.eval.ts', assertionResults: [] }, { name: '/w/evals/tasks/minecraft.eval.ts', assertionResults: [] }] });
+
+    expect(JSON.parse(resultsOfTasks(report, ['evals/tasks/chess.eval.ts'])))
+      .toEqual({ numTotalTests: 2, testResults: [{ name: '/w/evals/tasks/chess.eval.ts', assertionResults: [] }] });
   });
 
   test('a completed pilot cannot authorize a promotion even if its comparison says pass', () => {

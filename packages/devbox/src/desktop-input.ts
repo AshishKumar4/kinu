@@ -14,6 +14,11 @@ const Coordinate = v.pipe(v.number(), v.integer(), v.minValue(0));
 
 const Point = v.pipe(v.tuple([Coordinate, Coordinate]), v.readonly());
 
+/** How far a relative move goes on each axis, in pixels: a screen's width each way is the most any turn needs. */
+const Step = v.pipe(v.number(), v.integer(), v.minValue(-4096), v.maxValue(4096));
+
+const Delta = v.pipe(v.tuple([Step, Step]), v.readonly());
+
 /** A key or modifier as X spells it; the agent's chord was read into these before it was sent. */
 const KeyName = v.pipe(v.string(), v.regex(/^[A-Za-z0-9_]+$/u));
 
@@ -30,7 +35,7 @@ export const DesktopRequestSchema = v.object({
       frames: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(WATCH_SHEET.columns.length)),
     }),
     v.object({
-      kind: v.literal('click'), at: Point, button: v.picklist(['left', 'right', 'middle']),
+      kind: v.literal('click'), at: v.optional(Point), button: v.picklist(['left', 'right', 'middle']),
       count: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(3)), hold: v.pipe(v.array(KeyName), v.readonly()),
     }),
     // A line break or tab is a key press, never typed: xdotool types neither.
@@ -40,7 +45,9 @@ export const DesktopRequestSchema = v.object({
       holdMs: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(KEY_HOLD_MAX_MS))),
     }),
     v.object({ kind: v.literal('scroll'), at: Point, dy: Wheel, dx: Wheel }),
+    // To a point, or by a distance from wherever the pointer is: an app that captures the pointer reads motion alone.
     v.object({ kind: v.literal('move'), at: Point }),
+    v.object({ kind: v.literal('move'), by: Delta }),
     v.object({ kind: v.literal('drag'), from: Point, to: Point }),
   ]),
 });
@@ -184,7 +191,8 @@ os.execvp('xdotool', ['xdotool', 'type', '--delay', '12', '--', text])
 export function xdotoolOf(action: Exclude<DesktopAction, { kind: 'screenshot' | 'watch' }>): string[] {
   switch (action.kind) {
     case 'click':
-      return ['xdotool', ...action.hold.flatMap((key) => ['keydown', key]), 'mousemove', ...xy(action.at),
+      // With no point, where the pointer is: under a captured pointer a move first would turn the view.
+      return ['xdotool', ...action.hold.flatMap((key) => ['keydown', key]), ...action.at === undefined ? [] : ['mousemove', ...xy(action.at)],
         'click', '--repeat', String(action.count), '--delay', '80', BUTTONS[action.button], ...action.hold.flatMap((key) => ['keyup', key])];
     case 'type':
       // xdotool still types it, after {@link TYPE_PY} bound what the keymap lacked.
@@ -202,7 +210,9 @@ export function xdotoolOf(action: Exclude<DesktopAction, { kind: 'screenshot' | 
     }
 
     case 'move':
-      return ['xdotool', 'mousemove', ...xy(action.at)];
+      // A distance is sent as exactly that, wherever the hidden pointer is: a captured pointer is re-centred by the
+      // browser near the screen's edge, so a move to a point there turns the view again each time (pointer-lock-proof.ts).
+      return 'by' in action ? ['xdotool', 'mousemove_relative', '--', ...action.by.map(String)] : ['xdotool', 'mousemove', ...xy(action.at)];
     case 'drag': {
       // Moved through its midpoint: an app that reads a drag from motion sees one.
       const middle: [number, number] = [Math.round((action.from[0] + action.to[0]) / 2), Math.round((action.from[1] + action.to[1]) / 2)];
@@ -217,7 +227,7 @@ export function xdotoolOf(action: Exclude<DesktopAction, { kind: 'screenshot' | 
 function pointsOf(action: DesktopAction): ReadonlyArray<readonly [number, number]> {
   if (action.kind === 'drag') return [action.from, action.to];
 
-  return 'at' in action ? [action.at] : [];
+  return 'at' in action && action.at !== undefined ? [action.at] : [];
 }
 
 /** The action's points that fall outside `screen`, as the refusal names them. */
