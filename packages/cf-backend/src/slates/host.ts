@@ -407,7 +407,7 @@ export class SlateHost {
 
       // An answer's page calls as its author as of now, in the mode the author's next turn runs in.
       const callsAs = source.kind === 'message' ? source.author : caller;
-      // Only the owner's own slate, calling as the owner, hires or messages helpers; a hosted actor's slate never does.
+      // Only the owner's own slate, calling as the owner, hires or messages subagents; a hosted actor's slate never does.
       const call = routeSlateCall({ id, request: parsed.output, chain, hosted: callsAs.path.length > 0 });
       const impact = slateAddressImpact(call.address) ?? 'administer';
       const driven = reportOnly && call.address.namespace === 'web' && SLATE_DRIVEN_MEMBERS.includes(call.address.member);

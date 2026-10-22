@@ -30,7 +30,7 @@ function advisedHire(db: Database): string {
   return db.query<{ actor_id: string }, []>("SELECT actor_id FROM workspace_actors WHERE name = 'advised'").get()?.actor_id ?? '';
 }
 
-test('a hosted subordinate hires its advisor, whose note opens its next turn, without adding to either evolution window', async () => {
+test('a hosted subagent hires its advisor, whose note opens its next turn, without adding to either evolution window', async () => {
   const note = 'The probe failed but the reply claimed success. Read the exit status.';
   const requests: string[] = [];
   const reviews: string[] = [];

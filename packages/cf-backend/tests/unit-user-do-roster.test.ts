@@ -114,6 +114,21 @@ describe('the pushed tile', () => {
     } finally { harness.close(); }
   });
 
+  test('Home with no tile yet is not one of the workspaces waiting for a first report; once reported it counts', async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+    const owner = await testOwner();
+
+    try {
+      await workspace(harness, 'ledger');
+      await harness.userDO.setConfig(owner, 'assistant', 'kinu');
+      const home = await workspace(harness, 'kinu');
+
+      expect((await harness.userDO.listWorkspaces(owner)).counts).toMatchObject({ all: 1, unreported: 1 });
+      await harness.userDO.putWorkspaceOverview(home, 'kinu', QUIET);
+      expect((await harness.userDO.listWorkspaces(owner)).counts).toMatchObject({ all: 2, idle: 1, unreported: 1 });
+    } finally { harness.close(); }
+  });
+
   test('rides its roster entry, and a waiting decision files it under needs', async () => {
     const harness = createTestUserDO({ durableObjectId: USER_ID });
     const owner = await testOwner();

@@ -4,7 +4,7 @@
        between the two with <picture>. Everything below the palette block must
        stay byte-identical in both, so edit them together. -->
   <title id="t">Kinu delegation model</title>
-  <desc id="d">A running turn calls one agents tool: swarm, hire, msg, list and dismiss. Swarm runs a configured search; hire creates a durable or task-lifetime agent. Hires and swarm nodes are logical actors of one workspace database on both backends. The task role handles general delegated work; specialist roles narrow the assignment and authority. Messages reach subordinates or permitted peer workspaces.</desc>
+  <desc id="d">A running turn calls one agents tool: swarm, hire, msg, list and dismiss. Swarm runs a configured search; hire creates a durable or task-lifetime agent. Hires and swarm nodes are logical actors of one workspace database on both backends. The task role handles general delegated work; specialist roles narrow the assignment and authority. Messages reach subagents or permitted peer workspaces.</desc>
   <style>
     :root {
       --fg: #e6edf3;
@@ -123,14 +123,14 @@
   <text class="xs" x="552" y="487">hires and branches share workspace SQLite</text>
   <rect x="506" y="508" width="370" height="45" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="518" y="527" text-anchor="start">scope</text>
-  <text class="xs" x="518" y="542" text-anchor="start">subordinate here, or a new peer workspace</text>
+  <text class="xs" x="518" y="542" text-anchor="start">subagent here, or a new peer workspace</text>
   <path d="M691 553 L691 583" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-orange)"/>
-  <text class="xs" x="703" y="573">the roster a subordinate joins</text>
+  <text class="xs" x="703" y="573">the roster a subagent joins</text>
   <rect x="24" y="587" width="852" height="130" rx="10" fill="var(--blueFill)" stroke="var(--blueLine)"/>
   <text class="b" x="38" y="609" fill="var(--blue)">msg · list · dismiss — talking to what already exists</text>
-  <text class="xs" x="38" y="628">One address space: a name resolves to a subordinate in this workspace, otherwise to one of the owner’s other workspaces.</text>
+  <text class="xs" x="38" y="628">One address space: a name resolves to a subagent in this workspace, otherwise to one of the owner’s other workspaces.</text>
   <rect x="38" y="639" width="405" height="64" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
-  <text class="b" x="50" y="658" text-anchor="start">subordinates</text>
+  <text class="b" x="50" y="658" text-anchor="start">subagents</text>
   <text class="xs" x="50" y="672" text-anchor="start">hire assigns work; msg steers or follows up;</text>
   <text class="xs" x="50" y="686" text-anchor="start">list reads the roster; dismiss archives the agent</text>
   <rect x="457" y="639" width="405" height="64" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>

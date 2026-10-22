@@ -1069,7 +1069,7 @@ export const PLATFORM_CATALOG = {
       + 'so an O(1) clone is free in time and not in quota. Causality was established by '
       + 'freeing 5 GiB and retrying successfully '
       + '(~/Nimbus/scratchpad/do-sqlite-fork-feasibility.md §4). Every Kinu fork and '
-      + 'subordinate is a facet, so this is one shared 10 GB across a whole exploration tree: '
+      + 'subagent is a facet, so this is one shared 10 GB across a whole exploration tree: '
       + 'and see do.storage.size_is_per_object, because NOTHING on the platform reports the '
       + 'shared total. Accounting is LOGICAL rather than physical: a 1.058 GB facet cloned nine '
       + 'times is roughly 10.58 GB logical across ten databases, and all of them succeeded before '
@@ -1526,27 +1526,30 @@ export const PLATFORM_CATALOG = {
   // `do.facet.cpu_shared`, `do.isolate.abort_keeps_isolate`, `do.facet.count`.
 
   'do.facet.memory_independent': {
-    subject: 'A facet\'s memory ceiling is independent of its parent\'s residency',
-    limit: { value: 208 * MiB, unit: 'bytes' },
+    subject: 'A facet\'s memory ceiling, independent of its parent\'s residency',
+    // Kinu's agent facets (loaded workers) under a turn's churn: 125 MB lived and 130 MB was reset. That is the published
+    // 128 MB, and D8's 110/115 MB with a heavier base, not the 208 MiB Nimbus's plain facets measured on 2026-07-24.
+    limit: { value: 125 * MB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'peak-resident',
     evidence: 'proven-by-probe',
-    provenance: '~/Nimbus/scratchpad/do-facets-migration.md §1.6, §1.7, §1.8',
-    date: '2026-07-24',
-    trigger: 'a facet allocating while its parent already holds a large working set',
-    onBreach: 'nothing: the ceilings do not interact',
+    provenance: '/mnt/local/kinu/tmp/agent-placement/DESIGN.md §2.3',
+    date: '2026-10-21',
+    trigger: 'an agent facet whose turn holds more than about 125 MB',
+    onBreach: 'the facet is reset; its parent and its siblings keep running (their boot ids unchanged)',
     observable: [],
     firstPartySignal: false,
     measurements: [
-      { scenario: 'facet ceiling with parent holding 0 bytes', value: 208 * MiB, unit: 'bytes' },
-      { scenario: 'facet ceiling with parent holding 128 MiB: bit-identical', value: 208 * MiB, unit: 'bytes' },
-      { scenario: 'eight facets at 192 MiB plus a 128 MiB parent, live at once', value: 1664 * MiB, unit: 'bytes' },
-      { scenario: 'facets confirmed to be distinct isolates', value: 40, unit: 'count' },
+      { scenario: 'a Kinu agent facet under turn churn, highest that lived (f44999, 2026-10-21)', value: 125 * MB, unit: 'bytes' },
+      { scenario: 'a Kinu agent facet under turn churn, lowest reset (f44999, 2026-10-21)', value: 130 * MB, unit: 'bytes' },
+      { scenario: 'D8, an agent facet with a 13-18 MB idle base, highest that lived (2026-09-27)', value: 110 * MB, unit: 'bytes' },
+      { scenario: 'Nimbus plain facets, parent holding 0 or 128 MiB (2026-07-24): not Kinu\'s loader facets', value: 208 * MiB, unit: 'bytes' },
     ],
     notes:
-      'The GOOD half of the facet trade, and it is a large one: memory is genuinely per-facet, '
-      + 'so a fan-out of heads does not share one 128-200 MiB budget. Read together with '
-      + 'do.facet.cpu_shared, which is the price.',
+      'The good half of the facet trade holds: one facet\'s reset leaves its parent and its siblings alone, so a fan-out '
+      + 'of agents does not share one budget. The ceiling is not 208 MiB for Kinu: that was Nimbus\'s plain facets; a '
+      + 'loaded worker\'s facet is reset near the published 128 MB. Plan on about 125 MB per agent isolate, and on agents '
+      + 'sharing an isolate sharing it. Read together with do.facet.cpu_shared, which is the price.',
   },
 
   'do.facet.cpu_shared': {
@@ -1717,7 +1720,7 @@ export const PLATFORM_CATALOG = {
     observable: [{ context: 'the setAlarm call', message: 'Error: Facets currently cannot set alarms.' }],
     firstPartySignal: true,
     notes:
-      'Directly constrains this repo: forks and subordinates are facets, so a head cannot '
+      'Directly constrains this repo: forks and subagents are facets, so a head cannot '
       + 'schedule its own resumption, its own timeout, or its own recovery sweep. Everything '
       + 'time-driven must route through the root\'s single alarm (see do.alarm.wall_ms), which '
       + 'is also the only alarm there is.',
@@ -1781,35 +1784,57 @@ export const PLATFORM_CATALOG = {
     provenance: '~/Nimbus/scratchpad/do-sqlite-fork-feasibility.md:308 (workerd FacetTreeIndex format)',
     date: '2026-07-24',
     trigger: 'the 65,537th facet name ever used beneath one root object',
-    onBreach: 'unknown: the ceiling was read in the index format, not reached',
+    onBreach: 'unknown at the cap, which was read in the index format, not reached; creation fails long before it (do.facet.creation_degrades)',
     observable: [],
     firstPartySignal: false,
+    measurements: [
+      { scenario: 'facets created beneath one root object, none refused for count (f44999, 2026-10-21)', value: 31_773, unit: 'count' },
+    ],
     notes:
-      'LIFETIME, not concurrent. A per-run or per-head facet name burns one permanently, so a '
-      + 'long-lived workspace object doing thousands of explorations has a finite budget that '
-      + 'nothing in this repo counts. Read in source; deliberately not probed, because reaching '
-      + 'it would cost 65,536 facet creations. '
-      + 'THIS IS THE BINDING CONSTRAINT FOR THE LEAK, NOT do.storage.bytes. A fresh facet '
-      + 'database is 4096 bytes and a leaked head writes kilobytes, so at 15 permanent facets per '
-      + 'default MCTS search this cap arrives at roughly 4,400 searches: an order of magnitude '
-      + 'before 10 GB is threatened. A byte-based dashboard therefore reads healthy for the '
-      + 'ENTIRE LIFE of the defect and then the object hits a hard facet-id wall the telemetry '
-      + 'never mentioned: the same "true number answering the wrong question" shape as '
-      + 'do.storage.size_is_per_object. '
-      + 'HEADROOM IS ALREADY QUERYABLE, no new bookkeeping needed. The agents SDK writes a row '
-      + 'per facet into `cf_agents_sub_agents` at spawn, and `abortSubAgent` does NOT call '
-      + '`_forgetSubAgent` while `deleteSubAgent` does (verified in node_modules/agents/dist/'
-      + 'index.js: abortSubAgent at :5765 with no forget, deleteSubAgent forgetting at :5793). So '
-      + '`SELECT COUNT(*) FROM cf_agents_sub_agents` IS the leak counter, and once a terminal-only '
-      + 'delete lands it should go flat instead of monotonic. It is DISTRIBUTED like the journal: '
-      + 'the root holds depth-1 heads and each depth-1 facet holds its own depth-2, so a '
-      + 'root-only count under-reports a recursive split.'
-      + ' '
-      + 'The facet implementation recorded at git 4ebb58082:packages/cf-backend/src/facet-spawn.ts:61 '
-      + 'aborts without wiping storage and deletes hired actors only, a combination that leaks head '
-      + 'and branch SQLite at 15 fresh facet IDs per default search unless terminal deletion covers '
-      + 'them. Kinu binds every logical actor through state/actor-host.ts to the workspace SQLite, '
-      + 'so the facet measurements are preventive platform knowledge, not the storage topology.',
+      'LIFETIME, not concurrent: deleting a facet does not free its id, and re-creating a name under '
+      + 'the same parent reuses that name\'s id (workerd facet-tree-index.h, read again 2026-10-21). '
+      + 'Kinu gives every agent its own facet (D9): main by its id, every other agent by a fresh '
+      + 'storage key. So each reviewed turn\'s advisor, each head, swarm node, steer branch and hire '
+      + 'uses one id for good, and no name is reused. Counted per workspace on actor.startup\'s '
+      + '`facets` (identity/workspace-actors.ts facetNamesGiven): a ceiling, as an actor that never '
+      + 'ran used no id. The SDK\'s `cf_agents_sub_agents` does not count them: Kinu calls '
+      + 'ctx.facets.get itself (agent-facets.ts). '
+      + 'Not what binds first: creation degrades from about 31,300 (do.facet.creation_degrades), and '
+      + 'the 10 concurrent Dynamic Workers (worker_loader.do_dynamic_worker_concurrency) bind before '
+      + 'either. Bytes give no warning: a fresh facet database is 4096 bytes, so a byte dashboard '
+      + 'reads healthy up to the wall, the shape of do.storage.size_is_per_object.',
+  },
+
+  'do.facet.creation_degrades': {
+    subject: 'Facet creation beneath one Durable Object slows with its count, and fails long before do.facet.count',
+    limit: { value: 31_300, unit: 'count' },
+    origin: 'platform',
+    bounds: 'count',
+    evidence: 'proven-by-probe',
+    provenance: '/mnt/local/kinu/tmp/agent-placement/DESIGN.md §2.6',
+    date: '2026-10-21',
+    trigger: 'creating facets beneath a root object that has created about 31,300 of them',
+    onBreach:
+      'most creations are cut by a storage reset of the root, or answered 1101; the root still answers '
+      + 'a plain read, and resumes from what it stored',
+    observable: [
+      { context: 'a batch of facet creations past about 31,300 in one root object', message: 'Internal error in Durable Object storage caused object to be reset' },
+    ],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: '2,000 facets created from zero', value: 19_000, unit: 'ms' },
+      { scenario: '500 facets created at about 10,850', value: 29_000, unit: 'ms' },
+      { scenario: '500 facets created at 25,000-27,000, fastest', value: 70_000, unit: 'ms' },
+      { scenario: 'one facet created at 31,772', value: 8_100, unit: 'ms' },
+      { scenario: '20 facets created in a fresh object, fastest', value: 12_800, unit: 'ms' },
+    ],
+    notes:
+      'Creation cost grows with the count, from about 105 a second at zero to 6.7 a second at '
+      + '27,000. So a workspace that has made tens of thousands of agents makes every new agent\'s '
+      + 'first call slower, long before any refusal. Aborting each facet right after its write reset '
+      + 'the root (2 trials), so the climb kept its instances; the root was reset 8 times on the way '
+      + 'and resumed from its stored count. Read with do.facet.count, which this precedes; Kinu\'s '
+      + 'per-workspace count is actor.startup\'s `facets`.',
   },
 
   'do.facet.clone_name_unvalidated': {
@@ -1977,13 +2002,13 @@ export const PLATFORM_CATALOG = {
     date: '2026-08-17',
     trigger: 'mapping a Durable Object id to a class, or correlating telemetry on ctx.id, for a facet',
     onBreach:
-      'every facet is labelled as its root\'s class: every head and every subordinate reads as '
+      'every facet is labelled as its root\'s class: every head and every subagent reads as '
       + 'an OrchestratorAgent, and nothing contradicts the label',
     observable: [],
     firstPartySignal: false,
     notes:
       'A CORRECTNESS TRAP FOR ANY PER-AGENT VIEW, not just for tracing. Kinu spawns every '
-      + 'subordinate and every exploration head as a facet, so an id-keyed roster, an id-keyed '
+      + 'subagent and every exploration head as a facet, so an id-keyed roster, an id-keyed '
       + 'log field or an id-keyed UI grouping silently collapses the whole tree into one '
       + 'orchestrator. Correlate on selfPath. This is the "correct, wired, dead" shape at the '
       + 'identity layer: the map returns a class name, the name is wrong, and nothing fails.',

@@ -8,10 +8,10 @@ import { initHeadsTables } from '../src/heads/schema';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initMctsSearchTable } from '../src/mcts/search-store';
 import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
-import { SubordinateRosterStore } from '../src/subordinates/roster';
+import { SubagentRosterStore } from '../src/subagents/roster';
 import { actorReferenceOf, type ActorHandle } from '../src/identity/actor-handle';
-import type { SubordinateRosterEntry } from '../src/delegation/agents-tool';
-import { readWorkspaceAgents, type ChatReport, type PanelAgent } from '../src/read-models/workspace-agents';
+import type { SubagentRosterEntry } from '../src/delegation/agents-tool';
+import { measuredAt, readWorkspaceAgents, type ChatReport, type PanelAgent } from '../src/read-models/workspace-agents';
 import { OWNER_STOPPED } from '../src/heads/types';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { initAgentFiguresTable, readAgentFigures } from '../src/read-models/agent-figures';
@@ -38,13 +38,13 @@ function workspace() {
   // The read model's tables, as the workspace's genesis creates them.
   initOwnerRequestsTable(execRaw);
   const actors = createTestActors(sql, execRaw);
-  new SubordinateRosterStore(exec, actors.main).ensureSchema();
+  new SubagentRosterStore(exec, actors.main).ensureSchema();
 
-  const hire = (parent: ActorHandle, name: string, entry: Partial<SubordinateRosterEntry>): ActorHandle => {
+  const hire = (parent: ActorHandle, name: string, entry: Partial<SubagentRosterEntry>): ActorHandle => {
     const { origin = 'agent', lifetime = 'durable', ...rest } = entry;
     const child = actors.directory.create({ parent, name, origin, lifetime, creationId: name });
 
-    new SubordinateRosterStore(exec, parent).create({
+    new SubagentRosterStore(exec, parent).create({
       name, actorReference: actorReferenceOf(child), birth: null, deleteRequested: false,
       status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, taskEventId: null, ...rest,
     });
@@ -57,8 +57,8 @@ function workspace() {
   const running = new Set<string>();
 
   /** `queued`: the agents whose wake stands, each holding work it has not said it rests from. */
-  const read = (queued: readonly string[] = []): Promise<PanelAgent[]> => readWorkspaceAgents({
-    sql, exec, root: actors.main, actors: actors.directory.list({ retired: true }),
+  const read = (queued: readonly string[] = [], retained = false): Promise<PanelAgent[]> => readWorkspaceAgents({
+    sql, exec, root: actors.main, actors: actors.directory.list({ retired: true }), retained,
     figures: (actorIds) => readAgentFigures(sql, actorIds), queued: (actorId) => queued.includes(actorId) || running.has(actorId),
     chat: (actorId) => reports.get(actorId) ?? null,
   });
@@ -97,7 +97,7 @@ const rows = (listed: readonly PanelAgent[]) => listed.map(({ label, category, a
 }));
 
 describe('the Agents panel lists every agent in the workspace', () => {
-  test('the owner\'s own, one an agent hired, and a background helper, each placed as the design says', async () => {
+  test('the owner\'s own, one an agent hired, and a background subagent, each placed as the design says', async () => {
     const { db, main, hire, read, openTurn } = workspace();
     const alice = hire(main, 'alice', { origin: 'user' });
     openTurn(hire(alice, 'scout-1', {}));
@@ -135,6 +135,30 @@ describe('the Agents panel lists every agent in the workspace', () => {
     ]);
   });
 
+  // A search journals its first workers under its root, which is no worker of its own (swarm-expansion's `expandChild`).
+  test('a search\'s first workers, journalled under its root, hang from the agent that started it and wear its colour', async () => {
+    const { db, main, hire, read } = workspace();
+    const alice = hire(main, 'alice', {});
+    db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)').run(alice.actorId, 'run-2', 'compare two parsers', 10);
+
+    db.query(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+      VALUES (?, 'n-a', 'run-2', 'run-2', 1, 'Try the PEG parser', 'r', 'running', 11, 'synthesize')`).run(alice.actorId);
+
+    const listed = await read();
+    const worker = listed.find((agent) => agent.label === 'Try the PEG parser');
+
+    expect({ parent: worker?.parent, colour: worker?.colour }).toEqual({ parent: alice.actorId, colour: listed.find((agent) => agent.key === alice.actorId)?.colour });
+  });
+
+  test('a hire released with its history kept is read, dismissed, only when released hires are asked for', async () => {
+    const { db, main, hire, read } = workspace();
+    const old = hire(main, 'old', { status: 'dismissed', dismissedAt: 5 });
+    db.query('UPDATE workspace_actors SET deleted_at = 6 WHERE actor_id = ?').run(old.actorId);
+
+    expect((await read()).some((agent) => agent.key === old.actorId)).toBe(false);
+    expect((await read([], true)).find((agent) => agent.key === old.actorId)?.activity).toBe('dismissed');
+  });
+
   test('only a worker its owner stopped reads stopped; one cut off with its search or that errored reads failed', async () => {
     const { db, main, read } = workspace();
     db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)').run(main.actorId, 'run-1', 'compare two parsers', 10);
@@ -154,11 +178,11 @@ describe('the Agents panel lists every agent in the workspace', () => {
   });
 
   // Staging f75f06932, 2026-10-01: the eval's settle called five trials quiet on two idle reads a second apart, while
-  // each owed a turn it had not claimed (a helper's admitted task, its report to the lead, a job's wake). From the
+  // each owed a turn it had not claimed (a subagent's admitted task, its report to the lead, a job's wake). From the
   // moment a turn is owed, the agent it is owed to reads working.
   test('an agent owed a turn it has not claimed reads working', async () => {
     const { exec, main, hire, read } = workspace();
-    const helper = hire(main, 'counter-1', { lifetime: 'task' });
+    const subagent = hire(main, 'counter-1', { lifetime: 'task' });
     const activity = async (queued: readonly string[] = []) => Object.fromEntries((await read(queued)).map((agent) => [agent.label, agent.activity]));
 
     expect(await activity()).toEqual({ Main: 'idle', 'counter-1': 'idle' });
@@ -166,8 +190,8 @@ describe('the Agents panel lists every agent in the workspace', () => {
     // The lead's chat queued a turn (a job's wake) it has not claimed.
     expect((await activity([main.actorId])).Main).toBe('working');
 
-    // The helper was handed a task its turn has not claimed: its wake stands until it says it rests.
-    expect((await activity([helper.actorId]))['counter-1']).toBe('working');
+    // The subagent was handed a task its turn has not claimed: its wake stands until it says it rests.
+    expect((await activity([subagent.actorId]))['counter-1']).toBe('working');
 
     // An email reached the lead, and the drain that takes it has not run.
     new EventLog(exec, main).publish({ descriptor: { ingress: 'email_inbound', variant: 'email', sender_class: 'owner', payload: EMAIL }, now: Date.now() });
@@ -245,9 +269,32 @@ describe('the Agents panel lists every agent in the workspace', () => {
     const listed = await read();
     const figures = (label: string) => listed.find((agent) => agent.label === label)?.figures;
 
-    // The EMA seeds on the first rate (0) and moves α = 0.2 toward the second (0.9).
-    expect(figures('alice')).toEqual({ tokens: 3300, usd: 0.03, activeMs: 180_000, cacheEma: 0.2 * 0.9 });
-    expect(figures('Main')).toEqual({ tokens: 550, usd: 0.005, activeMs: 60_000, cacheEma: 0.8 });
+    // The EMA seeds on the first rate (0) and moves α = 0.2 toward the second (0.9); each was last active at its turn's end.
+    const start = Date.parse('2026-09-30T10:00:00.000Z');
+    expect(figures('alice')).toEqual({ tokens: 3300, usd: 0.03, activeMs: 180_000, cacheEma: 0.2 * 0.9, lastActiveAt: start + 180_000 });
+    expect(figures('Main')).toEqual({ tokens: 550, usd: 0.005, activeMs: 60_000, cacheEma: 0.8, lastActiveAt: start + 60_000 });
+  });
+
+  // A cloud agent's figures arrive at its turn's end; its report of its newest step can be later, and is.
+  test('an agent was last active at its newest step its isolate reported, past its figures', async () => {
+    const { main, hire, read, rests, turn } = workspace();
+    const alice = hire(main, 'alice', { origin: 'user' });
+    turn(alice, 'run-a', 3, [{ input: 1, output: 1, cacheRead: 0, usd: 0 }]);
+    const stepped = Date.parse('2026-09-30T11:00:00.000Z');
+    rests(alice, { activeAt: stepped });
+
+    expect((await read()).find((agent) => agent.label === 'alice')?.figures.lastActiveAt).toBe(stepped);
+  });
+
+  // A report may carry one measure and not the other: the step a gate admitted is a step all the same.
+  test('a report dates its agent by whichever measure it carries, and by none when it carries neither', () => {
+    const at = '2026-09-30T11:00:00.000Z';
+
+    expect([
+      measuredAt({ provider: null, gate: { at } }),
+      measuredAt({ provider: { at }, gate: { at: '2026-09-30T10:00:00.000Z' } }),
+      measuredAt({ provider: null, gate: null }),
+    ]).toEqual([Date.parse(at), Date.parse(at), undefined]);
   });
 
   test('an agent that has not run shows no figures, not zeros', async () => {

@@ -1,5 +1,6 @@
 /** Unit tests for the canonical tool surface. `skills` is not a BuiltinToolDeps field. */
 
+import { lonelyTree, ROOT_DELEGATION_BUDGET } from './helpers-agents';
 import { createFileCodemodeProvider } from '../src/tools/file-operations';
 import { buildToolSurface, type CodemodeSurface } from '../src/tools/builtins';
 import { serveMemory } from '../src/tools/memory-operations';
@@ -31,12 +32,11 @@ import {
   type CodemodeBuilder,
   type JsonValue,
   type ReportDeps,
-  type SubordinateReportHandoff,
+  type SubagentReportHandoff,
   type TeamToolDeps,
   type AgentRuntime,
   TurnEscalationLedger,
 } from '../src/index';
-import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 import { setDiagnosticsSink } from '../src/obs/index';
 import type { JsonObject } from '../src/utils/json';
 import type { Fact, FactsStore } from '../src/memory/facts';
@@ -144,16 +144,17 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       delegation: ROOT_DELEGATION_BUDGET,
       snapshot: () => [],
       list: async () => [],
+      tree: lonelyTree,
       create: async () => ({
         name: 's',
         displayName: 'S',
-        subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+        subagent: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async () => ({
         ok: true as const,
         name: 's',
         displayName: 'S',
-        subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+        subagent: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       spawn: async () => ({ name: 's', displayName: 'S' }),
       assign: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
@@ -331,7 +332,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   test('report.send carries a third-argument handoff to the same deps, and refuses a field it does not own', async () => {
-    const delivered: Array<{ status: string; content: string; handoff?: SubordinateReportHandoff }> = [];
+    const delivered: Array<{ status: string; content: string; handoff?: SubagentReportHandoff }> = [];
 
     const deps: ReportDeps = { report: async (input) => {
       delivered.push(input);

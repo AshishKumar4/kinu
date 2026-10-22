@@ -1,12 +1,13 @@
 /** A dismissed agent's read-only chat, paged by its actor id. */
 import { useMemo } from "react";
 import type { UIMessage } from "ai";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { KeptTranscript } from "@/components/KeptTranscript";
 import { TranscriptViewport } from "@/components/TranscriptViewport";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
 
 /** Hoisted, so the thread memos hold. */
 const NO_LIVE: readonly UIMessage[] = [];
@@ -30,12 +31,12 @@ export function KeptChatColumn({ workspace, subName, title, rpc, actorId }: {
       <ErrorBoundary label="Agent chat">
         <TranscriptViewport chat={chat} live={false} padClass="py-5"
           pending={<div role="status" aria-busy="true" className="flex justify-center py-4"><Loader size="sm" /></div>}
-          empty={<p className="text-center text-sm p-text-3">{title} said nothing before it was dismissed.</p>}
+          empty={<p className="t-body text-center p-text-3">{title} said nothing before it was dismissed.</p>}
           rows={(before) => <KeptTranscript entries={chat.thread.entries} unavailable={unavailable} before={before} />} />
       </ErrorBoundary>
-      <p role="note" className="border-t p-border p-sidebar px-4 py-3 text-xs p-text-3">
+      <Surface look="chrome" as="p" className="t-meta border-t p-border px-4 py-3 p-text-3" role="note">
         {title} was dismissed. Its conversation is kept and read-only.
-      </p>
+      </Surface>
     </div>
   );
 }

@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Loader } from "@cloudflare/kumo";
-import { ArrowSquareOutIcon, CaretLeftIcon, ShieldWarningIcon, TrashIcon, TrayIcon } from "@phosphor-icons/react";
+import { Loader } from "@/components/ui/Loader";
+import { ArrowSquareOutIcon, CaretLeftIcon, TrashIcon, TrayIcon } from "@phosphor-icons/react";
 import type { MailBox, MailThreadSummary, MailThreadView } from "@kinu.run/core";
-import { TileMenu, type MenuItem } from "@/components/drive/DriveTiles";
+import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useLabelledStep } from "@/components/ui/ConfirmDialog";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -11,6 +11,9 @@ import { MailMessage } from "./MailMessage";
 import { ReplyBox } from "./MailEditor";
 import { mailBoxLabel } from "./MailRow";
 import { SendToWorkspace } from "./SendToWorkspace";
+import { Button } from "@/components/ui/Button";
+import { Chip } from "@/components/ui/Chip";
+import { Notice } from "@/components/ui/Notice";
 
 export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }: {
   id: string; boxes: readonly MailBox[]; owner: string; drafts: boolean; onBack: () => void; onChanged: () => void;
@@ -31,9 +34,9 @@ export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }
 
   return (
     <div className="min-w-0">
-      {mail === null && <button type="button" data-mail-back onClick={onBack} className="mb-3 flex items-center gap-1 p-meta p-text-3 hover:p-text lg:hidden"><CaretLeftIcon size={13} />Mail</button>}
-      {resource.status === "loading" && <div className="p-card p-5" role="status" aria-label="Loading thread"><Loader /></div>}
-      {resource.status === "error" && <LoadFailure what="this thread" message={resource.message} onRetry={reload} className="p-card p-4" />}
+      {mail === null && <Button variant="ghost" size="sm" className="mb-3 lg:hidden" data-mail-back onClick={onBack} icon={<CaretLeftIcon size={14} />}>Mail</Button>}
+      {resource.status === "loading" && <div role="status" aria-label="Loading thread"><Loader /></div>}
+      {resource.status === "error" && <LoadFailure what="this thread" message={resource.message} onRetry={reload} />}
       {mail !== null && <Reader key={`${id}:${String(drafts)}`} mail={mail} box={boxes.find((box) => box.path === mail.thread.path)} owner={owner} drafts={drafts} onBack={onBack} onChanged={reload} />}
     </div>
   );
@@ -72,27 +75,26 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
   if (box?.kind === "person") reader = box.workspace === null ? "no assistant yet" : "Kinu";
 
   return (
-    <article data-mail-reader={thread.id} aria-busy={busy !== null} className="p-card min-w-0 space-y-4 px-5 py-5 lg:px-6">
-      <button type="button" data-mail-back onClick={onBack} className="flex items-center gap-1 p-meta p-text-3 hover:p-text lg:hidden"><CaretLeftIcon size={13} />Mail</button>
+    <article data-mail-reader={thread.id} aria-busy={busy !== null} className="min-w-0 max-w-[var(--layout-reader)] space-y-4">
+      <Button variant="ghost" size="sm" className="lg:hidden" data-mail-back onClick={onBack} icon={<CaretLeftIcon size={14} />}>Mail</Button>
       <header className="space-y-2">
         <div className="flex items-start gap-2">
-          <h2 data-mail-subject className="min-w-0 flex-1 p-heading p-text text-[19px] leading-7 [overflow-wrap:anywhere]">{thread.subject || "(No subject)"}</h2>
-          {busy === null && <TileMenu name="Thread" items={menu} className="relative shrink-0" />}
+          <h2 data-mail-subject className="t-title min-w-0 flex-1 p-text wrap-anywhere">{thread.subject || "(No subject)"}</h2>
+          {busy === null && <Menu name="Thread" items={menu} className="relative shrink-0" />}
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          <span className="inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-neutral-tint)] px-2.5 p-meta p-text-2 font-mono">{box?.address ?? thread.path}</span>
-          {box !== undefined && <span className="inline-flex h-6 max-w-full items-center truncate rounded-full bg-[var(--c-neutral-tint)] px-2.5 p-meta p-text-2">{reader}</span>}
+        <div className="flex flex-wrap gap-2">
+          <Chip><span className="truncate t-mono">{box?.address ?? thread.path}</span></Chip>
+          {box !== undefined && <Chip><span className="truncate">{reader}</span></Chip>}
         </div>
       </header>
-      {thread.important !== null && <p data-mail-why className="p-row-text p-text-2">{thread.important}</p>}
-      {last !== undefined && !last.verified && <p data-mail-unverified-banner className="flex items-center gap-2 rounded-lg bg-[var(--c-warning-tint)] px-3 py-2 p-row-text p-text">
-        <ShieldWarningIcon size={15} weight="fill" className="shrink-0 p-warning" />
+      {thread.important !== null && <p data-mail-why className="t-body p-text-2">{thread.important}</p>}
+      {last !== undefined && !last.verified && <Notice tone="warning" data-mail-unverified-banner>
         {last.from.address.toLowerCase() === owner.toLowerCase() ? "Not verified · claims to be you" : "Not verified"}
-      </p>}
-      {messages.length > 0 && <div className="p-group">
+      </Notice>}
+      {messages.length > 0 && <div className="p-rows-dashed border-y border-dashed p-border-dash">
         {messages.map((message) => <MailMessage key={message.id} mail={message} box={box} owner={owner} open={opened.get(message.id) ?? message.id === last?.id} onToggle={() => toggle(message.id)} />)}
       </div>}
-      {error !== null && <p role="alert" className="p-row-text p-danger">{error}</p>}
+      {error !== null && <p role="alert" className="t-body p-danger">{error}</p>}
       {box !== undefined && thread.trashedAt === null && (last?.verified !== false || thread.draft) && <ReplyBox mail={mail} box={box} drafts={drafts} onChanged={onChanged} onSent={drafts ? onBack : () => undefined} />}
       {handing && <SendToWorkspace thread={thread.id} onClose={() => setHanding(false)} />}
     </article>

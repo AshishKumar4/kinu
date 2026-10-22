@@ -17,8 +17,8 @@ export type EvidenceLine = { file: EvidenceFile; line: number };
 
 export type TrialEvidence = { ledger: string; timeline: string; transcript: string };
 
-export type InsightKind = 'tool-calls' | 'tool-errors' | 'failing-call-loop' | 'helper-hired' | 'helper-runs'
-  | 'helper-message' | 'idle-helper' | 'duplicated-delegation' | 'lead-delegated-work' | 'lead-report-wait'
+export type InsightKind = 'tool-calls' | 'tool-errors' | 'failing-call-loop' | 'subagent-hired' | 'subagent-runs'
+  | 'subagent-message' | 'idle-subagent' | 'duplicated-delegation' | 'lead-delegated-work' | 'lead-report-wait'
   | 'swarm-run' | 'no-tool-turn' | 'provider-error' | 'provider-wait' | 'stream-drop' | 'first-failing-check'
   | 'turn-outcome' | 'harness-error';
 
@@ -43,28 +43,28 @@ type LedgerRun = {
   end?: Located<Extract<RunEvent, { type: 'run_end' }>>;
 };
 
-type Assignment = { helper: string; brief: string; evidence: EvidenceLine[]; call: Call };
+type Assignment = { subagent: string; brief: string; evidence: EvidenceLine[]; call: Call };
 
-type HelperObservation = { status: string | null; runs: JsonValue | null; evidence: EvidenceLine[] };
+type SubagentObservation = { status: string | null; runs: JsonValue | null; evidence: EvidenceLine[] };
 
-type HelperObservations = Map<string, HelperObservation>;
+type SubagentObservations = Map<string, SubagentObservation>;
 
 const JsonObject = v.record(v.string(), JsonValueSchema);
 
 const EvidenceEvent = RunEventSchema;
 
-const HelperRun = v.object({ status: v.nullable(v.string()), userMessage: v.nullable(v.string()) });
+const SubagentRun = v.object({ status: v.nullable(v.string()), userMessage: v.nullable(v.string()) });
 
-const Helper = v.object({ name: v.string(), status: v.string(), runs: v.optional(v.array(HelperRun)) });
+const Subagent = v.object({ name: v.string(), status: v.string(), runs: v.optional(v.array(SubagentRun)) });
 
-const HelperCheck = v.object({ helpers: v.array(v.object({
-  ...Helper.entries,
+const SubagentCheck = v.object({ subagents: v.array(v.object({
+  ...Subagent.entries,
   runs: v.array(v.object({ status: v.nullable(v.string()), asked: v.string() })),
 })) });
 
 type EvidenceEvent = v.InferOutput<typeof EvidenceEvent>;
 
-type Helper = v.InferOutput<typeof Helper>;
+type Subagent = v.InferOutput<typeof Subagent>;
 
 function jsonLines<S extends v.GenericSchema>(content: string, file: EvidenceFile, schema: S): Located<v.InferOutput<S>>[] {
   return content.split('\n').flatMap((line, index) => line.trim() === '' ? [] : [{
@@ -311,31 +311,31 @@ function recordRuns(runs: readonly LedgerRun[], add: RecordFact): void {
   }
 }
 
-function recordedHelper(helper: { readonly status: string; readonly runs?: readonly { readonly status: string | null; readonly asked: string | null }[] }, old: HelperObservation | undefined, sources: EvidenceLine[]): HelperObservation {
-  return { status: helper.status, runs: helper.runs?.map((item) => ({ ...item })) ?? old?.runs ?? null,
+function recordedSubagent(subagent: { readonly status: string; readonly runs?: readonly { readonly status: string | null; readonly asked: string | null }[] }, old: SubagentObservation | undefined, sources: EvidenceLine[]): SubagentObservation {
+  return { status: subagent.status, runs: subagent.runs?.map((item) => ({ ...item })) ?? old?.runs ?? null,
     evidence: refs(old?.evidence ?? [], sources) };
 }
 
-function assignedHelper(call: Call, helpers: HelperObservations, add: RecordFact): Assignment | null {
+function assignedSubagent(call: Call, subagents: SubagentObservations, add: RecordFact): Assignment | null {
   const args = object(call.args), answer = object(call.event.result);
   const op = stringOf(args.op);
 
   if (op === 'hire' && stringOf(answer.name) !== '') {
     const name = stringOf(answer.name);
 
-    add('helper-hired', { helper: name, message: args.message ?? null, lifetime: args.lifetime ?? null }, call.evidence);
-    helpers.set(name, { status: null, runs: null, evidence: call.evidence });
+    add('subagent-hired', { subagent: name, message: args.message ?? null, lifetime: args.lifetime ?? null }, call.evidence);
+    subagents.set(name, { status: null, runs: null, evidence: call.evidence });
 
-    return { helper: name, brief: stringOf(args.message), evidence: call.evidence, call };
+    return { subagent: name, brief: stringOf(args.message), evidence: call.evidence, call };
   }
 
   if ((op === 'assign' || op === 'message') && stringOf(args.agent) !== '') {
     const name = stringOf(args.agent);
 
-    add('helper-message', { helper: name, op, message: args.message ?? null, delivery: answer.delivery ?? answer.status ?? null,
+    add('subagent-message', { subagent: name, op, message: args.message ?? null, delivery: answer.delivery ?? answer.status ?? null,
       eventId: answer.event_id ?? null }, call.evidence);
 
-    return { helper: name, brief: stringOf(args.message), evidence: call.evidence, call };
+    return { subagent: name, brief: stringOf(args.message), evidence: call.evidence, call };
   }
 
   return null;
@@ -343,7 +343,7 @@ function assignedHelper(call: Call, helpers: HelperObservations, add: RecordFact
 
 function recordDelegations(calls: readonly Call[], add: RecordFact) {
   const assignments: Assignment[] = [];
-  const helpers: HelperObservations = new Map();
+  const subagents: SubagentObservations = new Map();
 
   for (const call of calls) {
     if (call.event.name !== 'agents') continue;
@@ -358,31 +358,30 @@ function recordDelegations(calls: readonly Call[], add: RecordFact) {
 
     if (failed(call.event)) continue;
 
-    const assignment = assignedHelper(call, helpers, add);
+    const assignment = assignedSubagent(call, subagents, add);
 
     if (assignment !== null) assignments.push(assignment);
 
     if (op === 'list') {
-      const roster = v.safeParse(v.object({ subordinates: v.array(Helper) }), call.event.result);
+      // The caller's subtree: every agent below it, the caller itself aside.
+      const listed = v.safeParse(v.object({ tree: v.array(v.object({ name: v.string(), status: v.string(), you: v.optional(v.literal(true)) })) }), call.event.result);
 
-      for (const helper of roster.success ? roster.output.subordinates : []) {
-        helpers.set(helper.name, recordedHelper({
-          status: helper.status, runs: helper.runs?.map((run) => ({ status: run.status, asked: run.userMessage })),
-        }, helpers.get(helper.name), call.evidence));
+      for (const row of listed.success ? listed.output.tree.filter((agent) => agent.you !== true) : []) {
+        subagents.set(row.name, recordedSubagent({ status: row.status }, subagents.get(row.name), call.evidence));
       }
     }
   }
 
-  return { assignments, helpers };
+  return { assignments, subagents };
 }
 
-function helperSources(lines: readonly string[], helper: { readonly name: string; readonly status: string; readonly runs?: readonly { readonly status: string | null }[] }, at: number): EvidenceLine[] {
+function subagentSources(lines: readonly string[], subagent: { readonly name: string; readonly status: string; readonly runs?: readonly { readonly status: string | null }[] }, at: number): EvidenceLine[] {
   const source: EvidenceLine[] = [{ file: 'results.json', line: at }];
-  let runAt = lineOf(lines, 'status', helper.status, at);
+  let runAt = lineOf(lines, 'status', subagent.status, at);
 
   source.push({ file: 'results.json', line: runAt });
 
-  for (const observedRun of helper.runs ?? []) {
+  for (const observedRun of subagent.runs ?? []) {
     runAt = lineOf(lines, 'status', observedRun.status, runAt);
     source.push({ file: 'results.json', line: runAt });
   }
@@ -390,7 +389,7 @@ function helperSources(lines: readonly string[], helper: { readonly name: string
   return source;
 }
 
-function recordResultTurns(run: HarnessRun, lines: readonly string[], helpers: HelperObservations, add: RecordFact): void {
+function recordResultTurns(run: HarnessRun, lines: readonly string[], subagents: SubagentObservations, add: RecordFact): void {
   let checkAt = lines.findIndex((line) => line.trim() === '"output": {');
 
   for (const turn of run.output.turns) {
@@ -403,25 +402,25 @@ function recordResultTurns(run: HarnessRun, lines: readonly string[], helpers: H
 
     for (const check of turn.checks) {
       const at = lineOf(lines, 'id', check.id, checkAt);
-      const inspected = v.safeParse(HelperCheck, check.evidence);
+      const inspected = v.safeParse(SubagentCheck, check.evidence);
 
       checkAt = at;
 
       if (!inspected.success) continue;
 
-      let helperAt = at;
+      let subagentAt = at;
 
-      for (const helper of inspected.output.helpers) {
-        helperAt = lineOf(lines, 'name', helper.name, helperAt);
-        helpers.set(helper.name, recordedHelper(helper, helpers.get(helper.name), helperSources(lines, helper, helperAt)));
+      for (const subagent of inspected.output.subagents) {
+        subagentAt = lineOf(lines, 'name', subagent.name, subagentAt);
+        subagents.set(subagent.name, recordedSubagent(subagent, subagents.get(subagent.name), subagentSources(lines, subagent, subagentAt)));
       }
     }
   }
 }
 
-function recordHelperRuns(helpers: HelperObservations, runs: readonly LedgerRun[], add: RecordFact): void {
-  for (const [helper, observed] of helpers) {
-    const own = runs.filter((owner) => owner.start.agentId === helper);
+function recordSubagentRuns(subagents: SubagentObservations, runs: readonly LedgerRun[], add: RecordFact): void {
+  for (const [subagent, observed] of subagents) {
+    const own = runs.filter((owner) => owner.start.agentId === subagent);
 
     const recorded = own.map((owner) => ({ runId: owner.start.runId, status: owner.end?.value.reason ?? 'open',
       asked: owner.start.turn?.text ?? owner.start.userMessage ?? '' }));
@@ -429,23 +428,23 @@ function recordHelperRuns(helpers: HelperObservations, runs: readonly LedgerRun[
     const observedRuns = recorded.length === 0 ? observed.runs : recorded;
     const source = refs(observed.evidence, own.flatMap((owner) => [owner.evidence, ...(owner.end === undefined ? [] : [owner.end.evidence])]));
 
-    add('helper-runs', { helper, status: observed.status, runs: observedRuns }, source);
+    add('subagent-runs', { subagent, status: observed.status, runs: observedRuns }, source);
 
-    if (observed.status === 'idle' && Array.isArray(observedRuns) && observedRuns.length === 0) add('idle-helper', { helper }, source);
+    if (observed.status === 'idle' && Array.isArray(observedRuns) && observedRuns.length === 0) add('idle-subagent', { subagent }, source);
   }
 }
 
 function recordDelegationWork(assignments: readonly Assignment[], calls: readonly Call[], add: RecordFact): void {
   const distinct = assignments.filter((assignment, index, all) => assignment.brief !== ''
-    && all.findIndex((other) => other.helper === assignment.helper && other.brief === assignment.brief) === index);
+    && all.findIndex((other) => other.subagent === assignment.subagent && other.brief === assignment.brief) === index);
 
   const writes = new Map<Call, string[]>();
 
   for (const [index, assignment] of distinct.entries()) {
-    const duplicates = distinct.slice(index + 1).filter((other) => other.helper !== assignment.helper && other.brief === assignment.brief);
+    const duplicates = distinct.slice(index + 1).filter((other) => other.subagent !== assignment.subagent && other.brief === assignment.brief);
 
     if (duplicates.length > 0 && !distinct.slice(0, index).some((other) => other.brief === assignment.brief)) add('duplicated-delegation', {
-      helpers: [assignment.helper, ...duplicates.map((other) => other.helper)], brief: assignment.brief,
+      subagents: [assignment.subagent, ...duplicates.map((other) => other.subagent)], brief: assignment.brief,
     }, refs(assignment.evidence, ...duplicates.map((other) => other.evidence)));
 
     const delegated = new Set(mentionedPaths(assignment.brief));
@@ -458,25 +457,25 @@ function recordDelegationWork(assignments: readonly Assignment[], calls: readonl
 
       writes.set(call, submitted);
 
-      if (overlaps.length > 0) add('lead-delegated-work', { helper: assignment.helper, paths: overlaps, tool: call.event.name,
+      if (overlaps.length > 0) add('lead-delegated-work', { subagent: assignment.subagent, paths: overlaps, tool: call.event.name,
         observation: 'lead submitted explicit writes to paths named in the delegation; whether this duplicated the computation needs the trajectory' }, refs(assignment.evidence, call.evidence));
     }
   }
 }
 
-function recordReports(assignments: readonly Assignment[], runs: readonly LedgerRun[], helpers: HelperObservations, add: RecordFact): void {
+function recordReports(assignments: readonly Assignment[], runs: readonly LedgerRun[], subagents: SubagentObservations, add: RecordFact): void {
   const first = assignments[0];
 
   if (first === undefined) return;
 
   const lead = first.call.run.start.agentId;
 
-  const reports = runs.filter((owner) => owner.start.agentId === lead && (owner.start.caused_by === 'subordinate_report'
-    || (owner.start.turn?.kind === 'programmatic' && owner.start.turn.text.includes('subordinate_report'))));
+  const reports = runs.filter((owner) => owner.start.agentId === lead && (owner.start.caused_by === 'subagent_report'
+    || (owner.start.turn?.kind === 'programmatic' && owner.start.turn.text.includes('subagent_report'))));
 
   const ends = runs.filter((owner) => owner.start.agentId === lead && owner.end !== undefined);
 
-  add('lead-report-wait', { helpers: [...helpers.keys()], reportRuns: reports.map((owner) => owner.start.runId),
+  add('lead-report-wait', { subagents: [...subagents.keys()], reportRuns: reports.map((owner) => owner.start.runId),
     observed: reports.length === 0 ? 'no-report-recorded' : 'resumed-on-report' },
   refs(...assignments.map((assignment) => assignment.evidence), reports.map((owner) => owner.evidence), ends.flatMap((owner) => owner.end === undefined ? [] : [owner.end.evidence])));
 }
@@ -508,7 +507,7 @@ function recordFailures(run: HarnessRun, lines: readonly string[], transcript: r
   for (const error of run.errors) add('harness-error', { name: error.name, message: error.message }, [{ file: 'results.json', line: lineOf(lines, 'name', error.name, outputAt) }]);
 }
 
-/** Facts are observations, not causes. Missing facet evidence is not proof that a helper was idle. */
+/** Facts are observations, not causes. Missing facet evidence is not proof that a subagent was idle. */
 export function extractInsights(assertion: Assertion, evidence: TrialEvidence): TrialInsights {
   const run = assertion.meta.harness.run;
   const resultLines = resultsRow(assertion).split('\n');
@@ -542,12 +541,12 @@ export function extractInsights(assertion: Assertion, evidence: TrialEvidence): 
   recordTools(calls, add);
   recordRuns(runs, add);
 
-  const { assignments, helpers } = recordDelegations(calls, add);
+  const { assignments, subagents } = recordDelegations(calls, add);
 
-  recordResultTurns(run, resultLines, helpers, add);
-  recordHelperRuns(helpers, runs, add);
+  recordResultTurns(run, resultLines, subagents, add);
+  recordSubagentRuns(subagents, runs, add);
   recordDelegationWork(assignments, calls, add);
-  recordReports(assignments, runs, helpers, add);
+  recordReports(assignments, runs, subagents, add);
   recordStreamDrops(jsonLines(evidence.timeline, 'timeline.jsonl', TimelineEntrySchema), add);
   recordFailures(run, resultLines, evidence.transcript.split('\n'), add);
 

@@ -1,0 +1,300 @@
+diff --git a/dist/index.js b/dist/index.js
+index a24196f055058f612deae424e881115d733e7783..8b30a099b6f4bd87458ae4d77e4969fc7547c16d 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1403,11 +1403,7 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
+ 		role: "system",
+ 		content: message.content,
+ 		providerOptions: message.providerOptions
+-	})) : [], ...prompt.messages.map((message) => convertToLanguageModelMessage({
+-		message,
+-		downloadedAssets,
+-		provider
+-	}))];
++	})) : [], ...prompt.messages.map((message) => convertedOnce(message, downloadedAssets, provider))];
+ 	const combinedMessages = [];
+ 	for (const message of messages) {
+ 		if (message.role !== "tool") {
+@@ -1416,10 +1412,18 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
+ 		}
+ 		const lastCombinedMessage = combinedMessages.at(-1);
+ 		if (lastCombinedMessage?.role === "tool") {
+-			const lastContentPart = lastCombinedMessage.content.at(-1);
+-			if (lastContentPart != null && lastCombinedMessage.providerOptions != null) lastContentPart.providerOptions = mergeObjects(lastCombinedMessage.providerOptions, lastContentPart.providerOptions);
+-			lastCombinedMessage.content.push(...message.content);
+-			lastCombinedMessage.providerOptions = lastContentPart == null ? mergeObjects(lastCombinedMessage.providerOptions, message.providerOptions) : message.providerOptions;
++			const content = [...lastCombinedMessage.content];
++			const lastContentPart = content.at(-1);
++			if (lastContentPart != null && lastCombinedMessage.providerOptions != null) content[content.length - 1] = {
++				...lastContentPart,
++				providerOptions: mergeObjects(lastCombinedMessage.providerOptions, lastContentPart.providerOptions)
++			};
++			content.push(...message.content);
++			combinedMessages[combinedMessages.length - 1] = {
++				...lastCombinedMessage,
++				content,
++				providerOptions: lastContentPart == null ? mergeObjects(lastCombinedMessage.providerOptions, message.providerOptions) : message.providerOptions
++			};
+ 		} else combinedMessages.push(message);
+ 	}
+ 	const toolCallIds = /* @__PURE__ */ new Set();
+@@ -1437,6 +1441,67 @@ async function convertToLanguageModelPrompt({ prompt, supportedUrls, download, a
+ 	return combinedMessages.filter((message) => message.role !== "tool" || message.content.length > 0);
+ }
+ /**
++* Kinu patch: every step re-converts the whole history, though only its tail is new. A message frozen to its leaves
++* with no file or image anywhere in it converts the same way each time for one provider, so it converts once, and its
++* conversion is frozen in turn. A mutable message, or one carrying an asset (whose bytes come from this call's
++* downloads), converts every time. Upstream ask: kinu-logs/main/AI-SDK-ASKS.md.
++*/
++const convertedMessages = /* @__PURE__ */ new WeakMap();
++const frozenTrees = /* @__PURE__ */ new WeakSet();
++const CACHEABLE_PARTS = /* @__PURE__ */ new Set([
++	"text",
++	"reasoning",
++	"tool-call",
++	"tool-result",
++	"tool-approval-request",
++	"tool-approval-response"
++]);
++/** Plain data frozen to its leaves: a getter or a function (a `toJSON`) could answer differently on each read, and a class
++* instance (a byte view, a URL) carries state freezing does not reach. */
++function isFrozenTree(value) {
++	if (typeof value === "function") return false;
++	if (typeof value !== "object" || value === null || frozenTrees.has(value)) return true;
++	const prototype = Object.getPrototypeOf(value);
++	if (!Object.isFrozen(value) || prototype !== Object.prototype && prototype !== Array.prototype && prototype !== null) return false;
++	for (const key of Reflect.ownKeys(value)) {
++		const field = Object.getOwnPropertyDescriptor(value, key);
++		if (field === void 0 || !("value" in field) || !isFrozenTree(field.value)) return false;
++	}
++	frozenTrees.add(value);
++	return true;
++}
++function freezeTree(value) {
++	if (typeof value !== "object" || value === null || Object.isFrozen(value) || ArrayBuffer.isView(value) || value instanceof ArrayBuffer) return value;
++	for (const item of Object.values(value)) freezeTree(item);
++	return Object.freeze(value);
++}
++function assetFree(message) {
++	if (typeof message.content === "string") return true;
++	return message.content.every((part) => CACHEABLE_PARTS.has(part.type) && (part.type !== "tool-result" || part.output?.type !== "content" || part.output.value.every((item) => item.type === "text")));
++}
++function convertedOnce(message, downloadedAssets, provider) {
++	if (!assetFree(message) || !isFrozenTree(message)) return convertToLanguageModelMessage({
++		message,
++		downloadedAssets,
++		provider
++	});
++	let byProvider = convertedMessages.get(message);
++	if (byProvider === void 0) {
++		byProvider = /* @__PURE__ */ new Map();
++		convertedMessages.set(message, byProvider);
++	}
++	let converted = byProvider.get(provider);
++	if (converted === void 0) {
++		converted = freezeTree(convertToLanguageModelMessage({
++			message,
++			downloadedAssets,
++			provider
++		}));
++		byProvider.set(provider, converted);
++	}
++	return converted;
++}
++/**
+ * Convert a ModelMessage to a LanguageModelV4Message.
+ *
+ * @param message - The ModelMessage to convert.
+@@ -8300,10 +8365,27 @@ const originalGenerateCallId$8 = createIdGenerator$1({
+ *
+ * @returns A stream of model call parts together with request and response metadata when available.
+ */
+-async function streamLanguageModelCall({ model, tools, toolOrder, output, toolChoice, prompt, system, instructions, messages, allowSystemInMessages, download, abortSignal, headers, includeRawChunks, providerOptions, repairToolCall, refineToolInput, executeLanguageModelCallInTelemetryContext = async ({ execute }) => await execute(), callId, toolsContext, experimental_sandbox: sandbox, _internal: { generateId = originalGenerateId$3, generateCallId = originalGenerateCallId$8, now: now$3 = now, collectContent = true } = {}, onStart, onLanguageModelCallStart, onLanguageModelCallEnd, ...callSettings }) {
++/** Kinu patch: a step reuses streamText's messages without the full schema walk; the shape and role checks a caller's prepareStep replacement must pass still run. */
++function checkedPreparedPrompt(prepared, allowSystemInMessages = false) {
++	const { instructions, messages } = prepared;
++	if (instructions != null && typeof instructions !== "string" && !asArray(instructions).every((message) => message.role === "system")) throw new InvalidPromptError$1({
++		prompt: messages,
++		message: "instructions must be a string, SystemModelMessage, or array of SystemModelMessage"
++	});
++	if (messages.length === 0) throw new InvalidPromptError$1({
++		prompt: messages,
++		message: "messages must not be empty"
++	});
++	if (!allowSystemInMessages && messages.some((message) => message.role === "system")) throw new InvalidPromptError$1({
++		prompt: messages,
++		message: "System messages are not allowed in the prompt or messages fields. Use the instructions option instead."
++	});
++	return prepared;
++}
++async function streamLanguageModelCall({ model, tools, toolOrder, output, toolChoice, prompt, system, instructions, messages, allowSystemInMessages, download, abortSignal, headers, includeRawChunks, providerOptions, repairToolCall, refineToolInput, executeLanguageModelCallInTelemetryContext = async ({ execute }) => await execute(), callId, toolsContext, experimental_sandbox: sandbox, _internal: { generateId = originalGenerateId$3, generateCallId = originalGenerateCallId$8, now: now$3 = now, collectContent = true, standardizedPrompt: preparedPrompt, preparedTools } = {}, onStart, onLanguageModelCallStart, onLanguageModelCallEnd, ...callSettings }) {
+ 	const resolvedModel = resolveLanguageModel(model);
+ 	const effectiveCallId = callId ?? generateCallId();
+-	const standardizedPrompt = await standardizePrompt({
++	const standardizedPrompt = preparedPrompt ? checkedPreparedPrompt(preparedPrompt, allowSystemInMessages) : await standardizePrompt({
+ 		instructions,
+ 		system,
+ 		prompt,
+@@ -8320,7 +8402,7 @@ async function streamLanguageModelCall({ model, tools, toolOrder, output, toolCh
+ 		abortSignal,
+ 		provider: resolvedModel.provider.split(".")[0]
+ 	});
+-	const stepTools = await prepareTools({
++	const stepTools = preparedTools ?? await prepareTools({
+ 		tools,
+ 		toolOrder,
+ 		toolsContext,
+@@ -9867,7 +9949,12 @@ var DefaultStreamTextResult = class {
+ 						},
+ 						_internal: {
+ 							now,
+-							collectContent: retention.collectContent
++							collectContent: retention.collectContent,
++							standardizedPrompt: {
++								instructions: stepInstructions,
++								messages: stepMessages
++							},
++							preparedTools: stepTools
+ 						},
+ 						...stepCallSettings
+ 					})));
+diff --git a/src/generate-text/stream-language-model-call.ts b/src/generate-text/stream-language-model-call.ts
+index f9c537fb4827da4d567e13ae020dbab4962974d2..584a71f3b75e5b9fed504a1f77b4d5e534d3f994 100644
+--- a/src/generate-text/stream-language-model-call.ts
++++ b/src/generate-text/stream-language-model-call.ts
+@@ -1,3 +1,12 @@
++/**
++ * Kinu gap, ai@7.0.127, measured 2026-10-06 in workerd: a 150-step turn allocated 1.29 GB
++ * with repeated prompt validation, 653 MB with the loop's standardized prompt reused.
++ * A step skips only the schema walk: its shape and system-role checks still run, so a
++ * prepareStep replacement cannot smuggle in a system message. It also reuses the tools
++ * streamText already prepared from the same inputs. Standalone calls still validate.
++ * Upstream ask drafted for vercel/ai; remove this patch when streamText passes its
++ * validated input through without reparsing every prior message.
++ */
+ import {
+   getErrorMessage,
+   type LanguageModelV4Content,
+@@ -5,6 +14,7 @@ import {
+   type LanguageModelV4StreamPart,
+   type LanguageModelV4ToolChoice,
+   type SharedV4Headers,
++  InvalidPromptError,
+ } from '@ai-sdk/provider';
+ import {
+   createIdGenerator,
+@@ -15,6 +25,7 @@ import {
+   type ModelMessage,
+   type ProviderOptions,
+   type ToolSet,
++  asArray,
+ } from '@ai-sdk/provider-utils';
+ import { ToolCallNotFoundForApprovalError } from '../error/tool-call-not-found-for-approval-error';
+ import { resolveLanguageModel } from '../model/resolve-model';
+@@ -25,7 +36,10 @@ import type { LanguageModelCallOptions } from '../prompt/language-model-call-opt
+ import { normalizeStreamProviderError } from '../prompt/normalize-stream-provider-error';
+ import { prepareToolChoice } from '../prompt/prepare-tool-choice';
+ import { prepareTools } from '../prompt/prepare-tools';
+-import { standardizePrompt } from '../prompt/standardize-prompt';
++import {
++  standardizePrompt,
++  type StandardizedPrompt,
++} from '../prompt/standardize-prompt';
+ import type { Telemetry } from '../telemetry/telemetry';
+ import type {
+   CallWarning,
+@@ -195,6 +209,39 @@ export type LanguageModelStreamPart<TOOLS extends ToolSet = ToolSet> =
+  *
+  * @returns A stream of model call parts together with request and response metadata when available.
+  */
++function checkedPreparedPrompt(
++  prepared: StandardizedPrompt,
++  allowSystemInMessages = false,
++): StandardizedPrompt {
++  const { instructions, messages } = prepared;
++
++  if (
++    instructions != null &&
++    typeof instructions !== 'string' &&
++    !asArray(instructions).every(message => message.role === 'system')
++  ) {
++    throw new InvalidPromptError({
++      prompt: messages,
++      message:
++        'instructions must be a string, SystemModelMessage, or array of SystemModelMessage',
++    });
++  }
++
++  if (messages.length === 0) {
++    throw new InvalidPromptError({ prompt: messages, message: 'messages must not be empty' });
++  }
++
++  if (!allowSystemInMessages && messages.some(message => message.role === 'system')) {
++    throw new InvalidPromptError({
++      prompt: messages,
++      message:
++        'System messages are not allowed in the prompt or messages fields. Use the instructions option instead.',
++    });
++  }
++
++  return prepared;
++}
++
+ export async function streamLanguageModelCall<
+   TOOLS extends ToolSet,
+   OUTPUT extends Output = Output,
+@@ -226,6 +273,8 @@ export async function streamLanguageModelCall<
+     generateCallId = originalGenerateCallId,
+     now = originalNow,
+     collectContent = true,
++    standardizedPrompt: preparedPrompt,
++    preparedTools,
+   } = {},
+   onStart,
+   onLanguageModelCallStart,
+@@ -261,6 +310,8 @@ export async function streamLanguageModelCall<
+     now?: () => number;
+     /** Internal: content is only needed by collectors and full-content callbacks. */
+     collectContent?: boolean;
++    standardizedPrompt?: StandardizedPrompt;
++    preparedTools?: Awaited<ReturnType<typeof prepareTools>>;
+   };
+   onLanguageModelCallStart?: Arrayable<OnLanguageModelCallStartCallback>;
+   onLanguageModelCallEnd?: Arrayable<OnLanguageModelCallEndCallback<TOOLS>>;
+@@ -295,7 +346,9 @@ export async function streamLanguageModelCall<
+   const resolvedModel = resolveLanguageModel(model);
+   const effectiveCallId = callId ?? generateCallId();
+ 
+-  const standardizedPrompt = await standardizePrompt({
++  const standardizedPrompt = preparedPrompt
++    ? checkedPreparedPrompt(preparedPrompt, allowSystemInMessages)
++    : await standardizePrompt({
+     instructions,
+     system,
+     prompt,
+@@ -314,7 +367,7 @@ export async function streamLanguageModelCall<
+     provider: resolvedModel.provider.split('.')[0],
+   });
+ 
+-  const stepTools = await prepareTools({
++  const stepTools = preparedTools ?? await prepareTools({
+     tools,
+     toolOrder,
+     toolsContext,
+diff --git a/src/generate-text/stream-text.ts b/src/generate-text/stream-text.ts
+index 8b0aa33b38cd02e4a8c6fc592932378d6ea3c280..f76758466f0d69ede8644269187436e8badb16b8 100644
+--- a/src/generate-text/stream-text.ts
++++ b/src/generate-text/stream-text.ts
+@@ -2592,6 +2592,11 @@ class DefaultStreamTextResult<
+                   _internal: {
+                     now,
+                     collectContent: retention.collectContent,
++                    standardizedPrompt: {
++                      instructions: stepInstructions,
++                      messages: stepMessages,
++                    },
++                    preparedTools: stepTools,
+                   },
+                   ...stepCallSettings,
+                 }),

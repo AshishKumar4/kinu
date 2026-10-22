@@ -50,7 +50,7 @@ const workspace = {
     { type: 'run_end', runId: 'run-1', eventIndex: 1, timestamp: at, reason: 'completed' },
   ],
   backgroundJobs: async (of) => (of === undefined ? [server] : []),
-  subordinates: async () => [],
+  subagents: async () => [],
   agents: async () => [],
   toolCallsInFlight: () => [],
   heard: () => 0,

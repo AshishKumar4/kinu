@@ -319,8 +319,8 @@ describe("a message typed into an added agent's window while it works", () => {
 
     Reflect.set(workspace.agent, 'broadcast', (payload: string) => { frames.push(payload); });
     await workspace.agent.setSoul('# Purpose\n\nKeep the parser notes.');
-    const { subordinate } = await workspace.agent.createSubordinateAgent();
-    const pane = [actorConnectionTag(subordinate.actorId ?? '')];
+    const { subagent } = await workspace.agent.createSubagentAgent();
+    const pane = [actorConnectionTag(subagent.actorId ?? '')];
 
     await asPane(pane, () => workspace.agent.send(ASK, crypto.randomUUID()));
     await driveUntil(workspace, "the agent's model was never asked", () => held);

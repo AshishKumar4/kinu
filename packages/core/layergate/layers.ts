@@ -427,7 +427,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             parentId: i % 3 === 0 ? null : `t${i - (i % 3) + 1}`,
           })), total: 17 },
           delegates: { items: [
-            { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
+            { kind: 'subagent', name: 'ana', phase: 'working', task: 'survey the prior art' },
             { kind: 'swarm node', name: 'run-7', phase: '2 of 3 nodes running', task: null },
           ], total: 2 },
           approvals: { items: [{ id: 'cons-1', kind: 'device consent', detail: 'device: git push origin main' }], total: 1 },
@@ -1743,8 +1743,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   },
 
   {
-    id: 'subordinate-runtime',
-    owns: 'the facet inherited-context digest: what a spawned head/subordinate sees of its parent conversation ' +
+    id: 'subagent-runtime',
+    owns: 'the facet inherited-context digest: what a spawned head/subagent sees of its parent conversation ' +
       '(core orchestrator/heads-support.ts); spawn/assign/dismiss ordering stays in cf-backend behind this digest',
     subjects: [
       'serializeContentForHeads',
@@ -1753,7 +1753,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     ],
     probes: [
       {
-        id: 'subordinate-runtime/inherited-context-digest',
+        id: 'subagent-runtime/inherited-context-digest',
         asserts: 'the digest caps the parent history, DISCLOSES the omission it made, narrows roles, and keeps ids index-stable',
         observe: (s) => {
           const history: ModelMessage[] = Array.from({ length: 60 }, (_, i): ModelMessage =>
@@ -1763,7 +1763,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         },
       },
       {
-        id: 'subordinate-runtime/file-parts-never-inherit-payloads',
+        id: 'subagent-runtime/file-parts-never-inherit-payloads',
         asserts: 'attachment data URLs reduce to filename/mediaType references: heads never inherit base64 payloads',
         observe: (s) => ({
           plain: s.serializeContentForHeads('plain text'),
@@ -1775,7 +1775,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         }),
       },
       {
-        id: 'subordinate-runtime/role-narrowing',
+        id: 'subagent-runtime/role-narrowing',
         asserts: 'unknown stored roles read as assistant output; the four real roles pass through',
         observe: (s) => ['system', 'user', 'assistant', 'tool', 'developer', ''].map((role) =>
           [role, s.narrowInheritedRole(role)]),

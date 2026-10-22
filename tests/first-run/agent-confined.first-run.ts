@@ -1,7 +1,7 @@
 /**
  * FIRST RUN: a subagent is confined to the workspace that made it.
  *
- * THE ASK. Subordinates are "other agents confined to the workspace itself"
+ * THE ASK. Subagents are "other agents confined to the workspace itself"
  * (the owner, 2026-07-13): made in one workspace, listed on its strip, chatted
  * with there, and reachable from no other workspace of the same account. The
  * account's other workspaces are peers; a workspace's subagents are not.
@@ -58,7 +58,7 @@ afterAll(async () => { await publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE
 
 const CreatedSchema = v.object({
   name: v.string(),
-  subordinate: v.object({ actorReference: v.object({ actorId: v.string() }) }),
+  subagent: v.object({ actorReference: v.object({ actorId: v.string() }) }),
 });
 
 const RosterSchema = v.array(v.object({ name: v.string() }));
@@ -66,12 +66,12 @@ const RosterSchema = v.array(v.object({ name: v.string() }));
 const roomOf = (workspace: string): string => `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(workspace)}`;
 
 async function listed(socket: PublicSocket): Promise<{ readonly names: readonly string[] | null; readonly detail: string }> {
-  const answer = await ask(socket, 'listSubordinates', []);
+  const answer = await ask(socket, 'listSubagents', []);
   const parsed = answer.ok ? v.safeParse(RosterSchema, answer.value) : null;
 
   return parsed !== null && parsed.success
-    ? { names: parsed.output.map((row) => row.name), detail: `listSubordinates answered ${JSON.stringify(parsed.output.map((row) => row.name))}` }
-    : { names: null, detail: rpcDetail({ rpc: 'listSubordinates', answer, refusal: 'never answered', said: null }) };
+    ? { names: parsed.output.map((row) => row.name), detail: `listSubagents answered ${JSON.stringify(parsed.output.map((row) => row.name))}` }
+    : { names: null, detail: rpcDetail({ rpc: 'listSubagents', answer, refusal: 'never answered', said: null }) };
 }
 
 describe(SUITE, () => {
@@ -102,21 +102,21 @@ describe(SUITE, () => {
             return announce(subgoals);
           }
 
-          const answer = await ask(home, 'createSubordinateAgent', []);
+          const answer = await ask(home, 'createSubagentAgent', []);
           const created = answer.ok ? v.safeParse(CreatedSchema, answer.value) : null;
 
           if (created === null || !created.success) {
             subgoals.push({
               what: 'agent-created', reached: false,
-              detail: rpcDetail({ rpc: 'createSubordinateAgent', answer, refusal: 'refused', said: null }),
+              detail: rpcDetail({ rpc: 'createSubagentAgent', answer, refusal: 'refused', said: null }),
             });
 
             return announce(subgoals);
           }
 
           const { name } = created.output;
-          const { actorId } = created.output.subordinate.actorReference;
-          subgoals.push({ what: 'agent-created', reached: true, detail: `createSubordinateAgent answered ${name} (${actorId})` });
+          const { actorId } = created.output.subagent.actorReference;
+          subgoals.push({ what: 'agent-created', reached: true, detail: `createSubagentAgent answered ${name} (${actorId})` });
 
           const here = await listed(home);
           subgoals.push({ what: 'listed-where-made', reached: here.names?.includes(name) === true, detail: here.detail });

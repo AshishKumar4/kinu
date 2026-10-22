@@ -3,7 +3,7 @@
 
 import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { EvolutionLaneRequest } from '../identity/evolution-helpers';
+import type { EvolutionLaneRequest } from '../identity/evolution-subagents';
 import type { AgentSignal, SendOutcome } from '../types/signals';
 import type { CompletedTurn, ToolCallRecord } from '../evolution/types';
 import { CompletedTurnSchema } from '../evolution/session-window';
@@ -270,12 +270,12 @@ export const ADVISOR_ROLE_ID = 'advisor';
 
 const ADVISOR_LANE_PREFIX = 'advisor:';
 
-/** The reviewed turn's lane on the reviewing actor's helper rows; the answer finds its turn by it. */
+/** The reviewed turn's lane on the reviewing actor's subagent rows; the answer finds its turn by it. */
 export function advisorLane(turnId: string): EvolutionLaneRequest {
   return { requestId: `${ADVISOR_LANE_PREFIX}${turnId}` };
 }
 
-/** The turn an answered helper lane reviewed, or null for another lane's helper (a refiner). */
+/** The turn an answered subagent lane reviewed, or null for another lane's subagent (a refiner). */
 export function advisedTurnOf(lane: EvolutionLaneRequest): string | null {
   return lane.requestId.startsWith(ADVISOR_LANE_PREFIX) ? lane.requestId.slice(ADVISOR_LANE_PREFIX.length) : null;
 }

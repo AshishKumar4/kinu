@@ -174,7 +174,7 @@ export const CODE_EXECUTION_SECTION = definePromptSection(
   codeExecutionSection.trimEnd(),
 );
 
-/** Names the helper lifetimes; which rung to pick lives in the `agents` tool description. */
+/** Names the subagent lifetimes; which rung to pick lives in the `agents` tool description. */
 export const DELEGATION_SECTION = definePromptSection(
   "state/delegation",
   "{{#if hasActions}}{{/if}}{{#if hasHire}}{{/if}}{{#if hasReport}}{{/if}}{{#if hasSwarm}}{{/if}}{{#if hasTemporaryAsk}}{{/if}}{{#if rungsInCode}}{{/if}}{{#if isHired}}{{/if}}",

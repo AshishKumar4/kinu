@@ -49,7 +49,7 @@ function peer(id: string, replyExpected = false): KinuEvent {
 
 function assignment(id: string): KinuEvent {
   return {
-    ...EVENT_BASE, id, ingress: 'subordinate', variant: 'subordinate_task', payload_visibility: 'full',
+    ...EVENT_BASE, id, ingress: 'subagent', variant: 'subagent_task', payload_visibility: 'full',
     payload: { from_workspace: 'atlas', kind: 'task', body: 'Survey the auth module.', kinu_mode: 'build' },
   };
 }
@@ -100,14 +100,14 @@ describe('buildDrainBatch', () => {
     expect(batch.ids).toEqual(['ext']);
   });
 
-  /** B10. An assignment is the subordinate's whole turn input and belongs to the delegation
+  /** B10. An assignment is the subagent's whole turn input and belongs to the delegation
      *  runner; a drain would hand the child a paraphrase of its own brief. */
   test('an assignment never wakes a drain, alone or beside external work', () => {
     expect(buildDrainBatch([assignment('as1')])).toBeNull();
 
     const batch = present(buildDrainBatch([assignment('as1'), webhook('wh1')]), 'the drain batch');
     expect(batch.ids).toEqual(['wh1']);
-    expect(batch.text).not.toContain('[subordinate_task]');
+    expect(batch.text).not.toContain('[subagent_task]');
   });
 });
 

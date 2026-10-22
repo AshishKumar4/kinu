@@ -43,12 +43,12 @@ export type ConnectionStatus = "connecting" | "connected" | "disconnected" | "er
 
 export interface KinuActorAddress {
   workspace: string;
-  subordinate?: string;
+  subagent?: string;
 }
 
 const KinuActorAddressSchema = v.object({
   workspace: v.string(),
-  subordinate: v.optional(v.string()),
+  subagent: v.optional(v.string()),
 });
 
 /** Where the message landed, once its request has ended; it rejects `cancelled` when no turn took it, as when a Stop
@@ -121,22 +121,22 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   const addressed = targetAddress.success ? targetAddress.output.workspace : undefined;
   const workspace = targetString.success ? targetString.output : addressed;
 
-  const subordinate = targetAddress.success ? targetAddress.output.subordinate : undefined;
+  const subagent = targetAddress.success ? targetAddress.output.subagent : undefined;
 
   const actorAddress = useMemo<KinuActorAddress>(() => {
     const address: KinuActorAddress = { workspace: workspace === undefined || workspace === "" ? "default" : workspace };
 
-    if (subordinate) address.subordinate = subordinate;
+    if (subagent) address.subagent = subagent;
 
     return address;
-  }, [workspace, subordinate]);
+  }, [workspace, subagent]);
 
   const actorKey = useMemo(
-    () => JSON.stringify([actorAddress.workspace, subordinate ?? null]),
-    [actorAddress.workspace, subordinate],
+    () => JSON.stringify([actorAddress.workspace, subagent ?? null]),
+    [actorAddress.workspace, subagent],
   );
 
-  const isSubordinate = subordinate !== undefined;
+  const isSubagent = subagent !== undefined;
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   /**
    * Whether the server has answered the resume probe the SDK sends as this socket opens. Until it has, the chat is not
@@ -250,10 +250,10 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     onError: useCallback(() => {}, []),
   };
 
-  if (subordinate) {
+  if (subagent) {
     // The actor's own chat path under this room, not the SDK's `sub` facet hop: there is no child
     // Durable Object, so that path is refused. See `hostedActorSocketPath`.
-    agentOptions.path = hostedActorSocketPath(subordinate);
+    agentOptions.path = hostedActorSocketPath(subagent);
   }
 
   const agent = useAgent(agentOptions);
@@ -371,7 +371,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     // Reported once per failure; a report that cannot be sent is a diagnostic, never the page's failure.
     detach(Effect.promise(async () => {
       try {
-        await reportChatStreamFailure(failed, subordinate === undefined ? "root" : "actor", {
+        await reportChatStreamFailure(failed, subagent === undefined ? "root" : "actor", {
           release: pageDeployedBuildSha(),
           route: routeTemplateOf(location.pathname),
         });
@@ -379,7 +379,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
         diagnostics.event("client_error.reporter_failed", { reason: renderThrownChain({ cause }) });
       }
     }));
-  }, [standingStreamError, subordinate]);
+  }, [standingStreamError, subagent]);
 
   // Version skew: /api/health's build sha against the page's own (`pageDeployedBuildSha`), on each reconnect.
   const [newerDeployedBuild, setNewerDeployedBuild] = useState(false);
@@ -475,7 +475,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
           setSourceError,
           (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
           // A hosted chat's load seeds only its plan; the workspace's seeds every read its opening carries.
-          isSubordinate ? ["plan"] : SNAPSHOT_SEEDED_SOURCES,
+          isSubagent ? ["plan"] : SNAPSHOT_SEEDED_SOURCES,
         );
 
         if (disposed || outcome === "superseded") return;
@@ -502,7 +502,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       disposed = true;
       clearTimeout(timer);
     };
-  }, [actorKey, isSubordinate, liveRefreshAdmission, loadGeneration, rpc, setSourceError, subordinate, workspace]);
+  }, [actorKey, isSubagent, liveRefreshAdmission, loadGeneration, rpc, setSourceError, subagent, workspace]);
 
   /** Aborts the SDK request and the server turn in parallel. Unread messages come back on their
    *  `returned` broadcasts. Releases the send latch on settle, success or failure. */
@@ -577,7 +577,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   };
 
 
-  useSocketFrames(agent, () => ({ isSubordinate, ownActorId: ownActorIdRef.current }), { everyFrame, paneFrame });
+  useSocketFrames(agent, () => ({ isSubagent, ownActorId: ownActorIdRef.current }), { everyFrame, paneFrame });
 
   const retryLoad = useCallback(() => {
     failureStreak.current = 0;
@@ -622,9 +622,9 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     isCurrent: () => boolean,
     isSourceCurrent: (source: LiveRefreshSource) => boolean,
   ): Promise<void> {
-    const opening = isSubordinate ? null : await rpc("getWorkspaceOpening", []);
+    const opening = isSubagent ? null : await rpc("getWorkspaceOpening", []);
     // The root resolves the name through its directory, so a tab cannot ask about a non-child actor.
-    const chat = opening?.chat ?? await rpc("getActorSnapshot", [subordinate]);
+    const chat = opening?.chat ?? await rpc("getActorSnapshot", [subagent]);
 
     if (!isCurrent()) return;
     // Decoded before anything is published: a chat whose plan does not decode fails whole, never half-loaded nor read
@@ -633,7 +633,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
     // Set before anything is admitted: stamped frames are a hosted chat's only while the id matches, and a page request
     // without it reads the workspace's rows.
-    if (isSubordinate) {
+    if (isSubagent) {
       ownActorIdRef.current = chat.actorId;
       setPaneActorId(chat.actorId);
     }
@@ -670,7 +670,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     // The last actor's id would admit its frames here and page its history.
     ownActorIdRef.current = null;
     setPaneActorId(null);
-  }, [workspace, subordinate]);
+  }, [workspace, subagent]);
 
   /**
    * Idle: starts a turn under the send latch via the SDK chat path; the agent may still read it mid-turn, as a turn this
@@ -749,7 +749,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   }, [startTurn, messages.length, regenerate]);
 
   /** Every per-chat call names a hosted chat's agent last; the workspace's names none. */
-  const actorArgs = useMemo((): [] | [string] => (subordinate === undefined ? [] : [subordinate]), [subordinate]);
+  const actorArgs = useMemo((): [] | [string] => (subagent === undefined ? [] : [subagent]), [subagent]);
 
   /** Resolves null on success or the failure reason, which is also recorded on `error` after the
    *  picker is rolled back. Callers reporting "Saved" must check the result; it never rejects. */
@@ -842,7 +842,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
       rpc,
       rawAgent: agent,
       actorAddress,
-      isSubordinate,
+      isSubagent,
       /** Addresses cursored reads of this chat's older history. */
       paneActorId,
     },

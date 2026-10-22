@@ -28,7 +28,7 @@ const ROOT = canonicalProjectRoot();
 const GROUPED_ITEMS: readonly TuiAgentSummary[] = [
   {
     name: 'audit', label: 'audit', mode: 'local', localName: 'audit', cwd: ROOT, workspaceId: 'shop', status: 'running',
-    subordinates: [{ id: 'sub-reviewer', label: 'reviewer', status: 'idle', roleId: 'auditor' }],
+    subagents: [{ id: 'sub-reviewer', label: 'reviewer', status: 'idle', roleId: 'auditor' }],
   },
   { name: 'fixer', label: 'fixer', mode: 'local', localName: 'fixer', cwd: ROOT, workspaceId: 'shop' },
   { name: 'writer', label: 'writer', mode: 'local', localName: 'writer', cwd: ROOT, workspaceId: 'docs' },
@@ -453,7 +453,7 @@ function ShellProbe(props: {
       items: [
         {
           name: 'checkout', label: 'checkout', mode: 'local', localName: 'checkout', cwd: ROOT, workspaceId: 'checkout', status: 'running',
-          subordinates: [{ id: 'reviewer', label: 'Reviewer', status: 'idle', roleId: 'auditor' }],
+          subagents: [{ id: 'reviewer', label: 'Reviewer', status: 'idle', roleId: 'auditor' }],
         },
         { name: 'jarvis', label: 'Jarvis', mode: 'cloud', cloudName: 'jarvis', status: 'idle' },
       ],

@@ -6,7 +6,7 @@
 import { expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import { present, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
-import { pendingEventsDelivery } from '../src/subordinates/deliveries';
+import { pendingEventsDelivery } from '../src/subagents/deliveries';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { chatSeed } from '../src/read-models/status';
 import { keptMediaName } from '../src/session/chat-media';

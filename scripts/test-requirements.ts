@@ -40,6 +40,17 @@ export const TEST_REQUIREMENTS = {
       reference: 'https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html',
     },
   },
+  /** The palette's own floors, above WCAG's where a role carries more (docs/DESIGN-SYSTEM.md §1.1). */
+  designContrastFloors: {
+    kind: 'css',
+    values: { text: 12, text2: 7, quiet: 4.5, fill: 3, hairlineLow: 1.15, hairlineHigh: 1.6 },
+    authority: {
+      kind: 'spec',
+      standard: 'Kinu design system',
+      clause: '§1.1 Contrast floors',
+      reference: 'docs/DESIGN-SYSTEM.md',
+    },
+  },
   wcagNonTextContrast: {
     kind: 'css',
     values: { minimum: 3 },

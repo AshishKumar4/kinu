@@ -1,23 +1,28 @@
 import { Effect } from 'effect';
 import { useState, useCallback } from "react";
-import { Button, Badge, Loader } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
-import {
-  LightningIcon, CheckIcon,
-  PlusIcon, TrashIcon, WarningIcon, PlugIcon,
-} from "@phosphor-icons/react";
+import { Badge } from "@/components/ui/Badge";
+import { Loader } from "@/components/ui/Loader";
+import { Button } from "@/components/ui/Button";
+import { LightningIcon, PlusIcon, TrashIcon, WarningIcon, PlugIcon } from "@phosphor-icons/react";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { SECRET_REGION, SecretValue } from "@/components/ui/SecretValue";
 import { Modal } from "@/components/ui/Modal";
-import { inputCls } from "@/components/ui/form";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { StatusDot, type StatusTone } from "@/components/ui/Status";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import * as v from "valibot";
 import { showing, detach } from '@kinu.run/core/obs';
+import { dailyTimeOf } from "@kinu.run/core";
 import type { WorkspaceAnswer, WorkspaceRpc } from "@/lib/workspace-rpc";
+import { TextInput } from "@/components/ui/Field";
+import { Group } from "@/components/ui/Group";
+import { Chip } from "@/components/ui/Chip";
+import { CopyField } from "@/components/ui/CopyField";
+import { Preformatted } from "@/components/ui/Preformatted";
+import { Select } from "@/components/ui/Select";
+import { Card } from "@/components/ui/Card";
 
 type TriggerRow = WorkspaceAnswer<"listTriggers">["triggers"][number];
 
@@ -52,25 +57,25 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: WorkspaceRpc; wo
     <section className="min-w-0">
       {dialog}
       <div className="flex flex-wrap items-center gap-2 mb-3">
-        <LightningIcon size={16} className="p-accent" />
-        <h2 className="text-sm font-semibold p-text">Automations</h2>
-        {triggers && <Badge variant="secondary">{active}/{triggers.length} active</Badge>}
-        {nextFire && <span className="p-meta p-text-3 tabular-nums">next {new Date(nextFire).toLocaleString()}</span>}
+        <LightningIcon size={16} className="p-accent-fg" />
+        <h2 className="t-label p-text">Automations</h2>
+        {triggers && <Badge>{active}/{triggers.length} active</Badge>}
+        {nextFire && <span className="t-meta p-text-3 tabular-nums">next {new Date(nextFire).toLocaleString()}</span>}
         <Button size="sm" variant="secondary" className="ml-auto" icon={<PlusIcon size={12} />}
           onClick={() => { setShowCreate(true); setCreated(null); }}>New webhook</Button>
       </div>
-      <p className="text-xs p-text-3 mb-3">Webhooks and timers: what wakes this workspace's agent from outside.</p>
+      <p className="t-meta p-text-3 mb-3">Webhooks and timers: what wakes this workspace's agent from outside.</p>
       {created && <NewWebhookCard result={created} onDismiss={() => setCreated(null)} />}
       {triggers === null && (resource.status === "error"
         ? <LoadFailure what="automations" message={resource.message} onRetry={reload} />
         : <div className="flex justify-center py-6"><Loader size="sm" /></div>)}
-      {triggers !== null && triggers.length === 0 && <p className="text-xs p-text-3">No webhooks or timers yet. Use New webhook to let another system wake this agent.</p>}
+      {triggers !== null && triggers.length === 0 && <p className="t-meta p-text-3">No webhooks or timers yet. Use New webhook to let another system wake this agent.</p>}
       {triggers !== null && triggers.length > 0 && (
-        <div className="rounded-md border p-border overflow-hidden text-xs">
+        <Group>
           {triggers.map((t) => (
-            <TriggerLine key={t.id} trigger={t} onRevoke={() => revoke(t.id)} />
+            <TriggerLine key={t.id} trigger={t} onRevoke={() => revoke(t.id)} rpc={rpc} onMoved={reload} />
           ))}
-        </div>
+        </Group>
       )}
 
       {showCreate && (
@@ -88,27 +93,54 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: WorkspaceRpc; wo
 const TRIGGER_TONE: ReadonlyMap<string, StatusTone> = new Map([["active", "success"], ["paused", "warning"]]);
 
 /** The delivery URL carries a signed route capability; a URL built here would 404. */
-function TriggerLine({ trigger, onRevoke }: {
-  trigger: TriggerRow; onRevoke: () => void;
+/** A daily schedule's time, kept as typed until it is sent; a refusal says why beside it. */
+function DailyTime({ rpc, trigger, at, onMoved }: { rpc: WorkspaceRpc; trigger: TriggerRow; at: string; onMoved: () => void }) {
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const move = (next: string) => (next === "" || next === at ? Effect.void : Effect.catchCause(Effect.gen(function* () {
+    setFailure(null);
+    yield* Effect.promise(() => rpc("retimeDailySchedule", [trigger.id, next]));
+    onMoved();
+  }), showing(setFailure)));
+
+  return (
+    <span className="flex shrink-0 items-center gap-2" data-schedule-time={trigger.id}>
+      <span className="p-text-3">each day at</span>
+      <TextInput size="sm" type="time" className="t-mono w-28" defaultValue={at} aria-label="Time of day" disabled={trigger.state === "revoked"}
+        onBlur={(event) => detach(move(event.target.value))} onKeyDown={(event) => detach(event.key === "Enter" ? move(event.currentTarget.value) : Effect.void)} />
+      {failure !== null && <span className="p-danger" role="alert">{failure}</span>}
+    </span>
+  );
+}
+
+const AUTH_MODES: ReadonlyArray<{ value: v.InferOutput<typeof AuthModeSchema>; label: string }> = [
+  { value: "hmac", label: "HMAC (signed body)" },
+  { value: "bearer", label: "Bearer token (Authorization header)" },
+  { value: "mtls", label: "mTLS (client certificate)" },
+];
+
+function TriggerLine({ trigger, onRevoke, rpc, onMoved }: {
+  trigger: TriggerRow; onRevoke: () => void; rpc: WorkspaceRpc; onMoved: () => void;
 }) {
   const isWebhook = trigger.kind === "webhook_durable" || trigger.kind === "webhook_ephemeral";
   const url = trigger.url ? `${window.location.origin}${trigger.url}` : null;
   // The spec is the trigger's own JSON: a label and a cron are read where they are strings.
   const label = typeof trigger.spec.label === "string" ? trigger.spec.label : trigger.id;
   const cron = typeof trigger.spec.cron === "string" ? trigger.spec.cron : null;
+  const daily = cron === null ? null : dailyTimeOf(cron);
 
   return (
-    <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
+    <div className="t-meta flex items-center gap-2 py-1">
       <StatusDot tone={TRIGGER_TONE.get(trigger.state) ?? "neutral"} />
-      <span className="font-medium p-text-2 truncate max-w-40" title={label}>{label}</span>
+      <span className="t-item truncate max-w-40" title={label}>{label}</span>
       <span className="font-mono p-text-3 shrink-0">{trigger.kind}</span>
-      {cron && <code className="p-fill px-1 rounded-sm p-text-3 shrink-0">{cron}</code>}
+      {daily !== null && <DailyTime rpc={rpc} trigger={trigger} at={daily} onMoved={onMoved} />}
+      {cron !== null && daily === null && <Chip><span className="t-mono">{cron}</span></Chip>}
       <span className="flex-1" />
       {trigger.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{trigger.fire_count} fires</span>}
       <span className="p-text-3 shrink-0">{trigger.state}</span>
       {url !== null && (
-        <CopyButton value={url} what="the webhook URL" size={11}
-          className="p-1 rounded-sm p-card-hover p-text-3 shrink-0" />
+        <CopyButton value={url} what="the webhook URL" className="shrink-0" />
       )}
       {url === null && isWebhook && (
         <span className="p-text-3 shrink-0"
@@ -116,12 +148,7 @@ function TriggerLine({ trigger, onRevoke }: {
           no URL
         </span>
       )}
-      <button
-        onClick={onRevoke}
-        disabled={trigger.state === "revoked"}
-        className="p-text-3 hover:p-danger disabled:opacity-30 p-1 shrink-0"
-        title="Revoke" aria-label="Revoke"
-      ><TrashIcon size={11} /></button>
+      <Button variant="danger" size="sm" icon={<TrashIcon size={14} />} className="shrink-0" onClick={onRevoke} disabled={trigger.state === "revoked"} title="Revoke" aria-label="Revoke" />
     </div>
   );
 }
@@ -175,43 +202,34 @@ export function NewWebhookCard({ result, onDismiss }: {
   const curl = curlCommand(url, result);
 
   return (
-    <div className="p-card p-5 space-y-3 border p-border mb-3">
-      <div className="flex items-center gap-2">
-        <CheckIcon size={16} className="p-success" />
-        <span className="text-sm font-semibold">Webhook created</span>
-        <button className="ml-auto text-xs p-text-3 hover:p-text" onClick={onDismiss}>Dismiss</button>
-      </div>
-      <p className="text-xs p-text-2">
+    <div className="mb-3"><Card title="Webhook created" actions={<Button variant="ghost" size="sm" onClick={onDismiss}>Dismiss</Button>}>
+      <p className="t-meta p-text-2">
         {result.secret ? "Save the secret now. Kinu shows it only once. " : ""}The URL works until you revoke this webhook.
       </p>
       <div className="space-y-2">
         <div>
-          <div className="p-eyebrow mb-1">URL</div>
-          <div className="flex items-center gap-2">
-            <code className="text-xs p-fill px-2 py-1.5 rounded-sm font-mono flex-1 break-all">{url}</code>
-            <CopyButton value={url} what="the webhook URL" className="p-2 rounded-sm p-card p-card-hover" />
-          </div>
+          <div className="t-label mb-1">URL</div>
+          <CopyField value={url} what="the webhook URL" />
         </div>
         {result.secret && (
           <div>
-            <div className="p-eyebrow mb-1">Secret <span className="p-danger">(shown once)</span></div>
+            <div className="t-label mb-1">Secret <span className="p-danger">(shown once)</span></div>
             <div className="flex items-center gap-2">
-              <SecretValue value={result.secret}
-                className="text-xs p-fill px-2 py-1.5 rounded-sm font-mono flex-1 break-all" />
-              <CopyButton value={result.secret} what="the secret" className="p-2 rounded-sm p-card p-card-hover" />
+              <Preformatted className="flex-1"><SecretValue value={result.secret} /></Preformatted>
+              <CopyButton variant="secondary" value={result.secret} what="the secret" />
             </div>
           </div>
         )}
         <div>
-          <div className="p-eyebrow mb-1">Test with curl</div>
-          <pre className="p-meta p-fill p-3 rounded-sm font-mono overflow-x-auto whitespace-pre">
+          <div className="t-label mb-1">Test with curl</div>
+          <Preformatted wrap={false} className="p-3">
             {curl.before}
             {curl.secret !== null && <SecretValue value={curl.secret} />}
             {curl.after}
-          </pre>
+          </Preformatted>
         </div>
       </div>
-    </div>
+    </Card></div>
   );
 }
 
@@ -271,53 +289,46 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
   return (
     <Modal
       title="New webhook"
-      icon={<PlugIcon size={16} className="p-accent" />}
+      icon={<PlugIcon size={16} className="p-accent-fg" />}
       onClose={onClose}
       busy={submitting}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={submitting}>Cancel</Button>
-        <FilledButton onClick={submit} disabled={submitting || !label.trim()}>
+        <Button variant="primary" size="sm" onClick={submit} disabled={submitting || !label.trim()}>
           {submitting ? <><Loader size="sm" /><span className="ml-1">Creating…</span></> : "Create"}
-        </FilledButton>
+        </Button>
       </>}
     >
       <div className="space-y-2">
         <label className="block">
-          <div className="text-xs p-text-2 mb-1">Label</div>
-          <input value={label} onChange={(e) => setLabel(e.target.value)} className={inputCls}
-            placeholder="github-pr-events" />
+          <div className="t-meta p-text-2 mb-1">Label</div>
+          <TextInput value={label} onChange={(e) => setLabel(e.target.value)} placeholder="github-pr-events" />
         </label>
         <label className="block">
-          <div className="text-xs p-text-2 mb-1">Authentication</div>
-          <select value={authMode} onChange={(e) => setAuthMode(v.parse(AuthModeSchema, e.target.value))} className={inputCls}>
-            <option value="hmac">HMAC (signed body)</option>
-            <option value="bearer">Bearer token (Authorization header)</option>
-            <option value="mtls">mTLS (client certificate)</option>
-          </select>
+          <div className="t-meta p-text-2 mb-1">Authentication</div>
+          <Select label="Authentication" value={authMode} onChange={setAuthMode} options={AUTH_MODES} />
         </label>
         {authMode !== "mtls" && (
           <label className="block">
-            <div className="text-xs p-text-2 mb-1">Secret</div>
+            <div className="t-meta p-text-2 mb-1">Secret</div>
             {/* Marked for redaction too, so a later reveal toggle to `text` cannot undo it. */}
-            <input {...SECRET_REGION} type="password" value={secret}
-              onChange={(e) => setSecret(e.target.value)} className={inputCls}
-              placeholder="Leave blank and Kinu generates one" />
+            <TextInput {...SECRET_REGION} type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="Leave blank and Kinu generates one" />
           </label>
         )}
         <label className="block">
-          <div className="text-xs p-text-2 mb-1">Accepted content type</div>
-          <input value={contentType} onChange={(e) => setContentType(e.target.value)} className={inputCls} placeholder="application/json" />
+          <div className="t-meta p-text-2 mb-1">Accepted content type</div>
+          <TextInput value={contentType} onChange={(e) => setContentType(e.target.value)} placeholder="application/json" />
         </label>
       </div>
-      {err && <div className="text-xs p-danger">{err}</div>}
+      {err && <div className="t-meta p-danger">{err}</div>}
       {stepUp && (
-        <div role="status" className="flex items-center gap-2 text-xs p-text-2">
+        <div role="status" className="t-meta flex items-center gap-2 p-text-2">
           <span className="min-w-0 flex-1">Creating a webhook needs a sign-in from the last five minutes.</span>
           <Button size="sm" variant="secondary" onClick={signInAgain}>Sign in again</Button>
         </div>
       )}
-      <p className="p-meta p-text-3 flex items-start gap-1.5">
-        <WarningIcon size={11} className="mt-0.5 shrink-0" />
+      <p className="t-meta p-text-3 flex items-start gap-2">
+        <WarningIcon size={11} className="mt-px shrink-0" />
         <span>Creating a webhook needs a sign-in from the last five minutes. Sign in again if it fails.</span>
       </p>
     </Modal>

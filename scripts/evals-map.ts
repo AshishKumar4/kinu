@@ -15,7 +15,7 @@ import { gitIn } from '../packages/test-utils/src/git-env';
 import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
 import { drainArmadaProgress } from './armada-progress';
 import { KINU_ARMADA, keysWindows, kinuArmada, leaseBlock, outranked } from './evals-lease';
-import { NETWORK_SCOPE, processEvals } from './evals-post';
+import { NETWORK_SCOPE, processEvals, resolveGh, settleEvalRun } from './evals-post';
 import { isEvalTask, trackedFiles } from './sources';
 import { REPO_ROOT as ROOT } from './repo-root';
 
@@ -274,6 +274,7 @@ async function main(): Promise<number> {
     'staging-only': { type: 'boolean', default: false },
     'calls-at-once': { type: 'string' },
     sequence: { type: 'boolean', default: false },
+    settle: { type: 'string' },
   } });
 
   // A run on someone's own plan keeps to fewer calls at once than the eval key's ceiling, never more.
@@ -288,9 +289,29 @@ async function main(): Promise<number> {
     throw new Error('--staging-only measures models, never a build\'s verdict: drop --pass, --record and --post');
   }
 
+  // Resolved before hours of trials, in this caller's environment: the network scope the posting runs in need not find it.
+  const gh = values.post === undefined ? null : resolveGh();
+
+  if (values.post !== undefined && gh === null) {
+    console.error('evals: --post posts through gh, which is not on PATH and GH names none: this run\'s comments will not be posted, and its verdict is unaffected');
+  }
+
+  const clean = gitIn(ROOT, 'status', '--porcelain') === '';
+
+  // `--settle=<out>/evals`: a finished run's report, recorded and posted again with no new trials, as when its posting
+  // failed. Recording reads this checkout's HEAD and its comparison code (`promote.ts evals`), so it runs committed, at
+  // the run's own commit; posting alone runs anywhere. A run from before `--settle` records with
+  // `bun scripts/promote.ts evals <out>/evals`.
+  if (values.settle !== undefined) {
+    if (values.record && !clean) throw new Error('a recorded verdict is the commit\'s own: commit the tree first');
+    const { unposted } = await settleEvalRun({ dir: resolve(values.settle), record: values.record, post: values.post, gh });
+
+    return unposted.length === 0 ? 0 : 1;
+  }
+
   const sha = gitIn(ROOT, 'rev-parse', 'HEAD');
 
-  if (gitIn(ROOT, 'status', '--porcelain') !== '') throw new Error('armada measures a committed checkout: commit the tree first');
+  if (!clean) throw new Error('armada measures a committed checkout: commit the tree first');
   const { origins, candidateBuild, baselineBuild } = await legsOf(values.pass, values['staging-only'], positionals[0]);
 
   const matrix = evalMatrix({
@@ -329,21 +350,8 @@ async function main(): Promise<number> {
   writeFileSync(join(out, 'evals', 'run.json'), `${JSON.stringify(run, null, 2)}\n`);
   console.log(`report: ${join(out, 'evals')}; wall ${run.wallSeconds.toFixed(1)}s, armada job ${job}`);
 
-  if (values.record) {
-    const recorded = Bun.spawn([...NETWORK_SCOPE, process.execPath, 'scripts/promote.ts', 'evals', join(out, 'evals')],
-      { cwd: ROOT, stdout: 'inherit', stderr: 'inherit' });
-
-    if (await recorded.exited !== 0) throw new Error('recording this eval verdict failed');
-  }
-
-  if (values.post !== undefined) {
-    for (const [name, marker] of [['comparison', '<!-- kinu-evals-results -->'], ['why', '<!-- kinu-evals-why -->']] as const) {
-      const posted = Bun.spawn([...NETWORK_SCOPE, 'bash', 'evals/scripts/post-comment.sh', values.post, join(out, 'evals', name, 'comment.md'), marker],
-        { cwd: ROOT, stdout: 'inherit', stderr: 'inherit' });
-
-      if (await posted.exited !== 0) throw new Error(`posting the ${name} comment failed`);
-    }
-  }
+  // The verdict's own exit: a comment not posted is reported there, never this run's failure.
+  await settleEvalRun({ dir: join(out, 'evals'), record: values.record, post: values.post, gh });
 
   return postExit;
 }

@@ -48,7 +48,7 @@
     "context_id TEXT NOT NULL",
     "PRIMARY KEY(actor_id,context_id)"
   ],
-  "actor_executions@packages/core/src/subordinates/turn-fence.ts": [
+  "actor_executions@packages/core/src/subagents/turn-fence.ts": [
     "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
     "turn_id TEXT NOT NULL",
     "run_id TEXT NOT NULL",
@@ -83,7 +83,7 @@
     "CHECK((rendered_context_id IS NULL) = (rendered_revision IS NULL))",
     "CHECK((metadata_json IS NULL) <> (metadata_path IS NULL))"
   ],
-  "actor_subordinates@packages/core/src/subordinates/roster.ts": [
+  "actor_subagents@packages/core/src/subagents/roster.ts": [
     "actor_id TEXT NOT NULL",
     "name TEXT NOT NULL",
     "status TEXT NOT NULL CHECK (status IN ('idle','working','awaiting_input','dismissed'))",
@@ -129,7 +129,7 @@
     "oom_cuts INTEGER NOT NULL DEFAULT 0",
     "PRIMARY KEY(actor_id,turn_id)"
   ],
-  "actor_turn_fence@packages/core/src/subordinates/turn-fence.ts": [
+  "actor_turn_fence@packages/core/src/subagents/turn-fence.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
     "seq INTEGER NOT NULL",
     "turn_id TEXT NOT NULL",
@@ -145,7 +145,7 @@
     "created_by TEXT NOT NULL",
     "created_at INTEGER NOT NULL"
   ],
-  "agent_deliveries@packages/core/src/subordinates/deliveries.ts": [
+  "agent_deliveries@packages/core/src/subagents/deliveries.ts": [
     "seq INTEGER PRIMARY KEY AUTOINCREMENT",
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -204,13 +204,13 @@
     "consumed_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "agent_open_turns@packages/core/src/subordinates/open-turns.ts": [
+  "agent_open_turns@packages/core/src/subagents/open-turns.ts": [
     "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
     "turn_id TEXT NOT NULL",
     "opened_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, turn_id)"
   ],
-  "agent_report_steers@packages/core/src/subordinates/report-sequence.ts": [
+  "agent_report_steers@packages/core/src/subagents/report-sequence.ts": [
     "actor_id TEXT NOT NULL REFERENCES workspace_actors(actor_id)",
     "ord INTEGER NOT NULL",
     "id TEXT NOT NULL",
@@ -219,18 +219,18 @@
     "at_step INTEGER",
     "PRIMARY KEY (actor_id, ord)"
   ],
-  "agent_reports@packages/core/src/subordinates/report-sequence.ts": [
+  "agent_reports@packages/core/src/subagents/report-sequence.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
     "seq INTEGER NOT NULL",
     "standing_json TEXT NOT NULL",
     "holds INTEGER NOT NULL CHECK (holds IN (0, 1))",
     "charged_json TEXT NOT NULL DEFAULT '[]'"
   ],
-  "agent_sequence@packages/core/src/subordinates/report-sequence.ts": [
+  "agent_sequence@packages/core/src/subagents/report-sequence.ts": [
     "actor_id TEXT PRIMARY KEY",
     "seq INTEGER NOT NULL"
   ],
-  "agent_stops@packages/core/src/subordinates/deliveries.ts": [
+  "agent_stops@packages/core/src/subagents/deliveries.ts": [
     "actor_id TEXT PRIMARY KEY",
     "generation INTEGER NOT NULL",
     "retired INTEGER NOT NULL DEFAULT 0",
@@ -250,7 +250,7 @@
     "session_id TEXT",
     "PRIMARY KEY (actor_id, seq)"
   ],
-  "agent_turn_reports@packages/core/src/subordinates/turn-reports.ts": [
+  "agent_turn_reports@packages/core/src/subagents/turn-reports.ts": [
     "actor_id TEXT NOT NULL",
     "turn_id TEXT NOT NULL",
     "settled INTEGER NOT NULL",
@@ -633,7 +633,7 @@
     "created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)",
     "PRIMARY KEY (actor_id, id)"
   ],
-  "evolution_helpers@packages/core/src/identity/evolution-helpers.ts": [
+  "evolution_subagents@packages/core/src/identity/evolution-subagents.ts": [
     "actor_id TEXT NOT NULL",
     "name TEXT NOT NULL",
     "lane_request_id TEXT NOT NULL",

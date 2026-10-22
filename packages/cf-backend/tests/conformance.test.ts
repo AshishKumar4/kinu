@@ -6,7 +6,7 @@ import { describe, test, expect } from 'bun:test';
 import { asSchema } from 'ai';
 import * as v from 'valibot';
 import {
-  chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, improvementLanesRan, runDelegatedTask, until,
+  chatSessionTurns, gatewayWorkspace, hostedSubagentHarness, improvementLanesRan, runDelegatedTask, until,
   workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent, mainDatabase,
 } from './helpers/actor-harness';
 import { chatCompletion, offeredTools, stubAiBinding } from './helpers/platform-gateway';
@@ -64,22 +64,22 @@ async function observe(): Promise<ObservedSurface> {
   };
 }
 
-async function observeSubordinate(): Promise<ObservedSurface> {
+async function observeSubagent(): Promise<ObservedSurface> {
   // Its tools are what the gateway is asked to offer the model on a delegated turn the parent admitted and the wake ran.
   const { workspace, runs } = servedWorkspace();
 
-  const child = await hostedSubordinateHarness(workspace, {
+  const child = await hostedSubagentHarness(workspace, {
     name: 'conformance-child',
     displayName: 'Conformance Child',
     nameOrigin: 'user',
-    mission: 'prove the subordinate surface',
+    mission: 'prove the subagent surface',
   });
 
-  await runDelegatedTask(workspace, child.actor.handle.actorId, 'prove the subordinate surface');
+  await runDelegatedTask(workspace, child.actor.handle.actorId, 'prove the subagent surface');
   const tools = offeredTools(runs);
 
   return {
-    root: 'cf-subordinate',
+    root: 'cf-subagent',
     planes: {
       tool: new Set(tools.keys()),
       'agents-op': observedOpEnum(tools.get('agents')?.inputSchema),
@@ -96,8 +96,8 @@ describe('cf backend conformance', () => {
     expect(report.unmeasured).toEqual([]);
   });
 
-  test('cf-subordinate: the observed surface matches the manifest', async () => {
-    const report = compareSurface(await observeSubordinate());
+  test('cf-subagent: the observed surface matches the manifest', async () => {
+    const report = compareSurface(await observeSubagent());
     expect(renderConformanceFindings(report)).toBe('');
     expect(report.unmeasured).toEqual([]);
   });
@@ -110,8 +110,8 @@ describe('cf backend conformance', () => {
     expect(present(observed.planes.producer, 'the observed producer plane')).toEqual(new Set(CONFORMANCE_PRODUCERS));
   });
 
-  test('cf-subordinate: the observation sees a real surface at all', async () => {
-    const observed = await observeSubordinate();
+  test('cf-subagent: the observation sees a real surface at all', async () => {
+    const observed = await observeSubagent();
     expect(present(observed.planes.tool, 'the observed tool plane').size).toBeGreaterThanOrEqual(6);
     expect(present(observed.planes.tool, 'the observed tool plane').has('eval')).toBe(true);
   });

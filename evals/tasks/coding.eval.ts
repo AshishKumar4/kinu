@@ -7,7 +7,7 @@ import { combinatorsJourney } from './combinators-journey';
 import { boardHolds } from './work-board';
 
 // DeepSWE v1.1's true-myth-iterable-collection-combinators, worked the way a lead would: the library cloned and
-// installed on the computer, three helpers adding the Maybe, Result and Task combinators at once while the lead plans
+// installed on the computer, three subagents adding the Maybe, Result and Task combinators at once while the lead plans
 // them on its task board, then the cross-type toolbelt helpers as a change request. The same trial continues through
 // a live release desk, its two slates, reusable calculator, dual previews, independent review branches, web
 // provenance, archive handoff and remembered release code before naming the commit that holds the work.
@@ -37,7 +37,7 @@ const PNPM = 'pnpm@10.28.0';
 
 const CTRF = 'junit-to-ctrf@0.0.14';
 
-/** The modules the helpers split, one each; the toolbelt is the change request's. */
+/** The modules the subagents split, one each; the toolbelt is the change request's. */
 const MODULES = ['maybe', 'result', 'task'] as const;
 
 // ── The benchmark's prompt ───────────────────────────────────────────
@@ -133,17 +133,17 @@ async function graded(verifier: EvalVerifier, scope: 'without-toolbelt' | 'whole
 const combinators: EvalPart = {
   id: 'combinators',
   objectives: [
-    'Clone true-myth on the computer, plan one board task per module, and have three hired helpers each build one module at once; the tests pass and the work is committed.',
+    'Clone true-myth on the computer, plan one board task per module, and have three hired subagents each build one module at once; the tests pass and the work is committed.',
     'Add the cross-type toolbelt, mark it done and commit it; the DeepSWE verifier passes.',
   ],
   turns: [{
-    prompt: `true-myth needs new collection combinators. Build them with three helpers working at once.
+    prompt: `true-myth needs new collection combinators. Build them with three subagents working at once.
 
 1. On the computer, clone ${REPOSITORY} into ${CHECKOUT}, check out commit ${BASE_COMMIT}
    as the main branch, and install its dependencies.
 2. Plan the work on your task board: one task for each of ${MODULES.map((module) => `src/${module}.ts`).join(', ')},
    titled exactly with that path. Mark each one done once its module works.
-3. Hire three helpers and give each helper one of those files, so all three work at once. A helper
+3. Hire three subagents and give each subagent one of those files, so all three work at once. A subagent
    changes only its own file and does not commit. When all three have finished, run the tests in the
    computer with \`npx vitest run --coverage=false\` and commit, as the job says.
 
@@ -151,18 +151,18 @@ The job:
 
 ${JOB}`,
     verify: async (verifier) => {
-      await verifier.check('three-helpers-each-finished-a-module', async () => {
-        const worked = await verifier.helperWork();
+      await verifier.check('three-subagents-each-finished-a-module', async () => {
+        const worked = await verifier.subagentWork();
         const [onMaybe = [], onResult = [], onTask = []] = MODULES.map((module) => finishedWork(worked, `${module}.ts`));
 
         return {
-          // Each module had a helper of its own: three different helpers, one finished on each.
+          // Each module had a subagent of its own: three different subagents, one finished on each.
           pass: onMaybe.some((first) => onResult.some((second) => second !== first
             && onTask.some((third) => third !== first && third !== second))),
           evidence: {
-            helpers: worked.map((helper) => ({
-              name: helper.name, status: helper.status,
-              runs: helper.runs.map((run) => ({ status: run.status, asked: (run.userMessage ?? '').slice(0, 160) })),
+            subagents: worked.map((subagent) => ({
+              name: subagent.name, status: subagent.status,
+              runs: subagent.runs.map((run) => ({ status: run.status, asked: (run.userMessage ?? '').slice(0, 160) })),
             })),
             finished: { maybe: onMaybe, result: onResult, task: onTask },
           },

@@ -220,7 +220,7 @@ export const HIRED = 'HIRED';
 export const HOME_REPORTED = 'REPORTED HOME';
 
 /** The reach row (1008-ac, 1008-ad): a slate whose page streams `ai.stream` and `agent.ask` answers as they are
- *  written, and hires a helper as its owner's own slate. Each answer leads with words, then pauses, then ends. */
+ *  written, and hires a subagent as its owner's own slate. Each answer leads with words, then pauses, then ends. */
 export const REACH_SLATE = { title: 'Flow reach', id: 'flowreach' } as const;
 
 export const REACH_SLATE_ASK = `Flow reach: build the ${REACH_SLATE.title} slate.`;
@@ -229,7 +229,7 @@ export const REACH_STREAM_PROMPT = 'Flow reach stream: count the lamps.';
 
 export const REACH_ASK_TEXT = 'Flow reach ask: how many lamps are lit?';
 
-export const REACH_HELPER_MISSION = 'Flow reach helper: reply DONE.';
+export const REACH_SUBAGENT_MISSION = 'Flow reach subagent: reply DONE.';
 
 /** Each streamed answer: its first words, then a pause long enough to read them alone, then its end. */
 export const REACH_STREAM = { lead: 'Counting the lamps ', end: 'ALL TWELVE COUNTED' } as const;
@@ -253,7 +253,7 @@ const REACH_SERVER = [
   '',
   'export class Slate extends SlateObject {',
   '  async hire() {',
-  `    return await this.env.workspace.agents.hire("task", ${JSON.stringify(REACH_HELPER_MISSION)});`,
+  `    return await this.env.workspace.agents.hire("task", ${JSON.stringify(REACH_SUBAGENT_MISSION)});`,
   '  }',
   '',
   '  async fetch(request: Request) {',
@@ -376,7 +376,7 @@ function homeAnswer(request: ScriptedRequest, latest: string): ScriptedAnswer | 
   return undefined;
 }
 
-/** The reach row: the slate's build, its `ai.stream` prompt, its `agent.ask` message, and the helper it hires. */
+/** The reach row: the slate's build, its `ai.stream` prompt, its `agent.ask` message, and the subagent it hires. */
 function reachAnswer(request: ScriptedRequest, latest: string): ScriptedAnswer | undefined {
   if (latest.includes(REACH_SLATE_ASK)) return reachSlateAnswer(request);
 
@@ -384,7 +384,7 @@ function reachAnswer(request: ScriptedRequest, latest: string): ScriptedAnswer |
 
   if (latest.includes(REACH_ASK_TEXT)) return { text: REACH_REPLY.end, pace: { firstTokenMs: 0, lead: REACH_REPLY.lead, leadMs: REACH_PAUSE_MS } };
 
-  return latest.includes(REACH_HELPER_MISSION) ? { text: 'DONE' } : undefined;
+  return latest.includes(REACH_SUBAGENT_MISSION) ? { text: 'DONE' } : undefined;
 }
 
 /** The plan-comment row: the plan, then the request for changes, answered in the comment's thread before anything. */

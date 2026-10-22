@@ -7,6 +7,11 @@ import { redactSecrets } from '../safety/secret-patterns';
 import { NATIVE_ACTION_EFFECTS, type ActionEffect } from '../slates/members';
 import * as v from 'valibot';
 import { oneLineClip } from '../utils/text';
+import { programEffect, programEffectsOf } from '../execution/call-effects';
+
+/** The tool a program runs under. */
+const EVAL_TOOL = 'eval';
+
 
 /** Chip budget: must fit one line beside the name, runtime badge and duration. */
 const MAX = 72;
@@ -20,8 +25,18 @@ function str(input: JsonObject, key: string): string {
 
 export type ToolCallEffect = 'read' | 'mutate' | 'unknown';
 
-/** Only declared native operations are classified; shell and codemode programs have no effect receipt. */
-export function toolCallEffect(toolName: string, input: JsonValue | undefined): ToolCallEffect {
+/**
+ * Declared native operations are classified by their operation; a program by the record the host made of what it did
+ * (`answered`: its call's id, and its output or error text). A shell command's own changes no record traces.
+ */
+export function toolCallEffect(toolName: string, input: JsonValue | undefined, answered?: { readonly toolCallId: string; readonly output: JsonValue | undefined }): ToolCallEffect {
+  if (toolName === EVAL_TOOL && answered !== undefined) {
+    const effects = programEffectsOf(answered.toolCallId, answered.output);
+
+    // No record: made before programs were recorded, or failed before changing anything; either way not known.
+    return effects === null ? 'unknown' : programEffect(effects);
+  }
+
   const parsed = v.safeParse(JsonObjectSchema, input);
 
   if (!parsed.success) return 'unknown';
@@ -274,14 +289,14 @@ function describeAgents(input: JsonObject): string {
 
       if (str(input, "lifetime") === "task") return name ? `Asked ${name} for one answer` : "Asked one agent for one answer";
 
-      return name ? `Hired ${name}` : "Hired a subordinate";
+      return name ? `Hired ${name}` : "Hired a subagent";
     }
 
     case "hireWorkspace": return "Hired a workspace";
-    case "assign":  return agent ? `Asked ${agent}` : "Asked a subordinate";
+    case "assign":  return agent ? `Asked ${agent}` : "Asked a subagent";
     case "message": return agent ? `Messaged ${agent}` : "Messaged an agent";
     case "reply":   return "Answered an agent message";
-    case "dismiss": return agent ? `Dismissed ${agent}` : "Dismissed a subordinate";
+    case "dismiss": return agent ? `Dismissed ${agent}` : "Dismissed a subagent";
     case "list":    return "Listed the roster";
     default:        return "";
   }

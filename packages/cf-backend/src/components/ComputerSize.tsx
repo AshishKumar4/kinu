@@ -1,5 +1,4 @@
 import { useCallback, useState, type ReactNode } from "react";
-import { DesktopIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
@@ -10,6 +9,7 @@ import { getAccountComputerSize, setAccountComputerSize } from "../lib/user-api"
 import { ACCOUNT_DEFAULT, computerSizeText, sizeSpecs, stalledNote, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from "../lib/computer-size-text";
 import type { ComputerSizeState } from "../computer-size";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Button } from "@/components/ui/Button";
 
 const shownIn = (show: (message: string) => void) => (failure: { readonly cause?: unknown }) =>
   Effect.sync(() => { show(renderThrownChain({ cause: failure.cause ?? failure })); });
@@ -66,20 +66,20 @@ export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSi
   const notice = state === null ? null : (
     <>
       {state.startRefused !== null && (
-        <div data-env-start-refused className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1">
-          <span className="p-meta p-danger">{startRefusedNote(state.startRefused)}</span>
-          <button type="button" data-env-start-again onClick={() => detach(act("start", "starting the computer", () => rpc("startComputer", [])))}
-            disabled={pending !== null} className="p-env-action">{pending === "start" ? "Starting…" : "Start again"}</button>
+        <div data-env-start-refused className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-1">
+          <span className="t-meta p-danger">{startRefusedNote(state.startRefused)}</span>
+          <Button size="sm" data-env-start-again onClick={() => detach(act("start", "starting the computer", () => rpc("startComputer", [])))}
+            disabled={pending !== null} busy={pending === "start"}>Start again</Button>
         </div>
       )}
       {state.stalled !== null && (
-        <div data-env-stalled className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pb-1">
-          <span className="p-meta p-danger">{stalledNote(state.stalled)}</span>
-          <button type="button" data-env-stop-stalled onClick={() => detach(act("stop", "stopping the computer", () => rpc("stopStalledComputer", [])))}
-            disabled={pending !== null} className="p-env-action">{pending === "stop" ? "Stopping…" : "Stop"}</button>
+        <div data-env-stalled className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-1">
+          <span className="t-meta p-danger">{stalledNote(state.stalled)}</span>
+          <Button size="sm" data-env-stop-stalled onClick={() => detach(act("stop", "stopping the computer", () => rpc("stopStalledComputer", [])))}
+            disabled={pending !== null} busy={pending === "stop"}>Stop</Button>
         </div>
       )}
-      {note !== null && <p className={`px-4 pb-1 p-meta ${failure === null ? "p-text-3" : "p-danger"}`}>{note}</p>}
+      {note !== null && <p className={`t-meta px-4 pb-1 ${failure === null ? "p-text-3" : "p-danger"}`}>{note}</p>}
     </>
   );
 
@@ -132,10 +132,10 @@ export function ComputerSizeSettings() {
   };
 
   return (
-    <Card title="Size" icon={DesktopIcon} description="A change applies the next time a computer starts.">
+    <Card title="Size">
       <CardSlot resource={resource} what="the computer size" onRetry={reload}>
         {(account) => (
-          <Field label="Default size" hint={failure ?? (saving ? "Saving…" : undefined)}>
+          <Field label="Default size" hint={failure ?? (saving ? "Saving…" : "Applies the next time a computer starts.")}>
             <Choice
               label="Default computer size"
               value={account ?? DEFAULT_BOX_SIZE}

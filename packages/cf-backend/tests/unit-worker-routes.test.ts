@@ -160,6 +160,10 @@ const ROWS: readonly (readonly [Caller, string, string, Partial<Answer>])[] = [
   ['signed-in', 'GET', '/explore/workspaces/personal-assistant', { ...shell('/explore/workspaces/personal-assistant'), visitor: false }],
   ['anon', 'POST', '/explore', door(401)],
   ['page', 'GET', '/explorer', { status: 302, assets: [], location: `https://${APP_HOST}/login?return_to=%2Fexplorer` }],
+  // A connect's finish page, which a sign-in whose session expired meanwhile ends on: it reads nothing of an account,
+  // so it is served without one, to tell the page that began the connect and close (security review, 2026-10-20).
+  ['page', 'GET', '/connected?service=Cloudflare&error=signed-out', shell('/connected')],
+  ['anon', 'GET', '/connected?service=Cloudflare', shell('/connected')],
   ['anon', 'GET', '/gallery/ravi/pr-board', { ...shell('/gallery/ravi/pr-board'), visitor: false }],
   // The Drive's Shared tab is the account's own.
   ['page', 'GET', '/shared', { status: 302, assets: [], location: `https://${APP_HOST}/login?return_to=%2Fshared` }],

@@ -10,9 +10,9 @@ import type { RewindTold } from './rewind-notice';
 import {
   deliveredSignal, IntentResultSchema, MessageIdSchema, type Delivery, type DeliveryAnswer, type DeliveryInput, type IntentInput, type IntentResult, type OwedDelivery,
   type TurnDeliveryInput,
-} from '../subordinates/deliveries';
+} from '../subagents/deliveries';
 import type { PlanDecisionOutcome } from '../types/plans';
-import { refusedRun, type RunEndOutcome } from '../subordinates/agent-isolate';
+import { refusedRun, type RunEndOutcome } from '../subagents/agent-isolate';
 import { driveExecution, type AssembledRound, type ClaimedRound } from './execution-driver';
 import { authoredTurnMetadata, stampAuthorship, turnTags, type TurnTags } from '../types/turn-metadata';
 import type { TurnAuthorship } from '../types/turn';
@@ -66,8 +66,8 @@ import type { SessionTranscript, PreparedConversationEntry } from '../session/tr
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
-import { subordinateTurnContext } from '../subordinates/support';
-import { taskTurnEnding } from '../subordinates/temporary';
+import { subagentTurnContext } from '../subagents/support';
+import { taskTurnEnding } from '../subagents/temporary';
 import { SIGNALS_SEEN_METADATA_KEY, TURN_END_METADATA_KEY, TURN_FAILURE_METADATA_KEY, type SeenSplice } from '../read-models/background-event';
 import { TaskReminders, TASK_REMINDER_EVENT, type TaskReminder } from '../tasks/reminder';
 import type { AgentTaskTree } from '../tools/task-store';
@@ -1869,7 +1869,7 @@ export class ChatSession {
 
   /** Everything here may throw; runOpenedTurn owns what that means. */
   private async birthContext(drainTurnId: string): Promise<readonly SerializedMessage[]> {
-    return await this.ports.birthContext?.(drainTurnId) ?? subordinateTurnContext(this.eventLog, drainTurnId);
+    return await this.ports.birthContext?.(drainTurnId) ?? subagentTurnContext(this.eventLog, drainTurnId);
   }
 
   private settleContext(item: QueueItem, prepared: PreparedTurn, failure: Error | null): boolean {

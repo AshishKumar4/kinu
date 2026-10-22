@@ -1,11 +1,11 @@
-/** The Work read names each task's owner by the path its conversation opens at: a helper with no chat tab is reached this way. */
+/** The Work read names each task's owner by the path its conversation opens at: a subagent with no chat tab is reached this way. */
 import { describe, expect, test } from 'bun:test';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 import { explorationActorKey, readWorkspaceWork, TaskListStore, type ActorHandle } from '../src/index';
 import { createTestWorkspace } from './helpers';
 
 describe('the workspace work read', () => {
-  test('each task owner carries the subordinate path to its conversation, and none past a head', () => {
+  test('each task owner carries the subagent path to its conversation, and none past a head', () => {
     const workspace = createTestWorkspace();
     const { directory, main } = createTestActorsOver(workspace.db, { name: 'workspace' });
 

@@ -42,8 +42,9 @@ import { rowNotices } from './row-verdicts';
 import { recordMarkAt, recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
 import { openDeployLive } from './deploy-live';
 import {
-  CACHE_BLIND_SPOTS, cacheEnabled, defaultStoreDirectory, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
+  CACHE_BLIND_SPOTS, cacheEnabled, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
 } from './ladder-cache';
+import { ladderCacheDirectory } from './cache-root';
 import type { GateCacheRequest, Plan, Store, ToolVersions } from './ladder-cache';
 import { fromEnvironment, type RemoteProofs } from './ladder-proofs';
 import { auditClosure } from './ladder-audit';
@@ -312,6 +313,17 @@ export const LADDER: readonly Gate[] = [
       + 'kept alive after its caller drops it',
     blind: 'semantic quality of a reviewed parser candidate',
     inputs: AMBIENT_BY_NAME,
+  },
+  {
+    run: 'bun test --timeout=0 tests/design-system.test.ts',
+    label: 'Design system scan',
+    tier: 'push',
+    seconds: 0.45, // Measured 2026-10-21 on the 24-thread workstation: 0.45 s.
+    catches: 'a page or feature component that draws its own ground, edge, radius, type or raw control instead of '
+      + "taking it from ui/, an arbitrary value other than a --layout-* constant, and a colour, font size or radius in "
+      + "index.css outside theme.ts and the role table",
+    blind: 'class names built at run time from parts, and what a component computes in the browser (computed-style.ts)',
+    inputs: { kind: 'derived', imports: CF_BACKEND_SOURCES },
   },
   {
     run: 'bun scripts/pattern-inventory.ts',
@@ -1148,7 +1160,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/eval-plan-run.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/evals-post.test.ts scripts/eval-plan-run.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
@@ -1161,7 +1173,8 @@ export const LADDER: readonly Gate[] = [
     // the deploy's live status suite at 0.5 s (4 tests). deploy.test.ts gained the
     // smoke's version reads 2026-10-08: three routes against a local server, the
     // slowest held to its 6 s bound (3 tests). The Worker startup measure's suite
-    // joined 2026-10-13 at under 0.1 s (2 tests).
+    // joined 2026-10-13 at under 0.1 s (2 tests). The eval run's settle suite joined
+    // 2026-10-21 at under 0.1 s (5 tests).
     seconds: 100,
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
       + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails. And a promotion '
@@ -1605,7 +1618,7 @@ export const LADDER: readonly Gate[] = [
       + 'turn is checked black-box: the checker calls the slates the agent built over the slate '
       + 'RPC and compares every answer with its own reference implementation of the contract, so '
       + 'any correct build passes, and reads what a person would: the files, the task board, each '
-      + 'helper\'s runs, and each preview address fetched with no credential. Five trials per '
+      + 'subagent\'s runs, and each preview address fetched with no credential. Five trials per '
       + 'task, each trial its own armada map task, the candidate on staging and the '
       + 'promoted build on kinu.run measured at once under the candidate\'s definitions, compared by a '
       + 'two-sided Fisher exact test (evals/src/comparison.ts), with infrastructure failures and '
@@ -1904,7 +1917,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'everything about the SERVER half. The frame stubs `fetchPage`, so no rowid '
       + 'seek, no `limit + 1` over-read and no stale cursor is exercised here — those '
       + 'are unit-tested against the read model instead. Two hooks and one merge rule '
-      + 'of the ~29 gallery frames; the subordinate column and the node transcript walk '
+      + 'of the ~29 gallery frames; the subagent column and the node transcript walk '
       + 'the same contract and are measured by neither this nor any other browser. '
       + 'Chrome cost keeps it out of the commit tier.',
     inputs: CLIENT_BUILD,
@@ -2384,6 +2397,24 @@ export const LADDER: readonly Gate[] = [
       + 'leaves: the follow-up is answered, the stopped ask never runs, and nothing reads as a failure, words the Stop '
       + 'handed back returning to the draft; and a new chat\'s opening offers Stop while its first call waits.',
     blind: LIVE_APP_BLIND,
+    inputs: LIVE_APP_INPUTS,
+  },
+  {
+    run: 'bun test --timeout=0 tests/browser/live-app-connect.test.ts',
+    label: 'Live app in a browser: a connect through the Worker',
+    tier: 'ci',
+    // Measured 2026-10-23 on armada by `bun scripts/gate-cost-measure.ts --only=<this row>` at fa5806580: 219.0 s wall,
+    // 459 CPU seconds, 5.5 GiB peak (scripts/gate-cost.json); four sign-ins and a finish page beside the dev server's boot.
+    seconds: 220,
+    catches: 'an MCP server\'s sign-in on `vite dev` (workerd with real Durable Objects) driven in Chrome, through the '
+      + 'Worker\'s own OAuth callback, account storage and MCP SDK, against a loopback provider that asks the person '
+      + '(scripts/consenting-oauth.ts). Run in the tab itself from setup\'s tools step reached by Next, it comes back '
+      + 'to that step connected; a finish page naming another run, opened while a sign-in waits, closes nothing and '
+      + 'tells its page nothing; declined, the helper tab closes, the page says it failed and the row offers the '
+      + 'sign-in again, which connects once approved.',
+    blind: 'a Cloudflare connect, whose provider is Cloudflare\'s own dashboard (its callback is unit-tested, its page '
+      + 'half in providers-ux); a provider that answers its consent slowly. One viewport, and a LOCAL dev server whose '
+      + 'workerd is not production\'s.',
     inputs: LIVE_APP_INPUTS,
   },
   {
@@ -4407,7 +4438,7 @@ if (import.meta.main) {
   const caching = cacheEnabled({ hammer: rowGate?.phase === 'hammer', noCache: cli['no-cache'] === true });
   const remote = caching ? remoteStore : undefined;
   const tools = toolVersions(root, await pathNodeVersion());
-  const store = storeAt(defaultStoreDirectory());
+  const store = storeAt(ladderCacheDirectory());
   const revision = fullRevision();
   const ciRows: CIVerdict[] = [];
 

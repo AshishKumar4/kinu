@@ -123,7 +123,7 @@ test('what only the agent does is refused before it is routed', () => {
     expect(() => call(path), path.join('.')).toThrow(expect.objectContaining({ code: 'denied' }));
   }
 
-  // Helpers are the owner's own slate's to hire: routed as the act they are, and held to the owner by the host.
+  // Subagents are the owner's own slate's to hire: routed as the act they are, and held to the owner by the host.
   expect(call(['agents', 'hire'], [{}])).toMatchObject({ address: { namespace: 'agents', member: 'hire' }, impact: 'delegate' });
 
   // Read models and the browser are the surface's; an unknown read model is not.

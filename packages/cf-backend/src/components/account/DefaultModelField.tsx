@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { useCallback, useState } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import type { ProfileCatalogEnvelope } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { ModelPicker } from "@/components/ModelPicker";
@@ -37,7 +37,7 @@ export function DefaultModelField() {
       {(envelope) => (
         <CardSlot resource={menu.resource} what="your connected models" onRetry={retry}>
           {(models) => (models.models.length === 0 ? (
-            <p className="text-sm p-text-3" data-default-model="none">
+            <p className="t-body p-text-3" data-default-model="none">
               No models yet. Connect a provider in the step before and its models show up here.
             </p>
           ) : (
@@ -45,11 +45,11 @@ export function DefaultModelField() {
               <ModelPicker models={models.models} failures={models.failures} accounts={models.accounts}
                 value={envelope.catalog.tiers.default.model} onChange={(model) => choose(envelope, model)}
                 label="Default model" className="w-full" disabled={saving} />
-              <p className="p-meta p-text-3 flex items-center gap-1.5">
+              <p className="t-meta p-text-3 flex items-center gap-2">
                 {saving && <Loader size="sm" />}
                 {saving ? "Saving…" : "Every new workspace starts on this model. You can change it per workspace, or later in settings."}
               </p>
-              {error && <p className="text-xs p-danger">{error}</p>}
+              {error && <p className="t-meta p-danger">{error}</p>}
             </div>
           ))}
         </CardSlot>

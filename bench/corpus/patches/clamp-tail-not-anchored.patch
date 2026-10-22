@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/tools/clamp.ts b/packages/core/src/tools/clamp.ts
-index 68fb488fb..b8f7b4e4e 100644
 --- a/packages/core/src/tools/clamp.ts
 +++ b/packages/core/src/tools/clamp.ts
-@@ -96,7 +96,7 @@ function clampedAround(text: string, saved: Offload | null, opts: ClampToolResul
-   const room = (opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS) - marker.length - MARKER_FENCE_CHARS;
+@@ -143,7 +143,7 @@
+   const room = Math.max(0, maxChars - truncationMarker(saved, widestKept(text), compact).length - MARKER_FENCE_CHARS);
    const headLen = Math.floor(room * HEAD_FRACTION);
    const head = text.slice(0, headEnd(text, headLen));
 -  const tail = text.slice(tailStart(text, room - headLen));
 +  const tail = text.slice(room - headLen);
-   const clamped = `${head}\n\n${marker}\n\n${tail}`;
+   const marker = truncationMarker(saved, keptOf(text, head, tail), compact);
+ 
    // Counted off what was kept: refusing to split a character can drop a unit.
-   const omitted = text.length - head.length - tail.length;

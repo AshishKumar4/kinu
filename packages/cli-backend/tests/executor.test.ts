@@ -108,10 +108,38 @@ sys.exit(0)
 
   // Production crafted-harbor-37f29697, 2026-10-16: `await agents` called `agents.then` as a member and never ended.
   test('a program that awaits a namespace gets the namespace, never a wait on a member called `then`', async () => {
-    const agents = { name: 'agents', fns: { list: async () => ['helper'] } };
+    const agents = { name: 'agents', fns: { list: async () => ['subagent'] } };
 
     expect(await createSandboxedExecutor().execute('return await agents ? "awaited" : "never";', [agents])).toEqual({ result: 'awaited' });
-    expect(await createSandboxedExecutor().execute('const ns = await agents; return await ns.list();', [agents])).toEqual({ result: ['helper'] });
+    expect(await createSandboxedExecutor().execute('const ns = await agents; return await ns.list();', [agents])).toEqual({ result: ['subagent'] });
+  });
+
+  // Duplication audit, 2026-10-20 (InternalFish #12): the runtime's programs and eval held namespaces two ways, and the
+  // cloud's sandbox a third. One shape now, the cloud's: what a namespace serves is its own, a name it does not serve is
+  // refused by name when called, workspace.createTool takes a function as its source, and none is ever a thenable.
+  test('a namespace is held as the cloud sandbox holds one', async () => {
+    const created: unknown[] = [];
+
+    const workspace = {
+      name: 'workspace',
+      fns: {
+        exec: async () => 'ran',
+        'fs.read': async () => 'read',
+        createTool: async (...args: unknown[]) => {
+          created.push(args[1]);
+
+          return 'made';
+        },
+      },
+    };
+
+    const run = async (code: string) => createSandboxedExecutor().execute(code, [workspace]);
+
+    expect(await run('return await workspace.nope();')).toEqual({ result: undefined, error: expect.stringContaining('Tool "nope" not found') });
+    expect(await run('return [\'exec\' in workspace, \'slates\' in workspace, await workspace.fs.read()];')).toEqual({ result: [true, false, 'read'] });
+    expect(await run('return await workspace.createTool("hello", function hello() { return 1; });')).toEqual({ result: 'made' });
+    expect(created).toEqual(['function hello() { return 1; }']);
+    expect(await run('return (await workspace) === workspace;')).toEqual({ result: true });
   });
 
   test('refuses module metadata in the in-process function context before side effects', async () => {

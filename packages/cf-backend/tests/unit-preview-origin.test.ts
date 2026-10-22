@@ -23,7 +23,7 @@ import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
 import { LIVE_SHARE_OPEN_PATH, PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
 import { DEPLOY_API } from '@kinu.run/core/deploy';
 import { crossSiteRejection } from '../src/auth/session';
-import { CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from '../src/auth/cookies';
+import { CLI_APPROVAL_CSRF_COOKIE_NAME, oauthStateCookieName, SESSION_COOKIE_NAME } from '../src/auth/cookies';
 import {
   handleNimbusPreviewHostRequest,
   nimbusPreviewConfigured,
@@ -338,7 +338,7 @@ describe('serving the preview host', () => {
           `${SESSION_COOKIE_NAME}=owner`,
           'guest_session=guest',
           `${CLI_APPROVAL_CSRF_COOKIE_NAME}=csrf`,
-          `${OAUTH_STATE_COOKIE_NAME}=handoff`,
+          `${oauthStateCookieName('0123456789abcdef')}=handoff`,
         ].join('; '),
         authorization: `Bearer ptc_${OWNER}_${'a'.repeat(44)}`,
         'proxy-authorization': 'Basic c2VjcmV0',
@@ -477,7 +477,7 @@ describe('serving a Nimbus preview host', () => {
           `${SESSION_COOKIE_NAME}=owner`,
           'guest_session=guest',
           `${CLI_APPROVAL_CSRF_COOKIE_NAME}=csrf`,
-          `${OAUTH_STATE_COOKIE_NAME}=handoff`,
+          `${oauthStateCookieName('0123456789abcdef')}=handoff`,
         ].join('; '),
         authorization: `Bearer pta_${OWNER}_${'b'.repeat(44)}`,
         'proxy-authorization': 'Basic c2VjcmV0',

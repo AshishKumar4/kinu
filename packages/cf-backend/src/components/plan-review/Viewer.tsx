@@ -1,8 +1,7 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { settleLogged, detach } from '@kinu.run/core/obs';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import DOMPurify from 'dompurify';
 import katex from 'katex';
 import { Marked, type RendererObject } from 'marked';
@@ -13,6 +12,10 @@ import { copyTextToClipboard } from '@plannotator/ui/utils/clipboard';
 import { useAnnotationHighlighter } from '@plannotator/ui/hooks/useAnnotationHighlighter';
 import type { GeneralNote, PassageNote } from '@kinu.run/core';
 import { editorAnnotationOf, reviewNoteOf } from './notes';
+import { TextArea } from "@/components/ui/Field";
+import { Floating } from '@/components/ui/Floating';
+import { Button } from "@/components/ui/Button";
+import { XIcon } from '@phosphor-icons/react';
 
 interface ViewerProps {
   blocks: Block[];
@@ -44,11 +47,11 @@ const FrontmatterCard = ({ frontmatter }: { frontmatter: Frontmatter }) => {
   if (entries.length === 0) return null;
 
   return (
-    <div className="mt-4 mb-6 rounded-lg border border-border/50 bg-muted/30 p-4">
-      <div className="grid gap-2 text-sm">
+    <div data-plan-frontmatter>
+      <div className="t-body grid gap-2">
         {entries.map(([key, value]) => (
           <div key={key} className="flex gap-2">
-            <span className="min-w-[80px] font-medium text-muted-foreground">{key}:</span>
+            <span data-plan-frontmatter-key>{key}:</span>
             <span className="text-foreground">
               {frontmatterText(value)}
             </span>
@@ -122,9 +125,9 @@ const planDirectiveKind = (value: string | undefined): string => {
 
 /** A heading's classes by level; 3 and deeper share the last. */
 const HEADING_CLASS = [
-  'mb-4 mt-6 text-2xl font-bold tracking-tight first:mt-0',
-  'mb-3 mt-8 text-xl font-semibold text-foreground/90',
-  'mb-2 mt-6 text-base font-semibold text-foreground/80',
+  't-page-title mb-4 mt-6 first:mt-0',
+  't-title mb-3 mt-8 text-foreground/90',
+  't-title mb-2 mt-6 text-foreground/80',
 ] as const;
 
 /** A checkbox for a task item, its number in an ordered list, else a bullet. */
@@ -167,8 +170,8 @@ const PlanBlock = React.memo(({
     const alert = block.alertKind;
 
     return (
-      <blockquote data-block-id={block.id} className={`my-4 border-l-2 pl-4 text-muted-foreground ${alert ? `alert-${alert}` : 'border-primary/50 italic'}`}>
-        {alert && <div className="alert-title mb-1 text-xs font-semibold uppercase tracking-wide">{alert}</div>}
+      <blockquote data-block-id={block.id} className={`my-4 border-l-2 pl-4 text-muted-foreground${alert ? ` alert-${alert}` : ''}`}>
+        {alert && <div className="t-status alert-title mb-1 uppercase">{alert}</div>}
         <PlanInlineMarkdown text={block.content} />
       </blockquote>
     );
@@ -176,9 +179,10 @@ const PlanBlock = React.memo(({
 
   if (block.type === 'list-item') {
     const marker = listMarker(block.checked, listIndex);
+    const depth: CSSProperties & { readonly "--plan-depth": string } = { "--plan-depth": String(block.level ?? 0) };
 
     return (
-      <div data-block-id={block.id} className="my-1.5 flex items-start gap-3 text-sm leading-relaxed" style={{ marginLeft: `${(block.level ?? 0) * 1.25}rem` }}>
+      <div data-block-id={block.id} data-plan-item className="t-body my-2 flex items-start gap-3" style={depth}>
         <span className="select-none text-muted-foreground">{marker}</span>
         <span className={block.checked ? 'text-muted-foreground line-through' : 'text-foreground/90'}><PlanInlineMarkdown text={block.content} /></span>
       </div>
@@ -197,7 +201,7 @@ const PlanBlock = React.memo(({
         data-block-id={block.id}
         data-math-tex={block.content}
         data-math-display="true"
-        className="math-annotatable my-5 overflow-x-auto rounded-lg border border-border/30 bg-muted/30 p-4 text-center"
+        className="math-annotatable"
         dangerouslySetInnerHTML={{ __html: html }}
       />
     );
@@ -205,7 +209,7 @@ const PlanBlock = React.memo(({
 
   if (block.type === 'code') {
     return (
-      <pre data-block-id={block.id} className="my-5 overflow-x-auto rounded-lg border border-border/30 bg-muted/50 p-4 text-[13px]">
+      <pre data-block-id={block.id}>
         <code className={`pn-code font-mono${block.language ? ` language-${block.language}` : ''}`}>{block.content}</code>
       </pre>
     );
@@ -215,9 +219,9 @@ const PlanBlock = React.memo(({
     const kind = planDirectiveKind(block.directiveKind);
 
     return (
-      <aside data-block-id={block.id} className={`directive directive-${kind} my-4 rounded-lg border p-4`}>
-        <div className="directive-title mb-1 text-xs font-semibold uppercase tracking-wide">{kind}</div>
-        <p className="text-sm leading-relaxed text-foreground/90"><PlanInlineMarkdown text={block.content} /></p>
+      <aside data-block-id={block.id} className={`directive directive-${kind}`}>
+        <div className="t-status directive-title mb-1 uppercase">{kind}</div>
+        <p className="t-body text-foreground/90"><PlanInlineMarkdown text={block.content} /></p>
       </aside>
     );
   }
@@ -229,18 +233,18 @@ const PlanBlock = React.memo(({
 
     return (
       <div data-block-id={block.id} className="my-4 overflow-x-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead><tr>{header.map((cell, index) => <th key={index} className="border border-border bg-muted/40 px-3 py-2 text-left font-medium"><PlanInlineMarkdown text={cell} /></th>)}</tr></thead>
-          <tbody>{body.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex} className="border border-border px-3 py-2"><PlanInlineMarkdown text={cell} /></td>)}</tr>)}</tbody>
+        <table className="t-body w-full border-collapse">
+          <thead><tr>{header.map((cell, index) => <th key={index}><PlanInlineMarkdown text={cell} /></th>)}</tr></thead>
+          <tbody>{body.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}><PlanInlineMarkdown text={cell} /></td>)}</tr>)}</tbody>
         </table>
       </div>
     );
   }
 
-  if (block.type === 'hr') return <hr data-block-id={block.id} className="my-8 border-border/30" />;
+  if (block.type === 'hr') return <hr data-block-id={block.id} />;
 
   return (
-    <p data-block-id={block.id} className="mb-4 text-[15px] leading-relaxed text-foreground/90">
+    <p data-block-id={block.id} className="t-body mb-4 text-foreground/90">
       <PlanInlineMarkdown text={block.content} />
     </p>
   );
@@ -311,47 +315,29 @@ const PlanAnnotationToolbar = ({
 
   if (!position) return null;
 
-  return createPortal(
-    <div
-      className="annotation-toolbar fixed z-[100] flex -translate-x-1/2 items-center gap-0.5 rounded-lg border border-border bg-popover p-1 shadow-2xl"
-      style={position}
+  return (
+    <Floating
+      at={position}
+      className="annotation-toolbar flex -translate-x-1/2 items-center gap-px p-1"
       onMouseDown={(event) => event.stopPropagation()}
       role="toolbar"
       aria-label="Annotate selection"
     >
-      <button
-        type="button"
-        className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-        onClick={() => detach(Effect.promise(async () => settleLogged('plan_review.copy_failed', { doing: 'copying the selected text', otherwise: 'io' }, async () => {
+      <Button variant="ghost" size="sm" onClick={() => detach(Effect.promise(async () => settleLogged('plan_review.copy_failed', { doing: 'copying the selected text', otherwise: 'io' }, async () => {
           setCopied(await copyTextToClipboard(selectionText));
-        })))}
-      >
+        })))}>
         {copied ? 'Copied' : 'Copy'}
-      </button>
-      <button
-        type="button"
-        className="rounded-md px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
-        onClick={onDelete}
-      >
+      </Button>
+      <Button variant="danger" size="sm" onClick={onDelete}>
         Remove
-      </button>
-      <button
-        type="button"
-        className="rounded-md px-2 py-1 text-xs text-annotation-comment hover:bg-muted"
-        onClick={onComment}
-      >
+      </Button>
+      <Button variant="ghost" size="sm" onClick={onComment}>
         Comment
-      </button>
-      <button
-        type="button"
-        className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-        onClick={onClose}
-        aria-label="Cancel annotation"
-      >
+      </Button>
+      <Button variant="ghost" size="sm" onClick={onClose} aria-label="Cancel annotation">
         Cancel
-      </button>
-    </div>,
-    document.body,
+      </Button>
+    </Floating>
   );
 };
 
@@ -427,66 +413,42 @@ const PlanCommentPopover = ({
     if (comment) onSubmit(comment);
   };
 
-  return createPortal(
-    <div
+  return (
+    <Floating
       ref={rootRef}
+      at={position}
       data-comment-popover="true"
-      className="fixed z-[100] overflow-hidden rounded-xl border border-border bg-popover shadow-2xl"
-      style={position}
+      className="overflow-hidden"
       role="dialog"
       aria-label={isGlobal ? 'Global plan comment' : 'Plan comment'}
       onPointerDown={(event) => event.stopPropagation()}
     >
-      <div className="flex items-center justify-between gap-3 border-b border-border/50 px-3 py-2">
-        <span className="truncate text-xs text-muted-foreground">
+      <div className="flex items-center justify-between gap-3 border-b p-border px-3 py-2">
+        <span className="t-meta truncate text-muted-foreground">
           {isGlobal ? 'Global comment' : contextText || 'Comment'}
         </span>
-        <button
-          type="button"
-          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-          onClick={onClose}
-          aria-label="Close comment"
-        >
-          ×
-        </button>
+        <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close comment" icon={<XIcon size={14} />} />
       </div>
       <div className="p-3">
-        <textarea
-          ref={textareaRef}
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
+        <TextArea className="min-h-24 w-full resize-y" ref={textareaRef} value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => {
             if (event.key === 'Escape') onClose();
 
             if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
               event.preventDefault();
               submit();
             }
-          }}
-          className="min-h-24 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring"
-          placeholder={isGlobal ? 'Add a global comment…' : 'Add a comment…'}
-        />
+          }} placeholder={isGlobal ? 'Add a global comment…' : 'Add a comment…'} />
       </div>
-      <div className="flex items-center justify-end gap-2 border-t border-border/50 px-3 py-2">
-        <span className="mr-auto text-[10px] text-muted-foreground">Ctrl/⌘ + Enter</span>
-        <button
-          type="button"
-          className="rounded-md px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-          onClick={onClose}
-        >
+      <div className="flex items-center justify-end gap-2 border-t p-border px-3 py-2">
+        <span className="t-meta mr-auto text-muted-foreground">Ctrl/⌘ + Enter</span>
+        <Button variant="ghost" size="sm" onClick={onClose}>
           Cancel
-        </button>
-        <button
-          type="button"
-          className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-40"
-          onClick={submit}
-          disabled={!text.trim()}
-        >
+        </Button>
+        <Button variant="primary" size="sm" onClick={submit} disabled={!text.trim()}>
           Save
-        </button>
+        </Button>
       </div>
-    </div>,
-    document.body,
+    </Floating>
   );
 };
 
@@ -550,21 +512,17 @@ export const Viewer = ({
       <article
         ref={containerRef}
         data-print-region="article"
-        className="relative w-full rounded-xl bg-card py-5 md:py-8 lg:py-10 xl:py-12"
+        className="relative w-full bg-card py-5 md:py-8 lg:py-8 xl:py-12"
       >
         {!readOnly && (
           <div
             data-print-hide
-            className="z-30 float-right mt-6 flex items-start gap-1 rounded-lg bg-card/95 p-1 shadow-sm backdrop-blur-sm md:-mt-5 md:gap-2 md:p-2 lg:-mt-7 xl:-mt-9"
+            data-plan-document-actions
+            className="z-30 float-right mt-6 flex items-start gap-1 p-1 md:-mt-5 md:gap-2 md:p-2 lg:-mt-8 xl:-mt-8"
           >
-            <button
-              ref={globalCommentButtonRef}
-              type="button"
-              className="rounded-md bg-muted/50 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-              onClick={() => setGlobalCommentOpen(true)}
-            >
+            <Button variant="ghost" size="sm" ref={globalCommentButtonRef} onClick={() => setGlobalCommentOpen(true)}>
               Global comment
-            </button>
+            </Button>
           </div>
         )}
 

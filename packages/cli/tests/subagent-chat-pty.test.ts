@@ -5,7 +5,7 @@
 import { expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { createAgentConfigStore, initWorkspaceSchema, SubordinateRosterStore, WorkspaceActorDirectory } from '@kinu.run/core';
+import { createAgentConfigStore, initWorkspaceSchema, SubagentRosterStore, WorkspaceActorDirectory } from '@kinu.run/core';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { makeSql, makeSqlExec, makeWorkspaceSchemaSql, workspaceHome } from '@kinu.run/cli-backend';
 import { runToExit, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
@@ -56,7 +56,7 @@ async function workspaceThatHired(home: string, name: string, subagent: { name: 
 
     // A born child's title lives in its own config, which is what a listing reads.
     createAgentConfigStore(makeSql(db), child.reference.actorId, () => {}).setDisplayNameOrigin(subagent.displayName, 'user');
-    const roster = new SubordinateRosterStore(makeSqlExec(db), main);
+    const roster = new SubagentRosterStore(makeSqlExec(db), main);
     roster.ensureSchema();
 
     roster.create({

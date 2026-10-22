@@ -1,12 +1,11 @@
 import { Effect, Cause } from 'effect';
+import { SaveBar } from "@/components/ui/SaveBar";
 import { startTransition, useState, useEffect, useCallback, useRef } from "react";
 import { Link } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
-import {
-  FloppyDiskIcon, BrainIcon, CheckIcon,
-  ShieldIcon, KeyIcon,
-  DownloadSimpleIcon, EyeIcon, ChatsCircleIcon, TrashIcon,
-} from "@phosphor-icons/react";
+import { Loader } from "@/components/ui/Loader";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { GearSixIcon, KeyIcon, TrashIcon } from "@phosphor-icons/react";
+import { Page } from "@/components/ui/PageHeader";
 import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_LABEL, DEFAULT_ADVISOR_MIN_SEVERITY,
   WORKSPACE_ARCHIVE_EXTENSION,
@@ -18,19 +17,23 @@ import { executorLabel } from "@kinu.run/core";
 import type { ConnectionStatus } from "@/hooks/use-chat-owner";
 import type { AgentStatus, WorkspaceLayout, WorkspaceNotice } from "@kinu.run/core";
 import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
-import { Card, Field, composing, inputCls } from "@/components/ui/form";
-import { CopyButton } from "@/components/ui/CopyButton";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { Card, Field, composing } from "@/components/ui/form";
+import { CopyField } from "@/components/ui/CopyField";
+import { Chip } from "@/components/ui/Chip";
+import { Group } from "@/components/ui/Group";
+import { Preformatted } from "@/components/ui/Preformatted";
 import { Segmented } from "@/components/ui/Segmented";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { CardSlot } from "@/components/ui/CardSlot";
-import { WorkspaceLogo } from "@/components/Marks";
+import { WorkspaceLogo } from "@/components/ui/Marks";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { showing, detach, settle } from '@kinu.run/core/obs';
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Notice } from "@/components/ui/Notice";
+import { TextArea, TextInput } from "@/components/ui/Field";
 
 const APPROVAL_LABEL: Record<ShellApprovalMode, string> = {
-  strict: "Strict (review)",
+  strict: "Strict",
   allow_all: "Allow all",
   deny_all: "Deny all",
 };
@@ -47,6 +50,8 @@ interface SettingField<T> {
   hydrate: (value: T) => void;
   fail: (thrown: { cause: unknown }) => void;
   markSaved: (value: T) => void;
+  /** Puts the read value back: the edit is dropped. */
+  discard: () => void;
 }
 
 function useSettingField<T>(): SettingField<T> {
@@ -68,7 +73,7 @@ function useSettingField<T>(): SettingField<T> {
     resource,
     value: edited ? edited.value : lastValue(resource),
     dirty: edited !== null,
-    edit, hydrate, fail, markSaved,
+    edit, hydrate, fail, markSaved, discard: () => setEdited(null),
   };
 }
 
@@ -87,14 +92,6 @@ function FieldState<T>({ field, what, onRetry, children }: {
 const LAYOUT_CHOICES: { id: WorkspaceLayout; label: string }[] = [{ id: "workbench", label: "Workbench" }, { id: "focus", label: "Focus" }];
 
 const ADVISOR_SWITCH = [{ id: "off", label: "Off" }, { id: "on", label: "On" }] as const;
-
-function saveLabel(saving: boolean, saved: boolean): string {
-  if (saving) return "Saving…";
-
-  if (saved) return "Saved";
-
-  return "Save";
-}
 
 /** The workspace socket's pieces settings read; the page shares the chat's socket rather than opening its own. */
 interface SettingsSource {
@@ -124,11 +121,11 @@ function LogoField({ title, logo, rpc }: { title: string; logo: string | null | 
     <Field label="Logo">
       <div className="flex items-center gap-3" data-logo-field>
         <WorkspaceLogo title={title} logo={logo} size={40} />
-        <button type="button" onClick={redraw} disabled={drawing} className="p-btn-quiet inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs">
+        <Button size="sm" onClick={redraw} disabled={drawing}>
           {drawing ? <><Loader size="sm" /> Drawing…</> : "Draw a new one"}
-        </button>
+        </Button>
       </div>
-      {note && <p className="text-xs p-text-3">{note}</p>}
+      {note && <p className="t-meta p-text-3">{note}</p>}
     </Field>
   );
 }
@@ -149,7 +146,6 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   const advisor = useSettingField<AdvisorConfig>();
 
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   // The title is the roster's; the soul rides the workspace snapshot, so it hydrates or fails with it.
@@ -243,8 +239,6 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
       yield* Effect.promise(async () => Promise.all(writes));
 
       for (const commit of commits) commit();
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
     }), showing(setErr)), Effect.sync(() => {
       setSaving(false);
     }));
@@ -252,7 +246,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
 
   if (connectionStatus !== "connected") {
     return (
-      <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-sm p-text-2">
+      <div className="t-body flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-text-2">
         {connectionStatus === "connecting" ? (
           <><Loader size="base" /><span>Connecting to {agentId}…</span></>
         ) : (
@@ -263,130 +257,97 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   }
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto" data-workspace-settings>
-      <div className="mx-auto max-w-3xl space-y-8 px-5 pb-16 pt-9 sm:px-8">
-        <header className="flex flex-wrap items-end justify-between gap-4 border-b p-border pb-6">
-          <div className="min-w-0">
-            <h1 className="p-display text-[26px] leading-8">Settings</h1>
-            <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 p-row-text p-text-3">
-              <span className="font-mono">{agentId}</span>
-              <CopyButton value={agentId} what="the workspace slug" size={11}
-                className="rounded-sm p-0.5 p-card-hover hover:p-text transition-colors" />
-              <span>·</span>
-              <Link to="/user/settings" className="hover:p-text inline-flex items-center gap-1">
-                <KeyIcon size={11} /> Account settings and credentials
-              </Link>
-            </p>
-          </div>
-        </header>
+    <Page fill icon={<GearSixIcon size={22} />} title="Settings" data-workspace-settings
+      actions={<Link to="/user/settings" className={buttonClass({ variant: "ghost" })}><KeyIcon size={14} />Account settings</Link>}>
+      {err && <Notice tone="danger">{err}</Notice>}
 
-        {err && <div className="p-notice-danger px-4 py-3 text-xs">{err}</div>}
-
-        <div className="space-y-5">
-        <Card title="Identity" icon={BrainIcon}>
-          <LogoField title={title} logo={logo} rpc={rpc} />
-          <Field label="Display name">
-            <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
-              {(value) => (
-                <input value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} className={inputCls} />
-              )}
-            </FieldState>
-          </Field>
-          <Field label="Layout" hint="Focus shows the chat alone; its chats, agents and inspector open from the bar.">
-            <FieldState field={layout} what="the layout" onRetry={retryLoad}>
-              {(value) => (
-                <div className="flex">
-                  <Segmented label="Layout" value={value} segments={LAYOUT_CHOICES} onChange={(chosen) => layout.edit(chosen)} />
-                </div>
-              )}
-            </FieldState>
-          </Field>
-          <Field label="SOUL.md">
-            <FieldState field={soul} what="SOUL.md" onRetry={retryLoad}>
-              {(value) => (
-                <textarea value={value} onChange={(e) => soul.edit(e.target.value)} rows={8}
-                  className={`${inputCls} font-mono`} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
-              )}
-            </FieldState>
-          </Field>
-        </Card>
-
-
-        <Card title="Advisor" icon={EyeIcon}>
-          <FieldState field={advisor} what="the advisor settings" onRetry={loadRpcFields}>
+      <div className="space-y-5">
+      <Card title="Identity">
+        <LogoField title={title} logo={logo} rpc={rpc} />
+        <Field label="Address">
+          <CopyField value={agentId} what="the workspace's address" />
+        </Field>
+        <Field label="Display name">
+          <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
             {(value) => (
-              <>
-                <div className="space-y-1.5">
-                  <label className="block text-xs p-text-2 font-medium">Second opinion</label>
-                  <div className="flex">
-                    <Segmented label="Second opinion" value={value.advisorEnabled ? "on" : "off"} segments={ADVISOR_SWITCH}
-                      onChange={(id) => advisor.edit({ ...value, advisorEnabled: id === "on" })} />
-                  </div>
-                  <p className="p-meta p-text-3">
-                    Off by default. When on, a second model reads each turn and can add one note. That is one extra model call per turn.
-                  </p>
-                </div>
-                <div className="space-y-1.5">
-                  <label className="block text-xs p-text-2 font-medium">Minimum severity</label>
-                  <div className="flex">
-                    <Segmented label="Minimum severity" value={value.advisorMinSeverity}
-                      segments={ADVISOR_SEVERITIES.map((severity) => ({ id: severity, label: ADVISOR_SEVERITY_LABEL[severity] }))}
-                      onChange={(severity) => advisor.edit({ ...value, advisorMinSeverity: severity })} />
-                  </div>
-                  <p className="p-meta p-text-3">
-                    Notes at or above this severity show in the conversation. Lower ones go to the Changelog. The default is concern.
-                  </p>
-                </div>
-              </>
+              <TextInput value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} />
             )}
           </FieldState>
-        </Card>
-
-
-        <Card title="Shell-command approval" icon={ShieldIcon}>
-          <FieldState field={approval} what="the approval mode" onRetry={loadRpcFields}>
+        </Field>
+        <Field label="Layout">
+          <FieldState field={layout} what="the layout" onRetry={retryLoad}>
             {(value) => (
-              <div className="grid grid-cols-3 gap-2">
-                {(['strict', 'allow_all', 'deny_all'] satisfies ShellApprovalMode[]).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => approval.edit(m)}
-                    className={`p-2 rounded-md text-xs ${value === m ? 'p-accent-bg p-accent' : 'p-card p-card-hover'}`}
-                  >{APPROVAL_LABEL[m]}</button>
-                ))}
+              <div className="flex">
+                <Segmented label="Layout" value={value} segments={LAYOUT_CHOICES} onChange={(chosen) => layout.edit(chosen)} />
               </div>
             )}
           </FieldState>
-        </Card>
-        <StandingApprovalsCard rpc={rpc} />
-        <InstructionApprovalsCard rpc={rpc} />
+        </Field>
+        <Field label="SOUL.md">
+          <FieldState field={soul} what="SOUL.md" onRetry={retryLoad}>
+            {(value) => (
+              <TextArea mono value={value} onChange={(e) => soul.edit(e.target.value)} rows={8} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
+            )}
+          </FieldState>
+        </Field>
+      </Card>
 
 
-        <AlwaysActiveSkillsCard rpc={rpc} />
+      <Card title="Advisor">
+        <FieldState field={advisor} what="the advisor settings" onRetry={loadRpcFields}>
+          {(value) => (
+            <>
+              <div className="space-y-2">
+                <label className="t-status block p-text-2">Second opinion</label>
+                <div className="flex">
+                  <Segmented label="Second opinion" value={value.advisorEnabled ? "on" : "off"} segments={ADVISOR_SWITCH}
+                    onChange={(id) => advisor.edit({ ...value, advisorEnabled: id === "on" })} />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <label className="t-status block p-text-2">Minimum severity</label>
+                <div className="flex">
+                  <Segmented label="Minimum severity" value={value.advisorMinSeverity}
+                    segments={ADVISOR_SEVERITIES.map((severity) => ({ id: severity, label: ADVISOR_SEVERITY_LABEL[severity] }))}
+                    onChange={(severity) => advisor.edit({ ...value, advisorMinSeverity: severity })} />
+                </div>
+              </div>
+            </>
+          )}
+        </FieldState>
+      </Card>
 
-        <div className="p-card border p-border p-5" id="automations"><WorkspaceAutomations rpc={rpc} workspace={agentId} /></div>
 
-        <WorkspaceBackupCard rpc={rpc} workspace={agentId} />
+      <Card title="Shell-command approval">
+        <FieldState field={approval} what="the approval mode" onRetry={loadRpcFields}>
+          {(value) => (
+            <div className="flex">
+              <Segmented label="Shell-command approval" value={value} onChange={(chosen) => approval.edit(chosen)}
+                segments={(['strict', 'allow_all', 'deny_all'] satisfies ShellApprovalMode[]).map((mode) => ({ id: mode, label: APPROVAL_LABEL[mode] }))} />
+            </div>
+          )}
+        </FieldState>
+      </Card>
+      <StandingApprovalsCard rpc={rpc} />
+      <InstructionApprovalsCard rpc={rpc} />
 
-        <Card title="Main's conversation" icon={ChatsCircleIcon}>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="p-meta p-text-3">Clearing removes Main's messages. Memory, SOUL.md, learned tools and evolution stay.</p>
-            <Button size="sm" variant="secondary" icon={<TrashIcon size={12} />} onClick={clearMain}>Clear history</Button>
-          </div>
-        </Card>
+
+      <AlwaysActiveSkillsCard rpc={rpc} />
+
+      <div id="automations"><Card><WorkspaceAutomations rpc={rpc} workspace={agentId} /></Card></div>
+
+      <WorkspaceBackupCard rpc={rpc} workspace={agentId} />
+
+      <Card title="Main's conversation">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="t-meta p-text-3">Clearing removes Main's messages. Memory, SOUL.md, learned tools and evolution stay.</p>
+          <Button size="sm" variant="secondary" icon={<TrashIcon size={12} />} onClick={clearMain}>Clear history</Button>
         </div>
-        {/* Where the edits are: the bar rises from the page's foot once there is something to save. */}
-        {(dirty || saving || saved) && (
-          <div className="sticky bottom-4 z-10 flex items-center justify-between gap-3 rounded-[14px] border p-border p-overlay py-2.5 pl-4 pr-2.5 p-shadow-menu animate-fade-in">
-            <span className="p-row-text p-text-2">{saved && !dirty ? "Changes saved." : "You have unsaved changes."}</span>
-            <FilledButton onClick={save} disabled={saving || !dirty} className="px-3">
-              {saved && !dirty ? <CheckIcon size={14} /> : <FloppyDiskIcon size={14} />}
-              <span>{saveLabel(saving, saved && !dirty)}</span>
-            </FilledButton>
-          </div>
-        )}
+      </Card>
       </div>
-    </div>
+      <SaveBar dirty={dirty} saving={saving} onSave={save}
+        onDiscard={() => { for (const field of [displayName, soul, layout, approval, advisor]) field.discard(); }} />
+    </Page>
   );
 }
 
@@ -418,34 +379,29 @@ export function StandingApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   if (resource.status !== "error" && grants !== null && grants.length === 0) return null;
 
   return (
-    <Card title="Standing approvals" icon={ShieldIcon}>
-      <p className="p-meta p-text-3">
+    <Card title="Standing approvals">
+      <p className="t-meta p-text-3">
         “Always” stops Kinu asking about this check in this environment. It does not give the agent any more access.
       </p>
       {resource.status === "error" && grants === null && (
         <LoadFailure what="your standing approvals" message={resource.message} onRetry={reload} />
       )}
-      {resource.status !== "error" && grants === null && <p className="text-xs p-text-3">Loading…</p>}
+      {resource.status !== "error" && grants === null && <p className="t-meta p-text-3">Loading…</p>}
       {grants !== null && (
-        <div className="space-y-1">
+        <Group>
           {grants.map((grant) => (
-            <div key={`${grant.rule}@${grant.executor}`}
-              className="flex items-center gap-2 text-xs rounded-md px-2 py-1.5 p-card">
-              <code className="font-mono p-text">{grant.rule}</code>
+            <div key={`${grant.rule}@${grant.executor}`} className="t-meta flex items-center gap-2 py-2">
+              <code className="t-mono p-text">{grant.rule}</code>
               <span className="p-text-3">on</span>
               <span className="p-text-2">{executorLabel(grant.executor)}</span>
-              <button
-                type="button"
-                onClick={() => detach(revoke(grant))}
-                disabled={busy !== null}
-                className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50"
-                title={`Ask again next time a command trips ${grant.rule} on ${executorLabel(grant.executor)}`}
-              >{busy === `${grant.rule}@${grant.executor}` ? "…" : "Revoke"}</button>
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => detach(revoke(grant))} disabled={busy !== null}
+                busy={busy === `${grant.rule}@${grant.executor}`}
+                title={`Ask again next time a command trips ${grant.rule} on ${executorLabel(grant.executor)}`}>Revoke</Button>
             </div>
           ))}
-        </div>
+        </Group>
       )}
-      {err && <div className="p-meta p-danger mt-1">{err}</div>}
+      {err && <div className="t-meta p-danger mt-1">{err}</div>}
     </Card>
   );
 }
@@ -529,15 +485,15 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   if (resource.status !== "error" && rows !== null && rows.length === 0 && !cursor) return null;
 
   return (
-    <Card title="Workspace instruction files" icon={ShieldIcon}>
-      <p className="p-meta p-text-3">
+    <Card title="Workspace instruction files">
+      <p className="t-meta p-text-3">
         Your agent can write these files. Kinu follows a file as instructions only when you approve its
         contents. After any edit it becomes reference material again until you approve it again.
       </p>
       {resource.status === "error" && rows === null && (
         <LoadFailure what="this workspace's instruction files" message={resource.message} onRetry={reload} />
       )}
-      {resource.status !== "error" && rows === null && <p className="text-xs p-text-3">Loading…</p>}
+      {resource.status !== "error" && rows === null && <p className="t-meta p-text-3">Loading…</p>}
       {rows !== null && (
         <div className="space-y-1">
           {rows.map((row) => {
@@ -547,45 +503,30 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
             const readWord = opened === null ? "Read" : "Hide";
 
             return (
-              <div key={row.path} className="rounded-md px-2 py-1.5 p-card space-y-1">
-                <div className="flex items-center gap-2 text-xs">
-                  <code className="font-mono p-text truncate" title={row.path}>{row.path}</code>
+              <div key={row.path} className="space-y-1 py-2">
+                <div className="t-meta flex items-center gap-2">
+                  <code className="t-mono p-text truncate" title={row.path}>{row.path}</code>
                   <span className="p-text-3 shrink-0">
                     {row.kind === "skill" ? "skill" : "AGENTS.md"} · {row.bytes} bytes
                   </span>
                   <span className="p-text-3 shrink-0">{state}</span>
                   {row.reason === undefined && (
-                    <button
-                      type="button"
-                      onClick={() => detach(read(row))}
-                      disabled={busy !== null}
-                      className="ml-auto px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0"
-                    >{busy === row.path ? "…" : readWord}</button>
+                    <Button variant="ghost" size="sm" className="ml-auto shrink-0" onClick={() => detach(read(row))} disabled={busy !== null}
+                      busy={busy === row.path}>{readWord}</Button>
                   )}
                   {followed && (
-                    <button
-                      type="button"
-                      onClick={() => detach(decide(row, "revoke"))}
-                      disabled={busy !== null}
-                      className={`${row.reason === undefined ? "" : "ml-auto "}px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text disabled:opacity-50 shrink-0`}
-                      title="Stop following this file as instructions"
-                    >Revoke</button>
+                    <Button variant="ghost" size="sm" className={row.reason === undefined ? "shrink-0" : "ml-auto shrink-0"} onClick={() => detach(decide(row, "revoke"))}
+                      disabled={busy !== null} title="Stop following this file as instructions">Revoke</Button>
                   )}
                   {!followed && row.reason === undefined && (
-                    <button
-                      type="button"
-                      onClick={() => detach(decide(row, "approve"))}
-                      disabled={busy !== null}
-                      className="px-2 py-0.5 rounded-sm p-card-hover p-text-2 hover:p-text disabled:opacity-50 shrink-0"
-                      title="Follow these exact contents as instructions"
-                    >Approve</button>
+                    <Button size="sm" className="shrink-0" onClick={() => detach(decide(row, "approve"))} disabled={busy !== null}
+                      title="Follow these exact contents as instructions">Approve</Button>
                   )}
                 </div>
                 {opened && (
                   <>
-                    <pre className="p-t-code p-text-2 whitespace-pre-wrap break-words
-                      max-h-64 overflow-auto rounded-sm px-2 py-1.5 p-card-hover">{opened.preview}</pre>
-                    <div className="p-meta p-text-3 font-mono break-all">{opened.digest}</div>
+                    <Preformatted className="max-h-64">{opened.preview}</Preformatted>
+                    <div className="t-meta t-mono p-text-3 break-all">{opened.digest}</div>
                   </>
                 )}
               </div>
@@ -596,16 +537,14 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
       {(page?.status === "more" || cursor) && (
         <div className="flex gap-2 pt-1">
           {cursor && (
-            <button type="button" onClick={() => { setCursor(undefined); setOpen(null); }}
-              className="p-meta px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text">First page</button>
+            <Button variant="ghost" size="sm" onClick={() => { setCursor(undefined); setOpen(null); }}>First page</Button>
           )}
           {page?.status === "more" && (
-            <button type="button" onClick={() => { setCursor(page.next); setOpen(null); }}
-              className="p-meta px-2 py-0.5 rounded-sm p-card-hover p-text-3 hover:p-text">More</button>
+            <Button variant="ghost" size="sm" onClick={() => { setCursor(page.next); setOpen(null); }}>More</Button>
           )}
         </div>
       )}
-      {err && <div className="p-meta p-danger mt-1">{err}</div>}
+      {err && <div className="t-meta p-danger mt-1">{err}</div>}
     </Card>
   );
 }
@@ -660,17 +599,17 @@ function WorkspaceBackupCard({
   })), [rpc, workspace]);
 
   return (
-    <Card title="Backup" icon={DownloadSimpleIcon}>
-      <p className="p-meta p-text-3">
+    <Card title="Backup">
+      <p className="t-meta p-text-3">
         Download an archive of this workspace: transcripts, memory, files and evolution history. Restore it
         with <code className="font-mono">kinu import &lt;file&gt;</code>. Download one before you delete a
         workspace. The archive holds everything in the workspace, so keep it as safe as a password.
       </p>
-      <FilledButton onClick={() => detach(Effect.promise(async () => { await download(); }))} disabled={busy || !workspace}>
+      <Button variant="primary" size="sm" onClick={() => detach(Effect.promise(async () => { await download(); }))} disabled={busy || !workspace}>
         {busy ? "Exporting…" : "Download archive"}
-      </FilledButton>
-      {status && <div className="p-meta p-text-2 mt-1">{status}</div>}
-      {err && <div className="p-meta p-danger mt-1">Export failed: {err}</div>}
+      </Button>
+      {status && <div className="t-meta p-text-2 mt-1">{status}</div>}
+      {err && <div className="t-meta p-danger mt-1">Export failed: {err}</div>}
     </Card>
   );
 }
@@ -718,33 +657,23 @@ function AlwaysActiveSkillsCard({
   }, [names, save]);
 
   return (
-    <Card title="Always-active skills" icon={KeyIcon}>
-      <p className="p-meta p-text-3">
+    <Card title="Always-active skills">
+      <p className="t-meta p-text-3">
         Pin a workflow skill, such as <code className="font-mono">audit-implementation</code>, and it runs
         every turn without you typing /name.
       </p>
-      <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-2">
         {names.length === 0
-          ? <span className="p-meta p-text-3">No skills pinned.</span>
+          ? <span className="t-meta p-text-3">No skills pinned.</span>
           : names.map(n => (
-            <span key={n} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm p-card p-meta font-mono">
-              {n}
-              <button type="button" onClick={() => detach(Effect.promise(async () => { await remove(n); }))} aria-label={`Unpin ${n}`} className="p-text-3 hover:p-text">×</button>
-            </span>
+            <Chip key={n} removeLabel={`Unpin ${n}`} onRemove={() => detach(Effect.promise(async () => { await remove(n); }))}><span className="t-mono">{n}</span></Chip>
           ))}
       </div>
       <div className="flex gap-2 mt-2">
-        <input
-          type="text"
-          value={input}
-          placeholder="skill-name"
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => detach(Effect.promise(async () => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }))}
-          className={inputCls + " text-xs"}
-        />
-        <FilledButton onClick={() => detach(Effect.promise(async () => { await add(); }))} disabled={busy || !input.trim()}>Pin</FilledButton>
+        <TextInput size="sm" value={input} placeholder="skill-name" onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => detach(Effect.promise(async () => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }))} />
+        <Button variant="primary" size="sm" onClick={() => detach(Effect.promise(async () => { await add(); }))} disabled={busy || !input.trim()}>Pin</Button>
       </div>
-      {err && <div className="p-meta p-danger mt-1">{err}</div>}
+      {err && <div className="t-meta p-danger mt-1">{err}</div>}
     </Card>
   );
 }

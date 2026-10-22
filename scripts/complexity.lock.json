@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-20",
-  "files": 3642,
-  "functions": 95794,
+  "measuredAt": "2026-10-21",
+  "files": 3723,
+  "functions": 97553,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -102,10 +102,6 @@
       "complexity": 32
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#mcpServersFixture",
-      "complexity": 31
-    },
-    {
       "key": "packages/cf-backend/tests/workerd/http-model-fake.ts#probeControl",
       "complexity": 31
     },
@@ -191,6 +187,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/ui/BrandMark.tsx#providerBrand",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#mcpServersFixture",
       "complexity": 27
     },
     {

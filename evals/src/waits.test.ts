@@ -26,18 +26,18 @@ test('a trial names each shell command or program that became a job, what moved 
       call(3, { name: 'agents', args: { op: 'swarm' }, durationMs: 230, result: handle('spawn', 'Started.') }),
       call(4, { name: 'file', args: { op: 'read', path: '/a' }, durationMs: 12, result: 'text' }),
     ] },
-    { actor: 'helper-1', events: [call(5, { name: 'eval', args: { code: 'execFile("npx", ["tsc"])' }, durationMs: 9_000, result: handle('eval', PERSON) })] },
+    { actor: 'subagent-1', events: [call(5, { name: 'eval', args: { code: 'execFile("npx", ["tsc"])' }, durationMs: 9_000, result: handle('eval', PERSON) })] },
   ]);
 
   expect(waits).toEqual({
     backgrounded: [
       { actor: 'main', tool: 'shell', ran: 'setsid -f chromium http://127.0.0.1:3000', wallMs: 30_064, by: 'window' },
-      { actor: 'helper-1', tool: 'eval', ran: 'execFile("npx", ["tsc"])', wallMs: 9_000, by: 'person' },
+      { actor: 'subagent-1', tool: 'eval', ran: 'execFile("npx", ["tsc"])', wallMs: 9_000, by: 'person' },
     ],
     slowest: [
       { actor: 'main', tool: 'eval', ran: 'return await workspace.slates.chat.probeAsk({ q: "ok" });', wallMs: 120_800 },
       { actor: 'main', tool: 'shell', ran: 'setsid -f chromium http://127.0.0.1:3000', wallMs: 30_064 },
-      { actor: 'helper-1', tool: 'eval', ran: 'execFile("npx", ["tsc"])', wallMs: 9_000 },
+      { actor: 'subagent-1', tool: 'eval', ran: 'execFile("npx", ["tsc"])', wallMs: 9_000 },
       { actor: 'main', tool: 'agents', ran: '{"op":"swarm"}', wallMs: 230 },
       { actor: 'main', tool: 'file', ran: '{"op":"read","path":"/a"}', wallMs: 12 },
     ],
