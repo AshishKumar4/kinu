@@ -1035,13 +1035,12 @@ export async function storedChat(
   return (await chatSeed(agentHistory(harness, workspaceMainActor(harness.db).actorId).history.transcript(CHAT_SESSION_ID), keptMediaName)).messages;
 }
 
-/** A settled response's improvement lanes and advisor review ran: their rows completed, or the whole
- *  terminal sequence closed and pruned them. Other effects of the sequence may still be owed. */
+/** A settled response's improvement lanes ran: their row completed, or the whole terminal sequence closed and pruned
+ *  it. Other effects of the sequence may still be owed. */
 export function improvementLanesRan(db: Database, messageId: string): boolean {
-  // The review is its own detached row: the lanes have run once neither row is still owed.
   const effect = db.query<{ n: number; owed: number }, [string]>(
     `SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE status != 'completed') AS owed FROM terminal_effects
-     WHERE effect_name IN ('improvement_lanes', 'advisor_review') AND sequence_id LIKE ?`,
+     WHERE effect_name = 'improvement_lanes' AND sequence_id LIKE ?`,
   ).get(`%/${messageId}`);
 
   const closed = db.query<{ n: number }, [string]>(
@@ -1569,13 +1568,12 @@ export interface ActorHarness<T> {
   readonly sleepTimePrompts: string[];
 }
 
-/** An advisor answer's delivery job is due (`src/advice-jobs.ts`), as the alarm would run it. */
-/** A due job only the alarm delivers: an advisor's answer, or an agent's wake. */
+/** A due job only the alarm delivers: an agent's wake. */
 export function alarmDue(db: Database, now = Date.now()): boolean {
   // The SDK creates its queue table on the first job operation; before it, nothing is due.
   if (db.query("SELECT 1 FROM sqlite_master WHERE name = 'cf_agents_jobs'").get() === null) return false;
 
-  return db.query("SELECT 1 FROM cf_agents_jobs WHERE capability IN ('kinu-advice', 'kinu-agent-wakes') AND time <= ?").get(now) !== null;
+  return db.query("SELECT 1 FROM cf_agents_jobs WHERE capability IN ('kinu-agent-wakes') AND time <= ?").get(now) !== null;
 }
 
 /** The agents whose wake the Lifecycle queue holds (`src/agent-wakes.ts`). */

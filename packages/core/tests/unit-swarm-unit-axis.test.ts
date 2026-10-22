@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createTestRuntime, scriptedAdvisor, unobservedSpend } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedAdvisor, unobservedSpend, withScriptedAdvisor } from '@kinu.run/test-utils';
 import { SwarmConfigSchema } from '../src/tools/swarm-input';
 import type { JsonValue } from '../src/utils/json';
 import { resolveSwarm, swarmValidity, type BranchContext, type SwarmUnitSetting } from '../src/strategy/swarm';
@@ -180,7 +180,7 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
 
     const result = await runSwarm({
       reportModelCall: unobservedSpend,
-      rt, ...swarmSeats({ rt, db: testSql.db, autoEvolve: true, advisor }, () => scriptedTurnModel({ doGenerate: async () => ({
+      rt, ...swarmSeats({ rt, db: testSql.db, autoEvolve: true }, () => withScriptedAdvisor(async () => ({
         content: [{ type: 'text', text: 'A candidate solution.' }],
         finishReason: { unified: 'stop', raw: undefined },
         usage: {
@@ -188,7 +188,7 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
           outputTokens: { total: 3, text: 3, reasoning: undefined },
         },
         warnings: [],
-      }) })),
+      }), advisor)),
       mode: 'build',
     }, resolved);
 

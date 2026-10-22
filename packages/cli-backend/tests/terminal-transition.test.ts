@@ -5,14 +5,14 @@ import { describe, test, expect } from 'bun:test';
 import { APICallError } from 'ai';
 import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
-import { spawnTest, AwaitedList, handClock, scratchPath, scriptedAdvisorPort, type ScriptedAdvisorPort } from '@kinu.run/test-utils'
+import { spawnTest, AwaitedList, handClock, scratchPath } from '@kinu.run/test-utils'
 import type { SqlExecutor, SqlValue } from '@kinu.run/core';
 import {
   TerminalEffectInterrupt,
   COMPLETION_GATE_EVENT, TERMINAL_EFFECT_RETRY_CEILING_MS,
   TERMINAL_TRANSITION_CALL_ID,
   missionOf,
-  type Shell, type TemporaryAgentPort, type TerminalEffectFault,
+  type Shell, type TerminalEffectFault,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import { TestLanguageModelV2 } from './test-language-model';
@@ -24,22 +24,9 @@ import {
 } from './terminal-workspace';
 import { fakeModel, toolSequenceModel, type PromptMessage } from './helpers/local-session';
 
-/** The advisor a workspace's sessions hire through; a session with no host has no port of its own. */
-const advisors = new WeakMap<CLIRuntime, TemporaryAgentPort>();
 
 /** `terminalEffectFault` is protected with no production setter, so the test subclasses, as the DO's harness does. */
 class ProbeSession extends LocalAgentSession {
-  private readonly probeRt: CLIRuntime;
-
-  constructor(opts: ConstructorParameters<typeof LocalAgentSession>[0]) {
-    super(opts);
-    this.probeRt = opts.rt;
-  }
-
-  protected override advisorPort(): TemporaryAgentPort | null {
-    return advisors.get(this.probeRt) ?? null;
-  }
-
   /** Cut once at this effect and phase; disarmed as it fires so the ledger's replay is not cut too. */
   cutAt(name: TerminalEffectName, phase: TerminalEffectPhase): void {
     const fault: TerminalEffectFault = (at, effect, scope) => {
@@ -472,133 +459,6 @@ describe('a killed CLI process is recovered by the next start', () => {
 /** Who may re-drive an interrupted lane, which gate state its verdict was earned under, and whose auto-evolution
  *  setting applies are read off the record, never off the recovering session. */
 describe('a recovery reads the record, not the session that finds it', () => {
-  const NOTE = 'the staging cluster was never named';
-
-  /** The advisor switched on via the durable `actor_config` row, hired through a port the test answers. */
-  function withAdvisor(rt: CLIRuntime): ScriptedAdvisorPort {
-    rt.actor.config.setAdvisorEnabled(true);
-    const advisor = scriptedAdvisorPort();
-    advisors.set(rt, advisor);
-
-    return advisor;
-  }
-
-  /** A turn cut at its owed hire: the row, snapshot included, is all a later process has. */
-  async function cutAtHire(opts: { rt: CLIRuntime; db: Database; phase: TerminalEffectPhase }): Promise<void> {
-    const { model } = scriptedModel('rotated the staging keys');
-    const cut = new ProbeSession({ rt: opts.rt, db: opts.db, model, onEvent: () => {} });
-    cut.cutAt('advisor_review', opts.phase);
-    await cut.send('rotate the keys', { id: crypto.randomUUID() });
-    await cut.settleBackgroundWork();
-    await cut.end();
-  }
-
-  const owedReviews = (rt: CLIRuntime) => stillOwed(rt).filter((row) => row.effect_name === 'advisor_review').length;
-
-  const notes = (rt: CLIRuntime) =>
-    rt.storage.sql<{ message: string }>`
-      SELECT message FROM evolution_events WHERE type = 'advisor_note'`.map((row) => row.message);
-
-  const programmaticTurns = (events: SessionEvent[]) =>
-    events.filter((e) => e.type === 'turn-start' && e.kind === 'programmatic').length;
-
-  test('an owed advisor hire waits for the process that holds the driver lease', async () => {
-    const { db, rt } = workspace();
-    const advisor = withAdvisor(rt);
-    await cutAtHire({ rt, db, phase: 'before' });
-    expect(advisor.tasks).toEqual([]);
-    const { model } = scriptedModel('acknowledged');
-    const events: SessionEvent[] = [];
-
-    // Not the driver: each process finding this row would hire its own advisor.
-    const rival = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
-    rival.setDriverGate(() => ({ success: false, reason: 'unavailable', error: 'another process is driving' }));
-    await rival.recoverBackgroundJobs();
-    await rival.settleBackgroundWork();
-
-    expect(advisor.tasks).toEqual([]);
-    // Kept: the row is the only thing that can bring the hire back.
-    expect(owedReviews(rt)).toBe(1);
-    await rival.end();
-
-    const driver = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
-    driver.skipBackoff();
-    await driver.recoverBackgroundJobs();
-    await driver.settleBackgroundWork();
-
-    expect(advisor.tasks).toHaveLength(1);
-    expect(owedReviews(rt)).toBe(0);
-    expect(notes(rt)).toEqual([]);
-
-    // The answer arrives after the turn: the note lands once and opens one turn.
-    advisor.answer(JSON.stringify({ note: NOTE, severity: 'concern', class: 'wrong-work' }));
-    await driver.deliverAdvisorAnswers();
-    await driver.settleBackgroundWork();
-    await driver.deliverAdvisorAnswers();
-    expect(notes(rt)).toEqual([NOTE]);
-    expect(programmaticTurns(events)).toBe(1);
-    await driver.end();
-    db.close();
-  });
-
-  test('an advisor answer a death left undelivered is delivered once, at the next start', async () => {
-    const { db, rt } = workspace();
-    const advisor = withAdvisor(rt);
-    const { model } = scriptedModel('rotated the staging keys');
-    const first = new ProbeSession({ rt, db, model, onEvent: () => {} });
-    await first.send('rotate the keys', { id: crypto.randomUUID() });
-    await first.settleBackgroundWork();
-    // The answer is stored; the process dies before anything delivers it.
-    advisor.answer(JSON.stringify({ note: NOTE, severity: 'concern', class: 'wrong-work' }));
-    await first.end();
-    expect(notes(rt)).toEqual([]);
-
-    const events: SessionEvent[] = [];
-    const next = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
-    await next.recoverBackgroundJobs();
-    await next.settleBackgroundWork();
-    await next.recoverBackgroundJobs();
-    await next.settleBackgroundWork();
-
-    expect(notes(rt)).toEqual([NOTE]);
-    expect(programmaticTurns(events)).toBe(1);
-    await next.end();
-    db.close();
-  });
-
-  test('a hire cut after it started is not hired again by the replay', async () => {
-    const { db, rt } = workspace();
-    const advisor = withAdvisor(rt);
-    await cutAtHire({ rt, db, phase: 'after' });
-    expect(advisor.tasks).toHaveLength(1);
-    expect(owedReviews(rt)).toBe(1);
-
-    const driver = new ProbeSession({ rt, db, model: scriptedModel('unused').model, onEvent: () => {} });
-    driver.skipBackoff();
-    await driver.recoverBackgroundJobs();
-    await driver.settleBackgroundWork();
-
-    expect(advisor.tasks).toHaveLength(1);
-    expect(owedReviews(rt)).toBe(0);
-    await driver.end();
-    db.close();
-  });
-
-  test('with the advisor off, a turn owes no review and hires none', async () => {
-    const { db, rt } = workspace();
-    const advisor = scriptedAdvisorPort();
-    advisors.set(rt, advisor);
-    const { model } = scriptedModel('done');
-    const session = new ProbeSession({ rt, db, model, onEvent: () => {} });
-    await session.send('rotate the keys', { id: crypto.randomUUID() });
-    await session.settleBackgroundWork();
-
-    expect(advisor.tasks).toEqual([]);
-    expect(owedReviews(rt)).toBe(0);
-    await session.end();
-    db.close();
-  });
-
   test('a turn produced with learning ON is recorded by a recovery after it was turned off', async () => {
     const { db, rt } = workspace();
     const { model } = scriptedModel('answered');

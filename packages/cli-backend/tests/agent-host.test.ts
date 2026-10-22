@@ -89,14 +89,12 @@ function textAnswer(answer: string, usage: LanguageModelV2Usage) {
   return { content: [{ type: 'text' as const, text: answer }], finishReason: 'stop' as const, usage, warnings: [] };
 }
 
-/** The advisor's task names what it is: a review of one finished turn. */
-/** The advisor's own call: the review is the task it was handed, its newest words. A hirer's roster may name that task
- *  while the advisor still works, so a prompt that only mentions it is not one. */
+/** The advisor's own call: it alone is offered the `advise` tool. */
 function isReview(options: LanguageModelV2CallOptions): boolean {
-  return JSON.stringify(options.prompt.filter((message) => message.role === 'user').at(-1) ?? null).includes('You are reviewing one finished turn');
+  return (options.tools ?? []).some((offered) => offered.name === 'advise');
 }
 
-/** `review`, when given, is what a hired advisor on the same model answers its task with. */
+/** `review`, when given, is the `advise` call the in-session advisor makes on the same model (its input, as JSON). */
 function streamingModel(answer: string, onCall?: (options: LanguageModelV2CallOptions) => void, review?: string): TestLanguageModelV2 {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   const answerTo = (options: LanguageModelV2CallOptions): string => (review !== undefined && isReview(options) ? review : answer);
@@ -104,7 +102,17 @@ function streamingModel(answer: string, onCall?: (options: LanguageModelV2CallOp
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    doGenerate: async (options) => textAnswer(answerTo(options), usage),
+    doGenerate: async (options) => {
+      if (!isReview(options)) return textAnswer(answer, usage);
+
+      // A review is a generate; told like a turn's step, so a test sees every call.
+      onCall?.(options);
+
+      // Silence, unless the test scripted the advice.
+      return review === undefined
+        ? textAnswer('', usage)
+        : { content: [{ type: 'tool-call' as const, toolCallId: 'advise', toolName: 'advise', input: review }], finishReason: 'tool-calls' as const, usage, warnings: [] };
+    },
     doStream: async (options) => {
       onCall?.(options);
 
@@ -1927,24 +1935,24 @@ describe('LocalAgentHost', () => {
     await host.close();
   });
 
-  test('a subagent turn hires its advisor, and the note opens its next turn after the answer arrives', async () => {
+  test("a subagent's turn is reviewed in its own session, and its blocker opens the subagent's next turn", async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const note = 'The probe failed but the reply claimed success. Check its exit status.';
     const requests: string[] = [];
 
-    // The advisor is a hired agent on the same model: its task is the review, its answer the note.
+    // The advisor reviews on the turn's own model sources: its calls are the ones offered `advise`.
     const model = streamingModel(
       'The probe succeeded.',
       (options) => { if (!isReview(options)) requests.push(JSON.stringify(options.prompt)); },
-      JSON.stringify({ note, severity: 'concern', class: 'wrong-work' }),
+      JSON.stringify({ note, severity: 'blocker', class: 'wrong-work' }),
     );
 
     const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }], { advisor: true });
     const ended = Promise.withResolvers<void>();
     let turns = 0;
     host.subscribe((agent, event) => {
-      if (agent === 'root' || agent.includes('ask-advisor') || event.type !== 'turn-end') return;
+      if (agent === 'root' || event.type !== 'turn-end') return;
       turns++;
 
       if (turns === 2) ended.resolve();
@@ -1970,10 +1978,8 @@ describe('LocalAgentHost', () => {
       ).all(actorId);
 
       expect(notes).toEqual([{ message: note }]);
-      // The reviewer is a background agent under the subagent: view-only, no tab, one task.
-      expect(db.query<{ origin: string; lifetime: string }, [string]>(
-        'SELECT origin, lifetime FROM workspace_actors WHERE parent_actor_id = ?',
-      ).all(actorId)).toContainEqual({ origin: 'evolution', lifetime: 'task' });
+      // No reviewer was hired: the subagent has no agent of its own under it.
+      expect(db.query<{ origin: string }, [string]>('SELECT origin FROM workspace_actors WHERE parent_actor_id = ?').all(actorId)).toEqual([]);
     } finally { db.close(); }
   });
 
@@ -2073,7 +2079,7 @@ describe('LocalAgentHost', () => {
     expect(hireChild.reflections()).toBe(0);
   });
 
-  test('a daemon-hosted swarm node takes no input, so its turn hires no advisor', async () => {
+  test('a daemon-hosted swarm node takes no input, so its turn is not reviewed', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const reviews: boolean[] = [];

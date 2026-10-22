@@ -698,7 +698,6 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           await host().turnSettled(settled);
         },
         runSettled: (run) => host().runSettled(run),
-        hireAdvisor: (advisor) => host().hireAdvisor(advisor),
         owes: async (seq, next, holds, report) => {
           const delayedEnd = report.runEnds.length > 0 ? delayedRunEnd : null;
 
@@ -970,7 +969,6 @@ export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: (
     runEvents: (...args) => settle(through(() => isolate.runEvents(...args))),
     runEventText: (...args) => settle(through(() => isolate.runEventText(...args))),
     idle: (...args) => settle(through(() => isolate.idle(...args))),
-    deliverAdvice: (...args) => settle(through(() => isolate.deliverAdvice(...args))),
     step: (...args) => settle(through(() => isolate.step(...args))),
     frozen: (...args) => settle(through(() => isolate.frozen(...args))),
     seed: (...args) => settle(through(() => isolate.seed(...args))),

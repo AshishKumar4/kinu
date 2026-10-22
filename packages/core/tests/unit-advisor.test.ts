@@ -1,80 +1,27 @@
-import { compactToolCall } from '../src/evolution/tool-call-record';
-import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
-/** The advisor's decision half: each suppression rule alone, and the reply
- *  delivery an advisor agent's answer takes, asserted on observable calls. */
+/** The advisor's decision half, as pure parts: each suppression rule alone, the advice it may give, its system prompt,
+ *  and the steps as its model reads them. Where a note then goes is the session advisor's, in unit-session-advisor. */
 
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
+import type { ModelMessage } from 'ai';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { stepContextLimit } from '../src/context-window';
 import { CHARS_PER_TOKEN } from '../src/token-estimate';
 import { advisorWorkspaceGuidance } from '../src/prompting/agents-md';
 import type { AdvisorWorkspace } from '../src/prompting/agents-md';
+import { adviseNote, advisorSystemPrompt, renderForAdvisor } from '../src/advisor/session-advisor';
+import type { JsonObject } from '../src/utils/json';
 import {
-  ADVISOR_NOTE_MAX_CHARS,
-  ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
-  DEFAULT_ADVISOR_MIN_SEVERITY,
-  buildAdvisorPrompt, isAdvisorSeverity, isContentFree, isDuplicateNote,
-  judgeAdvisorReply, judgeNote, normalizeNote, parseAdvisorReply, sayAdvisorNote,
-  type AdvisorNote, type AdvisorSeverity,
+  ADVISOR_NOTE_MAX_CHARS, ADVISOR_SEVERITIES,
+  isAdvisorSeverity, isContentFree, isDuplicateNote, judgeNote, normalizeNote,
+  type AdvisorNote,
 } from '../src/index';
-import type { AgentSignal } from '../src/types/signals';
-import type { CompletedTurn } from '../src/evolution/types';
-
-const aTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
-  userMessage: 'rotate the staging keys',
-  assistantResponse: 'rotated them',
-  toolCalls: [compactToolCall({ name: 'shell', args: { command: 'kinu rotate' }, result: 'exit 1' })],
-  steps: 3,
-  durationMs: 900,
-  feedback: null,
-  hadError: false,
-  turnId: 'msg-1',
-  ...over,
-});
 
 const NOTE: AdvisorNote = {
   note: 'the rotate command exited 1 and the reply says it worked',
   severity: 'concern',
   class: 'wrong-work',
 };
-
-/** The advisor agent's reply, judged and delivered as the reviewed actor does when it arrives. */
-async function lane(over: {
-  reply?: string;
-  minSeverity?: AdvisorSeverity;
-  recent?: readonly string[];
-  gateOpen?: boolean;
-  turn?: CompletedTurn;
-} = {}) {
-  const delivered: AgentSignal[] = [];
-  const recorded: AdvisorNote[] = [];
-
-  const turnId = (over.turn ?? aTurn()).turnId;
-
-  const judged = judgeAdvisorReply(over.reply ?? JSON.stringify(NOTE), {
-    turnId,
-    minSeverity: over.minSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
-    recent: [...(over.recent ?? [])],
-    gateOpen: over.gateOpen ?? false,
-    record: (note) => { recorded.push(note); },
-  });
-
-  // Said only when judged to be: what every reviewed actor does with the verdict.
-  if (judged?.disposition === 'deliver') {
-    await sayAdvisorNote(judged.note, {
-      turnId,
-      send: async (signal) => {
-        delivered.push(signal);
-
-        return 'queued';
-      },
-    });
-  }
-
-  const disposition = judged === null ? null : judged.disposition;
-
-  return { disposition, delivered, recorded };
-}
 
 describe('workspace advisor guidance', () => {
   const limits = { contextWindow: 800, modelOutputLimit: 400 };
@@ -104,8 +51,8 @@ describe('workspace advisor guidance', () => {
       limits: async () => limits,
     };
 
-    // The advisor's task, as the reviewed actor hires it.
-    const prompt = buildAdvisorPrompt(aTurn(), [], await advisorWorkspaceGuidance(workspace));
+    // The advisor's system prompt, as each review of a turn's steps sends it.
+    const prompt = advisorSystemPrompt([], await advisorWorkspaceGuidance(workspace));
 
     return { prompt, reads };
   }
@@ -113,7 +60,7 @@ describe('workspace advisor guidance', () => {
   test('absence preserves the pre-guidance prompt bytes', async () => {
     const { prompt, reads } = await promptWith();
     expect(reads).toEqual([]);
-    expect(prompt).toBe(buildAdvisorPrompt(aTurn()));
+    expect(prompt).toBe(advisorSystemPrompt([], ''));
   });
 
   test('an admitted file has its own review section, including at the exact byte budget', async () => {
@@ -134,54 +81,6 @@ describe('workspace advisor guidance', () => {
     const { prompt, reads } = await promptWith('é'.repeat(budget));
     expect(reads).toEqual([]);
     expect(prompt).toContain('ADVISOR.md');
-  });
-});
-
-describe('severity decides where a note goes', () => {
-  test('below the floor it is a Changelog row and never a card', async () => {
-    const run = await lane({
-      reply: (JSON.stringify({ note: 'the variable name is inconsistent', severity: 'nit', class: 'wrong-work' })),
-      minSeverity: 'concern',
-    });
-
-    expect(run.disposition).toBe('changelog');
-    expect(run.delivered).toEqual([]);
-    expect(run.recorded).toHaveLength(1);
-  });
-
-  test('at the floor it is spoken, once, as a severity-tagged signal', async () => {
-    const run = await lane({ minSeverity: 'concern' });
-    expect(run.disposition).toBe('deliver');
-    expect(run.delivered).toHaveLength(1);
-    expect(run.delivered[0]).toMatchObject({
-      kind: ADVISOR_SIGNAL_KIND,
-      severity: 'concern',
-      metadata: { [ADVISOR_SEVERITY_METADATA_KEY]: 'concern' },
-      idempotencyKey: 'advisor:msg-1',
-    });
-  });
-
-  test('a lowered floor lets a nit through — the floor is the only gate on it', async () => {
-    const run = await lane({
-      reply: (JSON.stringify({ note: 'the variable name is inconsistent', severity: 'nit', class: 'wrong-work' })),
-      minSeverity: 'nit',
-    });
-
-    expect(run.disposition).toBe('deliver');
-  });
-
-  test('a raised floor holds a concern back', async () => {
-    expect((await lane({ minSeverity: 'blocker' })).disposition).toBe('changelog');
-  });
-
-  test('a delivered note is recorded too, so the next turn can dedupe against it', async () => {
-    const run = await lane();
-    expect(run.recorded).toEqual([NOTE]);
-  });
-
-  test('the words the agent reads say the runtime wrote them, not the user', async () => {
-    const [signal] = (await lane()).delivered;
-    expect(signal?.text).toContain(NOTE.note);
   });
 });
 
@@ -209,10 +108,6 @@ describe('the content-free rule', () => {
     expect(isContentFree(NOTE.note)).toBe(false);
   });
 
-  test('a content-free note is neither said nor stored', async () => {
-    const run = await lane({ reply: (JSON.stringify({ note: 'Stop.', severity: 'blocker', class: 'wrong-work' })) });
-    expect(run).toMatchObject({ disposition: 'drop', delivered: [], recorded: [] });
-  });
 });
 
 describe('the duplicate rule', () => {
@@ -224,22 +119,9 @@ describe('the duplicate rule', () => {
     expect(isDuplicateNote('a different finding', ['the rotate command failed'])).toBe(false);
   });
 
-  test('the same note twice in a window produces one delivery', async () => {
-    const first = await lane();
-    expect(first.disposition).toBe('deliver');
-    const second = await lane({ recent: first.recorded.map((n) => normalizeNote(n.note)) });
-    expect(second).toMatchObject({ disposition: 'drop', delivered: [], recorded: [] });
-  });
 });
 
 describe('the completion-gate rule', () => {
-  test('an open gate wins: the note is recorded, not spoken', async () => {
-    const run = await lane({ gateOpen: true });
-    expect(run.disposition).toBe('changelog');
-    expect(run.delivered).toEqual([]);
-    expect(run.recorded).toEqual([NOTE]);
-  });
-
   test('an open gate holds back a blocker too — one runtime voice per boundary', () => {
     expect(judgeNote({
       note: { note: 'the build is broken', severity: 'blocker', class: 'wrong-work' },
@@ -247,9 +129,6 @@ describe('the completion-gate rule', () => {
     })).toEqual({ disposition: 'changelog', rule: 'gate-open' });
   });
 
-  test('a closed gate changes nothing else', async () => {
-    expect((await lane({ gateOpen: false })).disposition).toBe('deliver');
-  });
 });
 
 describe('rule precedence', () => {
@@ -276,231 +155,111 @@ describe('rule precedence', () => {
   });
 });
 
-describe('what the model is allowed to answer', () => {
-  test('silence is an empty object, and the expected answer', () => {
-    expect(parseAdvisorReply('{}')).toBeNull();
-  });
-
-  test('silence reaches nothing: no card, no row', async () => {
-    const run = await lane({ reply: ('{}') });
-    expect(run).toMatchObject({ disposition: null, delivered: [], recorded: [] });
+describe('the advice the model may give', () => {
+  test('every declared severity and class is advice', () => {
+    for (const severity of ADVISOR_SEVERITIES) {
+      for (const noteClass of ['wrong-work', 'missed-capability', 'dissatisfaction']) {
+        expect(adviseNote({ note: 'a real finding', severity, class: noteClass })).toEqual({ note: 'a real finding', severity, class: noteClass });
+      }
+    }
   });
 
   test('an empty or blank note is silence, not an empty card', () => {
-    expect(parseAdvisorReply('{"note":"","severity":"concern"}')).toBeNull();
-    expect(parseAdvisorReply('{"note":"   ","severity":"concern"}')).toBeNull();
+    expect(adviseNote({ note: '', severity: 'concern', class: 'wrong-work' })).toBeNull();
+    expect(adviseNote({ note: '   ', severity: 'concern', class: 'wrong-work' })).toBeNull();
   });
 
   // An unlabeled class leaves a note whose kind a judge cannot be told.
   const refusedLabels = [
-    { name: 'an unknown severity is refused rather than coerced to a default',
-      replies: ['{"note":"x","severity":"critical","class":"wrong-work"}', '{"note":"x","class":"wrong-work"}'] },
+    { name: 'an unknown or absent severity is refused rather than coerced to a default',
+      inputs: [{ note: 'x', severity: 'critical', class: 'wrong-work' }, { note: 'x', class: 'wrong-work' }] },
     { name: 'an unknown or absent class is refused, exactly as a severity is',
-      replies: ['{"note":"x","severity":"nit","class":"style"}', '{"note":"x","severity":"nit"}'] },
+      inputs: [{ note: 'x', severity: 'nit', class: 'style' }, { note: 'x', severity: 'nit' }] },
   ] as const;
 
   for (const refused of refusedLabels) {
     test(refused.name, () => {
-      for (const reply of refused.replies) expect(parseAdvisorReply(reply)).toBeNull();
+      for (const input of refused.inputs) expect(adviseNote(input)).toBeNull();
     });
   }
 
-  test('prose around the JSON is tolerated, because models add it', () => {
-    expect(parseAdvisorReply(
-      'Here you go:\n```json\n{"note":"real finding","severity":"nit","class":"missed-capability"}\n```',
-    )).toEqual({ note: 'real finding', severity: 'nit', class: 'missed-capability' });
-  });
-
-  test('prose with no JSON in it is an unreadable answer, not a throw', () => {
-    expect(parseAdvisorReply('the turn looks fine, nothing to add')).toBeNull();
-  });
-
   test('an over-long note is bounded rather than refused', () => {
     const long = 'x'.repeat(ADVISOR_NOTE_MAX_CHARS + 200);
-    expect(parseAdvisorReply(JSON.stringify({ note: long, severity: 'nit', class: 'wrong-work' })))
-      .toMatchObject({ note: expect.stringContaining('x'), severity: 'nit', class: 'wrong-work' });
+    expect(adviseNote({ note: long, severity: 'nit', class: 'wrong-work' })?.note).toHaveLength(ADVISOR_NOTE_MAX_CHARS);
   });
 
-  test('every declared severity parses, and nothing else does', () => {
-
+  test('no other value is a severity', () => {
     for (const other of ['critical', 'NIT', '', null, 2]) expect(isAdvisorSeverity(other)).toBe(false);
   });
 });
 
-describe('the prompt', () => {
-  const prompt = buildAdvisorPrompt(aTurn());
-
-  test('carries the turn’s own record, so the reviewer needs no tools', () => {
-    expect(prompt).toContain('rotate the staging keys');
-    expect(prompt).toContain('rotated them');
-    expect(prompt).toContain('kinu rotate');
-    expect(prompt).toContain('exit 1');
-  });
-
-  test('names every severity it will accept back', () => {
-    for (const severity of ADVISOR_SEVERITIES) expect(prompt).toContain(`"${severity}"`);
-  });
-
-  test('says the turn errored only when it did', () => {
-    expect(prompt).not.toContain('the turn errored');
-    expect(buildAdvisorPrompt(aTurn({ hadError: true }))).toContain('the turn errored');
-  });
-
-  test('the advisor receives producer outcomes even when returned data is identical', () => {
-    const result = { error: 'business data' };
-    const succeeded = buildAdvisorPrompt(aTurn({ toolCalls: [compactToolCall({ name: 'shell', args: {}, result, outcome: { success: true } })] }));
-    const failed = buildAdvisorPrompt(aTurn({ toolCalls: [compactToolCall({ name: 'shell', args: {}, result, outcome: { success: false, reason: 'denied' } })] }));
-    expect(succeeded).toContain('"success":true');
-    expect(failed).toContain('"success":false');
-    expect(failed).toContain('"reason":"denied"');
-    expect(succeeded).toContain('business data');
-    expect(failed).toContain('business data');
-  });
-});
-
-describe('the missed-capability class', () => {
-  test('lists a reachable capability the turn did not call', () => {
-    const prompt = buildAdvisorPrompt(aTurn(), ['shell', 'agents', 'file']);
-    expect(prompt).toContain('Reachable capabilities it did not use: agents, file');
-  });
-
-  test('never lists a capability the turn DID call', () => {
-    expect(buildAdvisorPrompt(aTurn(), ['shell'])).toContain('did not use: (none recorded)');
-  });
-
-  test('the task forwards what the backend observed', () => {
-    expect(buildAdvisorPrompt(aTurn(), ['agents'])).toContain('did not use: agents');
-  });
-});
-
-// R6, advisor half: on the production turn all 12 native calls were `eval`,
-// 5 running `agents.swarm`; native names alone would have listed `agents` as
-// unused and prompted a note to delegate.
-describe('a capability reached through codemode counts as used', () => {
-  const swarmed = (code: string): CompletedTurn => aTurn({
-    toolCalls: [compactToolCall({ name: 'eval', args: { code }, result: 'ok' })],
-  });
-
-  test('a codemode agents.swarm is never reported unused', () => {
-    const prompt = buildAdvisorPrompt(
-      swarmed("await agents.swarm({ preset: 'ideate', branches: 3 })"),
-      ['agents', 'memory'],
-    );
-
-    expect(prompt).toContain('did not use: memory');
-    expect(prompt).not.toContain('did not use: agents');
-  });
-
-  test('any member of the namespace counts — the action is not the capability', () => {
-    const prompt = buildAdvisorPrompt(swarmed('await agents.list({})'), ['agents']);
-    expect(prompt).toContain('did not use: (none recorded)');
-  });
-
-  const unreached = [
-    { name: 'the control — a sandbox program reaching nothing leaves the list intact',
-      program: 'await workspace.list(".")' },
-    { name: 'a mention in a comment is not a use', program: '// agents.swarm({}) would work here' },
-  ] as const;
-
-  for (const unused of unreached) {
-    test(unused.name, () => {
-      expect(buildAdvisorPrompt(swarmed(unused.program), ['agents'])).toContain('did not use: agents');
-    });
-  }
-
-  test('a call spelled by a computed key or inside a markdown fence is a use', () => {
-    expect(buildAdvisorPrompt(swarmed('await agents["swarm"]({})'), ['agents'])).toContain('did not use: (none recorded)');
-    expect(buildAdvisorPrompt(swarmed('```js\nawait agents.swarm({})\n```'), ['agents'])).toContain('did not use: (none recorded)');
-  });
-
-  test('each capability is reached through its own namespace', () => {
-    expect(buildAdvisorPrompt(swarmed('await workspace.exec("ls")'), ['shell', 'file'])).toContain('did not use: file');
-    expect(buildAdvisorPrompt(swarmed('await file.read("a.md")'), ['shell', 'file'])).toContain('did not use: shell');
-  });
-});
-
 describe('the user-dissatisfaction class', () => {
-
-  test('reads the turn’s own request, so no new capture is needed for it', () => {
-    expect(buildAdvisorPrompt(aTurn({ userMessage: 'write better commit messages' })))
-      .toContain('write better commit messages');
-  });
-
-  test('a quoted note still obeys the suppression rules', async () => {
+  test('a quoted note still obeys the suppression rules', () => {
     const quoted = { note: 'the user asked you to "write better commit messages"', severity: 'concern', class: 'dissatisfaction' } as const;
-    const first = await lane({ reply: (JSON.stringify(quoted)) });
-    expect(first.disposition).toBe('deliver');
-
-    const again = await lane({
-      reply: (JSON.stringify(quoted)),
-      recent: [normalizeNote(quoted.note)],
-    });
-
-    expect(again.disposition).toBe('drop');
+    expect(judgeNote({ note: quoted, minSeverity: 'concern', recent: [], gateOpen: false }).disposition).toBe('deliver');
+    expect(judgeNote({ note: quoted, minSeverity: 'concern', recent: [normalizeNote(quoted.note)], gateOpen: false }).disposition).toBe('drop');
   });
 });
 
-describe('a turn with no durable id', () => {
-  test('is delivered without an idempotency key rather than with a fabricated one', async () => {
-    const run = await lane({ turn: aTurn({ turnId: undefined }) });
-    expect(run.disposition).toBe('deliver');
-    expect(run.delivered[0]).not.toHaveProperty('idempotencyKey');
-  });
-
-  test('an empty-string id is no id, so it is delivered without a key', async () => {
-    const run = await lane({ turn: aTurn({ turnId: '' }) });
-    expect(run.disposition).toBe('deliver');
-    expect(run.delivered[0]).not.toHaveProperty('idempotencyKey');
+describe('the system prompt', () => {
+  test('names the capabilities the agent can reach, so a missed one can be named, and says when none are recorded', () => {
+    expect(advisorSystemPrompt(['shell', 'agents'], '')).toContain('shell, agents');
+    expect(advisorSystemPrompt([], '')).not.toContain('shell');
   });
 });
 
-// Both backends deliver through one body; the gate is the caller's (see the completion-gate rule).
+describe('what the advisor reads of a step', () => {
+  const call = (input: JsonObject): ModelMessage => ({ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c', toolName: 'shell', input }] });
 
-describe('judgeAdvisorReply', () => {
-  test('an unreadable reply is a turn with no advice', async () => {
-    expect(await lane({ reply: 'the reviewer wandered off' })).toMatchObject({ disposition: null, delivered: [], recorded: [] });
+  const result = (value: string): ModelMessage => ({
+    role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c', toolName: 'shell', output: { type: 'text', value } }],
+  });
+
+  test('a call and its result, by tool, with a step still running marked so', () => {
+    const read = [renderForAdvisor(call({ command: 'kinu rotate' }), true), renderForAdvisor(result('exit 1'), false)].join('\n');
+
+    expect(read).toContain('shell');
+    expect(read).toContain('kinu rotate');
+    expect(read).toContain('exit 1');
+    expect(renderForAdvisor(call({}), true)).toStartWith('[in progress] ');
+    expect(renderForAdvisor(call({}), false)).not.toStartWith('[in progress] ');
+  });
+
+  test('a message with nothing done or said in it is not read at all', () => {
+    expect(renderForAdvisor({ role: 'assistant', content: [{ type: 'reasoning', text: 'thinking' }] }, true)).toBeNull();
   });
 });
 
-// The deep lane may use another vendor, so credential-shaped values are
-// obfuscated before the advisor prompt. Fixtures are assembled at runtime: a
-// contiguous real-shaped literal trips `scripts/secret-scan.ts` and push protection.
-
-describe('advisor prompt secret obfuscation', () => {
+// The advisor's route may be another vendor's, so credential-shaped values are redacted before its model reads them.
+// Fixtures are assembled at runtime: a contiguous real-shaped literal trips `scripts/secret-scan.ts` and push protection.
+describe('advisor secret obfuscation', () => {
   const bearer = 'Bearer ' + 't'.repeat(40);
   const awsKey = 'AK' + 'IA' + '1'.repeat(16);
   const kinuToken = 'pt' + 'a_' + 'ab12cd34';
   const providerKey = 'sk' + '-ant-' + 'x'.repeat(24);
   const privateKey = '-----BE' + 'GIN RSA PRIVATE KEY-----\nMIIB fake body\n-----END RSA PRIVATE KEY-----';
 
-  test('tool args and results carrying credentials reach the prompt redacted, a private key body and all', () => {
-    const prompt = buildAdvisorPrompt(aTurn({
-      toolCalls: [compactToolCall({
-        name: 'shell',
-        args: { command: 'deploy', token: bearer, key: providerKey },
-        result: `deployed with ${awsKey} as ${kinuToken}\n${privateKey}`,
-      })],
-    }));
+  const steps = (input: JsonObject, value: string): string => [
+    renderForAdvisor({ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c', toolName: 'shell', input }] }, true),
+    renderForAdvisor({ role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c', toolName: 'shell', output: { type: 'text', value } }] }, true),
+    renderForAdvisor({ role: 'assistant', content: value }, true),
+  ].join('\n');
 
-    for (const secret of [bearer, awsKey, kinuToken, providerKey, 'MIIB fake body']) expect(prompt).not.toContain(secret);
-    expect(prompt).toContain('<redacted>');
+  test('tool args, results and replies carrying credentials are read redacted, a private key body and all', () => {
+    const read = steps({ command: 'deploy', token: bearer, key: providerKey }, `deployed with ${awsKey} as ${kinuToken}\n${privateKey}`);
+
+    for (const secret of [bearer, awsKey, kinuToken, providerKey, 'MIIB fake body']) expect(read).not.toContain(secret);
+    expect(read).toContain('<redacted>');
   });
 
   test('secret-free values pass through verbatim, including lookalikes', () => {
     const commit = 'deadbeef'.repeat(5);
+    const read = steps({ command: 'kinu rotate', commit, hint: 'pass a Bearer token along' }, 'exit 1');
 
-    const prompt = buildAdvisorPrompt(aTurn({
-      toolCalls: [compactToolCall({
-        name: 'shell',
-        args: { command: 'kinu rotate', commit, hint: 'pass a Bearer token along' },
-        result: 'exit 1',
-      })],
-    }));
-
-    expect(prompt).toContain('kinu rotate');
-    expect(prompt).toContain(commit);
-    expect(prompt).toContain('Bearer token');
-    expect(prompt).toContain('exit 1');
-    expect(prompt).not.toContain('[redacted');
+    expect(read).toContain('kinu rotate');
+    expect(read).toContain(commit);
+    expect(read).toContain('Bearer token');
+    expect(read).toContain('exit 1');
+    expect(read).not.toContain('redacted');
   });
 });

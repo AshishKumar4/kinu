@@ -5,17 +5,28 @@ import { tool, jsonSchema, type ModelMessage } from 'ai';
 import { createTestSql } from '@kinu.run/test-utils';
 import { createTestActor } from './helpers';
 import { SessionAdvisor, ADVISOR_NOTES_PER_UPDATE, type AdvisedTurn, type AdvisorModel, type AdvisorReply } from '../src/advisor/session-advisor';
-import { ADVISOR_HEADER, ADVISOR_SEVERITY_LABEL, keptAdvisorNote, type AdvisorNote } from '../src/advisor/review';
+import {
+  ADVISOR_HEADER, ADVISOR_SEVERITY_LABEL, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND, keptAdvisorNote, normalizeNote,
+  type AdvisorNote,
+} from '../src/advisor/review';
+import type { AdvisorSeverity } from '../src/types/advisor';
 import type { AgentSignal, SendOutcome } from '../src/types/signals';
 import type { JsonValue } from '../src/utils/json';
 
-function harness(opts: { readonly enabled?: boolean; readonly reviewed?: boolean; readonly finalWaitMs?: number } = {}) {
+function harness(opts: {
+  readonly enabled?: boolean;
+  readonly reviewed?: boolean;
+  readonly finalWaitMs?: number;
+  readonly minSeverity?: AdvisorSeverity;
+  readonly gateOpen?: boolean;
+} = {}) {
   const { sql, execRaw } = createTestSql();
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'reviewed');
 
   if (opts.enabled !== false) actor.config.setAdvisorEnabled(true);
-  actor.config.setAdvisorMinSeverity('nit');
+  actor.config.setAdvisorMinSeverity(opts.minSeverity ?? 'nit');
   const sent: AgentSignal[] = [];
+  const hirer: AgentSignal[] = [];
   const recorded: { readonly note: AdvisorNote; readonly spoken: boolean }[] = [];
   let interrupts = 0;
   let outcome: SendOutcome = 'mid-turn';
@@ -25,14 +36,19 @@ function harness(opts: { readonly enabled?: boolean; readonly reviewed?: boolean
     config: () => actor.config,
     reviewed: opts.reviewed ?? true,
     notes: () => ({
-      recentAdvisorNotes: () => recorded.map((entry) => entry.note.note.toLowerCase()),
+      recentAdvisorNotes: () => recorded.map((entry) => normalizeNote(entry.note.note)),
       recordAdvisorNote: (note, _turnId, spoken = false) => { recorded.push({ note, spoken }); },
     }),
-    gateOpen: () => false,
+    gateOpen: () => opts.gateOpen ?? false,
     send: async (signal) => {
       sent.push(signal);
 
       return outcome;
+    },
+    parent: async (signal) => {
+      hirer.push(signal);
+
+      return 'queued';
     },
     interrupt: async () => {
       interrupts += 1;
@@ -44,7 +60,7 @@ function harness(opts: { readonly enabled?: boolean; readonly reviewed?: boolean
   });
 
   return {
-    advisor, sent, recorded,
+    advisor, sent, recorded, hirer,
     interrupts: () => interrupts,
     outcome: (next: SendOutcome) => { outcome = next; },
   };
@@ -76,7 +92,7 @@ function advising(...notes: readonly JsonValue[]): AdvisorReply {
 
 const step = (text: string): ModelMessage[] => [{ role: 'assistant', content: [{ type: 'text', text }] }];
 
-const turnOf = (model: AdvisorModel, tools: AdvisedTurn['tools'] = {}): AdvisedTurn => ({ turnId: 't1', model, tools, reachable: ['file', 'agents'] });
+const turnOf = (model: AdvisorModel, tools: AdvisedTurn['tools'] = {}, turnId: string | null = 't1'): AdvisedTurn => ({ turnId, model, tools, reachable: ['file', 'agents'] });
 
 /** A turn of `steps`, each outlasting the review it starts (a model call takes longer than a scripted review), unless
  *  `overlapping`: then the steps end at once and the turn ends with its reviews still to run. */
@@ -133,8 +149,8 @@ describe('the in-session advisor', () => {
     const { advisor, sent, interrupts } = harness();
 
     const { model } = scripted([
-      advising({ note: 'The migration ran before the suite. Stop and check the backup.', severity: 'blocker' }),
-      advising({ note: 'The rounding mode differs from the spec; weigh it before the next edit.', severity: 'concern' }),
+      advising({ note: 'The migration ran before the suite. Stop and check the backup.', severity: 'blocker', class: 'wrong-work' }),
+      advising({ note: 'The rounding mode differs from the spec; weigh it before the next edit.', severity: 'concern', class: 'wrong-work' }),
     ]);
 
     await runTurn(advisor, turnOf(model), [step('ran the migration'), step('edited rounding')]);
@@ -147,10 +163,10 @@ describe('the in-session advisor', () => {
   test('after its turn, a concern is kept as a changelog note and only a blocker is said, interrupting nothing', async () => {
     const { advisor, sent, recorded, interrupts, outcome } = harness({ finalWaitMs: 0 });
     const gate = Promise.withResolvers<AdvisorReply>();
-    const { model } = scripted([() => gate.promise, advising({ note: 'The sum is computed twice over the same rows.', severity: 'blocker' })]);
+    const { model } = scripted([() => gate.promise, advising({ note: 'The sum is computed twice over the same rows.', severity: 'blocker', class: 'wrong-work' })]);
     outcome('queued');
     await runTurn(advisor, turnOf(model), [step('done')], true);
-    gate.resolve(advising({ note: 'A cheaper index exists for this lookup; consider it later.', severity: 'concern' }));
+    gate.resolve(advising({ note: 'A cheaper index exists for this lookup; consider it later.', severity: 'concern', class: 'wrong-work' }));
     await advisor.settled(1000);
 
     expect(recorded.map((entry) => [entry.note.severity, entry.spoken])).toEqual([['concern', false], ['blocker', true]]);
@@ -163,8 +179,8 @@ describe('the in-session advisor', () => {
     const { model } = scripted([
       silent,
       advising(
-        { note: 'The summary claims the tests passed; none ran.', severity: 'blocker' },
-        { note: 'The changelog entry could name the issue it closes.', severity: 'nit' },
+        { note: 'The summary claims the tests passed; none ran.', severity: 'blocker', class: 'wrong-work' },
+        { note: 'The changelog entry could name the issue it closes.', severity: 'nit', class: 'wrong-work' },
       ),
     ]);
 
@@ -177,7 +193,7 @@ describe('the in-session advisor', () => {
 
   test(`says at most ${String(ADVISOR_NOTES_PER_UPDATE)} notes short of a blocker in one update`, async () => {
     const { advisor, sent } = harness();
-    const notes = Array.from({ length: ADVISOR_NOTES_PER_UPDATE + 2 }, (_, at) => ({ note: `Distinct problem number ${String(at)} in the rounding code.`, severity: 'nit' }));
+    const notes = Array.from({ length: ADVISOR_NOTES_PER_UPDATE + 2 }, (_, at) => ({ note: `Distinct problem number ${String(at)} in the rounding code.`, severity: 'nit', class: 'wrong-work' }));
     const { model } = scripted([advising(...notes)]);
     await runTurn(advisor, turnOf(model), [step('edited')]);
 
@@ -225,5 +241,78 @@ describe('the in-session advisor', () => {
 
     expect([said(ADVISOR_HEADER), said(hire)].map((text) => keptAdvisorNote(text, 'blocker'))).toEqual(['Stop and check the backup.', 'Stop and check the backup.']);
     expect(keptAdvisorNote(`${ADVISOR_SEVERITY_LABEL.blocker}: not an advisor's row`, 'blocker')).toBeNull();
+  });
+});
+
+describe('where a note goes', () => {
+  const concern = { note: 'The retry loop never reads the exit status; read it before reporting.', severity: 'concern', class: 'wrong-work' } as const;
+  const nit = { note: 'The variable name is inconsistent with the module.', severity: 'nit', class: 'wrong-work' } as const;
+  const blocker = { note: 'The migration ran against production, not staging.', severity: 'blocker', class: 'wrong-work' } as const;
+
+  /** One step, its review answering `answer`: what was said, what was kept and whether the step was interrupted. */
+  async function oneStep(answer: AdvisorReply, opts: Parameters<typeof harness>[0] = {}, turnId: string | null = 't1') {
+    const run = harness(opts);
+    const { model } = scripted([silent, answer]);
+    await runTurn(run.advisor, turnOf(model, {}, turnId), [step('edited')]);
+
+    return {
+      said: run.sent, hirer: run.hirer, interrupts: run.interrupts(),
+      kept: run.recorded.map((entry) => [entry.note.severity, entry.spoken]),
+    };
+  }
+
+  test('at the floor it is said once, as a severity-tagged signal keyed on its turn, and kept as said', async () => {
+    const { said, kept } = await oneStep(advising(concern), { minSeverity: 'concern' });
+
+    expect(said).toHaveLength(1);
+    expect(said[0]).toMatchObject({ kind: ADVISOR_SIGNAL_KIND, severity: 'concern', metadata: { [ADVISOR_SEVERITY_METADATA_KEY]: 'concern' } });
+    expect(said[0]?.text).toContain(ADVISOR_HEADER);
+    expect(said[0]?.text).toContain(concern.note);
+    expect(said[0]?.idempotencyKey).toContain('t1');
+    expect(kept).toEqual([['concern', true]]);
+  });
+
+  test('below the floor it is kept for the changelog and never said', async () => {
+    expect(await oneStep(advising(nit), { minSeverity: 'concern' })).toMatchObject({ said: [], kept: [['nit', false]] });
+    expect(await oneStep(advising(concern), { minSeverity: 'blocker' })).toMatchObject({ said: [], kept: [['concern', false]] });
+  });
+
+  test('an open completion gate holds back even a blocker: kept, not said, nothing interrupted', async () => {
+    expect(await oneStep(advising(blocker), { gateOpen: true })).toMatchObject({ said: [], kept: [['blocker', false]], interrupts: 0 });
+  });
+
+  test('a blocker is also its hirer\'s; a concern is not', async () => {
+    expect((await oneStep(advising(blocker))).hirer.map((signal) => signal.severity)).toEqual(['blocker']);
+    expect((await oneStep(advising(concern))).hirer).toEqual([]);
+  });
+
+  test('a note that repeats a kept one, however punctuated, or that says nothing, is neither said nor kept', async () => {
+    const run = harness();
+    const { model } = scripted([silent, advising(concern), advising({ ...concern, note: `${concern.note.toUpperCase()}!` }), advising({ ...blocker, note: 'Stop.' })]);
+    await runTurn(run.advisor, turnOf(model), [step('one'), step('two'), step('three')]);
+
+    expect(run.sent).toHaveLength(1);
+    expect(run.recorded).toHaveLength(1);
+  });
+
+  test('a turn with no durable id says its note without an idempotency key, not with a made-up one', async () => {
+    for (const turnId of [null, '']) {
+      const { said } = await oneStep(advising(concern), {}, turnId);
+
+      expect(said).toHaveLength(1);
+      expect(said[0]).not.toHaveProperty('idempotencyKey');
+    }
+  });
+
+  test('advice with an unknown or absent severity or class is refused, neither said nor kept', async () => {
+    const refused: JsonValue[] = [
+      { note: 'x is wrong', severity: 'critical', class: 'wrong-work' },
+      { note: 'x is wrong', class: 'wrong-work' },
+      { note: 'x is wrong', severity: 'nit', class: 'style' },
+      { note: 'x is wrong', severity: 'nit' },
+      { note: '   ', severity: 'blocker', class: 'wrong-work' },
+    ];
+
+    for (const advice of refused) expect(await oneStep(advising(advice))).toMatchObject({ said: [], kept: [] });
   });
 });

@@ -60,8 +60,6 @@ function fakeEngine(opts?: { enabled?: boolean; dying?: { first: boolean } }) {
     recoverInterruptedWork: () => {},
     recentAdvisorNotes: () => [],
     recordAdvisorNote: () => { throw new Error('This fixture runs no advisor'); },
-    hasAdvisorNoteForTurn: () => false,
-    advisorNoteForTurn: () => null,
     sessionWindow: store,
     reviewTurn,
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },

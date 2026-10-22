@@ -258,8 +258,6 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
     recoverInterruptedWork: () => {},
     recentAdvisorNotes: () => [],
     recordAdvisorNote: () => { throw new Error('This fixture runs no advisor'); },
-    hasAdvisorNoteForTurn: () => false,
-    advisorNoteForTurn: () => null,
     sessionWindow: store,
     reviewTurn: async (turn) => { recorded.push(turn); },
     runStoredTurnReview: async (rowId, turn) => { recorded.push(turn); void rowId; },

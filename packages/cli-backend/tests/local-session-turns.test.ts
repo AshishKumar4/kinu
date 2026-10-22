@@ -1,7 +1,7 @@
 import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: a user turn end to end.
 import { describe, test, expect } from 'bun:test';
-import { AwaitedList, hostDeliveries, present, scratchDir, scriptedAdvisorPort, scriptedTurnModel } from '@kinu.run/test-utils';
+import { AwaitedList, hostDeliveries, present, scratchDir, scriptedAdvisor, scriptedTurnModel, withScriptedAdvisor } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
@@ -9,7 +9,6 @@ import { join } from 'node:path';
 import { APICallError, type LanguageModel, type ModelMessage } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/provider';
-import type { TemporaryAgentPort } from '@kinu.run/core';
 import {
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, drawnStep, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, OUTPUT_CONTINUATION_EVENT, serializeContentForHeads, resolvePath,
 } from '@kinu.run/core';
@@ -1187,24 +1186,18 @@ describe('LocalAgentSession — mission-derived auto-titling', () => {
   });
 });
 
-/** A session whose advisor is hired through `advisor`; a session with no host has no port of its own. */
-class AdvisedSession extends LocalAgentSession {
-  advisor: TemporaryAgentPort | null = null;
-
-  protected override advisorPort(): TemporaryAgentPort | null {
-    return this.advisor;
-  }
-}
-
-describe('LocalAgentSession — the advisor is a hire, not a wait', () => {
-  function setupWithAdvisor(model?: LanguageModel) {
+describe('LocalAgentSession — the advisor reviews each step, in the session', () => {
+  function setupWithAdvisor(enabled: boolean) {
     const { db, rt } = workspaceRuntime();
     rt.actor.config.setLearning(false);
-    const session = new AdvisedSession({ rt, db, model: model ?? fakeModel('rotated the staging keys'), onEvent: () => {} });
-    const advisor = scriptedAdvisorPort();
+    rt.actor.config.setAdvisorMinSeverity('nit');
+    rt.actor.config.setAdvisorEnabled(enabled);
+    const advisor = scriptedAdvisor();
 
-    rt.actor.config.setAdvisorEnabled(true);
-    session.advisor = advisor;
+    // The advisor's calls ride the turn's model sources: one model answers the turn, and the advisor its own calls.
+    const model = withScriptedAdvisor(() => oneStepAnswer('rotated the staging keys'), advisor);
+
+    const session = new LocalAgentSession({ rt, db, model, onEvent: () => {} });
 
     return { db, session, advisor };
   }
@@ -1213,27 +1206,24 @@ describe('LocalAgentSession — the advisor is a hire, not a wait', () => {
     `SELECT message FROM evolution_events WHERE type = 'advisor_note'`,
   ).all().map((row) => row.message);
 
-  test('a turn hires its advisor on the advisor preset and the session ends without waiting for its answer', async () => {
-    const { db, session, advisor } = setupWithAdvisor();
+  test('a turn is reviewed before it ends, on the advisor\'s own model', async () => {
+    const { db, session, advisor } = setupWithAdvisor(true);
+    advisor.advise({ note: 'The old keys were never revoked; revoke them before reporting done.', severity: 'concern', class: 'wrong-work' });
 
     await session.send('rotate the keys', { id: crypto.randomUUID() });
     await session.end();
 
-    expect(advisor.tasks.map((task) => [task.role, task.mode])).toEqual([['advisor', 'build']]);
-    expect(notes(db)).toEqual([]);
+    expect(advisor.asked.length).toBeGreaterThan(0);
+    expect(advisor.asked.every((request) => request.includes('rotate the keys'))).toBe(true);
+    expect(notes(db)).toEqual(['The old keys were never revoked; revoke them before reporting done.']);
   });
 
-  test('a FAILED build turn hires no advisor', async () => {
-    // A provider-killed turn requests no advice, per core's `improvementLanesOpen`, matching cf.
-    const exploding = new TestLanguageModelV2({
-      provider: 'fake', modelId: 'fake-model',
-      doStream: async () => { throw new Error('upstream is on fire'); },
-    });
+  test('with the switch off, no step is reviewed', async () => {
+    const { db, session, advisor } = setupWithAdvisor(false);
 
-    const { db, session, advisor } = setupWithAdvisor(exploding);
     await session.send('rotate the keys', { id: crypto.randomUUID() });
     await session.end();
-    expect(advisor.tasks).toEqual([]);
+    expect(advisor.asked).toEqual([]);
     expect(notes(db)).toEqual([]);
   });
 });

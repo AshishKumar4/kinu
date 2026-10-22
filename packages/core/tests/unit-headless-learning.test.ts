@@ -2,7 +2,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** A headless actor learns only on the step clock; a positive control on the same turn shows the root would learn from it. */
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, expect, test } from 'bun:test';
-import { createTestRuntime, scriptedAdvisor, scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedAdvisor, scriptedTurnModel, withScriptedAdvisor } from '@kinu.run/test-utils';
 import type { LanguageModel } from 'ai';
 import { jsonSchema, tool } from 'ai';
 import { hostedSeatsOver, runningOn } from './helpers-actor-host';
@@ -86,19 +86,17 @@ describe('a headless actor runs the step clock only', () => {
       const note = 'The failing parser probe was reported as successful. Check its exit status.';
       const advisor = scriptedAdvisor();
       await writeText(rt.storage.vfs, 'ADVISOR.md', 'Watch parser outcomes.');
-      const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true, advisor });
+      const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true });
       const requests: string[] = [];
 
-      const model = scriptedTurnModel({
-        doGenerate: async (options) => {
-          requests.push(JSON.stringify(options.prompt));
+      const model = withScriptedAdvisor(async (options) => {
+        requests.push(JSON.stringify(options.prompt));
 
-          return {
-            content: [{ type: 'text', text: 'The parser probe succeeded.' }],
-            finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
-          };
-        },
-      });
+        return {
+          content: [{ type: 'text', text: 'The parser probe succeeded.' }],
+          finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
+        };
+      }, advisor);
 
       const notesOf = (actorId: string) => rt.storage.sql<{ message: string }>`SELECT message FROM evolution_events
         WHERE actor_id = ${actorId} AND type = 'advisor_note'`;
@@ -113,7 +111,7 @@ describe('a headless actor runs the step clock only', () => {
           ...runningOn(seat, model), tools: {}, stores: null, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
         }));
 
-        // Its own turn made its one call; the review ran on the advisor's own model, and its end waited for it.
+        // Its own turn made its one call; the reviews were the advisor's, and the turn's end waited for them.
         expect(report.status).toBe('completed');
         expect(requests).toHaveLength(asked + 1);
         expect(notesOf(seat.actor.handle.actorId)).toEqual([{ message: note }]);
@@ -138,13 +136,13 @@ describe('a headless actor runs the step clock only', () => {
     const { rt, testSql } = createTestRuntime();
     rt.actor.config.setAdvisorEnabled(true);
     const advisor = scriptedAdvisor();
-    const seats = hostedSeatsOver({ rt, db: testSql.db, advisor });
+    const seats = hostedSeatsOver({ rt, db: testSql.db });
     const seat = await seats.seat('node', 'swarm');
 
     const report = await runHeadInference(preparedHeadRun(headInput(), {
-      ...runningOn(seat, scriptedTurnModel({ doGenerate: async () => ({
+      ...runningOn(seat, withScriptedAdvisor(async () => ({
         content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
-      }) })),
+      }), advisor)),
       tools: {}, stores: null, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
     }));
 

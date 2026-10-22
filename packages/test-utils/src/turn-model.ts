@@ -60,17 +60,19 @@ export function scriptedTurnModel(config: {
 export interface ScriptedAdvice {
   readonly note: string;
   readonly severity: 'nit' | 'concern' | 'blocker';
-  readonly class?: 'wrong-work' | 'missed-capability' | 'dissatisfaction';
+  readonly class: 'wrong-work' | 'missed-capability' | 'dissatisfaction';
 }
 
-/** An in-session advisor's model, as a session's `advisorLane` binds it: each review answers the advice queued for it,
- *  in order, then silence; every request it was sent is kept. */
+/** An in-session advisor's script: each review answers the advice queued for it, in order, then silence; every request
+ *  it was sent is kept. A turn's advisor rides the turn's own model sources, so a test hands it in through
+ *  {@link withScriptedAdvisor}. */
 export interface ScriptedAdvisor {
-  readonly model: MockLanguageModelV4;
-  /** Each review's request, as the advisor's model was sent it. */
+  /** Each review's request, as the advisor was sent it. */
   readonly asked: readonly string[];
   /** The next review says this. */
   advise(advice: ScriptedAdvice): void;
+  /** One review's answer. */
+  answer(options: ScriptedTurnOptions): ScriptedTurnResult;
 }
 
 const ADVISOR_USAGE: ScriptedTurnResult['usage'] = {
@@ -82,8 +84,10 @@ export function scriptedAdvisor(): ScriptedAdvisor {
   const asked: string[] = [];
   const queued: ScriptedAdvice[] = [];
 
-  const model = scriptedTurnModel({
-    doGenerate: (options): ScriptedTurnResult => {
+  return {
+    asked,
+    advise: (advice) => { queued.push(advice); },
+    answer: (options) => {
       asked.push(JSON.stringify(options.prompt));
       const advice = queued.shift();
 
@@ -94,7 +98,16 @@ export function scriptedAdvisor(): ScriptedAdvisor {
         finishReason: { unified: 'tool-calls', raw: undefined }, usage: ADVISOR_USAGE, warnings: [],
       };
     },
-  });
+  };
+}
 
-  return { model, asked, advise: (advice) => { queued.push(advice); } };
+/** One model for a turn and the advisor that reviews it, as the product binds both from the turn's model sources:
+ *  a call that offers the advisor's `advise` tool is the advisor's, every other `turn`'s. */
+export function withScriptedAdvisor(
+  turn: (options: ScriptedTurnOptions) => PromiseLike<ScriptedTurnResult> | ScriptedTurnResult,
+  advisor: ScriptedAdvisor,
+): MockLanguageModelV4 {
+  const asksAdvisor = (options: ScriptedTurnOptions): boolean => (options.tools ?? []).some((offered) => offered.name === 'advise');
+
+  return scriptedTurnModel({ doGenerate: (options) => (asksAdvisor(options) ? advisor.answer(options) : turn(options)) });
 }

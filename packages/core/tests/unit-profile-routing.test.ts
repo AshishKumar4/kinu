@@ -142,18 +142,18 @@ test('a phase line asks the fast tier at low, as near as its model declares; the
   expect(at([])).toEqual([null, null]);
 });
 
-// Review P2 (d35c1060fe): the advisor, hired as an agent, took the workspace's chat pin (or the parent's, copied into
-// its own) and lost the fixed deep slot its lane had: a second opinion from the model under review.
-test('the advisor agent runs on the fixed deep slot, whatever the workspace or its own pane pins', () => {
+// Review P2 (d35c1060fe): the advisor took the workspace's chat pin (or the parent's, copied into its own) and lost the
+// fixed deep slot its lane had: a second opinion from the model under review. It reads the reviewed turn's profile.
+test("the advisor runs on the fixed deep slot, whatever the reviewed agent's workspace or pane pins", () => {
   const tiers = { fast: { model: '@cf/a/model-a' }, default: { model: '@cf/a/model-a' }, deep: { model: '@cf/b/model-b' } };
   const account = envelope({ roles: { ...BUILTIN_PROFILE_CATALOG.roles }, tiers });
 
   const pinned = resolveTurnProfile(baseInput({
-    envelope: account, roleId: 'advisor', availableTools: [], workspaceModel: '@cf/a/model-a', actorModel: '@cf/a/model-a',
+    envelope: account, availableTools: [], workspaceModel: '@cf/a/model-a', actorModel: '@cf/a/model-a',
   }));
 
-  expect(pinned.tier).toMatchObject({ id: 'deep', model: '@cf/b/model-b' });
-  expect(resolveModelRoute('agent', pinned)?.model).toBe('@cf/b/model-b');
+  expect(resolveModelRoute('agent', pinned)?.model).toBe('@cf/a/model-a');
+  expect(resolveModelRoute('advisor', pinned)).toMatchObject({ tier: 'deep', model: '@cf/b/model-b' });
 });
 
 describe('resolver tier snapshot', () => {

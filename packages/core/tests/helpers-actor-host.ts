@@ -1,6 +1,6 @@
 /** A real hosted actor per head and node over the caller's one workspace database, via the production
  *  directory, `createActorHost` and `seedActorLoop`; a mocked session would pass while writing no claim. */
-import { unobservedSpend, withHostDeliveries, type ScriptedAdvisor } from '@kinu.run/test-utils';
+import { withHostDeliveries } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { makeSqlExec, storesFor } from './helpers';
 import { WorkspaceJobAuthorities } from '../src/jobs/authorities';
@@ -150,12 +150,10 @@ export function hostedSeatsOver(input: {
   readonly autoEvolve?: boolean;
   /** Spans every seat's turns. */
   readonly tracing?: AgentTracing;
-  /** The model every seat's advisor runs on; absent, no seat is reviewed. */
-  readonly advisor?: ScriptedAdvisor;
   /** The model every seat's turns run on; read per turn. Absent, a seat that runs a turn refuses it. */
   readonly model?: (spec: string) => LanguageModel;
 }): HostedSeats {
-  const { rt, db, advisor } = input;
+  const { rt, db } = input;
   const runId = input.runId ?? 'run-hosted-fixture';
   const { sql, execRaw } = rt.storage;
   const exec = makeSqlExec(db);
@@ -236,7 +234,6 @@ export function hostedSeatsOver(input: {
     orchestrationFor,
     // No run events published; a suite asserting context-edit audit rows binds its own.
     contextEvents: () => null,
-    ...(advisor !== undefined && { advisorLane: () => ({ bind: () => ({ model: advisor.model }), spend: { report: unobservedSpend } }) }),
   });
 
   const seat = async (

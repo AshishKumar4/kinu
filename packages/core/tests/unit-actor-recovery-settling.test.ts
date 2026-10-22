@@ -1,6 +1,6 @@
 /**
  * Recovery must leave a live turn's claim alone while that turn settles. A delegated turn's claim settles only after
- * its advisor review, when the session no longer reads as in flight; a sweep in that window settled the live claim
+ * its answer is in, when the session no longer reads as in flight; a sweep in that window settled the live claim
  * `indeterminate` and the hirer never got its report (review job 139 on 9359ce96e1).
  */
 import { expect, test } from 'bun:test';
@@ -42,7 +42,7 @@ test('a sweep between a turn\'s answer and its claim settle leaves the claim to 
       dynamic: () => ({ factsBlock: '' }),
     }, () => {});
 
-    // The answer is in; the advisor review and the claim settle are still ahead of this turn.
+    // The answer is in; the claim settle is still ahead of this turn.
     const swept = await recoverActorTurns(seats.host);
 
     expect(swept.active).toEqual(['turn-settling']);
