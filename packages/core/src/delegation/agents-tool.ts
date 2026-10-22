@@ -136,7 +136,7 @@ export interface TeamToolDeps {
   readonly delegation: DelegationBudget;
   /** The workspace's subagent roster (dismissed entries excluded). */
   list(): Promise<SubagentRosterEntry[]>;
-  /** This actor's subtree of the workspace's agents, as `agents.list` shows it ({@link agentTree}). */
+  /** This actor's subtree of the workspace's agents and its peers, as `agents.list` shows them ({@link agentTree}). */
   tree(input: { readonly retired: boolean; readonly limit: number }): Promise<AgentTreeView>;
   snapshot(): SubagentRosterEntry[];
   /** Create an idle durable subagent for the owner; it has no task until messaged or assigned. Role defaults
@@ -967,7 +967,7 @@ async function messageAgent(deps: AgentsToolDeps, fields: MessageFields, { mode,
   return badInput(`unknown agent "${agent}": check the roster with op:"list"`);
 }
 
-/** The caller's subtree, or one agent's status: provenance, not addressing, so `knows` includes archived rows. */
+/** The caller's subtree and peers, or one agent's status: provenance, not addressing, so `knows` includes archived rows. */
 async function roster(deps: AgentsToolDeps, fields: ListFields): Promise<object> {
   const { team, peers } = deps;
 

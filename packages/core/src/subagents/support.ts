@@ -418,7 +418,7 @@ export function createTeamToolDeps(deps: {
   ownMission(): Promise<string> | string;
   rosterMoved(): void;
   broadcastTask(event: { subagent: string; content: string; timestamp: number }): void;
-  /** The workspace's agents as the person's sidebar reads them (`readWorkspaceAgents`): `agents.list` shows its subtree. */
+  /** The workspace's agents as the person's sidebar reads them (`readWorkspaceAgents`): `agents.list` shows its subtree and peers. */
   workspaceAgents(): Promise<readonly PanelAgent[]>;
   /** This roster's owner as that read keys it: `main`, or its actor id. */
   readonly treeOwner: string;

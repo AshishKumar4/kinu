@@ -174,7 +174,8 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
 
   if (offers.has('list')) {
     const tree = 'Your agents as a tree: you and every agent below you, each after the one that started it, running first, '
-      + 'with its kind, status, what it works on, depth, last activity and its reports you have not read; '
+      + 'with its kind, status, what it works on, depth, last activity and its reports you have not read; then Main and '
+      + 'the agents the person made, as `peer` rows without what they started; '
       + `${String(AGENT_TREE_LIMIT)} rows unless \`limit\` says more.`;
 
     const help = team ? `${tree}${peers ? ' Peer workspace agents beside it.' : ''}` : 'Peer workspace agents.';
