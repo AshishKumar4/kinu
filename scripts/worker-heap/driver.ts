@@ -31,7 +31,14 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   mainIdle(): Promise<void>;
   /** `worker-heap/product.ts`'s probe RPC. */
   seedScreenshots(count: number, bytes: number): Promise<void>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  armAdvisorFault(fault: AdvisorFault | null): Promise<void>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  mainPlanted(): Promise<number>;
 }
+
+/** What `heap-plant-agent.ts` makes its advisor's model calls do once armed. */
+type AdvisorFault = 'throw' | 'uncaught';
 
 interface AccountRpc extends Rpc.DurableObjectBranded {
   ensureProfile(caller: { ownerToken: string }, email: string, name: string): Promise<void>;
@@ -116,6 +123,14 @@ export class HeapDriver extends DurableObject<DriverEnv> {
   async quiesce(workspace: string): Promise<void> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).quiesce();
   }
+
+  async armAdvisorFault(workspace: string, fault: AdvisorFault | null): Promise<void> {
+    await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).armAdvisorFault(fault);
+  }
+
+  async mainPlanted(workspace: string): Promise<number> {
+    return await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).mainPlanted();
+  }
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
@@ -176,7 +191,7 @@ async function scriptedBody(inputs: BindingInputs): Promise<string> {
   if (asksAdvisor(JSON.stringify(inputs))) {
     model.advisorCalls += 1;
 
-    return `data: ${JSON.stringify({ response: inputs.tools === undefined ? '{}' : '' })}\n\n${USAGE}data: [DONE]\n\n`;
+    return `data: ${JSON.stringify({ response: '' })}\n\n${USAGE}data: [DONE]\n\n`;
   }
 
   const lane = laneAnswer(inputs);
@@ -287,11 +302,10 @@ async function compatAnswer(body: string): Promise<Response> {
   const asked = read.request;
   let answer: ScriptedAnswer = { text: 'Heap' };
 
-  // The advisor's review, answered at once with silence (the hire's `{}`, the in-session advisor's empty text): the
-  // measured cost is its being there, not what it says.
+  // The advisor's review, answered at once with silence: the measured cost is its being there, not what it says.
   if (asksAdvisor(body)) {
     model.advisorCalls += 1;
-    const out = compatBody({ text: body.includes(ADVISOR_HIRE_MARKER) ? '{}' : '' }, asked);
+    const out = compatBody({ text: '' }, asked);
 
     return new Response(out.body, { headers: { 'content-type': out.contentType } });
   }
@@ -391,6 +405,8 @@ export default {
 
     if (url.pathname === '/failed-tool-calls') return Response.json(await driver.failedToolCalls(workspace));
 
+    if (url.pathname === '/main-planted') return Response.json(await driver.mainPlanted(workspace));
+
     // Polled as the holds above are: this stateless entry's requests cannot settle one another's promises.
     if (url.pathname === '/failing-started') while (model.failingAsked === 0) await scheduler.wait(20);
     else if (url.pathname === '/main-idle') await driver.mainIdle(workspace);
@@ -398,6 +414,7 @@ export default {
     else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
     else if (url.pathname === '/quiesce') await driver.quiesce(workspace);
     else if (url.pathname === '/advisor') await driver.advisor(workspace);
+    else if (url.pathname === '/advisor-fault') await driver.armAdvisorFault(workspace, v.parse(v.nullable(v.picklist(['throw', 'uncaught'])), url.searchParams.get('fault')));
     else if (url.pathname === '/seed-screenshots') await driver.seedScreenshots(workspace, Number(url.searchParams.get('count')), Number(url.searchParams.get('bytes')));
     else if (url.pathname === '/seed') return Response.json(await driver.seed(workspace));
     else if (url.pathname === '/plant') await driver.plant(workspace, v.parse(v.picklist(['workspace', 'main']), url.searchParams.get('isolate')), v.parse(v.string(), url.searchParams.get('marker')), Number(url.searchParams.get('bytes')));

@@ -15,6 +15,8 @@ const planted: Record<string, Uint8Array>[] = [];
 /** Main's isolate as the gate loads it (`packages/cf-backend/tests/workerd/heap-plant-agent.ts`). */
 interface PlantingFacet extends Rpc.WorkerEntrypointBranded {
   plant(marker: string, bytes: number): Promise<void>;
+  plantedCount(): Promise<number>;
+  armAdvisorFault(fault: 'throw' | 'uncaught' | null): Promise<void>;
   failedToolCalls(): Promise<number>;
   idle(): Promise<void>;
 }
@@ -31,6 +33,18 @@ export class OrchestratorAgent extends Product {
     Reflect.deleteProperty(this, 'failedToolCalls');
     Reflect.deleteProperty(this, 'mainIdle');
     Reflect.deleteProperty(this, 'seedScreenshots');
+    Reflect.deleteProperty(this, 'armAdvisorFault');
+    Reflect.deleteProperty(this, 'mainPlanted');
+  }
+
+  /** Arms `fault` in main's advisor's model calls from now on, or disarms it. */
+  async armAdvisorFault(fault: 'throw' | 'uncaught' | null): Promise<void> {
+    await (await this.agentFacetOf<PlantingFacet>(this.actorHandle().actorId)).armAdvisorFault(fault);
+  }
+
+  /** The buffers main's isolate holds planted: none once it was reset. */
+  async mainPlanted(): Promise<number> {
+    return await (await this.agentFacetOf<PlantingFacet>(this.actorHandle().actorId)).plantedCount();
   }
 
   /** `count` distinct PNGs of `bytes` at /home/main/shots/step-<i>.png, for the screenshot turn to read: a header naming
