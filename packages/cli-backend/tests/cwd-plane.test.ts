@@ -532,7 +532,8 @@ describe('the shell over the bound directory', () => {
     };
 
     const hostShell = await createHostShell(project, source).exec('env');
-    const rawDevice = v.parse(DevicePlanSchema, daemon.plan({ tier: 'raw', deviceHome: project, command: 'env', cwd: project, source })).env;
+    // `plan` reads what the sandbox keeps read-only (git, the run-later paths) before it answers.
+    const rawDevice = v.parse(DevicePlanSchema, await daemon.plan({ tier: 'raw', deviceHome: project, command: 'env', cwd: project, source })).env;
 
     expect(hostShell.stdout.split('\n').filter((line) => line.includes('planted:'))).toEqual([]);
     expect(Object.entries(rawDevice).filter(([, value]) => value.startsWith('planted:'))).toEqual([]);
@@ -541,7 +542,7 @@ describe('the shell over the bound directory', () => {
     // The sandboxed device tier passes named variables only, so a secret no rule names stays out as well.
     const secret = `npm_${crypto.randomUUID().replaceAll('-', '')}`;
 
-    const sandboxed = JSON.stringify(daemon.plan({
+    const sandboxed = JSON.stringify(await daemon.plan({
       tier: 'sandboxed', platform: 'linux', home, agentHome, agentTmp, deviceHome: project, roots: [project], cwd: project,
       command: 'env', source: { ...source, NPM_TOKEN: secret }, statusFd: 3,
     }));
