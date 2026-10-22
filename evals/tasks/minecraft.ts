@@ -4,7 +4,8 @@ import { JsonValueSchema, WORKSPACE_ROOT, type JsonValue } from '@kinu.run/core'
 import { DESKTOP_MEMBERS } from '../../packages/core/src/execution/desktop';
 import { BOX_CHROMIUM_POLICY, CHROMIUM_POLICIES, DESKTOP_CHECK, DESKTOP_LOG } from '../../packages/devbox/src/desktop';
 import type { EvalCheck, EvalPart, PrepareCommand, TrialBox } from '../src/task';
-import type { EvalVerifier } from '../src/verifier';
+import type { EvalCheckOutcome, EvalVerifier } from '../src/verifier';
+import { renderThrownChain } from '@kinu.run/core/obs';
 
 // Minecraft Classic on the agent's own desktop, played by hand: every move a desktop action the agent chose from what it
 // saw. The box enforces the hand: the game's keys only, no typing, developer tools off, no page but the game's, and no
@@ -616,6 +617,10 @@ const SavedGameSchema = v.object({
   changedBlocks: v.record(v.string(), v.object({ a: v.number(), bt: v.number() })),
 });
 
+/** A save of a world: the game writes its seed once it made one, and counts a save with a seed as saved (its app.js:
+ *  `gameSaved()` is `!!worldSeed`). */
+const WorldSchema = v.object({ worldSeed: v.union([v.pipe(v.number(), v.notValue(0)), v.pipe(v.string(), v.nonEmpty())]) });
+
 export type SavedGame = v.InferOutput<typeof SavedGameSchema>;
 
 export type Tower = { readonly height: number; readonly at: { readonly x: number; readonly z: number; readonly from: number; readonly to: number } | null };
@@ -716,11 +721,30 @@ function once<T>(read: () => Promise<T>): () => Promise<T> {
   return () => (reading ??= read());
 }
 
-/** A yes or no from the vision judge on the last frame, recorded beside the verdict. */
-async function judged(verifier: EvalVerifier, frame: () => Promise<Uint8Array>, question: string) {
-  const judgement = await verifier.judgement(question, [Uint8Array.from(await frame())]);
+/**
+ * A yes or no from the vision judge on the last frame, recorded beside the verdict. A judgement it could not give (its
+ * call failed, or it said neither) is unjudged, never a no (2026-10-21: all ten calls failed on the reviewer login's
+ * usage limit, and read as no).
+ */
+export async function judged(verifier: Pick<EvalVerifier, 'judgement'>, frame: () => Promise<Uint8Array>, question: string): Promise<EvalCheckOutcome> {
+  const picture = Uint8Array.from(await frame());
+  const [asked] = await Promise.allSettled([verifier.judgement(question, [picture])]);
 
-  return { pass: judgement.verdict === true, evidence: { verdict: judgement.verdict, reply: judgement.reply } };
+  if (asked.status === 'rejected') return { pass: false, unjudged: true, evidence: { unjudged: renderThrownChain({ cause: asked.reason }).slice(0, 300) } };
+  const { verdict, reply } = asked.value;
+
+  return verdict === null ? { pass: false, unjudged: true, evidence: { unjudged: 'the judge said neither yes nor no', reply } } : { pass: verdict, evidence: { verdict, reply } };
+}
+
+/**
+ * The rungs on the way to the tower a trial climbed, read from the game's save as the tower is (`EvalVerifier.rung`): in a
+ * world at all, a block placed, a column of 2, of 3. A save not read, as when the browser did not close, climbed none.
+ */
+export function rungsClimbed(saved: ClosedBox['saved']): Readonly<Record<'in-a-world' | 'placed-a-block' | 'column-of-2' | 'column-of-3', boolean>> {
+  const game = v.safeParse(SavedGameSchema, saved);
+  const height = game.success ? tallestColumn(game.output).height : 0;
+
+  return { 'in-a-world': v.is(WorldSchema, saved), 'placed-a-block': height >= 1, 'column-of-2': height >= 2, 'column-of-3': height >= 3 };
 }
 
 async function verifyTower(verifier: EvalVerifier): Promise<void> {
@@ -767,6 +791,14 @@ async function verifyTower(verifier: EvalVerifier): Promise<void> {
 
     return { pass: tower.height >= 5, evidence: tower };
   });
+
+  for (const id of ['in-a-world', 'placed-a-block', 'column-of-2', 'column-of-3'] as const) {
+    await verifier.rung(id, async () => {
+      const { saved, closed } = await box.closed();
+
+      return closed ? { pass: rungsClimbed(saved)[id] } : { pass: false, evidence: 'the browser did not close, so the game\'s save was not read' };
+    });
+  }
 
   await verifier.record('refused-at-the-box', async () => {
     const { refused } = await box.closed();

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { MINECRAFT_CONTROL, MINECRAFT_CONTROL_TRIES, minecraftControlScript } from '../../scripts/minecraft-control-script';
 import { readScriptedRequest, type ScriptedRequest } from '../../scripts/scripted-protocol';
 import { TOOL_IMAGES_OPENING } from '../../packages/core/src/utils/prompt-sections';
-import { boxBreaches, browserBreaches, controlShortfalls, playedByHand, tallestColumn, type ClosedBox, type LiveBox } from '../tasks/minecraft';
+import { boxBreaches, browserBreaches, controlShortfalls, judged, playedByHand, rungsClimbed, tallestColumn, type ClosedBox, type LiveBox } from '../tasks/minecraft';
 import type { EvalCheck } from './task';
 
 const program = (code: string) => ({ name: 'eval', args: JSON.stringify({ code }) });
@@ -188,6 +188,42 @@ describe('the control trial', () => {
       'the box did not refuse typing',
       'browser-locked-down did not pass: ["developer tools were opened"]',
       'https://example.com/ loaded',
+    ]);
+  });
+});
+
+// Main, 2026-10-22: a task no build passes moves no pass rate, so the gate reads its rungs, from the game's own save.
+describe('the rungs a Minecraft trial climbed', () => {
+  const save = (blocks: Readonly<Record<string, { a: number; bt: number }>>) => ({ worldSeed: 4242, changedBlocks: blocks, worldSize: 128, version: 1 });
+
+  test('a world, then a block, then a column of 2 and of 3, as high as its tallest placed column', () => {
+    const column = save({ 'p10_40_10': { a: 1, bt: 1 }, 'p10_41_10': { a: 1, bt: 1 }, 'p3_40_3': { a: 1, bt: 4 } });
+
+    expect([rungsClimbed(null), rungsClimbed(save({})), rungsClimbed(column)]).toEqual([
+      { 'in-a-world': false, 'placed-a-block': false, 'column-of-2': false, 'column-of-3': false },
+      { 'in-a-world': true, 'placed-a-block': false, 'column-of-2': false, 'column-of-3': false },
+      { 'in-a-world': true, 'placed-a-block': true, 'column-of-2': true, 'column-of-3': false },
+    ]);
+  });
+});
+
+// 2026-10-21: every judge call failed on the reviewer login's usage limit and was recorded as a no.
+describe("the vision judge's answer", () => {
+  const frame = async () => new Uint8Array([1]);
+
+  test('a yes passes, a no fails, and a failed call or an answer neither yes nor no is unjudged', async () => {
+    const asking = (answer: () => Promise<{ verdict: boolean | null; reply: string }>) => judged({ judgement: answer }, frame, 'Is it a tower?');
+
+    expect(await Promise.all([
+      asking(async () => ({ verdict: true, reply: 'yes' })),
+      asking(async () => ({ verdict: false, reply: 'no' })),
+      asking(async () => { throw new Error('429 usage limit'); }),
+      asking(async () => ({ verdict: null, reply: 'maybe' })),
+    ])).toEqual([
+      { pass: true, evidence: { verdict: true, reply: 'yes' } },
+      { pass: false, evidence: { verdict: false, reply: 'no' } },
+      { pass: false, unjudged: true, evidence: { unjudged: '429 usage limit' } },
+      { pass: false, unjudged: true, evidence: { unjudged: 'the judge said neither yes nor no', reply: 'maybe' } },
     ]);
   });
 });
