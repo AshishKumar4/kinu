@@ -4,13 +4,20 @@
  */
 import { getAgentByName } from 'agents';
 import { Effect } from 'effect';
-import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
+import { mailDeploymentAliases } from '@kinu.run/core';
+import { attempt, diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import type { OrchestratorAgent } from '../orchestrator';
 import { routeInboundMail } from './router';
 
 export async function handleInboundMail(message: ForwardableEmailMessage, env: Env): Promise<void> {
+  const aliases = mailDeploymentAliases(env.MAIL_ALIASES);
+
+  // A mistaken MAIL_ALIASES fails the delivery, so Email Routing tries it again once the deployment is fixed.
+  if (aliases === 'malformed') return await settle(Effect.fail(new KinuError('unavailable', 'MAIL_ALIASES is not an object of labels to usernames')));
+
   return settle(attempt({ doing: 'routing an inbound email', otherwise: 'io' }, async () => await routeInboundMail(message, {
     domain: env.EMAIL_DOMAIN,
+    aliases,
     name: (label) => env.MAILNAME.get(env.MAILNAME.idFromName(label)),
     mailbox: (userId) => env.MAILBOX.get(env.MAILBOX.idFromName(userId)),
     wake: async (arrival) => {

@@ -1,6 +1,7 @@
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import { specWithoutAccount } from '../providers/types';
+import type { HarnessMode, HarnessProfile, HarnessSurface } from '../config/harness-mode';
 
 export type PromptModelFamily = 'kimi' | 'gpt' | 'claude' | 'gemini' | 'muse' | 'generic';
 
@@ -40,6 +41,14 @@ function resolveFamily(model?: PromptModelContext): PromptModelFamily {
 
 export function resolvePromptModelProfile(model?: PromptModelContext): PromptModelProfile {
   return { family: resolveFamily(model) };
+}
+
+/** Under `auto`, the profile each family is shown by default; a family it does not name is shown `kinu`. */
+const AUTO_HARNESS: Partial<Record<PromptModelFamily, HarnessProfile>> = { claude: 'claude-code', gpt: 'codex' };
+
+/** The surface `mode` shows `model` (step 1: recorded, not yet applied), resolved as its prompt family is. */
+export function resolveHarnessSurface(mode: HarnessMode, model?: PromptModelContext): HarnessSurface {
+  return mode === 'auto' ? AUTO_HARNESS[resolveFamily(model)] ?? 'kinu' : mode;
 }
 
 /** Refuses tools only where the model's catalog row says it calls none; a model no row names is given the benefit. */

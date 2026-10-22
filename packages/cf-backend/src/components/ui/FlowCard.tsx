@@ -24,3 +24,8 @@ export function FlowStep({ title, steps, at, children, footer }: { title: string
     </>
   );
 }
+
+/** A flow's whole page, over the app: the page's ground, scrolling on its own. */
+export function FlowPage({ children }: { children: ReactNode }) {
+  return <div className="p-flow-page">{children}</div>;
+}

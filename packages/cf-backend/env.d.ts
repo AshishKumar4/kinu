@@ -104,6 +104,8 @@ declare global {
     /** Root user-plane secret: seals credentials and derives the owner capability; without it no
      *  signed-in user can be served. Generate with `openssl rand -base64 32`. */
     CREDENTIAL_ENCRYPTION_KEY?: string;
+    /** One-time first-owner link digest, expiry and email; absent leaves manual setup or sign-in. */
+    KINU_FIRST_OWNER_LINK?: string;
     /** Retired keys for reading only during rotation (user/credential-envelope.ts). */
     /** Signs webhook delivery URLs (secret); without it creation answers 503 and URLs 404. Rotation
      *  revokes every URL (events/webhook-route.ts). */
@@ -123,6 +125,10 @@ declare global {
     KINU_DEPLOYMENT_RECORD?: string;
     /** This deployment's own Cloudflare refresh token, so updates are pulls; absent ⇒ install nothing. */
     KINU_SELF_DEPLOY_REFRESH_TOKEN?: string;
+    /** Mail on a subdomain: the zone its domain sits in, where each address routes by a rule; empty on an apex. */
+    KINU_MAIL_ZONE?: string;
+    /** Mail on a subdomain: the token that may edit that zone's routing rules, minted by the deploy run. */
+    KINU_MAIL_ROUTING_TOKEN?: string;
     /** The one identity usable without OAuth; off localhost it also needs `DEV_IDENTITY_SECRET`. */
     DEV_USER_EMAIL?: string;
     /** `on`: every user's Workers AI goes through this Worker's `AI` binding. */
@@ -143,6 +149,9 @@ declare global {
     CONTROL_PLANE_ADMINS?: string;
     /** `operators` (the default): only CONTROL_PLANE_ADMINS may claim a mail address; `everyone`: any account may. */
     MAIL_ACCOUNTS?: string;
+    /** The deployment's own addresses, JSON `{ "privacy": "<username>" }`: each delivered to that account's own box,
+     *  and no one's to claim (docs/MAIL.md §1). */
+    MAIL_ALIASES?: string;
     /** Cloudflare Access org for `/control*`: JWKS origin and pinned `iss`, else any org is a valid signer.
      *  Unset ⇒ 404 to everyone; `scripts/infra-verify.ts` requires it (control-plane/access-gate.ts). */
     CONTROL_PLANE_ACCESS_TEAM_DOMAIN?: string;

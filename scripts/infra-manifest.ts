@@ -782,15 +782,11 @@ export const SUPPLY = new Map<string, Supply>([
     absent: 'previews and shares are addressed on 443, where a deployed zone serves them. Only '
       + '`vite dev` sets it, for its own loopback zone (packages/cf-backend/vite-preview-zone.ts).',
   }],
-  ['CLOUDFLARE_DEPLOY_CLIENT_ID', {
-    handling: 'config-var',
+  ['KINU_FIRST_OWNER_LINK', {
+    handling: 'out-of-band',
     required: false,
-    absent: 'the Cloudflare half of /deploy renders as not configured and refuses to start a '
-      + 'run; `kinu deploy local` is unaffected. Belongs in `vars`: a PKCE client is public and '
-      + 'has no secret to pair it with.',
-    source: 'https://dash.cloudflare.com/?to=/:account/api-tokens — a self-managed PUBLIC OAuth '
-      + 'client with PKCE, redirect https://kinu.run/deploy/callback plus a localhost redirect '
-      + 'for the CLI door, and the scopes in docs/SELF-DEPLOY.md § The Cloudflare door.',
+    absent: 'no setup link: the first owner is created with KINU_SETUP_TOKEN, or not at all',
+    source: 'written by the self-deploy run (docs/SELF-DEPLOY-FLOW.md); never set by hand',
   }],
   ['KINU_DEPLOYMENT_RECORD', {
     handling: 'out-of-band',
@@ -800,6 +796,15 @@ export const SUPPLY = new Map<string, Supply>([
       + 'exactly that deployment.',
     source: 'written onto the new Worker by the flow\'s handover step (core/src/deploy/steps.ts); '
       + 'never typed by a person.',
+  }],
+  ['KINU_MAIL_ROUTING_TOKEN', {
+    handling: 'out-of-band',
+    required: false,
+    absent: 'mail on a subdomain of its zone routes no new address: a subdomain has no catch-all, so each '
+      + 'address needs a rule of its own, which the deployment makes with this token. An apex, kinu.run '
+      + 'among them, needs none.',
+    source: 'minted by the flow\'s mail-routing step (core/src/deploy/mail.ts) from the person\'s grant: '
+      + 'Email Routing Rules Write on the zone KINU_MAIL_ZONE names, and nothing else; never typed by a person.',
   }],
   ['KINU_SELF_DEPLOY_REFRESH_TOKEN', {
     handling: 'out-of-band',

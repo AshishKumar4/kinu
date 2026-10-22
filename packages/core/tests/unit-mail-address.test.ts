@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mailAddressOf, mailLabelOf, mailUsernameRefusal, parseMailRecipient, suggestedMailUsername } from '../src/mail/address';
+import { mailAddressOf, mailDeploymentAliases, mailLabelOf, mailUsernameRefusal, parseMailRecipient, suggestedMailUsername } from '../src/mail/address';
 
 const DOMAIN = 'kinu.run';
 
@@ -64,5 +64,16 @@ describe('the username a person is offered, and the ones they may not have', () 
     expect(mailUsernameRefusal('-ashish')).toBe('invalid');
     expect(mailUsernameRefusal('a'.repeat(21))).toBe('invalid');
     expect(['postmaster', 'abuse', 'noreply', 'dmarc', 'admin'].map(mailUsernameRefusal)).toEqual(['reserved', 'reserved', 'reserved', 'reserved', 'reserved']);
+  });
+});
+
+describe("the deployment's own addresses", () => {
+  test('are read from MAIL_ALIASES as labels to usernames; unset is none, and anything else is refused, never read as none', () => {
+    expect(mailDeploymentAliases(undefined)).toEqual(new Map());
+    expect(mailDeploymentAliases('{"privacy": "ashish"}')).toEqual(new Map([['privacy', 'ashish']]));
+
+    for (const raw of ['privacy=ashish', '["privacy"]', '{"privacy": 1}', '{"Privacy": "ashish"}', '{"privacy": "privacy"}', '{"privacy": "ash ish"}']) {
+      expect(mailDeploymentAliases(raw)).toBe('malformed');
+    }
   });
 });

@@ -8,7 +8,8 @@ const CALLER = { workspace: 'api-worker', title: 'API Worker', mainActorId: 'act
 it.each([['the person', 'person'], ['an agent', 'agent']] as const)('a thread %s trashes is due to be purged', async (_who, by) => {
   const mailbox = env.MAILBOX.get(env.MAILBOX.idFromName(`trash-${by}`));
 
-  await mailbox.open({ userId: `u-${by}`, email: 'me@ashishkumarsingh.com', username: 'ashish', assistant: null });
+  // A name each: opening a box claims it, and a name is one account's.
+  await mailbox.open({ userId: `u-${by}`, email: 'me@ashishkumarsingh.com', username: `ashish-${by}`, assistant: null });
   const draft = await mailbox.draftFor(CALLER, { to: ['dana@northwind.io'], subject: 'Webhook signing', text: 'Checking the signing change.' });
 
   if (by === 'person') await mailbox.update(draft.threadId, { trashed: true });

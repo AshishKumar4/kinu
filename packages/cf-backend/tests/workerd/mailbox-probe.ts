@@ -3,6 +3,8 @@
  */
 import { MailboxDO } from '../../src/mail/mailbox-do';
 
+export { MailNameDO } from '../../src/mail/mailname-do';
+
 export class MailboxProbeDO extends MailboxDO {
   alarmAt(): Promise<number | null> {
     return this.ctx.storage.getAlarm();

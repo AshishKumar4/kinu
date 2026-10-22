@@ -96,11 +96,7 @@ function authorize(door: DeployDoor, clientId: string): Effect.Effect<void> {
       clientId, redirectUri: CLI_DEPLOY_REDIRECT_URI, code, verifier: pkce.verifier,
     }));
 
-    yield* Effect.promise(() => door.holdToken({
-      accessToken: token.accessToken,
-      refreshToken: token.refreshToken,
-      expiresInSeconds: token.expiresInSeconds,
-    }));
+    yield* Effect.promise(() => door.holdToken(token));
   });
 }
 
@@ -145,7 +141,6 @@ function answers(door: DeployDoor, prompts: readonly string[]): Effect.Effect<De
         ? { kind: 'zone', hostname, zoneId: zone.id }
         : { kind: 'workers-dev', hostname: '', zoneId: '' },
       ownerEmail,
-      accessEmails: [ownerEmail],
       providerKeyNames: keyNames,
       sandbox: false,
       mailDomain: zones.some((held) => held.name === mailDomain) ? mailDomain : '',

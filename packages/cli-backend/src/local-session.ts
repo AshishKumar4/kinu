@@ -143,7 +143,7 @@ import {
 import { cleanupFacetScratch, makeSqlExec, soulIn, writeTransaction, type CLIRuntime } from './runtime';
 import { createLocalActorHost } from './actor-host';
 import { createLocalOrchestration, type LocalOrchestration } from './orchestration';
-import { localActorDirectory, nodeWorkspace, reclaimSettledRunActors, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
+import { localActorDirectory, nodeWorkspace, openLocalRootActor, reclaimSettledRunActors, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
 import { osLeaseProcess } from './agent-host/lease-process';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
@@ -320,6 +320,7 @@ export class LocalAgentSession {
   private readonly mctsSearchStore: MctsSearchStore;
   private readonly factsStore: FactsStore;
   private readonly config: AgentConfigStore;
+  private mainConfig: AgentConfigStore | undefined;
   private readonly eventLog: EventLog;
   private readonly eventRecorder: RunEventRecorder;
   /** Label-scoped spend governor; public for the `agent.*` namespace. */
@@ -776,6 +777,14 @@ export class LocalAgentSession {
   /** What waits on the owner moved: each armed wait it now meets wakes its agent, once; a failure is logged. */
   async ownerWaitsChanged(): Promise<void> {
     return settleEffect(logged('owner_waits.wake_failed', { doing: 'waking the agents whose wait on their owner is met', otherwise: 'io' }, this.ownerWaitsMoved()));
+  }
+
+  /** The workspace's own settings, its root's, whichever actor this session hosts: `harness.mode` is read here by every
+   *  actor's turn, as the CF workspace reads its own, and as a hire reads its root's shell mode (`runtime.ts`). */
+  private workspaceConfig(): AgentConfigStore {
+    this.mainConfig ??= this.rt.actor.parentActorId === null ? this.config : openLocalRootActor(this.rt.storage.sql).config;
+
+    return this.mainConfig;
   }
 
   /**
@@ -1782,6 +1791,7 @@ export class LocalAgentSession {
       rt: this.rt,
       backend: 'cli-local',
       executors: () => this.rt.executionRouter?.listExecutors() ?? [],
+      harnessMode: () => this.workspaceConfig().getHarnessMode(),
       config: this.config,
       skills: vfsTurnSkills(this.rt.ownFiles, this.config, this.instructionTrust, this.turnHidesSkills),
       models: this.turnModels(),
@@ -2767,6 +2777,7 @@ export class LocalAgentSession {
       backend: 'cli-local',
       executors: () => actor.runtime.executionRouter?.listExecutors() ?? [],
       config: actor.stores.config,
+      harnessMode: () => this.workspaceConfig().getHarnessMode(),
       skills: vfsTurnSkills(actor.runtime.storage.vfs, actor.stores.config, this.instructionTrust),
       models: compaction.models,
       profileInputs: () => this.profiles().inputs(),

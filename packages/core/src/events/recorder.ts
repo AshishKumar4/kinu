@@ -13,6 +13,7 @@ import {
 import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
 import { boundedInt, boundPageQuery } from '../utils/bounds';
 import { USAGE_FIELDS, UsageSchema, addUsage, type Usage } from '../usage';
+import { HARNESS_MODES, HARNESS_SURFACES } from '../config/harness-mode';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
 import { MODEL_ATTEMPT_OUTCOMES, PROVIDER_WAIT_SOURCES } from '../providers/types';
 import { APP_MUTATIONS, APP_TABLE_SCOPES } from '../types/app-store';
@@ -80,7 +81,8 @@ export const RunEventSchema = v.variant('type', [
     reason: v.optional(v.string()), parts: v.pipe(v.array(MessagePartReferenceSchema), v.readonly()),
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),
     modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema),
-    account: v.optional(CallAccountSchema), egress: v.optional(v.string()) }),
+    account: v.optional(CallAccountSchema), egress: v.optional(v.string()),
+    harness: v.optional(v.object({ mode: v.picklist(HARNESS_MODES), surface: v.picklist(HARNESS_SURFACES) })) }),
   v.object({ ...BaseFields, type: v.literal('model_call'),
     source: v.picklist(SPEND_SOURCES), usage: v.optional(UsageSchema),
     usd: v.optional(v.number()),
