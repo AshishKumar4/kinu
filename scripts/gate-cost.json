@@ -1179,6 +1179,18 @@
       "exit": 0,
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)"
     },
+    "bun scripts/deploy-oauth-client.ts check": {
+      "wallSeconds": 0.95,
+      "cpuSeconds": 0.78,
+      "peakRssMb": 149.59,
+      "peakRunnable": 4,
+      "peakCpuThreads": 1.31,
+      "meanThreads": 0.82,
+      "samples": 16,
+      "loadAtStart": 4.98,
+      "exit": 0,
+      "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)"
+    },
     "bun test --timeout=0 tests/design-system.test.ts": {
       "wallSeconds": 1.84,
       "cpuSeconds": 1.56,

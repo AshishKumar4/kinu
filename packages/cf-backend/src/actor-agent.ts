@@ -129,7 +129,7 @@ import {
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
   parseModelSpec, specModelInfo, assembleActorTurn,
   type ModelWindow, type AgentsMdSources,
-  ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead, type ModelInfo,
+  ModelCatalogSession, resolveEffectiveModelSpec, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   // AGENTS.md discovery, and the trust authority deciding whether discovered bytes earn system placement.
   collectWorkspaceAgentsMd,
@@ -146,7 +146,7 @@ import {
   toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
-  toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
+  McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   OwnerAnswersSchema, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, providersWithoutOwnerSecrets, withholdingOwnerSecrets, currentWorkMode, requireWorkModePermission,
@@ -2770,7 +2770,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const providers = actorNamespaces(this.surfaceActor(requested, 'owner', own.stores), SURFACE_POLICY.operations);
 
     // The workspace's own agent, which reaches its external tools.
-    const mcp = await this.buildUserMcpTools(own.raw, Promise.resolve(this.modelCatalog));
+    const mcp = await this.buildUserMcpTools();
     const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
     const external = { ...this.extensions.tools(), ...mcp };
     const tools = authority.mode === requested ? own.raw : this.ownTools(authority.mode, null, { ledgers, stores: own.stores }).raw;
@@ -3446,17 +3446,10 @@ export abstract class ActorAgent extends Agent<Env> {
    * Rebuilds AI-SDK tools from MCP descriptors; cache invalidates on descriptor content hash, and a
    * failed read keeps the last good build. `execute` dispatches as the parent workspace's token.
    */
-  protected async buildUserMcpTools(nativeTools: ToolSet, catalog: Promise<ModelCatalogRead>, descriptors = this.userMcpDescriptors()): Promise<ToolSet> {
+  protected async buildUserMcpTools(descriptors = this.userMcpDescriptors()): Promise<ToolSet> {
     if (descriptors === null) return {};
-    // Read beside the model's resolution; a failed read reaches the failure arm through `refresh`.
-    const [read] = await Promise.allSettled([catalog, descriptors]);
-
-    // An unresolved profile fails the turn in `readTurnInputs`.
-    if (read.status === 'rejected') return {};
 
     try {
-      // Budget is the resolved model's step context limit minus this actor's own tool definitions, read
-      // off the same `ModelCatalogSession` as compaction (`McpSurfaceBudget`).
       const tools = await this.mcpToolsCache.refresh(
         async () => {
           const surface = await descriptors;
@@ -3464,10 +3457,6 @@ export abstract class ActorAgent extends Agent<Env> {
           if (surface.status === 'rejected') throw surface.reason;
 
           return v.parse(McpToolSurfaceSchema, surface.value);
-        },
-        {
-          ...read.value.window(),
-          nativeToolTokens: toolSurfaceTokens(nativeTools),
         },
       );
 

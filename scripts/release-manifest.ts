@@ -27,10 +27,11 @@ import {
   ENV_TYPES, WRANGLER_CONFIG, deployedConfig, deploymentOf, envFields, vectorizeGeometry, SUPPLY, type DeployedConfig, type Supply,
 } from './infra-manifest';
 import type {
-  BindingKind, ReleaseBinding, ReleaseFile, ReleaseManifest, ReleaseMigration,
+  BindingKind, ReleaseBinding, ReleaseComputer, ReleaseFile, ReleaseManifest, ReleaseMigration,
   ReleaseSecret, ReleaseSeed, ReleaseVar, ReleaseVectorIndex, VarPolicy,
 } from '../packages/core/src/deploy/manifest';
 import { REPO_ROOT as REPO } from './repo-root';
+import { partsOf, type Tools } from './devbox-tools-pin';
 
 
 /** Where a deployment pulls its next version from, and where the CLI artifacts
@@ -63,6 +64,8 @@ export const VAR_POLICY = {
   SIGN_IN_PROVIDERS: 'derived',
   CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD: 'carried',
   CLOUDFLARE_AI_GATEWAY_ID: 'carried',
+  // kinu.run's own door; a self-host deploys nobody else, and refreshes with the id its record names.
+  CLOUDFLARE_DEPLOY_CLIENT_ID: 'ours',
   CLOUDFLARE_ACCOUNT_ID: 'derived',
   // '' names the datasets a deployment binds in its own account; only kinu.run's staging, sharing an account, differs.
   ANALYTICS_DATASET_SUFFIX: 'carried',
@@ -77,6 +80,8 @@ export const VAR_POLICY = {
   OPS_ALERT_EMAIL: 'ours',
   // The domain a self-host's owner onboarded for mail, or '' for none: a deploy answer, like MAIL_ACCOUNTS.
   EMAIL_DOMAIN: 'derived',
+  // The mail domain's zone where it is a subdomain, so each address routes by a rule: found by the deploy run.
+  KINU_MAIL_ZONE: 'derived',
   CONTROL_PLANE_ACCESS_TEAM_DOMAIN: 'ours',
   CONTROL_PLANE_ACCESS_AUD: 'ours',
   // The digest of the runtime catalog a release's NIMBUS_RUNTIME_CACHE holds: every deployment of it reads the same one.
@@ -193,6 +198,20 @@ export function releaseVars(config: DeployedConfig): readonly ReleaseVar[] {
   });
 }
 
+/** The store bucket a box reads its tools from (`packages/devbox` `#pipeParts`). */
+const TOOLS_BUCKET = 'BACKUP_BUCKET';
+
+/** The Durable Object-managed container this config deploys, with the tools its golden snapshot installs; null when it
+ *  deploys none, or binds no store bucket to read them from. */
+export function releaseComputer(config: DeployedConfig, tools: Tools): ReleaseComputer | null {
+  const container = (config.containers ?? []).find((entry) => 'scheduling_policy' in entry && entry.scheduling_policy === 'durable_object');
+  const bucket = (config.r2_buckets ?? []).find((entry) => entry.binding === TOOLS_BUCKET);
+
+  if (container?.class_name === undefined || bucket === undefined) return null;
+
+  return { className: container.class_name, bucket: TOOLS_BUCKET, tools: { sha256: tools.sha256, parts: partsOf(tools) } };
+}
+
 export interface ReleaseBuild {
   readonly version: string;
   readonly sha: string;
@@ -200,6 +219,7 @@ export interface ReleaseBuild {
   readonly files: readonly ReleaseFile[];
   readonly modules: readonly string[];
   readonly seed: ReleaseSeed | null;
+  readonly tools: Tools;
 }
 
 export function buildReleaseManifest(build: ReleaseBuild, configPath = WRANGLER_CONFIG): ReleaseManifest {
@@ -247,6 +267,7 @@ export function buildReleaseManifest(build: ReleaseBuild, configPath = WRANGLER_
     vars,
     files: build.files,
     seed: build.seed,
+    computer: releaseComputer(config, build.tools),
   };
 }
 

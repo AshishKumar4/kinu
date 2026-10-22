@@ -38,3 +38,6 @@ export function runKeyAdmits(presented: string, storedDigest: string): boolean {
 export const DEPLOY_SOCKET_PROTOCOL = 'kinu.deploy.run-key';
 
 export const DEPLOY_RUN_ID = /^[A-Za-z0-9_-]{16}$/u;
+
+/** A page sign-in's OAuth `state` begins with this, where a door run's begins with its run id (never this short). */
+export const DEPLOY_SESSION_STATE = 'session';

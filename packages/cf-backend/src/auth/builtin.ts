@@ -13,7 +13,7 @@ import { sanitizeReturnTo } from '@kinu.run/core';
 import { builtinSignInOn } from '@kinu.run/core/identity';
 import type { AuthRoutesAuthority, AuthRoutesEnv } from './routes';
 import {
-  attemptBuckets as buckets, BUILTIN_ACCOUNTS_OBJECT, CHALLENGE_TTL_MS, checkPassword, grantOf, hashPassword, INVITE_TTL_MS,
+  attemptBuckets as buckets, BUILTIN_ACCOUNTS_OBJECT, CHALLENGE_TTL_MS, checkPassword, firstOwnerLinkEmail, grantOf, hashPassword, INVITE_TTL_MS,
   type AttemptBucket, type ChallengePurpose, type Grant, type InvitePurpose, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 import type { UserDO } from '../user/user-do';
@@ -29,6 +29,7 @@ type BuiltinAuthority = AuthRoutesAuthority & Pick<UserDO,
 export interface BuiltinAuthEnv<Id = DurableObjectId> extends Omit<AuthRoutesEnv<Id>, 'UserDO'> {
   UserDO: ObjectNamespace<Id, BuiltinAuthority>;
   KINU_SETUP_TOKEN?: string;
+  KINU_FIRST_OWNER_LINK?: string;
 }
 
 const RP_NAME = 'Kinu';
@@ -121,11 +122,27 @@ builtinAuthRoutes.use('/api/auth/builtin/*', async (c, next) => {
 
 const RegisterSchema = v.object({ email: EmailSchema, invite: TokenSchema, setup: TokenSchema });
 
+function registerGrant<Id>(env: BuiltinAuthEnv<Id>, input: v.InferOutput<typeof RegisterSchema>): Grant | Response {
+  const grant = grantOf({ invite: input.invite, setup: input.setup }, env.KINU_SETUP_TOKEN);
+
+  if (grant.kind !== 'none') return grant;
+  const email = firstOwnerLinkEmail(env.KINU_FIRST_OWNER_LINK, input.setup, Date.now());
+
+  if (email === null) return grant;
+
+  if (email !== input.email) return refuse('This setup link is for a different email address.', 403);
+
+  return { kind: 'setup' };
+}
+
 async function admitted<Id>(env: BuiltinAuthEnv<Id>, request: Request, input: v.InferOutput<typeof RegisterSchema>) {
   const limited = await reserve(env, [buckets.register(addressKey(request))]);
 
   if (limited) return limited;
-  const request_ = { email: input.email, grant: grantOf({ invite: input.invite, setup: input.setup }, env.KINU_SETUP_TOKEN) };
+  const grant = registerGrant(env, input);
+
+  if (grant instanceof Response) return grant;
+  const request_ = { email: input.email, grant };
   const admission = await accounts(env).builtinAdmissible(await ownerCaller(env), request_);
 
   return admission.admitted ? request_ : refuse(admission.reason, 403);

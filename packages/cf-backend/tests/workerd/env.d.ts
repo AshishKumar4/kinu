@@ -22,7 +22,7 @@ import type { AttributedLine } from './attribution-shapes';
 import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
 } from './deploy-fake';
-import type { DeployInputs, DeployRunPhase, DeploySnapshot } from '@kinu.run/core/deploy';
+import type { DeployInputs, DeployRunPhase, DeployRunView, DeploySnapshot } from '@kinu.run/core/deploy';
 import type { ParkedWritesProbeDO } from './parked-writes-probe';
 import type { ComplexityProbeDO } from './complexity/complexity-probe';
 import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
@@ -339,6 +339,28 @@ interface CensusMailNameRpc extends Rpc.DurableObjectBranded {
   whenRetired(): Promise<void>;
 }
 
+/** `mail-routing-probe`: the shipped mail objects, on a subdomain, with a routing grant. */
+interface RoutedMailboxRpc extends Rpc.DurableObjectBranded {
+  open(account: { userId: string; email: string; username: string; assistant: null }): Promise<import('@kinu.run/core').MailBox>;
+  readableBy(caller: import('@kinu.run/core').MailCaller): Promise<readonly import('@kinu.run/core').MailBox[]>;
+  boxes(): Promise<readonly import('@kinu.run/core').MailBox[]>;
+  deleteBox(userId: string): Promise<void>;
+  routedUnder(grant: string): Promise<void>;
+}
+
+interface RoutedMailNameRpc extends Rpc.DurableObjectBranded {
+  claim(label: string, userId: string): Promise<{ label: string; user_id: string; kind: string; target_path: string | null }>;
+  lookup(): Promise<{ label: string; user_id: string; kind: string; target_path: string | null } | null>;
+  retire(userId: string): Promise<void>;
+}
+
+interface MailRulesFakeControlRpc extends Rpc.WorkerEntrypointBranded {
+  reset(): Promise<import('./mail-rules-fake').MailRulesState>;
+  state(): Promise<import('./mail-rules-fake').MailRulesState>;
+  cap(rules: number): Promise<import('./mail-rules-fake').MailRulesState>;
+  refuseList(status: number): Promise<import('./mail-rules-fake').MailRulesState>;
+}
+
 interface CensusStorageRpc extends Rpc.DurableObjectBranded {
   storageRows(): Promise<number>;
 }
@@ -554,6 +576,10 @@ interface DeployRunProbeRpc extends Rpc.DurableObjectBranded {
   expireSoon(): Promise<boolean>;
   rowText(): Promise<string>;
   abort(reason: string): Promise<void>;
+  advance(ms: number): Promise<void>;
+  vaultNames(): Promise<readonly string[]>;
+  gone(): Promise<boolean>;
+  view(owner: string): Promise<DeployRunView | null>;
 }
 
 interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
@@ -568,6 +594,12 @@ interface DeployFakeControlRpc extends Rpc.WorkerEntrypointBranded {
   weigh(weight: DeployFakeWeight): Promise<void>;
   expireGrant(expiresIn: number): Promise<void>;
   existing(): Promise<void>;
+  r2(on: boolean): Promise<void>;
+  free(on: boolean): Promise<void>;
+  unrefuse(): Promise<void>;
+  signInAs(user: { id: string; email: string }): Promise<void>;
+  zone(zone: { id: string; name: string }): Promise<void>;
+  activate(zoneId: string): Promise<void>;
 }
 
 interface UpdatesSession {
@@ -590,7 +622,11 @@ interface DoorProbeAnswer {
 }
 
 interface DeployDoorProbeRpc extends Rpc.WorkerEntrypointBranded {
-  hit(method: string, path: string, headers?: Readonly<Record<string, string>>): Promise<DoorProbeAnswer>;
+  hit(method: string, path: string, headers?: Readonly<Record<string, string>>, body?: string): Promise<DoorProbeAnswer>;
+}
+
+interface DeployFramesProbeRpc extends Rpc.WorkerEntrypointBranded {
+  frames(path: string, headers: Readonly<Record<string, string>>, count: number): Promise<readonly string[]>;
 }
 
 declare global {
@@ -661,6 +697,10 @@ declare global {
       DEPLOY_FAKE: Service<DeployFakeControlRpc>;
       UPDATES_PROBE: Service<UpdatesProbeRpc>;
       DEPLOY_DOOR_PROBE: Service<DeployDoorProbeRpc>;
+      DEPLOY_FRAMES_PROBE: Service<DeployFramesProbeRpc>;
+      ROUTED_MAILBOX: DurableObjectNamespace<RoutedMailboxRpc>;
+      ROUTED_MAILNAME: DurableObjectNamespace<RoutedMailNameRpc>;
+      MAIL_RULES_FAKE: Service<MailRulesFakeControlRpc>;
     }
 
     /** `exports.CodemodeEgress` is a loopback stub here as in production. */

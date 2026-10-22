@@ -100,27 +100,44 @@ straight to disk.
 1. **Sign in with Cloudflare.** A self-managed OAuth client owned by Kinu,
    public with PKCE, so a deployment can refresh its own token without a
    client secret. Scopes (`CLOUDFLARE_DEPLOY_SCOPES` in
-   `packages/core/src/deploy/pkce.ts`): workers scripts, routes, KV, R2,
-   Vectorize, AI, AI Gateway, Secrets Store, Access, DNS write, zone read,
-   account read, user read, offline access. Every one is in the catalog; the
-   first client creation confirms each is selectable.
+   `packages/core/src/deploy/pkce.ts`) are the OAuth catalog's dot ids
+   (`GET /oauth/scopes`): workers scripts, routes, KV, R2, Vectorize, AI
+   Gateway, zone read, DNS write, the three mail scopes, user details,
+   account settings and offline access. The authorize endpoint refuses the
+   old colon names (`invalid_scope` for `account:read`, kinu.run 2026-10-20).
+   The mail scopes are the client's optional ones. A declined consent or a
+   refused scope comes back to the page with Cloudflare's `error` and
+   `error_description`, as does a refused code exchange. The page holds no
+   run key: its sign-in is an HttpOnly cookie naming the object that holds
+   the grant and the Cloudflare user `GET /user` proved, for an hour, and a
+   run is named for that user and its account, so signing in on another
+   device finds it (docs/SELF-DEPLOY-FLOW.md § 10). The CLI keeps its run key.
 2. **Account and plan.** The lean deployment runs on the free plan. R2 needs
-   a payment method on file. The sandbox needs Workers Paid and is off by
-   default: with it off, the upload leaves out the `KinuDevbox` binding, and
-   it never sends the container. No other subscription is needed. Not built:
-   the flow does not read the account's plan or R2 billing state, and the
-   page has no sandbox switch and no plan link.
+   a payment method on file. The computer needs Workers Paid and is off by
+   default. It is a Durable Object-managed container on Cloudflare's managed
+   image (`cloudflare/debian-trixie`, D55), so no image travels: the upload
+   declares `containers: [{ class_name: "KinuDevbox" }]`, and the `computer`
+   step makes its application on the class's namespace, as Wrangler makes one
+   with no image. Its golden snapshot installs the pinned tools from the store
+   bucket, which `computer-tools` fills from the channel
+   (`/downloads/devbox-tools/<sha>.tgz.<n>`, streamed through, two parts of at
+   most 256 MiB, under the R2 upload endpoint's 300 MB). Its registry token is
+   an account-owned token with Workers Containers Write that `computer-token`
+   mints, never asked. With the computer off, none of these runs, and the upload
+   leaves out the `KinuDevbox` binding and the container.
+   The page's preflight reads whether R2 is on; the plan it cannot read without
+   Billing, so it reports "unknown", and a run that meets Workers Free pauses
+   on it.
 3. **Name and address.** Instance name (default: `kinu`), and where it lives:
    `<name>.<subdomain>.workers.dev` by default, or a hostname in one of the
    account's zones, in which case the flow creates a Workers custom domain,
    which makes the DNS record.
-4. **Sign-in to your Kinu.** Cloudflare Access with one-time PIN, the way
-   Cloudflare OS does it, on the Zero Trust free tier. The flow creates the
-   Access application and a policy for the owner's email. The page sends only
-   that one email; adding more is not built. Kinu already verifies Access on
-   its control plane; the self-hosted profile verifies it on everything. No
-   OAuth app registrations at Google or GitHub, which is the part
-   non-technical people cannot do.
+4. **Sign-in to your Kinu.** Built-in sign-in (passkey or password): the
+   run mints a one-time setup link, `https://<address>/login?setup=<token>`,
+   shown when the run is done. The Worker holds only the token's digest, its
+   lapse (7 days) and the owner's Cloudflare email (`KINU_FIRST_OWNER_LINK`),
+   and the link creates the first owner once, with that email. No Zero Trust
+   setup and no Access application.
 5. **Models.** Default model from Workers AI's free tier. Optional keys for
    OpenAI, Anthropic and OpenRouter, stored as secrets on the deployment,
    never at kinu.run. Subscriptions shared from a connected device work the
@@ -128,10 +145,14 @@ straight to disk.
 6. **Deploy.** The steps run in a Durable Object on kinu.run that holds the
    session's access token only for the run, streams progress over the
    existing WebSocket surface, and wipes the token at the end. Each step is
-   idempotent, so a re-run resumes. In order: read the account and settle the
+   idempotent, so a re-run resumes; the upload tags its version, so a replay
+   reuses it rather than uploading another. A prerequisite refusal (R2 off,
+   Workers Paid, a refused sign-in) pauses the run, which asks again every
+   15 s; an hour into the pause it lets go of the grant, and keeps what it
+   minted and its setup link for seven days before deleting itself. In order: read the account and settle the
    address; create KV, the R2 buckets, the Vectorize index with the geometry
-   `release.json` states, the AI Gateway, the Access app and policy; seed the
-   runtime cache; mint the secrets; upload the Worker version with the
+   `release.json` states, the AI Gateway; seed the runtime cache; mint the
+   secrets and the first owner's setup link; upload the Worker version with the
    bindings and migrations from `release.json`; bind the address and deploy
    the new version at 0% beside the one serving; smoke-check `/api/health`
    through a version override, for the new version's id and the release's own
@@ -176,6 +197,58 @@ use the CLI's update channel with a different artifact name. The local
 instance serves `http://127.0.0.1` on the port the command prints, 8787 by
 default; TLS is the host's concern. Step 5 below lists which of these parts
 exist today.
+
+## Live runs
+
+### f44999, 2026-10-21
+
+**What was run:** the plan engine, run locally as the run object runs it, with a scoped token as its bearer.
+- Release 0.2.0+62b6c90c6 from kinu.run's channel, then rc30's (b04fac742) from a local channel.
+- Instances `kinu-sdtest-10210741`, `-10210754` and `-before-0802`.
+- Address on workers.dev; no computer and no mail.
+- The handover was left out, since it needs an OAuth grant.
+
+Each instance had a fresh deploy and then an update. Both serve the new version, and each instance is torn down. The
+account census afterwards equals the census before.
+
+**What it met:**
+- **AI gateway create** was refused with 7001 "Required" without `cache_invalidate_on_update`.
+- **The assets upload session** answers `errors: null, messages: null`, which the envelope used to reject.
+- **A fresh workers.dev address** answered HTTP 404 after its route was enabled.
+  - `-10210741`: enabled at 07:49:23, answered 404 then, served by 07:49:52 (up to 29 s).
+  - `-before-0802`: served after one 3 s wait.
+  - The smoke asks again for four times the longest seen (platform-catalog `workers_dev.fresh_route_404`).
+- **The override reached the serving version, not the staged one.** An update's smoke ran in the second its 0%
+  deployment was made, and the override still answered with the old version. Asked again, it reached the new one.
+- **Startup refusals:** 4 of 7 uploads of 62b6c90c6, and 1 of 8 of b04fac742, were refused with 10021
+  "Script startup exceeded CPU time limit." Each passed when asked again. The validator's readings fell in two modes:
+  363–377 ms and 777–949 ms (platform-catalog `worker.startup_ms`). The page names the refusal and offers a retry the
+  person presses.
+
+### The owner's free account, 2026-10-21
+
+**What was run:** feat/self-deploy's plan engine and its build 1 (0.2.0+8996748cf) from a test channel, on the owner's
+Workers Free account (8158b420), signed in by the owner's consent, without the computer.
+
+**What it met:**
+- **The plan:** Cloudflare's Containers list answers 401, code 1000, "Deploying containers requires the Workers Paid
+  plan". Preflight then read the plan as 'unknown' and raised no need.
+- **R2:** off, 10042 ("Please enable R2 through the Cloudflare Dashboard."). Preflight raised the R2 hand-off; the owner
+  turned R2 on.
+- **Accepted on Free:** KV, 6 R2 buckets, a Vectorize index and an AI Gateway.
+- **Duplicate assets:** two byte-identical assets, whose hash Cloudflare asks for once (631 assets, 630 hashes). The run
+  sent the hash twice and refused itself. Now each hash is sent once.
+- **Analytics Engine:** the version upload was refused with 10089, "You need to enable Analytics Engine". The owner
+  turned it on.
+- **Dynamic Workers:** the next upload was refused with 10195, "In order to use Dynamic Workers, you must switch to a
+  paid plan", because the Worker binds `LOADER`. That ended the run, and led to the Workers Paid decision
+  (SELF-DEPLOY-FLOW.md § 8).
+- **The consent screen:** it showed the optional API Tokens permission unticked (the owner's observation); the owner
+  ticked it. A token minted from the grant could carry no permission outside the grant's scopes: 1001, "The OAuth
+  session does not include the scopes required for the requested permission groups: "Account Analytics Read"".
+
+**Cleanup:** what the run made was torn down, the census equals the census before, the minted token was deleted, and the
+grant was revoked.
 
 ## Not in this design
 

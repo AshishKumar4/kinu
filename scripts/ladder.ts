@@ -2642,6 +2642,21 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'deploys eval-owned Cloudflare fixtures from this tree, copies staging tools, runs real containers and R2, and verifies complete cleanup.' },
   },
   {
+    run: 'bun scripts/deploy-oauth-client.ts check',
+    label: 'Deploy OAuth client registered as the door asks',
+    ciExempt: 'reads the deploy OAuth client on Cloudflare with an account token for OAuth clients, which no pull request holds.',
+    secrets: ['KINU_OAUTH_CLIENT_TOKEN'],
+    tier: 'deploy',
+    // 2026-10-21 on the 24-thread workstation: one GET, 1.1 s.
+    seconds: 1.1,
+    catches: 'a deploy OAuth client whose registered scopes differ from what every consent asks (core deploy/pkce.ts): '
+      + 'a scope the door asks and the client lacks, refused at the person\'s consent as invalid_scope, or one it holds '
+      + 'that no step asks for (f44999, 2026-10-21: the owner\'s consent refused zone-settings.write as zonesettings.write).',
+    blind: 'a scope Cloudflare refuses at consent though it is registered, which only a person\'s sign-in shows; the '
+      + 'redirect URIs and grant types; whether each scope still lets its step do what the step does.',
+    inputs: { kind: 'live', why: 'reads the client\'s registration on Cloudflare, which no hash over the tree stands for.' },
+  },
+  {
     run: 'bun scripts/upgrade-fixtures.ts',
     label: 'Upgrade fixtures, on the deployment',
     ciExempt: 'has nothing to read at CI: its subject is data the previous staging deploy wrote, read by the build that just '

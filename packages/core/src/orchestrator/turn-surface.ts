@@ -27,8 +27,8 @@ export interface TurnSkillSurface {
 }
 
 /**
- * Bounded by `stepContextLimit`: the ambient index is charged first, active bodies get the rest
- * (the derivation a remote MCP catalog's budget uses, tools/mcp-surface.ts). Never fails the turn: falls back to built-ins.
+ * Bounded by `stepContextLimit`: the ambient index is charged first, active bodies get the rest.
+ * Never fails the turn: falls back to built-ins.
  */
 export function resolveTurnSkills(opts: {
   vfs: VFS;

@@ -126,7 +126,7 @@ import { ActorSession, type ActorTurnLease,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID, READS_CHANGED_EVENT, readsOfTables,
   recordModelOperations, type ModelOperationSink,
-  McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
+  McpToolSurfaceCache, type McpServedSurface,
   defaultLoopOrigin,
   type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type SeatedActor, type WriteObserver,
   PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
@@ -1252,36 +1252,23 @@ export class LocalAgentSession {
       spill: this.rt.storage,
     }));
     this.mcpClose = () => conn.close();
-    await this.admitMcp(await this.modelCatalog.resolved());
+    await this.refreshMcp();
   }
 
   private mcpServed: McpServedSurface | null = null;
   private mcpSurface: McpToolSurfaceCache<ToolSet> | null = null;
-  private readonly mcpDeferred = new Set<string>();
 
   private emitMcp(message: string): void {
     this.emit({ type: 'background', event: 'mcp', message });
   }
 
-  /** Against the window the next request runs on, so a switched model re-admits what fits it. */
-  private async admitMcp(window: Pick<McpSurfaceBudget, 'contextWindow' | 'modelOutputLimit'>): Promise<void> {
+  private async refreshMcp(): Promise<void> {
     const served = this.mcpServed;
 
     if (served === null || this.mcpSurface === null) return;
 
-    this.extraTools = await this.mcpSurface.refresh(async () => served, {
-      contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit, nativeToolTokens: toolSurfaceTokens(this.tools),
-    });
+    this.extraTools = await this.mcpSurface.refresh(async () => served);
     this.mcpUnavailable = this.mcpSurface.unavailable;
-    const deferred = this.mcpSurface.deferred;
-
-    for (const d of deferred) {
-      if (!this.mcpDeferred.has(d.server)) this.emitMcp(`mcp: ${d.server} deferred: ${d.reason}`);
-    }
-
-    this.mcpDeferred.clear();
-
-    for (const d of deferred) this.mcpDeferred.add(d.server);
   }
 
   private mcpUnavailable: NonNullable<DynamicContextInput['unavailableMcp']> = [];
@@ -1801,9 +1788,9 @@ export class LocalAgentSession {
       ...(this.ancestors && { ancestors: this.ancestors }),
       toolset: (mode) => this.turnToolSet(mode),
       // What lies outside the workspace is its own agent's alone.
-      externalTools: async (window) => {
+      externalTools: async () => {
         if (this.actorReach.kind !== 'workspace') return {};
-        await this.admitMcp(window);
+        await this.refreshMcp();
 
         return this.extraTools;
       },
