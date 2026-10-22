@@ -5,6 +5,7 @@
  */
 import * as acorn from 'acorn';
 import { Effect } from 'effect';
+import * as v from 'valibot';
 import { renderThrownChain, settleSync } from '../obs/index';
 
 /** The module a program imports Kinu's namespaces from, on Node: `import { web } from 'kinu'`. */
@@ -44,34 +45,42 @@ const PARSE: acorn.Options = {
   ecmaVersion: 'latest', sourceType: 'module', allowReturnOutsideFunction: true, allowAwaitOutsideFunction: true, allowHashBang: true,
 };
 
+/** A node of the parsed program, as the walk reads it: anything with a string `type`. */
+const SyntaxNodeSchema = v.looseObject({ type: v.string() });
+
+type SyntaxNode = Readonly<Pick<v.InferOutput<typeof SyntaxNodeSchema>, 'type'>>;
+
+const NamedSchema = v.looseObject({ type: v.literal('Literal'), value: v.string() });
+
+/** `require('…')`, its one argument a string literal. */
+const RequireSchema = v.looseObject({
+  type: v.literal('CallExpression'), callee: v.looseObject({ type: v.literal('Identifier'), name: v.literal('require') }), arguments: v.looseTuple([NamedSchema]),
+});
+
+/** `import('…')`, its source a string literal. */
+const DynamicImportSchema = v.looseObject({ type: v.literal('ImportExpression'), source: NamedSchema });
+
 /** Every node of `root`, depth first. */
-function* nodesOf(root: acorn.Node): Generator<acorn.Node> {
-  const stack: acorn.Node[] = [root];
+function* nodesOf(root: SyntaxNode): Generator<SyntaxNode> {
+  const stack: SyntaxNode[] = [root];
 
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
     yield node;
+    const values: readonly unknown[] = Object.values(node);
 
-    for (const value of Object.values(node)) {
-      for (const child of Array.isArray(value) ? value : [value]) {
-        if (child instanceof acorn.Node) stack.push(child);
-      }
+    for (const value of values) {
+      const children: readonly unknown[] = Array.isArray(value) ? value : [value];
+
+      for (const child of children) if (v.is(SyntaxNodeSchema, child)) stack.push(child);
     }
   }
 }
 
-/** The literal a `require(…)` or `import(…)` names, or null for any other node. */
-function namedModule(node: acorn.Node): string | null {
-  if (node.type === 'ImportExpression' && 'source' in node && node.source instanceof acorn.Node && node.source.type === 'Literal' && 'value' in node.source) {
-    return typeof node.source.value === 'string' ? node.source.value : null;
-  }
+/** The module a `require('…')` or `import('…')` names, or null for any other node. */
+function namedModule(node: SyntaxNode): string | null {
+  if (v.is(RequireSchema, node)) return node.arguments[0].value;
 
-  if (node.type !== 'CallExpression' || !('callee' in node) || !('arguments' in node)) return null;
-  const { callee } = node;
-  const [first] = Array.isArray(node.arguments) ? node.arguments : [];
-
-  if (!(callee instanceof acorn.Node) || callee.type !== 'Identifier' || !('name' in callee) || callee.name !== 'require') return null;
-
-  return first instanceof acorn.Node && first.type === 'Literal' && 'value' in first && typeof first.value === 'string' ? first.value : null;
+  return v.is(DynamicImportSchema, node) ? node.source.value : null;
 }
 
 /** Where `code` runs; one that does not parse stays in the isolate, which reports its syntax error as it always has. */
