@@ -16,7 +16,7 @@
     "valibot": "^1.4.1"
   },
   "scripts": {
-    "check": "tsc --noEmit"
+    "check": "tsrs --noEmit"
   },
   "devDependencies": {
     "@ai-sdk/provider": "4.0.31",

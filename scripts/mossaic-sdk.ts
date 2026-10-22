@@ -100,21 +100,36 @@ export function verifyPinnedSource(
  *  lock names while it reaches that compiler. */
 export const PINNED_COMPILER_LINK = { key: 'rolldown-plugin-dts/typescript', target: '@mossaic/sdk/typescript' } as const;
 
+/** The `typescript` a package at `from` resolves, as Node walks up from it, no further than `root`: its real path. */
+function installedFrom(from: string, root: string): string | undefined {
+  for (let dir = from; ; dir = dirname(dir)) {
+    const candidate = join(dir, 'node_modules/typescript');
+
+    if (existsSync(candidate)) return realpathSync(candidate);
+
+    if (dir === root || dirname(dir) === dir) return undefined;
+  }
+}
+
 /**
  * The compiler upstream builds with, where the dts generator will find it.
  *
  * Measured 2026-09-20, bun 1.4.0, `linker = "hoisted"`. `typescript` is an
  * OPTIONAL PEER of `rolldown-plugin-dts` (range `^5 || ^6 || ~7.0`), and bun
- * hoists the plugin to the repo root, where that peer binds to Kinu's own
- * `typescript@7.0.2`. The plugin reads its compiler with
- * `createRequire(import.meta.url)`, so its location decides the version and no
- * flag, env var or cwd changes the answer. Two consequences, both measured:
- * `require('typescript')` at 7.0.2 returns a package with NO JS API
- * (`createProgram === undefined`), and the plugin's `isTS70Installed()` then
- * selects the `tsgo` generator, which passes `--rootDir <dirname(tsconfig)>`
- * — i.e. `sdk/` — while `sdk/tsconfig.json` includes `../shared` and
- * `../worker/core`. Every vendored file outside `sdk/` is then TS6059 and no
- * `.d.ts` is emitted at all.
+ * hoists the plugin to the repo root, where that peer bound to Kinu's own
+ * `typescript@7.0.2` while Kinu had one; since Kinu checks with tsrs
+ * (2026-10-22) the root has no `typescript` and the peer binds nothing. The
+ * plugin reads its compiler with `createRequire(import.meta.url)`, so its
+ * location decides the version and no flag, env var or cwd changes the answer.
+ * A 7.x there returns a package with NO JS API (`createProgram === undefined`),
+ * and the plugin's `isTS70Installed()` then selects the `tsgo` generator, which
+ * passes `--rootDir <dirname(tsconfig)>` — i.e. `sdk/` — while
+ * `sdk/tsconfig.json` includes `../shared` and `../worker/core`. Every vendored
+ * file outside `sdk/` is then TS6059 and no `.d.ts` is emitted at all. tsrs as
+ * that generator's binary (its `tsgo.path`) emits the declarations (95 files,
+ * with the parent as `rootDir`) but fails the same TS6059 under the `rootDir`
+ * the plugin forces (measured 2026-10-22): this one build stays on TypeScript 6,
+ * the SDK's own pinned compiler, with its classic API.
  *
  * Upstream's own lock binds `tsdown@0.22.3(typescript@6.0.3)`, and
  * `sdk/package.json` pins `typescript: ^6.0.3`, which bun DOES install — nested
@@ -131,17 +146,21 @@ export const PINNED_COMPILER_LINK = { key: 'rolldown-plugin-dts/typescript', tar
  * build tool's internals to make a resolution edge appear.
  */
 export function bindPinnedCompiler(root: string): void {
-  const compiler = join(root, MOSSAIC_SDK, 'node_modules/typescript');
+  const compiler = installedFrom(join(root, MOSSAIC_SDK), root);
 
-  if (!existsSync(compiler)) {
+  if (compiler === undefined) {
     throw new Error(
-      `${MOSSAIC_SDK}: the pinned typescript is not installed at ${compiler}. `
+      `${MOSSAIC_SDK}: the pinned typescript is not installed for it. `
       + 'Run `bun install` at the repository root first.',
     );
   }
 
   const peer = join(root, 'node_modules/rolldown-plugin-dts/node_modules/typescript');
   const plugin = realpathSync(join(root, 'node_modules/rolldown-plugin-dts'));
+
+  // Hoisted: with no `typescript` of Kinu's own at the root (tsrs checks Kinu, 2026-10-22), bun hoists the SDK's,
+  // and the plugin reaches it as pnpm's peer edge would. Nothing to bind.
+  if (!existsSync(peer) && installedFrom(plugin, root) === realpathSync(compiler)) return;
 
   // A linked worktree's plugin is the donor checkout's (`setup-worktree.sh`): writing the link there repointed the
   // donor's build at this tree, dangling once the tree was gone (2026-09-26). The donor's own install binds it, and

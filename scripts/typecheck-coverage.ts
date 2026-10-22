@@ -9,7 +9,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
-import { API } from 'typescript/unstable/async';
+import { API } from 'tsrs/unstable/async';
 import * as v from 'valibot';
 import { childrenRunning, exitOf } from './deadline';
 import { assertMeasured, finding } from './gate-ratchet';
@@ -125,10 +125,10 @@ const BUN_SUBCOMMANDS = new Set([
   'add', 'build', 'create', 'exec', 'init', 'install', 'link', 'pm', 'publish', 'remove', 'run', 'test', 'update', 'upgrade', 'x',
 ]);
 
-/** The project a `tsc` argument list compiles: `-p`/`--project`, else the tsconfig of the working directory. */
-function tscProject(args: readonly string[]): string {
+/** The project a `tsrs` argument list checks: `-p`/`--project`, else the tsconfig of the working directory. */
+function checkerProject(args: readonly string[]): string {
   if (args.some((arg) => arg === '-b' || arg === '--build')) {
-    throw new Error('typecheck-coverage: `tsc --build` compiles references too; this gate reads `tsc -p` programs only');
+    throw new Error('typecheck-coverage: `tsrs --build` checks references too; this gate reads `tsrs -p` programs only');
   }
 
   const at = args.findIndex((arg) => arg === '-p' || arg === '--project');
@@ -138,10 +138,10 @@ function tscProject(args: readonly string[]): string {
 }
 
 /**
- * The tsconfig projects `bun run check` passes to tsc, following `bun run`
+ * The tsconfig projects `bun run check` passes to tsrs, following `bun run`
  * references transitively. The list is derived from the command that actually
  * runs rather than duplicated here: each script body is read as shell
- * (`shell-words.ts`), so a quoted path, a `bunx tsc`, a continued line or a
+ * (`shell-words.ts`), so a quoted path, a `bunx tsrs`, a continued line or a
  * `-p` handed to another program reads as the shell would run it.
  */
 export function checkedProjects(
@@ -165,7 +165,7 @@ export function checkedProjects(
     for (const command of allCommands(parseShell(body))) {
       const run = invocation(command);
 
-      if (run?.program === 'tsc') projects.add(tscProject(run.args));
+      if (run?.program === 'tsrs') projects.add(checkerProject(run.args));
 
       if (run?.program !== 'bun') continue;
       const [sub, ...rest] = run.args;
@@ -235,7 +235,7 @@ export const BLIND_SPOTS: readonly string[] = [
   'WHETHER THE TESTS IN A COVERED DIRECTORY ASSERT ANYTHING — NOT MEASURED. '
   + 'This gate proves each runnable suite reaches the compiler. A suite that '
   + 'compiles and asserts nothing passes here.',
-  'SCRIPTS ARE READ AS THE SHELL SUBSET IN scripts/shell-words.ts. A `tsc` or `bun run` reached '
+  'SCRIPTS ARE READ AS THE SHELL SUBSET IN scripts/shell-words.ts. A `tsrs` or `bun run` reached '
   + 'through `sh -c`, `eval`, a variable or a shell function is not followed, and a `-p` whose value '
   + 'is an expansion is read as its source text.',
 ];

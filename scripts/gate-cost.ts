@@ -47,9 +47,8 @@ export const COST_TABLE = `${root}scripts/gate-cost.json`;
  */
 export const QUIET_LOAD = 2;
 
-/** A Kinu suite, dev server or typechecker. `tsc` is `bun run check` and takes
- *  the box for minutes. */
-export const KINU_WORK = /(?:vitest|vite|tsc|wrangler|workerd)/u;
+/** A Kinu suite, dev server or typechecker. `tsrs` is `bun run check`'s, and an editor's `tsc` still runs beside it. */
+export const KINU_WORK = /(?:vitest|vite|tsrs|tsc|wrangler|workerd)/u;
 
 /** An editor's language server (`tsc --lsp`) lives as long as the editor and idles: it holds no pool, and a
  *  wait on it never ends (2026-09-23, a browser row skipped behind one). */
