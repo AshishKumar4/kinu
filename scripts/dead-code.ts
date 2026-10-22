@@ -393,7 +393,7 @@ export function typedRuntime(name: string): string | undefined {
  * `node_modules/.bin/knip` and imports nothing. A `.json` counts a quoted value
  * (a plugin named in `.oxlintrc.json`, a binding in `wrangler.jsonc`), a `.sh`
  * or a workflow counts a command word (`bunx puppeteer browsers install chrome`
- * is the only reference `puppeteer` has, and `tsc` is the only one `typescript`
+ * is the only reference `puppeteer` has, and `tsrs` is the only one `tsrs`
  * has), and a `.css` counts an at-rule (`@import "@cloudflare/kumo/styles/…"`).
  * A `.md` counts nothing: prose about a package is not a use of it.
  */

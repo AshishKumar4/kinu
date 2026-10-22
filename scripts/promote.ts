@@ -35,7 +35,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { deployment, environmentArgs, r2Text, why, wrangler } from './infra-cloudflare';
@@ -44,7 +44,8 @@ import { type InfraEnvironment, deriveInfrastructure } from './infra-manifest';
 import { type Reset, ResetSchema, latestReset } from './reset';
 import { DEFAULT_TRIALS } from '../evals/src/config';
 import { compareEvalResults, evalGateVerdict, whyIncomplete } from '../evals/src/comparison';
-import { COMMIT_QUESTIONS } from '../evals/scripts/git';
+import { COMMIT_QUESTIONS, diffBetween } from '../evals/scripts/git';
+import { COMPUTER_PATHS, COMPUTER_VERDICT_MAX_AGE_MS, EVAL_SUITES, suiteTasks, type EvalSuite } from './evals-suites';
 import { parsePlatformReport } from '../evals/src/platform';
 import { parseResults, trials } from '../evals/src/results';
 import { EvalRunSchema, readEvalRun } from './evals-artifacts';
@@ -148,11 +149,12 @@ const EvalVerdictSchema = v.object({ pass: v.boolean(), reason: v.string() });
 
 export type EvalVerdict = v.InferOutput<typeof EvalVerdictSchema>;
 
-/** A run `dir` holds, refused unless it is the full statistical matrix of this checkout's tasks, its trials run on its
- *  own definitions; with its candidate's report and every tracked task file. */
+/** A run `dir` holds, refused unless it is the full statistical matrix of this checkout's tasks (of its suite's, for a
+ *  daily run of one), its trials run on its own definitions; with its candidate's report and those task files. */
 function fullMatrixRun(dir: string) {
   const run = readEvalRun(join(dir, 'run.json'));
-  const all = trackedFiles().filter(isEvalTask).sort();
+  const tracked = trackedFiles().filter(isEvalTask).sort();
+  const all = run.suite === undefined ? tracked : suiteTasks(run.suite, tracked);
 
   if (run.pass || run.trials < DEFAULT_TRIALS || run.taskFiles.length !== all.length
     || [...run.taskFiles].sort().some((file, index) => file !== all[index])) {
@@ -162,6 +164,17 @@ function fullMatrixRun(dir: string) {
   const candidate = readFileSync(join(dir, 'candidate', 'results.json'), 'utf8');
 
   return { run, all, candidate };
+}
+
+const ResultFilesSchema = v.looseObject({ testResults: v.array(v.looseObject({ name: v.string() })) });
+
+/** A results report kept to the task files `taskFiles` names: the run before a daily one may have run more tasks, the
+ *  whole matrix before the suites split. */
+export function resultsOfTasks(text: string, taskFiles: readonly string[]): string {
+  const report = v.parse(ResultFilesSchema, JSON.parse(text));
+  const kept = new Set(taskFiles.map((file) => basename(file)));
+
+  return JSON.stringify({ ...report, testResults: report.testResults.filter((file) => kept.has(basename(file.name))) });
 }
 
 function definedBy(run: { readonly definitions: string }, text: string): void {
@@ -198,8 +211,16 @@ const EvalProofSchema = v.object({ run: v.pick(EvalRunSchema, ['candidateBuild',
 
 export const evalsKey = (sha: string): string => `evals/${sha}.json`;
 
-/** The latest daily eval verdict, replaced by each day's run (`daily`). */
+/** The latest daily eval verdict, the fast suite's, replaced by each day's run (`daily`). */
 export const DAILY_EVALS_KEY = 'evals/daily.json';
+
+/** The latest computer suite's verdict, replaced by each of its runs. */
+export const COMPUTER_EVALS_KEY = 'evals/computer.json';
+
+/** The records a run of each suite writes; the whole matrix, both. */
+const SUITE_KEYS: Readonly<Record<EvalSuite | 'all', readonly string[]>> = {
+  fast: [DAILY_EVALS_KEY], computer: [COMPUTER_EVALS_KEY], all: [DAILY_EVALS_KEY, COMPUTER_EVALS_KEY],
+};
 
 /** How old the latest daily verdict may be and still let a build through: a day, and two hours for the run's own length. */
 export const DAILY_VERDICT_MAX_AGE_MS = 26 * 60 * 60 * 1000;
@@ -221,6 +242,8 @@ export const DailyOutcomeSchema = v.picklist(['improved', 'unchanged', 'inconclu
 export const DailyVerdictSchema = v.pipe(
   v.object({
     measured: v.string(), definitions: v.string(), baseline: v.nullable(v.string()), jobs: v.array(v.string()),
+    // The suite it ran; none, the whole matrix.
+    suite: v.optional(v.picklist([...EVAL_SUITES, 'all'])),
     // The first daily run (2026-10-21, at ce6dee5fe) recorded neither: it was a baseline, recorded as its trials ended.
     outcome: v.optional(DailyOutcomeSchema), measuredAt: v.optional(v.string()),
     verdict: EvalVerdictSchema, recordedAt: v.string(),
@@ -233,15 +256,15 @@ export const DailyVerdictSchema = v.pipe(
 export type DailyVerdict = v.InferOutput<typeof DailyVerdictSchema>;
 
 /**
- * The verdict of the daily run in `dir` (owner, 2026-10-21, "Daily gated release"): the build production serves,
- * measured once a day, against the run of the day before in `previous`, asking this checkout which definitions moved
- * between them as `compare.ts` does. With no day before, or nothing of it comparable, the run is the new baseline. Only a
- * regression holds promotion. A run that is not complete is no verdict, and the latest one stands.
+ * The verdict of the daily run in `dir` (owner, 2026-10-21, "Daily gated release"): its suite on the build its
+ * deployment serves, against the run of that suite before it in `previous` (kept to this run's tasks), asking this
+ * checkout which definitions moved between them as `compare.ts` does. With no run before, or nothing of it comparable,
+ * the run is the new baseline. A run that is not complete is no verdict, and the latest one stands.
  */
 export function readDailyVerdict(dir: string, previous: string | undefined, checkout: string) {
   const { run, all, candidate } = fullMatrixRun(dir);
 
-  if (run.daily !== true) throw new Error('this run is no daily run: its candidate is not the build production serves (evals-map --daily)');
+  if (run.daily !== true) throw new Error('this run is no daily run (evals-map --daily): it has a baseline leg of its own');
 
   if (!run.definitions.startsWith(checkout)) throw new Error(`this daily run ran the definitions of ${run.definitions}, not this checkout's ${checkout}`);
   definedBy(run, candidate);
@@ -258,7 +281,8 @@ export function readDailyVerdict(dir: string, previous: string | undefined, chec
   }
 
   const before = readEvalRun(join(previous, 'run.json'));
-  const baseline = readFileSync(join(previous, 'candidate', 'results.json'), 'utf8');
+  const baseline = resultsOfTasks(readFileSync(join(previous, 'candidate', 'results.json'), 'utf8'), run.taskFiles);
+  const beforeTasks = before.taskFiles.filter((file) => run.taskFiles.includes(file));
 
   const comparison = compareEvalResults(baseline, candidate, COMMIT_QUESTIONS, {
     baseline: parsePlatformReport(readFileSync(join(previous, 'candidate', 'platform.json'), 'utf8')),
@@ -273,7 +297,7 @@ export function readDailyVerdict(dir: string, previous: string | undefined, chec
   }
 
   const verdict = evalGateVerdict(comparison, {
-    candidate: null, baseline: whyIncomplete(baseline, { trials: before.trials, taskFiles: before.taskFiles, build: before.candidateBuild }),
+    candidate: null, baseline: whyIncomplete(baseline, { trials: before.trials, taskFiles: beforeTasks, build: before.candidateBuild }),
   });
 
   // One word for the gate: a verdict that refuses short of a regression (an incomplete day before) is no evidence.
@@ -282,32 +306,63 @@ export function readDailyVerdict(dir: string, previous: string | undefined, chec
   return { run, measuredAt, baseline: before.candidateBuild, outcome, verdict };
 }
 
-/**
- * Why `sha` may not be promoted on the evals, or undefined when it may: the latest daily verdict, 26 hours old at most and
- * no regression; else a passing verdict on `sha` itself, as a fix's own run records it (`evals <dir>`), which is how
- * promotion resumes after a regression (a P1) or a lapse.
- */
-export function evalGateRefusal(sha: string, daily: DailyVerdict | undefined, own: { readonly candidateBuild: string; readonly verdict: EvalVerdict } | undefined, now: number): string | undefined {
-  if (own !== undefined && own.candidateBuild.startsWith(sha) && own.verdict.pass) return undefined;
-  const fix = `a fix lands and its own run passes (bun scripts/evals-map.ts ${sha.slice(0, 9)} --record)`;
+/** The two suites' latest verdicts, and the files changed since the computer suite's build that it measures. */
+export interface GateVerdicts {
+  readonly daily: DailyVerdict | undefined;
+  readonly computer: DailyVerdict | undefined;
+  readonly computerChanged: readonly string[];
+}
 
-  if (daily === undefined) return `no eval verdict yet: no daily run has recorded one, and none names ${sha}; the daily run records the first`;
-  const age = now - Date.parse(daily.measuredAt);
-  const hours = age / 3_600_000;
-  const measured = `measured ${daily.measured.slice(0, 9)}, its trials ending ${daily.measuredAt}`;
+/** One suite's latest verdict as the gate holds it: its name, the oldest it may be, and the way past a hold. */
+interface SuiteHold {
+  readonly name: string;
+  readonly maxAgeMs: number;
+  readonly now: number;
+  readonly fix: string;
+}
 
-  if (daily.outcome === 'regressed') return `the latest daily eval verdict is a regression, a P1 (${measured}): ${daily.verdict.reason}; promotion holds until ${fix}`;
+/** Why one suite's latest verdict holds promotion, or undefined: a regression (a P1), an inconclusive run, or an age past
+ *  `maxAgeMs` from its trials' end. */
+function suiteHolds(verdict: DailyVerdict, { name, maxAgeMs, now, fix }: SuiteHold): string | undefined {
+  const age = now - Date.parse(verdict.measuredAt);
+  const measured = `measured ${verdict.measured.slice(0, 9)}, its trials ending ${verdict.measuredAt}`;
 
-  if (daily.outcome === 'inconclusive') {
-    return `the latest daily eval verdict is inconclusive, no evidence that nothing regressed (${measured}): ${daily.verdict.reason}; promotion holds until the next daily run, or ${fix}`;
+  if (verdict.outcome === 'regressed') return `the latest ${name} eval verdict is a regression, a P1 (${measured}): ${verdict.verdict.reason}; promotion holds until ${fix}`;
+
+  if (verdict.outcome === 'inconclusive') {
+    return `the latest ${name} eval verdict is inconclusive, no evidence that nothing regressed (${measured}): ${verdict.verdict.reason}; promotion holds until its next run, or ${fix}`;
   }
 
   // An unreadable time, or one ahead of this clock by more than its drift, is no fresher than an old one.
-  if (!(age >= -DAILY_CLOCK_DRIFT_MS && age <= DAILY_VERDICT_MAX_AGE_MS)) {
-    return `the latest daily eval verdict is ${hours.toFixed(1)} h old (${measured}), more than ${String(DAILY_VERDICT_MAX_AGE_MS / 3_600_000)} h; promotion holds until the daily run records one, or ${fix}`;
+  if (!(age >= -DAILY_CLOCK_DRIFT_MS && age <= maxAgeMs)) {
+    return `the latest ${name} eval verdict is ${(age / 3_600_000).toFixed(1)} h old (${measured}), more than ${String(maxAgeMs / 3_600_000)} h; promotion holds until its next run records one, or ${fix}`;
   }
 
   return undefined;
+}
+
+/**
+ * Why `sha` may not be promoted on the evals, or undefined when it may (owner, 2026-10-21, "Fast daily, Minecraft
+ * weekly"): the daily verdict, 26 hours old at most and no regression; and the computer suite's, 8 days old at most, no
+ * regression, and measuring a build with every change to the computer and desktop that `sha` has. Until the computer
+ * suite records its first verdict, the daily one alone decides. A passing verdict on `sha` itself, as a fix's own run
+ * records it (`evals <dir>`), lets it through: that is how promotion resumes after a regression (a P1) or a lapse.
+ */
+export function evalGateRefusal(sha: string, verdicts: GateVerdicts, own: { readonly candidateBuild: string; readonly verdict: EvalVerdict } | undefined, now: number): string | undefined {
+  if (own !== undefined && own.candidateBuild.startsWith(sha) && own.verdict.pass) return undefined;
+  const fix = `a fix lands and its own run passes (bun scripts/evals-map.ts ${sha.slice(0, 9)} --record)`;
+  const { daily, computer, computerChanged } = verdicts;
+
+  if (daily === undefined) return `no eval verdict yet: no daily run has recorded one, and none names ${sha}; the daily run records the first`;
+
+  const held = suiteHolds(daily, { name: 'daily', maxAgeMs: DAILY_VERDICT_MAX_AGE_MS, now, fix })
+    ?? (computer === undefined ? undefined : suiteHolds(computer, { name: 'computer', maxAgeMs: COMPUTER_VERDICT_MAX_AGE_MS, now, fix }));
+
+  if (held !== undefined || computer === undefined || computerChanged.length === 0) return held;
+
+  return `${computerChanged.slice(0, 5).join(', ')}${computerChanged.length > 5 ? ` and ${String(computerChanged.length - 5)} more` : ''} changed the computer `
+    + `or the desktop since the computer suite measured ${computer.measured.slice(0, 9)}: promotion holds until that suite runs on a build with `
+    + 'them (daily-evals.sh computer, on staging)';
 }
 
 /** `sha`'s own eval verdict, as `evals <dir>` recorded it, or undefined. */
@@ -324,12 +379,20 @@ function ownPass(records: Records, sha: string): boolean {
   return proof !== undefined && proof.run.candidateBuild.startsWith(sha) && proof.verdict.pass;
 }
 
+/** The latest verdict `key` holds, or undefined. */
+function storedVerdict(records: Records, key: string): DailyVerdict | undefined {
+  const stored = records.read(key);
+
+  return stored === undefined ? undefined : v.parse(DailyVerdictSchema, JSON.parse(stored));
+}
+
 /** The comparison may finish before the deploy writes its verified record. Keep them independent. */
 function assertEvalGate(sha: string, records: Records): void {
-  const daily = records.read(DAILY_EVALS_KEY);
+  const computer = storedVerdict(records, COMPUTER_EVALS_KEY);
   const proof = ownVerdict(records, sha);
+  const computerChanged = computer === undefined ? [] : diffBetween(computer.measured, sha, { paths: COMPUTER_PATHS, names: true }).split('\n').filter((line) => line !== '');
 
-  const refused = evalGateRefusal(sha, daily === undefined ? undefined : v.parse(DailyVerdictSchema, JSON.parse(daily)),
+  const refused = evalGateRefusal(sha, { daily: storedVerdict(records, DAILY_EVALS_KEY), computer, computerChanged },
     proof === undefined ? undefined : { candidateBuild: proof.run.candidateBuild, verdict: proof.verdict }, Date.now());
 
   if (refused !== undefined) throw new Error(`${sha} cannot be promoted: ${refused}`);
@@ -802,7 +865,6 @@ async function evalsCommand({ sha, records }: Context, [dir = '']: readonly stri
   return 0;
 }
 
-/** The daily run in `dir`, against the day before's in `previous`, recorded as the latest daily verdict. */
 /** What a day that compares may find and replace a standing regression with. */
 const CLEARS_REGRESSION: ReadonlySet<DailyVerdict['outcome']> = new Set(['unchanged', 'improved', 'regressed']);
 
@@ -828,28 +890,40 @@ export function dailyReplacementRefusal(
   return undefined;
 }
 
-/** How `daily` exits on a held outcome, for the runner to say which (`daily-evals.sh`): any other is 0. */
+/** How `daily` exits on a held outcome it recorded, for the runner to say which (`daily-evals.sh`): any other is 0. */
 const DAILY_EXITS: Partial<Record<DailyVerdict['outcome'], number>> = { regressed: 3, inconclusive: 4 };
 
+/** How `daily` exits when it recorded nothing because a standing regression keeps its record: apart from 3, which
+ *  records one, so the runner does not count this run as the suite's latest. */
+const KEPT_REGRESSION_EXIT = 5;
+
+/** The daily run in `dir`, against its suite's run before it in `previous`, recorded as that suite's latest verdict; a
+ *  run of the whole matrix as both suites'. */
 async function dailyCommand({ sha, records }: Context, [dir = '', previous]: readonly string[]): Promise<number> {
   const { run, baseline, outcome, verdict, measuredAt } = readDailyVerdict(dir, previous, sha);
-  const latest = records.read(DAILY_EVALS_KEY);
-  const read = latest === undefined ? undefined : v.safeParse(DailyVerdictSchema, JSON.parse(latest));
-  const standing = read?.success === true ? read.output : undefined;
-  const refused = dailyReplacementRefusal(standing, { outcome, measuredAt }, ownPass(records, run.candidateBuild));
-
-  if (refused !== undefined) {
-    console.error(`promote: ${refused}`);
-
-    return standing?.outcome === 'regressed' ? DAILY_EXITS.regressed ?? 1 : 1;
-  }
+  const suite = run.suite ?? 'all';
+  const passed = ownPass(records, run.candidateBuild);
 
   const daily: DailyVerdict = {
-    measured: run.candidateBuild, definitions: run.definitions, baseline, jobs: run.jobs, outcome, verdict, measuredAt, recordedAt: new Date().toISOString(),
+    measured: run.candidateBuild, definitions: run.definitions, baseline, jobs: run.jobs, suite, outcome, verdict, measuredAt, recordedAt: new Date().toISOString(),
   };
 
-  records.write(DAILY_EVALS_KEY, JSON.stringify(daily));
-  console.log(`promote: the daily eval verdict on ${run.candidateBuild.slice(0, 9)}${baseline === null ? '' : ` against ${baseline.slice(0, 9)}`}, `
+  const refusals = SUITE_KEYS[suite].flatMap((key) => {
+    const standing = storedVerdict(records, key);
+    const refused = dailyReplacementRefusal(standing, { outcome, measuredAt }, passed);
+
+    if (refused === undefined) records.write(key, JSON.stringify(daily));
+
+    return refused === undefined ? [] : [{ key, refused, regressed: standing?.outcome === 'regressed' }];
+  });
+
+  for (const { key, refused } of refusals) console.error(`promote: ${key}: ${refused}`);
+
+  // A record that kept its regression keeps promotion held, whatever another took; any refusal is no clean record.
+  if (refusals.some((held) => held.regressed)) return KEPT_REGRESSION_EXIT;
+
+  if (refusals.length > 0) return 1;
+  console.log(`promote: the ${suite} eval verdict on ${run.candidateBuild.slice(0, 9)}${baseline === null ? '' : ` against ${baseline.slice(0, 9)}`}, `
     + `from armada ${run.jobs.join(', ')}: ${outcome === 'regressed' ? 'A REGRESSION, a P1' : outcome}: ${verdict.reason}`);
 
   return DAILY_EXITS[outcome] ?? 0;

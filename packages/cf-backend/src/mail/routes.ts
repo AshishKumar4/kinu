@@ -14,7 +14,7 @@ import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import {
-  err, importantMail, json, MAIL_MESSAGE_FIELDS, mailUsernameRefusal, MAIL_VIEWS, MAIL_WAKES, MailAddress, mailText, mailThreadText, objectNamed, ownerCaller, safeJson,
+  err, importantMail, json, MAIL_MESSAGE_FIELDS, mailDeploymentAliases, mailUsernameRefusal, MAIL_VIEWS, MAIL_WAKES, MailAddress, mailText, mailThreadText, objectNamed, ownerCaller, safeJson,
   type MailListQuery, type ObjectNamespace, type OwnerCapabilityEnv,
 } from '@kinu.run/core';
 import { attempt, diagnostics, settle } from '@kinu.run/core/obs';
@@ -32,6 +32,7 @@ type MailboxReach = Pick<MailboxDO, 'open' | 'boxes' | 'list' | 'thread' | 'upda
 export interface MailRoutesEnv extends OwnerCapabilityEnv {
   readonly EMAIL_DOMAIN?: string;
   readonly MAIL_ACCOUNTS?: string;
+  readonly MAIL_ALIASES?: string;
   readonly CONTROL_PLANE_ADMINS?: string;
   readonly MAILNAME: ObjectNamespace<unknown, Pick<MailNameDO, 'lookup' | 'claim'>>;
   readonly MAILBOX: ObjectNamespace<unknown, MailboxReach>;
@@ -105,6 +106,10 @@ async function usernameRefusal(c: MailContext, username: string): Promise<'inval
   const refusal = mailUsernameRefusal(username);
 
   if (refusal !== null) return refusal;
+  const aliases = mailDeploymentAliases(c.env.MAIL_ALIASES);
+
+  // The deployment's own addresses are its config's; a mistaken config keeps every name until it is fixed.
+  if (aliases === 'malformed' || aliases.has(username)) return 'reserved';
   const holder = await objectNamed(c.env.MAILNAME, username).lookup();
 
   return holder !== null && holder.user_id !== c.get('identity').userId ? 'taken' : null;

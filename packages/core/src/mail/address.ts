@@ -9,6 +9,7 @@
  * Any of them may carry `+<tag>`: the same box, the tag kept with the message. A box's path is its address's local
  * part without the username: `''`, `<workspace>`, `<agent>.<workspace>`.
  */
+import * as v from 'valibot';
 
 /** One label: lowercase letters, digits and inner hyphens, at most 20 long, as a username is. */
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,18}[a-z0-9])?$/u;
@@ -70,6 +71,31 @@ const RESERVED_USERNAMES: ReadonlySet<string> = new Set([
   'postmaster', 'abuse', 'admin', 'administrator', 'noreply', 'no-reply', 'mail', 'mailer-daemon', 'ops', 'dmarc', 'security',
   'support', 'root', 'www', 'hostmaster', 'webmaster', 'info', 'help', 'billing',
 ]);
+
+const MailLabelSchema = v.pipe(v.string(), v.regex(LABEL));
+
+/** `MAIL_ALIASES`: JSON of the deployment's own labels to the usernames whose boxes they reach. */
+const DeploymentAliasesSchema = v.pipe(
+  v.string(), v.parseJson(),
+  // A JSON array is a record of its indexes to valibot: an object it must be.
+  v.check((value) => typeof value === 'object' && value !== null && !Array.isArray(value), 'an object of labels to usernames'),
+  v.record(MailLabelSchema, MailLabelSchema),
+);
+
+/**
+ * The deployment's own addresses (`MAIL_ALIASES`, docs/MAIL.md §1): a name such as `privacy` delivered to the own box of
+ * the account holding a username, so a legal or contact address reaches its operator through Kinu's mail. Declared,
+ * never claimed: nobody can take one, and only the deployment's config makes one. Unset is none; a value that is not
+ * an object of labels to labels is refused as the deployment's mistake, never read as none.
+ */
+export function mailDeploymentAliases(raw: string | undefined): ReadonlyMap<string, string> | 'malformed' {
+  if (raw === undefined || raw.trim() === '') return new Map();
+  const parsed = v.safeParse(DeploymentAliasesSchema, raw);
+
+  if (!parsed.success || Object.entries(parsed.output).some(([alias, username]) => alias === username)) return 'malformed';
+
+  return new Map(Object.entries(parsed.output));
+}
 
 /** Why `username` cannot be anyone's: not a label (`invalid`), or one mail systems need (`reserved`); null when it can. */
 export function mailUsernameRefusal(username: string): 'invalid' | 'reserved' | null {
