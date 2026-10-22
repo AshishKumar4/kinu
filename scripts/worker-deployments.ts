@@ -39,19 +39,20 @@ export async function listDeployments(worker: string, api?: string): Promise<rea
 }
 
 /**
- * Whether a deploy other than `version`'s own landed inside `window`: only then can a code update have ended the
- * version's calls. Otherwise the runtime's "code was updated" is the version's own failure, and it counts as one. With
- * no version, any deploy inside counts. A list as long as the API lists that does not reach back to the window cannot
- * say, and fails the read.
+ * How long after a deploy lands its code update can still reset the calls of the version it replaced: the longest
+ * measured. A reset later than this after the newest deploy is not that deploy's.
  */
-export function deployLanded(deployments: readonly Deployment[], window: { readonly from: number; readonly to: number }, version = ''): boolean {
+export const ROLLOVER_SPAN_MS = 300_000;
+
+/**
+ * Who caused a code-update reset at `at`: `deploy` when a deploy other than `version`'s own landed at or before it, within
+ * {@link ROLLOVER_SPAN_MS}; otherwise `own`, the version's own failure, whatever deploy came after it. `unknown` when a
+ * list as long as the API lists does not reach back past the span, which cannot say.
+ */
+export function resetCause(deployments: readonly Deployment[], at: number, version = ''): 'deploy' | 'own' | 'unknown' {
   const others = deployments.filter((deployment) => !(deployment.versions.length === 1 && deployment.versions[0] === version));
 
-  if (others.some((deployment) => deployment.at > window.from && deployment.at <= window.to)) return true;
+  if (others.some((deployment) => deployment.at <= at && at - deployment.at <= ROLLOVER_SPAN_MS)) return 'deploy';
 
-  if (deployments.length >= DEPLOYMENTS_LISTED && deployments.every((deployment) => deployment.at > window.from)) {
-    throw new Error(`the ${String(deployments.length)} deployments listed all landed after ${new Date(window.from).toISOString()}, so whether one landed inside the window is unknown`);
-  }
-
-  return false;
+  return deployments.length >= DEPLOYMENTS_LISTED && deployments.every((deployment) => deployment.at > at - ROLLOVER_SPAN_MS) ? 'unknown' : 'own';
 }
