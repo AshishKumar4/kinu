@@ -309,6 +309,15 @@ async function closeWorkspace(session: KinuPublicSession, reads: ClosingReads | 
   return { events, ledgers, output, costUsd, workspace };
 }
 
+/** How many of a turn's checks passed, of those judged: one whose judgement could not be had is said apart, not counted
+ *  as failed (`EvalCheck.unjudged`). */
+function checksPassed(checks: readonly EvalCheck[]): string {
+  const judged = checks.filter((check) => check.unjudged !== true);
+  const unjudged = checks.length - judged.length;
+
+  return `${String(judged.filter((check) => check.pass).length)} of ${String(judged.length)} checks passed${unjudged > 0 ? `, ${String(unjudged)} unjudged` : ''}`;
+}
+
 /**
  * One trial of one task on the deployment: a fresh workspace, then per turn the seeded files, the
  * prompt, the wait until the workspace settles, and the checks. A failed check ends its part, because
@@ -414,8 +423,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
             watching: { waiting: say, cancelled: stop },
           }) };
 
-          say(`turn ${String(turn)} ${result.outcome.status} in ${String(Math.round(result.turnWallMs / 1000))}s, `
-            + `${String(result.checks.filter((check) => check.pass).length)} of ${String(result.checks.length)} checks passed`
+          say(`turn ${String(turn)} ${result.outcome.status} in ${String(Math.round(result.turnWallMs / 1000))}s, ${checksPassed(result.checks)}`
             + `${result.outcome.message === undefined ? '' : `: ${result.outcome.message}`}`);
           turns.push(result);
 

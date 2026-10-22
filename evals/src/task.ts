@@ -55,7 +55,12 @@ export type EvalTask = {
 };
 
 /** `graded: false`: recorded with the trial for its reader, and never a reason it fails (`EvalVerifier.record`). */
-export type EvalCheck = { id: string; pass: boolean; evidence?: JsonValue; graded?: false };
+/**
+ * One check's outcome. `graded: false`, a recorded check, judges nothing; `rung: true`, a step of partial credit on the
+ * way to the pass, judges nothing in its trial but its pass rate is compared (`comparison.ts`); `unjudged: true`, a
+ * judgement that could not be had, counts toward no rate.
+ */
+export type EvalCheck = { id: string; pass: boolean; evidence?: JsonValue; graded?: false; rung?: true; unjudged?: true };
 
 /** Whether a check judges its trial. */
 export function graded(check: EvalCheck): boolean {

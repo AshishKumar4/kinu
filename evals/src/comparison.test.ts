@@ -18,6 +18,8 @@ type Trial = {
   steps?: { actor: string; inputTokens: number; cacheReadTokens: number }[];
   toolFailures?: { tool: string; cause: string; count: number }[];
   workspace?: string;
+  /** Rungs it climbed (`true`), missed (`false`), or could not be judged on (`'unjudged'`), by id. */
+  rungs?: Record<string, boolean | 'unjudged'>;
 };
 
 function outcomeOf(trial: Trial) {
@@ -67,7 +69,12 @@ function fileResult(taskId: string, trials: readonly Trial[], side: { productSha
               part: 'build', turn: 1,
               outcome: outcomeOf(trial),
               checks: trial.refused === undefined && trial.reset === undefined && trial.hung === undefined && trial.cancelled === undefined
-                ? [{ id: trial.failed ?? 'builds', pass: trial.pass, evidence: trial.pass ? { calls: 3 } : { answered: 1 } }]
+                ? [
+                  { id: trial.failed ?? 'builds', pass: trial.pass, evidence: trial.pass ? { calls: 3 } : { answered: 1 } },
+                  ...Object.entries(trial.rungs ?? {}).map(([id, climbed]) => ({
+                    id, pass: climbed === true, graded: false, rung: true, ...climbed === 'unjudged' && { unjudged: true },
+                  })),
+                ]
                 : [],
             }],
           },
@@ -146,8 +153,36 @@ describe('compareEvalResults', () => {
     const row = comparison.rows[0];
 
     expect(row?.reason === null ? row.checks : null).toEqual([
-      { check: 't1 builds', baseline: { attempted: 10, passed: 10 }, candidate: { attempted: 10, passed: 3 }, pValue: fisherExact({ passed: 10, trials: 10 }, { passed: 3, trials: 10 }) },
+      {
+        check: 't1 builds', baseline: { attempted: 10, passed: 10, rung: false }, candidate: { attempted: 10, passed: 3, rung: false }, rung: false,
+        pValue: fisherExact({ passed: 10, trials: 10 }, { passed: 3, trials: 10 }),
+      },
     ]);
+  });
+
+  // Main, 2026-10-22: Minecraft passes 0 of 5 on every build, so its pass rate cannot move; its rungs (a block placed, a
+  // column of 2, of 3) can, and a build that climbs them less far regresses.
+  test("a task whose pass cannot move regresses when a rung's rate falls significantly, and names the rung", () => {
+    const climbing = (placed: number, unjudged = 0) => Array.from({ length: 5 }, (_unused, index): Trial => ({
+      pass: false, rungs: { 'placed-a-block': index < unjudged ? 'unjudged' : index < placed, 'column-of-2': false },
+    }));
+
+    const fell = compareEvalResults(report('t', climbing(5), BASE), report('t', climbing(0), NEXT));
+    const held = compareEvalResults(report('t', climbing(5), BASE), report('t', climbing(4), NEXT));
+
+    expect({ fell: fell.verdict, why: evalGateVerdict(fell, { baseline: null, candidate: null }).reason, held: held.verdict })
+      .toEqual({ fell: 'regressed', why: expect.stringContaining('Climbed less far: t t1 placed-a-block 5/5 \u2192 0/5'), held: 'unchanged' });
+  });
+
+  test('a judgement that could not be had counts toward no rate, never as a miss', () => {
+    // Every candidate trial's judge call failed (as 2026-10-21's ten did, on the login's usage limit): no rate to fall.
+    const unjudged = compareEvalResults(report('t', Array.from({ length: 5 }, (): Trial => ({ pass: false, rungs: { 'placed-a-block': true } })), BASE),
+      report('t', Array.from({ length: 5 }, (): Trial => ({ pass: false, rungs: { 'placed-a-block': 'unjudged' } })), NEXT));
+
+    const row = unjudged.rows[0];
+
+    expect({ verdict: unjudged.verdict, rate: row?.reason === null ? row.checks.find((check) => check.check === 't1 placed-a-block')?.candidate : null })
+      .toEqual({ verdict: 'unchanged', rate: { attempted: 0, passed: 0, rung: true } });
   });
 
   // oh-my-pi holds 95–100% after a conversation's first request (the owner). ChatGPT spends the owner's plan and never gates.

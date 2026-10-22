@@ -72,6 +72,13 @@ function stepTokens(step: StepUsage): string {
     + `${count(uncached)} uncached · ${count(step.cacheReadTokens)} cache read · ${count(step.cacheWriteTokens)} cache write · ${count(step.outputTokens)} output`;
 }
 
+/** A recorded check's answer: a judgement that could not be had says so, never "no" (`EvalCheck.unjudged`). */
+function recordedAnswer(check: { readonly pass: boolean; readonly unjudged?: true }): string {
+  if (check.unjudged === true) return 'unjudged';
+
+  return check.pass ? 'yes' : 'no';
+}
+
 /** One trial's section: its checks turn by turn, its errors, and its transcript, whole unless `clip` trims it. */
 export function renderTrial(run: HarnessRun, verdict: { status: 'passed' | 'failed'; durationMs: number }, clip: Clip = WHOLE): string {
   const { taskId, arm } = run.session.metadata;
@@ -93,7 +100,7 @@ export function renderTrial(run: HarnessRun, verdict: { status: 'passed' | 'fail
 
     for (const check of checks) {
       lines.push(check.graded === false
-        ? `- recorded \`${check.id}\` (${check.pass ? 'yes' : 'no'})${check.evidence === undefined ? '' : `: ${value(check.evidence)}`}`
+        ? `- recorded \`${check.id}\` (${recordedAnswer(check)})${check.evidence === undefined ? '' : `: ${value(check.evidence)}`}`
         : `- ${check.pass ? 'pass' : 'FAIL'} \`${check.id}\`${check.pass || check.evidence === undefined ? '' : `: ${value(check.evidence)}`}`);
     }
   }
