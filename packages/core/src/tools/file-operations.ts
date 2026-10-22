@@ -6,7 +6,7 @@ import { readText, type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js
 import { isVfsError, VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import * as v from 'valibot';
-import { addressingHint, formatPath, resolvePath, type PathPlanes } from '../vfs/resolve';
+import { addressingHint, formatPath, prefixedAddresses, resolvePath, type PathPlanes } from '../vfs/resolve';
 import { writeConditionally, type ObservedFile, type WriteGuarantee } from '../vfs/conditional-write';
 import type { CheckpointFiles, Memory, VfsWriteReport } from '../types/primitives';
 import type { TurnContextBudget } from '../context-budget';
@@ -100,7 +100,32 @@ interface VfsFailure {
   readonly error: string;
 }
 
-function vfsFailure(planes: PathPlanes, input: { error: unknown }, action: string, path: string): VfsFailure {
+/**
+ * Where a path that named nothing names a file under a plane's prefix (`prefixedAddresses`): the first reading there, so
+ * the refusal says which address was meant, and the next call needs no guess (H3, 2026-10-21: 11 trials read
+ * `skills/slates/SKILL.md`, which starts at the home, for `vfs://skills/slates/SKILL.md`). One spelling is kept: only a
+ * reading that is there is named.
+ */
+async function meantAddress(at: { readonly vfs: Pick<VFS, 'stat'>; readonly planes: PathPlanes }, path: string): Promise<string | null> {
+  for (const reading of prefixedAddresses(path, at.planes)) {
+    // A reading not there (missing) is no address; any other failure is the plane's, and the refusal it was helping
+    // stands without the address.
+    const there = await tolerateAsync(async () => at.vfs.stat(reading.at), 'enoent');
+
+    if (there !== undefined && there !== null) return reading.reference;
+  }
+
+  return null;
+}
+
+/** What a path that named nothing is told: the address meant, where one is there, then where the path landed. */
+async function missedPath(at: { readonly vfs: Pick<VFS, 'stat'>; readonly planes: PathPlanes }, path: string): Promise<string> {
+  const meant = await meantAddress(at, path);
+
+  return `${meant === null ? '' : `did you mean \`${meant}\`? `}${addressingHint(at.planes, path)}`;
+}
+
+async function vfsFailure(at: { readonly vfs: Pick<VFS, 'stat'>; readonly planes: PathPlanes }, input: { error: unknown }, action: string, path: string): Promise<VfsFailure> {
   const err = input.error;
 
   if (err instanceof FileRefusalError) return { reason: err.verdict, error: err.message };
@@ -125,7 +150,7 @@ function vfsFailure(planes: PathPlanes, input: { error: unknown }, action: strin
   }
 
   // Only addressing mistakes get where the path landed; other errors carry their own reason.
-  const hint = err.code === 'ENOENT' ? `: ${addressingHint(planes, path)}` : '';
+  const hint = err.code === 'ENOENT' ? `: ${await missedPath(at, path)}` : '';
 
   return { reason, error: `${err.message}${hint}` };
 }
@@ -241,12 +266,12 @@ function fileOps(deps: FileDeps) {
 
     try { output = await read(); }
     catch (cause) {
-      const refused = vfsFailure(deps.planes, { error: cause }, action, path);
+      const refused = await vfsFailure(deps, { error: cause }, action, path);
 
       return failure(refused.reason, refused.error);
     }
 
-    return output ?? failure('missing', `No path at ${path}: ${addressingHint(deps.planes, path)}`);
+    return output ?? failure('missing', `No path at ${path}: ${await missedPath(deps, path)}`);
   };
 
   const searchLines = (content: string, query: string): { line: number; text: string }[] =>
@@ -359,7 +384,7 @@ function fileOps(deps: FileDeps) {
       if (shown !== null) return shown;
       scanned = await scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit ?? FILE_READ_LINES, maxChars });
     } catch (err) {
-      const vfsFail = vfsFailure(deps.planes, { error: err }, 'read', path);
+      const vfsFail = await vfsFailure(deps, { error: err }, 'read', path);
 
       return failure(vfsFail.reason, vfsFail.error);
     }
@@ -427,7 +452,7 @@ function fileOps(deps: FileDeps) {
         target = await landing(path, true);
         ({ text: existing, observed } = await readObserved(target.path));
       } catch (err) {
-        const vfsFail = vfsFailure(deps.planes, { error: err }, 'write', path);
+        const vfsFail = await vfsFailure(deps, { error: err }, 'write', path);
 
         return failure(vfsFail.reason, vfsFail.error);
       }
@@ -446,7 +471,7 @@ function fileOps(deps: FileDeps) {
           noteFileChange(path, existing === null ? 'created' : 'replaced');
         }, observed);
       } catch (err) {
-        const vfsFail = vfsFailure(deps.planes, { error: err }, 'write', path);
+        const vfsFail = await vfsFailure(deps, { error: err }, 'write', path);
 
         return failure(vfsFail.reason, vfsFail.error);
       }
@@ -480,7 +505,7 @@ function fileOps(deps: FileDeps) {
         if (held.text === null) throw new VfsError('ENOENT', 'no such file, open', path);
         ({ text: current, observed } = { text: held.text, observed: held.observed });
       } catch (err) {
-        const vfsFail = vfsFailure(deps.planes, { error: err }, 'edit', path);
+        const vfsFail = await vfsFailure(deps, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);
 
         return failure(vfsFail.reason, vfsFail.error);
@@ -510,7 +535,7 @@ function fileOps(deps: FileDeps) {
           noteFileChange(path, 'edited');
         }, observed);
       } catch (err) {
-        const vfsFail = vfsFailure(deps.planes, { error: err }, 'edit', path);
+        const vfsFail = await vfsFailure(deps, { error: err }, 'edit', path);
         ledger.recordEdit(path, vfsFail.reason);
 
         return failure(vfsFail.reason, vfsFail.error);
