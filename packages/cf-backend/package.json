@@ -84,7 +84,6 @@
     "magic-string": "^0.30.21",
     "miniflare": "5.20260926.0-alpha",
     "tailwindcss": "^4.2.2",
-    "typescript": "^7.0.2",
     "vite": "^8.0.8",
     "vitest": "^4.1.12",
     "workerd": "^1.20260930.2",

@@ -1,5 +1,5 @@
 /**
- * Typed `{{#if}}` flags, red-proven: runs the gate's `tsc` over fixtures/template-flags, where
+ * Typed `{{#if}}` flags, red-proven: runs the gate's `tsrs` over fixtures/template-flags, where
  * violations.ts must fail naming the slot and allowed.ts must compile. Deliberately no
  * `@ts-expect-error`: it never says which error fired.
  */
@@ -22,20 +22,20 @@ interface Diagnostic {
   readonly text: string;
 }
 
-/** What one `tsc` run over the fixture project reported. */
+/** What one `tsrs` run over the fixture project reported. */
 interface CompileReport {
   readonly status: number;
   readonly diagnostics: readonly Diagnostic[];
 }
 
 /**
- * `tsc --noEmit` via the repo's own binary. Indented continuation lines carry the slot name, so
+ * `tsrs --noEmit` via the repo's own binary. Indented continuation lines carry the slot name, so
  * they fold into their diagnostic.
  */
 async function compileFixtures(): Promise<CompileReport> {
-  const tsc = join(repoRoot, 'node_modules', '.bin', 'tsc');
+  const checker = join(repoRoot, 'node_modules', '.bin', 'tsrs');
 
-  const run = await runToExit([tsc, '--noEmit', '--pretty', 'false', '-p', fixtureProject], {
+  const run = await runToExit([checker, '--noEmit', '--pretty', 'false', '-p', fixtureProject], {
     cwd: repoRoot,
   });
 

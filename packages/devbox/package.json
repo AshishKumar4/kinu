@@ -19,7 +19,7 @@
     "valibot": "^1.4.1"
   },
   "scripts": {
-    "check": "tsc --noEmit && tsc --noEmit -p tests/workerd",
+    "check": "tsrs --noEmit && tsrs --noEmit -p tests/workerd",
     "proof": "cd proof && lake build",
     "test": "bun test --preload ../../scripts/test-preload.ts --timeout=0 ../../scripts/bench-devbox-independence.test.ts tests/*.test.ts bench/*.test.ts && vitest run tests/workerd"
   },
