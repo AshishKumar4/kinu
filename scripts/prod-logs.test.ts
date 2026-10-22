@@ -5,7 +5,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { activationDisruptions, canaryActivations } from './durability-canary-telemetry';
 import { deployLanded } from './worker-deployments';
 import {
-  alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings, versionRead,
+  alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, readAgainWhile, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings, versionRead,
   versionSignals, workWindow,
 } from './prod-logs';
 
@@ -253,10 +253,10 @@ describe('what one deployed version did, as a deploy reports it', () => {
 
 // Staging 2026-10-08: an 08:19:16Z row was absent from a read at 10:25Z and present at 10:50Z.
 describe('a read that issues a verdict', () => {
-  /** Answers each count in turn, its last forever; `refused` is a read the API answered 500, `rejected` one it answered
-   *  400, a query it will never take. The window ends at `windowEnd`, the first read starts at `startAt`, and each read
-   *  takes `readMs`; reads settle a `holdMs` past it. */
-  const reader = (counts: readonly (number | 'refused' | 'rejected')[], { windowEnd = 0, startAt = 0, readMs = 0, holdMs = 10 } = {}) => {
+  /** Answers each count in turn, its last forever; `refused` is a read the API answered 500, `timedout` one its gateway
+   *  answered 504, `rejected` one it answered 400, a query it will never take. The window ends at `windowEnd`, the first
+   *  read starts at `startAt`, and each read takes `readMs`; reads settle a `holdMs` past it. */
+  const reader = (counts: readonly (number | 'refused' | 'timedout' | 'rejected')[], { windowEnd = 0, startAt = 0, readMs = 0, holdMs = 10 } = {}) => {
     let clock = startAt;
     let at = 0;
     const startedAt: number[] = [];
@@ -269,6 +269,8 @@ describe('a read that issues a verdict', () => {
         clock += readMs;
 
         if (count === 'refused') return Promise.reject(new KinuError('unavailable', 'telemetry query answered 500'));
+
+        if (count === 'timedout') return Promise.reject(new KinuError('timeout', 'telemetry query answered 504'));
 
         return count === 'rejected' ? Promise.reject(new KinuError('bad_input', 'telemetry query answered 400')) : Promise.resolve(count);
       },
@@ -318,10 +320,11 @@ describe('a read that issues a verdict', () => {
     expect(old.startedAt).toEqual([0, 2]);
   });
 
-  // Staging 2026-10-14: the API answered 500 to 12 of 80 reads, which named nothing about the version.
-  test('reads again after a refused read, which neither agrees nor disagrees', async () => {
+  // Staging 2026-10-14: the API answered 500 to 12 of 80 reads, which named nothing about the version. Staging after
+  // 2fc6aa727, 2026-10-21: its gateway answered 504 to the deploy's own window, which gave up at once and was red.
+  test.each(['refused', 'timedout'] as const)('reads again after a %s read, which neither agrees nor disagrees', async (refusal) => {
     // Answered at 2, 4, 8 and 10; refused at 0 and 6.
-    expect(await settledRead(reader(['refused', 5, 5, 'refused', 5, 5, 5, 5]))).toEqual({ settled: true, value: 5, reads: 4, lateRows: 0 });
+    expect(await settledRead(reader([refusal, 5, 5, refusal, 5, 5, 5, 5]))).toEqual({ settled: true, value: 5, reads: 4, lateRows: 0 });
   });
 
   test('fails with the refusal when no read is answered before the cap', async () => {
@@ -497,4 +500,63 @@ test('a full list that does not reach back to the window cannot say, and fails',
 
   expect(() => deployLanded(newer, deployWindow, 'v1')).toThrow('whether one landed inside the window is unknown');
   expect(deployLanded(newer.slice(0, 3), deployWindow, 'v1')).toBe(false);
+});
+
+// Staging after 2fc6aa727, 2026-10-21: one 502 on each kept window's single read kept all five and reported each red.
+describe('a kept window read beside the deploy\'s own', () => {
+  /** A read answering each of `answers` in turn: a number, the gateway's 502, or a 400 the API will never take. */
+  const answering = (answers: readonly (number | 'gateway' | 'rejected')[]) => {
+    let at = 0;
+
+    return {
+      asked: () => at,
+      read: async () => {
+        const answer = answers[Math.min(at++, answers.length - 1)] ?? 0;
+
+        if (answer === 'gateway') throw new KinuError('unavailable', 'telemetry query answered 502');
+
+        if (answer === 'rejected') throw new KinuError('bad_input', 'telemetry query answered 400');
+
+        return answer;
+      },
+    };
+  };
+
+  const reading = () => {
+    const ended = Promise.withResolvers<void>();
+
+    return { ended: false, done: ended.promise, end: ended.resolve };
+  };
+
+  test('is read again after the gateway\'s refusal while the own read lasts, and answers', async () => {
+    const own = reading();
+    const kept = answering(['gateway', 'gateway', 7]);
+
+    expect({ read: await readAgainWhile(own, kept.read, async () => {}), asked: kept.asked() }).toEqual({ read: 7, asked: 3 });
+  });
+
+  test('keeps its last refusal once the own read has ended, and fails at once on any other failure', async () => {
+    const own = reading();
+    const kept = answering(['gateway', 7]);
+    const rejected = answering(['rejected', 7]);
+
+    own.ended = true;
+    own.end();
+
+    await expect(readAgainWhile(own, kept.read, async () => {})).rejects.toThrow('answered 502');
+    await expect(readAgainWhile(reading(), rejected.read, async () => {})).rejects.toThrow('answered 400');
+    expect({ kept: kept.asked(), rejected: rejected.asked() }).toEqual({ kept: 1, rejected: 1 });
+  });
+
+  test('stops asking when the own read ends during its wait, keeping the refusal', async () => {
+    const own = reading();
+    const kept = answering(['gateway', 7]);
+    const waiting = readAgainWhile(own, kept.read, async () => new Promise<void>(() => {}));
+
+    own.ended = true;
+    own.end();
+
+    await expect(waiting).rejects.toThrow('answered 502');
+    expect(kept.asked()).toBe(1);
+  });
 });

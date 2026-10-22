@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { auditTracing, tracerCallSites } from './tracing-gate';
+import { version } from 'esbuild';
+import { auditTracing, observeSpans, tracerCallSites } from './tracing-gate';
+import { childrenRunning } from './deadline';
 import type { SpanObservations, TracingConfig } from './tracing-gate';
 import { isProductSource, readMatching } from './sources';
 
@@ -69,5 +71,15 @@ describe('tracing — red in every direction it claims', () => {
 
   test('the corrected form is silent', () => {
     expect(auditTracing([TRACED], 1, CLEAN)).toEqual([]);
+  });
+});
+
+// The row's runner reads the processes of a run the moment it exits: esbuild's service, which outlives a build until its
+// parent's exit closes its stdin, was found there and failed the row as a leftover (deploy of 324bd728d, 2026-10-21).
+describe('tracing — the gate ends what it starts', () => {
+  test('esbuild\'s service has exited once the spans are observed', async () => {
+    await observeSpans();
+
+    expect(childrenRunning(process.pid, `--service=${version}`)).toEqual([]);
   });
 });

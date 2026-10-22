@@ -1,5 +1,6 @@
-// Defends: a Stop below an agent doing the same on every host. The cloud retired a stopped task agent alone and left
-// its own hires under a retired hirer; the CLI retired them first. Both now run core's `stopAgentsBelow`.
+// Defends: a Stop below an agent doing the same on every host. The cloud's directory retired a stopped task agent's
+// hires with it but left them counted working on its roster; the CLI dismissed them first. Both now run core's
+// `stopAgentsBelow` (cf-backend/tests/unit-stop-below.test.ts drives the cloud's).
 import { describe, expect, test } from 'bun:test';
 import { stopAgentsBelow } from '../src/subagents/hire-lifecycle';
 import type { WorkspaceActor } from '../src/identity/workspace-actors';
