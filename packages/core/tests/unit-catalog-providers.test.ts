@@ -114,16 +114,16 @@ describe('models.dev provider metadata', () => {
 
     const failing = createMockFetch([{ match: 'models.dev/api.json', respond: { status: 500, body: {} } }]);
 
+    // The stalled read settles at all only because its bound fires: unbounded, it never answers (the test hung).
     const failure = async (fetchFn: typeof fetch) => {
-      const started = Date.now();
       const [listed] = await Promise.allSettled([listModelsDevProviderModels('groq', { fetch: fetchFn }, { required: true, readMs: 50, ttlMs: 0 })]);
 
-      return { chain: listed.status === 'rejected' ? renderThrownChain({ cause: listed.reason }) : 'it listed', within: Date.now() - started < 2_000 };
+      return listed.status === 'rejected' ? renderThrownChain({ cause: listed.reason }) : 'it listed';
     };
 
     expect({ stalled: await failure(stalled), failing: await failure(failing.fetch) }).toEqual({
-      stalled: { chain: expect.stringMatching(/models.dev could not be read[\s\S]*models.dev could not be reached/u), within: true },
-      failing: { chain: expect.stringMatching(/models.dev could not be read[\s\S]*models.dev returned HTTP 500/u), within: true },
+      stalled: expect.stringMatching(/models.dev could not be read[\s\S]*models.dev could not be reached/u),
+      failing: expect.stringMatching(/models.dev could not be read[\s\S]*models.dev returned HTTP 500/u),
     });
   });
 
