@@ -918,12 +918,21 @@ export const PAGE_TABS = `[
 ].filter((name, index, names) => name !== '' && names.indexOf(name) === index)`;
 
 /**
+ * Press `item` on the menu of the row or tile `row`: its ⋯ (ui/Menu's `data-row-menu`), then the item in the menu it
+ * opens, which is drawn in a portal and not inside the row (62d972325 moved every row menu onto ui/Menu, 2026-10-21).
+ */
+export async function pressRowMenu(page: Page, row: string, item: string): Promise<void> {
+  await page.click(`${row} [data-row-menu]`);
+  await page.waitForSelector(`[role="menu"][data-open] ${item}`);
+  await page.click(`[role="menu"][data-open] ${item}`);
+}
+
+/**
  * Open the share dialog and its choices, as a person checks them before sharing: its one-line summary's Change opens
  * them in place, and their limits line is drawn once the capability graph has supplied it.
  */
 export async function openSlateShareDialog(page: Page, tile: string): Promise<void> {
-  await page.click(`${tile} [data-drive-menu]`);
-  await page.click(`${tile} [data-drive-share-slate]`);
+  await pressRowMenu(page, tile, '[data-drive-share-slate]');
   await until(page, 'the share dialog\'s Change', `document.querySelector('[role="dialog"] [data-share-options]') !== null`);
   await page.click('[role="dialog"] [data-share-options]');
   await until(page, 'the share dialog\'s limits', `document.querySelector('[role="dialog"] [data-share-limits]') !== null`);

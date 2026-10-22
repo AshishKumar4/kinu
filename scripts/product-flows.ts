@@ -38,7 +38,7 @@ import {
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
-  ACTIVE_TAB_INDEX, CHATS, CHAT_COMPOSER_LIVE, CHAT_IDLE, FILES_FAILURE, type FlowTarget, type FrameLedger, INSPECTOR_WIDTH, PAGE_TABS, type RpcCounts, type SendSite, countRpc, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, pagesTraffic, painted, recordRenderTasks, removeFlowWorkspace, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn,
+  ACTIVE_TAB_INDEX, CHATS, CHAT_COMPOSER_LIVE, CHAT_IDLE, FILES_FAILURE, type FlowTarget, type FrameLedger, INSPECTOR_WIDTH, PAGE_TABS, type RpcCounts, type SendSite, countRpc, createFlowWorkspace, frameLedger, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, pagesTraffic, painted, pressRowMenu, recordRenderTasks, removeFlowWorkspace, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn,
 } from './browser-page';
 
 
@@ -1643,8 +1643,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
     const droppedText = read.ok ? await read.text() : `(the Drive answered ${String(read.status)})`;
 
     await relisted(page, async () => {
-      await page.click(`[data-drive-entry="${folder}"] [data-drive-menu]`);
-      await page.click(`[data-drive-entry="${folder}"] [data-drive-rename]`);
+      await pressRowMenu(page, `[data-drive-entry="${folder}"]`, '[data-drive-rename]');
       await nameInDialog(page, renamed);
     });
 
@@ -1658,8 +1657,7 @@ export async function driveKeepsWhatIsDone(target: FlowTarget): Promise<DriveVer
     // the verdict's finding, and the `finally` below removes what is left.
     for (const entry of [renamed, file, dropped].filter((listed) => afterRename.includes(listed))) {
       await relisted(page, async () => {
-        await page.click(`[data-drive-entry="${entry}"] [data-drive-menu]`);
-        await page.click(`[data-drive-entry="${entry}"] [data-drive-delete]`);
+        await pressRowMenu(page, `[data-drive-entry="${entry}"]`, '[data-drive-delete]');
         await until(page, 'the delete confirmation', `document.querySelector('[data-drive-delete-confirm]') !== null`);
         await page.click('[data-drive-delete-confirm]');
       });
@@ -1917,8 +1915,7 @@ export async function slateSharesReachingNothing(target: FlowTarget): Promise<Sl
     share = await page.$eval(mine, (element) => element.getAttribute('data-drive-share'));
     const tile = `[data-drive-share="${share ?? ''}"]`;
 
-    await page.click(`${tile} [data-drive-menu]`);
-    await page.click(`${tile} [data-drive-stop-sharing]`);
+    await pressRowMenu(page, tile, '[data-drive-stop-sharing]');
     await until(page, 'the stop confirmation', `document.querySelector('[data-drive-stop-confirm]') !== null`);
     await page.click('[data-drive-stop-confirm]');
     await until(page, 'the share to leave the Drive', `document.querySelector(${JSON.stringify(tile)}) === null`);
