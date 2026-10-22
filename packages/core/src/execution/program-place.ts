@@ -6,7 +6,7 @@
 import * as acorn from 'acorn';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { renderThrownChain, settleSync } from '../obs/index';
+import { settleSync } from '../obs/index';
 
 /** The module a program imports Kinu's namespaces from, on Node: `import { web } from 'kinu'`. */
 export const KINU_PROGRAM_MODULE = 'kinu';
@@ -83,13 +83,8 @@ function namedModule(node: SyntaxNode): string | null {
   return v.is(DynamicImportSchema, node) ? node.source.value : null;
 }
 
-/** Where `code` runs; one that does not parse stays in the isolate, which reports its syntax error as it always has. */
-export function programPlace(code: string): ProgramPlace {
-  const parsed = settleSync(Effect.try({ try: (): acorn.Program | { readonly unparsed: string } => acorn.parse(code, PARSE), catch: (cause) => ({ cause }) }).pipe(
-    Effect.catch((failed) => Effect.succeed({ unparsed: renderThrownChain(failed) })),
-  ));
-
-  if ('unparsed' in parsed) return { kind: 'isolate' };
+/** Where a parsed program runs: on Node with a static import, or a `require`/`import()` of a workspace module. */
+function placeOf(parsed: acorn.Program): ProgramPlace {
   const imports: ProgramImport[] = [];
 
   for (const statement of parsed.body) {
@@ -108,4 +103,13 @@ export function programPlace(code: string): ProgramPlace {
   }
 
   return { kind: 'isolate' };
+}
+
+/** Where `code` runs; one that does not parse stays in the isolate, which reports its syntax error as it always has. */
+export function programPlace(code: string): ProgramPlace {
+  return settleSync(Effect.try({ try: () => acorn.parse(code, PARSE), catch: (cause) => ({ cause }) }).pipe(
+    Effect.map(placeOf),
+    Effect.catchIf((failed) => failed.cause instanceof SyntaxError, () => Effect.succeed<ProgramPlace>({ kind: 'isolate' })),
+    Effect.catch((failed) => Effect.die(failed.cause)),
+  ));
 }

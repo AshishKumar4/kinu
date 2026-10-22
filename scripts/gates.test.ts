@@ -530,7 +530,7 @@ describe('native egress constraints — red in every governed direction', () => 
     [kinu, 'this.#nativeExports.KinuEgress({ props: params })', 'this.#nativeExports.KinuEvents({ props: params })', 'does not bind the vault'],
     [base, 'await this.outboundPolicy()', '{ routes: {} }', 'does not bind the vault'],
     [router, 'this.#fallback = policy.fallback', 'this.#fallback = undefined', 'does not bind the vault'],
-    [worker, "return forwardEgress(request, this.env, parseEgressPrincipal(this.ctx), { self: exports.default, github: githubRecorder(this.env.OrchestratorAgent, this.ctx), seam: 'container' });", 'return fetch(request);', 'does not enter credential injection'],
+    [worker, "return forwardEgress(request, this.env, principal, { self: exports.default, github: githubRecorder(this.env.OrchestratorAgent, this.ctx), seam: 'container' });", 'return fetch(request);', 'does not enter credential injection'],
     [sender, 'owner.resolveEgressInjection(', 'owner.unrelatedInjection(', 'does not consult the owner vault'],
     [policy, 'return yield* sendOut(request, env, authority.vault, github);', 'return yield* Effect.promise(() => fetch(request));', 'does not leave through sendOut'],
     [router, '?? outbound.fallback', '', 'owned routes do not precede'],
