@@ -608,6 +608,32 @@ describe('a caller stops the MCP call it made', () => {
     h.close();
   });
 
+  // Main, 2026-10-21: every connect of a server is one of its dials, so none shares the vendor's client with another; a
+  // sign-in's end used to establish its server beside a warmup's redial of it.
+  test("a sign-in's end while a warmup redials its server waits for the redial, and connects once it is done", async () => {
+    const h = harness();
+    await seedServer(h, 'srv1');
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    const owner = await testOwner();
+
+    // Failed, so the warmup redials it and the sign-in's end establishes it in earnest: the vendor's establish passes
+    // over a ready connection (`client-BnYbNT3z.js:2192`).
+    liveConnection(h, 'srv1').connectionState = 'failed';
+    const redial = hangNextMcpConnect();
+    const warming = h.userDO.userMcp_warmConnections(owner);
+
+    await redial.entered;
+    const ended = h.userDO.userMcp_handleOAuthCallback(owner, 'https://kinu.example.com/api/user/mcp/callback?state=signed.srv1&code=c');
+
+    // The sign-in's end reads the server while the redial's connect is out.
+    await nextTurn();
+    redial.release();
+    await Promise.all([warming, ended]);
+
+    expect({ overlapped: recordedMcpLifecycle().overlapped, established: recordedMcpLifecycle().established.includes('srv1') }).toEqual({ overlapped: [], established: true });
+    h.close();
+  });
+
   // Release review, 2026-10-05: deleting a workspace revoked its token first, so its MCP calls ran on and it could not cancel them.
   test('deleting a workspace stops the MCP calls it is making', async () => {
     const h = harness({ durableObjectId: OWNER_ID });
