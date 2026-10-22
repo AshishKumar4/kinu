@@ -1,8 +1,8 @@
 {
-  "date": "2026-10-08",
+  "date": "2026-10-21",
   "base": "cloudflare/debian-trixie",
-  "sandboxVersion": "1.0.0",
-  "sandbox": "docker.io/cloudflare/sandbox@sha256:5bc187515bad0d9d486a4f1476f7d8ad39fe97c57965f044e4b0a0dcc93eac06",
+  "sandboxVersion": "1.0.2",
+  "sandbox": "docker.io/cloudflare/sandbox@sha256:c2733169f130f73ba4f1cc0de169570936145ed013fbdf63707bf7d5386a4b81",
   "squashfuse": {
     "url": "https://github.com/vasi/squashfuse/releases/download/0.1.103/squashfuse-0.1.103.tar.gz",
     "sha256": "42d4dfd17ed186745117cfd427023eb81effff3832bab09067823492b6b982e7",
@@ -11,12 +11,12 @@
   "binaries": {
     "devbox-block-lower": "5f7b8bf06f0b55ae6625361c29c72b8d2df48cda765ed82196e7a5922d613f20",
     "devbox-squashfuse": "477158afaa0e965535c168618c44e12a2b5af0189fcd663603fddfbbf67d57e9",
-    "sandbox-shim": "a2973893e48d9b80c4ea9d763affdb5ea0135c94ed467716c8e3a57add032d97"
+    "sandbox-shim": "ca804ac454895015a4e35d4ee9f5e6d6da2ffd2483076d4562f18329658b2e79"
   },
   "files": {
     "Cargo.toml": "e1a269141da13953785f1fbaa6a18edb10cf644fdc9a710858ac02f31e426f83",
     "Cargo.lock": "42b0f84a3a09ad9cca1e51c35fb750d6fff123ce5c27f99996ced24c98d22109",
-    "tools-setup.sh": "7a502ddf29ae31ddf16526e339651a0045151c21cab5218aae48dbe147eb7d76",
+    "tools-setup.sh": "cdef747ff4faafe04eed4373993af4656353cf7985b8e6e3ac03b23adbbacf1c",
     "tools-build.sh": "3c301a53661845a20b5f8492b177c99b0ec8616855163bb676db55eb2794448f",
     "src/index.rs": "e26e54ebcc3893d7ba84470512bde960e239aec9ea7c89b05dd66992417961d7",
     "src/main.rs": "3b436f50857187a45ff68f9c5e72366c18c5504a8902b2e2f0dfd81383a0ead6",
@@ -25,8 +25,8 @@
     "src/storage.rs": "39e73d186faabde0724715283eba6c0f2bf2e7132b64e22307351da51ec4d60d"
   },
   "tools": {
-    "sha256": "2932a11ccfc4e54b93a7de54a3d5acc8bfb6ed4a0cb8032a93398ee25673c78c",
-    "bytes": 358408784
+    "sha256": "334f371234f45c386854a19f0da81d26fe7571898c4a1407fad7fdb0ded0c848",
+    "bytes": 358365987
   },
   "rust": {
     "version": "1.93.1",
@@ -36,6 +36,6 @@
     "base": "cloudflare/debian-trixie",
     "debian": "snapshot.debian.org 20261002T000000Z",
     "where": "armada recipe: tools-setup.sh as root, tools-build.sh as the user",
-    "job": "20261008204556-b92029c0"
+    "job": "20261021130128-5627fd4f"
   }
 }

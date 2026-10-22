@@ -253,7 +253,7 @@
       "name": "@kinu.run/devbox",
       "version": "0.1.0",
       "dependencies": {
-        "@cloudflare/sandbox": "1.0.0",
+        "@cloudflare/sandbox": "1.0.2",
         "effect": "4.0.0-rc.117",
         "valibot": "^1.4.1",
       },
@@ -488,7 +488,7 @@
 
     "@cloudflare/puppeteer": ["@cloudflare/puppeteer@1.4.0", "", { "dependencies": { "@puppeteer/browsers": "2.2.4", "debug": "^4.3.5", "devtools-protocol": "0.0.1299070", "ws": "^8.18.0" } }, "sha512-39lo96Y7ErOJFmu/KIJU1VLaOibhynx/BauKCZOW5+RVH/mG0jZrAEGJlqCdx5ZxLHyWppm78YX3jLNPCBB+fA=="],
 
-    "@cloudflare/sandbox": ["@cloudflare/sandbox@1.0.0", "", { "dependencies": { "aws4fetch": "1.0.20", "zod": "4.5.4" } }, "sha512-+TZVuCey6OBDTvPLWisq4Ie7/R5Zy3zFyYOFCNRpdEIyQsKq3xwzpctonE43DfZ+wYZvvu6QYpR138PayDjF+A=="],
+    "@cloudflare/sandbox": ["@cloudflare/sandbox@1.0.2", "", { "dependencies": { "aws4fetch": "1.0.20", "zod": "4.6.7" } }, "sha512-JPPASKBQ5PE1XLy18zzljh3oIyDleu8lK3jW/HaSGq+eh9aJMl5zwAgobuP7I2FLuRMlqA18te5MIPEBF56jlg=="],
 
     "@cloudflare/unenv-preset": ["@cloudflare/unenv-preset@2.16.2", "", { "peerDependencies": { "unenv": "2.0.0-rc.24", "workerd": ">1.20260305.0 <2.0.0-0" }, "optionalPeers": ["workerd"] }, "sha512-JBP1+Z7ZSNG/d4mRP+y8VC5dka3tZVMLEZRvS+rzQ4DGV1EoxRFQckcJTTkXbHSQiTj0DtNI01Zwb/V2fX0mvQ=="],
 

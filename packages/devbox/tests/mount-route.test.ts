@@ -77,7 +77,7 @@ test('a marker from a mount made at the box prefix is refused: its s3fs sends ke
 
 });
 
-/** The marker exactly as sandbox-shim 1.0.0 writes it for a root mount (`s3_mount/model.rs:41-92`): no
+/** The marker exactly as sandbox-shim 1.0.2 writes it for a root mount (`s3_mount/model.rs:41-92`, unchanged since 1.0.0): no
  *  `keyPrefix`, since `skip_serializing_if` drops an absent one, and each s3fs option's value or `null`. */
 function rootMountMarker(routeId: string) {
   return {
