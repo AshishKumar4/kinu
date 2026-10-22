@@ -189,9 +189,11 @@ export function addressingHint(planes: PathPlanes, written?: string): string {
   return settleSync(Effect.map(landed, (where) => [...(where === '' ? [] : [where]), ...reading].join('; ')));
 }
 
-/** A plain path read under one plane's prefix: the reference, where it lands, and the view it is in, if one. */
+/** A plain path read under one plane's prefix: the reference, its path on the agent's file plane, where that lands on
+ *  this machine, and the view it is in, if one. */
 export interface PrefixedReading {
   readonly reference: string;
+  readonly vfs: string;
   readonly at: string;
   readonly view: string | undefined;
 }
@@ -212,7 +214,7 @@ function prefixedCandidates(written: string, landed: string, planes: PathPlanes)
 
     return Effect.match(vfsPath(row.prefix, rest, planes, reference), {
       onFailure: () => null,
-      onSuccess: (vfs) => ({ reference, at: onMachine(vfs, planes), view: planes.views.find((name) => holds(`/${name}`, vfs)) }),
+      onSuccess: (vfs) => ({ reference, vfs, at: onMachine(vfs, planes), view: planes.views.find((name) => holds(`/${name}`, vfs)) }),
     });
   });
 
@@ -235,12 +237,18 @@ function prefixedReadings(written: string, landed: string, planes: PathPlanes): 
     : `\`${reading.reference}\` is in the ${reading.view} view`)));
 }
 
-/** Where `written`, a path that named nothing, would land under each plane's prefix instead: a caller that can look
- *  names the one there (`file` tool, H3). None for a path that names no file at all. */
+/**
+ * Where `written`, a path that named nothing, would land under each plane's prefix instead, for a caller that can look
+ * to name the one there (`file` tool, H3). Only the agent's own files: never a reading on a computer or a device, where
+ * a look would wake a stopped box or reach a person's machine for a guess. None for a path that names no file at all.
+ */
 export function prefixedAddresses(written: string, planes: PathPlanes): PrefixedReading[] {
+  const executors = Object.values(EXECUTOR_MOUNTS);
+
   return settleSync(Effect.matchEffect(resolvedPath(written, planes), {
     onFailure: () => Effect.succeed([]),
-    onSuccess: (at) => prefixedCandidates(written, at.absolute, planes),
+    onSuccess: (at) => Effect.map(prefixedCandidates(written, at.absolute, planes),
+      (read) => read.filter((reading) => !executors.some((mount) => holds(mount, reading.vfs)))),
   }));
 }
 

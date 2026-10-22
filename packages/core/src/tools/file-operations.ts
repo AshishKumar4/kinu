@@ -6,6 +6,7 @@ import { readText, type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js
 import { isVfsError, VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { addressingHint, formatPath, prefixedAddresses, resolvePath, type PathPlanes } from '../vfs/resolve';
 import { writeConditionally, type ObservedFile, type WriteGuarantee } from '../vfs/conditional-write';
 import type { CheckpointFiles, Memory, VfsWriteReport } from '../types/primitives';
@@ -16,7 +17,7 @@ import { applyFileEdits, formatFileSlice, FILE_READ_LINE_CHARS, FILE_READ_LINES,
 import { FileRefusalError } from '../types/file-edits';
 import { readFileHead, scanFileWindow, type ScannedFile } from './file-scan';
 import type { TurnFileLedger, FileEditOutcomeReason, FileSeenNeed } from '../vfs/file-ledger';
-import { KinuError, renderThrownChain, tolerateAsync } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, settle, toKinuError, tolerateAsync } from '../obs/index';
 import { requireBuild } from '../execution/work-mode';
 import { uncheckpointedSentence } from '../execution/exec-result';
 import { RESIDENT_TEXT_MAX_BYTES, type VfsMountRouting } from '../vfs/mounts';
@@ -108,14 +109,26 @@ interface VfsFailure {
  */
 async function meantAddress(at: { readonly vfs: Pick<VFS, 'stat'>; readonly planes: PathPlanes }, path: string): Promise<string | null> {
   for (const reading of prefixedAddresses(path, at.planes)) {
-    // A reading not there (missing) is no address; any other failure is the plane's, and the refusal it was helping
-    // stands without the address.
-    const there = await tolerateAsync(async () => at.vfs.stat(reading.at), 'enoent');
-
-    if (there !== undefined && there !== null) return reading.reference;
+    if (await readingThere(at.vfs, reading.at)) return reading.reference;
   }
 
   return null;
+}
+
+/** Whether a reading is there to suggest. One its plane could not stat is recorded and not suggested: the refusal it
+ *  was helping stands as it would have, a miss, rather than become that failure. */
+async function readingThere(vfs: Pick<VFS, 'stat'>, path: string): Promise<boolean> {
+  return settle(Effect.tryPromise({
+    try: async () => vfs.stat(path),
+    catch: (cause) => toKinuError({ doing: `looking for ${path} to suggest it`, cause, otherwise: 'io' }),
+  }).pipe(Effect.match({
+    onFailure: (unread) => {
+      if (unread.code !== 'missing') diagnostics.failure('file.suggestion_unread', unread);
+
+      return false;
+    },
+    onSuccess: (stat) => stat !== null,
+  })));
 }
 
 /** What a path that named nothing is told: the address meant, where one is there, then where the path landed. */

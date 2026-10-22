@@ -532,6 +532,39 @@ test("a relative path that named nothing is told the plane's address that names 
   });
 });
 
+// Review finding (2026-10-22): a guess is never looked for on a computer or a device, where the look would wake a
+// stopped box or reach a person's machine; and a look its plane cannot answer leaves the refusal a miss.
+test("a miss's suggestion looks only at the agent's own files, and a look that fails leaves the miss as it was", async () => {
+  const files = memoryVfs({ '/computer/workspace/app.ts': 'x' });
+  const looked: string[] = [];
+
+  const watched = {
+    ...files,
+    stat: async (path: string) => {
+      looked.push(path);
+
+      return files.stat(path);
+    },
+  };
+
+  const failing = { ...files, stat: async (path: string): Promise<VfsStat | null> => { throw new VfsError('EIO', 'the plane is down', path); } };
+
+  const read = async (vfs: VFS, path: string) => {
+    const [answer] = await Promise.allSettled([toolFor(vfs).call({ op: 'read', path })]);
+
+    return answer.status === 'rejected' ? answer.reason : null;
+  };
+
+  const onComputer = await read(watched, 'workspace/app.ts');
+  const unanswered = await read(failing, 'skills/slates/SKILL.md');
+
+  expect({
+    computerLooked: looked.some((path) => path.startsWith('/computer')),
+    computerSuggested: renderThrownChain({ cause: onComputer }).includes('did you mean'),
+    unansweredCode: v.parse(v.object({ code: v.string() }), unanswered).code,
+  }).toEqual({ computerLooked: false, computerSuggested: false, unansweredCode: 'missing' });
+});
+
 test('a denied edit keeps its counter through the persisted file-edit event', async () => {
   const { stores, db } = createTestRuntime();
   const files = memoryVfs({ '/denied.txt': 'before' });
