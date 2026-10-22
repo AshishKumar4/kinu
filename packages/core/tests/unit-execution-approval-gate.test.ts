@@ -442,7 +442,9 @@ describe('a workspace shell over the user\'s mounts', () => {
     }
   });
 
-  // `..` after a link is the walk's: from a link into /pc/proj/sub it climbs to /pc/proj, never back into the home.
+  // `..` after a link is the walk's: from a link into /pc/proj/sub it climbs inside /pc, never back into the home. Inside
+  // the machine's mount the machine walks it (Nimbus core 0.25, ask 58), so the ask names the path as the machine is
+  // handed it: collapsed, it would name another file wherever `sub` is a link of the machine's.
   test('a write through link/.. into /pc is asked as the user\'s file it lands on', async () => {
     const db = new Database(':memory:');
     const workspace = createWorkspaceBundle(db);
@@ -477,7 +479,7 @@ describe('a workspace shell over the user\'s mounts', () => {
 
       await file({ op: 'read', path: 'sub-link/../a.txt' });
       await expect(file({ op: 'write', path: 'sub-link/../a.txt', content: 'forged' })).rejects.toMatchObject({ code: 'denied' });
-      expect(asked.map((request) => request.write?.path)).toContain('/pc/proj/a.txt');
+      expect(asked.map((request) => request.write?.path)).toContain('/pc/proj/sub/../a.txt');
       expect(await device.readFile('/proj/a.txt')).toEqual(new TextEncoder().encode('kept by the owner'));
       expect(await workspace.vfs.stat(`${WORKSPACE_ROOT}/a.txt`)).toBeNull();
     } finally {

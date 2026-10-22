@@ -23,7 +23,7 @@ import { parseInput, type JsonValue } from '../utils/json';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { SessionExecOptions, SessionPort, SessionStartResult } from '@nimbus-sh/core/runtime/session-protocol.js';
 import type { NimbusSandboxFiles } from '@nimbus-sh/sdk/sandbox';
-import type { ShellState } from '@nimbus-sh/core/workspace/named-shells.js';
+import type { ShellState, VariableAttributes } from '@nimbus-sh/core/workspace';
 import { sha256Hex } from '../safety/argument-digest';
 import { compareCodeUnits } from '../utils/text';
 
@@ -533,13 +533,26 @@ async function stopUnanswered(box: NimbusSandboxHandle, execId: string): Promise
 }
 
 /**
- * A named shell's state as the session keeps it, digested: its directory, then every variable sorted by name, as JSON,
- * which writes a lone UTF-16 surrogate as its own escape, so no value or name can pass for another (Nimbus ask 52's
- * `shellState`; a `set` listing loses them). Nimbus keeps no function, alias, option or array between a named shell's
- * calls.
+ * A named shell's state as the session keeps it, digested: its directory, then every variable sorted by name, then what
+ * the session keeps of them besides their values, as JSON, which writes a lone UTF-16 surrogate as its own escape, so no
+ * value or name can pass for another (Nimbus ask 52's `shellState`; a `set` listing loses them). Nimbus keeps no
+ * function, alias or option between a named shell's calls.
  */
 function shellStateDigest(state: ShellState): string {
-  return sha256Hex(JSON.stringify([state.cwd, Object.entries(state.env).sort(([a], [b]) => compareCodeUnits(a, b))]));
+  const env = Object.entries(state.env).sort(([a], [b]) => compareCodeUnits(a, b));
+
+  // A state no different from a fresh shell's has no `vars`, and digests as every state did before Nimbus kept them.
+  return sha256Hex(JSON.stringify(state.vars === undefined ? [state.cwd, env] : [state.cwd, env, variableAttributes(state.vars)]));
+}
+
+/** Which names are exported, read-only or declared, and each indexed array's entries, each in one order. */
+function variableAttributes(vars: VariableAttributes): unknown[] {
+  const names = (list: readonly string[]) => [...list].sort(compareCodeUnits);
+
+  const arrays = Object.entries(vars.arrays).sort(([a], [b]) => compareCodeUnits(a, b))
+    .map(([name, entries]) => [name, [...entries].sort(([a], [b]) => a - b)]);
+
+  return [names(vars.exported), names(vars.readonly), names(vars.declared), arrays];
 }
 
 /**

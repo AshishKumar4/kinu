@@ -24,7 +24,7 @@ import {
   agentIdentity, agentTmpRoot, confineAgentTmp, MAIN_AGENT, provisionAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleSharedRoots, provisionWorkspaceSoul,
   type HomeRootVfs, type TmpConfiner,
-  refuseViewerIdentityChange,
+  viewerStaysItself,
 } from './agent-home';
 import * as v from 'valibot';
 import { walkedPath, WORKSPACE_ROOT } from './workspace-path';
@@ -224,6 +224,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
       // Each supplied runtime's bins are stubs that install it on first use; a reopened workspace rehydrates it.
       runtimes: opts.runtimes ?? [],
       runtimeInstall: 'on-demand',
+      mayChangeIdentity: viewerStaysItself(opts.sql),
     };
 
     if (opts.runtimeFacets !== undefined) creation = { ...creation, facets: opts.runtimeFacets };
@@ -260,7 +261,6 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     // Trusted host init, once per engine boot: a registration is not stored with the tree.
     settleSharedRoots(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
     provisionWorkspaceSoul(workspace.vfs.as(CRED_KERNEL));
-    await refuseViewerIdentityChange(workspace.registry, opts.sql);
 
     const root = workspace.vfs.as(CRED_KERNEL);
     const main = agentIdentity(opts.sql, MAIN_AGENT);

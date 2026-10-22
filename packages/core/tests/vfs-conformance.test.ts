@@ -235,6 +235,14 @@ function nimbusHandle(fs: MemFs): SessionBox {
     async chmod(path: string) { throw new VfsError('ENOTSUP', 'this test plane keeps no modes', path); },
     async writeIfRevision(path: string) { throw new VfsError('ENOTSUP', 'this test plane keeps no revisions', path); },
     async delete(path: string) { fs.del(path); },
+    async unlink(path: string) { fs.del(path); },
+    async rmdir(path: string) { throw new VfsError('ENOTSUP', 'this test plane removes no directories', path); },
+    async appendFile(path: string) { throw new VfsError('ENOTSUP', 'this test plane does not append', path); },
+    async symlink(_target: string, path: string) { throw new VfsError('ENOTSUP', 'this test plane keeps no links', path); },
+    async realpath(path: string) { return path; },
+    async truncate(path: string) { throw new VfsError('ENOTSUP', 'this test plane does not truncate', path); },
+    async utimes(path: string) { throw new VfsError('ENOTSUP', 'this test plane keeps no times', path); },
+    async chown(path: string) { throw new VfsError('ENOTSUP', 'this test plane keeps no owners', path); },
   };
 
   const handle: SessionBox = {

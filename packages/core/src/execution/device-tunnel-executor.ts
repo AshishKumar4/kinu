@@ -1,4 +1,5 @@
 import type { Awaitable, VFS, VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
+import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import { direntType, listedStat, type DirectoryPages } from '../vfs/dirent';
 /**
  * DeviceTunnelExecutor (`device.*`): the user's machines via a daemon connected through the UserDO hub.
@@ -244,13 +245,8 @@ class DevicePlane {
   }
 
   private routeOf(path: string): { view: DeviceVFS; rest: string } | null {
-    const trimmed = path.replace(/^\/+/, '');
-
-    if (trimmed === '') return null;
-    const slash = trimmed.indexOf('/');
-    const first = slash === -1 ? trimmed : trimmed.slice(0, slash);
-    const rest = slash === -1 ? '/' : trimmed.slice(slash);
-    const route = this.routes().find((r) => r.segment === first);
+    const { segment, rest } = fleetPath(path);
+    const route = segment === null ? undefined : this.routes().find((r) => r.segment === segment);
 
     return route ? { view: route.view, rest } : null;
   }
@@ -267,12 +263,12 @@ class DevicePlane {
 
       return route
         ? Effect.promise(async () => op(route.view, route.rest))
-        : Effect.fail(noSuchDevice(this.transport.status().devices, path.replace(/^\/+/, '').split('/')[0] ?? ''));
+        : Effect.fail(noSuchDevice(this.transport.status().devices, fleetPath(path).segment ?? ''));
     });
   }
 
   private isFleetRoot(path: string): boolean {
-    return (path.replace(/\/+$/, '') === '' || path.replace(/\/+$/, '') === '/');
+    return fleetPath(path).segment === null;
   }
 
   readonly files: DeviceVFS = {
@@ -587,6 +583,41 @@ function listedEntry(entry: JsonValue): VfsDirent {
   return { name: JSON.stringify(entry), type: 'unknown' };
 }
 
+/**
+ * Where a path in the fleet's view leads: the machine its first name selects (null: the fleet's root), and the rest,
+ * which that machine's daemon walks as written. The levels above a machine's tree hold no links, so their `.` and `..`
+ * are walked here, since Nimbus hands a `resolvesPaths` mount every segment as written (ask 58): `..` from a machine's
+ * root is the fleet's root again.
+ */
+interface FleetPath {
+  /** The machine the path's first name selects; null for the fleet's root. */
+  readonly segment: string | null;
+  /** The rest, from that machine's root, as written. */
+  readonly rest: string;
+}
+
+function fleetPath(path: string): FleetPath {
+  const parts = path.split('/');
+  let segment: string | null = null;
+  let at = 0;
+
+  for (; at < parts.length; at++) {
+    const part = parts[at];
+
+    if (part === '' || part === '.') continue;
+
+    if (part === '..') {
+      segment = null;
+      continue;
+    }
+
+    if (segment !== null) break;
+    segment = part ?? null;
+  }
+
+  return { segment, rest: `/${parts.slice(at).join('/')}` };
+}
+
 /** The machine's files in its own absolute paths: the daemon resolves root and path, this guard only rejects lexical
  *  escapes, and `homeDir` is HELLO's, never an `exec`'s. */
 export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConsent, deviceId?: string): DeviceVFS {
@@ -634,11 +665,15 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
     if (scope === 'unconfined') return null;
 
-    if (scope === 'sandboxed' && AGENT_TMP_PATHS.some((tmp) => path === tmp || path.startsWith(`${tmp}/`))) return null;
+    // Judged where the path lands by its spelling, `..` taken: the path reaches the daemon as written (Nimbus hands the
+    // mount every segment, ask 58), and only a link can take it elsewhere, which the daemon's realpath check answers.
+    const lands = normalizePath(path);
+
+    if (scope === 'sandboxed' && AGENT_TMP_PATHS.some((tmp) => lands === tmp || lands.startsWith(`${tmp}/`))) return null;
     const root = yield* effectiveRoot();
 
     // A device that named no directory failed above rather than widening to `/`.
-    if (!(root === '/' || path === root || path.startsWith(`${root}/`))) {
+    if (!(root === '/' || lands === root || lands.startsWith(`${root}/`))) {
       return yield* Effect.fail(syscallError('EACCES', op, path, {
         detail: `outside the consented device directory '${root}': the agent sees the folder the owner `
           + `consented${scope === 'sandboxed' ? ' and its own /tmp' : ''}, and nothing else. Ask the owner to consent that directory`,
