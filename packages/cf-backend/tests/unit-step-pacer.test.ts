@@ -4,7 +4,7 @@
  * a stop or a rest let it go.
  */
 import { expect, test } from 'bun:test';
-import { PLATFORM_CATALOG, profileCatalogDigest, resolveTurnProfile, type ProfileCatalog } from '@kinu.run/core';
+import { PLATFORM_CATALOG, profileCatalogDigest, resolveTurnProfile, type HarnessMode, type ProfileCatalog } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { StepPacer } from '../src/agent-facet/step-pacer';
 import type { TurnBound } from '../src/agent-facet/agent-turn';
@@ -27,6 +27,11 @@ const PROFILE = resolveTurnProfile({
   roleId: 'reader', workMode: 'build', availableTools: [], activeSkills: [],
 });
 
+/** The workspace's `harness.mode`, as each grant carries it. */
+interface WorkspaceHarness {
+  mode: HarnessMode;
+}
+
 /** The workspace's side: each pace grants through the pacer, as its call into the isolate does, and stays open until the
  *  grant is let go; `cut` rejects every open one, as a Stop's fence does. */
 function grantingWorkspace(pacer: StepPacer) {
@@ -34,17 +39,19 @@ function grantingWorkspace(pacer: StepPacer) {
   const answered: string[] = [];
   let cut = Promise.withResolvers<never>();
   let refusing = false;
+  const harness: WorkspaceHarness = { mode: 'native' };
 
   return {
     paces,
     answered,
+    harness,
     cut: () => { cut.reject(new KinuError('cancelled', 'stale_epoch: the turn was stopped')); cut = Promise.withResolvers<never>(); refusing = true; },
     port: {
       paceStep: async (bound: TurnBound) => {
         paces.push(bound);
 
         if (refusing) throw new KinuError('cancelled', 'stale_epoch: the turn was stopped');
-        const granted = pacer.grant(bound.turnId, null).then(() => { answered.push(bound.turnId); });
+        const granted = pacer.grant(bound.turnId, null, harness.mode).then(() => { answered.push(bound.turnId); });
 
         await Promise.race([granted, cut.promise]);
       },
@@ -97,6 +104,27 @@ test('a step that binds the profile, a new execution and a spent budget each ask
   expect(ws.paces.map((bound) => bound.epoch)).toEqual([7, 7, 8, 8]);
   // Each newer grant let the one before it go.
   expect(ws.answered).toHaveLength(3);
+});
+
+// FEAT-2 step 1: an agent's isolate reads the workspace's `harness.mode` off the grant its step runs under, so a change
+// reaches its steps at its next grant: a renewal, a new execution, or a step that binds the profile.
+test("each step reads the workspace's harness mode as the grant it runs under carried it", async () => {
+  let now = 0;
+  const pacer = new StepPacer(() => now);
+  const ws = grantingWorkspace(pacer);
+  const signal = new AbortController().signal;
+  const read: HarnessMode[] = [];
+
+  ws.harness.mode = 'auto';
+  read.push((await pacer.pace(ws.port, BOUND, signal, null)).harnessMode);
+  ws.harness.mode = 'pi';
+  read.push((await pacer.pace(ws.port, BOUND, signal, null)).harnessMode);
+  now = PLATFORM_CATALOG['do.facet.cpu_ms'].limit.value / 2;
+  read.push((await pacer.pace(ws.port, BOUND, signal, null)).harnessMode);
+  await drained();
+
+  // The held grant's, then the renewed one's.
+  expect(read).toEqual(['auto', 'auto', 'pi']);
 });
 
 test('a stopped turn and a resting agent hold no grant', async () => {

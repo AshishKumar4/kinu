@@ -18,6 +18,8 @@ import {
   type JsonObject, type JsonValue, type KinuExtension, type Usage,
   type ModelCallDeps, type AuthResolution, type WorkersAIRunBinding,
 } from '../src/index';
+import type { HarnessMode } from '../src/config/harness-mode';
+import type { TurnSinks } from '../src/orchestrator/turn-accumulator';
 import { Database } from 'bun:sqlite';
 import { freezeTree } from '../src/utils/freeze';
 import { createMockFetch, testActorHandle, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
@@ -468,6 +470,8 @@ function usageFor(entry: ProviderCase, verdict: Verdict, decoy: boolean): JsonOb
 interface TurnResult {
   mock: MockFetchHandle;
   steps: Usage[];
+  /** Each step's run event, as the accumulator hands it to its sink. */
+  recorded: Parameters<NonNullable<TurnSinks['onStepEvent']>>[0][];
   /** The turn's accumulated usage, from the real TurnAccumulator. */
   total: Usage;
   /** The last step's request as the accumulator carries it to a cache warm. */
@@ -480,7 +484,7 @@ interface TurnResult {
  *  `instructions` (the unapproved workspace files) ride the dynamic context's ledger. */
 async function driveTurn(
   entry: ProviderCase,
-  opts: { decoy?: boolean; extension?: KinuExtension; dynamic?: () => DynamicContext; durable?: true; instructions?: string } = {},
+  opts: { decoy?: boolean; extension?: KinuExtension; dynamic?: () => DynamicContext; durable?: true; instructions?: string; harnessMode?: () => HarnessMode } = {},
 ): Promise<TurnResult> {
   const oracle = new PrefixCacheOracle();
 
@@ -500,7 +504,8 @@ async function driveTurn(
   }]);
 
   const deps = makeDeps(entry.credentials, mock.fetch);
-  const acc = new TurnAccumulator();
+  const recorded: Parameters<NonNullable<TurnSinks['onStepEvent']>>[0][] = [];
+  const acc = new TurnAccumulator({ onStepEvent: (step) => { recorded.push(step); } });
   acc.reset(0);
   const steps: Usage[] = [];
   const extensions = opts.extension ? new ExtensionHost().register(opts.extension) : undefined;
@@ -523,6 +528,7 @@ async function driveTurn(
     extensions,
     dynamicContext: opts.dynamic ? { ledger: new DynamicContextLedger(), snapshot: opts.dynamic, instructions: opts.instructions } : undefined,
     cache: { providerId: entry.providerId, modelId: entry.modelId },
+    ...(opts.harnessMode !== undefined && { harnessMode: opts.harnessMode }),
     ...plane,
   })) {
     if (event.type === 'step-finish') {
@@ -531,7 +537,7 @@ async function driveTurn(
     }
   }
 
-  return { mock, steps, total: acc.reportedUsage() ?? {}, lastRequest: acc.lastRequest, oracle };
+  return { mock, steps, recorded, total: acc.reportedUsage() ?? {}, lastRequest: acc.lastRequest, oracle };
 }
 
 /** Strip `cache_control` everywhere and re-place one breakpoint on the first message, inside the stored prefix. */
@@ -588,6 +594,51 @@ const BLIND_SPOTS = [
 ];
 
 describe('a stable prefix reads back as a nonzero cache hit', () => {
+  // FEAT-2 step 1 (docs/HARNESS-PROFILES.md): each step's record names the surface its request was shown as, read from
+  // `harness.mode` as it left, beside the cache figures it reported, so they read per profile; and no mode, of all six,
+  // changes a byte any step sends.
+  test('each step records the harness surface its request was shown as, read live, and sends the same bytes under every mode', async () => {
+    const anthropic = CACHING_PROVIDERS.find((entry) => entry.label === 'anthropic');
+
+    if (anthropic === undefined) throw new Error('no anthropic case');
+    const plain = await driveTurn(anthropic);
+    const bodies = (turn: TurnResult) => turn.mock.requests.map((request) => request.body);
+
+    const shownUnder = async (modes: readonly HarnessMode[]) => {
+      let asked = 0;
+      const turn = await driveTurn(anthropic, { harnessMode: () => modes[asked++] ?? 'native' });
+
+      return {
+        steps: turn.recorded.map((step) => ({ harness: step.harness, cached: (step.usage?.cacheRead ?? 0) > 0 })),
+        sameBytes: bodies(turn).length === 3 && JSON.stringify(bodies(turn)) === JSON.stringify(bodies(plain)),
+      };
+    };
+
+    expect({
+      first: await shownUnder(['native', 'auto', 'kinu']),
+      second: await shownUnder(['claude-code', 'codex', 'pi']),
+      unstamped: plain.recorded.map((step) => step.harness),
+    }).toEqual({
+      first: {
+        steps: [
+          { harness: { mode: 'native', surface: 'native' }, cached: false },
+          { harness: { mode: 'auto', surface: 'claude-code' }, cached: true },
+          { harness: { mode: 'kinu', surface: 'kinu' }, cached: true },
+        ],
+        sameBytes: true,
+      },
+      second: {
+        steps: [
+          { harness: { mode: 'claude-code', surface: 'claude-code' }, cached: false },
+          { harness: { mode: 'codex', surface: 'codex' }, cached: true },
+          { harness: { mode: 'pi', surface: 'pi' }, cached: true },
+        ],
+        sameBytes: true,
+      },
+      unstamped: [undefined, undefined, undefined],
+    });
+  });
+
   test('a tool crafted during the conversation appends its declaration behind the cached prefix', async () => {
     for (const entry of CACHING_PROVIDERS) {
       let step = 0;

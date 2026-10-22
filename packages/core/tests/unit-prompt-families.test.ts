@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { resolvePromptModelProfile, type PromptModelContext, type PromptModelFamily } from '../src/prompting/model-profile';
+import { resolveHarnessSurface, resolvePromptModelProfile, type PromptModelContext, type PromptModelFamily } from '../src/prompting/model-profile';
 
 const MODELS: Readonly<Record<PromptModelFamily, PromptModelContext>> = {
   kimi: { id: 'kimi-k3-instruct', provider: 'moonshot' },
@@ -24,4 +24,24 @@ describe('family wording is a delta over the same typed sections', () => {
     expect(resolvePromptModelProfile().family).toBe('generic');
   });
 
+});
+
+// FEAT-2 step 1 (docs/HARNESS-PROFILES.md, "The profile axis"): `auto` resolves as the prompt family does, a claude family
+// to claude-code and a gpt one to codex, every other to kinu; a named profile is forced onto any model; native is none.
+describe('the harness surface a mode shows a model', () => {
+  test('auto follows the family, a named profile is forced, and native stays native', () => {
+    const models: readonly PromptModelContext[] = [
+      { id: 'claude-opus-5-5', provider: 'anthropic' }, { id: 'gpt-6.1-sol', provider: 'chatgpt' }, { id: 'kimi-k3' }, { id: 'muse-1' }, {},
+    ];
+
+    expect({
+      auto: models.map((model) => resolveHarnessSurface('auto', model)),
+      native: models.map((model) => resolveHarnessSurface('native', model)),
+      pi: models.map((model) => resolveHarnessSurface('pi', model)),
+    }).toEqual({
+      auto: ['claude-code', 'codex', 'kinu', 'kinu', 'kinu'],
+      native: ['native', 'native', 'native', 'native', 'native'],
+      pi: ['pi', 'pi', 'pi', 'pi', 'pi'],
+    });
+  });
 });
