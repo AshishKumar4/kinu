@@ -683,6 +683,8 @@ async function api(url: URL, request: Request): Promise<Response> {
 
   if (path === `/accounts/${ACCOUNT_ID}`) return envelope({ id: ACCOUNT_ID, name: 'Probe Account' });
 
+  if (path.startsWith(`/accounts/${ACCOUNT_ID}/email/sending/suppressions`)) return envelope([]);
+
   const indexed = v.safeParse(v.object({ dimensions: v.number(), metric: v.string() }), body.config);
   const stored = storageApi(path, request, named, indexed.success ? indexed.output : null);
 

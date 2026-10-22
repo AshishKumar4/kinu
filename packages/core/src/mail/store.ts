@@ -457,8 +457,11 @@ export class MailStore {
     const from: MailParty = { name: parsed.from?.name ?? null, address: verdict.from ?? parsed.from?.address ?? input.envelopeFrom.toLowerCase() };
     const headerId = parsed.messageId === null ? null : bare(parsed.messageId);
 
+    // Only an arrival: a message the person sent themselves, to their own address or an alias of it, carries the
+    // Message-ID their sent copy holds, and arrives (staging 2026-10-22: a test to privacy@ never showed).
     const [seen] = headerId === null ? [] : rows(v.pick(MessageColumns, ['id', 'thread_id', 'verdict', 'woke']), this.deps.sql.exec(
-      'SELECT m.id, m.thread_id, m.verdict, m.woke FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ?', headerId, box.path,
+      "SELECT m.id, m.thread_id, m.verdict, m.woke FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ? AND m.send_state IS NULL",
+      headerId, box.path,
     ));
 
     // The edge redelivers a message it is unsure arrived: it is filed once, but handed on as the first was, since the

@@ -125,6 +125,24 @@ describe('an arrival is filed, and wakes by the verdict and the box\'s policy', 
     expect((await store.thread(first.threadId))?.messages).toHaveLength(1);
   });
 
+  test('a message the person sends to their own address arrives beside the copy they sent, and a redelivery of it is filed once', async () => {
+    const box = open('probe@ashishkumarsingh.com');
+    const queued = await store.queue({ path: box.path, to: ['ashish@kinu.run'], subject: 'Note to self', text: 'Remember the DMARC check.' });
+
+    store.sentAs(queued.view.id, '<self-1@kinu.run>');
+
+    const own = new TextEncoder().encode([
+      'From: ashish@kinu.run', 'To: ashish@kinu.run', 'Subject: Note to self', 'Message-ID: <self-1@kinu.run>', 'Content-Type: text/plain; charset=utf-8', '', 'Remember the DMARC check.',
+    ].join('\r\n'));
+
+    const arrived = await delivered({ raw: own, envelopeFrom: 'bounce@cf-bounce.kinu.run', recipient: toPerson });
+    const again = await delivered({ raw: own, envelopeFrom: 'bounce@cf-bounce.kinu.run', recipient: toPerson });
+
+    expect(arrived.duplicate).toBe(false);
+    expect(again).toMatchObject({ duplicate: true, messageId: arrived.messageId });
+    expect(arrived.messageId).not.toBe(queued.view.id);
+  });
+
   test('another verified sender on the same domain is not the owner: by default a box wakes for its owner only', async () => {
     open('probe@ashishkumarsingh.com');
     const delivery = await delivered({ raw: raw('second-local-part-pass'), envelopeFrom: 'x@cf-bounce.ashishkumarsingh.com', recipient: toPerson });
