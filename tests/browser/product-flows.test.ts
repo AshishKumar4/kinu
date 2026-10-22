@@ -21,18 +21,18 @@ import {
   driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState, openWaitsNamed, slateOpensFromSlates,
   slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
-  computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, type AgentPlanVerdict, type AgentReturnVerdict,
+  computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, type AgentPlanVerdict, type AgentReturnVerdict,
   type ApprovalStackVerdict, type HireApprovalVerdict, type AgentWorkspaceVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
   type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict,
   type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
   type StampedCardVerdict, type WrittenFileVerdict, type DesktopResizeVerdict, type DesktopSwitchVerdict, type ReopenVerdict,
-  type SessionsVerdict, type AgentJobVerdict,
+  type SessionsVerdict, type AgentJobVerdict, type AttachmentVerdict,
 } from '../../scripts/product-flows';
 import { INSPECTOR_SHUT_PX, type FlowTarget } from '../../scripts/browser-page';
 import {
   ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
   INTERRUPTED_TITLE, PARKED_COMMANDS, PIN_PAGE, PLAN_COMMENT, AGENT_WORKSPACE, REACH_REPLY, REACH_STREAM, STACK_FACT, STACK_RECALL_REPLY, STORM_FILES,
-  THREAD_REPLY,
+  THREAD_REPLY, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_WORD,
 } from '../../scripts/flows-script';
 import {
   chatTitledFromItsBrief, hireLivesUnderItsName, pinKeepsAnInChatPage, planCommentReachesTheAgent, slateStreamsAndHires,
@@ -547,6 +547,28 @@ function landingFor(opened: DriveOpensVerdict): string {
 
   return opened.places.includes('shared') ? '/shared' : '/drive';
 }
+
+describe(productFlowTestName('attachment', 'a file dropped on the chat is read and stays in the transcript'), () => {
+  let observed: AttachmentVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('attachment', attachmentIsReadAndShown);
+  });
+
+  test('the dropped file waits in the tray before Send', () => {
+    expect(verdictOf(observed, 'attachment').tray).toEqual([ATTACHMENT_FILE]);
+  });
+
+  test("the agent's reply repeats the word only the file held", () => {
+    expect(verdictOf(observed, 'attachment').reply).toBe(`${ATTACHMENT_REPLY} ${ATTACHMENT_WORD}`);
+  });
+
+  test('the sent message shows the file, and still does after a reload', () => {
+    const attached = verdictOf(observed, 'attachment');
+
+    expect([attached.sent, attached.sentAfterReload]).toEqual([true, true]);
+  });
+});
 
 describe(productFlowTestName('drive-opens', 'the Drive opens and draws nothing empty'), () => {
   let observed: DriveOpensVerdict | null = null;

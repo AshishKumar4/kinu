@@ -49,6 +49,26 @@ export const ACCOUNT_RECALL_ASK = 'Flow account memory: which city do I live in?
 
 export const ACCOUNT_RECALL_REPLY = 'YOU LIVE IN';
 
+/** The attachment row (MA-019): a text file dropped on the chat, then an ask about it; the reply repeats the one word
+ *  the file holds, which the ask never says, so a reply that has it read the file. */
+export const ATTACHMENT_FILE = 'flow-attachment.txt';
+
+export const ATTACHMENT_WORD = 'flow-attached-7d3e';
+
+export const ATTACHMENT_ASK = 'Flow attachment: which word does the attached file hold?';
+
+export const ATTACHMENT_REPLY = 'THE FILE SAYS';
+
+/** What a reply says when the turn was given no attached word. */
+export const ATTACHMENT_UNREAD = 'nothing attached';
+
+/** The attachment row's answer: the word its latest ask carried in, or that it carried none. */
+function attachmentAnswer(latest: string): ScriptedAnswer | undefined {
+  if (!latest.includes(ATTACHMENT_ASK)) return undefined;
+
+  return { text: `${ATTACHMENT_REPLY} ${latest.includes(ATTACHMENT_WORD) ? ATTACHMENT_WORD : ATTACHMENT_UNREAD}` };
+}
+
 /** The stack row's own fact and asks, so it never meets the Settings row's on one account. */
 export const STACK_FACT_ASK = 'Flow stack memory: my editor is Helix. Remember that for every workspace.';
 
@@ -593,7 +613,7 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   const latest = request.userTexts.at(-1) ?? '';
 
-  const proposed = agentWorkspaceAnswer(latest, request) ?? accountMemoryAnswer(latest, request) ?? ownerAskAnswer(request, latest);
+  const proposed = agentWorkspaceAnswer(latest, request) ?? accountMemoryAnswer(latest, request) ?? attachmentAnswer(latest) ?? ownerAskAnswer(request, latest);
 
   if (proposed !== undefined) return proposed;
 
