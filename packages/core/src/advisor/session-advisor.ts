@@ -262,12 +262,18 @@ export class SessionAdvisor {
     };
   }
 
-  /** Once every review owed has run, or `waitMs` has passed. */
+  /** Once every review owed has run, or `waitMs` has passed: one timer, cleared, so no wait outlives the call (a pending
+   *  timer holds a CLI process open), and no clock read a test may have frozen. */
   async settled(waitMs: number): Promise<void> {
-    const deadline = Date.now() + waitMs;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<'expired'>((resolve) => { timer = setTimeout(() => { resolve('expired'); }, waitMs); });
 
-    while (this.reviewing !== null && Date.now() < deadline) {
-      await Promise.race([this.reviewing, new Promise((resolve) => { setTimeout(resolve, Math.max(0, deadline - Date.now())); })]);
+    try {
+      while (this.reviewing !== null) {
+        if (await Promise.race([this.reviewing.then(() => 'reviewed' as const), expired]) === 'expired') return;
+      }
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -281,24 +287,23 @@ export class SessionAdvisor {
       if (rendered !== null) this.backlog.push(rendered);
     }
 
-    if (this.backlog.length > 0 && this.reviewing === null) this.reviewing = this.drain();
+    if (this.backlog.length > 0 && this.reviewing === null) this.reviewing = this.review();
   }
 
-  private async drain(): Promise<void> {
-    try {
+  /** Reviews what was read and not yet reviewed, an update at a time, until nothing is owed. Never fails. */
+  review(): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
       while (this.backlog.length > 0 && this.turn !== null) {
         const delta = this.backlog.splice(0);
-        await this.update(this.turn, delta);
+        yield* this.update(this.turn, delta);
       }
-    } finally {
-      this.reviewing = null;
-    }
+    }).pipe(Effect.ensuring(Effect.sync(() => { this.reviewing = null; }))));
   }
 
   /** One review of the steps read since the last: a few calls at most, its notes guarded before any is said. */
-  private async update(turn: AdvisedTurn, delta: readonly string[]): Promise<void> {
+  private update(turn: AdvisedTurn, delta: readonly string[]): Effect.Effect<void> {
     // Never the agent's turn's failure: a review that fails is logged, and the next step is read afresh.
-    await settle(attempt({ doing: 'reviewing the agent\'s steps', otherwise: 'unavailable' }, async () => {
+    return attempt({ doing: 'reviewing the agent\'s steps', otherwise: 'unavailable' }, async () => {
       if (this.conversationChars > CONVERSATION_MAX_CHARS) [this.conversation, this.conversationChars] = [[], 0];
 
       for (const text of delta) this.append({ role: 'user', content: text });
@@ -341,7 +346,7 @@ export class SessionAdvisor {
         // A loop past its warning, or an update whose only calls were advice: nothing more to read.
         if (stopped || reply.toolCalls.every((call) => call.toolName === 'advise')) return;
       }
-    }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('advisor.review_failed', failure, { actorId: this.deps.actor.actorId }); }))));
+    }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('advisor.review_failed', failure, { actorId: this.deps.actor.actorId }); })));
   }
 
   private append(message: ModelMessage): void {

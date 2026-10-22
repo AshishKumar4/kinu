@@ -11,8 +11,8 @@ import type { AgentProviderDeps, AgentProviderRegistry } from '../../src/provide
 /** Each buffer the gate plants, under the marker it finds it by: held for the isolate's life, as a leak would be. */
 const planted: Record<string, Uint8Array>[] = [];
 
-/** What an armed advisor call does: `throw` fails the call; `uncaught` throws from a timer and rejects a promise no one
- *  awaits, then lets the call answer. */
+/** What an armed advisor call does: `throw` fails the call; `uncaught` throws from a microtask and rejects a promise no
+ *  one awaits, then lets the call answer. */
 export type AdvisorFault = 'throw' | 'uncaught';
 
 /** Armed by the gate, for every advisor call from then on: module state, so an isolate reset disarms it. */
@@ -27,7 +27,7 @@ const ADVISOR_FAULT: LanguageModelMiddleware = {
     if (armed === null || !(params.tools ?? []).some((offered) => offered.name === 'advise')) return params;
 
     if (armed === 'throw') throw new Error('advisor fault probe: the call threw');
-    setTimeout(() => { throw new Error('advisor fault probe: uncaught in a timer'); }, 0);
+    queueMicrotask(() => { throw new Error('advisor fault probe: uncaught in a microtask'); });
     unheard.push(Promise.reject(new Error('advisor fault probe: a rejection no one awaits')));
 
     return params;
