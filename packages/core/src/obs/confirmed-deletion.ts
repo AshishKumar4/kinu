@@ -5,7 +5,8 @@
  * 60, so neither the answer nor its failure says whether the storage went. Every such deletion goes through here.
  */
 import { Effect } from 'effect';
-import { KinuError, settle, toKinuError } from '@kinu.run/core/obs';
+import { settle } from './effect';
+import { KinuError, toKinuError } from './error';
 
 /** An object as its deletion reaches it: the deletion, and a read of how much of its own data it still holds, wherever
  *  it keeps it (its tables, and its KV entries if it has any: a SQLite object keeps those in `_cf_KV`). */
