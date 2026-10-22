@@ -27,11 +27,11 @@ function harness(opts: {
   readonly minSeverity?: AdvisorSeverity;
   readonly gateOpen?: boolean;
   readonly guidance?: () => Promise<string>;
-  /** The reviewed agent's id: the same across two harnesses, as across a restart of its session. */
-  readonly actorId?: string;
+  /** The reviewed agent: one across two harnesses, as across a restart of its session. */
+  readonly actor?: ReturnType<typeof createTestActor>;
 } = {}) {
   const { sql, execRaw } = createTestSql();
-  const actor = createTestActor(sql, execRaw, opts.actorId ?? crypto.randomUUID(), 'reviewed');
+  const actor = opts.actor ?? createTestActor(sql, execRaw, crypto.randomUUID(), 'reviewed');
 
   if (opts.enabled !== false) actor.config.setAdvisorEnabled(true);
   actor.config.setAdvisorMinSeverity(opts.minSeverity ?? 'nit');
@@ -71,7 +71,7 @@ function harness(opts: {
   });
 
   return {
-    advisor, sent, recorded, hirer,
+    advisor, actor, sent, recorded, hirer,
     interrupts: () => interrupts,
     outcome: (next: SendOutcome) => { outcome = next; },
   };
@@ -126,10 +126,19 @@ async function runTurn(advisor: SessionAdvisor, turn: AdvisedTurn, steps: readon
 
 /** The ids of the advisor's own tool calls with no result after them: a provider refuses a request that holds one. */
 function unanswered(messages: readonly ModelMessage[]): string[] {
-  const parts = messages.flatMap((message) => (typeof message.content === 'string' ? [] : message.content));
-  const answered = new Set(parts.flatMap((part) => (part.type === 'tool-result' ? [part.toolCallId] : [])));
+  const calls: string[] = [];
+  const answered = new Set<string>();
 
-  return parts.flatMap((part) => (part.type === 'tool-call' && !answered.has(part.toolCallId) ? [part.toolCallId] : []));
+  for (const message of messages) {
+    if (typeof message.content === 'string') continue;
+
+    for (const part of message.content) {
+      if (part.type === 'tool-call') calls.push(part.toolCallId);
+      else if (part.type === 'tool-result') answered.add(part.toolCallId);
+    }
+  }
+
+  return calls.filter((id) => !answered.has(id));
 }
 
 /** The agent's own messages an update was sent, as the advisor rendered them. */
@@ -242,7 +251,7 @@ describe('the in-session advisor', () => {
 
     const { model, asked } = scripted([calling('file', 'r1'), calling('file', 'r2'), calling('file', 'r3'), calling('memory', 'm1')]);
     const file = tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'contents' });
-    const memory = tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async () => { throw new Error('the memory store is gone'); } });
+    const memory = tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async (): Promise<string> => { throw new Error('the memory store is gone'); } });
     await runTurn(advisor, turnOf(model, { file, memory }), [step('edited'), step('edited again')]);
 
     expect(asked.length).toBeGreaterThanOrEqual(5);
@@ -383,8 +392,8 @@ describe('where a note goes', () => {
   });
 
   test('a note is keyed by its turn and what it says, so a restarted turn says a new note, and an old one only once', async () => {
-    const actorId = crypto.randomUUID();
-    const keyOf = async (note: JsonObject) => (await oneStep(advising(note), { actorId })).said[0]?.idempotencyKey;
+    const { actor } = harness();
+    const keyOf = async (note: JsonObject) => (await oneStep(advising(note), { actor })).said[0]?.idempotencyKey;
     const first = await keyOf(concern);
 
     expect(first).toBeDefined();

@@ -347,7 +347,7 @@ export class SessionAdvisor {
         let stopped = false;
 
         for (const call of reply.toolCalls) {
-          const repeated = stopped ? 'stop' : guards.repeat(call.toolName, call.input);
+          const repeated: 'ok' | 'warn' | 'stop' = stopped ? 'stop' : guards.repeat(call.toolName, call.input);
           stopped = repeated === 'stop';
           let text = repeated === 'stop' ? STOPPED : 'You made this exact call already; its result has not changed. Decide from what you have.';
 
