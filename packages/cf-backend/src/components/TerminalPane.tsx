@@ -64,7 +64,7 @@ function TerminalFrame({ leading, state, failure, copies, action, hostRef, barOn
 }) {
   return (
     <div className="flex h-full w-full flex-col">
-      <div className={`flex shrink-0 items-center gap-3 pr-3 pl-4 ${barOnGround ? "p-terminal-ground h-9" : "h-11"}`}>
+      <div className={`flex shrink-0 items-center gap-3 pr-3 pl-4 ${barOnGround ? "p-terminal-ground h-9" : "h-11"}`} data-terminal-bar>
         {leading}
         <span className="t-meta ml-auto flex shrink-0 items-center gap-3 p-text-3">
           {failure !== null && <span className="max-w-64 truncate p-danger" title={failure}>{failure}</span>}

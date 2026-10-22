@@ -436,7 +436,7 @@ function SelectedEnvironment({ rpc, machine, grant, exec, workspace, executorOut
       {machineSessions?.failure != null && <p className="t-meta px-4 pb-1 p-danger">{machineSessions.failure}</p>}
       {device !== null && !device.connected && (
         <Absence icon={DesktopTowerIcon} title={`${name} is offline`}>
-          Its Kinu daemon is not running. Run <code className="t-meta t-mono">kinu connect</code> on it to bring it back.
+          Run <code className="t-meta t-mono">kinu connect</code> on it to bring it back.
         </Absence>
       )}
       {device !== null && device.connected && !device.granted && <GiveAccess name={name} onGive={() => grant(device.id)} />}
@@ -496,7 +496,7 @@ function EnvironmentView({ mount, machineKey, device, exec, name, workspace, des
 }) {
   if (!mount.live) return <UnavailableMount mount={mount} exec={exec} />;
 
-  if (exec === undefined) return <Absence icon={PlugIcon} title="No command lane">This environment runs no commands.</Absence>;
+  if (exec === undefined) return <Absence icon={PlugIcon} title="No terminal here">This environment runs no commands.</Absence>;
 
   const tab = shownTab(shown.tab(machineKey), sessions?.sessions ?? null);
   // A PC's pane names its session once its list has read; one whose list failed opens its first, naming none.
@@ -642,7 +642,7 @@ const DESKTOP_STEPS = {
   setup: (name: string, detail: string | null) => ({ title: `${name} needs one step first`, body: detail ?? "" }),
   permission: (name: string) => ({
     title: `Allow screen sharing on ${name}`,
-    body: `A prompt on ${name} asks to share its screen with Kinu. Its screen opens here once it is allowed there.`,
+    body: `Allow the prompt on ${name}, and its screen opens here.`,
   }),
 } satisfies Record<"setup" | "permission", (name: string, detail: string | null) => { readonly title: string; readonly body: ReactNode }>;
 
@@ -765,10 +765,11 @@ function GiveAccess({ name, onGive }: { name: string; onGive: () => Effect.Effec
   );
 }
 
-/** The chosen environment's absence, said in its place: the reason, and where to read more. */
+/** The chosen environment's absence, said in its place: what is missing and what brings it, each in under twelve words
+ *  (MA-243), with no account of how it works underneath. */
 function Absence({ icon: Mark, title, children }: { icon: Icon; title: string; children: ReactNode }) {
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center border-t p-border px-8">
+    <div className="flex min-h-0 flex-1 items-center justify-center border-t p-border px-8" data-env-absence>
       <div className="max-w-sm space-y-2 text-center">
         <Mark size={22} className="mx-auto p-text-3" aria-hidden />
         <p className="t-label p-text">{title}</p>
@@ -782,7 +783,7 @@ const EXECUTION_DOCS = "https://github.com/AshishKumar4/kinu/blob/main/docs/EXEC
 
 function UnavailableMount({ mount, exec }: { mount: EnvironmentInfo; exec: ExecutorInfo | undefined }) {
   const text = mount.name === "computer"
-    ? "This deployment has no computer. Use the Workspace shell instead."
+    ? "This deployment has no computer; use the Workspace shell."
     : mount.reason ?? exec?.reason ?? "This environment is not enabled here.";
 
   return (
