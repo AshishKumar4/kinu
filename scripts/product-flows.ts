@@ -289,16 +289,18 @@ export async function answerStackCard(page: Page, key: string, words: string): P
 /**
  * Unticks the parked command `row` on the flow's own batch card `key`, opening it first, until its box stands
  * unticked. On 2026-10-17 a card another run raised took the front between finding the box and pressing it, and the
- * press met a box no longer in the page ("Node is detached from document").
+ * press met a box no longer in the page ("Node is detached from document"). The box is the design system's checkbox,
+ * a `role="checkbox"` button that says its state in `aria-checked` (ui/Check.tsx): a flow that looked for an `input`
+ * waited on staging until its runner's bound (324bd728d, 2026-10-21).
  */
 export async function untickOwnRow(page: Page, key: string, row: string): Promise<void> {
   await until(page, `the flow's command ${row} unticked on its own card`, `(() => {
-    const box = ${ownCard(key)}?.querySelector(${JSON.stringify(`[data-parked-command=${JSON.stringify(row)}] input`)});
+    const box = ${ownCard(key)}?.querySelector(${JSON.stringify(`[data-parked-command=${JSON.stringify(row)}] [role="checkbox"]`)});
 
-    if (!(box instanceof HTMLInputElement)) return false;
-    if (box.checked) box.click();
+    if (!(box instanceof HTMLElement)) return false;
+    if (box.getAttribute('aria-checked') === 'true') box.click();
 
-    return !box.checked;
+    return box.getAttribute('aria-checked') === 'false';
   })()`);
 }
 
