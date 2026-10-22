@@ -288,7 +288,7 @@ const ORCHESTRATOR_METHODS = [
   'connectionsChanged',
   // The account, DO-to-DO, when an account it shared with is deleted (`user/share-cards.ts`).
   'forgetPerson',
-  // The account, DO-to-DO, confirming a workspace's deletion (`user/workspaces.ts`, `confirmed-deletion.ts`).
+  // The account, DO-to-DO, confirming a workspace's deletion (`user/workspaces.ts`, core's `confirmedDeletion`).
   'storedWorkspace',
   'blueprintBundle',
   'readBlueprint',
