@@ -16,7 +16,7 @@ export type {
 export { BUILTIN_ACCOUNTS_OBJECT } from './builtin-accounts';
 
 export {
-  attemptBuckets, CHALLENGE_TTL_MS, checkPassword, grantOf, hashPassword, INVITE_TTL_MS,
+  attemptBuckets, CHALLENGE_TTL_MS, checkPassword, firstOwnerLinkEmail, firstOwnerLinkSecret, grantOf, hashPassword, INVITE_TTL_MS,
 } from './builtin-sign-in';
 
 export {

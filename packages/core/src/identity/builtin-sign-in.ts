@@ -50,6 +50,22 @@ function setupTokenMatches(secret: string | undefined, presented: string | null)
   return timingSafeEqual(sha256Hex(presented), sha256Hex(configured));
 }
 
+export function firstOwnerLinkSecret(token: string, expiresAt: number, email: string): string {
+  return `${sha256Hex(token)}.${expiresAt}.${email}`;
+}
+
+export function firstOwnerLinkEmail(link: string | undefined, presented: string | null, now: number): string | null {
+  const configured = /^([a-f0-9]{64})\.([0-9]+)\.([^\s@]+@[^\s@]+)$/u.exec(link ?? '');
+
+  if (configured === null || presented === null || presented === '') return null;
+  const [, digest = '', expiry = '', email = ''] = configured;
+  const expiresAt = Number(expiry);
+
+  if (!Number.isSafeInteger(expiresAt) || !(now < expiresAt) || email.length > 254) return null;
+
+  return timingSafeEqual(sha256Hex(presented), digest) ? email.toLowerCase() : null;
+}
+
 export function grantOf(tokens: { invite?: string | null; reset?: string | null; setup?: string | null }, setupSecret: string | undefined): Grant {
   if (tokens.reset) return { kind: 'reset', hash: sha256Hex(tokens.reset) };
 

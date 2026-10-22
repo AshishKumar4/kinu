@@ -34,9 +34,17 @@ export interface MultipartUpload {
   readonly parts: readonly UploadPart[];
 }
 
+/** A body carried through without being held: a source's stream of known length, as an R2 object upload takes it. */
+export interface StreamedPut {
+  readonly path: string;
+  readonly body: ReadableStream<Uint8Array>;
+  readonly bytes: number;
+}
+
 export interface CloudflareTransport {
   request(call: CloudflareCall): Promise<CloudflareHttpResponse>;
   upload(upload: MultipartUpload): Promise<CloudflareHttpResponse>;
+  put(put: StreamedPut): Promise<CloudflareHttpResponse>;
 }
 
 export interface CloudflareErrorDetail {
@@ -59,13 +67,14 @@ export class CloudflareApiError extends Data.TaggedError('CloudflareApiError')<{
   }
 }
 
+// Absent, empty or null alike: the assets session answers `errors: null, messages: null` (f44999, 2026-10-21).
 const EnvelopeSchema = v.object({
   success: v.optional(v.boolean()),
-  errors: v.optional(v.array(v.object({
+  errors: v.nullish(v.array(v.object({
     code: v.optional(v.number()),
     message: v.optional(v.string()),
   }))),
-  messages: v.optional(v.array(JsonValueSchema)),
+  messages: v.nullish(v.array(JsonValueSchema)),
   result: v.optional(JsonValueSchema),
 });
 
@@ -77,6 +86,23 @@ export async function cloudflareResult<Result>(
   const response = await transport.request(call);
 
   return readEnvelope(call.path, response, schema);
+}
+
+/** The most a page of `/accounts` and `/zones` holds (their `per_page` maximum). */
+const PAGE = 50;
+
+/** Every item of a listing, a page at a time until one comes back short: no account or zone past the first page lost. */
+export async function cloudflarePages<Item>(transport: CloudflareTransport, path: string, schema: v.GenericSchema<Item>): Promise<Item[]> {
+  const items: Item[] = [];
+  const joiner = path.includes('?') ? '&' : '?';
+
+  for (let page = 1; ; page += 1) {
+    const batch = await cloudflareResult(transport, { method: 'GET', path: `${path}${joiner}per_page=${String(PAGE)}&page=${String(page)}` }, v.array(schema));
+
+    items.push(...batch);
+
+    if (batch.length < PAGE) return items;
+  }
 }
 
 export function readEnvelope<Result>(
@@ -127,6 +153,13 @@ function describe(issues: readonly v.BaseIssue<unknown>[]): string {
   return path === '' ? 'the expected result' : `\`${path}\``;
 }
 
+/**
+ * `DELETE …/email/routing/dns` disables Email Routing for the whole zone and names no subdomain: on a zone another
+ * deployment receives mail on (kinu.run's, under every deployment on a subdomain of it) it turns that mail off too.
+ * No path of Kinu's sends it (2026-10-21); a subdomain's addresses go as their rules are deleted.
+ */
+const DISABLES_ROUTING = /^\/zones\/[^/]+\/email\/routing\/dns(?:\?|$)/u;
+
 export function bearerTransport(
   token: string,
   fetchImpl: typeof fetch = fetch,
@@ -136,6 +169,10 @@ export function bearerTransport(
 
   return {
     async request(call: CloudflareCall): Promise<CloudflareHttpResponse> {
+      if (call.method === 'DELETE' && DISABLES_ROUTING.test(call.path)) {
+        return settleSync(Effect.die(new CloudflareApiError(0, call.path, "Kinu never disables a zone's Email Routing: it is every address's on the zone", [])));
+      }
+
       const response = await fetchImpl(`${apiRoot}${call.path}`, {
         method: call.method,
         headers: {
@@ -166,6 +203,17 @@ export function bearerTransport(
           authorization: upload.bearer === undefined ? authorization : `Bearer ${upload.bearer}`,
         },
         body: form,
+      });
+
+      return { status: response.status, body: await readJsonBody(response) };
+    },
+
+    // Its length named, so the platform pipes the source into the upload and the isolate never holds the body.
+    async put(put: StreamedPut): Promise<CloudflareHttpResponse> {
+      const response = await fetchImpl(`${apiRoot}${put.path}`, {
+        method: 'PUT',
+        headers: { accept: 'application/json', authorization, 'content-type': 'application/octet-stream', 'content-length': String(put.bytes) },
+        body: put.body,
       });
 
       return { status: response.status, body: await readJsonBody(response) };

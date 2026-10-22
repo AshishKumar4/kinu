@@ -1,5 +1,5 @@
 
-import { analyticsMissingSettings, runAnalyticsBatch, type AnalyticsResult } from './analytics-sql';
+import { ANALYTICS_OFF, analyticsMissingSettings, runAnalyticsBatch, type AnalyticsResult, type AnalyticsSqlEnv } from './analytics-sql';
 import type { ProbeOutcome } from '../http/synthetic-probes';
 import type { SqlExec } from '../types/primitives';
 import {
@@ -19,10 +19,7 @@ const SOURCES = 'sources';
 
 const FLEET_SOURCES_PROBE = `${FLEET_PROBE_PREFIX}${SOURCES}`;
 
-export interface FleetEnv {
-  CLOUDFLARE_ACCOUNT_ID?: string;
-  ANALYTICS_SQL_API_TOKEN?: string;
-  ANALYTICS_DATASET_SUFFIX?: string;
+export interface FleetEnv extends AnalyticsSqlEnv {
   KINU_OBS_TOKEN?: string;
   CF_VERSION_METADATA?: { id: string };
 }
@@ -58,7 +55,11 @@ function fromPanel<R extends v.GenericSchema, T>(
 ): Read<T> {
   if (panel === undefined) return unreadable(source, 'no answer');
 
-  if (panel.status === 'unconfigured') return { value: null, unavailable: { source, kind: 'unset', why: `set ${panel.missing.join(' and ')}` } };
+  if (panel.status === 'unconfigured') {
+    const why = panel.missing.includes(ANALYTICS_OFF) ? ANALYTICS_OFF : `set ${panel.missing.join(' and ')}`;
+
+    return { value: null, unavailable: { source, kind: 'unset', why } };
+  }
 
   if (panel.status === 'failed') return unreadable(source, panel.reason);
   const rows = v.safeParse(v.array(row), panel.rows);

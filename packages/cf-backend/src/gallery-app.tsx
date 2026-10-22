@@ -21,7 +21,7 @@ import { EXPLORE_LISTINGS, installExploreFixture } from "@/gallery-explore";
 import { installGalleryFixture } from "@/gallery-listings";
 import { DriveRoute } from "@/gallery-drive";
 import { installMailPageFixture } from "@/gallery-mailpage";
-import { SelfDeployFlow } from "@/gallery-self-deploy";
+import DeployPage from "@/pages/DeployPage";
 import { DesignBar, KeepPlace, PhoneWindow, startDesign, useDesign } from "@/gallery-design-bar";
 
 const WorkspacesPage = lazy(() => import("@/pages/WorkspacesPage"));
@@ -91,7 +91,7 @@ function Pages() {
         <Route path="*" element={<Navigate to={APP_ROUTES.home} replace />} />
       </Route>
       <Route path={APP_ROUTES.welcome} element={loading(<WelcomePage initialStep={0} />)} />
-      <Route path="/deploy" element={<SelfDeployFlow />} />
+      <Route path="/deploy" element={<DeployPage />} />
     </Routes>
   );
 }
