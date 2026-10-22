@@ -13,7 +13,7 @@ import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
-import { principalExecId } from './secrets-caller';
+import { execIdsOf, principalExecId } from './secrets-caller';
 import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
 import { attempt, detach, hold, KinuError, logged, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { Cause, Effect, Exit } from 'effect';
@@ -530,6 +530,21 @@ async function stopUnanswered(box: NimbusSandboxHandle, execId: string): Promise
   await Promise.all(running.map(async (process) => await kill(process.pid)));
 
   return running.length > 0 ? 'workspace exec cancelled: the command was stopped' : `${unconfirmed}, and it is not running now`;
+}
+
+/**
+ * The pids running for job `jobId` in the workspace, by the exec id its process was started under. After the workspace
+ * restarted, Nimbus starts a recorded dev server or a node resident again under that exec id (`restartedFrom`), and its
+ * listing waits for that start; a process nothing starts again is listed by nothing.
+ */
+export async function workspaceJobPids(box: NimbusSandboxHandle, jobId: string): Promise<readonly number[]> {
+  const list = box.processes?.list?.bind(box.processes);
+
+  if (list === undefined) return [];
+  const listed = v.parse(RunningProcessesSchema, await list());
+  const execIds = execIdsOf(jobId);
+
+  return listed.filter((process) => process.state === 'running' && process.execId !== undefined && execIds.includes(process.execId)).map((process) => process.pid);
 }
 
 /**

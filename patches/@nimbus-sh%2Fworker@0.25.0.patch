@@ -1,3 +1,39 @@
+diff --git a/node_modules/@nimbus-sh/worker/.bun-tag-3a58be39db26b80d b/.bun-tag-3a58be39db26b80d
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/dist/hosted/runtime.d.ts b/dist/hosted/runtime.d.ts
+index 53dd6961be290fd6ac4ca28b0b8f578929274953..dce425cc909646ebb03dc7748351187c66625df6 100644
+--- a/dist/hosted/runtime.d.ts
++++ b/dist/hosted/runtime.d.ts
+@@ -36,6 +36,12 @@ export interface HostedRuntimeOptions {
+      * this, or when it answers `null`, the relaunch fails, saying why.
+      */
+     resolveProcessEnv?: FacetManagerHostHooks['resolveProcessEnv'];
++    /**
++     * Where a host that answers resolveProcessEnv from its own keeping keeps
++     * each relaunchable launch's environment, beside its record
++     * (sessionProcessEnv). Without it no environment is kept to answer from.
++     */
++    keepProcessEnv?: FacetManagerHostHooks['keepProcessEnv'];
+     basePath?: string;
+     origin?: string;
+ }
+diff --git a/dist/hosted/runtime.js b/dist/hosted/runtime.js
+index 73cd76f571b6e4eab9f111367f075c7f1f31e7d1..7629f6161642648362bde9fd3bbb4d7e668df253 100644
+--- a/dist/hosted/runtime.js
++++ b/dist/hosted/runtime.js
+@@ -75,7 +75,10 @@ class RuntimeOwner {
+     supervisorDeliveries;
+     constructor(options) {
+         this.options = options;
+-        this.processEnv = options.resolveProcessEnv === undefined ? {} : { resolveProcessEnv: options.resolveProcessEnv };
++        this.processEnv = {
++            ...(options.resolveProcessEnv === undefined ? {} : { resolveProcessEnv: options.resolveProcessEnv }),
++            ...(options.keepProcessEnv === undefined ? {} : { keepProcessEnv: options.keepProcessEnv }),
++        };
+         hostNamespaceBinding(options.env, 'HostedRuntime');
+         this.supervisorDeliveries = openSupervisorDeliveries(options.ctx);
+         const exports = Reflect.get(options.ctx, 'exports');
 diff --git a/dist/hosted/session.d.ts b/dist/hosted/session.d.ts
 index f5d78a440d68863a96bfb048d84233d64f8ae801..717bca9b0c6543dad42ea9dcb2f3c2cc0a21bae1 100644
 --- a/dist/hosted/session.d.ts
@@ -119,6 +155,30 @@ index 273d39485cd21a3dacc1ab244592906a235aad35..db26461833e165b9b7797fe4afdf9315
  /**
   * Write one host-governed file at a session root and let ordinary Unix
   * permissions keep it that way: the root becomes a sticky 1777 directory owned
+diff --git a/dist/workspace-host.d.ts b/dist/workspace-host.d.ts
+index 6821f50a141cbfab4fc91fdb137585b58e36e4fc..db51268faf36ad7fb2c9896a12f09fa0cd7bf6ac 100644
+--- a/dist/workspace-host.d.ts
++++ b/dist/workspace-host.d.ts
+@@ -2,6 +2,7 @@ export { composeFacetManager, type FacetManagerDeps, type FacetManagerHostHooks,
+ export type { WorkerRecipe, ResolvedWorkerLaunch, LongRunningWorkerSpawnOptions } from './facets/manager.js';
+ export { composeHostedRuntime, type HostedRuntime, type HostedRuntimeOptions, type HostedRuntimeLifecycle, type HostedRuntimeTask, type RuntimeFiles } from './hosted/runtime.js';
+ export { HostedSession, type HostedSessionScope } from './hosted/session.js';
++export { sessionProcessEnv } from './session/process-env.js';
+ export { collectExecStream, decodeExecStream, encodeExecStream, type ExecChunk, type ExecExit, type ExecOutput, type ExecStream, type ExecStreamName } from '@nimbus-sh/core/runtime/exec-stream.js';
+ export { runtimeCatalogSource } from './runtime/runtime-catalog.js';
+ export { SupervisorRPC } from './session/supervisor-rpc.js';
+diff --git a/dist/workspace-host.js b/dist/workspace-host.js
+index 4eb846f3c429bd4bd6557fb920c387f4c4448ab4..121edda7f9dde6bb9f0e4c03ee28396b7d4c1b4c 100644
+--- a/dist/workspace-host.js
++++ b/dist/workspace-host.js
+@@ -1,6 +1,7 @@
+ export { composeFacetManager } from './facets/compose.js';
+ export { composeHostedRuntime } from './hosted/runtime.js';
+ export { HostedSession } from './hosted/session.js';
++export { sessionProcessEnv } from './session/process-env.js';
+ export { collectExecStream, decodeExecStream, encodeExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
+ export { runtimeCatalogSource } from './runtime/runtime-catalog.js';
+ export { SupervisorRPC } from './session/supervisor-rpc.js';
 diff --git a/public/_assets/runtime/node-shims-df298aa46ab0bb20.js b/public/_assets/runtime/node-shims-df298aa46ab0bb20.js
 index 703aa3ae4c7ae507ac0f19889d639ce02c21352c..0994d098c181d0f4d64f070643a5442a06b2976b 100644
 --- a/public/_assets/runtime/node-shims-df298aa46ab0bb20.js

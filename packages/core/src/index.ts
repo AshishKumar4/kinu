@@ -1084,6 +1084,8 @@ export {
 
 export { computerProcessResume, stopComputerProcessJob } from './jobs/computer-process';
 
+export { isWorkspaceProcessJob, stopWorkspaceProcessJob, workspaceProcessJobRuns } from './jobs/workspace-process';
+
 export { ComputerProcessEnds, jobState, type ComputerProcessJobRows, type ComputerProcessJobState } from './execution/computer-process-ends';
 
 export {

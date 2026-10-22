@@ -21,6 +21,7 @@ import type { ApprovalSpend } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
+import { onceMoreIfNotAdmitted } from './not-admitted';
 import { type SlateBinding, type SlateBindingProps } from './bindings';
 import { codemodeEgress } from '../codemode-egress-mint';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
@@ -261,16 +262,22 @@ export class SlateHost {
     try {
       // A share's viewers use the slate itself: its durable app and its storage are the state everyone shares. What its
       // calls may reach is the shared server's to say (shared-server.ts), for every request alike.
-      const process = await this.ensure(ROOT_SLATE_CALLER, admission.share.slate);
-      const issued = this.invocations.get(admission.invocation);
+      const send = async (): Promise<Response> => {
+        const process = await this.ensure(ROOT_SLATE_CALLER, admission.share.slate);
+        const issued = this.invocations.get(admission.invocation);
 
-      if (issued !== undefined) this.invocations.set(admission.invocation, { ...issued, incarnation: this.lineageOfProcess(process).incarnation });
-      const headers = new Headers(request.headers);
-      headers.set('x-slate-call', admission.invocation);
-      const target = new URL(request.url);
-      target.pathname = pathname;
-      const forwarded = reoriginateRequest(request, target.toString(), { headers, redirect: request.redirect });
-      const response = headers.get('upgrade')?.toLowerCase() === 'websocket' ? await process.connect(forwarded) : await process.request(forwarded);
+        if (issued !== undefined) this.invocations.set(admission.invocation, { ...issued, incarnation: this.lineageOfProcess(process).incarnation });
+        const headers = new Headers(request.headers);
+        headers.set('x-slate-call', admission.invocation);
+        const target = new URL(request.url);
+        target.pathname = pathname;
+        const forwarded = reoriginateRequest(request, target.toString(), { headers, redirect: request.redirect });
+
+        return headers.get('upgrade')?.toLowerCase() === 'websocket' ? await process.connect(forwarded) : await process.request(forwarded);
+      };
+
+      // A body the first send may have read is not sent twice.
+      const response = request.body === null ? await onceMoreIfNotAdmitted(send) : await send();
 
       const held = this.invocations.get(admission.invocation);
 
@@ -517,34 +524,37 @@ export class SlateHost {
       const parsed = v.safeParse(v.array(JsonValueSchema), args);
 
       if (!parsed.success) throw new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
-      const process = await this.ensure(caller, id);
 
-      if (!process.methods.includes(method)) {
-        throw new KinuError('bad_input', `Slate ${id} has no method ${method}; its class exports ${process.methods.join(', ')}`);
-      }
+      return await onceMoreIfNotAdmitted(async () => {
+        const process = await this.ensure(caller, id);
 
-      // Issued to the process it reaches, under each slate's sharing on its way now.
-      const record = {
-        id, chain, incarnation: this.lineageOfProcess(process).incarnation, generations: this.generationsOf([...chain, id]),
-        ...request.turn !== undefined && { turn: request.turn },
-      };
+        if (!process.methods.includes(method)) {
+          throw new KinuError('bad_input', `Slate ${id} has no method ${method}; its class exports ${process.methods.join(', ')}`);
+        }
 
-      this.invocations.set(invocation, viewer === undefined ? record : { ...record, viewer });
-      const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(process, invocation);
+        // Issued to the process it reaches, under each slate's sharing on its way now.
+        const record = {
+          id, chain, incarnation: this.lineageOfProcess(process).incarnation, generations: this.generationsOf([...chain, id]),
+          ...request.turn !== undefined && { turn: request.turn },
+        };
 
-      try {
-        // The caller's word read again where the call is sent, with nothing awaited between: it throws to refuse.
-        admit?.();
-        const raw: unknown = await stub[method](...parsed.output);
-        const value = v.safeParse(JsonValueSchema, raw === undefined ? null : raw);
+        this.invocations.set(invocation, viewer === undefined ? record : { ...record, viewer });
+        const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(process, invocation);
 
-        if (!value.success) throw new KinuError('bad_input', 'Slate method must return a JSON value', { cause: new v.ValiError(value.issues) });
+        try {
+          // The caller's word read again where the call is sent, with nothing awaited between: it throws to refuse.
+          admit?.();
+          const raw: unknown = await stub[method](...parsed.output);
+          const value = v.safeParse(JsonValueSchema, raw === undefined ? null : raw);
 
-        return { ok: true, value: value.output };
-      } finally {
-        // Dispose here, not at transport end, or workerd reports the read-loop rejection as unhandled.
-        stub[Symbol.dispose]();
-      }
+          if (!value.success) throw new KinuError('bad_input', 'Slate method must return a JSON value', { cause: new v.ValiError(value.issues) });
+
+          return { ok: true, value: value.output };
+        } finally {
+          // Dispose here, not at transport end, or workerd reports the read-loop rejection as unhandled.
+          stub[Symbol.dispose]();
+        }
+      });
     } catch (cause) {
       const refusal = refusalFromThrown({ cause });
 
