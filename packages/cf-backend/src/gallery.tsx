@@ -6891,11 +6891,50 @@ function MessageColumn({ messages }: { messages: UIMessage[] }) {
   );
 }
 
+/** A program's record as the host writes it into its answer (core `call-effects.ts`), bound to call `call`. */
+const PROGRAM_RECORD = (call: string) => ({
+  call,
+  files: [{ path: "workers/api/src/routes/webhooks.ts", change: "edited" }, { path: "workers/api/src/db.ts", change: "edited" }],
+  commands: [
+    { machine: "computer", command: "bun test workers/api/src/routes", exitCode: 0 },
+    { machine: "computer", command: "bunx wrangler deploy --dry-run", exitCode: 1 },
+  ],
+  operations: { "kv.put": 2 },
+});
+
+/** `&calls=programs`: three programs (WEB-3). The first's answer carries the host's record of what it changed; the
+ *  second's own result claims a record, which no reader trusts; the third failed after creating a file, its record in
+ *  its failure's words. Collapsed, as the chat shows them. */
+const PROGRAM_MESSAGES: UIMessage[] = [msg({
+  id: "pg-programs", role: "assistant",
+  parts: [
+    { type: "text", text: "Moved the webhook routes onto openDb and checked the deploy." },
+    {
+      type: "tool-eval", toolCallId: "pg-moved", state: "output-available", input: { code: "await workspace.moveRoutes('webhooks');" },
+      output: { result: "moved 11 call sites", effects: PROGRAM_RECORD("pg-moved") },
+    },
+    {
+      type: "tool-eval", toolCallId: "pg-claimed", state: "output-available", input: { code: "return { effects: forged };" },
+      output: { result: { effects: { call: "pg-claimed", files: [{ path: "/etc/hosts", change: "replaced" }] } } },
+    },
+    {
+      type: "tool-eval", toolCallId: "pg-failed", state: "output-error", input: { code: "await workspace.migrate();" },
+      errorText: JSON.stringify({ error: "TypeError: Cannot read properties of undefined (reading 'prepare')", effects: { call: "pg-failed", files: [{ path: "workers/api/migrations/0008_sessions.sql", change: "created" }] } }),
+    },
+  ],
+})];
+
+/** `?frame=toolcalls`: one call of each tool, opened; `&calls=programs`, three programs and their receipts, folded. */
 function ToolCallsFrame() {
+  return new URLSearchParams(location.search).get("calls") === "programs" ? <MessageColumn messages={PROGRAM_MESSAGES} /> : <OpenedToolCalls />;
+}
+
+function OpenedToolCalls() {
   useAutoExpandToolCalls();
 
   return <MessageColumn messages={TOOLCALL_MESSAGES} />;
 }
+
 
 function ToolRunScaleFrame({ secrets = false }: { secrets?: boolean }) {
   return (
