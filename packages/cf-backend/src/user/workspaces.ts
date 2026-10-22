@@ -3,7 +3,7 @@ import {
   objectNamed,
   autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, commitWorkspaceCapability, freshWorkspaceCapability, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview, type RosterPage, type WorkspaceEntry, workspaceTitleProblem,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
+import { confirmedDeletion, diagnostics, KinuError, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import { ASSISTANT_CONFIG_KEY, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, type RosterQuery } from './roster';
@@ -514,12 +514,13 @@ export class UserWorkspaces {
     // An assistant removed is no longer the owner's: the next install makes a new one (`blueprint-install.ts`).
     this.host.sqlx(`DELETE FROM user_config WHERE key = ? AND value = ?`, ASSISTANT_CONFIG_KEY, name);
 
-    try {
-      await stub.destroyAgent(ownerUserId);
-    } catch (err) {
-      // agents-SDK destroy aborts its own isolate after the wipe; the 'destroyed' error means success.
-      if (!(err instanceof Error) || err.message !== 'destroyed') throw err;
-    }
+    // The Agents SDK's destroy ends its activation after the wipe, which can cut its answer (`confirmedDeletion`): a
+    // new stub reads whether the workspace is still there.
+    await confirmedDeletion(() => {
+      const opened = this.host.env.OrchestratorAgent.get(object);
+
+      return { destroy: async () => { await opened.destroyAgent(ownerUserId); }, remains: async () => opened.storedWorkspace() };
+    }, `the workspace ${name}`);
 
     // Written here, where the destroy landed: the destroyed object's own rows of it can be missing from telemetry
     // (staging f9c17ac7b, 2026-10-14: none of 7d3e6921's quiet, destroy or abort rows were stored), and a deploy's

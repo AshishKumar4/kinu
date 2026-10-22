@@ -4440,6 +4440,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`.length > 0;
   }
 
+  /**
+   * Whether this workspace is still here, for its deletion's confirmation (`confirmedDeletion`): 1 while its identity
+   * stands, which only the wipe removes; 0 once it went, or for a name never born. A new activation makes its tables
+   * empty, and one reached before its destroy's end has none at all, so the table is asked for first.
+   */
+  storedWorkspace(): number {
+    return tableExists(this.boundSql, 'workspace_identity') && this.workspaceBorn() ? 1 : 0;
+  }
+
   /** The first claim or fork. */
   protected bearWorkspace(identityName: string, ownerUserId: string): void {
     this.ctx.storage.transactionSync(() => {
