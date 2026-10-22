@@ -387,7 +387,7 @@ call's usage through the `ModelCallSink` the call was handed.
   messages name each exempt file and the reason it is exempt.
 
 `workspaceSpend()` (`read-models/workspace-spend.ts`) groups the rows. `fast`
-and `reflection` carry review spend; `advisor` carries its deep-tier call. The
+and `reflection` carry review spend; `advisor` carries its deep-tier calls. The
 workspace total includes review spend.
 
 `producers` groups work by producer. `missions` groups by `mission_budget`

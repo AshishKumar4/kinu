@@ -58,11 +58,14 @@ export function advisorReadTools(planes: {
 
 const ToolCallSchema = v.object({ toolCallId: v.string(), toolName: v.string(), input: JsonValueSchema });
 
-/** The advisor's model on its route: the route's fallbacks walked, each call billed as the advisor's. */
-export function routedAdvisorModel(route: ModelRouteResolution, lane: RouteWalk & {
+/** What a backend binds the advisor's model calls with: its registry's binder, its route walk and its spend sink. */
+export type AdvisorLane = RouteWalk & {
   readonly bind: RouteModelBinder;
   readonly spend: Omit<ModelCallSpend, 'source'>;
-}): AdvisorModel {
+};
+
+/** The advisor's model on its route: the route's fallbacks walked, each call billed as the advisor's. */
+export function routedAdvisorModel(route: ModelRouteResolution, lane: AdvisorLane): AdvisorModel {
   return async ({ system, messages, tools }) => await onRoute(route, lane, async (serving) => {
     const { model, providerOptions } = lane.bind(serving);
     const request: GenerateRequest = { model, system, messages: [...messages], tools: tools satisfies ToolSet, ...routeRetryOptions(serving) };

@@ -512,8 +512,6 @@ export class LocalAgentHost {
       installedBuild: null,
       // What each hire's turn told its hirer, so a restart settles a turn its report already answered.
       answered: (turn) => new TurnReports(sql).answered(turn),
-      // Its own entry's port; a seated swarm node has none, and takes no input to be reviewed on.
-      advisorPort: (bound) => this.byActor.get(bound.reference.actorId)?.temporary ?? null,
       // Every hirer here, the root included, is an entry of this process.
       sayToParent: (child, signal) => this.sayToHirer(child, signal),
       actorRuntimeFor: (bound) => this.runtimeFor(runtimes, db, bound),
@@ -1091,7 +1089,6 @@ export class LocalAgentHost {
       evolutionAnswerStored: () => undefined,
       onEvolutionAnswer: async () => {
         this.answerWake(parent);
-        await parent.session.deliverAdvisorAnswers();
       },
       temporary: parent.temporary,
     }, {

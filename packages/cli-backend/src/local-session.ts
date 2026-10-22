@@ -25,7 +25,7 @@ import type {
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   RequestShellApproval,
   DeferredApproval, DeferredApprovalAnswer,
-  AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps, TemporaryAgentPort,
+  AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
   DynamicContextInput,
   RunEvent, RunEventInput, RunEventQuery,
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
@@ -522,7 +522,6 @@ export class LocalAgentSession {
       events: this.eventRecorder,
       recording: this.eventRecorder,
       orchestration: orchestration.deps,
-      advisorPort: () => this.advisorPort(),
       // The completion gate is RAM here: while it waits for its answer, the advisor records its note silently.
       gateOpen: () => this.chat.completionGate.open,
     });
@@ -1505,8 +1504,6 @@ export class LocalAgentSession {
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
     });
     await this.reclaimSettledRunActors();
-    // An advisor that answered while this process was gone.
-    await this.deliverAdvisorAnswers();
     const reviews = await this.actorSession.orchestrator.runDeferredTurnReviews();
 
     if (reviews.reviewed > 0 || reviews.refused.length > 0) {
@@ -1903,7 +1900,7 @@ export class LocalAgentSession {
 
     // No `turnEndExtensions` (runChat fires them in-stream), no `eventReplies` (startup's
     // `reclaimStrandedEventDeliveries` covers them), no `craftedToolsUsed` lane here.
-    return declareTerminalRoster(facts, { role, advisor: this.actorSession.advisor, turn: scoped, reachableTools: input.reachableTools }, parts);
+    return declareTerminalRoster(facts, { role, turn: scoped, reachableTools: input.reachableTools }, parts);
   }
 
   /** This backend's terminal effect bodies; each is replayable at its own boundary (keyed ids, unbound-row selection). */
@@ -1971,7 +1968,6 @@ export class LocalAgentSession {
       }),
       ...chatTerminalEffects({ chat: () => this.chat, orchestrator: () => this.actorSession.orchestrator, engine: this.engine }),
       ...actorTerminalEffects({
-        hireAdvisor: (advisor) => this.actorSession.advisor.hire(advisor),
         // Awaited so a one-shot close joins it.
         applyTitle: async (subject) => {
           await this.applyAutoTitle(subject);
@@ -2382,21 +2378,6 @@ export class LocalAgentSession {
   private reportDeps: ReportDeps | null = null;
   /** Automatic turn-end relay for a subagent, distinct from the model's own {@link reportDeps}. */
   private parentRelay: LocalParentRelay | null = null;
-
-  /** The advisor is hired as every temporary agent is: through the team's port, absent without a host. */
-  protected advisorPort(): TemporaryAgentPort | null {
-    return this.teamDeps?.temporary ?? null;
-  }
-
-  /**
-   * This actor's advisor answered: its note reaches the conversation. The CLI has no durable job queue, so the
-   * stored answer is the owed delivery itself: an answer a death left undelivered goes at the next start. A note is
-   * handed to the turn it opens, never awaited here; tracked, so an exit joins it.
-   */
-  async deliverAdvisorAnswers(): Promise<void> {
-    await this.actorSession.advisor.deliverAnswers();
-    this.tracked(() => this.actorSession.advisor.deliveries());
-  }
 
   /** Installed after construction: roster and peer inbox need the session's broadcast. */
   setTeam(deps: TeamToolDeps): void {

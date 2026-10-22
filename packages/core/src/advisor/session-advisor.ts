@@ -18,6 +18,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentSignal, SendOutcome } from '../types/signals';
 import { isAdvisorSeverity } from '../types/advisor';
 import { EVIDENCE_BUDGETS, evidenceWindow, renderToolResult } from '../utils/evidence-window';
+import { redactSecrets } from '../safety/secret-patterns';
 import type { AdvisorReadTools } from './advisor-ports';
 import {
   ADVISOR_NOTE_MAX_CHARS, ADVISOR_RULES, isAdvisorNoteClass, judgeNote, sayAdvisorNote, type AdvisorNote,
@@ -95,10 +96,16 @@ const MESSAGE_CHARS = EVIDENCE_BUDGETS.outcomeAssistantResponse;
 
 const CALL_CHARS = EVIDENCE_BUDGETS.patternToolCall;
 
+/** `text` as the advisor's model reads it: its route may be another vendor's, so credentials are redacted before it is
+ *  cut, and a cut never leaves a key's body without the header that marks it. */
+function shown(text: string, chars: number): string {
+  return evidenceWindow(redactSecrets(text), chars);
+}
+
 const AdviseSchema = v.object({
   note: v.pipe(v.string(), v.trim(), v.minLength(1)),
   severity: v.string(),
-  class: v.optional(v.string()),
+  class: v.string(),
 });
 
 const ADVISE_TOOL = tool({
@@ -112,7 +119,7 @@ const ADVISE_TOOL = tool({
       severity: { type: 'string', enum: ['nit', 'concern', 'blocker'] },
       class: { type: 'string', enum: ['wrong-work', 'missed-capability', 'dissatisfaction'] },
     },
-    required: ['note', 'severity'],
+    required: ['note', 'severity', 'class'],
     additionalProperties: false,
   }),
 });
@@ -141,19 +148,19 @@ function renderPart(part: MessagePart): string {
 
   switch (record.type) {
     case 'text':
-      return v.is(v.object({ text: v.string() }), record) ? evidenceWindow(record.text, MESSAGE_CHARS) : '';
+      return v.is(v.object({ text: v.string() }), record) ? shown(record.text, MESSAGE_CHARS) : '';
 
     case 'tool-call': {
       const call = v.parse(v.looseObject({ toolName: v.string(), input: v.optional(v.unknown()) }), record);
 
-      return `call ${call.toolName}(${evidenceWindow(JSON.stringify(call.input ?? null), CALL_CHARS)})`;
+      return `call ${call.toolName}(${shown(JSON.stringify(call.input ?? null), CALL_CHARS)})`;
     }
 
     case 'tool-result': {
       const result = v.parse(v.looseObject({ toolName: v.string(), output: v.optional(v.unknown()) }), record);
       const output = v.safeParse(v.looseObject({ value: v.unknown() }), result.output);
 
-      return `result ${result.toolName}: ${evidenceWindow(renderToolResult(output.success ? output.output.value : result.output), CALL_CHARS)}`;
+      return `result ${result.toolName}: ${shown(renderToolResult(output.success ? output.output.value : result.output), CALL_CHARS)}`;
     }
 
     default:
@@ -164,7 +171,7 @@ function renderPart(part: MessagePart): string {
 
 /** One of the agent's messages, as the advisor reads it: its role and what it said or did. */
 export function renderForAdvisor(message: ModelMessage, inProgress: boolean): string | null {
-  const parts = typeof message.content === 'string' ? [evidenceWindow(message.content, MESSAGE_CHARS)] : message.content.map(renderPart);
+  const parts = typeof message.content === 'string' ? [shown(message.content, MESSAGE_CHARS)] : message.content.map(renderPart);
   const body = parts.filter((part) => part !== '').join('\n');
 
   if (body === '') return null;
@@ -172,16 +179,14 @@ export function renderForAdvisor(message: ModelMessage, inProgress: boolean): st
   return `${inProgress ? '[in progress] ' : ''}${message.role}:\n${body}`;
 }
 
-/** One `advise` call's note, or null where it is not one: an unknown severity or class answers nothing. */
+/** One `advise` call's note, or null where it is not one: an unknown or absent severity or class answers nothing, since
+ *  a note whose kind is unlabeled is one a judge cannot be told. */
 export function adviseNote(input: JsonValue): AdvisorNote | null {
   const parsed = v.safeParse(AdviseSchema, input);
 
-  if (!parsed.success || !isAdvisorSeverity(parsed.output.severity)) return null;
-  const noteClass = parsed.output.class ?? 'wrong-work';
+  if (!parsed.success || !isAdvisorSeverity(parsed.output.severity) || !isAdvisorNoteClass(parsed.output.class)) return null;
 
-  if (!isAdvisorNoteClass(noteClass)) return null;
-
-  return { note: parsed.output.note.slice(0, ADVISOR_NOTE_MAX_CHARS), severity: parsed.output.severity, class: noteClass };
+  return { note: parsed.output.note.slice(0, ADVISOR_NOTE_MAX_CHARS), severity: parsed.output.severity, class: parsed.output.class };
 }
 
 function readToolNamed(tools: AdvisorReadTools, name: string): Tool | undefined {
@@ -348,7 +353,7 @@ export class SessionAdvisor {
     if (offered?.execute === undefined) return 'There is no such tool.';
     const result: unknown = await offered.execute(input, { toolCallId: 'advisor', messages: [], context: undefined });
 
-    return evidenceWindow(renderToolResult(result), MESSAGE_CHARS);
+    return shown(renderToolResult(result), MESSAGE_CHARS);
   }
 
   /** One `advise` call: judged as every note is, recorded, and said where the judgement says. */

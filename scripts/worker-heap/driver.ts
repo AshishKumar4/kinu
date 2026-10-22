@@ -121,12 +121,10 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
 const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, screenshots: 0, stepping: false, arrived: 0, released: 0, hires: 0, subagentsAnswered: 0, holdSubagent: false, subagentParked: false, nest: false, failingSteps: 0, failingAsked: 0, stepped: { binding: 0, compat: 0 }, advisorCalls: 0 };
 
-/** The advisor's own model calls: today's hire answers its review prompt (`buildAdvisorPrompt`); the in-session advisor
- *  offers its `advise` tool. Neither is a step of the turn it reviews, so neither takes a scripted step. */
-const ADVISOR_HIRE_MARKER = 'You are reviewing one finished turn of an autonomous coding agent';
-
+/** The advisor's own model calls, which offer its `advise` tool: none is a step of the turn it reviews, so none takes a
+ *  scripted step. */
 function asksAdvisor(request: string): boolean {
-  return request.includes(ADVISOR_HIRE_MARKER) || /"name"\s*:\s*"advise"/u.test(request);
+  return /"name"\s*:\s*"advise"/u.test(request);
 }
 
 /** Each character above U+00FF in `request`, with the text before it: one of them stores the whole request two bytes each. */

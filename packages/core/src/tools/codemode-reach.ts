@@ -1,12 +1,9 @@
 /**
- * Which builtin capability a codemode `eval` program reached, since tool-name meters only see `eval`.
- * `shell` and `file` share `workspace`, so both report as reached: over-reporting is deliberate.
+ * The program a codemode `eval` call submitted, since tool-name meters only see `eval`.
  */
 
 import * as v from 'valibot';
-import { namespacedCalls, parseCodemodeProgram } from '../safety/evolved-code';
 import type { JsonObject } from '../utils/json';
-import { TOOL_REACH, isBuiltinToolName } from './registry';
 
 const CODEMODE_TOOL = 'eval';
 
@@ -19,19 +16,4 @@ export function codemodeProgramOf(toolName: string, args: JsonObject): string {
   const parsed = v.safeParse(CodeArgSchema, args);
 
   return parsed.success ? parsed.output.code : '';
-}
-
-/** Did this program call the capability through its codemode namespace (comments and strings ignored)? */
-export function codemodeReaches(program: string, capability: string): boolean {
-  if (program === '') return false;
-
-  if (!isBuiltinToolName(capability)) return false;
-  const namespace = TOOL_REACH[capability].codemode;
-
-  // `eval` is the sandbox and owns no namespace inside it.
-  if (namespace === null) return false;
-
-  const parsed = parseCodemodeProgram(program);
-
-  return parsed !== null && namespacedCalls(parsed, [namespace]).size > 0;
 }

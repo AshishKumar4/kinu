@@ -15,6 +15,7 @@ import type { AgentsMdSources } from '../prompting/agents-md';
 import type { MediaModality } from '../prompting/attachment-sanitizer';
 import type { PromptBackend, PromptIdentity } from '../prompting/surface';
 import { withOperationProfile, type OperationProfile } from '../profiles/operation';
+import { bindRoute } from '../profiles/model-lane';
 import { effectiveRoleCatalog } from '../profiles/catalog';
 import { ownProfileChoices, resolveTurnProfile, type PinnedProfile, type ProfileAuthorityInputs, type ResolvedTurnProfile } from '../profiles/resolve';
 import type { FrozenAuthority } from './turn-facts';
@@ -288,6 +289,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   const providerOptions = reasoningEffortOptions(profile.tier.reasoningEffort, spec);
 
   const system = buildSystemPromptParts(sources.rt, prompt);
+  const { routed } = models;
 
   const chat: ActorExecutionInput['chat'] = {
     model: models.resolve(spec),
@@ -321,6 +323,12 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
       scaffoldSpend: sources.scaffoldSpend,
       stores: offered.stores,
       artifactVersions: artifacts.versions,
+      // The advisor's calls ride the turn's own model sources and spend sink, on its own route.
+      advisor: {
+        bind: (serving) => bindRoute(models, serving),
+        ...(routed !== undefined && { attemptOf: (served: string) => routed.attemptFor(served) }),
+        spend: { report: sources.scaffoldSpend.report, ...(sources.operations !== undefined && { operations: sources.operations }) },
+      },
     },
     profile, profileInputs, operation, externalTools, activeSkills: activeSkills ?? null, window,
   };

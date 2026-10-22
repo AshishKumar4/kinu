@@ -11,7 +11,6 @@
 
 import * as v from 'valibot';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { parseJsonValue } from '../utils/json';
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { LLM } from '../types/primitives';
@@ -34,7 +33,7 @@ import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from
 import { effectAlreadyDone, preparedOutput, prepareOutput, recordEffectDone, retirePreparedOutput } from '../identity/effect-tombstones';
 import type { TurnPairReader } from '../identity/conversation-store';
 import {
-  ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, AdvisorRowDataSchema, normalizeNote,
+  ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, normalizeNote,
   type AdvisorNote, type AdvisorRowData,
 } from '../advisor/review';
 import { initLessonTables } from './lessons';
@@ -244,33 +243,6 @@ export class EvolutionEngine {
       ORDER BY created_at DESC LIMIT ${limit}`;
 
     return rows.map((row) => normalizeNote(row.message));
-  }
-
-  /**
-     * Idempotency guard for a replayed `advisor_review` effect: the note row is the only
-     * durable evidence that the review completed.
-     */
-  /** The note recorded for `turnId`, and whether it is to be said to the actor; null before its review is judged. */
-  advisorNoteForTurn(turnId: string): { readonly note: AdvisorNote; readonly spoken: boolean } | null {
-    const [row] = this.rt.storage.sql<{ message: string; data: string }>`
-      SELECT message, data FROM evolution_events
-      WHERE actor_id = ${this.rt.actor.actorId} AND type = ${ADVISOR_EVENT_TYPE}
-        AND json_extract(data, '$.turnId') = ${turnId}
-      ORDER BY created_at LIMIT 1`;
-
-    if (row === undefined) return null;
-    const data = v.parse(AdvisorRowDataSchema, parseJsonValue(row.data));
-
-    return { note: { note: row.message, severity: data.severity, class: data.class }, spoken: data.spoken === true };
-  }
-
-  hasAdvisorNoteForTurn(turnId: string): boolean {
-    const rows = this.rt.storage.sql<{ n: number }>`
-      SELECT COUNT(*) AS n FROM evolution_events
-      WHERE actor_id = ${this.rt.actor.actorId} AND type = ${ADVISOR_EVENT_TYPE}
-        AND json_extract(data, '$.turnId') = ${turnId}`;
-
-    return (rows[0]?.n ?? 0) > 0;
   }
 
   private announceReview(turn: CompletedTurn, rating: EffectiveRating | null): void {

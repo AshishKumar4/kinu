@@ -7,7 +7,7 @@ import { attemptInItsWords, flight, KinuError, renderThrownChain, settle } from 
 import {
   encodeModelMessageValues, readAgentArchivePage,
   type InspectedWork,
-  type AgentOwnInspection, type AnsweredEvolutionSubagent, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
+  type AgentOwnInspection, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxFiles, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubagentInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
   type SendState, DeliverySchema, type AdmittedDelivery, type Delivery, type DeliveryAnswer, type InputProducer, type OwedDelivery,
@@ -114,7 +114,6 @@ export interface AgentFacetCalls {
   drainAnswers(snapshot: AgentSnapshot, drainTurnIds: readonly string[]): Promise<Readonly<Record<string, string>>>;
   /** A retirement waits on it. */
   idle(): Promise<void>;
-  deliverAdvice(snapshot: AgentSnapshot, subagent: AnsweredEvolutionSubagent, turnId: string): Promise<boolean>;
   frozen(snapshot: AgentSnapshot, key: FactsKey): Promise<FrozenAuthority | null>;
   /** Runs the turn's waiting model step under this call, and answers once it has ended (`StepPacer`). `dynamic`: the live
    *  block on the profile the step's pace bound, its turn's first. */
@@ -461,11 +460,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async owedWork(snapshot: AgentSnapshot): Promise<readonly InspectedWork[]> {
     return await settle(this.withChat(snapshot, (chat) => chat.owedWork()));
-  }
-
-  /** An advisor's answer on one of this agent's own turns, judged by this isolate's lane and said here. */
-  async deliverAdvice(snapshot: AgentSnapshot, subagent: AnsweredEvolutionSubagent, turnId: string): Promise<boolean> {
-    return await (await this.open(snapshot).acquire()).session.advisor.sayAnswer(subagent, turnId);
   }
 
   async idle(): Promise<void> {

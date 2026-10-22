@@ -32,7 +32,7 @@ const DeliveryInputSchema = v.variant('kind', [
     kind: v.literal('words'), text: v.string(), files: v.optional(v.array(PromptFileSchema)), mode: v.optional(WorkModeSchema),
     tier: v.optional(TierIdSchema), metadata: v.optional(JsonObjectSchema),
   }),
-  /** A turn of the agent's own, opened by what happened: an event, an assignment, a report, an advisor's note. A turn
+  /** A turn of the agent's own, opened by what happened: an event, an assignment, a report, an advisor's blocker. A turn
    *  already running takes it at its next step instead, reading `stepText` when it has one; one that `opensTurn` (an
    *  assignment, whose answer is keyed by its id) or yields to the owner's words always waits for a turn of its own. */
   v.object({

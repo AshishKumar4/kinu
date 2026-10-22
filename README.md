@@ -177,7 +177,7 @@ self-host as of 2026-09-13; it depends on model use, storage and containers.
 | Delegation | One `agents` tool: `swarm`, `hire`, `msg`, `list`, `dismiss`. A hired agent either stays or runs one task, as `task`, `researcher`, `planner`, `auditor` or `designer`. |
 | Crafted tools | The agent writes tools, scores them as it uses them, and finds them again with FTS5 search. |
 | A scaffold the agent can change | The agent loop is code the agent can rewrite. Structural checks validate a change before it runs. |
-| Evolution | Four timescales: step, turn, session, lifetime. An optional advisor reviews finished turns. |
+| Evolution | Four timescales: step, turn, session, lifetime. An optional advisor reviews each step as the agent works. |
 | Prompts as Markdown | Prompt text lives under `packages/core/src/prompts/`. The builder picks sections and fills their slots. Indexed sections evolve on their own. |
 | Triggers | Timers and webhooks wake cloud workspaces. Local timers need `kinu daemon` running. Email needs the mail domain set up; the last live check, on 2026-08-20, found that setup unfinished on `kinu.run` ([email setup](docs/EMAIL-INGRESS.md)). |
 | Web search | The `web` tool works with no keys. A Tavily key adds ranked search. |

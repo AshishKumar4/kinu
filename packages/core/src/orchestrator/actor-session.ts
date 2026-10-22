@@ -40,11 +40,10 @@ import type { SendOutcome } from '../types/signals';
 import { USER_MESSAGE_SIGNAL_KIND } from '../types/signals';
 
 import { SessionAdvisor, type AdvisorContext } from '../advisor/session-advisor';
-import { advisorReadTools, routedAdvisorModel } from '../advisor/advisor-ports';
+import { advisorReadTools, routedAdvisorModel, type AdvisorLane } from '../advisor/advisor-ports';
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { modelWindow } from '../context-window';
 import { resolveModelRoute } from '../profiles/model-route';
-import type { RouteModelBinder, RouteWalk } from '../profiles/model-lane';
 import { SessionHistory, type MaterializedHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
@@ -87,8 +86,6 @@ export interface ActorSessionOptions {
   readonly events?: ContextEventRecorder | null;
   readonly recording?: RunEventRecorder;
   readonly advisor?: AdvisorContext;
-  /** The advisor's model lane: the backend's binder, its route walk and its spend. Absent, turns are not reviewed. */
-  readonly advisorLane?: RouteWalk & { readonly bind: RouteModelBinder; readonly spend: Omit<ModelCallSpend, 'source'> };
   /** The profile's `input`: an actor that takes no input (a swarm node, an evolution agent) is not reviewed. */
   readonly reviewed?: boolean;
   /** The completion gate has asked and not heard back, when the host keeps one: only the CLI's one-shot surface arms it. */
@@ -128,6 +125,8 @@ export interface ActorExecutionInput {
   /** The store operations `chat.tools` run, which its scaffold's machines run too; null where this session holds no
    *  machine (an agent's isolate, whose programs run on the workspace). */
   readonly stores: ServedStores | null;
+  /** The advisor's model calls, on the turn's own model sources; absent, the turn is not reviewed. */
+  readonly advisor?: AdvisorLane;
   /** `<artifactId>@<version>` of each promoted text the turn assembled from, recorded once on its admission. */
   readonly artifactVersions?: readonly string[];
 }
@@ -261,7 +260,7 @@ export class ActorSession {
     this.advisor = new SessionAdvisor({
       actor: options.runtime.actor,
       config: () => context?.config ?? options.runtime.actor.config,
-      reviewed: (options.reviewed ?? true) && options.advisorLane !== undefined,
+      reviewed: options.reviewed ?? true,
       notes: () => options.orchestration.engine,
       gateOpen: () => options.gateOpen?.() ?? false,
       send: (signal) => this.orchestrator.signals.send(signal),
@@ -948,9 +947,9 @@ export class ActorSession {
   }): AsyncIterable<ChatEvent> {
     const { lease, active, profile, input, program, claim, stream, tally, remote } = turn;
     const { tools, extensions } = this.turnToolset(input, profile);
-    const lane = this.options.advisorLane;
+    const lane = this.advisor.reviewsTurns ? input.advisor : undefined;
 
-    if (lane !== undefined && this.advisor.reviewsTurns) {
+    if (lane !== undefined) {
       extensions.register(this.advisor.extension({
         turnId: claim.turnId,
         model: routedAdvisorModel(resolveModelRoute('advisor', profile), lane),

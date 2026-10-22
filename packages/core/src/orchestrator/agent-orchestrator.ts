@@ -31,8 +31,6 @@ export interface AgentOrchestratorDeps extends EvolutionLanesDeps {
     | 'reviewTurn'
     | 'recentAdvisorNotes'
     | 'recordAdvisorNote'
-    | 'hasAdvisorNoteForTurn'
-    | 'advisorNoteForTurn'
   >;
   eventLog: EventLog;
   sinks?: TurnSinks;

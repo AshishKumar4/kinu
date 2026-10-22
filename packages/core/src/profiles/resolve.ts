@@ -13,7 +13,7 @@ import type { NamedSwarmPreset } from '../types/swarm';
 import { DEFAULT_PROVIDER_RETRIES, ROLE_ID_RE, isValidRoleId } from '../types/profile';
 import { DEFAULT_DECISION_MODEL, type DecisionModel } from '../providers/decision-model';
 import { TierIdSchema, tierIdsOf,
-  BUILTIN_PROFILE_CATALOG, SYSTEM_ROLE_DEFINITIONS, deriveRoleLabel, effectiveRoleCatalog,
+  BUILTIN_PROFILE_CATALOG, deriveRoleLabel, effectiveRoleCatalog,
   profileCatalogDigest, validateProfileCatalogEnvelope,
   type ProfileAuthority, type ProfileCatalogEnvelope, type RoleCatalog, type RoleId, type TierAssignment, type TierId,
 } from './catalog';
@@ -273,7 +273,7 @@ function checkedAuthority(input: ProfileAuthorityInputs): Effect.Effect<CheckedA
     return {
       envelope,
       provider,
-      roles: { ...effectiveRoleCatalog(envelope.catalog), ...SYSTEM_ROLE_DEFINITIONS },
+      roles: effectiveRoleCatalog(envelope.catalog),
       defaultAssignment,
       assigned: (id) => envelope.catalog.tiers[id] ?? (id === 'fast' ? autoFast : undefined),
       serving(id, stored) {
@@ -442,14 +442,11 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   }));
 }
 
-/** The pins a turn's model takes, weakest first: the workspace's, then the actor's own. A runtime preset takes
- *  none: the advisor's second opinion is not the model it reviews. */
+/** The pins a turn's model takes, weakest first: the workspace's, then the actor's own. */
 function modelPins(input: Pick<ResolveTurnProfileInput, 'roleId' | 'workspaceModel' | 'actorModel'>): readonly {
   readonly model: string;
   readonly source: 'workspace' | 'actor';
 }[] {
-  if (Object.hasOwn(SYSTEM_ROLE_DEFINITIONS, input.roleId)) return [];
-
   return [
     ...(input.workspaceModel === undefined || input.workspaceModel === null ? [] : [{ model: input.workspaceModel, source: 'workspace' as const }]),
     ...(input.actorModel === undefined || input.actorModel === null ? [] : [{ model: input.actorModel, source: 'actor' as const }]),

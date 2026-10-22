@@ -7,7 +7,7 @@ import type { ChatWindow, ForkConversationPlan, ForkConversationSection, ForkCon
 import type { CacheWarmArm, ContextEditor, ContextTree, ConversationRecall, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ProviderEnv, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace, TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
-import type { AdvisorRecoverySnapshot, AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnEndEvent, ModelCallReport } from '@kinu.run/core';
+import type { AgentFigures, AgentReport, AgentTurnActivity, HandedOffTurn, ResolvedTurnProfile, SettledRun, AgentHeadDelta, AgentSnapshot, AgentToolCall, AgentTrace, SessionEvent, TurnEndEvent, ModelCallReport } from '@kinu.run/core';
 import type { ChatTurnRequest } from './agent-turns';
 import { attempt, diagnostics, KinuError, relayedLine, settle, toKinuError } from '@kinu.run/core/obs';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
@@ -213,7 +213,6 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   autoTitle(subject: string, title: string | null) { return this.open(() => this.answers.autoTitle(subject, title)); }
   turnSettled(settled: HandedOffTurn) { return this.open(() => this.answers.turnSettled(settled), settled); }
   runSettled(run: SettledRun) { return this.open(() => this.answers.runSettled(run), run); }
-  hireAdvisor(advisor: AdvisorRecoverySnapshot) { return this.open(() => this.answers.hireAdvisor(advisor)); }
   owes(seq: number, next: number | null, holds: boolean, report: AgentReport) { return this.open(() => this.answers.owes(seq, next, holds, report)); }
   birthContext(drainTurnId: string) { return this.open(() => this.answers.birthContext(drainTurnId)); }
   steerSkills(text: string, alreadyActive: readonly string[]) { return this.open(() => this.answers.steerSkills(text, alreadyActive)); }

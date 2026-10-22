@@ -1,7 +1,6 @@
 import type { AgentFigures } from '../read-models/agent-figures';
 import type { ContextMeasures } from '../events/recorder';
 import type { JSONSchema7, UIMessage } from 'ai';
-import type { CompletedTurn } from '../evolution/types';
 import type { TurnFacts } from '../orchestrator/turn-facts';
 import type { ContextFill } from '../read-models/context-fill';
 import type { InlineSteer } from '../read-models/transcript';
@@ -99,7 +98,6 @@ export interface PreparedAgentTurn {
    *  its own receipts: no workspace receipt is kept around them (design v2 §4). */
   readonly ownerLane: Pick<TurnReach, 'askOwner' | 'submitPlan' | 'replyToComment'>;
   readonly dynamic: DynamicContext;
-  readonly reviewsTurns: boolean;
   readonly missionLabels?: readonly string[];
   /** What the workspace decided as the turn opened; the agent keeps the first it is told for a turn. */
   readonly facts: TurnFacts;
@@ -136,14 +134,6 @@ export interface AgentToolCall {
   readonly callId: string;
   readonly name: string;
   readonly input: JsonValue;
-}
-
-/** A completed round of a delivered run, for its caller's advisor: carried by the run's end, and reviewed by the
- *  workspace as it takes that end, so nothing of it crosses before the run's end commits. */
-export interface AgentReview {
-  readonly turn: CompletedTurn;
-  readonly reachable: readonly string[];
-  readonly mode: WorkMode;
 }
 
 interface AgentCaptureDelta {
@@ -184,8 +174,6 @@ export interface AgentTurnEnd extends Omit<HeadReport, 'errorMessage'> {
   readonly figures: AgentFigures;
   readonly errorMessage: string | null;
   readonly produced?: readonly JsonValue[];
-  /** Its completed rounds, for its caller's advisor, in order. */
-  readonly reviews?: readonly AgentReview[];
   /** Its model calls beside its rounds' own (compaction, its loop's calls), charged to the workspace as it takes the end:
    *  kept with the end, so an end a restart tells was charged, once. */
   readonly charges?: readonly ModelCallReport[];
