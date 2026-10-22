@@ -177,8 +177,8 @@ async function screenshotWorkspace(respond: (run: RecordedGatewayRun) => Respons
 /** An added agent, and the owner's words in its own pane. */
 async function addedAgent(agent: HarnessOrchestratorAgent) {
   await agent.setSoul('# Purpose\n\nCheck the settings screens.');
-  const { subordinate } = await agent.createSubordinateAgent();
-  const pane = [actorConnectionTag(subordinate.actorId ?? '')];
+  const { subagent } = await agent.createSubagentAgent();
+  const pane = [actorConnectionTag(subagent.actorId ?? '')];
 
   return async (text: string): Promise<void> => {
     await asPane(pane, () => agent.send(text, crypto.randomUUID()));

@@ -86,7 +86,7 @@ export async function outranked(armada: Armada, job: string, claim: SlotClaim): 
  * draws on these same keys (scripts/eval-provider-keys.ts), so a long comparison can spend the window a release needs;
  * this is where that shows. A window the provider does not report is said, not guessed.
  */
-export async function keysWindows(say: (line: string) => void, seams: { readonly keysPath?: string; readonly fetch?: typeof fetch; readonly now?: number } = {}): Promise<void> {
+export async function keysWindows(say: (line: string) => void, seams: { readonly keysPath?: string; readonly fetch?: typeof fetch; readonly now?: number; readonly refuseSpent?: boolean } = {}): Promise<void> {
   const now = seams.now ?? Date.now();
   const file = keysIn(seams.keysPath ?? EVAL_PROVIDER_KEYS);
 
@@ -97,7 +97,7 @@ export async function keysWindows(say: (line: string) => void, seams: { readonly
   for (const line of limitLines(limits, limitsUnread, now)) say(`evals: eval keys: ${line}`);
   const spent = limits.flatMap((report) => report.windows.filter((window) => (window.usedPercent ?? 0) >= 100).map((window) => ({ report, window })));
 
-  if (spent.length > 0) {
+  if (spent.length > 0 && seams.refuseSpent !== false) {
     throw new Error(`evals: ${spent.map(({ report, window }) => `${report.provider}'s ${window.name} window is spent${window.resetsAt === undefined ? '' : ` until ${new Date(window.resetsAt).toISOString()}`}`).join('; ')}: `
       + 'every trial\'s model calls would be refused; start once it resets');
   }

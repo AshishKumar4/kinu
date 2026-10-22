@@ -66,7 +66,7 @@ export function useSceneWidth(): number {
 
 export type TuiAgentStatus = 'idle' | 'running' | 'needs-you' | 'failed';
 
-export interface TuiSubordinate {
+export interface TuiSubagent {
   readonly id: string;
   readonly label: string;
   readonly status: TuiAgentStatus;
@@ -77,7 +77,7 @@ export interface TuiSubordinate {
 
 export type TuiAgentSummary = ListedAgent & {
   readonly status?: TuiAgentStatus;
-  readonly subordinates?: readonly TuiSubordinate[];
+  readonly subagents?: readonly TuiSubagent[];
 };
 
 export interface TuiAgentPage {
@@ -345,7 +345,7 @@ function buildSidebarRows(
 }
 
 function rowLineCount(row: TuiSidebarRow): number {
-  return row.kind === 'agent' ? 1 + (row.agent.subordinates?.length ?? 0) : 1;
+  return row.kind === 'agent' ? 1 + (row.agent.subagents?.length ?? 0) : 1;
 }
 
 function rowLineOffset(rows: readonly TuiSidebarRow[], index: number): number {
@@ -802,11 +802,11 @@ function NavigatorRow(props: {
           <span fg={props.selected || props.active ? colors.text.strong : colors.text.primary}>{clipText(agentDisplayLabel(agent), 16)}</span>
         </text>
       </box>
-      {agent.subordinates?.map((subordinate) => (
-        <text key={subordinate.id}>
+      {agent.subagents?.map((subagent) => (
+        <text key={subagent.id}>
           <span fg={colors.border.strong}>{row.nested ? '    └ ' : '  └ '}</span>
-          <span fg={subordinate.status === 'running' ? colors.intent.success : colors.text.muted}>
-            {clipText(subordinate.roleId === undefined ? agentDisplayLabel({ name: subordinate.id, label: subordinate.label }) : `${agentDisplayLabel({ name: subordinate.id, label: subordinate.label })} · ${subordinate.roleId}`, 18)}
+          <span fg={subagent.status === 'running' ? colors.intent.success : colors.text.muted}>
+            {clipText(subagent.roleId === undefined ? agentDisplayLabel({ name: subagent.id, label: subagent.label }) : `${agentDisplayLabel({ name: subagent.id, label: subagent.label })} · ${subagent.roleId}`, 18)}
           </span>
         </text>
       ))}
@@ -844,11 +844,11 @@ function validateAgentPage(page: TuiAgentPage): Effect.Effect<TuiAgentPage> {
     }
 
     return Object.freeze({
-      items: Object.freeze(page.items.map((agent) => agent.subordinates === undefined
+      items: Object.freeze(page.items.map((agent) => agent.subagents === undefined
         ? Object.freeze({ ...agent })
         : Object.freeze({
             ...agent,
-            subordinates: Object.freeze(agent.subordinates.map((subordinate) => Object.freeze({ ...subordinate }))),
+            subagents: Object.freeze(agent.subagents.map((subagent) => Object.freeze({ ...subagent }))),
           }))),
       total: page.total,
       nextCursor: page.nextCursor,

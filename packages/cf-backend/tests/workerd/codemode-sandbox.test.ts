@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
-import { admitCraftedSource, cloudPlanes, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, JsonValueSchema, WORKSPACE_ROOT, workspacePath, type ToolOutcome, type JsonValue } from '@kinu.run/core';
+import { admitCraftedSource, cloudPlanes, commandAnswer, decodeJsonValue, failedToolOutcome, programEffectsOf, successfulToolOutcome, withCodemodeProgram, programSurface, narrowToolSurface, nativeToolFunctions, JsonValueSchema, WORKSPACE_ROOT, workspacePath, type ToolOutcome, type JsonValue } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { createCodeTool } from '@cloudflare/codemode/ai';
 import { generateText, isStepCount, tool, jsonSchema } from 'ai';
@@ -12,6 +12,8 @@ import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { KinuSandboxExecutor, codemodeLauncher, renderToolsPrelude } from '../../src/codemode-sandbox';
 import { BROWSER_PRELUDE } from '../../src/browser-prelude';
 import { createWebCodemodeProvider, type WebSearchProvider } from '@kinu.run/core';
+import { buildMcpToolSet, describeMcpTool } from '@kinu.run/core';
+import { GITHUB_MCP_INTENTS, GITHUB_MCP_TOOLS } from '@kinu.run/test-utils/github-mcp-catalog';
 
 const files = new Map<string, string>([[`${WORKSPACE_ROOT}/notes.md`, 'hello from the workspace']]);
 
@@ -75,11 +77,18 @@ const workspace = {
   },
 };
 
+/** `tools.*` as a program's surface holds it with nothing else reached: each crafted tool's failure census. */
+function craftedSurface(crafted: ReadonlyArray<{ name: string; code: string; description: string }>) {
+  const { providers } = programSurface({ surface: { native: {}, external: () => ({}) }, namespaces: [], reach: narrowToolSurface(undefined), mode: 'build', signal: undefined, crafted });
+
+  return providers.find((provider) => provider.name === 'tools')?.tools ?? {};
+}
+
 function toolsProvider(crafted: Array<{ name: string; code: string; description: string }>, cwd = WORKSPACE_ROOT) {
   return {
     name: 'tools',
     fns: {
-      ...Object.fromEntries(Object.entries(craftedFailureFunctions(crafted)).map(([name, entry]) => [name, entry.execute])),
+      ...Object.fromEntries(Object.entries(craftedSurface(crafted)).map(([name, entry]) => [name, entry.execute])),
       file: async (...args: unknown[]) => ({ echoed: decodeJsonValue({ value: args[0] }) }),
     },
     prelude: renderToolsPrelude(crafted, { cwd, workspace: 'probe' }),
@@ -114,8 +123,89 @@ const dbProvider = {
 
 const SCRATCH_TABLE = 'await db.createTable({ name: "scratch", scope: "private", columns: [{ name: "key", type: "text", primaryKey: true }, { name: "value", type: "json" }] });';
 
+/** GitHub's catalog as `describeMcpTool` serves it from a server named `github`. */
+function githubDescriptors() {
+  return GITHUB_MCP_TOOLS.map((remote) => {
+    const described = describeMcpTool({ id: 'github', name: 'github' }, remote);
+
+    if ('refused' in described) throw new Error(described.refused.reason);
+
+    return described.admitted;
+  });
+}
+
 describe('the eval sandbox under workerd', () => {
   const executor = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: null }, async () => ({})));
+
+  test('MCP discovery and typed calls cross the hosted sandbox through the shared core surface', async () => {
+    const external = buildMcpToolSet(githubDescriptors(), {
+      call: async (descriptor, args) => ({ tool: descriptor.name, args }),
+      effectClaims: {
+        sql: () => { throw new Error('Read-only MCP tools must not write receipts'); },
+        get actor(): never { throw new Error('Read-only MCP tools must not claim effects'); },
+        execution: () => ({ turnId: 'discovery', runId: 'discovery' }),
+      },
+      spill: { get vfs(): never { throw new Error('The small result must not spill'); }, home: WORKSPACE_ROOT },
+    });
+
+    const { providers } = programSurface({
+      surface: { native: {}, external: () => external }, namespaces: [], mode: 'build', signal: undefined,
+      reach: narrowToolSurface(['eval', 'mcp_github_search_code']), crafted: [],
+    });
+
+    const program = createCodeTool({ executor, tools: providers });
+    const execute = program.execute;
+
+    if (execute === undefined) throw new Error('The hosted eval is not executable');
+
+    const output = await execute({ code: `
+      const ranked = await codemode.search("search code");
+      const docs = await codemode.describe(ranked.results[0].path);
+      const hidden = await codemode.search("create issue");
+      const missing = await codemode.describe("tools.not_present");
+      return { path: ranked.results[0].path, schema: docs.inputSchema, hidden: hidden.total, missing: missing.path,
+        result: await tools[ranked.results[0].method]({ query: "DurableObject" }) };
+    ` }, { toolCallId: 'discovery', messages: [], context: undefined });
+
+    const searchCode = GITHUB_MCP_TOOLS.find((entry) => entry.name === 'search_code');
+
+    // GitHub's own schema returned whole, its page bounds kept; reach narrowed to one tool hides the rest from search.
+    expect(output).toMatchObject({ result: {
+      path: 'tools.mcp_github_search_code', hidden: 0, missing: 'tools.not_present',
+      schema: searchCode?.inputSchema,
+      result: { tool: 'search_code', args: { query: 'DurableObject' } },
+    } });
+    // Exactly the catalog's schema, not a subset of it; its page bounds among what it keeps.
+    expect(v.parse(v.object({ result: v.object({ schema: v.unknown() }) }), output).result.schema).toEqual(searchCode?.inputSchema);
+    expect(searchCode?.inputSchema.properties.perPage).toMatchObject({ minimum: 1, maximum: 100 });
+  });
+
+  test('over GitHub\'s own catalog, search ranks first the tool each representative intent means', async () => {
+    const external = buildMcpToolSet(githubDescriptors(), {
+      call: async () => { throw new Error('search calls no tool'); },
+      effectClaims: {
+        sql: () => { throw new Error('search writes no receipt'); },
+        get actor(): never { throw new Error('search claims no effect'); },
+        execution: () => ({ turnId: 'discovery', runId: 'discovery' }),
+      },
+      spill: { get vfs(): never { throw new Error('search spills nothing'); }, home: WORKSPACE_ROOT },
+    });
+
+    const { providers } = programSurface({
+      surface: { native: {}, external: () => external }, namespaces: [], mode: 'build', signal: undefined, reach: narrowToolSurface(undefined), crafted: [],
+    });
+
+    const execute = createCodeTool({ executor, tools: providers }).execute;
+
+    if (execute === undefined) throw new Error('The hosted eval is not executable');
+
+    const output = await execute({ code: `
+      const queries = ${JSON.stringify(GITHUB_MCP_INTENTS.map(([query]) => query))};
+      return await Promise.all(queries.map(async (query) => (await codemode.search(query)).results[0].path));
+    ` }, { toolCallId: 'ranking', messages: [], context: undefined });
+
+    expect(output).toMatchObject({ result: GITHUB_MCP_INTENTS.map(([, name]) => `tools.mcp_github_${name}`) });
+  });
 
   test('hosted codemode distinguishes returned data, handled refusal, and unhandled failure', async () => {
     const outcomes: ToolOutcome[] = [];
@@ -286,6 +376,20 @@ describe('the eval sandbox under workerd', () => {
     expect(created).toEqual([String.raw`async (args) => 'it\'s ' + args.name`]);
   });
 
+  // Duplication audit, 2026-10-20 (InternalFish #12): one namespace shape for the sandbox and in-process programs. A
+  // member a namespace serves is its own, so the shim binds slates only where they are served; any other name refuses.
+  test("a namespace's own members are what it serves, and a name it does not serve is refused by name", async () => {
+    const served = await executor.execute(
+      "return ['exec' in workspace, 'slates' in workspace, 'nope' in workspace, (await workspace) === workspace];",
+      [toolsProvider([]), { name: 'workspace', fns: { exec: async () => 'ran' } }],
+    );
+
+    const missing = await executor.execute('return await workspace.nope();', [toolsProvider([]), { name: 'workspace', fns: { exec: async () => 'ran' } }]);
+
+    expect(served).toMatchObject({ result: [true, false, false, true] });
+    expect(missing.error).toContain('Tool "nope" not found');
+  });
+
   test('private db scratch survives between two programs, and a host failure is attributed to its namespace member', async () => {
     const first = await executor.execute(`${SCRATCH_TABLE}\nawait db.insert('scratch', [{ key: 'n', value: 41 }]); return 'saved'`, [toolsProvider([]), dbProvider, workspace]);
     expect(first.result).toBe('saved');
@@ -301,6 +405,20 @@ describe('the eval sandbox under workerd', () => {
     expect(failed.result).toEqual({ success: false, reason: null, error: 'ENOENT: no such file: absent.md' });
   });
 
+  // WEB-3: a program's member calls arrive over RPC with no async context of their caller's; the record it makes is
+  // still the program's, entered where its call was bound.
+  test("a command a program's member answers over RPC is recorded for that program, with its exit code", async () => {
+    const providers = [{ name: 'workspace', fns: {
+      exec: async (...args: unknown[]) => commandAnswer({ exitCode: 2, stderr: 'no such file' }, false, false, { machine: 'workspace', command: String(args[0]) }),
+    } }];
+
+    const ran = await withCodemodeProgram(() => executor.execute("await workspace.exec('cat missing.txt').catch(() => null); return 'done';", providers), { call: 'call-rpc' });
+
+    expect(programEffectsOf('call-rpc', v.parse(JsonValueSchema, ran))).toEqual({
+      call: 'call-rpc', files: [], commands: [{ machine: 'workspace', command: 'cat missing.txt', exitCode: 2 }], operations: {},
+    });
+  });
+
   test('host rejections and native refusals use one value; recovery and propagation keep their binding census', async () => {
     const native = nativeToolFunctions({ file: tool({
       inputSchema: jsonSchema<{ action: string }>({ type: 'object' }),
@@ -308,7 +426,7 @@ describe('the eval sandbox under workerd', () => {
     }) }, undefined);
 
     const providers = [{ name: 'tools', fns: Object.fromEntries(Object.entries(native).map(([name, entry]) => [name, entry.execute])) }];
-    const run = (code: string) => withCodemodeProgram(() => executor.execute(code, providers));
+    const run = (code: string) => withCodemodeProgram(() => executor.execute(code, providers), { call: 'call-test' });
     const recovered = await run('const failure = await tools.file({op:"read"}); if (failure.success === false) return failure.reason; throw new Error("missing failure shape");');
     expect(recovered.result).toBe('unavailable');
     expect(successfulToolOutcome('eval', { output: recovered })).toEqual({ success: true, failures: [
@@ -377,7 +495,7 @@ describe('the eval sandbox under workerd', () => {
       "// reach a browser this agent did not open, then list tools on something that is no page\n"
       + "const browser = await web.connectBrowser('not-mine'); const tools = await web.pageTools({}); return { browser, tools };",
       [{ name: 'web', fns, prelude: web.prelude }],
-    ));
+    ), { call: 'call-test' });
 
     expect(ran.result).toMatchObject({
       browser: { success: false, reason: 'denied' },

@@ -10,7 +10,7 @@ import type { AgentStatus } from "@kinu.run/core";
 import type { ReadMoves } from "@/hooks/use-workspace-reads";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 import { executorLabel, previewPortTitle, type ExecutorInfo, type InspectedWork } from "@kinu.run/core";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import type { MemoryEntry, ForkNode, ExecutorCommandResult, TabPresence } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { ChangesSurface, type ChangesFocus } from "./ChangesSurface";
@@ -38,6 +38,8 @@ import { PlanPageList } from "./PlanPage";
 import { usePlanPages } from "./use-plan-pages";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
+import { Pressable } from "@/components/ui/Pressable";
 
 // A surface drawn only once it is chosen loads with its first view, outside the workspace's first chunk.
 const FilesSurface = lazyRoute<FilesSurfaceProps>(async () => {
@@ -133,6 +135,9 @@ interface WorkSurfaceProps {
   /** A fork's landing opens on what it reaches, not the preview. */
   forkLanding?: { readonly slate: string; readonly reaches: readonly string[] } | null;
   onForkLandingOpened?: () => void;
+  /** The page opened on the desktop's address: Environment shows the chosen machine's desktop, once. */
+  desktopLanding?: boolean;
+  onDesktopLanded?: () => void;
 }
 
 /** The open Slate's pane: a fork's reach on landing, else its frame. */
@@ -156,7 +161,7 @@ function ListingStatus({ error, starting = [], onRetry }: { error: string | null
   if (starting.length === 0) return null;
 
   return (
-    <div role="status" className={`flex items-center gap-2 text-xs p-text-3 ${LISTING_STRIP}`} data-preview-starting>
+    <div role="status" className={`t-meta flex items-center gap-2 p-text-3 ${LISTING_STRIP}`} data-preview-starting>
       <Loader size="sm" />
       <span className="min-w-0 truncate">{starting.map(executorLabel).join(" and ")} starting…</span>
     </div>
@@ -165,7 +170,7 @@ function ListingStatus({ error, starting = [], onRetry }: { error: string | null
 
 /** A page, and Environment's terminal and screen, fill the column edge to edge; the rest scroll inside its margins. */
 function bodyFitFor(surface: SurfaceKind | null, previewSelected: boolean): string {
-  return previewSelected || surface === "Environment" ? "overflow-hidden" : "overflow-y-auto py-[18px] pl-[18px] pr-6";
+  return previewSelected || surface === "Environment" ? "overflow-hidden" : "overflow-y-auto py-[var(--layout-inset)] pl-[var(--layout-inset)] pr-6";
 }
 
 export function WorkSurface(props: WorkSurfaceProps) {
@@ -283,21 +288,20 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const bodyFit = bodyFitFor(surface, previewSelected);
 
   return (
-    <div className="@container flex flex-col h-full p-sidebar">
+    <Surface look="chrome" className="@container flex flex-col h-full">
       <InspectorBar surface={surface} pages={pages} tools={tools} choose={choose} trailing={<>
         {chip !== null && (
-          <button
-            type="button"
+          <Pressable look="compact" selected
             onClick={() => choose(chip.surface)}
             data-preview-ready
             title={chip.title}
             aria-label={`Preview ready: ${chip.title}`}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border p-border p-accent-subtle px-2 py-1 text-[11px] font-medium p-accent transition-colors hover:p-elevated @[28rem]:px-2.5"
+            className="t-micro inline-flex shrink-0 items-center gap-2 border p-border px-2 py-1 p-accent-fg"
           >
             <StatusDot tone="live" />
             {/* A narrow column keeps the pulse and gives its words to the pages; the name is the control's either way. */}
             <span className="hidden @[28rem]:inline">Preview ready</span>
-          </button>
+          </Pressable>
         )}
       </>} />
 
@@ -354,6 +358,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
                 onExecute={props.onExecute}
                 onOpenFiles={openFiles}
                 onConnectDevice={openConnect}
+                desktopLanding={props.desktopLanding === true}
+                onDesktopLanded={props.onDesktopLanded}
               />
             )}
             {openPort && <div className="p-pane"><div className="p-pane-card"><PreviewFrame url={openPort.url} label={previewPortTitle(openPort)} publicLink={publicLink} /></div></div>}
@@ -369,7 +375,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
       </div>
       <ListingStatus error={props.previewError} starting={props.previewStarting} onRetry={props.onRefreshPorts} />
       {connecting && <ConnectDeviceDialog workspace={props.workspace} onClose={closeConnect} />}
-    </div>
+    </Surface>
   );
 }
 

@@ -28,15 +28,19 @@ export function accountTheme(stored: string | null): ThemeName {
 }
 
 export type ColourToken =
-  | '--c-recessed' | '--c-bg' | '--c-sidebar' | '--c-surface' | '--c-elevated' | '--c-fill' | '--c-overlay'
-  | '--c-border' | '--c-border-strong' | '--c-input-border' | '--c-dash'
-  | '--c-text' | '--c-text-2' | '--c-text-3' | '--c-text-4'
-  | '--c-accent' | '--c-accent-fg' | '--c-accent-on' | '--c-accent-subtle' | '--c-accent-mark'
+  | '--c-bg' | '--c-sidebar' | '--c-sunken' | '--c-surface' | '--c-field' | '--c-fill' | '--c-overlay'
+  | '--c-hover' | '--c-pressed' | '--c-selected'
+  | '--c-border' | '--c-border-strong' | '--c-field-border' | '--c-dash'
+  | '--c-text' | '--c-text-2' | '--c-text-3'
+  | '--c-accent' | '--c-accent-fg' | '--c-accent-on' | '--c-accent-mark' | '--c-focus'
   | '--c-success' | '--c-warning' | '--c-danger' | '--c-info'
-  | '--c-success-tint' | '--c-warning-tint' | '--c-danger-tint' | '--c-info-tint' | '--c-neutral-tint'
-  | '--c-code' | '--c-user-bg' | '--c-user-border' | '--c-input-bg'
+  | '--c-success-tint' | '--c-warning-tint' | '--c-danger-tint' | '--c-info-tint' | '--c-danger-on'
+  | '--c-button-bg' | '--c-button-bg-hover' | '--c-button-bg-active' | '--c-button-line'
+  | '--c-user-bg' | '--c-user-border'
   | '--c-composer-bg' | '--c-composer-line' | '--c-composer-line-focus' | '--c-scrim' | '--c-shadow-drop'
-  | '--shadow-overlay' | '--shadow-card' | '--shadow-menu' | '--shadow-composer';
+  | '--c-accent-hover' | '--c-accent-active' | '--c-danger-hover'
+  | '--shadow-overlay' | '--shadow-card' | '--shadow-menu' | '--shadow-composer' | '--shadow-button'
+  | '--shadow-primary' | '--shadow-destructive' | '--shadow-tab';
 
 /** Every block declares the complete set: an omitted token would resolve by source order. */
 export type TokenSet = Readonly<Record<ColourToken, string>>;
@@ -44,29 +48,30 @@ export type TokenSet = Readonly<Record<ColourToken, string>>;
 /*
  * Each palette's grounds step evenly in OKLCH lightness; every text role clears WCAG AA on every ground it can land on,
  * and control edges, brass edges and the open row's icon clear 3:1 (tests/browser/palette-ux.test.ts holds every theme
- * to that). Graphite is near-neutral, so brass is the only colour on screen; Warm keeps the umber ground at half its
- * old tint. Dark draws no card shadow: a card is a rung of the ladder plus a hairline.
+ * to that). Graphite is near-neutral, so brass is the only colour on screen. Warm is the owner's own palette as it was
+ * approved (2026-10-14: "no need to change warm more"): its grounds, papers, text and bubble as they were, with only
+ * what the contrast rules need moved in its own hue (the control edge, the brass edge on light paper) and warning
+ * turned 20 degrees off brass so the two never read as one. Dark draws no card shadow: a card is a rung of the ladder
+ * plus a hairline.
  */
 const GRAPHITE_DARK = {
-  '--c-recessed': '#0B0A09',
+  '--c-sunken': '#0B0A09',
   '--c-bg': '#100F0E',
   '--c-sidebar': '#141413',
   '--c-surface': '#1A1918',
-  '--c-elevated': '#252423',
   '--c-fill': '#1F1E1D',
   '--c-overlay': '#252423',
   '--c-border': '#323130',
   '--c-border-strong': '#666664',
-  '--c-input-border': '#666664',
+  '--c-field-border': '#666664',
   '--c-dash': '#292928',
   '--c-text': '#EDEBE8',
   '--c-text-2': '#D2D1CE',
   '--c-text-3': '#9D9C99',
-  '--c-text-4': '#8D8C89',
   '--c-accent': '#E0A458',
   '--c-accent-fg': '#E6D3AC',
   '--c-accent-on': '#1F1306',
-  '--c-accent-subtle': 'rgba(224, 164, 88, 0.12)',
+  '--c-selected': 'rgba(224, 164, 88, 0.12)',
   '--c-accent-mark': 'var(--c-accent)',
   '--c-success': '#7CCD8E',
   '--c-warning': '#E4CE63',
@@ -76,11 +81,11 @@ const GRAPHITE_DARK = {
   '--c-warning-tint': 'rgba(228, 206, 99, 0.14)',
   '--c-danger-tint': 'rgba(239, 127, 114, 0.14)',
   '--c-info-tint': 'rgba(126, 188, 232, 0.14)',
-  '--c-neutral-tint': 'rgba(237, 235, 232, 0.06)',
-  '--c-code': '#E6D3AC',
+  '--c-hover': 'rgba(237, 235, 232, 0.06)',
+  '--c-pressed': 'rgba(237, 235, 232, 0.1)',
   '--c-user-bg': '#302416',
   '--c-user-border': '#4C3922',
-  '--c-input-bg': '#090807',
+  '--c-field': '#090807',
   '--c-composer-bg': '#181716',
   '--c-composer-line': 'rgba(237, 235, 232, 0.09)',
   '--c-composer-line-focus': 'rgba(237, 235, 232, 0.18)',
@@ -90,28 +95,43 @@ const GRAPHITE_DARK = {
   '--shadow-card': 'none',
   '--shadow-menu': '0 10px 28px -10px rgba(0, 0, 0, 0.5)',
   '--shadow-composer': '0 12px 32px -12px rgba(0, 0, 0, 0.6), 0 2px 6px -2px rgba(0, 0, 0, 0.35)',
+  // A button's own fill, edge and lift (design review 2026-10-20, A4): quieter than an input's 3:1 edge.
+  '--c-button-bg': '#232221',
+  '--c-button-bg-hover': '#2A2928',
+  '--c-button-bg-active': '#1E1D1C',
+  '--c-button-line': 'rgba(237, 235, 232, 0.09)',
+  '--shadow-button': 'inset 0 1px 0 rgba(255, 255, 255, 0.04)',
+  '--c-danger-on': '#1A0B08',
+  // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
+  '--c-focus': '#E0A458',
+  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark), and the lifts a filled
+  // button and a raised tab carry.
+  '--c-accent-hover': '#E3AD69',
+  '--c-accent-active': '#CE9751',
+  '--c-danger-hover': '#D77267',
+  '--shadow-primary': 'inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.04)',
+  '--shadow-destructive': 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
+  '--shadow-tab': '0 1px 2px rgba(0, 0, 0, 0.18)',
 } satisfies TokenSet;
 
 const GRAPHITE_LIGHT = {
-  '--c-recessed': '#EAE9E8',
+  '--c-sunken': '#EAE9E8',
   '--c-bg': '#F9F9F8',
   '--c-sidebar': '#F3F2F1',
   '--c-surface': '#FFFFFF',
-  '--c-elevated': '#EDEDEB',
   '--c-fill': '#EFEEED',
   '--c-overlay': '#FFFFFF',
   '--c-border': '#DAD9D8',
   '--c-border-strong': '#8B8A89',
-  '--c-input-border': '#8B8A89',
+  '--c-field-border': '#8B8A89',
   '--c-dash': '#E4E3E1',
   '--c-text': '#191816',
   '--c-text-2': '#3C3A38',
   '--c-text-3': '#615F5D',
-  '--c-text-4': '#696765',
   '--c-accent': '#BE7D1D',
   '--c-accent-fg': '#865713',
   '--c-accent-on': '#1F1306',
-  '--c-accent-subtle': 'rgba(190, 125, 29, 0.12)',
+  '--c-selected': 'rgba(190, 125, 29, 0.12)',
   '--c-accent-mark': 'var(--c-accent-fg)',
   '--c-success': '#29723E',
   '--c-warning': '#796300',
@@ -121,11 +141,11 @@ const GRAPHITE_LIGHT = {
   '--c-warning-tint': 'rgba(121, 99, 0, 0.1)',
   '--c-danger-tint': 'rgba(171, 67, 53, 0.1)',
   '--c-info-tint': 'rgba(42, 105, 153, 0.1)',
-  '--c-neutral-tint': 'rgba(25, 24, 22, 0.06)',
-  '--c-code': '#865713',
+  '--c-hover': 'rgba(25, 24, 22, 0.06)',
+  '--c-pressed': 'rgba(25, 24, 22, 0.1)',
   '--c-user-bg': '#F5E2C4',
   '--c-user-border': '#DDBF91',
-  '--c-input-bg': '#FFFFFF',
+  '--c-field': '#FFFFFF',
   '--c-composer-bg': '#FFFFFF',
   '--c-composer-line': 'rgba(25, 24, 22, 0.12)',
   '--c-composer-line-focus': 'rgba(25, 24, 22, 0.24)',
@@ -135,96 +155,143 @@ const GRAPHITE_LIGHT = {
   '--shadow-card': 'none',
   '--shadow-menu': '0 10px 24px -10px rgba(25, 24, 22, 0.18), 0 1px 3px rgba(25, 24, 22, 0.06)',
   '--shadow-composer': '0 12px 32px -14px rgba(25, 24, 22, 0.24), 0 1px 3px rgba(25, 24, 22, 0.07)',
+  // A button's own fill, edge and lift (design review 2026-10-20, A4): quieter than an input's 3:1 edge.
+  '--c-button-bg': '#FFFFFF',
+  '--c-button-bg-hover': '#F4F4F3',
+  '--c-button-bg-active': '#ECECEA',
+  '--c-button-line': 'rgba(25, 24, 22, 0.13)',
+  '--shadow-button': '0 1px 2px rgba(25, 24, 22, 0.06)',
+  '--c-danger-on': '#FFFFFF',
+  // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
+  '--c-focus': '#9D691C',
+  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark), and the lifts a filled
+  // button and a raised tab carry.
+  '--c-accent-hover': '#AF731B',
+  '--c-accent-active': '#A36B19',
+  '--c-danger-hover': '#9A3C30',
+  '--shadow-primary': 'inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 2px rgba(25, 24, 22, 0.06)',
+  '--shadow-destructive': 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
+  '--shadow-tab': '0 1px 2px rgba(0, 0, 0, 0.18)',
 } satisfies TokenSet;
 
 const WARM_DARK = {
-  '--c-recessed': '#0D0905',
-  '--c-bg': '#130F0A',
-  '--c-sidebar': '#17130E',
-  '--c-surface': '#1D1913',
-  '--c-elevated': '#27231E',
-  '--c-fill': '#211D18',
-  '--c-overlay': '#27231E',
-  '--c-border': '#35312B',
-  '--c-border-strong': '#6B665F',
-  '--c-input-border': '#6B665F',
-  '--c-dash': '#2C2822',
-  '--c-text': '#F1EAE1',
-  '--c-text-2': '#D6D0C7',
-  '--c-text-3': '#A19A92',
-  '--c-text-4': '#918B83',
+  '--c-sunken': '#131110',
+  '--c-bg': '#0F0D0B',
+  '--c-sidebar': '#141110',
+  '--c-surface': '#181512',
+  '--c-fill': '#1B1713',
+  '--c-overlay': '#221C15',
+  '--c-border': '#302920',
+  '--c-border-strong': '#696257',
+  '--c-field-border': '#696257',
+  '--c-dash': '#2A241D',
+  '--c-text': '#EDE5D8',
+  '--c-text-2': '#D8CFC2',
+  '--c-text-3': '#9C9184',
   '--c-accent': '#E0A458',
-  '--c-accent-fg': '#E6D3AC',
-  '--c-accent-on': '#1F1306',
-  '--c-accent-subtle': 'rgba(224, 164, 88, 0.12)',
+  '--c-accent-fg': '#E3D2AE',
+  '--c-accent-on': '#1A1408',
+  '--c-selected': 'rgba(224, 164, 88, 0.12)',
   '--c-accent-mark': 'var(--c-accent)',
-  '--c-success': '#7CCD8E',
-  '--c-warning': '#E4CE63',
-  '--c-danger': '#EF7F72',
-  '--c-info': '#7EBCE8',
-  '--c-success-tint': 'rgba(124, 205, 142, 0.14)',
-  '--c-warning-tint': 'rgba(228, 206, 99, 0.14)',
-  '--c-danger-tint': 'rgba(239, 127, 114, 0.14)',
-  '--c-info-tint': 'rgba(126, 188, 232, 0.14)',
-  '--c-neutral-tint': 'rgba(241, 234, 225, 0.06)',
-  '--c-code': '#E6D3AC',
-  '--c-user-bg': '#302416',
-  '--c-user-border': '#4C3922',
-  '--c-input-bg': '#0B0804',
-  '--c-composer-bg': '#1A1611',
-  '--c-composer-line': 'rgba(241, 234, 225, 0.09)',
-  '--c-composer-line-focus': 'rgba(241, 234, 225, 0.18)',
-  '--c-scrim': 'rgba(5, 3, 1, 0.6)',
-  '--c-shadow-drop': 'rgba(0, 0, 0, 0.35)',
+  '--c-success': '#8FBC8B',
+  '--c-warning': '#DAC077',
+  '--c-danger': '#C97B6B',
+  '--c-info': '#8FB6D6',
+  '--c-success-tint': 'rgba(143, 188, 139, 0.14)',
+  '--c-warning-tint': 'rgba(218, 192, 119, 0.14)',
+  '--c-danger-tint': 'rgba(201, 123, 107, 0.14)',
+  '--c-info-tint': 'rgba(143, 182, 214, 0.14)',
+  '--c-hover': 'rgba(237, 229, 216, 0.06)',
+  '--c-pressed': 'rgba(237, 229, 216, 0.1)',
+  '--c-user-bg': '#241E16',
+  '--c-user-border': '#3A3126',
+  '--c-field': '#0B0A09',
+  '--c-composer-bg': '#1A1714',
+  '--c-composer-line': 'rgba(237, 229, 216, 0.08)',
+  '--c-composer-line-focus': 'rgba(237, 229, 216, 0.16)',
+  '--c-scrim': 'rgba(10, 8, 5, 0.55)',
+  '--c-shadow-drop': 'rgba(0, 0, 0, 0.3)',
   '--shadow-overlay': '0 18px 44px -12px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35)',
   '--shadow-card': 'none',
   '--shadow-menu': '0 10px 28px -10px rgba(0, 0, 0, 0.5)',
   '--shadow-composer': '0 12px 32px -12px rgba(0, 0, 0, 0.6), 0 2px 6px -2px rgba(0, 0, 0, 0.35)',
+  // A button's own fill, edge and lift (design review 2026-10-20, A4): quieter than an input's 3:1 edge.
+  '--c-button-bg': '#201B16',
+  '--c-button-bg-hover': '#27211A',
+  '--c-button-bg-active': '#1B1713',
+  '--c-button-line': 'rgba(237, 229, 216, 0.09)',
+  '--shadow-button': 'inset 0 1px 0 rgba(255, 240, 220, 0.04)',
+  '--c-danger-on': '#1A0B08',
+  // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
+  '--c-focus': '#E0A458',
+  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark), and the lifts a filled
+  // button and a raised tab carry.
+  '--c-accent-hover': '#E3AD69',
+  '--c-accent-active': '#CE9751',
+  '--c-danger-hover': '#B56F60',
+  '--shadow-primary': 'inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 1px 0 rgba(255, 240, 220, 0.04)',
+  '--shadow-destructive': 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
+  '--shadow-tab': '0 1px 2px rgba(0, 0, 0, 0.18)',
 } satisfies TokenSet;
 
 const WARM_LIGHT = {
-  '--c-recessed': '#EAE2D7',
-  '--c-bg': '#FAF2E7',
-  '--c-sidebar': '#F4EBE1',
-  '--c-surface': '#FEFBF8',
-  '--c-elevated': '#EDE5DA',
-  '--c-fill': '#EFE7DC',
-  '--c-overlay': '#FEFBF8',
-  '--c-border': '#D9D1C7',
-  '--c-border-strong': '#8D867C',
-  '--c-input-border': '#8D867C',
-  '--c-dash': '#E3DBD0',
-  '--c-text': '#1C1711',
-  '--c-text-2': '#3F3A33',
-  '--c-text-3': '#615B54',
-  '--c-text-4': '#69635C',
-  '--c-accent': '#BA7917',
-  '--c-accent-fg': '#82530D',
-  '--c-accent-on': '#1F1306',
-  '--c-accent-subtle': 'rgba(186, 121, 23, 0.12)',
+  '--c-sunken': '#E0D8C5',
+  '--c-bg': '#E9E2D3',
+  '--c-sidebar': '#F1EBDD',
+  '--c-surface': '#F7F3E9',
+  '--c-fill': '#E5DCC8',
+  '--c-overlay': '#F7F3E9',
+  '--c-border': '#D2C6AE',
+  '--c-border-strong': '#8F7F62',
+  '--c-field-border': '#8F7F62',
+  '--c-dash': '#DBD1BE',
+  '--c-text': '#1C1710',
+  '--c-text-2': '#3D3427',
+  '--c-text-3': '#5E5344',
+  '--c-accent': '#B17513',
+  '--c-accent-fg': '#7A5514',
+  '--c-accent-on': '#1F1503',
+  '--c-selected': 'rgba(216, 154, 68, 0.16)',
   '--c-accent-mark': 'var(--c-accent-fg)',
-  '--c-success': '#246E3A',
-  '--c-warning': '#755F00',
-  '--c-danger': '#A73F32',
-  '--c-info': '#266595',
-  '--c-success-tint': 'rgba(36, 110, 58, 0.1)',
-  '--c-warning-tint': 'rgba(117, 95, 0, 0.1)',
-  '--c-danger-tint': 'rgba(167, 63, 50, 0.1)',
-  '--c-info-tint': 'rgba(38, 101, 149, 0.1)',
-  '--c-neutral-tint': 'rgba(28, 23, 17, 0.06)',
-  '--c-code': '#82530D',
-  '--c-user-bg': '#F5E2C4',
-  '--c-user-border': '#DDBF91',
-  '--c-input-bg': '#FEFBF8',
-  '--c-composer-bg': '#FEFBF8',
-  '--c-composer-line': 'rgba(28, 23, 17, 0.12)',
-  '--c-composer-line-focus': 'rgba(28, 23, 17, 0.24)',
-  '--c-scrim': 'rgba(28, 23, 17, 0.28)',
-  '--c-shadow-drop': 'rgba(28, 23, 17, 0.12)',
+  '--c-success': '#316530',
+  '--c-warning': '#715A00',
+  '--c-danger': '#96412C',
+  '--c-info': '#2F6289',
+  '--c-success-tint': 'rgba(49, 101, 48, 0.11)',
+  '--c-warning-tint': 'rgba(113, 90, 0, 0.1)',
+  '--c-danger-tint': 'rgba(150, 65, 44, 0.11)',
+  '--c-info-tint': 'rgba(47, 98, 137, 0.08)',
+  '--c-hover': 'rgba(43, 36, 25, 0.07)',
+  '--c-pressed': 'rgba(43, 36, 25, 0.11)',
+  '--c-user-bg': '#F2D9AC',
+  '--c-user-border': '#D9B573',
+  '--c-field': '#F7F3E9',
+  '--c-composer-bg': '#F8F4EB',
+  '--c-composer-line': 'rgba(43, 36, 25, 0.10)',
+  '--c-composer-line-focus': 'rgba(43, 36, 25, 0.20)',
+  '--c-scrim': 'rgba(43, 26, 4, 0.32)',
+  '--c-shadow-drop': 'rgba(43, 26, 4, 0.14)',
   '--shadow-overlay': '0 16px 40px -14px rgba(43, 26, 4, 0.20), 0 2px 8px rgba(43, 26, 4, 0.07)',
   '--shadow-card': 'none',
   '--shadow-menu': '0 10px 24px -10px rgba(43, 26, 4, 0.18), 0 1px 3px rgba(43, 26, 4, 0.06)',
   '--shadow-composer': '0 12px 32px -14px rgba(43, 26, 4, 0.24), 0 1px 3px rgba(43, 26, 4, 0.07)',
+  // A button's own fill, edge and lift (design review 2026-10-20, A4): quieter than an input's 3:1 edge.
+  '--c-button-bg': '#FBF8F1',
+  '--c-button-bg-hover': '#F3EEE2',
+  '--c-button-bg-active': '#ECE5D5',
+  '--c-button-line': 'rgba(43, 36, 25, 0.15)',
+  '--shadow-button': '0 1px 2px rgba(43, 26, 4, 0.07)',
+  '--c-danger-on': '#FFFFFF',
+  // The focus ring: 3:1 on every ground (brass itself is too light on the light grounds).
+  '--c-focus': '#936212',
+  // A filled control pressed or hovered (a step darker on light grounds, lighter on dark), and the lifts a filled
+  // button and a raised tab carry.
+  '--c-accent-hover': '#A36C11',
+  '--c-accent-active': '#986510',
+  '--c-danger-hover': '#873B28',
+  '--shadow-primary': 'inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 2px rgba(43, 26, 4, 0.07)',
+  '--shadow-destructive': 'inset 0 1px 0 rgba(255, 255, 255, 0.12)',
+  '--shadow-tab': '0 1px 2px rgba(0, 0, 0, 0.18)',
 } satisfies TokenSet;
 
 /** Each theme's token values by mode, for a reader that needs one colour outside the cascade. */
@@ -233,14 +300,38 @@ export const THEME_TOKENS: Readonly<Record<ThemeName, Readonly<Record<Mode, Toke
   warm: { dark: WARM_DARK, light: WARM_LIGHT },
 };
 
-export type RadiusRole = '--r-control' | '--r-row' | '--r-card' | '--r-overlay';
+export type RadiusRole = '--r-check' | '--r-inner' | '--r-control' | '--r-row' | '--r-card' | '--r-pill'
+  | '--r-composer' | '--r-workspace-tab' | '--r-workspace-tab-outline' | '--r-workspace-tab-flare'
+  | '--r-bubble' | '--r-bubble-tail' | '--r-prompt';
 
+/** The only radii (design system §1.5): a checkbox; an inner piece; a control; a row, menu or notice; a card, tile or
+ *  dialog; and a pill. Then the named variants of the approved composer and the settled workspace tab: its rename
+ *  field, the outline's top corners and its flared feet; the person's chat bubble, round but for the corner that
+ *  points at them; and the prompt card that opens a workspace or a chat. */
 const RADII = {
-  '--r-control': '6px',
-  '--r-row': '8px',
+  '--r-check': '4px',
+  '--r-inner': '6px',
+  '--r-control': '8px',
+  '--r-row': '12px',
   '--r-card': '14px',
-  '--r-overlay': '14px',
+  '--r-pill': '999px',
+  '--r-composer': '24px',
+  '--r-workspace-tab': '7px',
+  '--r-workspace-tab-outline': '10px',
+  '--r-workspace-tab-flare': '8px',
+  '--r-bubble': '16px',
+  '--r-bubble-tail': '4px',
+  '--r-prompt': '16px',
 } satisfies Readonly<Record<RadiusRole, string>>;
+
+/**
+ * The colours the agents' mascots and their accessories are drawn in (components/Marks.tsx): an illustration's own, the
+ * same in every look, so a mascot is the same character on a dark page and a light one.
+ */
+export const ILLUSTRATION = {
+  teal: '#1F7A72', tealLight: '#2FA39A', blue: '#3366B5', ink: '#4A4366', sky: '#4C86E0', lilac: '#8C86A3',
+  berry: '#C94F88', red: '#E0524F', pink: '#EC6FA8', rose: '#F07FAE', gold: '#F2BE45',
+} as const;
 
 /**
  * The default theme is unnamed on `:root`; every theme also answers its own `data-theme`, so a swatch can wear one
@@ -255,12 +346,45 @@ function selectors(theme: ThemeName, mode: Mode): string {
   return `${mode === 'dark' ? ':root' : '[data-mode="light"]'},${named}`;
 }
 
+/** Colours the same in every look: a partner's full-colour mark sits on white, as its guidelines ask, and a mark drawn
+ *  in white (GitHub's) on near-black; an avatar's initial is white on its name's hue; someone else's HTML is drawn on
+ *  white paper as its author drew it, and a remote screen in black; the prompt card's long soft drop. */
+const FIXED = {
+  '--c-brand-tile': '#FFFFFF',
+  '--c-brand-tile-ink': '#111318',
+  '--c-avatar-ink': '#FFFFFF',
+  '--c-paper': '#FFFFFF',
+  '--c-screen': '#000000',
+  '--shadow-prompt': '0 18px 55px -42px rgba(0, 0, 0, 0.75)',
+} satisfies Readonly<Record<`--c-${string}` | `--shadow-${string}`, string>>;
+
+/** What a feedback screenshot draws over a field it blocks out: opaque near-black, read as removed in either look. */
+export const REDACTION_FILL = '#111111';
+
+/** An avatar's ground (ui/Avatar.tsx): its name's hue at a middle lightness, so the white initial reads in every look. */
+export function avatarGround(hue: number): string {
+  return `hsl(${String(hue)} 45% 45%)`;
+}
+
+/**
+ * The public pages' type (design system §1.3, the public variants): the landing, /privacy, /terms and the deploy flow
+ * are read by someone not yet in the app, at a reading size, not the app chrome's 13. Body 15, lede 17 and the
+ * call to action's 14, each with its leading; the public shell's CSS and the app's t-public-* roles read these.
+ */
+const PUBLIC_TYPE = {
+  '--t-public-body': '15px',
+  '--t-public-body-leading': '1.7',
+  '--t-public-lede': '17px',
+  '--t-public-lede-leading': '1.62',
+  '--t-public-control': '14px',
+} satisfies Readonly<Record<`--t-public-${string}`, string>>;
+
 const declarations = (tokens: Readonly<Record<string, string>>): string => Object.entries(tokens).map(([name, value]) => `${name}:${value}`).join(';');
 
 const ORDERED: readonly ThemeName[] = [DEFAULT_THEME, ...THEME_NAMES.filter((name) => name !== DEFAULT_THEME)];
 
 export const THEME_CSS = [
-  `:root{${declarations(RADII)}}`,
+  `:root{${declarations(RADII)};${declarations(PUBLIC_TYPE)};${declarations(FIXED)}}`,
   ...ORDERED.flatMap((theme) => (['dark', 'light'] as const).map((mode) => `${selectors(theme, mode)}{${declarations(THEME_TOKENS[theme][mode])}}`)),
 ].join('\n');
 
@@ -300,7 +424,7 @@ export function terminalPalette(mode: Mode, token: (name: ColourToken) => string
     ...roles,
     brightRed: roles.red, brightGreen: roles.green, brightYellow: roles.yellow, brightBlue: roles.blue,
     brightMagenta: magenta, brightCyan: cyan,
-    black: light ? token('--c-text') : token('--c-recessed'),
+    black: light ? token('--c-text') : token('--c-sunken'),
     white: light ? token('--c-text-2') : token('--c-text'),
     brightBlack: token('--c-text-3'),
     brightWhite: light ? token('--c-text-3') : token('--c-text'),

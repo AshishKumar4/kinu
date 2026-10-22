@@ -1,10 +1,12 @@
 /** What a forked slate reaches on its forker's surface, before its preview first runs: each namespace it calls, as the
  *  forker, and where to connect what it needs. */
 import { useState } from "react";
+import { Button, buttonClass } from "@/components/ui/Button";
 import { Link } from "react-router-dom";
 import { ArrowSquareOutIcon, PlugsConnectedIcon } from "@phosphor-icons/react";
 import { APP_ROUTES } from "@kinu.run/core";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { settingsPath } from "@/components/SettingsRail";
+import { Surface } from "@/components/ui/Surface";
 
 interface ReachConnection {
   readonly text: string;
@@ -27,7 +29,7 @@ export function reachConnection(namespace: string): ReachConnection {
   switch (head) {
     case "mcp": return { text: `Connect an MCP server named "${name}" to your account.`, to: APP_ROUTES.userMcp, label: "MCP servers" };
     case "slates": return { text: `Calls another slate with id "${name}"; fork or author it in this workspace.` };
-    case "device": return { text: "Runs on one of your machines: link a device and grant this workspace access.", to: APP_ROUTES.devices, label: "Devices" };
+    case "device": return { text: "Runs on one of your machines: link a device and grant this workspace access.", to: settingsPath("devices"), label: "Devices" };
     case "web": return { text: "Uses this workspace's web access, as you." };
     case "memory": return { text: "Reads and writes this workspace's memory, as you." };
     case "tasks": return { text: "Reads and writes this workspace's tasks, as you." };
@@ -50,37 +52,37 @@ export function ForkReachPanel({ title, reaches, onOpen }: {
   const shown = personReaches(reaches);
 
   return (
-    <div className="h-full overflow-y-auto px-[18px] py-[18px]" data-fork-reach>
+    <div className="h-full overflow-y-auto p-[var(--layout-inset)]" data-fork-reach>
       <div className="mx-auto max-w-xl space-y-4">
         <header className="flex items-start gap-3">
-          <PlugsConnectedIcon size={20} className="mt-0.5 shrink-0 p-accent" />
+          <PlugsConnectedIcon size={20} className="mt-px shrink-0 p-accent-fg" />
           <div>
-            <h2 className="p-title p-text">{title} runs as you here</h2>
-            <p className="mt-0.5 p-meta p-text-3">This slate was forked. It calls your own workspace, as you, and nothing has run yet.</p>
+            <h2 className="t-title p-text">{title} runs as you here</h2>
+            <p className="t-meta mt-px p-text-3">This slate was forked. It calls your own workspace, as you, and nothing has run yet.</p>
           </div>
         </header>
         <ul className="space-y-2">
-          {shown.length === 0 && <li className="p-card px-4 py-3 text-xs p-text-3">It was published calling nothing of its publisher&apos;s. It runs on its own.</li>}
+          {shown.length === 0 && <Surface look="panel" as="li" className="t-meta px-4 py-3 p-text-3">It was published calling nothing of its publisher&apos;s. It runs on its own.</Surface>}
           {shown.map((namespace) => {
             const connection = reachConnection(namespace);
 
             return (
-              <li key={namespace} className="p-card flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:gap-4">
+              <Surface look="panel" as="li" key={namespace} className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-start sm:gap-4">
                 <div className="min-w-0 flex-1">
-                  <span className="font-mono text-sm p-text">{namespace}</span>
-                  <p className="mt-0.5 text-xs p-text-2">{connection.text}</p>
+                  <span className="t-body t-mono p-text">{namespace}</span>
+                  <p className="t-meta mt-px p-text-2">{connection.text}</p>
                 </div>
                 {connection.to !== undefined && (
-                  <Link to={connection.to} className="p-btn-quiet inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-2.5 text-xs">
+                  <Link to={connection.to} className={buttonClass({ size: "sm" })}>
                     <ArrowSquareOutIcon size={12} /> {connection.label}
                   </Link>
                 )}
-              </li>
+              </Surface>
             );
           })}
         </ul>
         <div className="flex justify-end pt-1">
-          <FilledButton onClick={() => { setOpening(true); onOpen(); }} disabled={opening}>Open the preview</FilledButton>
+          <Button variant="primary" size="sm" onClick={() => { setOpening(true); onOpen(); }} disabled={opening}>Open the preview</Button>
         </div>
       </div>
     </div>

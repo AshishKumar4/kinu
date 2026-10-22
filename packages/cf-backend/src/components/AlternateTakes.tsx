@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Button, Loader } from "@cloudflare/kumo";
-import { FilledButton } from "@/components/ui/FilledButton";
+import { Loader } from "@/components/ui/Loader";
+import { Button } from "@/components/ui/Button";
 import {
   ArrowLeftIcon, ArrowRightIcon, CaretDownIcon, CaretRightIcon, GitBranchIcon,
   CheckCircleIcon, WarningCircleIcon, XIcon,
@@ -17,6 +17,9 @@ import { NO_HEAD_DELTAS, type HeadDeltas } from "@kinu.run/core";
 import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Notice } from "@/components/ui/Notice";
+import { Surface } from "@/components/ui/Surface";
+import { Pressable } from "@/components/ui/Pressable";
 
 export function TakesChip({ set, onPick }: {
   set: AlternateTakeSet;
@@ -27,15 +30,14 @@ export function TakesChip({ set, onPick }: {
 
   return (
     <>
-      <button
-        type="button"
+      <Pressable look="compact"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1 p-t-control p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm border p-border p-card-hover transition-colors"
+        className="t-control inline-flex items-center gap-1 p-text-3 hover:p-text px-1 py-px border p-border"
         title="Your mid-turn redirect ran as a parallel branch. Compare both answers and pick one."
       >
         <GitBranchIcon size={11} />
         {takeChipLabel(set)}
-      </button>
+      </Pressable>
       {open && <TakesComparison set={set} onPick={onPick} onClose={() => setOpen(false)} />}
     </>
   );
@@ -93,17 +95,17 @@ function TakesComparison({ set, onPick, onClose }: {
   return (
     <Modal
       title="Alternate takes"
-      icon={<GitBranchIcon size={18} className="p-accent" />}
+      icon={<GitBranchIcon size={18} className="p-accent-fg" />}
       onClose={onClose}
       maxWidthClass="max-w-xl"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Keep current</Button>
-        <FilledButton onClick={useTake} disabled={busy || isCurrent}>
+        <Button variant="primary" size="sm" onClick={useTake} disabled={busy || isCurrent}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Recording…</span></> : pickWord}
-        </FilledButton>
+        </Button>
       </>}
     >
-      <p className="text-xs p-text-3 leading-relaxed">
+      <p className="t-meta p-text-3">
         You redirected mid-turn with{" "}
         <span className="p-text-2">{set.task.length > 120 ? `${set.task.slice(0, 120)}…` : set.task}</span>{" "}
         and it ran as a parallel branch. Compare both answers.{" "}
@@ -111,41 +113,35 @@ function TakesComparison({ set, onPick, onClose }: {
       </p>
 
       <div className="flex items-center justify-between">
-        <button type="button" onClick={() => step(-1)} aria-label="Previous take"
-          className="p-1.5 rounded-sm p-text-3 hover:p-text p-card-hover transition-colors cursor-pointer">
-          <ArrowLeftIcon size={14} />
-        </button>
-        <div className="flex items-center gap-2 text-xs p-text-2">
-          <span className="font-medium p-text">Take {index + 1} of {count}</span>
+        <Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />} onClick={() => step(-1)} aria-label="Previous take" />
+        <div className="t-meta flex items-center gap-2 p-text-2">
+          <strong className="p-text">Take {index + 1} of {count}</strong>
           {isCurrent && (
-            <span className="inline-flex items-center gap-1 p-t-status p-success">
+            <span className="t-status inline-flex items-center gap-1 p-success">
               <CheckCircleIcon size={11} weight="fill" />current answer
             </span>
           )}
         </div>
-        <button type="button" onClick={() => step(1)} aria-label="Next take"
-          className="p-1.5 rounded-sm p-text-3 hover:p-text p-card-hover transition-colors cursor-pointer">
-          <ArrowRightIcon size={14} />
-        </button>
+        <Button variant="ghost" size="sm" icon={<ArrowRightIcon size={14} />} onClick={() => step(1)} aria-label="Next take" />
       </div>
 
-      <div className="border p-border p-card px-3 py-2.5 max-h-64 overflow-y-auto">
-        <div className="prose-chat p-text text-sm">
+      <Surface look="panel" className="px-3 py-2 max-h-64 overflow-y-auto">
+        <div className="t-body prose-chat p-text">
           <MarkdownContent content={candidate.text} />
         </div>
-      </div>
+      </Surface>
 
-      <div className="p-meta p-text-3">{takeEvidence(candidate)}</div>
+      <div className="t-meta p-text-3">{takeEvidence(candidate)}</div>
 
       {notice && (
-        <div className="text-xs rounded-md px-3 py-2 p-notice-success">
+        <Notice tone="success">
           {notice}
-        </div>
+        </Notice>
       )}
       {err && (
-        <div className="text-xs rounded-md px-3 py-2 p-notice-danger">
+        <Notice tone="danger">
           {err}
-        </div>
+        </Notice>
       )}
     </Modal>
   );
@@ -177,7 +173,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
 
   let branchBody: ReactNode = (
     // The head id derives from the run id, so "nothing recorded" means the branch died before its first write.
-    <div className="px-4 py-6 text-center p-meta p-text-3">
+    <div className="t-meta px-4 py-6 text-center p-text-3">
       Nothing is recorded for this branch yet.
     </div>
   );
@@ -186,19 +182,19 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
     branchBody = <TranscriptBody view={view} pending={pending} />;
   } else if (resource.status === "loading") {
     branchBody = (
-      <div className="flex items-center justify-center gap-2 py-6 p-t-status p-text-2">
+      <div className="t-status flex items-center justify-center gap-2 py-6 p-text-2">
         <Loader size="sm" />Reading the branch…
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col items-start gap-1 animate-fade-in py-0.5">
-      <div className="inline-flex items-center gap-2 max-w-full px-3 py-1.5 rounded-full p-elevated border p-border p-row-text p-text-2">
+    <div className="flex flex-col items-start gap-1 animate-fade-in py-px">
+      <Surface round look="tile" className="t-body inline-flex items-center gap-2 max-w-full px-3 py-1 border p-border p-text-2">
         {run.status === "running" && (
           <>
             <Loader size="sm" />
-            <GitBranchIcon size={12} className="p-accent shrink-0" />
+            <GitBranchIcon size={12} className="p-accent-fg shrink-0" />
             <span className="truncate">Branching: <span className="p-text">{task}</span> · the live turn continues</span>
           </>
         )}
@@ -215,26 +211,22 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
             <span className="truncate">Branch discarded: {run.message ?? "no comparison available"}</span>
           </>
         )}
-        <button type="button" onClick={() => setOpen(!open)}
-          className="p-text-3 hover:p-text cursor-pointer shrink-0 inline-flex items-center gap-1"
-          aria-expanded={open} title="Read every step this branch took">
+        <Button variant="ghost" size="sm" className="shrink-0" onClick={() => setOpen(!open)} aria-expanded={open} title="Read every step this branch took">
           {open ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />}
           {open ? "Hide" : "Show what it did"}
-        </button>
+        </Button>
         {run.status !== "running" && (
-          <button onClick={onDismiss} className="p-text-3 hover:p-text cursor-pointer shrink-0" aria-label="Dismiss branch chip">
-            <XIcon size={11} />
-          </button>
+          <Button variant="ghost" size="sm" icon={<XIcon size={14} />} className="shrink-0" onClick={onDismiss} aria-label="Dismiss branch chip" />
         )}
-      </div>
+      </Surface>
       {open && (
-        <div className="w-full max-h-96 flex flex-col rounded-lg border p-border p-surface overflow-hidden">
+        <Surface look="panel" className="w-full max-h-96 flex flex-col overflow-hidden">
           {resource.status === "error" && (
             <LoadFailure what="this branch's transcript" message={resource.message} onRetry={reload}
               className="shrink-0 border-b p-border px-4 py-2" />
           )}
           {branchBody}
-        </div>
+        </Surface>
       )}
     </div>
   );

@@ -121,6 +121,21 @@ export class TriggerRegistry {
     return rows.map(rowToTrigger);
   }
 
+  /** A schedule moved: its spec (its new cron) and its next firing, armed. False when no such trigger is live. */
+  async retime(id: TriggerId, spec: JsonObject, nextFireAt: number): Promise<boolean> {
+    const before = this.get(id);
+
+    if (!before || before.state === 'revoked') return false;
+    this.sql.exec(
+      `UPDATE triggers SET spec = ?, next_fire_at = ? WHERE actor_id = ? AND id = ?`,
+      JSON.stringify(spec), nextFireAt, this.actorId, id,
+    );
+
+    if (before.state === 'active') await this.alarm.scheduleAt(nextFireAt);
+
+    return true;
+  }
+
   /** Paused triggers' alarm firings are dropped silently. */
   pause(id: TriggerId, now: number): boolean {
     const before = this.get(id);

@@ -9,6 +9,7 @@ import { nameOriginOf, type NameOrigin } from '../identity/naming';
 import { WorkspaceLayoutSchema, type WorkspaceLayout } from './workspace-layout';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
 import { isReasoningEffort, type ReasoningEffort } from '../providers/reasoning-effort';
+import { isHarnessMode, type HarnessMode } from './harness-mode';
 import { DEFAULT_ROLE_ID, isTierId, isValidRoleId, type RoleId, type TierId } from '../types/profile';
 import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
@@ -43,6 +44,8 @@ export const AGENT_CONFIG_KEYS = {
   /** Tier a parent pinned at hire; unset means derive from the role. */
   assignedTier: 'assigned_tier',
   shellApprovalMode: 'shell_approval_mode',
+  /** The workspace's `harness.mode` (docs/HARNESS-PROFILES.md); read at every step, never cached. */
+  harnessMode: 'harness_mode',
   /** Comma-separated `<rule>@<executor>` grants; read live at exec time like the mode. */
   shellApprovalGrants: 'shell_approval_grants',
   sleepTimeCompute: 'sleep_time_compute',
@@ -126,6 +129,9 @@ export interface AgentConfigStore {
   setRoleChangePolicy(policy: 'allow' | 'approval' | 'locked'): void;
   getShellApprovalMode(): ShellApprovalMode;
   setShellApprovalMode(mode: ShellApprovalMode): void;
+  /** Unset or malformed reads as `native`. */
+  getHarnessMode(): HarnessMode;
+  setHarnessMode(mode: HarnessMode): void;
   /** Standing (rule, executor) grants; they stop the gate asking, never widen reach. */
   getShellApprovalGrants(): ApprovalGrant[];
   /** Idempotent. */
@@ -381,6 +387,14 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       const valid = mode === 'strict' || mode === 'allow_all' || mode === 'deny_all';
 
       return settleSync(setValid(AGENT_CONFIG_KEYS.shellApprovalMode, mode, valid, 'shell approval mode'));
+    },
+    getHarnessMode(): HarnessMode {
+      const stored = get(AGENT_CONFIG_KEYS.harnessMode);
+
+      return isHarnessMode(stored) ? stored : 'native';
+    },
+    setHarnessMode(mode) {
+      return settleSync(setValid(AGENT_CONFIG_KEYS.harnessMode, mode, isHarnessMode(mode), 'harness mode'));
     },
     getShellApprovalGrants: storedGrants,
     grantShellApproval(grants) { writeGrants([...storedGrants(), ...grants]); },

@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
 import { TERM_GRACE_MS } from './lifecycle';
-import { BOX_CHROMIUM_POLICY, CHROMIUM_POLICIES, CHROMIUM_PROFILES } from './desktop';
+import { BOX_CHROMIUM_POLICY, BOX_CHROMIUM_POLICY_KEYS, CHROMIUM_POLICIES, CHROMIUM_PROFILES } from './desktop';
 import { INSTALL_SESSION_FILES, READS_TERMINAL, SAVED_SESSIONS, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE } from './sessions';
 import DISTRUSTED from './distrusted-roots.json';
 
@@ -179,6 +179,27 @@ export function resizePty(container: Pick<Container, 'exec'>, pid: number, size:
 }
 
 /**
+ * Sends TERM to every process in the container but PID 1 and the kill itself, by an exec of `kill`; a kill that refuses
+ * fails in its own words. `--` before `-1`: the box's procps kill (4.0.4) reads a `-1` after the signal as a second option
+ * and refuses it, exit 1, signalling nothing (staging rc30, 2026-10-21, where the box's stop then waited on a container
+ * never told to end). A kill that ends by a signal, 128 and above, went with the container it ended (137 on a golden
+ * container the same day): it was sent, which the container's end says.
+ */
+export function endEveryProcess(container: Pick<Container, 'exec'>): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const sent = yield* attempt('process', () => containerExec(container, ['kill', '-TERM', '--', '-1']), 'ending every process');
+    const { exitCode, stderr } = yield* attempt('process', () => sent.output(), 'ending every process');
+
+    if (exitCode !== 0 && exitCode < SIGNALLED) {
+      return yield* Effect.fail(new DevboxError('process', `kill -TERM -- -1 exited ${String(exitCode)}: ${new TextDecoder().decode(stderr).trim()}`));
+    }
+  }));
+}
+
+/** The exit at and above which a process ended by a signal (128 + its number), not by its own choice. */
+const SIGNALLED = 128;
+
+/**
  * Ends `pid` in the container with an exec of `kill`, whose failure the box reads and says; a pid still to come is ended
  * once it comes. The platform's own kill (`ExecProcess.kill()`, or aborting the signal an exec was given) is a task
  * workerd adds and nobody can await: on a container whose connection was lost it failed the box's request as an uncaught
@@ -244,6 +265,9 @@ fi`;
  */
 const CHROMIUM_DISTRUSTED = 'MIICTjCCAdOgAwIBAgIKPPYHqWhwDtqLhDAKBggqhkjOPQQDAzBrMQswCQYDVQQGEwJJTjETMBEGA1UECxMKZW1TaWduIFBLSTElMCMGA1UEChMcZU11ZGhyYSBUZWNobm9sb2dpZXMgTGltaXRlZDEgMB4GA1UEAxMXZW1TaWduIEVDQyBSb290IENBIC0gRzMwHhcNMTgwMjE4MTgzMDAwWhcNNDMwMjE4MTgzMDAwWjBrMQswCQYDVQQGEwJJTjETMBEGA1UECxMKZW1TaWduIFBLSTElMCMGA1UEChMcZU11ZGhyYSBUZWNobm9sb2dpZXMgTGltaXRlZDEgMB4GA1UEAxMXZW1TaWduIEVDQyBSb290IENBIC0gRzMwdjAQBgcqhkjOPQIBBgUrgQQAIgNiAAQjpQy4LRL1KPOxst3iAhKAnjlfSU2fySU0WXTsuwYc58Byr+iuL+FBVIcUqEqy6HyC5ltqtdyzdc6LBtCGI79G1Y4PPwT01xySfvalY8L1X44uT6EYGQIrMgqCZH0Wk9GjQjBAMB0GA1UdDgQWBBR8XQKEE9TMipuBzhccLikenEhjQjAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAwNpADBmAjEAvvNhzwIQHWSVB7gYboiFBS+DCBeQyh+KTOgNG3qxrdWBCUfvO6wIBHxcmbHtRwfSAjEAnbpV/KlK6O3t5nYBQnvI+GDZjVGLVTv7jHvrZQnD+JbNR6iC8hZVdyR+EhCVBCyj';
 
+/** The policy's keys, each named once, where an eval's audit of the browser reads them too. */
+const [TRUSTED_KEY, DISTRUSTED_KEY, FLAG_WARNINGS_KEY] = BOX_CHROMIUM_POLICY_KEYS;
+
 /**
  * The SDK docs' trust step, which keeps no earlier container's CA: the system bundle, and Chromium's policy. The
  * desktop's earlier policy file, `devbox.json`, is folded into the box's own. It is the start's step for the desktop's
@@ -253,7 +277,7 @@ export const TRUST = ['/bin/sh', '-c', `${CLEAN_EXIT}
 ${DESELECT} && { [ -e ${SYSTEM_BUNDLE} ] || { cp ${BUNDLE} ${SYSTEM_BUNDLE}.tmp && mv ${SYSTEM_BUNDLE}.tmp ${SYSTEM_BUNDLE}; }; } \\
   && timeout 10 sh -c 'until [ -s ${CA_PATH} ]; do sleep 0.1; done' && cat ${SYSTEM_BUNDLE} ${CA_PATH} >${BUNDLE}.tmp && mv ${BUNDLE}.tmp ${BUNDLE} \\
   && mkdir -p ${CHROMIUM_POLICIES} && rm -f ${CHROMIUM_POLICIES}/devbox.json \\
-  && printf '{"CACertificates":[%s],"CADistrustedCertificates":["${CHROMIUM_DISTRUSTED}"],"CommandLineFlagSecurityWarningsEnabled":false}\\n' "$(${CA_DER})" >${BOX_CHROMIUM_POLICY}.tmp \\
+  && printf '{"${TRUSTED_KEY}":[%s],"${DISTRUSTED_KEY}":["${CHROMIUM_DISTRUSTED}"],"${FLAG_WARNINGS_KEY}":false}\\n' "$(${CA_DER})" >${BOX_CHROMIUM_POLICY}.tmp \\
   && mv ${BOX_CHROMIUM_POLICY}.tmp ${BOX_CHROMIUM_POLICY}`, 'devbox-trust'] as const;
 
 const ROOT = '/var/tmp/devbox/processes';

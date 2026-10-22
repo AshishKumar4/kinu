@@ -74,7 +74,7 @@ export function isBuiltinToolName(value: string): value is BuiltinToolName {
   return BUILTIN_TOOL_NAMES.has(value);
 }
 
-/** The subordinate → parent progress tool id. */
+/** The subagent → parent progress tool id. */
 export const REPORT_TOOL: BuiltinToolName = 'report';
 
 /** The plan review's submission tool. Not in TOOL_REACH: `buildBuiltinTools` adds it where its deps are wired. */
@@ -299,9 +299,9 @@ export const BUILTIN_TOOL_SPECS = {
     name: 'agents',
     summary: 'Delegate work to other agents and message them.',
     notes: [
-      'Do the work yourself by default. A helper costs more than it looks: you write its brief, you see only its report, and trusting that report means reading what it touched.',
+      'Do the work yourself by default. A subagent costs more than it looks: you write its brief, you see only its report, and trusting that report means reading what it touched.',
       'Delegate only when the work is large, separable from your next step, and clearly costs more to do than to brief and check: independent pieces that can run at the same time, or a long side task whose raw output would flood your context.',
-      'Do it yourself when it takes a handful of calls, when your next step depends on it, or when you would redo it to trust the result. Never delegate one small piece, and never split one modest job across several helpers.',
+      'Do it yourself when it takes a handful of calls, when your next step depends on it, or when you would redo it to trust the result. Never delegate one small piece, and never split one modest job across several subagents.',
     ],
     // Cheapest complete call: `ideate` is the one preset that takes no `objective`.
     example: "agents({op:'swarm', preset:'ideate', task:'Three ways to stop staging 502ing under load'})",
@@ -393,6 +393,9 @@ export function renderCodemodeDescription(all: readonly DescribedProvider[], sub
   return [
     BUILTIN_TOOL_DESCRIPTIONS.eval,
     `- ${SANDBOX_RUNS[substrate]}`,
+    'Discover MCP tools with `await codemode.list()` (servers), `await codemode.list(server)` (tools), '
+      + '`await codemode.search("short intent phrase")` (ranked paths), then `await codemode.describe(path)` '
+      + '(types and full input schema). Call the returned `tools.<name>(input)` path.',
     ...(shown === undefined ? [] : [`Namespaces are globals of the program, beside \`tools\` and never inside it: call a member as ${shown}.`]),
     'Each namespace with its members\' call forms: positional arguments, then one object of options. '
       + 'Any call can resolve to a `Refusal`, `{ success: false, reason, error }`.',

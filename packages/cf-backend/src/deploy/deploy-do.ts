@@ -1,6 +1,6 @@
 /**
  * DeployRunDO — one guided deployment, from the first answer to the moment it
- * holds no secret.
+ * holds no secret; and, for the deploy page, the sign-in that starts it.
  *
  * WHY A DURABLE OBJECT PER RUN. A run is a sequence of writes to somebody
  * else's Cloudflare account that takes minutes, and the page in front of it is
@@ -9,63 +9,56 @@
  * middle of a step leaves that row `running` and the next activation does it
  * again — which is safe because the steps look before they create.
  *
- * THE ALARM IS THE RUNNER. `start` and `selfUpdate` write down what to run and
- * return at once; `alarm()` is where every step actually happens. Three things
- * fall out of that and none of them needed its own mechanism: a caller is never
- * held for the length of a deployment, a handler the runtime could not finish
- * is redelivered — which is how a run survives an eviction, and how a
- * self-update survives the restart its own upload causes — and the same timer,
- * with no plan to run, is the vault's clock.
+ * THE ALARM IS THE RUNNER. `start`, `begin` and `selfUpdate` write down what to
+ * run and return at once; `alarm()` is where every step actually happens. A
+ * caller is never held for the length of a deployment, a handler the runtime
+ * could not finish is redelivered — which is how a run survives an eviction,
+ * and how a self-update survives the restart its own upload causes — and the
+ * same one timer, with no plan to run, is every clock the run keeps: the
+ * fifteen-second re-check of a paused run, the hour its grant may be held, the
+ * seven days its ledger is kept, and a sign-in's hour.
  *
- * WHAT IT HOLDS AND FOR HOW LONG. The person's access and refresh tokens, their
- * provider keys and the two minted root secrets live in the object's key-value
- * storage, never in a SQL row and never in a frame. The last step writes the
- * refresh token into the new Worker as its own secret and wipes the lot; from
- * then on the deployment owns its key and kinu.run holds nothing. A run that
- * stops moving for an hour loses them to the alarm instead, because a tab
- * somebody closed must not leave their account writable from here. A
- * self-update keeps its refresh token and client id past that hour: they are
- * the deployment's own key.
+ * WHAT IT HOLDS AND FOR HOW LONG. The vault (`secret.`) holds two kinds of
+ * thing: the person's grant (access token, refresh token, client id) and what
+ * the run minted (the root keys, the setup link's secret) or was given. The
+ * grant is held for an hour without the person: a run paused on a prerequisite
+ * re-checks for that hour, then lets go of the grant, because a tab somebody
+ * closed must not leave their account writable from here; signing in again
+ * from any device gives it back, and the run carries on where it stopped. The
+ * minted keys stay with the ledger and the setup link for seven days, so that
+ * resume finds them, then the object deletes itself. The handover writes the
+ * refresh token into the new Worker and wipes the vault. A self-update keeps
+ * its refresh token and client id past the hour: they are the deployment's own.
  *
- * WHAT THE KEY IS FOR. The door is public, so the run key is the whole of the
- * authorization: 192 bits minted at creation, presented on every call and on
- * the socket upgrade, compared against its digest. Storage holds the digest.
+ * WHO REACHES IT. A door run (the CLI, the old page) is named by its run id and
+ * authorized by its run key: 192 bits minted at creation, presented on every
+ * call, compared against its digest. A page run is named for the Cloudflare
+ * user and account it deploys into (`deploy-run.<user>.<account>`), reached
+ * only through a sign-in that proved that user: the sign-in's own object,
+ * named by its cookie's digest, holds the grant and the user for an hour.
  */
 import { Effect } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
 import {
   ACCESS_TOKEN_KEY, DEPLOY_CLIENT_ID_KEY, DEPLOY_SOCKET_PROTOCOL,
-  DeployInputsSchema, DeployRunPhaseSchema, DeployStepRowSchema, DeploymentRecordSchema,
-  FACT_ADDRESS, REFRESH_TOKEN_KEY, SELF_UPDATE_RUN_ID,
-  bearerTransport, cloudflareResult, deployPlan, exchangeDeployCode, factsFrom,
-  fetchReleaseArtifact, fetchReleaseManifest, refreshDeployToken, runDeployPlan, runKeyAdmits,
-  type DeployChoice, type DeployFrame, type DeployInputs, type DeployLedger,
-  type DeploySecretVault, type DeploySnapshot, type DeployStepFailure,
-  type DeployStepRow, type DeployStepSeed, type DeploymentRecord,
+  DeployInputsSchema, DeployNeedSchema, DeployRunPhaseSchema, DeployRunPlanSchema, DeploymentRecordSchema,
+  FACT_ADDRESS, HeldBytes, REFRESH_TOKEN_KEY, SELF_UPDATE_RUN_ID, SIGN_IN_AGAIN_NEED,
+  bearerTransport, cloudflareResult, deployPlan, deployRunView, exchangeDeployCode, factsFrom, failureWords,
+  fetchReleaseArtifact, fetchReleaseManifest, heard, judgeRefusal, mintDeployRun, refreshDeployToken, runDeployPlan, runKeyAdmits,
+  zoneHeld,
+  type ArtifactMember, type ArtifactSource, type CloudflareUser, type DeployChoice, type DeployFrame, type DeployInputs, type DeployLedger, type DeployNeed,
+  DeployRunFrameSchema, type DeployRunFrame, type DeployRunOutcome, type DeployRunPlan, type DeployRunView,
+  type DeploySecretVault, type DeploySnapshot,
+  type DeployStepRow, type DeploymentRecord, type TarArtifact, type ApiTokensState,
 } from '@kinu.run/core/deploy';
-import { durableStamps, randomToken, readStamp, repairSchema, SCHEMA_TABLES, writeStamp } from '@kinu.run/core';
+import { durableStamps, randomToken, readStamp, repairSchema, SCHEMA_TABLES, sha256Hex, writeStamp } from '@kinu.run/core';
 import { diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-
-interface StepRecord extends Record<string, SqlStorageValue> {
-  id: string;
-  seq: number;
-  title: string;
-  state: string;
-  attempt: number;
-  detail: string;
-  notes: string;
-  failure: string | null;
-  facts: string;
-}
-
-const FailureSchema = DeployStepRowSchema.entries.failure;
-
-const FactsSchema = DeployStepRowSchema.entries.facts;
-
-const NotesSchema = DeployStepRowSchema.entries.notes;
-
-const StateSchema = DeployStepRowSchema.entries.state;
+import {
+  DeploySignIn, NONCE_BYTES, SECRET_PREFIX, SESSION_UNTIL_KEY, STATE_KEY, TOKEN_EXPIRES_KEY, VAULT_TTL_MS, VERIFIER_KEY, heldValue, holdGrant,
+  type DeployGrant, type DeploySignInAsk, type DeploySignInEnding,
+} from './sign-in';
+import { stepLedger, stepRows } from './step-ledger';
 
 /** An account to deploy into or a zone to bind a hostname in, as the Cloudflare API answers it. */
 const ChoicesSchema: v.GenericSchema<readonly DeployChoice[]> = v.array(v.object({
@@ -81,21 +74,18 @@ const INPUTS_KEY = 'run.inputs';
 
 const KEY_DIGEST_KEY = 'run.key_digest';
 
-const VERIFIER_KEY = 'oauth.verifier';
 
-const STATE_KEY = 'oauth.state';
 
 /** The release version this run installs, shown while steps are still going. */
 const VERSION_KEY = 'run.version';
 
-const SECRET_PREFIX = 'secret.';
+
+/** The person's grant inside the vault: what the hour lets go of. The rest of the vault is what the run minted or was given. */
+const GRANT_KEYS: readonly string[] = [ACCESS_TOKEN_KEY, REFRESH_TOKEN_KEY, DEPLOY_CLIENT_ID_KEY].map((key) => `${SECRET_PREFIX}${key}`);
 
 /** An update's vault keys that the expiry leaves: the deployment's own key. */
 const OWN_KEY: readonly string[] = [`${SECRET_PREFIX}${REFRESH_TOKEN_KEY}`, `${SECRET_PREFIX}${DEPLOY_CLIENT_ID_KEY}`];
 
-/** The state nonce, in bytes. 128 bits of CSPRNG beside the run id, so a
- *  `state` is not guessable by somebody who knows which run is authorizing. */
-const NONCE_BYTES = 16;
 
 /** Durable: the activation that writes the intent is often not the one that runs it. Whether it is an update is the
  *  run record's presence, which the alarm reads. */
@@ -110,21 +100,90 @@ const INTENT_KEY = 'run.intent';
 /** For an update: what to re-run, and where to write the rotated refresh token. */
 const RECORD_KEY = 'run.record';
 
-/** Not a secret, so not under the `secret.` prefix; the wipe leaves it. */
-const TOKEN_EXPIRES_KEY = 'run.token_expires_at';
 
-/** How long a run may hold tokens idle: an hour so a person can fix billing in another tab and retry. */
-const VAULT_TTL_MS = 3_600_000;
+/** The first owner's setup link and its lapse: shown to the run's holder until then, never in a row or the vault. */
+const SEAT_KEY = 'run.owner_seat';
+
+const SeatSchema = v.object({ link: v.string(), expiresAt: v.number() });
+
+/** When the grant must be let go of: an hour after the person last acted, or after the run first paused. */
+const GRANT_UNTIL_KEY = 'run.grant_until';
+
+/** A page run: the Cloudflare user it belongs to, and how it began (`DeployRunPlan`). */
+const OWNER_KEY = 'run.owner';
+
+const PLAN_KEY = 'run.plan';
+
+/** The prerequisite a page run is paused on, the step it stopped at, and since when. */
+const PAUSE_KEY = 'run.paused';
+
+const PauseSchema = v.object({ need: DeployNeedSchema, step: v.string(), since: v.number() });
+
+type DeployPause = v.InferOutput<typeof PauseSchema>;
+
+
+/** When the object deletes itself: seven days after the run last moved. */
+const RETAIN_KEY = 'run.retain_until';
+
+
+
+
+
+
+
+
+
+/** A paused run asks Cloudflare again this often, and whenever the page reads it. */
+const RECHECK_MS = 15_000;
+
+/** How often a run with no grant looks up a pending domain's nameservers: a zone's own activation check is slower. */
+const DNS_WATCH_MS = 5 * 60_000;
+
+/** The ledger, the minted keys and the setup link outlive the grant by this much: the link's own lifetime. */
+const RETAIN_MS = 7 * 24 * 3_600_000;
 
 /** A plan's next call must not land past the access token's expiry. */
 const TOKEN_FLOOR_MS = 60_000;
 
+
+/** The archive is fetched when a step first walks it, so a re-check that stops before the upload downloads none of it.
+ *  Its bytes are charged to `held` on arrival, as `TarArtifact` charges its own. */
+function fetchedOnWalk(open: () => Promise<TarArtifact>): ArtifactSource {
+  const held = new HeldBytes();
+
+  return {
+    held,
+    async *members(): AsyncIterable<ArtifactMember> {
+      const artifact = await open();
+
+      held.hold(artifact.held.peak());
+      yield* artifact.members();
+    },
+  };
+}
+
+/** The nameservers public DNS gives `domain`, lower-cased and without the trailing dot (Cloudflare's DNS over HTTPS). */
+async function nameserversOf(domain: string): Promise<readonly string[]> {
+  const answer = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=NS`, { headers: { accept: 'application/dns-json' } });
+  const read = v.parse(v.object({ Answer: v.optional(v.array(v.object({ data: v.string() })), []) }), await answer.json());
+
+  return read.Answer.map((record) => record.data.toLowerCase().replace(/\.$/u, ''));
+}
+
+/** The domain points at Cloudflare now; moving the deployment onto it takes the person's grant again. */
+function movingNeed(domain: string): DeployNeed {
+  return { id: 'signin-again', sentence: `${domain} now points at Cloudflare. Sign in again to move Kinu onto it.`, action: { label: 'Sign in again' } };
+}
+
 export class DeployRunDO extends DurableObject<Env> {
   private readonly sql: SqlStorage;
+
+  private readonly signIn: DeploySignIn;
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     this.sql = ctx.storage.sql;
+    this.signIn = new DeploySignIn({ storage: ctx.storage, now: () => this.now(), arm: async () => this.arm(), accessToken: () => this.accessToken() });
     const stamps = durableStamps(ctx.storage.kv);
     const unmade = readStamp(stamps, this.sql, 'deploy') === 'unmade';
 
@@ -154,6 +213,11 @@ export class DeployRunDO extends DurableObject<Env> {
     )`);
   }
 
+  /** Every clock here reads this, so a probe can move time without waiting for it. */
+  protected now(): number {
+    return Date.now();
+  }
+
   async fetch(request: Request): Promise<Response> {
     if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
       return this.accept(request);
@@ -168,6 +232,7 @@ export class DeployRunDO extends DurableObject<Env> {
     await this.ctx.storage.put(RUN_ID_KEY, runId);
     await this.ctx.storage.put(KEY_DIGEST_KEY, keyDigest);
     await this.ctx.storage.put(RUN_STATE_KEY, 'collecting');
+    await this.ctx.storage.put(RETAIN_KEY, this.now() + RETAIN_MS);
     await this.armExpiry();
   }
 
@@ -215,15 +280,22 @@ export class DeployRunDO extends DurableObject<Env> {
     refreshToken: string,
     expiresInSeconds: number,
   ): Promise<void> {
-    await this.ctx.storage.put(`${SECRET_PREFIX}${DEPLOY_CLIENT_ID_KEY}`, clientId);
-    await this.ctx.storage.put(`${SECRET_PREFIX}${ACCESS_TOKEN_KEY}`, accessToken);
-    await this.ctx.storage.put(`${SECRET_PREFIX}${REFRESH_TOKEN_KEY}`, refreshToken);
-    await this.ctx.storage.put(TOKEN_EXPIRES_KEY, expiresInSeconds === 0 ? 0 : Date.now() + expiresInSeconds * 1000);
+    await this.landGrant({ clientId, accessToken, refreshToken, expiresAt: expiresInSeconds === 0 ? 0 : this.now() + expiresInSeconds * 1000 });
+  }
+
+  /** A grant the person just gave: the run's own to spend, held for the hour from now. */
+  private async landGrant(grant: DeployGrant): Promise<void> {
+    await this.holdGrant(grant);
 
     // A refresh in the middle of a plan must not send the page back to the form.
     if (await this.runState() === 'authorizing') await this.ctx.storage.put(RUN_STATE_KEY, 'collecting');
     await this.armExpiry();
   }
+
+  private async holdGrant(grant: DeployGrant): Promise<void> {
+    await holdGrant(this.ctx.storage, grant);
+  }
+
 
   async authorized(): Promise<boolean> {
     return await this.ctx.storage.get<string>(`${SECRET_PREFIX}${ACCESS_TOKEN_KEY}`) !== undefined;
@@ -247,6 +319,7 @@ export class DeployRunDO extends DurableObject<Env> {
   async snapshot(): Promise<DeploySnapshot> {
     const steps = this.rows();
     const facts = factsFrom(steps);
+    const seat = await this.seat();
 
     return {
       runId: await this.runId(),
@@ -254,6 +327,7 @@ export class DeployRunDO extends DurableObject<Env> {
       address: facts.get(FACT_ADDRESS) ?? '',
       version: await this.ctx.storage.get<string>(VERSION_KEY) ?? '',
       steps,
+      setupLink: seat,
     };
   }
 
@@ -306,7 +380,9 @@ export class DeployRunDO extends DurableObject<Env> {
    * where the three things come from — the answers come from the deployment's
    * own record instead of a person, the token is minted by spending the
    * deployment's own refresh token, and the channel is the one the record
-   * names rather than this Worker's own origin.
+   * names rather than this Worker's own origin. The page's update of a Kinu
+   * (`begin` with an update plan) is this plan again, its answers read back
+   * from the account and its token the person's.
    *
    * THE GRANT IS SPENT HERE AND KEPT HERE. Cloudflare rotates the refresh token
    * on every refresh, so the pair this call receives is the only one that will
@@ -335,14 +411,201 @@ export class DeployRunDO extends DurableObject<Env> {
     return this.snapshot();
   }
 
-  /** Runs the stored intent (redelivered if unfinished, so runs resume); with no intent, it is the
-   *  vault expiry. */
+  // ── A sign-in (the page's session, sign-in.ts) ────────────────────────────
+
+  openSession(): Promise<void> {
+    return this.signIn.open();
+  }
+
+  holdSignIn(verifier: string, ask: DeploySignInAsk): Promise<string> {
+    return this.signIn.hold(verifier, ask);
+  }
+
+  apiTokens(): Promise<ApiTokensState> {
+    return this.signIn.apiTokens();
+  }
+
+  ending(): Promise<DeploySignInEnding> {
+    return this.signIn.ending();
+  }
+
+  landSignIn(clientId: string, redirectUri: string, code: string, state: string): Promise<boolean> {
+    return this.signIn.land(clientId, redirectUri, code, state);
+  }
+
+  signedIn(): Promise<CloudflareUser | null> {
+    return this.signIn.user();
+  }
+
+  readToken(): Promise<string | null> {
+    return this.signIn.readToken();
+  }
+
+  surrender(): Promise<DeployGrant | null> {
+    return this.signIn.surrender();
+  }
+
+  follow(account: string): Promise<void> {
+    return this.signIn.follow(account);
+  }
+
+  following(): Promise<string> {
+    return this.signIn.following();
+  }
+
+  // ── A page run ────────────────────────────────────────────────────────────
+
+  async busy(): Promise<boolean> {
+    return this.going();
+  }
+
+  /**
+   * A new run in this account, replacing whatever finished or stopped here before: the ledger, the vault (a change
+   * must never bind another Worker's minted keys) and the setup link start empty. Null while a plan is going.
+   */
+  async begin(owner: string, plan: DeployRunPlan, grant: DeployGrant): Promise<string | null> {
+    if (await this.going()) return null;
+    const parsed = v.parse(DeployRunPlanSchema, plan);
+
+    this.initSchema();
+    const runId = mintDeployRun().runId;
+    const vault = await this.ctx.storage.list({ prefix: SECRET_PREFIX });
+
+    this.sql.exec(`DELETE FROM deploy_step`);
+    await this.ctx.storage.delete([...vault.keys(), PAUSE_KEY, SEAT_KEY, VERSION_KEY]);
+    await this.ctx.storage.put(RUN_ID_KEY, runId);
+    await this.ctx.storage.put(OWNER_KEY, owner);
+    await this.holdPlan(parsed);
+    await this.ctx.storage.put(RETAIN_KEY, this.now() + RETAIN_MS);
+    await this.landGrant(grant);
+    await this.wake({ channelOrigin: this.channelOrigin() });
+
+    return runId;
+  }
+
+  /** The page's view, for its own user only; null for anyone else's sign-in, or when no run is here. */
+  async view(owner: string): Promise<DeployRunView | null> {
+    if (await this.ownedBy(owner)) return this.runView();
+
+    // A session asks every account's run object; one that holds no run keeps nothing for having been asked, and a run
+    // that begins here later makes its table again (`begin`).
+    if (await this.runId() === '') await this.ctx.storage.deleteAll();
+
+    return null;
+  }
+
+  /** The view, and a paused run asks Cloudflare again now rather than at its next fifteen seconds. */
+  async current(owner: string): Promise<DeployRunView | null> {
+    if (!await this.ownedBy(owner)) return null;
+
+    if (!await this.going() && await this.pause() !== null && await this.authorized()) await this.wake({ channelOrigin: this.channelOrigin() });
+
+    return this.runView();
+  }
+
+  /** Whether `continue` needs the sign-in's grant: the run let go of its own, or Cloudflare stopped accepting the one it
+   *  holds (paused to sign in again), and it has more to do. */
+  async wantsGrant(owner: string): Promise<boolean> {
+    if (!await this.ownedBy(owner)) return false;
+
+    if (await this.authorized() && (await this.pause())?.need.id !== 'signin-again') return false;
+
+    return await this.runState() !== 'done' || ((await this.plan())?.pending ?? null) !== null;
+  }
+
+  /**
+   * After a refusal's action, or on resume from any device: the grant lands if one came, the stopped step runs again,
+   * and a run waiting on a zone looks at it now.
+   */
+  async carryOn(owner: string, grant: DeployGrant | null): Promise<DeployRunView | null> {
+    if (!await this.ownedBy(owner)) return null;
+
+    if (grant !== null) await this.landGrant(grant);
+
+    if (!await this.going()) {
+      await this.ctx.storage.put(RETAIN_KEY, this.now() + RETAIN_MS);
+
+      // A live run with a domain pending looks at it now, with the grant that came: no step of it waits on a pause.
+      if (await this.runState() === 'done') {
+        await this.ctx.storage.delete(PAUSE_KEY);
+        await this.ctx.storage.setAlarm(Date.now());
+      } else {
+        this.sql.exec(`UPDATE deploy_step SET state = 'pending', failure = NULL WHERE state = 'failed'`);
+        await this.wake({ channelOrigin: this.channelOrigin() });
+      }
+    }
+
+    return this.runView();
+  }
+
+  private async ownedBy(owner: string): Promise<boolean> {
+    const held = await this.ctx.storage.get<string>(OWNER_KEY) ?? '';
+
+    return held !== '' && held === owner;
+  }
+
+  /** The page's plan, its answers read from the one record every run drives from (`INPUTS_KEY`). */
+  private async plan(): Promise<DeployRunPlan | null> {
+    const held = await this.ctx.storage.get<string>(PLAN_KEY);
+    const inputs = await this.ctx.storage.get<string>(INPUTS_KEY);
+
+    return held === undefined || inputs === undefined ? null : v.parse(DeployRunPlanSchema, { ...JSON.parse(held), inputs: JSON.parse(inputs) });
+  }
+
+  /** The plan's answers under `INPUTS_KEY`, as every run's; the rest under `PLAN_KEY`, without them. */
+  private async holdPlan(plan: DeployRunPlan): Promise<void> {
+    const { inputs, ...page } = plan;
+
+    await this.ctx.storage.put(PLAN_KEY, JSON.stringify(page));
+    await this.ctx.storage.put(INPUTS_KEY, JSON.stringify(inputs));
+  }
+
+  private async pause(): Promise<DeployPause | null> {
+    return this.held(PAUSE_KEY, PauseSchema);
+  }
+
+  private async held<T>(key: string, schema: v.GenericSchema<T>): Promise<T | null> {
+    return heldValue(this.ctx.storage, key, schema);
+  }
+
+
+  private async seat(): Promise<{ readonly link: string; readonly expiresAt: number } | null> {
+    const seat = v.safeParse(SeatSchema, await this.ctx.storage.get(SEAT_KEY));
+
+    return seat.success && seat.output.expiresAt > this.now() ? seat.output : null;
+  }
+
+  private async runView(): Promise<DeployRunView> {
+    const rows = this.rows();
+    const plan = await this.plan();
+    const state = await this.runState();
+    const inputs = await this.ctx.storage.get<string>(INPUTS_KEY);
+    const answers = inputs === undefined ? null : v.parse(DeployInputsSchema, JSON.parse(inputs));
+    const pending = plan?.pending ?? null;
+    const renamed = plan === null || plan.renamedFrom === '' ? '' : `${plan.renamedFrom} was taken by then, so this Kinu is ${plan.inputs.instanceName}.`;
+
+    return deployRunView({
+      runId: await this.runId(),
+      account: answers?.accountId ?? '',
+      rows,
+      state,
+      mail: (answers?.mailDomain ?? '') !== '',
+      paused: (await this.pause())?.need ?? null,
+      signedOut: state !== 'done' && !await this.authorized(),
+      seat: await this.seat(),
+      pending: pending === null ? null : { domain: pending.domain, nameservers: pending.nameservers, ready: (await this.pause())?.need.id === 'signin-again' },
+      note: renamed,
+      now: this.now(),
+    });
+  }
+
+  /** Runs the stored intent (redelivered if unfinished, so runs resume); with no intent, it is the clock. */
   override alarm(): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
       const intent = yield* Effect.promise(async () => this.ctx.storage.get<string>(INTENT_KEY));
 
       if (intent === undefined) {
-        yield* Effect.promise(async () => this.expire());
+        yield* this.tick();
 
         return;
       }
@@ -361,8 +624,97 @@ export class DeployRunDO extends DurableObject<Env> {
 
       // Only after the plan settled: a stored intent is a plan the next alarm must carry on with.
       yield* Effect.promise(async () => this.ctx.storage.delete(INTENT_KEY));
-      yield* Effect.promise(async () => this.armExpiry());
+      yield* Effect.promise(async () => this.arm());
     }));
+  }
+
+  /**
+   * The clock, when no plan is going. In order: a sign-in past its hour is deleted; a grant past its hour is let go
+   * of; a paused run holding its grant asks Cloudflare again; a live run waiting on a zone looks at it; and a run seven
+   * days still is deleted.
+   */
+  private tick(): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const now = this.now();
+      const session = yield* Effect.promise(async () => this.ctx.storage.get<number>(SESSION_UNTIL_KEY));
+
+      if (session !== undefined && session <= now) {
+        const run = yield* Effect.promise(async () => this.deleteSelf());
+
+        return diagnostics.event('deploy.session_ended', { run });
+      }
+
+      const grantUntil = yield* Effect.promise(async () => this.ctx.storage.get<number>(GRANT_UNTIL_KEY));
+
+      if (session === undefined && grantUntil !== undefined && grantUntil <= now) {
+        if (yield* Effect.promise(async () => this.expire())) return;
+      } else if (yield* Effect.promise(async () => this.recheckable())) {
+        return yield* Effect.promise(async () => this.wake({ channelOrigin: this.channelOrigin() }));
+      } else {
+        yield* this.watchZone();
+      }
+
+      const retain = yield* Effect.promise(async () => this.ctx.storage.get<number>(RETAIN_KEY));
+
+      if (retain !== undefined && retain <= now) {
+        const run = yield* Effect.promise(async () => this.deleteSelf());
+
+        return diagnostics.event('deploy.run_retired', { run });
+      }
+
+      yield* Effect.promise(async () => this.arm());
+    });
+  }
+
+  /** Paused on a prerequisite with the grant still held. */
+  private async recheckable(): Promise<boolean> {
+    return await this.pause() !== null && await this.authorized() && await this.ctx.storage.get(INPUTS_KEY) !== undefined;
+  }
+
+  /**
+   * Live on workers.dev with a zone pending. The run holds no grant once it handed over, so it watches the domain's
+   * nameservers in public DNS (DNS over HTTPS, no sign-in); once they are the two Cloudflare assigned, it asks for a
+   * sign-in to move the deployment onto the host. With a grant (the person signed in again) and the zone active, the
+   * same plan runs again with the host as the address. A run replaced while it read is left alone.
+   */
+  private watchZone(): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const plan = yield* Effect.promise(async () => this.plan());
+      const live = (yield* Effect.promise(async () => this.runState())) === 'done';
+
+      if (plan === null || plan.pending === null || !live) return;
+      const pending = plan.pending;
+      const run = yield* Effect.promise(async () => this.runId());
+
+      if (!(yield* Effect.promise(async () => this.authorized()))) {
+        const pointed = yield* heard(Effect.promise(async () => nameserversOf(pending.domain)));
+
+        if ('answer' in pointed && pending.nameservers.every((ns) => pointed.answer.includes(ns.toLowerCase())) && run === (yield* Effect.promise(async () => this.runId()))) {
+          yield* Effect.promise(async () => this.ctx.storage.put(PAUSE_KEY, { need: movingNeed(pending.domain), step: 'address', since: this.now() }));
+        }
+
+        return;
+      }
+
+      const token = yield* heard(this.accessToken());
+
+      if ('words' in token) return;
+      const zone = yield* heard(zoneHeld(bearerTransport(token.answer), pending.zoneId));
+
+      // Read over the network, so another call may have begun a run here meanwhile.
+      if ('words' in zone || zone.answer.status !== 'active' || run !== (yield* Effect.promise(async () => this.runId()))) return;
+
+      const moved: DeployRunPlan = {
+        ...plan, kind: 'change', pending: null,
+        inputs: { ...plan.inputs, address: { kind: 'zone', hostname: pending.host, zoneId: pending.zoneId } },
+      };
+
+      this.sql.exec(`DELETE FROM deploy_step`);
+      yield* Effect.promise(async () => this.holdPlan(moved));
+      yield* Effect.promise(async () => this.ctx.storage.delete(PAUSE_KEY));
+      yield* Effect.promise(async () => this.wake({ channelOrigin: this.channelOrigin() }));
+      diagnostics.event('deploy.zone_active', { run, zone: pending.zoneId });
+    });
   }
 
   /** The stored intent rather than a field: an in-memory flag is lost by the eviction that makes
@@ -379,42 +731,84 @@ export class DeployRunDO extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(Date.now());
   }
 
-  /** Never while a plan awaits the alarm: one timer slot, and arming expiry would drop the run. */
+  /** The person acted: the grant may be held for another hour from now. */
   private async armExpiry(): Promise<void> {
-    if (await this.going()) return;
-
-    await this.ctx.storage.setAlarm(Date.now() + VAULT_TTL_MS);
+    await this.ctx.storage.put(GRANT_UNTIL_KEY, this.now() + VAULT_TTL_MS);
+    await this.arm();
   }
 
   /**
-   * The end of a run nobody finished.
-   *
-   * A person's access and refresh tokens, their provider keys and the minted
-   * root secrets are gone, and the run says so: the page offers signing in
-   * again rather than a ledger that cannot move. A self-update keeps
-   * `OWN_KEY`. A guided object that never got as far as a single step deletes
-   * itself outright — `POST /api/deploy/runs` is public, so an object per probe
-   * is the shape this bounds.
+   * The one timer slot, when no plan awaits it (arming then would drop the run): the soonest of the sign-in's end, the
+   * grant's hour, a paused or waiting run's next look, and the retention's end.
    */
-  private async expire(): Promise<void> {
-    const held = await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX });
-    const run = await this.runId();
-    const own = await this.ctx.storage.get<string>(RECORD_KEY) !== undefined;
-    const dropped = [...held.keys()].filter((key) => !own || !OWN_KEY.includes(key));
+  private async arm(): Promise<void> {
+    if (await this.going()) return;
+    const now = this.now();
+    const plan = await this.plan();
+    const holds = await this.authorized();
+    const waiting = (plan?.pending ?? null) !== null && await this.runState() === 'done';
+    const paused = await this.pause() !== null;
+    // With its grant the run asks Cloudflare; without, it watches the domain's nameservers, until they point there.
+    const looks = holds && (paused || waiting) ? now + RECHECK_MS : undefined;
+    const watches = !holds && waiting && !paused ? now + DNS_WATCH_MS : undefined;
 
-    await this.ctx.storage.delete(dropped);
+    const due = [
+      await this.ctx.storage.get<number>(SESSION_UNTIL_KEY),
+      await this.ctx.storage.get<number>(GRANT_UNTIL_KEY),
+      await this.ctx.storage.get<number>(RETAIN_KEY),
+      looks,
+      watches,
+    ].filter((at): at is number => at !== undefined);
 
-    if (!own && this.rows().length === 0) {
-      await this.ctx.storage.deleteAll();
-      this.initSchema();
-      diagnostics.event('deploy.run_dropped', { run, secrets: held.size });
+    if (due.length === 0) {
+      await this.ctx.storage.deleteAlarm();
 
       return;
     }
 
-    await this.ctx.storage.put(RUN_STATE_KEY, 'expired');
+    // In the run's own clock: a probe that moved it forward fires the alarm itself.
+    await this.ctx.storage.setAlarm(Date.now() + Math.max(0, Math.min(...due) - now));
+  }
+
+  /**
+   * The end of the grant's hour.
+   *
+   * The person's access and refresh tokens are gone, and the run says so: the
+   * page offers signing in again rather than a ledger that cannot move, and a
+   * fresh grant carries on from the step it stopped at. What the run minted
+   * stays with it, for the retention's seven days. A self-update keeps
+   * `OWN_KEY`. A door object that never got as far as a single step deletes
+   * itself outright — `POST /api/deploy/runs` is public, so an object per probe
+   * is the shape this bounds. True when the object is gone.
+   */
+  private async expire(): Promise<boolean> {
+    const run = await this.runId();
+    const own = await this.ctx.storage.get<string>(RECORD_KEY) !== undefined;
+    const dropped = GRANT_KEYS.filter((key) => !own || !OWN_KEY.includes(key));
+
+    await this.ctx.storage.delete([...dropped, GRANT_UNTIL_KEY]);
+
+    if (!own && this.rows().length === 0 && await this.plan() === null) {
+      diagnostics.event('deploy.run_dropped', { run: await this.deleteSelf() });
+
+      return true;
+    }
+
+    if (await this.runState() !== 'done') await this.ctx.storage.put(RUN_STATE_KEY, 'expired');
     diagnostics.event('deploy.run_expired', { run, secrets: dropped.length });
     await this.broadcast();
+
+    return false;
+  }
+
+  /** Everything this run kept, deleted, its schema made again empty; the run it was, for the caller's event. */
+  private async deleteSelf(): Promise<string> {
+    const run = await this.runId();
+
+    await this.ctx.storage.deleteAll();
+    this.initSchema();
+
+    return run;
   }
 
   /**
@@ -423,7 +817,8 @@ export class DeployRunDO extends DurableObject<Env> {
    * Cloudflare's access tokens last about an hour and a plan can be retried
    * long after the person walked away, so an expiry in the past is a refresh
    * rather than a step that fails with 401. The rotated pair lands the moment
-   * it exists, as in `selfUpdate`.
+   * it exists, as in `selfUpdate`. Never once the handover gave the refresh
+   * token to the deployment: spending it would leave the deployment a spent one.
    */
   private accessToken(): Effect.Effect<string, KinuError> {
     return Effect.gen({ self: this }, function* () {
@@ -432,7 +827,7 @@ export class DeployRunDO extends DurableObject<Env> {
       if (held === undefined) return yield* new KinuError('denied', 'this run holds no Cloudflare authorization');
       const expiresAt = (yield* Effect.promise(async () => this.ctx.storage.get<number>(TOKEN_EXPIRES_KEY))) ?? 0;
 
-      if (expiresAt === 0 || expiresAt > Date.now() + TOKEN_FLOOR_MS) return held;
+      if (expiresAt === 0 || expiresAt > this.now() + TOKEN_FLOOR_MS) return held;
 
       const clientId = yield* Effect.promise(async () => this.ctx.storage.get<string>(`${SECRET_PREFIX}${DEPLOY_CLIENT_ID_KEY}`));
       const refreshToken = yield* Effect.promise(async () => this.ctx.storage.get<string>(`${SECRET_PREFIX}${REFRESH_TOKEN_KEY}`));
@@ -440,7 +835,10 @@ export class DeployRunDO extends DurableObject<Env> {
       if (clientId === undefined || refreshToken === undefined) return held;
       const minted = yield* Effect.promise(async () => refreshDeployToken({ clientId, refreshToken }));
 
-      yield* Effect.promise(async () => this.landToken(clientId, minted.accessToken, minted.refreshToken, minted.expiresInSeconds));
+      yield* Effect.promise(async () => this.holdGrant({
+        clientId, accessToken: minted.accessToken, refreshToken: minted.refreshToken,
+        expiresAt: minted.expiresInSeconds === 0 ? 0 : this.now() + minted.expiresInSeconds * 1000,
+      }));
 
       return minted.accessToken;
     });
@@ -448,11 +846,18 @@ export class DeployRunDO extends DurableObject<Env> {
 
   private drive(inputs: DeployInputs, channelOrigin: string, update: boolean): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const token = yield* this.accessToken();
+      const token = yield* heard(this.accessToken());
       const run = yield* Effect.promise(async () => this.runId());
 
+      // No grant, or Cloudflare refused its renewal: the run waits for the person to sign in again.
+      if ('words' in token) {
+        yield* Effect.promise(async () => this.signedOut(token.words.code === undefined ? SIGN_IN_AGAIN_NEED : { ...SIGN_IN_AGAIN_NEED, details: token.words }));
+
+        return;
+      }
+
+      const plan = yield* Effect.promise(async () => this.plan());
       const manifest = yield* Effect.promise(async () => fetchReleaseManifest(channelOrigin));
-      const artifact = yield* Effect.promise(async () => fetchReleaseArtifact(manifest, channelOrigin));
       const ran = (yield* Effect.promise(async () => this.ctx.storage.get<string>(VERSION_KEY))) ?? '';
 
       // A ledger belongs to one release: the self-update object has a fixed id, so a new version must
@@ -467,21 +872,68 @@ export class DeployRunDO extends DurableObject<Env> {
         {
           manifest,
           inputs,
-          transport: bearerTransport(token),
-          artifact,
+          transport: bearerTransport(token.answer),
+          artifact: fetchedOnWalk(async () => fetchReleaseArtifact(manifest, channelOrigin)),
           vault: this.vault(),
-          update,
+          seat: { hold: async (link, expiresAt) => { await this.ctx.storage.put(SEAT_KEY, { link, expiresAt }); } },
+          // A change or an update of a Kinu the page found keeps its root secrets, as a self-update does.
+          update: update || (plan !== null && plan.kind !== 'new'),
+          freshSetupLink: plan?.freshSetupLink ?? false,
+          tag: `${run}.${manifest.version}.${sha256Hex(JSON.stringify(inputs)).slice(0, 16)}`.slice(0, 100),
           facts: factsFrom(this.rows()),
           http: (url, headers) => fetch(url, { headers }),
           note: () => undefined,
+          wait: async (ms) => { await new Promise<void>((resolve) => { setTimeout(resolve, ms); }); },
         },
         this.ledger(),
         (progress) => this.deliver(run, { type: 'deploy.progress', progress }),
       ));
 
       yield* Effect.promise(async () => this.ctx.storage.put(RUN_STATE_KEY, outcome.state));
+      yield* Effect.promise(async () => this.settled(outcome, inputs.accountId));
       yield* Effect.promise(async () => this.broadcast());
     });
+  }
+
+  /**
+   * What the plan's end means for the grant's hour. A page run stopped by a prerequisite pauses on it: the hour starts
+   * at the first pause and a re-check that is refused again does not extend it. Anything else starts the hour now.
+   */
+  private async settled(outcome: DeployRunOutcome, account: string): Promise<void> {
+    const prior = await this.pause();
+    const failure = outcome.rows.find((row) => row.id === outcome.failedAt)?.failure ?? null;
+    const judged = failure === null ? null : judgeRefusal(failureWords(failure), account);
+    const paging = await this.ctx.storage.get<string>(OWNER_KEY) !== undefined;
+
+    // A deployment's own update is never retired: after a failed one this object holds the only unspent refresh token.
+    if (await this.runId() !== SELF_UPDATE_RUN_ID) await this.ctx.storage.put(RETAIN_KEY, this.now() + RETAIN_MS);
+
+    if (paging && judged !== null && 'need' in judged && outcome.failedAt !== null) {
+      const again = prior !== null && prior.step === outcome.failedAt;
+
+      await this.ctx.storage.put(PAUSE_KEY, { need: judged.need, step: outcome.failedAt, since: again ? prior.since : this.now() });
+
+      if (!again) await this.ctx.storage.put(GRANT_UNTIL_KEY, this.now() + VAULT_TTL_MS);
+
+      return;
+    }
+
+    await this.ctx.storage.delete(PAUSE_KEY);
+
+    if (await this.authorized()) await this.ctx.storage.put(GRANT_UNTIL_KEY, this.now() + VAULT_TTL_MS);
+  }
+
+  private async signedOut(need: DeployNeed): Promise<void> {
+    const prior = await this.pause();
+    const step = this.rows().find((row) => row.state !== 'done')?.id ?? '';
+
+    await this.ctx.storage.put(RUN_STATE_KEY, 'expired');
+
+    if (await this.ctx.storage.get<string>(OWNER_KEY) !== undefined) {
+      await this.ctx.storage.put(PAUSE_KEY, { need, step, since: prior?.since ?? this.now() });
+    }
+
+    await this.broadcast();
   }
 
   /** The record's channel for a self-update: a deployment's own origin publishes no channel. */
@@ -489,7 +941,8 @@ export class DeployRunDO extends DurableObject<Env> {
     return this.env.CLI_PUBLIC_ORIGIN ?? 'https://kinu.run';
   }
 
-  /** No read-through to `env`: an update keeps live secrets via `keep_bindings` (`steps.ts versionMetadata`). */
+  /** No read-through to `env`: an update keeps live secrets via `keep_bindings` (`steps.ts versionMetadata`). A handover
+   *  with a zone still pending keeps the grant to watch it, and from then on never refreshes it (`accessToken`). */
   protected vault(): DeploySecretVault {
     return {
       read: async (name: string) => await this.ctx.storage.get<string>(`${SECRET_PREFIX}${name}`) ?? null,
@@ -501,63 +954,27 @@ export class DeployRunDO extends DurableObject<Env> {
 
         return [...held.keys()].map((key) => key.slice(SECRET_PREFIX.length));
       },
+      // The grant too, whatever is left to do: the deployment now holds its refresh token, and two holders of one
+      // rotating token leave whichever spends it second with a spent one.
       wipe: async () => {
-        const held = await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX });
+        const wiped = [...(await this.ctx.storage.list<string>({ prefix: SECRET_PREFIX })).keys()];
 
-        await this.ctx.storage.delete([...held.keys()]);
-        diagnostics.event('deploy.secrets_wiped', { run: await this.runId(), count: held.size });
+        await this.ctx.storage.delete([...wiped, GRANT_UNTIL_KEY]);
+        diagnostics.event('deploy.secrets_wiped', { run: await this.runId(), count: wiped.length });
       },
     };
   }
 
   private ledger(): DeployLedger {
-    return {
-      rows: async () => this.rows(),
-      seed: async (steps: readonly DeployStepSeed[]) => {
-        for (const step of steps) {
-          this.sql.exec(
-            `INSERT INTO deploy_step (id, seq, title, state) VALUES (?, ?, ?, 'pending')
-             ON CONFLICT(id) DO UPDATE SET seq = excluded.seq, title = excluded.title`,
-            step.id, step.seq, step.title,
-          );
-        }
-      },
-      started: async (id: string, attempt: number) => {
-        this.sql.exec(`UPDATE deploy_step SET state = 'running', attempt = ?, failure = NULL WHERE id = ?`, attempt, id);
-        await this.broadcast();
-      },
-      noted: (id: string, note: string) => {
-        const row = this.sql.exec<{ notes: string }>(`SELECT notes FROM deploy_step WHERE id = ?`, id).toArray()[0];
-        const notes = row === undefined ? [] : v.parse(NotesSchema, JSON.parse(row.notes));
-
-        this.sql.exec(`UPDATE deploy_step SET notes = ? WHERE id = ?`, JSON.stringify([...notes, note]), id);
-      },
-      settled: async (id: string, detail: string, facts: Readonly<Record<string, string>>) => {
-        this.sql.exec(
-          `UPDATE deploy_step SET state = 'done', detail = ?, facts = ?, failure = NULL WHERE id = ?`,
-          detail, JSON.stringify(facts), id,
-        );
-        await this.broadcast();
-      },
-      failed: async (id: string, failure: DeployStepFailure) => {
-        this.sql.exec(`UPDATE deploy_step SET state = 'failed', failure = ? WHERE id = ?`, JSON.stringify(failure), id);
-        await this.broadcast();
-      },
-    };
+    return stepLedger(this.sql, {
+      broadcast: async () => this.broadcast(),
+      // The step a pause waited on went through: Cloudflare says the prerequisite is met.
+      settled: async (id) => { if ((await this.pause())?.step === id) await this.ctx.storage.delete(PAUSE_KEY); },
+    });
   }
 
   private rows(): readonly DeployStepRow[] {
-    return this.sql.exec<StepRecord>(`SELECT * FROM deploy_step ORDER BY seq`).toArray().map((row) => ({
-      id: row.id,
-      seq: row.seq,
-      title: row.title,
-      state: v.parse(StateSchema, row.state),
-      attempt: row.attempt,
-      detail: row.detail,
-      notes: v.parse(NotesSchema, JSON.parse(row.notes)),
-      failure: row.failure === null ? null : v.parse(FailureSchema, JSON.parse(row.failure)),
-      facts: v.parse(FactsSchema, JSON.parse(row.facts)),
-    }));
+    return stepRows(this.sql);
   }
 
   private async runId(): Promise<string> {
@@ -596,7 +1013,7 @@ export class DeployRunDO extends DurableObject<Env> {
 
   /** The only place a send happens. A socket whose browser left throws on `send`; unguarded, that
    *  would strand the plan mid-step with the vault still full. */
-  private deliver(run: string, frame: DeployFrame, only: WebSocket | null = null): void {
+  private deliver(run: string, frame: DeployFrame | DeployRunFrame, only: WebSocket | null = null): void {
     const body = JSON.stringify(frame);
 
     for (const socket of only === null ? this.ctx.getWebSockets() : [only]) {
@@ -610,16 +1027,16 @@ export class DeployRunDO extends DurableObject<Env> {
     }
   }
 
+  /** The ledger as the CLI reads it, then the same moment as the page reads it. */
   private async broadcast(): Promise<void> {
-    const snapshot = await this.snapshot();
-
-    this.deliver(snapshot.runId, { type: 'deploy.snapshot', snapshot });
+    await this.sendSnapshot(null);
   }
 
   /** A page that connected mid-run renders the ledger it missed. */
-  private async sendSnapshot(socket: WebSocket): Promise<void> {
+  private async sendSnapshot(socket: WebSocket | null): Promise<void> {
     const snapshot = await this.snapshot();
 
     this.deliver(snapshot.runId, { type: 'deploy.snapshot', snapshot }, socket);
+    this.deliver(snapshot.runId, v.parse(DeployRunFrameSchema, { type: 'deploy.run', run: await this.runView() }), socket);
   }
 }

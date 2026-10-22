@@ -38,13 +38,13 @@ describe('a long turn, in the real chat', () => {
 
       expect(top).toEqual([{ kind: 'rollup', rolledUp: false, phases: '5', state: null, title: 'calls', now: false }]);
       // The answer, and the thought that led to it, stand outside the rollup.
-      expect(await page.evaluate(() => [...document.querySelectorAll('.p-thread-column .prose-chat')].filter((words) => words.closest('[data-turn-rollup]') === null).length)).toBe(1);
+      expect(await page.evaluate(() => [...document.querySelectorAll('.p-thread-column [data-said]')].filter((words) => words.closest('[data-turn-rollup]') === null).length)).toBe(1);
 
       await page.click('[data-turn-rollup] > button');
       await page.waitForSelector('[data-turn-rollup] [data-disclosure-body="open"]');
       expect(await page.$$eval('[data-turn-rollup] [data-tool-run]', (phases) => phases.filter((phase) => phase.getClientRects().length > 0).length)).toBe(5);
       // Its words to the owner after each of the first four phases are inside it, shown once it opens.
-      expect(await page.$$eval('[data-turn-rollup] .prose-chat', (words) => words.filter((said) => said.getClientRects().length > 0).length)).toBe(4);
+      expect(await page.$$eval('[data-turn-rollup] [data-said]', (words) => words.filter((said) => said.getClientRects().length > 0).length)).toBe(4);
 
       await page.click('[data-turn-rollup] [data-tool-run] > button');
       await page.waitForFunction(() => [...document.querySelectorAll('[data-turn-rollup] [data-tool-run] [data-tool-state]')].some((row) => row.getClientRects().length > 0));

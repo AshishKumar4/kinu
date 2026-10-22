@@ -1,15 +1,19 @@
 import { createContext, memo, useContext, useCallback, useMemo, useState, type ReactNode } from "react";
-import { CaretRightIcon, CopyIcon, ImageBrokenIcon, WarningCircleIcon } from "@phosphor-icons/react";
-import { Loader } from "@cloudflare/kumo";
+import { CaretRightIcon, ImageBrokenIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { Loader } from "@/components/ui/Loader";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { findPlaneReferences, isWholeReference, linkProse, MAX_LINES_PER_FILE, promoteSlateLinks, slateLinkId, type ChangelogEntry, type DiffLine, type MarkdownNode } from "@kinu.run/core";
 import { ephemeralSlateId, slateUiSegments, type EphemeralSlateAddress, type SlateUiSegment } from "@kinu.run/core";
 import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { SlateInlineContext } from "@/components/slates/context";
+import { Pressable } from "@/components/ui/Pressable";
+import { Button } from "@/components/ui/Button";
+import { InlineAction } from "@/components/ui/InlineAction";
+import { CopyText } from "@/components/ui/CopyButton";
+import { Surface } from "@/components/ui/Surface";
 
 const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
   add: { tone: "p-badge-success px-3", mark: "+" },
@@ -21,7 +25,7 @@ const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
 /** An empty truncated body (file too long to align) must read differently from one clipped at {@link MAX_LINES_PER_FILE}. */
 export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?: boolean }) {
   return (
-    <pre className="p-t-code overflow-x-auto max-h-[360px] overflow-y-auto m-0">
+    <pre className="t-code overflow-x-auto max-h-90 overflow-y-auto m-0">
       {lines.map((l, i) => {
         const { tone, mark } = DIFF_LINE[l.kind];
 
@@ -45,7 +49,6 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
 
 /** `wrap`: long lines wrap instead of scrolling, for data read rather than code copied (a tool's arguments). */
 export function CodeBlock({ children, className, wrap = false }: { children: string; className?: string; wrap?: boolean }) {
-  const { status, copy } = useCopy();
   const code = children.replace(/\n$/, "");
   const lang = className?.replace(/^language-/, "") ?? "";
 
@@ -60,18 +63,15 @@ export function CodeBlock({ children, className, wrap = false }: { children: str
     ? resource.value.html : null;
 
   return (
-    <div className={`p-code my-2 rounded-lg overflow-hidden${wrap ? " p-code-wrap" : ""}`}>
-      <div className="p-code-head flex items-center justify-between gap-2 px-3 py-1 p-annotation">
+    <div className={`p-code p-code-block my-2${wrap ? " p-code-wrap" : ""}`}>
+      <div className="t-meta t-mono p-code-head flex items-center justify-between gap-2 px-3 py-1">
         <span className="truncate font-mono">{lang || "code"}</span>
-        <button onClick={() => copy(code)} type="button"
-          className={`flex shrink-0 cursor-pointer items-center gap-1 transition-colors ${status === "failed" ? "p-danger" : "hover:p-text"}`}>
-          <CopyIcon size={12} />{copyLabel(status)}
-        </button>
+        <CopyText value={code} />
       </div>
       {html === null
-        ? <pre className="p-scroll-x p-code-scroll m-0 px-3 py-2.5 p-t-code"><code>{code}</code></pre>
+        ? <pre className="t-code p-text p-scroll-x p-code-scroll m-0 px-3 py-2"><code>{code}</code></pre>
         : <div className="p-scroll-x p-code-scroll"><div className="p-code-highlight" dangerouslySetInnerHTML={{ __html: html }} /></div>}
-      {resource.status === "error" && <button type="button" onClick={reload} className="px-3 py-1 text-xs p-warning" title={resource.message}>Syntax highlighting failed. Retry</button>}
+      {resource.status === "error" && <Button variant="ghost" size="sm" onClick={reload} title={resource.message}>Syntax highlighting failed. Retry</Button>}
     </div>
   );
 }
@@ -82,25 +82,24 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
 
   if (failed || !src) {
     return (
-      <span data-markdown-image-error role="note" className="my-1.5 inline-flex max-w-full items-baseline gap-1.5 rounded-lg border p-border px-2.5 py-1.5 text-xs p-text-3">
+      <Surface look="outlined" as="span" className="t-meta my-2 inline-flex max-w-full items-baseline gap-2 px-2 py-1 p-text-3" data-markdown-image-error role="note">
         <ImageBrokenIcon size={13} aria-hidden className="self-center shrink-0" />
         <span className="min-w-0">
           {alt ? `Image failed to load: ${alt}` : "Image failed to load"}
           {src && (
             <>
               {" ("}
-              <a href={src} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline break-all">{src}</a>
+              <a href={src} target="_blank" rel="noopener noreferrer" className="p-accent-fg hover:underline break-all">{src}</a>
               {")"}
             </>
           )}
         </span>
-      </span>
+      </Surface>
     );
   }
 
   return (
-    <img data-markdown-image src={src} alt={alt ?? ""} title={title} loading="lazy"
-      className="max-w-full rounded-lg" onError={() => setFailed(true)} />
+    <Surface look="clip" as="img" className="max-w-full" data-markdown-image src={src} alt={alt ?? ""} title={title} loading="lazy" onError={() => setFailed(true)} />
   );
 }
 
@@ -124,7 +123,7 @@ function SlateUiBlock({ address, html }: { address: EphemeralSlateAddress | null
   if (inline === null || address === null) {
     return (
       <details className="my-2">
-        <summary className="p-meta p-text-3 cursor-pointer">{address?.name ?? "slate-ui"}</summary>
+        <summary className="t-meta p-text-3 cursor-pointer">{address?.name ?? "slate-ui"}</summary>
         <CodeBlock className="language-html">{html}</CodeBlock>
       </details>
     );
@@ -153,7 +152,7 @@ function AnswerSegment({ segment, place }: { segment: SlateUiSegment; place: Ans
 
   // Its page is read from the stored answer, so until the answer is stored it is a quiet line.
   if (segment.kind === "open" || (drawn && !place.stored)) {
-    return <div data-slate-ui-pending={segment.name} aria-label={`Drawing ${segment.name}`} className="my-2 h-8 rounded-md p-recessed animate-pulse" />;
+    return <Surface look="well" className="my-2 h-8 animate-pulse" data-slate-ui-pending={segment.name} aria-label={`Drawing ${segment.name}`} />;
   }
 
   const address = place.chat === undefined ? null : { actorId: place.chat.actorId, messageId: place.messageId, name: segment.name };
@@ -204,15 +203,15 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
         if (id !== null) return <SlateLink id={id} />;
 
         if (files !== null && href !== undefined && isWholeReference(href, roots)) {
-          return <button type="button" data-file-link={href} className="p-accent hover:underline" onClick={() => files.open(href)}>{children}</button>;
+          return <InlineAction data-file-link={href} onClick={() => files.open(href)}>{children}</InlineAction>;
         }
 
-        return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline">{children}</a>;
+        return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent-fg hover:underline">{children}</a>;
       },
       img({ src, alt, title }) { return <MarkdownImage key={src ?? ""} src={src} alt={alt} title={title} />; },
-      table({ children }) { return <div className="p-scroll-x my-2 rounded-lg border p-border"><table className="w-full text-xs border-collapse">{children}</table></div>; },
-      th({ children }) { return <th className="border-b p-border px-2.5 py-1.5 text-left font-medium p-fill whitespace-nowrap">{children}</th>; },
-      td({ children }) { return <td className="border-b p-border px-2.5 py-1.5 align-top">{children}</td>; },
+      table({ children }) { return <Surface look="outlined" className="p-scroll-x my-2"><table className="t-meta p-text-2 w-full border-collapse">{children}</table></Surface>; },
+      th({ children }) { return <th className="p-table-head border-b p-border px-2 py-1 text-left whitespace-nowrap">{children}</th>; },
+      td({ children }) { return <td className="border-b p-border px-2 py-1 align-top">{children}</td>; },
       // Drop the fence's own <pre>: CodeBlock supplies one, and nesting would nest scroll containers.
       pre({ children }) { return <>{children}</>; },
     }}>{content}</Markdown>
@@ -224,11 +223,11 @@ export function EmptyState({ icon, title, hint, children }: {
 }) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center" data-empty>
-      <div className={`mb-3 ${icon ? "p-text-3 opacity-60" : "text-[var(--c-accent)] opacity-55"}`}>
+      <div className={`mb-3 ${icon ? "p-text-3 opacity-60" : "p-accent opacity-55"}`}>
         {icon ?? <KinuMark size={30} />}
       </div>
-      <p className="p-eyebrow p-text-2">{title}</p>
-      {hint && <p className="text-xs p-text-3 mt-2 max-w-xs leading-relaxed">{hint}</p>}
+      <p className="t-label p-text-2">{title}</p>
+      {hint && <p className="t-meta p-text-3 mt-2 max-w-xs">{hint}</p>}
       {children}
     </div>
   );
@@ -236,17 +235,17 @@ export function EmptyState({ icon, title, hint, children }: {
 
 export function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-md border p-border p-recessed px-2 py-1.5">
-      <div className="p-eyebrow">{label}</div>
-      <div className="p-row-text p-text font-mono tabular-nums">{value}</div>
-    </div>
+    <Surface look="well" className="border p-border px-2 py-1">
+      <div className="t-label">{label}</div>
+      <div className="t-body t-mono p-text tabular-nums">{value}</div>
+    </Surface>
   );
 }
 
 export function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="space-y-1.5">
-      <div className="p-eyebrow">{title}</div>
+    <section className="space-y-2">
+      <div className="t-label">{title}</div>
       {children}
     </section>
   );
@@ -284,21 +283,16 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
 
   return (
     <section data-section={id}>
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={open}
-        className="group/section flex w-full items-center gap-2 rounded-md py-1 text-left cursor-pointer p-row-hover transition-colors"
-      >
+      <Pressable className="group/section flex items-center gap-2 py-1" onClick={toggle} aria-expanded={open}>
         <CaretRightIcon
           size={12}
           className={`shrink-0 p-text-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
         />
         {icon}
-        <span className="p-label">{title}</span>
-        {badge && <span className="ml-auto inline-flex shrink-0">{badge}</span>}
-      </button>
-      {open && <div className="mt-2.5">{children}</div>}
+        <span className="t-label" data-section-title>{title}</span>
+        {badge && <span className="ml-auto inline-flex shrink-0" data-section-badge>{badge}</span>}
+      </Pressable>
+      {open && <div className="mt-3">{children}</div>}
     </section>
   );
 }
@@ -317,7 +311,7 @@ function HistoryBoundaryNotice({ loading, error, exhausted, onRetry }: HistoryBo
       <>
         <WarningCircleIcon size={13} className="p-danger shrink-0" />
         <span className="p-text-3">Could not load earlier messages.</span>
-        <button onClick={() => { onRetry(); }} className="p-accent hover:underline">Retry</button>
+        <Button variant="ghost" size="sm" onClick={() => { onRetry(); }}>Retry</Button>
       </>
     );
   }
@@ -330,7 +324,7 @@ function HistoryBoundaryNotice({ loading, error, exhausted, onRetry }: HistoryBo
     return (
       <>
         <span className="h-px flex-1 p-border border-t" />
-        <span className="p-text-3 p-meta">Beginning of the conversation</span>
+        <span className="t-meta p-text-3">Beginning of the conversation</span>
         <span className="h-px flex-1 p-border border-t" />
       </>
     );
@@ -342,7 +336,7 @@ function HistoryBoundaryNotice({ loading, error, exhausted, onRetry }: HistoryBo
 /** All four states share one height: this row sits above the prepend, so a size change shifts the transcript. */
 export function HistoryBoundary(props: HistoryBoundaryProps) {
   return (
-    <div data-scroll-edge="" className="flex h-7 items-center justify-center gap-2 text-xs">
+    <div data-scroll-edge="" className="t-meta flex h-7 items-center justify-center gap-2">
       <HistoryBoundaryNotice {...props} />
     </div>
   );

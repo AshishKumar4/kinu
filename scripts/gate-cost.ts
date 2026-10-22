@@ -27,9 +27,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { arch, cpus, homedir, platform as osPlatform } from 'node:os';
+import { arch, cpus, platform as osPlatform } from 'node:os';
 import * as v from 'valibot';
 import { REPO_ROOT as root } from './repo-root';
+import { ladderCacheDirectory } from './cache-root';
 
 
 export const COST_TABLE = `${root}scripts/gate-cost.json`;
@@ -46,9 +47,8 @@ export const COST_TABLE = `${root}scripts/gate-cost.json`;
  */
 export const QUIET_LOAD = 2;
 
-/** A Kinu suite, dev server or typechecker. `tsc` is `bun run check` and takes
- *  the box for minutes. */
-export const KINU_WORK = /(?:vitest|vite|tsc|wrangler|workerd)/u;
+/** A Kinu suite, dev server or typechecker. `tsrs` is `bun run check`'s, and an editor's `tsc` still runs beside it. */
+export const KINU_WORK = /(?:vitest|vite|tsrs|tsc|wrangler|workerd)/u;
 
 /** An editor's language server (`tsc --lsp`) lives as long as the editor and idles: it holds no pool, and a
  *  wait on it never ends (2026-09-23, a browser row skipped behind one). */
@@ -127,7 +127,7 @@ export function writeCosts(table: CostTable, path = COST_TABLE): number {
 /** Live rows measure their process tree on every deploy, red or green. This is resource evidence, not a verdict or
  *  a tracked-tree edit: it survives disposable deploy checkouts and never changes the SHA being verified. */
 export function resourceCostFile(run: string): string {
-  return join(homedir(), '.cache', 'kinu-ladder', 'resources', createHash('sha256').update(run).digest('hex') + '.json');
+  return join(ladderCacheDirectory(), 'resources', createHash('sha256').update(run).digest('hex') + '.json');
 }
 
 export function withResourceCosts(table: CostTable, runs: readonly string[]): CostTable {

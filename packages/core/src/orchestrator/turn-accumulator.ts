@@ -2,7 +2,7 @@
 // Usage arrives already normalized: absence means the provider said nothing, zero means zero.
 
 import type { MessagePartReference } from '../session/messages';
-import type { ChatEvent, StepRecord } from '../chat';
+import type { ChatEvent, HarnessStamp, StepRecord } from '../chat';
 import type { ToolCallRecord } from '../evolution/types';
 import { compactToolCall } from '../evolution/tool-call-record';
 import { TurnContextBudget, citesSpillAddress } from '../context-budget';
@@ -38,6 +38,8 @@ export interface StepLike {
   /** The breakdown of the request this step sent. */
   context?: ContextComposition;
   fallback?: string | undefined;
+  /** The surface the request was shown as. */
+  harness?: HarnessStamp | undefined;
 }
 
 /** ai-SDK v6 tool-result hook shape. */
@@ -340,6 +342,9 @@ export class TurnAccumulator {
 
 
     if (ctx.context) stepEvent.context = ctx.context;
+
+    // Beside the cache figures, so they read per profile.
+    if (ctx.harness !== undefined) stepEvent.harness = ctx.harness;
 
     // Priced as the mission ledger prices it, at the serving model's rate; no rate means no `usd`.
     if (reported) {

@@ -3,6 +3,8 @@ import { useRef, type ClipboardEvent } from "react";
 import type { FileUIPart } from "ai";
 import { PaperclipIcon } from "@phosphor-icons/react";
 import { AttachmentChip } from "@/components/AttachmentChip";
+import { FilePicker } from "@/components/ui/FilePicker";
+import { IconControl } from "@/components/ui/IconControl";
 
 export interface AttachmentsControl {
   readonly parts: readonly FileUIPart[];
@@ -71,7 +73,7 @@ export function AttachmentTray({ attachments }: { attachments: AttachmentsContro
   if (attachments.parts.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap gap-1.5 px-3 pt-3" data-attachments>
+    <div className="flex flex-wrap gap-2 px-3 pt-3" data-attachments>
       {attachments.parts.map((part, i) => (
         <AttachmentChip key={`${part.filename ?? "file"}-${i}`} part={part} onRemove={() => attachments.onRemove(i)} />
       ))}
@@ -84,12 +86,10 @@ export function AttachButton({ attachments, disabled }: { attachments: Attachmen
 
   return (
     <>
-      <input ref={input} type="file" multiple className="hidden"
-        onChange={(e) => { attachments.onAdd(e.currentTarget.files); e.currentTarget.value = ""; }} />
-      <button type="button" onClick={() => input.current?.click()} disabled={disabled}
-        className="p-composer-round" aria-label="Attach files" title="Attach files">
+      <FilePicker ref={input} multiple onChange={(e) => { attachments.onAdd(e.currentTarget.files); e.currentTarget.value = ""; }} />
+      <IconControl place="composer" onClick={() => input.current?.click()} disabled={disabled} aria-label="Attach files" title="Attach files">
         <PaperclipIcon size={17} />
-      </button>
+      </IconControl>
     </>
   );
 }

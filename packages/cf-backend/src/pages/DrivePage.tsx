@@ -6,10 +6,10 @@
 import { Effect, Result } from 'effect';
 import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import {
   AppWindowIcon, ArrowSquareOutIcon, BookOpenIcon, CaretDownIcon, CaretRightIcon, CopyIcon, DownloadSimpleIcon, FolderSimpleIcon, GitForkIcon, GlobeIcon, HardDrivesIcon,
-  PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, UsersThreeIcon, WarningIcon, XIcon,
+  PencilSimpleIcon, ProhibitIcon, ShareNetworkIcon, SquaresFourIcon, TrashIcon, UploadSimpleIcon, UsersIcon, UsersThreeIcon, XIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
 import {
@@ -20,6 +20,8 @@ import {
 } from "@kinu.run/core";
 import { detach, diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
 import { useMediaQuery } from "@/hooks/use-media-query";
+import { ToolPage } from "@/components/ui/PageHeader";
+import { NavRow } from "@/components/ui/NavRow";
 import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip, type PickedFile, type UploadWatch,
 } from "@/lib/drive-api";
@@ -28,13 +30,24 @@ import { useAsyncResource, lastValue, type AsyncResource, type AsyncResourceCont
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useCopy } from "@/hooks/use-copy";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { inputCls } from "@/components/ui/form";
 import {
-  Cover, FileCover, FOLDER_ICON, FolderTile, GRID, LINK_ICON, SHARE_ICON, SKILLS_ICON, SLATE_ICON, Tile, fileIcon, type MenuItem,
+  FileCover, FOLDER_ICON, FolderTile, GRID, LINK_ICON, SHARE_ICON, SKILLS_ICON, SLATE_ICON, Tile, fileIcon,
 } from "@/components/drive/DriveTiles";
+import type { MenuItem } from "@/components/ui/Menu";
+import { TypesetCover } from "@/components/ui/Tiles";
 import { DriveDialog, pickedFolderName, PrimaryAction, type DriveDialogState } from "@/components/drive/DriveActions";
 import { FileViewer } from "@/components/surfaces/FileViewer";
 import { SlatePicture } from "@/components/slates/SlatePicture";
+import { Notice } from "@/components/ui/Notice";
+import { Button } from "@/components/ui/Button";
+import { Dot } from "@/components/ui/Dot";
+import { TextInput } from "@/components/ui/Field";
+import { SegmentedNav } from "@/components/ui/Segmented";
+import { CodeCover, PageCover, SheetCover, TransferCover } from "@/components/ui/Covers";
+import { Empty } from "@/components/ui/Empty";
+import { DropHint } from "@/components/ui/FilePicker";
+import { Drawer } from "@/components/ui/Drawer";
+import { Group } from "@/components/ui/Group";
 
 export type DriveTab = "slates" | "mine" | "shared";
 
@@ -67,29 +80,19 @@ function placesOf(library: SharedLibrary | null): DriveTab[] {
 }
 
 function NewDot() {
-  return <span data-drive-unseen className="size-1.5 shrink-0 rounded-full p-dot-accent" title="Something new" />;
+  return <Dot tone="accent" label="Something new" data-drive-unseen="" />;
 }
 
-/** Below `lg`, the places as a switch at the top. */
+/** Below `lg`, the places as a switch in the row under the bar, as `Segmented` draws one at 28. */
 function PlaceSwitch({ tab, places, unseen }: { tab: DriveTab; places: readonly DriveTab[]; unseen: boolean }) {
   return (
-    <nav aria-label="Drive" className="flex w-fit items-center gap-0.5 rounded-lg p-recessed p-0.5">
-      {PLACES.filter((each) => places.includes(each.id)).map((each) => (
-        <Link key={each.id} to={each.to} state={{ chosen: true }} aria-current={each.id === tab ? "page" : undefined} data-drive-tab={each.id}
-          className={`flex items-center gap-1.5 whitespace-nowrap rounded-md px-3.5 py-1.5 p-t-control ${each.id === tab ? "p-surface p-text shadow-[0_1px_2px_var(--c-shadow-drop)]" : "p-text-3 hover:p-text"}`}>
-          {each.label}
-          {each.id === "shared" && unseen && each.id !== tab && <NewDot />}
-        </Link>
-      ))}
-    </nav>
+    <SegmentedNav label="Drive" size="sm" current={tab}
+      segments={PLACES.filter((each) => places.includes(each.id)).map((each) => ({
+        id: each.id, label: each.label, to: each.to, state: { chosen: true }, data: { "data-drive-tab": each.id },
+        mark: each.id === "shared" && unseen && each.id !== tab ? <NewDot /> : undefined,
+      }))} />
   );
 }
-
-const PLACE_ROW = "flex items-center gap-2.5 rounded-lg py-[7px] pl-2.5 pr-2 p-t-control transition-colors";
-
-const ROW_ON = "bg-[color-mix(in_srgb,var(--c-text)_8%,transparent)]";
-
-const ROW_HOVER = "hover:bg-[color-mix(in_srgb,var(--c-text)_5%,transparent)]";
 
 /** A folder's own folders, Skills first: the tree draws only what can be walked into. */
 function subfolders(entries: readonly DriveEntry[] | undefined, parent: string): DriveEntry[] {
@@ -123,15 +126,13 @@ function FolderTree({ listings, parent, current, depth }: {
 
         return (
           <li key={path}>
-            <Link to={folderHref(path)} aria-current={path === current ? "page" : undefined} data-drive-tree={path}
-              style={{ paddingLeft: `${String(10 + depth * 14)}px` }}
-              className={`flex items-center gap-1.5 rounded-lg py-[5px] pr-2 p-row-text transition-colors ${path === current ? `${ROW_ON} font-medium p-text` : `p-text-2 ${ROW_HOVER}`}`}>
-              <span className="flex w-3 shrink-0 justify-center p-text-4">{caret}</span>
+            <NavRow to={folderHref(path)} size="sm" depth={depth} current={path === current} data-drive-tree={path}>
+              <span className="flex w-3 shrink-0 justify-center p-text-3">{caret}</span>
               {skills
                 ? <BookOpenIcon size={15} weight="fill" className="shrink-0 p-success" />
                 : <FolderSimpleIcon size={15} weight="fill" className="shrink-0 p-info" />}
-              <span className="truncate">{path === DRIVE_SKILLS_DIR ? "Skills" : child.name}</span>
-            </Link>
+              <span className="t-body truncate">{path === DRIVE_SKILLS_DIR ? "Skills" : child.name}</span>
+            </NavRow>
             {open && <FolderTree listings={listings} parent={path} current={current} depth={depth + 1} />}
           </li>
         );
@@ -151,30 +152,22 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
   if (!drawn) return null;
 
   return (
-    <aside aria-label="Drive" className="hidden w-52 shrink-0 flex-col overflow-y-auto border-r p-border px-3 pb-6 pt-8 lg:flex">
-      <div className="flex h-8 items-center gap-2.5 px-2.5">
-        <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
-        <h1 className="p-display text-2xl">Drive</h1>
-      </div>
-      <nav aria-label="Drive places" className="mt-6 space-y-0.5">
+    <aside className="hidden w-[var(--layout-tool-places)] shrink-0 flex-col overflow-y-auto border-r p-border p-2 lg:flex">
+      <nav aria-label="Drive places" className="space-y-px">
         {PLACES.filter((each) => places.includes(each.id)).map((each) => {
           const active = each.id === tab;
           const here = active && (each.id !== "mine" || path === "/");
-          let tone = `p-text-2 ${ROW_HOVER}`;
-
-          if (here) tone = `${ROW_ON} p-text`;
-          else if (active) tone = `p-text ${ROW_HOVER}`;
 
           return (
             <div key={each.id}>
-              <Link to={each.to} state={{ chosen: true }} aria-current={here ? "page" : undefined} data-drive-place={each.id}
-                className={`${PLACE_ROW} ${tone}`}>
-                <span className={`flex shrink-0 ${active ? "p-accent" : "p-text-3"}`}>{each.icon}</span>
+              {/* The place a folder is open under keeps its ink but not the fill. */}
+              <NavRow to={each.to} state={{ chosen: true }} current={here} data-drive-place={each.id} className={active && !here ? "gap-3 p-text" : "gap-3"}>
+                <span className={`flex shrink-0 ${active ? "p-accent-fg" : "p-text-3"}`}>{each.icon}</span>
                 <span className="flex-1">{each.label}</span>
                 {each.id === "shared" && unseen && !active && <NewDot />}
-              </Link>
+              </NavRow>
               {each.id === "mine" && active && (
-                <div className="mt-0.5 pl-3"><FolderTree listings={listings} parent="/" current={path} depth={0} /></div>
+                <div className="mt-px pl-3"><FolderTree listings={listings} parent="/" current={path} depth={0} /></div>
               )}
             </div>
           );
@@ -184,34 +177,36 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
   );
 }
 
-/**
- * The page's head, one tree laid out twice: below `lg` the title, the switch, the search and the crumbs stack; from
- * `lg` the title and the places are the column's, and the crumbs share a row with New or the search.
- */
-function DriveHead({ tab, path, subtitle, places, unseen, search, action }: {
-  tab: DriveTab; path: string; subtitle: ReactNode; places: readonly DriveTab[]; unseen: boolean;
-  search: { readonly query: string; readonly set: (query: string) => void }; action: ReactNode;
+/** Below `lg`, the places as the row under the bar; with one place there is nothing to switch. */
+function PlacesRow({ tab, places, unseen }: { tab: DriveTab; places: readonly DriveTab[]; unseen: boolean }) {
+  if (places.length < 2) return null;
+
+  return <div className="p-tool-row lg:hidden"><PlaceSwitch tab={tab} places={places} unseen={unseen} /></div>;
+}
+
+/** The bar's right end: Shared's search, or My stuff's New; Slates has neither. */
+function BarActions({ tab, search, primary }: {
+  tab: DriveTab; search: { readonly query: string; readonly set: (query: string) => void }; primary: ReactNode;
 }) {
-  const isRoot = path === "/";
+  if (tab === "mine") return primary;
+
+  if (tab !== "shared") return null;
 
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center lg:grid-cols-[minmax(0,1fr)_auto_auto] [grid-template-areas:'title_action'_'places_places'_'search_search'_'crumbs_crumbs'] lg:[grid-template-areas:'crumbs_action_search']">
-      <header className="flex items-center gap-3 [grid-area:title] lg:hidden">
-        <HardDrivesIcon size={22} className="shrink-0 p-text-3" />
-        <h1 className="p-display text-2xl">Drive</h1>
-      </header>
-      {action && <div className="ml-3 [grid-area:action]">{action}</div>}
-      {places.length > 1 && <div className="mt-5 [grid-area:places] lg:hidden"><PlaceSwitch tab={tab} places={places} unseen={unseen} /></div>}
-      {tab === "shared" && (
-        <input value={search.query} onChange={(event) => search.set(event.target.value)} placeholder="Search shared" aria-label="Search shared"
-          data-drive-search className={`${inputCls} mt-3 w-full [grid-area:search] sm:w-60 lg:mt-0`} />
-      )}
-      {(!isRoot || subtitle !== null) && (
-        <div className={`min-w-0 [grid-area:crumbs] lg:mt-0 ${isRoot ? "mt-4" : "mt-6"}`}>
-          {tab === "mine" && !isRoot && <Crumbs path={path} />}
-          {subtitle !== null && <p className={`p-meta p-text-3 lg:leading-8 ${isRoot ? "" : "mt-1"}`}>{subtitle}</p>}
-        </div>
-      )}
+    <TextInput size="sm" className="w-60 min-w-0" value={search.query} onChange={(event) => search.set(event.target.value)} placeholder="Search shared" aria-label="Search shared" data-drive-search />
+  );
+}
+
+/** Where in My stuff the page is: the crumbs under a folder, and the root's line; nothing on another place. */
+function DriveHead({ tab, path, subtitle }: { tab: DriveTab; path: string; subtitle: ReactNode }) {
+  const isRoot = path === "/";
+
+  if (isRoot && subtitle === null) return null;
+
+  return (
+    <div className="mb-6 min-w-0">
+      {tab === "mine" && !isRoot && <Crumbs path={path} />}
+      {subtitle !== null && <p className={`t-meta p-text-3 ${isRoot ? "" : "mt-1"}`}>{subtitle}</p>}
     </div>
   );
 }
@@ -255,11 +250,11 @@ function Crumbs({ path }: { path: string }) {
   const segments = path.slice(1).split("/");
 
   return (
-    <nav aria-label="Folder" className="flex min-w-0 flex-wrap items-center gap-1.5 p-heading text-[15px] sm:text-[17px]">
+    <nav aria-label="Folder" className="t-title flex min-w-0 flex-wrap items-center gap-2">
       <Link to={APP_ROUTES.drive} state={{ chosen: true }} data-drive-crumb className="shrink-0 p-text-3 transition-colors hover:p-text">My stuff</Link>
       {segments.map((segment, index) => (
-        <span key={index} className="flex min-w-0 items-center gap-1.5">
-          <CaretRightIcon size={12} className="shrink-0 p-text-4" />
+        <span key={index} className="flex min-w-0 items-center gap-2">
+          <CaretRightIcon size={12} className="shrink-0 p-text-3" />
           <Link to={folderHref(`/${segments.slice(0, index + 1).join("/")}`)} data-drive-crumb
             className={`truncate ${index === segments.length - 1 ? "p-text" : "p-text-3 hover:p-text"}`}>
             {index === 0 && `/${segment}` === DRIVE_SKILLS_DIR ? "Skills" : segment}
@@ -271,7 +266,7 @@ function Crumbs({ path }: { path: string }) {
 }
 
 /** A heading that names a kind of thing in a place is quiet; one that names who a share came from or went to leads. */
-const SECTION_HEADING = { quiet: "mb-2.5 p-meta font-medium p-text-3", lead: "mb-3 p-heading text-[15px] p-text" } as const;
+const SECTION_HEADING = { quiet: "t-status mb-3 p-text-3", lead: "t-title mb-3 p-text" } as const;
 
 /** A titled group: tiles in the grid, or `rows` in one `p-group` (things with no picture, docs/APP-CONSISTENCY.md). */
 function Section({ label, titled = true, heading = "quiet", rows = false, children }: {
@@ -280,7 +275,7 @@ function Section({ label, titled = true, heading = "quiet", rows = false, childr
   return (
     <section aria-label={label} data-drive-section={label}>
       {titled && <h2 className={SECTION_HEADING[heading]}>{label}</h2>}
-      <ul className={rows ? "p-group" : GRID}>{children}</ul>
+      {rows ? <Group list>{children}</Group> : <ul className={GRID}>{children}</ul>}
     </section>
   );
 }
@@ -353,58 +348,24 @@ function sheetRows(text: string, name: string): string[][] {
 
 const NUMERIC = /^-?[\d.,$%]+$/u;
 
-function SheetCover({ rows }: { rows: readonly (readonly string[])[] }) {
+/** Which of a table's first columns, up to four, hold only numbers below the head: they set right. */
+function numericColumns(rows: readonly (readonly string[])[]): boolean[] {
   const columns = Math.min(4, rows[0]?.length ?? 1);
-  const right = Array.from({ length: columns }, (_, column) => rows.slice(1).every((row) => NUMERIC.test(row[column]?.trim() ?? "")));
-  const grid = { gridTemplateColumns: `repeat(${String(columns)}, minmax(0, 1fr))` };
 
-  return (
-    <span className="absolute inset-0 overflow-hidden p-surface text-[8.5px] leading-[1.45]">
-      {rows.map((row, index) => (
-        <span key={index} data-drive-sheet-row style={grid}
-          className={`grid gap-2 px-4 ${index === 0 ? "p-recessed py-2 font-semibold p-text-2" : "border-t p-border py-[5px] font-mono p-text-3"}`}>
-          {row.slice(0, columns).map((cell, column) => <span key={column} className={`truncate ${right[column] === true ? "text-right" : ""}`}>{cell}</span>)}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-function CodeCover({ lines }: { lines: readonly string[] }) {
-  return (
-    <span className="absolute inset-0 overflow-hidden p-recessed px-3 pt-3 font-mono text-[8.5px] leading-[1.6]">
-      {lines.map((line, index) => (
-        <span key={index} data-drive-code-line className="flex gap-2.5">
-          <span className="min-w-3 shrink-0 text-right tabular-nums p-text-4">{index + 1}</span>
-          <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre p-text-3">{line === "" ? "\u00a0" : line}</span>
-        </span>
-      ))}
-    </span>
-  );
+  return Array.from({ length: columns }, (_, column) => rows.slice(1).every((row) => NUMERIC.test(row[column]?.trim() ?? "")));
 }
 
 function TextPage({ text, name }: { text: string | null; name: string }) {
   const rows = text !== null && SHEET.test(name) ? sheetRows(text, name) : [];
 
-  if (rows.length > 0) return <SheetCover rows={rows} />;
+  if (rows.length > 0) return <SheetCover rows={rows} numeric={numericColumns(rows)} />;
   const [heading, lines] = text === null ? [null, []] : coverLines(text, name);
 
   if (heading === null && lines.length === 0) return <FileCover name={name} />;
 
   if (heading === null && !PROSE.test(name)) return <CodeCover lines={lines.map((line) => line.text)} />;
 
-  return (
-    <span className="absolute inset-0 overflow-hidden p-recessed px-[14%] pt-[5%]">
-      <span className="block h-full overflow-hidden rounded-t-md border border-b-0 p-border p-surface px-3 pt-2.5 text-[8.5px] leading-[1.45] p-text-3">
-        {heading !== null && <span data-drive-page-heading className="mb-1 block truncate text-[11px] font-semibold p-text">{heading}</span>}
-        {lines.map((line, index) => (
-          <span key={index} data-drive-page-line className={`block truncate ${line.heading ? "mt-0.5 font-semibold p-text-2" : ""}`}>
-            {line.text === "" ? "\u00a0" : line.text}
-          </span>
-        ))}
-      </span>
-    </span>
-  );
+  return <PageCover heading={heading} lines={lines} />;
 }
 
 /** The first lines of a text file, read once the tile is in view. */
@@ -455,30 +416,12 @@ interface Transfer extends Sending {
   readonly stop: () => void;
 }
 
-function TransferPicture({ status, progress }: { status: Transfer["status"]; progress: number }) {
-  if (status === "failed") {
-    return <span className="absolute inset-0 flex items-center justify-center p-recessed"><WarningIcon size={24} className="p-danger" /></span>;
-  }
-
-  const percent = Math.round(progress * 100);
-
-  return (
-    <span className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 p-recessed">
-      <span className="p-meta tabular-nums p-text-2">{percent}%</span>
-      <span role="progressbar" aria-label="Uploading" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100}
-        className="h-1 w-1/2 overflow-hidden rounded-full bg-[var(--c-border-strong)]">
-        <span className="block h-full rounded-full bg-[var(--c-accent-mark)] transition-[width]" style={{ width: `${String(percent)}%` }} />
-      </span>
-    </span>
-  );
-}
-
 function VisibilityGlyph({ visibility }: { visibility: LiveShareVisibility | undefined }) {
   if (visibility === undefined) return null;
 
   return visibility === "public"
-    ? <GlobeIcon size={13} className="shrink-0 p-text-4" aria-label="Anyone with the link" />
-    : <UsersIcon size={13} className="shrink-0 p-text-4" aria-label="Shared with people" />;
+    ? <GlobeIcon size={13} className="shrink-0 p-text-3" aria-label="Anyone with the link" />
+    : <UsersIcon size={13} className="shrink-0 p-text-3" aria-label="Shared with people" />;
 }
 
 function whyUnused(refusal: SkillFileRefusal): string {
@@ -570,13 +513,7 @@ function landing({ tab, firstVisit, settled, nothingOwned, library }: Arrival): 
 }
 
 function subtitleOf(tab: DriveTab, path: string): ReactNode {
-  if (tab !== "mine") return null;
-
-  if (path === DRIVE_SKILLS_DIR) return "Every workspace you own uses these skills.";
-
-  if (path !== "/") return null;
-
-  return <>Files and folders here are in every workspace you own, at <span className="font-mono p-text-2">/shared</span>.</>;
+  return tab === "mine" && path === DRIVE_SKILLS_DIR ? "Every workspace you own uses these skills." : null;
 }
 
 function SectionList({ groups, titled = false, heading = "quiet" }: {
@@ -585,7 +522,7 @@ function SectionList({ groups, titled = false, heading = "quiet" }: {
   const shown = groups.filter((group) => group.tiles.length > 0);
 
   return (
-    <div className={heading === "lead" ? "space-y-10" : "space-y-7"}>
+    <div className={heading === "lead" ? "space-y-12" : "space-y-8"}>
       {shown.map((group) => (
         <Section key={group.label} label={group.label} titled={titled || shown.length > 1} heading={heading} rows={group.rows}>{group.tiles}</Section>
       ))}
@@ -640,12 +577,8 @@ function MineBody({ resource, onRetry, empty, children }: {
   if (!empty) return children;
 
   return (
-    <div data-drive-empty className="flex flex-col items-center px-6 py-16 text-center sm:py-24">
-      <span className="flex size-14 items-center justify-center rounded-2xl p-text-3 bg-[color-mix(in_srgb,var(--c-text)_7%,transparent)]">
-        <FolderSimpleIcon size={26} />
-      </span>
-      <h2 className="mt-5 p-heading text-[19px] p-text">This folder is empty</h2>
-      <p className="mt-2 max-w-[26rem] p-row-text p-text-3">Drop files here, or use New.</p>
+    <div data-drive-empty>
+      <Empty icon={FolderSimpleIcon} title="This folder is empty">Drop files here, or use New.</Empty>
     </div>
   );
 }
@@ -654,17 +587,13 @@ function DropZone({ label, onFiles, children }: { label: string; onFiles: (files
   const [over, setOver] = useState(false);
 
   return (
-    <div data-drive-list className="relative mt-6"
+    <div data-drive-list className="relative"
       onDragOver={(event) => { event.preventDefault(); setOver(true); }}
       onDragLeave={() => setOver(false)}
       onDrop={(event) => { event.preventDefault(); setOver(false); onFiles([...event.dataTransfer.files]); }}>
       {children}
       {over && (
-        <div aria-hidden="true" className="pointer-events-none absolute -inset-3 z-20 flex items-center justify-center rounded-[18px] border-2 border-dashed border-[var(--c-accent)] bg-[color-mix(in_srgb,var(--c-bg)_74%,transparent)]">
-          <span className="flex items-center gap-2 rounded-full bg-[var(--c-accent)] px-4 py-2 text-sm font-semibold text-[var(--c-accent-on)] p-shadow-menu">
-            <UploadSimpleIcon size={15} weight="bold" /> Drop to add to {label}
-          </span>
-        </div>
+        <DropHint><UploadSimpleIcon size={16} weight="bold" /> Drop to add to {label}</DropHint>
       )}
     </div>
   );
@@ -681,33 +610,23 @@ function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource
   return (
     <>
       {notice !== null && (
-        <div role="alert" data-drive-notice className="p-notice-danger mt-4 flex items-start gap-2 rounded-md px-3 py-2 text-xs">
-          <WarningIcon size={13} className="mt-px shrink-0" />
-          <span className="min-w-0 break-words">{notice}</span>
-          <button type="button" onClick={onDismissNotice} className="ml-auto shrink-0 p-text-3 hover:p-text" aria-label="Dismiss"><XIcon size={12} /></button>
-        </div>
+        <Notice tone="danger" data-drive-notice="" className="mt-4"
+          action={<Button variant="ghost" size="sm" icon={<XIcon size={14} />} onClick={onDismissNotice} aria-label="Dismiss" />}>
+          <span className="break-words">{notice}</span>
+        </Notice>
       )}
-      {listingPending && <p role="status" data-drive-listing-pending className="mt-4 p-meta p-text-3">Saved. The list will catch up.</p>}
+      {listingPending && <p role="status" data-drive-listing-pending className="t-meta mt-4 p-text-3">Saved. The list will catch up.</p>}
       {libraryResource.status === "error" && (
         <LoadFailure what="your slates and shares" message={libraryResource.message} onRetry={onRetryLibrary} className="mt-4" />
       )}
-      {copyStatus !== "idle" && <p role="status" className="mt-4 p-meta p-text-3">{copyStatus === "copied" ? "Link copied." : "Could not copy the link."}</p>}
-    </>
-  );
-}
-
-function Drawer({ onClose, children }: { onClose: () => void; children: ReactNode }) {
-  return (
-    <>
-      <div aria-hidden="true" className="p-scrim fixed inset-0 z-40" onClick={onClose} />
-      <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-[min(640px,92vw)]" data-drive-viewer>{children}</div>
+      {copyStatus !== "idle" && <p role="status" className="t-meta mt-4 p-text-3">{copyStatus === "copied" ? "Link copied." : "Could not copy the link."}</p>}
     </>
   );
 }
 
 function FileDrawer({ path, entry, onClose }: { path: string; entry: DriveEntry; onClose: () => void }) {
   return (
-    <Drawer onClose={onClose}>
+    <Drawer onClose={onClose} data-drive-viewer="">
       <FileViewer path={path} read={readDriveText} revision={entryRevision(entry)} rawHref={inlineUrl(path)} downloadHref={downloadUrl(path)} onClose={onClose} />
     </Drawer>
   );
@@ -725,7 +644,7 @@ function BuiltinSkillDrawer({ name, onClose }: { name: string; onClose: () => vo
   const bytes = `data:text/markdown;charset=utf-8,${encodeURIComponent(BUILTIN_SKILL_FILES[name])}`;
 
   return (
-    <Drawer onClose={onClose}>
+    <Drawer onClose={onClose} data-drive-viewer="">
       <FileViewer path={skillViewPath(name)} read={readBuiltinSkill} revision="built-in" rawHref={bytes} downloadHref={bytes} onClose={onClose} />
     </Drawer>
   );
@@ -898,13 +817,13 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     }
 
     const meta = mine ? whoCanOpen(row) : [row.kind === "live" ? "Live" : "Blueprint", row.owner, shortAge(row.createdAt)].filter(Boolean).join(" · ");
-    const cover = <Cover title={row.title} />;
+    const cover = <TypesetCover title={row.title} line={row.description === "" ? null : row.description} />;
     // A live share of yours shows the picture of the slate it shares.
     const slate = mine && row.kind === "live" ? shared?.slates.find((each) => each.workspace === row.workspace && each.id === row.slate) : undefined;
 
     return (
       <Tile key={`${row.kind}:${row.id}`} title={row.title} icon={SHARE_ICON[row.kind]}
-        picture={slate === undefined ? cover : <SlatePicture workspace={slate.workspace} slate={slate} className="absolute inset-0 size-full object-cover object-top" fallback={cover} />}
+        picture={slate === undefined ? cover : <SlatePicture mat workspace={slate.workspace} slate={slate} className="absolute inset-0 size-full object-cover object-top" fallback={cover} />}
         href={row.kind === "blueprint" ? blueprintPagePath(row.id) : undefined} onOpen={row.kind === "live" ? () => openLive(row) : undefined}
         meta={<span className="truncate">{meta}</span>} menu={menu}
         attributes={{ "data-drive-share": row.id, "data-drive-share-kind": row.kind }} />
@@ -913,8 +832,8 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
 
   const slateTile = (slate: OwnedSlate): ReactNode => (
     <Tile key={`${slate.workspace}:${slate.id}`} title={slate.title}
-      picture={<SlatePicture workspace={slate.workspace} slate={slate} className="absolute inset-0 size-full object-cover object-top"
-        fallback={<Cover title={slate.title} />} />}
+      picture={<SlatePicture mat workspace={slate.workspace} slate={slate} className="absolute inset-0 size-full object-cover object-top"
+        fallback={<TypesetCover title={slate.title} line={null} />} />}
       icon={SLATE_ICON} href={slateHref(slate)}
       meta={<><span className="truncate">{titleOf(slate.workspace)}</span><VisibilityGlyph visibility={slate.visibility} /></>}
       attributes={{ "data-drive-slate": slate.id, "data-drive-workspace": slate.workspace }}
@@ -974,7 +893,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   };
 
   const uploadTile = (row: Transfer): ReactNode => (
-    <Tile key={`upload:${String(row.id)}`} title={row.name} icon={fileIcon(row.name)} picture={<TransferPicture status={row.status} progress={row.progress} />}
+    <Tile key={`upload:${String(row.id)}`} title={row.name} icon={fileIcon(row.name)} picture={<TransferCover failed={row.status === "failed"} percent={Math.round(row.progress * 100)} />}
       meta={row.status === "failed"
         ? <span className="truncate p-danger" title={row.error}>{row.error}</span>
         : <span className="truncate">{row.size > 0 ? `Uploading · ${formatBytes(row.size)}` : "Uploading"}</span>}
@@ -988,22 +907,25 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const builtin = contents.builtins.find((name) => name === search.get("skill"));
   const subtitle = subtitleOf(tab, path);
 
+  // A tool (design review 2026-10-20, A2): the chat bar's band, the places column from `lg` (below it, the places are the
+  // row under the bar), and the content padded 24 inside its own column.
   return (
-    <div className="flex h-full min-h-0">
+    <ToolPage icon={<HardDrivesIcon size={18} />} title="Drive" below={<PlacesRow tab={tab} places={places} unseen={unseen} />} actions={(
+      <BarActions tab={tab} search={{ query, set: setQuery }} primary={(
+        <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
+          onFolder={(picks) => { if (picks.length > 0) uploadPicked(picks); }}
+          onZip={(file) => {
+            const unpacked = file.name.replace(/\.zip$/iu, "");
+
+            transfer({ folder: path, name: file.name, size: file.size, lands: unpacked }, (watch) => uploadZip(joinDir(path, unpacked), file, watch));
+          }}
+          onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
+      )} />
+    )}>
       <DriveColumn tab={tab} path={path} shown={lastValue(listing.resource)} places={places} unseen={unseen} />
       <div className="min-w-0 flex-1 overflow-y-auto">
-      <div className="px-5 pb-20 pt-6 sm:px-8 lg:pt-8">
-        <DriveHead tab={tab} path={path} subtitle={subtitle} places={places} unseen={unseen} search={{ query, set: setQuery }}
-          action={tab === "mine" && (
-            <PrimaryAction inSkills={inSkills} onFiles={uploadFiles}
-              onFolder={(picks) => { if (picks.length > 0) uploadPicked(picks); }}
-              onZip={(file) => {
-                const unpacked = file.name.replace(/\.zip$/iu, "");
-
-                transfer({ folder: path, name: file.name, size: file.size, lands: unpacked }, (watch) => uploadZip(joinDir(path, unpacked), file, watch));
-              }}
-              onNewFolder={() => setDialog({ kind: "new-folder" })} onNewSkill={() => setDialog({ kind: "add-skill" })} />
-          )} />
+      <div className="p-5 pb-16 sm:p-6 sm:pb-16">
+        <DriveHead tab={tab} path={path} subtitle={subtitle} />
 
         <DriveNotices notice={notice} onDismissNotice={() => setNotice(null)} listingPending={listingPending} libraryResource={library.resource} onRetryLibrary={library.reload}
           copyStatus={copier.status} />
@@ -1018,9 +940,8 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
             </MineBody>
           </DropZone>
         )}
-        {/* From `lg` Slates has no head of its own: the column names the place. */}
-        {tab === "slates" && <div className="mt-6 lg:mt-0"><SlatesBody slates={shared?.slates ?? null} tile={slateTile} /></div>}
-        {tab === "shared" && <div className="mt-6"><SharedBody shared={shared} query={query} tile={shareTile} /></div>}
+        {tab === "slates" && <SlatesBody slates={shared?.slates ?? null} tile={slateTile} />}
+        {tab === "shared" && <SharedBody shared={shared} query={query} tile={shareTile} />}
       </div>
 
       </div>
@@ -1031,6 +952,6 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
         <DriveDialog dialog={dialog} folder={path} onClose={() => setDialog(null)} onListingChanged={listing.reload}
           onSharesChanged={(behind) => { if (behind === "pending") setListingPending(true); library.reload(); }} onSkillAdded={() => void afterSkillAdded()} />
       )}
-    </div>
+    </ToolPage>
   );
 }

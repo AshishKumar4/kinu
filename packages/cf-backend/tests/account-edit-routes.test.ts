@@ -8,7 +8,7 @@ import type { AuthIdentity } from '../src/auth/session';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { serveFamily } from './helpers/api';
 import { workspaceObject } from './helpers/bindings';
-import { catalogTurn, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask } from './helpers/actor-harness';
+import { catalogTurn, hostedSubagentHarness, orchestratorHarness, runDelegatedTask } from './helpers/actor-harness';
 import { chatCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
 import { createTestUserDO, provisionTestWorkspace, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
 
@@ -65,7 +65,7 @@ test('after an account edit in Settings, the root\'s next request and an existin
 
   await save(GATEWAY_MODEL, 0);
 
-  const child = await hostedSubordinateHarness(workspace, {
+  const child = await hostedSubagentHarness(workspace, {
     name: 'edit-child', displayName: 'Edit Child', nameOrigin: 'user', mission: 'answer once',
   });
 

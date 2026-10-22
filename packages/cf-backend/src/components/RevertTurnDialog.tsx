@@ -1,14 +1,14 @@
 /** Only the conversation is always revertible; workspace and sandbox files have no snapshot store. File restore is offered only when the device checkpoint store answers. */
 import { Cause, Effect } from 'effect';
 import { startTransition, useCallback, useEffect, useState } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { deviceHistoryNote, summarizeRestorePlan, type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan } from "@kinu.run/core";
 import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { Modal } from "@/components/ui/Modal";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
 
 interface DeviceRestorePlan {
   entries: FileCheckpointEntry[];
@@ -107,23 +107,23 @@ function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }
             Revert conversation and device files
           </Button>
         )}
-        <FilledButton onClick={(...args: Parameters<typeof revertConversation>) => detach(Effect.promise(async () => revertConversation(...args)))} disabled={busy} data-revert-action="conversation">
+        <Button variant="primary" size="md" onClick={(...args: Parameters<typeof revertConversation>) => detach(Effect.promise(async () => revertConversation(...args)))} disabled={busy} data-revert-action="conversation">
           Revert conversation
-        </FilledButton>
+        </Button>
       </>}
     >
       <div className="space-y-2" data-revert-dialog={checked ? "ready" : "checking"}>
-        <p className="text-xs p-text-2 leading-relaxed">
+        <p className="t-meta p-text-2">
           The messages from here on are removed from the conversation. Files in the workspace, its computer
           and your devices stay as they are.
         </p>
-        {historyNote && <p data-device-history className="text-xs p-text-3 leading-relaxed">{historyNote}</p>}
+        {historyNote && <p data-device-history className="t-meta p-text-3">{historyNote}</p>}
         {deviceFailure && (
-          <p className="text-xs p-warning leading-relaxed">
+          <p className="t-meta p-warning">
             Your devices' file history could not be read: {deviceFailure}
           </p>
         )}
-        {failure && <p className="text-xs p-danger leading-relaxed">{failure}</p>}
+        {failure && <p className="t-meta p-danger">{failure}</p>}
       </div>
     </Modal>
   );
@@ -199,31 +199,31 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <FilledButton onClick={onConfirm} disabled={busy}>
+        <Button variant="primary" size="md" onClick={onConfirm} disabled={busy}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Restoring…</span></> : `Restore ${plan.files.length} file${plan.files.length === 1 ? "" : "s"}`}
-        </FilledButton>
+        </Button>
       </>}
     >
       <div className="space-y-2">
-        <p className="text-xs p-text-2 leading-relaxed">
+        <p className="t-meta p-text-2">
           This changes files under <span className="font-mono p-text">{plan.dirs.join(", ")}</span> on your
           device: {counts}. Kinu creates a safety snapshot first. Restore again to undo this change.
         </p>
-        <ul className="rounded-md border p-border p-elevated max-h-52 overflow-y-auto p-annotation">
+        <Surface look="tile" as="ul" className="t-meta t-mono border p-border max-h-52 overflow-y-auto">
           {shown.map((f) => {
             const { mark, tone } = RESTORE_MARK[f.kind];
 
             return (
-              <li key={`${f.kind}:${f.path}`} className="flex gap-2 px-2.5 py-1 border-b p-border last:border-0">
+              <li key={`${f.kind}:${f.path}`} className="flex gap-2 px-2 py-1 border-b p-border last:border-0">
                 <span className={`shrink-0 ${tone}`}>{mark}</span>
                 <span className="p-text-2 truncate" title={f.path}>{f.path}</span>
               </li>
             );
           })}
           {plan.files.length > shown.length && (
-            <li className="px-2.5 py-1 p-text-3">… {plan.files.length - shown.length} more</li>
+            <li className="px-2 py-1 p-text-3">… {plan.files.length - shown.length} more</li>
           )}
-        </ul>
+        </Surface>
       </div>
     </Modal>
   );

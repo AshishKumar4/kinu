@@ -33,7 +33,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import type { BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Identity } from '../src/types/primitives';
-import type { TemporaryAgentPort } from '../src/types/subordinates';
+import type { TemporaryAgentPort } from '../src/types/subagents';
 import { historyTurnPairs } from '../src/identity/conversation-store';
 
 type FixtureSeat = HostedNodeSeat<HostedActor>;
@@ -98,6 +98,7 @@ export function fixtureRunSources(actor: HostedActor, model: (spec: string) => L
     rt: actor.runtime,
     backend: 'cli-local',
     executors: () => [],
+    harnessMode: () => actor.stores.config.getHarnessMode(),
     config: actor.stores.config,
     models: {
       catalog: { window: () => modelWindow(null), windowFor: async () => modelWindow(null), warm: async () => {}, acceptedMedia: () => new Set(), callsTools: () => undefined },

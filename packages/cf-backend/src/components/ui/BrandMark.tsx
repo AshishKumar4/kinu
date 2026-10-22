@@ -1,9 +1,10 @@
 /** Brand hexes do not theme: marks sit on white unless their hex is unreadable there, then on ink. */
+import { CloudflareLogo } from "@cloudflare/kumo";
 import {
   siAnthropic, siCloudflare, siDeepmind, siDeepseek, siGithub, siGoogle,
   siGooglecloud, siHuggingface, siKimi, siMetaai, siMinimax, siMistralai,
   siMoonshotai, siNvidia, siOllama, siOpenrouter, siPerplexity, siQwen,
-  siVercel,
+  siVercel, siLinear, siNotion,
 } from "simple-icons";
 
 interface BrandIcon {
@@ -40,11 +41,13 @@ const BRANDS = {
   minimax: { icon: siMinimax },
   mistralai: { icon: siMistralai },
   kimi: { icon: siKimi, theme: true },
+  linear: { icon: siLinear },
   moonshotai: { icon: siMoonshotai, theme: true },
   openai: { icon: siOpenai, theme: true },
   opencode: { icon: siOpencode, theme: true },
   ollama: { icon: siOllama, theme: true },
   openrouter: { icon: siOpenrouter },
+  notion: { icon: siNotion, theme: true },
   nvidia: { icon: siNvidia },
   perplexity: { icon: siPerplexity },
   qwen: { icon: siQwen },
@@ -52,6 +55,11 @@ const BRANDS = {
 } satisfies Record<string, { icon: BrandIcon; ink?: boolean; theme?: boolean }>;
 
 export type BrandName = keyof typeof BRANDS;
+
+/** The brand's own name, as its mark's title spells it ("Linear"). */
+export function brandTitle(brand: BrandName): string {
+  return BRANDS[brand].icon.title;
+}
 
 /** Undefined when no mark is held. */
 export function providerBrand(provider: string): BrandName | undefined {
@@ -109,10 +117,16 @@ export function BrandMark({ brand, size = 16, bare = false, className }: {
   return (
     <span
       aria-hidden="true"
-      className={`inline-flex shrink-0 items-center justify-center rounded-lg ${ink ? "bg-[#111318]" : "bg-white border p-border"}`}
+      className={`inline-flex shrink-0 items-center justify-center rounded-[var(--r-row)] ${ink ? "bg-[var(--c-brand-tile-ink)]" : "border p-border bg-[var(--c-brand-tile)]"}`}
       style={{ width: tile, height: tile }}
     >
       {mark}
     </span>
   );
+}
+
+/** Cloudflare's cloud, in its own colours on its white tile: its guidelines keep the full-colour mark on white and rule
+ *  out black on orange, and white alone would vanish on the light amber of the dark theme. */
+export function CloudflareTile() {
+  return <span aria-hidden className="p-brand-tile"><CloudflareLogo variant="glyph" className="w-4" /></span>;
 }

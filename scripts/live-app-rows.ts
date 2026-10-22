@@ -219,6 +219,7 @@ export interface TierVerdicts {
   slateUi: SlateUiVerdict | null;
   slateAsk: SlateAskVerdict | null;
   providerWait: ProviderWaitVerdict | null;
+  workspaceViews: WorkspaceViewsVerdict | null;
   state: StateVerdict | null;
 }
 
@@ -416,6 +417,75 @@ async function measureControls(newPage: LiveApp['newPage'], origin: string): Pro
     railLaneBefore: before.railLane,
     railAttempts: rail.attempts,
     railLaneAfter: rail.value,
+  };
+}
+
+/** What a workspace's own addresses draw (rc29 walkthrough F2): the desktop's old page, a view no page answers, the overview. */
+interface WorkspaceViewsVerdict {
+  /** Where `/workspace/:id/desktop` came to rest, its path and query. */
+  readonly desktopLandedAt: string;
+  /** It drew the overview, as it did once its view was gone (the defect). */
+  readonly desktopOverview: boolean;
+  /** The workspace with its Environment open. */
+  readonly desktopEnvironment: boolean;
+  /** The machine Environment chose, and its Desktop tab where it has one: shown, not shown, or no such tab. */
+  readonly desktopMachine: string;
+  readonly desktopTab: 'current' | 'other' | 'none';
+  /** A view no page answers: the not-found page, never the overview. */
+  readonly unknownNotFound: boolean;
+  readonly unknownOverview: boolean;
+  /** The overview's own address still draws it. */
+  readonly overviewDrawn: boolean;
+}
+
+const OVERVIEW = `document.querySelector('[data-workspace-overview]') !== null`;
+
+const NOT_FOUND = `document.querySelector('[data-not-found]') !== null`;
+
+/** Environment is the open tool and its machine row has chosen a machine. */
+const ENVIRONMENT_CHOSEN = `document.querySelector('button.p-tool[aria-label="Environment"][aria-current="true"]') !== null
+  && document.querySelector('[data-env-card] [data-env-select][aria-pressed="true"]') !== null`;
+
+async function measureWorkspaceViews(newPage: LiveApp['newPage'], origin: string): Promise<WorkspaceViewsVerdict> {
+  const workspace = await createWorkspace(
+    origin, LOOPBACK_IDENTITY, { name: `live-row-views-${RUN_ID}`, purpose: 'workspace views probe', model: SCRIPTED_MODEL_SPEC });
+
+  const page = await newPage();
+
+  await page.setViewport(DESKTOP);
+  await named('the desktop address to load', () => page.goto(`${origin}/workspace/${workspace}/desktop`, { waitUntil: 'load' }));
+  await until(page, 'the desktop address to land', `${OVERVIEW} || (${ENVIRONMENT_CHOSEN})`);
+
+  const desktop = v.parse(v.object({ at: v.string(), overview: v.boolean(), environment: v.boolean(), machine: v.string(), tab: v.picklist(['current', 'other', 'none']) }),
+    await page.evaluate(`(() => {
+      const tab = [...document.querySelectorAll('[role="tab"].p-session-tab')].find((each) => (each.textContent ?? '').trim() === 'Desktop');
+
+      return {
+        at: location.pathname + location.search,
+        overview: ${OVERVIEW},
+        environment: ${ENVIRONMENT_CHOSEN},
+        machine: document.querySelector('[data-env-card]:has([data-env-select][aria-pressed="true"])')?.getAttribute('data-env-card') ?? '',
+        tab: tab === undefined ? 'none' : (tab.getAttribute('aria-selected') === 'true' && 'current') || 'other',
+      };
+    })()`));
+
+  await shoot(page, 'f2-desktop');
+  await named('a view no page answers to load', () => page.goto(`${origin}/workspace/${workspace}/nonsense`, { waitUntil: 'load' }));
+  await until(page, 'an unknown view to draw', `${OVERVIEW} || ${NOT_FOUND}`);
+
+  const unknownOverview = v.parse(v.boolean(), await page.evaluate(OVERVIEW));
+  const unknownNotFound = v.parse(v.boolean(), await page.evaluate(NOT_FOUND));
+
+  await named('the overview to load', () => page.goto(`${origin}/workspace/${workspace}/overview`, { waitUntil: 'load' }));
+  await until(page, 'the overview to draw', `${OVERVIEW} || ${NOT_FOUND}`);
+
+  const overviewDrawn = v.parse(v.boolean(), await page.evaluate(OVERVIEW));
+
+  await page.close();
+
+  return {
+    desktopLandedAt: desktop.at, desktopOverview: desktop.overview, desktopEnvironment: desktop.environment, desktopMachine: desktop.machine,
+    desktopTab: desktop.tab, unknownNotFound, unknownOverview, overviewDrawn,
   };
 }
 
@@ -831,7 +901,7 @@ const DROP_SOCKETS = `(() => {
   return dropped;
 })()`;
 
-const ANSWER_BLOCKS = `[...document.querySelectorAll('#chat .prose-chat, #chat [data-tool-state]')].map((node) =>
+const ANSWER_BLOCKS = `[...document.querySelectorAll('#chat [data-said], #chat [data-tool-state]')].map((node) =>
   node.matches('[data-tool-state]')
     ? 'T:' + (node.querySelector('strong')?.textContent ?? '').trim()
     : 'P:' + (node.textContent ?? '').trim().slice(0, 40))`;
@@ -1499,7 +1569,7 @@ interface PlanTasksVerdict {
   readonly unlinked: readonly string[];
 }
 
-const TASK_TITLE = `(row) => row.querySelector('.p-row-text')?.firstChild?.textContent ?? ''`;
+const TASK_TITLE = `(row) => row.querySelector('[data-task-title]')?.firstChild?.textContent ?? ''`;
 
 const PLAN_CARDS = `[...document.querySelectorAll('[data-plan-card]')].map((card) => [...card.querySelectorAll('[data-task-depth]')]
   .map((row) => [(${TASK_TITLE})(row), Number(row.getAttribute('data-task-depth'))]))`;
@@ -2334,7 +2404,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'unanswered-probe', 'slept', 'watched-slept', 'answered',
   'unsent-answer', 'controls', 'walkthrough', 'own-server', 'kept-tab', 'chat-scroll', 'mid-thought', 'dropped-file', 'cleared', 'plan-tasks',
-  'stop-then-send', 'new-chat-stop', 'slate-ui', 'slate-ask', 'provider-wait', 'connect', 'state',
+  'stop-then-send', 'new-chat-stop', 'slate-ui', 'slate-ask', 'provider-wait', 'connect', 'workspace-views', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -2356,7 +2426,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, unansweredProbe: null, slept: null, watchedSlept: null, answered: null,
     unsentAnswer: null, bootFailure: null, slateAsk: null, connect: null,
-    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, stopThenSend: null, newChatStop: null, slateUi: null, providerWait: null, state: null,
+    controls: null, walkthrough: null, ownServer: null, keptTab: null, chatScroll: null, midThought: null, droppedFile: null, cleared: null, planTasks: null, stopThenSend: null, newChatStop: null, slateUi: null, providerWait: null, workspaceViews: null, state: null,
   };
 
   // Set once the dev server is up: a row that breaks names the file its server's output is kept in.
@@ -2430,6 +2500,7 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'slate-ask': async () => { observed.slateAsk = await attempt('slate-ask', () => measureSlateAsk(newPage, origin, askProbe)); },
         'connect': async () => { observed.connect = await attempt('connect', () => measureConnect(newPage, origin)); },
         'provider-wait': async () => { observed.providerWait = await attempt('provider-wait', () => measureProviderWait(newPage, origin, waitProbe)); },
+        'workspace-views': async () => { observed.workspaceViews = await attempt('workspace-views', () => measureWorkspaceViews(newPage, origin)); },
         'state': async () => { observed.state = await attempt('state', () => measureState(app)); },
       };
 

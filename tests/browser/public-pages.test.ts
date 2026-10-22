@@ -249,7 +249,10 @@ interface Facts {
   publicOverflow: Record<string, number>;
   landingTargets?: number[];
   /** Every tab of every workspace frame, pressed in turn: each `frame/tab`, and what any of them showed failing. */
-  landingTabs?: { readonly visited: readonly string[]; readonly failures: readonly string[]; readonly asked: readonly string[]; readonly samplesOpened: readonly string[] };
+  landingTabs?: {
+    readonly visited: readonly string[]; readonly failures: readonly string[]; readonly asked: readonly string[]; readonly samplesOpened: readonly string[];
+    readonly unfilled: readonly string[];
+  };
   publicTargets?: number[];
   wideColumns: Record<string, number>;
   contrast: Contrast[];
@@ -304,6 +307,7 @@ async function visitLandingTabs(): Promise<NonNullable<Facts['landingTabs']>> {
   const failures: string[] = [];
   const asked: string[] = [];
   const samplesOpened: string[] = [];
+  const unfilled: string[] = [];
 
   page.on('request', (request) => {
     const url = new URL(request.url());
@@ -333,12 +337,15 @@ async function visitLandingTabs(): Promise<NonNullable<Facts['landingTabs']>> {
         shown.map((failure) => `${where}: ${failure.textContent ?? ''}`)
       ), `${frame}/${label}`));
       samplesOpened.push(...await linksToSamples(page, frame));
+      unfilled.push(...await page.$$eval(`[data-landing-frame="${frame}"] :is([data-memory-loading], [data-env-empty])`, (shown, where) => (
+        shown.map((part) => `${where}: ${part.hasAttribute('data-env-empty') ? 'no environments' : 'memory still loading'}`)
+      ), `${frame}/${label}`));
     }
   }
 
   await page.close();
 
-  return { visited, failures, asked, samplesOpened };
+  return { visited, failures, asked, samplesOpened, unfilled };
 }
 
 function required<T>(value: T | undefined, label: string): T {
@@ -669,7 +676,7 @@ beforeAll(async () => {
           assistantLabel: assistant?.querySelector('span')?.textContent ?? null,
           adaptiveHint: document.querySelector('[data-tui-agent]')?.textContent?.includes('Alt+W workspaces') === true,
           groupHeader: buttons.some((button) => button.textContent?.replace(/\s+/gu, ' ').includes('api-worker · 2') === true),
-          subordinate: pinned?.textContent?.includes('└ reviewer · auditor') === true,
+          subagent: pinned?.textContent?.includes('└ reviewer · auditor') === true,
           cloudCollapsedHidesJarvis: buttons.every((button) => button.textContent?.includes('Jarvis') !== true),
         };
       })).toEqual({
@@ -679,7 +686,7 @@ beforeAll(async () => {
         assistantLabel: null,
         adaptiveHint: true,
         groupHeader: true,
-        subordinate: true,
+        subagent: true,
         cloudCollapsedHidesJarvis: true,
       });
       // Expanding the collapsed cloud section reveals the remote workspace;
@@ -1233,6 +1240,11 @@ describe('every landing frame tab renders', () => {
 
   test('a sample preview names its address and offers no link to it', () => {
     expect(required(facts.landingTabs, 'the landing tabs').samplesOpened).toEqual([]);
+  });
+
+  // Production walkthrough rc30 F5 and F6: the Agent tab's Memory spun for good, and Environment had no machine.
+  test('every tab shows its sample: no memory left loading, no Environment without its machines', () => {
+    expect(required(facts.landingTabs, 'the landing tabs').unfilled).toEqual([]);
   });
 });
 

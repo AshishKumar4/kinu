@@ -113,7 +113,9 @@ export function createPlayback(host: HTMLElement, wanted: () => boolean, advance
     const began = performance.now();
     advance(step);
     push(work, performance.now() - began);
-    frameId = requestAnimationFrame(tick);
+
+    // Asked again before each frame: a picture that came to rest during this one draws no next.
+    if (wanted() && visible && !document.hidden) frameId = requestAnimationFrame(tick);
   };
 
   const sync = (): void => {

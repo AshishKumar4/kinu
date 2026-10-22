@@ -206,7 +206,7 @@ export class FacetChat {
 
   private async assemble(prepared: PreparedAgentTurn, turn: { readonly id: string; readonly mode: WorkMode; readonly runId: string; readonly epoch: number | null }, asked: TurnAssemblyRequest, bind?: Parameters<typeof assembleActorTurn>[0]['settle']) {
     const { actor, database, workspace, models, pacer } = this.deps;
-    const live: LiveTurn = { dynamic: prepared.dynamic, openWork: prepared.openWork ?? null };
+    const live: LiveTurn = { dynamic: prepared.dynamic, harnessMode: 'native', openWork: prepared.openWork ?? null };
 
     this.liveTurn = { turnId: turn.id, live };
 
@@ -711,7 +711,7 @@ export class FacetChat {
 
     // No run of this agent's: its provider's words are the workspace's, as every actor's turnless call's are.
     const { sources } = facetTurnSources({
-      actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic, openWork: null }, runId: prepared.runId, turnId, epoch: null, pacer,
+      actor, workspace, models, prepared, spend: this.spend, live: { dynamic: prepared.dynamic, harnessMode: 'native', openWork: null }, runId: prepared.runId, turnId, epoch: null, pacer,
       recordsIn: WORKSPACE_RUN_ID,
     });
 

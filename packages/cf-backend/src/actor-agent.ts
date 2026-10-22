@@ -13,17 +13,17 @@ import {
 } from "agents";
 import {
   objectNamed,
-  inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
+  inspectSubagentStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
   type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair,
-  type RunEventInput, type SubordinateInspectionAuthority, type ConversationRecall,
-  isSubordinateOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
+  type RunEventInput, type SubagentInspectionAuthority, type ConversationRecall,
+  isSubagentOrigin, WORKSPACE_ROOT, PLATFORM_CATALOG, ProgramsInFlight, type OwedIntent, type OwedOwnerIntent, cardWords,
 } from '@kinu.run/core';
-import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, ProgrammaticTurn, RecordedTurn, SendState, SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
-import type { SubordinateActivityEvent } from '@kinu.run/core';
+import type { EnqueueTurnResult, MailDeps, OwnerWaitsHost, PanelAgent, ProgrammaticTurn, RecordedTurn, SendState, SubagentInspectionRequest, SubagentInspectionResult } from '@kinu.run/core';
+import type { SubagentActivityEvent } from '@kinu.run/core';
 import type { Fact } from '@kinu.run/core';
-import type { SubordinateView } from '@kinu.run/core/protocol';
+import type { SubagentView } from '@kinu.run/core/protocol';
 import { MessageType } from "agents/chat";
 import {
   ActorChatRooms, ChatWireTransport, type ChatWire,
@@ -53,7 +53,7 @@ import { convertToModelMessages } from "ai";
 import type { LanguageModel, ModelMessage, ToolSet } from "ai";
 
 import {
-  EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf,
+  EvolutionEngine, recoverSubagentLifecycles, actorReferenceOf,
   type ActorHandle, type ActorHost, type ActorReference, type ChildActorOperation,
   type ActorDirectoryResult, type WorkspaceActorDirectory,
   type ScaffoldRunOptions,
@@ -99,7 +99,7 @@ import {
   // Prices a model_call row only when the rate belongs to that call's own model.
   pricedModelCallEvent,
   type FactsStore,
-  createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subordinateDelegatesOf,
+  createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subagentDelegatesOf,
   agentArtifactDirectory, agentHome, MAIN_AGENT,
   type SessionTranscript,
   type SqlExecutor,
@@ -121,18 +121,15 @@ import {
   type ParentExecResult,
   type ParentRpcWrite,
   type TeamToolDeps,
-  type SubordinateRuntime, type TemporaryAgentPort,
-  SubordinateRosterStore, subordinateTitle,
-  createTeamToolDeps, createTemporaryAgentPort,
-  // One minting rule for every subordinate, on either backend
-  agentNamer,
-  // Subordinate tree depth cap: derived per child, never stated by one
-  type DelegationBudget,
+  type SubagentRuntime, type TemporaryAgentPort,
+  SubagentRosterStore, subagentTitle,
+  // One minting rule, depth walk and clock for every subagent, on either backend
+  teamToolDepsFor, temporaryPortFor,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
   parseModelSpec, specModelInfo, assembleActorTurn,
   type ModelWindow, type AgentsMdSources,
-  ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead, type ModelInfo,
+  ModelCatalogSession, resolveEffectiveModelSpec, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   // AGENTS.md discovery, and the trust authority deciding whether discovered bytes earn system placement.
   collectWorkspaceAgentsMd,
@@ -149,7 +146,7 @@ import {
   toolsNamespace, runWorkModeInvocation, actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost,
   resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode,
-  toolSurfaceTokens, McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
+  McpToolSurfaceSchema, GITHUB_MCP_PRESET, recognizeGitHubMcp, recordGitHubActivity, type SerializableToolDescriptor,
   OwnerAnswersSchema, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ProfileCatalogEnvelope,
   toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, providersWithoutOwnerSecrets, withholdingOwnerSecrets, currentWorkMode, requireWorkModePermission,
@@ -162,7 +159,7 @@ import {
   type CFRuntime, type CFRuntimeHooks, type WorkspaceBoxUse,
 } from "./runtime";
 import {
-  hostNodeSeat, nodeCodemodeTool, hostedSubordinateRuntime,
+  hostNodeSeat, nodeCodemodeTool, hostedSubagentRuntime,
   type ActorSurface, type HostedActorSeams, type SurfaceTurn,
 } from "./hosted-actors";
 import type { CFSeat } from "./actor-hosting";
@@ -496,6 +493,9 @@ export abstract class ActorAgent extends Agent<Env> {
   protected abstract actorKind(): AgentKind;
   /** The workspace agent's newest answered turns, which a pending scaffold is replayed against. */
   abstract recordedTurns(limit?: number): Promise<RecordedTurn[]>;
+  /** The workspace's agents as the person's sidebar reads them, released hires too when `retained`: `agents.list` shows
+   *  a subtree of it. */
+  protected abstract workspaceAgents(retained: boolean): Promise<PanelAgent[]>;
 
   /** The workspace whose exec planes this actor rides; a facet actor overrides with its parent's. */
   protected workspaceName(): string { return this.name; }
@@ -702,10 +702,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return { closed };
   }
 
-  /** The orchestrator answers with the root budget; a facet actor answers from durable storage,
-   * so an eviction cannot reset it. */
-  protected abstract delegationBudget(): DelegationBudget;
-
   /** The workspace's one actor host; every logical actor is acquired from it over this object's SQL.
    * Abstract because it is built from root state this base class does not hold. */
   protected abstract actorHost(): ActorHost<CFSeat>;
@@ -728,7 +724,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * `hostedHomeName`); its identity is its `workspace_actors` row, so there is no facet port.
    */
 
-  private _subordinateRoster: SubordinateRosterStore | null = null;
+  private _subagentRoster: SubagentRosterStore | null = null;
 
   /** Reads held between this object's statements: `sql` and {@link watchedExec}, its two executors, drop them. */
   // Lazy: this object's statements run before its fields are initialised (its base's constructor).
@@ -755,73 +751,73 @@ export abstract class ActorAgent extends Agent<Env> {
     };
   }
 
-  protected get subordinateRoster(): SubordinateRosterStore {
-    if (!this._subordinateRoster) {
-      this._subordinateRoster = new SubordinateRosterStore(this.watchedExec, this.actorHandle());
-      this._subordinateRoster.ensureSchema();
+  protected get subagentRoster(): SubagentRosterStore {
+    if (!this._subagentRoster) {
+      this._subagentRoster = new SubagentRosterStore(this.watchedExec, this.actorHandle());
+      this._subagentRoster.ensureSchema();
     }
 
-    return this._subordinateRoster;
+    return this._subagentRoster;
   }
 
-  protected subordinateDelegates() {
-    return subordinateDelegatesOf(this.subordinateRoster.list());
+  protected subagentDelegates() {
+    return subagentDelegatesOf(this.subagentRoster.list());
   }
 
   /**
    * One roster row as a chat surface draws it: lifecycle from the roster, title and role from config.
    * Config is read via the presence-fenced handle, not by name: a kept dismissal releases the name.
    */
-  protected async subordinateView(name: string): Promise<SubordinateView> {
-    const entry = this.subordinateRoster.get(name);
+  protected async subagentView(name: string): Promise<SubagentView> {
+    const entry = this.subagentRoster.get(name);
 
-    if (entry === null) throw new KinuError('missing', `Subordinate "${name}" is not in the roster`);
+    if (entry === null) throw new KinuError('missing', `Subagent "${name}" is not in the roster`);
     const reference = entry.actorReference;
 
-    if (reference === null) return { ...entry, actorId: null, ...subordinateTitle(entry, null) };
+    if (reference === null) return { ...entry, actorId: null, ...subagentTitle(entry, null) };
 
     const record = this.actorDirectoryStore().retained(reference.actorId);
 
-    if (record === null) throw new KinuError('missing', `Subordinate "${name}" names an actor this workspace does not hold.`);
+    if (record === null) throw new KinuError('missing', `Subagent "${name}" names an actor this workspace does not hold.`);
 
-    return { ...entry, actorId: reference.actorId, ...subordinateTitle(entry, actorReadHandle(this.boundSql, record).config) };
+    return { ...entry, actorId: reference.actorId, ...subagentTitle(entry, actorReadHandle(this.boundSql, record).config) };
   }
 
-  protected async subordinateViews(): Promise<SubordinateView[]> {
-    return Promise.all(this.subordinateRoster.listAll().map(
-      async (entry) => this.subordinateView(entry.name),
+  protected async subagentViews(): Promise<SubagentView[]> {
+    return Promise.all(this.subagentRoster.listAll().map(
+      async (entry) => this.subagentView(entry.name),
     ));
   }
 
-  protected broadcastSubordinateEvent(
-    event: Omit<SubordinateActivityEvent, 'type' | 'id'> & { id?: string },
+  protected broadcastSubagentEvent(
+    event: Omit<SubagentActivityEvent, 'type' | 'id'> & { id?: string },
   ): void {
     this.broadcastToActor(null, JSON.stringify({
-      type: 'subordinate_event',
+      type: 'subagent_event',
       id: event.id ?? nanoid(),
       kind: event.kind,
-      subordinate: event.subordinate,
+      subagent: event.subagent,
       status: event.status,
       content: event.content,
       task: event.task,
       timestamp: event.timestamp,
-    } satisfies SubordinateActivityEvent));
+    } satisfies SubagentActivityEvent));
   }
 
   /**
    * Hosted actors have no facet hop: `agent-routing.ts` refuses `sub` publicly and
    * `resolveHostedActorRoute` checks the directory and roster before the request reaches an actor.
    */
-  private _subordinateRuntime: SubordinateRuntime | null = null;
+  private _subagentRuntime: SubagentRuntime | null = null;
 
   /** Memoized so the durable roster and the temporary register address the same actors. */
-  protected subordinateRuntime(): SubordinateRuntime {
-    this._subordinateRuntime ??= hostedSubordinateRuntime(
+  protected subagentRuntime(): SubagentRuntime {
+    this._subagentRuntime ??= hostedSubagentRuntime(
       this.hostedSeams(),
       () => this.rootBound(),
     );
 
-    return this._subordinateRuntime;
+    return this._subagentRuntime;
   }
 
   protected stopSubtree(_actorId: string): void {}
@@ -834,8 +830,8 @@ export abstract class ActorAgent extends Agent<Env> {
       const roster = seams.roster(bound);
       roster.ensureSchema();
 
-      return createTemporaryAgentPort({
-        roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: agentNamer(this.actorDirectoryStore(), roster),
+      return temporaryPortFor({
+        roster, runtime: hostedSubagentRuntime(seams, () => bound), directory: this.actorDirectoryStore(),
         afterTurn: (child, work) => {
           this.detachOwned(Effect.promise(async () => {
             await this.agentTurnSettled(child);
@@ -848,21 +844,22 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected getTeamToolDeps(): TeamToolDeps {
-    return createTeamToolDeps({
-      delegation: this.delegationBudget(),
-      roster: this.subordinateRoster,
-      runtime: this.subordinateRuntime(),
+    return teamToolDepsFor({
+      record: this.rootBound().record,
+      directory: this.actorDirectoryStore(),
+      roster: this.subagentRoster,
+      runtime: this.subagentRuntime(),
       temporary: this.temporaryAgentPort(),
-      now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(),
       originContext: () => this.mainWorkingContext(),
       ownMission: () => this.ownMission(),
-      createName: agentNamer(this.actorDirectoryStore(), this.subordinateRoster),
       rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
-      broadcastTask: (event) => this.broadcastSubordinateEvent({
+      broadcastTask: (event) => this.broadcastSubagentEvent({
         kind: 'task',
         ...event,
       }),
+      workspaceAgents: () => this.workspaceAgents(true),
+      events: this.eventLog,
     });
   }
 
@@ -2397,7 +2394,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected configureRuntime(_runtime: CFRuntime): void {}
 
   /**
-   * Deferral target for gated commands with no approver; subordinates have no queue, the
+   * Deferral target for gated commands with no approver; subagents have no queue, the
    * orchestrator overrides. Resolved at exec time, never during runtime construction (reaching the
    * queue re-enters `rt`).
    */
@@ -2798,7 +2795,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const providers = actorNamespaces(this.surfaceActor(requested, 'owner', own.stores), SURFACE_POLICY.operations);
 
     // The workspace's own agent, which reaches its external tools.
-    const mcp = await this.buildUserMcpTools(own.raw, Promise.resolve(this.modelCatalog));
+    const mcp = await this.buildUserMcpTools();
     const authority = await this.slateAuthority(requested, providers, Object.keys(mcp));
     const external = { ...this.extensions.tools(), ...mcp };
     const tools = authority.mode === requested ? own.raw : this.ownTools(authority.mode, null, { ledgers, stores: own.stores }).raw;
@@ -3010,10 +3007,10 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Native owner inspection. Does not initialize the SDK or application tables. */
-  async inspectSubordinateStorage(request: SubordinateInspectionRequest, authority: SubordinateInspectionAuthority): Promise<SubordinateInspectionResult> {
+  async inspectSubagentStorage(request: SubagentInspectionRequest, authority: SubagentInspectionAuthority): Promise<SubagentInspectionResult> {
     // Core authorizes the directory path before resolving its canonical
     // transcript. Payload reads may await VFS; they never acquire an actor.
-    return inspectSubordinateStorage({
+    return inspectSubagentStorage({
       sql: this.boundSql, raw: this.ctx.storage.sql,
       actor: this.actorHandle(), directory: this.actorDirectoryStore(),
       transcriptFor: (actor) => this.transcriptFor(actor),
@@ -3035,7 +3032,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * One page of one chat: the caller's own by default, or the subordinate a pane names by actor id.
+   * One page of one chat: the caller's own by default, or the subagent a pane names by actor id.
    * The root's pane names none and reads this actor's conversation.
    */
   @callable()
@@ -3044,7 +3041,7 @@ export abstract class ActorAgent extends Agent<Env> {
       // Strict: a dropped id cursor from an old client re-reads the newest page forever.
       const { actor, ...page } = v.parse(v.strictObject({ ...PositionPageRequestSchema.entries, actor: v.optional(v.string()) }), request);
 
-      if (actor !== undefined) yield* this.requireSubordinateChat(actor);
+      if (actor !== undefined) yield* this.requireSubagentChat(actor);
 
       return yield* Effect.promise(async () => this.agentCall(actor ?? this.actorHandle().actorId, (isolate, snapshot) => isolate.historyPage(snapshot, page)));
     }));
@@ -3052,7 +3049,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * A tab shows a settled answer whose phases have no line: they are named in its agent's own isolate, on its fast tier.
-   * The caller's own chat by default, or the subordinate a pane names; never part of a turn. False while no committed
+   * The caller's own chat by default, or the subagent a pane names; never part of a turn. False while no committed
    * answer has the id, so the tab asks again once it has one.
    */
   @callable()
@@ -3060,13 +3057,13 @@ export abstract class ActorAgent extends Agent<Env> {
     return settle(Effect.gen({ self: this }, function* () {
       const { messageId, actor } = v.parse(v.strictObject({ messageId: v.string(), actor: v.optional(v.string()) }), request);
 
-      if (actor !== undefined) yield* this.requireSubordinateChat(actor);
+      if (actor !== undefined) yield* this.requireSubagentChat(actor);
 
       return yield* Effect.promise(async () => this.agentCall(actor ?? this.actorHandle().actorId, (isolate, snapshot) => isolate.namePhases(snapshot, messageId)));
     }));
   }
 
-  private requireSubordinateChat(actorId: string): Effect.Effect<void, KinuError> {
+  private requireSubagentChat(actorId: string): Effect.Effect<void, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const directory = this.actorDirectoryStore();
       const record = directory.retained(actorId);
@@ -3075,7 +3072,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
       // Every agent up its hierarchy is a hire, to the tree's root, which hosts every chat below it.
       for (let step: typeof record | null = record; step?.parentActorId !== null; step = directory.retained(step.parentActorId)) {
-        if (step === null || !isSubordinateOrigin(step.origin)) return yield* new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
+        if (step === null || !isSubagentOrigin(step.origin)) return yield* new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
       }
     });
   }
@@ -3474,17 +3471,10 @@ export abstract class ActorAgent extends Agent<Env> {
    * Rebuilds AI-SDK tools from MCP descriptors; cache invalidates on descriptor content hash, and a
    * failed read keeps the last good build. `execute` dispatches as the parent workspace's token.
    */
-  protected async buildUserMcpTools(nativeTools: ToolSet, catalog: Promise<ModelCatalogRead>, descriptors = this.userMcpDescriptors()): Promise<ToolSet> {
+  protected async buildUserMcpTools(descriptors = this.userMcpDescriptors()): Promise<ToolSet> {
     if (descriptors === null) return {};
-    // Read beside the model's resolution; a failed read reaches the failure arm through `refresh`.
-    const [read] = await Promise.allSettled([catalog, descriptors]);
-
-    // An unresolved profile fails the turn in `readTurnInputs`.
-    if (read.status === 'rejected') return {};
 
     try {
-      // Budget is the resolved model's step context limit minus this actor's own tool definitions, read
-      // off the same `ModelCatalogSession` as compaction (`McpSurfaceBudget`).
       const tools = await this.mcpToolsCache.refresh(
         async () => {
           const surface = await descriptors;
@@ -3492,10 +3482,6 @@ export abstract class ActorAgent extends Agent<Env> {
           if (surface.status === 'rejected') throw surface.reason;
 
           return v.parse(McpToolSurfaceSchema, surface.value);
-        },
-        {
-          ...read.value.window(),
-          nativeToolTokens: toolSurfaceTokens(nativeTools),
         },
       );
 
@@ -3697,8 +3683,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
     const held = {
       reads: dynamicReads(stores, this.boundSql, handle, this.held),
-      // Every SubordinateRosterStore writes over `watchedExec`, the directory's origins over `sql`.
-      delegates: this.held.hold(['actor_subordinates', 'workspace_actors'], () => subordinateDelegatesOf(new SubordinateRosterStore(this.watchedExec, handle).list())),
+      // Every SubagentRosterStore writes over `watchedExec`, the directory's origins over `sql`.
+      delegates: this.held.hold(['actor_subagents', 'workspace_actors'], () => subagentDelegatesOf(new SubagentRosterStore(this.watchedExec, handle).list())),
     };
 
     this.heldDynamic.set(reference.actorId, held);
@@ -3746,7 +3732,7 @@ export abstract class ActorAgent extends Agent<Env> {
       ...(secrets !== undefined && { secrets: { granted: secrets.granted.map(({ name, hosts, position, reveal }) => ({ name, hosts, position, reveal })), withheld: secrets.withheld } }),
       ...(reach.kind === 'workspace' && { unavailableMcp: this._mcpUnavailable }),
       missingCapabilities: extras.extraMissingCapabilities?.() ?? [],
-      subordinateDelegates: held.delegates,
+      subagentDelegates: held.delegates,
       approvals: extras.approvals,
       ...(mail !== undefined && { mail }),
       ...(extras.failingSlates !== undefined && { failingSlates: extras.failingSlates }),
@@ -3875,7 +3861,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Idempotent; returns whether the budget filled and work must continue next tick.
    */
   protected async maintenanceWork(): Promise<boolean> {
-    return recoverSubordinateLifecycles(this.subordinateRoster, this.subordinateRuntime());
+    return recoverSubagentLifecycles(this.subagentRoster, this.subagentRuntime());
   }
 
   /** A lane: work held alive whose own row outlives the activation running it, so the next one re-drives what it left

@@ -42,8 +42,9 @@ import { rowNotices } from './row-verdicts';
 import { recordMarkAt, recordNotice, recordRed, recordSkipped, recordStep, recordTiming } from './deploy-report';
 import { openDeployLive } from './deploy-live';
 import {
-  CACHE_BLIND_SPOTS, cacheEnabled, defaultStoreDirectory, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
+  CACHE_BLIND_SPOTS, cacheEnabled, gateEnvironment, gateEnvNames, keyFor, planGate, recordGreen, pathNodeVersion, storeAt, toolVersions,
 } from './ladder-cache';
+import { ladderCacheDirectory } from './cache-root';
 import type { GateCacheRequest, Plan, Store, ToolVersions } from './ladder-cache';
 import { fromEnvironment, type RemoteProofs } from './ladder-proofs';
 import { auditClosure } from './ladder-audit';
@@ -314,6 +315,17 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
+    run: 'bun test --timeout=0 tests/design-system.test.ts',
+    label: 'Design system scan',
+    tier: 'push',
+    seconds: 0.45, // Measured 2026-10-21 on the 24-thread workstation: 0.45 s.
+    catches: 'a page or feature component that draws its own ground, edge, radius, type or raw control instead of '
+      + "taking it from ui/, an arbitrary value other than a --layout-* constant, and a colour, font size or radius in "
+      + "index.css outside theme.ts and the role table",
+    blind: 'class names built at run time from parts, and what a component computes in the browser (computed-style.ts)',
+    inputs: { kind: 'derived', imports: CF_BACKEND_SOURCES },
+  },
+  {
     run: 'bun scripts/pattern-inventory.ts',
     label: 'Pattern inventory',
     tier: 'local',
@@ -363,11 +375,11 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run typecheck',
     label: 'TypeScript projects',
     tier: 'local',
-    // Measured 2026-09-15 on the 24-thread workstation, quiet: 18 tsc projects
-    // sum to 11.9 s solo (largest cf-backend 1.4 s, scripts 1.25 s, core 1.0 s).
-    // One row rather than eighteen: every project reads the corpus, so their
-    // closures are one closure and a split would buy no cache hit.
-    seconds: 12,
+    // Measured 2026-10-22 on the 24-thread workstation: the 16 projects sum to 4.3 s with tsrs (largest cf-backend
+    // 1.1 s, peak 2.0 GB) against 21.0 s with tsc 7.0.2 (cf-backend 6.8 s, peak 3.9 GB); the whole script 5.2 s.
+    // One row rather than sixteen: every project reads the corpus, so their closures are one closure and a split
+    // would buy no cache hit.
+    seconds: 6,
     catches: 'type errors across all the projects `package.json`\'s `typecheck` names, following '
       + '`bun run` transitively. The largest defect class by volume and the only total one.',
     blind: 'everything about behaviour. A well-typed call to the wrong function passes. '
@@ -1148,7 +1160,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/eval-plan-run.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/evals-lease.test.ts scripts/evals-post.test.ts scripts/eval-plan-run.test.ts scripts/armada-progress.test.ts scripts/credential-checkpoint.test.ts scripts/reset.test.ts scripts/tables-reset.test.ts scripts/upgrade-fixtures.test.ts scripts/prod-logs.test.ts scripts/telemetry-windows.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts scripts/runtime-catalog.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
@@ -1161,7 +1173,8 @@ export const LADDER: readonly Gate[] = [
     // the deploy's live status suite at 0.5 s (4 tests). deploy.test.ts gained the
     // smoke's version reads 2026-10-08: three routes against a local server, the
     // slowest held to its 6 s bound (3 tests). The Worker startup measure's suite
-    // joined 2026-10-13 at under 0.1 s (2 tests).
+    // joined 2026-10-13 at under 0.1 s (2 tests). The eval run's settle suite joined
+    // 2026-10-21 at under 0.1 s (5 tests).
     seconds: 100,
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
       + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails. And a promotion '
@@ -1605,7 +1618,7 @@ export const LADDER: readonly Gate[] = [
       + 'turn is checked black-box: the checker calls the slates the agent built over the slate '
       + 'RPC and compares every answer with its own reference implementation of the contract, so '
       + 'any correct build passes, and reads what a person would: the files, the task board, each '
-      + 'helper\'s runs, and each preview address fetched with no credential. Five trials per '
+      + 'subagent\'s runs, and each preview address fetched with no credential. Five trials per '
       + 'task, each trial its own armada map task, the candidate on staging and the '
       + 'promoted build on kinu.run measured at once under the candidate\'s definitions, compared by a '
       + 'two-sided Fisher exact test (evals/src/comparison.ts), with infrastructure failures and '
@@ -1904,7 +1917,7 @@ export const LADDER: readonly Gate[] = [
     blind: 'everything about the SERVER half. The frame stubs `fetchPage`, so no rowid '
       + 'seek, no `limit + 1` over-read and no stale cursor is exercised here — those '
       + 'are unit-tested against the read model instead. Two hooks and one merge rule '
-      + 'of the ~29 gallery frames; the subordinate column and the node transcript walk '
+      + 'of the ~29 gallery frames; the subagent column and the node transcript walk '
       + 'the same contract and are measured by neither this nor any other browser. '
       + 'Chrome cost keeps it out of the commit tier.',
     inputs: CLIENT_BUILD,
@@ -2627,6 +2640,21 @@ export const LADDER: readonly Gate[] = [
       + 'snapshot and R2 recovery data loss, whole-file deltas, failed compaction, serial mounts and disk-pressure failures.',
     blind: 'long snapshot lifetime, account saturation, the model path, and a product adapter no contract drives. No Docker image is built or started.',
     inputs: { kind: 'live', why: 'deploys eval-owned Cloudflare fixtures from this tree, copies staging tools, runs real containers and R2, and verifies complete cleanup.' },
+  },
+  {
+    run: 'bun scripts/deploy-oauth-client.ts check',
+    label: 'Deploy OAuth client registered as the door asks',
+    ciExempt: 'reads the deploy OAuth client on Cloudflare with an account token for OAuth clients, which no pull request holds.',
+    secrets: ['KINU_OAUTH_CLIENT_TOKEN'],
+    tier: 'deploy',
+    // 2026-10-21 on the 24-thread workstation: one GET, 1.1 s.
+    seconds: 1.1,
+    catches: 'a deploy OAuth client whose registered scopes differ from what every consent asks (core deploy/pkce.ts): '
+      + 'a scope the door asks and the client lacks, refused at the person\'s consent as invalid_scope, or one it holds '
+      + 'that no step asks for (f44999, 2026-10-21: the owner\'s consent refused zone-settings.write as zonesettings.write).',
+    blind: 'a scope Cloudflare refuses at consent though it is registered, which only a person\'s sign-in shows; the '
+      + 'redirect URIs and grant types; whether each scope still lets its step do what the step does.',
+    inputs: { kind: 'live', why: 'reads the client\'s registration on Cloudflare, which no hash over the tree stands for.' },
   },
   {
     run: 'bun scripts/upgrade-fixtures.ts',
@@ -4425,7 +4453,7 @@ if (import.meta.main) {
   const caching = cacheEnabled({ hammer: rowGate?.phase === 'hammer', noCache: cli['no-cache'] === true });
   const remote = caching ? remoteStore : undefined;
   const tools = toolVersions(root, await pathNodeVersion());
-  const store = storeAt(defaultStoreDirectory());
+  const store = storeAt(ladderCacheDirectory());
   const revision = fullRevision();
   const ciRows: CIVerdict[] = [];
 

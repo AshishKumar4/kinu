@@ -14,6 +14,73 @@ import { createWorkspace, deleteWorkspace, type PublicWebIdentity } from '../eva
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { documentScriptFailures, explained, FAILED_APP_SCRIPT, SCRIPT_FAILED, type ScriptFailure } from './script-failures';
 
+/*
+ * The controls both the deploy flows (scripts/product-flows.ts) and the browser UI tests (tests/browser) drive, each
+ * selector in this one place: a control the design system moves is moved here once. Twice on 2026-10-21 a move
+ * (ui/Check's checkbox, ui/Menu's row menu) updated the tests and left the flows, which failed only on staging.
+ */
+
+/** A row's or tile's ⋯ (ui/Menu's trigger), and the menu it opens, drawn in a portal and not inside the row. */
+export const ROW_MENU = '[data-row-menu]';
+
+export const OPEN_MENU = '[role="menu"][data-open]';
+
+/** The design system's checkbox (ui/Check): a button that says its state in `aria-checked`, not an input. */
+export const CHECKBOX = '[role="checkbox"]';
+
+/** The attention stack: the open card, a card behind it, and a parked command's row on a card. */
+export const ATTENTION_CARD = '[data-attention-card]';
+
+export const ATTENTION_BEHIND = '[data-attention-behind]';
+
+export const PARKED_COMMAND = '[data-parked-command]';
+
+export const attentionCard = (key: string): string => `[data-attention-card="${key}"]`;
+
+export const attentionBehind = (key: string): string => `[data-attention-behind="${key}"]`;
+
+export const parkedCommand = (id: string): string => `[data-parked-command="${id}"]`;
+
+/** The chat bar: an agent's tab, its rename, the agents counter, and a new chat's link and question. */
+export const AGENT_TAB = '[data-agent-tab]';
+
+export const agentTab = (agent: string): string => `[data-agent-tab="${agent}"]`;
+
+export const RENAME_BUTTON = 'button[aria-label^="Rename "]';
+
+export const AGENTS_COUNTER = '[data-agents-counter]';
+
+export const NEW_CHAT_LINK = 'a[aria-label="New chat"]';
+
+export const NEW_CHAT = '[data-new-chat]';
+
+/** The inspector: its pages' bar, a new session, the desktop's return, and a slate's review mark. */
+export const PAGES_NAV = 'nav[aria-label="Pages"]';
+
+export const NEW_SESSION = 'button[aria-label="New session"]';
+
+export const DESKTOP_RETURN = '[data-desktop-return]';
+
+export const MARK_REVIEWED = '[data-mark-reviewed]';
+
+/** The Drive: a place in its rail, its New, and a dialog's commit. */
+export const DRIVE_PLACE = '[data-drive-place]';
+
+export const drivePlace = (place: string): string => `[data-drive-place="${place}"]`;
+
+export const DRIVE_NEW = '[data-drive-new]';
+
+export const DRIVE_DIALOG_COMMIT = '[data-drive-dialog-commit]';
+
+/** The share dialog: its choices' opener, who can open it, and its submit. */
+export const SHARE_OPTIONS = '[data-share-options]';
+
+export const SHARE_ACCESS_OPTION = '[data-share-access-option]';
+
+export const shareAccessOption = (access: string): string => `[data-share-access-option="${access}"]`;
+
+export const SHARE_SUBMIT = '[data-share-submit]';
+
 
 export interface FlowTarget {
   readonly browser: Browser;
@@ -270,6 +337,14 @@ export async function typeIntoComposer(page: Page, text: string): Promise<Elemen
 
 /** Type into the chat column's live composer and press its Send; resolves once
  *  the pane shows the words and the turn they started has ended. */
+/** + then the first message: what a person does to open a chat, up to its send. */
+export async function askNewChat(page: Page, opening: string): Promise<void> {
+  await page.click(`${CHATS} ${NEW_CHAT_LINK}`);
+  await page.waitForSelector(`${NEW_CHAT} textarea`);
+  await page.type(`${NEW_CHAT} textarea`, opening);
+  await page.click(`${NEW_CHAT} button[type="submit"]`);
+}
+
 /** + then the first message, as a person opens a chat; resolves once that opening turn has closed. Send is back
  *  before the page learns the turn began, and a message sent then steers it: the agent-plan row's Plan ask became a
  *  steer of the Auto opening, which offered no submit_plan (staging, 2026-10-08). The turn's close on the socket is
@@ -279,10 +354,7 @@ export async function startNewChat(page: Page): Promise<void> {
 
   try {
     await barDrawn(page);
-    await page.click(`${CHATS} a[aria-label="New chat"]`);
-    await until(page, 'the new-chat question', `document.querySelector('[data-new-chat] textarea') !== null`);
-    await page.type('[data-new-chat] textarea', NEW_CHAT_OPENING);
-    await page.click('[data-new-chat] button[type="submit"]');
+    await askNewChat(page, NEW_CHAT_OPENING);
     await until(page, "the new chat's page", `location.pathname.includes('/agents/')`);
     await until(page, 'the opening in the chat column',
       `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(NEW_CHAT_OPENING)})`);
@@ -583,7 +655,7 @@ export async function rendered(page: Page): Promise<void> {
 /** Which chat tab is current, by index: 0 is Main, the person's chats
  *  follow in roster order, -1 while none is marked. */
 export const ACTIVE_TAB_INDEX = `(() => {
-  const tabs = [...document.querySelectorAll('nav[aria-label="Chats"] [data-agent-tab]')];
+  const tabs = [...document.querySelectorAll('${CHATS} ${AGENT_TAB}')];
   return tabs.findIndex((tab) => tab.querySelector('[aria-current="page"]') !== null);
 })()`;
 
@@ -634,7 +706,7 @@ export interface RpcCounts {
   readonly sent: Readonly<Record<string, number>>;
   readonly received: Readonly<Record<string, number>>;
   /** Frames received on an `actor/<name>` socket. Zero after the '+' flow means
-   *  the subordinate pane's transport never answered — the shape the hosted
+   *  the subagent pane's transport never answered — the shape the hosted
    *  actor socket defect left behind, where the composer stays disabled. */
   readonly actorFrames: number;
 }
@@ -881,19 +953,19 @@ export async function openInspector(page: Page): Promise<void> {
 export function inspectorPageListed(title: string): string {
   const quoted = JSON.stringify(title);
 
-  return `nav[aria-label="Pages"] :is(li button[aria-label*=${quoted}], button[aria-haspopup="menu"][title*=${quoted}])`;
+  return `${PAGES_NAV} :is(li button[aria-label*=${quoted}], button[aria-haspopup="menu"][title*=${quoted}])`;
 }
 
 /** Open the inspector's page whose title holds `title` through its bar: its tab when it has room, else the bar's menu
  *  of the rest. Settles once that page is the open one. */
 export async function openInspectorPage(page: Page, title: string, wait = { timeout: 10_000 }): Promise<void> {
-  const tab = `nav[aria-label="Pages"] li button[aria-label*=${JSON.stringify(title)}]`;
+  const tab = `${PAGES_NAV} li button[aria-label*=${JSON.stringify(title)}]`;
 
-  await page.waitForSelector(`${tab}, nav[aria-label="Pages"] button[aria-haspopup="menu"]`, wait);
+  await page.waitForSelector(`${tab}, ${PAGES_NAV} button[aria-haspopup="menu"]`, wait);
 
   if (await page.$(tab) === null) {
-    if (await page.$('nav[aria-label="Pages"] button[aria-haspopup="menu"][aria-expanded="true"]') === null) {
-      await page.click('nav[aria-label="Pages"] button[aria-haspopup="menu"]');
+    if (await page.$(`${PAGES_NAV} button[aria-haspopup="menu"][aria-expanded="true"]`) === null) {
+      await page.click(`${PAGES_NAV} button[aria-haspopup="menu"]`);
     }
 
     const item = await page.waitForFunction((wanted: string) => [...document.querySelectorAll('nav[aria-label="Pages"] [role="menuitem"]')]
@@ -904,7 +976,7 @@ export async function openInspectorPage(page: Page, title: string, wait = { time
     await page.click(tab);
   }
 
-  await page.waitForSelector(`nav[aria-label="Pages"] button[aria-current="true"][aria-label*=${JSON.stringify(title)}]`, wait);
+  await page.waitForSelector(`${PAGES_NAV} button[aria-current="true"][aria-label*=${JSON.stringify(title)}]`, wait);
 }
 
 /**
@@ -913,28 +985,43 @@ export async function openInspectorPage(page: Page, title: string, wait = { time
  * the bar's. The flows' slate titles hold no comma.
  */
 export const PAGE_TABS = `[
-  ...[...document.querySelectorAll('#inspector nav[aria-label="Pages"] li button[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? ''),
-  ...(document.querySelector('#inspector nav[aria-label="Pages"] button[aria-haspopup="menu"]')?.getAttribute('title') ?? '').split(', '),
+  ...[...document.querySelectorAll('#inspector ${PAGES_NAV} li button[aria-label]')].map((tab) => tab.getAttribute('aria-label') ?? ''),
+  ...(document.querySelector('#inspector ${PAGES_NAV} button[aria-haspopup="menu"]')?.getAttribute('title') ?? '').split(', '),
 ].filter((name, index, names) => name !== '' && names.indexOf(name) === index)`;
+
+/** Open the menu of the row or tile `row` with its ⋯, until the menu it opens shows its items. */
+export async function openRowMenu(page: Page, row: string): Promise<void> {
+  await page.click(`${row} ${ROW_MENU}`);
+  await page.waitForSelector(`${OPEN_MENU} [role="menuitem"]`);
+}
+
+/**
+ * Press `item` on the menu of the row or tile `row`: its ⋯, then the item in the menu it opens, which is drawn in a
+ * portal and not inside the row (62d972325 moved every row menu onto ui/Menu, 2026-10-21).
+ */
+export async function pressRowMenu(page: Page, row: string, item: string): Promise<void> {
+  await page.click(`${row} ${ROW_MENU}`);
+  await page.waitForSelector(`${OPEN_MENU} ${item}`);
+  await page.click(`${OPEN_MENU} ${item}`);
+}
 
 /**
  * Open the share dialog and its choices, as a person checks them before sharing: its one-line summary's Change opens
  * them in place, and their limits line is drawn once the capability graph has supplied it.
  */
 export async function openSlateShareDialog(page: Page, tile: string): Promise<void> {
-  await page.click(`${tile} [data-drive-menu]`);
-  await page.click(`${tile} [data-drive-share-slate]`);
-  await until(page, 'the share dialog\'s Change', `document.querySelector('[role="dialog"] [data-share-options]') !== null`);
-  await page.click('[role="dialog"] [data-share-options]');
+  await pressRowMenu(page, tile, '[data-drive-share-slate]');
+  await until(page, 'the share dialog\'s Change', `document.querySelector('[role="dialog"] ${SHARE_OPTIONS}') !== null`);
+  await page.click(`[role="dialog"] ${SHARE_OPTIONS}`);
   await until(page, 'the share dialog\'s limits', `document.querySelector('[role="dialog"] [data-share-limits]') !== null`);
 }
 
-/** Submit the public share when its control can accept the click, then read the created link. */
+/** Submit the public share when its control can accept the click, then read the created link. Who can open it is a
+ *  set of choices shown whole (ShareParts' AccessPicker), no longer a menu behind a button of its own. */
 export async function submitPublicSlateShare(page: Page): Promise<string | null> {
-  await page.click('[data-share-access]');
-  await page.click('[data-share-access-option="public"]');
-  await until(page, 'the public share to be ready', `document.querySelector('[data-share-submit]:not([disabled])') !== null`);
-  await page.click('[data-share-submit]');
+  await page.click(shareAccessOption('public'));
+  await until(page, 'the public share to be ready', `document.querySelector('${SHARE_SUBMIT}:not([disabled])') !== null`);
+  await page.click(SHARE_SUBMIT);
   await until(page, 'the share to be made', `document.querySelector('[data-share-created]') !== null`);
 
   return v.parse(v.nullable(v.string()), await page.evaluate(`document.querySelector('[role="dialog"] a[href]')?.href ?? null`));

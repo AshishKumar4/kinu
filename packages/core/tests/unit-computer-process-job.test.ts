@@ -115,6 +115,22 @@ describe("the computer's startProcess, each process a job of the actor's", () =>
     expect(jobs.woke.map((turn) => turn.text)).toEqual([expect.stringContaining(`Background startProcess job ${jobId} completed`)]);
   });
 
+  // Walkthrough F3 (rc30, 2026-10-21): a program's workspace.startProcess under /computer ran on the computer, printed `/`,
+  // and the agent said it ran in the workspace: neither its job nor its wake named the machine.
+  test('names the machine it ran on, in its job and in the wake that tells its end, from where it was taken', async () => {
+    const jobs = actorJobs();
+    const box = computerBox(jobs);
+    const computer = createSandboxExecutor(box.handle, { processJobs: box.processJobs });
+    const { jobId } = v.parse(Started, await computer.tools.startProcess.execute('npm run dev', { cwd: '/workspace/app' }));
+
+    await Promise.resolve();
+    await box.ends.record(jobId, { exitCode: 0, tail: '/\n' });
+    await jobs.settled();
+
+    expect(jobs.store.get(jobId)?.label).toBe('Computer: npm run dev');
+    expect(jobs.woke.map((turn) => turn.text)).toEqual([expect.stringContaining('It ran as Computer: npm run dev.')]);
+  });
+
   // Review, 2026-10-21: the incident was acknowledged when the end reached the waiting promise, before any row held it;
   // a restart then lost the end, and its resume waited for one that never came again.
   test('an end told is on the job row before the telling answers', async () => {

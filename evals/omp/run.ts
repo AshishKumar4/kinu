@@ -33,7 +33,7 @@ import { armEvolution } from '../src/reactive';
 /** A dream is owed every five rated turns, as the cadence takes them. */
 const DREAM_CADENCE = 5;
 
-/** Passes a dream may take to settle, its helpers' turns between them, before the run moves on without it. */
+/** Passes a dream may take to settle, its subagents' turns between them, before the run moves on without it. */
 const DREAM_PASSES = 40;
 
 const SETTLED = new Set(['applied', 'rolled_back', 'refused']);
@@ -97,7 +97,7 @@ function frozenSet(data: string, heldOut: readonly OwnerTurn[], count: number, s
   return frozen;
 }
 
-/** Passes until the dreams owed have settled, the helpers' turns run between them; how many it took. */
+/** Passes until the dreams owed have settled, the subagents' turns run between them; how many it took. */
 async function dream(run: { readonly lane: () => Promise<void>; readonly tick: () => Promise<void>; readonly rt: Pick<AgentRuntime, 'storage' | 'actor'> }): Promise<number> {
   for (let pass = 1; pass <= DREAM_PASSES; pass += 1) {
     await run.lane();
@@ -175,6 +175,37 @@ async function prepare(arm: Arm, train: readonly OwnerTurn[], last: number): Pro
 }
 
 /** One request on its own copy of the prepared workspace at `prepared`, as the line its answers file keeps. */
+/** The held-out turns a copy's answers file already holds: a copy restarted after its process died asks only the rest. A
+ *  line the dead process left torn is no answer, and its request is asked again. */
+export function answeredTurnIds(answers: string): Set<string> {
+  if (!existsSync(answers)) return new Set();
+
+  return new Set(readFileSync(answers, 'utf8').split('\n').flatMap((line) => {
+    const row = v.safeParse(v.pipe(v.string(), v.parseJson(), v.object({ turnId: v.string() })), line);
+
+    return row.success ? [row.output.turnId] : [];
+  }));
+}
+
+/** How often a request the provider refused before any model call is asked again, and how many times at most: a declared
+ *  wait past the minute a call waits (Workers AI's, minutes long) is waited out, and an hour of refusals gives up. */
+const UNASKED_RETRY_MS = 60_000;
+
+const UNASKED_ATTEMPTS = 60;
+
+/** A request's answer row once it was asked: one the provider refused before any model call is no measurement, so it
+ *  is asked again (on a fresh copy, as every ask is) after `retryMs`, up to `attempts` times; the last row stands. */
+export async function askedRow<Row extends { readonly answer: string | null; readonly spent: { readonly modelCalls: number } }>(
+  ask: () => Promise<Row>, wait: (ms: number) => Promise<void>, retryMs = UNASKED_RETRY_MS, attempts = UNASKED_ATTEMPTS,
+): Promise<Row> {
+  for (let attempt = 1; ; attempt++) {
+    const row = await ask();
+
+    if (row.answer !== null || row.spent.modelCalls > 0 || attempt >= attempts) return row;
+    await wait(retryMs);
+  }
+}
+
 async function answered(arm: Arm, prepared: string, turn: OwnerTurn) {
   // The kept calls of the request, what its own record answers a kept shell command with, and where its time went.
   const kept: Kept[] = [];
@@ -269,9 +300,13 @@ if (import.meta.main) {
       });
 
       const answering: Arm = { arm, spec, snapshot, llm: workersAi(account, token, model), space: join(base, `copy-${String(copy)}`) };
+      const answers = join(base, `answers-${String(copy)}.jsonl`);
+      const done = answeredTurnIds(answers);
 
-      for (const turn of requests) {
-        appendFileSync(join(base, `answers-${String(copy)}.jsonl`), `${JSON.stringify(await answered(answering, join(base, 'base'), turn))}\n`);
+      for (const turn of requests.filter((request) => request.turn.turnId === undefined || !done.has(request.turn.turnId))) {
+        const row = await askedRow(() => answered(answering, join(base, 'base'), turn), (ms) => Bun.sleep(ms));
+
+        appendFileSync(answers, `${JSON.stringify(row)}\n`);
       }
     }
 

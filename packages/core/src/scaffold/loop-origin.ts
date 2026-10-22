@@ -18,7 +18,7 @@ export type LoopOrigin =
 
 /**
  * The loop an agent takes when its creator names none. Swarm workers share the
- * parent's loop; hired subordinates and temporaries start from the bootstrap.
+ * parent's loop; hired subagents and temporaries start from the bootstrap.
  */
 export function defaultLoopOrigin(origin: WorkspaceActor['origin']): LoopOrigin {
   return origin === 'swarm' ? { kind: 'inherit' } : { kind: 'builtin' };

@@ -1,11 +1,11 @@
 // The one table list every composition root creates, in one idempotent transaction. Root-only tables are
 // declared in `test-utils/src/conformance/manifest.ts`, which checks `sqlite_master` against this.
 
-import { initAgentOpenTurnsTable } from '../subordinates/open-turns';
-import { initAgentReportsTable } from '../subordinates/report-sequence';
-import { initTurnFenceTable } from '../subordinates/turn-fence';
-import { initAgentDeliveriesTable, initAgentStopsTable } from '../subordinates/deliveries';
-import { initTurnReportTable } from '../subordinates/turn-reports';
+import { initAgentOpenTurnsTable } from '../subagents/open-turns';
+import { initAgentReportsTable } from '../subagents/report-sequence';
+import { initTurnFenceTable } from '../subagents/turn-fence';
+import { initAgentDeliveriesTable, initAgentStopsTable } from '../subagents/deliveries';
+import { initTurnReportTable } from '../subagents/turn-reports';
 import { initAgentFiguresTable } from '../read-models/agent-figures';
 import type { RawSqlExec, SqlExec, SqlExecutor, Storage } from '../types/primitives';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
@@ -39,7 +39,7 @@ import { initGitHubActivityTable } from '../github/activity';
 import { initAlternateTakesTable } from '../mcts/takes';
 import { initMctsSearchTable } from '../mcts/search-store';
 import { initFactsTable } from '../memory/facts';
-import { initSubordinateRosterTable } from '../subordinates/roster';
+import { initSubagentRosterTable } from '../subagents/roster';
 import { initTaskListTable } from '../tools/task-store';
 import { initArtifactTables } from '../evolution/artifact-schema';
 import { initSlateStateTable } from '../slates/state';
@@ -126,7 +126,7 @@ function createAgentTables(db: WorkspaceSchemaSql): void {
   initAgentDeliveriesTable(execRaw);
   // Its figures folded where its run events are, in its own isolate; the workspace keeps those reported to it.
   initAgentFiguresTable(execRaw);
-  initSubordinateRosterTable(db.exec);
+  initSubagentRosterTable(db.exec);
   initActorStateSchema(db);
   execRaw(`CREATE TABLE IF NOT EXISTS slates (
     id TEXT NOT NULL, workspace_id TEXT NOT NULL, revision INTEGER NOT NULL, bytes BLOB NOT NULL,

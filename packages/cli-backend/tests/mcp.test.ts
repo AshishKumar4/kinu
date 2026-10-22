@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, test, expect, spyOn } from 'bun:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { jsonSchema, tool, type LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import { isMcpToolKey, narrowToolSurface, WORKSPACE_ROOT, type JsonObject, type JsonValue, type LLMProviderConfig } from '@kinu.run/core';
+import { narrowToolSurface, WORKSPACE_ROOT, type JsonObject, type JsonValue, type LLMProviderConfig } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
@@ -12,6 +12,8 @@ import { connectMcpServers } from '../src/mcp';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import type { LocalModelResolver } from '../src/model-resolver';
 import { createLocalProfileAuthority, resolverModelPlane } from '../src/profile-authority';
+import { GITHUB_MCP_INTENTS, GITHUB_MCP_TOOLS } from '@kinu.run/test-utils/github-mcp-catalog';
+import * as v from 'valibot';
 import { scratchPath, scriptedTurnModel, toolExecute, scratchDir, type ScriptedTurnOptions, type ScriptedTurnResult, workspaceDatabase, freshServedStores } from '@kinu.run/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -204,6 +206,69 @@ describe('connectMcpServers', () => {
 
 const USAGE = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } };
 
+test('eval discovers and calls a tool beyond the former catalog budget without sending the catalog', async () => {
+  let step = 0;
+  let captured = '';
+
+  const code = `
+    const servers = await codemode.list();
+    const listed = await codemode.list("github");
+    const queries = ${JSON.stringify(GITHUB_MCP_INTENTS.map(([query]) => query))};
+    const ranked = await Promise.all(queries.map(async (query) => (await codemode.search(query)).results[0].path));
+    const path = (await codemode.search("search code")).results[0].path;
+    const docs = await codemode.describe(path);
+    const undocumented = await codemode.describe((await codemode.search("archive 000")).results[0].path);
+    const missing = await codemode.describe("tools.not_present");
+    const tracker = (await codemode.search("tracker search users")).results[0].path;
+    const trackerResult = await tools.mcp_tracker_team_search_users({ query: "developers" });
+    const result = await tools[path.slice("tools.".length)]({ query: "repo:cloudflare/agents DurableObject" });
+    return { servers, count: listed.length, listed: listed.find((tool) => tool.name === "search_code"), ranked, tracker, trackerResult, schema: docs.inputSchema,
+      undocumented: { path: undocumented.path, description: Object.hasOwn(undocumented, "description") }, missing: missing.path, result };
+  `;
+
+  const { session, events } = sessionWithWindows(scriptedTurnModel({ doGenerate: (options) => {
+    // The first request, before any program ran: what the turn sends the model unasked, tool definitions included.
+    if (step === 0) captured = JSON.stringify({ prompt: options.prompt, tools: options.tools });
+
+    return ++step === 1
+      ? { content: [{ type: 'tool-call', toolCallId: 'discovery', toolName: 'eval', input: JSON.stringify({ code }) }], finishReason: { unified: 'tool-calls', raw: undefined }, usage: USAGE, warnings: [] }
+      : { content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage: USAGE, warnings: [] };
+  } }), { 'local/small': 32_000 });
+
+  try {
+    const server = { command: 'bun', args: [new URL('./fixtures/github-mcp-server.ts', import.meta.url).pathname] };
+
+    await session.connectMcp({ github: server, 'tracker-team': server });
+    await session.send('Find the MCP tool for searching source code and use it.', { id: crypto.randomUUID() });
+    const result = events.find((event) => event.type === 'tool-result' && event.toolCallId === 'discovery');
+
+    const searchCode = GITHUB_MCP_TOOLS.find((entry) => entry.name === 'search_code');
+
+    // GitHub's own catalog, one tool with no description beside it: its schema whole, bounds and all, as `describe`
+    // returns it, never in the prompt.
+    expect(result).toMatchObject({ success: true, output: { result: {
+      servers: [{ server: 'github', tools: GITHUB_MCP_TOOLS.length + 1 }, { server: 'tracker-team', tools: GITHUB_MCP_TOOLS.length + 1 }],
+      count: GITHUB_MCP_TOOLS.length + 1,
+      listed: { path: 'tools.mcp_github_search_code', name: 'search_code', description: searchCode?.description },
+      ranked: GITHUB_MCP_INTENTS.map(([, name]) => `tools.mcp_github_${name}`),
+      tracker: 'tools.mcp_tracker_team_search_users',
+      trackerResult: { structuredContent: { tool: 'search_users', input: { query: 'developers' } } },
+      undocumented: { path: 'tools.mcp_github_archive_000', description: false },
+      missing: 'tools.not_present',
+      schema: searchCode?.inputSchema,
+      result: { structuredContent: { tool: 'search_code', input: { query: 'repo:cloudflare/agents DurableObject' } } },
+    } } });
+    // The schema returned exactly, bounds and all; and no MCP tool is named to the model before a program asks, by its
+    // callable key (a description may reach the request only escaped or trimmed).
+    const returned = v.parse(v.object({ output: v.object({ result: v.object({ schema: v.unknown() }) }) }), result).output.result.schema;
+
+    expect({ returned, bounded: searchCode?.inputSchema.properties.perPage, named: ['mcp_github_', 'mcp_tracker_team_'].filter((key) => captured.includes(key)) })
+      .toEqual({ returned: searchCode?.inputSchema, bounded: expect.objectContaining({ minimum: 1, maximum: 100 }), named: [] });
+  } finally {
+    await session.end();
+  }
+});
+
 /** One session and one echo server for every surface case: a session's startup and an MCP connection cost seconds
  *  each, and no case here depends on another's turn. Each case sets the script its turns answer from. */
 describe('LocalAgentSession MCP surface', () => {
@@ -252,7 +317,6 @@ describe('LocalAgentSession MCP surface', () => {
     await shared.session.send('which tools can you see?', { id: crypto.randomUUID() });
     expect(captured.native).toContain('eval');
     expect(captured.native).not.toContain('mcp_echo_echo');
-    expect(captured.prompt).toContain('mcp_echo_echo');
   });
 });
 
@@ -278,11 +342,6 @@ describe('a server that is down is named only to a turn that can reach MCP tools
     expect(told).toEqual({ task: true, planner: false });
   });
 });
-
-/** What the request's latest context declares; an earlier turn's block stays in the history it was sent in. */
-function latestDeclarations(prompt: string): string {
-  return prompt.slice(prompt.lastIndexOf('MCP and extension tools available through eval'));
-}
 
 /** Two models known by their windows: the session switches between them through its public `setModel`. */
 function sessionWithWindows(model: LanguageModel, windows: Readonly<Record<string, number>>) {
@@ -315,80 +374,3 @@ function sessionWithWindows(model: LanguageModel, windows: Readonly<Record<strin
 
   return { session, events };
 }
-
-describe('LocalAgentSession MCP admission', () => {
-  // Rank 26: the CLI admitted the catalog once, at connect, against whatever window it had then.
-  test("a model switch re-admits the catalog against the new model's window, both ways", async () => {
-    let captured = '';
-
-    const { session } = sessionWithWindows(capturingModel((request) => { captured = request.prompt; }), {
-      'local/small': 128_000, 'local/large': 4_000_000,
-    });
-
-    try {
-      await session.connectMcp(mcpServers());
-      await session.send('which tools can you see?', { id: crypto.randomUUID() });
-      expect(latestDeclarations(captured)).toContain('mcp_echo_echo');
-      expect(latestDeclarations(captured)).not.toContain('mcp_echo_huge');
-
-      await session.setModel('local/large');
-      await session.send('and now?', { id: crypto.randomUUID() });
-      expect(latestDeclarations(captured)).toContain('mcp_echo_huge');
-
-      await session.setModel('local/small');
-      await session.send('and now?', { id: crypto.randomUUID() });
-      expect(latestDeclarations(captured)).toContain('mcp_echo_echo');
-      expect(latestDeclarations(captured)).not.toContain('mcp_echo_huge');
-    } finally {
-      await session.end();
-    }
-  });
-
-  test('a tool larger than the session step allocation is deferred with its arithmetic', async () => {
-    // `huge` carries ~600KB each of description and schema against a ~113k-token step remainder;
-    // schemas are never truncated, so it defers whole.
-    let captured: CapturedRequest = { native: [], prompt: '' };
-    const { session, events } = sessionWithWindows(capturingModel((request) => { captured = request; }), { 'local/small': 128_000 });
-
-    try {
-      await session.connectMcp(mcpServers());
-      expect(session.toolNames()).toContain('mcp_echo_echo');
-      expect(session.toolNames()).not.toContain('mcp_echo_huge');
-
-      await session.send('which tools can you see?', { id: crypto.randomUUID() });
-      expect(captured.prompt).toContain('mcp_echo_echo');
-      expect(captured.prompt).not.toContain('mcp_echo_huge');
-
-      const deferrals: string[] = [];
-
-      for (const e of events) {
-        if (e.type === 'background' && e.event === 'mcp' && e.message.includes('deferred')) {
-          deferrals.push(e.message);
-        }
-      }
-
-      expect(deferrals).toHaveLength(1);
-      expect(deferrals[0]).toContain('echo');
-    } finally {
-      await session.end();
-    }
-  });
-
-  test('tools admit in (server, tool) order regardless of config map order', async () => {
-    // Admission sorts by (server, tool) name, not config key order: `zulu` is configured first and must still lose.
-    const { session } = sessionWithWindows(capturingModel(() => {}), { 'local/small': 128_000 });
-
-    try {
-      await session.connectMcp({
-        zulu: { command: 'node', args: [fixtureServer] },
-        alpha: { command: 'node', args: [fixtureServer] },
-      });
-      expect(session.toolNames().filter((name) => isMcpToolKey(name))).toEqual([
-        'mcp_alpha_echo', 'mcp_alpha_held',
-        'mcp_zulu_echo', 'mcp_zulu_held',
-      ]);
-    } finally {
-      await session.end();
-    }
-  });
-});

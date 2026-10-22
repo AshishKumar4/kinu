@@ -28,9 +28,9 @@ describe('checkedProjects', () => {
   test('follows `bun run <script>` transitively', () => {
     const projects = checkedProjects(JSON.stringify({
       scripts: {
-        check: 'bun run lint && tsc --noEmit -p packages/core',
+        check: 'bun run lint && tsrs --noEmit -p packages/core',
         lint: 'bun run test:anti-slop && oxlint',
-        'test:anti-slop': 'tsc --noEmit -p tools/oxlint/anti-slop && node x.ts',
+        'test:anti-slop': 'tsrs --noEmit -p tools/oxlint/anti-slop && node x.ts',
       },
     }));
 
@@ -39,7 +39,7 @@ describe('checkedProjects', () => {
 
   test('terminates on a cyclic script reference instead of hanging', () => {
     const projects = checkedProjects(JSON.stringify({
-      scripts: { check: 'bun run a', a: 'bun run b', b: 'bun run a && tsc --noEmit -p pkg' },
+      scripts: { check: 'bun run a', a: 'bun run b', b: 'bun run a && tsrs --noEmit -p pkg' },
     }));
 
     expect(projects).toEqual(['pkg']);
@@ -52,8 +52,8 @@ describe('checkedProjects', () => {
   test('reads each script as the shell runs it, not as a -p anywhere in the text', () => {
     const projects = checkedProjects(JSON.stringify({
       scripts: {
-        check: 'mkdir -p dist && bunx tsc --noEmit --project "packages/my pkg" \\\n  && bun run --silent lint',
-        lint: 'tsc --noEmit -p tools/lint',
+        check: 'mkdir -p dist && bunx tsrs --noEmit --project "packages/my pkg" \\\n  && bun run --silent lint',
+        lint: 'tsrs --noEmit -p tools/lint',
       },
     }));
 

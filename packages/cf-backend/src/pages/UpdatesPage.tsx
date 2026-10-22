@@ -3,17 +3,20 @@
  * A poll failing mid-run is expected: the Worker being replaced is the update working.
  */
 import { showing, detach } from "@kinu.run/core/obs";
+import { Button } from "@/components/ui/Button";
 import { Effect } from "effect";
 import { useCallback, useEffect, useState } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { ArrowUpIcon } from "@phosphor-icons/react";
 import {
   DeploySnapshotSchema, UpdateOfferSchema,
   type DeploySnapshot, type UpdateBuild, type UpdateOffer,
 } from "@kinu.run/core/deploy";
 import * as v from "valibot";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { StepRow } from "@/components/deploy/DeployStepRow";
+import { Notice } from "@/components/ui/Notice";
+import { Group } from "@/components/ui/Group";
+import { Surface } from "@/components/ui/Surface";
 
 const RUN_POLL_MS = 2000;
 
@@ -43,9 +46,9 @@ function read<Schema extends v.GenericSchema>(
 function Build({ label, build }: { label: string; build: UpdateBuild | null }) {
   return (
     <div>
-      <p className="p-eyebrow">{label}</p>
-      <p className="mt-0.5 p-row-text p-text">{build === null ? "unknown" : build.version}</p>
-      {build !== null && <p className="p-meta p-text-3">built {build.builtAt}</p>}
+      <p className="t-label">{label}</p>
+      <p className="t-body mt-px p-text">{build === null ? "unknown" : build.version}</p>
+      {build !== null && <p className="t-meta p-text-3">built {build.builtAt}</p>}
     </div>
   );
 }
@@ -108,53 +111,53 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-6 py-8">
       <div>
-        <h1 className="p-display text-2xl">Updates</h1>
-        <p className="mt-1 text-sm p-text-2">
+        <h1 className="t-page-title">Updates</h1>
+        <p className="t-body mt-1 p-text-2">
           This Kinu installs its own updates. It reads the release channel and runs the same steps
           that first put it here, with its own Cloudflare key.
         </p>
       </div>
       {err !== null && (err.includes(NOT_OWNER)
-        ? <p className="text-sm p-text-2" data-updates="not-owner">{NOT_OWNER}</p>
-        : <div className="p-notice-danger rounded-md px-3 py-2 text-xs" role="alert">{err}</div>)}
+        ? <p className="t-body p-text-2" data-updates="not-owner">{NOT_OWNER}</p>
+        : <Notice tone="danger">{err}</Notice>)}
       {offer === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
       {offer !== null && (
         <section className="space-y-4" aria-label="This deployment's build">
-          <div className="p-card space-y-4 px-5 py-4">
+          <Surface look="panel" className="space-y-4 px-5 py-4">
             <div className="flex flex-wrap items-start justify-between gap-6">
               <Build label="Running" build={offer.current} />
               <Build label="Published" build={offer.available} />
               <div>
-                <p className="p-eyebrow">Channel</p>
-                <p className="mt-0.5 p-meta p-text-3">
+                <p className="t-label">Channel</p>
+                <p className="t-meta mt-px p-text-3">
                   {offer.channelOrigin === "" ? "none" : offer.channelOrigin}
                 </p>
               </div>
             </div>
-            {offer.reason !== "" && <p className="text-sm p-text-2">{offer.reason}</p>}
-            {offer.upToDate && <p className="p-row-text p-text" data-updates="up-to-date">Up to date.</p>}
+            {offer.reason !== "" && <p className="t-body p-text-2">{offer.reason}</p>}
+            {offer.upToDate && <p className="t-body p-text" data-updates="up-to-date">Up to date.</p>}
             {offer.installable && (
-              <FilledButton onClick={apply} disabled={busy || going} className="!h-9 !px-4 !text-sm">
+              <Button variant="primary" size="md" onClick={apply} disabled={busy || going} >
                 <ArrowUpIcon size={15} /> Install {offer.available?.version ?? ""}
-              </FilledButton>
+              </Button>
             )}
-          </div>
+          </Surface>
         </section>
       )}
       {run !== null && run.steps.length > 0 && (
         <section className="space-y-2" aria-label="Update steps">
-          <h2 className="p-eyebrow">{run.state === "done" ? "What it did" : "Installing"}</h2>
+          <h2 className="t-label">{run.state === "done" ? "What it did" : "Installing"}</h2>
           {restarting !== null && (
-            <p className="p-meta p-text-3" data-updates="restarting">
+            <p className="t-meta p-text-3" data-updates="restarting">
               This deployment is restarting on the new version, so the last steps may show up late.
               The last check failed with: {restarting}
             </p>
           )}
-          <ul className="space-y-2">
+          <Group list>
             {run.steps.map((row) => <StepRow key={row.id} row={row} />)}
-          </ul>
+          </Group>
           {run.state === "done" && (
-            <p className="p-row-text p-text" data-updates="installed">
+            <p className="t-body p-text" data-updates="installed">
               Kinu {run.version} is now running.
             </p>
           )}

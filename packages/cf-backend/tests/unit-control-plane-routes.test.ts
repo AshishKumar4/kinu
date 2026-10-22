@@ -320,6 +320,8 @@ function harness(options: World = {}): Harness {
   const env: ControlRoutesEnv = {
     CREDENTIAL_ENCRYPTION_KEY: SECRET,
     CONTROL_PLANE_ADMINS: options.admins ?? OPERATOR,
+    // Bound, as on kinu.run: what the readers read was written (`analyticsOff`).
+    AGENT_METRICS: { writeDataPoint: () => undefined },
     ControlPlaneDO: namespace(() => controlPlane),
     OrchestratorAgent: namespace(workspaceStub),
     UserDO: namespace(userStub),
@@ -1008,6 +1010,16 @@ describe('reads that reach through', () => {
     expect(await bodyOf(answer)).toMatchObject({
       incidents: [{ probe: 'health', failures: 3, alertedAt: null }],
     });
+    h.close();
+  });
+
+  // Owner decision, 2026-10-21: a deployment on an account with Analytics Engine off is bound to no dataset.
+  test('metrics on a deployment bound to no dataset say that usage analytics are off, rather than naming settings', async () => {
+    const h = harness();
+    const { AGENT_METRICS: _bound, ...unbound } = h.env;
+    const answer = await control(get('/metrics?hours=24'), unbound, identity());
+
+    expect(await bodyOf(answer)).toMatchObject({ missing: ['Usage analytics are off on this deployment.'], panels: {} });
     h.close();
   });
 

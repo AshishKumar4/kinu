@@ -45,6 +45,7 @@ export function fixtureRunSources(
     rt: actor.runtime,
     backend: 'cli-local',
     executors: () => [],
+    harnessMode: () => actor.stores.config.getHarnessMode(),
     config: actor.stores.config,
     models: {
       catalog: { window: () => modelWindow(null), windowFor: async () => modelWindow(null), warm: async () => {}, acceptedMedia: () => new Set(), callsTools: () => undefined },
@@ -73,7 +74,7 @@ export function fixtureRunSources(
       runtime: { backend: 'cli-local', model: { id: profile.tier.model }, date: '2026-01-01' },
       memoryTail,
       missingCapabilities: [],
-      subordinateDelegates: () => [],
+      subagentDelegates: () => [],
       approvals: () => ({ items: [], total: 0 }),
     }),
     operation: (profile, profileInputs) => captureOperationProfile({ actor: actor.handle, profile, inputs: profileInputs, runId, turnId: null }),

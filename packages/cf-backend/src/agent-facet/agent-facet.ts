@@ -7,8 +7,8 @@ import { attemptInItsWords, flight, KinuError, renderThrownChain, settle } from 
 import {
   encodeModelMessageValues, readAgentArchivePage,
   type InspectedWork,
-  type AgentOwnInspection, type AnsweredEvolutionHelper, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
-  type NimbusSandboxFiles, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
+  type AgentOwnInspection, type AnsweredEvolutionSubagent, type JsonValue, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
+  type NimbusSandboxFiles, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubagentInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
   type SendState, DeliverySchema, type AdmittedDelivery, type Delivery, type DeliveryAnswer, type InputProducer, type OwedDelivery,
 } from '@kinu.run/core';
@@ -21,7 +21,7 @@ import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
 import type {
   AgentAnswer, AgentAnswerTexts, AgentStanding, AgentSteps, AgentRecovery, AgentSnapshot, ConversationProjection, ConversationTurnPair, EnqueueTurnResult, ProgrammaticTurn, SendLanding, TurnRequestAt,
-  DynamicContext, FactsKey, FrozenAuthority, JsonObject, PlanReview, PlanReviewResult, ReviewAnnotation, AskedQuestions,
+  DynamicContext, FactsKey, FrozenAuthority, HarnessMode, JsonObject, PlanReview, PlanReviewResult, ReviewAnnotation, AskedQuestions,
   Page, PageRequest, RunEvent, RunEventQuery, RunListEntry, RunSummary, StoredRunEvent,
   ForkConversationPlan, ForkConversationSection, ForkRowSection, ForkRows,
 } from '@kinu.run/core';
@@ -114,18 +114,18 @@ export interface AgentFacetCalls {
   drainAnswers(snapshot: AgentSnapshot, drainTurnIds: readonly string[]): Promise<Readonly<Record<string, string>>>;
   /** A retirement waits on it. */
   idle(): Promise<void>;
-  deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
+  deliverAdvice(snapshot: AgentSnapshot, subagent: AnsweredEvolutionSubagent, turnId: string): Promise<boolean>;
   frozen(snapshot: AgentSnapshot, key: FactsKey): Promise<FrozenAuthority | null>;
   /** Runs the turn's waiting model step under this call, and answers once it has ended (`StepPacer`). `dynamic`: the live
    *  block on the profile the step's pace bound, its turn's first. */
-  step(turnId: string, dynamic: DynamicContext | null): Promise<void>;
+  step(turnId: string, dynamic: DynamicContext | null, harnessMode: HarnessMode): Promise<void>;
   /** This chat's newest page, as a tab is sent it on connecting or a turn's end. */
   seed(snapshot: AgentSnapshot): Promise<ChatWindow>;
   /** One image a page of this chat named; each crosses alone, never inside a page. */
   media(snapshot: AgentSnapshot, ref: MediaRef): Promise<StoredImage | null>;
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
   messageCount(snapshot: AgentSnapshot): Promise<number>;
-  inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
+  inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubagentInspectionResult>;
   inheritedContext(snapshot: AgentSnapshot): Promise<SerializedMessage[]>;
   /** In the session codec's durable form, as `AgentWorkspace.resume`. */
   workingContext(snapshot: AgentSnapshot): Promise<readonly JsonValue[]>;
@@ -464,16 +464,16 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   /** An advisor's answer on one of this agent's own turns, judged by this isolate's lane and said here. */
-  async deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
-    return await (await this.open(snapshot).acquire()).session.advisor.sayAnswer(helper, turnId);
+  async deliverAdvice(snapshot: AgentSnapshot, subagent: AnsweredEvolutionSubagent, turnId: string): Promise<boolean> {
+    return await (await this.open(snapshot).acquire()).session.advisor.sayAnswer(subagent, turnId);
   }
 
   async idle(): Promise<void> {
     await this.held?.idle();
   }
 
-  async step(turnId: string, dynamic: DynamicContext | null): Promise<void> {
-    await this.pacer.grant(turnId, dynamic);
+  async step(turnId: string, dynamic: DynamicContext | null, harnessMode: HarnessMode): Promise<void> {
+    await this.pacer.grant(turnId, dynamic, harnessMode);
   }
 
   async seed(snapshot: AgentSnapshot): Promise<ChatWindow> {
@@ -492,7 +492,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return readAgentArchivePage(this.ctx.storage.sql, this.open(snapshot).reference().actorId, cursor, maxBytes);
   }
 
-  async inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult> {
+  async inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubagentInspectionResult> {
     return await this.open(snapshot).inspect(request);
   }
 

@@ -803,6 +803,9 @@ export interface RecordedMcpLifecycle {
   established: readonly string[];
   /** Each server `connectToServer` dialled, in order: a sign-in begun, or a dial on its own. */
   dialled: readonly string[];
+  /** Each server `connectToServer` dialled while a connect of it was still running: the vendor's two `init`s then share
+   *  one client, and the first one's handshake goes out on the second one's transport. */
+  overlapped: readonly string[];
   discovered: readonly string[];
   restored: number;
   waited: number;
@@ -813,6 +816,27 @@ const mcpServers = new Map<string, RecordedMcpServer>();
 const mcpEstablished: string[] = [];
 
 const mcpDialled: string[] = [];
+
+const mcpOverlapped: string[] = [];
+
+/** Servers a `connectToServer` is running for. */
+const mcpConnecting = new Set<string>();
+
+/** Runs one of the vendor's calls that may open a connection's client (a connect, an establish, a discover that recovers
+ *  a stale session), recording it as overlapping when another of them runs for the same server. */
+async function connectingTo<T>(id: string, connect: () => Promise<T>): Promise<T> {
+  if (mcpConnecting.has(id)) mcpOverlapped.push(id);
+  mcpConnecting.add(id);
+
+  try {
+    return await connect();
+  } finally {
+    mcpConnecting.delete(id);
+  }
+}
+
+/** The next `connectToServer`'s hold, once {@link hangNextMcpConnect} planted it. */
+let mcpConnectGate: { readonly entered: () => void; readonly released: Promise<void> } | null = null;
 
 const mcpDiscovered: string[] = [];
 
@@ -921,7 +945,20 @@ export function liveMcpFetch(id: string): McpCredentialTransport['fetch'] | null
 }
 
 export function recordedMcpLifecycle(): RecordedMcpLifecycle {
-  return { established: mcpEstablished, dialled: mcpDialled, discovered: mcpDiscovered, restored: mcpRestored, waited: mcpWaited };
+  return { established: mcpEstablished, dialled: mcpDialled, overlapped: mcpOverlapped, discovered: mcpDiscovered, restored: mcpRestored, waited: mcpWaited };
+}
+
+/**
+ * Holds the next `connectToServer` until `release`, as the vendor's `init` holds while its handshake is out: it has put
+ * a fresh client in place of the closed one, so the connection reads `closed` (ready, its client with no transport)
+ * until the connect lands (`client-BnYbNT3z.js:585-592`).
+ */
+export function hangNextMcpConnect(): McpEstablishGate {
+  const gate = Promise.withResolvers<void>();
+  const arrival = Promise.withResolvers<void>();
+  mcpConnectGate = { entered: () => { arrival.resolve(); }, released: gate.promise };
+
+  return { entered: arrival.promise, release: () => { gate.resolve(); } };
 }
 
 export interface McpEstablishGate {
@@ -1065,6 +1102,9 @@ export function resetRecordedMcp(): void {
   mcpServers.clear();
   mcpEstablished.length = 0;
   mcpDialled.length = 0;
+  mcpOverlapped.length = 0;
+  mcpConnecting.clear();
+  mcpConnectGate = null;
   mcpDiscovered.length = 0;
   mcpCallToolFailure = null;
   mcpDiscoveryFailure = null;
@@ -1271,7 +1311,7 @@ class FakeMCPClientManager {
 
   establishConnection(id: string): Promise<void> {
     mcpEstablished.push(id);
-    const dial = this.establish(id);
+    const dial = connectingTo(id, async () => this.establish(id));
     this.track(dial);
 
     return dial;
@@ -1343,6 +1383,23 @@ class FakeMCPClientManager {
     if (!connection) return { state: 'failed', error: `no registered server ${id}` };
     mcpDialled.push(id);
 
+    return await connectingTo(id, async () => this.connectedOrSigningIn(id, connection));
+  }
+
+  private async connectedOrSigningIn(id: string, connection: RecordedMcpConnection): Promise<
+    | { state: 'failed'; error: string }
+    | { state: 'authenticating'; authUrl: string; clientId?: string }
+    | { state: 'connected' }
+  > {
+    const gate = mcpConnectGate;
+
+    if (gate !== null) {
+      mcpConnectGate = null;
+      connection.client = { request: async () => { throw new SdkError(SdkErrorCode.NotConnected, 'Not connected'); }, transport: undefined };
+      gate.entered();
+      await gate.released;
+    }
+
     const provider = connection.options.transport.authProvider;
     const signIn = mcpSignInRequired.get(id) ?? pendingMcpAuthUrl;
 
@@ -1368,6 +1425,10 @@ class FakeMCPClientManager {
   /** Early return without a connection (`client-zqKcsyFa.js:1991-2001`); a probe failure lands as the
    *  connection's catch does (`:762-764`) and does not clear tools. */
   async discoverIfConnected(id: string): Promise<void> {
+    await connectingTo(id, async () => this.discovered(id));
+  }
+
+  private async discovered(id: string): Promise<void> {
     mcpDiscovered.push(id);
     const connection = this.mcpConnections[id];
 

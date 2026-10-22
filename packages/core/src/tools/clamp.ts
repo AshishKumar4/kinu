@@ -5,7 +5,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 
 import type { ToolSet } from 'ai';
-import { Effect } from 'effect';
+import { Effect, Exit } from 'effect';
 import * as v from 'valibot';
 
 import { nanoid } from '../utils/nanoid';
@@ -13,10 +13,10 @@ import { admissionBytes } from '../token-estimate';
 import { headEnd, tailStart } from '../utils/text';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
 import type { Storage } from '../types/primitives';
-import { assertJsonValue, JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
+import { assertJsonValue, JsonObjectSchema, JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { imageModelOutput, takeImages } from './image-results';
 import { imageCarrier } from '../types/tool-images';
-import { diagnostics, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
+import { diagnostics, hold, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
 import { successfulToolOutcome } from './outcome';
 
 
@@ -90,24 +90,29 @@ function clampedText(text: string, opts: ClampToolResultOptions): Effect.Effect<
   return Effect.map(files ? offload(files, text) : Effect.succeed(null), (saved) => clampedAround(text, saved, opts));
 }
 
-function clampedAround(text: string, saved: Offload | null, opts: ClampToolResultOptions): string {
-  const marker = truncationMarker(saved);
-  const room = (opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS) - marker.length - MARKER_FENCE_CHARS;
+/** `text` cut around its middle to `maxChars`, the marker where it was cut; what it omitted, counted off what was kept. */
+function cutAround(text: string, marker: string, maxChars: number) {
+  // A bound smaller than the marker keeps the marker alone: a negative room would slice from the end and keep it all.
+  const room = Math.max(0, maxChars - marker.length - MARKER_FENCE_CHARS);
   const headLen = Math.floor(room * HEAD_FRACTION);
   const head = text.slice(0, headEnd(text, headLen));
   const tail = text.slice(tailStart(text, room - headLen));
-  const clamped = `${head}\n\n${marker}\n\n${tail}`;
-  // Counted off what was kept: refusing to split a character can drop a unit.
-  const omitted = text.length - head.length - tail.length;
 
-  if (opts.budget) {
-    opts.budget.admit(clamped.length);
-    opts.budget.recordSpill({
-      producer: opts.producer ?? 'eval',
-      omitted,
-      referenced: saved !== null && 'path' in saved,
-    });
-  }
+  // Counted off what was kept: refusing to split a character can drop a unit.
+  return { clamped: `${head}\n\n${marker}\n\n${tail}`, omitted: text.length - head.length - tail.length };
+}
+
+/** A cut charged to the turn's budget: what it keeps, and the spill it left. */
+function chargedCut(chars: number, omitted: number, saved: Offload | null, opts: ClampToolResultOptions): void {
+  if (!opts.budget) return;
+  opts.budget.admit(chars);
+  opts.budget.recordSpill({ producer: opts.producer ?? 'eval', omitted, referenced: saved !== null && 'path' in saved });
+}
+
+function clampedAround(text: string, saved: Offload | null, opts: ClampToolResultOptions): string {
+  const { clamped, omitted } = cutAround(text, truncationMarker(saved), opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS);
+
+  chargedCut(clamped.length, omitted, saved, opts);
 
   return clamped;
 }
@@ -134,6 +139,71 @@ export function clampSerializedToolResult(
   }));
 }
 
+/** An eval's answer with its record of what it changed (`execution/call-effects.ts`) set aside, where it has one. */
+function setAside(producer: string | undefined, output: JsonValue | undefined) {
+  const answer = producer === 'eval' ? v.safeParse(v.looseObject({ effects: JsonValueSchema }), output) : null;
+
+  if (answer?.success !== true) return null;
+  const { effects, ...rest } = answer.output;
+
+  return { rest: v.parse(JsonObjectSchema, rest), effects };
+}
+
+/**
+ * A recorded answer within its bound: whole where it fits, else its rest cut to text beside its census and its record,
+ * never cut. The cut is made again, narrower by what it overran, until the answer as returned, the text escaped inside
+ * `result`, fits, down to the marker alone. A census and a record that overrun the bound with the marker alone are
+ * returned so, never cut, and said. It is saved once, and charged as returned.
+ */
+async function recordedAnswer(
+  recorded: { readonly rest: JsonObject; readonly effects: JsonValue }, failures: JsonValue | undefined, opts: ClampToolResultOptions,
+): Promise<JsonObject> {
+  const cap = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
+  const whole: JsonObject = { ...recorded.rest, effects: recorded.effects };
+  const wholeChars = JSON.stringify(whole).length;
+
+  if (wholeChars <= cap) {
+    opts.budget?.admit(wholeChars);
+
+    return whole;
+  }
+
+  const kept: JsonObject = failures === undefined ? { effects: recorded.effects } : { failures, effects: recorded.effects };
+  const text = JSON.stringify(recorded.rest);
+  // Saving never fails the answer: a failed save is the marker's to say (`offload`).
+  const offloaded = opts.files === undefined ? null : await hold(offload(opts.files, text));
+  const saved = offloaded !== null && Exit.isSuccess(offloaded) ? offloaded.value : null;
+  const marker = truncationMarker(saved);
+  const answered = (clamped: string): JsonObject => ({ result: clamped, ...kept });
+  // The narrowest cut keeps the marker alone (`cutAround` with no room).
+  const floor = marker.length + MARKER_FENCE_CHARS;
+  let width = Math.max(floor, cap - JSON.stringify(answered('')).length);
+  let cut = cutAround(text, marker, width);
+
+  // Each pass narrows strictly, so it ends at a fit or at the marker alone.
+  for (let over = JSON.stringify(answered(cut.clamped)).length - cap; over > 0 && width > floor; over = JSON.stringify(answered(cut.clamped)).length - cap) {
+    width = Math.max(floor, width - over);
+    cut = cutAround(text, marker, width);
+  }
+
+  const answer = answered(cut.clamped);
+  const overrun = JSON.stringify(answer).length - cap;
+
+  if (overrun > 0) diagnostics.event('clamp.record_over_bound', { producer: opts.producer ?? 'eval', cap, overrun });
+
+  chargedCut(JSON.stringify(answer).length, cut.omitted, saved, opts);
+
+  return answer;
+}
+
+/** An answer within its bound; one cut to text keeps a program's census at the top level, where it is read. */
+async function clampedAnswer(input: Parameters<typeof clampSerializedToolResult>[0], failures: JsonValue | undefined, opts: ClampToolResultOptions) {
+  const clamped = await clampSerializedToolResult(input, opts);
+  const text = v.safeParse(v.string(), clamped);
+
+  return text.success && failures !== undefined ? { result: text.output, failures } : clamped;
+}
+
 export function withClampedToolResult(
   toolEntry: ToolSet[string],
   opts: ClampToolResultOptions,
@@ -149,17 +219,14 @@ export function withClampedToolResult(
       const json = opts.images === true ? v.safeParse(JsonValueSchema, produced) : null;
       const taken = json?.success === true ? takeImages(json.output) : null;
       const output = taken?.value ?? produced;
-      const clamped = await clampSerializedToolResult({ output }, opts);
       const outcome = successfulToolOutcome(opts.producer ?? '', { output });
-      const text = v.safeParse(v.string(), clamped);
+      const answered = v.safeParse(JsonValueSchema, output);
+      const recorded = answered.success ? setAside(opts.producer, answered.output) : null;
+      const failures = outcome.failures === undefined ? undefined : v.parse(JsonValueSchema, outcome.failures);
 
-      const result = text.success && outcome.failures !== undefined
-        ? { result: text.output, failures: outcome.failures }
-        : clamped;
+      const result = recorded === null ? await clampedAnswer({ output }, failures, opts) : await recordedAnswer(recorded, failures, opts);
 
       if (taken === null || taken.images.length === 0) return result;
-
-      // An eval's failures stay at the top level, where `successfulToolOutcome` reads the program's census.
       const carrier = imageCarrier(result ?? null, taken.images);
 
       return outcome.failures === undefined ? carrier : { ...carrier, failures: outcome.failures };

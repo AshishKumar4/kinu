@@ -20,7 +20,7 @@ export function CardSlot<T>({ resource, what, onRetry, children }: {
 
   if (resource.status === "loading") {
     return (
-      <div className="flex items-center justify-center gap-2 py-4 p-meta p-text-3" data-settings-resource={what} data-resource-state="loading">
+      <div className="t-meta flex items-center justify-center gap-2 py-4 p-text-3" data-settings-resource={what} data-resource-state="loading">
         <Loader size="sm" /> Loading {what}…
       </div>
     );

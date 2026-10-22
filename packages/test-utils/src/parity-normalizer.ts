@@ -6,7 +6,7 @@ const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/g;
 
 const STEER = /\bsteer-[A-Za-z0-9_-]{12}\b/g;
 
-/** An event-log id (`evt-` and a 21-character nanoid), as a task to a subordinate is keyed. */
+/** An event-log id (`evt-` and a 21-character nanoid), as a task to a subagent is keyed. */
 const EVENT = /\bevt-[A-Za-z0-9_-]{21}\b/g;
 
 const CLOCK_KEY = /(?:At|Ms|_at|_ms|timestamp)$/;

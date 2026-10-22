@@ -197,13 +197,14 @@ export const INFRA_FAILURE_MARKER = 'INFRA FAILURE';
 /**
  * Cloudflare's own transient Durable Object failures, verbatim from its error-handling guide
  * (developers.cloudflare.com/durable-objects/best-practices/error-handling): a request that failed
- * with one never reached the code under test.
+ * with one never reached the code under test. A code update's reset ("Durable Object reset because its
+ * code was updated") is not one here: a live step runs against a version its deploy already published,
+ * and no deploy of that worker lands inside it (deploys of one environment run one at a time), so those
+ * words are the build's own reset (platform-catalog.ts do.storage.write_await_reset), not a deploy's.
  */
 export const TRANSIENT_PLATFORM_ERRORS: readonly string[] = [
   'Network connection lost',
   'Cannot resolve Durable Object due to transient issue on remote node',
-  'Durable Object reset because its code was updated',
-  "The Durable Object's code has been updated",
 ];
 
 /**

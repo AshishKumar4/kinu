@@ -8,7 +8,7 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import { JsonValueSchema, type JsonObject } from '@kinu.run/core';
+import { APP_ROUTES, connectEndedOf, JsonValueSchema, type JsonObject } from '@kinu.run/core';
 import { SCRIPTED_MODEL_KEY_ENV, SCRIPTED_MODEL_ORIGIN } from '../../packages/test-utils/src/scripted-model-spec';
 import { SCRIPTED_MCP_TOOL } from '../../scripts/scripted-mcp';
 import { SCRIPTED_MCP_OAUTH_PATH } from '../../scripts/scripted-mcp-oauth';
@@ -98,17 +98,31 @@ END`));
 
         if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + (setup.error ?? setup.stdout ?? ''));
 
-        /** Signs the OAuth server in as a person would: the authorize link (with the tiers' key), then the product's
-         *  callback as the owner. The cause it failed on, or null. */
-        const signIn = async (authUrl: string): Promise<string | null> => {
-          const authorized = await fetch(authUrl, { headers: { authorization: `Bearer ${key}` }, redirect: 'manual' });
+        /** Signs the OAuth server in as a person would from its row: a sign-in begun for a run of the page's own, the
+         *  authorize link (with the tiers' key), then the product's callback as the owner, which ends on the finish
+         *  page naming that run. The cause it failed on, or null. */
+        const signIn = async (serverId: string): Promise<string | null> => {
+          const run = crypto.randomUUID();
+
+          const begun = await fetch(`${plan.origin}/api/user/mcp/servers/${encodeURIComponent(serverId)}/connect`, {
+            method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ run }),
+          });
+
+          const beginText = await begun.text();
+          const begin = begun.ok ? v.safeParse(v.pipe(v.string(), v.parseJson(), v.object({ authUrl: v.string() })), beginText) : undefined;
+
+          if (begin?.success !== true) return `begin ${String(begun.status)}: ${causeOf(beginText)}`;
+          const authorized = await fetch(begin.output.authUrl, { headers: { authorization: `Bearer ${key}` }, redirect: 'manual' });
           const callback = authorized.headers.get('location');
 
           if (callback === null) return `authorize ${String(authorized.status)}: ${causeOf(await authorized.text())}`;
           const landed = await fetch(callback, { headers, redirect: 'manual' });
-          const settings = new URL(landed.headers.get('location') ?? 'https://unknown/');
+          const finish = new URL(landed.headers.get('location') ?? 'https://unknown/');
+          const ended = connectEndedOf(finish.searchParams);
 
-          return settings.searchParams.get('mcp_auth') === 'ok' ? null : `callback: ${causeOf(settings.search)}`;
+          return finish.pathname === APP_ROUTES.connected && ended.run === run && ended.error === null
+            ? null
+            : `callback: ${causeOf(finish.pathname + finish.search)}`;
         };
 
         /** The server's id, connected and signed in under `name`, or null with the failure counted. */
@@ -121,7 +135,8 @@ END`));
           const connection = connected.ok ? v.safeParse(v.pipe(v.string(), v.parseJson(), McpConnection), text) : undefined;
           let cause: string | null = connection?.success === true ? null : `connect ${String(connected.status)}: ${causeOf(text)}`;
 
-          if (connection?.success === true && connection.output.authUrl !== null) cause = await signIn(connection.output.authUrl);
+          // An add that answers a sign-in link waits for one; the person signs in from its row.
+          if (connection?.success === true && connection.output.authUrl !== null) cause = await signIn(connection.output.id);
 
           if (cause !== null) tallies.connect.failed(cause);
 

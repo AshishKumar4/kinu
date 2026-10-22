@@ -4,15 +4,15 @@
  */
 import { expect, test } from 'bun:test';
 import {
-  agentSql, armedWakes, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, reactivateOrchestratorHarness, wakeForDelegatedTask,
+  agentSql, armedWakes, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, hostedSubagentHarness, reactivateOrchestratorHarness, wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { abandonHarnessFibers, joinHarnessFibers, joinHarnessKeepAlives } from './helpers/agents-sdk';
 import { KINU_TIMER_JOB } from '../src/wake-jobs';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 import { wrapDatabase } from '@kinu.run/core/identity';
 
-// A helper that hired durable then task: the durable hire's report must not wait on the helper while its task hire runs.
-test("a helper waiting on its task hire gets its answer, then takes up the report its durable hire made meanwhile", async () => {
+// A subagent that hired durable then task: the durable hire's report must not wait on the subagent while its task hire runs.
+test("a subagent waiting on its task hire gets its answer, then takes up the report its durable hire made meanwhile", async () => {
   const workspace = gatewayWorkspace(stubAiBinding((run) => {
     const { messages } = requestOf(run);
     const opening = JSON.stringify(messages.filter((message) => message.role === 'user'));
@@ -31,27 +31,27 @@ test("a helper waiting on its task hire gets its answer, then takes up the repor
 
   await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
 
-  const middle = await hostedSubordinateHarness(workspace, {
+  const middle = await hostedSubagentHarness(workspace, {
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
-  // The helper's runs are in its own database.
+  // The subagent's runs are in its own database.
   const middleDone = (): boolean => (agentSql(workspace, middle.actor.handle.actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middle.actor.handle.actorId} AND type = 'run_end'`[0]?.n ?? 0) > 0;
 
   await wakeForDelegatedTask(workspace, middle.actor.handle.actorId, 'Middle task.');
 
-  await driveUntil(workspace, 'the helper\'s turn never ended', middleDone);
+  await driveUntil(workspace, 'the subagent\'s turn never ended', middleDone);
 
-  // The durable hire reported while the helper waited: the helper takes it up in a turn of its own.
+  // The durable hire reported while the subagent waited: the subagent takes it up in a turn of its own.
   const turns = (): number => agentSql(workspace, middle.actor.handle.actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middle.actor.handle.actorId} AND type = 'run_start'`[0]?.n ?? 0;
 
-  await driveUntil(workspace, 'the helper never took up the report in a turn of its own', () => turns() >= 2);
+  await driveUntil(workspace, 'the subagent never took up the report in a turn of its own', () => turns() >= 2);
   expect(turns()).toBe(2);
 });
 
-// A helper that asks its durable hire anything that waits on that hire's queue must not block the hire, which waits
+// A subagent that asks its durable hire anything that waits on that hire's queue must not block the hire, which waits
 // inside its own task hire.
 const ASKS = {
   msg: (agent: string) => ({ op: 'message', agent, message: 'Also note this.' }),
@@ -67,7 +67,7 @@ const CASES = [
 ];
 
 for (const { verb, args, notes } of CASES) {
-  test(`a helper's ${verb} to its durable hire, while that hire waits on its own task hire${notes ? ' and then reports progress' : ''}, still finishes`, async () => {
+  test(`a subagent's ${verb} to its durable hire, while that hire waits on its own task hire${notes ? ' and then reports progress' : ''}, still finishes`, async () => {
     let parked = false;
     const release = Promise.withResolvers<void>();
     // The durable hire waits on its task hire once that hire's own turn asks its model.
@@ -80,11 +80,11 @@ for (const { verb, args, notes } of CASES) {
       const second = users.map((user) => /Second: ([a-z0-9-]+)/.exec(user)?.[1]).find((name) => name !== undefined);
 
       if (second !== undefined) {
-        // Counted from its own brief: the helper's history carries the first turn's hire result.
+        // Counted from its own brief: the subagent's history carries the first turn's hire result.
         const brief = messages.map((message) => JSON.stringify(message).includes('Second: ')).lastIndexOf(true);
         const asked = messages.slice(brief).some((message) => message.role === 'tool');
 
-        // The second task reaches the helper at once; it asks only once its durable hire waits inside its own task hire.
+        // The second task reaches the subagent at once; it asks only once its durable hire waits inside its own task hire.
         if (!asked) await waitingOnLeaf.promise;
 
         return !asked ? toolCallCompletion(run, { tool: 'agents', args: args(second) }, 'call_ask') : chatCompletion(run, 'Second done.');
@@ -113,7 +113,7 @@ for (const { verb, args, notes } of CASES) {
 
     await workspace.agent.setSoul('# Purpose\n\nDo each task asked.');
 
-    const middle = await hostedSubordinateHarness(workspace, {
+    const middle = await hostedSubagentHarness(workspace, {
       name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
     });
 
@@ -125,24 +125,24 @@ for (const { verb, args, notes } of CASES) {
 
     await driveUntil(workspace, 'the durable hire never started its turn', () => parked);
 
-    const durable = sql<{ name: string }>`SELECT s.name FROM actor_subordinates s
+    const durable = sql<{ name: string }>`SELECT s.name FROM actor_subagents s
       JOIN workspace_actors a ON a.actor_id = json_extract(s.actor_reference, '$.actorId')
       WHERE s.actor_id = ${middleId} AND a.lifetime = 'durable'`[0]?.name;
 
-    if (durable === undefined) throw new Error('the helper hired no durable agent');
+    if (durable === undefined) throw new Error('the subagent hired no durable agent');
     // Queued while the durable hire's turn is still parked.
     await wakeForDelegatedTask(workspace, middleId, `Second: ${durable}`);
     release.resolve();
 
-    await driveUntil(workspace, 'the helper never ended both its turns', () => turnsEnded() >= 2);
+    await driveUntil(workspace, 'the subagent never ended both its turns', () => turnsEnded() >= 2);
     expect(turnsEnded()).toBe(2);
   });
 }
 
-test("a report its durable hire made during a helper's turn is taken up though the workspace reset before that turn ended", async () => {
+test("a report its durable hire made during a subagent's turn is taken up though the workspace reset before that turn ended", async () => {
   let takenUp = false;
 
-  // The first activation's leaf never answers: the helper's turn is still waiting on it when the reset comes.
+  // The first activation's leaf never answers: the subagent's turn is still waiting on it when the reset comes.
   const script = (leafAnswers: boolean) => async (run: RecordedGatewayRun): Promise<Response> => {
     const { messages } = requestOf(run);
     const users = messages.filter((message) => message.role === 'user').map((message) => JSON.stringify(message));
@@ -173,7 +173,7 @@ test("a report its durable hire made during a helper's turn is taken up though t
   const first = gatewayWorkspace(stubAiBinding(script(false)), world);
   await first.agent.setSoul('# Purpose\n\nDo each task asked.');
 
-  const middle = await hostedSubordinateHarness(first, {
+  const middle = await hostedSubagentHarness(first, {
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
@@ -181,7 +181,7 @@ test("a report its durable hire made during a helper's turn is taken up though t
   const middleId = middle.actor.handle.actorId;
 
   const pendingReports = (): number => sql<{ n: number }>`
-    SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ${middleId} AND variant = 'subordinate_report' AND turn_id IS NULL`[0]?.n ?? 0;
+    SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ${middleId} AND variant = 'subagent_report' AND turn_id IS NULL`[0]?.n ?? 0;
 
   await wakeForDelegatedTask(first, middleId, 'Middle task.');
 
@@ -195,13 +195,13 @@ test("a report its durable hire made during a helper's turn is taken up though t
     beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
   });
 
-  await driveUntil(second, 'the helper never took up the report after the reset', () => takenUp);
+  await driveUntil(second, 'the subagent never took up the report after the reset', () => takenUp);
   expect(takenUp).toBe(true);
 });
 
 // Review P1 (integration/0963): a hosted hirer's drain was only an in-memory debounce, so a reset right after its
 // hire's report landed left that report pending with no wake that would ever take it up.
-test("a report to an idle helper survives a reset before its drain: the durable wake takes it up", async () => {
+test("a report to an idle subagent survives a reset before its drain: the durable wake takes it up", async () => {
   let takenUp = false;
 
   const script = (run: RecordedGatewayRun): Response => {
@@ -228,7 +228,7 @@ test("a report to an idle helper survives a reset before its drain: the durable 
   const first = gatewayWorkspace(stubAiBinding(script), world);
   await first.agent.setSoul('# Purpose\n\nDo each task asked.');
 
-  const middle = await hostedSubordinateHarness(first, {
+  const middle = await hostedSubagentHarness(first, {
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
@@ -236,7 +236,7 @@ test("a report to an idle helper survives a reset before its drain: the durable 
   const middleId = middle.actor.handle.actorId;
 
   const pendingReports = (): number => sql<{ n: number }>`
-    SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ${middleId} AND variant = 'subordinate_report' AND turn_id IS NULL`[0]?.n ?? 0;
+    SELECT COUNT(*) AS n FROM agent_log WHERE actor_id = ${middleId} AND variant = 'subagent_report' AND turn_id IS NULL`[0]?.n ?? 0;
 
   await wakeForDelegatedTask(first, middleId, 'Middle task.');
   await driveUntil(first, 'the durable hire never reported', () => pendingReports() > 0);
@@ -259,5 +259,5 @@ test("a report to an idle helper survives a reset before its drain: the durable 
   await joinHarnessFibers();
   expect(pendingReports()).toBe(0);
 
-  await driveUntil(second, 'the helper never took up the report after the reset', () => takenUp);
+  await driveUntil(second, 'the subagent never took up the report after the reset', () => takenUp);
 });

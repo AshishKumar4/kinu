@@ -1,0 +1,417 @@
+diff --git a/node_modules/@cloudflare/codemode/dist/json-schema.d.ts b/dist/json-schema.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..8b09c9409386183ba598512e0e796564f44d1a77
+--- /dev/null
++++ b/dist/json-schema.d.ts
+@@ -0,0 +1,2 @@
++export { i as jsonSchemaToType } from "./json-schema-types-Cb2wClAd.js";
++export declare function sanitizeToolName(name: string): string;
+diff --git a/node_modules/@cloudflare/codemode/dist/json-schema.js b/dist/json-schema.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..737d6fee6a9e1a964ebed9c4fdba3cb5ffc2aa9d
+--- /dev/null
++++ b/dist/json-schema.js
+@@ -0,0 +1 @@
++export { n as jsonSchemaToType, a as sanitizeToolName } from "./json-schema-types-D_m9tVnI.js";
+diff --git a/node_modules/@cloudflare/codemode/dist/normalize.d.ts b/dist/normalize.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..3fa4f330e244ad8314e30cf1a5d76ae46adf8c78
+--- /dev/null
++++ b/dist/normalize.d.ts
+@@ -0,0 +1 @@
++export declare function normalizeCode(code: string): string;
+diff --git a/node_modules/@cloudflare/codemode/dist/normalize.js b/dist/normalize.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..dcf795c5e4e6b6bde56e983e3eef08795fadb344
+--- /dev/null
++++ b/dist/normalize.js
+@@ -0,0 +1 @@
++export { s as normalizeCode } from "./json-schema-types-D_m9tVnI.js";
+diff --git a/package.json b/package.json
+index 03bab304d0f29fecd3a726232774b4c3c617df0f..a38bddc7a71dc84235b10b88344e80ebde4d8b4a 100644
+--- a/package.json
++++ b/package.json
+@@ -48,6 +48,21 @@
+       "import": "./dist/index.js",
+       "require": "./dist/index.js"
+     },
++    "./discovery": {
++      "types": "./dist/discovery.d.ts",
++      "import": "./dist/discovery.js",
++      "require": "./dist/discovery.js"
++    },
++    "./normalize": {
++      "types": "./dist/normalize.d.ts",
++      "import": "./dist/normalize.js",
++      "require": "./dist/normalize.js"
++    },
++    "./json-schema": {
++      "types": "./dist/json-schema.d.ts",
++      "import": "./dist/json-schema.js",
++      "require": "./dist/json-schema.js"
++    },
+     "./ai": {
+       "types": "./dist/ai.d.ts",
+       "import": "./dist/ai.js",
+diff --git a/dist/discovery.js b/dist/discovery.js
+new file mode 100644
+index 0000000000000000000000000000000000000000..87dd9004ae3f06343c7b94a6a1792163ed32c4fe
+--- /dev/null
++++ b/dist/discovery.js
+@@ -0,0 +1,168 @@
++import { a as sanitizeToolName, t as generateTypesFromJsonSchema } from "./json-schema-types-D_m9tVnI.js";
++//#region src/connectors/search.ts
++const SEARCH_RESULT_LIMIT = 50;
++const FIELD_WEIGHTS = {
++	path: 12,
++	connector: 8,
++	method: 10,
++	description: 5
++};
++function normalizeSearchText(value) {
++	return value.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_./:-]+/g, " ").toLowerCase().trim();
++}
++function tokenize(value) {
++	return normalizeSearchText(value).split(/[^a-z0-9]+/).map((t) => t.trim()).filter(Boolean);
++}
++function prepareField(value) {
++	return {
++		raw: normalizeSearchText(value ?? ""),
++		tokens: tokenize(value ?? "")
++	};
++}
++function scoreField(query, queryTokens, field, weight) {
++	if (field.raw.length === 0) return {
++		score: 0,
++		matchedTokens: /* @__PURE__ */ new Set(),
++		exactPhrase: false
++	};
++	let score = 0;
++	const matchedTokens = /* @__PURE__ */ new Set();
++	const exactPhrase = query.length > 0 && field.raw.includes(query);
++	if (query.length > 0) {
++		if (field.raw === query) score += weight * 14;
++		else if (field.raw.startsWith(query)) score += weight * 9;
++		else if (exactPhrase) score += weight * 6;
++	}
++	for (const token of queryTokens) if (field.tokens.includes(token)) {
++		score += weight * 4;
++		matchedTokens.add(token);
++	} else if (field.tokens.some((c) => c.startsWith(token) || token.startsWith(c))) {
++		score += weight * 2;
++		matchedTokens.add(token);
++	} else if (field.raw.includes(token)) {
++		score += weight;
++		matchedTokens.add(token);
++	}
++	return {
++		score,
++		matchedTokens,
++		exactPhrase
++	};
++}
++function scoreMatch(item, query) {
++	const normalizedQuery = normalizeSearchText(query);
++	const queryTokens = tokenize(query);
++	if (normalizedQuery.length === 0 || queryTokens.length === 0) return null;
++	const fields = [
++		scoreField(normalizedQuery, queryTokens, prepareField(item.path), FIELD_WEIGHTS.path),
++		scoreField(normalizedQuery, queryTokens, prepareField(item.connector), FIELD_WEIGHTS.connector),
++		scoreField(normalizedQuery, queryTokens, prepareField(item.method), FIELD_WEIGHTS.method),
++		scoreField(normalizedQuery, queryTokens, prepareField(item.description), FIELD_WEIGHTS.description)
++	];
++	const matchedTokens = /* @__PURE__ */ new Set();
++	let score = 0;
++	let exactPhrase = false;
++	for (const field of fields) {
++		score += field.score;
++		exactPhrase ||= field.exactPhrase;
++		for (const t of field.matchedTokens) matchedTokens.add(t);
++	}
++	if (matchedTokens.size === 0) return null;
++	const coverage = matchedTokens.size / queryTokens.length;
++	if (coverage < (queryTokens.length <= 2 ? 1 : .6) && !exactPhrase) return null;
++	if (coverage === 1) score += 25;
++	else score += Math.round(coverage * 10);
++	const pathTokens = tokenize(item.path);
++	const methodTokens = tokenize(item.method);
++	if (pathTokens[0] === queryTokens[0] || methodTokens[0] === queryTokens[0]) score += 8;
++	if (normalizeSearchText(item.path) === normalizedQuery || normalizeSearchText(item.method) === normalizedQuery) score += 20;
++	return {
++		path: item.path,
++		connector: item.connector,
++		method: item.method,
++		description: item.description,
++		...item.requiresApproval ? { requiresApproval: true } : {},
++		kind: item.kind,
++		score
++	};
++}
++function searchConnectors(query, descriptions, snippets) {
++	const items = [];
++	for (const desc of descriptions) for (const [methodName, descriptor] of Object.entries(desc.descriptors)) items.push({
++		path: `${desc.name}.${methodName}`,
++		connector: desc.name,
++		method: methodName,
++		description: descriptor?.description,
++		...desc.annotations?.[methodName]?.requiresApproval ? { requiresApproval: true } : {},
++		kind: "method"
++	});
++	if (snippets) for (const snippet of snippets) items.push({
++		path: snippet.name,
++		connector: "snippet",
++		method: snippet.name,
++		description: snippet.description,
++		kind: "snippet"
++	});
++	const ranked = items.map((item) => scoreMatch(item, query)).filter((r) => r !== null).sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
++	const total = ranked.length;
++	return {
++		results: ranked.slice(0, SEARCH_RESULT_LIMIT),
++		total,
++		truncated: total > SEARCH_RESULT_LIMIT
++	};
++}
++//#endregion
++//#region src/connectors/describe.ts
++/**
++* Connector and snippet docs rendering — derives TypeScript documentation from
++* connector descriptors on demand. Also renders snippet source.
++*/
++function renderConnectorTypes(connectorName, instructions, descriptors) {
++	return [instructions, generateTypesFromJsonSchema(descriptors).replace("declare const codemode", `declare const ${sanitizeToolName(connectorName)}`)].filter(Boolean).join("\n\n");
++}
++function renderMethodTypes(methodName, descriptors) {
++	const descriptor = descriptors[methodName];
++	if (!descriptor) return "";
++	const generated = generateTypesFromJsonSchema({ [methodName]: descriptor });
++	return generated.slice(0, generated.indexOf("declare const codemode")).trim();
++}
++function describeTarget(target, descriptions, snippets) {
++	if (snippets) {
++		const snippet = snippets.find((s) => s.name === target);
++		if (snippet) {
++			const parts = [snippet.description];
++			parts.push(`\`\`\`ts\n${snippet.code}\n\`\`\``);
++			return {
++				path: snippet.name,
++				description: snippet.description,
++				types: parts.join("\n\n"),
++				kind: "snippet"
++			};
++		}
++	}
++	const [maybeConnector, maybeMethod] = target.includes(".") ? target.split(".", 2) : [target, void 0];
++	const connector = descriptions.find((d) => d.name === maybeConnector);
++	if (connector && !maybeMethod) return {
++		path: connector.name,
++		description: connector.instructions,
++		types: renderConnectorTypes(connector.name, connector.instructions, connector.descriptors),
++		kind: "connector"
++	};
++	const candidates = connector ? [connector] : descriptions;
++	const methodName = maybeMethod ?? target;
++	for (const candidate of candidates) if (candidate.descriptors[methodName]) return {
++		path: `${candidate.name}.${methodName}`,
++		description: candidate.descriptors[methodName]?.description,
++		...candidate.annotations?.[methodName]?.requiresApproval ? { requiresApproval: true } : {},
++		types: renderMethodTypes(methodName, candidate.descriptors),
++		kind: "method"
++	};
++	return {
++		path: target,
++		description: void 0,
++		types: `"${target}" not found.`,
++		kind: "method"
++	};
++}
++//#endregion
++export { searchConnectors, describeTarget };
+diff --git a/dist/discovery.d.ts b/dist/discovery.d.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..789f6ad87be7944b101dc925eb75bd6c080e3f0c
+--- /dev/null
++++ b/dist/discovery.d.ts
+@@ -0,0 +1,4 @@
++import type { ConnectorDescription, SearchOutput, DescribeOutput, Snippet } from "./index.js";
++export type { ConnectorDescription, SearchOutput, DescribeOutput } from "./index.js";
++export declare function searchConnectors(query: string, descriptions: ConnectorDescription[], snippets?: Snippet[]): SearchOutput;
++export declare function describeTarget(target: string, descriptions: ConnectorDescription[], snippets?: Snippet[]): DescribeOutput;
+diff --git a/dist/index.js b/dist/index.js
+index 170f2bf6ea1620301935ace18481cbee11e9b622..c237a4760d545c42c5d111128c7db6b74e83df58 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1288,172 +1288,7 @@
+ 	return current;
+ }
+ //#endregion
+-//#region src/connectors/search.ts
+-const SEARCH_RESULT_LIMIT = 50;
+-const FIELD_WEIGHTS = {
+-	path: 12,
+-	connector: 8,
+-	method: 10,
+-	description: 5
+-};
+-function normalizeSearchText(value) {
+-	return value.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_./:-]+/g, " ").toLowerCase().trim();
+-}
+-function tokenize(value) {
+-	return normalizeSearchText(value).split(/[^a-z0-9]+/).map((t) => t.trim()).filter(Boolean);
+-}
+-function prepareField(value) {
+-	return {
+-		raw: normalizeSearchText(value ?? ""),
+-		tokens: tokenize(value ?? "")
+-	};
+-}
+-function scoreField(query, queryTokens, field, weight) {
+-	if (field.raw.length === 0) return {
+-		score: 0,
+-		matchedTokens: /* @__PURE__ */ new Set(),
+-		exactPhrase: false
+-	};
+-	let score = 0;
+-	const matchedTokens = /* @__PURE__ */ new Set();
+-	const exactPhrase = query.length > 0 && field.raw.includes(query);
+-	if (query.length > 0) {
+-		if (field.raw === query) score += weight * 14;
+-		else if (field.raw.startsWith(query)) score += weight * 9;
+-		else if (exactPhrase) score += weight * 6;
+-	}
+-	for (const token of queryTokens) if (field.tokens.includes(token)) {
+-		score += weight * 4;
+-		matchedTokens.add(token);
+-	} else if (field.tokens.some((c) => c.startsWith(token) || token.startsWith(c))) {
+-		score += weight * 2;
+-		matchedTokens.add(token);
+-	} else if (field.raw.includes(token)) {
+-		score += weight;
+-		matchedTokens.add(token);
+-	}
+-	return {
+-		score,
+-		matchedTokens,
+-		exactPhrase
+-	};
+-}
+-function scoreMatch(item, query) {
+-	const normalizedQuery = normalizeSearchText(query);
+-	const queryTokens = tokenize(query);
+-	if (normalizedQuery.length === 0 || queryTokens.length === 0) return null;
+-	const fields = [
+-		scoreField(normalizedQuery, queryTokens, prepareField(item.path), FIELD_WEIGHTS.path),
+-		scoreField(normalizedQuery, queryTokens, prepareField(item.connector), FIELD_WEIGHTS.connector),
+-		scoreField(normalizedQuery, queryTokens, prepareField(item.method), FIELD_WEIGHTS.method),
+-		scoreField(normalizedQuery, queryTokens, prepareField(item.description), FIELD_WEIGHTS.description)
+-	];
+-	const matchedTokens = /* @__PURE__ */ new Set();
+-	let score = 0;
+-	let exactPhrase = false;
+-	for (const field of fields) {
+-		score += field.score;
+-		exactPhrase ||= field.exactPhrase;
+-		for (const t of field.matchedTokens) matchedTokens.add(t);
+-	}
+-	if (matchedTokens.size === 0) return null;
+-	const coverage = matchedTokens.size / queryTokens.length;
+-	if (coverage < (queryTokens.length <= 2 ? 1 : .6) && !exactPhrase) return null;
+-	if (coverage === 1) score += 25;
+-	else score += Math.round(coverage * 10);
+-	const pathTokens = tokenize(item.path);
+-	const methodTokens = tokenize(item.method);
+-	if (pathTokens[0] === queryTokens[0] || methodTokens[0] === queryTokens[0]) score += 8;
+-	if (normalizeSearchText(item.path) === normalizedQuery || normalizeSearchText(item.method) === normalizedQuery) score += 20;
+-	return {
+-		path: item.path,
+-		connector: item.connector,
+-		method: item.method,
+-		description: item.description,
+-		...item.requiresApproval ? { requiresApproval: true } : {},
+-		kind: item.kind,
+-		score
+-	};
+-}
+-function searchConnectors(query, descriptions, snippets) {
+-	const items = [];
+-	for (const desc of descriptions) for (const [methodName, descriptor] of Object.entries(desc.descriptors)) items.push({
+-		path: `${desc.name}.${methodName}`,
+-		connector: desc.name,
+-		method: methodName,
+-		description: descriptor?.description,
+-		...desc.annotations?.[methodName]?.requiresApproval ? { requiresApproval: true } : {},
+-		kind: "method"
+-	});
+-	if (snippets) for (const snippet of snippets) items.push({
+-		path: snippet.name,
+-		connector: "snippet",
+-		method: snippet.name,
+-		description: snippet.description,
+-		kind: "snippet"
+-	});
+-	const ranked = items.map((item) => scoreMatch(item, query)).filter((r) => r !== null).sort((a, b) => b.score - a.score || a.path.localeCompare(b.path));
+-	const total = ranked.length;
+-	return {
+-		results: ranked.slice(0, SEARCH_RESULT_LIMIT),
+-		total,
+-		truncated: total > SEARCH_RESULT_LIMIT
+-	};
+-}
+-//#endregion
+-//#region src/connectors/describe.ts
+-/**
+-* Connector and snippet docs rendering — derives TypeScript documentation from
+-* connector descriptors on demand. Also renders snippet source.
+-*/
+-function renderConnectorTypes(connectorName, instructions, descriptors) {
+-	return [instructions, generateTypesFromJsonSchema(descriptors).replace("declare const codemode", `declare const ${sanitizeToolName(connectorName)}`)].filter(Boolean).join("\n\n");
+-}
+-function renderMethodTypes(methodName, descriptors) {
+-	const descriptor = descriptors[methodName];
+-	if (!descriptor) return "";
+-	const generated = generateTypesFromJsonSchema({ [methodName]: descriptor });
+-	return generated.slice(0, generated.indexOf("declare const codemode")).trim();
+-}
+-function describeTarget(target, descriptions, snippets) {
+-	if (snippets) {
+-		const snippet = snippets.find((s) => s.name === target);
+-		if (snippet) {
+-			const parts = [snippet.description];
+-			parts.push(`\`\`\`ts\n${snippet.code}\n\`\`\``);
+-			return {
+-				path: snippet.name,
+-				description: snippet.description,
+-				types: parts.join("\n\n"),
+-				kind: "snippet"
+-			};
+-		}
+-	}
+-	const [maybeConnector, maybeMethod] = target.includes(".") ? target.split(".", 2) : [target, void 0];
+-	const connector = descriptions.find((d) => d.name === maybeConnector);
+-	if (connector && !maybeMethod) return {
+-		path: connector.name,
+-		description: connector.instructions,
+-		types: renderConnectorTypes(connector.name, connector.instructions, connector.descriptors),
+-		kind: "connector"
+-	};
+-	const candidates = connector ? [connector] : descriptions;
+-	const methodName = maybeMethod ?? target;
+-	for (const candidate of candidates) if (candidate.descriptors[methodName]) return {
+-		path: `${candidate.name}.${methodName}`,
+-		description: candidate.descriptors[methodName]?.description,
+-		...candidate.annotations?.[methodName]?.requiresApproval ? { requiresApproval: true } : {},
+-		types: renderMethodTypes(methodName, candidate.descriptors),
+-		kind: "method"
+-	};
+-	return {
+-		path: target,
+-		description: void 0,
+-		types: `"${target}" not found.`,
+-		kind: "method"
+-	};
+-}
+-//#endregion
++import { searchConnectors, describeTarget } from "./discovery.js";
+ //#region src/proxy-tool.ts
+ /**
+ * Model-facing proxy tool.

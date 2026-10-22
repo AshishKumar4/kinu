@@ -3,17 +3,18 @@
  * and watches, its slates, its layout and soul), what it needs of yours and what it asks you before acting; and Install.
  */
 import { useEffect, useState, type ReactNode } from "react";
+import { Button, buttonClass } from "@/components/ui/Button";
+import { Page } from "@/components/ui/PageHeader";
 import { Link, useParams } from "react-router-dom";
 import { Effect } from "effect";
-import { Loader } from "@cloudflare/kumo";
-import { ArrowsClockwiseIcon, CaretRightIcon, ClockIcon, HandPalmIcon, HouseIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
+import { Loader } from "@/components/ui/Loader";
+import { ClockIcon, HandPalmIcon, HouseIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, mcpPresetById, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Status } from "@/components/ui/Status";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { presetBrand } from "@/components/plugins/McpPresetCards";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { KindBadge, Maker, kinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { InstallDialog } from "@/components/explore/InstallDialog";
@@ -22,6 +23,7 @@ import { readBlueprint, starBlueprint, type BlueprintPage, type ExploreNeed, typ
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 import { useGallerySignedIn } from "@/hooks/use-gallery-signed-in";
 import { hereAsking, signInAndReturn } from "@/lib/sign-in";
+import { Surface } from "@/components/ui/Surface";
 
 const ago = (at: number) => {
   const days = Math.round((Date.now() - at) / 864e5);
@@ -32,7 +34,7 @@ const ago = (at: number) => {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-3">
-      <h2 className="p-eyebrow">{title}</h2>
+      <h2 className="t-label">{title}</h2>
       {children}
     </section>
   );
@@ -41,13 +43,13 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function Row({ icon, title, meta, children }: { icon: ReactNode; title: string; meta?: ReactNode; children?: ReactNode }) {
   return (
     <li className="flex items-start gap-3 px-4 py-3">
-      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-neutral-tint)] p-text-2">{icon}</span>
+      <Surface look="wash" as="span" className="mt-px flex size-7 shrink-0 items-center justify-center p-text-2">{icon}</Surface>
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-baseline gap-x-2">
-          <span className="p-row-text font-medium p-text">{title}</span>
-          {meta !== undefined && <span className="p-meta p-text-3">{meta}</span>}
+          <span className="t-item p-text">{title}</span>
+          {meta !== undefined && <span className="t-meta p-text-3">{meta}</span>}
         </span>
-        {children !== undefined && <span className="block p-meta p-text-2">{children}</span>}
+        {children !== undefined && <span className="t-meta block p-text-2">{children}</span>}
       </span>
     </li>
   );
@@ -61,17 +63,17 @@ function NeedRow({ need, connected }: { need: ExploreNeed; connected: boolean })
 
   return (
     <li className="flex items-start gap-3 px-4 py-3" data-blueprint-need={need.connection ?? need.secret}>
-      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-[var(--c-neutral-tint)]">
+      <Surface look="wash" as="span" className="mt-px flex size-7 shrink-0 items-center justify-center">
         {brand !== undefined ? <BrandMark brand={brand} size={14} bare /> : <KeyIcon size={14} className="p-text-2" />}
-      </span>
+      </Surface>
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-x-2">
-          <span className="p-row-text font-medium p-text">{name}</span>
-          <span className="p-meta p-text-3">{need.access === "read" ? "to read" : "to read and write"}</span>
+          <span className="t-item p-text">{name}</span>
+          <span className="t-meta p-text-3">{need.access === "read" ? "to read" : "to read and write"}</span>
         </span>
-        <span className="block p-meta p-text-2">{need.why}</span>
+        <span className="t-meta block p-text-2">{need.why}</span>
       </span>
-      {connected ? <Status tone="success">Connected</Status> : <span className="shrink-0 p-meta p-text-3">At install</span>}
+      {connected ? <Status tone="success">Connected</Status> : <span className="t-meta shrink-0 p-text-3">At install</span>}
     </li>
   );
 }
@@ -92,18 +94,18 @@ function BlueprintActions({ workspace, onInstall }: { workspace: WorkspaceCard; 
     showing(setFailure),
   );
 
+  // The page's header actions: Star, then the one primary.
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2">
-      {installed
-        ? <Link to={APP_ROUTES.home} className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-[var(--c-accent)] px-3 text-[13px] font-semibold text-[var(--c-accent-on)]" data-blueprint-open><HouseIcon size={14} />Open on Home</Link>
-        : <FilledButton onClick={signedIn ? onInstall : () => signInAndReturn(hereAsking("install"))} data-blueprint-install><DownloadSimpleIcon size={14} />Install</FilledButton>}
-      <button type="button" onClick={() => detach(signedIn ? toggle(!star.on) : Effect.sync(() => signInAndReturn()))} aria-pressed={star.on} data-blueprint-star
-        className={`inline-flex h-8 items-center gap-1.5 rounded-lg border p-border px-3 text-[13px] transition-colors hover:p-text ${star.on ? "p-text" : "p-text-2"}`}>
-        <StarIcon size={14} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent" : undefined} />
+    <>
+      {failure !== null && <span role="alert" className="t-meta max-w-64 truncate p-danger" title={failure}>{failure}</span>}
+      <Button onClick={() => detach(signedIn ? toggle(!star.on) : Effect.sync(() => signInAndReturn()))} aria-pressed={star.on} data-blueprint-star>
+        <StarIcon size={14} weight={star.on ? "fill" : "regular"} className={star.on ? "p-accent-fg" : undefined} />
         {star.on ? "Starred" : "Star"}<span className="tabular-nums p-text-3">{star.count.toLocaleString("en-US")}</span>
-      </button>
-      {failure !== null && <span className="w-full text-xs p-danger">{failure}</span>}
-    </div>
+      </Button>
+      {installed
+        ? <Link to={APP_ROUTES.home} className={buttonClass({ variant: "primary" })} data-blueprint-open><HouseIcon size={14} />Open on Home</Link>
+        : <Button variant="primary" onClick={signedIn ? onInstall : () => signInAndReturn(hereAsking("install"))} data-blueprint-install><DownloadSimpleIcon size={14} />Install</Button>}
+    </>
   );
 }
 
@@ -145,79 +147,67 @@ function Blueprint({ page, connected }: { page: BlueprintPage; connected: (prese
   const { workspace, inside } = page;
 
   return (
-    <div className="h-full overflow-y-auto" data-blueprint-page={workspace.id}>
-      <div className="mx-auto w-full max-w-[1080px] px-4 pb-16 pt-5 sm:px-8 sm:pt-7">
-        <nav className="flex items-center gap-1 p-meta p-text-3" aria-label="Breadcrumb">
-          <Link to="/explore" className="hover:p-text">Explore</Link><CaretRightIcon size={10} />
-          <Link to="/explore?kind=workspace" className="hover:p-text">Workspaces</Link>
-        </nav>
-
-        <div className="mt-4 grid gap-6 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-          <div className="relative aspect-[16/10] overflow-hidden rounded-[18px] border p-border p-recessed">
-            {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
-          </div>
-          <div className="flex min-w-0 flex-col gap-3">
-            <span className="flex flex-wrap items-center gap-2"><KindBadge kind="workspace" /><span className="p-meta p-text-3">{CATEGORY_WORDS[workspace.category]}</span></span>
-            <h1 className="p-display text-[30px] leading-tight p-text">{workspace.title}</h1>
-            <p className="p-row-text p-text-2">{workspace.line}</p>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 p-meta p-text-3">
-              <Maker maker={workspace.maker} size={20} />
-              <span className="inline-flex items-center gap-1"><DownloadSimpleIcon size={13} />{workspace.installs.toLocaleString("en-US")} {workspace.installs === 1 ? "install" : "installs"}</span>
-            </div>
-            <BlueprintActions workspace={workspace} onInstall={() => setInstalling(true)} />
-            <p className="mt-3 flex items-start gap-2 rounded-xl bg-[var(--c-neutral-tint)] px-3 py-2.5 p-meta p-text-2">
-              <ArrowsClockwiseIcon size={13} className="mt-0.5 shrink-0" />
-              {`${workspace.maker.kinu ? "Kept by Kinu. " : ""}Version ${page.version}, updated ${ago(page.updatedAt)}. Installing makes a workspace of your own: change anything in it, and later versions leave it as it is.`}
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-10 grid gap-10 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-          <div className="space-y-8">
-            <Section title="What it does">
-              <div className="grid gap-3 sm:grid-cols-2">
-                {page.about.map((item) => (
-                  <div key={item.title} className="rounded-[14px] border p-border p-surface px-4 py-3">
-                    <div className="p-row-text font-medium p-text">{item.title}</div>
-                    <div className="mt-1 p-meta p-text-2">{item.body}</div>
-                  </div>
-                ))}
-              </div>
-            </Section>
-
-            <Section title="What a new workspace holds">
-              <ul className="divide-y divide-[var(--c-border)] overflow-hidden rounded-[14px] border p-border p-surface">
-                {inside.agents.map((agent) => <Row key={agent.name} icon={<RobotIcon size={15} />} title={agent.name} meta="agent">{agent.about}</Row>)}
-                {inside.automations.map((automation) => <Row key={automation.label} icon={<ClockIcon size={15} />} title={automation.label} meta={automation.when}>{automation.does}</Row>)}
-                {inside.slates.map((slate) => <Row key={slate.title} icon={<AppWindowIcon size={15} />} title={slate.title} meta="slate">{slate.about}</Row>)}
-                <Row icon={<LayoutIcon size={15} />} title={inside.layout === "focus" ? "Focus layout" : "Workbench layout"} meta="layout">
-                  {inside.layout === "focus" ? "Its chat alone; its agents, tabs and inspector a click away." : "Chats as tabs, beside the inspector."}
-                </Row>
-              </ul>
-              <button type="button" onClick={() => setSoul((shown) => !shown)} aria-expanded={soul} className="p-meta p-accent hover:underline">{soul ? "Hide its soul" : "Read its soul"}</button>
-              {soul && <pre className="max-h-64 overflow-auto rounded-[14px] border p-border p-recessed p-4 p-t-code whitespace-pre-wrap p-text-2" data-blueprint-soul>{inside.soul}</pre>}
-            </Section>
-          </div>
-
-          <div className="space-y-8">
-            <Section title="What it needs of yours">
-              <ul className="divide-y divide-[var(--c-border)] overflow-hidden rounded-[14px] border p-border p-surface">
-                {workspace.needs.map((need) => <NeedRow key={`${need.connection ?? ""}${need.secret ?? ""}`} need={need} connected={has(need.connection)} />)}
-                {workspace.needs.length === 0 && <li className="px-4 py-3 p-meta p-text-3">Nothing: it works with what any workspace has.</li>}
-              </ul>
-            </Section>
-            <Section title="It asks you first">
-              <ul className="space-y-2">
-                {page.asks.map((ask) => (
-                  <li key={ask} className="flex items-start gap-2.5 p-row-text p-text-2"><HandPalmIcon size={14} className="mt-0.5 shrink-0 p-accent" />{ask}</li>
-                ))}
-              </ul>
-              <p className="p-meta p-text-3">Each is a card in Needs you. Allow one for good from its card, and take it back in Settings.</p>
-            </Section>
+    <Page back={{ to: "/explore?kind=workspace", label: "Back to Explore" }} icon={null} title={workspace.title} data-blueprint-page={workspace.id}
+      actions={<BlueprintActions workspace={workspace} onInstall={() => setInstalling(true)} />}>
+      <div className="grid gap-6 lg:grid-cols-[var(--layout-detail)]">
+        <Surface look="well" className="relative aspect-16/10 overflow-hidden border p-border">
+          {workspace.picture !== null && <img src={kinuBlueprintPicture(workspace.picture)} alt={`${workspace.title} at work`} className="absolute inset-0 size-full object-cover object-left-top" />}
+        </Surface>
+        <div className="flex min-w-0 flex-col gap-3">
+          <span className="flex flex-wrap items-center gap-2"><KindBadge kind="workspace" /><span className="t-meta p-text-3">{CATEGORY_WORDS[workspace.category]}</span></span>
+          <p className="t-body p-text-2">{workspace.line}</p>
+          <div className="t-meta flex flex-wrap items-center gap-x-4 gap-y-1 p-text-3">
+            <Maker maker={workspace.maker} size={20} />
+            <span className="inline-flex items-center gap-1"><DownloadSimpleIcon size={13} />{workspace.installs.toLocaleString("en-US")} {workspace.installs === 1 ? "install" : "installs"}</span>
+            <span className="tabular-nums">Version {page.version} · updated {ago(page.updatedAt)}</span>
           </div>
         </div>
       </div>
+
+      <div className="grid gap-12 lg:grid-cols-[var(--layout-detail)]">
+        <div className="space-y-8">
+          <Section title="What it does">
+            <div className="grid gap-3 sm:grid-cols-2">
+              {page.about.map((item) => (
+                <Surface look="panel" className="px-4 py-3" key={item.title}>
+                  <div className="t-item p-text">{item.title}</div>
+                  <div className="t-meta mt-1 p-text-2">{item.body}</div>
+                </Surface>
+              ))}
+            </div>
+          </Section>
+
+          <Section title="What a new workspace holds">
+            <Surface look="panel" as="ul" className="p-rows-ruled overflow-hidden">
+              {inside.agents.map((agent) => <Row key={agent.name} icon={<RobotIcon size={15} />} title={agent.name} meta="agent">{agent.about}</Row>)}
+              {inside.automations.map((automation) => <Row key={automation.label} icon={<ClockIcon size={15} />} title={automation.label} meta={automation.when}>{automation.does}</Row>)}
+              {inside.slates.map((slate) => <Row key={slate.title} icon={<AppWindowIcon size={15} />} title={slate.title} meta="slate">{slate.about}</Row>)}
+              <Row icon={<LayoutIcon size={15} />} title={inside.layout === "focus" ? "Focus layout" : "Workbench layout"} meta="layout">
+                {inside.layout === "focus" ? "Its chat alone; its agents, tabs and inspector a click away." : "Chats as tabs, beside the inspector."}
+              </Row>
+            </Surface>
+            <Button variant="ghost" size="sm" onClick={() => setSoul((shown) => !shown)} aria-expanded={soul}>{soul ? "Hide its soul" : "Read its soul"}</Button>
+            {soul && <Surface look="well" as="pre" className="t-code max-h-64 overflow-auto border p-border p-4 whitespace-pre-wrap p-text-2" data-blueprint-soul>{inside.soul}</Surface>}
+          </Section>
+        </div>
+
+        <div className="space-y-8">
+          <Section title="What it needs of yours">
+            <Surface look="panel" as="ul" className="p-rows-ruled overflow-hidden">
+              {workspace.needs.map((need) => <NeedRow key={`${need.connection ?? ""}${need.secret ?? ""}`} need={need} connected={has(need.connection)} />)}
+              {workspace.needs.length === 0 && <li className="t-meta px-4 py-3 p-text-3">Nothing: it works with what any workspace has.</li>}
+            </Surface>
+          </Section>
+          <Section title="It asks you first">
+            <ul className="space-y-2">
+              {page.asks.map((ask) => (
+                <li key={ask} className="t-body flex items-start gap-3 p-text-2"><HandPalmIcon size={14} className="mt-px shrink-0 p-accent-fg" />{ask}</li>
+              ))}
+            </ul>
+          </Section>
+        </div>
+      </div>
       {installing && <InstallDialog page={page} connected={has} onClose={() => setInstalling(false)} />}
-    </div>
+    </Page>
   );
 }

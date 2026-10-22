@@ -284,7 +284,7 @@ function rootLane(run: HireRun, body: OutboundBody, results: readonly string[]):
 
   return toolCallBody(model, 'call_hire_1', 'agents', {
     op: 'hire',
-    // `nest-park`'s middle helper is durable: the owner dismisses it while it waits on its own task hire.
+    // `nest-park`'s middle subagent is durable: the owner dismisses it while it waits on its own task hire.
     lifetime: run.childScript === 'nest-park' ? 'durable' : 'task',
     role: 'auditor',
     message: run.childScript === 'answer' || run.childScript === 'throw' || run.childScript === 'park' ? HIRE_MISSION : NEST_MISSION,
@@ -328,14 +328,16 @@ async function durableLane(run: HireRun, body: OutboundBody, results: readonly s
 async function childLane(run: HireRun, body: OutboundBody, results: readonly string[]): Promise<Response> {
   const model = body.model ?? HIRE_CHILD_MODEL;
 
-  // `chain`: every helper hires one of its own, to the depth cap; the others nest one level.
+  // `chain`: every subagent hires one of its own, to the depth cap; the others nest one level.
   if (run.childScript !== 'answer' && run.childScript !== 'throw' && run.childScript !== 'park' && allUsers(body).includes(NEST_MISSION)) {
     if (onReport(body)) return textBody(model, `${NEST_RELAY} ${lastUser(body)}`.slice(0, 600));
 
-    // At the depth cap `hire` is not among this helper's operations: it is the bottom of the chain, so it answers.
-    if (results.some((result) => result.includes('unknown op') && result.includes('hire'))) return textBody(model, CHAIN_BOTTOM);
+    // At the depth cap this subagent has no `agents` tool, or none that hires: it is the bottom of the chain, so it answers.
+    const capped = (result: string) => (result.includes('unknown op') && result.includes('hire')) || result.includes('unavailable tool \'agents\'');
 
-    if (results.length !== 0) return textBody(model, 'HELPER-WAITS');
+    if (results.some(capped)) return textBody(model, CHAIN_BOTTOM);
+
+    if (results.length !== 0) return textBody(model, 'SUBAGENT-WAITS');
 
     return toolCallBody(model, 'call_nested_hire_1', 'agents', {
       op: 'hire',

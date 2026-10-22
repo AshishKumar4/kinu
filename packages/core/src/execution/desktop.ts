@@ -21,11 +21,12 @@ type DesktopButton = 'left' | 'right' | 'middle';
 export type DesktopAction =
   | { readonly kind: 'screenshot' }
   | { readonly kind: 'watch'; readonly seconds: number; readonly frames: number }
-  | { readonly kind: 'click'; readonly at: DesktopPoint; readonly button: DesktopButton; readonly count: number; readonly hold: readonly string[] }
+  | { readonly kind: 'click'; readonly at?: DesktopPoint; readonly button: DesktopButton; readonly count: number; readonly hold: readonly string[] }
   | { readonly kind: 'type'; readonly text: string }
   | { readonly kind: 'key'; readonly keys: string; readonly holdMs?: number }
   | { readonly kind: 'scroll'; readonly at: DesktopPoint; readonly dy: number; readonly dx: number }
   | { readonly kind: 'move'; readonly at: DesktopPoint }
+  | { readonly kind: 'move'; readonly by: readonly [number, number] }
   | { readonly kind: 'drag'; readonly from: DesktopPoint; readonly to: DesktopPoint };
 
 /** An action, and the agent it is for: the screen has one driver at a time. */
@@ -59,7 +60,7 @@ const AtPoint = v.object({ at: v.array(v.number()) });
 
 /** A point sent as `{ x, y }`, or as an options object holding `at` (the minecraft trials, 2026-10-19), is refused with
  *  the array to send instead. */
-function pointIsAnArray(issue: v.TupleIssue): string {
+function pointIsAnArray(issue: { readonly input: unknown }): string {
   const xy = v.safeParse(XY, issue.input);
   const at = v.safeParse(AtPoint, issue.input);
 
@@ -72,6 +73,22 @@ function pointIsAnArray(issue: v.TupleIssue): string {
 
 /** A point of the screen; its size is the box's to check. */
 const DesktopPointSchema = v.tuple([Coordinate, Coordinate], pointIsAnArray);
+
+const STEP_IS = 'a whole number of pixels from -4096 to 4096';
+
+const Step = v.pipe(v.number(STEP_IS), v.integer(STEP_IS), v.minValue(-4096, STEP_IS), v.maxValue(4096, STEP_IS));
+
+/** How far a relative move goes: [dx, dy], right and down. */
+const DesktopDeltaSchema = v.tuple([Step, Step], 'a distance is one array [dx, dy]: pixels right and down, negative left and up');
+
+const MOVE_IS = 'move takes a point [x, y], or a distance { by: [dx, dy] }';
+
+/** Where a move goes: to a point, or by a distance from wherever the pointer is. */
+const MoveSchema = v.union([DesktopPointSchema, v.strictObject({ by: DesktopDeltaSchema })], (issue) => {
+  const by = v.safeParse(v.object({ by: v.unknown() }), issue.input);
+
+  return by.success ? `{ by } is a distance: ${STEP_IS} each, as [dx, dy]` : `${MOVE_IS}; ${pointIsAnArray(issue)}`;
+});
 
 /** Wheel clicks: the largest scroll is one call of about 2 s at the box's 20 ms a click. */
 const WheelClicksSchema = v.pipe(v.number(), v.integer(), v.minValue(-50), v.maxValue(50));
@@ -255,11 +272,12 @@ function typedActions(text: string): DesktopAction[] {
 export const DESKTOP_INPUTS = {
   screenshot: {},
   watch: { seconds: WatchSecondsSchema, fps: v.optional(WatchFpsSchema) },
-  click: { at: DesktopPointSchema, button: v.optional(ButtonSchema), count: v.optional(ClickCountSchema), keys: v.optional(ClickKeysSchema) },
+  // Null: where the pointer is, which moves nothing first.
+  click: { at: v.nullable(DesktopPointSchema), button: v.optional(ButtonSchema), count: v.optional(ClickCountSchema), keys: v.optional(ClickKeysSchema) },
   type: { text: TypedTextSchema },
   key: { keys: KeysSchema, hold: v.optional(KeyHoldSchema) },
   scroll: { at: DesktopPointSchema, dy: WheelClicksSchema, dx: v.optional(WheelClicksSchema) },
-  move: { at: DesktopPointSchema },
+  move: { at: MoveSchema },
   drag: { from: DesktopPointSchema, to: DesktopPointSchema },
 } as const satisfies Record<DesktopMember, v.ObjectEntries>;
 
@@ -385,7 +403,7 @@ export function desktopTools(deps: DesktopDeps): Record<string, ExecutorTool> {
     click: member('click', 'Click at a point of the screen.', v.strictObject(DESKTOP_INPUTS.click), ({ at, button = 'left', count = 1, keys }) => {
       const held = keys === undefined ? [] : desktopChord(chordKeys(keys), true);
 
-      return held instanceof KinuError ? held : [{ kind: 'click', at, button, count, hold: held }];
+      return held instanceof KinuError ? held : [{ kind: 'click', ...at !== null && { at }, button, count, hold: held }];
     }),
     type: member('type', 'Type text at the keyboard focus.', v.strictObject(DESKTOP_INPUTS.type), ({ text }) => typedActions(text)),
     key: member('key', 'Press a key or a chord, or hold it down.', v.strictObject(DESKTOP_INPUTS.key), ({ keys, hold }) => {
@@ -398,7 +416,9 @@ export function desktopTools(deps: DesktopDeps): Record<string, ExecutorTool> {
     scroll: member('scroll', 'Turn the mouse wheel over a point.', v.strictObject(DESKTOP_INPUTS.scroll), ({ at, dy, dx = 0 }) => (
       dy === 0 && dx === 0 ? new KinuError('bad_input', 'nothing to scroll: dy and dx are both 0.') : [{ kind: 'scroll', at, dy, dx }]
     )),
-    move: member('move', 'Move the pointer to a point.', v.strictObject(DESKTOP_INPUTS.move), ({ at }) => [{ kind: 'move', at }]),
+    move: member('move', 'Move the pointer to a point, or by a distance.', v.strictObject(DESKTOP_INPUTS.move), ({ at }) => [
+      'by' in at ? { kind: 'move', by: at.by } : { kind: 'move', at },
+    ]),
     drag: member('drag', 'Drag with the left button from one point to another.', v.strictObject(DESKTOP_INPUTS.drag), ({ from, to }) => [{ kind: 'drag', from, to }]),
   } satisfies Record<DesktopMember, { readonly description: string }>;
 

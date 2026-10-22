@@ -1,6 +1,6 @@
 /**
  * A workspace's agents live in the left sidebar, reached from its All agents row: the person's chats, each with the
- * agents it started nested under it, then swarms and helpers in folded groups. A row opens that agent's chat in the
+ * agents it started nested under it, then swarms and subagents in folded groups. A row opens that agent's chat in the
  * main area, a swarm worker opens view only, and Back returns the workspace list and focus. On a phone the sidebar is
  * the drawer.
  */
@@ -8,6 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { AGENTS_COUNTER } from '../../scripts/browser-page';
 
 const LIST = '[data-sidebar-agents="api-worker"]';
 
@@ -37,8 +38,8 @@ describe('the sidebar drills into a workspace\'s agents', () => {
   test('chats lead, each with the agents it started under it; groups fold at the bottom; Back returns', async () => {
     await withGallery(async (gallery) => {
       const page = await shell(gallery, 1280);
-      await page.waitForSelector('[data-agents-counter]');
-      await page.click('[data-agents-counter]');
+      await page.waitForSelector(AGENTS_COUNTER);
+      await page.click(AGENTS_COUNTER);
       await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, LIST);
       await still(page);
 
@@ -51,7 +52,7 @@ describe('the sidebar drills into a workspace\'s agents', () => {
       expect(await parentOf('a-check')).toBe('a-scout');
       expect(await parentOf('a-copy')).toBe('actor-docs');
 
-      // Swarms and helpers are their own groups, folded until asked for; a helper's own hires nest under it there.
+      // Swarms and subagents are their own groups, folded until asked for; a subagent's own hires nest under it there.
       const groups = await page.$$eval(`${LIST} section`, (all) => all.map((section) => [section.getAttribute('aria-label'), section.querySelector('[aria-expanded]')?.getAttribute('aria-expanded')]));
       expect(groups).toEqual([['Swarms', 'false'], ['Background', 'false']]);
       expect(await parentOf('a-sampler')).toBe('a-refine');
@@ -71,8 +72,8 @@ describe('the sidebar drills into a workspace\'s agents', () => {
   test('an agent nested under another opens on one read of its roster, which stays read', async () => {
     await withGallery(async (gallery) => {
       const page = await shell(gallery, 1280);
-      await page.waitForSelector('[data-agents-counter]');
-      await page.click('[data-agents-counter]');
+      await page.waitForSelector(AGENTS_COUNTER);
+      await page.click(AGENTS_COUNTER);
       await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, LIST);
       await still(page);
       await page.click(`${LIST} [data-agent-row="a-check"]`);
@@ -104,8 +105,8 @@ describe('the sidebar drills into a workspace\'s agents', () => {
   test('a swarm worker opens view only, and leaving the workspace ends the agents list', async () => {
     await withGallery(async (gallery) => {
       const page = await shell(gallery, 1280);
-      await page.waitForSelector('[data-agents-counter]');
-      await page.click('[data-agents-counter]');
+      await page.waitForSelector(AGENTS_COUNTER);
+      await page.click(AGENTS_COUNTER);
       await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, LIST);
       await still(page);
 
@@ -130,9 +131,9 @@ describe('the sidebar drills into a workspace\'s agents', () => {
       const drawn = `[data-drawer] ${LIST}`;
       await page.waitForSelector('.p-bar-menu button');
       await page.click('.p-bar-menu button');
-      await page.waitForSelector('[data-drawer] [data-agents-counter]');
+      await page.waitForSelector(`[data-drawer] ${AGENTS_COUNTER}`);
       await still(page);
-      await page.click('[data-drawer] [data-agents-counter]');
+      await page.click(`[data-drawer] ${AGENTS_COUNTER}`);
       await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, drawn);
       await still(page);
 
@@ -190,8 +191,8 @@ describe('who is at work, and who is who', () => {
       const page = await shell(gallery, 1280);
 
       try {
-        await page.waitForSelector('[data-rail] [data-agents-counter]');
-        await page.click('[data-rail] [data-agents-counter]');
+        await page.waitForSelector(`[data-rail] ${AGENTS_COUNTER}`);
+        await page.click(`[data-rail] ${AGENTS_COUNTER}`);
         // Reached for as the slide starts, as a press, a find-in-page or a focus without preventScroll may.
         await page.$eval(`[data-rail] ${LIST} [data-agent-row="a-scout"]`, (row) => { row.scrollIntoView({ block: 'center', inline: 'center' }); });
         await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, `[data-rail] ${LIST}`);
@@ -227,8 +228,8 @@ describe('who is at work, and who is who', () => {
       }));
 
       try {
-        await busy.waitForSelector('[data-agents-counter]');
-        await quiet.waitForSelector('[data-agents-counter]');
+        await busy.waitForSelector(AGENTS_COUNTER);
+        await quiet.waitForSelector(AGENTS_COUNTER);
         expect({ busy: await shown(busy), quiet: await shown(quiet) })
           .toEqual({ busy: { spinning: true, counted: '3' }, quiet: { spinning: false, counted: null } });
       } finally {

@@ -6,7 +6,7 @@
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { ASKED, historyTurnPairs, openWorkspaceMainActor, providerAccounts, testModel, toolDescription, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
-import type { ActorHandle, DeliveryAnswer, InProcessDeliveries, JsonObject, OwedDelivery, ReceiptExecution } from '@kinu.run/core';
+import type { ActorHandle, ChatReport, DeliveryAnswer, InProcessDeliveries, JsonObject, OwedDelivery, ReceiptExecution } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { resolve } from 'node:path';
 import type { LanguageModel, ToolSet } from 'ai';
@@ -35,11 +35,11 @@ import type {
 import { ActorSession, type ActorTurnLease,
   recoverActorTurns, TurnReports,
   type TurnSteering,
-  type AgentStores, collectDynamicContext, subordinateDelegatesOf,
+  type AgentStores, collectDynamicContext, subagentDelegatesOf,
   BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type JobHolder, processJobHolder, type TaskListStore,
   WorkspaceJobAuthorities, endedStepLoopJobs, actorReferenceOf, type JobAuthority, type JobRetirement, type WorkspaceJobPorts,
   backgroundJobNotice,
-  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, admitSubordinateTask, AgentDeliveries, assignmentDelivery, type AgentSignal,
+  DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals, admitSubagentTask, AgentDeliveries, assignmentDelivery, type AgentSignal,
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, resumableBackgroundJob, harvestBackgroundJob, type ActorToolsets,
   BACKGROUND_POLICY, type BackgroundPolicy,
   type MctsSearchStore,
@@ -59,9 +59,9 @@ import { ActorSession, type ActorTurnLease,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   TerminalTransitions, initTerminalEffectTable, chatTurnParts, declareTerminalRoster, missionOf, SleepTimeLane, initSleepTimeTables,
-  toolsBehindBoundary, type ToolBoundary, assembleActorTurn, runHeadInference, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
+  toolsBehindBoundary, type ToolBoundary, assembleActorTurn, driveSeatedRun, preparedHeadRun, withCompactionTrigger, conversationKey, vfsTurnSkills, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources, type RunTurnSources,
   branchesTerminalEffect, chatTerminalEffects, actorTerminalEffects,
-  type OwedReport, type SubordinateReportStatus, type TurnReportFacts,
+  type OwedReport, type SubagentReportStatus, type TurnReportFacts,
   terminalEffect,
   type TerminalEffectTable, type TerminalEffectFault,
   type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts, type OwedEffect,
@@ -116,7 +116,7 @@ import { ActorSession, type ActorTurnLease,
   type TurnReads,
   approvedTaskPlan,
   decodeJsonValue, projectJsonValue,
-  agentSelfHost, ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, isSubordinateOrigin, type OwnerWaitsHost, type ScopedOwnerWait,
+  agentSelfHost, ownerWaits, ownerWaitsHost, wakeMetOwnerWaits, isSubagentOrigin, type OwnerWaitsHost, type ScopedOwnerWait,
   cancelBackgroundJob, listBackgroundJobs,
   getAlwaysActiveSkills, getProviderAccounts, workspaceSpend, type WorkspaceSpend, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
   getShellApprovalGrants, revokeShellApprovalGrants, type ApprovalGrant,
@@ -126,7 +126,7 @@ import { ActorSession, type ActorTurnLease,
   getRunEvents, listRuns, type RunListEntry, type Page, type PageRequest,
   WORKSPACE_RUN_ID, READS_CHANGED_EVENT, readsOfTables,
   recordModelOperations, type ModelOperationSink,
-  McpToolSurfaceCache, toolSurfaceTokens, type McpServedSurface, type McpSurfaceBudget,
+  McpToolSurfaceCache, type McpServedSurface,
   defaultLoopOrigin,
   type ActorHost, type ActorSeat, type HostedActor, type LoopOrigin, type SeatedActor, type WriteObserver,
   PlanReviewActions, SUBMIT_PLAN_TOOL, REPLY_TO_COMMENT_TOOL, ASK_OWNER_TOOL, workModeUnderReview, authoredTurnMetadata, planHandoffStillOwed,
@@ -143,7 +143,7 @@ import {
 import { cleanupFacetScratch, makeSqlExec, soulIn, writeTransaction, type CLIRuntime } from './runtime';
 import { createLocalActorHost } from './actor-host';
 import { createLocalOrchestration, type LocalOrchestration } from './orchestration';
-import { localActorDirectory, nodeWorkspace, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
+import { localActorDirectory, nodeWorkspace, openLocalRootActor, reclaimSettledRunActors, registerLocalActor, retireLocalActor, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
 import { osLeaseProcess } from './agent-host/lease-process';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
@@ -202,7 +202,7 @@ export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 export type LocalSessionDb = Pick<Database, 'query' | 'transaction'>;
 
 /**
- * The answer a subordinate's turn owes its parent, installed by the owning host. A port, not a
+ * The answer a subagent's turn owes its parent, installed by the owning host. A port, not a
  * listener: the report is an owed effect that must survive a process death.
  */
 export interface LocalParentRelay {
@@ -215,7 +215,7 @@ export interface LocalParentRelay {
   readonly sequenceId: (messageId: string) => string;
   readonly send: (report: {
     readonly text: string;
-    readonly status: SubordinateReportStatus;
+    readonly status: SubagentReportStatus;
     readonly mode: WorkMode;
     readonly sequenceId: string;
     readonly quiet?: true;
@@ -320,6 +320,7 @@ export class LocalAgentSession {
   private readonly mctsSearchStore: MctsSearchStore;
   private readonly factsStore: FactsStore;
   private readonly config: AgentConfigStore;
+  private mainConfig: AgentConfigStore | undefined;
   private readonly eventLog: EventLog;
   private readonly eventRecorder: RunEventRecorder;
   /** Label-scoped spend governor; public for the `agent.*` namespace. */
@@ -544,7 +545,7 @@ export class LocalAgentSession {
       ports: {
         prepareTurn: (item, lease, opening, round) => this.prepareTurn(item, lease, opening, round),
         composeRequest: () => this.composeNextRequest(),
-        // Only a root chat can approve a plan; a subordinate's plan is refused at admission.
+        // Only a root chat can approve a plan; a subagent's plan is refused at admission.
         stillOwed: (metadata) => planHandoffStillOwed(metadata, this.stores.planReviews),
         // The owner's decision as an intent delivers it, as their own decision here decides it.
         decidePlan: (verdict) => this.planActions.decideAndHandOff(verdict, (turn) => this.enqueueTurn(turn)),
@@ -778,6 +779,14 @@ export class LocalAgentSession {
     return settleEffect(logged('owner_waits.wake_failed', { doing: 'waking the agents whose wait on their owner is met', otherwise: 'io' }, this.ownerWaitsMoved()));
   }
 
+  /** The workspace's own settings, its root's, whichever actor this session hosts: `harness.mode` is read here by every
+   *  actor's turn, as the CF workspace reads its own, and as a hire reads its root's shell mode (`runtime.ts`). */
+  private workspaceConfig(): AgentConfigStore {
+    this.mainConfig ??= this.rt.actor.parentActorId === null ? this.config : openLocalRootActor(this.rt.storage.sql).config;
+
+    return this.mainConfig;
+  }
+
   /**
    * What waits on the owner may have moved: each agent's armed wait it now meets wakes that agent, once, as the
    * owner's decision would. Run by the root, which holds the queue; a hire's session holds none of the others' waits.
@@ -823,7 +832,7 @@ export class LocalAgentSession {
       const from = this.rt.actor.name;
 
       writeTransaction(this.db, () => {
-        const admitted = admitSubordinateTask(log, { fromWorkspace: from, kind: 'message', body: signal.text, mode: 'build', now: Date.now() });
+        const admitted = admitSubagentTask(log, { fromWorkspace: from, kind: 'message', body: signal.text, mode: 'build', now: Date.now() });
 
         if (admitted.admitted) new AgentDeliveries(this.rt.storage.sql).add(actorId, assignmentDelivery(log, { id: admitted.id, body: signal.text.trim(), mode: 'build', from }));
       });
@@ -1027,7 +1036,7 @@ export class LocalAgentSession {
     return this._planActions;
   }
 
-  /** Only a root chat holds the plan review surface; a subordinate answers via `report`. */
+  /** Only a root chat holds the plan review surface; a subagent answers via `report`. */
   private planReviewSurface(): boolean {
     return this.parentRelay === null;
   }
@@ -1244,36 +1253,23 @@ export class LocalAgentSession {
       spill: this.rt.storage,
     }));
     this.mcpClose = () => conn.close();
-    await this.admitMcp(await this.modelCatalog.resolved());
+    await this.refreshMcp();
   }
 
   private mcpServed: McpServedSurface | null = null;
   private mcpSurface: McpToolSurfaceCache<ToolSet> | null = null;
-  private readonly mcpDeferred = new Set<string>();
 
   private emitMcp(message: string): void {
     this.emit({ type: 'background', event: 'mcp', message });
   }
 
-  /** Against the window the next request runs on, so a switched model re-admits what fits it. */
-  private async admitMcp(window: Pick<McpSurfaceBudget, 'contextWindow' | 'modelOutputLimit'>): Promise<void> {
+  private async refreshMcp(): Promise<void> {
     const served = this.mcpServed;
 
     if (served === null || this.mcpSurface === null) return;
 
-    this.extraTools = await this.mcpSurface.refresh(async () => served, {
-      contextWindow: window.contextWindow, modelOutputLimit: window.modelOutputLimit, nativeToolTokens: toolSurfaceTokens(this.tools),
-    });
+    this.extraTools = await this.mcpSurface.refresh(async () => served);
     this.mcpUnavailable = this.mcpSurface.unavailable;
-    const deferred = this.mcpSurface.deferred;
-
-    for (const d of deferred) {
-      if (!this.mcpDeferred.has(d.server)) this.emitMcp(`mcp: ${d.server} deferred: ${d.reason}`);
-    }
-
-    this.mcpDeferred.clear();
-
-    for (const d of deferred) this.mcpDeferred.add(d.server);
   }
 
   private mcpUnavailable: NonNullable<DynamicContextInput['unavailableMcp']> = [];
@@ -1495,6 +1491,7 @@ export class LocalAgentSession {
       }),
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
     });
+    await this.reclaimSettledRunActors();
     // An advisor that answered while this process was gone.
     await this.deliverAdvisorAnswers();
     const reviews = await this.actorSession.orchestrator.runDeferredTurnReviews();
@@ -1661,6 +1658,15 @@ export class LocalAgentSession {
     return this.chat.pumpPromise !== null;
   }
 
+  /** Its chat as the workspace's read model asks of it, as a cloud agent's isolate reports it: a plan the owner has not
+   *  answered, and whether its latest run failed. */
+  chatReport(): ChatReport {
+    return {
+      planPending: this.stores.planReviews.getActive(CHAT_SESSION_ID)?.status === 'pending',
+      lastFailed: this.eventRecorder.latestRunHeader()?.status === 'error',
+    };
+  }
+
   /** Append to the run-event log, scoped to the in-flight run unless `runId` is given. Never throws. */
   private recordRunEvent(input: RunEventInput, runId?: string | null, recorder: RunEventRecorder = this.eventRecorder): void {
     const id = runId !== undefined ? runId : this.chat.currentRunId;
@@ -1772,6 +1778,7 @@ export class LocalAgentSession {
       rt: this.rt,
       backend: 'cli-local',
       executors: () => this.rt.executionRouter?.listExecutors() ?? [],
+      harnessMode: () => this.workspaceConfig().getHarnessMode(),
       config: this.config,
       skills: vfsTurnSkills(this.rt.ownFiles, this.config, this.instructionTrust, this.turnHidesSkills),
       models: this.turnModels(),
@@ -1784,9 +1791,9 @@ export class LocalAgentSession {
       ...(this.ancestors && { ancestors: this.ancestors }),
       toolset: (mode) => this.turnToolSet(mode),
       // What lies outside the workspace is its own agent's alone.
-      externalTools: async (window) => {
+      externalTools: async () => {
         if (this.actorReach.kind !== 'workspace') return {};
-        await this.admitMcp(window);
+        await this.refreshMcp();
 
         return this.extraTools;
       },
@@ -2289,7 +2296,7 @@ export class LocalAgentSession {
       memoryTail,
       unavailableMcp: this.mcpUnavailable,
       missingCapabilities: [],
-      subordinateDelegates: () => subordinateDelegatesOf(this.teamDeps?.snapshot() ?? []),
+      subagentDelegates: () => subagentDelegatesOf(this.teamDeps?.snapshot() ?? []),
       approvals: () => {
         // A command shown on the live prompt is a row here too.
         const items = this.deferrals.approvals(this.rt.actor.actorId);
@@ -2356,11 +2363,11 @@ export class LocalAgentSession {
   }
   /** Team transport from the owning LocalAgentHost; absent, team actions are structurally missing. */
   private teamDeps: TeamToolDeps | null = null;
-  /** Peer transport, roots only; absent, `reply` does not exist and ask/send reach subordinates only. */
+  /** Peer transport, roots only; absent, `reply` does not exist and ask/send reach subagents only. */
   private peersDeps: PeersToolDeps | null = null;
-  /** Report transport, subordinates only. */
+  /** Report transport, subagents only. */
   private reportDeps: ReportDeps | null = null;
-  /** Automatic turn-end relay for a subordinate, distinct from the model's own {@link reportDeps}. */
+  /** Automatic turn-end relay for a subagent, distinct from the model's own {@link reportDeps}. */
   private parentRelay: LocalParentRelay | null = null;
 
   /** The advisor is hired as every temporary agent is: through the team's port, absent without a host. */
@@ -2396,7 +2403,7 @@ export class LocalAgentSession {
   }
 
   /** What the running turn may reach in `mode`, decided by core's `turnReach` as every host's turns are. The CLI shows
-   *  the owner a root's questions and plans alone; a subordinate's partner is its parent. */
+   *  the owner a root's questions and plans alone; a subagent's partner is its parent. */
   private reach(mode: WorkMode): TurnReach {
     return turnReach({
       lane: this.turnLaneOf, mode, driving: this.turnDriving, ownerSurface: this.planReviewSurface(),
@@ -2561,7 +2568,7 @@ export class LocalAgentSession {
       web: { search: this.getWebSearchProvider(), files: this.rt.storage, browser: null },
       stores,
       // A hire's: what waits on its owner from its own work. A head or a swarm node, whose run ends with it, holds none.
-      ownerWaits: isSubordinateOrigin(this.seat.record.origin) ? this.ownerWaitsHost() : null,
+      ownerWaits: isSubagentOrigin(this.seat.record.origin) ? this.ownerWaitsHost() : null,
       agents: () => this.agentsToolDeps(mode),
       mail: null,
     }), SURFACE_POLICY.program, reported);
@@ -2623,18 +2630,31 @@ export class LocalAgentSession {
       this.loopOrigins.set(actorId, input.loop);
     }, { kind: 'head', writes });
 
-    return {
-      ...seat,
-      release: async () => {
-        this.actorHost.release(binding.reference);
-        this.loopOrigins.delete(binding.reference.actorId);
-        await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
-          const agentName = actorHomeName(binding);
+    return { ...seat, release: () => this.retireRunActor(binding) };
+  }
 
-          cleanupFacetScratch(this.rt.space, agentName);
-        });
-      },
-    };
+  /** A head's or a node's actor, once its run is done: unseated, its loop forgotten, retired with its scratch. */
+  private async retireRunActor(binding: Pick<LocalActorBinding, 'reference' | 'name' | 'origin' | 'storageKey'>): Promise<void> {
+    this.actorHost.release(binding.reference);
+    this.loopOrigins.delete(binding.reference.actorId);
+    await retireLocalActor(this.rt.actor, binding.name, binding.reference, async () => {
+      cleanupFacetScratch(this.rt.space, actorHomeName(binding));
+    });
+  }
+
+  /** Run actors a process left behind, heads and nodes alike (a node's is retired by no release of its own). */
+  private async reclaimSettledRunActors(): Promise<void> {
+    // Only the local root owns the actor directory.
+    if (this.rt.actor.parentActorId !== null) return;
+
+    const { retired } = await reclaimSettledRunActors({
+      actors: localActorDirectory(this.rt.actor).directory.list(),
+      resumable: new Set(this.actorHost.resumable(Number.MAX_SAFE_INTEGER).map((turn) => turn.reference.actorId)),
+      ledger: { readHead: (id) => this.headJournal.readHead(id), hasLiveExploration: () => this.headJournal.hasUnfinishedHeads() || this.mctsSearchStore.hasRunningSwarms() },
+      retire: (actor) => this.retireRunActor({ ...actor, reference: actorReferenceOf(actor) }),
+    });
+
+    if (retired > 0) diagnostics.event('actor.settled_retired', { retired });
   }
 
   /** The session's own job seams: a node's or head's output reaches the same listeners its chat's does. */
@@ -2710,7 +2730,12 @@ export class LocalAgentSession {
         actor,
         runId,
         sources: this.runActorSources(actor, runId, { extension: compaction.extension, models, report, operations }),
-        infer: (input, inference) => runHeadInference(preparedHeadRun(input, { ...inference, actor, compaction: compaction.trigger })),
+        // Driven as a delivered run, so its chat holds what it was asked and its answer, as a cloud run actor's does.
+        infer: (input, inference) => {
+          const run = preparedHeadRun(input, { ...inference, actor, compaction: compaction.trigger });
+
+          return driveSeatedRun(actor, input, { runId: inference.runId, prepare: (capability) => run.prepare(capability) });
+        },
         conversations: actor.stores.conversationSearch,
         jobs: { ports: this.loopJobPorts(), attach: (authority) => this.jobAuthorities.attach(authority) },
         receipts: {
@@ -2723,8 +2748,9 @@ export class LocalAgentSession {
   }
 
   /**
-   * Seat one swarm node as a logical actor; a factory per node (see core's `HostedNodeSeat`). No release:
-   * retirement belongs to the owning search. Public so an eval can seat nodes through this session.
+   * Seat one swarm node as a logical actor; a factory per node (see core's `HostedNodeSeat`). No release: it is
+   * retired once its row is settled, by the next start's reclaim, as the cloud's are. Public so an eval can seat nodes
+   * through this session.
    */
   async hostNode(node: NodeIdentity): Promise<HostedNodeSeat<HostedActor>> {
     return (await this.seatRunActor(node.nodeId, () => {}, { kind: 'node' })).seat;
@@ -2738,6 +2764,7 @@ export class LocalAgentSession {
       backend: 'cli-local',
       executors: () => actor.runtime.executionRouter?.listExecutors() ?? [],
       config: actor.stores.config,
+      harnessMode: () => this.workspaceConfig().getHarnessMode(),
       skills: vfsTurnSkills(actor.runtime.storage.vfs, actor.stores.config, this.instructionTrust),
       models: compaction.models,
       profileInputs: () => this.profiles().inputs(),
@@ -2778,7 +2805,7 @@ export class LocalAgentSession {
       ...(reads.activeSkills !== null && { activeSkills: reads.activeSkills }),
       memoryTail: reads.memoryTail,
       missingCapabilities: [],
-      subordinateDelegates: () => [],
+      subagentDelegates: () => [],
       approvals: () => ({ items: [], total: 0 }),
     });
   }

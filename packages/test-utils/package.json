@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./turn-model": "./src/turn-model.ts",
+    "./github-mcp-catalog": "./src/github-mcp-catalog.ts",
     "./parity-normalizer": "./src/parity-normalizer.ts",
     "./clef-binding-answer": "./src/clef-binding-answer.ts",
     "./mossaic": "./src/mossaic.ts",
@@ -25,10 +26,10 @@
     "effect": "4.0.0-rc.117"
   },
   "scripts": {
-    "check": "tsc --noEmit"
+    "check": "tsrs --noEmit"
   },
   "devDependencies": {
-    "ai": "7.0.127",
+    "ai": "7.0.148",
     "valibot": "^1.4.1"
   }
 }

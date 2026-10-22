@@ -4,11 +4,11 @@ import { settleSync } from '../obs/effect';
 
 const EXPLORATION_PREFIX = 'exp:';
 
-const SUBORDINATE_NAME = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+const SUBAGENT_NAME = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 
 /** Apply creation grammar only. Retained names and imported paths stay exact. */
-export function requireSubordinateActorName(name: string): void {
-  if (!SUBORDINATE_NAME.test(name)) return settleSync(Effect.fail(new KinuError('bad_input', 'Subordinate names must be lowercase URL-safe slugs.')));
+export function requireSubagentActorName(name: string): void {
+  if (!SUBAGENT_NAME.test(name)) return settleSync(Effect.fail(new KinuError('bad_input', 'Subagent names must be lowercase URL-safe slugs.')));
 }
 
 export function explorationActorKey(id: string): string {
@@ -21,10 +21,10 @@ export function isExplorationActorKey(key: string): boolean {
   return key.startsWith(EXPLORATION_PREFIX);
 }
 
-export interface ParsedActorKey { readonly family: 'exploration' | 'subordinate'; readonly id: string }
+export interface ParsedActorKey { readonly family: 'exploration' | 'subagent'; readonly id: string }
 
 export function parseActorKey(key: string): ParsedActorKey {
-  if (!isExplorationActorKey(key)) return { family: 'subordinate', id: key };
+  if (!isExplorationActorKey(key)) return { family: 'subagent', id: key };
 
   return settleSync(Effect.try({
     try: (): ParsedActorKey => ({ family: 'exploration', id: decodeURIComponent(key.slice(EXPLORATION_PREFIX.length)) }),

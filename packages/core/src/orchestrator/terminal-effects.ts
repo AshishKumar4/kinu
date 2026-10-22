@@ -26,7 +26,7 @@ import type { HeadJournal } from '../heads/journal';
 import { CompletedTurnSchema } from '../evolution/session-window';
 import { WorkModeSchema, type WorkMode } from '../types/turn';
 import { AdvisorRecoverySnapshotSchema, type AdvisorRecoverySnapshot } from '../advisor/review';
-import { SUBORDINATE_REPORT_STATUSES, type SubordinateReportStatus } from '../events/hub/types';
+import { SUBAGENT_REPORT_STATUSES, type SubagentReportStatus } from '../events/hub/types';
 import {
   branchHeadId, branchOutcomeFromJournal, settleBranchIntoTakes, settlePendingBranch,
   type BranchStatusEvent, type PendingBranch,
@@ -35,7 +35,7 @@ import { attempt, diagnostics, hold, toKinuError, type ErrorCode } from '../obs/
 import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
 import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/reminder';
 import { TASK_REMINDER_OPEN_KEY } from '../read-models/event-summary';
-import { TASK_TURN_ENDINGS } from '../subordinates/temporary';
+import { TASK_TURN_ENDINGS } from '../subagents/temporary';
 
 /** The picklist is {@link RUN_END_REASONS}, so a stored row cannot carry an unknown word. */
 export const RunEndReasonSchema = v.picklist(RUN_END_REASONS);
@@ -278,7 +278,7 @@ export interface ActorEffectPorts {
   readonly report?: (turn: TurnReportFacts) => Promise<string>;
   /** A report already composed ({@link unansweredReport}). Absent with no hirer. */
   readonly sendReport?: (report: {
-    readonly text: string; readonly status: SubordinateReportStatus; readonly mode: WorkMode; readonly sequenceId: string; readonly quiet?: true;
+    readonly text: string; readonly status: SubagentReportStatus; readonly mode: WorkMode; readonly sequenceId: string; readonly quiet?: true;
   }) => Promise<string>;
 }
 
@@ -325,7 +325,7 @@ export function actorTerminalEffects(ports: ActorEffectPorts): TerminalEffectTab
     ...(sendReport !== undefined && {
       parent_report: terminalEffect({
         input: v.object({
-          text: v.string(), status: v.picklist(SUBORDINATE_REPORT_STATUSES),
+          text: v.string(), status: v.picklist(SUBAGENT_REPORT_STATUSES),
           sequenceId: v.string(), mode: WorkModeSchema, quiet: v.optional(v.boolean()),
         }),
         run: async ({ text, status, sequenceId, mode, quiet }) => ({

@@ -2,7 +2,7 @@
  * `POST /api/client-errors` writes to the operator's log sink on a browser's behalf.
  * Defends: anything other than a report reaching the sink, and release identity taken on the browser's word.
  */
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { asFetchFunction } from '@kinu.run/core';
 import {
@@ -113,7 +113,10 @@ async function recorded(
   return { response, lines: logs.emitted };
 }
 
-afterEach(() => { setDiagnosticsSink(createRecordingLogger()); });
+afterEach(() => {
+  setDiagnosticsSink(createRecordingLogger());
+  setSystemTime();
+});
 
 describe('routing', () => {
   test('another path is not this module’s business', async () => {
@@ -152,6 +155,10 @@ describe('who may write to the log sink', () => {
     const serve = serveFamily(clientErrorRoutes, {});
     const from = (address: string) => serve(post(JSON.stringify(report()), { headers: { 'cf-connecting-ip': address } }), env);
     const looping: number[] = [];
+
+    // The budget counts per minute's window (`ingressAdmission`): a burst the wall clock let straddle a window's end split
+    // its count between two, neither past the limit, and the row read no refusal (contended reruns, 2026-10-21).
+    setSystemTime(new Date(Date.now() - (Date.now() % 60_000) + 60_000));
 
     for (let sent = 0; sent < 30; sent += 1) looping.push((await from('203.0.113.7'))?.status ?? 0);
 

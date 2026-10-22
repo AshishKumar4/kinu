@@ -1,11 +1,14 @@
 /** Reports clipboard failures; the webhook secret is shown only once. */
 import { CheckIcon, CopyIcon, WarningCircleIcon, type Icon } from "@phosphor-icons/react";
-import { useCopy, type CopyStatus } from "@/hooks/use-copy";
+import { copyLabel, useCopy, type CopyStatus } from "@/hooks/use-copy";
+import { Button } from "@/components/ui/Button";
 
 interface CopyButtonProps {
   value: string;
   what: string;
-  size?: number;
+  /** `secondary` beside a field or link it copies; the quiet ghost elsewhere. */
+  variant?: "ghost" | "secondary";
+  /** Placement only. */
   className?: string;
 }
 
@@ -15,19 +18,25 @@ const FEEDBACK: Record<CopyStatus, { Icon: Icon; verb: string; tone: string }> =
   failed: { Icon: WarningCircleIcon, verb: "Could not copy", tone: "p-danger" },
 };
 
-export function CopyButton({ value, what, size = 12, className }: CopyButtonProps) {
+/** ui/Button's icon form that copies `value`, saying so in its icon and tooltip. */
+export function CopyButton({ value, what, variant = "ghost", className }: CopyButtonProps) {
   const { status, copy } = useCopy();
   const { Icon, verb, tone } = FEEDBACK[status];
 
   return (
-    <button
-      type="button"
-      onClick={() => copy(value)}
-      title={`${verb} ${what}`}
-      aria-label={`Copy ${what}`}
-      className={`${tone} ${className ?? ""}`}
-    >
-      <Icon size={size} />
+    <Button variant={variant} size="sm" icon={<Icon size={14} />} onClick={() => copy(value)} title={`${verb} ${what}`} aria-label={`Copy ${what}`}
+      className={`${tone}${className === undefined ? "" : ` ${className}`}`} />
+  );
+}
+
+/** A copy that says so in words beside its icon: the approved code block's head. */
+export function CopyText({ value, className }: { value: string; className?: string }) {
+  const { status, copy } = useCopy();
+
+  return (
+    <button onClick={() => copy(value)} type="button"
+      className={`flex shrink-0 cursor-pointer items-center gap-1 transition-colors ${status === "failed" ? "p-danger" : "hover:p-text"}${className === undefined ? "" : ` ${className}`}`}>
+      <CopyIcon size={12} />{copyLabel(status)}
     </button>
   );
 }

@@ -4,14 +4,14 @@ import type { ModelMessage } from 'ai';
 import {
   CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
-  initAgentIsolateSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, readSubordinateInspection,
+  initAgentIsolateSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, readSubagentInspection,
   chatMediaPath, chatSeed, drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
   recordedTurns, type RecordedTurn,
   type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
   readAgentFigures, NO_FIGURES, type AgentFigures,
   localContextTree, readableActor, type ReadableActor, type ContextEditor, type ContextTree, type ConversationRecall,
   type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
-  type SubordinateInspectionResult, type SubordinateReportLedger, type ModelPricing, type SqlExecutor,
+  type SubagentInspectionResult, type SubagentReportLedger, type ModelPricing, type SqlExecutor,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HostedActor,
   type Executor, type JsonObject, type NimbusSandboxFiles, type SqlValue, WORKSPACE_ROOT, cloudPlanes, answersForDrainTurns,
   initPendingSendTables, initTerminalEffectTable, PendingSendStore, contextFill, announcementOf, TurnReports,
@@ -492,10 +492,10 @@ export class AgentDatabase {
     });
   }
 
-  async inspect(request: AgentOwnInspection): Promise<SubordinateInspectionResult> {
+  async inspect(request: AgentOwnInspection): Promise<SubagentInspectionResult> {
     const { actor, transcript } = this.readable();
 
-    return await readSubordinateInspection({
+    return await readSubagentInspection({
       sql: this.sql, raw: this.exec, actor, transcriptFor: () => transcript,
     }, request);
   }
@@ -726,11 +726,11 @@ export class AgentDatabase {
   }
 
   /** What a turn has told its hirer, kept as its tools answered: only ever more. */
-  recordReports(turnId: string, reports: SubordinateReportLedger): void {
+  recordReports(turnId: string, reports: SubagentReportLedger): void {
     new TurnReports(this.sql).record({ actorId: this.readable().actor.actorId, turnId }, reports);
   }
 
-  reports(turnId: string): SubordinateReportLedger {
+  reports(turnId: string): SubagentReportLedger {
     return new TurnReports(this.sql).read({ actorId: this.readable().actor.actorId, turnId });
   }
 

@@ -7,7 +7,7 @@ import type { Assertion } from './results';
 export const SIMPLE_CAUSES = ['agent:spec-misread', 'agent:gave-up/incomplete', 'agent:wrong-answer',
   'product:tool-error', 'product:refusal', 'product:reset/stream-drop', 'product:hang', 'provider:refused', 'provider:throttled', 'harness'] as const;
 
-export const ORCHESTRATION_CAUSES = ['idle helpers', 'duplicated work', 'lead did the delegated work', 'never waited for a report'] as const;
+export const ORCHESTRATION_CAUSES = ['idle subagents', 'duplicated work', 'lead did the delegated work', 'never waited for a report'] as const;
 
 export const DIAGNOSIS_HEADING = '## \u{1F52C} Why the evals failed';
 

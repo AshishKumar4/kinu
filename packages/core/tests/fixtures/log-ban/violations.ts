@@ -2,7 +2,7 @@
  * Log calls that MUST NOT compile. Every line here is a real evasion route, and
  * the file is deliberately broken: it is EXCLUDED from
  * `packages/core/tsconfig.json` and typechecked only by
- * `unit-obs-log-ban.test.ts`, which runs the same `tsc` the gate runs and reads a
+ * `unit-obs-log-ban.test.ts`, which runs the same `tsrs` the gate runs and reads a
  * diagnostic off each marked line.
  *
  * Written without a single `@ts-expect-error`. That directive proves an error

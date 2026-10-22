@@ -3,7 +3,7 @@
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import { sqlCheckList } from '../identity/schema';
+import { sqlCheckList } from '../utils/sql';
 import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';

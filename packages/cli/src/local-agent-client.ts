@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import { localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes, type SessionEvent } from '@kinu.run/core';
-import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementListing, RefinementRequestView, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
+import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementListing, RefinementRequestView, SubagentInspectionRequest, SubagentInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import { getChatHistoryPage, keptMediaName, getToolList, CHAT_SESSION_ID, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, ToolOutcomeSchema, usageReported } from '@kinu.run/core';
 import * as v from 'valibot';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
@@ -14,7 +14,7 @@ import {
 } from '@kinu.run/cli-backend';
 import { agentDbPath } from './config';
 import { renameLocalAgent } from './agent-create';
-import { inspectLocalSubordinate, localJobRunning, readLocalWorkspaceWork } from './local-inspection';
+import { inspectLocalSubagent, localJobRunning, readLocalWorkspaceWork } from './local-inspection';
 import { createLocalHost } from './local-host';
 import type { LocalModelResolverOptions } from './local-model-resolver';
 import {
@@ -394,8 +394,8 @@ export class LocalAgentClient implements AgentClient {
     return this.session.setRole(roleId);
   }
 
-  async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
-    return inspectLocalSubordinate(this.agentName, request);
+  async inspectSubagent(request: SubagentInspectionRequest): Promise<SubagentInspectionResult> {
+    return inspectLocalSubagent(this.agentName, request);
   }
 
   async workspaceWork(): Promise<WorkspaceWork> {

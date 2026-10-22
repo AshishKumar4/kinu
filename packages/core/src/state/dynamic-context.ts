@@ -80,7 +80,7 @@ export interface DynamicContextInput {
   /** Down MCP servers (`server` null: the catalog), noted only where `eval` reaches MCP tools. */
   readonly unavailableMcp?: readonly { readonly server: string | null; readonly reason: string }[];
   /** Backend-only planes, as callbacks: no backend re-splices the result. */
-  readonly subordinateDelegates?: () => readonly DynamicDelegate[];
+  readonly subagentDelegates?: () => readonly DynamicDelegate[];
   readonly approvals?: () => ActiveRoster<DynamicApproval>;
   /** Slates whose latest source does not build, each `id: why`. */
   readonly failingSlates?: () => readonly string[];
@@ -90,7 +90,7 @@ export interface DynamicContextInput {
   readonly mail?: ActiveRoster<MailInContext>;
 }
 
-export function subordinateDelegatesOf(
+export function subagentDelegatesOf(
   entries: readonly {
     readonly name: string;
     readonly status: string;
@@ -98,7 +98,7 @@ export function subordinateDelegatesOf(
   }[],
 ): DynamicDelegate[] {
   return entries.map((entry) => ({
-    kind: 'subordinate',
+    kind: 'subagent',
     name: entry.name,
     phase: entry.status,
     task: entry.currentTask,
@@ -131,7 +131,7 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     runningJobs: reads.runningJobs(),
     openTasks: reads.openTasks(),
     liveHeadRuns: reads.liveHeadRuns(),
-    subordinateDelegates: input.subordinateDelegates?.(),
+    subagentDelegates: input.subagentDelegates?.(),
     approvals: input.approvals?.(),
     ...(input.mail !== undefined && { mail: input.mail }),
     failingSlates: input.failingSlates?.(),

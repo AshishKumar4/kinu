@@ -24,6 +24,12 @@ function activationCount(): string {
   return `MAX(${ordinal}) - MIN(${ordinal}) + 1`;
 }
 
+/** The most facet names a workspace had given out in its group: how near its object is to `do.facet.count`. Not
+ *  weighted: the count only grows, so its largest reading is the one to read. */
+function facetNamesGiven(): string {
+  return `MAX(${doubleColumn(AGENT_METRICS_SCHEMA, 'facets')})`;
+}
+
 function numberedStartup(): readonly string[] {
   return [`${blobColumn(AGENT_METRICS_SCHEMA, 'event')} = 'actor.startup'`, `${doubleColumn(AGENT_METRICS_SCHEMA, 'activation')} > 0`];
 }
@@ -225,7 +231,7 @@ export function controlPlaneMetricsQueries(
         { as: 'workspace', expression: indexColumn(agent) },
         { as: 'hour', expression: "toStartOfInterval(timestamp, INTERVAL '1' HOUR)" },
       ],
-      metrics: [{ as: 'startups', expression: activationCount() }],
+      metrics: [{ as: 'startups', expression: activationCount() }, { as: 'facets', expression: facetNamesGiven() }],
       since,
       where: [...scoped('event'), ...numberedStartup()],
       orderBy: 'startups',

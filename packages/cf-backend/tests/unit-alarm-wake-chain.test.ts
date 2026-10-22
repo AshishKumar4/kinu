@@ -8,7 +8,7 @@ import { openWorkspaceMainActor } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
-  agentWakes, armedWakes, catalogTurn, fireSoonestWake, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
+  agentWakes, armedWakes, catalogTurn, fireSoonestWake, gatewayWorkspace, hostedSubagentHarness, jobsOver, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
   tapDiagnostics, until, seedOrphanFiber, wakeForDelegatedTask, type StartedHarness,
 } from './helpers/actor-harness';
 import { ownerMail } from './helpers/owner-mail';
@@ -60,12 +60,12 @@ async function poisonedRosterWake(): Promise<StartedHarness> {
 
   await agent.activateActor();
   db.prepare(
-    `INSERT INTO actor_subordinates
+    `INSERT INTO actor_subagents
       (actor_id, name, status, current_task, created_at, dismissed_at,
        task_event_id, actor_reference, birth_request, delete_requested)
      VALUES (?, 'reviewer', 'idle', NULL, ?, NULL, NULL, NULL, ?, 0)`,
   ).run(harnessActorId(db), Date.now(), REJECTED_ROLE_BIRTH);
-  await expect(agent.terminalRetryPass()).rejects.toThrow('Stored subordinate roster data is malformed');
+  await expect(agent.terminalRetryPass()).rejects.toThrow('Stored subagent roster data is malformed');
   db.prepare('UPDATE cf_agents_jobs SET time = ? WHERE id = ?').run(Date.now() - 1000, TERMINAL_RETRY_JOB);
 
   return harness;
@@ -147,7 +147,7 @@ describe('the workspace keeps exactly one wake per job', () => {
     // The activation classifies (workspace-wide `owedWorkExists`) and arms an immediate wake; its pass sweeps every actor.
     const workspace = orchestratorHarness();
 
-    const child = await hostedSubordinateHarness(workspace, {
+    const child = await hostedSubagentHarness(workspace, {
       name: 'deferred-child',
       displayName: 'Deferred Child',
       nameOrigin: 'user',
@@ -415,7 +415,7 @@ describe('the workspace keeps exactly one wake per job', () => {
     await agent.activateActor();
     await joinHarnessFibers();
     await agent.setSoul('# Purpose\n\nDo each task asked.');
-    const { subordinate: retired } = await agent.createSubordinateAgent();
+    const { subagent: retired } = await agent.createSubagentAgent();
 
     if (retired.actorId === null) throw new Error('the added agent has no actor');
     // Its crossing dies before the agent takes it: owed, with the agent's wake armed to cross it again.
@@ -423,7 +423,7 @@ describe('the workspace keeps exactly one wake per job', () => {
     await wakeForDelegatedTask(harness, retired.actorId, 'brief');
     expect(agentWakes(db)).toContain(retired.actorId);
 
-    await agent.dismissSubordinate(retired.name, true);
+    await agent.dismissSubagent(retired.name, true);
     await joinHarnessFibers();
 
     expect(agentWakes(db)).not.toContain(retired.actorId);
@@ -525,7 +525,7 @@ describe('the workspace keeps exactly one wake per job', () => {
 
     // Real input: `birth_request` is JSON-parsed on read mid-tick, after the arm and before the drain.
     db.prepare(
-      `INSERT INTO actor_subordinates
+      `INSERT INTO actor_subagents
         (actor_id, name, status, current_task, created_at, dismissed_at,
          task_event_id, actor_reference, birth_request, delete_requested)
        VALUES (?, 'poisoned-birth', 'idle', NULL, ?, NULL, NULL, NULL, '{malformed', 0)`,

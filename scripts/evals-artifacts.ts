@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import * as v from 'valibot';
 import { parseResults, trials, type EvalFile } from '../evals/src/results';
+import { EVAL_SUITES } from './evals-suites';
 
 export const TrialItemSchema = v.object({
   leg: v.picklist(['candidate', 'baseline']), origin: v.string(), task: v.string(),
@@ -22,6 +23,12 @@ export const EvalRunSchema = v.object({
   /** The calls its trials make at once, at most: armada's budget, each trial's cost its task's peak. */
   budget: v.number(),
   wallSeconds: v.optional(v.number()), pass: v.boolean(),
+  /** A daily gated run: no baseline leg, its verdict against the run before it of its suite (`promote.ts daily`). */
+  daily: v.optional(v.boolean()),
+  /** A daily run's suite (scripts/evals-suites.ts); none, the whole matrix. */
+  suite: v.optional(v.picklist(EVAL_SUITES)),
+  /** Where a daily run's candidate runs; none, production. */
+  deployment: v.optional(v.picklist(['production', 'staging'])),
 });
 
 export type EvalRun = v.InferOutput<typeof EvalRunSchema>;

@@ -5,15 +5,16 @@
  */
 import { Cause, Effect } from "effect";
 import { useEffect, useRef, useState, type FocusEvent, type ReactNode } from "react";
-import { Button } from "@cloudflare/kumo";
+import { Button } from "@/components/ui/Button";
 import { BrainIcon, ChatCircleTextIcon, CheckIcon, DesktopTowerIcon, NotePencilIcon, ShieldWarningIcon, XIcon, type Icon } from "@phosphor-icons/react";
 import { revealMisrepresenting, timeAgo, type AccountMemoryProposal, type OwedIntent, type OwedOwnerIntent, type OwnerAsk, type PendingAction, type PendingActionKind, type PendingConsent, type PlanPageRef } from "@kinu.run/core";
 import { detach, renderThrownChain } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { MailSendBody } from "@/components/mail/MailSendBody";
 import { AlwaysLine, alwaysLabel, ParkedCommands, ParkedDecisionFlow, ParkedWriteChange } from "@/components/ParkedCommands";
 import { QuestionCard } from "@/components/QuestionCard";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { Surface } from "@/components/ui/Surface";
+import { ChromeButton } from "@/components/ui/ChromeButton";
 
 type ConsentChoice = "once" | "always" | "deny";
 
@@ -89,7 +90,7 @@ function AnswerButton({ answer, busy, onAnswer }: { answer: Answer; busy: boolea
   const Mark = answer.icon;
   const label = <>{Mark && <Mark size={12} weight="bold" aria-hidden />}{answer.label}</>;
 
-  if (answer.weight === "primary") return <FilledButton disabled={busy} onClick={() => detach(onAnswer(answer))}>{label}</FilledButton>;
+  if (answer.weight === "primary") return <Button variant="primary" size="sm" disabled={busy} onClick={() => detach(onAnswer(answer))}>{label}</Button>;
 
   return (
     <Button size="sm" variant={answer.weight === "secondary" ? "secondary" : "ghost"} disabled={busy} title={answer.title} onClick={() => detach(onAnswer(answer))}>
@@ -106,7 +107,7 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
     return (
       <>
         <MailSendBody send={mail} text={mail.text} />
-        <div className="mt-1 p-meta p-text-3">Approving sends exactly this, once · asked {timeAgo(action.at)}</div>
+        <div className="t-meta mt-1 p-text-3">Approving sends exactly this, once · asked {timeAgo(action.at)}</div>
       </>
     );
   }
@@ -118,11 +119,11 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
 
     return (
       <>
-        <div className="p-row-text p-text">{asks}</div>
-        {action.detail !== null && <code className="mt-1 block max-h-28 overflow-auto rounded-sm px-2 py-1 p-t-code p-text-2 break-all whitespace-pre-wrap p-fill">{revealMisrepresenting(action.detail)}</code>}
-        {action.where !== undefined && <div className="mt-1 p-meta p-text-2 break-all">Runs {revealMisrepresenting(action.where)}</div>}
-        {action.write && <div className="mt-1.5"><ParkedWriteChange id={action.id} rpc={rpc} /></div>}
-        <div className="mt-1 p-meta p-text-3">
+        <div className="t-body p-text">{asks}</div>
+        {action.detail !== null && <Surface look="tile" as="code" className="t-code mt-1 block max-h-28 overflow-auto px-2 py-1 p-text-2 break-all whitespace-pre-wrap">{revealMisrepresenting(action.detail)}</Surface>}
+        {action.where !== undefined && <div className="t-meta mt-1 p-text-2 break-all">Runs {revealMisrepresenting(action.where)}</div>}
+        {action.write && <div className="mt-2"><ParkedWriteChange id={action.id} rpc={rpc} /></div>}
+        <div className="t-meta mt-1 p-text-3">
           {action.write ? "Approving writes exactly these bytes." : action.title.replace(/^Approve: /u, "")} · asked {timeAgo(action.at)}
         </div>
         {action.effect !== undefined && <div className="mt-1"><AlwaysLine action={action} /></div>}
@@ -132,8 +133,8 @@ function ActionBody({ action, rpc }: { action: PendingAction; rpc: WorkspaceRpc 
 
   return (
     <>
-      <div className="p-row-text p-text">{action.title}</div>
-      <div className="mt-0.5 p-meta p-text-3">{action.detail ?? "Your agent"} · {timeAgo(action.at)} · read it in its review</div>
+      <div className="t-body p-text">{action.title}</div>
+      <div className="t-meta mt-px p-text-3">{action.detail ?? "Your agent"} · {timeAgo(action.at)} · read it in its review</div>
     </>
   );
 }
@@ -143,9 +144,9 @@ function ConsentBody({ consent }: { consent: PendingConsent }) {
 
   return (
     <>
-      <div className="p-row-text p-text">Use <span className="font-medium">{consent.deviceLabel}</span> for {forWhom}?</div>
-      <code className="mt-1 block rounded-sm px-2 py-1 p-t-code p-text-2 break-all p-fill">{revealMisrepresenting(consent.command || "(command)")}</code>
-      <div className="mt-1 p-meta p-text-3">Commands use {consent.deviceLabel}'s Sandbox setting. Revoke access on the Devices page.</div>
+      <div className="t-body p-text">Use <strong>{consent.deviceLabel}</strong> for {forWhom}?</div>
+      <Surface look="tile" as="code" className="t-code mt-1 block px-2 py-1 p-text-2 break-all">{revealMisrepresenting(consent.command || "(command)")}</Surface>
+      <div className="t-meta mt-1 p-text-3">Commands use {consent.deviceLabel}'s Sandbox setting. Revoke access on the Devices page.</div>
     </>
   );
 }
@@ -157,9 +158,9 @@ function MemoryBody({ memory }: { memory: AccountMemoryProposal }) {
 
   return (
     <>
-      <div className="p-row-text p-text">Remember this for every workspace?</div>
-      <code className="mt-1 block max-h-28 overflow-auto rounded-sm px-2 py-1 p-t-code p-text-2 break-all whitespace-pre-wrap p-fill">{remembered(memory)}</code>
-      <div className="mt-1 p-meta p-text-3">{by}{where} asked {timeAgo(memory.createdAt)}. Forget it any time under Settings → Memory.</div>
+      <div className="t-body p-text">Remember this for every workspace?</div>
+      <Surface look="tile" as="code" className="t-code mt-1 block max-h-28 overflow-auto px-2 py-1 p-text-2 break-all whitespace-pre-wrap">{remembered(memory)}</Surface>
+      <div className="t-meta mt-1 p-text-3">{by}{where} asked {timeAgo(memory.createdAt)}. Forget it any time under Settings → Memory.</div>
     </>
   );
 }
@@ -332,18 +333,18 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
         const BehindIcon = KIND_ICON[kindOf(ask)];
 
         return (
-          <button key={ask.key} type="button" data-attention-behind={ask.key} onClick={() => { setError(null); setChosen(ask.key); }}
-            className="p-attention-behind" title="Answer this one first">
+          <ChromeButton part="behind" key={ask.key} data-attention-behind={ask.key} onClick={() => { setError(null); setChosen(ask.key); }}
+            title="Answer this one first">
             <BehindIcon size={11} className="shrink-0 p-text-3" aria-hidden />
             <span className="min-w-0 flex-1 truncate">{headline(ask)}</span>
             {depth === 0 && unshown > 0 && <span className="shrink-0 tabular-nums p-text-3">+{unshown}</span>}
-          </button>
+          </ChromeButton>
         );
       })}
       <div key={front.key} className="p-attention-card animate-fade-in" data-attention-card={front.key} data-attention-kind={kindOf(front)}
         {...(front.kind === "consent" ? { "data-device-bind": front.consent.consentId } : {})}
         aria-live="polite">
-        <div className="mb-1 flex items-center gap-1.5 p-meta p-text-3">
+        <div className="t-meta mb-1 flex items-center gap-2 p-text-3">
           <FrontIcon size={12} className="shrink-0 p-warning" weight="fill" aria-hidden />
           <span>{answerOwed ? "Answer sent" : "Waiting on you"}</span>
           {cards > 1 && <span className="tabular-nums" data-attention-position>· 1 of {cards}</span>}
@@ -358,9 +359,9 @@ export function AttentionStack(props: AttentionStackProps): ReactNode {
             onAnswer={(answers) => detach(answer({ label: "Answer", weight: "primary", run: async () => rpc("answerOwnerQuestions", [front.question.asked.id, answers, front.question.actor]) }))}
             onDismiss={() => detach(answer({ label: "Dismiss", weight: "quiet", run: async () => { await rpc("dismissOwnerQuestions", [front.question.asked.id, front.question.actor]); } }))} />
         )}
-        {error?.key === front.key && <div className="mt-1.5 p-t-status p-danger" role="alert">{error.message}</div>}
+        {error?.key === front.key && <div className="t-status mt-2 p-danger" role="alert">{error.message}</div>}
         {!batched && (
-          <div className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+          <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
             {[...answersOf(front, props)].reverse().map((choice) => <AnswerButton key={choice.label} answer={choice} busy={busy === front.key} onAnswer={answer} />)}
           </div>
         )}

@@ -2,7 +2,7 @@
  * `settle` is the one place an effect meets a Promise, and it accepts only `KinuError` or `VfsError` failures:
  * a string, a foreign tagged error, a plain `Error` or an unclassified `tryPromise` rejection would
  * reach callers with no class, and the classification every reader keys on would read `null`.
- * Compiles fixtures/effect-closed-failure with the repo's `tsc`: violations.ts must fail on each
+ * Checks fixtures/effect-closed-failure with the repo's `tsrs`: violations.ts must fail on each
  * marked line naming `KinuError`, allowed.ts must compile. Measured 2026-09-23, effect 4.0.0-rc.117.
  */
 
@@ -25,8 +25,8 @@ interface Diagnostic {
 }
 
 async function compileFixtures() {
-  const tsc = join(repoRoot, 'node_modules', '.bin', 'tsc');
-  const run = await runToExit([tsc, '--noEmit', '--pretty', 'false', '-p', fixtureProject], { cwd: repoRoot });
+  const checker = join(repoRoot, 'node_modules', '.bin', 'tsrs');
+  const run = await runToExit([checker, '--noEmit', '--pretty', 'false', '-p', fixtureProject], { cwd: repoRoot });
 
   const diagnostics: Diagnostic[] = [];
   let current: Diagnostic | undefined;
