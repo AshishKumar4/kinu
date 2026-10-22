@@ -210,6 +210,9 @@ export interface TestUserDOOptions {
   /** In-memory Mossaic per tenant id; absent, the Drive is unbound. */
   drive?: (tenant: string) => MossaicVfs | null;
   destroyWorkspaceError?: string;
+  /** Whether a destroy that failed with `destroyWorkspaceError` had wiped the workspace first, as the Agents SDK's
+   *  destroy does before its activation's end cuts the answer; by default only a `destroyed` failure had. */
+  destroyWorkspaceWiped?: boolean;
   /** Hold workspace teardown open to observe the in-flight destroy window, or route the call to a real workspace object. */
   destroyWorkspaceGate?: (name: string, ownerUserId: string) => Promise<void>;
   /** What the workspace's quiet before its deletion does; nothing when unset. */
@@ -409,6 +412,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const sql = sqlExec(db);
   const installed = new Map<string, string>();
   const destroyedWorkspaces: string[] = [];
+  /** Workspaces whose storage a destroy wiped, whatever its call answered. */
+  const wipedWorkspaces = new Set<string>();
   const accountDeleted: string[] = [];
   const accountOf = options.accounts;
 
@@ -662,9 +667,17 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         async destroyAgent(ownerUserId: string) {
           if (options.destroyWorkspaceGate) await options.destroyWorkspaceGate(name, ownerUserId);
 
-          if (options.destroyWorkspaceError) throw new Error(options.destroyWorkspaceError);
+          if (options.destroyWorkspaceError) {
+            if (options.destroyWorkspaceWiped ?? options.destroyWorkspaceError === 'destroyed') wipedWorkspaces.add(name);
+
+            throw new Error(options.destroyWorkspaceError);
+          }
+
+          wipedWorkspaces.add(name);
           destroyedWorkspaces.push(name);
         },
+        // A workspace stands until its destroy wiped it (`storedWorkspace`).
+        storedWorkspace: async () => (wipedWorkspaces.has(name) ? 0 : 1),
         async installWorkspaceCapability(token: string) {
           installed.set(name, token);
 

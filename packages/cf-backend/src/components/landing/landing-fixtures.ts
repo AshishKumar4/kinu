@@ -207,7 +207,7 @@ const WORKER_TREE: ReadonlyMap<string, readonly DirEntry[]> = new Map([
 ]);
 
 /** The week's ratings, as an account no one has rated answers them (core `qualityWindow`). */
-const UNRATED_WEEK: QualityWindow = {
+export const UNRATED_WEEK: QualityWindow = {
   from: new Date(NOW - 6 * 864e5).toISOString().slice(0, 10),
   to: new Date(NOW).toISOString().slice(0, 10),
   satisfaction: satisfactionInterval([]),
@@ -218,7 +218,7 @@ const UNRATED_WEEK: QualityWindow = {
 };
 
 /** No metered step yet: what a workspace's Activity reads before its agent has run one. */
-const QUIET_ACTIVITY: ActivitySnapshot = {
+export const QUIET_ACTIVITY: ActivitySnapshot = {
   latest: null,
   contextWindow: null,
   fill: null,

@@ -78,11 +78,13 @@ type Cohort = { taskId: string; model: string; arm: string; taskVersion: string;
 
 type Identity = { taskId: string; model: string; arm: string };
 
-/** One check's attempts and passes on one side: a trial that stopped before the check did not attempt it. */
-export type CheckRate = { attempted: number; passed: number };
+/** One check's attempts and passes on one side: a trial that stopped before the check did not attempt it, and one whose
+ *  judgement could not be had (`unjudged`) did not either. `rung`: a step of partial credit (`EvalCheck`). */
+export type CheckRate = { attempted: number; passed: number; rung: boolean };
 
-/** One check, `t<turn> <id>`, on both sides, with the two-sided Fisher exact test on its passes over its attempts. */
-export type CheckShift = { check: string; baseline: CheckRate; candidate: CheckRate; pValue: number };
+/** One check, `t<turn> <id>`, on both sides, with the two-sided Fisher exact test on its passes over its attempts. A
+ *  rung's significant fall regresses, as the task's pass rate's does. */
+export type CheckShift = { check: string; baseline: CheckRate; candidate: CheckRate; pValue: number; rung: boolean };
 
 /**
  * One task/model/arm cohort. `reason` is null exactly when both sides compare, and then `pValue` is the two-sided
@@ -551,9 +553,12 @@ function checkRates(assertions: readonly Assertion[]): Map<string, CheckRate> {
     for (const turn of assertion.meta.harness.run.output.turns) {
       for (const check of turn.checks) {
         const key = `t${String(turn.turn)} ${check.id}`;
-        const sofar = rates.get(key) ?? { attempted: 0, passed: 0 };
+        const sofar = rates.get(key) ?? { attempted: 0, passed: 0, rung: false };
+        const rung = sofar.rung || check.rung === true;
 
-        rates.set(key, { attempted: sofar.attempted + 1, passed: sofar.passed + (check.pass ? 1 : 0) });
+        rates.set(key, check.unjudged === true
+          ? { ...sofar, rung }
+          : { attempted: sofar.attempted + 1, passed: sofar.passed + (check.pass ? 1 : 0), rung });
       }
     }
   }
@@ -564,17 +569,26 @@ function checkRates(assertions: readonly Assertion[]): Map<string, CheckRate> {
 /** Every check either side attempted, with its pass rate on both. */
 function checkShifts(baseline: readonly Assertion[], candidate: readonly Assertion[]): CheckShift[] {
   const before = checkRates(baseline), after = checkRates(candidate);
-  const none: CheckRate = { attempted: 0, passed: 0 };
+  const none: CheckRate = { attempted: 0, passed: 0, rung: false };
 
   return [...new Set([...before.keys(), ...after.keys()])].map((check) => {
     const [was, is] = [before.get(check) ?? none, after.get(check) ?? none];
 
-    return { check, baseline: was, candidate: is, pValue: fisherExact({ passed: was.passed, trials: was.attempted }, { passed: is.passed, trials: is.attempted }) };
+    return {
+      check, baseline: was, candidate: is, rung: was.rung || is.rung,
+      pValue: fisherExact({ passed: was.passed, trials: was.attempted }, { passed: is.passed, trials: is.attempted }),
+    };
   });
 }
 
 function passRate(side: EvalStats): number {
   return side.passed / side.trials;
+}
+
+/** The rungs a compared cohort climbed significantly less often (`CheckShift`): a regression of their own. */
+function rungsFell(row: ComparedRow): CheckShift[] {
+  return row.checks.filter((check) => check.rung && check.pValue < SIGNIFICANCE && check.baseline.attempted > 0 && check.candidate.attempted > 0
+    && check.candidate.passed / check.candidate.attempted < check.baseline.passed / check.baseline.attempted);
 }
 
 /** Measures in which more is worse ("evals show no degradations", the owner): a rise beyond noise in any is a regression,
@@ -627,7 +641,9 @@ function verdictOf(rows: readonly EvalComparisonRow[], profiled: EvalComparison[
 
   if (moved.some((row) => passRate(row.candidate) < passRate(row.baseline)) || compared.some(resetMore) || compared.some(collapsed)) return 'regressed';
 
-  if (compared.some((row) => worsened(row).length > 0) || belowCacheTarget(profiled).length > 0 || buggier(platform).length > 0) return 'regressed';
+  if (compared.some((row) => worsened(row).length > 0 || rungsFell(row).length > 0) || belowCacheTarget(profiled).length > 0 || buggier(platform).length > 0) {
+    return 'regressed';
+  }
 
   // Too few trials to tell a fall from noise is no evidence that nothing fell, and a promotion needs that evidence.
   if (!compared.every(canTellAFall)) return 'inconclusive';
@@ -832,6 +848,10 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
 
   const uncached = belowCacheTarget(comparison.profiles).map(({ model, candidate }) => `${model} ${rate(candidate.steadyCacheHitRate)}`);
 
+  const climbed = compared.flatMap((row) => rungsFell(row).map((check) => `${rowName(row, shared)} ${check.check} `
+    + `${String(check.baseline.passed)}/${String(check.baseline.attempted)} \u2192 ${String(check.candidate.passed)}/${String(check.candidate.attempted)} `
+    + `(p = ${check.pValue.toFixed(2)})`));
+
   switch (comparison.verdict) {
     case 'inconclusive': {
       const reasons = [...new Set(comparison.rows.flatMap((row) => row.reason ?? []))];
@@ -850,6 +870,7 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
       ...falls.length > 0 ? [`Fell: ${falls.join(', ')}.`] : [],
       ...resets.length > 0 ? [`Reset for memory more often: ${resets.join(', ')}.`] : [],
       ...worse.length > 0 ? [`Worse: ${worse.join(', ')}.`] : [],
+      ...climbed.length > 0 ? [`Climbed less far: ${climbed.join(', ')}.`] : [],
       ...uncached.length > 0 ? [`Steady cache hit below ${rate(CACHE_TARGET)}: ${uncached.join(', ')}.`] : [],
       ...rises.length > 0 ? [`Rose: ${rises.join(', ')}.`] : [],
     ].join(' ');

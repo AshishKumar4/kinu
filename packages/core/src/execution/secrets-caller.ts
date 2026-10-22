@@ -63,6 +63,11 @@ export function principalExecId(id: string): string {
   return secretsCaller() === 'viewer' && !id.startsWith(VIEWER_EXEC_PREFIX) ? `${VIEWER_EXEC_PREFIX}${id}` : id;
 }
 
+/** Each exec id `id` was started under, whoever's call it was: read where no call is current (a restart's recovery). */
+export function execIdsOf(id: string): readonly string[] {
+  return [id, `${VIEWER_EXEC_PREFIX}${id}`];
+}
+
 /** A process a viewer's call started, however far down, or one running as the viewer's uid (`viewerUid`). */
 export function isViewerProcess(process: { readonly cred: VfsCred; readonly execId?: string }, viewerUid: (uid: number) => boolean): boolean {
   return process.execId?.startsWith(VIEWER_EXEC_PREFIX) === true || viewerUid(process.cred.uid);

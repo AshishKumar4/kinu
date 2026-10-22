@@ -17,6 +17,7 @@ import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
 import { wrapToolsForBackground, type ActorJobs } from '../jobs/background-wrap';
 import type { EffectClaimDeps } from '../tools/effect-claim';
+import { isBuiltinSkillFile } from '../skills/view';
 
 export interface HeadSplitRequest {
   readonly rationale: string;
@@ -112,6 +113,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ServedTools {
     allowed: input.allowedTools,
     codemode: deps.codemode,
     effectClaims: deps.effectClaims,
+    knownFile: isBuiltinSkillFile,
     wrapFinished: (finished) => wrapToolsForBackground(finished, deps.jobs),
   };
 

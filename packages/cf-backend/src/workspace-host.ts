@@ -84,6 +84,7 @@ function processLogsJson(logs: ProcessLogs): JsonObject {
 interface HostedRuntimeModule {
   readonly composeHostedRuntime: (options: HostedRuntimeOptions) => Promise<HostedRuntime>;
   readonly runtimeCatalogSource: (env: Pick<HostedRuntimeOptions['env'], 'NIMBUS_RUNTIME_CACHE' | 'NIMBUS_RUNTIME_CATALOG_SHA256'>) => RuntimeSource;
+  readonly sessionProcessEnv: (storage: DurableObjectStorage) => Required<Pick<HostedRuntimeOptions, 'resolveProcessEnv' | 'keepProcessEnv'>>;
 }
 
 let runtimeModule: Promise<HostedRuntimeModule> | null = null;
@@ -92,6 +93,7 @@ function hostedRuntimeModule(): Promise<HostedRuntimeModule> {
   runtimeModule ??= import('@nimbus-sh/worker/workspace-host').then((module) => ({
     composeHostedRuntime: module.composeHostedRuntime,
     runtimeCatalogSource: module.runtimeCatalogSource,
+    sessionProcessEnv: module.sessionProcessEnv,
   }));
 
   return runtimeModule;
@@ -299,7 +301,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
     composing ??= (async (): Promise<HostComposition> => {
       try {
         const session = await bundle.session();
-        const { composeHostedRuntime } = await hostedRuntimeModule();
+        const { composeHostedRuntime, sessionProcessEnv } = await hostedRuntimeModule();
 
         const runtimeBindings: HostedRuntimeBindings<Id> = {
           OrchestratorAgent: deps.env.OrchestratorAgent,
@@ -315,6 +317,10 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
           ports: portRegistry,
           lifecycle,
           resolveWorkerLaunch: (recipe) => resolveSlateLaunch(deps, recipe),
+          // Nimbus keeps no process's environment (ask 62); a relaunch asks for it again. Kinu has no record of a dev
+          // server's or a resident's launch env, so it is kept as Nimbus's own session keeps it: a storage row beside its
+          // record, outside the filesystem. The box's env holds egress placeholders only, never a secret's value.
+          ...sessionProcessEnv(deps.ctx.storage),
         });
 
         // Cold-start recovery of the launch journal, as Nimbus's own session pumps once at init.

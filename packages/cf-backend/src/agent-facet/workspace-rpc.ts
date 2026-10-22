@@ -127,6 +127,8 @@ class WorkspaceSession implements NimbusSessionSurface {
   _rpcExecStream(...args: Parameters<NimbusSessionSurface['_rpcExecStream']>) { return settle(this.call(session => session._rpcExecStream(...args), true)); }
   _rpcDetachExec(...args: Parameters<NimbusSessionSurface['_rpcDetachExec']>) { return settle(this.call(session => session._rpcDetachExec(...args))); }
   _rpcStartProcess(...args: Parameters<NimbusSessionSurface['_rpcStartProcess']>) { return settle(this.call(session => session._rpcStartProcess(...args))); }
+  _rpcStartProgram(...args: Parameters<NimbusSessionSurface['_rpcStartProgram']>) { return settle(this.call(session => session._rpcStartProgram(...args), true)); }
+  _rpcWaitProgram(...args: Parameters<NimbusSessionSurface['_rpcWaitProgram']>) { return settle(this.call(session => session._rpcWaitProgram(...args))); }
   _rpcRunCode(...args: Parameters<NimbusSessionSurface['_rpcRunCode']>) { return settle(this.call(session => session._rpcRunCode(...args))); }
   _rpcReadFile(...args: Parameters<NimbusSessionSurface['_rpcReadFile']>) { return settle(this.call(session => session._rpcReadFile(...args))); }
   _rpcReadFileBytes(...args: Parameters<NimbusSessionSurface['_rpcReadFileBytes']>) { return settle(this.call(session => session._rpcReadFileBytes(...args))); }
@@ -142,6 +144,14 @@ class WorkspaceSession implements NimbusSessionSurface {
   _rpcExists(...args: Parameters<NimbusSessionSurface['_rpcExists']>) { return settle(this.call(session => session._rpcExists(...args))); }
   _rpcMkdir(...args: Parameters<NimbusSessionSurface['_rpcMkdir']>) { return settle(this.call(session => session._rpcMkdir(...args))); }
   _rpcDeleteFile(...args: Parameters<NimbusSessionSurface['_rpcDeleteFile']>) { return settle(this.call(session => session._rpcDeleteFile(...args))); }
+  _rpcUnlink(...args: Parameters<NimbusSessionSurface['_rpcUnlink']>) { return settle(this.call(session => session._rpcUnlink(...args))); }
+  _rpcRmdir(...args: Parameters<NimbusSessionSurface['_rpcRmdir']>) { return settle(this.call(session => session._rpcRmdir(...args))); }
+  _rpcAppendFile(...args: Parameters<NimbusSessionSurface['_rpcAppendFile']>) { return settle(this.call(session => session._rpcAppendFile(...args))); }
+  _rpcSymlink(...args: Parameters<NimbusSessionSurface['_rpcSymlink']>) { return settle(this.call(session => session._rpcSymlink(...args))); }
+  _rpcRealpath(...args: Parameters<NimbusSessionSurface['_rpcRealpath']>) { return settle(this.call(session => session._rpcRealpath(...args))); }
+  _rpcTruncate(...args: Parameters<NimbusSessionSurface['_rpcTruncate']>) { return settle(this.call(session => session._rpcTruncate(...args))); }
+  _rpcUtimes(...args: Parameters<NimbusSessionSurface['_rpcUtimes']>) { return settle(this.call(session => session._rpcUtimes(...args))); }
+  _rpcChown(...args: Parameters<NimbusSessionSurface['_rpcChown']>) { return settle(this.call(session => session._rpcChown(...args))); }
   _rpcInstallRuntime(...args: Parameters<NimbusSessionSurface['_rpcInstallRuntime']>) { return settle(this.call(session => session._rpcInstallRuntime(...args))); }
   _rpcEnsureRuntimes(...args: Parameters<NimbusSessionSurface['_rpcEnsureRuntimes']>) { return settle(this.call(session => session._rpcEnsureRuntimes(...args))); }
   _rpcListRuntimes() { return settle(this.call(session => session._rpcListRuntimes())); }
@@ -152,6 +162,8 @@ class WorkspaceSession implements NimbusSessionSurface {
   _rpcResizeProcess(...args: Parameters<NimbusSessionSurface['_rpcResizeProcess']>) { return settle(this.call(session => session._rpcResizeProcess(...args))); }
   _rpcSignalProcess(...args: Parameters<NimbusSessionSurface['_rpcSignalProcess']>) { return settle(this.call(session => session._rpcSignalProcess(...args))); }
   _rpcProcessLogs(...args: Parameters<NimbusSessionSurface['_rpcProcessLogs']>) { return settle(this.call(session => session._rpcProcessLogs(...args))); }
+  _rpcListTerminals() { return settle(this.call(session => session._rpcListTerminals())); }
+  _rpcCloseTerminal(...args: Parameters<NimbusSessionSurface['_rpcCloseTerminal']>) { return settle(this.call(session => session._rpcCloseTerminal(...args))); }
   _rpcListPorts() { return settle(this.call(session => session._rpcListPorts())); }
   _rpcExposePort(...args: Parameters<NimbusSessionSurface['_rpcExposePort']>) { return settle(this.call(session => session._rpcExposePort(...args))); }
   _rpcExposeApp(...args: Parameters<NimbusSessionSurface['_rpcExposeApp']>) { return settle(this.call(session => session._rpcExposeApp(...args))); }

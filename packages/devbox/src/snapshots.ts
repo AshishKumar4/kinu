@@ -73,6 +73,12 @@ export class Snapshots {
     });
   }
 
+  /** A take still under way is given up: when it lands it is owed for deletion, never the next wake, as a superseded
+   *  one is. The snapshot this box already holds stays. */
+  abandon(): void {
+    this.#lineage += 1;
+  }
+
   supersede(): void {
     const held = this.record;
 

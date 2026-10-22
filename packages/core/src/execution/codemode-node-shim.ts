@@ -1,11 +1,10 @@
 /**
- * The Node-convenience module beside an `eval` program, plain JS for the sandbox isolate: `fs` and
- * `child_process` over `workspace`, `process.cwd()` at the working root, `workspace.slates` objects,
- * a `fetch` that rejects the egress entrypoint's marked 502, and isolated crafted tools.
+ * The Node-convenience module beside an `eval` program, plain JS for the sandbox isolate: Nimbus's node-compat `fs` and
+ * `child_process` over `workspace` (its files, and each machine's exec), `process.cwd()` at the working root,
+ * `workspace.slates` objects, a `fetch` that rejects the egress entrypoint's marked 502, and isolated crafted tools.
  */
 
 import { SLATE_PROGRAM_MEMBERS } from '../slates/rpc';
-import { walkedPath } from '../vfs/workspace-path';
 
 export const KINU_NODE_MODULE_NAME = 'kinu-node.js';
 
@@ -36,45 +35,37 @@ function refusalOf(result) {
     && (result.success === false || typeof result.reason === 'string') ? result.error : null;
 }
 
-/** The file plane's own join (vfs/workspace-path.ts): a relative path onto the working root, its components left for the
- *  plane to walk, so a link's '..' lands where the link's target is, as file.write's does. */
-const walkedPath = ${walkedPath.toString()};
-
-/** A path as the host resolves it; an empty or root:// one as given. */
-function resolveAt(cwd, path) {
-  const text = String(path);
-  if (text === '' || /^[^\s/:]+:\/\//.test(text)) return text;
-  return walkedPath(text, cwd);
-}
-
 /** The platform's process object plus a working directory: the root relative paths resolve against. */
 export function createProcess(cwd) {
   const own = { cwd: () => cwd };
   return globalThis.process ? Object.setPrototypeOf(own, globalThis.process) : own;
 }
 
-/** A refusal's error and its reason, or null for a value. */
-function refusedOf(result) {
-  const error = refusalOf(result);
-  return error === null ? null : { error, reason: typeof result.reason === 'string' ? result.reason : null };
-}
-
 /** The errno a refusal's reason stands for when its text names none. Only a stated absence is ENOENT: a read that was
  *  refused or could not be made says nothing of whether the file is there, so an append never reads it as empty. */
 const ERRNO_OF_REASON = { missing: 'ENOENT', denied: 'EACCES', bad_input: 'EINVAL', unsupported: 'ENOTSUP', timeout: 'ETIMEDOUT', cancelled: 'ECANCELED' };
 
-/** A Node-shaped error from a host refusal: the errno its text names, else its reason's, else EIO; and the path. */
-function fsError(refused, path, syscall) {
-  const named = /^(E[A-Z]+): /.exec(refused.error);
-  const code = named ? named[1] : (ERRNO_OF_REASON[refused.reason] || 'EIO');
-  const text = named ? refused.error.slice(named[0].length) : refused.error;
-  const error = new Error(code + ': ' + text + (path === undefined || text.includes("'" + path + "'") ? '' : ', ' + syscall + " '" + path + "'"));
-  error.code = code;
-  error.errno = -1;
-  error.syscall = syscall;
-  error.path = path;
-  return error;
+/** A failure as Node's fs reads one from the files it is given: its errno, the syscall and the path, in Node's words,
+ *  the path said once where the text names it already. */
+function nodeError(code, text, syscall, path) {
+  const named = text.includes("'" + path + "'") ? text : text + ', ' + syscall + " '" + path + "'";
+  return Object.assign(new Error(code + ': ' + named), { code, syscall, path });
 }
+
+/** A member's value, or its refusal thrown with the errno its text names, else its reason's, else EIO. */
+async function answered(call, syscall, path) {
+  const result = await call;
+  const refused = refusalOf(result);
+  if (refused === null) return result;
+  const named = /^(E[A-Z]+): /.exec(refused);
+  throw nodeError(named ? named[1] : (ERRNO_OF_REASON[result.reason] || 'EIO'), named ? refused.slice(named[0].length) : refused, syscall, path);
+}
+
+/** The errno a failed command's own words name (coreutils' strerror text), else EIO. */
+const ERRNO_OF_TEXT = [
+  ['No such file or directory', 'ENOENT'], ['File exists', 'EEXIST'], ['Not a directory', 'ENOTDIR'], ['Is a directory', 'EISDIR'],
+  ['Directory not empty', 'ENOTEMPTY'], ['Permission denied', 'EACCES'], ['Read-only file system', 'EROFS'],
+];
 
 function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
@@ -87,8 +78,8 @@ function shownArg(value) {
 }
 
 /**
- * A synchronous or streaming Node call. Nothing in the sandbox can block on the workspace (workerd,
- * 2026-09-23: "Atomics.wait cannot be called in this context"), so it names the awaited replacement.
+ * A synchronous Node call. Nothing in the sandbox can block on the workspace (workerd, 2026-09-23: "Atomics.wait cannot
+ * be called in this context"), so it names the awaited call that replaces it, written out for this one.
  */
 function asyncOnly(name, rewrite) {
   return (...args) => {
@@ -127,187 +118,158 @@ function fromBase64(text) {
   return bytes;
 }
 
-/** Data a program writes, as the bytes it holds: a string as UTF-8, a view of bytes as they are. */
-function bytesOf(data) {
-  if (typeof data === 'string') return new TextEncoder().encode(data);
-  if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-  if (data instanceof ArrayBuffer) return new Uint8Array(data);
-  return new TextEncoder().encode(String(data));
+/**
+ * A path as the host resolves it. One the program named under a root (\`vfs://notes/a.md\`) reaches here joined onto the
+ * working directory (\`<cwd>/vfs://notes/a.md\`, or \`<cwd>/vfs:/notes/a.md\` where the engine's path rules fold the
+ * slashes), and goes to the host as it was written.
+ */
+function hostPath(path) {
+  const at = path.search(/\/[^\s/:]+:\//);
+  return at < 0 ? path : path.slice(at + 1).replace(/^([^\s/:]+):\/+/, '$1://');
 }
 
-function makeFs(workspace, cwd) {
-  const encodingOf = (options) => typeof options === 'string' ? options : options && options.encoding;
-
-  /** The file's bytes exactly, as the file plane reads them (file.text with base64), for a file that is not text too. */
-  async function readBase64(path) {
-    const target = resolveAt(cwd, path);
-    const read = await workspace.fs.text(target, { encoding: 'base64' });
-    const refused = refusedOf(read);
-    if (refused) throw fsError(refused, target, 'open');
-    return read;
-  }
-  async function readFile(path, options) {
-    const encoding = encodingOf(options);
-    if (encoding === undefined || encoding === null) return fromBase64(await readBase64(path));
-    if (encoding === 'base64') return await readBase64(path);
-    const target = resolveAt(cwd, path);
-    const text = await workspace.fs.text(target);
-    const refused = refusedOf(text);
-    if (refused) throw fsError(refused, target, 'open');
-    return text;
-  }
-  /** A string is written as its text; bytes, or a string named base64, as the bytes exactly. */
-  async function writeFile(path, data, options) {
-    const target = resolveAt(cwd, path);
-    const encoding = encodingOf(options);
-    const result = typeof data === 'string' && encoding !== 'base64'
-      ? await workspace.fs.write(target, data)
-      : await workspace.fs.write(target, typeof data === 'string' ? data : toBase64(bytesOf(data)), { encoding: 'base64' });
-    const refused = refusedOf(result);
-    if (refused) throw fsError(refused, target, 'open');
-  }
-  // Read, joined, written whole: a file that is not there starts empty, and any other failed read fails the append
-  // before anything is written.
-  async function appendFile(path, data) {
-    let current = new Uint8Array(0);
-    try {
-      current = await readFile(path);
-    } catch (cause) {
-      if (!cause || cause.code !== 'ENOENT') throw cause;
-    }
-    const added = bytesOf(data);
-    const joined = new Uint8Array(current.length + added.length);
-    joined.set(current);
-    joined.set(added, current.length);
-    await writeFile(path, joined);
-  }
-  async function readdir(path, options) {
-    const target = resolveAt(cwd, path);
-    const names = [];
-    // A listing comes a page at a time; Node's is the whole directory.
-    for (let offset = 0; ;) {
-      const page = await workspace.fs.list(target, { offset });
-      const refused = refusedOf(page);
-      if (refused) throw fsError(refused, target, 'scandir');
-      names.push(...page.entries);
-      if (!page.truncated || page.truncated.next >= page.truncated.total || page.entries.length === 0) break;
-      offset = page.truncated.next;
-    }
-    if (!(options && options.withFileTypes)) return names;
-    const base = target.replace(/\/+$/, '');
-    return await Promise.all(names.map(async (name) => {
-      const info = await stat(base + '/' + name);
-      return { name, isFile: () => info.isFile(), isDirectory: () => info.isDirectory() };
-    }));
-  }
+/**
+ * The workspace's files as Node's fs asks for them (Nimbus's node-compat \`NodeFiles\`), through the program's file
+ * namespace, so its gates and records apply as to any of its calls. What the namespace has no member for (a directory
+ * made or removed, a rename, a copy) is the workspace's own command. Links, modes and descriptors are not here: Node's
+ * fs answers ENOSYS for them.
+ */
+function workspaceFiles(workspace) {
   async function stat(path) {
-    const target = resolveAt(cwd, path);
-    const found = await workspace.fs.stat(target);
-    const refused = refusedOf(found);
-    if (refused) throw fsError(refused, target, 'stat');
+    const found = await answered(workspace.fs.stat(hostPath(path)), 'stat', path);
+    const at = found.mtimeMs;
     return {
-      size: found.size,
-      mtimeMs: found.mtimeMs,
-      mtime: new Date(found.mtimeMs),
-      isFile: () => !found.isDir,
-      isDirectory: () => found.isDir,
-      isSymbolicLink: () => false,
+      dev: 0, ino: 0, nlink: 1, type: found.isDir ? 'directory' : 'file', size: found.size, ctime: at, atime: at, mtime: at,
+      mode: found.isDir ? 0o40755 : 0o100644, uid: 0, gid: 0, revision: 0,
     };
   }
-  async function run(command, path, syscall) {
-    const outcome = await execParts(workspace, command, {});
-    if (outcome.exitCode !== 0) throw fsError({ error: outcome.stderr.trim() || outcome.stdout.trim() || ('exit ' + outcome.exitCode), reason: null }, path, syscall);
+  /** The file's bytes exactly, as the file plane reads them (file.text with base64), for a file that is not text too. */
+  const readFile = async (path) => fromBase64(await answered(workspace.fs.text(hostPath(path), { encoding: 'base64' }), 'open', path));
+  /** A string is written as its text; bytes as the bytes exactly. */
+  async function writeFile(path, data) {
+    const at = hostPath(path);
+    await answered(typeof data === 'string' ? workspace.fs.write(at, data) : workspace.fs.write(at, toBase64(data), { encoding: 'base64' }), 'open', path);
   }
-  const onPath = (path, command, syscall) => {
-    const target = resolveAt(cwd, path);
-    return run(command + shellQuote(target), target, syscall);
-  };
-  const mkdir = (path, options) => onPath(path, 'mkdir ' + (options && options.recursive ? '-p ' : '') + '-- ', 'mkdir');
-  const rm = (path, options) => onPath(path, 'rm ' + (options && options.recursive ? '-r ' : '') + (options && options.force ? '-f ' : '') + '-- ', 'rm');
-  const unlink = (path) => onPath(path, 'rm -- ', 'unlink');
-  const rmdir = (path) => onPath(path, 'rmdir -- ', 'rmdir');
-  const carry = (from, to, command, syscall) => {
-    const source = resolveAt(cwd, from);
-    return run(command + shellQuote(source) + ' ' + shellQuote(resolveAt(cwd, to)), source, syscall);
-  };
-  const copyFile = (from, to) => carry(from, to, 'cp -- ', 'copyfile');
-  const rename = (from, to) => carry(from, to, 'mv -- ', 'rename');
-  async function access(path) {
-    await stat(path);
+  /** \`command\`, run for \`syscall\` on \`path\`: its failure as the errno its words name. */
+  async function run(command, syscall, path) {
+    const outcome = await execParts({ workspace }, command, undefined);
+    if (outcome.exitCode === 0) return;
+    const text = outcome.stderr.trim() || outcome.stdout.trim() || ('exit ' + outcome.exitCode);
+    const named = ERRNO_OF_TEXT.find(([words]) => text.includes(words));
+    throw nodeError(named ? named[1] : 'EIO', text, syscall, path);
   }
-  /** False only for a file stated absent; a stat that failed otherwise fails, as it says nothing either way. */
-  async function exists(path) {
-    try {
-      await stat(path);
-      return true;
-    } catch (cause) {
-      if (cause && cause.code === 'ENOENT') return false;
-      throw cause;
-    }
-  }
-  const promises = {
-    readFile, writeFile, appendFile, readdir, stat, lstat: stat, mkdir, rm, unlink, rmdir,
-    copyFile, rename, access,
-    exists,
+  return {
+    stat, lstat: stat, readFile, writeFile,
+    readFileString: async (path) => await answered(workspace.fs.text(hostPath(path)), 'open', path),
+    // Absent only where the plane says so: a stat refused otherwise says nothing of the file, so access fails with its errno.
+    async exists(path) {
+      const [found] = await Promise.allSettled([stat(path)]);
+      if (found.status === 'fulfilled') return true;
+      if (found.reason && found.reason.code === 'ENOENT') return false;
+      throw found.reason;
+    },
+    async readdir(path) {
+      const entries = [];
+      // A listing comes a page at a time; Node's is the whole directory. The plane names no entry's type: fs asks.
+      for (let offset = 0; ;) {
+        const page = await answered(workspace.fs.list(hostPath(path), { offset }), 'scandir', path);
+        entries.push(...page.entries.map((name) => ({ name, type: 'unknown' })));
+        if (!page.truncated || page.truncated.next >= page.truncated.total || page.entries.length === 0) return entries;
+        offset = page.truncated.next;
+      }
+    },
+    // Read, joined, written whole: a file that is not there starts empty, and any other failed read fails the append
+    // before anything is written.
+    async appendFile(path, data) {
+      const [read] = await Promise.allSettled([readFile(path)]);
+      if (read.status === 'rejected' && !(read.reason && read.reason.code === 'ENOENT')) throw read.reason;
+      const current = read.status === 'fulfilled' ? read.value : new Uint8Array(0);
+      const added = typeof data === 'string' ? new TextEncoder().encode(data) : data;
+      const joined = new Uint8Array(current.length + added.length);
+      joined.set(current);
+      joined.set(added, current.length);
+      await writeFile(path, joined);
+    },
+    mkdir: (path, options) => run('mkdir ' + (options && options.recursive ? '-p ' : '') + '-- ' + shellQuote(path), 'mkdir', path),
+    unlink: (path) => run('rm -- ' + shellQuote(path), 'unlink', path),
+    rmdir: (path) => run('rmdir -- ' + shellQuote(path), 'rmdir', path),
+    rmdirRecursive: (path) => run('rm -r -- ' + shellQuote(path), 'rm', path),
+    rename: (from, to) => run('mv -- ' + shellQuote(from) + ' ' + shellQuote(to), 'rename', from),
+    copyFile: (from, to) => run('cp -- ' + shellQuote(from) + ' ' + shellQuote(to), 'copyfile', from),
   };
-  const callbackForm = (fn) => (...args) => {
-    const callback = typeof args[args.length - 1] === 'function' ? args.pop() : null;
-    const promise = fn(...args);
-    if (!callback) return promise;
-    promise.then((value) => callback(null, value), (error) => callback(error));
-    return undefined;
-  };
-  const fs = { promises };
-  for (const [name, fn] of Object.entries(promises)) {
-    fs[name] = callbackForm(fn);
-    fs[name + 'Sync'] = asyncOnly('fs.' + name + 'Sync', (args) => 'await require("fs/promises").' + name + '(' + args.slice(0, 2).map(shownArg).join(', ') + ')');
-  }
-  return { fs, promises };
 }
 
-function makeChildProcess(machines, cwd) {
-  function exec(command, optionsOrCallback, maybeCallback) {
-    const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
-    const options = typeof optionsOrCallback === 'object' && optionsOrCallback !== null ? optionsOrCallback : {};
-    const promise = (async () => {
-      const outcome = await execParts(machines, String(command), options.cwd === undefined ? undefined : resolveAt(cwd, String(options.cwd)));
-      if (outcome.exitCode !== 0) {
-        const error = new Error('Command failed: ' + command + '\n' + outcome.stderr);
-        error.code = outcome.exitCode;
-        error.stdout = outcome.stdout;
-        error.stderr = outcome.stderr;
-        throw error;
-      }
-      return { stdout: outcome.stdout, stderr: outcome.stderr };
-    })();
-    if (typeof callback !== 'function') return promise;
-    promise.then((out) => callback(null, out.stdout, out.stderr), (error) => callback(error, error.stdout || '', error.stderr || ''));
-    return undefined;
-  }
-  function execFile(file, args, optionsOrCallback, maybeCallback) {
-    const argv = Array.isArray(args) ? args : [];
-    const callback = typeof args === 'function' ? args : (typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback);
-    const options = typeof optionsOrCallback === 'object' && optionsOrCallback !== null ? optionsOrCallback : {};
-    return exec([file, ...argv].map(shellQuote).join(' '), options, callback);
-  }
+/** A shell's own line (\`exec\`, or \`shell: true\`): the exec runs its command in a shell already. */
+function shellLine(argv) {
+  return argv.length === 3 && (argv[0] === '/bin/sh' || argv[0] === 'sh') && argv[1] === '-c' ? argv[2] : null;
+}
+
+/**
+ * A program child_process starts (Nimbus's node-compat \`NodeStart\`), on the machine whose files its cwd is, through
+ * that machine's own exec, its argv quoted as one command; one in the program's own directory, where the shell starts.
+ * That exec answers at the command's exit, so its output comes then; it is given no stdin, it runs with the machine's
+ * own environment, not \`env\`, and a kill does not reach it.
+ */
+function machineStart(machines, home) {
+  return async (program, cancel) => {
+    if (cancel.aborted) throw Object.assign(new Error('spawn ' + program.argv[0] + ' ECANCELED'), { code: 'ECANCELED' });
+    const command = shellLine(program.argv) ?? program.argv.map(shellQuote).join(' ');
+    const ran = execParts(machines, command, program.cwd === home ? undefined : program.cwd)
+      .catch((cause) => ({ exitCode: 126, stdout: '', stderr: cause && cause.message ? cause.message : String(cause) }));
+    const encoder = new TextEncoder();
+    const output = new ReadableStream({
+      async start(controller) {
+        const outcome = await ran;
+        if (outcome.stdout !== '') controller.enqueue({ stream: 'stdout', data: encoder.encode(outcome.stdout) });
+        if (outcome.stderr !== '') controller.enqueue({ stream: 'stderr', data: encoder.encode(outcome.stderr) });
+        controller.close();
+      },
+    });
+    return { output, exit: ran.then((outcome) => ({ code: outcome.exitCode, signal: null })), kill: () => {} };
+  };
+}
+
+/** Node's child_process, whose \`exec\` and \`execFile\` given no callback also resolve, awaited, to { stdout, stderr }
+ *  (util.promisify's answer, a failure's error carrying both), as this sandbox's programs have always awaited them; its
+ *  synchronous forms name that awaited call. */
+function awaitable(childProcess) {
+  const custom = Symbol.for('nodejs.util.promisify.custom');
+  const thenable = (run) => Object.defineProperty((...args) => {
+    if (typeof args[args.length - 1] === 'function') return run(...args);
+    const promise = run[custom](...args);
+    // A child only listened to is not an unhandled failure.
+    promise.catch(() => {});
+    return Object.assign(promise.child, { then: promise.then.bind(promise), catch: promise.catch.bind(promise), finally: promise.finally.bind(promise) });
+  }, custom, { value: run[custom] });
   const viaExec = (args) => 'const { stdout } = await require("child_process").exec(' + JSON.stringify(String(args[0])) + ')';
   const viaExecFile = (args) => 'const { stdout } = await require("child_process").execFile(' + JSON.stringify(String(args[0])) + ', ' + JSON.stringify(Array.isArray(args[1]) ? args[1].map(String) : []) + ')';
   return {
-    exec, execFile,
+    ...childProcess, exec: thenable(childProcess.exec), execFile: thenable(childProcess.execFile),
     execSync: asyncOnly('child_process.execSync', viaExec),
     execFileSync: asyncOnly('child_process.execFileSync', viaExecFile),
-    spawn: asyncOnly('child_process.spawn', viaExecFile),
     spawnSync: asyncOnly('child_process.spawnSync', viaExecFile),
-    fork: asyncOnly('child_process.fork', (args) => viaExec(['node ' + String(args[0])])),
   };
 }
 
-/** \`machines\`: the program's computer and device namespaces, where it has them, for a command whose cwd is theirs. */
-export function createRequire({ workspace, machines, builtins, cwd }) {
-  const { fs, promises } = makeFs(workspace, cwd);
-  const childProcess = makeChildProcess({ ...machines, workspace }, cwd);
+/** Node's fs, whose synchronous forms name the awaited call that replaces each. */
+function awaitableFs(fs) {
+  const named = { ...fs };
+  for (const name of Object.keys(fs)) {
+    const base = name.slice(0, -'Sync'.length);
+    if (!name.endsWith('Sync') || typeof fs.promises[base] !== 'function') continue;
+    named[name] = asyncOnly('fs.' + name, (args) => 'await require("fs/promises").' + base + '(' + args.slice(0, 2).map(shownArg).join(', ') + ')');
+  }
+  return named;
+}
+
+/**
+ * \`machines\`: the program's computer and device namespaces, where it has them, for a command whose cwd is theirs.
+ * \`createNodeCompat\`: Nimbus's node-compat (\`@nimbus-sh/core/node-compat\`), Node's fs and child_process written once.
+ */
+export function createRequire({ workspace, machines, builtins, cwd, createNodeCompat }) {
+  const { fs, fsPromises, childProcess } = createNodeCompat({ files: workspaceFiles(workspace), start: machineStart({ ...machines, workspace }, cwd) }, { cwd });
   const table = {
-    fs, 'fs/promises': promises, child_process: childProcess,
+    fs: awaitableFs(fs), 'fs/promises': fsPromises, child_process: awaitable(childProcess),
   };
   for (const [name, module] of Object.entries(builtins)) {
     table[name.slice('node:'.length)] = module;

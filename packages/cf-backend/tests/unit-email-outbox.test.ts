@@ -153,6 +153,25 @@ describe('EmailOutbox — retry backoff', () => {
   });
 });
 
+// staging 2026-10-22: a test sent to privacy@staging.kinu.run before its routing rule propagated bounced, and the
+// service suppressed the address. Each later send was refused E_RECIPIENT_SUPPRESSED, retried quietly, and read "queued".
+describe('EmailOutbox — a recipient the service suppressed', () => {
+  test('fails the send at once and for good, naming the suppression, where any other failure is retried', async () => {
+    const { box, sql } = outbox();
+
+    const suppressed = fakeBinding(() => {
+      throw Object.assign(new Error('Cannot send emails to this recipient. This email address has been suppressed due to repeated bounces'), { code: 'E_RECIPIENT_SUPPRESSED' });
+    });
+
+    const refused = await box.send(suppressed.binding, 'gone', message(), 1_000);
+
+    expect(refused).toMatchObject({ status: 'failed', final: true, error: expect.stringContaining('suppression list') });
+    expect(rowFor(sql, 'gone')).toMatchObject({ state: 'dlq', attempt_count: 1 });
+    expect(await box.send(fakeBinding(() => { throw new Error('the service did not answer'); }).binding, 'later', message(), 1_000))
+      .toMatchObject({ status: 'failed', final: false });
+  });
+});
+
 describe('EmailOutbox — reconciliation of an indeterminate', () => {
   test('a send that failed stays pending and is re-driven once', async () => {
     const { box, sql } = outbox();

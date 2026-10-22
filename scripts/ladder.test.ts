@@ -926,6 +926,28 @@ describe('what `armada run --json` answers', () => {
   });
 });
 
+// Staging e8837b133, 2026-10-22: a job that never started (a secret it named was not set) wrote `job: null`, the ladder
+// threw on parsing it, and the deploy went red with no red in its report.
+describe('an armada run that started no task job', () => {
+  test('is read, and each of its rows is not graded in the run\'s own words; a report it cannot read is too', () => {
+    const dir = scratchDir('armada-run-unstarted');
+    const unstarted = join(dir, 'kinu-unstarted.json');
+    const garbled = join(dir, 'kinu-garbled.json');
+    const problem = 'a task job did not start, so the run\'s task jobs were cancelled: POST /jobs: 409 no secret KINU_OAUTH_CLIENT_TOKEN is set';
+
+    writeFileSync(unstarted, JSON.stringify({ sha: 'a'.repeat(40), job: null, graded: 'not graded', problems: [problem], verdicts: { sha: 'a'.repeat(40), part: 'all', rows: [] } }));
+    writeFileSync(garbled, JSON.stringify({ job: 7, graded: 'maybe' }));
+    const answered = (path: string) => `${JSON.stringify({ sha: 'a'.repeat(40), planJob: 'p', job: null, report: path, graded: 'not graded', problems: [problem], rows: [] })}\n`;
+    const rows = armadaPhaseRows(['source']).filter((gate) => gate.run === 'bun scripts/deploy-oauth-client.ts check');
+    const read = armadaRowVerdicts(rows, armadaReport(answered(unstarted)));
+    const unreadable = armadaRowVerdicts(rows, armadaReport(answered(garbled)));
+
+    expect({ rows: rows.length, green: read.map(({ green }) => green), found: read.map(({ found }) => found) }).toEqual({ rows: 1, green: [false], found: [problem] });
+    expect({ green: unreadable.map(({ green }) => green), found: unreadable[0]?.found.startsWith(`armada's report ${garbled} does not read as this ladder expects:`) })
+      .toEqual({ green: [false], found: true });
+  });
+});
+
 describe('a deploy row\'s evidence', () => {
   // armada keeps a task's artifacts directory whole and extracts it beside the run's report, so the verdict names files
   // instead of carrying them: the base64 tar.gz it replaced dropped evidence past 64 MiB compressed.

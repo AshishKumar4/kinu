@@ -265,6 +265,30 @@ describe('the composite file plane', () => {
     ]);
   });
 
+  // Nimbus hands the mount every segment as written (ask 58). Above a machine's tree there are no links, so `.` and
+  // `..` there are walked by the fleet; inside it, by the machine.
+  test('the fleet\'s own levels walk `.` and `..`; inside a machine its daemon walks them', async () => {
+    const t = fleetTransport([STUDIO, RIG]);
+
+    const provider = createDeviceTunnelExecutor(t, {
+      consentedRoot: async () => '/', deviceHome: async () => '/', scope: async () => 'unconfined',
+    });
+
+    const plane = provider.files;
+
+    if (plane === undefined) throw new Error('the device executor exposes no file plane');
+
+    expect(await readText(plane, '/./mrwhite@rig/etc/hosts')).toBe('bytes of dev-rig');
+    expect(await readText(plane, '/ashish@studio/../mrwhite@rig/etc/hosts')).toBe('bytes of dev-rig');
+    expect(await readText(plane, '/mrwhite@rig/./etc/hosts')).toBe('bytes of dev-rig');
+    expect(await plane.stat('/./')).toMatchObject({ type: 'directory' });
+    expect((await plane.readdir('/ashish@studio/..')).map(({ name }) => name)).toEqual(['ashish@studio', 'mrwhite@rig']);
+    expect(await readText(plane, '/mrwhite@rig/etc/../etc/hosts')).toBe('bytes of dev-rig');
+    expect(t.sent.map((frame) => [frame.params[0], frame.deviceId])).toEqual([
+      ['/etc/hosts', 'dev-rig'], ['/etc/hosts', 'dev-rig'], ['/etc/hosts', 'dev-rig'], ['/etc/../etc/hosts', 'dev-rig'],
+    ]);
+  });
+
   test('a path under no live machine is a stated absence naming the fleet', async () => {
     const t = fleetTransport([STUDIO, RIG]);
 

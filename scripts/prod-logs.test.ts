@@ -3,7 +3,7 @@ import * as v from 'valibot';
 import { ALERT_THRESHOLDS } from '@kinu.run/core/analytics';
 import { KinuError } from '@kinu.run/core/obs';
 import { activationDisruptions, canaryActivations } from './durability-canary-telemetry';
-import { deployLanded } from './worker-deployments';
+import { resetCause, ROLLOVER_SPAN_MS } from './worker-deployments';
 import {
   alarmsThatRan, deletionTimes, idleWakeHours, ordinalHours, readAgainWhile, settledRead, Telemetry, terminalEffectStates, type VersionRead, versionFindings, versionRead,
   versionSignals, workWindow,
@@ -360,7 +360,7 @@ const startup = (timestamp: number, activation: number) => ({
 
 // 2026-10-22: a code update's reset with no deploy is the build's own (platform-catalog.ts do.storage.write_await_reset);
 // the canary filed every one as a deploy's.
-test('the canary files a code-updated reset as a deploy\'s only when a deploy landed between the activations', () => {
+test('the canary files a code-updated reset as a deploy\'s only when a deploy landed at or before it', () => {
   const reset = { timestamp: 15, source: { event: '', code: '', cause: '', fields: {} }, $workers: {}, $metadata: { type: 'cf-worker', error: 'Durable Object reset because its code was updated.' } };
   const activations = [{ ordinal: 1, at: 10, version: 'v' }, { ordinal: 2, at: 20, version: 'v' }];
 
@@ -368,7 +368,8 @@ test('the canary files a code-updated reset as a deploy\'s only when a deploy la
     window: { from: 0, to: 100 }, touches: [], deployments: [{ at: deployedAt, versions: ['w'] }],
   }).map((row) => row.endedBy);
 
-  expect({ deployed: endedBy(18), none: endedBy(50) }).toEqual({ deployed: ['deploy'], none: ['reset'] });
+  // The reset is at 15: a deploy at 12 caused it; one at 18, later in the same gap, did not.
+  expect({ deployed: endedBy(12), none: endedBy(50), later: endedBy(18) }).toEqual({ deployed: ['deploy'], none: ['reset'], later: ['reset'] });
 });
 
 // Staging 2026-10-08: the canary's object started six times and telemetry kept four of the startup rows.
@@ -419,8 +420,10 @@ describe('a code update\'s reset in a version\'s window', () => {
   const from = Date.parse('2026-10-21T20:31:52Z');
   const to = Date.parse('2026-10-21T20:41:12Z');
 
-  /** One KinuDevbox invocation that ended in an exception, its request's line the reset's words; `deployedAt` is when
-   *  the one deploy after the version's own landed. */
+  /** One KinuDevbox invocation that ended in an exception, its request's line the reset's words at `resetAt`;
+   *  `deployedAt` is when the one deploy after the version's own landed. */
+  const resetAt = from + 5000;
+
   const deployment = async (deployedAt: number) => {
     const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: async (request) => {
       if (request.method === 'GET') {
@@ -440,16 +443,16 @@ describe('a code update\'s reset in a version\'s window', () => {
         return Response.json({ success: true, result: { calculations: [{ alias: 'count', aggregates: [{ groups, value: 1 }] }, { alias: 'distinct', aggregates: [{ groups, value: 1 }] }] } });
       }
 
-      if (has('"view":"calculations"') && !has('granularity') && has(RESET)) {
-        return Response.json({ success: true, result: { calculations: [{ alias: 'count', aggregates: [{ groups: [{ key: '$workers.entrypoint', value: 'KinuDevbox' }], value: 1 }] }] } });
+      if (has('"view":"events"') && has(RESET)) {
+        return Response.json({ success: true, result: { events: { events: [{ $metadata: { type: 'cf-worker', error: RESET }, $workers: { entrypoint: 'KinuDevbox' }, timestamp: resetAt }] } } });
       }
 
       if (has('"view":"events"') && has('"value":"exception"')) {
-        return Response.json({ success: true, result: { events: { events: [{ $metadata: { requestId: 'r1' }, $workers: { durableObjectId: 'box-1', entrypoint: 'KinuDevbox' }, timestamp: from + 5000 }] } } });
+        return Response.json({ success: true, result: { events: { events: [{ $metadata: { requestId: 'r1' }, $workers: { durableObjectId: 'box-1', entrypoint: 'KinuDevbox' }, timestamp: resetAt }] } } });
       }
 
       if (has('"view":"events"') && has('"value":"r1"')) {
-        return Response.json({ success: true, result: { events: { events: [{ $metadata: { requestId: 'r1', error: RESET }, timestamp: from + 5000 }] } } });
+        return Response.json({ success: true, result: { events: { events: [{ $metadata: { requestId: 'r1', error: RESET }, timestamp: resetAt }] } } });
       }
 
       return Response.json({ success: true, result: {} });
@@ -465,42 +468,44 @@ describe('a code update\'s reset in a version\'s window', () => {
     }
   };
 
-  test('is the deploy\'s when a deploy landed inside the window, and no finding', async () => {
-    expect(await deployment(to - 60_000)).toEqual([]);
+  const own = [`1 invocation(s) of KinuDevbox ended in an uncaught exception: "${RESET}", in request r1 of object box-1`];
+
+  test('is the deploy\'s when a deploy landed just before it, and no finding', async () => {
+    expect(await deployment(resetAt - 2000)).toEqual([]);
   });
 
-  test('is the version\'s own uncaught exception, with its words, when none did', async () => {
-    expect(await deployment(to + 60_000)).toEqual([
-      `1 invocation(s) of KinuDevbox ended in an uncaught exception: "${RESET}", in request r1 of object box-1`,
-    ]);
+  test('is the version\'s own uncaught exception, with its words, when no deploy landed in the window', async () => {
+    expect(await deployment(to + 60_000)).toEqual(own);
+  });
+
+  // A write-await reset, then a real deploy later in the same window: the deploy cannot have caused what came first.
+  test('is the version\'s own when the window\'s deploy landed after it', async () => {
+    expect(await deployment(resetAt + 60_000)).toEqual(own);
   });
 });
 
-// worker-deployments.ts, which the version read and the canary ask.
-
-const deployedAt = (iso: string) => Date.parse(iso);
-
-const deployWindow = { from: deployedAt('2026-10-21T20:31:52Z'), to: deployedAt('2026-10-21T20:41:12Z') };
-
-// A code update's reset is a deploy's only when a deploy other than the version's own landed inside its window.
-test('a deploy of another version inside the window rolled the version over; its own deploy and later ones did not', () => {
-  const own = { at: deployedAt('2026-10-21T20:31:53Z'), versions: ['v1'] };
-  const next = { at: deployedAt('2026-10-21T20:40:00Z'), versions: ['v2'] };
-  const later = { at: deployedAt('2026-10-21T21:00:00Z'), versions: ['v2'] };
-  const before = { at: deployedAt('2026-10-21T19:00:00Z'), versions: ['v0'] };
+// worker-deployments.ts, which the version read and the canary ask: each reset is attributed by its own time.
+test('a reset is a deploy\'s only when another version\'s deploy landed at or before it, within the rollover\'s span', () => {
+  const resetAt = Date.parse('2026-10-21T20:35:00Z');
+  const own = { at: resetAt - 120_000, versions: ['v1'] };
+  const before = { at: resetAt - 30_000, versions: ['v2'] };
+  const after = { at: resetAt + 60_000, versions: ['v2'] };
+  const long = { at: resetAt - ROLLOVER_SPAN_MS - 1, versions: ['v0'] };
 
   expect({
-    rolled: deployLanded([later, next, own, before], deployWindow, 'v1'),
-    quiet: deployLanded([later, own, before], deployWindow, 'v1'),
-  }).toEqual({ rolled: true, quiet: false });
+    rolled: resetCause([after, before, own], resetAt, 'v1'),
+    laterOnly: resetCause([after, own, long], resetAt, 'v1'),
+    ownOnly: resetCause([own], resetAt, 'v1'),
+  }).toEqual({ rolled: 'deploy', laterOnly: 'own', ownOnly: 'own' });
 });
 
-test('a full list that does not reach back to the window cannot say, and fails', () => {
-  const newer = Array.from({ length: 10 }, (_, index) => ({ at: deployedAt('2026-10-21T22:00:00Z') + index * 60_000, versions: [`n${String(index)}`] }));
+test('a full list that does not reach back past the span cannot say', () => {
+  const resetAt = Date.parse('2026-10-21T20:35:00Z');
+  const newer = Array.from({ length: 10 }, (_, index) => ({ at: resetAt + 60_000 + index * 60_000, versions: [`n${String(index)}`] }));
 
-  expect(() => deployLanded(newer, deployWindow, 'v1')).toThrow('whether one landed inside the window is unknown');
-  expect(deployLanded(newer.slice(0, 3), deployWindow, 'v1')).toBe(false);
+  expect({ full: resetCause(newer, resetAt, 'v1'), short: resetCause(newer.slice(0, 3), resetAt, 'v1') }).toEqual({ full: 'unknown', short: 'own' });
 });
+
 
 // Staging after 2fc6aa727, 2026-10-21: one 502 on each kept window's single read kept all five and reported each red.
 describe('a kept window read beside the deploy\'s own', () => {

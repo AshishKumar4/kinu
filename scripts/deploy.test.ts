@@ -115,6 +115,26 @@ if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "open" ]; then
   mkdir -p "$KINU_DEPLOY_ROOT/report/logs"
   printf '%s\\n' "$KINU_DEPLOY_ROOT/report"
 fi
+# The reds the report names, by phase, as deploy.sh asks (\`holds-red\`): each note it wrote, and each red a phase's
+# runner recorded before it ended red (a failing gate named \`recorded:<command>\`).
+if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "note" ]; then
+  printf '%s\\n' "$4" >> "$KINU_DEPLOY_ROOT/reds"
+fi
+if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "holds-red" ]; then
+  [ -f "$KINU_DEPLOY_ROOT/reds" ] || exit 1
+  [ -z "$4" ] && exit 0
+  for phase in \${4//,/ }; do grep -qx "$phase" "$KINU_DEPLOY_ROOT/reds" && exit 0; done
+  exit 1
+fi
+# The ladder's own verdict: a red recorded, then exit 1. A runner that throws (\`crashed:<command>\`): exit 1 too,
+# having recorded nothing.
+if [ "$KINU_DEPLOY_FAIL" = "recorded:$command_line" ]; then
+  printf '%s\\n' "\${2#--deploy-phase=}" >> "$KINU_DEPLOY_ROOT/reds"
+  exit 1
+fi
+if [ "$KINU_DEPLOY_FAIL" = "crashed:$command_line" ]; then
+  exit 1
+fi
 # WHAT THE INFRASTRUCTURE PHASE ACTUALLY SAW. The account gate reads its phase
 # and account from the environment deploy.sh hands the ladder, so the only way to
 # assert which a deploy ran is to record them where the ladder would start it.
@@ -174,7 +194,8 @@ exit 0
 
 /** One deploy run against stub commands.
  *
- *  `failingGate` names a command (a phase, or a step deploy.sh takes itself) that exits 47; `killGate` SIGKILLs one,
+ *  `failingGate` names a command (a phase, or a step deploy.sh takes itself) that exits 47, or, prefixed `recorded:` or
+ *  `crashed:`, a phase that exits 1 having recorded its red or nothing; `killGate` SIGKILLs one,
  *  so it settles with no verdict of its own. `option` is the script's second word, and `ambientPhase` is a
  *  KINU_INFRA_PHASE already on the environment — the one thing that must never decide how strictly a deploy is
  *  checked. */
@@ -480,7 +501,8 @@ exit 87
 
   const events = logged.filter((event) => !event.startsWith(REPORT) && !event.startsWith('bun scripts/ladder.ts --ci-') && !event.startsWith(STAMPS));
 
-  const report = logged.filter((event) => event.startsWith(REPORT))
+  // What the deploy wrote, apart from its reads of the report (`holds-red`).
+  const report = logged.filter((event) => event.startsWith(REPORT) && !event.startsWith(`${REPORT}holds-red `))
     .map((event) => event.slice(REPORT.length).replace(/^(\w+) report( |$)/u, "$1$2").replace(/^mark (\S+) \d+$/u, "mark $1"));
 
   const infraPhase = existsSync(phaseLog) ? readFileSync(phaseLog, "utf8").trim() : null;
@@ -852,10 +874,10 @@ describe("deploy gate", () => {
     const byPhase = Object.fromEntries(DEPLOY_PHASES.map((phase) => [phase, phaseGates(phase)]));
     expect(byPhase.preflight).toEqual(["bun scripts/preflight.ts"]);
     expect(byPhase.upload).toEqual(["bun scripts/secret-scan.ts", "bun run gate:infra"]);
-    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bun scripts/upgrade-fixtures.ts", "bash scripts/product-flows-tier.sh"]);
+    expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bun scripts/upgrade-fixtures.ts", "bun scripts/staging-mail-inbound.ts", "bash scripts/product-flows-tier.sh"]);
     expect(byPhase.hammer).toEqual(["bun run gate:hammer"]);
     expect(byPhase.soak).toEqual(["bash scripts/eval-pass-tier.sh"]);
-    expect(byPhase.source?.length).toBe(PLAN.length - 8);
+    expect(byPhase.source?.length).toBe(PLAN.length - 9);
 
     for (const gate of LADDER) {
       if (gate.phase === undefined) {
@@ -896,6 +918,20 @@ describe("deploy gate", () => {
     expect(run.report).toContain(
       "note source the source phase's runner it ended with exit 137 and no verdict of its own, so a row it had not reported on may be red and unnamed",
     );
+  });
+
+  // Staging e8837b133, 2026-10-22: the ladder threw on a report it could not parse and exited 1, the status its own
+  // verdict also exits with, so the deploy went red with "0 red" in its report. The report decides, not the status.
+  test("a phase that ends red naming no red of its own is named in the report; one that recorded its red is not named twice", async () => {
+    const crashed = await runDeploy({ failingGate: `crashed:${phaseRun("source")}` });
+    const reported = await runDeploy({ failingGate: `recorded:${phaseRun("source")}` });
+    const runner = "note source the source phase's runner it ended with exit";
+
+    expect({
+      crashed: [crashed.status, crashed.report.filter((entry) => entry.startsWith(runner)).length, crashed.report.some((entry) => entry.startsWith("note deploy the verdict"))],
+      reported: [reported.status, reported.report.filter((entry) => entry.startsWith(runner)).length, reported.report.some((entry) => entry.startsWith("note deploy the verdict"))],
+    }).toEqual({ crashed: [1, 1, false], reported: [1, 0, false] });
+    expect(crashed.report).toContain("note source the source phase's runner it ended with exit 1 and no verdict of its own, so a row it had not reported on may be red and unnamed");
   });
 
   // THE TWO STOPS. A red preflight or upload phase TRUNCATES the run: nothing

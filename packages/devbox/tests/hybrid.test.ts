@@ -159,6 +159,45 @@ test('a rest whose snapshot is refused still rests, says why, and the next wake 
   }).toEqual({ rest: 'committed', running: true, starts: ['golden', 'golden'], said: true, asked: ['attach from image', 'commit quiesce', 'attach from image'] });
 });
 
+/** A hybrid box that gives up its rest's snapshot after 50 ms. */
+class ImpatientBox extends HybridBox {
+  protected override get restSnapshotWaitMs(): number {
+    return 50;
+  }
+}
+
+// f44999, 2026-10-22 (D108): a rest's snapshot never answered, and the box refused every request for the 14 minutes it
+// waited on it, its terminal included.
+test('a rest whose snapshot never answers stops without it, says why, and a request after it starts the box from the chain', async () => {
+  asked.length = 0;
+  registry.deleted.length = 0;
+  const { box, container, rows } = chainBox(ImpatientBox);
+  await box.devboxStartup();
+  const taking = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  container.snapshotHold = { entered: taking.resolve, release: release.promise };
+  const rest = box.quiesce();
+
+  await taking.promise;
+  const during = await box.resolveReadiness();
+  const ended = await rest;
+  const stopped = container.running.running;
+  const after = await box.resolveReadiness();
+  const reasons = (await box.devboxIncidentReasons()).map(row => row.reason);
+
+  // The take that lands after the box stopped is owed, and deleted, never woken from.
+  release.resolve();
+  await box.devboxStartup();
+
+  expect({
+    during, rest: ended.kind, stopped, after: after.kind, starts: container.startOptions.map(startedFrom),
+    said: reasons.some(reason => reason.includes('the platform had not answered in 0.05 s')), snapshot: rows.has('devbox:snapshot'),
+  }).toEqual({
+    during: { kind: 'pending', reason: 'the computer is saving its work and stopping; it starts again as soon as that is done', quiescing: true },
+    rest: 'committed', stopped: false, after: 'restored', starts: ['golden', 'golden'], said: true, snapshot: false,
+  });
+});
+
 test('a discard empties the box\'s store whether it holds no object or more than one listing of them', async () => {
   const empty = chainBox(HybridBox);
   await empty.box.devboxStartup();

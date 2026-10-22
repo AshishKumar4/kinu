@@ -365,7 +365,10 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
         from, to: outgoing.to, cc: outgoing.cc ?? [], subject: outgoing.subject, text: outgoing.text, inReplyTo, references,
       }), Date.now()));
 
-      // Not yet sent is still queued: the outbox retries on this object's alarm, and the view reads its state from it.
+      // A send refused for good (a suppressed recipient) is the person's answer, the message kept as failed. Not yet sent
+      // is still queued: the outbox retries on this object's alarm, and the view reads its state from it.
+      if (sent.status === 'failed' && sent.final) return yield* Effect.fail(new KinuError('denied', `Not sent: ${sent.error}`));
+
       if (sent.status === 'failed') yield* Effect.promise(arm);
 
       return (yield* Effect.promise(async () => store.messageView(view.threadId, view.id))) ?? view;

@@ -131,6 +131,32 @@ export function sessionFilesOver(files = new Map<string, Uint8Array>()): NimbusS
       files.delete(path);
       revisions.delete(path);
     },
+    unlink: async (path) => {
+      files.delete(path);
+      revisions.delete(path);
+    },
+    // No directories in this plane, so none to remove.
+    rmdir: (path) => settle(Effect.fail(new VfsError('ENOTDIR', 'this test plane keeps no directories', path))),
+    appendFile: async (path, content) => {
+      const added = content instanceof Uint8Array ? content : new TextEncoder().encode(content);
+      const present = files.get(path) ?? new Uint8Array();
+      const joined = new Uint8Array(present.byteLength + added.byteLength);
+
+      joined.set(present);
+      joined.set(added, present.byteLength);
+      write(path, joined);
+    },
+    symlink: (_target, path) => settle(Effect.fail(new VfsError('ENOTSUP', 'this test plane keeps no links', path))),
+    realpath: async (path) => path,
+    truncate: async (path, size) => {
+      const present = files.get(path) ?? new Uint8Array();
+      const cut = new Uint8Array(size);
+
+      cut.set(present.subarray(0, size));
+      write(path, cut);
+    },
+    utimes: (path) => settle(Effect.fail(new VfsError('ENOTSUP', 'this test plane keeps no times', path))),
+    chown: (path) => settle(Effect.fail(new VfsError('ENOTSUP', 'this test plane keeps no owners', path))),
   };
 
   return plane;

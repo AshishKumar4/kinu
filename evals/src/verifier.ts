@@ -170,7 +170,8 @@ export type ReachedRun = { readonly tools: readonly string[] };
 /** What a check saw: JSON-like data, projected to JSON when it is recorded. */
 export type Evidence = string | number | boolean | null | undefined | readonly Evidence[] | { readonly [key: string]: Evidence };
 
-export type EvalCheckOutcome = { pass: boolean; evidence?: Evidence };
+/** A check's result; `unjudged`, a judgement that could not be had (`EvalCheck`). */
+export type EvalCheckOutcome = { pass: boolean; evidence?: Evidence; unjudged?: true };
 
 /**
  * A slate, or the checker's reference implementing the same contract: `client('lend', input)` is
@@ -277,6 +278,7 @@ export class EvalVerifier {
   readonly #settled: () => Promise<void>;
   readonly #checks: EvalCheck[] = [];
   readonly #recorded = new Set<string>();
+  readonly #rungs = new Set<string>();
   readonly #pending: Promise<void>[] = [];
 
   /** `settled` waits until the workspace has nothing left to do, as the harness waits out a turn. */
@@ -545,6 +547,16 @@ export class EvalVerifier {
     await this.check(id, body);
   }
 
+  /**
+   * A step of partial credit on the way to the trial's pass: it grades nothing in its trial, but its pass rate is
+   * compared across builds, and a significant fall regresses (`comparison.ts`), so a task the pass alone cannot move
+   * (0 of 5 on both sides) still shows a build that got it less far.
+   */
+  async rung(id: string, body: () => Promise<EvalCheckOutcome>): Promise<void> {
+    this.#rungs.add(id);
+    await this.record(id, body);
+  }
+
   async collect(verify: (verifier: EvalVerifier) => Promise<void>): Promise<EvalCheck[]> {
     try {
       await verify(this);
@@ -558,7 +570,9 @@ export class EvalVerifier {
 
     await Promise.all(this.#pending);
 
-    return this.#checks.map((check) => (this.#recorded.has(check.id) ? { ...check, graded: false } : { ...check }));
+    return this.#checks.map((check) => (this.#recorded.has(check.id)
+      ? { ...check, graded: false, ...this.#rungs.has(check.id) && { rung: true } }
+      : { ...check }));
   }
 
   async #run(index: number, id: string, body: () => Promise<EvalCheckOutcome>): Promise<void> {
@@ -566,9 +580,11 @@ export class EvalVerifier {
       const outcome = await body();
 
       // Evidence quotes what the agent built and said, which can carry a preview host or an echoed header.
-      this.#checks[index] = outcome.evidence === undefined
-        ? { id, pass: outcome.pass }
-        : { id, pass: outcome.pass, evidence: redactJson(projectJsonValue({ value: outcome.evidence })) };
+      this.#checks[index] = {
+        id, pass: outcome.pass,
+        ...outcome.evidence !== undefined && { evidence: redactJson(projectJsonValue({ value: outcome.evidence })) },
+        ...outcome.unjudged === true && { unjudged: true },
+      };
     } catch (error) {
       // The deployment failing to answer is not the build's failure: the trial fails as infrastructure. A held
       // workspace is the turn's outcome, not this check's.
