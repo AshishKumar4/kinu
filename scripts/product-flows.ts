@@ -35,6 +35,7 @@ import {
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, AGENT_WORKSPACE_REPLY, AGENT_WORKSPACE_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
   SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
+  ATTACHMENT_ASK, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_UNREAD, ATTACHMENT_WORD,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import { ACTIVE_TAB_INDEX, AGENT_TAB, AGENTS_COUNTER, agentTab, ATTENTION_BEHIND, ATTENTION_CARD, attentionBehind, attentionCard, CHAT_COMPOSER_LIVE, CHAT_IDLE, CHATS, CHECKBOX, countRpc, createFlowWorkspace, DESKTOP_RETURN, DRIVE_DIALOG_COMMIT, DRIVE_NEW, DRIVE_PLACE, drivePlace, FILES_FAILURE, frameLedger, INSPECTOR_WIDTH, MARK_REVIEWED, NEW_SESSION, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, PAGE_TABS, pagesTraffic, painted, PARKED_COMMAND, parkedCommand, pressRowMenu, recordRenderTasks, removeFlowWorkspace, RENAME_BUTTON, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn, type FlowTarget, type FrameLedger, type RpcCounts, type SendSite } from './browser-page';
@@ -475,6 +476,62 @@ async function lastReply(page: Page, marker: string, answers: readonly string[])
 }
 
 const RECALL_ANSWERS = [ACCOUNT_FACT.value, 'nowhere I know of'];
+
+export interface AttachmentVerdict {
+  /** The tray's chips once the file was dropped on the chat, by the names they show. */
+  readonly tray: readonly string[];
+  /** What the agent answered: `THE FILE SAYS <word>`, the word only the file held, or `nothing attached`. */
+  readonly reply: string;
+  /** Whether the sent message showed the file with its words, before a reload and after: the transcript keeps it. */
+  readonly sent: boolean;
+  readonly sentAfterReload: boolean;
+}
+
+/** The person's sent message holding the ask: its text, the attachment's chip with it. */
+const SENT_ASK = `[...document.querySelectorAll('#chat [data-revert-turn]')]
+  .map((control) => control.parentElement?.textContent ?? '')
+  .some((text) => text.includes(${JSON.stringify(ATTACHMENT_ASK)}) && text.includes(${JSON.stringify(ATTACHMENT_FILE)}))`;
+
+/**
+ * Row: a person drops a text file on the chat, asks about it and sends (MA-019). The tray shows the file before Send;
+ * the agent's reply repeats the one word only the file held, so the turn read it; the sent message shows the file, and
+ * still does after a reload, from the stored transcript.
+ */
+export async function attachmentIsReadAndShown(target: FlowTarget): Promise<AttachmentVerdict> {
+  const workspace = await createFlowWorkspace(target, 'attachment');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+
+    // A drag from the desktop arrives as a drop whose DataTransfer carries the file: the same event a person's makes.
+    await page.evaluate(`(() => {
+      const pane = document.querySelector('#chat [data-agent-pane]');
+      if (pane === null) throw new Error('the chat column has no pane to drop on');
+      const files = new DataTransfer();
+      files.items.add(new File([${JSON.stringify(`The word is ${ATTACHMENT_WORD}.
+`)}], ${JSON.stringify(ATTACHMENT_FILE)}, { type: 'text/plain' }));
+      for (const type of ['dragenter', 'dragover', 'drop']) pane.dispatchEvent(new DragEvent(type, { dataTransfer: files, bubbles: true, cancelable: true }));
+    })()`);
+    await until(page, "the dropped file in the composer's tray", `document.querySelector('#chat [data-attachments]') !== null`);
+
+    const tray = v.parse(v.array(v.string()), await page.evaluate(`[...document.querySelectorAll('#chat [data-attachments] .t-mono')].map((name) => name.textContent ?? '')`));
+
+    await sendAndSettle(page, ATTACHMENT_ASK);
+    const reply = await lastReply(page, ATTACHMENT_REPLY, [ATTACHMENT_WORD, ATTACHMENT_UNREAD]);
+    const sent = v.parse(v.boolean(), await page.evaluate(SENT_ASK));
+
+    await page.reload({ waitUntil: 'load' });
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await until(page, 'the sent ask in the stored transcript', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(ATTACHMENT_ASK)})`);
+    const sentAfterReload = v.parse(v.boolean(), await page.evaluate(SENT_ASK));
+
+    await page.close();
+
+    return { tray, reply, sent, sentAfterReload };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
 
 async function flowMemoryProposals(target: FlowTarget, workspace: string, key: string): Promise<readonly AccountMemoryProposal[]> {
   const response = await fetch(`${target.origin}/api/user/memory`, { headers: webHeaders(target.identity) });
