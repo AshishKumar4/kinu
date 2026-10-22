@@ -1,7 +1,7 @@
 /** Fixture state for the landing page's frames, which mount the product's own components.
  *  Nothing here is served; only the install command comes from the deployment. */
 import type { UIMessage } from 'ai';
-import { mainPanelAgent, satisfactionInterval, wilsonInterval, type ActivitySnapshot, type DirEntry, type PanelAgent, type PendingAction, type PlanReview, type QualityWindow, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
+import { mainPanelAgent, satisfactionInterval, wilsonInterval, type ActivitySnapshot, type AgentStatus, type DirEntry, type EnvironmentInfo, type ExecutorInfo, type MemoryEntry, type TerminalPaneOutput, type PanelAgent, type PendingAction, type PlanReview, type QualityWindow, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
 import type { Important } from '@/lib/mail-api';
 import type { AccountMemoryState, DeviceConsent, UserDevice, UserProfile } from '@/lib/user-api';
 import { answeringRpc, type WorkspaceAnswer, type WorkspaceAnswers, type WorkspaceRpc } from '@/lib/workspace-rpc';
@@ -112,6 +112,49 @@ const WORKER_TASKS: WorkspaceWorkTasks = [
 
 export const LANDING_OWNER = { actorId: 'actor-main', name: 'main', title: 'main', retired: false, path: [] };
 
+/** The sample workspace's agent as its Agent tab reads it: who it is, then what it has kept in memory. */
+export const LANDING_AGENT: AgentStatus = {
+  name: LANDING_WORKSPACE, displayName: 'API Worker',
+  purpose: 'The api Worker on Cloudflare: keep it deployed, healthy and fast.', model: LANDING_MODEL,
+  scaffoldVersion: 3, searchNodeCount: 0, messageCount: 24, soul: '# API Worker', forkLineage: null,
+  layout: 'workbench', createdAt: NOW - 7 * 864e5, reasoningEffort: 'medium',
+};
+
+export const LANDING_MEMORY: MemoryEntry[] = [
+  { path: 'memory/MEMORY.md', content: 'Every route that reads a session goes through openDb', matchScore: 1, updatedAt: '2026-09-15', savedBy: 'main' },
+  { path: 'memory/MEMORY.md', content: 'The sessions database is bound as SESSIONS_DB since the rename', matchScore: 1, updatedAt: '2026-09-17', savedBy: 'main' },
+];
+
+/** The sample workspace's machines, both up, as Environment lists them: its own isolate and its computer. */
+const LANDING_MOUNTS: EnvironmentInfo[] = [
+  { name: 'workspace', prefix: 'workspace.*', live: true, policy: { readOnly: false, consistency: 'durable' }, reason: null },
+  { name: 'computer', prefix: 'computer.*', live: true, policy: { readOnly: false, consistency: 'ephemeral' }, reason: null },
+];
+
+export const LANDING_EXECUTORS: ExecutorInfo[] = [
+  { name: 'computer', kind: 'computer', available: true, configured: true, active: true, status: 'active', capabilities: ['shell', 'npm', 'git', 'fs_owned', 'process_long'] },
+  { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active', capabilities: ['javascript', 'typescript', 'shell', 'npm', 'fs_shared'] },
+];
+
+/** A run on a sample machine, `minutesAgo`, as its terminal replays it. */
+function ran(id: string, command: string, stdout: string, minutesAgo: number): TerminalPaneOutput {
+  return { id, command, stdout, stderr: '', stdout_len: stdout.length, stderr_len: 0, exit_code: 0, created_at: NOW - minutesAgo * 60e3 };
+}
+
+/** What each sample machine ran, the chat's own runs: its terminal replays them, with no machine behind it. */
+export const LANDING_TERMINALS: ReadonlyMap<string, readonly TerminalPaneOutput[]> = new Map([
+  ['computer', [
+    ran('landing-run', 'bunx wrangler tail api --status error', "TypeError: Cannot read properties of undefined (reading 'prepare') at openDb (src/db.ts:12)\n", 24),
+    ran('landing-tests', 'bun test workers/api', '18 passed\n', 6),
+  ]],
+  ['workspace', [
+    ran('landing-query', 'grep -n binding workers/api/wrangler.jsonc', '14:      "binding": "SESSIONS_DB",\n', 20),
+  ]],
+]);
+
+export const LANDING_MEMORY_FILE = '## api Worker\n\n- Every route that reads a session goes through `openDb`.\n'
+  + '- The sessions database is bound as `SESSIONS_DB` since the rename; `DB` is the old name.\n';
+
 const WORKER_CHANGELOG: WorkspaceAnswer<'getEvolutionChangelog'> = {
   seenAt: NOW - 30e5,
   unseenCount: 0,
@@ -210,10 +253,13 @@ function frameAnswers({ plan, tasks, changelog }: {
     getQuality: () => [],
     getQualityWindow: () => UNRATED_WEEK,
     getExecutorFiles: (_executor, path) => ({ path, entries: [...(WORKER_TREE.get(path) ?? [])] }),
-    listMounts: () => [],
+    listMounts: () => LANDING_MOUNTS,
+    listComputerSessions: () => null,
+    getComputerSize: () => null,
     getExecutorDiff: () => ({ files: [], mode: 'vfs-baseline' }),
     getExposedPorts: () => ({ ports: [] }),
     getEvolutionChangelog: () => changelog,
+    listScaffoldVersions: () => [],
     listBackgroundJobs: () => [],
     listWorkspaceWork: () => ({
       plans: plan === null ? [] : [{ owner: LANDING_OWNER, plan, tasks: [] }],

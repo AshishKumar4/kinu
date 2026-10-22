@@ -281,10 +281,15 @@
     // set CLOUDFLARE_OAUTH_SCOPES here only to override that one source.
     "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
     "CLOUDFLARE_AI_GATEWAY_ID": "default",
+    // The /deploy door's public PKCE client (docs/SELF-DEPLOY.md § The Cloudflare door): an id, never a secret.
+    "CLOUDFLARE_DEPLOY_CLIENT_ID": "d4a4eef20ae904413777223b4e9ea682",
     // Mission Inbox mail domain: <agent-name>@EMAIL_DOMAIN. Takes effect only
     // after the one-time Email Routing / Email Sending setup in
     // docs/EMAIL-INGRESS.md is done for this domain.
     "EMAIL_DOMAIN": "kinu.run",
+    // The zone a mail domain on a subdomain sits in, where each address routes by a rule of its own (docs/MAIL.md § 5);
+    // empty on an apex, whose catch-all routes every address, kinu.run's among them.
+    "KINU_MAIL_ZONE": "",
     // Where synthetic-monitoring alerts land. Same mail path as the Mission
     // Inbox, so it works exactly when outbound email does.
     "OPS_ALERT_EMAIL": "me@ashishkumarsingh.com",
@@ -317,6 +322,8 @@
     // Who may claim a mail address (docs/MAIL.md §1): `operators` (CONTROL_PLANE_ADMINS) until the owner opens it
     // to `everyone`, who then send at most 100 a day.
     "MAIL_ACCOUNTS": "operators",
+    // The deployment's own addresses (docs/MAIL.md §1): privacy@kinu.run, the legal pages' contact, to the owner's box.
+    "MAIL_ALIASES": "{\"privacy\": \"ashish\"}",
     // Account the Analytics Engine SQL API is queried against. The same id as
     // `account_id` above; a plain var because it is in this file already, and
     // the Worker cannot read the deploy-time field. Its companion is the
@@ -562,12 +569,16 @@
         "SIGN_IN_PROVIDERS": "",
         "CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD": "client_secret_basic",
         "CLOUDFLARE_AI_GATEWAY_ID": "default",
+        "CLOUDFLARE_DEPLOY_CLIENT_ID": "d4a4eef20ae904413777223b4e9ea682",
         "EMAIL_DOMAIN": "staging.kinu.run",
+        "KINU_MAIL_ZONE": "",
         "OPS_ALERT_EMAIL": "",
         "CONTROL_PLANE_ACCESS_TEAM_DOMAIN": "",
         "CONTROL_PLANE_ACCESS_AUD": "",
         "CONTROL_PLANE_ADMINS": "",
         "MAIL_ACCOUNTS": "everyone",
+        // privacy@staging.kinu.run to the eval account's box: the production alias, provable here.
+        "MAIL_ALIASES": "{\"privacy\": \"eval\"}",
         "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
         "ANALYTICS_DATASET_SUFFIX": "_staging"
       }

@@ -53,7 +53,7 @@ The runner scores an attempt by running two checks in the sandbox
 | check | command |
 |---|---|
 | `core-tests` | `bun test --timeout=0 --cwd packages/core` |
-| `core-typecheck` | `node_modules/.bin/tsc --noEmit -p packages/core` |
+| `core-typecheck` | `node_modules/.bin/tsrs --noEmit -p packages/core` |
 
 The task passes when both exit 0. There is no partial credit. Because the
 checks run the full suite rather than only the target test, a solver that

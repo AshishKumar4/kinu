@@ -1,10 +1,13 @@
 /** The self-deploy flow against a fake Cloudflare (docs/SELF-DEPLOY.md): idempotent reruns, refusals, retries, eviction resume, no secret held at the end. */
 import { beforeEach, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import {
   ACCESS_TOKEN_KEY, DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY,
+  CLOUDFLARE_DEPLOY_CLIENT, CLOUDFLARE_DEPLOY_SCOPES, apiTokensState, deployClientDrift, FIRST_OWNER_LINK_MS, FIRST_OWNER_LINK_SECRET,
   HeldBytes, LOCAL_PORT, LocalConfigSchema, MINTED_SECRETS, promptedSecrets,
-  REFRESH_TOKEN_KEY, deployDoor, deployPlan, factsFrom, localLayout, parseReleaseManifest, releaseDir,
+  FACT_VERSION_ID, REFRESH_TOKEN_KEY, deployDoor, deployPlan, deployRunView, domainsMatching, factsFrom,
+  judgeRefusal, localLayout, mailHostPreview, parseReleaseManifest, plannedRun, preflight, releaseDir,
   renderLocalConfig, renderWorkerdConfig, runDeployPlan, unhostedBindings, workerdDirectories,
 } from '../src/deploy/index';
 import type {
@@ -12,9 +15,11 @@ import type {
   DeployInputs,
   ArtifactSource, DeployLedger, DeployProgress, DeploySecretVault, DeployStepFailure, DeployStepRow,
   DeployStepSeed, HttpGet,
-  MultipartUpload, ReleaseManifest, UpdateBuild,
+  DeployRunStanding, MultipartUpload, ReleaseManifest, StreamedPut, UpdateBuild,
 } from '../src/deploy/index';
 import { parseJsonObject, type JsonObject, type JsonValue } from '../src/utils/json';
+import { sha256Hex } from '../src/safety/argument-digest';
+import { settle } from '../src/obs/index';
 
 const MANIFEST: ReleaseManifest = {
   version: '0.4.0+abc1234',
@@ -56,7 +61,9 @@ const MANIFEST: ReleaseManifest = {
     { name: 'CLI_PUBLIC_ORIGIN', policy: 'derived' },
     { name: 'SIGN_IN_PROVIDERS', policy: 'derived' },
     { name: 'EMAIL_DOMAIN', policy: 'derived' },
+    { name: 'KINU_MAIL_ZONE', policy: 'derived' },
     { name: 'MAIL_ACCOUNTS', policy: 'derived' },
+    { name: 'CONTROL_PLANE_ADMINS', policy: 'derived' },
     { name: 'DEV_USER_EMAIL', policy: 'ours' },
   ],
   files: [
@@ -66,6 +73,7 @@ const MANIFEST: ReleaseManifest = {
     { path: 'client/app.js', sha256: 'd'.repeat(64), size: 7, assetHash: '2'.repeat(32) },
   ],
   seed: null,
+  computer: null,
 };
 
 const INPUTS: DeployInputs = {
@@ -73,7 +81,6 @@ const INPUTS: DeployInputs = {
   instanceName: 'kinu',
   address: { kind: 'workers-dev', hostname: '', zoneId: '' },
   ownerEmail: 'owner@example.com',
-  accessEmails: ['owner@example.com', 'second@example.com'],
   providerKeyNames: [],
   sandbox: false,
 };
@@ -100,8 +107,25 @@ const PRIOR_VERSION = 'version-0';
 
 const PRIOR_BUILD: UpdateBuild = { version: '0.3.9+old0000', sha: 'old0000', builtAt: '2026-09-10T10:00:00.000Z' };
 
+/** What creating an AI gateway requires, as the reference names it; one missing is refused as f44999 refused it on
+ *  2026-10-21 (code 7001, "Required"), which the fake had accepted until then. */
+const GATEWAY_REQUIRED = ['id', 'cache_invalidate_on_update', 'cache_ttl', 'collect_logs', 'rate_limiting_interval', 'rate_limiting_limit'];
+
+function gatewayRefusal(call: CloudflareCall): CloudflareHttpResponse | null {
+  if (call.method !== 'POST' || !call.path.endsWith('/ai-gateway/gateways')) return null;
+
+  const body = v.parse(v.record(v.string(), v.unknown()), call.body ?? {});
+
+  if (GATEWAY_REQUIRED.every((field) => body[field] !== undefined)) return null;
+
+  return { status: 400, body: { success: false, errors: [{ code: 7001, message: 'Required' }], result: null } };
+}
+
 class FakeCloudflare implements CloudflareTransport {
   readonly calls: Recorded[] = [];
+
+  /** The parts each asset batch carried, by name: an asset's is its content hash. */
+  readonly assetParts: string[] = [];
 
   readonly namespaces: string[] = [];
 
@@ -114,23 +138,17 @@ class FakeCloudflare implements CloudflareTransport {
 
   readonly gateways: string[] = [];
 
-  readonly apps: string[] = [];
-
-  /** Each Access policy, under the app it guards. */
-  readonly policies: { app: string; id: string; name: string; include: unknown }[] = [];
-
-  /** An app's policies listed, one added, or one replaced in place. */
-  private accessPolicy(method: string, [, app = '', id]: RegExpExecArray, body: JsonObject): JsonValue {
-    if (method === 'GET') return this.policies.filter((policy) => policy.app === app).map(({ id: held, name }) => ({ id: held, name }));
-    const policy = { app, id: id ?? `policy-${String(this.policies.length + 1)}`, name: bodyText(body, 'name'), include: body.include ?? null };
-
-    if (method === 'PUT') this.policies.splice(this.policies.findIndex((held) => held.id === id), 1, policy);
-    else this.policies.push(policy);
-
-    return { id: policy.id };
-  }
 
   readonly objects: string[] = [];
+
+  /** Bytes each streamed object upload carried, by path. */
+  readonly streamed = new Map<string, number>();
+
+  /** Account tokens by name, and each value minted or rolled for one. */
+  readonly tokens = new Map<string, string[]>();
+
+  /** Container applications, by the namespace they run on. */
+  readonly applications = new Map<string, string>();
 
   /** The zones the token can read, by name; a mail domain must be one. */
   readonly zones = new Map<string, string>();
@@ -141,6 +159,25 @@ class FakeCloudflare implements CloudflareTransport {
 
   /** What the zone's Email Routing and Sending hold. */
   readonly routing = { enabled: new Set<string>(), catchAll: new Map<string, unknown>(), sending: new Map<string, string>() };
+
+  /** Each zone's literal routing rules, by id: the address each sends, and to which Worker. */
+  readonly rules = new Map<string, { zone: string; to: string; worker: string }>();
+
+  /** A zone's routing rules as the API lists and deletes them (one page holds them all here). */
+  private rulesCall(id: string, rest: string, call: CloudflareCall): CloudflareHttpResponse | null {
+    if (rest.startsWith('email/routing/rules?') && call.method === 'GET') {
+      return this.ok([...this.rules].filter(([, rule]) => rule.zone === id).map(([ruleId, rule]) => ({
+        id: ruleId, enabled: true, matchers: [{ type: 'literal', field: 'to', value: rule.to }], actions: [{ type: 'worker', value: [rule.worker] }],
+      })));
+    }
+
+    const ruleId = /^email\/routing\/rules\/(rule-.+)$/u.exec(rest)?.[1];
+
+    if (ruleId === undefined || call.method !== 'DELETE') return null;
+    this.rules.delete(ruleId);
+
+    return this.ok({ id: ruleId });
+  }
 
   /** Paths under a zone the token may not touch: Email Routing, Sending or DNS. */
   readonly forbiddenUnder: string[] = [];
@@ -235,7 +272,7 @@ class FakeCloudflare implements CloudflareTransport {
       const name = decodeURIComponent(/name=([^&]+)/u.exec(call.path)?.[1] ?? '');
       const id = this.zones.get(name);
 
-      return ok(id === undefined ? [] : [{ id, name }]);
+      return ok(id === undefined ? [] : [this.zoneOf(name, id)]);
     }
 
     if (zone === null) return null;
@@ -248,6 +285,19 @@ class FakeCloudflare implements CloudflareTransport {
     // Email Routing is enabled through its DNS: `routing/enable` is deprecated and not served here. A `name` is for a
     // subdomain only: the zone's own name is refused, as the API refused kinu.run's (2026-10-20).
     if (rest === 'email/routing/dns' && call.method === 'POST') return this.routingDns(id, call);
+
+    // The records Email Routing needs on the apex, as `GET …/email/routing/dns` lists them.
+    if (rest === 'email/routing/dns') {
+      const apex = [...this.zones].find(([, held]) => held === id)?.[0] ?? '';
+
+      return ok([
+        { type: 'MX', name: apex, content: 'route1.mx.cloudflare.net', priority: 13 },
+        { type: 'MX', name: apex, content: 'route2.mx.cloudflare.net', priority: 86 },
+        { type: 'TXT', name: apex, content: 'v=spf1 include:_spf.mx.cloudflare.net ~all' },
+      ]);
+    }
+
+    if (rest.startsWith('email/routing/rules') && rest !== 'email/routing/rules/catch_all') return this.rulesCall(id, rest, call);
 
     if (rest === 'email/routing/rules/catch_all') { this.routing.catchAll.set(id, call.body ?? null);
 
@@ -264,6 +314,72 @@ class FakeCloudflare implements CloudflareTransport {
 
   scriptExists = false;
 
+  /** The bindings the last version carried, as `…/settings` answers them: secrets by name only. */
+  /** What the version last uploaded binds, as Cloudflare's settings answer it. */
+  bindings: { type: string; name: string; text?: string; class_name?: string }[] = [];
+
+  /** Each version's `workers/tag`, as `…/versions?deployable=true` lists it. */
+  readonly tags = new Map<string, string>();
+
+  /** Other Workers the account runs, beside the one a run uploads. */
+  readonly otherScripts: string[] = [];
+
+  /** Null: the account has no workers.dev subdomain yet, which the API answers 404. */
+  subdomain: string | null = 'acme';
+
+  /** On Workers Free, Cloudflare refuses the Containers API as it did the owner's free account (2026-10-21). */
+  workersFree = false;
+
+  /** Zones added by `POST /zones`, not active until their nameservers are set. */
+  readonly pendingZones = new Set<string>();
+
+  /** The account, its user and its Workers, as the page reads them. */
+  private accountCall(call: CloudflareCall): CloudflareHttpResponse | null {
+    const scripts = call.path.endsWith('/workers/scripts');
+    const zone = /^\/zones\/([^/?]+)$/u.exec(call.path)?.[1];
+
+    if (call.path === '/user') return this.ok({ id: 'user-1', email: INPUTS.ownerEmail });
+
+    if (scripts) return this.ok([...this.scriptExists ? [INPUTS.instanceName] : [], ...this.otherScripts].map((id) => ({ id })));
+
+    if (call.path.includes('/versions?deployable=true')) return this.ok({ items: this.versions.map((id) => ({ id, annotations: { 'workers/tag': this.tags.get(id) ?? '' } })) });
+
+    if (call.path.endsWith('/workers/subdomain') && call.method === 'PUT') {
+      this.subdomain = bodyText(call.body ?? {}, 'subdomain');
+
+      return this.ok({ subdomain: this.subdomain });
+    }
+
+    if (call.path.endsWith('/workers/subdomain') && this.subdomain === null) {
+      return { status: 404, body: { success: false, errors: [{ code: 10_007, message: 'This account has no workers.dev subdomain.' }], result: null } };
+    }
+
+    if (call.path.startsWith('/zones?account.id=')) {
+      // Fifty to a page, as Cloudflare pages a listing.
+      const page = Number(new URLSearchParams(call.path.slice(call.path.indexOf('?'))).get('page') ?? '1');
+
+      return this.ok([...this.zones].slice((page - 1) * 50, page * 50).map(([name, id]) => this.zoneOf(name, id)));
+    }
+
+    if (call.path === '/zones' && call.method === 'POST') {
+      const name = bodyText(call.body ?? {}, 'name');
+      const id = sha256Hex(name).slice(0, 32);
+
+      this.zones.set(name, id);
+      this.pendingZones.add(id);
+
+      return this.ok(this.zoneOf(name, id));
+    }
+
+    const named = [...this.zones].find(([, id]) => id === zone);
+
+    return named === undefined ? null : this.ok(this.zoneOf(...named));
+  }
+
+  private zoneOf(name: string, id: string): JsonValue {
+    return { id, name, status: this.pendingZones.has(id) ? 'pending' : 'active', name_servers: ['ada.ns.cloudflare.com', 'bob.ns.cloudflare.com'] };
+  }
+
   /** Every version id this account holds. */
   readonly versions: string[] = [];
 
@@ -273,6 +389,12 @@ class FakeCloudflare implements CloudflareTransport {
   /** The new deployment has not reached the location that answers, so an override is not applied and
    *  the request goes to the serving version (Cloudflare's version-overrides doc). */
   overridesLag = false;
+
+  /** Asks of the health the staged version's override still misses, as one carried a moment late does. */
+  overrideLateAsks = 0;
+
+  /** Asks a just-bound address still answers 404 to, while Cloudflare brings it up. */
+  addressWarmingAsks = 0;
 
   private uploads = 0;
 
@@ -297,7 +419,10 @@ class FakeCloudflare implements CloudflareTransport {
   answering(headers: Readonly<Record<string, string>> | undefined): string {
     const override = new Headers(headers).get('cloudflare-workers-version-overrides') ?? '';
     const named = /^kinu="(.+)"$/u.exec(override)?.[1];
-    const live = this.overridesLag ? [] : this.deployments.at(-1) ?? [];
+    const late = this.overrideLateAsks > 0;
+
+    if (late) this.overrideLateAsks -= 1;
+    const live = this.overridesLag || late ? [] : this.deployments.at(-1) ?? [];
 
     return live.find((entry) => entry.version_id === named)?.version_id ?? this.serving();
   }
@@ -305,9 +430,21 @@ class FakeCloudflare implements CloudflareTransport {
   async request(call: CloudflareCall): Promise<CloudflareHttpResponse> {
     this.calls.push({ method: call.method, path: call.path, body: call.body, bearer: undefined });
 
-    const refusal = this.refusalFor(call.method, call.path);
+    const refusal = this.refusalFor(call.method, call.path) ?? gatewayRefusal(call);
 
     if (refusal !== null) return refusal;
+
+    // Its errors and messages null, not empty, as f44999 answered it on 2026-10-21.
+    if (call.path.endsWith('/assets-upload-session')) {
+      return { status: 200, body: { result: { jwt: 'session-token', buckets: [['1'.repeat(32), '2'.repeat(32)]] }, success: true, errors: null, messages: null } };
+    }
+
+    const read = this.accountCall(call);
+
+    if (read !== null) return read;
+
+    // Another Worker of the account: no deployment record among its bindings.
+    if (this.otherScripts.some((name) => call.path.endsWith(`/workers/scripts/${name}/settings`))) return this.ok({ bindings: [{ type: 'plain_text', name: 'GREETING', text: 'hi' }] });
 
     // How the flow tells a first deployment from an update.
     if (call.path.endsWith('/settings') && !this.scriptExists) {
@@ -328,6 +465,10 @@ class FakeCloudflare implements CloudflareTransport {
 
     if (call.path.endsWith('/deployments')) return this.deploymentsCall(call);
 
+    const computed = this.computerCall(call);
+
+    if (computed !== null) return computed;
+
     const zoned = this.zoneCall(call);
 
     if (zoned !== null) return zoned;
@@ -335,13 +476,103 @@ class FakeCloudflare implements CloudflareTransport {
     return { status: 200, body: { success: true, errors: [], result: this.answer(call) } };
   }
 
+  async put(put: StreamedPut): Promise<CloudflareHttpResponse> {
+    this.calls.push({ method: 'PUT', path: put.path, body: undefined, bearer: undefined });
+    const bytes = (await new Response(put.body).arrayBuffer()).byteLength;
+
+    if (bytes !== put.bytes) return { status: 400, body: { success: false, errors: [{ code: 10_000, message: `declared ${String(put.bytes)}, carried ${String(bytes)}` }], result: null } };
+    this.objects.push(put.path);
+    this.streamed.set(put.path, bytes);
+
+    return { status: 200, body: { success: true, errors: [], result: {} } };
+  }
+
+  /** The account's tokens: its permission groups by name, and tokens listed, minted, rolled and deleted. */
+  private tokenCall(call: CloudflareCall): CloudflareHttpResponse | null {
+    const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
+
+    // By the name asked, as the account's permission groups answer (read 2026-10-21).
+    if (call.path.includes('/tokens/permission_groups')) {
+      const asked = decodeURIComponent(/name=([^&]+)/u.exec(call.path)?.[1] ?? '');
+
+      return ok([['group-containers-write', 'Workers Containers Write'], ['group-email-routing-rules-write', 'Email Routing Rules Write']]
+        .filter(([, name]) => name === asked).map(([id, name]) => ({ id, name })));
+    }
+
+    if (call.path.endsWith('/tokens?per_page=50')) return ok([...this.tokens.keys()].map((name) => ({ id: `token-${name}`, name })));
+
+    const rolled = /\/tokens\/token-(.+)\/value$/u.exec(call.path);
+
+    if (rolled !== null) {
+      const value = `rolled-${String(this.tokens.get(rolled[1] ?? '')?.length ?? 0)}`;
+
+      this.tokens.get(rolled[1] ?? '')?.push(value);
+
+      return ok(value);
+    }
+
+    const deleted = /\/tokens\/token-(.+)$/u.exec(call.path)?.[1];
+
+    if (deleted !== undefined && call.method === 'DELETE') {
+      this.tokens.delete(decodeURIComponent(deleted));
+
+      return ok({ id: `token-${deleted}` });
+    }
+
+    if (call.path.endsWith('/tokens') && call.method === 'POST') {
+      const name = bodyText(call.body ?? {}, 'name');
+
+      this.tokens.set(name, ['minted-token']);
+
+      return ok({ id: `token-${name}`, value: 'minted-token' });
+    }
+
+    return null;
+  }
+
+  /** The computer's account: its tokens, its namespaces, its container applications (`computer.ts`). */
+  private computerCall(call: CloudflareCall): CloudflareHttpResponse | null {
+    const ok = (result: JsonValue): CloudflareHttpResponse => ({ status: 200, body: { success: true, errors: [], result } });
+
+    const token = this.tokenCall(call);
+
+    if (token !== null) return token;
+
+    if (call.path.includes('/durable_objects/namespaces')) return ok([{ id: 'ns-devbox', script: 'kinu', class: 'KinuDevbox' }, { id: 'ns-other', script: 'other', class: 'KinuDevbox' }]);
+
+    if (call.path.includes('/containers/applications') && this.workersFree) {
+      return { status: 401, body: { success: false, result: null, messages: [], errors: [{ code: 1000, message: '{"error":"Unauthorized: You do not have access to Cloudflare Containers. Deploying containers requires the Workers Paid plan. Upgrade your plan at https://dash.cloudflare.com/workers/plans"}' }] } };
+    }
+
+    if (call.method === 'GET' && call.path.endsWith('/containers/applications')) return ok([...this.applications].map(([id, name]) => ({ id, name })));
+
+    const application = /\/containers\/applications\/(.+)$/u.exec(call.path);
+
+    if (application !== null) {
+      const name = this.applications.get(application[1] ?? '');
+
+      return name === undefined ? { status: 404, body: { success: false, errors: [{ code: 1000, message: 'application not found' }], result: null } } : ok({ id: application[1] ?? '', name });
+    }
+
+    if (call.path.endsWith('/containers/applications')) {
+      const namespace = call.body?.durable_objects;
+      const id = v.parse(v.object({ namespace_id: v.string() }), namespace).namespace_id;
+
+      this.applications.set(id, bodyText(call.body ?? {}, 'name'));
+
+      return ok({ id });
+    }
+
+    return null;
+  }
+
   async upload(upload: MultipartUpload): Promise<CloudflareHttpResponse> {
-    const metadata = upload.parts.find((part) => part.name === 'metadata')?.body;
+    const metadataPart = upload.parts.find((part) => part.name === 'metadata')?.body;
 
     this.calls.push({
       method: upload.method,
       path: upload.path,
-      body: v.is(v.string(), metadata) ? parseJsonObject(metadata) : undefined,
+      body: v.is(v.string(), metadataPart) ? parseJsonObject(metadataPart) : undefined,
       bearer: upload.bearer,
     });
 
@@ -350,6 +581,8 @@ class FakeCloudflare implements CloudflareTransport {
     if (refusal !== null) return refusal;
 
     if (upload.path.includes('/workers/assets/upload')) {
+      this.assetParts.push(...upload.parts.map((part) => part.name));
+
       return { status: 201, body: { success: true, errors: [], result: { jwt: 'completion-token' } } };
     }
 
@@ -362,8 +595,15 @@ class FakeCloudflare implements CloudflareTransport {
     this.scriptExists = true;
     this.uploads += 1;
     const version = `version-${String(this.uploads)}`;
+    const metadata = v.is(v.string(), metadataPart) ? parseJsonObject(metadataPart) : {};
+    const tag = v.safeParse(v.object({ 'workers/tag': v.string() }), metadata.annotations);
 
     this.versions.push(version);
+
+    if (tag.success) this.tags.set(version, tag.output['workers/tag']);
+    // Settings answer a secret by its name alone.
+    this.bindings = uploadedBindings({ method: upload.method, path: upload.path, body: metadata, bearer: undefined })
+      .map((binding) => (binding.type === 'secret_text' ? { type: binding.type, name: binding.name } : binding));
 
     // A first upload deploys what it carried and answers with the script, whose id is its name.
     if (upload.method === 'PUT') {
@@ -454,22 +694,6 @@ class FakeCloudflare implements CloudflareTransport {
       return { id: body.id ?? '' };
     }
 
-    if (path.endsWith('/access/apps') && call.method === 'GET') {
-      return this.apps.map((domain) => ({ id: `app-${domain}`, domain }));
-    }
-
-    if (path.endsWith('/access/apps')) {
-      const domain = bodyText(body, 'domain');
-
-      this.apps.push(domain);
-
-      return { id: `app-${domain}` };
-    }
-
-    const policyPath = /\/access\/apps\/([^/]+)\/policies(?:\/([^/]+))?$/.exec(path);
-
-    if (policyPath !== null) return this.accessPolicy(call.method, policyPath, body);
-
     if (path.endsWith('/workers/subdomain')) return { subdomain: 'acme' };
 
     if (path.endsWith('/subdomain')) return { enabled: true };
@@ -481,11 +705,9 @@ class FakeCloudflare implements CloudflareTransport {
     }
 
     if (path.endsWith('/settings')) {
-      return this.scriptExists ? { logpush: false } : null;
-    }
+      const secrets = [...this.secrets.keys()].filter((name) => !this.bindings.some((binding) => binding.name === name));
 
-    if (path.endsWith('/assets-upload-session')) {
-      return { jwt: 'session-token', buckets: [['1'.repeat(32), '2'.repeat(32)]] };
+      return this.scriptExists ? { logpush: false, bindings: [...this.bindings, ...secrets.map((name) => ({ type: 'secret_text', name }))] } : null;
     }
 
     return { id: 'account-1', name: 'Acme' };
@@ -612,6 +834,9 @@ let ledger: ArrayLedger;
 
 let vault: MemoryVault;
 
+/** The setup links the runs held, in order. */
+let seats: { link: string; expiresAt: number }[];
+
 let progress: DeployProgress[];
 
 /** What an uploaded version answers; the prior version answers 200 with `PRIOR_BUILD`. */
@@ -619,10 +844,32 @@ let health: number;
 
 let updating = false;
 
+/** A change asking for a new setup link: minted though the root keys are kept. */
+let freshLink = false;
+
+/** The tag a run sets on its version; a second run has its own. */
+let runTag = 'run-tag-1';
+
+/** Each wait a step asked of the run, in milliseconds. */
+let waits: number[] = [];
+
 let served: UpdateBuild;
 
+/** The computer's tools parts the channel serves: as many bytes as the release names for each. */
+const toolsBytes = new Map<string, number>();
+
 const healthFetch: HttpGet = async (url, headers) => {
+  const part = /\/downloads\/(devbox-tools\/.+)$/u.exec(url)?.[1];
+
+  if (part !== undefined) return toolsBytes.has(part) ? new Response(new Uint8Array(toolsBytes.get(part) ?? 0)) : new Response('missing', { status: 404 });
+
   if (!url.endsWith('/api/health')) throw new Error(`unexpected fetch ${url}`);
+
+  if (cloudflare.addressWarmingAsks > 0) {
+    cloudflare.addressWarmingAsks -= 1;
+
+    return new Response('Not found', { status: 404 });
+  }
 
   const version = cloudflare.answering(headers);
   const prior = version === PRIOR_VERSION;
@@ -634,24 +881,29 @@ const healthFetch: HttpGet = async (url, headers) => {
   });
 };
 
-async function contextFor(inputs: DeployInputs = INPUTS): Promise<DeployContext> {
+async function contextFor(inputs: DeployInputs = INPUTS, manifest: ReleaseManifest = MANIFEST): Promise<DeployContext> {
   return {
-    manifest: MANIFEST,
+    manifest,
     inputs,
     transport: cloudflare,
-    artifact: artifactFor(MANIFEST),
+    artifact: artifactFor(manifest),
     vault,
+    seat: { hold: async (link, expiresAt) => { seats.push({ link, expiresAt }); } },
     facts: factsFrom(await ledger.rows()),
     http: healthFetch,
     update: updating,
+    freshSetupLink: freshLink,
+    tag: runTag,
     note: () => undefined,
+    // The smoke's patience, counted and never slept: a test runs on no clock of its own.
+    wait: async (ms) => { waits.push(ms); },
   };
 }
 
-async function run(inputs: DeployInputs = INPUTS): Promise<DeployStepRow[]> {
+async function run(inputs: DeployInputs = INPUTS, manifest: ReleaseManifest = MANIFEST): Promise<DeployStepRow[]> {
   const outcome = await runDeployPlan(
-    deployPlan(MANIFEST, inputs),
-    await contextFor(inputs),
+    deployPlan(manifest, inputs),
+    await contextFor(inputs, manifest),
     ledger,
     (event) => progress.push(event),
   );
@@ -663,9 +915,13 @@ beforeEach(async () => {
   cloudflare = new FakeCloudflare();
   ledger = new ArrayLedger();
   vault = new MemoryVault();
+  seats = [];
   progress = [];
   health = 200;
   updating = false;
+  freshLink = false;
+  runTag = 'run-tag-1';
+  waits = [];
   served = { version: MANIFEST.version, sha: MANIFEST.sha, builtAt: MANIFEST.builtAt };
   await vault.write(ACCESS_TOKEN_KEY, 'access-token-value');
   await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
@@ -680,7 +936,6 @@ describe('a guided run', () => {
     expect(cloudflare.namespaces).toEqual(['kinu-auth-kv']);
     expect(cloudflare.buckets).toEqual(['kinu-backups']);
     expect(cloudflare.indexes).toEqual(['kinu-memory']);
-    expect(cloudflare.apps).toEqual(['kinu.acme.workers.dev']);
     expect(cloudflare.secrets.get(DEPLOYMENT_REFRESH_SECRET)).toBe('refresh-token-value');
     expect(JSON.parse(cloudflare.secrets.get(DEPLOYMENT_RECORD_SECRET) ?? '{}')).toMatchObject({
       inputs: { accountId: INPUTS.accountId, instanceName: 'kinu', ownerEmail: INPUTS.ownerEmail },
@@ -745,7 +1000,7 @@ describe('a guided run', () => {
     expect(plain.find((binding) => binding.name === 'SIGN_IN_PROVIDERS')?.text).toBe('');
     expect(plain.map((binding) => binding.name)).not.toContain('DEV_USER_EMAIL');
     expect(bindings.filter((binding) => binding.type === 'secret_text').map((binding) => binding.name).sort())
-      .toEqual([...MINTED_SECRETS].sort());
+      .toEqual([...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET].sort());
   });
 
   /** The mail vars the run uploaded: EMAIL_DOMAIN, then MAIL_ACCOUNTS. */
@@ -814,8 +1069,139 @@ describe('a guided run', () => {
   test('a mail domain that is not a zone of the account is named, and mail stays off', async () => {
     const rows = await run({ ...INPUTS, mailDomain: 'raman.dev' });
 
-    expect(rows.find((row) => row.id === 'mail')?.detail).toBe('Mail is off: raman.dev is not a zone this token can read.');
+    expect(rows.find((row) => row.id === 'mail')?.detail).toBe('Mail is off: raman.dev is in no zone this token can read.');
     expect(cloudflare.routing.enabled.size).toBe(0);
+  });
+
+  // Mail on a subdomain, 2026-10-21: kinu.run's routing is an apex's, and must come out of every run byte-identical.
+  test("an apex's routing is asked for as it always was: its catch-all, no rule and no token", async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    await run({ ...INPUTS, mailDomain: 'raman.dev' });
+
+    const lookup = { method: 'GET', path: `/zones?name=raman.dev&account.id=${INPUTS.accountId}` };
+    const dmarc = { method: 'GET', path: '/zones/zone-raman/dns_records?type=TXT&name=_dmarc.raman.dev&per_page=100' };
+
+    expect(cloudflare.calls.filter((call) => call.path.startsWith('/zones')).map(({ method, path, body }) => (body === undefined ? { method, path } : { method, path, body }))).toEqual([
+      // Read once, by the routing token's step, which finds an apex and writes nothing; the mail step asks no second time.
+      lookup,
+      { method: 'POST', path: '/zones/zone-raman/email/routing/dns', body: {} },
+      {
+        method: 'PUT', path: '/zones/zone-raman/email/routing/rules/catch_all',
+        body: { enabled: true, name: 'Kinu', matchers: [{ type: 'all' }], actions: [{ type: 'worker', value: ['kinu'] }] },
+      },
+      dmarc,
+      { method: 'GET', path: '/zones/zone-raman/email/sending/subdomains' },
+      { method: 'POST', path: '/zones/zone-raman/email/sending/subdomains', body: { name: 'raman.dev' } },
+      { method: 'GET', path: '/zones/zone-raman/email/sending/subdomains/tag-raman.dev/dns' },
+      { method: 'GET', path: '/zones/zone-raman/dns_records?type=MX&name=cf-bounce.raman.dev&per_page=100' },
+      { method: 'GET', path: '/zones/zone-raman/dns_records?type=TXT&name=cf-bounce._domainkey.raman.dev&per_page=100' },
+      dmarc,
+      { method: 'PATCH', path: '/zones/zone-raman/dns_records/record-2', body: { content: 'v=DMARC1; p=none; rua=mailto:dmarc@raman.dev' } },
+    ]);
+    expect(cloudflare.calls.filter((call) => call.path.includes('/tokens'))).toEqual([]);
+  });
+
+  /** What the run uploaded under `name`: a plain var's text, or a secret's. */
+  const uploaded = (name: string) => uploadedBindings([...cloudflare.calls].reverse().find((call) => call.path.endsWith('/workers/scripts/kinu') || call.path.endsWith('/workers/scripts/kinu/versions')))
+    .find((binding) => binding.name === name)?.text;
+
+  test('a subdomain is routed by its name with no catch-all, and the run mints its routing token for that zone alone', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect(cloudflare.calls.filter((call) => call.path.endsWith('/email/routing/dns')).map((call) => call.body)).toEqual([{ name: 'mail.raman.dev' }]);
+    expect(cloudflare.routing.catchAll.size).toBe(0);
+    expect(cloudflare.calls.find((call) => call.method === 'POST' && call.path.endsWith('/tokens'))?.body).toEqual({
+      name: 'kinu mail raman.dev (Kinu)',
+      policies: [{ effect: 'allow', resources: { 'com.cloudflare.api.account.zone.zone-raman': '*' }, permission_groups: [{ id: 'group-email-routing-rules-write' }] }],
+    });
+    // The zone is the one new fact; the domain is EMAIL_DOMAIN's and the Worker its own.
+    expect([uploaded('KINU_MAIL_ZONE'), uploaded('KINU_MAIL_ROUTING_TOKEN'), uploaded('EMAIL_DOMAIN')]).toEqual(['zone-raman', 'minted-token', 'mail.raman.dev']);
+    expect(cloudflare.dns.map((record) => `${record.type} ${record.name}`)).toEqual(['MX cf-bounce.mail.raman.dev', 'TXT cf-bounce._domainkey.mail.raman.dev', 'TXT _dmarc.mail.raman.dev']);
+    expect(rows.find((row) => row.id === 'mail')?.detail).toBe('Mail onboarded on mail.raman.dev: each address routed to kinu by a rule of its own, sending, and DMARC at p=none.');
+  });
+
+  test('a host deeper under its zone is routed in the nearest zone above it, each name asked for from the host up', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    await run({ ...INPUTS, mailDomain: 'eu.mail.raman.dev' });
+
+    expect(cloudflare.calls.filter((call) => call.path.startsWith('/zones?name=')).map((call) => decodeURIComponent(/name=([^&]+)/u.exec(call.path)?.[1] ?? ''))).toEqual([
+      'eu.mail.raman.dev', 'mail.raman.dev', 'raman.dev',
+    ]);
+    expect(cloudflare.calls.filter((call) => call.path.endsWith('/email/routing/dns')).map((call) => call.body)).toEqual([{ name: 'eu.mail.raman.dev' }]);
+  });
+
+  test('a routing token Cloudflare will not mint is asked of the owner by name, and the deployment goes on', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.refuseOnce = { method: 'GET', path: `/accounts/${INPUTS.accountId}/tokens`, status: 403, code: 9109, message: 'Unauthorized to access requested resource' };
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+    const asked = progress.flatMap((event) => (event.kind === 'step-note' && event.id === 'mail-routing' ? [event.note] : []));
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect(rows.find((row) => row.id === 'mail-routing')?.detail).toBe('No routing token: Cloudflare refused minting one for raman.dev.');
+    expect(asked).toEqual([expect.stringContaining('allow "Email Routing Rules" and "API Tokens"')]);
+    // Its zone set and no token: the deployment refuses addresses it could not route rather than take itself for an apex.
+    expect([uploaded('KINU_MAIL_ZONE'), uploaded('KINU_MAIL_ROUTING_TOKEN')]).toEqual(['zone-raman', undefined]);
+  });
+
+  /** A first run on `mail.raman.dev`, live, then the next run an update, as a person's change is. */
+  const routedBefore = async (): Promise<void> => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.zones.set('northwind.dev', 'zone-northwind');
+    await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+    cloudflare.rules.set('rule-1', { zone: 'zone-raman', to: 'dana@mail.raman.dev', worker: 'kinu' });
+    cloudflare.rules.set('rule-2', { zone: 'zone-raman', to: 'eval@staging.raman.dev', worker: 'kinu-staging' });
+    cloudflare.calls.length = 0;
+    ledger = new ArrayLedger();
+    runTag = 'run-tag-2';
+    updating = true;
+    await vault.write(ACCESS_TOKEN_KEY, 'access-token-value');
+    await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
+    await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
+  };
+
+  // Second review, 2026-10-21: an update rolled the running version's token before its replacement was live, so a
+  // failed update left the running deployment unable to route an address.
+  test('an update in the same zone keeps the running version\'s token: nothing is minted, rolled or retired', async () => {
+    await routedBefore();
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.raman.dev' });
+
+    expect(rows.find((row) => row.id === 'mail-routing')?.detail).toBe('The running version\'s routing token for raman.dev is kept.');
+    expect(rows.find((row) => row.id === 'mail-routing-retired')?.detail).toBe('The mail routing is as it was.');
+    expect(cloudflare.calls.filter((call) => call.path.includes('/tokens') || call.path.includes('/email/routing/rules'))).toEqual([]);
+    expect(uploaded('KINU_MAIL_ZONE')).toBe('zone-raman');
+  });
+
+  test("a move to another zone mints for it, and once live retires the zone left: this Worker's rules there, and its token", async () => {
+    await routedBefore();
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.northwind.dev' });
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect(rows.find((row) => row.id === 'mail-routing-retired')?.detail).toBe('1 rule(s) for another domain retired, and the token for raman.dev.');
+    expect([...cloudflare.tokens.keys()]).toEqual(['kinu mail northwind.dev (Kinu)']);
+    expect([...cloudflare.rules.keys()]).toEqual(['rule-2']);
+    expect(uploaded('KINU_MAIL_ZONE')).toBe('zone-northwind');
+  });
+
+  test('a move that never goes live leaves the running version\'s token and rules as they were', async () => {
+    await routedBefore();
+    health = 503;
+    const rows = await run({ ...INPUTS, mailDomain: 'mail.northwind.dev' });
+
+    expect(rows.find((row) => row.id === 'smoke')?.state).toBe('failed');
+    expect(cloudflare.calls.filter((call) => call.method === 'DELETE' || (call.method === 'PUT' && call.path.includes('/tokens/')))).toEqual([]);
+    expect([...cloudflare.tokens.keys()]).toEqual(['kinu mail raman.dev (Kinu)', 'kinu mail northwind.dev (Kinu)']);
+    expect([...cloudflare.rules.keys()]).toEqual(['rule-1', 'rule-2']);
+  });
+
+  test('mail turned off retires the zone it left: its rules there, and its token', async () => {
+    await routedBefore();
+    const rows = await run({ ...INPUTS, mailDomain: '' });
+
+    expect(rows.find((row) => row.id === 'mail-routing-retired')?.detail).toBe('1 rule(s) for another domain retired, and the token for raman.dev.');
+    expect([...cloudflare.tokens.keys()]).toEqual([]);
+    expect([...cloudflare.rules.keys()]).toEqual(['rule-2']);
   });
 
   test('a deployment whose owner gave no mail answers has no mail domain, and only its operators may claim', async () => {
@@ -824,6 +1210,14 @@ describe('a guided run', () => {
 
   test('the owner\'s mail domain, and opening addresses to everyone, are sent as the deploy\'s answers', async () => {
     expect(await mailVars({ ...INPUTS, mailDomain: 'raman.dev', mailAccounts: 'everyone' })).toEqual(['raman.dev', 'everyone']);
+  });
+
+  // The owner's free account, 2026-10-21: a build carried two byte-identical assets, Cloudflare asked for their hash once,
+  // and the run sent it twice and refused itself ("asked for 630 asset(s) and the release artifact carries 631").
+  test('two assets with the same bytes are uploaded once, as Cloudflare asks for their hash once', async () => {
+    const twin = { path: 'client/copy.js', sha256: 'e'.repeat(64), size: 7, assetHash: '2'.repeat(32) };
+    const rows = await run(INPUTS, { ...MANIFEST, files: [...MANIFEST.files, twin] });
+    expect({ upload: rows.find((row) => row.id === 'upload')?.state, sent: [...cloudflare.assetParts].sort() }).toEqual({ upload: 'done', sent: ['1'.repeat(32), '2'.repeat(32)] });
   });
 
   test('uploads the assets with the session token, not the account token', async () => {
@@ -839,6 +1233,151 @@ describe('a guided run', () => {
     });
     expect(batch?.bearer).toBe('session-token');
     expect(upload?.body?.assets).toMatchObject({ jwt: 'completion-token' });
+  });
+});
+
+describe('what a run asks, makes and hands over', () => {
+  /** A release that requires a key only its deployer can supply. */
+  const WITH_REQUIRED_KEY: ReleaseManifest = {
+    ...MANIFEST,
+    secrets: [...MANIFEST.secrets, { name: 'OPENAI_API_KEY', handling: 'prompted', required: true, prompt: 'an OpenAI key' }],
+  };
+
+  /** A release whose computer reads the registry token the run mints for it. */
+  const WITH_COMPUTER_TOKEN: ReleaseManifest = {
+    ...MANIFEST,
+    secrets: [...MANIFEST.secrets, { name: 'DEVBOX_REGISTRY_TOKEN', handling: 'prompted', required: true, prompt: 'Containers Edit' }],
+  };
+
+  test('asks Cloudflare only for scopes its OAuth catalog names', () => {
+    // kinu.run 2026-10-20: the authorize endpoint refused `account:read` with invalid_scope.
+    expect(CLOUDFLARE_DEPLOY_SCOPES.filter((scope) => scope.includes(':'))).toEqual([]);
+    expect(CLOUDFLARE_DEPLOY_SCOPES).toContain('offline_access');
+    // Its optional scopes are among its scopes, as Cloudflare requires of a registration.
+    expect(CLOUDFLARE_DEPLOY_CLIENT.optional.filter((scope) => !CLOUDFLARE_DEPLOY_SCOPES.includes(scope))).toEqual([]);
+  });
+
+  // f44999, 2026-10-21: the registration held zone-settings.write and registrar-domains.admin, which no consent asked
+  // for, and Cloudflare refused the first as zonesettings.write at the owner's consent.
+  test('a registration that differs from the list is named scope by scope, and one that matches is not', () => {
+    const registered = {
+      scopes: [...CLOUDFLARE_DEPLOY_SCOPES, 'zone-settings.write', 'registrar-domains.admin'].filter((scope) => scope !== 'aig.write'),
+      optional: [...CLOUDFLARE_DEPLOY_CLIENT.optional, 'zone-settings.write'],
+    };
+
+    expect(deployClientDrift(registered)).toEqual([
+      'scope aig.write is not registered',
+      'scope zone-settings.write is registered and not asked for',
+      'scope registrar-domains.admin is registered and not asked for',
+      'optional scope zone-settings.write is registered and not asked for',
+    ]);
+    expect(deployClientDrift({ scopes: CLOUDFLARE_DEPLOY_SCOPES, optional: CLOUDFLARE_DEPLOY_CLIENT.optional })).toEqual([]);
+  });
+
+  test('a run that would stop at a missing secret stops before it makes anything', async () => {
+    const rows = await run(INPUTS, WITH_REQUIRED_KEY);
+
+    expect(rows.find((row) => row.state === 'failed')).toMatchObject({ id: 'account', failure: { detail: expect.stringContaining('OPENAI_API_KEY') } });
+    expect(cloudflare.namespaces).toEqual([]);
+    expect(cloudflare.buckets).toEqual([]);
+  });
+
+  test('the computer\'s registry token is never asked of a person', async () => {
+    const rows = await run(INPUTS, WITH_COMPUTER_TOKEN);
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+  });
+
+  test('makes no Access application: the first owner signs in through a one-time setup link', async () => {
+    const before = Date.now();
+    const rows = await run();
+    const [seat] = seats;
+    const token = new URL(seat?.link ?? 'https://absent.invalid').searchParams.get('setup') ?? '';
+
+    const bound = uploadedBindings(cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu')))
+      .find((binding) => binding.name === FIRST_OWNER_LINK_SECRET);
+
+    expect(cloudflare.calls.filter((call) => call.path.includes('/access/'))).toEqual([]);
+    expect(seat?.link.startsWith('https://kinu.acme.workers.dev/login?setup=')).toBe(true);
+    expect(token.length).toBeGreaterThanOrEqual(32);
+    expect(seat?.expiresAt ?? 0).toBeGreaterThanOrEqual(before + FIRST_OWNER_LINK_MS);
+    // The Worker holds the token's digest, its lapse and the owner's email; never the token.
+    expect(bound).toMatchObject({ type: 'secret_text', text: `${sha256Hex(token)}.${String(seat?.expiresAt)}.owner@example.com` });
+    expect(JSON.stringify(rows)).not.toContain(token);
+    expect(await vault.names()).toEqual([]);
+  });
+});
+
+describe('the computer', () => {
+  const SHA = 'e'.repeat(64);
+
+  /** A release whose computer runs on the managed image and reads two tools parts from the store bucket. */
+  const WITH_COMPUTER: ReleaseManifest = {
+    ...MANIFEST,
+    secrets: [...MANIFEST.secrets, { name: 'DEVBOX_REGISTRY_TOKEN', handling: 'prompted', required: true, prompt: 'Containers Edit' }],
+    computer: {
+      className: 'KinuDevbox', bucket: 'BACKUP_BUCKET',
+      tools: { sha256: SHA, parts: [{ key: `devbox-tools/${SHA}.tgz.0`, bytes: 5 }, { key: `devbox-tools/${SHA}.tgz.1`, bytes: 3 }] },
+    },
+  };
+
+  const COMPUTER_INPUTS: DeployInputs = { ...INPUTS, sandbox: true };
+
+  const toolPuts = () => cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.includes('/objects/devbox-tools/'));
+
+  const applicationPosts = () => cloudflare.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/containers/applications'));
+
+  beforeEach(() => {
+    toolsBytes.clear();
+
+    for (const part of WITH_COMPUTER.computer?.tools.parts ?? []) toolsBytes.set(part.key, part.bytes);
+  });
+
+  test('copies its tools, mints its registry token and makes its application on no image', async () => {
+    const rows = await run(COMPUTER_INPUTS, WITH_COMPUTER);
+    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
+    const bindings = uploadedBindings(upload);
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect([...cloudflare.streamed]).toEqual([
+      [`/accounts/${INPUTS.accountId}/r2/buckets/kinu-backups/objects/devbox-tools/${SHA}.tgz.0`, 5],
+      [`/accounts/${INPUTS.accountId}/r2/buckets/kinu-backups/objects/devbox-tools/${SHA}.tgz.1`, 3],
+    ]);
+    expect([...cloudflare.tokens]).toEqual([['kinu computer (Kinu)', ['minted-token']]]);
+    expect(cloudflare.calls.find((call) => call.method === 'POST' && call.path.endsWith('/tokens'))?.body).toEqual({
+      name: 'kinu computer (Kinu)',
+      policies: [{ effect: 'allow', resources: { [`com.cloudflare.api.account.${INPUTS.accountId}`]: '*' }, permission_groups: [{ id: 'group-containers-write' }] }],
+    });
+    expect(applicationPosts().map((call) => call.body)).toEqual([
+      { name: 'kinu-kinudevbox', scheduling_policy: 'durable_object', durable_objects: { namespace_id: 'ns-devbox' } },
+    ]);
+    expect(upload?.body?.containers).toEqual([{ class_name: 'KinuDevbox' }]);
+    expect(bindings.find((binding) => binding.name === 'KinuDevbox')).toMatchObject({ type: 'durable_object_namespace', class_name: 'KinuDevbox' });
+    expect(bindings.find((binding) => binding.name === 'DEVBOX_REGISTRY_TOKEN')).toEqual({ type: 'secret_text', name: 'DEVBOX_REGISTRY_TOKEN', text: 'minted-token' });
+  });
+
+  test('a second sitting copies nothing again and makes no second application, and rolls the token it lost', async () => {
+    await run(COMPUTER_INPUTS, WITH_COMPUTER);
+    ledger = new ArrayLedger();
+    await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
+    await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
+
+    const rows = await run(COMPUTER_INPUTS, WITH_COMPUTER);
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    expect(toolPuts()).toHaveLength(2);
+    expect(applicationPosts()).toHaveLength(1);
+    expect([...cloudflare.tokens]).toEqual([['kinu computer (Kinu)', ['minted-token', 'rolled-1']]]);
+  });
+
+  test('a deployment without it runs none of its steps and binds no container', async () => {
+    const rows = await run(INPUTS, WITH_COMPUTER);
+    const upload = cloudflare.calls.find((call) => call.path.endsWith('/workers/scripts/kinu'));
+
+    expect(rows.every((row) => row.state === 'done')).toBe(true);
+    // The account step's one read of the plan (`workersPlan`) aside, which every run makes.
+    expect(cloudflare.calls.filter((call) => /\/tokens|\/containers\/|devbox-tools/u.test(call.path) && !(call.method === 'GET' && call.path.endsWith('/containers/applications')))).toEqual([]);
+    expect(upload?.body?.containers).toBeUndefined();
   });
 });
 
@@ -861,27 +1400,37 @@ describe('a second sitting on the same account', () => {
     expect(cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.includes('/r2/buckets/')))
       .toEqual([]);
   });
-
-  // core-rest review P2-18: the Access step POSTed a new Owners policy on every sitting.
-  test('keeps one Owners policy and sets its addresses to today\'s', async () => {
-    await run();
-    const [held] = cloudflare.policies;
-
-    if (held === undefined) throw new Error('the first sitting made no Owners policy');
-    held.include = [{ email: { email: 'gone@example.com' } }];
-    ledger = new ArrayLedger();
-    await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
-    await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
-
-    await run();
-
-    expect(cloudflare.policies.map(({ name, include }) => ({ name, include }))).toEqual([{
-      name: 'Owners', include: ['owner@example.com', 'second@example.com'].map((email) => ({ email: { email } })),
-    }]);
-  });
 });
 
 describe('a refusal', () => {
+  // The owner's free account, 2026-10-21: 10089 at the upload, and no API turns Analytics Engine on. Owner decision: skip it.
+  test('a version refused for Analytics Engine off is uploaded once more without its datasets, and the run says so', async () => {
+    cloudflare.refuseOnce = {
+      path: `/accounts/${INPUTS.accountId}/workers/scripts/kinu`, method: 'PUT', status: 403, code: 10_089,
+      message: 'You need to enable Analytics Engine. Head to the Cloudflare Dashboard to enable: https://dash.cloudflare.com/x/workers/analytics-engine',
+    };
+    const rows = await run();
+    const upload = rows.find((row) => row.id === 'upload');
+
+    expect({
+      upload: upload?.state,
+      datasets: cloudflare.bindings.filter((binding) => binding.type === 'analytics_engine'),
+      said: upload?.notes.filter((note) => note.includes('Analytics Engine')),
+    }).toEqual({ upload: 'done', datasets: [], said: ['Analytics Engine is off on this account, so usage analytics are off.'] });
+  });
+
+  // The owner's free account, 2026-10-21: the run made KV, R2, Vectorize and a gateway before 10195 refused its upload.
+  test('a Workers Free account stops at its first step on the plan need, having made nothing', async () => {
+    cloudflare.workersFree = true;
+
+    const rows = await run();
+
+    expect({
+      account: rows.find((row) => row.id === 'account')?.state,
+      made: [...cloudflare.namespaces, ...cloudflare.buckets, ...cloudflare.indexes],
+    }).toEqual({ account: 'failed', made: [] });
+  });
+
   test('stops the run at the step that refused and keeps Cloudflare\'s words', async () => {
     cloudflare.refuseOnce = {
       path: `/accounts/${INPUTS.accountId}/r2/buckets`,
@@ -898,6 +1447,8 @@ describe('a refusal', () => {
       detail: 'R2 is not enabled for this account. Add a payment method to enable R2.',
       code: 10042,
       status: 403,
+      // The catalog reads a shared code by the path Cloudflare refused.
+      endpoint: `/accounts/${INPUTS.accountId}/r2/buckets?per_page=100`,
     });
     expect(rows.find((row) => row.id === 'upload')?.state).toBe('pending');
     expect(cloudflare.calls.some((call) => call.path.endsWith('/workers/scripts/kinu'))).toBe(false);
@@ -1047,6 +1598,20 @@ describe('the door client', () => {
 describe('a release manifest a channel publishes', () => {
   const manifestWith = (over: JsonObject): string =>
     JSON.stringify({ ...parseJsonObject(JSON.stringify(MANIFEST)), ...over });
+
+  test('one published before the computer could be deployed reads as naming none', () => {
+    const { computer: _named, ...older } = parseJsonObject(JSON.stringify(MANIFEST));
+
+    expect(parseReleaseManifest(JSON.stringify(older)).computer).toBeNull();
+  });
+
+  test('takes a tools part under the tools prefix and refuses one outside it', () => {
+    const part = (key: string) => ({ className: 'KinuDevbox', bucket: 'BACKUP_BUCKET', tools: { sha256: 'e'.repeat(64), parts: [{ key, bytes: 1 }] } });
+    const kept = `devbox-tools/${'e'.repeat(64)}.tgz.0`;
+
+    expect(parseReleaseManifest(manifestWith({ computer: part(kept) })).computer?.tools.parts.map((entry) => entry.key)).toEqual([kept]);
+    expect(() => parseReleaseManifest(manifestWith({ computer: part('../release.json') }))).toThrow('"../release.json"');
+  });
 
   test('refuses a file path that leaves the release directory', () => {
     const escaping = [
@@ -1211,9 +1776,34 @@ describe('what the address and smoke steps check', () => {
     expect(cloudflare.secrets.has(DEPLOYMENT_RECORD_SECRET)).toBe(false);
   });
 
+  // f44999, 2026-10-21: an update's smoke ran in the second its 0% deployment was made, and the serving version answered;
+  // the override reached the staged one a moment later.
+  test('a smoke the staged version does not answer yet asks again until it does', async () => {
+    await run();
+    ledger = new ArrayLedger();
+    runTag = 'run-tag-2';
+    await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
+    await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
+    cloudflare.overrideLateAsks = 2;
+
+    const rows = await run();
+
+    expect({ smoke: rows.find((row) => row.id === 'smoke')?.state, waits }).toEqual({ smoke: 'done', waits: [3000, 3000] });
+  });
+
+  // f44999, 2026-10-21: a first deploy's smoke met the workers.dev address it had just bound answering 404.
+  test('a fresh address that answers 404 while it comes up is asked again until the version answers', async () => {
+    cloudflare.addressWarmingAsks = 3;
+
+    const rows = await run();
+
+    expect({ smoke: rows.find((row) => row.id === 'smoke')?.state, waits }).toEqual({ smoke: 'done', waits: [3000, 3000, 3000] });
+  });
+
   test('a smoke answered by the serving version fails, though that version carries the same build', async () => {
     await run();
     ledger = new ArrayLedger();
+    runTag = 'run-tag-2';
     await vault.write(REFRESH_TOKEN_KEY, 'refresh-token-value');
     await vault.write(DEPLOY_CLIENT_ID_KEY, 'deploy-client-id');
     cloudflare.overridesLag = true;
@@ -1224,5 +1814,351 @@ describe('what the address and smoke steps check', () => {
     expect(smoke?.state).toBe('failed');
     expect(smoke?.failure?.detail).toContain('version-1');
     expect(cloudflare.serving()).toBe('version-1');
+  });
+});
+
+describe('a replayed upload', () => {
+  test('finds the version this run tagged and uploads no other', async () => {
+    const first = await run();
+    const version = first.find((row) => row.id === 'upload')?.facts[FACT_VERSION_ID];
+
+    // The activation died after Cloudflare took the version and before the row said so.
+    ledger.markRunning('upload');
+    const again = await run();
+
+    expect({
+      versions: cloudflare.versions,
+      reused: again.find((row) => row.id === 'upload')?.facts[FACT_VERSION_ID],
+      tag: cloudflare.tags.get(version ?? ''),
+      done: again.every((row) => row.state === 'done'),
+    }).toEqual({ versions: ['version-1'], reused: version, tag: 'run-tag-1', done: true });
+  });
+});
+
+describe('a change that asks for a new setup link', () => {
+  test('mints the link and binds it, keeping the running version\'s root keys', async () => {
+    updating = true;
+    freshLink = true;
+    cloudflare.serveExisting(PRIOR_VERSION);
+
+    const rows = await run();
+
+    const secrets = uploadedBindings(cloudflare.calls.find((call) => call.path.endsWith('/versions')))
+      .filter((binding) => binding.type === 'secret_text').map((binding) => binding.name);
+
+    expect({ done: rows.every((row) => row.state === 'done'), seats: seats.map((seat) => new URL(seat.link).pathname), secrets })
+      .toEqual({ done: true, seats: ['/login'], secrets: [FIRST_OWNER_LINK_SECRET] });
+  });
+});
+
+const ACCOUNT = INPUTS.accountId;
+
+const EXAMPLE_ZONE = 'e'.repeat(32);
+
+const R2_OFF = {
+  path: `/accounts/${ACCOUNT}/r2/buckets`, status: 403, code: 10_042,
+  message: 'R2 is not enabled for this account. Add a payment method to enable R2.',
+};
+
+/** The view of a run's ledger as the page reads it; the rest of what the run holds, as given. */
+function viewOf(rows: readonly DeployStepRow[], held: Partial<DeployRunStanding> = {}) {
+  return deployRunView({
+    runId: 'run-1', account: ACCOUNT, rows, state: 'failed', mail: false, paused: null, signedOut: false,
+    seat: null, pending: null, note: '', now: 0, ...held,
+  });
+}
+
+describe('the page\'s view of a run', () => {
+  test('a finished run is live at its address with its setup link and CLI line, in six phases without mail', async () => {
+    const rows = await run();
+    const view = viewOf(rows, { state: 'done', seat: seats[0] ?? null });
+
+    expect(view).toEqual({
+      runId: 'run-1', account: ACCOUNT, state: 'live',
+      phase: { id: 'live', index: 6, of: 6, words: 'Going live' },
+      phases: ['prepare', 'storage', 'upload', 'address', 'check', 'live'].map((id) => expect.objectContaining({ id, state: 'done' })),
+      live: {
+        url: 'https://kinu.acme.workers.dev', setupLink: seats[0]?.link, setupLinkExpiresAt: seats[0]?.expiresAt,
+        cli: 'curl -fsSL https://kinu.acme.workers.dev/install.sh | bash',
+      },
+    });
+  });
+
+  test('R2 not turned on pauses in storage with Cloudflare\'s words and the dashboard page that turns it on', async () => {
+    cloudflare.refuseOnce = R2_OFF;
+    const view = viewOf(await run());
+
+    expect({ state: view.state, phase: view.phase, storage: view.phases[1]?.state, paused: view.paused }).toEqual({
+      state: 'paused',
+      phase: { id: 'storage', index: 2, of: 6, words: 'Creating storage' },
+      storage: 'running',
+      paused: {
+        id: 'r2', sentence: expect.stringContaining('R2'),
+        action: { label: 'Turn on R2', href: `https://dash.cloudflare.com/${ACCOUNT}/r2/overview` },
+        details: { message: R2_OFF.message, code: 10_042, status: 403, endpoint: `/accounts/${ACCOUNT}/r2/buckets?per_page=100` },
+      },
+    });
+  });
+
+  test('a refusal the catalog does not name stops the run with its words and "Retry this step"', async () => {
+    cloudflare.refuseOnce = { path: `/accounts/${ACCOUNT}/vectorize/v2/indexes`, status: 400, code: 40_026, message: 'vectorize.index.invalid_config' };
+    const view = viewOf(await run());
+
+    expect({ state: view.state, vectorize: view.phases[1]?.state, refused: view.refused }).toEqual({
+      state: 'refused', vectorize: 'refused',
+      refused: {
+        sentence: 'This step did not finish.', action: { label: 'Retry this step' },
+        details: { message: 'vectorize.index.invalid_config', code: 40_026, status: 400, endpoint: `/accounts/${ACCOUNT}/vectorize/v2/indexes` },
+      },
+    });
+  });
+
+  test('a run that let go of its grant asks to sign in again, whatever it stopped on', async () => {
+    cloudflare.refuseOnce = R2_OFF;
+    const view = viewOf(await run(), { state: 'expired', signedOut: true });
+
+    expect({ state: view.state, need: view.paused?.id, action: view.paused?.action }).toEqual({ state: 'paused', need: 'signin-again', action: { label: 'Sign in again' } });
+  });
+
+  test('a step the table does not name sits in the phase before it; mail counts only when the deployment has it', () => {
+    const row = (id: string, state: DeployStepRow['state']): DeployStepRow => ({ id, seq: 0, title: id, state, attempt: 0, detail: '', notes: [], failure: null, facts: {} });
+
+    const view = viewOf([row('account', 'done'), row('secrets', 'done'), row('upload', 'done'), row('computer-next', 'running'), row('address', 'pending')], {
+      state: 'running', mail: true, note: 'kinu was taken by then, so this Kinu is kinu-2.',
+    });
+
+    expect({ state: view.state, phase: view.phase, phases: view.phases.map((phase) => [phase.id, phase.state]), note: view.phases[0]?.note }).toEqual({
+      state: 'running',
+      phase: { id: 'storage', index: 2, of: 7, words: 'Creating storage' },
+      phases: [['prepare', 'done'], ['storage', 'waiting'], ['upload', 'running'], ['address', 'waiting'], ['mail', 'waiting'], ['check', 'waiting'], ['live', 'waiting']],
+      note: 'kinu was taken by then, so this Kinu is kinu-2.',
+    });
+  });
+
+  test('the catalog reads a sign-in Cloudflare refuses, and the computer on Workers Free, as needs', () => {
+    expect([
+      judgeRefusal({ message: 'Authentication error', code: 10_000, status: 401, endpoint: `/accounts/${ACCOUNT}` }, ACCOUNT),
+      judgeRefusal({ message: 'Unauthorized: Deploying containers requires the Workers Paid plan.', code: 1000, status: 401, endpoint: `/accounts/${ACCOUNT}/containers/applications` }, ACCOUNT),
+      // A missing permission on the computer's endpoint is a sign-in to repeat, not a plan to buy.
+      judgeRefusal({ message: 'Unauthorized to access requested resource', code: 9109, status: 403, endpoint: `/accounts/${ACCOUNT}/containers/applications` }, ACCOUNT),
+    ].map((judged) => ('need' in judged ? [judged.need.id, judged.need.action] : judged.refused.sentence))).toEqual([
+      ['signin-again', { label: 'Sign in again' }],
+      ['plan', { label: 'Upgrade to Workers Paid', href: `https://dash.cloudflare.com/${ACCOUNT}/workers/plans` }],
+      ['signin-again', { label: 'Sign in again' }],
+    ]);
+  });
+
+  // f44999, 2026-10-21: one of eight uploads of one rc30 bundle refused, the same bundle passing when asked again.
+  test('a startup Cloudflare refuses is a refusal in its own words, with a retry the person presses', () => {
+    const words = { message: 'Error: Script startup exceeded CPU time limit.\n', code: 10_021, status: 400, endpoint: `/accounts/${ACCOUNT}/workers/scripts/kinu/versions` };
+
+    expect(judgeRefusal(words, ACCOUNT)).toEqual({ refused: {
+      sentence: 'Cloudflare\'s check of how fast Kinu starts ran slow this time. The same release usually passes when checked again.',
+      action: { label: 'Retry this step' }, details: words,
+    } });
+  });
+});
+
+describe('what the page reads of an account', () => {
+  test('a Kinu reads back as the answers it was made with, from its settings alone, whichever door ran it', async () => {
+    const made: DeployInputs = { ...INPUTS, mailDomain: 'raman.dev', mailAccounts: 'everyone' };
+
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.otherScripts.push('blog');
+    await run(made);
+
+    const asked = (name: string) => settle(plannedRun(cloudflare, { id: 'user-1', email: INPUTS.ownerEmail }, { kind: 'update', account: ACCOUNT, name })
+      .pipe(Effect.match({ onFailure: (error) => error.code, onSuccess: (plan) => plan.inputs })));
+
+    expect({ kinu: await asked('kinu'), blog: await asked('blog') }).toEqual({ kinu: made, blog: 'missing' });
+  });
+
+  test('preflight reads the checklist together and says only what needs the person', async () => {
+    cloudflare.subdomain = null;
+    cloudflare.serveExisting(PRIOR_VERSION);
+    cloudflare.otherScripts.push('kinu-2');
+    cloudflare.zones.set('example.com', 'zone-example');
+    cloudflare.refuseOnce = R2_OFF;
+
+    expect(await settle(preflight(cloudflare, ACCOUNT, 0))).toEqual({
+      workersSubdomain: null, suggestedName: 'kinu-3', r2: 'off', plan: 'paid',
+      zones: [expect.objectContaining({ id: 'zone-example', name: 'example.com', status: 'active' })],
+      needs: [expect.objectContaining({ id: 'r2', details: expect.objectContaining({ code: 10_042 }) })],
+      checkedAt: '1970-01-01T00:00:00.000Z',
+    });
+  });
+
+  // The owner's free account, 2026-10-21: preflight answered plan 'unknown' always, and the run then made storage before
+  // Cloudflare refused its Dynamic Workers. Owner decision: Kinu is Workers Paid only.
+  test('a Workers Free account reads as free, from Cloudflare\'s own refusal of its Containers, and needs the plan first', async () => {
+    cloudflare.workersFree = true;
+
+    const answer = await settle(preflight(cloudflare, ACCOUNT, 0));
+
+    expect({ plan: answer.plan, first: answer.needs[0]?.id, sentence: answer.needs[0]?.sentence, code: answer.needs[0]?.details?.code })
+      .toEqual({ plan: 'free', first: 'plan', sentence: 'Kinu runs on Cloudflare\'s Workers Paid plan, $5 a month.', code: 1000 });
+  });
+
+  test('a version refused for Dynamic Workers on Workers Free is the plan need, in Cloudflare\'s words', () => {
+    const words = { message: 'In order to use Dynamic Workers, you must switch to a paid plan at https://dash.cloudflare.com/x/workers/plans.', code: 10_195, status: 403, endpoint: `/accounts/${ACCOUNT}/workers/scripts/kinu` };
+    const judged = judgeRefusal(words, ACCOUNT);
+
+    expect('need' in judged ? [judged.need.id, judged.need.sentence] : judged).toEqual(['plan', 'Kinu runs on Cloudflare\'s Workers Paid plan, $5 a month.']);
+  });
+
+  test('a sign-in\'s API Tokens state: granted, left out, or left out again after a sign-in made to grant it', () => {
+    expect([
+      apiTokensState(['account-api-tokens.write', 'offline_access'], false),
+      apiTokensState(['offline_access'], false),
+      apiTokensState(['offline_access'], true),
+      apiTokensState(null, true),
+    ]).toEqual(['granted', 'missing', 'missing-after-reconsent', 'granted']);
+  });
+
+  test('the computer refused on Workers Free is the plan need, in Cloudflare\'s words', () => {
+    const words = { message: 'Unauthorized: You do not have access to Cloudflare Containers. Deploying containers requires the Workers Paid plan.', code: 1000, status: 401, endpoint: `/accounts/${ACCOUNT}/containers/applications` };
+    const judged = judgeRefusal(words, ACCOUNT);
+
+    expect('need' in judged ? [judged.need.id, judged.need.action.href, judged.need.details] : judged).toEqual(['plan', `https://dash.cloudflare.com/${ACCOUNT}/workers/plans`, words]);
+  });
+
+  test('a sign-in Cloudflare refuses is one need, however many reads met it', async () => {
+    cloudflare.refuseOnce = { path: `/accounts/${ACCOUNT}/workers/subdomain`, status: 401, code: 10_000, message: 'Authentication error' };
+
+    expect((await settle(preflight(cloudflare, ACCOUNT, 0))).needs.map((need) => need.id)).toEqual(['signin-again']);
+  });
+
+  test('every zone past the first page of fifty is read, so the last is offered too', async () => {
+    for (let at = 1; at <= 51; at += 1) cloudflare.zones.set(`site-${String(at).padStart(2, '0')}.example`, `zone-${String(at)}`);
+
+    expect((await settle(preflight(cloudflare, ACCOUNT, 0))).zones.map((zone) => zone.name).at(-1)).toBe('site-51.example');
+  });
+
+  test('a name is suggested only when the account\'s Workers could be listed', async () => {
+    cloudflare.refuseOnce = { path: `/accounts/${ACCOUNT}/workers/scripts`, status: 403, code: 9109, message: 'Unauthorized to access requested resource' };
+
+    expect(await settle(preflight(cloudflare, ACCOUNT, 0))).toMatchObject({ suggestedName: '', needs: [expect.objectContaining({ id: 'signin-again' })] });
+  });
+
+  test('a mail preview Cloudflare refuses a read of fails in its words, never as records that are not there', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.refuseOnce = { path: '/zones/zone-raman/email/routing/dns', status: 403, code: 10_000, message: 'Authentication error' };
+
+    await expect(settle(mailHostPreview(cloudflare, ACCOUNT, 'raman.dev'))).rejects.toThrow('Authentication error');
+  });
+
+  test('a domain search names the account\'s zones, and a domain registered elsewhere as such', async () => {
+    cloudflare.zones.set('example.com', 'zone-example');
+
+    expect([
+      await settle(domainsMatching(cloudflare, ACCOUNT, 'https://kinu.example.com/')),
+      await settle(domainsMatching(cloudflare, ACCOUNT, 'FlourAndHearth.com')),
+    ]).toEqual([
+      [{ name: 'example.com', state: 'yours', zone: 'zone-example', status: 'active' }],
+      [{ name: 'flourandhearth.com', state: 'elsewhere' }],
+    ]);
+  });
+
+  test('mail is previewed by the step\'s own reads: what it would write, what is there, and an MX elsewhere', async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+    cloudflare.routing.sending.set('zone-raman', 'raman.dev');
+    cloudflare.dns.push(
+      { zone: 'zone-raman', type: 'MX', name: 'raman.dev', content: 'mx.fastmail.com', priority: 10 },
+      { zone: 'zone-raman', type: 'TXT', name: 'raman.dev', content: 'v=spf1 include:_spf.mx.cloudflare.net ~all' },
+      { zone: 'zone-raman', type: 'TXT', name: '_dmarc.raman.dev', content: '"v=DMARC1; p=quarantine"' },
+    );
+
+    const preview = await settle(mailHostPreview(cloudflare, ACCOUNT, 'raman.dev'));
+
+    expect(preview).toEqual({
+      host: 'raman.dev',
+      conflict: { mx: 'mx.fastmail.com', suggestion: 'mail.raman.dev' },
+      writes: [
+        { type: 'MX', name: 'raman.dev', content: 'route1.mx.cloudflare.net', purpose: 'receive' },
+        { type: 'MX', name: 'raman.dev', content: 'route2.mx.cloudflare.net', purpose: 'receive' },
+        { type: 'MX', name: 'cf-bounce.raman.dev', content: 'route1.mx.cloudflare.net.', purpose: 'send' },
+        { type: 'TXT', name: 'cf-bounce._domainkey.raman.dev', content: '"v=DKIM1; h=sha256; k=rsa; p=MIIBIjAN"', purpose: 'sign' },
+      ],
+      kept: [
+        { type: 'TXT', name: 'raman.dev', content: 'v=spf1 include:_spf.mx.cloudflare.net ~all', purpose: 'send' },
+        { type: 'TXT', name: '_dmarc.raman.dev', content: 'v=DMARC1; p=quarantine', purpose: 'report' },
+      ],
+    });
+    expect(cloudflare.calls.filter((call) => call.method !== 'GET')).toEqual([]);
+  });
+
+  test("a subdomain's preview lists routing's records under its own name, and its own sending and DMARC", async () => {
+    cloudflare.zones.set('raman.dev', 'zone-raman');
+
+    const preview = await settle(mailHostPreview(cloudflare, ACCOUNT, 'mail.raman.dev'));
+
+    expect(preview).toEqual({
+      host: 'mail.raman.dev',
+      conflict: null,
+      writes: [
+        { type: 'MX', name: 'mail.raman.dev', content: 'route1.mx.cloudflare.net', purpose: 'receive' },
+        { type: 'MX', name: 'mail.raman.dev', content: 'route2.mx.cloudflare.net', purpose: 'receive' },
+        { type: 'TXT', name: 'mail.raman.dev', content: 'v=spf1 include:_spf.mx.cloudflare.net ~all', purpose: 'send' },
+        { type: 'TXT', name: '_dmarc.mail.raman.dev', content: 'v=DMARC1; p=none; rua=mailto:dmarc@mail.raman.dev', purpose: 'report' },
+      ],
+      kept: [],
+    });
+  });
+
+});
+
+describe('the run a page asks for', () => {
+  const user = { id: 'user-1', email: 'person@example.com' };
+
+  test('a new Kinu takes the person\'s Cloudflare email, the next free name, and a workers.dev subdomain made for it', async () => {
+    cloudflare.subdomain = null;
+    cloudflare.serveExisting(PRIOR_VERSION);
+
+    const planned = await settle(plannedRun(cloudflare, user, {
+      kind: 'new', account: ACCOUNT, name: 'kinu', address: { kind: 'workers' }, computer: false, mail: null,
+    }));
+
+    expect({ planned, subdomain: String(cloudflare.subdomain) }).toEqual({
+      planned: {
+        kind: 'new', renamedFrom: 'kinu', freshSetupLink: false, pending: null,
+        inputs: { ...INPUTS, instanceName: 'kinu-2', ownerEmail: 'person@example.com', mailDomain: '' },
+      },
+      subdomain: 'acme',
+    });
+  });
+
+  test('a domain registered elsewhere is added as a zone, and the run waits on its nameservers on workers.dev', async () => {
+    const planned = await settle(plannedRun(cloudflare, user, {
+      kind: 'new', account: ACCOUNT, name: 'kinu', address: { kind: 'domain', domain: 'flourandhearth.com', host: 'flourandhearth.com' }, computer: false, mail: null,
+    }));
+
+    expect({ address: planned.inputs.address, pending: planned.pending }).toEqual({
+      address: { kind: 'workers-dev', hostname: '', zoneId: '' },
+      pending: { zoneId: sha256Hex('flourandhearth.com').slice(0, 32), domain: 'flourandhearth.com', host: 'flourandhearth.com', nameservers: ['ada.ns.cloudflare.com', 'bob.ns.cloudflare.com'] },
+    });
+  });
+
+  test('a change and an update start from the deployment\'s own answers; a Worker no run made is refused', async () => {
+    cloudflare.zones.set('example.com', EXAMPLE_ZONE);
+    cloudflare.otherScripts.push('blog');
+    await run();
+
+    const change = await settle(plannedRun(cloudflare, user, {
+      kind: 'change', account: ACCOUNT, name: 'kinu', address: { kind: 'domain', domain: 'example.com', host: 'kinu.example.com' }, setupLink: true,
+    }));
+
+    const update = await settle(plannedRun(cloudflare, user, { kind: 'update', account: ACCOUNT, name: 'kinu' }));
+
+    const refused = await settle(plannedRun(cloudflare, user, { kind: 'update', account: ACCOUNT, name: 'blog' })
+      .pipe(Effect.match({ onFailure: (error) => error.code, onSuccess: () => 'planned' })));
+
+    expect({ change, update, refused }).toEqual({
+      change: {
+        kind: 'change', renamedFrom: '', freshSetupLink: true, pending: null,
+        inputs: { ...INPUTS, address: { kind: 'zone', hostname: 'kinu.example.com', zoneId: EXAMPLE_ZONE }, mailDomain: '', mailAccounts: 'operators' },
+      },
+      update: { kind: 'update', inputs: { ...INPUTS, mailDomain: '', mailAccounts: 'operators' }, renamedFrom: '', freshSetupLink: false, pending: null },
+      refused: 'missing',
+    });
   });
 });

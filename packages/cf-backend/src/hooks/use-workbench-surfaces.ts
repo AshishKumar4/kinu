@@ -45,23 +45,42 @@ interface WorkbenchSurfaces {
   readonly openChangeNote: (source: string, anchor: DiffAnchor | undefined) => void;
   readonly forkLanding: ForkLanding | null;
   readonly forkLandingOpened: () => void;
+  /** The page opened on `?environment=desktop`: Environment shows the chosen machine's desktop, once. */
+  readonly desktopLanding: boolean;
+  readonly desktopLanded: () => void;
 }
 
-/** `search`: the URL the page opened on, read once for its landings. */
-export function useWorkbenchSurfaces({ workspace, executors, slates, search }: {
+/** The landing that opens Environment on the chosen machine's desktop: what `/workspace/:id/desktop` became (D99). */
+export const DESKTOP_LANDING = "environment=desktop";
+
+/** `search`: the page's query, for its landings (most read once, at mount). `inspectorReady`: the workbench's layout is decided. */
+export function useWorkbenchSurfaces({ workspace, executors, slates, search, inspectorReady }: {
   workspace: string;
   executors: readonly ExecutorInfo[];
   slates: readonly SlateSummary[];
   search: string;
+  inspectorReady: boolean;
 }): WorkbenchSurfaces {
   const workbench = useRef<WorkbenchHandle | null>(null);
-  const [surface, setSurface] = useState<SurfaceKind>("Work");
   const [filesFocus, setFilesFocus] = useState<FilesFocus | null>(null);
   const [changesFocus, setChangesFocus] = useState<ChangesFocus | null>(null);
   const [landingFile, setLandingFile] = useState<string | null>(() => new URLSearchParams(search).get("file"));
   // The jump to a fork's slate waits until the listing names the slate.
   const [landingSlate, setLandingSlate] = useState<string | null>(() => new URLSearchParams(search).get("slate"));
   const [forkLanding, setForkLanding] = useState(() => forkLandingOf(new URLSearchParams(search)));
+  const [surface, setSurface] = useState<SurfaceKind>("Work");
+  // `?environment=desktop` opens Environment, once the inspector's layout is decided (a reveal before it is undone), and
+  // Environment shows the chosen machine's desktop; each lets go once it has. Followed, not read once: the desktop's old
+  // address redirects here within the same page, which stays mounted across the workspace's own routes.
+  const [desktopLanding, setDesktopLanding] = useState(false);
+  const [environmentLanding, setEnvironmentLanding] = useState(false);
+  const asksDesktop = new URLSearchParams(search).get("environment") === "desktop";
+
+  useEffect(() => {
+    if (!asksDesktop) return;
+    setDesktopLanding(true);
+    setEnvironmentLanding(true);
+  }, [asksDesktop]);
 
   const show = useCallback((next: SurfaceKind): void => {
     setSurface(next);
@@ -106,7 +125,17 @@ export function useWorkbenchSurfaces({ workspace, executors, slates, search }: {
     setLandingSlate(null);
   }, [landingSlate, slates, show]);
 
-  const forkLandingOpened = useCallback(() => setForkLanding(null), []);
+  useEffect(() => {
+    if (!environmentLanding || !inspectorReady) return;
+    show("Environment");
+    setEnvironmentLanding(false);
+  }, [environmentLanding, inspectorReady, show]);
 
-  return { workbench, surface, setSurface, show, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened };
+  const forkLandingOpened = useCallback(() => setForkLanding(null), []);
+  const desktopLanded = useCallback(() => setDesktopLanding(false), []);
+
+  return {
+    workbench, surface, setSurface, show, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened,
+    desktopLanding, desktopLanded,
+  };
 }

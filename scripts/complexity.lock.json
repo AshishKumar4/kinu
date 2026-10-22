@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-22",
-  "files": 3740,
-  "functions": 98045,
+  "files": 3770,
+  "functions": 99102,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -127,10 +127,6 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/changes/ChangesPanel.tsx#ChangesPanel",
-      "complexity": 29
-    },
-    {
-      "key": "packages/cf-backend/src/pages/DeployPage.tsx#DeployPage",
       "complexity": 29
     },
     {
@@ -271,10 +267,6 @@
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#settingsSectionsFixture",
-      "complexity": 26
-    },
-    {
-      "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#api",
       "complexity": 26
     },
     {
@@ -423,10 +415,6 @@
     },
     {
       "key": "packages/core/src/web/hero-art.ts#SearchTree.stepLayer",
-      "complexity": 25
-    },
-    {
-      "key": "packages/core/tests/unit-deploy-flow.test.ts#FakeCloudflare.answer",
       "complexity": 25
     },
     {

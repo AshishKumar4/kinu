@@ -16,7 +16,7 @@
  *     every tracked file under it.
  *   - `bun scripts/<gate>.ts`, `node <file>`: that file's graph.
  *   - `bun run <name>`: the script body from `package.json`, one word form at
- *     a time; `tsc --noEmit -p` and `oxlint` read the whole corpus.
+ *     a time; `tsrs --noEmit -p` and `oxlint` read the whole corpus.
  *   - `vitest run --root R dir/`: the selected suites' graphs plus every
  *     tracked file under `R/`, because the workers pool loads the Worker the
  *     wrangler config names, which no import edge carries.
@@ -573,7 +573,7 @@ function resolveForm(run: string, repo: Repo, depth: number): Form | Uncomputabl
     if (file !== undefined && isParseable(file)) return { entries: [file], loaded: [], reads: [], corpus: false };
   }
 
-  if (first === 'tsc' || first === 'oxlint') return { entries: [], loaded: [], reads: [], corpus: true };
+  if (first === 'tsrs' || first === 'oxlint') return { entries: [], loaded: [], reads: [], corpus: true };
 
   if (first === 'vitest' && second === 'run') return vitestForm(run, words, repo);
 

@@ -98,6 +98,7 @@ export function fixtureRunSources(actor: HostedActor, model: (spec: string) => L
     rt: actor.runtime,
     backend: 'cli-local',
     executors: () => [],
+    harnessMode: () => actor.stores.config.getHarnessMode(),
     config: actor.stores.config,
     models: {
       catalog: { window: () => modelWindow(null), windowFor: async () => modelWindow(null), warm: async () => {}, acceptedMedia: () => new Set(), callsTools: () => undefined },

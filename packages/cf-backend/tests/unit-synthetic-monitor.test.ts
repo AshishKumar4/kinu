@@ -337,6 +337,7 @@ describe('fleet signals share the ledger', () => {
 
   const FLEET_ENV: FleetEnv = {
     CLOUDFLARE_ACCOUNT_ID: 'acct', ANALYTICS_SQL_API_TOKEN: 'ae-read', KINU_OBS_TOKEN: 'obs-read', CF_VERSION_METADATA: { id: 'v1' },
+    AGENT_METRICS: { writeDataPoint: () => undefined },
   };
 
   interface FleetApiState {

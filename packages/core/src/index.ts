@@ -97,13 +97,13 @@ export { initMailNameTables, initMailboxTables } from './state/mail-schema';
 
 export { mailVerdict } from './mail/verdict';
 
-export { mailAddressOf, mailLabelOf, mailUsernameRefusal, parseMailRecipient, suggestedMailUsername, type MailRecipient } from './mail/address';
+export { mailAddressOf, mailDeploymentAliases, mailLabelOf, mailUsernameRefusal, parseMailRecipient, suggestedMailUsername, type MailRecipient } from './mail/address';
 
 export type * from './mail/mailbox-api';
 
 export { importantMail, MAIL_BOX_KINDS, MAIL_SEND_STATES, MAIL_VIEWS, MAIL_WAKES, MAIL_WOKE } from './mail/mailbox-api';
 
-export { MailStore, type MailBlobs, type ParsedMail } from './mail/store';
+export { MailStore, type MailBlobs, type MailBoxOwner, type ParsedMail } from './mail/store';
 
 export { createMailCodemodeProvider, unreadMailForTurn, type MailDeps, type MailSendApprovals } from './tools/mail-codemode';
 
@@ -861,6 +861,8 @@ export {
   type PromptModelFamily,
   type PromptModelProfile,
 } from './prompting/model-profile';
+
+export type { HarnessMode } from './config/harness-mode';
 
 export {
   renderAgentsMdSection,

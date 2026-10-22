@@ -729,6 +729,22 @@ describe('the application and the Agents UI share that one runtime', () => {
   });
 });
 
+/** A font inlined as a data URL: woff and woff2 by their media type or by their magic number, base64 (`wOFF`, `wOF2`). */
+const FONT_DATA_URL = /data:(?:font\/|application\/(?:x-)?font)|;base64,d09G(?:Rg|Mg)/u;
+
+describe("the shipped client's fonts", () => {
+  // Under Vite's 4 KB inline limit KaTeX_Size3-Regular.woff2 was inlined into the CSS every page shares, and a public
+  // page's CSP, fonts from this origin alone, refused it on every landing load (production walkthroughs rc29 F3, rc30 F4).
+  test('are files of this origin, none inlined as a data URL', () => {
+    const assets = join(CF, PRODUCTION_OUT, 'client', 'assets');
+    const emitted = readdirSync(assets);
+    const inlined = emitted.filter((file) => /\.(?:css|js)$/u.test(file) && FONT_DATA_URL.test(readFileSync(join(assets, file), 'utf8')));
+
+    expect(emitted.some((file) => file.endsWith('.css')) && emitted.some((file) => /\.woff2?$/u.test(file))).toBe(true);
+    expect(inlined).toEqual([]);
+  });
+});
+
 describe('the browser installs one production dispatcher', () => {
   const pages = (): readonly [string, RuntimeFacts][] => [
     [HOME, home], [WORKSPACE, workspace], [LANDING, landing],

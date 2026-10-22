@@ -15,6 +15,7 @@ import {
 import * as v from "valibot";
 import { StepRow } from "@/components/deploy/DeployStepRow";
 import { Notice } from "@/components/ui/Notice";
+import { Group } from "@/components/ui/Group";
 import { Surface } from "@/components/ui/Surface";
 
 const RUN_POLL_MS = 2000;
@@ -152,9 +153,9 @@ export default function UpdatesPage({ fixture, fixtureRun }: {
               The last check failed with: {restarting}
             </p>
           )}
-          <ul className="space-y-2">
+          <Group list>
             {run.steps.map((row) => <StepRow key={row.id} row={row} />)}
-          </ul>
+          </Group>
           {run.state === "done" && (
             <p className="t-body p-text" data-updates="installed">
               Kinu {run.version} is now running.

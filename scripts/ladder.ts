@@ -375,11 +375,11 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run typecheck',
     label: 'TypeScript projects',
     tier: 'local',
-    // Measured 2026-09-15 on the 24-thread workstation, quiet: 18 tsc projects
-    // sum to 11.9 s solo (largest cf-backend 1.4 s, scripts 1.25 s, core 1.0 s).
-    // One row rather than eighteen: every project reads the corpus, so their
-    // closures are one closure and a split would buy no cache hit.
-    seconds: 12,
+    // Measured 2026-10-22 on the 24-thread workstation: the 16 projects sum to 4.3 s with tsrs (largest cf-backend
+    // 1.1 s, peak 2.0 GB) against 21.0 s with tsc 7.0.2 (cf-backend 6.8 s, peak 3.9 GB); the whole script 5.2 s.
+    // One row rather than sixteen: every project reads the corpus, so their closures are one closure and a split
+    // would buy no cache hit.
+    seconds: 6,
     catches: 'type errors across all the projects `package.json`\'s `typecheck` names, following '
       + '`bun run` transitively. The largest defect class by volume and the only total one.',
     blind: 'everything about behaviour. A well-typed call to the wrong function passes. '
@@ -2640,6 +2640,21 @@ export const LADDER: readonly Gate[] = [
       + 'snapshot and R2 recovery data loss, whole-file deltas, failed compaction, serial mounts and disk-pressure failures.',
     blind: 'long snapshot lifetime, account saturation, the model path, and a product adapter no contract drives. No Docker image is built or started.',
     inputs: { kind: 'live', why: 'deploys eval-owned Cloudflare fixtures from this tree, copies staging tools, runs real containers and R2, and verifies complete cleanup.' },
+  },
+  {
+    run: 'bun scripts/deploy-oauth-client.ts check',
+    label: 'Deploy OAuth client registered as the door asks',
+    ciExempt: 'reads the deploy OAuth client on Cloudflare with an account token for OAuth clients, which no pull request holds.',
+    secrets: ['KINU_OAUTH_CLIENT_TOKEN'],
+    tier: 'deploy',
+    // 2026-10-21 on the 24-thread workstation: one GET, 1.1 s.
+    seconds: 1.1,
+    catches: 'a deploy OAuth client whose registered scopes differ from what every consent asks (core deploy/pkce.ts): '
+      + 'a scope the door asks and the client lacks, refused at the person\'s consent as invalid_scope, or one it holds '
+      + 'that no step asks for (f44999, 2026-10-21: the owner\'s consent refused zone-settings.write as zonesettings.write).',
+    blind: 'a scope Cloudflare refuses at consent though it is registered, which only a person\'s sign-in shows; the '
+      + 'redirect URIs and grant types; whether each scope still lets its step do what the step does.',
+    inputs: { kind: 'live', why: 'reads the client\'s registration on Cloudflare, which no hash over the tree stands for.' },
   },
   {
     run: 'bun scripts/upgrade-fixtures.ts',

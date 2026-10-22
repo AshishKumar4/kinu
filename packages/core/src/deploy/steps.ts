@@ -6,22 +6,27 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { KinuError } from '../obs/index';
-import { cloudflareResult, readEnvelope, type CloudflareTransport, type UploadPart } from './cloudflare';
+import { workersPlan } from './account';
+import { CloudflareApiError, cloudflareResult, readEnvelope, type CloudflareHttpResponse, type CloudflareTransport, type UploadPart } from './cloudflare';
 import {
-  FACT_ACCESS_APP, FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
+  FACT_ACCOUNT_NAME, FACT_ADDRESS, FACT_ANALYTICS_OFF, FACT_GATEWAY_URL, FACT_OWNER_EMAIL,
   FACT_UPLOAD_PEAK, FACT_VERSION_ID, FACT_WORKERS_SUBDOMAIN, kvFact, type DeployContext,
 } from './context';
 import {
-  DEPLOYMENT_RECORD_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, MINTED_SECRETS,
-  REFRESH_TOKEN_KEY,
+  COMPUTER_SECRETS, DEPLOYMENT_RECORD_SECRET, MAIL_ROUTING_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, FIRST_OWNER_LINK_MS,
+  FIRST_OWNER_LINK_SECRET, MINTED_SECRETS, REFRESH_TOKEN_KEY, resourceName,
   type DeployInputs, type DeploymentRecord,
 } from './inputs';
-import { HealthAnswerSchema } from './update';
+import { HealthAnswerSchema, type UpdateBuild } from './update';
 import type { ArtifactMember, HeldBytes } from './artifact';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { bytesToBase64 } from '../utils/base64';
+import { randomToken } from '../utils/crypto';
+import { PLATFORM_CATALOG } from '../platform-catalog';
+import { firstOwnerLinkSecret } from '../identity/builtin-sign-in';
 import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
-import { mailStep } from './mail';
+import { mailRoutingRetiredStep, mailRoutingStep, mailStep, mailZoneVar } from './mail';
+import { computerStep, computerTokenStep, computerToolsStep } from './computer';
 
 export interface DeployStep {
   readonly id: string;
@@ -50,6 +55,13 @@ const DeploymentsSchema = v.object({ deployments: v.array(v.object({ versions: v
 
 const VERSION_OVERRIDE_HEADER = 'Cloudflare-Workers-Version-Overrides';
 
+/** A version's own identifier, up to 100 bytes, as `wrangler deploy --tag` sets it. */
+const VERSION_TAG = 'workers/tag';
+
+const TaggedVersionsSchema = v.object({
+  items: v.optional(v.array(v.object({ id: v.string(), annotations: v.optional(v.object({ [VERSION_TAG]: v.optional(v.string()) })) }))),
+});
+
 const ASSET_CONTENT_TYPES = {
   html: 'text/html', js: 'text/javascript', mjs: 'text/javascript',
   css: 'text/css', json: 'application/json', svg: 'image/svg+xml',
@@ -70,41 +82,66 @@ const BASE64_ALPHABET = new TextEncoder()
 
 export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): readonly DeployStep[] {
   return [
-    accountStep(),
+    accountStep(manifest),
+    computerTokenStep(manifest),
+    // Before the upload, which binds what it mints.
+    mailRoutingStep(inputs),
     kvStep(manifest),
     bucketStep(manifest),
     vectorizeStep(manifest),
     gatewayStep(),
-    accessStep(),
     seedStep(manifest),
-    secretsStep(manifest),
+    computerToolsStep(manifest),
+    secretsStep(),
     uploadStep(manifest),
+    // On the namespace the upload made, before the address sends anyone to it.
+    computerStep(manifest),
     addressStep(inputs),
     // After the address: the catch-all names the Worker the upload made, and a failure here leaves it answering.
     mailStep(inputs),
     smokeStep(),
     promoteStep(),
+    // Once this version is live: the running one kept its token and rules until now.
+    mailRoutingRetiredStep(inputs),
     handoverStep(manifest),
   ];
 }
 
-function accountStep(): DeployStep {
+function accountStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'account',
     title: 'Read the account',
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
+        // Before anything is made: a run that would stop at its secrets must not leave storage behind it.
+        const missing = missingSecrets(manifest, context.inputs);
+
+        if (missing.length > 0) {
+          return yield* Effect.die(new Error(`this release requires ${missing.join(', ')}, which no answer supplied`));
+        }
+
         const account = yield* Effect.promise(async () => cloudflareResult(
           context.transport,
           { method: 'GET', path: `/accounts/${context.inputs.accountId}` },
           NamedSchema,
         ));
 
+        // Before anything is made too: Kinu needs Workers Paid, which a Free account is told here, not at the upload.
+        const { need } = yield* workersPlan(context.transport, context.inputs.accountId);
+
+        // Its own words, so the run pauses on the plan need the page already showed.
+        if (need?.details !== undefined) {
+          const { status = 0, endpoint = '', message, code = 0 } = need.details;
+
+          return yield* Effect.die(new CloudflareApiError(status, endpoint, message, [{ code, message }]));
+        }
+
         const name = account.name ?? context.inputs.accountId;
 
         context.facts.set(FACT_ACCOUNT_NAME, name);
+        context.facts.set(FACT_OWNER_EMAIL, context.inputs.ownerEmail);
 
-        // Settled first: the Access application is keyed by hostname.
+        // Settled first: the first owner's setup link and the Worker's own origin name it.
         if (context.inputs.address.kind === 'zone') {
           context.facts.set(FACT_ADDRESS, context.inputs.address.hostname);
 
@@ -280,7 +317,8 @@ function gatewayStep(): DeployStep {
             {
               method: 'POST',
               path: base,
-              body: { id, cache_ttl: 0, collect_logs: true, rate_limiting_interval: 0, rate_limiting_limit: 0 },
+              // Every field the reference requires: one missing is refused, code 7001 "Required" (f44999, 2026-10-21).
+              body: { id, cache_invalidate_on_update: false, cache_ttl: 0, collect_logs: true, rate_limiting_interval: 0, rate_limiting_limit: 0 },
             },
             v.object({ id: v.optional(v.string()) }),
           ));
@@ -291,72 +329,6 @@ function gatewayStep(): DeployStep {
         context.facts.set(FACT_GATEWAY_URL, url);
 
         return `Gateway ${id} ready.`;
-      });
-    },
-  };
-}
-
-/** The Access policy that names who may sign in: the owner and the addresses they listed. */
-const OWNERS_POLICY = 'Owners';
-
-function accessStep(): DeployStep {
-  return {
-    id: 'access',
-    title: 'Set up sign-in',
-    run(context: DeployContext): Effect.Effect<string, KinuError> {
-      return Effect.gen(function* () {
-        const hostname = context.facts.get(FACT_ADDRESS);
-
-        if (hostname === undefined) return yield* Effect.die(new Error('the account step settled no address for the Access application'));
-
-        const emails = new Set([context.inputs.ownerEmail, ...context.inputs.accessEmails]);
-        const base = `/accounts/${context.inputs.accountId}/access/apps`;
-
-        const apps = yield* Effect.promise(async () => cloudflareResult(
-          context.transport,
-          { method: 'GET', path: base },
-          v.array(v.object({ id: v.string(), domain: v.optional(v.string()) })),
-        ));
-
-        const held = apps.find((app) => app.domain === hostname);
-
-        const appId = held?.id ?? (yield* Effect.promise(async () => cloudflareResult(
-          context.transport,
-          {
-            method: 'POST',
-            path: base,
-            body: { name: `Kinu ${context.inputs.instanceName}`, domain: hostname, type: 'self_hosted', session_duration: '24h' },
-          },
-          IdSchema,
-        ))).id;
-
-        context.facts.set(FACT_ACCESS_APP, appId);
-        context.facts.set(FACT_OWNER_EMAIL, context.inputs.ownerEmail);
-
-        // Found and updated, never added again: a second sitting keeps one Owners policy, at today's addresses.
-        const policies = yield* Effect.promise(async () => cloudflareResult(
-          context.transport,
-          { method: 'GET', path: `${base}/${appId}/policies` },
-          v.array(v.object({ id: v.string(), name: v.optional(v.string()) })),
-        ));
-
-        const owners = policies.find((policy) => policy.name === OWNERS_POLICY);
-
-        yield* Effect.promise(async () => cloudflareResult(
-          context.transport,
-          {
-            method: owners === undefined ? 'POST' : 'PUT',
-            path: owners === undefined ? `${base}/${appId}/policies` : `${base}/${appId}/policies/${owners.id}`,
-            body: {
-              name: OWNERS_POLICY,
-              decision: 'allow',
-              include: [...emails].map((email) => ({ email: { email } })),
-            },
-          },
-          v.object({ id: v.optional(v.string()) }),
-        ));
-
-        return `One-time PIN sign-in for ${emails.size} address(es).`;
       });
     },
   };
@@ -414,7 +386,7 @@ function seedStep(manifest: ReleaseManifest): DeployStep {
   };
 }
 
-function secretsStep(manifest: ReleaseManifest): DeployStep {
+function secretsStep(): DeployStep {
   return {
     id: 'secrets',
     title: 'Mint the deployment secrets',
@@ -423,11 +395,11 @@ function secretsStep(manifest: ReleaseManifest): DeployStep {
         // Runs before the upload: secrets are bindings of a version.
         // Root keys are minted once; re-minting `CREDENTIAL_ENCRYPTION_KEY` would make stored
         // credentials unreadable. Updates carry them via `keep_bindings`.
-        if (context.update) {
+        if (context.update && !context.freshSetupLink) {
           return `${MINTED_SECRETS.length} secret(s) kept from the running version.`;
         }
 
-        for (const name of MINTED_SECRETS) {
+        for (const name of context.update ? [] : MINTED_SECRETS) {
           if ((yield* Effect.promise(async () => context.vault.read(name))) !== null) continue;
           const bytes = new Uint8Array(32);
 
@@ -436,21 +408,35 @@ function secretsStep(manifest: ReleaseManifest): DeployStep {
         }
 
         const supplied = context.inputs.providerKeyNames.length;
+        const address = context.facts.get(FACT_ADDRESS);
 
-        const missing = manifest.secrets
-          .filter((secret) => secret.required && secret.handling === 'prompted')
-          .filter((secret) => !MINTED_SECRETS.includes(secret.name))
-          .map((secret) => secret.name)
-          .filter((name) => !context.inputs.providerKeyNames.includes(name));
+        if (address === undefined) return yield* Effect.die(new Error('the account step settled no address for the setup link'));
+        yield* Effect.promise(async () => mintFirstOwnerLink(context, address));
 
-        if (missing.length > 0) {
-          return yield* Effect.die(new Error(`this release requires ${missing.join(', ')}, which no answer supplied`));
-        }
-
-        return `${MINTED_SECRETS.length} secret(s) minted, ${supplied} supplied.`;
+        return `${MINTED_SECRETS.length} secret(s) ${context.update ? 'kept' : 'minted'}, ${supplied} supplied, `
+          + `and a one-time setup link for ${context.inputs.ownerEmail}.`;
       });
     },
   };
+}
+
+/** What the release requires and this run neither mints nor was given: the computer's registry token is the computer's
+ *  steps' to mint, and only a deployment with the computer has one. */
+function missingSecrets(manifest: ReleaseManifest, inputs: DeployInputs): readonly string[] {
+  return manifest.secrets
+    .filter((secret) => secret.required && secret.handling === 'prompted')
+    .filter((secret) => ![...MINTED_SECRETS, ...COMPUTER_SECRETS].includes(secret.name) && !inputs.providerKeyNames.includes(secret.name))
+    .map((secret) => secret.name);
+}
+
+/** The first owner's seat (docs/SELF-DEPLOY-FLOW.md § 9): the Worker holds the token's digest, its lapse and the owner's
+ *  email; the run keeps the token to show its link, and nothing else holds it. */
+async function mintFirstOwnerLink(context: DeployContext, address: string): Promise<void> {
+  const token = randomToken(32);
+  const expiresAt = Date.now() + FIRST_OWNER_LINK_MS;
+
+  await context.vault.write(FIRST_OWNER_LINK_SECRET, firstOwnerLinkSecret(token, expiresAt, context.inputs.ownerEmail));
+  await context.seat.hold(`https://${address}/login?setup=${token}`, expiresAt);
 }
 
 /** Asset session first, then one walk: assets go out in bounded batches, modules are kept
@@ -463,28 +449,31 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
       return Effect.gen(function* () {
         const accountId = context.inputs.accountId;
         const script = context.inputs.instanceName;
-        const session = yield* openAssetSession(context, manifest, script);
-        const carried = yield* carryArtifact(context, manifest, session);
         const exists = yield* Effect.promise(async () => scriptExists(context.transport, accountId, script));
-        const metadata = yield* Effect.promise(async () => versionMetadata(context, manifest, carried.token, exists));
+        // Once per run (docs/SELF-DEPLOY-FLOW.md § 7): a replay after the version landed finds it by this run's tag.
+        const tagged = exists ? yield* Effect.promise(async () => taggedVersion(context, script)) : undefined;
+
+        if (tagged !== undefined) {
+          context.facts.set(FACT_VERSION_ID, tagged);
+
+          return `Version ${tagged} was already uploaded by this run.`;
+        }
 
         const path = exists
           ? `/accounts/${accountId}/workers/scripts/${script}/versions`
           : `/accounts/${accountId}/workers/scripts/${script}`;
 
-        // The transport copies every part, so the module set is held twice in flight.
-        context.artifact.held.hold(carried.bytes);
+        let { response, carried } = yield* uploadVersion(context, manifest, path, exists);
 
-        const response = yield* Effect.promise(async () => context.transport.upload({
-          method: exists ? 'POST' : 'PUT',
-          path,
-          parts: [
-            { name: 'metadata', contentType: 'application/json', body: JSON.stringify(metadata) },
-            ...carried.modules,
-          ],
-        }));
-
-        context.artifact.held.release(carried.bytes * 2);
+        // An account with Analytics Engine off refuses a version that binds a dataset (10089, the owner's free account,
+        // 2026-10-21), and no API turns it on. The datasets are optional: usage analytics are off on such a deployment,
+        // and its one writer writes nothing (core obs/analytics/writer.ts). The second upload's assets are already held
+        // by Cloudflare, so it carries modules alone.
+        if (refusedFor(response, ANALYTICS_ENGINE_OFF) && context.facts.get(FACT_ANALYTICS_OFF) === undefined) {
+          context.facts.set(FACT_ANALYTICS_OFF, 'true');
+          context.note('Analytics Engine is off on this account, so usage analytics are off.');
+          ({ response, carried } = yield* uploadVersion(context, manifest, path, exists));
+        }
 
         const uploaded = readEnvelope(path, response, VersionSchema);
         // A first upload answers the script; its deployment names the version.
@@ -501,6 +490,43 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
       });
     },
   };
+}
+
+/** Cloudflare's code for a version bound to a dataset on an account with Analytics Engine off. */
+const ANALYTICS_ENGINE_OFF = 10_089;
+
+/** Whether `response` is Cloudflare refusing with `code`. */
+function refusedFor(response: CloudflareHttpResponse, code: number): boolean {
+  const errors = v.safeParse(v.object({ errors: v.nullish(v.array(v.object({ code: v.number() }))) }), response.body);
+
+  return response.status >= 400 && errors.success && (errors.output.errors ?? []).some((error) => error.code === code);
+}
+
+/** The assets, then the modules with the version's metadata, in one upload; its answer as Cloudflare gave it. */
+function uploadVersion(
+  context: DeployContext, manifest: ReleaseManifest, path: string, exists: boolean,
+): Effect.Effect<{ readonly response: CloudflareHttpResponse; readonly carried: CarriedRelease }, KinuError> {
+  return Effect.gen(function* () {
+    const session = yield* openAssetSession(context, manifest, context.inputs.instanceName);
+    const carried = yield* carryArtifact(context, manifest, session);
+    const metadata = yield* Effect.promise(async () => versionMetadata(context, manifest, carried.token, exists));
+
+    // The transport copies every part, so the module set is held twice in flight.
+    context.artifact.held.hold(carried.bytes);
+
+    const response = yield* Effect.promise(async () => context.transport.upload({
+      method: exists ? 'POST' : 'PUT',
+      path,
+      parts: [
+        { name: 'metadata', contentType: 'application/json', body: JSON.stringify(metadata) },
+        ...carried.modules,
+      ],
+    }));
+
+    context.artifact.held.release(carried.bytes * 2);
+
+    return { response, carried };
+  });
 }
 
 function addressStep(inputs: DeployInputs): DeployStep {
@@ -552,6 +578,36 @@ function addressStep(inputs: DeployInputs): DeployStep {
   };
 }
 
+/** How long the smoke asks again while the address does not answer as the version under test yet, and how often.
+ *  Cloudflare carries a deployment everywhere within a couple of seconds (docs, "Version overrides"), and a workers.dev
+ *  address bound a moment before answers 404 for a while (platform-catalog `workers_dev.fresh_route_404`): both are a
+ *  change still arriving, never the version's own answer. Four times the longest measured, as Cloudflare names no
+ *  bound; past it the step fails in the last answer's words, and the run can be retried. */
+const SMOKE_PATIENCE_MS = 4 * Math.max(...PLATFORM_CATALOG['workers_dev.fresh_route_404'].measurements.map((measured) => measured.value));
+
+const SMOKE_INTERVAL_MS = 3_000;
+
+/** One ask of the version under test: its health, `arriving` while the address or the override is still being
+ *  carried, or why it failed. */
+type SmokeAnswer = { readonly kind: 'answered'; readonly build: UpdateBuild | null } | { readonly kind: 'arriving' | 'failed'; readonly why: string };
+
+function askVersion(context: DeployContext, url: string, version: string): Effect.Effect<SmokeAnswer> {
+  return Effect.gen(function* () {
+    const response = yield* Effect.promise(async () => context.http(url, { [VERSION_OVERRIDE_HEADER]: `${context.inputs.instanceName}="${version}"` }));
+
+    if (response.status === 404) return { kind: 'arriving', why: `${url} answered HTTP 404` };
+
+    if (!response.ok) return { kind: 'failed', why: `${url} answered HTTP ${response.status}` };
+
+    const { build, versionId } = v.parse(HealthAnswerSchema, yield* Effect.promise(async () => response.json()));
+
+    // An override not yet carried reaches the serving version, which may be this build.
+    if (versionId !== version) return { kind: 'arriving', why: `${url} was answered by version ${versionId ?? 'unnamed'}, and the version under test is ${version}` };
+
+    return { kind: 'answered', build };
+  });
+}
+
 function smokeStep(): DeployStep {
   return {
     id: 'smoke',
@@ -565,16 +621,15 @@ function smokeStep(): DeployStep {
 
         if (version === undefined) return yield* Effect.die(new Error('no version was uploaded, so nothing can be checked'));
         const url = `https://${address}/api/health`;
-        const response = yield* Effect.promise(async () => context.http(url, { [VERSION_OVERRIDE_HEADER]: `${context.inputs.instanceName}="${version}"` }));
+        let answer = yield* askVersion(context, url, version);
 
-        if (!response.ok) return yield* Effect.die(new Error(`${url} answered HTTP ${response.status}`));
-
-        const { build, versionId } = v.parse(HealthAnswerSchema, yield* Effect.promise(async () => response.json()));
-
-        // An unapplied override reaches the serving version, which may be this build.
-        if (versionId !== version) {
-          return yield* Effect.die(new Error(`${url} was answered by version ${versionId ?? 'unnamed'}, and the version under test is ${version}`));
+        for (let waited = 0; answer.kind === 'arriving' && waited < SMOKE_PATIENCE_MS; waited += SMOKE_INTERVAL_MS) {
+          yield* Effect.promise(async () => context.wait(SMOKE_INTERVAL_MS));
+          answer = yield* askVersion(context, url, version);
         }
+
+        if (answer.kind !== 'answered') return yield* Effect.die(new Error(answer.why));
+        const { build } = answer;
 
         if (build === null || build.version !== context.manifest.version || build.sha !== context.manifest.sha) {
           return yield* Effect.die(new Error(
@@ -751,6 +806,9 @@ async function walkArtifact(context: DeployContext, manifest: ReleaseManifest, s
   let batchBytes = 0;
   let uploaded = 0;
   let token = session.token;
+  // Cloudflare asks for each content hash once: two assets with the same bytes are one upload (the owner's free account,
+  // 2026-10-21: 631 assets, 630 hashes asked for, and the run counted the second copy as an upload it was not asked for).
+  const sent = new Set<string>();
 
   for await (const member of context.artifact.members()) {
     const moduleName = member.path.startsWith(prefix) ? member.path.slice(prefix.length) : '';
@@ -771,7 +829,8 @@ async function walkArtifact(context: DeployContext, manifest: ReleaseManifest, s
 
     const hash = session.hashes.get(member.path);
 
-    if (hash === undefined || !session.wanted.has(hash)) continue;
+    if (hash === undefined || !session.wanted.has(hash) || sent.has(hash)) continue;
+    sent.add(hash);
 
     // Flush before this member joins, so an oversized member travels alone.
     if (batchBytes > 0 && batchBytes + member.size > ASSET_BATCH_BYTES) {
@@ -881,6 +940,18 @@ function mebibytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 }
 
+/** `?deployable=true` answers every deployable version, unpaged, each with its annotations (wrangler 4.145.0's
+ *  `versions deploy --tag` resolves tags from this list). */
+async function taggedVersion(context: DeployContext, script: string): Promise<string | undefined> {
+  const listed = await cloudflareResult(
+    context.transport,
+    { method: 'GET', path: `/accounts/${context.inputs.accountId}/workers/scripts/${script}/versions?deployable=true` },
+    TaggedVersionsSchema,
+  );
+
+  return (listed.items ?? []).find((item) => item.annotations?.[VERSION_TAG] === context.tag)?.id;
+}
+
 async function scriptExists(transport: CloudflareTransport, accountId: string, script: string): Promise<boolean> {
   const response = await transport.request({
     method: 'GET',
@@ -952,7 +1023,7 @@ async function versionMetadata(
     if (value !== null) bindings.push({ type: 'plain_text', name: declared.name, text: value });
   }
 
-  for (const name of [...MINTED_SECRETS, ...context.inputs.providerKeyNames]) {
+  for (const name of [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, ...COMPUTER_SECRETS, MAIL_ROUTING_SECRET, ...context.inputs.providerKeyNames]) {
     const value = await context.vault.read(name);
 
     if (value !== null) bindings.push({ type: 'secret_text', name, text: value });
@@ -968,9 +1039,13 @@ async function versionMetadata(
     bindings,
     keep_bindings: ['secret_text', 'secret_key'],
     observability: { enabled: true },
+    annotations: { [VERSION_TAG]: context.tag },
   };
 
   if (!exists) metadata.migrations = { new_tag: tag, new_sqlite_classes: classes };
+
+  // The class's container, as Wrangler declares one with no image; the computer step makes its application.
+  if (context.inputs.sandbox && manifest.computer !== null) metadata.containers = [{ class_name: manifest.computer.className }];
 
   if (assetsToken === '') {
     metadata.keep_assets = true;
@@ -984,7 +1059,7 @@ async function versionMetadata(
   return metadata;
 }
 
-// Null for the container (needs Workers Paid and a user registry) and bindings turned off.
+// Null for the container (the computer's own step binds it, with its user registry) and bindings turned off.
 async function wireBinding(
   context: DeployContext,
   manifest: ReleaseManifest,
@@ -1012,7 +1087,8 @@ async function wireBinding(
     }
 
     case 'analytics-engine':
-      return { type: 'analytics_engine', name, dataset: resource };
+      // Off on the account: an optional dataset is left out; a required one is bound, and Cloudflare says why it cannot be.
+      return context.facts.get(FACT_ANALYTICS_OFF) !== undefined && !binding.required ? null : { type: 'analytics_engine', name, dataset: resource };
     case 'ai':
       return { type: 'ai', name };
     case 'browser':
@@ -1046,6 +1122,8 @@ function derivedVar(context: DeployContext, name: string): string | null {
       return context.inputs.ownerEmail;
     case 'EMAIL_DOMAIN':
       return context.inputs.mailDomain ?? '';
+    case 'KINU_MAIL_ZONE':
+      return mailZoneVar(context);
     case 'MAIL_ACCOUNTS':
       return context.inputs.mailAccounts ?? 'operators';
     case 'PREVIEW_HOST_SUFFIX':
@@ -1054,13 +1132,6 @@ function derivedVar(context: DeployContext, name: string): string | null {
     default:
       return null;
   }
-}
-
-// Prefixed by instance name so several instances can share an account.
-function resourceName(inputs: DeployInputs, base: string): string {
-  if (inputs.instanceName === 'kinu' || base.startsWith(inputs.instanceName)) return base;
-
-  return base.startsWith('kinu-') ? `${inputs.instanceName}-${base.slice('kinu-'.length)}` : `${inputs.instanceName}-${base}`;
 }
 
 const CONTENT_TYPE_BY_EXTENSION = new Map<string, string>(Object.entries(ASSET_CONTENT_TYPES));
