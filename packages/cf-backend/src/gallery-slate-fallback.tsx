@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { SlateSummary } from "@kinu.run/core";
 import type { ForkNode } from "@kinu.run/core";
-import { workspaceRpc, type SocketCall } from "@/lib/workspace-rpc";
+import { answeringRpc, type WorkspaceAnswers } from "@/lib/workspace-rpc";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { SLATE_PREFIX, type SurfaceKind } from "@kinu.run/core";
 
@@ -19,7 +19,7 @@ const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
 const NO_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
 /** Gallery-only previewSlate fixture. It does not exercise a production origin. */
-export function SlateFallbackFrame({ rpc }: { rpc: SocketCall }) {
+export function SlateFallbackFrame({ answers }: { answers: WorkspaceAnswers }) {
   const [slates, setSlates] = useState<readonly SlateSummary[]>(FALLBACK_SLATES);
   const [surface, setSurface] = useState<SurfaceKind>(`${SLATE_PREFIX}${FALLBACK_ID}`);
   useEffect(() => {
@@ -30,16 +30,7 @@ export function SlateFallbackFrame({ rpc }: { rpc: SocketCall }) {
     return () => { window.removeEventListener("gallery:slate-unpublish", unpublish); };
   }, []);
 
-  const frameRpc: SocketCall = async <T,>(method: string, args?: Parameters<SocketCall>[1]): Promise<T> => {
-    if (method === "previewSlate") {
-      return new Response(JSON.stringify({
-        ok: true,
-        value: { url: SLATE_GALLERY_URL, port: 8789, sized: false },
-      })).json<T>();
-    }
-
-    return rpc(method, args);
-  };
+  const frameRpc = answeringRpc({ ...answers, previewSlate: () => ({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789, sized: false } }) });
 
   return (
     <div className="p-bg min-h-screen flex justify-center">
@@ -68,7 +59,7 @@ export function SlateFallbackFrame({ rpc }: { rpc: SocketCall }) {
           pendingActions={[]}
           slates={slates}
           tabPresence={{ explorations: true, work: true }}
-          rpc={workspaceRpc(frameRpc)}
+          rpc={frameRpc}
         />
       </div>
     </div>

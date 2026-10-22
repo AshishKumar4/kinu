@@ -33,8 +33,15 @@ export function workspaceRpc(call: SocketCall): WorkspaceRpc {
  * catch-all answered `agentMail` with `{ ok: true }`, and the Agent tab crashed in production).
  */
 export type WorkspaceAnswers = {
-  readonly [K in WorkspaceMethod]?: (...args: Parameters<WorkspaceStub[K]>) => WorkspaceAnswer<K> | Promise<WorkspaceAnswer<K>>;
+  readonly [K in WorkspaceMethod]?: (...args: Parameters<WorkspaceStub[K]>) => Answered<WorkspaceAnswer<K>>;
 };
+
+/** An answer as a fixture writes it: the value, its promise, or an effect that fails as the server's read would. */
+type Answered<A> = A | Promise<A> | Effect.Effect<A, KinuError>;
+
+function isAnswerEffect<A>(answer: Answered<A>): answer is Effect.Effect<A, KinuError> {
+  return Effect.isEffect(answer);
+}
 
 /**
  * A rpc answering from `answers` alone, each answer carried as the socket carries it (as JSON). A method they lack is
@@ -46,9 +53,32 @@ export function answeringRpc(answers: WorkspaceAnswers): WorkspaceRpc {
 
     if (answer === undefined) return yield* new KinuError("unsupported", `This fixture answers no ${String(method)}.`);
     // Typed where it is written (`WorkspaceAnswers`); here it is only carried.
-    const value = yield* Effect.promise(async () => await answer(...args));
+    const answering = answer(...args);
+    const value = isAnswerEffect(answering) ? yield* answering : yield* Effect.promise(async () => await answering);
 
     return yield* Effect.promise(() => new Response(JSON.stringify(v.parse(JsonValueSchema, value ?? null))).json<WorkspaceAnswer<K>>());
+  }));
+}
+
+/** Whether `answers` has an answer for the method a wire named. */
+function answered(answers: WorkspaceAnswers, method: string): method is WorkspaceMethod {
+  return Object.hasOwn(answers, method);
+}
+
+/**
+ * `answers` as a socket serves them, for a page whose own client reads them over the wire: the method a frame names,
+ * its arguments decoded as the wire decodes them, each answer typed where it is written. A method `answers` lacks is
+ * refused.
+ */
+export function wireOf(answers: WorkspaceAnswers): SocketCall {
+  const rpc = answeringRpc(answers);
+
+  return <T,>(method: string, args?: unknown[]): Promise<T> => settle(Effect.gen(function* () {
+    if (!answered(answers, method)) return yield* new KinuError("unsupported", `This fixture answers no ${method}.`);
+    const decoded = yield* Effect.promise(() => new Response(JSON.stringify(args ?? [])).json<Parameters<WorkspaceStub[typeof method]>>());
+    const answer = yield* Effect.promise(() => rpc(method, decoded));
+
+    return yield* Effect.promise(() => new Response(JSON.stringify(v.parse(JsonValueSchema, answer ?? null))).json<T>());
   }));
 }
 
