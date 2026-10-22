@@ -5,7 +5,7 @@ import { TestDevbox } from './support/test-devbox';
 import { describe, expect, test } from 'bun:test';
 
 import { harness } from './support/devbox-harness';
-import { TYPE_PY, xdotoolOf, type DesktopRequest } from '../src/desktop-input';
+import { xdotoolOf, type DesktopRequest } from '../src/desktop-input';
 
 class DesktopBox extends TestDevbox<unknown> {
 
@@ -145,18 +145,20 @@ describe("an agent's desktop action on the box", () => {
     await box.desktop(look('main'));
     await box.desktop({ driver: 'main', action: { kind: 'type', text: 'aüb' } });
 
-    expect(runs.filter((run) => run.argv[2] === TYPE_PY).map((run) => [run.argv.at(-1), run.locale])).toEqual([['aüb', 'C.UTF-8']]);
+    const typing = xdotoolOf({ kind: 'type', text: 'aüb' })[2];
+
+    expect(runs.filter((run) => run.argv[2] === typing).map((run) => [run.argv.at(-1), run.locale])).toEqual([['aüb', 'C.UTF-8']]);
   });
 
   // Staging 11d9df0da, 2026-10-22: xdotool bound the `ü` to a scratch keycode and restored the keymap before Chromium
   // read the press, so a whole line came out without it. What the keymap lacks is bound first and left bound; the real
   // box's proof is the golden contract's typed line (scripts/devbox-container-tier.ts, desktop-agent).
   test('text is typed by xdotool after the keymap was given each character past ASCII it lacked', () => {
-    const bound = TYPE_PY.indexOf('x.XChangeKeyboardMapping(display');
-    const typed = TYPE_PY.indexOf("os.execvp('xdotool', ['xdotool', 'type', '--delay', '12', '--', text])");
+    const [program = '', flag = '', helper = '', text = ''] = xdotoolOf({ kind: 'type', text: 'aüb' });
+    const bound = helper.indexOf('x.XChangeKeyboardMapping(display');
+    const typed = helper.indexOf("os.execvp('xdotool', ['xdotool', 'type', '--delay', '12', '--', text])");
 
-    expect({ argv: xdotoolOf({ kind: 'type', text: 'aüb' }), order: bound > 0 && typed > bound })
-      .toEqual({ argv: ['python3', '-c', TYPE_PY, 'aüb'], order: true });
+    expect({ program, flag, text, order: bound > 0 && typed > bound }).toEqual({ program: 'python3', flag: '-c', text: 'aüb', order: true });
   });
 
   test('a watch is one run that looks over its window, its sheet laid out by its frames, and it takes the screen as a look does', async () => {

@@ -146,7 +146,7 @@ print('keys', *keys, 'buttons', *buttons)
  * otherwise whole line (staging 11d9df0da, 2026-10-22). A keysym the keymap already holds is typed with no remap. Past
  * the free keycodes, xdotool binds the rest as it would have.
  */
-export const TYPE_PY = String.raw`import ctypes, os, sys
+const TYPE_PY = String.raw`import ctypes, os, sys
 text = sys.argv[1]
 x = ctypes.cdll.LoadLibrary('libX11.so.6')
 x.XOpenDisplay.restype = ctypes.c_void_p
