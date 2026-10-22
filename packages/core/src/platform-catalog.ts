@@ -1465,15 +1465,16 @@ export const PLATFORM_CATALOG = {
 
   'do.storage.write_await_reset': {
     subject:
-      'A Durable Object request that alternates SQLite writes, awaits and tens of ms of CPU is reset after about a '
-      + 'second of CPU',
+      'A Durable Object request that alternated SQLite writes, awaits and a tight integer loop of tens of ms was reset '
+      + 'after about a second of CPU; a turn\'s shape with JSON work did not reset',
     limit: { value: 1_000, unit: 'ms' },
     origin: 'platform',
     bounds: 'duration',
     evidence: 'proven-by-probe',
     provenance: '/mnt/local/kinu/logs/research/do-write-await-reset/RESULTS.md §2',
     date: '2026-10-22',
-    trigger: 'a request that writes SQLite, awaits anything, computes 12 ms or more, and repeats, for about 1 s of CPU',
+    trigger: 'a request that wrote SQLite, awaited anything and ran 12 ms or more of a tight integer loop, repeatedly, '
+      + 'for about 1 s of CPU (§1-§3); not reproduced with JSON work of the same size (§4)',
     onBreach:
       'its next storage call throws and the object is reset, in the words of a code deploy though none happened; the '
       + 'same work reset again on every attempt',
@@ -1488,6 +1489,7 @@ export const PLATFORM_CATALOG = {
       { scenario: '2 writes around fully synchronous CPU, no await: no reset (12 of 12), up to (CPU)', value: 8_000, unit: 'ms' },
       { scenario: 'no writes: no reset (7 of 7), up to (CPU)', value: 6_000, unit: 'ms' },
       { scenario: '16 writes, 12.5 ms of work between: CPU billed for 0.2 s of work, at least', value: 2_100, unit: 'ms' },
+      { scenario: 'a turn\'s shape, 100 writes, each with a 1 s awaited fetch and ~14 ms of JSON work: no reset (4 of 4), up to (CPU)', value: 1_510, unit: 'ms' },
     ],
     notes:
       'The writes are the variable, not calls or facets: the same CPU with no writes survived in a plain object, a '
@@ -1499,7 +1501,11 @@ export const PLATFORM_CATALOG = {
       + 'keeps the writes in one synchronous section or keeps its CPU between awaited writes to a few ms. Not '
       + 'established: the platform\'s mechanism, and whether CPU or wall time is the bound (64-write resets landed at '
       + '1.1-1.3 s of wall too). The agent-placement study\'s "facet work with no call in flight is reset in 3-12 s" '
-      + 'wrote a row per slice, so it is this.',
+      + 'wrote a row per slice, so it is this. NOT A RULE FOR KINU\'S TURNS YET (RESULTS.md §4): a turn\'s real shape, a '
+      + 'write, a slow awaited fetch and JSON work per step, ran 1.4-1.5 s of CPU in one request without a reset, and the '
+      + 'turn loop measures about 43 ms of CPU a step with no AgentFacet reset in a week of staging and production. What '
+      + 'resets is open: the kind of CPU, several objects sharing an isolate (runs that shared one failed together), or '
+      + 'something else. The week\'s no-deploy resets on staging were invocations that had hung for minutes (D108).',
     conflictsWith: ['do.reset.transient'],
   },
 
