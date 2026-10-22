@@ -32,8 +32,7 @@ export function outputReserveTokens(limits: ModelWindow): number {
 /**
  * Tokens one step's request may occupy: the one allocation every request-bound
  * producer divides. Unbounded for an unknown window, so nothing is trimmed,
- * deferred or refused by it. Exported so MCP catalog admission (`tools/mcp-surface.ts`)
- * subtracts from it instead of taking a second share.
+ * deferred or refused by it.
  */
 export function stepContextLimit(limits: ModelWindow): number {
   if (limits.contextWindow === null) return Number.POSITIVE_INFINITY;

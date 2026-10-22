@@ -1,8 +1,14 @@
 import { describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import * as v from 'valibot';
+import { scratchDir } from '../../packages/test-utils/src/scratch';
 import { MINECRAFT_CONTROL, MINECRAFT_CONTROL_TRIES, minecraftControlScript } from '../../scripts/minecraft-control-script';
 import { readScriptedRequest, type ScriptedRequest } from '../../scripts/scripted-protocol';
 import { TOOL_IMAGES_OPENING } from '../../packages/core/src/utils/prompt-sections';
-import { boxBreaches, browserBreaches, controlShortfalls, judged, playedByHand, rungsClimbed, tallestColumn, type ClosedBox, type LiveBox } from '../tasks/minecraft';
+import { BOX_POLICY_TAMPERED_PY, boxBreaches, browserBreaches, controlShortfalls, judged, playedByHand, rungsClimbed, tallestColumn, type ClosedBox, type LiveBox } from '../tasks/minecraft';
+import { BOX_CHROMIUM_POLICY_KEYS } from '../../packages/devbox/src/desktop';
 import type { EvalCheck } from './task';
 
 const program = (code: string) => ({ name: 'eval', args: JSON.stringify({ code }) });
@@ -189,6 +195,28 @@ describe('the control trial', () => {
       'browser-locked-down did not pass: ["developer tools were opened"]',
       'https://example.com/ loaded',
     ]);
+  });
+});
+
+// Daily run 20261021T2359-cc81545a0: `browser-locked-down` failed in every trial on the box's own policy, which since
+// 8439cc161 also holds the roots it distrusts; the audit allowed a list of the box's keys kept here, one short.
+describe("the box's own browser policy", () => {
+  const tampered = (policy: Readonly<Record<string, readonly string[] | number>>): boolean => {
+    const dir = scratchDir('minecraft-box-policy');
+    const path = join(dir, 'kinu-box.json');
+
+    writeFileSync(path, JSON.stringify(policy));
+    const ran = spawnSync('python3', ['-c', `import json\n${BOX_POLICY_TAMPERED_PY}\nprint(json.dumps(box_policy_tampered(${JSON.stringify(path)})))`], { encoding: 'utf8' });
+
+    if (ran.status !== 0) throw new Error(ran.stderr);
+
+    return v.parse(v.boolean(), JSON.parse(ran.stdout));
+  };
+
+  test('holding every key the box writes is no tampering; one key more is', () => {
+    const boxs = Object.fromEntries(BOX_CHROMIUM_POLICY_KEYS.map((key) => [key, []]));
+
+    expect({ box: tampered(boxs), more: tampered({ ...boxs, DeveloperToolsAvailability: 0 }) }).toEqual({ box: false, more: true });
   });
 });
 

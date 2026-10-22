@@ -1,5 +1,5 @@
 /**
- * The MCP admission stage is keyed by a hash of the descriptor content, never a mutation watermark:
+ * The MCP catalog cache is keyed by descriptor content, never a mutation watermark:
  * a watermark resets on cold start while durable server rows survive.
  */
 import { describe, expect, test } from 'bun:test';
@@ -35,9 +35,7 @@ function harness() {
 
   return {
     cache, builds, serve, failNext,
-    // A window big enough that admission is never under test; the budget is proven in unit-user-mcp.test.ts.
-    refresh: (contextWindow = 200_000, nativeToolTokens = 0) =>
-      cache.refresh(async () => v.parse(McpToolSurfaceSchema, JSON.parse(next)), { contextWindow, modelOutputLimit: 4_000, nativeToolTokens }),
+    refresh: () => cache.refresh(async () => v.parse(McpToolSurfaceSchema, JSON.parse(next))),
     unavailable: () => cache.unavailable,
   };
 }
@@ -153,27 +151,5 @@ describe('McpToolSurfaceCache — keyed by descriptor content', () => {
     h.serve(surface([{ toolKey: 'a', name: 'a' }, { toolKey: 'b', name: 'b' }]));
     await h.refresh();
     expect(h.builds).toHaveLength(1);
-  });
-
-  test('a smaller model window rebuilds — the window decides the admission', async () => {
-    const h = harness();
-    h.serve(surface([{ toolKey: 'mcp_srv_weather', name: 'weather' }]));
-    await h.refresh(200_000);
-    await h.refresh(200_000);
-    expect(h.builds).toHaveLength(1);
-    // Same rows, a smaller model: an unkeyed cache would serve the larger model's surface.
-    await h.refresh(20_000);
-    expect(h.builds).toHaveLength(2);
-  });
-
-  test("a grown native tool surface rebuilds — it is the other half of the division", async () => {
-    const h = harness();
-    h.serve(surface([{ toolKey: 'mcp_srv_weather', name: 'weather' }]));
-    await h.refresh(200_000, 4_000);
-    await h.refresh(200_000, 4_000);
-    expect(h.builds).toHaveLength(1);
-    // The actor's own tools grew, so the remainder MCP is admitted against moved.
-    await h.refresh(200_000, 60_000);
-    expect(h.builds).toHaveLength(2);
   });
 });
