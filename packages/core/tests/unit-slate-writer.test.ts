@@ -37,8 +37,8 @@ async function editorTree() {
   user.writeFile(`${root}/a.ts`, 'before-a');
   user.writeFile(`${root}/b.ts`, 'before-b');
 
-  const write = (files: SlateFileChange, editor = 'pat@example.test', revision: string | null = 'r0') =>
-    writeSlateBatch({ session, root, files, marks, slate: 'board', editor, revision });
+  const write = (files: SlateFileChange, editor = 'pat@example.test') =>
+    writeSlateBatch({ session, root, files, marks, slate: 'board', editor });
 
   const rollback = (batch: ReturnType<typeof write>) => rollbackSlateBatch({ session, root, slate: 'board', marks, batch });
 
@@ -65,9 +65,9 @@ test('a fully no-op batch neither changes files nor creates an edit mark', async
 
 test('a no-op batch keeps an existing editor mark exactly as it was', async () => {
   const { marks, write } = await editorTree();
-  write({ 'a.ts': replace('actual edit', 'before-a') }, 'pat', 'r0');
+  write({ 'a.ts': replace('actual edit', 'before-a') }, 'pat');
   const before = marks.editMark('board');
-  const batch = write({ 'a.ts': replace('actual edit', 'actual edit'), absent: replace(null, null) }, 'sam', 'r1');
+  const batch = write({ 'a.ts': replace('actual edit', 'actual edit'), absent: replace(null, null) }, 'sam');
 
   expect(batch.paths).toEqual([]);
   expect(marks.editMark('board')).toEqual(before);
@@ -94,12 +94,12 @@ test('an atomic batch rolls back the first write when the second write fails and
 
 test('a failed later batch preserves the exact previous edit mark and before images', async () => {
   const { user, kernel, root, marks, write } = await editorTree();
-  write({ 'a.ts': replace('earlier editor save', 'before-a') }, 'earlier', 'r0');
+  write({ 'a.ts': replace('earlier editor save', 'before-a') }, 'earlier');
   kernel.chmod(`${root}/b.ts`, 0o444);
 
-  expect(() => write({ 'a.ts': replace('later edit', 'earlier editor save'), 'b.ts': replace('no', 'before-b') }, 'later', 'r1')).toThrow();
+  expect(() => write({ 'a.ts': replace('later edit', 'earlier editor save'), 'b.ts': replace('no', 'before-b') }, 'later')).toThrow();
   expect(user.readFileString(`${root}/a.ts`)).toBe('earlier editor save');
-  expect(marks.editMark('board')).toEqual({ editor: 'earlier', revisionBefore: 'r0' });
+  expect(marks.editMark('board')).toEqual({ editor: 'earlier' });
 });
 
 test('an edit mark write failure rolls source changes back in the same transaction', async () => {
@@ -133,7 +133,7 @@ test('an editor refuses a symlinked slate root and directory leaves', async () =
   user.symlink(root, '/slates/alias');
 
   expect(() => write({ directory: replace('no', null) })).toThrow(/regular file/);
-  expect(() => writeSlateBatch({ session, root: '/slates/alias', files: { 'a.ts': replace('no', 'before-a') }, slate: 'alias', marks, editor: 'pat', revision: 'r0' })).toThrow(/real directory/);
+  expect(() => writeSlateBatch({ session, root: '/slates/alias', files: { 'a.ts': replace('no', 'before-a') }, slate: 'alias', marks, editor: 'pat' })).toThrow(/real directory/);
   expect(user.readFileString(`${root}/a.ts`)).toBe('before-a');
 });
 
@@ -158,17 +158,17 @@ test('a successful batch hashes UTF-8 bytes, creates parents and records its bef
   expect(user.readFileString(`${root}/a.ts`)).toBe('snow 雪');
   expect(user.exists(`${root}/b.ts`)).toBe(false);
   expect(user.lstat(`${root}/new`).type).toBe('directory');
-  expect(marks.editMark('board')).toEqual({ editor: 'pat@example.test', revisionBefore: 'r0' });
+  expect(marks.editMark('board')).toEqual({ editor: 'pat@example.test' });
 });
 
 test('each edit fences its current revision and complete rollback restores the exact prior mark, including null', async () => {
   const { marks, write, rollback } = await editorTree();
-  const first = write({ 'a.ts': replace('first', 'before-a') }, 'pat', null);
-  const second = write({ 'a.ts': replace('second', 'first') }, 'sam', 'r1');
+  const first = write({ 'a.ts': replace('first', 'before-a') }, 'pat');
+  const second = write({ 'a.ts': replace('second', 'first') }, 'sam');
 
-  expect(marks.editMark('board')).toEqual({ editor: 'sam', revisionBefore: 'r1' });
+  expect(marks.editMark('board')).toEqual({ editor: 'sam' });
   expect(rollback(second)).toEqual({ restored: ['a.ts'], conflicts: [] });
-  expect(marks.editMark('board')).toEqual({ editor: 'pat', revisionBefore: null });
+  expect(marks.editMark('board')).toEqual({ editor: 'pat' });
   expect(rollback(first)).toEqual({ restored: ['a.ts'], conflicts: [] });
   expect(marks.editMark('board')).toBeNull();
 });
@@ -187,13 +187,13 @@ test('failed-build rollback keeps a newer owner save, names the conflict and ret
 
 test('a failed first batch cannot erase the mark of a disjoint second edit by the same editor at the same revision', async () => {
   const { user, root, marks, write, rollback } = await editorTree();
-  const first = write({ 'a.ts': replace('first broken edit', 'before-a') }, 'pat', 'r0');
-  write({ 'b.ts': replace('second pending edit', 'before-b') }, 'pat', 'r0');
+  const first = write({ 'a.ts': replace('first broken edit', 'before-a') }, 'pat');
+  write({ 'b.ts': replace('second pending edit', 'before-b') }, 'pat');
 
   expect(rollback(first)).toEqual({ restored: ['a.ts'], conflicts: [] });
   expect(user.readFileString(`${root}/a.ts`)).toBe('before-a');
   expect(user.readFileString(`${root}/b.ts`)).toBe('second pending edit');
-  expect(marks.editMark('board')).toEqual({ editor: 'pat', revisionBefore: 'r0' });
+  expect(marks.editMark('board')).toEqual({ editor: 'pat' });
 });
 
 test('the rollback tree fingerprint records symlink targets without reading outside the slate', async () => {

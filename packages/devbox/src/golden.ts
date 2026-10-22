@@ -5,6 +5,7 @@ import { DevboxError, attempt } from './errors';
 import { OwedSchema, SNAPSHOT_LIFE_MS, payDebt, type SnapshotDeletion } from './snapshot-registry';
 import { shellPath } from './stream-archive';
 import { TOOLS_STAMP, toolsInstallCommand } from './tools';
+import { containerExec } from './processes';
 
 export const GOLDEN_BASE = 'cloudflare/debian-trixie';
 
@@ -205,7 +206,7 @@ export function pipeParts(
       }
 
       if (object === null) return;
-      const writer = yield* attempt('io', () => ports.container.exec(['/bin/sh', '-c', `cat ${part === 0 ? '>' : '>>'} ${shellPath(path)}`], { stdin: 'pipe' }));
+      const writer = yield* attempt('io', () => containerExec(ports.container, ['/bin/sh', '-c', `cat ${part === 0 ? '>' : '>>'} ${shellPath(path)}`], { stdin: 'pipe' }));
       const stdin = writer.stdin;
 
       if (stdin === null) return yield* Effect.fail(new DevboxError('io', 'the exec took no stdin'));

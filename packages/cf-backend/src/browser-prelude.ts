@@ -3,7 +3,7 @@
  * JSON call to the host can. `connectBrowser` dials `codemode-egress.ts`'s gate, which checks the session's owner.
  * `pageTools` and `callPageTool` keep one WebMCP session per page, whose tool set follows the page's reports.
  */
-import { BROWSER_GATE_HOST } from './codemode-egress';
+import { BROWSER_GATE_HOST } from './codemode-egress-mint';
 
 export const BROWSER_CLIENT_MODULE = 'kinu-puppeteer.js';
 

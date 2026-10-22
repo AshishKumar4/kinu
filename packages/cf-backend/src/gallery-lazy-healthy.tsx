@@ -5,5 +5,5 @@
 import type { ReactElement } from "react";
 
 export default function LazyHealthyRoute(): ReactElement {
-  return <p data-lazy-healthy className="text-sm p-text-2">The other split route rendered.</p>;
+  return <p data-lazy-healthy className="t-body p-text-2">The other split route rendered.</p>;
 }

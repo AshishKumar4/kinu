@@ -2,10 +2,10 @@
 // splice after `collectDynamicContext` would drop planes for actors that do not re-splice. Observed where
 // the model reads them: the request a turn prepares.
 import { describe, expect, test } from 'bun:test';
-import { appendMemoryNote, DeferredApprovalStore, formatApproval, SubordinateRosterStore } from '@kinu.run/core';
+import { appendMemoryNote, DeferredApprovalStore, formatApproval, SubagentRosterStore } from '@kinu.run/core';
 import { makeSqlExec } from '../../core/tests/helpers';
 import {
-  chatSessionTurns, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor, type HarnessOrchestratorAgent,
+  chatSessionTurns, hostedSubagentHarness, orchestratorHarness, workspaceMainActor, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { wrapDatabase } from '@kinu.run/core/identity';
 
@@ -19,11 +19,11 @@ async function modelContext(agent: HarnessOrchestratorAgent): Promise<string> {
 }
 
 describe('the orchestrator dynamic context reads its own planes', () => {
-  test('a hired subordinate renders as a delegate in the block', async () => {
+  test('a hired subagent renders as a delegate in the block', async () => {
     const { agent, db } = orchestratorHarness();
     const scout = await agent.actorDirectory({ action: 'register', creationId: 'c-scout', name: 'scout', origin: 'agent', lifetime: 'durable' });
 
-    new SubordinateRosterStore(makeSqlExec(db), workspaceMainActor(db)).create({
+    new SubagentRosterStore(makeSqlExec(db), workspaceMainActor(db)).create({
       name: 'scout', actorReference: scout.reference, birth: null, deleteRequested: false,
       status: 'working', currentTask: 'map the failure surface', createdAt: Date.now(), dismissedAt: null,
       taskEventId: null,
@@ -53,7 +53,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
   // The block is the workspace's to render (its reads), so the agent's own isolate reads no memory of its own.
   test("the workspace's MEMORY.md tail is in its agent's block", async () => {
     const workspace = orchestratorHarness();
-    const hire = await hostedSubordinateHarness(workspace, { name: 'scribe-1', displayName: 'Scribe', nameOrigin: 'user', roleId: 'task', mission: 'take notes' });
+    const hire = await hostedSubagentHarness(workspace, { name: 'scribe-1', displayName: 'Scribe', nameOrigin: 'user', roleId: 'task', mission: 'take notes' });
 
     // A hire's note lands in the workspace's MEMORY.md, which every agent of it reads.
     await appendMemoryNote(hire.actor.runtime.memory, 'the build needs node 22', { heading: 'Lesson' });

@@ -27,6 +27,8 @@ const CONTROL_PLANE_CAPABILITIES = {
   'gallery.mark': 'ingest',
   'gallery.list': 'ingest',
   'gallery.forget': 'ingest',
+  // A deleted account's place in the fleet's index, its feedback and its name in the operators' audit.
+  'account.forget': 'ingest',
   'overview.read': 'admin',
   'users.read': 'admin',
   'workspaces.read': 'admin',

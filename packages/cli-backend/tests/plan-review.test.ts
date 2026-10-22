@@ -139,7 +139,7 @@ describe('LocalAgentSession — plan review', () => {
       // Typed as ordinary work but held in Plan; an explicit Auto message and a drain are outside the plan's thread.
       await agent.send('Implement it now.', { id: crypto.randomUUID() });
       await agent.send('Fix the typo meanwhile.', { id: crypto.randomUUID(), mode: 'build' });
-      await agent.enqueueTurn({ text: '[subordinate_report] done', idempotencyKey: 'drain:1' });
+      await agent.enqueueTurn({ text: '[subagent_report] done', idempotencyKey: 'drain:1' });
       await agent.settleBackgroundWork();
       expect(fileResults(events)).toMatchObject([{ success: false, reason: 'denied' }, { success: true }, { success: true }]);
       expect(await agent.getActivePlanReview()).toMatchObject({ id: first.id, status: 'pending' });
@@ -268,7 +268,7 @@ describe('LocalAgentSession — plan review', () => {
 
     try {
       await agent.enqueueTurn({
-        text: `1 event arrived while you were idle.\n- [subordinate_report] from subordinate (ask-refiner-a1): completed: ${proposal}`,
+        text: `1 event arrived while you were idle.\n- [subagent_report] from subagent (ask-refiner-a1): completed: ${proposal}`,
         idempotencyKey: 'drain:refiner', metadata: { kinuEvent: 'event_drain', kinuMode: 'plan' },
       });
       await agent.settleBackgroundWork();
@@ -364,7 +364,7 @@ describe('LocalAgentSession — plan review', () => {
       { answer: 'Plan submitted for review.' },
     ]);
 
-    // A subordinate reports to whoever hired it, so a plan has no owner to decide it
+    // A subagent reports to whoever hired it, so a plan has no owner to decide it
     // (the cloud backend wires `submitPlan` on the orchestrator alone).
     agent.setParentRelay({
       owed: async () => null,

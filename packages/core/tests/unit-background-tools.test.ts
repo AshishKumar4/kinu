@@ -187,7 +187,7 @@ describe('wrapToolsForBackground — swarm is spawn-shaped, run/eval are result-
         execute: async () => {
           ran = true;
 
-          return { subordinates: [] };
+          return { subagents: [] };
         },
       }),
     };
@@ -199,7 +199,7 @@ describe('wrapToolsForBackground — swarm is spawn-shaped, run/eval are result-
     const wrapped = wrapToolsForBackground(raw, { jobRunner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS });
     const out = await executeTool(wrapped, 'agents')({ op: 'list' });
     expect(ran).toBe(true);
-    expect(out).toEqual({ subordinates: [] });
+    expect(out).toEqual({ subagents: [] });
   });
 
   test('run/eval stay result-shaped even on the interactive surface — they race the threshold, never spawn-detach', async () => {

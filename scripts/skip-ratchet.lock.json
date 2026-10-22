@@ -72,7 +72,7 @@
     "reason": "needs a live model: session 1 of the cross-session transfer proof."
   },
   {
-    "key": "tests/live-model/evolution-proof.test.ts › Evolution Proof › session 1, turn 3: cipher challenge + session reflection",
+    "key": "tests/live-model/evolution-proof.test.ts › Evolution Proof › session 1, turn 3: cipher challenge",
     "reason": "needs a live model: closes session 1 and triggers session reflection."
   },
   {

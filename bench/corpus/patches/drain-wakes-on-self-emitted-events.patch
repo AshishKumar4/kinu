@@ -9,6 +9,6 @@ index 9d5dbea6d..c13e7a998 100644
 -  return event.ingress !== 'self_emit'
 -    && event.variant !== 'internal'
 +  return (event.ingress !== 'self_emit' || event.variant !== 'internal')
-     && event.variant !== 'subordinate_task'
+     && event.variant !== 'subagent_task'
      && internal?.(event) !== true;
  }

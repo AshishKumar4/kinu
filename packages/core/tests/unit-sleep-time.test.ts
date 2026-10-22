@@ -6,7 +6,7 @@ import { profileCatalogDigest, resolveTurnProfile } from '../src/profiles';
 import {
   runSleepTimeCompute, applySleepTimeUpdate,
   SLEEP_TIME_CADENCE,
-  initEffectTombstoneTable, initFactsTable, initSleepTimeUpdatesTable, SleepTimeLane,
+  initEffectTombstoneTable, initFactsTable, initSleepTimeTables, SleepTimeLane,
   sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type ConversationProjection,
 } from '../src/index';
@@ -177,8 +177,10 @@ describe('Sleep-time compute', () => {
         formats.push(options.responseFormat?.type === 'json' && options.responseFormat.schema !== undefined ? 'json schema' : 'text');
 
         return {
-          content: [{ type: 'text' as const, text }], finishReason: { unified: 'stop' as const, raw: undefined }, warnings: [],
+          content: [{ type: 'text' as const, text }],
+          finishReason: { unified: 'stop' as const, raw: undefined },
           usage: { inputTokens: { total: 9, noCache: 9, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 2, text: 2, reasoning: undefined } },
+          warnings: [],
         };
       },
     });
@@ -305,7 +307,7 @@ describe('an idle wake dreams first', () => {
   function lane(count: number) {
     const { rt, stores, testSql } = createTestRuntime();
     initFactsTable(testSql.execRaw);
-    initSleepTimeUpdatesTable(testSql.execRaw);
+    initSleepTimeTables(testSql.execRaw);
     initEffectTombstoneTable(testSql.execRaw);
     stores.config.setSleepTimeComputeEnabled(true);
     const order: string[] = [];

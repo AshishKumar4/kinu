@@ -21,9 +21,9 @@ const asks = (run: RecordedGatewayRun, ask: string): boolean => openingOf(run).i
   && !JSON.stringify(requestOf(run).messages).includes(WORKSPACE_TITLE_SYSTEM_PROMPT);
 
 async function addedAgent(workspace: StartedHarness): Promise<readonly string[]> {
-  const { subordinate } = await workspace.agent.createSubordinateAgent();
+  const { subagent } = await workspace.agent.createSubagentAgent();
 
-  return [actorConnectionTag(v.parse(v.string(), subordinate.actorId))];
+  return [actorConnectionTag(v.parse(v.string(), subagent.actorId))];
 }
 
 test("one agent's turn opening under another agent's open turn's id takes nothing of that turn", async () => {

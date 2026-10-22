@@ -1,29 +1,23 @@
 /** Opens setup as a modal so a half-typed mission on the page behind is not lost. */
 import { useState } from "react";
 import { AccountPanelModal, type AccountPanel } from "@/components/account/AccountPanelModal";
+import { Button } from "@/components/ui/Button";
+import { Card } from "@/components/ui/Card";
 
-export function SetupCard({ returnTo }: { returnTo: string }) {
+export function SetupCard() {
   const [open, setOpen] = useState<AccountPanel | null>(null);
 
   return (
     <>
-      <div className="rounded-[14px] border p-border p-surface px-[18px] py-4">
-        <div className="mb-2.5 text-xs font-semibold p-text-4">Setup</div>
-        <button type="button" onClick={() => setOpen('providers')}
-          className="block w-full py-[5px] text-left p-t-control p-accent">
-          Connect providers →
-        </button>
-        <button type="button" onClick={() => setOpen('mcp')}
-          className="block w-full py-[5px] text-left p-t-control p-accent">
-          Add MCP servers →
-        </button>
-        <button type="button" onClick={() => setOpen('cli')}
-          className="block w-full py-[5px] text-left p-t-control p-accent">
-          Install the CLI →
-        </button>
-      </div>
+      <Card title="Setup">
+        <div className="-my-2 flex flex-col items-start">
+          <Button variant="ghost" size="sm" onClick={() => setOpen('providers')}>Connect providers →</Button>
+          <Button variant="ghost" size="sm" onClick={() => setOpen('mcp')}>Add MCP servers →</Button>
+          <Button variant="ghost" size="sm" onClick={() => setOpen('cli')}>Install the CLI →</Button>
+        </div>
+      </Card>
       {open !== null && (
-        <AccountPanelModal panel={open} returnTo={returnTo} onClose={() => setOpen(null)} />
+        <AccountPanelModal panel={open} onClose={() => setOpen(null)} />
       )}
     </>
   );

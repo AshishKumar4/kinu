@@ -499,7 +499,7 @@ credential carries the workspace group (`SHARED_ROOTS`, `docs/STORAGE.md`).
 It is a place to leave work for each other, not a merge path: a swarm node's
 candidate still reaches the origin through settle. A head or a
 swarm node (a swarm node's actor is a head) lives at `/home/head-<id>`. A
-subordinate lives under its own name, one no actor of the workspace had before
+subagent lives under its own name, one no actor of the workspace had before
 (`/home/fix-coupon-expiry`), or at `/home/sub-<id>` when its name was had or is
 shaped like a derived home (`main`, `sub-…`, `head-…`), so one namespace holds
 every hosted kind.

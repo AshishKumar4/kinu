@@ -1,6 +1,6 @@
 /**
  * Transient per-delta output of a running head, filling the gap before a durable step lands. Best
- * effort and subordinate: the durable step supersedes it, and nothing reads a frame back. One frame
+ * effort and subagent: the durable step supersedes it, and nothing reads a frame back. One frame
  * per provider delta, never batched.
  */
 import type { HeadId } from './types';

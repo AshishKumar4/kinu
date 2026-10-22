@@ -4,7 +4,7 @@
  * when the call returns. A call that threw was not billed and files none.
  */
 
-import { generateText, jsonSchema, NoObjectGeneratedError, Output, streamText } from 'ai';
+import { generateText, JSONParseError, jsonSchema, NoObjectGeneratedError, Output, streamText, TypeValidationError } from 'ai';
 import { toJsonSchema } from '@valibot/to-json-schema';
 import * as v from 'valibot';
 import { Cause, Effect } from 'effect';
@@ -14,6 +14,8 @@ import {
 } from '../events/model-call';
 import type { Embedder } from '../memory/vector-store';
 import { normalizeUsage, type Usage } from '../usage';
+import { sha256Hex } from '../safety/argument-digest';
+import { renderIssuesUnquoted } from '../utils/json';
 import { callAccountOf } from './quota';
 import { mergeProviderOptions, type ProviderOptions } from './effort';
 
@@ -22,6 +24,9 @@ export type GenerateRequest = Parameters<typeof generateText>[0];
 export type GenerateResult = Awaited<ReturnType<typeof generateText>>;
 
 export type StreamRequest = Parameters<typeof streamText>[0];
+
+/** A structured call's request: one prompt, and only the options it sends on. */
+export type ObjectRequest = Pick<StreamRequest, 'model' | 'system' | 'maxRetries' | 'abortSignal' | 'providerOptions'> & { readonly prompt: string };
 
 export interface ReportedCall {
   readonly spend: ModelCallSpend;
@@ -90,40 +95,59 @@ const NON_STRICT: ProviderOptions = { openai: { strictJsonSchema: false }, opena
 /**
  * One answer of `schema`'s shape, through the model's structured output: the provider is sent the schema as JSON
  * Schema (`toJsonSchema`; a value it cannot express, as a JSON value, is any value there), and the answer is read back
- * through `schema` itself. Billed as {@link generateReported} bills. An answer off the schema was billed and is no
- * answer: it fails `bad_input`, as a wrong answer does, and is not asked of another model; an answer stopped at the
- * output limit fails `unavailable`, as {@link generateReported}'s does.
+ * through `schema` itself. A generate, filed as {@link generateReported} files one: nothing of it is read until it is
+ * whole, so a provider that streams its generates (Workers AI, whose silent requests end at 10 minutes with a 408,
+ * `WORKERS_AI_STREAMS_GENERATE`) asks again for one its stream cut part way. An answer off the schema was billed and is
+ * no answer: it fails `bad_input`, as a wrong answer does, and is not asked of another model; an answer stopped at the
+ * output limit fails `unavailable`.
  */
-export function generateObjectReported<S extends v.GenericSchema>(request: GenerateRequest, schema: S, call: ReportedCall): Promise<v.InferOutput<S>> {
-  const generated: GenerateRequest = {
+export function generateObjectReported<S extends v.GenericSchema>(request: ObjectRequest, schema: S, call: ReportedCall): Promise<v.InferOutput<S>> {
+  const asked: GenerateRequest = {
     ...request,
     output: Output.object({ schema: jsonSchema(toJsonSchema(schema, { errorMode: 'ignore' })) }),
     providerOptions: mergeProviderOptions(request.providerOptions, NON_STRICT),
   };
 
-  const offSchema = (cause: Error) => new KinuError('bad_input', `${call.spec ?? 'the model'} answered off its schema`, { cause });
+  // Named by its length and digest, and why it was refused without a value of it: each layer the refusal crosses logs
+  // its chain, and the answer in it was three log lines of 0.2 MB for one refused memory pass (2026-10-20).
+  const offSchema = (text: string, cause: Error) => new KinuError('bad_input',
+    `${call.spec ?? 'the model'} answered off its schema (${String(text.length)} characters, sha256 ${sha256Hex(text, 12)})`, { cause });
 
-  return settle(Effect.promise(() => generateReported(generated, call)).pipe(
-    // Any other failure is the provider's, kept as it came for the route walk to read.
-    Effect.catchDefect((defect) => {
-      if (!NoObjectGeneratedError.isInstance(defect)) return Effect.die(defect);
+  return settle(Effect.gen(function* () {
+    const result = yield* Effect.tryPromise({ try: () => generateReported(asked, call), catch: (cause) => cause }).pipe(Effect.catch((cause) => {
+      if (!NoObjectGeneratedError.isInstance(cause)) return Effect.die(cause);
 
-      return Effect.fail(defect.finishReason === 'length' ? outputLimitFailure(defect.response?.modelId ?? call.spec ?? 'the model', 'length', defect) : offSchema(defect));
-    }),
-    Effect.flatMap((result) => {
-      const parsed = v.safeParse(schema, result.output);
+      // A partial object at the output limit is no answer yet, not a wrong one.
+      return Effect.fail(cause.finishReason === 'length' ? outputLimitFailure(cause.response?.modelId ?? call.spec ?? 'the model', 'length', cause) : offSchema(cause.text ?? '', noObject(cause)));
+    }));
 
-      return parsed.success ? Effect.succeed(parsed.output) : Effect.fail(offSchema(new v.ValiError(parsed.issues)));
-    }),
-  ));
+    // Fail-fast: the refusal names the first path it got wrong and nothing more, so an answer of ten thousand wrong
+    // items makes one line, not ten thousand.
+    const parsed = v.safeParse(schema, result.output, { abortEarly: true });
+
+    if (parsed.success) return parsed.output;
+
+    return yield* Effect.fail(offSchema(result.text, new KinuError('bad_input', renderIssuesUnquoted(parsed.issues))));
+  }));
 }
 
-/** Files the row once the stream drains; an abandoned stream leaves only the start row. */
+/** Why the SDK found no object in an answer, in words of ours: its parse error quotes the answer, the engine's
+ *  SyntaxError an excerpt, and a validation error a field. */
+function noObject(refused: NoObjectGeneratedError): KinuError {
+  if (JSONParseError.isInstance(refused.cause)) return new KinuError('bad_input', 'its answer is not JSON');
+
+  return new KinuError('bad_input', TypeValidationError.isInstance(refused.cause) ? 'its answer does not fit the schema sent' : 'it answered no object');
+}
+
+/**
+ * Files the row once the stream drains, and returns its result; an abandoned stream leaves only the start row, and a
+ * reader that ends it early (`return`) gets none.
+ */
 export async function* streamTextReported(
   request: StreamRequest,
   call: ReportedCall,
   onPart?: (part: StreamPart) => void,
-): AsyncGenerator<string> {
+): AsyncGenerator<string, StreamResult | undefined> {
   const operation = beginModelOperation(call.spend, 'stream', { spec: call.spec });
   let result;
 
@@ -150,6 +174,8 @@ export async function* streamTextReported(
   const response = await result.response;
   operation.completed({ usage, modelId: response.modelId });
   call.spend.report(reportOf(call, usage, response));
+
+  return result;
 }
 
 /** Structural: core compiles without the Worker's `Env`. */

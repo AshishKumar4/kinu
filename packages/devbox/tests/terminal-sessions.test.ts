@@ -218,6 +218,20 @@ describe("an agent's job", () => {
     expect((await box.listSupervised()).filter((listed) => listed.restartable)).toEqual([]);
   });
 
+  // Review of the computer process jobs, 2026-10-21: the job such a close ended was never told, and ran on forever.
+  test("closing a job's session on a stopped computer tells its job it ended", async () => {
+    const { box, container, rows } = harness(SessionBox);
+    await box.devboxStartup();
+    const { processId } = await box.startSupervised('npm run dev', '/workspace', {}, { job: 'bgjob-tab' });
+    await container.stop();
+
+    await box.closeTerminalSession(jobSessionId(processId));
+
+    expect([...rows].filter(([key]) => key.startsWith('devbox:incident:')).map(([, incident]) => incident)).toEqual([expect.objectContaining({
+      stage: 'process-ended', processId, job: 'bgjob-tab', reason: 'its session was closed while the computer was stopped',
+    })]);
+  });
+
   test("a job's session id is one tmux takes unquoted, and a long command names it in 40 characters", () => {
     expect(jobSessionId('4F0C9A2E-77D1-4F5B-9A63-0B2F6F0E1C55')).toMatch(/^[a-z0-9][a-z0-9-]{0,31}$/u);
     expect(jobSessionName(`node ${'a'.repeat(60)}`)).toHaveLength(40);

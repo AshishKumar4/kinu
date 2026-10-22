@@ -704,10 +704,7 @@ async function deleteAccount(world: World, owner: AuthIdentity): Promise<number>
     method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: owner.email }),
   });
 
-  // The control plane's Gallery forgets the account's stars and reports; none here to forget.
-  const ControlPlaneDO = { idFromName: (name: string) => name, get: () => ({ galleryForget: async () => undefined }) };
-
-  return present(await serveFamily(accountRoutes, { identity: owner })(request, { ...world.env, ControlPlaneDO }), 'the delete answer').status;
+  return present(await serveFamily(accountRoutes, { identity: owner })(request, world.env), 'the delete answer').status;
 }
 
 test("an account deleted while a card's removal is pending tells that person to forget it", async () => {
@@ -1091,7 +1088,7 @@ test("a slate's standing approvals are its owner's to list and take back, from e
 
   // As an owner's "Always for this slate" leaves its owner shares (the decision is the queue's): seeded in their rows.
   for (const { share } of made) {
-    world.owner.db.query("UPDATE slate_live_shares SET mode = 'owner', grant_revision = 'rev-1', grant_json = ? WHERE id = ?")
+    world.owner.db.query("UPDATE slate_shares SET mode = 'owner', grant_revision = 'rev-1', grant_json = ? WHERE id = ?")
       .run(JSON.stringify({ ...share.grant, preapproved: [{ ...create, revision: 'rev-1' }] }), share.id);
   }
 

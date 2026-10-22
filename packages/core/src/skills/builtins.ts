@@ -79,7 +79,7 @@ Write the slate itself: the \`<slate-ui>\` block in your answer, or the slate's 
 
 ## It looks like the chat
 
-A slate is drawn in the app's theme already, dark and light: its text, font, colours, buttons and inputs. Write plain HTML or JSX and add layout only. Set no page background, text colour or font. Where you need a colour, use the theme's: \`var(--c-text)\`, \`--c-text-2\`, \`--c-text-3\`, \`--c-accent\`, \`--c-border\`, \`--c-surface\`, \`--c-elevated\`, \`--c-success\`, \`--c-warning\`, \`--c-danger\`.
+A slate is drawn in the app's theme already, dark and light: its text, font, colours, buttons and inputs. Write plain HTML or JSX and add layout only. Set no page background, text colour or font. Where you need a colour, use the theme's: \`var(--c-text)\`, \`--c-text-2\`, \`--c-text-3\`, \`--c-accent\`, \`--c-border\`, \`--c-surface\`, \`--c-fill\`, \`--c-success\`, \`--c-warning\`, \`--c-danger\`.
 
 In the chat a slate is as tall as its content, like the text around it. Never size to the viewport (no \`100vh\`, no \`height: 100%\` on \`html\` or \`body\`) and add no scroller of your own. Make it work at a phone's width: one column, large touch targets. \`alert()\` and \`confirm()\` are blocked.
 
@@ -144,7 +144,7 @@ Every slate gets \`workspace\`, the namespaces your \`eval\` programs reach, cal
 - \`workspace.fs.text(path)\`, \`workspace.file.*\`, \`workspace.memory.*\`, \`workspace.tasks.*\`, \`workspace.web.*\` and \`workspace.db.*\`, as a program calls them; \`workspace.ai.run({ prompt, system?, tier? })\` is one call to a bare model, and \`workspace.ai.stream(...)\` the same call as a \`ReadableStream\` of its text as the model writes it, for a page that shows a model's text as it is typed.
 - \`workspace.mcp.<server>.<tool>(args)\`, \`workspace.tools.<name>(input)\`, \`workspace.reads.<model>()\` and \`workspace.slates.<id>.<method>(...args)\`.
 
-Your own slate, run by the user, may also hire and message helpers as you: \`workspace.agents.*\` (\`hire\`, \`assign\`, \`message\`, \`reply\`, \`list\`, \`dismiss\`, \`swarm\`). A shared slate, or a helper's slate, never does. No slate steers you, makes tools or changes slates.
+Your own slate, run by the user, may also hire and message subagents as you: \`workspace.agents.*\` (\`hire\`, \`assign\`, \`message\`, \`reply\`, \`list\`, \`dismiss\`, \`swarm\`). A shared slate, or a subagent's slate, never does. No slate steers you, makes tools or changes slates.
 
 ## Showing and keeping slates
 

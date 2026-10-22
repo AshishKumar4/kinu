@@ -9,7 +9,7 @@ import type { ElementHandle, Page } from 'puppeteer';
 import { detach } from '@kinu.run/core/obs';
 import { DESKTOP_CLIENT_ROOT } from '../../packages/core/src/http/desktop-client';
 import { withGallery } from '../../scripts/gallery-harness';
-import { openInspectorPage, sessionLine } from '../../scripts/browser-page';
+import { DESKTOP_RETURN, NEW_SESSION, openInspectorPage, PAGES_NAV, sessionLine } from '../../scripts/browser-page';
 
 declare global {
   interface Window {
@@ -173,7 +173,7 @@ describe('the inspector bar keeps the workspace in reach', () => {
       try {
         await page.setViewport({ width: 1440, height: 900 });
         await page.goto(`${origin}/gallery.html?frame=workspacepage&slates=3`, { waitUntil: 'networkidle0' });
-        await page.waitForSelector('nav[aria-label="Pages"]', SOON);
+        await page.waitForSelector(PAGES_NAV, SOON);
 
         const tool = await required(page, 'body', 'button', 'Environment');
 
@@ -359,7 +359,7 @@ describe('the Environment panel', () => {
         await page.waitForFunction(`${DESKTOP_FILL} > 0.9 && document.querySelector('[data-rail-collapsed]') !== null`, SOON);
         expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
 
-        await page.click('[data-desktop-return]');
+        await page.click(DESKTOP_RETURN);
         await page.waitForFunction(`${DESKTOP_FILL} < 0.9 && document.querySelector('[data-rail]') !== null`, SOON);
         expect(await page.evaluate(`${DESKTOP_WINDOW}.__left === true`)).toBe(true);
       } finally { await page.close(); }
@@ -378,7 +378,7 @@ describe('the Environment panel', () => {
         await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 2, SOON);
         expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace/api-worker', ports: [':5173'] });
 
-        await page.click('#inspector button[aria-label="New session"]');
+        await page.click(`#inspector ${NEW_SESSION}`);
         await page.waitForFunction(() => document.querySelectorAll('#inspector .xterm-rows').length === 3, SOON);
         expect(await page.evaluate(sessionLine('#inspector'))).toEqual({ folder: '/workspace', ports: [] });
       } finally { await page.close(); }

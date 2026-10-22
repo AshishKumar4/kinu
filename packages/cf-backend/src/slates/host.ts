@@ -13,7 +13,7 @@ import {
   escapeHtml, keptSlateContext, publicPage, sharedBuildRefusal, VIEWER_EXCHANGE_PATH,
   type JsonValue, type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation,
   type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ShareViewerClaim, type MissionGovernor, type EphemeralSlateAddress,
-  type SlateFileChange, type SlateOperation,
+  type SlateFileChange, type SlateOperation, type EgressPrincipal,
 } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import { attempt, ERROR_CODES, KinuError, refusalOf, settle, toKinuError, type Refusal } from '@kinu.run/core/obs';
@@ -22,7 +22,7 @@ import { Effect } from 'effect';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
 import { type SlateBinding, type SlateBindingProps } from './bindings';
-import { codemodeEgress } from '../codemode-egress';
+import { codemodeEgress } from '../codemode-egress-mint';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
 import { PersonalParts, type PartConnections } from './part-runs';
 
@@ -43,6 +43,8 @@ export interface SlateDispatchContext {
    * owner's slate, held to the grant and the share's life for a viewer. It throws to refuse.
    */
   readonly nested: (namespace: string, member: string) => void;
+  /** The turn whose program began the call's chain (`SlateInvocation.turn`), read from the host's own record. */
+  readonly turn?: string;
   /**
    * A viewer's call: the share's word on it read again where it acts (share-viewers.ts `ViewerRun`). The dispatch calls
    * it synchronously immediately before the call acts, with nothing awaited between; it throws to refuse.
@@ -72,6 +74,8 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained'> {
   /** Each viewer's own account, where their personal parts' calls run (`part-runs.ts`); absent, no part runs. */
   readonly partConnections?: PartConnections;
   ownerUserId?(): string | null;
+  /** A signed-in viewer's key on a share (`SlateShareViewersDeps.viewerKey`). */
+  viewerKey?(share: string, userId: string): Promise<string | null>;
   /** The owner's secrets granted to the workspace, as an owner's slate server holds them: placeholders, since a slate's
    *  server is started again without asking (`CommandEnvironment` `keep`). */
   secrets?(): Promise<Readonly<Record<string, string>>>;
@@ -169,6 +173,7 @@ export class SlateHost {
       ...(kv !== undefined && { admitted: async (key: string, perMinute: number) => ingressAdmitted(kv, 'slate-share', key, perMinute) }),
       ...(deps.budget !== undefined && { budget: deps.budget.bind(deps) }),
       ...(deps.ownerUserId !== undefined && { ownerUserId: deps.ownerUserId.bind(deps) }),
+      ...(deps.viewerKey !== undefined && { viewerKey: deps.viewerKey.bind(deps) }),
       ...(deps.forgetPicture !== undefined && { forgetPicture: deps.forgetPicture.bind(deps) }),
       ...(deps.sharesChanged !== undefined && { sharesChanged: deps.sharesChanged.bind(deps) }),
       ...(deps.ownerTitle !== undefined && { ownerTitle: deps.ownerTitle.bind(deps) }),
@@ -402,7 +407,7 @@ export class SlateHost {
 
       // An answer's page calls as its author as of now, in the mode the author's next turn runs in.
       const callsAs = source.kind === 'message' ? source.author : caller;
-      // Only the owner's own slate, calling as the owner, hires or messages helpers; a hosted actor's slate never does.
+      // Only the owner's own slate, calling as the owner, hires or messages subagents; a hosted actor's slate never does.
       const call = routeSlateCall({ id, request: parsed.output, chain, hosted: callsAs.path.length > 0 });
       const impact = slateAddressImpact(call.address) ?? 'administer';
       const driven = reportOnly && call.address.namespace === 'web' && SLATE_DRIVEN_MEMBERS.includes(call.address.member);
@@ -418,6 +423,7 @@ export class SlateHost {
         run: (bounded, admit) => this.run(callsAs, call.route, {
           nested: (namespace, member) => { within(namespace, member); record(namespace, member); },
           admit,
+          ...(issued?.turn !== undefined && { turn: issued.turn }),
           ...(bounded && { viewer: true }),
           ...(parsed.output.authorize && { authorizeOnly: true }),
         }),
@@ -477,6 +483,8 @@ export class SlateHost {
       case 'app': return this.call({
         caller: this.inheriting(caller, route.chain), id: route.id, method: route.method, args: [...route.args], chain: route.chain, viewer,
         ...(context.admit !== undefined && { admit: context.admit }),
+        // The chain's beginning stays its own on every hop.
+        ...(context.turn !== undefined && { turn: context.turn }),
       });
     }
   }
@@ -516,7 +524,10 @@ export class SlateHost {
       }
 
       // Issued to the process it reaches, under each slate's sharing on its way now.
-      const record = { id, chain, incarnation: this.lineageOfProcess(process).incarnation, generations: this.generationsOf([...chain, id]) };
+      const record = {
+        id, chain, incarnation: this.lineageOfProcess(process).incarnation, generations: this.generationsOf([...chain, id]),
+        ...request.turn !== undefined && { turn: request.turn },
+      };
 
       this.invocations.set(invocation, viewer === undefined ? record : { ...record, viewer });
       const stub = slateBatchStub<Record<string, (...args: JsonValue[]) => Promise<JsonValue>>>(process, invocation);
@@ -635,7 +646,8 @@ export class SlateHost {
     const actor = unshared ? await this.deps.browserActor(caller) : null;
     // Shared, it reaches the network as no one: its own preview hosts too, and it holds and spends none of the owner's secrets.
     const ownerUserId = unshared ? this.deps.ownerUserId?.() ?? null : null;
-    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor, asOwner: unshared, ownerUserId });
+    const principal: EgressPrincipal = unshared ? { as: 'owner', workspace: this.deps.workspace, actorId: actor, ownerUserId } : { as: 'viewer', workspace: this.deps.workspace, actorId: null };
+    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ principal });
     const secrets = unshared ? await this.deps.secrets?.() ?? {} : {};
 
     if (caller.workMode === 'build' && globalOutbound === null) {

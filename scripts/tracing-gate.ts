@@ -55,7 +55,8 @@
  */
 import { readFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { build } from 'esbuild';
+import { build, stop, version } from 'esbuild';
+import { childrenRunning, exitOf } from './deadline';
 import { Miniflare, NoOpLog, type WorkerOptions } from 'miniflare';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
@@ -163,6 +164,13 @@ export async function observeSpans(): Promise<SpanObservations> {
     platform: 'browser',
     external: ['cloudflare:workers'],
   });
+
+  // esbuild's service outlives the build until this process's exit closes its stdin, and the row's runner read it then
+  // as a process the gate left running (deploy of 324bd728d, 2026-10-21); stop() only signals it, so its exit is awaited.
+  const service = childrenRunning(process.pid, `--service=${version}`);
+
+  await stop();
+  await exitOf(service);
 
   const script = bundled.outputFiles[0]?.text ?? '';
 

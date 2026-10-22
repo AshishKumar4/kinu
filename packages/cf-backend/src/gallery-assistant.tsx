@@ -15,6 +15,7 @@ import { JsonObjectSchema } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import WorkspacePage from "@/pages/WorkspacePage";
 import { seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
+import { GALLERY_PICTURE } from "@/gallery-pictures";
 import type { SocketCall } from "@/lib/workspace-rpc";
 
 const NOW = Date.now();
@@ -43,37 +44,48 @@ const overview = (o: Partial<WorkspaceOverview> & Pick<WorkspaceOverview, "activ
   decisionsWaiting: 0, hasUpdates: false, awaitsSettings: false, latestRun: null, slates: [], shares: [], plan: null, ...o,
 });
 
+/** A slate the workspace keeps, with its latest capture (gallery-pictures.ts names each). */
+const slate = (id: string, title: string, picture: string) => ({ id, title, picture, visibility: null });
+
 const entry = (name: string, displayName: string, visited: number, o: WorkspaceOverview | null): RosterEntry => ({
   name, displayName, createdAt: NOW - 20 * 864e5, lastVisited: NOW - visited, overview: o, decisions: o?.decisionsWaiting ?? 0, logo: null,
 });
 
 /** The owner's workspaces as the assistant sees them on a Monday morning: two it runs, one waiting on a deploy. */
 export const ASSISTANT_ROSTER: RosterEntry[] = [
+  // Home's own workspace, as the roster lists it once installed and its first turn has reported: named as its assistant
+  // is, since setup names both; the rail leaves it out.
+  { ...entry(ASSISTANT_WORKSPACE, "Kinu", 0, overview({ activity: "idle" })), home: true },
   // Started by the assistant a few minutes ago, when Ashish asked for it in Home's chat.
   ...(MOMENT === "firstrun" ? [] : [entry("api-worker-v2", "API Worker v2 release", 2 * MIN, overview({
     activity: "working", latestRun: { status: "running", task: "Cut release/v2 from main and write the notes", run: null },
     plan: { title: "Cut release/v2, write the notes, get staging green", done: 1, total: 4 },
+    slates: [slate("release", "Release v2", GALLERY_PICTURE.release)],
   }))]),
   entry("api-worker", "API Worker", 12 * MIN, overview({
     activity: "idle", decisionsWaiting: 1,
     latestRun: { status: "completed", task: "Read the sessions database as SESSIONS_DB, then deploy", run: null },
     plan: { title: "Read the sessions database as SESSIONS_DB", done: 4, total: 5 },
+    slates: [slate("workers-health", "Workers health", GALLERY_PICTURE.deploys), slate("incident", "Incident: sessions 500s", GALLERY_PICTURE.incident)],
   })),
   entry("kinu-issues", "Issue triage · kinu-run/kinu", 40 * MIN, overview({
     activity: "working",
     latestRun: { status: null, task: "Label this week's issues and answer the easy ones", run: null },
     plan: { title: "Label this week's issues and answer the easy ones", done: 9, total: 14 },
+    slates: [slate("pr-board", "PR review board", GALLERY_PICTURE.prBoard)],
   })),
   entry("do-sqlite", "Durable Objects SQLite report", 9 * HOUR, overview({
     activity: "idle",
     latestRun: { status: "completed", task: "What changed in Durable Objects SQLite storage this month", run: null },
     plan: { title: "What changed in Durable Objects SQLite storage this month", done: 6, total: 6 },
+    slates: [slate("report", "Durable Objects SQLite report", GALLERY_PICTURE.report)],
   })),
   entry("kinu-website", "Kinu website", 2 * 864e5, overview({
     activity: "idle", latestRun: { status: "error", task: "Lighthouse check of kinu.run before the release", run: null },
   })),
   entry("router-firmware", "Router firmware in Ghidra", 4 * 864e5, overview({
     activity: "unfinished", latestRun: { status: "completed", task: "Map the update routine's signature check", run: null },
+    slates: [slate("ghidra", "Update routine map", GALLERY_PICTURE.ghidra)],
   })),
 ];
 
@@ -113,7 +125,7 @@ const BRIEF = `Two things wait on you this morning, and the rest moved overnight
 
 **Waiting on you**
 - **API Worker** has the \`SESSIONS_DB\` fix on staging: 2,140 requests since 06:10, no 500s. It wants to deploy to production; the approval is in its chat.
-- **#4120 Web search chain** on kinu-run/kinu needs your review. CI is green; it is 1,182 lines, mostly the provider registry.
+- [#4120 Web search chain](https://github.com/kinu-run/kinu/pull/4120) on kinu-run/kinu needs your review. CI is green; it is 1,182 lines, mostly the provider registry.
 
 **Mail**: three Important. Priya Shah wants a Dynamic Workers demo this week; Thursday afternoon has nothing on it in your mail.
 
@@ -169,13 +181,13 @@ function assistantSnapshot(snapshot: JsonObject): JsonObject {
 
   return {
     ...snapshot,
-    status: { ...status, name: ASSISTANT_WORKSPACE, displayName: "Personal assistant", purpose: mission, soul: `# Kinu\n\n## Mission\n${mission}\n`, layout: "focus" },
+    status: { ...status, name: ASSISTANT_WORKSPACE, displayName: "Kinu", purpose: mission, soul: `# Kinu\n\n## Mission\n${mission}\n`, layout: "focus" },
     chat: { ...chat, name: ASSISTANT_WORKSPACE, displayName: "Kinu", mission, activePlan: null, messageCount: MOMENT === "firstrun" ? 2 : 41 },
   };
 }
 
 /** The workspace's own answers over the gallery's, as the assistant's Durable Object would give them. */
-function assistantRpc(base: SocketCall): SocketCall {
+export function assistantRpc(base: SocketCall): SocketCall {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const answer = (value: JsonValue) => new Response(JSON.stringify(value)).json<T>();
 
@@ -184,7 +196,7 @@ function assistantRpc(base: SocketCall): SocketCall {
     if (method === "listWorkspaceAgents") return answer(v.parse(v.array(JsonObjectSchema), [mainPanelAgent({ label: "Kinu", activity: "idle", actorId: `actor-${ASSISTANT_WORKSPACE}` })]));
 
     // It asks nothing of its own: it creates workspaces itself, and only an external or cross-tenant step would ask.
-    if (method === "listPendingActions" || method === "listSubordinates" || method === "listBackgroundJobs" || method === "inspectWork") return answer([]);
+    if (method === "listPendingActions" || method === "listSubagents" || method === "listBackgroundJobs" || method === "inspectWork") return answer([]);
 
     return base<T>(method, args);
   };
@@ -206,13 +218,13 @@ function AssistantLine() {
 }
 
 /** Home: the assistant's chat in the focus layout, with nothing above it. The brief arrives as a message in it. */
-function AssistantHome() {
+export function AssistantHome() {
   return <WorkspacePage workspace={ASSISTANT_WORKSPACE} identity={{ label: "Kinu", line: <AssistantLine /> }} />;
 }
 
 /** Home with the assistant installed, in the product's own shell. */
 /** The assistant's chat as the frame's moment has it. */
-const ASSISTANT_THREAD = MOMENT === "firstrun" ? FIRST_RUN_THREAD : MORNING_THREAD;
+export const ASSISTANT_THREAD = MOMENT === "firstrun" ? FIRST_RUN_THREAD : MORNING_THREAD;
 
 export function assistantHomeFrame(base: SocketCall) {
   serveGalleryRpc(assistantRpc(base));

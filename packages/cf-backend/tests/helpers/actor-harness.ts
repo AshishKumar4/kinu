@@ -20,13 +20,13 @@ import type { GalleryListingSync } from '@kinu.run/core/slates';
 import type { ControlCaller } from '@kinu.run/core/control-plane';
 import { OwnedModelServices } from '../../src/owned-model-services';
 import { bindAgentSql } from '../../src/runtime';
-import { hostedSubordinateRuntime, type ActorSurface, type SurfaceTurn, type ToolScope } from '../../src/hosted-actors';
+import { hostedSubagentRuntime, type ActorSurface, type SurfaceTurn, type ToolScope } from '../../src/hosted-actors';
 import type { CFSeat } from '../../src/actor-hosting';
 import type { ChatWireTransport } from '../../src/chat-transport';
 import type { AgentTurns } from '../../src/agent-turns';
 import type { PictureBucket } from '../../src/slates/pictures';
 import { isWorkMode, turnTags, type UserProfile } from '@kinu.run/core';
-import { ActorClaimStore, agentArtifactDirectory, agentHome, CHAT_SESSION_ID, EventLog, SubordinateRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
+import { ActorClaimStore, agentArtifactDirectory, prepareOutput, agentHome, CHAT_SESSION_ID, EventLog, SubagentRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
 import { answeredAs, present, admitTestClaim } from '@kinu.run/test-utils';
 import {
   createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
@@ -37,7 +37,7 @@ import type { WorkspaceHostTarget } from '../../src/workspace-host';
 import {
   actorPolicy, actorReferenceOf, announcementOf,
   type ActorHandle,
-  type ActorHost, type ActorSeat, type SubordinateSeed,
+  type ActorHost, type ActorSeat, type SubagentSeed,
 } from '@kinu.run/core';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest, actorAffinity,
@@ -273,10 +273,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     return hosted + (this._inFlight ? 1 : 0);
   }
 
-  /** Actors whose turn waits inside a task hire: a task helper of theirs is still working. */
+  /** Actors whose turn waits inside a task hire: a task subagent of theirs is still working. */
   harnessTurnsWaitingOnDelegates(): number {
     return this.boundSql<{ n: number }>`
-      SELECT COUNT(DISTINCT s.actor_id) AS n FROM actor_subordinates s
+      SELECT COUNT(DISTINCT s.actor_id) AS n FROM actor_subagents s
       JOIN workspace_actors a ON a.actor_id = json_extract(s.actor_reference, '$.actorId')
       WHERE a.lifetime = 'task' AND s.status != 'dismissed'`[0]?.n ?? 0;
   }
@@ -320,6 +320,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** Main's chat, in its own isolate (D9): a turn is open there. */
   harnessMainTurnInFlight(): boolean { return this.mainChatTurn() !== null; }
+
   /** The owner's Stop of main's chat, as its window sends it. */
   async harnessStopMain(): Promise<void> { await this.cancelCurrentWork(); }
   /** The owner's words to main, admitted as its window admits them; resolves once reserved. */
@@ -437,13 +438,13 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
 
   /** The child substrate, for lifecycle verbs without a roster row. */
-  observeSubordinateRuntime() { return this.subordinateRuntime(); }
+  observeSubagentRuntime() { return this.subagentRuntime(); }
 
   /** The runtime the agent's own hirer assigns it work through, as that hirer's `agents` tool does. */
   observeHirerRuntime(actorId: string) {
     const hirer = present(this.agentOf(actorId).parentActorId, `${actorId} has no hirer`);
 
-    return hostedSubordinateRuntime(this.hostedSeams(), () => this.actorHost().bindStores(actorReferenceOf(this.agentOf(hirer))));
+    return hostedSubagentRuntime(this.hostedSeams(), () => this.actorHost().bindStores(actorReferenceOf(this.agentOf(hirer))));
   }
   observeRuntime(): AgentRuntime { return this.rt; }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
@@ -802,7 +803,7 @@ export function nextTurn(): Promise<void> {
  * Runs the object's wake until `holds()`. Detached work is observed by its effect, the way an operator would see it,
  * and a condition that never holds fails by name rather than hanging the suite: `failure` is thrown once the object has
  * nothing left to run (no owed work, no fiber in flight), or once every running turn waits either on the suite (a
- * scripted model call not yet answered, a planted hold) or on a task helper of its own, so nothing else could move it.
+ * scripted model call not yet answered, a planted hold) or on a task subagent of its own, so nothing else could move it.
  * No lap count.
  */
 export async function driveUntil(
@@ -962,15 +963,15 @@ export function eventsOver(db: Database): EventLog {
 }
 
 /** The main actor's roster of the agents it hired, over the object's stored rows. */
-export function rosterOver(db: Database): SubordinateRosterStore {
-  return new SubordinateRosterStore(makeSqlExec(db), workspaceMainActor(db));
+export function rosterOver(db: Database): SubagentRosterStore {
+  return new SubagentRosterStore(makeSqlExec(db), workspaceMainActor(db));
 }
 
 const ReportPayloadSchema = v.looseObject({ content: v.string() });
 
 /** What the workspace's hires reported to its main actor, newest first, as its inbox holds them. */
 export function relayedReports(db: Database): string[] {
-  return eventsOver(db).query({ variant: 'subordinate_report' })
+  return eventsOver(db).query({ variant: 'subagent_report' })
     .map((event) => v.parse(ReportPayloadSchema, event.payload).content);
 }
 
@@ -1675,6 +1676,9 @@ export interface HarnessActorWorld {
   versionId?: string | null;
   /** The `send_email` binding at `env.EMAIL`; unset, the workspace has no mail route. */
   email?: SendEmail;
+  /** The deployment's mail: its domain at `env.EMAIL_DOMAIN`, and the owner's Mailbox object at `env.MAILBOX`.
+   *  Unset, the deployment has no mail. */
+  mailbox?: { readonly domain: string; readonly owner: object };
   /** The Analytics Engine datasets the object's turns, tools and jobs write rows to (`helpers/analytics-engine.ts`). */
   analytics?: Pick<Env, 'AGENT_METRICS' | 'CONTROL_PLANE_OPS'>;
   /** The container binding at `env.KinuDevbox`: the runtime registers the sandbox executor over it.
@@ -1732,6 +1736,10 @@ export function makeEnv(
     ...platformGatewayEnv(world?.aiGateway),
     ...(world?.versionId !== null && { CF_VERSION_METADATA: { id: world?.versionId ?? HARNESS_BUILD, tag: '', timestamp: '' } }),
     ...(world?.email !== undefined && { EMAIL: world.email }),
+    ...(world?.mailbox !== undefined && {
+      EMAIL_DOMAIN: world.mailbox.domain,
+      MAILBOX: { idFromName: (userId: string) => userId, get: () => world.mailbox?.owner },
+    }),
     ...world?.analytics,
     ...(world?.previewHostSuffix !== undefined && { PREVIEW_HOST_SUFFIX: world.previewHostSuffix }),
     ...(world?.container === true && {
@@ -1988,14 +1996,13 @@ export async function reactivateOrchestratorHarness(
   },
 ): Promise<StartedHarness> {
   // Durable state the prior activation left, written through the stores before `onStart` runs the recovery.
-  const config = workspaceMainActor(db).config;
+  const main = workspaceMainActor(db);
+  const config = main.config;
 
   if (opts?.sleepTimeAnswer) {
     const [key, update] = opts.sleepTimeAnswer;
     config.setSleepTimeComputeEnabled(true);
-    db.prepare(
-      'INSERT INTO sleep_time_updates (effect_key, update_json) VALUES (?, ?) ON CONFLICT(effect_key) DO NOTHING',
-    ).run(key, JSON.stringify(update));
+    prepareOutput(wrapDatabase(db).sql, main, { scope: 'sleep_time', key }, JSON.stringify(update));
   } else {
     config.setSleepTimeComputeEnabled(false);
   }
@@ -2012,9 +2019,9 @@ export async function reactivateOrchestratorHarness(
 }
 
 
-/** A real hired subordinate, seeded through the parent's `SubordinateRuntime` and
+/** A real hired subagent, seeded through the parent's `SubagentRuntime` and
  *  acquired from the workspace's `ActorHost`, in one process and one database. */
-export async function hostedSubordinateHarness(
+export async function hostedSubagentHarness(
   workspace: ActorHarness<HarnessOrchestratorAgent>,
   identity: {
     readonly name: string;
@@ -2022,15 +2029,15 @@ export async function hostedSubordinateHarness(
     readonly nameOrigin: 'user' | 'auto';
     readonly mission: string;
     readonly roleId?: string;
-    /** `evolution` stands in for a lane's helper: a view-only task agent. */
+    /** `evolution` stands in for a lane's subagent: a view-only task agent. */
     readonly origin?: 'agent' | 'evolution';
   },
 ): Promise<HostedActorHarness> {
-  const seed: SubordinateSeed & { creationId: string } = {
+  const seed: SubagentSeed & { creationId: string } = {
     name: identity.name,
     displayName: identity.displayName,
     nameOrigin: identity.nameOrigin,
-    // Durable: this stands in for a hire; a lane's helper lives one task.
+    // Durable: this stands in for a hire; a lane's subagent lives one task.
     lifetime: identity.origin === 'evolution' ? 'task' : 'durable',
     origin: identity.origin ?? 'agent',
     mission: identity.mission,
@@ -2039,7 +2046,7 @@ export async function hostedSubordinateHarness(
     creationId: crypto.randomUUID(),
   };
 
-  const reference = await workspace.agent.observeSubordinateRuntime().spawn(seed);
+  const reference = await workspace.agent.observeSubagentRuntime().spawn(seed);
   const actor = await workspace.agent.observeActorHost().acquire(reference, { kind: 'actor' });
 
   return { actor, workspace };

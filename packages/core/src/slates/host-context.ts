@@ -8,11 +8,21 @@ import { SlateDirectoryName } from './rpc';
  * already inlines (`THEME_CSS`) as the app has it now, the app's own tokens beside it, and its type stacks.
  */
 export const SLATE_THEME_TOKENS = [
-  '--c-bg', '--c-text', '--c-text-2', '--c-text-3', '--c-text-4', '--c-accent', '--c-accent-fg', '--c-accent-mark', '--c-accent-subtle',
-  '--c-border', '--c-border-strong', '--c-surface', '--c-fill', '--c-elevated', '--c-recessed', '--c-input-bg', '--c-neutral-tint', '--c-code-bg',
+  '--c-bg', '--c-text', '--c-text-2', '--c-text-3', '--c-accent', '--c-accent-fg', '--c-accent-mark', '--c-selected',
+  '--c-border', '--c-border-strong', '--c-field-border', '--c-surface', '--c-fill', '--c-sunken', '--c-field', '--c-hover', '--c-code-bg',
   '--c-danger', '--c-success', '--c-warning', '--c-info',
   '--font-ui', '--font-display', '--font-serif', '--font-mono',
 ] as const;
+
+/**
+ * The names slates were written against before the design system renamed the palette (2026-10-21): a slate is the
+ * person's own page, kept in their workspace, so the names it already uses keep meaning what they meant. Each reads the
+ * role that took its place, on the slate page alone; the app itself knows only the new names.
+ */
+export const SLATE_LEGACY_TOKEN_CSS = `:root{${Object.entries({
+  '--c-text-4': '--c-text-3', '--c-elevated': '--c-fill', '--c-recessed': '--c-sunken', '--c-input-bg': '--c-field',
+  '--c-input-border': '--c-field-border', '--c-neutral-tint': '--c-hover', '--c-accent-subtle': '--c-selected', '--c-code': '--c-accent-fg',
+}).map(([legacy, role]) => `${legacy}:var(${role})`).join(';')}}`;
 
 export interface SlateHostContext {
   readonly theme: 'dark' | 'light';

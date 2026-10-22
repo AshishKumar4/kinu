@@ -37,7 +37,6 @@ import { PROMPT_SECTIONS } from '../prompting/section-templates';
 import { routeSkill, settleDreamSkill, skillRefusal } from './refinement-skill';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { jsonObjectOnlyInstruction } from '../providers/structured';
-import { renderIssues } from '../utils/json';
 import { attempt, diagnostics, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -503,24 +502,11 @@ function askHelper<S extends v.GenericSchema>(
     Effect.flatMap((task) => Effect.tryPromise({
       try: async () => Result.succeed(await llm.object(task, schema)),
       catch: (cause) => toKinuError({ doing: `asking the ${helper.roleLabel}`, cause, otherwise: 'unavailable' }),
-    }).pipe(Effect.catch((failure) => {
-      // An answer off the schema names every key it got wrong, so a refusal says what to fix.
-      const issues = schemaIssues(failure);
-
-      return Effect.succeed(Result.fail(issues === null
-        ? `the ${helper.roleLabel} did not answer (${failure.code}): ${renderThrownChain({ cause: failure })}`
-        : `the ${helper.roleLabel} did not answer in its shape (bad_input): ${renderIssues(issues)}`));
-    }))),
+    }).pipe(
+      // An answer off the schema names the first key it got wrong (`generateObjectReported`), so a refusal says what to fix.
+      Effect.catch((failure) => Effect.succeed(Result.fail(`the ${helper.roleLabel} did not answer (${failure.code}): ${renderThrownChain({ cause: failure })}`))),
+    )),
   );
-}
-
-/** The schema's own rejection, wherever the provider's failure wraps it (`generateObjectReported`); null for any other. */
-function schemaIssues(failure: Error): readonly v.BaseIssue<unknown>[] | null {
-  for (let cause: unknown = failure; cause instanceof Error; cause = cause.cause) {
-    if (v.isValiError(cause)) return cause.issues;
-  }
-
-  return null;
 }
 
 function askRefiner(deps: RefinementDeps, request: RefinementRequest): Effect.Effect<RefinerAnswer, KinuError> {
@@ -602,7 +588,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
     '',
     'Every description you write, for a skill or a tool, says when it applies, and when a similar one fits instead.',
     '',
-    'Subordinate specs (`subagent_spec`): a subordinate\'s role and spec belong to that agent\'s',
+    'Subagent specs (`subagent_spec`): a subagent\'s role and spec belong to that agent\'s',
     'own config and there is no writable proposal authority for them. Propose one only to record',
     'the finding; it will be refused rather than applied.',
     '',
@@ -859,7 +845,7 @@ async function routeEditOnce(
   }
 }
 
-const SUBAGENT_SPEC_REFUSAL = 'no writable proposal authority exists for a subordinate\'s role or spec: those '
+const SUBAGENT_SPEC_REFUSAL = 'no writable proposal authority exists for a subagent\'s role or spec: those '
   + 'belong to that agent\'s own config, which this workspace reads and never writes. '
   + 'Recorded as a finding rather than mirrored into a second agent store.';
 

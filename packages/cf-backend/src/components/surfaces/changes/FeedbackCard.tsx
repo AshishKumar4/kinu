@@ -2,6 +2,8 @@ import { ChatCircleTextIcon, ListBulletsIcon, MinusCircleIcon } from "@phosphor-
 import type { ChangeNotesCard, DiffAnchor } from "@kinu.run/core";
 import { sinceLabel } from "./diff";
 import { placeLabel } from "./notes";
+import { Bubble, BubbleRule } from "@/components/ui/Bubble";
+import { Pressable } from "@/components/ui/Pressable";
 
 type CardNote = ChangeNotesCard["notes"][number];
 
@@ -22,10 +24,10 @@ function NoteRow({ note }: { note: CardNote }) {
 
   return (
     <>
-      <Icon size={14} weight="bold" className={`mt-[3px] shrink-0 ${TYPE_TONE[note.type]}`} />
+      <span className={`flex h-5 shrink-0 items-center ${TYPE_TONE[note.type]}`}><Icon size={14} weight="bold" /></span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate font-mono text-[11.5px] p-text-3 group-hover:p-text-2">{placeLabel(note.anchor)}</span>
-        <span className="line-clamp-2 p-row-text p-text group-hover:underline">
+        <span className="t-meta t-mono block truncate p-text-3 group-hover:p-text-2">{placeLabel(note.anchor)}</span>
+        <span className="t-body line-clamp-2 p-text group-hover:underline">
           {note.type === "DELETION" && note.text === undefined ? "Remove this." : note.text}
         </span>
       </span>
@@ -43,26 +45,25 @@ export function FeedbackCard({ card, sentAt, now, onOpen }: {
 
   return (
     <div className="flex justify-end" data-feedback-card>
-      <div className="w-full max-w-[min(85%,34rem)] rounded-t-2xl rounded-bl-2xl rounded-br-[4px] p-user-bubble px-4 pb-2 pt-3">
-        <p className="flex items-baseline gap-2 p-row-text">
-          <span className="font-medium p-text">{card.notes.length} {card.notes.length === 1 ? "note" : "notes"} on the changes</span>
-          <span className="p-meta p-text-3">{files} {files === 1 ? "file" : "files"} · {sinceLabel(sentAt, now)}</span>
+      <Bubble notes>
+        <p className="t-body flex items-baseline gap-2">
+          <strong className="p-text">{card.notes.length} {card.notes.length === 1 ? "note" : "notes"} on the changes</strong>
+          <span className="t-meta p-text-3">{files} {files === 1 ? "file" : "files"} · {sinceLabel(sentAt, now)}</span>
         </p>
-        <ul className="mt-2 border-t border-[var(--c-user-border)] pt-1">
+        <BubbleRule className="mt-2 pt-1">
           {card.notes.map((note) => (
             <li key={note.id}>
               {onOpen === undefined
-                ? <div className="flex items-start gap-2.5 py-2"><NoteRow note={note} /></div>
+                ? <div className="flex items-start gap-3 py-2"><NoteRow note={note} /></div>
                 : (
-                  <button type="button" onClick={() => onOpen(note.anchor)} data-feedback-note={note.id}
-                    className="group flex w-full items-start gap-2.5 py-2 text-left">
+                  <Pressable className="group flex items-start gap-3 py-2" onClick={() => onOpen(note.anchor)} data-feedback-note={note.id}>
                     <NoteRow note={note} />
-                  </button>
+                  </Pressable>
                 )}
             </li>
           ))}
-        </ul>
-      </div>
+        </BubbleRule>
+      </Bubble>
     </div>
   );
 }

@@ -18,19 +18,19 @@ const THEME_DISTANCE = 0.3;
 const READABLE = 0.9;
 
 /** The turn built `slates`, what it was asked to, itself: no prototype standing in for them (`prototypeSteps`), a
- *  preview and a screenshot of the real slate being its check, as the slates skill asks; and no helper and no swarm at
- *  work, read from the lead's delegations (its helpers' runs and its swarms this turn), not from its calls: a hire
+ *  preview and a screenshot of the real slate being its check, as the slates skill asks; and no subagent and no swarm at
+ *  work, read from the lead's delegations (its subagents' runs and its swarms this turn), not from its calls: a hire
  *  made from a program reaches the model's record only as the program. */
 export async function builtItself(verifier: EvalVerifier, slates: readonly string[]): Promise<void> {
   await madeNoPrototype(verifier, slates);
 
   await verifier.check('hired-no-one', async () => {
-    const [helpers, swarms] = await Promise.all([verifier.helperWork(), verifier.swarms()]);
-    const working = helpers.filter((helper) => helper.runs.length > 0);
+    const [subagents, swarms] = await Promise.all([verifier.subagentWork(), verifier.swarms()]);
+    const working = subagents.filter((subagent) => subagent.runs.length > 0);
 
     return {
       pass: working.length === 0 && swarms.length === 0,
-      evidence: { helpers: working.map((helper) => ({ name: helper.name, runs: helper.runs.length })), swarms: swarms.map((swarm) => swarm.run.id) },
+      evidence: { subagents: working.map((subagent) => ({ name: subagent.name, runs: subagent.runs.length })), swarms: swarms.map((swarm) => swarm.run.id) },
     };
   });
 }

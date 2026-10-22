@@ -1,5 +1,5 @@
 /**
- * chess dqf52o, staging 85a438698, 2026-10-02: a helper's foreground `node server.js` held the helper for the
+ * chess dqf52o, staging 85a438698, 2026-10-02: a subagent's foreground `node server.js` held the subagent for the
  * sandbox command's whole 385 s, since only the root's tools detached. A hired agent's long command now outruns its
  * window into a job of the hire's own: the hire is told the handle, its view lists the job and hears its output, the
  * owner's cancel ends it, and the settle wakes the hire.
@@ -49,7 +49,7 @@ async function hiredServer() {
   workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
   // An agent added takes the workspace's purpose, so the workspace has one first.
   await workspace.agent.setSoul('# Purpose\n\nRun the dev server.');
-  const { name } = await workspace.agent.createSubordinateAgent();
+  const { name } = await workspace.agent.createSubagentAgent();
   const route = await workspace.agent.resolveHostedActorRoute(name);
 
   if ('reason' in route) throw new Error(route.error);

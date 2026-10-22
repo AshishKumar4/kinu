@@ -4,16 +4,16 @@
 import * as v from 'valibot';
 import { WorkModeSchema } from '../../types/turn';
 import {
-  SUBORDINATE_REPORT_STATUSES,
+  SUBAGENT_REPORT_STATUSES,
   type EventId, type EventVariant, type IngressDescriptor,
-  type SubordinateReportHandoffField,
+  type SubagentReportHandoffField,
   type Priority, type KinuEvent, type RevisitCondition,
   type TraceId, type TurnId,
 } from './types';
 import type { ActorHandle } from '../../identity/actor-handle';
 import { dedupeKeyForDescriptor } from './dedupe';
 import { wakesADrain } from './drain';
-import { EvolutionHelperStore } from '../../identity/evolution-helpers';
+import { EvolutionSubagentStore } from '../../identity/evolution-subagents';
 import { deriveFields } from './trust';
 import { applyVisibilityForStorage } from './visibility';
 import { ulid } from './ulid';
@@ -25,7 +25,7 @@ import {
   parseJsonValue,
 } from '../../utils/json';
 import { boundedInt, boundPageQuery } from '../../utils/bounds';
-import { SubordinateInheritedContextSchema } from '../../types/subordinates';
+import { SubagentInheritedContextSchema } from '../../types/subagents';
 import { Effect } from 'effect';
 import { diagnostics, settleSync, toKinuError, type KinuError } from '../../obs/index';
 
@@ -77,12 +77,12 @@ const PRIORITY_ORDER = {
 const IngressSchema = v.picklist([
   'chat_ws', 'webhook_hmac', 'webhook_bearer', 'webhook_mtls', 'timer_alarm',
   'computer_cb', 'peer_async', 'mcp_streamable',
-  'email_inbound', 'subordinate', 'self_emit', 'reply_request',
+  'email_inbound', 'subagent', 'self_emit', 'reply_request',
 ]);
 
 const VariantSchema = v.picklist([
-  'chat', 'webhook', 'process_done', 'timer', 'peer_agent', 'subordinate_task',
-  'subordinate_report', 'file_changed', 'email', 'internal', 'reply_request',
+  'chat', 'webhook', 'process_done', 'timer', 'peer_agent', 'subagent_task',
+  'subagent_report', 'file_changed', 'email', 'internal', 'reply_request',
   'mcp_chat', 'mcp_third_party',
 ]);
 
@@ -166,12 +166,12 @@ const PeerAgentPayloadSchema = v.object({
   kinu_mode: WorkModeSchema,
 });
 
-const SubordinateTaskPayloadSchema = v.object({
+const SubagentTaskPayloadSchema = v.object({
   from_workspace: v.string(),
   kind: v.picklist(['task', 'message']),
   body: v.string(),
   deliverable: v.optional(v.string()),
-  inherited_context: v.optional(SubordinateInheritedContextSchema),
+  inherited_context: v.optional(SubagentInheritedContextSchema),
   kinu_mode: WorkModeSchema,
   creation_id: v.optional(v.string()),
   message_id: v.optional(v.string()),
@@ -184,11 +184,11 @@ const HandoffPayloadEntries = {
   deviations: v.optional(v.array(v.string())),
   findings: v.optional(v.array(v.string())),
   open_work: v.optional(v.array(v.string())),
-} satisfies Record<SubordinateReportHandoffField, v.GenericSchema<string[] | undefined>>;
+} satisfies Record<SubagentReportHandoffField, v.GenericSchema<string[] | undefined>>;
 
-const SubordinateReportPayloadSchema = v.object({
-  from_subordinate: v.string(),
-  status: v.picklist(SUBORDINATE_REPORT_STATUSES),
+const SubagentReportPayloadSchema = v.object({
+  from_subagent: v.string(),
+  status: v.picklist(SUBAGENT_REPORT_STATUSES),
   content: v.string(),
   sequence_id: v.string(),
   task: v.optional(v.string()),
@@ -251,13 +251,13 @@ const OpenAssignmentRowSchema = v.object({ id: v.string() });
 export class EventLog {
   private readonly actorId: string;
 
-  private readonly helpers: EvolutionHelperStore;
+  private readonly evolution: EvolutionSubagentStore;
 
   /** `actorId` is captured once so a re-pointed handle cannot move the log; `assertCurrent()` runs
    *  before every statement so a retired actor stops at once. */
   constructor(private readonly sql: SqlExec, private readonly actor: ActorHandle) {
     this.actorId = actor.actorId;
-    this.helpers = new EvolutionHelperStore(sql, actor);
+    this.evolution = new EvolutionSubagentStore(sql, actor);
   }
 
   /** Without `caused_by` the event roots its own trace. */
@@ -431,9 +431,9 @@ export class EventLog {
   }
 
   readonly isEvolutionReport = (event: KinuEvent): boolean =>
-    event.variant === 'subordinate_report'
+    event.variant === 'subagent_report'
     && (event.payload_visibility === 'full' || event.payload_visibility === 'redact')
-    && this.helpers.has(event.payload.from_subordinate);
+    && this.evolution.has(event.payload.from_subagent);
 
   markConsumed(eventId: EventId, turnId: TurnId, stepIdx: number, now = Date.now()): void {
     this.actor.assertCurrent();
@@ -454,7 +454,7 @@ export class EventLog {
     this.actor.assertCurrent();
 
     return this.sql.exec(
-      `SELECT id FROM agent_log WHERE actor_id = ? AND kind = 'event' AND variant = 'subordinate_task'
+      `SELECT id FROM agent_log WHERE actor_id = ? AND kind = 'event' AND variant = 'subagent_task'
          AND turn_id IS NOT NULL AND consumed_at IS NOT NULL`,
       this.actorId,
     ).toArray().map((row) => v.parse(OpenAssignmentRowSchema, row).id);
@@ -536,8 +536,9 @@ export class EventLog {
   }
 
   /**
-   * `olderThanMs` has no default: `0` only for a host holding an exclusive lease. `answered` turns
-   * owe a reply, and re-pending them would silently repeat the question.
+   * `olderThanMs` has no default: `0` only for a host holding an exclusive lease. `answered` names the turns that still
+   * owe their events, whose bindings stay: one answered owes a reply, and one restored still runs them; re-pending
+   * either would repeat its events.
    */
   unbindStale(
     olderThanMs: number,
@@ -716,8 +717,8 @@ function preserveDelegatedMode(
 
   if (
     descriptor.variant !== 'peer_agent'
-    && descriptor.variant !== 'subordinate_task'
-    && descriptor.variant !== 'subordinate_report'
+    && descriptor.variant !== 'subagent_task'
+    && descriptor.variant !== 'subagent_report'
   ) return stored;
   const envelope = v.safeParse(JsonObjectSchema, stored);
 
@@ -778,10 +779,10 @@ function rowToEvent(row: v.InferOutput<typeof EventRowSchema>): KinuEvent {
       return { ...readable, variant: row.variant, payload: v.parse(TimerPayloadSchema, payload) };
     case 'peer_agent':
       return { ...readable, variant: row.variant, payload: v.parse(PeerAgentPayloadSchema, payload) };
-    case 'subordinate_task':
-      return { ...readable, variant: row.variant, payload: v.parse(SubordinateTaskPayloadSchema, payload) };
-    case 'subordinate_report':
-      return { ...readable, variant: row.variant, payload: v.parse(SubordinateReportPayloadSchema, payload) };
+    case 'subagent_task':
+      return { ...readable, variant: row.variant, payload: v.parse(SubagentTaskPayloadSchema, payload) };
+    case 'subagent_report':
+      return { ...readable, variant: row.variant, payload: v.parse(SubagentReportPayloadSchema, payload) };
     case 'file_changed':
       return { ...readable, variant: row.variant, payload: v.parse(FileChangedPayloadSchema, payload) };
     case 'email':

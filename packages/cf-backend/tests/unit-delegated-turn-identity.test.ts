@@ -7,7 +7,7 @@ import { readText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { expect, test } from 'bun:test';
 import { MEMORY_PATH, parseMemoryNotes, WORKSPACE_ROOT } from '@kinu.run/core';
-import { gatewayWorkspace, hostedSubordinateHarness, runDelegatedTask } from './helpers/actor-harness';
+import { gatewayWorkspace, hostedSubagentHarness, runDelegatedTask } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 const NOTE = 'the release train leaves on thursdays';
@@ -24,7 +24,7 @@ test('two turns of one hire making the same call under a reused call id each run
 
   const workspace = gatewayWorkspace(gateway);
 
-  const child = await hostedSubordinateHarness(workspace, {
+  const child = await hostedSubagentHarness(workspace, {
     name: 'note-keeper', displayName: 'Note keeper', nameOrigin: 'user', mission: 'keep notes',
   });
 

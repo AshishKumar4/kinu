@@ -181,7 +181,7 @@ describe('the post-turn lanes', () => {
   const notes = (harness: Harness): number => count(harness, "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'");
 
   const advisorsWorking = (harness: Harness): number =>
-    count(harness, "SELECT COUNT(*) AS n FROM actor_subordinates WHERE (name = 'ask-advisor' OR name LIKE 'ask-advisor-%') AND status = 'working'");
+    count(harness, "SELECT COUNT(*) AS n FROM actor_subagents WHERE (name = 'ask-advisor' OR name LIKE 'ask-advisor-%') AND status = 'working'");
 
   // The workspace agent's review was the one recorded without its model: its snapshot was cf's own, not its advisor's.
   test("the workspace agent's owed review names the advisor's model, as every agent's does", async () => {
@@ -228,7 +228,7 @@ describe('the post-turn lanes', () => {
     expect(calls()).toBe(1);
     expect(notes(died)).toBe(0);
     // The answer and the job that delivers it are both still on disk.
-    expect(count(died, "SELECT COUNT(*) AS n FROM evolution_helpers WHERE answer_status IS NOT NULL")).toBe(1);
+    expect(count(died, "SELECT COUNT(*) AS n FROM evolution_subagents WHERE answer_status IS NOT NULL")).toBe(1);
 
     const restarted = await restart();
     await restart();
@@ -268,7 +268,7 @@ describe('an advisor answer handed to a turn', () => {
     await turns.settle({ messageId: 'turn-42', text: 'ran it' });
 
     const answers = (): number => harness.db.query<{ n: number }, []>(
-      'SELECT COUNT(*) AS n FROM evolution_helpers WHERE answer_status IS NOT NULL',
+      'SELECT COUNT(*) AS n FROM evolution_subagents WHERE answer_status IS NOT NULL',
     ).get()?.n ?? 0;
 
     // The note opens a turn on the idle actor, and that turn parks on its model call; the wake drives the advisor's
@@ -331,6 +331,68 @@ describe('a lane row no recovery names', () => {
     const next = await nextActivation(harness);
 
     expect(next.agent.harnessOpenFiberRows().map((row) => row.id)).not.toContain(orphan);
+  });
+});
+
+// Main's decision, 2026-10-20: a computer's process run as a job tells its end and its restore to its job, not as an
+// incident: the job's own wake and notes tell the agent.
+describe("a computer's process run as a job", () => {
+  const ended = (jobId: string, incidentId: string) => ({
+    version: ENVELOPE_VERSION, incidentId, stage: 'process-ended' as const, attempts: 1, processId: 'proc-dev', job: jobId, exitCode: 1,
+    reason: 'Error: listen EADDRINUSE: address already in use :::3000',
+  });
+
+  // An eviction leaves the job's row running and its lane's fiber orphaned; the box's process runs on. The next
+  // activation's recovery resumes the job, waiting for the end its box tells.
+  const evicted = async (jobId: string): Promise<Harness> => {
+    const harness = orchestratorHarness();
+    await harness.started;
+    jobsOver(harness.db).create({
+      id: jobId, kind: 'startProcess', workMode: 'build', now: Date.now(), label: 'npm run dev',
+      input: JSON.stringify({ command: 'npm run dev', cwd: '/workspace/app', processId: 'proc-dev', machine: 'computer', job: jobId }),
+    });
+    seedOrphanFiber(harness.db, `${BACKGROUND_FIBER_PREFIX}startProcess`, { phase: 'running', jobId, kind: 'startProcess' });
+
+    return harness;
+  };
+
+  test("across the workspace's restart its end settles the job with the code and what it wrote, told once, as the job", async () => {
+    const harness = await evicted('bgjob-dev');
+    const next = await nextActivation(harness);
+
+    expect(jobsOver(harness.db).get('bgjob-dev')).toMatchObject({ status: 'running' });
+    expect(await next.agent.acceptSandboxLifecycleIncident(ended('bgjob-dev', 'inc-end'))).toMatchObject({ status: 'queued', duplicate: false });
+    expect(await next.agent.acceptSandboxLifecycleIncident(ended('bgjob-dev', 'inc-end'))).toMatchObject({ status: 'queued', duplicate: true });
+    await joinHarnessFibers();
+
+    expect(jobsOver(harness.db).get('bgjob-dev')).toMatchObject({ status: 'completed', result: expect.stringContaining('EADDRINUSE') });
+    const texts = (await programmaticTurns(next)).map((turn) => turn.text);
+    expect(texts).toEqual([expect.stringContaining('Background startProcess job bgjob-dev completed')]);
+  });
+
+  test('an end the box told before the restart resumed the job settles it as the job resumes', async () => {
+    const harness = await evicted('bgjob-early');
+    // Told before the next activation resumed the job: nothing waited, so the end was kept.
+    await harness.agent.acceptSandboxLifecycleIncident(ended('bgjob-early', 'inc-early'));
+
+    await nextActivation(harness);
+    await joinHarnessFibers();
+
+    expect(jobsOver(harness.db).get('bgjob-early')).toMatchObject({ status: 'completed', result: expect.stringContaining('EADDRINUSE') });
+  });
+
+  test('a restore is noted to the running job, and is no incident', async () => {
+    const harness = await evicted('bgjob-dev');
+    const next = await nextActivation(harness);
+
+    await next.agent.acceptSandboxLifecycleIncident({
+      version: ENVELOPE_VERSION, incidentId: 'inc-restore', stage: 'process-restored', attempts: 1, processId: 'proc-dev', job: 'bgjob-dev',
+      reason: 'the computer restarted, and started this process again',
+    });
+
+    expect(jobsOver(harness.db).get('bgjob-dev')).toMatchObject({ status: 'running' });
+    const texts = (await programmaticTurns(next)).map((turn) => turn.text);
+    expect(texts).toEqual([expect.stringContaining('Background startProcess job bgjob-dev is still running')]);
   });
 });
 

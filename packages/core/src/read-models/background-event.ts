@@ -11,7 +11,6 @@ import type { SignalCardEvent, SignalCardState } from '../types/signals';
 import { TURN_AUTHOR_METADATA_KEY, turnTags } from '../types/turn-metadata';
 import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import * as v from 'valibot';
-import { promotedSlateIds } from './markdown-links';
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import { summarizeSystemEvent, type EventSummary } from './event-summary';
 import { DELIVERED_RUN_EVENT } from '../orchestrator/chat-queue';
@@ -34,7 +33,7 @@ const DELEGATED_FROM_KEY = 'kinuFrom';
 
 /** A hirer's task in the hired agent's chat: one event shape on both backends. */
 export function delegatedTaskMetadata(from: string, mode: string): JsonObject {
-  return { kinuEvent: 'subordinate_task', [TURN_AUTHOR_METADATA_KEY]: 'harness', [DELEGATED_FROM_KEY]: from, kinuMode: mode };
+  return { kinuEvent: 'subagent_task', [TURN_AUTHOR_METADATA_KEY]: 'harness', [DELEGATED_FROM_KEY]: from, kinuMode: mode };
 }
 
 const ProgrammaticMetadataSchema = v.looseObject({
@@ -94,9 +93,9 @@ export function classifyProgrammaticTurn(
         decision: cardField(turn.decision, "decided"),
         count: turn.count ?? 1,
       };
-    // A delivered run's text is its hirer's task, as a subordinate task's is.
+    // A delivered run's text is its hirer's task, as a subagent task's is.
     case DELIVERED_RUN_EVENT:
-    case "subordinate_task":
+    case "subagent_task":
       return { kind: "delegated_task", from: cardField(turn[DELEGATED_FROM_KEY], "the hirer") };
     case ADVISOR_SIGNAL_KIND:
       return {
@@ -147,15 +146,20 @@ export function slatesChanged(row: { metadata: unknown }): readonly string[] {
   return metadataField(row, SLATES_CHANGED_METADATA_KEY, v.array(v.string())) ?? [];
 }
 
-export function slatesToPreview(changed: Iterable<string>, shown: ReadonlySet<string>, texts: readonly string[]): string[] {
+/** The changed slates no answer showed or linked; the Markdown grammar loads only when there are words to read. */
+export async function slatesToPreview(changed: Iterable<string>, shown: ReadonlySet<string>, texts: readonly string[]): Promise<string[]> {
   const pending = new Set(changed);
 
   for (const id of shown) pending.delete(id);
 
-  for (const text of texts) {
-    if (pending.size === 0) break;
+  if (pending.size > 0 && texts.length > 0) {
+    const { promotedSlateIds } = await import('./slate-promotions');
 
-    for (const id of promotedSlateIds(text)) pending.delete(id);
+    for (const text of texts) {
+      if (pending.size === 0) break;
+
+      for (const id of promotedSlateIds(text)) pending.delete(id);
+    }
   }
 
   return [...pending].sort();
@@ -287,8 +291,8 @@ const VARIANT_LABELS = new Map([
   ["process_done", "Process finished"],
   ["timer", "Scheduled trigger"],
   ["peer_agent", "Peer agent"],
-  ["subordinate_task", "Agent task"],
-  ["subordinate_report", "Agent report"],
+  ["subagent_task", "Agent task"],
+  ["subagent_report", "Agent report"],
   ["file_changed", "File changed"],
   ["email", "Mail"],
   ["internal", "Internal"],
@@ -304,7 +308,7 @@ export function eventVariantLabel(variant: string): string {
 
 /** Internal event sources keep their stable vocabulary; owner copy does not. */
 export function eventSourceLabel(source: string): string {
-  return source.replace(/^subordinate(?=$|[\s(])/i, "Agent");
+  return source.replace(/^subagent(?=$|[\s(])/i, "Agent");
 }
 
 /** The one construction site for a metadata-bearing broadcast event. */

@@ -247,6 +247,16 @@ export const isProductSource = (file: string): boolean =>
 export const isShippedSource = (file: string): boolean =>
   SHIPPED_SOURCE.test(file) && !TEST_FILE.test(file) && !isTestScaffold(file) && !file.endsWith('.d.ts');
 
+/** The web client's source the design system governs (docs/DESIGN-SYSTEM.md §4): `packages/cf-backend/src`'s TypeScript
+ *  but its tests, declarations and the frames the §3 audit set aside — the design gallery (`gallery*`, `diff-design/`)
+ *  and the landing page's own (`components/landing/`). */
+export const isDesignSystemSource = (file: string): boolean =>
+  DESIGN_SYSTEM_SOURCE.test(file) && !DESIGN_SYSTEM_ASIDE.test(file) && !TEST_FILE.test(file) && !file.endsWith('.d.ts');
+
+const DESIGN_SYSTEM_SOURCE = /^packages\/cf-backend\/src\/.+\.tsx?$/u;
+
+const DESIGN_SYSTEM_ASIDE = /^packages\/cf-backend\/src\/(?:gallery|diff-design\/|components\/landing\/)/u;
+
 /** The package a file belongs to: its directory under `packages/`, else its top-level directory (`scripts`, `tests`,
  *  `evals`, `tools`), or its own name at the root. */
 export function packageOf(file: string): string {

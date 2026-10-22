@@ -15,7 +15,7 @@
  * had shipped them.
  */
 import { expect, test } from 'bun:test';
-import { copyFileSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { scratchDir } from '@kinu.run/test-utils';
@@ -102,6 +102,24 @@ test('a pinned path missing from the tree is drift', () => {
   ]);
 });
 
+// 2026-10-21: lanes move their worktrees (`git worktree move`), and an absolute link went on naming the old path.
+test('a checkout moved after its install still reaches its pinned compiler', () => {
+  const root = realpathSync(scratchDir('mossaic-moved'));
+  const moved = `${root}-moved`;
+  const peer = 'node_modules/rolldown-plugin-dts/node_modules/typescript';
+
+  mkdirSync(join(root, MOSSAIC_SDK, 'node_modules/typescript'), { recursive: true });
+  mkdirSync(join(root, 'node_modules/rolldown-plugin-dts'), { recursive: true });
+  bindPinnedCompiler(root);
+  renameSync(root, moved);
+
+  try {
+    expect(realpathSync(join(moved, peer))).toBe(join(moved, MOSSAIC_SDK, 'node_modules/typescript'));
+  } finally {
+    rmSync(moved, { recursive: true, force: true });
+  }
+});
+
 test('a linked worktree leaves the compiler link of the checkout it links, and refuses one that misses', () => {
   // `setup-worktree.sh` links a worktree's node_modules entries to the donor checkout's, the plugin's included.
   const donor = realpathSync(scratchDir('mossaic-donor'));
@@ -119,7 +137,7 @@ test('a linked worktree leaves the compiler link of the checkout it links, and r
 
   bindPinnedCompiler(tree);
 
-  expect(readlinkSync(link)).toBe(compiler);
+  expect(realpathSync(link)).toBe(compiler);
 
   rmSync(link);
 

@@ -77,7 +77,7 @@ const failure = (errno: number, message: string) => {
 export class NativeShim {
   constructor(readonly disk: Disk) {}
 
-  exec(argv: string[]): ExecProcess {
+  exec(argv: string[], options: ContainerExecOptions = {}): ExecProcess {
     const [op = '', path = '', destination = ''] = argv.slice(1);
     const exit = Promise.withResolvers<number>();
     let stdout!: ReadableStreamDefaultController<Uint8Array>;
@@ -86,9 +86,10 @@ export class NativeShim {
     const err = new ReadableStream<Uint8Array>({ start(c) { stderr = c; } });
     let ended = false;
 
-    let input: WritableStream<Uint8Array> | null = op === 'write'
-      ? new WritableStream({ write() { throw new Error('shim already exited'); } })
-      : null;
+    // The pipe the box asks of every exec, which it closes unwritten (`containerExec`); a write's is the file it fills.
+    let input: WritableStream<Uint8Array> | null = options.stdin === 'pipe' ? new WritableStream<Uint8Array>() : null;
+
+    if (op === 'write') input = new WritableStream({ write() { throw new Error('shim already exited'); } });
 
     const end = (code = 0) => {
       if (ended) return;

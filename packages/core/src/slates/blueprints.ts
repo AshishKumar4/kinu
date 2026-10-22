@@ -69,17 +69,6 @@ function includeTree(tree: RetainedTree, included: readonly string[] | undefined
   return { mode: tree.mode, entries: tree.entries.filter((entry) => names.has(entry.path.split('/')[0])) };
 }
 
-function topLevelNames(tree: RetainedTree): string[] {
-  const names: string[] = [];
-
-  for (const entry of tree.entries) {
-    const name = entry.path.split('/')[0];
-
-    if (!names.includes(name)) names.push(name);
-  }
-
-  return names;
-}
 
 export interface BlueprintHeading {
   readonly title: string;
@@ -143,9 +132,8 @@ export class WorkspaceBlueprints {
       const requirements = yield* blueprintRequirements(inspection.reaches);
       const publication = yield* Effect.promise(() => this.deps.slates.publish(record.id, requirements, bundle));
 
-      const row: NewSlateShare = {
-        id: nanoid(), slate, publication: publication.id.value, included: topLevelNames(tree),
-      };
+      // What it includes is its publication's materialization, read back whole by every reader.
+      const row: NewSlateShare = { id: nanoid(), slate, publication: publication.id.value };
 
       return { share: this.deps.shares.add(row), inspection };
     }));

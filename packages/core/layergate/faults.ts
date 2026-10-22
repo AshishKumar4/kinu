@@ -151,8 +151,8 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     }),
   },
   {
-    id: 'subordinate-runtime/digest-leaks-payloads',
-    layer: 'subordinate-runtime',
+    id: 'subagent-runtime/digest-leaks-payloads',
+    layer: 'subagent-runtime',
     patches: ['serializeContentForHeads', 'inheritedContextFromHistory'],
     models: 'file payloads stop being reduced to references and the parent-history cap stops applying',
     inject: (s) => ({
@@ -231,7 +231,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     id: 'delegation/evidence-undercounts',
     layer: 'delegation',
     patches: ['delegationFeatures', 'renderDelegationFeatures'],
-    models: 'subordinate spawns stop being counted and the rendered evidence drops its wall clock',
+    models: 'subagent spawns stop being counted and the rendered evidence drops its wall clock',
     inject: (s) => ({
       ...s,
       delegationFeatures: (turn) => ({ ...s.delegationFeatures(turn), teamCalls: 0 }),

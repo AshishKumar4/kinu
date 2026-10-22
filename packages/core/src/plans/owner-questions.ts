@@ -12,7 +12,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
 import { argumentDigest } from '../safety/argument-digest';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import { TurnReasonSchema, type TurnReason, type WorkMode } from '../types/turn';
+import { TurnReasonSchema, WorkModeSchema, type TurnReason, type WorkMode } from '../types/turn';
 import { AskOwnerInputSchema, OWNER_ANSWER_SIGNAL, OwnerQuestionSchema, type OwnerQuestion } from '../types/owner-questions';
 import type { JsonObject, JsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
@@ -39,12 +39,11 @@ const AskedQuestionsSchema = v.object({
   callId: v.string(),
   turnId: v.string(),
   /** The asking turn's mode, which the turn its answer starts runs in. */
-  mode: v.picklist(['plan', 'build']),
+  mode: WorkModeSchema,
   questions: v.array(OwnerQuestionSchema),
   status: StatusSchema,
   answers: v.nullable(OwnerAnswersSchema),
   askedAt: v.number(),
-  closedAt: v.nullable(v.number()),
 });
 
 export type AskedQuestions = v.InferOutput<typeof AskedQuestionsSchema>;
@@ -75,7 +74,7 @@ export interface OwedResume extends AskingTurn {
 
 interface Row {
   actor_id: string; id: string; call_id: string; turn_id: string; mode: string; tier: string | null; reason_json: string;
-  questions_json: string; status: string; answers_json: string | null; asked_at: number; closed_at: number | null;
+  questions_json: string; status: string; answers_json: string | null; asked_at: number;
 }
 
 function asked(row: Row): AskedQuestions {
@@ -84,7 +83,7 @@ function asked(row: Row): AskedQuestions {
     questions: v.parse(v.array(OwnerQuestionSchema), JSON.parse(row.questions_json)),
     status: v.parse(StatusSchema, row.status),
     answers: row.answers_json === null ? null : v.parse(OwnerAnswersSchema, JSON.parse(row.answers_json)),
-    askedAt: row.asked_at, closedAt: row.closed_at,
+    askedAt: row.asked_at,
   };
 }
 
@@ -102,7 +101,6 @@ export function initOwnerQuestionsTable(execRaw: RawSqlExec): void {
     status         TEXT NOT NULL,
     answers_json   TEXT,
     asked_at       INTEGER NOT NULL,
-    closed_at      INTEGER,
     resumed_at     INTEGER,
     PRIMARY KEY (actor_id, id)
   )`);
@@ -284,7 +282,7 @@ export class OwnerQuestionStore {
       const refusal = answersRefusal(current.questions, answers);
 
       if (refusal !== null) return Effect.fail(new KinuError('bad_input', refusal));
-      void this.sql`UPDATE owner_questions SET status='answered', answers_json=${JSON.stringify(answers)}, closed_at=${this.now()}
+      void this.sql`UPDATE owner_questions SET status='answered', answers_json=${JSON.stringify(answers)}
         WHERE actor_id=${this.actorId} AND id=${id} AND status='open'`;
       this.pending = true;
       markStoreChanged(this.sql);
@@ -299,13 +297,12 @@ export class OwnerQuestionStore {
     const open = this.open().filter((row) => id === undefined || row.id === id);
 
     if (open.length === 0) return [];
-    const at = this.now();
 
-    for (const row of open) void this.sql`UPDATE owner_questions SET status=${status}, closed_at=${at} WHERE actor_id=${this.actorId} AND id=${row.id} AND status='open'`;
+    for (const row of open) void this.sql`UPDATE owner_questions SET status=${status} WHERE actor_id=${this.actorId} AND id=${row.id} AND status='open'`;
     this.pending = undefined;
     markStoreChanged(this.sql);
 
-    return open.map((row) => ({ ...row, status, closedAt: at }));
+    return open.map((row) => ({ ...row, status }));
   }
 
   /**

@@ -19,7 +19,8 @@ import { initTurnRatingTables, rateTurn } from '../src/evolution/ratings';
 import { dreamChangesFor, renderWatch } from '../src/evolution/watch';
 import { buildChangelog, executeChangelogRevert } from '../src/evolution/changelog';
 import {
-  artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, stageArtifact, toolArtifact, turnArtifacts,
+  artifactEditRefusal, artifactOverrides, currentArtifacts, listArtifactVersions, revertArtifact, sectionArtifact, stageArtifact, toolArtifact,
+  turnArtifacts,
 } from '../src/evolution/artifacts';
 import { BUILTIN_TOOL_DESCRIPTIONS } from '../src/tools/registry';
 import { initArtifactTables } from '../src/evolution/artifact-schema';
@@ -57,7 +58,7 @@ import { createAgentConfigStore, type AgentConfigStore } from '../src/config/sto
 import { resolveTurnSkills } from '../src/orchestrator/turn-surface';
 import { renderSkillsIndexSection } from '../src/skills/render';
 import { idleDream, refinementPass } from '../src/evolution/refinement-host';
-import { createTestSql, present } from '@kinu.run/test-utils';
+import { answeredAs, createTestSql, present } from '@kinu.run/test-utils';
 import { createLineLogger, renderThrownChain, setDiagnosticsSink } from '../src/obs/index';
 import { RunEventRecorder } from '../src/events/recorder';
 import type { Database } from 'bun:sqlite';
@@ -128,11 +129,11 @@ function helperRoute(tier: HelperAsk['tier'], refiner: ScriptedRefiner, reviewer
       const role = Object.is(schema, DreamVerdictsSchema) ? 'dream_reviewer' : 'dreamer';
       refiner.requests.push({ role, tier, task: prompt });
 
-      if (role === 'dreamer') return v.parse(schema, extractJsonObject(await refiner.answerOf({ role, tier, task: prompt })));
+      if (role === 'dreamer') return answeredAs(schema, JSON.stringify(extractJsonObject(await refiner.answerOf({ role, tier, task: prompt }))));
       const edits = prompt.match(/^### Edit \d+:/gmu)?.length ?? 0;
       const answered = reviewer(prompt, edits);
 
-      return v.parse(schema, typeof answered === 'string' ? JSON.parse(answered) : { verdicts: answered });
+      return answeredAs(schema, typeof answered === 'string' ? answered : JSON.stringify({ verdicts: answered }));
     },
   };
 }
@@ -460,6 +461,41 @@ describe('refinement request — durable, and behaviourally inert', () => {
   });
 });
 
+// An edit is held to 600 changed characters. What changed is what a diff marks: the OMP pilot's dreams had their
+// section edits refused at 1,421 characters for a 296-character change, two small edits counting the text between them.
+describe("an edit's size is what a diff of it marks", () => {
+  const LONG = present(PROMPT_SECTIONS.find((section) => section.source.length >= 1500), 'a section of 1,500 characters or more');
+  const sentence = (n: number) => ` Say what you checked, plainly, before you say it is done${'.'.repeat(Math.max(1, n - 58))}`;
+
+  function refusal(after: string): string | null {
+    const fx = fixture();
+
+    return artifactEditRefusal(fx.rt.storage.sql, fx.rt.actor, { artifactId: sectionArtifact(LONG.id), before: LONG.source, after });
+  }
+
+  test('two small edits at the two ends of a long section are not refused for their size', () => {
+    const lines = LONG.source.split('\n');
+    const after = [`${lines[0] ?? ''}${sentence(100)}`, ...lines.slice(1, -1), `${lines.at(-1) ?? ''}${sentence(100)}`].join('\n');
+
+    expect(refusal(after) ?? '').not.toContain('characters; at most');
+  });
+
+  test('a real 700-character rewrite is refused for its size', () => {
+    const start = Math.floor((LONG.source.length - 700) / 2);
+    const rewritten = 'Rewrite '.repeat(88).slice(0, 700);
+
+    expect(refusal(`${LONG.source.slice(0, start)}${rewritten}${LONG.source.slice(start + 700)}`)).toContain('characters; at most 600');
+  });
+
+  test('many scattered tiny edits add up, and past 600 are refused', () => {
+    // Every other word of the section gains three letters: no one change is large, together they are.
+    const words = LONG.source.split(/(\s+)/u);
+    const after = words.map((word, at) => (at % 4 === 0 && /\w/u.test(word) ? `${word}xyz` : word)).join('');
+
+    expect(refusal(after)).toContain('characters; at most 600');
+  });
+});
+
 describe('the refiner — bounded references, prior history, strict typed answer', () => {
   test('the dreamer reads each section and tool text as the agent reads it now, and both briefs put a skill last', async () => {
     const fx = fixture();
@@ -506,7 +542,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
         const key = Object.keys(DreamVerdictsSchema.entries)[0] ?? 'verdict';
         asked.push(key);
 
-        return v.parse(schema, { [key]: [{ edit: 0, verdict: 'accept', note: 'it fits the turns' }] });
+        return answeredAs(schema, JSON.stringify({ [key]: [{ edit: 0, verdict: 'accept', note: 'it fits the turns' }] }));
       },
     };
 
@@ -527,8 +563,8 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const row = createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id);
 
     expect(row?.stage).toBe('refused');
-    expect(row?.detail).toContain('did not answer in its shape');
-    expect(row?.detail).toContain('verdict');
+    expect(row?.detail).toContain('did not answer (bad_input)');
+    expect(row?.detail).toContain('verdicts: expected');
   });
 
   test('the brief and the review name the picks the turns switched from or corrected, with their descriptions now', async () => {
@@ -739,7 +775,7 @@ describe('the brief and the schema are one contract', () => {
     expect(section).toContain(`\`rationale\` is ${String(MIN_EDIT_RATIONALE)} characters or longer`);
   });
 
-  test('an answer missing the required keys is refused, classified, naming every key', async () => {
+  test('an answer missing the required keys is refused, classified, naming the first key it got wrong and no other', async () => {
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     // One key with no slot, and all three required keys absent.
@@ -752,9 +788,9 @@ describe('the brief and the schema are one contract', () => {
 
     expect(row.stage).toBe('refused');
 
-    for (const key of ['scope', 'summary', 'edits', 'see_rpi']) {
-      expect(row.detail).toContain(`${key}: Invalid key`);
-    }
+    const named = ['scope', 'summary', 'edits', 'see_rpi'].filter((key) => row.detail?.includes(`${key}: expected`) === true);
+
+    expect(named).toHaveLength(1);
 
     // A classified refusal, and nothing written.
     expect(row.detail).toContain('bad_input');
@@ -1139,7 +1175,7 @@ describe('routing — every typed edit lands in the store that already owns it',
         kind: 'subagent_spec',
         role: 'reviewer',
         spec: 'always answer in one line',
-        rationale: 'the reviewer subordinate produced the long answers the user corrected three times',
+        rationale: 'the reviewer subagent produced the long answers the user corrected three times',
       }],
     }));
 
@@ -1171,7 +1207,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     expect(added).toEqual(['refinement_requests']);
 
     // Names that would betray a second authority for an artifact.
-    for (const forbidden of ['skill', 'prompt_section', 'fact', 'subordinate', 'actor_config']) {
+    for (const forbidden of ['skill', 'prompt_section', 'fact', 'subagent', 'actor_config']) {
       expect(added.some((name) => name.includes(forbidden))).toBe(false);
     }
 

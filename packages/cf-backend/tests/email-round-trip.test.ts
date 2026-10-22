@@ -72,7 +72,7 @@ function mailboxFor(workspace: string, actorId: string) {
   };
 }
 
-const CLAIM = { label: 'owner', user_id: 'u-owner', kind: 'username', target_path: null, state: 'active' } as const;
+const CLAIM = { label: 'owner', user_id: 'u-owner', kind: 'username', target_path: null } as const;
 
 test('an email opens a turn whose answer threads back to the sender; a refused send is retried, a redelivery answered once', async () => {
   const sent: Sent[] = [];

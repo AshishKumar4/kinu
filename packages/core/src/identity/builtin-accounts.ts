@@ -282,6 +282,20 @@ export function reserveAttempt(sql: BuiltinSql, buckets: readonly AttemptBucket[
   return 0;
 }
 
+/**
+ * A deleted account's sign-in, as its account is deleted: its account row and password, its passkeys, its pending
+ * ceremonies and invites, and the attempts its email ran up. Removing the owner opens the deployment's setup again.
+ */
+export function removeBuiltinAccount(sql: BuiltinSql, person: { readonly userId: string; readonly email: string }): void {
+  const email = person.email.trim().toLowerCase();
+
+  void sql`DELETE FROM builtin_passkeys WHERE user_id = ${person.userId}`;
+  void sql`DELETE FROM builtin_challenges WHERE user_id = ${person.userId} OR email = ${email}`;
+  void sql`DELETE FROM builtin_invites WHERE email = ${email}`;
+  void sql`DELETE FROM builtin_attempts WHERE bucket = ${`password-email:${email}`}`;
+  void sql`DELETE FROM builtin_accounts WHERE user_id = ${person.userId}`;
+}
+
 export function clearAttempts(sql: BuiltinSql, keys: readonly string[]): void {
   for (const key of keys) void sql`DELETE FROM builtin_attempts WHERE bucket = ${key}`;
 }

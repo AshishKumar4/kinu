@@ -6,7 +6,10 @@
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { simulateReadableStream, wrapLanguageModel } from 'ai';
+import { InvalidResponseDataError } from '@ai-sdk/provider';
 import { MockLanguageModelV3 } from 'ai/test';
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { createTestActors, unpricedLedger } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';
 import { RunEventRecorder } from '../src/events/recorder';
@@ -19,6 +22,11 @@ import { buildCfWebSearchProvider } from '../src/web/provider-factory';
 import { DEFAULT_WEB_SEARCH_CHAIN } from '../src/providers/web-search';
 import type { ModelCallSink } from '../src/events/model-call';
 import type { Usage } from '../src/usage';
+import { renderThrownChain } from '../src/obs/error';
+import { sha256Hex } from '../src/safety/argument-digest';
+import { retryMiddleware } from '../src/providers/middleware/retry';
+import { ProviderPacer } from '../src/providers/pacing';
+import { WORKERS_AI_STREAMS_GENERATE } from '../src/providers/workers-ai-provider';
 
 interface Spent {
   readonly calls: number;
@@ -56,7 +64,12 @@ describe('an endpoint model files every call it makes', () => {
     hostname: '127.0.0.1',
     async fetch(request) {
       const body = v.parse(v.looseObject({ stream: v.optional(v.boolean()) }), await request.json());
-      const usage = { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 };
+
+      // Cache reads and reasoning reported, as zeros: a count left out is unmeasured, not zero (`normalizeUsage`).
+      const usage = {
+        prompt_tokens: 12, completion_tokens: 3, total_tokens: 15,
+        prompt_tokens_details: { cached_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 0 },
+      };
 
       if (body.stream === true) {
         const chunk = (delta: { content?: string }, finish: string | null): string => `data: ${JSON.stringify({
@@ -106,12 +119,28 @@ describe('an endpoint model files every call it makes', () => {
 describe('a structured call', () => {
   const Fact = v.object({ key: v.string(), value: v.unknown(), note: v.optional(v.string()) });
 
-  /** A model that answers `text`, stopping as `finish` says, having read 9 tokens and written 2. */
+  const USAGE = { inputTokens: { total: 9, noCache: 9, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 2, text: 2, reasoning: undefined } };
+
+  /** `text` as a model streams it, in pieces of `piece` characters `delay` ms apart, stopping as `finish` says. */
+  const streamed = (text: string, opts: { finish?: 'stop' | 'length'; piece?: number; delay?: number } = {}) => {
+    const piece = opts.piece ?? text.length;
+    const deltas = Array.from({ length: Math.ceil(text.length / Math.max(1, piece)) }, (_, at) => text.slice(at * piece, (at + 1) * piece));
+
+    const parts: LanguageModelV3StreamPart[] = [
+      { type: 'stream-start', warnings: [] },
+      { type: 'text-start', id: 't' },
+      ...deltas.map((delta): LanguageModelV3StreamPart => ({ type: 'text-delta', id: 't', delta })),
+      { type: 'text-end', id: 't' },
+      { type: 'finish', finishReason: { unified: opts.finish ?? 'stop', raw: undefined }, usage: USAGE },
+    ];
+
+    return { stream: simulateReadableStream({ chunks: parts, chunkDelayInMs: opts.delay ?? null }) };
+  };
+
+  /** A model that answers `text`, stopping as `finish` says, having read 9 tokens and written 2, in the form asked. */
   const answering = (text: string, finish: 'stop' | 'length' = 'stop') => new MockLanguageModelV3({
-    doGenerate: async () => ({
-      content: [{ type: 'text' as const, text }], finishReason: { unified: finish, raw: undefined }, warnings: [],
-      usage: { inputTokens: { total: 9, noCache: 9, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 2, text: 2, reasoning: undefined } },
-    }),
+    doGenerate: async () => ({ content: [{ type: 'text', text }], finishReason: { unified: finish, raw: undefined }, usage: USAGE, warnings: [] }),
+    doStream: async () => streamed(text, { finish }),
   });
 
   test('an answer off the schema is refused as wrong, and was billed like any answer', async () => {
@@ -127,12 +156,91 @@ describe('a structured call', () => {
     expect(producers()).toEqual({ fast: { calls: 3, unmeasured: 0, usage: { input: 27, output: 6 } } });
   });
 
+  // Each layer a refusal crosses logs its chain: one refused memory pass logged its 0.2 MB answer three times (2026-10-20).
+  test('a refused answer is named by its length and digest, never quoted', async () => {
+    const prose = 'word '.repeat(40_000);
+    const Count = v.object({ count: v.number() });
+
+    // Prose; JSON missing a key; JSON with the prose where a number belongs, which valibot's message quotes whole.
+    for (const [schema, text] of [[Fact, prose], [Fact, `{"value":"${prose}"}`], [Count, `{"count":"${prose}"}`]] as const) {
+      const [refused] = await Promise.allSettled([generateObjectReported({ model: answering(text), prompt: 'p' }, schema, { spend: { source: 'fast', report: () => {} } })]);
+      const chain = refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered';
+
+      expect(chain).toContain(`(${String(text.length)} characters, sha256 ${sha256Hex(text, 12)})`);
+      expect(chain).not.toContain('word');
+    }
+  });
+
+  // Fail-fast: ten thousand wrong items made a log line larger than the answer (2026-10-20).
+  test('an answer with many wrong items names the first path it got wrong, and no other', async () => {
+    const Tags = v.object({ tags: v.array(v.string()) });
+    const text = JSON.stringify({ tags: Array.from({ length: 10_000 }, (_, at) => at) });
+    const [refused] = await Promise.allSettled([generateObjectReported({ model: answering(text), prompt: 'p' }, Tags, { spend: { source: 'fast', report: () => {} } })]);
+    const chain = refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered';
+
+    expect(chain).toContain('tags.0');
+    expect(chain).not.toContain('tags.1');
+  });
+
+  test('an answer off its schema names the path it got wrong and the type that came, never the value', async () => {
+    const Count = v.object({ count: v.number(), tags: v.array(v.string()) });
+    const [refused] = await Promise.allSettled([generateObjectReported({ model: answering('{"count":"many-fold","tags":[90210]}'), prompt: 'p' }, Count, { spend: { source: 'fast', report: () => {} } })]);
+    const chain = refused.status === 'rejected' ? renderThrownChain({ cause: refused.reason }) : 'answered';
+
+    // Fail-fast, the first path it got wrong: `count`, and the type that came.
+    for (const named of ['count', 'number', 'string']) expect(chain).toContain(named);
+
+    for (const value of ['many-fold', '90210']) expect(chain).not.toContain(value);
+  });
+
   // Cut off, the answer is incomplete rather than wrong: asked again, the model may finish it.
   test('an answer stopped at the output limit is no answer yet, not a wrong one', async () => {
     const { report } = ledger();
 
     await expect(generateObjectReported({ model: answering('{"key":"build', 'length'), prompt: 'p' }, Fact, { spend: { source: 'fast', report } }))
       .rejects.toMatchObject({ code: 'unavailable' });
+  });
+
+  /** `inner` as Workers AI's provider stack serves it: every generate read from a stream (`WORKERS_AI_STREAMS_GENERATE`). */
+  const onWorkersAI = (inner: MockLanguageModelV3) => wrapLanguageModel({ model: inner, middleware: retryMiddleware({
+    provider: 'workers-ai', lane: 'workers-ai@main', generateByStream: WORKERS_AI_STREAMS_GENERATE, warn: () => {}, sleep: async () => {}, pacer: new ProviderPacer(),
+  }) });
+
+  // Workers AI ended a 14k-token dreamer brief's non-streamed request at 10 minutes (408, 3046) while the same call
+  // streamed answered in 7 (2026-10-20): a provider ends a request that sends nothing for that long.
+  test('a call that reasons longer than a provider holds a silent request is answered, as it streams', async () => {
+    const { report, producers } = ledger();
+
+    const model = onWorkersAI(new MockLanguageModelV3({
+      doGenerate: async () => { throw new Error('Request timeout (HTTP 408, 3046)'); },
+      doStream: async () => streamed('{"key":"build.dir","value":"dist"}', { piece: 4, delay: 5 }),
+    }));
+
+    expect(await generateObjectReported({ model, prompt: 'p', maxRetries: 0 }, Fact, { spend: { source: 'judge', report } })).toEqual({ key: 'build.dir', value: 'dist' });
+    expect(producers()).toEqual({ judge: { calls: 1, unmeasured: 0, usage: { input: 9, output: 2 } } });
+  });
+
+  // The OMP pilot's dreamer, 2026-10-21: kimi-k2.6's stream closed part way, the OpenAI-compatible adapter ended it
+  // "without a finish reason", and the dream was refused. Nothing of a structured answer is read until it is whole.
+  test('a stream cut part way is asked again, as nothing of the answer was read', async () => {
+    let opened = 0;
+
+    const model = onWorkersAI(new MockLanguageModelV3({
+      doStream: async () => {
+        opened += 1;
+
+        if (opened > 1) return streamed('{"key":"build.dir","value":"dist"}');
+
+        return { stream: simulateReadableStream<LanguageModelV3StreamPart>({ chunks: [
+          { type: 'stream-start', warnings: [] }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: '{"key":"bui' },
+          { type: 'error', error: new InvalidResponseDataError({ data: undefined, message: 'Response stream ended without a finish reason.' }) },
+        ] }) };
+      },
+    }));
+
+    const answer = await generateObjectReported({ model, prompt: 'p', maxRetries: 0 }, Fact, { spend: { source: 'judge', report: () => {} } });
+
+    expect({ answer, opened }).toEqual({ answer: { key: 'build.dir', value: 'dist' }, opened: 2 });
   });
 
   // OpenAI's strict mode refuses a schema with an optional field or an open value before answering.

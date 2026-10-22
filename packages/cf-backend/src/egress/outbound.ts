@@ -8,14 +8,14 @@ import * as v from 'valibot';
 import { Hono } from 'hono';
 import { rawPath, rethrow, type FamilyEnv } from '../api/context';
 import {
-  egressHost, refusedHostname, JsonValueSchema, type ContainerEventResult, type GitHubFact, type GitHubRecorder, type JsonValue,
+  egressHost, JsonValueSchema, type ContainerEventResult, type EgressPrincipal, type JsonValue,
 } from '@kinu.run/core';
 import type { EgressStreams, EgressTlsTarget } from '@nimbus-sh/core/_shared/workspace-network.js';
 import { carryKeyed, keyedHost } from './keyed-socket';
-import { refusal, sendOut, type ContainerEgressEnv } from './send-out';
+import { refusal } from './send-out';
 import type { OrchestratorAgent } from '../orchestrator';
 import {
-  attempt, diagnostics, logged, toKinuError, tolerateAsync, KinuError, type Refusal, settle,
+  attempt, diagnostics, toKinuError, tolerateAsync, KinuError, settle,
 } from '@kinu.run/core/obs';
 
 /** `.internal` resolves nowhere publicly, so a lapse in interception fails to connect rather than leaking activity. */
@@ -64,11 +64,17 @@ export type EgressParams = KinuEgressParams | ViewerEgressParams;
 
 const ViewerEgressParamsSchema = v.object({ principal: v.literal('viewer'), workspaceName: v.pipe(v.string(), v.minLength(1)) });
 
-/** As {@link parseEgressParams}, a viewer's read first: a configuration naming a viewer is never read as an owner's. */
-export function parseEgressPrincipal(ctx: { readonly props: unknown }): EgressParams | undefined {
+/**
+ * Whom the egress was minted for, as the one principal every egress reads (`egressAuthority`): a viewer's configuration
+ * is read first, so one naming a viewer is never read as an owner's. Undefined: not configured yet.
+ */
+export function parseEgressPrincipal(ctx: { readonly props: unknown }): EgressPrincipal | undefined {
   const viewer = v.safeParse(ViewerEgressParamsSchema, ctx.props);
 
-  return viewer.success ? viewer.output : parseEgressParams(ctx);
+  if (viewer.success) return { as: 'viewer', workspace: viewer.output.workspaceName, actorId: null };
+  const owner = parseEgressParams(ctx);
+
+  return owner === undefined ? undefined : { as: 'owner', workspace: owner.workspaceName, actorId: owner.actorId ?? null, ownerUserId: owner.ownerUserId };
 }
 
 /** Must be on `ORCHESTRATOR_METHODS` too, or it is silently unreachable over a stub (`unit-egress-interception.test.ts`). */
@@ -86,46 +92,6 @@ export const containerEventResolver = (env: Env): ContainerEventResolver =>
   async (workspaceName) => await getAgentByName<Env, OrchestratorAgent>(
     env.OrchestratorAgent, workspaceName,
   );
-
-export class GitHubEgressRecorder implements GitHubRecorder {
-  constructor(private readonly env: Env, private readonly execution: ExecutionContext, private readonly params: KinuEgressParams) {}
-
-  waitUntil(work: Promise<unknown>): void {
-    this.execution.waitUntil(work);
-  }
-
-  record(facts: readonly GitHubFact[]): Promise<void> {
-    return settle(logged('egress.github_record_failed', { doing: 'recording GitHub work in its workspace', otherwise: 'unavailable' }, async () => {
-      if (facts.length === 0) return;
-      const agent = await getAgentByName<Env, OrchestratorAgent>(this.env.OrchestratorAgent, this.params.workspaceName);
-
-      await agent.recordGitHubEgress(facts, this.params.actorId ?? null);
-    }));
-  }
-}
-
-/** Catch-all for every host except the event channel. Only a request that carries a placeholder pays for substitution. */
-export function handleContainerEgress<Id>(
-  request: Request,
-  env: ContainerEgressEnv<Id>,
-  params: EgressParams | undefined,
-  github: GitHubRecorder | undefined,
-): Promise<Response> {
-  return settle(Effect.gen(function* () {
-    if (!params) {
-      // Unconfigured: refuse, since forwarding cannot tell a placeholder from a secret.
-      return refusal(503, 'Egress interception is not configured for this container yet.');
-    }
-
-    const url = new URL(request.url);
-    // Judged before the vault call: a private destination is refused regardless.
-    const destination = refusedHostname(url.hostname);
-
-    if (destination !== null) return destinationRefusal(url.hostname, destination);
-
-    return yield* sendOut(request, env, 'principal' in params ? null : params, github);
-  }));
-}
 
 /** `host:port` as a socket names its destination (`[v6]:port` for an IPv6 literal); null when it names none. */
 function socketDestination(address: string): { readonly hostname: string; readonly port: number } | null {
@@ -146,7 +112,7 @@ function socketDestination(address: string): { readonly hostname: string; readon
  * that resolves to a private address is refused by Cloudflare at connect (PLATFORM_CATALOG 'worker.connect.private_address',
  * as fetch is by 'worker.fetch.private_address'), so the egress resolves nothing itself.
  */
-export function handleEgressConnect(socket: Socket, params: EgressParams | undefined): Promise<void> {
+export function handleEgressConnect(socket: Socket, params: EgressPrincipal | undefined): Promise<void> {
   return settle(Effect.gen(function* () {
     const opened = yield* attempt({ doing: 'reading where a workspace socket goes', otherwise: 'io' }, () => socket.opened);
     const address = opened.localAddress ?? '';
@@ -208,7 +174,7 @@ export function handleEgressConnect(socket: Socket, params: EgressParams | undef
  * program's servername where it named one other than the host, and its plaintext handed back. A refused host, or a
  * session that cannot be made, rejects with why: the program's socket fails with it.
  */
-export function handleEgressTls(target: EgressTlsTarget, params: EgressParams | undefined): Promise<EgressStreams> {
+export function handleEgressTls(target: EgressTlsTarget, params: EgressPrincipal | undefined): Promise<EgressStreams> {
   return settle(Effect.gen(function* () {
     const judged = params === undefined ? { refusal: { error: 'egress is not configured for this workspace yet' } } : egressHost(target.hostname);
 
@@ -229,14 +195,6 @@ export function handleEgressTls(target: EgressTlsTarget, params: EgressParams | 
 
     return { readable: secure.readable, writable: secure.writable };
   }));
-}
-
-/** One classifier refuses at three seams (container hop, `web.fetch`, codemode loopback); one event shape keeps them comparable. */
-function destinationRefusal(host: string, payload: Refusal): Response {
-  const error = new KinuError('denied', payload.error);
-  diagnostics.failure('egress.private_destination', error, { host, seam: 'container' });
-
-  return Response.json(payload, { status: 403 });
 }
 
 interface EventChannel {

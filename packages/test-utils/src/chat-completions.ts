@@ -76,3 +76,23 @@ export function chatCompletionStream(answer: ChatAnswer): string {
 
   return `${frames.join('')}data: ${JSON.stringify(finish)}\n\ndata: [DONE]\n\n`;
 }
+
+/** Whether a `/chat/completions` body asks for a stream: every Workers AI generate does (`WORKERS_AI_STREAMS_GENERATE`). */
+export function asksStream(body: string): boolean {
+  return /"stream"\s*:\s*true/u.test(body);
+}
+
+/** The answer as a stream, or as one completion's JSON. */
+export function chatResponse(answer: ChatAnswer, streamed: boolean): Response {
+  return streamed
+    ? new Response(chatCompletionStream(answer), { headers: { 'content-type': 'text/event-stream' } })
+    : new Response(chatCompletionBody(answer), { headers: { 'content-type': 'application/json' } });
+}
+
+/** The answer as the call a fetch was given asked for it: a stream when its body asked for one. */
+export function answerChat(answer: ChatAnswer, init?: { readonly body?: unknown }): Response {
+  return chatResponse(answer, typeof init?.body === 'string' && asksStream(init.body));
+}
+
+/** Every fixture's plain answer: `ok`, one token each way. */
+export const OK_CHAT_ANSWER: ChatAnswer = { model: 'mock-model', text: 'ok', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } };

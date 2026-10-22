@@ -104,7 +104,7 @@ export function ownerAsks(
 export interface PendingActionInputs {
   /** Still-queued only (safety/deferred-approval.ts). */
   readonly deferredActions: readonly DeferredApproval[];
-  /** Workspace-wide and retired-inclusive: a subordinate's plan asks the same owner. `actor`: its owner's id. */
+  /** Workspace-wide and retired-inclusive: a subagent's plan asks the same owner. `actor`: its owner's id. */
   readonly pendingPlans: ReadonlyArray<{
     owner: string; actor: string; id: string; revision: number; content: string; updatedAt: number;
   }>;

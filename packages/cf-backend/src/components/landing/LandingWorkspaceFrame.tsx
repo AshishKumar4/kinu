@@ -9,7 +9,7 @@ import { Composer } from '@/components/Composer';
 import type { WorkMode } from '@kinu.run/core';
 import { ChatLiveTail, MessageView } from '@/components/MessageView';
 import { ModelPicker } from '@/components/ModelPicker';
-import { PreviewChrome } from '@/components/PreviewFrame';
+import { PreviewAddress } from '@/components/PreviewFrame';
 import { SidebarRail } from '@/components/SidebarRail';
 import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { WorkSurface } from '@/components/surfaces/WorkSurface';
@@ -72,7 +72,7 @@ const STATIC_MESSAGES = {
 function SlateBody(): ReactElement {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <PreviewChrome url={SLATE_PREVIEW_URL} />
+      <PreviewAddress url={SLATE_PREVIEW_URL} />
       <SlateDashboard />
     </div>
   );

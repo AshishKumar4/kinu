@@ -44,7 +44,7 @@ graph TB
     end
 
     Orch["orchestrator<br/>the workspace's default agent"] --> WS
-    Subs["subordinates · heads · swarm nodes · background agents<br/>one AgentFacet loader isolate and SQLite per actor<br/>tools and shared files through workspace RPC"] -.->|assigned-work reports · findings merge back| Orch
+    Subs["subagents · heads · swarm nodes · background agents<br/>one AgentFacet loader isolate and SQLite per actor<br/>tools and shared files through workspace RPC"] -.->|assigned-work reports · findings merge back| Orch
     Peers["peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
 ```
 
@@ -72,7 +72,7 @@ graph TB
     A["Agent&lt;Env&gt;: agents SDK"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · ChatSession ports"]
     O["OrchestratorAgent<br/>agents: swarm · hire · msg · list · dismiss<br/>codemode: release · agent"]
-    H["AgentFacet<br/>main · subordinate · head · node · background<br/>own isolate and SQLite; workspace RPC for tools"]
+    H["AgentFacet<br/>main · subagent · head · node · background<br/>own isolate and SQLite; workspace RPC for tools"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
 
     A --> AA
@@ -107,11 +107,12 @@ one decision, `surfaceReach` (`packages/core/src/delegation/turn-reach.ts`):
 what the agent reaches by what it is (`actorReach`) and by the lane its turn was
 admitted in (`turnReach`). The `agents` actions derive from the deps the factory
 wires (`actorAgentsToolDeps`, read by core's `agentsActionsFor`,
-`packages/core/src/delegation/agents-tool.ts`). Every actor has `swarm`.
-`hire`, `msg`, and `list` need a roster or the peer transport. `dismiss` needs
-the roster. `msg`'s `event_id` target answers an inbound agent message. At the
-depth cap `teamProfile()` returns nothing, so the roster and the `hire` rung
-vanish together. `report` exists only on a hirer's lane. `release` is not a
+`packages/core/src/delegation/agents-tool.ts`). Every actor below the depth
+cap has `swarm`. `hire`, `msg`, and `list` need a roster or the peer transport.
+`dismiss` needs the roster. `msg`'s `event_id` target answers an inbound agent
+message. At the depth cap the team and the search substrate are not offered, so
+the roster, the `hire` rung and `swarm` vanish together: a search's nodes are
+agents a level below it. `report` exists only on a hirer's lane. `release` is not a
 native tool: it is an orchestrator-only codemode provider, left out of the
 Plan-mode set. The owner's lane is `submit_plan` (an owner turn in Plan mode),
 `reply_to_comment` (while a plan the owner sent back awaits answers) and
@@ -173,15 +174,15 @@ A fork reads main's conversation from its isolate and lands it in the fork's
 facet builds the same provider registry and brokers credential requests
 through the workspace; it owns no credential store.
 
-A subordinate is a durable teammate: its own session, store bundle, queue, and
+A subagent is a durable teammate: its own session, store bundle, queue, and
 abort over the workspace's one SQLite, and the full-agent tool surface. It
 survives hibernation as rows. Its runtime keys to the parent
 workspace name, so it uses the same Nimbus files, processes, ports, container,
 and device consent. Its home (`.kinu/agents/<storage-key>`), scaffold path, and
-shell id (`subordinate:<key>`) are private.
+shell id (`subagent:<key>`) are private.
 
 Work arrives as delegated tasks admitted against the child's session. Results
-return through the report lane as `subordinate_report`, decided from how the
+return through the report lane as `subagent_report`, decided from how the
 turn ended: a `task` child answers on every ending, and a durable hire relays a
 completed turn worth relaying. Reports broadcast to sockets and drain on the
 parent. A delegated turn is never owner-driven and is never cancelled by a
@@ -194,21 +195,21 @@ kept; failure or Stop reads `awaiting_input`. An explicit `blocked` report
 keeps that state, and `completed` clears the assignment. A progress note can
 suppress a redundant report, not the activity transition. A `task` child
 keeps working until its settling report, including while it awaits its own
-helpers or queued input. Both backends use this roster policy.
+subagents or queued input. Both backends use this roster policy.
 
 Locally, `LocalAgentHost` (`packages/cli-backend/src/agent-host/host.ts`) holds
 one `LocalAgentSession` per bound agent for the daemon's whole life: every root
-it has a ref for, plus every live subordinate beneath one. Roots are not
+it has a ref for, plus every live subagent beneath one. Roots are not
 workspaces. Several roots share one virtual workspace as equal peers; the
 workspace is the `{ cwd, workspaceId }` pair on their refs. After construction
 the host installs three dependency sets, and each decides whether a tool exists:
 `setTeam` gives a roster, `setPeers` gives a root the peer transport behind
-`reply`, and `setReport` gives a subordinate its reporting tool. Durable work
+`reply`, and `setReport` gives a subagent its reporting tool. Durable work
 stays in the shared `EventLog`, `background_jobs`, fiber, and `outbox_peer`
 tables. The host adds no second queue and no second loop.
 
 The system prompt (`packages/core/src/prompt.ts`) carries the matching doctrine:
-decompose multi-part or multi-hour work, hire one subordinate per independent
+decompose multi-part or multi-hour work, hire one subagent per independent
 workstream, and keep coordination and integration in the agent's own turn.
 
 ## The turn pipeline
@@ -238,7 +239,7 @@ claimed as `preparing`, prepared, bound, executed, settled and finished), as
 every chat turn does, and `runHeadInference`
 (`packages/core/src/heads/head-inference.ts`) keeps each round's assembly, its
 projection and the next input, which decide how many rounds a head, node, or
-subordinate run gets. So one `runChat` body serves every actor kind on both
+subagent run gets. So one `runChat` body serves every actor kind on both
 backends.
 
 ```mermaid
@@ -304,7 +305,7 @@ that stopped the loop. Every other clean end is `completed`.
   ladder stage ever sees it. What it frees is subtracted from the pressure the
   engine hears about, so relief there stands the rest of the ladder down.
 - What reaches an agent from outside its own isolate is a delivery
-  (`packages/core/src/subordinates/deliveries.ts`, decision D13): its producer
+  (`packages/core/src/subagents/deliveries.ts`, decision D13): its producer
   (a send, a signal, an event drain, an assignment, a run) commits an
   `agent_deliveries` row with its source fact and arms the agent's wake, then
   crosses `admit` once; the isolate's answer retires the row, and one that does
@@ -405,7 +406,7 @@ Five ingress paths publish into the log:
 | Email | `packages/core/src/events/ingress/email.ts` (plus `server.ts` `email()`) | `ingress: 'email_inbound'` |
 | Webhook | `packages/core/src/events/ingress/webhook.ts` (plus `packages/cf-backend/src/events/routes.ts`, `packages/core/src/events/webhook-route.ts`) | signed route capability in the URL, then per-trigger HMAC, Bearer, or mTLS |
 | Peer | `packages/core/src/events/ingress/peer.ts` (`outbox_peer` to `PeerHub`) | `ingress: 'peer_async'` (cross-workspace) |
-| Subordinate | `packages/core/src/subordinates/ingress.ts` (plus `subordinates/support.ts` admission) | `ingress: 'subordinate'` (variants `subordinate_task`, `subordinate_report`) |
+| Subagent | `packages/core/src/subagents/ingress.ts` (plus `subagents/support.ts` admission) | `ingress: 'subagent'` (variants `subagent_task`, `subagent_report`) |
 | Timer | `packages/core/src/events/ingress/triggers.ts`, driven by each backend's clock | `ingress: 'timer_alarm'` (cron or one-shot) |
 
 The webhook rail is the only public one, and it has two checks. The delivery URL
@@ -484,7 +485,7 @@ Neither kind attests who is calling; a sibling DO sharing `env` can derive the
 owner capability too. What the boundary buys: the tool surface, which an
 injected prompt can steer, reaches the UserDO only through code presenting a
 workspace token, so a forgotten tool check still leaves the call attenuated.
-Logical actors (subordinates, heads, swarm nodes) present their parent's
+Logical actors (subagents, heads, swarm nodes) present their parent's
 token and hold no identity of their own. Enforcement lives where the secrets
 are.
 
@@ -581,7 +582,7 @@ local process. Both drive the same core `ChatSession`.
 | Executor | codemode over the Worker Loader (`KinuSandboxExecutor`) | Bun subprocess sandbox, in-process fallback |
 | LLM | Workers AI binding or AI Gateway | AI Gateway via AI SDK |
 | Swarm nodes | Hosted `node` actors acquired from the one `ActorHost`, seated per run | `LocalAgentSession` node runtime with a credentialed home when the local VFS supports principals |
-| Subordinates | Hosted `subordinate` actors (`host.acquire` + `host.run`, report lane) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
+| Subagents | Hosted `subagent` actors (`host.acquire` + `host.run`, report lane) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
 
 The full contract and the three extension points (`ModelProvider`,
 `ActorAgent`, `KinuExtension`) are in [EXTENSIBILITY.md](./EXTENSIBILITY.md).

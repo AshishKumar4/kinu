@@ -130,10 +130,10 @@ step's prepared request, the renders it names, and that step's `step_finish`
 row. Wire bytes are never stored, and this read stores nothing new.
 
 Finished-step events contain sealed part references and accounting, not a
-second copy of the native response. Owner-authorized `inspectSubordinate`
+second copy of the native response. Owner-authorized `inspectSubagent`
 with `view: 'step'`, `runId`, `eventIndex` and an optional `from` reads those
 references from the actor's canonical payload store, including retained
-helpers. It returns native message projections and `nextFrom`; pages use
+subagents. It returns native message projections and `nextFrom`; pages use
 `run_events.page_bytes`, while one oversized message still ships whole as
 on the request inspector. Eval verification and artifact capture use this
 reader before teardown, so full tool inputs are not inferred from the
@@ -154,7 +154,7 @@ partial-snapshot ledger readers are not supported.
   every read.
 
 Retention, measured in source on 2026-09-26: nothing prunes `run_events`,
-`session_messages`, `request_renders` or the turn claims by age. They are
+`session_messages`, `actor_requests` or the turn claims by age. They are
 removed when the workspace is removed (`destroyAgent`, then `deleteAll`) or
 when an actor is retired with `destroy` (`purgeActorRows`). Clearing a chat
 removes the visible conversation only, not the model's history. This read
@@ -201,7 +201,7 @@ that asked for it. There is no RPC boundary, so there is no `rpc` span to open,
 and the 120 s cap on an unanswered cross-object request does not apply.
 
 Every span carries `kinu.actor` (the digest of the actor id) and
-`kinu.actor_kind` (`main`, `subordinate`, `head`, `branch`). `kinu.self_path`
+`kinu.actor_kind` (`main`, `subagent`, `head`, `branch`). `kinu.self_path`
 cannot tell actors apart: it renders the Durable Object path, which is the same
 for every actor of a workspace, and so is `ctx.id`. An invocation span carries
 the workspace root; a turn span carries the actor whose turn it is.

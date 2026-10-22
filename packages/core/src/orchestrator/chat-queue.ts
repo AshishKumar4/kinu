@@ -4,7 +4,7 @@
  */
 import * as v from 'valibot';
 import type { KinuError } from '../obs/index';
-import type { AgentTurnTask } from '../subordinates/agent-isolate';
+import type { AgentTurnTask } from '../subagents/agent-isolate';
 import type { OperatorSend, ProgrammaticTurn, PromptFile } from '../types/backend-host';
 import { turnTags, type TurnTags } from '../types/turn-metadata';
 import type { Usage } from '../usage';

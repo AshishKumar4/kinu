@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 import { withGallery } from '../../scripts/gallery-harness';
+import { ATTENTION_BEHIND, ATTENTION_CARD } from '../../scripts/browser-page';
 
 /** What the Agent tab's memory section shows: its retry, the workspace's memory, an empty state, or nothing yet. */
 function memoryShows(page: Page): Promise<string> {
@@ -273,7 +274,7 @@ async function settleConsent(page: Page, id: string, failed?: string): Promise<v
 
 /** The attention stack's cards, the open one first, then those waiting behind it, nearest first. */
 function stacked(page: Page): Promise<(string | null)[]> {
-  return page.$$eval('[data-attention-card], [data-attention-behind]', (cards) => {
+  return page.$$eval(`${ATTENTION_CARD}, ${ATTENTION_BEHIND}`, (cards) => {
     const open = cards.filter((card) => card.hasAttribute('data-attention-card')).map((card) => card.getAttribute('data-attention-card'));
     const behind = cards.filter((card) => card.hasAttribute('data-attention-behind')).map((card) => card.getAttribute('data-attention-behind')).reverse();
 

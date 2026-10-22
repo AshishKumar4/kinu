@@ -67,6 +67,17 @@ test('a rest commits the chain, then takes the snapshot the next wake starts fro
   });
 });
 
+// Review of 977bf090f: the admission probe's output was read outside its settled check, so a start refused for room after
+// the probe answered failed in the lost connection's words, and read as a verdict on the snapshot.
+test('a snapshot wake refused for room after its admission probe answered keeps the snapshot as its source', async () => {
+  const { box, container, rows } = await rested();
+
+  container.admissionLoss = { lost: new Error('Network connection lost.'), refusal: new Error('Account resource limit exceeded') };
+  await box.devboxStartup();
+
+  expect({ starts: container.startOptions.map(startedFrom), snapshotKept: rows.has('devbox:snapshot') }).toEqual({ starts: ['golden', 'snapshot-1'], snapshotKept: true });
+});
+
 test('a snapshot wake that is not admitted within the cutover starts from the golden and tells the agent when it restored to', async () => {
   setSystemTime(new Date('2026-09-30T00:00:00Z'));
   const { box, container, rows } = await rested();
@@ -218,6 +229,21 @@ test('discarding the workspace deletes its whole lineage', async () => {
 
   expect({ deleted: [...registry.deleted].sort(), snapshot: rows.has('devbox:snapshot'), pending: rows.get('devbox:dead-snapshots') ?? [] })
     .toEqual({ deleted: ['snapshot-1', 'snapshot-2'], snapshot: false, pending: [] });
+});
+
+// Deleting an account deletes everything it has: a workspace's teardown discards the box's state, then destroys the box,
+// which keeps nothing of the workspace but the snapshots it still owes a deletion, for a sweep to pay.
+test('a destroyed box keeps nothing of its workspace but the snapshots still owed a deletion', async () => {
+  const { box, rows } = await rested();
+  await box.devboxStartup();
+  await box.quiesce();
+  registry.refuse = 'deleting rootfs-snapshot-ab answered 403: forbidden';
+  await box.discardState();
+  const owed = rows.get('devbox:dead-snapshots');
+  await box.destroy();
+
+  expect({ kept: [...rows.keys()], owed: rows.get('devbox:dead-snapshots') }).toEqual({ kept: ['devbox:dead-snapshots'], owed });
+  expect(owed).toHaveLength(1);
 });
 
 // Review finding 11: a rest's snapshot that finished after a discard was published as the next wake.

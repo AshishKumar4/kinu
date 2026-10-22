@@ -16,6 +16,7 @@ export interface AiRun {
 const AiInputsSchema = v.looseObject({
   messages: v.optional(v.array(v.looseObject({ role: v.optional(v.string()), content: v.optional(v.unknown()) }))),
   stream: v.optional(v.boolean()),
+  tools: v.optional(v.array(v.unknown())),
   state: v.optional(v.string()),
   questions: v.optional(v.record(v.string(), v.unknown())),
 });
@@ -30,8 +31,9 @@ export async function readAiRun(request: Pick<Request, 'json' | 'headers'>): Pro
 const DECISION_MODEL_IDS: ReadonlySet<string> = new Set(['@cf/cloudflare/clef', '@cf/cloudflare/clef-flash']);
 
 /** The product lanes that call the binding, each known by its real request shape: a decision model's `state` and
- *  `questions` (rating), a chat led by a system message (title), a user-only chat (sleep-time judge). Turns stream over
- *  the HTTP seam, never here. */
+ *  `questions` (rating), a completion led by a system message (title), a user-only chat (sleep-time judge). Every
+ *  Workers AI call streams (`WORKERS_AI_STREAMS_GENERATE`), so a turn is known by the tools it offers; turns call the
+ *  HTTP seam, never here, so a tool-free role's turn reaching here would read as a title and is not one these suites run. */
 export const AI_LANES = ['decision', 'title', 'sleep'] as const;
 
 export function aiLane({ model, inputs }: AiRun): (typeof AI_LANES)[number] | null {
@@ -39,7 +41,9 @@ export function aiLane({ model, inputs }: AiRun): (typeof AI_LANES)[number] | nu
 
   const messages = inputs.messages ?? [];
 
-  if (inputs.stream === true || messages.length === 0) return null;
+  if (messages.length === 0) return null;
+
+  if (inputs.tools !== undefined) return null;
 
   if (messages[0]?.role === 'system') return 'title';
 

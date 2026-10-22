@@ -36,10 +36,11 @@ class Inbound implements InboundMail {
 const inbound = (to: string, headers: Record<string, string> = {}): Inbound => new Inbound(to, headers);
 
 const CLAIMS = new Map<string, MailNameClaim>(Object.entries({
-  ashish: { label: 'ashish', user_id: 'u-ashish', kind: 'username', target_path: null, state: 'active' },
-  ashishks: { label: 'ashishks', user_id: 'u-ashish', kind: 'username', target_path: null, state: 'former' },
-  hello: { label: 'hello', user_id: 'u-ashish', kind: 'alias', target_path: 'api-worker', state: 'active' },
-  gone: { label: 'gone', user_id: 'u-gone', kind: 'username', target_path: null, state: 'retired' },
+  ashish: { label: 'ashish', user_id: 'u-ashish', kind: 'username', target_path: null },
+  ashishks: { label: 'ashishks', user_id: 'u-ashish', kind: 'username', target_path: null },
+  // Retired: kept with no owner, so nobody claims it again.
+  gone: { label: 'gone', user_id: '', kind: 'username', target_path: null },
+  hello: { label: 'hello', user_id: 'u-ashish', kind: 'alias', target_path: 'api-worker' },
 }));
 
 function delivery(woke: MailDelivery['woke'], extra: Partial<MailDelivery> = {}): MailDelivery {

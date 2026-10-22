@@ -41,6 +41,9 @@ async function feedBecomes(page: Page, ids: readonly string[]): Promise<readonly
 /** What the fixture was asked to install (gallery-explore.tsx `data-explore-installed`). */
 const InstalledSchema = v.object({ id: v.string(), body: v.record(v.string(), v.unknown()) });
 
+/** What a visitor's page asked of an account (gallery-explore.tsx `data-explore-account-reads`): nothing, read rightly. */
+const accountReads = async (page: Page): Promise<readonly string[]> => v.parse(v.array(v.string()), JSON.parse(await page.$eval('html', (root) => root.dataset.exploreAccountReads ?? '[]')));
+
 async function installed(page: Page): Promise<v.InferOutput<typeof InstalledSchema>> {
   await page.waitForFunction(() => document.documentElement.dataset.exploreInstalled !== undefined, SOON);
 
@@ -61,7 +64,7 @@ describe('Explore', () => {
           .toEqual(['pr-board', 'issue-triage', 'worker-logs', 'firmware-lab', 'workers-health', 'do-sqlite-notes']);
 
         // A kind shows the feed alone, Kinu's own in it.
-        await page.click('[data-explore-kind-filter="workspace"]');
+        await page.click('[data-explore-filters] [data-segment="workspace"]');
         await page.waitForFunction(() => document.querySelector('[data-explore-hero]') === null, SOON);
         expect(await feedBecomes(page, ['personal-assistant', 'worker-on-call', 'release-manager', 'research-desk', 'issue-triage', 'firmware-lab']))
           .toEqual(['personal-assistant', 'worker-on-call', 'release-manager', 'research-desk', 'issue-triage', 'firmware-lab']);
@@ -86,7 +89,8 @@ describe('Explore', () => {
 
       const asked = await installed(assistant);
 
-      expect(asked).toEqual({ id: 'personal-assistant', body: { agent: 'Kinu', brief: '08:00', home: true, timeZone: expect.any(String) } });
+      // The workspace takes its assistant's name, so the roster calls Home what Home's bar does.
+      expect(asked).toEqual({ id: 'personal-assistant', body: { displayName: 'Kinu', agent: 'Kinu', brief: '08:00', home: true, timeZone: expect.any(String) } });
       // Home: the fixture marks it, and draws no Home of its own.
       await assistant.waitForSelector('[data-gallery-home]', SOON);
       await assistant.close();
@@ -182,6 +186,55 @@ describe('Explore', () => {
         await page.waitForSelector('[data-gallery-blank]', SOON);
         expect(JSON.parse(await page.$eval('html', (root) => root.dataset.exploreCreated ?? 'null'))).toMatchObject({ purpose: 'Keep the api Worker deployed and healthy.' });
         await page.close();
+      }
+    });
+  });
+
+  // rc28 walkthrough: Explore's API was public, its pages were not; a visitor was sent to sign in before seeing anything.
+  test('signed out: Explore and a blueprint draw under the public bar and read nothing of an account; Install and Star sign in first', async () => {
+    await withGallery(async (gallery) => {
+      for (const [theme, viewport] of [['dark', 'desktop'], ['light', 'mobile']] as const) {
+        const feed = await freshPage(gallery, 'explore&signed=out', theme, viewport);
+
+        try {
+          await feed.waitForSelector('[data-gallery-public] [data-explore-hero="personal-assistant"]', SOON);
+          expect(await feed.$('nav[aria-label="Primary"]')).toBeNull();
+          expect(await accountReads(feed)).toEqual([]);
+        } finally {
+          await feed.close();
+        }
+
+        for (const [control, intent] of [['[data-blueprint-install]', '1'], ['[data-blueprint-star]', null]] as const) {
+          const page = await freshPage(gallery, 'explore-workspace&id=personal-assistant&signed=out', theme, viewport);
+
+          try {
+            await page.waitForSelector('[data-gallery-public] [data-blueprint-page="personal-assistant"]', SOON);
+            // Read while the page is still the blueprint's: the press below leaves it for sign-in, and a read racing that
+            // navigation finds its context gone (armada 20261020213324-3ed3be10).
+            expect(await accountReads(page)).toEqual([]);
+
+            const signIns: string[] = [];
+
+            page.on('request', (sent) => {
+              if (sent.isNavigationRequest() && new URL(sent.url()).pathname === '/login') signIns.push(sent.url());
+            });
+
+            // The press and the navigation it causes, awaited together: nothing reads the page it leaves.
+            const [login] = await Promise.all([
+              page.waitForRequest((sent) => new URL(sent.url()).pathname === '/login', SOON),
+              page.waitForNavigation({ waitUntil: 'domcontentloaded', ...SOON }),
+              page.click(control),
+            ]);
+
+            const back = new URL(new URL(login.url()).searchParams.get('return_to') ?? '', gallery.origin);
+
+            expect([back.searchParams.get('id'), back.searchParams.get('install')]).toEqual(['personal-assistant', intent]);
+            // One press, one trip to sign-in: the page is left once.
+            expect(signIns).toHaveLength(1);
+          } finally {
+            await page.close();
+          }
+        }
       }
     });
   });

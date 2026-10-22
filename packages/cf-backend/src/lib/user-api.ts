@@ -332,17 +332,22 @@ export const updateProfileCatalog = (
 
 export const listAvailableModels = (): Promise<ModelMenuResponse> => settle(api(ModelMenuResponseSchema, 'GET', '/models'));
 
+/** One account setting as `/api/user/config/:key` answers it: null until it is chosen. */
+const ConfigRowSchema = v.object({ key: v.string(), value: v.nullable(v.string()) });
+
+export type ConfigRow = v.InferOutput<typeof ConfigRowSchema>;
+
 const COMPUTER_SIZE_PATH = `/config/${COMPUTER_SIZE_CONFIG_KEY}`;
 
 export const getAccountComputerSize = (): Promise<BoxSize | null> =>
-  settle(Effect.map(api(v.object({ key: v.string(), value: v.nullable(v.string()) }), 'GET', COMPUTER_SIZE_PATH), (row) => accountComputerSize(row.value)));
+  settle(Effect.map(api(ConfigRowSchema, 'GET', COMPUTER_SIZE_PATH), (row) => accountComputerSize(row.value)));
 
 export const setAccountComputerSize = (size: BoxSize) => settle(api(OkSchema, 'PUT', COMPUTER_SIZE_PATH, { value: size }));
 
 const FILES_VIEW_PATH = `/config/${FILES_VIEW_CONFIG_KEY}`;
 
 export const getFilesView = (): Promise<FilesView> =>
-  settle(Effect.map(api(v.object({ key: v.string(), value: v.nullable(v.string()) }), 'GET', FILES_VIEW_PATH), (row) => accountFilesView(row.value)));
+  settle(Effect.map(api(ConfigRowSchema, 'GET', FILES_VIEW_PATH), (row) => accountFilesView(row.value)));
 
 export const setFilesView = (view: FilesView) => settle(api(OkSchema, 'PUT', FILES_VIEW_PATH, { value: JSON.stringify(view) }));
 
@@ -427,15 +432,6 @@ export const listCloudflareGateways = () =>
 
 export const selectCloudflareGateway = (id: string | null) => settle(putCloudflareSelection('/cloudflare/gateway', id));
 
-export function cloudflareReconnectPath(returnTo: string): string {
-  const params = new URLSearchParams({
-    return_to: returnTo || '/',
-    prompt: 'login',
-  });
-
-  return `/auth/cloudflare/start?${params.toString()}`;
-}
-
 export interface McpServerInput {
   name?: string;
   serverUrl?: string;
@@ -453,6 +449,10 @@ export const listMcpPresets = () => settle(api(v.array(McpPresetAvailabilitySche
 
 export const addMcpServer   = (input: McpServerInput) =>
   settle(api(v.object({ id: v.string(), authUrl: v.nullable(v.string()) }), 'POST', '/mcp/servers', input));
+
+/** An MCP server's sign-in begun for `run`: its sign-in address, which its callback ends with that run. */
+export const beginMcpConnect = (id: string, run: string) =>
+  settle(api(v.object({ authUrl: v.string() }), 'POST', `/mcp/servers/${encodeURIComponent(id)}/connect`, { run }));
 
 export const removeMcpServer = (id: string) =>
   settle(api(OkSchema, 'DELETE', `/mcp/servers/${encodeURIComponent(id)}`));

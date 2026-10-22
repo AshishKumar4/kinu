@@ -6,7 +6,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { runToExit, scratchDir } from '@kinu.run/test-utils';
 
 import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
-import { JOB_OUTPUT_EVENT, missingSubordinateHistory, READS_CHANGED_EVENT, TURN_FAILURE_METADATA_KEY, type AgentModelMenu, type JobOutputTail, type ModelTestResult, type SubordinateChild } from '@kinu.run/core';
+import { JOB_OUTPUT_EVENT, missingSubagentHistory, READS_CHANGED_EVENT, TURN_FAILURE_METADATA_KEY, type AgentModelMenu, type JobOutputTail, type ModelTestResult, type SubagentChild } from '@kinu.run/core';
 import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction } from '@kinu.run/core';
 
@@ -1039,9 +1039,9 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       id: 'agent-main', label: 'Checkout', kind: 'main', status: 'idle',
       roleId: 'task', tierId: 'default', workspace: 'shop',
     }],
-    subordinates: [],
+    subagents: [],
     work: [],
-    helpers: [],
+    taskSubagents: [],
     profile: {
       envelope: {
         authority: { kind: 'local' },
@@ -1174,7 +1174,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
   });
 
   test('the Agent Hub lists the subagents the open agent hired, and Enter opens one\'s conversation', async () => {
-    const scout: SubordinateChild = {
+    const scout: SubagentChild = {
       name: 'scout',
       displayName: 'Scout',
       nameOrigin: 'user',
@@ -1195,24 +1195,24 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       taskEventId: null,
     };
 
-    const dismissed: SubordinateChild = {
+    const dismissed: SubagentChild = {
       ...scout,
-      name: 'retired-helper',
+      name: 'retired-subagent',
       birth: null,
       status: 'dismissed',
       dismissedAt: 2,
     };
 
-    const helper: SubordinateChild = { ...scout, name: 'busy-mill-01', displayName: 'Busy Mill', nameOrigin: 'auto', birth: null, currentTask: null };
-    const refiner: SubordinateChild = { ...helper, name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', origin: 'evolution', lifetime: 'task' };
-    const asked: SubordinateChild = { ...helper, name: 'ask-reviewer-a1', displayName: 'reviewing', lifetime: 'task' };
+    const subagent: SubagentChild = { ...scout, name: 'busy-mill-01', displayName: 'Busy Mill', nameOrigin: 'auto', birth: null, currentTask: null };
+    const refiner: SubagentChild = { ...subagent, name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', origin: 'evolution', lifetime: 'task' };
+    const asked: SubagentChild = { ...subagent, name: 'ask-reviewer-a1', displayName: 'reviewing', lifetime: 'task' };
 
     const main = fakeClient({
       name: 'checkout',
-      inspectSubordinate: async (request) => {
-        if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [scout, dismissed, helper, refiner, asked] } };
+      inspectSubagent: async (request) => {
+        if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [scout, dismissed, subagent, refiner, asked] } };
 
-        if (request.view !== 'history' || request.path.join('/') !== 'scout') return missingSubordinateHistory(request.path);
+        if (request.view !== 'history' || request.path.join('/') !== 'scout') return missingSubagentHistory(request.path);
 
         return {
           view: 'history',
@@ -1233,7 +1233,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the hired subagent in the hub', () => screen.frame().includes('Scout') && !screen.composerFocused());
     expect(screen.frame()).toContain('Survey the logs');
     expect(rowInOrder(screen.frame(), ['Scout', 'task/default'])).toBe(true);
-    expect(screen.frame()).not.toContain('retired-helper');
+    expect(screen.frame()).not.toContain('retired-subagent');
 
     for (const shown of ['reviewing', 'ask-reviewer-a1', 'Quiet Ash']) expect(screen.frame()).not.toContain(shown);
     expect(screen.frame()).toContain('Busy Mill');
@@ -1243,14 +1243,14 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the subagent conversation', () => screen.frame().includes('Found 3 errors in app.log'));
     expect(screen.frame()).toContain('Look through app.log for errors');
     screen.mockInput.pressEscape();
-    // The hub's other helper: the conversation's own header names Scout too.
+    // The hub's other subagent: the conversation's own header names Scout too.
     await screen.waitFor('back in the Agent Hub', () => screen.frame().includes('Busy Mill'));
     expect(screen.frame()).not.toContain('Found 3 errors in app.log');
   });
 
-  // 2026-10-01: the hub read the agent's helpers once, when it opened, and a hire made after that never showed.
-  test('the open Agent Hub reads its helpers again when a frame names them', async () => {
-    const scout: SubordinateChild = {
+  // 2026-10-01: the hub read the agent's subagents once, when it opened, and a hire made after that never showed.
+  test('the open Agent Hub reads its subagents again when a frame names them', async () => {
+    const scout: SubagentChild = {
       name: 'scout', displayName: 'Scout', nameOrigin: 'user', role: 'task', actorReference: null, birth: null, deleteRequested: false,
       origin: 'agent', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null,
     };
@@ -1259,9 +1259,9 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const main = fakeClient({
       name: 'checkout',
-      inspectSubordinate: async (request) => request.view === 'children'
+      inspectSubagent: async (request) => request.view === 'children'
         ? { view: 'children', path: request.path, page: { status: 'end', items: hired } }
-        : missingSubordinateHistory(request.path),
+        : missingSubagentHistory(request.path),
     });
 
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
@@ -1269,7 +1269,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the hire the hub read when it opened', () => screen.frame().includes('Scout'));
 
     hired = [scout, { ...scout, name: 'busy-mill-01', displayName: 'Busy Mill', createdAt: 2 }];
-    main.emit({ type: 'broadcast', event: { type: READS_CHANGED_EVENT, reads: ['listSubordinates'] } });
+    main.emit({ type: 'broadcast', event: { type: READS_CHANGED_EVENT, reads: ['listSubagents'] } });
 
     await screen.waitFor('the hire the frame named', () => screen.frame().includes('Busy Mill'));
     expect(screen.frame()).toContain('Scout');
@@ -1299,7 +1299,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
   // Main's queue (b), 2026-10-03: the hub listed the workspace's jobs alone, never a hire's.
   test("each hire's running jobs are listed under that hire, and its row opens the hire's conversation", async () => {
-    const builder: SubordinateChild = {
+    const builder: SubagentChild = {
       name: 'builder', displayName: 'Builder', nameOrigin: 'user', role: 'builder',
       actorReference: { actorId: 'actor-builder', workspaceId: 'ws', parentActorId: 'actor-main' },
       birth: null, deleteRequested: false, origin: 'agent', status: 'working', currentTask: 'serve the preview', createdAt: 1,
@@ -1315,9 +1315,9 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
         return actor === 'builder' ? [{ id: 'bgjob-9c2d10aa77ee', kind: 'shell', status: 'serving', label: 'sandbox: node server.js' }] : [];
       },
-      inspectSubordinate: async (request) => (request.view === 'children'
+      inspectSubagent: async (request) => (request.view === 'children'
         ? { view: 'children', path: request.path, page: { status: 'end', items: [builder] } }
-        : missingSubordinateHistory(request.path)),
+        : missingSubagentHistory(request.path)),
     });
 
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
@@ -1364,11 +1364,11 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     expect(rowInOrder(screen.frame(), [/\b2(\.0)?\s*KB\b/u, 'linked'])).toBe(true);
   });
 
-  test('after a reload, a one-question helper the chat asked is listed as answered, and Enter opens its kept chat by id', async () => {
+  test('after a reload, a one-question subagent the chat asked is listed as answered, and Enter opens its kept chat by id', async () => {
     const reads: unknown[] = [];
     const answered = { status: 'completed', agent: 'ask-reviewer-a1', lifetime: 'task', role: 'reviewer', answer: 'Fine.', transcript: 'kept' };
 
-    const reviewer: SubordinateChild = {
+    const reviewer: SubagentChild = {
       name: 'ask-reviewer-a1', displayName: 'reviewing', nameOrigin: 'auto', role: 'task',
       actorReference: { actorId: 'actor-reviewer', workspaceId: 'ws', parentActorId: 'actor-main' }, birth: null, deleteRequested: false,
       origin: 'agent', status: 'dismissed', currentTask: null, createdAt: 1, dismissedAt: 2, lifetime: 'task', taskEventId: null,
@@ -1380,10 +1380,10 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
         { id: 'c1', role: 'tool_call', content: '', toolName: 'agents', toolCallId: 'agents_0', args: '{"op":"hire","lifetime":"task"}' },
         { id: 'r1', role: 'tool_result', content: JSON.stringify(answered), toolName: 'agents', toolCallId: 'agents_0', success: true },
       ],
-      inspectSubordinate: async (request) => {
+      inspectSubagent: async (request) => {
         if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [reviewer] } };
 
-        if (request.view !== 'history') return missingSubordinateHistory(request.path);
+        if (request.view !== 'history') return missingSubagentHistory(request.path);
         reads.push(request);
 
         return { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, turnId: null, role: 'assistant', parts: [{ type: 'text', text: 'The review found nothing' }], createdAt: 1 }] } };
@@ -1392,7 +1392,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the answered helper in the hub', () => !screen.composerFocused() && screen.frame().includes('ask-reviewer-a1'));
+    await screen.waitFor('the answered subagent in the hub', () => !screen.composerFocused() && screen.frame().includes('ask-reviewer-a1'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
@@ -1401,7 +1401,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressEscape();
   });
 
-  test('a finished helper stays reachable from its finished task, its kept chat read by id', async () => {
+  test('a finished subagent stays reachable from its finished task, its kept chat read by id', async () => {
     const reads: unknown[] = [];
 
     const main = fakeClient({
@@ -1414,15 +1414,15 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
           tasks: [{ id: 't1', parentId: null, title: 'Tighten the turn-ending rule', status: 'done', updatedAt: 2, note: null, subtasks: [] }],
         }],
       }),
-      inspectSubordinate: async (request) => {
+      inspectSubagent: async (request) => {
         if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
 
-        if (request.view !== 'history') return missingSubordinateHistory(request.path);
+        if (request.view !== 'history') return missingSubagentHistory(request.path);
         reads.push(request);
 
         return request.actor === 'actor-refiner'
           ? { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, turnId: null, role: 'assistant', parts: [{ type: 'text', text: 'Two edits proposed' }], createdAt: 1 }] } }
-          : missingSubordinateHistory(request.path);
+          : missingSubagentHistory(request.path);
       },
     });
 
@@ -1437,10 +1437,10 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressEscape();
   });
 
-  test('an evolution helper is a Work row in the Agent Hub, and Enter opens its kept chat by id', async () => {
+  test('an evolution subagent is a Work row in the Agent Hub, and Enter opens its kept chat by id', async () => {
     const reads: unknown[] = [];
 
-    const refiner: SubordinateChild = {
+    const refiner: SubagentChild = {
       name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', nameOrigin: 'auto', role: 'task',
       actorReference: { actorId: 'actor-refiner', workspaceId: 'ws', parentActorId: null }, birth: null, deleteRequested: false, origin: 'evolution',
       status: 'dismissed', currentTask: null, createdAt: 1, dismissedAt: 2, lifetime: 'task', taskEventId: null,
@@ -1448,15 +1448,15 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const main = fakeClient({
       name: 'checkout',
-      inspectSubordinate: async (request) => {
+      inspectSubagent: async (request) => {
         if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [refiner] } };
 
-        if (request.view !== 'history') return missingSubordinateHistory(request.path);
+        if (request.view !== 'history') return missingSubagentHistory(request.path);
         reads.push(request);
 
         return request.actor === 'actor-refiner'
           ? { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, role: 'assistant', turnId: null, parts: [{ type: 'text', text: 'One wording change proposed' }], createdAt: 1 }] } }
-          : missingSubordinateHistory(request.path);
+          : missingSubagentHistory(request.path);
       },
     });
 
@@ -1471,8 +1471,8 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressEscape();
   });
 
-  test('a helper with no tab appears as the owner of its task in the Agent Hub, and Enter opens its conversation', async () => {
-    const helper = ['ask-refiner-fb0gr9'];
+  test('a subagent with no tab appears as the owner of its task in the Agent Hub, and Enter opens its conversation', async () => {
+    const subagent = ['ask-refiner-fb0gr9'];
     const opened: (string | undefined)[] = [];
 
     const main = fakeClient({
@@ -1480,15 +1480,15 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       workspaceWork: async () => ({
         plans: [],
         tasks: [{
-          owner: { actorId: 'actor-refiner', name: 'ask-refiner-fb0gr9', title: 'ask-refiner-fb0gr9', retired: true, path: helper },
+          owner: { actorId: 'actor-refiner', name: 'ask-refiner-fb0gr9', title: 'ask-refiner-fb0gr9', retired: true, path: subagent },
           plan: null,
           tasks: [{ id: 't1', parentId: null, title: 'Tighten the turn-ending rule', status: 'active', updatedAt: 1, note: null, subtasks: [] }],
         }],
       }),
-      inspectSubordinate: async (request) => {
+      inspectSubagent: async (request) => {
         if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
 
-        if (request.view !== 'history') return missingSubordinateHistory(request.path);
+        if (request.view !== 'history') return missingSubagentHistory(request.path);
         opened.push(request.actor);
 
         return {
@@ -1501,11 +1501,11 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
 
     const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
     screen.mockInput.pressKey('a', { meta: true });
-    await screen.waitFor('the helper\'s task in the hub', () => screen.frame().includes('Tighten the turn-ending rule') && screen.frame().includes('ask-refiner-fb0gr9'));
+    await screen.waitFor('the subagent\'s task in the hub', () => screen.frame().includes('Tighten the turn-ending rule') && screen.frame().includes('ask-refiner-fb0gr9'));
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
-    await screen.waitFor('the helper\'s conversation', () => screen.frame().includes('Two edits proposed for the turn-ending section'));
+    await screen.waitFor('the subagent\'s conversation', () => screen.frame().includes('Two edits proposed for the turn-ending section'));
     expect(opened).toEqual(['actor-refiner']);
     screen.mockInput.pressEscape();
   });

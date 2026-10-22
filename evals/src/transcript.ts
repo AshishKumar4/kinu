@@ -7,7 +7,7 @@ import type { TranscriptEvent } from 'vitest-evals';
 import { redact, redactJson } from './redact';
 import type { EvalMetrics } from './task';
 import type { InspectionAnswer } from './session';
-import type { SubordinateInspectionRequest } from '@kinu.run/core';
+import type { SubagentInspectionRequest } from '@kinu.run/core';
 
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
 
@@ -61,7 +61,7 @@ export function messagesOfStep(step: FinishedStep, output: StepMessages): readon
 }
 
 /** One actor-authorized output reader for live verification and final artifact capture. */
-export function inspectedStepMessages(events: readonly RunEvent[], inspect: (request: SubordinateInspectionRequest) => Promise<InspectionAnswer>, cache: StepMessageCache): Promise<StepMessages> {
+export function inspectedStepMessages(events: readonly RunEvent[], inspect: (request: SubagentInspectionRequest) => Promise<InspectionAnswer>, cache: StepMessageCache): Promise<StepMessages> {
   return readStepMessages(events, async (step, from) => {
     const output = await inspect({ path: [], view: 'step', runId: step.runId, eventIndex: step.eventIndex, from });
 

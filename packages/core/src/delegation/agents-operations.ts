@@ -1,5 +1,5 @@
 /**
- * Delegation: a search over agents, a helper hired for a workstream, an existing agent given its next one, and
+ * Delegation: a search over agents, a subagent hired for a workstream, an existing agent given its next one, and
  * messages between agents. Each operation is offered only where its wiring is, and its fields reach `dispatchAgentsCall`
  * as its declaration admitted them.
  */
@@ -12,7 +12,8 @@ import {
 import { NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_DOCTRINE } from '../strategy/swarm';
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
 import { TierIdSchema } from '../profiles';
-import { SUBORDINATE_LIFETIMES } from '../subordinates/temporary';
+import { SUBAGENT_LIFETIMES } from '../subagents/temporary';
+import { AGENT_TREE_LIMIT, AGENT_TREE_MAX } from './agent-tree';
 import { SWARM_CONTEXTS } from '../types/swarm';
 import { MissionBudgetExhausted } from '../mission-budget';
 import { endWhenSettled } from '../turn-trace';
@@ -92,8 +93,8 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
   const temporary = team?.temporary !== undefined;
 
   const targets = [
-    ...(team ? ['a subordinate'] : []), ...(peers ? ['a peer workspace agent'] : []),
-  ].join(' here or ') + (team && peers ? ' (a subordinate wins a name collision)' : '');
+    ...(team ? ['a subagent'] : []), ...(peers ? ['a peer workspace agent'] : []),
+  ].join(' here or ') + (team && peers ? ' (a subagent wins a name collision)' : '');
 
   const agent = described(v.pipe(v.string(), v.nonEmpty()), `The agent: ${targets}.`);
   const topic = optional(described(v.pipe(v.string(), v.maxLength(80)), 'A short label for a message to a peer workspace agent; default "message".'));
@@ -129,8 +130,8 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
       context: optional(described(v.picklist(SWARM_CONTEXTS), 'fresh (default) starts from the message alone; inherit also carries your recent turns.')),
     };
 
-    const help = `Create a helper under a role for one workstream; its message is its first turn. It returns at once; the helper's report, or its failure, arrives later as a message that opens your next turn. It stays in your roster, with its context, after it reports. ${nestingRoom(team.delegation)}`;
-    const lifetime = optional(described(v.picklist(SUBORDINATE_LIFETIMES), 'durable (default) stays in your roster; task answers one question, as a later message, and is archived.'));
+    const help = `Create a subagent under a role for one workstream; its message is its first turn. It returns at once; the subagent's report, or its failure, arrives later as a message that opens your next turn. It stays in your roster, with its context, after it reports. ${nestingRoom(team.delegation)}`;
+    const lifetime = optional(described(v.picklist(SUBAGENT_LIFETIMES), 'durable (default) stays in your roster; task answers one question, as a later message, and is archived.'));
 
     served.push(temporary
       ? serve(agentsOp('hire', help, true, { ...hire, lifetime }), (fields, call) => dispatched({ op: 'hire', fields }, call))
@@ -138,11 +139,11 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
   }
 
   if (offers.has('assign')) {
-    const help = 'Hand an existing agent its next workstream; a subordinate reports later as a message, a peer\'s reply is awaited.';
+    const help = 'Hand an existing agent its next workstream; a subagent reports later as a message, a peer\'s reply is awaited.';
     const assign = { agent, message: text(20000, 'The work.') };
     const run = (fields: AgentsCallFields<'assign'>, call: OperationCall) => dispatched({ op: 'assign', fields }, call);
 
-    // A deliverable is a subordinate's to meet; a topic labels a peer's message.
+    // A deliverable is a subagent's to meet; a topic labels a peer's message.
     if (team && peers) served.push(serve(agentsOp('assign', help, true, { ...assign, deliverable, topic }), run));
     else if (team) served.push(serve(agentsOp('assign', help, true, { ...assign, deliverable }), run));
     else served.push(serve(agentsOp('assign', help, true, { ...assign, topic }), run));
@@ -172,16 +173,22 @@ function serveAgents(deps: () => AgentsToolDeps): readonly Served[] {
   }
 
   if (offers.has('list')) {
-    const listed = [...(team ? ['your subordinates'] : []), ...(peers ? ['peer workspace agents'] : []), ...(temporary ? ['the task-lifetime agents running now'] : [])];
+    const tree = 'Your agents as a tree: you and every agent below you, each after the one that started it, running first, '
+      + 'with its kind, status, what it works on, depth, last activity and its reports you have not read; '
+      + `${String(AGENT_TREE_LIMIT)} rows unless \`limit\` says more.`;
 
-    served.push(serve(agentsOp('list', `The roster: ${listed.join(', ')}.`, true, {
-      agent: optional(described(v.string(), 'Only this agent.')),
+    const help = team ? `${tree}${peers ? ' Peer workspace agents beside it.' : ''}` : 'Peer workspace agents.';
+
+    served.push(serve(agentsOp('list', help, true, {
+      agent: optional(described(v.string(), 'Only this agent, in detail.')),
+      retired: optional(described(v.boolean(), 'true lists dismissed agents and finished swarm workers too.')),
+      limit: optional(described(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(AGENT_TREE_MAX)), `Rows at most; default ${String(AGENT_TREE_LIMIT)}.`)),
     }), (fields, call) => dispatched({ op: 'list', fields }, call)));
   }
 
   if (offers.has('dismiss')) {
-    served.push(serve(agentsOp('dismiss', 'Retire a subordinate; archived with its context by default.', false, {
-      agent: described(v.pipe(v.string(), v.nonEmpty()), 'The subordinate.'),
+    served.push(serve(agentsOp('dismiss', 'Retire a subagent; archived with its context by default.', false, {
+      agent: described(v.pipe(v.string(), v.nonEmpty()), 'The subagent.'),
       keepHistory: optional(described(v.boolean(), 'false deletes its storage for good; default true.')),
     }), (fields, call) => dispatched({ op: 'dismiss', fields }, call)));
   }

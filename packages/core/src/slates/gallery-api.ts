@@ -17,7 +17,7 @@ export type GalleryCategory = v.InferOutput<typeof GalleryCategorySchema>;
 const GalleryListingSchema = v.object({
   workspace: v.string(),
   slate: v.string(),
-  /** The live share it opens: `slate_live_shares.id`. */
+  /** The live share it opens: its `slate_shares.id`. */
   share: v.string(),
   title: v.string(),
   line: v.string(),
@@ -62,9 +62,14 @@ export const GallerySlateSchema = v.object({
 
 export type GallerySlate = v.InferOutput<typeof GallerySlateSchema>;
 
+/** A listed slate's page in the app. */
+export function galleryPagePath(workspace: string, slate: string): string {
+  return `/gallery/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}`;
+}
+
 /** `GET`, public: a listed slate's {@link GallerySlate}. */
 export function gallerySlatePath(workspace: string, slate: string): string {
-  return `/api/gallery/${encodeURIComponent(workspace)}/${encodeURIComponent(slate)}`;
+  return `/api${galleryPagePath(workspace, slate)}`;
 }
 
 /** `GET`, public: a listed slate's picture by its digest. */

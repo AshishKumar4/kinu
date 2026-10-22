@@ -34,6 +34,7 @@ import {
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { localNodeRuntime } from './node-runtime';
+import { requireSchemaGenesis } from './schema-genesis';
 import { actorFilePlane, ownContextTree } from './actor-plane';
 import { MemoryStore } from '@kinu.run/agent-utils';
 import { CraftStore } from '@kinu.run/agent-utils';
@@ -214,6 +215,9 @@ function buildCLIRuntime(
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
 
+  // A facet is the root's database bound to one of its agents, which the host binds with no open of its own: the root's
+  // check, before any schema runs over it.
+  if (config.facet !== undefined) requireSchemaGenesis(db, config.actorBinding?.name ?? config.facet);
   initFiberTable(execRaw);
 
   let actor: ActorHandle;

@@ -12,6 +12,7 @@ import {
   ThumbsUpIcon, ThumbsDownIcon,
 } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
+import { settingsPath } from "@/components/SettingsRail";
 import { AskRecord } from "@/components/QuestionCard";
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart, ReasoningUIPart } from "ai";
@@ -38,9 +39,16 @@ import { redactPayload, redactSecrets, segmentBySteers, splicesSeenOn, type Sign
 import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, systemEventTurn, turnFailure, turnFailureFacts } from "@kinu.run/core";
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
-import { StatusDot } from "@/components/ui/Status";
+import { StatePill, StatusDot, type StatePillTone } from "@/components/ui/Status";
 import { ChatDisclosure, ToolRun, TurnRollup, usePhaseLinesOnSeen, useSeenRunning, WorkLabel } from "@/components/ChatDisclosure";
 import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
+import { Bubble } from "@/components/ui/Bubble";
+import { Button } from "@/components/ui/Button";
+import { Pressable } from "@/components/ui/Pressable";
+import { Dot } from "@/components/ui/Dot";
+import { IconControl } from "@/components/ui/IconControl";
+import { InlineAction } from "@/components/ui/InlineAction";
+import { Surface } from "@/components/ui/Surface";
 
 const MessageCreatedAtSchema = v.looseObject({
   createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),
@@ -78,7 +86,7 @@ export function eventTurnKey(message: UIMessage): string | null {
 
 function FilePartView({ part }: { part: FileUIPart }) {
   return part.mediaType.startsWith("image/")
-    ? <img src={part.url} alt={part.filename ?? "image"} className="max-h-48 max-w-full rounded-lg border p-border" />
+    ? <Surface look="outlined" as="img" className="max-h-48 max-w-full" src={part.url} alt={part.filename ?? "image"} />
     : <AttachmentChip part={part} />;
 }
 
@@ -88,13 +96,13 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
 
   if (isNaN(d.getTime())) return null;
 
-  return <span className="p-annotation p-text-3 mt-1 block">{clockTime(d)}</span>;
+  return <span className="t-meta t-mono p-text-3 mt-1 block">{clockTime(d)}</span>;
 }
 
 // A settled call takes a line's gap, prose and grouped cards a section's. The block carries
 // its own margin because a stack utility cannot be overridden per child.
 const BLOCK_GAP = {
-  row: "mt-1.5 first:mt-0",
+  row: "mt-2 first:mt-0",
   section: "mt-4 first:mt-0",
 } as const;
 
@@ -104,7 +112,7 @@ export function ChatLiveTail({ tail }: { tail: LiveTail | null }) {
   if (tail?.kind !== "thinking") return null;
 
   return (
-    <div data-live-indicator="thinking" className="animate-fade-in py-1.5" aria-live="polite">
+    <div data-live-indicator="thinking" className="animate-fade-in py-1" aria-live="polite">
       {/* A pause and a reasoning block share one "Thinking" label, so the indicator keeps its shape. */}
       <WorkLabel live>Thinking</WorkLabel>
     </div>
@@ -132,18 +140,18 @@ function FailedTurnRow({ message, live, onRetry }: { message: UIMessage; live: b
   const said = provider === null ? words : `${provider}: ${words}`;
 
   return (
-    <div className="py-0.5" role="status" data-turn-failure>
+    <div className="py-px" role="status" data-turn-failure>
       <div className="p-turn-mark">
         <WarningCircleIcon size={14} weight="fill" className="p-danger" aria-hidden />
         <span className="min-w-0 truncate" title={said}><span className="p-text-2">This turn stopped.</span> {said}</span>
-        <button type="button" className="p-turn-mark-link" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide" : "Details"}</button>
+        <InlineAction quiet className="shrink-0" aria-expanded={open} onClick={() => setOpen(!open)}>{open ? "Hide" : "Details"}</InlineAction>
         {onRetry !== undefined && (
-          <button type="button" onClick={onRetry} className="p-turn-mark-link inline-flex items-center gap-1">
+          <InlineAction quiet onClick={onRetry} className="inline-flex shrink-0 items-center gap-1">
             <ArrowClockwiseIcon size={11} aria-hidden />Retry
-          </button>
+          </InlineAction>
         )}
       </div>
-      {open && <pre className="p-pill-detail !ml-[21px]">{raw}</pre>}
+      {open && <pre className="p-pill-detail">{raw}</pre>}
     </div>
   );
 }
@@ -151,8 +159,8 @@ function FailedTurnRow({ message, live, onRetry }: { message: UIMessage; live: b
 /** A turn its owner stopped before its work was done: the failure line's quiet shape, with nothing to act on. */
 function StoppedMidWorkRow() {
   return (
-    <div className="p-turn-mark py-0.5" role="status">
-      <span className="ml-1 mr-0.5 size-1.5 shrink-0 self-center rounded-full p-dot-danger" aria-hidden />
+    <div className="p-turn-mark py-px" role="status">
+      <Dot tone="danger" className="ml-1 mr-px self-center" />
       <span>Stopped before the work was finished</span>
     </div>
   );
@@ -203,24 +211,24 @@ function toolIcon(toolName: string): ReactNode {
   return <DotsThreeCircleIcon size={15} />;
 }
 
-/** Where a one-question helper's chat opens, relative to the chat its `agents` call sits in; null draws no link. */
-export const HelperChatBase = createContext<{ readonly base: string; readonly parent: string | null } | null>(null);
+/** Where a one-question subagent's chat opens, relative to the chat its `agents` call sits in; null draws no link. */
+export const SubagentChatBase = createContext<{ readonly base: string; readonly parent: string | null } | null>(null);
 
-const AnsweredHelperObject = v.looseObject({ agent: v.string(), lifetime: v.literal("task") });
+const AnsweredSubagentObject = v.looseObject({ agent: v.string(), lifetime: v.literal("task") });
 
-const AnsweredHelperSchema = v.union([AnsweredHelperObject, v.pipe(v.string(), v.parseJson(), AnsweredHelperObject)]);
+const AnsweredSubagentSchema = v.union([AnsweredSubagentObject, v.pipe(v.string(), v.parseJson(), AnsweredSubagentObject)]);
 
-/** A task-lifetime helper has no tab and makes no report card: the call that asked it is its durable door. */
-function HelperChatLink({ output }: { output?: JsonValue }) {
-  const base = useContext(HelperChatBase);
-  const helper = v.safeParse(AnsweredHelperSchema, output);
+/** A task-lifetime subagent has no tab and makes no report card: the call that asked it is its durable door. */
+function SubagentChatLink({ output }: { output?: JsonValue }) {
+  const base = useContext(SubagentChatBase);
+  const subagent = v.safeParse(AnsweredSubagentSchema, output);
 
-  if (base === null || !helper.success) return null;
-  const name = helper.output.agent;
+  if (base === null || !subagent.success) return null;
+  const name = subagent.output.agent;
 
   return (
     <Link to={`${base.base}${encodeURIComponent(name)}${base.parent === null ? "" : `?parent=${encodeURIComponent(base.parent)}`}`} aria-label={`Open ${name}'s conversation`}
-      className="ml-10 inline-block p-annotation p-accent hover:underline">{name}</Link>
+      className="t-meta t-mono ml-12 inline-block p-accent-fg hover:underline">{name}</Link>
   );
 }
 
@@ -230,10 +238,10 @@ function ToolOutput({ output }: { output: JsonValue }) {
 
   return (
     <div>
-      <div className="p-eyebrow mb-1">Output</div>
+      <div className="t-label mb-1">Output</div>
       {printed.trim() === ""
-        ? <p className="p-meta p-text-3">Nothing printed.</p>
-        : <pre className="p-t-code p-text-2 max-h-40 overflow-auto whitespace-pre-wrap break-words m-0">{printed}</pre>}
+        ? <p className="t-meta p-text-3">Nothing printed.</p>
+        : <pre className="t-code p-text-2 max-h-40 overflow-auto whitespace-pre-wrap break-words m-0">{printed}</pre>}
     </div>
   );
 }
@@ -283,64 +291,55 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
   else if (toolName === "shell") codePreview = jsonString(input, "command");
 
   let stateName = "done";
-  let stateTone = "p-badge-success";
+  let stateTone: StatePillTone = "done";
   let stateBadge: ReactNode = <><CheckCircleIcon size={11} weight="fill" />{durationLabel ?? "Done"}</>;
 
   if (isRunning) {
     stateName = "running";
-    stateTone = "p-accent-subtle p-accent";
+    stateTone = "live";
     stateBadge = <><StatusDot tone="live" />Running</>;
   } else if (failed) {
     stateName = "failed";
-    stateTone = "p-fill p-text-4";
+    stateTone = "quiet";
     stateBadge = <><WarningCircleIcon size={11} weight="fill" />Failed</>;
   }
 
   return (
     <div>
-      <button
-        type="button"
-        onClick={onToggleExpand}
-        aria-expanded={expanded}
-        data-tool-state={stateName}
-        data-tool-effect={effect}
-        className="group/tool grid w-full cursor-pointer grid-cols-[20px_minmax(0,1fr)_auto_auto] items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--c-elevated)]"
-      >
-        <span className="flex size-5 items-center justify-center p-text-4">
+      <Pressable className="group/tool grid grid-cols-[var(--layout-tool-row)] items-center gap-2 px-3 py-2" onClick={onToggleExpand} aria-expanded={expanded} data-tool-state={stateName} data-tool-effect={effect}>
+        <span className="flex size-5 items-center justify-center p-text-3">
           {toolIcon(toolName)}
         </span>
         <span className="flex min-w-0 items-baseline gap-2">
-          <strong className="min-w-0 truncate p-row-text font-medium p-text-2">{description || toolLabel(toolName)}</strong>
-          <span className="min-w-0 flex-1 truncate p-annotation p-text-4" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
-          {runtime && <span className="shrink-0 p-annotation p-text-4">{runtime}</span>}
+          <strong className="t-item min-w-0 truncate p-text-2">{description || toolLabel(toolName)}</strong>
+          <span className="t-meta t-mono min-w-0 flex-1 truncate p-text-3" title={[summary, description].filter(Boolean).join(" · ")}>{summary || "Tool call"}</span>
+          {runtime && <span className="t-meta t-mono shrink-0 p-text-3">{runtime}</span>}
         </span>
-        <span className={`inline-flex min-h-6 shrink-0 items-center gap-1.5 rounded-full px-2 p-t-status ${stateTone}`}>
-          {stateBadge}
-        </span>
+        <StatePill tone={stateTone}>{stateBadge}</StatePill>
         <CaretRightIcon size={11} aria-hidden className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`} />
-      </button>
-      {toolName === "agents" && <HelperChatLink output={output} />}
+      </Pressable>
+      {toolName === "agents" && <SubagentChatLink output={output} />}
       {expanded && provisionErr && (
-        <div className="p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 text-xs p-text-2 flex items-start gap-2">
-          <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />
+        <Surface look="outlined" className="t-meta p-tint-warning mt-2 ml-5 px-3 py-2 p-text-2 flex items-start gap-2">
+          <WrenchIcon size={12} className="p-warning mt-px shrink-0" />
           <div className="space-y-1">
             <div>
-              The agent asked for <span className="font-medium">{executorLabel(provisionErr.runtime)}</span>, which isn't
+              The agent asked for <strong>{executorLabel(provisionErr.runtime)}</strong>, which isn't
               provisioned yet.
             </div>
             <div className="p-text-3">{provisionErr.message}</div>
             <div className="p-text-3">
-              Open the <span className="font-medium">Environment</span> tab to provision it.
+              Open the <strong>Environment</strong> tab to provision it.
             </div>
           </div>
-        </div>
+        </Surface>
       )}
       {expanded && (
-        <div className="border-t border-dashed border-[var(--c-dash)] px-4 py-3 space-y-2 animate-scale-in bg-[var(--c-recessed)]">
+        <Surface look="well" className="p-rule-dashed px-4 py-3 space-y-2 animate-scale-in">
           {errorText && (
             <div>
-              <div className="p-eyebrow mb-1 p-danger">Error</div>
-              <pre className="p-t-code p-danger max-h-40 overflow-auto whitespace-pre-wrap m-0">{redactSecrets(errorText)}</pre>
+              <div className="t-label mb-1 p-danger">Error</div>
+              <pre className="t-code p-danger max-h-40 overflow-auto whitespace-pre-wrap m-0">{redactSecrets(errorText)}</pre>
             </div>
           )}
           {/* eval and shell args render as source, not JSON: JSON escapes every quote and newline. */}
@@ -349,12 +348,12 @@ function ToolCallBlock({ toolName, input, output, effect, isRunning, isError, er
           )}
           {codePreview === null && input != null && (
             <div>
-              <div className="p-eyebrow mb-1">Input</div>
+              <div className="t-label mb-1">Input</div>
               <div className="max-h-40 overflow-auto"><CodeBlock wrap className="language-json">{JSON.stringify(redactPayload(input), null, 2)}</CodeBlock></div>
             </div>
           )}
           {output != null && <ToolOutput output={output} />}
-        </div>
+        </Surface>
       )}
     </div>
   );
@@ -386,9 +385,9 @@ function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; e
         onToggleExpand={onToggleExpand}
       />
       {previewUrl && (
-        <div className="mt-2 h-64 overflow-hidden rounded-md border p-border">
+        <Surface look="outlined" className="mt-2 h-64 overflow-hidden">
           <PreviewFrame url={previewUrl} />
-        </div>
+        </Surface>
       )}
       <PartPictures part={part} size="thumb" />
     </div>
@@ -414,7 +413,7 @@ export function DeviceOfflineRow({ devices }: { devices: ReadonlyArray<Unavailab
       tone="p-warning"
       label="Machine"
       body={offline}
-      action={devices.length === 0 ? <Link to="/devices" className="mt-1 mr-2 shrink-0 p-row-text p-accent hover:underline">Connect</Link> : undefined}
+      action={devices.length === 0 ? <Link to={settingsPath("devices")} className="t-body mt-1 mr-2 shrink-0 p-accent-fg hover:underline">Connect</Link> : undefined}
       hooks={{ "data-device-offline": String(devices.length) }}
     />
   );
@@ -429,8 +428,7 @@ export function ModelFallbackRows({ notices }: { notices: readonly string[] }) {
 }
 
 /** `wrap-anywhere`: a long unbroken token must break inside the bubble, not widen the column. */
-const USER_BUBBLE_CLASS =
-  "relative max-w-[min(80%,42rem)] rounded-t-2xl rounded-br-[4px] rounded-bl-2xl border p-user-border px-[18px] py-3 p-user-bubble p-t-chat whitespace-pre-wrap wrap-anywhere";
+const USER_BUBBLE_TEXT = "prose-chat whitespace-pre-wrap wrap-anywhere";
 
 export function SteerBubble({ steer, onFork }: {
   steer: InlineSteer;
@@ -438,18 +436,12 @@ export function SteerBubble({ steer, onFork }: {
 }) {
   return (
     <div className="group flex flex-col items-end animate-fade-in" data-steer={steer.state}>
-      <div className={USER_BUBBLE_CLASS}>
+      <Bubble className={USER_BUBBLE_TEXT}>
         {steer.text}
         {onFork && steer.state === "landed" && (
-          <button
-            onClick={() => onFork(steer.id)}
-            className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
-            title="Fork the workspace from here"
-          >
-            <GitBranchIcon size={12} />
-          </button>
+          <Button variant="ghost" size="sm" icon={<GitBranchIcon size={14} />} className="absolute -left-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onClick={() => onFork(steer.id)} title="Fork the workspace from here" aria-label="Fork the workspace from here" />
         )}
-      </div>
+      </Bubble>
       <SteeredMark state={steer.state === "queued" ? "queued" : "landed"} />
     </div>
   );
@@ -457,7 +449,7 @@ export function SteerBubble({ steer, onFork }: {
 
 function SteeredMark({ state }: { state: "queued" | "landed" }) {
   return (
-    <span className="mt-1 inline-flex items-center gap-1 p-meta p-text-3">
+    <span className="t-meta mt-1 inline-flex items-center gap-1 p-text-3">
       <ArrowBendUpRightIcon size={10} weight="bold" />
       {state === "queued" ? "queued for the next step" : "steered mid-turn"}
     </span>
@@ -563,33 +555,20 @@ export const MessageView = memo(function MessageView({
 
     return (
       <div className="flex flex-col items-end animate-fade-in group">
-        <div className={USER_BUBBLE_CLASS}>
+        <Bubble className={USER_BUBBLE_TEXT}>
           {fileParts.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mb-1.5">
+            <div className="flex flex-wrap gap-2 mb-2">
               {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}
             </div>
           )}
           {rowText(message)}
           {canFork && (
-            <button
-              onClick={() => onFork(message.id)}
-              className="absolute -left-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
-              title="Fork the workspace from here"
-            >
-              <GitBranchIcon size={12} />
-            </button>
+            <Button variant="ghost" size="sm" icon={<GitBranchIcon size={14} />} className="absolute -left-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onClick={() => onFork(message.id)} title="Fork the workspace from here" aria-label="Fork the workspace from here" />
           )}
           {!isLive && onRevert && message.id && (
-            <button
-              onClick={() => onRevert(message.id)}
-              data-revert-turn={message.id}
-              className="absolute -left-9 top-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
-              title="Revert to before this turn"
-            >
-              <ClockCounterClockwiseIcon size={12} />
-            </button>
+            <Button variant="ghost" size="sm" icon={<ClockCounterClockwiseIcon size={14} />} className="absolute -left-8 top-8 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onClick={() => onRevert(message.id)} data-revert-turn={message.id} title="Revert to before this turn" aria-label="Revert to before this turn" />
           )}
-        </div>
+        </Bubble>
         {isSteeredMessage({ metadata: message.metadata }) && <SteeredMark state="landed" />}
         <MessageTimestamp createdAt={messageCreatedAt(message)} />
       </div>
@@ -605,7 +584,7 @@ export const MessageView = memo(function MessageView({
     const isTailPart = (tail?.kind === "text" || tail?.kind === "reasoning") && tail.part === part;
 
     if (part.type === "file") {
-      return <div key={key} className="my-1.5"><FilePartView part={part} /></div>;
+      return <div key={key} className="my-2"><FilePartView part={part} /></div>;
     }
 
     if (part.type === "text") {
@@ -616,7 +595,7 @@ export const MessageView = memo(function MessageView({
       // `p-streaming` draws the caret inside the last markdown block; a sibling element would land on its own line.
       return (
         <Fragment key={key}>
-          <div {...(isTailPart ? { "data-live-indicator": "text" } : {})}
+          <div data-said {...(isTailPart ? { "data-live-indicator": "text" } : {})}
             className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
             <AnswerText text={t} place={{ messageId: message.id, stored: tail === null, chat: answerSlates }} />
           </div>
@@ -685,13 +664,7 @@ export const MessageView = memo(function MessageView({
           {segment.parts.length > 0 && (
             <div className="group relative flex w-full flex-col">
               {s === forkSegment && canFork && (
-                <button
-                  onClick={() => onFork(message.id)}
-                  className="absolute -right-9 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity flex items-center gap-1 p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm"
-                  title="Fork the workspace from here"
-                >
-                  <GitBranchIcon size={12} />
-                </button>
+                <Button variant="ghost" size="sm" icon={<GitBranchIcon size={14} />} className="absolute -right-8 top-2 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity" onClick={() => onFork(message.id)} title="Fork the workspace from here" aria-label="Fork the workspace from here" />
               )}
               {rollUpTurn(groupMessageParts(segment.parts), isLive && s === segments.length - 1).map((block, i, blocks) => {
                 if (block.kind !== "turn") {
@@ -783,27 +756,15 @@ function MessageFeedback({
 
   return (
     <div className={`flex items-center gap-1 transition-opacity ${current === null ? 'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100' : ''}`}>
-      <button
-        type="button"
-        onClick={() => toggle('positive')}
-        disabled={busy}
-        className={`flex items-center p-1 rounded-sm p-card-hover transition-colors ${
-          current === 'positive' ? 'p-text' : 'p-text-3 hover:p-text focus-visible:p-text'
-        }`}
-        title="Mark this response helpful. Feeds evolution scoring."
-        aria-label="Mark this response helpful"
-      ><ThumbsUpIcon size={12} weight={current === 'positive' ? 'fill' : 'regular'} /></button>
-      <button
-        type="button"
-        onClick={() => toggle('negative')}
-        disabled={busy}
-        className={`flex items-center p-1 rounded-sm p-card-hover transition-colors ${
-          current === 'negative' ? 'p-text' : 'p-text-3 hover:p-text focus-visible:p-text'
-        }`}
-        title="Mark this response poor. Feeds evolution scoring."
-        aria-label="Mark this response poor"
-      ><ThumbsDownIcon size={12} weight={current === 'negative' ? 'fill' : 'regular'} /></button>
-      {failed && <span className="p-t-status p-danger">Could not save. Try again.</span>}
+      <IconControl place="inline" onClick={() => toggle('positive')} disabled={busy} aria-pressed={current === 'positive'}
+        title="Mark this response helpful. Feeds evolution scoring." aria-label="Mark this response helpful">
+        <ThumbsUpIcon size={12} weight={current === 'positive' ? 'fill' : 'regular'} />
+      </IconControl>
+      <IconControl place="inline" onClick={() => toggle('negative')} disabled={busy} aria-pressed={current === 'negative'}
+        title="Mark this response poor. Feeds evolution scoring." aria-label="Mark this response poor">
+        <ThumbsDownIcon size={12} weight={current === 'negative' ? 'fill' : 'regular'} />
+      </IconControl>
+      {failed && <span className="t-status p-danger">Could not save. Try again.</span>}
     </div>
   );
 }

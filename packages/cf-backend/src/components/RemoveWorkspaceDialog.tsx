@@ -23,8 +23,8 @@ export function RemoveWorkspaceDialog({ workspace, onClose }: { workspace: { nam
   return (
     <ConfirmDialog title="Remove workspace" icon={<TrashIcon size={18} className="p-danger" />} action="Remove"
       failed="Could not remove" onConfirm={confirm} onClose={onClose}>
-      <p className="text-xs p-text-2 leading-relaxed">
-        Remove <span className="font-medium p-text">{workspaceDisplayTitle(workspace)}</span> and delete
+      <p className="t-meta p-text-2">
+        Remove <strong className="p-text">{workspaceDisplayTitle(workspace)}</strong> and delete
         everything in it? This cannot be undone.
       </p>
     </ConfirmDialog>

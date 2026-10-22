@@ -97,10 +97,17 @@ function asyncOnly(name, rewrite) {
 }
 
 /**
- * A command's result as Node reports it, asked for as the command wrote it (parts). A refusal ran nothing (126).
+ * A command's result as Node reports it, asked for as the command wrote it (parts), on the machine whose files its cwd
+ * is (\`fs.machine\`), through that machine's own exec; with no cwd, the workspace's. A refusal ran nothing (126).
  */
-async function execParts(workspace, command, options) {
-  const result = await workspace.exec(command, { ...options, parts: true });
+async function execParts(machines, command, cwd) {
+  const where = cwd === undefined ? null : await machines.workspace.fs.machine(cwd);
+  const refusedWhere = where === null ? null : refusalOf(where);
+  if (refusedWhere !== null) return { exitCode: 126, stdout: '', stderr: refusedWhere };
+  const machine = where === null ? machines.workspace : machines[where.machine];
+  if (!machine) return { exitCode: 126, stdout: '', stderr: cwd + ' is on ' + where.machine + ', which this program has no namespace for' };
+  const options = where === null ? {} : { cwd: where.path, ...(where.device === undefined ? {} : { device: where.device }) };
+  const result = await machine.exec(command, { ...options, parts: true });
   const refused = refusalOf(result);
   if (refused !== null) return { exitCode: 126, stdout: '', stderr: refused };
   return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
@@ -258,12 +265,12 @@ function makeFs(workspace, cwd) {
   return { fs, promises };
 }
 
-function makeChildProcess(workspace) {
+function makeChildProcess(machines, cwd) {
   function exec(command, optionsOrCallback, maybeCallback) {
     const callback = typeof optionsOrCallback === 'function' ? optionsOrCallback : maybeCallback;
     const options = typeof optionsOrCallback === 'object' && optionsOrCallback !== null ? optionsOrCallback : {};
     const promise = (async () => {
-      const outcome = await execParts(workspace, String(command), options.cwd === undefined ? {} : { cwd: String(options.cwd) });
+      const outcome = await execParts(machines, String(command), options.cwd === undefined ? undefined : resolveAt(cwd, String(options.cwd)));
       if (outcome.exitCode !== 0) {
         const error = new Error('Command failed: ' + command + '\n' + outcome.stderr);
         error.code = outcome.exitCode;
@@ -295,9 +302,10 @@ function makeChildProcess(workspace) {
   };
 }
 
-export function createRequire({ workspace, builtins, cwd }) {
+/** \`machines\`: the program's computer and device namespaces, where it has them, for a command whose cwd is theirs. */
+export function createRequire({ workspace, machines, builtins, cwd }) {
   const { fs, promises } = makeFs(workspace, cwd);
-  const childProcess = makeChildProcess(workspace);
+  const childProcess = makeChildProcess({ ...machines, workspace }, cwd);
   const table = {
     fs, 'fs/promises': promises, child_process: childProcess,
   };
@@ -331,7 +339,9 @@ export function createFetch(failureHeader) {
  * operation is captured here and shadowed, so a program reaches slates through these members only.
  */
 export function bindSlates(workspace) {
-  const operate = workspace === null ? undefined : workspace.slates;
+  // A member the workspace serves is its own, in both sandboxes; any other name reads as a member that refuses when called.
+  if (workspace === null || !('slates' in workspace)) return;
+  const operate = workspace.slates;
   if (typeof operate !== 'function') return;
   const members = ${JSON.stringify(SLATE_PROGRAM_MEMBERS)};
   // Never a class method here: 'then' would make a slate look like a promise to await, and the rest

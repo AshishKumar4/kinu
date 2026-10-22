@@ -34,7 +34,7 @@
 <g>
 <rect x="48" y="311" width="262" height="120" rx="10" fill="#FFFCF5" stroke="#8A7B66" stroke-width="1.5" />
 <text x="68" y="346" font-size="24" font-weight="650" fill="#29231C" text-anchor="start">
-<tspan x="68" dy="0">Subordinate actor</tspan>
+<tspan x="68" dy="0">Subagent actor</tspan>
 </text>
 <text x="68" y="380" font-size="22" font-weight="400" fill="#29231C" text-anchor="start">
 <tspan x="68" dy="0">Own session, queue,</tspan>

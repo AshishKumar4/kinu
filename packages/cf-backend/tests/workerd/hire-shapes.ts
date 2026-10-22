@@ -14,11 +14,11 @@ export const NEST_MISSION = 'HIRE-NEST-BRIEF';
 
 export const NEST_RELAY = 'RELAYED';
 
-/** The deepest helper's answer under `chain`: its own hire is refused at the depth cap. */
+/** The deepest subagent's answer under `chain`: its own hire is refused at the depth cap. */
 export const CHAIN_BOTTOM = 'CHAIN-BOTTOM-7';
 
 /** How a hired agent's report reads in the drain turn it opens on its hirer. */
-export const REPORT_MARK = '[subordinate_report]';
+export const REPORT_MARK = '[subagent_report]';
 
 export const HIRE_ROOT_MODEL = 'hire-root';
 
@@ -27,8 +27,9 @@ export const HIRE_DURABLE_MODEL = 'hire-root-durable';
 /** The catalog's default tier: not what the child runs on (the workspace pin), but every tier slot must be offered by `/v1/models`. */
 export const HIRE_CHILD_MODEL = 'hire-child';
 
-/** `job`: a durable hire whose brief starts a shell command that outlives its call's window. */
-export type ChildScript = 'answer' | 'throw' | 'park' | 'nest' | 'nest-park' | 'nest-progress' | 'chain' | 'job';
+/** `job`: a durable hire whose brief starts a shell command that outlives its call's window. `process`: the workspace's
+ *  agent starts a process from a program, with `workspace.startProcess`. */
+export type ChildScript = 'answer' | 'throw' | 'park' | 'nest' | 'nest-park' | 'nest-progress' | 'chain' | 'job' | 'process';
 
 export const JOB_MISSION = 'HIRE-JOB-BRIEF';
 
@@ -46,6 +47,19 @@ export const JOB_STARTED = 'JOB-STARTED';
 
 /** The hire's answer to a wake about its job. */
 export const JOB_NOTED = 'JOB-NOTED';
+
+/** How many lines the `process` script's process writes, one a second: it runs half a minute past its turn. */
+export const PROCESS_TICKS = 30;
+
+/** Where it writes them, in the workspace's home. */
+export const PROCESS_LOG = '/home/main/process-ticks.log';
+
+export const PROCESS_COMMAND = `i=0; while [ "$i" -lt ${String(PROCESS_TICKS)} ]; do i=$((i + 1)); echo "$i" >> ${PROCESS_LOG}; sleep 1; done`;
+
+/** The agent's answer once its process started, and to a wake about its job. */
+export const PROCESS_STARTED = 'PROCESS-STARTED';
+
+export const PROCESS_NOTED = 'PROCESS-NOTED';
 
 export interface JobRow {
   readonly actorId: string;
@@ -108,7 +122,7 @@ export interface HireObservation {
   readonly actors: readonly ActorRow[];
   readonly turns: readonly TurnCount[];
   readonly toolResults: readonly string[];
-  /** Every report message a hirer's turn opened on (`[subordinate_report]` drain text). */
+  /** Every report message a hirer's turn opened on (`[subagent_report]` drain text). */
   readonly reports: readonly string[];
   /** The reports the root's own turns opened on: the root alone carries no `report` tool. */
   readonly rootReports: readonly string[];

@@ -1,11 +1,11 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
-import { CONTAINER_ENV, endProcess } from './processes';
+import { boxEnv, containerExec, endProcess, resizePty, type TerminalSize } from './processes';
 import { INSTALL_SESSION_FILES, SAVED_SESSIONS, SESSIONS_FORGET, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE, type SessionRecord } from './sessions';
 import { DEVBOX_WORKDIR } from './storage';
 
-const ENV = { ...CONTAINER_ENV, ...SESSION_FILES, TERM: 'xterm-256color' };
+const ENV = boxEnv({ ...SESSION_FILES, TERM: 'xterm-256color' });
 
 /**
  * `$1` the session's id, `$2` its folder: joins the session, or opens it there, first showing what it had before a
@@ -31,13 +31,23 @@ interface TerminalLanes {
   readonly output: ReadableStream<Uint8Array>;
   /** Ends the PTY's tmux client, which leaves its session running (`endProcess`). */
   readonly end: () => void;
+  readonly resize: (size: TerminalSize) => Effect.Effect<'resized' | 'ended', DevboxError>;
+  /** The size the PTY opened at. */
+  readonly size: TerminalSize;
 }
 
 class TerminalConnection {
   #closed = false;
   #exited = false;
+  /** The size the pane asked for last, while a resize runs: a pane being dragged asks many times, and only its last counts. */
+  #wanted: TerminalSize | null = null;
+  #resizing = false;
+  /** The PTY's size now: a pane that asks for it again is answered without an exec. */
+  #size: TerminalSize;
 
-  constructor(readonly lanes: TerminalLanes) {}
+  constructor(readonly lanes: TerminalLanes) {
+    this.#size = lanes.size;
+  }
 
   close(code: number, message: string): void {
     if (this.#closed) return;
@@ -47,23 +57,47 @@ class TerminalConnection {
     this.lanes.server.close(code, message);
   }
 
-  #failed(lane: 'input' | 'output', cause: DevboxError): void {
-    if (this.#closed && cause.code === 'cancelled') return;
+  /** A lane that failed while the terminal is open closes it; one failing after it closed or its client exited is no news. */
+  failed(lane: 'input' | 'output', cause: DevboxError): void {
+    if (this.#closed || this.#exited) return;
     console.error(`[devbox] native terminal ${lane} failed: ${cause.message}`);
     this.close(1011, `terminal ${lane} failed`);
   }
 
-  accept(event: MessageEvent): Promise<void> {
-    return settle(Effect.gen({ self: this }, function* () {
+  accept(event: MessageEvent): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
       if (this.#closed) return;
 
       if (event.data instanceof ArrayBuffer) {
         yield* attempt('io', () => this.lanes.input.write(new Uint8Array(event.data)));
       } else {
         const resize = yield* attemptSync('invalid-input', () => v.parse(Resize, JSON.parse(event.data)));
-        yield* attemptSync('process', () => this.lanes.process.resize(resize.cols, resize.rows));
+
+        yield* this.#resizes({ cols: resize.cols, rows: resize.rows });
       }
-    }).pipe(Effect.catch(cause => Effect.sync(() => this.#failed('input', cause)))));
+    });
+  }
+
+  /** Runs the resize the pane asked for, then each it asked for meanwhile, last first; one asked while one runs waits. */
+  #resizes(size: TerminalSize): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      this.#wanted = size;
+
+      if (this.#resizing) return;
+      this.#resizing = true;
+
+      yield* Effect.gen({ self: this }, function* () {
+        for (let next = this.#wanted; next !== null && !this.#closed; next = this.#wanted) {
+          this.#wanted = null;
+
+          if (next.cols === this.#size.cols && next.rows === this.#size.rows) continue;
+
+          // A client gone mid-resize ended its terminal: its output's end closes the socket, and no size is owed it.
+          if ((yield* this.lanes.resize(next)) === 'ended') return;
+          this.#size = next;
+        }
+      }).pipe(Effect.ensuring(Effect.sync(() => { this.#resizing = false; })));
+    });
   }
 
   read(): () => void {
@@ -87,7 +121,7 @@ class TerminalConnection {
 
     return observe(pump, {
       success: () => this.close(1000, 'terminal exited'),
-      failure: cause => this.#failed('output', cause),
+      failure: cause => this.failed('output', cause),
     });
   }
 }
@@ -97,7 +131,7 @@ export function terminalSocket(container: Pick<Container, 'exec'>, params: URLSe
   return settle(Effect.gen(function* () {
     const size = yield* attemptSync('invalid-input', () => v.parse(Size, { cols: Number(params.get('cols') ?? 80), rows: Number(params.get('rows') ?? 24) }));
 
-    const process = yield* attempt('process', () => container.exec(['/bin/sh', '-c', ATTACH, 'devbox-terminal', session.id, session.cwd], {
+    const process = yield* attempt('process', () => containerExec(container, ['/bin/sh', '-c', ATTACH, 'devbox-terminal', session.id, session.cwd], {
       pty: size, stdin: 'pipe', env: ENV,
     }));
 
@@ -113,11 +147,12 @@ export function terminalSocket(container: Pick<Container, 'exec'>, params: URLSe
     const server = sockets[1];
     server.binaryType = 'arraybuffer';
     server.accept();
-    const connection = new TerminalConnection({ process, server, input: process.stdin.getWriter(), output: process.stdout, end });
+    const resize = (wanted: TerminalSize) => resizePty(container, process.pid, wanted);
+    const connection = new TerminalConnection({ process, server, input: process.stdin.getWriter(), output: process.stdout, end, resize, size });
     const cancelRead = connection.read();
-    server.addEventListener('message', event => observe(Effect.promise(() => connection.accept(event)), {
+    server.addEventListener('message', event => observe(connection.accept(event), {
       success: () => undefined,
-      failure: () => { connection.close(1011, 'terminal input failed'); cancelRead(); },
+      failure: (cause) => { connection.failed('input', cause); cancelRead(); },
     }));
     server.addEventListener('close', () => { connection.close(1000, 'terminal detached'); cancelRead(); });
     server.addEventListener('error', () => { connection.close(1011, 'terminal transport failed'); cancelRead(); });
@@ -129,7 +164,7 @@ export function terminalSocket(container: Pick<Container, 'exec'>, params: URLSe
 /** Ends a session's shell and screen, and what a restart saved of it (D97); its next attach opens a fresh one. */
 export function resetTerminal(container: Container, id: string): Promise<void> {
   return settle(Effect.gen(function* () {
-    const process = yield* attempt('process', () => container.exec(['/bin/sh', '-c', `if tmux has-session -t "=$1" 2>/dev/null; then tmux kill-session -t "=$1"; fi\n${SESSIONS_FORGET}`, 'devbox-reset', id]));
+    const process = yield* attempt('process', () => containerExec(container, ['/bin/sh', '-c', `if tmux has-session -t "=$1" 2>/dev/null; then tmux kill-session -t "=$1"; fi\n${SESSIONS_FORGET}`, 'devbox-reset', id]));
     const response = yield* attempt('process', () => process.output());
 
     if (response.exitCode !== 0) return yield* Effect.fail(new DevboxError('process', new TextDecoder().decode(response.stderr)));

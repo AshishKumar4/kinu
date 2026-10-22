@@ -11,7 +11,7 @@ export function KinuMark({ className, size = 20 }: KinuMarkProps): ReactElement 
   return (
     <span
       aria-hidden="true"
-      className={`inline-block shrink-0 text-[var(--c-accent)]${className ? ` ${className}` : ''}`}
+      className={`${className ?? ''} inline-block shrink-0 p-accent`}
       style={{ lineHeight: 0 }}
       dangerouslySetInnerHTML={{ __html: mark(size) }}
     />
@@ -26,7 +26,7 @@ interface KinuLogoProps {
 /** The mark and the name, set plainly in the UI face. */
 export function KinuLogo({ className, compact = false }: KinuLogoProps): ReactElement {
   return (
-    <span className={`inline-flex items-center gap-2 font-medium p-text ${compact ? 'text-[17px]' : 'text-[18px]'}${className ? ` ${className}` : ''}`}>
+    <span className={`p-wordmark inline-flex items-center gap-2 p-text${className ? ` ${className}` : ''}`} data-compact={compact ? '' : undefined}>
       <KinuMark size={compact ? 20 : 22} />
       <span>Kinu</span>
     </span>

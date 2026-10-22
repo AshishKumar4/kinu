@@ -1,5 +1,5 @@
 /** Fills its parent: render inside a sized container. */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Effect } from "effect";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { Switch } from "@/components/ui/Switch";
@@ -8,6 +8,7 @@ import { PREVIEW_SANDBOX, isPreviewUrl, type PinnedPreviewPort } from "@kinu.run
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { detach, showing } from "@kinu.run/core/obs";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
+import { Surface } from "@/components/ui/Surface";
 
 /** Whether a computer preview is a public link, and the owner's way to change it. */
 export interface PublicLink {
@@ -27,12 +28,21 @@ export function useComputerPreviewLink(port: PinnedPreviewPort | undefined, rpc:
 
 export function PreviewChrome({ url, publicLink }: { url: string; publicLink?: PublicLink | undefined }) {
   return (
-    <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
-      <code className="p-annotation p-text-3 truncate flex-1">{url}</code>
+    <PreviewAddress url={url}>
       {publicLink !== undefined && <PublicLinkSwitch key={url} link={publicLink} />}
-      <CopyButton value={url} what="the preview URL" size={11} className="p-text-3 hover:p-text p-1 shrink-0" />
+      <CopyButton value={url} what="the preview URL" className="shrink-0" />
       <a href={url} target="_blank" rel="noopener noreferrer" className="p-text-3 hover:p-text p-1 shrink-0" title="Open in new tab"><ArrowSquareOutIcon size={11} /></a>
-    </div>
+    </PreviewAddress>
+  );
+}
+
+/** The bar alone, naming where a preview is: the landing's sample, whose address serves nothing to open or copy. */
+export function PreviewAddress({ url, children }: { url: string; children?: ReactNode }) {
+  return (
+    <Surface look="tile" className="flex items-center gap-2 px-3 py-1 border-b p-border shrink-0">
+      <code data-preview-address className="t-meta t-mono p-text-3 truncate flex-1">{url}</code>
+      {children}
+    </Surface>
   );
 }
 
@@ -62,7 +72,7 @@ function PublicLinkSwitch({ link }: { link: PublicLink }) {
 
   return (
     <>
-      <label className="flex shrink-0 items-center gap-1.5 p-annotation p-text-3" title={error ?? (open ? "Anyone with this link can open it" : "Opens only for you, signed in")} data-preview-public>
+      <label className="t-meta t-mono flex shrink-0 items-center gap-2 p-text-3" title={error ?? (open ? "Anyone with this link can open it" : "Opens only for you, signed in")} data-preview-public>
         {open ? <span className="p-warning">Public link</span> : "Public link"}
         <Switch on={open} label="Anyone with the link can open this preview" data-preview-public-switch
           onChange={(next) => (next
@@ -88,7 +98,7 @@ export function PreviewFrame({ url, label, publicLink }: {
   if (!isPreviewUrl(url)) {
     return (
       <div className="h-full flex items-center justify-center p-4 text-center">
-        <span className="p-annotation p-text-3 break-all">
+        <span className="t-meta t-mono p-text-3 break-all">
           Refused to preview a URL that is not a Kinu preview: {url}
         </span>
       </div>
@@ -98,12 +108,7 @@ export function PreviewFrame({ url, label, publicLink }: {
   return (
     <div className="h-full flex flex-col">
       <PreviewChrome url={url} publicLink={publicLink} />
-      <iframe
-        src={url}
-        title={label ?? url}
-        className="p-bg flex-1 min-h-0 w-full border-0"
-        sandbox={PREVIEW_SANDBOX}
-      />
+      <Surface look="page" as="iframe" className="flex-1 min-h-0 w-full border-0" src={url} title={label ?? url} sandbox={PREVIEW_SANDBOX} />
     </div>
   );
 }

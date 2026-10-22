@@ -213,16 +213,16 @@ describe('renderForLLM', () => {
     const longReport = 'seam found in the auth module; '.repeat(40);
     const shortReport = 'Survey done — three seams found; note written.';
 
-    test('an oversize subordinate report cites the spill that holds it whole', async () => {
+    test('an oversize subagent report cites the spill that holds it whole', async () => {
       const { vfs } = createMemoryVfs();
       const spilled = await spillEventContent(vfs, longReport);
       expect(spilled).toEqual({ path: eventContentPath(longReport) });
       const content_path = present(spilled?.path, 'the spilled report path');
 
       const r = renderForLLM({
-        ...EVENT_BASE, ingress: 'subordinate', variant: 'subordinate_report', payload_visibility: 'full',
+        ...EVENT_BASE, ingress: 'subagent', variant: 'subagent_report', payload_visibility: 'full',
         payload: {
-          from_subordinate: 'researcher', status: 'completed', content: longReport, content_path,
+          from_subagent: 'researcher', status: 'completed', content: longReport, content_path,
           sequence_id: 'seq-1', kinu_mode: 'build',
         },
       });
@@ -252,9 +252,9 @@ describe('renderForLLM', () => {
       expect(await filesIn(vfs)).toEqual([]);
 
       const r = renderForLLM({
-        ...EVENT_BASE, ingress: 'subordinate', variant: 'subordinate_report', payload_visibility: 'full',
+        ...EVENT_BASE, ingress: 'subagent', variant: 'subagent_report', payload_visibility: 'full',
         payload: {
-          from_subordinate: 'researcher', status: 'completed', content: shortReport,
+          from_subagent: 'researcher', status: 'completed', content: shortReport,
           sequence_id: 'seq-2', task: 'Survey auth', kinu_mode: 'build',
         },
       });

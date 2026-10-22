@@ -41,7 +41,7 @@ import {
 import { resolvePublicSessionPlan, KinuPublicSession, openPublicSession, type InspectionAnswer } from './session';
 import { resolveWebIdentity } from './workspace-roster';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
-import { SubordinateInspectionRequestSchema } from '../../packages/core/src/subordinates/inspection';
+import { SubagentInspectionRequestSchema } from '../../packages/core/src/subagents/inspection';
 import { measurePromptUsage } from './results';
 import { claimTrialAccount } from './slot';
 import { reviewerCatalog, REVIEWER_ROLE_ID } from './reviewer';
@@ -125,7 +125,7 @@ function socketOnly(request: Request, server: Server<undefined>): Response | und
   return new Response('not found', { status: 404 });
 }
 
-test("a helper's own jobs are the RPC's actor, and a helper dismissed since the roster was read has none", async () => {
+test("a subagent's own jobs are the RPC's actor, and a subagent dismissed since the roster was read has none", async () => {
   const asked: unknown[][] = [];
 
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
@@ -135,8 +135,8 @@ test("a helper's own jobs are the RPC's actor, and a helper dismissed since the 
 
         asked.push(request.args);
 
-        if (request.args[1] === 'gone-helper') {
-          socket.send(rpcReplyFrame({ requestId: request.id, error: '"gone-helper" is not an agent of this workspace.' }));
+        if (request.args[1] === 'gone-subagent') {
+          socket.send(rpcReplyFrame({ requestId: request.id, error: '"gone-subagent" is not an agent of this workspace.' }));
 
           return;
         }
@@ -147,16 +147,16 @@ test("a helper's own jobs are the RPC's actor, and a helper dismissed since the 
   });
 
   const session = new KinuPublicSession({ origin: server.url.origin, identity: { kind: 'loopback' },
-    workspace: 'probe', purpose: 'helper jobs probe',
+    workspace: 'probe', purpose: 'subagent jobs probe',
     llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
   }, 'probe');
 
   try {
     await session.connect();
-    expect((await session.backgroundJobs('task-helper')).map((job) => job.id)).toEqual(['bgjob-tests']);
-    expect(await session.backgroundJobs('gone-helper')).toEqual([]);
+    expect((await session.backgroundJobs('task-subagent')).map((job) => job.id)).toEqual(['bgjob-tests']);
+    expect(await session.backgroundJobs('gone-subagent')).toEqual([]);
     expect(await session.backgroundJobs()).toHaveLength(1);
-    expect(asked).toEqual([[50, 'task-helper'], [50, 'gone-helper'], [50]]);
+    expect(asked).toEqual([[50, 'task-subagent'], [50, 'gone-subagent'], [50]]);
   } finally { await session.teardown(); await server.stop(true); }
 });
 
@@ -170,24 +170,24 @@ test('trial usage walks retained descendants\' whole ledgers, every run and even
 
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
     websocket: { message: answerRpcs((request) => {
-      const query = v.parse(SubordinateInspectionRequestSchema, request.args[0]);
+      const query = v.parse(SubagentInspectionRequestSchema, request.args[0]);
 
       // Retired hires no longer resolve through a name path, even when an actor id is also supplied.
-      if (query.path.length > 0) return { view: 'missing', reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
+      if (query.path.length > 0) return { view: 'missing', reason: 'missing', error: 'The requested subagent or retained history is unavailable.' };
 
       if (query.view === 'children') {
         const items = [];
 
-        if (query.actor === undefined) items.push(child('helper'));
-        else if (query.actor === 'helper') items.push(child('nested'));
+        if (query.actor === undefined) items.push(child('subagent'));
+        else if (query.actor === 'subagent') items.push(child('nested'));
 
         return v.parse(JsonValueSchema, { view: 'children', page: { status: 'end', items } });
       }
 
       if (query.view === 'runs') {
-        const runId = query.actor === 'helper' ? 'later-run' : 'shared-run-id';
+        const runId = query.actor === 'subagent' ? 'later-run' : 'shared-run-id';
 
-        const page = query.actor === 'helper' && query.page.cursor === undefined
+        const page = query.actor === 'subagent' && query.page.cursor === undefined
           ? { status: 'more', items: [run('shared-run-id')], next: { after: 'first-run' } }
           : { status: 'end', items: [run(runId)] };
 
@@ -220,12 +220,12 @@ test('trial usage walks retained descendants\' whole ledgers, every run and even
     const ledgers = await session.actorLedgers([step(0, 100, 20, 10)]);
     const usage = measurePromptUsage(ledgers);
 
-    // A helper's tool calls are its run events as much as its steps are: its ledger keeps them.
+    // A subagent's tool calls are its run events as much as its steps are: its ledger keeps them.
     expect(ledgers.find((ledger) => ledger.actor === 'nested')?.events.map((event) => event.type)).toEqual(['step_finish', 'tool_call_end']);
 
     expect(usage).toMatchObject({ inputTokens: 950, outputTokens: 34, metadata: { cacheReadTokens: 660 } });
     expect(usage.metadata.steps.map(({ actor, stepIndex }) => [actor, stepIndex])).toEqual([
-      ['main', 0], ['helper', 1], ['helper', 2], ['helper', 3], ['nested', 4],
+      ['main', 0], ['subagent', 1], ['subagent', 2], ['subagent', 3], ['nested', 4],
     ]);
     expect(usage.metadata.cache?.ema).toBeCloseTo(0.41856, 14);
   } finally { await session.teardown(); await server.stop(true); }
@@ -406,7 +406,7 @@ test('a frame naming a live read moves that read before the answer to a later ca
         const request = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
 
         // Never answered: its rejection is the close landing.
-        if (request.method === 'listSubordinates') return;
+        if (request.method === 'listSubagents') return;
         // The tick that wrote ends with its frame, ahead of the answer to any call after the write.
         socket.send(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ['listBackgroundJobs', 'getMemoryContent'] }));
         socket.send(rpcReplyFrame({ requestId: request.id, result: [lead] }));
@@ -432,7 +432,7 @@ test('a frame naming a live read moves that read before the answer to a later ca
     expect(moving.aborted).toBe(true);
     expect(moved()).toEqual([2, 1]);
 
-    const held = session.subordinates();
+    const held = session.subagents();
     firstServerSocket?.close(1012, 'instance no longer active');
     await expect(held).rejects.toThrow('the workspace socket closed (code 1012, instance no longer active)');
 
@@ -481,7 +481,7 @@ test('a tool call is in flight from its input to its last output, and only while
 
   try {
     await session.connect();
-    const turn = session.submit('Hire a helper.').settled;
+    const turn = session.submit('Hire a subagent.').settled;
     const send = await opened.promise;
 
     await stage(send, [{ type: 'start' }, { type: 'start-step' }, { type: 'tool-input-available', toolCallId: 'call-hire', toolName: 'agents', input: {} }]);
@@ -489,7 +489,7 @@ test('a tool call is in flight from its input to its last output, and only while
     await stage(send, [{ type: 'tool-output-available', toolCallId: 'call-hire', output: 'hired', preliminary: true }]);
     expect(session.toolCallsInFlight()).toEqual(['call-hire']);
     await stage(send, [
-      { type: 'tool-output-available', toolCallId: 'call-hire', output: 'the helper answered' },
+      { type: 'tool-output-available', toolCallId: 'call-hire', output: 'the subagent answered' },
       { type: 'tool-input-available', toolCallId: 'call-shell', toolName: 'shell', input: {} },
     ]);
     expect(session.toolCallsInFlight()).toEqual(['call-shell']);
@@ -518,7 +518,7 @@ describe('a socket hears the streams of its room', () => {
     heard.hear('turn', heardFrame('turn', { type: 'tool-output-available', toolCallId: 'hire', output: 'hired', preliminary: true }));
     expect(heard.running()).toEqual(['hire', 'build']);
 
-    heard.hear('turn', heardFrame('turn', { type: 'tool-output-available', toolCallId: 'hire', output: 'the helper answered' }));
+    heard.hear('turn', heardFrame('turn', { type: 'tool-output-available', toolCallId: 'hire', output: 'the subagent answered' }));
     heard.hear('wake', heardFrame('wake', { type: 'tool-approval-request', approvalId: 'approval', toolCallId: 'build' }));
     heard.hear('wake', heardFrame('wake', { type: 'tool-input-available', toolCallId: 'test', toolName: 'shell', input: {} }));
     expect(heard.running()).toEqual(['test']);
@@ -620,10 +620,10 @@ test('a socket that meets a turn the product opened acknowledges it, and hears t
   } finally { await session.teardown(); await server.stop(true); }
 });
 
-test("a working helper is heard in its own room, on a socket that closes when the watch stops listening", async () => {
+test("a working subagent is heard in its own room, on a socket that closes when the watch stops listening", async () => {
   const opened = Promise.withResolvers<string>();
   const closed = Promise.withResolvers<void>();
-  const heardHelper = Promise.withResolvers<void>();
+  const heardSubagent = Promise.withResolvers<void>();
 
   const server = Bun.serve<{ path: string; room: boolean }>({ port: 0, hostname: '127.0.0.1',
     fetch(request, upgrading) {
@@ -639,11 +639,11 @@ test("a working helper is heard in its own room, on a socket that closes when th
         if (!socket.data.room) return;
         opened.resolve(socket.data.path);
 
-        // The helper's turn, as its window hears it: a call it started, then its words.
+        // The subagent's turn, as its window hears it: a call it started, then its words.
         for (const chunk of [{ type: 'start' }, { type: 'start-step' },
-          { type: 'tool-input-available', toolCallId: 'helper-call', toolName: 'shell', input: {} },
+          { type: 'tool-input-available', toolCallId: 'subagent-call', toolName: 'shell', input: {} },
           { type: 'text-delta', id: 'text', delta: 'Counting signups.' }] satisfies UIMessageChunk[]) {
-          socket.send(chatChunkFrame({ requestId: 'helper-turn', chunk }));
+          socket.send(chatChunkFrame({ requestId: 'subagent-turn', chunk }));
         }
       },
       message() { /* the room is only listened to */ },
@@ -652,20 +652,20 @@ test("a working helper is heard in its own room, on a socket that closes when th
   });
 
   const session = new KinuPublicSession({
-    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'a helper heard',
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'a subagent heard',
     llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
   }, 'probe');
 
-  session.onHeard = (room, type) => { if (room === 'task-helper' && type === 'text-delta') heardHelper.resolve(); };
+  session.onHeard = (room, type) => { if (room === 'task-subagent' && type === 'text-delta') heardSubagent.resolve(); };
 
   try {
     await session.connect();
-    session.listen(['task-helper']);
-    expect(await opened.promise).toBe('/agents/orchestrator-agent/probe/actor/task-helper');
-    await heardHelper.promise;
+    session.listen(['task-subagent']);
+    expect(await opened.promise).toBe('/agents/orchestrator-agent/probe/actor/task-subagent');
+    await heardSubagent.promise;
 
     expect(session.heard()).toBe(4);
-    expect(session.toolCallsInFlight()).toEqual(['helper-call']);
+    expect(session.toolCallsInFlight()).toEqual(['subagent-call']);
 
     session.listen([]);
     expect(session.toolCallsInFlight()).toEqual([]);
@@ -673,11 +673,11 @@ test("a working helper is heard in its own room, on a socket that closes when th
   } finally { await session.teardown(); await server.stop(true); }
 });
 
-test("a helper's room opened mid-call acknowledges the turn once, and the replayed call runs until its output", async () => {
+test("a subagent's room opened mid-call acknowledges the turn once, and the replayed call runs until its output", async () => {
   const acked: string[] = [];
   const spoke = Promise.withResolvers<void>();
   const ended = Promise.withResolvers<void>();
-  const call: UIMessageChunk = { type: 'tool-input-available', toolCallId: 'helper-call', toolName: 'shell', input: {} };
+  const call: UIMessageChunk = { type: 'tool-input-available', toolCallId: 'subagent-call', toolName: 'shell', input: {} };
   const room = Promise.withResolvers<ServerWebSocket<{ room: boolean }>>();
 
   const server = Bun.serve<{ room: boolean }>({ port: 0, hostname: '127.0.0.1',
@@ -689,44 +689,44 @@ test("a helper's room opened mid-call acknowledges the turn once, and the replay
       return new Response('not found', { status: 404 });
     },
     websocket: {
-      // The helper's room announces its open turn on connect and again on request, and holds its live chunks back until the ack.
+      // The subagent's room announces its open turn on connect and again on request, and holds its live chunks back until the ack.
       open(socket) {
         if (!socket.data.room) return;
         room.resolve(socket);
-        socket.send(streamResumingFrame('helper-turn'));
-        socket.send(streamResumingFrame('helper-turn'));
+        socket.send(streamResumingFrame('subagent-turn'));
+        socket.send(streamResumingFrame('subagent-turn'));
       },
       message(socket, message) {
         const frame = v.parse(v.looseObject({ type: v.string(), id: v.optional(v.string()) }), JSON.parse(message.toString()));
 
         if (frame.type !== CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK || frame.id === undefined) return;
         acked.push(frame.id);
-        socket.send(chatChunkFrame({ requestId: 'helper-turn', chunk: call, replay: true }));
-        socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: 'helper-turn', body: '', done: false, replay: true, replayComplete: true }));
+        socket.send(chatChunkFrame({ requestId: 'subagent-turn', chunk: call, replay: true }));
+        socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: 'subagent-turn', body: '', done: false, replay: true, replayComplete: true }));
         // Live, after the replay on the same socket: once it is heard, so is the replay.
-        socket.send(chatChunkFrame({ requestId: 'helper-turn', chunk: { type: 'text-delta', id: 'text', delta: 'Still checking.' } }));
+        socket.send(chatChunkFrame({ requestId: 'subagent-turn', chunk: { type: 'text-delta', id: 'text', delta: 'Still checking.' } }));
       },
     },
   });
 
   const session = new KinuPublicSession({
-    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'a helper joined mid-call',
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'a subagent joined mid-call',
     llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
   }, 'probe');
 
   session.onHeard = (heard, type) => {
-    if (heard === 'task-helper' && type === 'text-delta') spoke.resolve();
+    if (heard === 'task-subagent' && type === 'text-delta') spoke.resolve();
 
-    if (heard === 'task-helper' && type === 'tool-output-available') ended.resolve();
+    if (heard === 'task-subagent' && type === 'tool-output-available') ended.resolve();
   };
 
   try {
     await session.connect();
-    session.listen(['task-helper']);
+    session.listen(['task-subagent']);
     await spoke.promise;
-    expect({ acked, running: session.toolCallsInFlight() }).toEqual({ acked: ['helper-turn'], running: ['helper-call'] });
+    expect({ acked, running: session.toolCallsInFlight() }).toEqual({ acked: ['subagent-turn'], running: ['subagent-call'] });
 
-    (await room.promise).send(chatChunkFrame({ requestId: 'helper-turn', chunk: { type: 'tool-output-available', toolCallId: 'helper-call', output: 'ok' } }));
+    (await room.promise).send(chatChunkFrame({ requestId: 'subagent-turn', chunk: { type: 'tool-output-available', toolCallId: 'subagent-call', output: 'ok' } }));
     await ended.promise;
     expect(session.toolCallsInFlight()).toEqual([]);
   } finally { await session.teardown(); await server.stop(true); }
@@ -1332,10 +1332,10 @@ test('a beat on a workspace a sweep took marks nothing, so the next 404 is still
 });
 
 /** One RPC method → the reply this fixture answers it with. */
-const FixtureRpcMethodSchema = v.picklist(['listSubordinates']);
+const FixtureRpcMethodSchema = v.picklist(['listSubagents']);
 
 interface FixtureRpcAnswers {
-  listSubordinates: JsonValue;
+  listSubagents: JsonValue;
 }
 
 describe('the verifier reads speak the RPCs the web app is bound to', () => {
@@ -1345,7 +1345,7 @@ describe('the verifier reads speak the RPCs the web app is bound to', () => {
   });
 
   const answers: FixtureRpcAnswers = {
-    listSubordinates: [
+    listSubagents: [
       { name: 'alpha', status: 'dismissed', lifetime: 'task', createdBy: 'orchestrator',
         currentTask: null, createdAt: 1, dismissedAt: 2, actorReference: null, birth: null,
         deleteRequested: false, taskEventId: null },
@@ -1380,7 +1380,7 @@ describe('the verifier reads speak the RPCs the web app is bound to', () => {
     };
   };
 
-  test('subordinates() is listSubordinates, narrowed to name, status and lifetime', async () => {
+  test('subagents() is listSubagents, narrowed to name, status and lifetime', async () => {
     const { server, session } = open();
     asked.length = 0;
 
@@ -1388,10 +1388,10 @@ describe('the verifier reads speak the RPCs the web app is bound to', () => {
       await session.connect();
       // `lifetime` is the point: it is the column no later state recovers, so
       // dropping it would make "a task hire retired itself" unaskable.
-      expect(await session.subordinates())
+      expect(await session.subagents())
         .toEqual([{ name: 'alpha', status: 'dismissed', lifetime: 'task' }]);
 
-      expect(asked).toEqual([{ method: 'listSubordinates', args: [] }]);
+      expect(asked).toEqual([{ method: 'listSubagents', args: [] }]);
     } finally { await session.teardown(); await server.stop(true); }
   });
 });

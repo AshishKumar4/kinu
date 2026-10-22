@@ -1,12 +1,12 @@
 /**
- * A hired subordinate gets the full-agent surface via `buildActorTools`, and its `memory` and `agents` tools run on its own stores.
+ * A hired subagent gets the full-agent surface via `buildActorTools`, and its `memory` and `agents` tools run on its own stores.
  * Defends: delegated turns built from the confined head set. Shape is pinned in tests/conformance.test.ts.
  * Each delegated turn is admitted and run as production runs one; its model is served by the platform gateway.
  */
 import { expect, test } from 'bun:test';
 import { Effect, Result } from 'effect';
 import { settle } from '@kinu.run/core/obs';
-import { GATEWAY_CATALOG, actorOver, actorOverWorkspace, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, workspaceMainActor } from './helpers/actor-harness';
+import { GATEWAY_CATALOG, actorOver, actorOverWorkspace, gatewayWorkspace, hostedSubagentHarness, orchestratorHarness, runDelegatedTask, workspaceMainActor } from './helpers/actor-harness';
 import { requestOf, scriptedGateway, type RecordedGatewayRun } from './helpers/platform-gateway';
 import { createTestUserDO, testOwner } from './helpers/user-do';
 
@@ -72,7 +72,7 @@ function systemPrompt(runs: readonly RecordedGatewayRun[]): string {
   throw new Error('the turn issued no request carrying a system prompt');
 }
 
-test('a hired subordinate saves and searches memory and lists its roster in its assigned turn', async () => {
+test('a hired subagent saves and searches memory and lists its roster in its assigned turn', async () => {
   const gateway = scriptedGateway([
     { tool: 'memory', args: { op: 'note', content: NOTE } },
     { tool: 'memory', args: { op: 'search', query: 'streaming parser' } },
@@ -81,7 +81,7 @@ test('a hired subordinate saves and searches memory and lists its roster in its 
 
   const workspace = gatewayWorkspace(gateway);
 
-  const child = await hostedSubordinateHarness(workspace, {
+  const child = await hostedSubagentHarness(workspace, {
     name: 'surface-prover', displayName: 'Surface prover', nameOrigin: 'user',
     mission: 'prove the delegated surface runs',
   });
@@ -93,15 +93,15 @@ test('a hired subordinate saves and searches memory and lists its roster in its 
   expect(results[0]).toContain('saved');
   expect(results[1]).toContain('streaming parser');
   // An empty roster is right for a child that has hired nobody; what matters is that the rung answers.
-  expect(results[2]).toContain('subordinates');
+  expect(results[2]).toContain('tree');
 });
 
 /** Defends: a delegated turn falling to the runner's default head prompt instead of the agent prompt that names a hire. */
-test('a hired subordinate is framed as a hire, not as a head', async () => {
+test('a hired subagent is framed as a hire, not as a head', async () => {
   const gateway = scriptedGateway([]);
   const workspace = gatewayWorkspace(gateway);
 
-  const child = await hostedSubordinateHarness(workspace, {
+  const child = await hostedSubagentHarness(workspace, {
     name: 'framing-prover', displayName: 'Framing prover', nameOrigin: 'user',
     mission: 'prove the delegated framing',
   });
@@ -115,12 +115,12 @@ test('a hired subordinate is framed as a hire, not as a head', async () => {
 });
 
 // The workspace's soul is SOUL.md as it stands: a save with no main turn after it still frames the next hired turn.
-test("a hired subordinate's turn is framed with SOUL.md as it stands, not as main last read it", async () => {
+test("a hired subagent's turn is framed with SOUL.md as it stands, not as main last read it", async () => {
   const gateway = scriptedGateway([]);
   const workspace = gatewayWorkspace(gateway);
   await workspace.agent.setSoul('# Checkout\n\n## Mission\n\nAudit the checkout flow.');
 
-  const child = await hostedSubordinateHarness(workspace, {
+  const child = await hostedSubagentHarness(workspace, {
     name: 'soul-reader', displayName: 'Soul reader', nameOrigin: 'user', mission: 'read the soul it is framed with',
   });
 
@@ -136,7 +136,7 @@ test('a hosted child advertises only its callable crafted surface and loses it w
   const gateway = scriptedGateway([]);
   const workspace = gatewayWorkspace(gateway);
 
-  const child = await hostedSubordinateHarness(workspace, {
+  const child = await hostedSubagentHarness(workspace, {
     name: 'craft-prover', displayName: 'Craft prover', nameOrigin: 'user', mission: 'Inspect your current capabilities.',
   });
 
@@ -170,7 +170,7 @@ test("a hire's eval reaches only the namespaces its role admits", async () => {
   const gateway = scriptedGateway([{ tool: 'eval', args: { code: 'return `${typeof workspace} ${typeof web}`;' } }]);
   const workspace = gatewayWorkspace(gateway);
 
-  const child = await hostedSubordinateHarness(workspace, {
+  const child = await hostedSubagentHarness(workspace, {
     name: 'reach-prover', displayName: 'Reach prover', nameOrigin: 'user', mission: 'Say what you can reach.',
   });
 

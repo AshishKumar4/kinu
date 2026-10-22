@@ -16,7 +16,7 @@ import { removeWhole } from './mounts';
 import * as v from 'valibot';
 import { SOUL_FILE, SOUL_PATH } from '../identity/soul';
 import { parseActorKey } from '../identity/actor-key';
-import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
+import { isSubagentOrigin, type WorkspaceActor } from '../identity/workspace-actors';
 import { SHARED_ROOTS, WORKSPACE_ROOT } from './workspace-path';
 
 /** Its home is {@link WORKSPACE_ROOT}. */
@@ -71,8 +71,8 @@ export function agentTmpRoot(agentName: string): string {
 }
 
 /** Revalidated here: the roster's rule and this one are checked by different callers. */
-function subordinateAgentName(subordinateName: string): Effect.Effect<string> {
-  return validAgentName(`sub-${subordinateName}`);
+function subagentAgentName(subagentName: string): Effect.Effect<string> {
+  return validAgentName(`sub-${subagentName}`);
 }
 
 /** Unsafe ids are refused, not escaped: grader and merge-back must derive the same home. */
@@ -88,10 +88,10 @@ function headAgentName(headId: string): Effect.Effect<string> {
 export function actorHomeName(record: Pick<WorkspaceActor, 'origin' | 'name' | 'storageKey'>): string {
   if (record.origin === 'system') return MAIN_AGENT;
 
-  if (isSubordinateOrigin(record.origin) && record.storageKey === record.name) return settleSync(validAgentName(record.name));
+  if (isSubagentOrigin(record.origin) && record.storageKey === record.name) return settleSync(validAgentName(record.name));
   const { id } = parseActorKey(record.storageKey);
 
-  return settleSync(isSubordinateOrigin(record.origin) ? subordinateAgentName(id) : headAgentName(id));
+  return settleSync(isSubagentOrigin(record.origin) ? subagentAgentName(id) : headAgentName(id));
 }
 
 /** Storage key; only the confinement boundary uses it. */
@@ -123,7 +123,8 @@ export function agentCred(identity: AgentIdentity): VfsCred {
 
 const IDENTITY_TABLE = 'kinu_agent_identity';
 
-function ensureIdentityTable(sql: SqlDatabase): void {
+/** Made on first use (a workspace's boot, a facet's first home); a repair's trial reads its shape from here too. */
+export function ensureIdentityTable(sql: SqlDatabase): void {
   sql.exec(
     `CREATE TABLE IF NOT EXISTS ${IDENTITY_TABLE} (
        agent_name TEXT PRIMARY KEY,

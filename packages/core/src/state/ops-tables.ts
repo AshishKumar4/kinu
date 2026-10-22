@@ -4,18 +4,31 @@
  * changes nothing itself; it is how a release sees what its repairs did, and which objects stayed refused.
  */
 import { Effect } from 'effect';
+import { createHash } from 'node:crypto';
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import { timingSafeEqual } from '../utils/crypto';
 import { rowsOf, tableNames, type Repair } from './schema-repair';
-import type { SqlExec } from '../types/primitives';
+import type { SqlExec, SqlExecRow, SqlValue } from '../types/primitives';
 
-/** A table's rows, as a database held them when it was asked. */
+/** A table's rows, as a database held them when it was asked, and a digest of what they hold: two censuses of one
+ *  database tell a table a reset left alone (its digest the same) from one it dropped. */
 export interface TableRows {
   readonly table: string;
   readonly rows: number;
+  readonly digest: string;
+  /** For a table whose rows are written once and only ever added (`LEDGERS`), each row as `<ordinal>:<digest>`, oldest
+   *  first: a later census tells rows added, and the oldest a full ring let go, from any earlier row lost or rewritten. */
+  readonly ledger?: readonly string[];
 }
+
+/** Tables whose rows are written once, by the column that orders them. `workspace_activations` keeps 256 rows: the
+ *  newest replaces the oldest slot (identity/activations.ts), so its rowids are no order; its ordinal is. */
+const LEDGERS = new Map([['workspace_activations', 'ordinal']]);
+
+/** Hex digits of each ledger row's digest: 48 bits, one table's few hundred rows never collide by chance. */
+const LEDGER_DIGEST = 12;
 
 /** One database as the walk found it: every table and its rows, what this activation's repair did (null where it found
  *  the database at this build, or an earlier activation repaired it), and why it is refused, if it is. */
@@ -90,5 +103,59 @@ export function requireOps(env: OpsSecretEnv, caller: Partial<OpsCaller> | null 
 
 /** Every table `sql` holds and its rows. */
 export function censusOf(sql: SqlExec): TableRows[] {
-  return tableNames(sql).map((table) => ({ table, rows: rowsOf(sql, table) }));
+  const keyed = new Set(sql.exec('PRAGMA table_list').toArray().map((row) => v.parse(ListedSchema, row)).filter((row) => row.wr === 1).map((row) => row.name));
+
+  return tableNames(sql).map((table) => {
+    const rows = rowsOf(sql, table);
+    const digest = digestOf(sql, table, !keyed.has(table));
+    const order = LEDGERS.get(table);
+
+    return order === undefined ? { table, rows, digest } : { table, rows, digest, ledger: ledgerOf(sql, table, order) };
+  });
+}
+
+/** Each row of `table` by `order`, as `<order>:<digest of its values>`; a row without a whole-number order is no ledger
+ *  row, and reads as `?`, which no later census matches. */
+function ledgerOf(sql: SqlExec, table: string, order: string): string[] {
+  return sql.exec(`SELECT * FROM "${table}" ORDER BY "${order}"`).toArray().map((row) => {
+    const at = row[order];
+    const digest = createHash('sha256').update(JSON.stringify(Object.values(row).map(cellText))).digest('hex').slice(0, LEDGER_DIGEST);
+
+    return `${typeof at === 'number' && Number.isInteger(at) ? String(at) : '?'}:${digest}`;
+  });
+}
+
+const ListedSchema = v.object({ name: v.string(), wr: v.number() });
+
+/** A value as the digest reads it: a blob by its bytes, so two blobs that differ never read alike. */
+function cellText(value: SqlValue): SqlValue | { readonly blob: string } {
+  if (value instanceof ArrayBuffer) return { blob: Buffer.from(value).toString('hex') };
+
+  return ArrayBuffer.isView(value) ? { blob: Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString('hex') } : value;
+}
+
+/** Rows a digest reads at a time: a table is never held whole. */
+const DIGEST_PAGE = 1000;
+
+/** SHA-256 over every row of `table`, each row's columns in order: in rowid order a page at a time, or, for a WITHOUT
+ *  ROWID table, in its own key order. */
+function digestOf(sql: SqlExec, table: string, rowid: boolean): string {
+  const hash = createHash('sha256');
+  const add = (row: SqlExecRow) => { hash.update(`${JSON.stringify(Object.values(row).map(cellText))}\n`); };
+
+  if (!rowid) {
+    for (const row of sql.exec(`SELECT * FROM "${table}"`).toArray()) add(row);
+
+    return hash.digest('hex');
+  }
+
+  for (let after = Number.MIN_SAFE_INTEGER; ;) {
+    const page = sql.exec(`SELECT rowid AS kinu_rowid, * FROM "${table}" WHERE rowid > ? ORDER BY rowid LIMIT ${String(DIGEST_PAGE)}`, after).toArray();
+
+    for (const row of page) add(row);
+    const last = page.at(-1)?.['kinu_rowid'];
+
+    if (page.length < DIGEST_PAGE || typeof last !== 'number') return hash.digest('hex');
+    after = last;
+  }
 }

@@ -4,6 +4,7 @@ import {
 import { readBuildStamp, type AssetFetcher } from './deployed-assets';
 import { escapeHtml } from './http';
 import { PAGE_BUILD_META } from '../web/page-build';
+import { VISITOR_PAGE_ATTRIBUTE } from '../web/visitor-page';
 import { withAppSecurityHeaders } from './security-headers';
 import type { ThemeName } from '../web/theme';
 
@@ -50,8 +51,14 @@ export interface ShellAccount {
   readonly theme: () => Promise<ThemeName>;
 }
 
-/** With an `account`, the page names its theme on the root, so the first paint is already in it; without, the default. */
-export async function serveApp(request: Request, env: AppShellEnv, account?: ShellAccount): Promise<Response> {
+/** A public page served to someone signed out: its root says so (`VISITOR_PAGE_ATTRIBUTE`), and the app draws it as theirs. */
+export const VISITOR_SHELL = 'visitor';
+
+/**
+ * With an `account`, the page names its theme on the root, so the first paint is already in it; without, the default.
+ * A visitor's page is marked as one, in the default.
+ */
+export async function serveApp(request: Request, env: AppShellEnv, account?: ShellAccount | typeof VISITOR_SHELL): Promise<Response> {
   const suffix = previewHostSuffix(env);
   const asset = await env.ASSETS.fetch(request);
   const url = new URL(request.url);
@@ -59,11 +66,13 @@ export async function serveApp(request: Request, env: AppShellEnv, account?: She
   if (!asset.headers.get('content-type')?.includes('text/html')) return cached(asset, url);
   // The page names the build that served it, from the stamp /api/health reads, so the two agree by construction.
   const build = await readBuildStamp(env, request.url);
-  const theme = await account?.theme();
+  const theme = account === VISITOR_SHELL ? undefined : await account?.theme();
 
   const named = new HTMLRewriter().on('html', {
     element(element) {
       if (theme !== undefined) element.setAttribute('data-theme', theme);
+
+      if (account === VISITOR_SHELL) element.setAttribute(VISITOR_PAGE_ATTRIBUTE, '');
     },
   }).on('head', {
     element(element) {

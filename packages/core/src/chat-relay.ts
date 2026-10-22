@@ -6,6 +6,45 @@
  */
 import { toUIMessageChunk, type TextStreamPart, type ToolSet, type UIMessageChunk } from 'ai';
 import { isServerCompaction } from './providers/server-compaction';
+import * as v from 'valibot';
+import { redactSecrets } from './safety/secret-patterns';
+import { toolErrorText } from './tools/outcome';
+import { JsonValueSchema, type JsonValue } from './utils/json';
+
+const EncodedObjectSchema = v.pipe(v.string(), v.parseJson(), v.record(v.string(), JsonValueSchema));
+
+/** Each string of a JSON value redacted on its own, so a pattern that runs to the end of its text ends with its string;
+ *  a string that encodes an object (a classified failure's `error` holds the program's envelope) is redacted inside. */
+function redactedJson(value: JsonValue): JsonValue {
+  if (typeof value === 'string') {
+    const encoded = v.safeParse(EncodedObjectSchema, value);
+
+    return encoded.success ? JSON.stringify(redactedJson(encoded.output)) : redactSecrets(value);
+  }
+
+  if (Array.isArray(value)) return value.map(redactedJson);
+
+  return value !== null && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([key, field]) => [key, redactedField(key, field)])) : value;
+}
+
+/** A field redacted with its name, which a secret-named field is masked by and its value read alone no longer carries,
+ *  then as a value, which reaches inside an object it encodes; a pair the redaction could not keep whole (a key's header
+ *  runs to its end) is redacted as a value alone. */
+function redactedField(key: string, field: JsonValue): JsonValue {
+  if (typeof field !== 'string') return redactedJson(field);
+  const paired = v.safeParse(EncodedObjectSchema, redactSecrets(JSON.stringify({ [key]: field })));
+  const masked = paired.success ? paired.output[key] : undefined;
+
+  return redactedJson(typeof masked === 'string' ? masked : field);
+}
+
+/** A tool's failure as stored, its secrets redacted: a host envelope (a failed program's words) field by field, so it
+ *  stays the envelope its record is read from; any other text whole. */
+function redactedToolError(text: string): string {
+  const redacted = redactedJson(text);
+
+  return typeof redacted === 'string' ? redacted : JSON.stringify(redacted);
+}
 
 export class ChatRelay {
   /** Settles once its observer has read to the end; at once where nothing observes the call. */
@@ -56,7 +95,13 @@ export class ChatRelay {
   /** A part the loop read, as the owner sees it. */
   push(part: TextStreamPart<ToolSet>): void {
     if (this.#cancelled || this.#end !== undefined) return;
-    const chunk = toUIMessageChunk(part, { tools: this.options.tools, onError: (cause) => this.options.describe({ cause }) });
+
+    // A tool's failure as it is stored and sent to the model (`toolErrorOutput`), so a reload shows what was shown live;
+    // the owner never sees a secret it echoes. Any other failure is described.
+    const chunk = toUIMessageChunk(part, {
+      tools: this.options.tools,
+      onError: part.type === 'tool-error' ? (cause) => redactedToolError(toolErrorText({ cause })) : (cause) => this.options.describe({ cause }),
+    });
 
     if (chunk === undefined) return;
 

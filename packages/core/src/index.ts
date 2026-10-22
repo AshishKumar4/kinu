@@ -5,21 +5,23 @@ export {
 
 export { AskOwnerInputSchema, OTHER_OPTION, OWNER_ANSWER_SIGNAL, type OwnerQuestion } from './types/owner-questions';
 
-export { initFiberTable, tableExists } from './identity/schema';
+export { initFiberTable } from './identity/schema';
 
-export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
+export { tableExists } from './utils/sql';
 
-export { AgentOpenTurns, type AgentOpenTurn } from './subordinates/open-turns';
+export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubagentInspectionRequestSchema, SubagentInspectionResultSchema, readSubagentInspection, missingSubagentHistory, type SubagentInspectionRequest, type SubagentInspectionResult, type SubagentChild } from './subagents/inspection';
 
-export { AgentReports, AgentSequence, type AcceptedReport } from './subordinates/report-sequence';
+export { AgentOpenTurns, type AgentOpenTurn } from './subagents/open-turns';
 
-export { TurnFences, type ClosedExecution, type FencedRow, type OpenedAt } from './subordinates/turn-fence';
+export { AgentReports, AgentSequence, type AcceptedReport } from './subagents/report-sequence';
 
-export { TurnReports, type ReportedTurn } from './subordinates/turn-reports';
+export { TurnFences, type ClosedExecution, type FencedRow, type OpenedAt } from './subagents/turn-fence';
+
+export { TurnReports, type ReportedTurn } from './subagents/turn-reports';
 
 export { runEventSinks } from './orchestrator/run-event-sinks';
 
-export { inspectDescendant, inspectSubordinateStorage, readableActor, type AgentOwnInspection, type ReadableActor, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
+export { inspectDescendant, inspectSubagentStorage, readableActor, type AgentOwnInspection, type ReadableActor, type SubagentInspectionAuthority, type SubagentInspectionAccess } from './subagents/inspection-path';
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
@@ -27,7 +29,7 @@ export {
   type HandedOffTurn, type SettledRun, type TerminalActor, type TerminalTurnFacts, type TerminalTurnParts, type TurnEnd,
 } from './orchestrator/terminal-roster';
 
-export { SleepTimeLane, initSleepTimeUpdatesTable } from './orchestrator/sleep-time-lane';
+export { SleepTimeLane, initSleepTimeTables } from './orchestrator/sleep-time-lane';
 
 export {
   assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle,
@@ -69,19 +71,19 @@ export { standingFileLedger, turnLedgers, type TurnLedgers } from './orchestrato
 
 // Records that keyed work happened, kept after its row is retired.
 export {
-  initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
+  initEffectTombstoneTable, effectAlreadyDone, prepareOutput, recordEffectDone,
 } from './identity/effect-tombstones';
 
 export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './identity/activity-log';
 
-export { initActivationTable, listActivations, recordActivation, type Activation } from './identity/activations';
+export { ACTIVATION_SLOTS, initActivationTable, listActivations, recordActivation, type Activation } from './identity/activations';
 
 export { ChatHistoryEntrySchema } from './types/chat';
 
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
 export { initAgentIsolateSchema, initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
-export { REGENERABLE, repairSchema, type Repair, type TableWrites, type TouchedTable } from './state/schema-repair';
+export { derivedFrom, repairSchema, type Repair, type TableWrites, type TouchedTable } from './state/schema-repair';
 
 export { textContains } from './utils/text-match';
 
@@ -89,7 +91,7 @@ export {
   censusOf, OPS_OBJECTS_PER_REQUEST, OPS_PASS_PREFIX, opsCaller, requireOps, type OpsCaller, type StoreCensus, type TableRows, type TablesAnswer,
 } from './state/ops-tables';
 
-export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS } from './state/user-schema';
+export { ACCOUNT_EPOCH_FIELDS, type ConnectionTicketPurpose, initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS } from './state/user-schema';
 
 export { initMailNameTables, initMailboxTables } from './state/mail-schema';
 
@@ -99,7 +101,7 @@ export { mailAddressOf, mailLabelOf, mailUsernameRefusal, parseMailRecipient, su
 
 export type * from './mail/mailbox-api';
 
-export { MAIL_BOX_KINDS, MAIL_SEND_STATES, MAIL_VIEWS, MAIL_WAKES, MAIL_WOKE } from './mail/mailbox-api';
+export { importantMail, MAIL_BOX_KINDS, MAIL_SEND_STATES, MAIL_VIEWS, MAIL_WAKES, MAIL_WOKE } from './mail/mailbox-api';
 
 export { MailStore, type MailBlobs, type ParsedMail } from './mail/store';
 
@@ -352,7 +354,7 @@ export type {
 } from './slates/room-api';
 
 export {
-  GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GallerySlateSchema, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
+  GALLERY_CATEGORIES, GALLERY_SORTS, GALLERY_LAST_PAGE, GallerySlateSchema, galleryPagePath, gallerySlatePath, galleryPicturePath, GALLERY_STAR_PATH,
   GALLERY_REPORT_PATH, type GalleryCategory, type GalleryListing, type GallerySlate, type GallerySort, type GalleryStar,
   type GalleryReport,
   EXPLORE_KINDS, ExplorePageSchema, BlueprintPageSchema, explorePath, workspaceBlueprintPath,
@@ -543,6 +545,7 @@ export {
   localMissionScope,
   missionGate,
   listMissionSpend,
+  initMissionBudgetTable,
   type MissionBudgetPort,
   type MissionScope,
   type MissionBudgetLimits,
@@ -578,10 +581,10 @@ export {
 export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, codemodeInputSchema,
-  renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, programProviders, codemodeFunction, craftedFailureFunctions, renderCraftedDefinitions,
+  renderCraftedToolsDeclaration, nativeToolFunctions, toolsNamespace, programSurface, servedImpacts, codemodeFunction, renderCraftedDefinitions,
   slateToolReach, callCodemodeMember, requireCodemodeMember,
   withCraftedToolDeclarations, craftedToolDeclarations,
-  shownConsoleValue, createToolArguments, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
+  shownConsoleValue, programNamespace, type ProgramMember, type ProgramNamespace, SANDBOX_CONSOLE_PRELUDE, SANDBOX_CREATE_TOOL_PRELUDE,
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
@@ -604,23 +607,23 @@ export {
 
 export { ActorReferenceSchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './identity/actor-handle';
 
-export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubordinateActorName } from './identity/actor-key';
+export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubagentActorName } from './identity/actor-key';
 
-export { recoverSubordinateLifecycles, SubordinateBirthSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
+export { recoverSubagentLifecycles, SubagentBirthSchema, type SubagentBirth, type SubagentSeed } from './subagents/birth';
 
-export { SubordinateInheritedContextSchema, type SubordinateInheritedContext } from './types/subordinates';
+export { SubagentInheritedContextSchema, type SubagentInheritedContext } from './types/subagents';
 
-export { subordinateForkContext, subordinateTurnContext } from './subordinates/support';
+export { subagentForkContext, subagentTurnContext } from './subagents/support';
 
-export { admitHireWork, hireLifecycle, retireHireSubtree, type HireLifecyclePorts, type SeatedHire } from './subordinates/hire-lifecycle';
+export { admitHireWork, hireLifecycle, stopAgentsBelow, type HireLifecyclePorts, type SeatedHire } from './subagents/hire-lifecycle';
 
 export { inheritedAsModelMessage } from './heads/head-inference';
 
-export { driveDeliveredRun } from './heads/delivered-run';
+export { driveDeliveredRun, driveSeatedRun } from './heads/delivered-run';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, stoppedBelow, isSubordinateOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding, actorEnded, endedStandingOf, type ActorEnded } from './identity/workspace-actors';
+export { initWorkspaceActorTable, facetNamesGiven, WorkspaceActorDirectory, subagentDescendants, stoppedBelow, isSubagentOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type CreateWorkspaceActor, actorStanding, type ActorStanding, actorEnded, endedStandingOf, type ActorEnded } from './identity/workspace-actors';
 
-export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
+export type { AnsweredEvolutionSubagent } from './identity/evolution-subagents';
 
 export {
   openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
@@ -655,7 +658,7 @@ export {
 } from './delegation/agents-tool';
 
 export {
-  createLocalPeerEndpoint, samePeerGroup,
+  createLocalPeerEndpoint, peersToolDeps, samePeerGroup,
   type HostedAgentRef, type LocalPeerEndpoint,
 } from './tools/local-peer';
 
@@ -676,26 +679,28 @@ export { createAgentSelfProvider, type AgentSelfHost, type OwnerWaitsHost } from
 
 export { agentSelfHost } from './orchestrator/agent-self-host';
 
-// Platform-neutral: a backend supplies only SubordinateRuntime.
-export { SubordinateRosterStore, initSubordinateRosterTable, subordinateTitle } from './subordinates/roster';
+// Platform-neutral: a backend supplies only SubagentRuntime.
+export { SubagentRosterStore, initSubagentRosterTable, subagentTitle } from './subagents/roster';
+
+export { teamToolDepsFor, temporaryPortFor } from './subagents/team-wiring';
 
 export {
-  admitSubordinateReport,
-  admitSubordinateTask,
+  admitSubagentReport,
+  admitSubagentTask,
   agentNamer,
   createTeamToolDeps,
-  describeSubordinateHandoff,
+  describeSubagentHandoff,
   normalizeReportContent,
-  parentAdmitsSubordinateReport,
-  readSubordinateLiveStatus,
-  subordinateDescriptorSource,
-  owedSubordinateTurnReport,
-  type SubordinateReportOrigin,
-  type SubordinateRuntime,
-} from './subordinates/support';
+  parentAdmitsSubagentReport,
+  readSubagentLiveStatus,
+  subagentDescriptorSource,
+  hireTurnSettled,
+  type SubagentReportOrigin,
+  type SubagentRuntime,
+} from './subagents/support';
 
 export {
-  SUBORDINATE_LIFETIMES,
+  SUBAGENT_LIFETIMES,
   TEMPORARY_LIFETIME,
   TASK_TURN_ENDINGS,
   createTemporaryAgentPort,
@@ -705,22 +710,21 @@ export {
   terminalTaskReport,
   reportReadsNarration,
   type OwedReport,
-  type SubordinateLifetime,
+  type SubagentLifetime,
   type TemporaryAgentPort,
   type TemporaryRunOutcome,
   type TaskTurnEnding,
   type TemporaryRunRequest,
-} from './subordinates/temporary';
+} from './subagents/temporary';
 
 // The depth cap is derived per child, never stated by one.
 export {
   DELEGATION_MAX_DEPTH,
-  ROOT_DELEGATION_BUDGET,
   delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,
   type DelegationBudget,
-} from './subordinates/depth';
+} from './subagents/depth';
 
 export {
   buildBuiltinTools,
@@ -741,8 +745,8 @@ export {
   buildActorTools, PEER_REPLY_TOPIC,
   type ActorToolsetDeps, type ActorToolsets,
   type AgentsToolDeps, type AgentsSwarmDeps,
-  type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
-  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff, type SubordinateDismissal,
+  type TeamToolDeps, type SubagentRosterEntry, type SubagentStatus,
+  type SubagentDelivery, type SubagentPhase, type SubagentHandoff, type SubagentDismissal,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './delegation/actor-tools';
@@ -791,6 +795,8 @@ export {
   toolCallEffect,
   type ToolCallEffect,
 } from './tools/tool-call-summary';
+
+export { programEffectsOf, programEffect, type MemberImpacts, type ProgramEffects } from './execution/call-effects';
 
 export { ToolOutcomeSchema, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, type ToolOutcome } from './tools/outcome';
 
@@ -924,7 +930,7 @@ export { createAgentStores } from './state/agent-stores';
 
 export type { AgentStores } from './state/agent-stores';
 
-export { collectDynamicContext, dynamicReads, subordinateDelegatesOf, type DynamicReads } from './state/dynamic-context';
+export { collectDynamicContext, dynamicReads, subagentDelegatesOf, type DynamicReads } from './state/dynamic-context';
 
 export type { DynamicContextInput } from './state/dynamic-context';
 
@@ -1063,7 +1069,7 @@ export {
 } from './execution/router';
 
 export {
-  withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, type FileReach,
+  withApprovalGatedShell, withApprovalGatedFiles, hostedToolFiles, gateProviderExec, type FileReach,
 } from './execution/approval';
 
 export {
@@ -1072,9 +1078,13 @@ export {
 } from './execution/shell-session';
 
 export {
-  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
+  createSandboxExecutor, computerProcessJob, type ComputerProcessEnd, type ComputerProcessJobs, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
   sandboxSizeLabel, WORKSPACE_BACKUP_DIR, sandboxFiles,
 } from './execution/sandbox';
+
+export { computerProcessResume, stopComputerProcessJob } from './jobs/computer-process';
+
+export { ComputerProcessEnds, jobState, type ComputerProcessJobRows, type ComputerProcessJobState } from './execution/computer-process-ends';
 
 export {
   DESKTOP_MEMBERS,
@@ -1151,7 +1161,7 @@ export {
 } from './execution/command-call';
 
 export {
-  commandResultAt, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
+  commandAnswer, commandResultAt, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
 } from './execution/exec-result';
 
 export {
@@ -1168,9 +1178,11 @@ export {
 } from './execution/parent';
 
 export {
-  createInlineExecutor, createNimbusWorkspaceExecutor, workspaceCapabilities,
+  createInlineExecutor, createNimbusWorkspaceExecutor, workspaceCapabilities, SlateProgramSchema,
   type InlineExecutorDeps,
 } from './tools/inline-executor';
+
+export { processRetryTool } from './tools/process-retry';
 
 export { explainSandboxError } from './tools/sandbox-errors';
 
@@ -1190,6 +1202,7 @@ export {
   agentHome, agentArtifactDirectory, agentTmpRoot, agentCred, agentIdentity, agentNameOfUid, VIEWER_HOME_NAME,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements, settleWorkspaceRoot,
   settleSharedRoots,
+  ensureIdentityTable,
   actorHomeName,
   MAIN_AGENT, SESSION_UID, AGENT_UID_FLOOR,
   type HomeRootVfs, type TmpConfiner,
@@ -1236,7 +1249,7 @@ export {
 } from './skills/drive';
 
 export {
-  withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
+  withMountTable, workspaceFilePlane, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, type PathOwner,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps, removeWhole,
   type VfsMount, type MountedVfs, type WorkspacePrincipal,
   type VfsListedEntry,
@@ -1297,7 +1310,7 @@ export { memoryBytes } from './memory/note';
 export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, type MemoryNote } from './memory/note';
 
 export {
-  ConversationSearchStore, invalidateConversationSearchIndex,
+  ConversationSearchStore, ensureIndexTables, invalidateConversationSearchIndex,
   type ConversationRecall, type ConversationSearchHit,
   type ConversationScrollResult, type ConversationSummary,
 } from './memory/conversation-search';
@@ -1317,7 +1330,7 @@ export {
 } from './memory/account';
 
 export {
-  JsonValueSchema, JsonObjectSchema, JsonArraySchema,
+  JsonValueSchema, JsonObjectSchema, JsonArraySchema, renderIssuesUnquoted,
   parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, jsonResultOrVoid, projectJsonValue, nonEmptyString,
   binaryReplacer, type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
@@ -1402,7 +1415,7 @@ export * from './events/hub/index';
 
 export * from './events/ingress/index';
 
-export * from './subordinates/ingress';
+export * from './subagents/ingress';
 
 // Swarm
 export * from './strategy/index';
@@ -1548,8 +1561,12 @@ export {
   type ScrubReplacement,
 } from './safety/egress-gate';
 
+export { egressAuthority, type EgressAuthority, type EgressPrincipal } from './safety/egress-principal';
+
+export { initOwnerRequestsTable } from './safety/owner-requests';
+
 export {
-  DeferredApprovalQueue, decideDeferredApprovals, DeferredApprovalStore, initDeferredApprovalsTable,
+  DeferredApprovalQueue, decideDeferredApprovals, DeferredApprovalStore,
   DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, DeferredApprovalSchema, type DeferredApproval,
   type DeferredApprovalAnswer,
   type DeferredApprovalNotice, type ParkedWrites, type SlateEffectVerdict,
@@ -1563,7 +1580,7 @@ export {
 } from './safety/egress-vault';
 
 export {
-  ownerCaller, OwnerCapabilityUnavailableError, CapabilityDeniedError, initWorkspaceCapabilityTables,
+  ownerCaller, OwnerCapabilityUnavailableError, CapabilityDeniedError,
   workspaceCapabilityHash, freshWorkspaceCapability, commitWorkspaceCapability, revokeWorkspaceCapability,
   requireTier, type WorkspaceCapability, type UserCaller, type ResolvedCaller,
   type OwnerCapabilityEnv,
@@ -1656,7 +1673,7 @@ export {
   LiveHeadJournal, type AnnounceHeadActivity,
   type HeadStreamFrame, type HeadStreamKind,
   type ReportHeadDelta, type PublishHeadStream,
-  reconcileInterruptedForks, jobRedriveResumeGate, resumableForkRoots,
+  reconcileInterruptedForks, reclaimSettledRunActors, jobRedriveResumeGate, resumableForkRoots,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
   ForkNotices, forkNoticeDeliveries, initForkNoticeTable, type ForkNotice,
   HeadController, runHeadSplit, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
@@ -1684,8 +1701,8 @@ export {
   BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, RESUMED_SURFACE, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders, type ServingScope,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
-  type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
-  type BackgroundPolicy, type DetachOutcome, type InvocationSurface, InvocationSurfaceSchema,
+  type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, BackgroundHandleSchema, backgroundedBy, type ThresholdDeps,
+  type BackgroundPolicy, type DetachOutcome, type InvocationSurface, InvocationSurfaceSchema, type AdoptsJobs, type JobAdoption,
   type BackgroundJobRunnerDeps, type JobHolder, initJobHoldersTable, processJobHolder, type JobResumer, type JobClaim, type DeviceRequestChannel, type WorkspaceJobPorts,
   WorkspaceJobAuthorities, endedStepLoopJobs, inlineResultInbox, type JobAuthority, type JobAuthorityKind, type JobRetirement, type StepLoopJobSeat,
   JobOutputFeeds, JOB_OUTPUT_EVENT, JobOutputFrameSchema, JobOutputTailSchema, followJobOutput, lastOutputLines, jobName, shortJobId, type JobName,
@@ -1713,7 +1730,7 @@ export {
 
 export { readWorkspaceWork, hasWorkspaceWork, actorReadHandle, WorkspaceWorkSchema, WORK_TAB_JOBS } from './read-models/workspace-work';
 
-export { agentTitle, nestedAgent, type AgentLinkIds, type InspectSubordinate } from './subordinates/nested-agent';
+export { agentTitle, nestedAgent, type AgentLinkIds, type InspectSubagent } from './subagents/nested-agent';
 
 export { recognizeGitHubHttp, recognizeGitHubMcp, GitHubFactSchema, GITHUB_MCP_PRESET, type GitHubFact } from './github/recognize';
 
@@ -1732,8 +1749,8 @@ export {
 export { readGitHubRemotes } from './github/remotes';
 
 export {
-  mainPanelAgent, readWorkspaceAgents,
-  type PanelAgent, type AgentActivity,
+  mainPanelAgent, measuredAt, readWorkspaceAgents,
+  type PanelAgent, type AgentActivity, type ChatReport,
 } from './read-models/workspace-agents';
 
 export { readAgentFigures, recordAgentFigures, reportedAgentFigures, NO_FIGURES, type AgentFigures } from './read-models/agent-figures';
@@ -1842,9 +1859,9 @@ export {
 export {
   AgentDeliveries, AgentStops, DeliveryInbox, DeliverySchema, wordsRefusal, initAgentDeliveriesTable, initAgentStopsTable, pendingEventsDelivery, assignmentDelivery, deliveryMetadata, deliveredSignal, handBackCarried, type OwedDelivery, type DeliveryPort, type OwedAdmission, type Delivery, type DeliveryAnswer, type DeliveryInput, type TurnDeliveryInput, type IntentInput, type IntentResult, type OwedIntent, type OwedOwnerIntent, OwedIntentSchema, OwedOwnerIntentSchema,
   SendMetadataSchema, sentWords, type SendMetadata, type SentWords,
-} from './subordinates/deliveries';
+} from './subagents/deliveries';
 
-export { DeliveryCoordinator, InProcessDeliveries, type CrossedDelivery } from './subordinates/delivery-coordinator';
+export { DeliveryCoordinator, InProcessDeliveries, type CrossedDelivery } from './subagents/delivery-coordinator';
 
 export {
   serializeContentForHeads, narrowInheritedRole,
@@ -2213,8 +2230,8 @@ export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-m
 
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
-  type MemoryEntry, type PendingConsent, type SubordinateActivityEvent,
-  type TabPresence, evolutionHelper, ownerFacingSubordinate,
+  type MemoryEntry, type PendingConsent, type SubagentActivityEvent,
+  type TabPresence, evolutionSubagent, ownerFacingSubagent,
 } from './protocol';
 
 export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';
@@ -2257,7 +2274,7 @@ export {
 } from './preview/preview-ports';
 
 export {
-  sandboxPreviewExposure, sandboxPreviewExposures,
+  sandboxPreviewExposure, sandboxPreviewExposures, forgetSandboxPreviews, type ListedKv,
   type SandboxPreviewExposures,
 } from './preview/preview-exposures';
 
@@ -2272,7 +2289,7 @@ export { PRIVATE_NO_STORE, publicHtmlHeaders, withAppSecurityHeaders } from './h
 
 export { desktopClientUrl } from './http/desktop-client';
 
-export { serveApp } from './http/app-shell';
+export { serveApp, VISITOR_SHELL } from './http/app-shell';
 
 export { ingressAdmission, ingressAdmitted, ingressDenied, peerIp } from './http/ingress-budget';
 
@@ -2304,7 +2321,7 @@ export {
 } from './http/public-shell';
 
 export {
-  accountTheme, DEFAULT_THEME, terminalPalette, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed,
+  accountTheme, avatarGround, DEFAULT_THEME, ILLUSTRATION, REDACTION_FILL, terminalPalette, THEME_CONFIG_KEY, THEME_CSS, THEME_NAMES, THEME_TOKENS, themeNamed,
   type ColourToken, type Mode, type TerminalPalette, type ThemeName,
 } from './web/theme';
 
@@ -2362,7 +2379,7 @@ export {
 } from './read-models/workspace-reads';
 
 export {
-  PROVIDER_WAIT_PART, ProviderWaitSchema, SubordinateActivityEventSchema, WorkspaceBroadcastSchema, WorkspacePlanUpdatedFrameSchema,
+  PROVIDER_WAIT_PART, ProviderWaitSchema, SubagentActivityEventSchema, WorkspaceBroadcastSchema, WorkspacePlanUpdatedFrameSchema,
   type MctsProgress, type WorkspaceBroadcast,
 } from './read-models/workspace-broadcasts';
 
@@ -2396,6 +2413,8 @@ export {
 
 export { pageDeployedBuildSha } from './web/page-build';
 
+export { pageIsVisitors, VISITOR_PAGE_ATTRIBUTE } from './web/visitor-page';
+
 export { loadRouteChunk } from './utils/chunk-recovery';
 
 export {
@@ -2408,7 +2427,7 @@ export {
   gatewayWireModel,
 } from './providers/my-gateway';
 
-export { createWorkersAIProvider } from './providers/workers-ai-provider';
+export { WORKERS_AI_STREAMS_GENERATE, createWorkersAIProvider } from './providers/workers-ai-provider';
 
 export { createWireModel, deferredModel, sdkWire, withModelStack, type WireProtocol } from './providers/wire-model';
 
@@ -2559,6 +2578,13 @@ export {
 
 export {
   APP_ROUTES,
+  cloudflareConnectPath,
+  CONNECT_CHANNEL,
+  connectedPath,
+  connectEndedOf,
+  type ConnectEnded,
+  ConnectEndedSchema,
+  ConnectRunSchema,
   type ReportedRoute,
   REPORTED_ROUTES,
   routeTemplateOf,
@@ -2624,7 +2650,7 @@ export {
 } from './http/health-route';
 
 export {
-  adaptMemory,
+  adaptMemory, forgetMemoryVectors,
   backfillMemoryVectors,
 } from './memory/vector-sync';
 
@@ -2691,8 +2717,8 @@ export {
 export type {
   AgentTurnActivity, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentReview, AgentStanding, AgentStandingReport, AgentReport, AgentOwes, AdmittedDelivery, AgentSteps, RunEndOutcome, RunEndReport, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
-} from './subordinates/agent-isolate';
+} from './subagents/agent-isolate';
 
-export { refusedRun, writesSnapshotRows } from './subordinates/agent-isolate';
+export { refusedRun, writesSnapshotRows } from './subagents/agent-isolate';
 
-export { describeAgentTools } from './subordinates/tool-descriptors';
+export { describeAgentTools } from './subagents/tool-descriptors';

@@ -17,7 +17,7 @@ import { PREVIEW_SELF } from '../src/viewer-pass';
 import { workerContext } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY, TEST_USER_ENV, createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { jsrpcStub } from './helpers/jsrpc-stub';
-import type { EgressRequestFacts, UserCaller } from '@kinu.run/core';
+import type { EgressPrincipal, EgressRequestFacts, UserCaller } from '@kinu.run/core';
 import { type RecordingLogger, createRecordingLogger } from '@kinu.run/test-utils';
 
 /** The owner object a program's egress asks for a placeholder; these suites ask it nothing unless they say so. */
@@ -33,7 +33,9 @@ const UNASKED_OWNER = {
 function browserEnv(owned: ReadonlySet<string>) {
   const reached: string[] = [];
 
-  const env = {
+  const view: Partial<Env> = {};
+
+  Object.assign(view, {
     ...UNASKED_OWNER,
     BROWSER: {
       fetch: async (input: string) => {
@@ -53,13 +55,15 @@ function browserEnv(owned: ReadonlySet<string>) {
         ownsBrowserSession: async (actor: string, sessionId: string) => owned.has(`${workspace.toString()}/${actor}/${sessionId}`),
       }),
     },
-  };
+  });
 
-  return { env, reached };
+  // SAFETY: each member CodemodeEgress reads is constructed above: UserDO, CREDENTIAL_ENCRYPTION_KEY, BROWSER and
+  // OrchestratorAgent (codemode-egress.ts, egress/policy.ts, egress/send-out.ts); no other member is reachable.
+  return { env: view as Env, reached };
 }
 
 /** Its fetch override reads no instance state; `WorkerEntrypoint`'s constructor still takes the platform handle whole. */
-const entry = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor: 'a1', asOwner: true, ownerUserId: null } }, browserEnv(new Set()).env);
+const entry = new CodemodeEgress({ ...workerContext(), props: { principal: { as: 'owner', workspace: 'hello', actorId: 'a1', ownerUserId: null } } }, browserEnv(new Set()).env);
 
 const egressFetch = (url: string, init?: RequestInit): Promise<Response> =>
   entry.fetch(new Request(url, init));
@@ -207,7 +211,7 @@ function previewEgress(suffix: string, asOwner = true) {
 
   return {
     env,
-    fetch: (url: string) => new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor: 'a1', asOwner } }, env).fetch(new Request(url)),
+    fetch: (url: string) => new CodemodeEgress({ ...workerContext(), props: { principal: asOwner ? { as: 'owner', workspace: 'hello', actorId: 'a1', ownerUserId: null } : { as: 'viewer', workspace: 'hello', actorId: 'a1' } } }, env).fetch(new Request(url)),
     // The Worker's own fetch, as `enable_ctx_exports` binds it.
     self: { fetch: (request: Request) => server.fetch(request, env, workerContext()) },
   };
@@ -295,7 +299,8 @@ describe("a program spends its workspace's secrets as a command does, and a view
       },
     };
 
-    const egress = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor: 'a1', ...props } }, env);
+    const principal: EgressPrincipal = props.asOwner ? { as: 'owner', workspace: 'hello', actorId: 'a1', ownerUserId: props.ownerUserId } : { as: 'viewer', workspace: 'hello', actorId: 'a1' };
+    const egress = new CodemodeEgress({ ...workerContext(), props: { principal } }, env);
 
     return { placeholder, fetch: (url: string) => egress.fetch(new Request(url, { headers: { authorization: `Bearer ${placeholder}` } })) };
   }
@@ -328,7 +333,7 @@ describe('a program reaches a browser session only through the gate, and only on
 
   const gate = (owned: ReadonlySet<string>, actor: string | null) => {
     const { env, reached } = browserEnv(owned);
-    const egress = new CodemodeEgress({ ...workerContext(), props: { workspace: 'hello', actor, asOwner: true, ownerUserId: null } }, env);
+    const egress = new CodemodeEgress({ ...workerContext(), props: { principal: { as: 'owner', workspace: 'hello', actorId: actor, ownerUserId: null } } }, env);
 
     return { reached, fetch: (session: string, init?: RequestInit) => egress.fetch(new Request(`https://browser.kinu.invalid/v1/devtools/browser/${session}`, init)) };
   };

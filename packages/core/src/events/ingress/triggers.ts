@@ -146,6 +146,53 @@ export function cancelTrigger(request: CancelTriggerRequest): CancelTriggerResul
   return { ok: true, changed };
 }
 
+/** A daily schedule's cron, `M H * * *`: the one shape whose time of day the owner may move. */
+const DAILY_CRON = /^(\d{1,2}) (\d{1,2}) \* \* \*$/u;
+
+/** `HH:MM`, 24-hour. */
+const CLOCK = /^([01]\d|2[0-3]):([0-5]\d)$/u;
+
+/** The time of day a daily schedule fires, `HH:MM`; null for any other cron. */
+export function dailyTimeOf(cron: string): string | null {
+  const [, minutes, hours] = DAILY_CRON.exec(cron.trim()) ?? [];
+
+  return minutes === undefined || hours === undefined ? null : `${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}`;
+}
+
+export interface RetimeTriggerRequest {
+  readonly registry: TriggerRegistry;
+  readonly trigger_id: string;
+  /** `HH:MM`, in the schedule's own time zone. */
+  readonly at: string;
+  readonly now: number;
+}
+
+/**
+ * A daily schedule moved to `at`, in the time zone it already keeps; its next firing is the next `at` from now. Only a
+ * live daily schedule moves: any other trigger, or a time that is not `HH:MM`, is refused. The owner's call alone (the
+ * host gives it no model surface).
+ */
+export async function retimeDailyTrigger(request: RetimeTriggerRequest): Promise<{ readonly at: string; readonly nextFireAt: number }> {
+  const { registry, trigger_id, at, now } = request;
+  const trigger = registry.get(trigger_id);
+  const clock = CLOCK.exec(at);
+
+  if (clock === null) return settleSync(Effect.fail(new KinuError('bad_input', `A time of day is HH:MM, not ${at}`)));
+  const spec = trigger === null || trigger.kind !== 'timer_cron' || trigger.state === 'revoked' ? null : v.parse(TimerSpecSchema, trigger.spec);
+
+  if (trigger === null || spec === null || spec.cron === undefined || dailyTimeOf(spec.cron) === null) {
+    return settleSync(Effect.fail(new KinuError('missing', 'No daily schedule with that id')));
+  }
+
+  const cron = `${String(Number(clock[2]))} ${String(Number(clock[1]))} * * *`;
+  const nextFireAt = nextCronFire(cron, now, spec.time_zone);
+
+  if (nextFireAt === null) return settleSync(Effect.fail(new KinuError('bad_input', `Unsupported cron expression: ${cron}`)));
+  await registry.retime(trigger.id, { ...trigger.spec, cron }, nextFireAt);
+
+  return { at, nextFireAt };
+}
+
 export interface TimerFireDeps {
   registry: TriggerRegistry;
   log: EventLog;

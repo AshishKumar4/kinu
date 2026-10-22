@@ -139,14 +139,14 @@ describe('EvalVerifier', () => {
 const LONG_BRIEF = `Tally the waitlist signups per country. ${'The file is a CSV with a header row. '.repeat(14)}Write the totals to signups-by-country.json`;
 
 /**
- * An inspector over one live helper and one released, as core subordinates/inspection-path.ts answers: a path reaches
- * live children only, so by name the released helper is missing, and every retained helper is reached by its actor from
+ * An inspector over one live subagent and one released, as core subagents/inspection-path.ts answers: a path reaches
+ * live children only, so by name the released subagent is missing, and every retained subagent is reached by its actor from
  * the root. Run summaries and events are previews; the canonical history retains the full run-linked assignment, as a
  * hirer's brief projects it: a `system` entry. Measured on staging 667f96316, 2026-10-19: a finished hire's history held
  * its brief as `system` and its answer as `assistant`, both under the run's id.
  */
 function inspecting(): VerifierSession {
-  const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
+  const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subagent or retained history is unavailable.' };
 
   const actors = new Map([
     ['actor-live', [{ status: 'error', brief: LONG_BRIEF }, { status: 'completed', brief: 'Retry the same tally' }]],
@@ -187,11 +187,11 @@ function inspecting(): VerifierSession {
   };
 }
 
-describe("a helper's runs", () => {
-  // Staging f75f06932, 2026-10-01: both task helpers of a capture were dismissed once they answered, and their runs
-  // read by name answered missing (kinu-logs/evals-fast/FINDINGS.md F3B), as every task helper's do.
-  test('every helper is read by its actor, live or released, and each run by the brief that started it, whole', async () => {
-    const work = await new EvalVerifier(inspecting(), [], 0, settledAtOnce).helperWork();
+describe("a subagent's runs", () => {
+  // Staging f75f06932, 2026-10-01: both task subagents of a capture were dismissed once they answered, and their runs
+  // read by name answered missing (kinu-logs/evals-fast/FINDINGS.md F3B), as every task subagent's do.
+  test('every subagent is read by its actor, live or released, and each run by the brief that started it, whole', async () => {
+    const work = await new EvalVerifier(inspecting(), [], 0, settledAtOnce).subagentWork();
 
     expect(work).toEqual([
       { name: 'ask-task-live', status: 'working', runs: [
@@ -203,7 +203,7 @@ describe("a helper's runs", () => {
 
   // delegation trial 3 (run 37880718948): the first brief named the report past the summary's cut, the retry named none.
   test('a retry finishes the assignment whose brief names its file only past the summary\'s first 500 characters', async () => {
-    const work = await new EvalVerifier(inspecting(), [], 0, settledAtOnce).helperWork();
+    const work = await new EvalVerifier(inspecting(), [], 0, settledAtOnce).subagentWork();
 
     expect(finishedWork(work, 'signups-by-country.json')).toEqual(['ask-task-live']);
   });
@@ -224,9 +224,9 @@ describe("a helper's runs", () => {
       },
     };
 
-    const work = await new EvalVerifier(connection, [], 0, settledAtOnce).helperWork();
+    const work = await new EvalVerifier(connection, [], 0, settledAtOnce).subagentWork();
 
-    expect(work.flatMap((helper) => helper.runs.map((run) => run.userMessage))).toEqual([null, null, null]);
+    expect(work.flatMap((subagent) => subagent.runs.map((run) => run.userMessage))).toEqual([null, null, null]);
     expect(finishedWork(work, 'signups-by-country.json')).toEqual([]);
   });
 
@@ -248,12 +248,12 @@ describe("a helper's runs", () => {
       },
     };
 
-    const work = await new EvalVerifier(connection, [], 0, settledAtOnce).helperWork();
+    const work = await new EvalVerifier(connection, [], 0, settledAtOnce).subagentWork();
 
     expect(work[0]?.runs[0]?.userMessage).toBe(LONG_BRIEF);
   });
 
-  test('a reused helper must finish the assigned run, not just an earlier unrelated run', () => {
+  test('a reused subagent must finish the assigned run, not just an earlier unrelated run', () => {
     const work = [
       { name: 'earlier-completion', status: 'dismissed', runs: [
         { startedAt: 10, status: 'completed', userMessage: 'Build src/maybe.ts' },
@@ -274,7 +274,7 @@ describe("a helper's runs", () => {
     expect(finishedWork(work, 'maybe.ts')).toEqual(['resumed']);
   });
 
-  test('old helper runs cannot satisfy this turn', async () => {
+  test('old subagent runs cannot satisfy this turn', async () => {
     const connection = {
       ...inspecting(),
       inspect: (request: Parameters<VerifierSession['inspect']>[0]) => request.view === 'runs'
@@ -286,7 +286,7 @@ describe("a helper's runs", () => {
 
     const verifier = new EvalVerifier(connection, [], 100, settledAtOnce);
 
-    expect((await verifier.helperWork()).flatMap((helper) => helper.runs)).toEqual([]);
+    expect((await verifier.subagentWork()).flatMap((subagent) => subagent.runs)).toEqual([]);
   });
 
   test('old swarms cannot satisfy this turn', async () => {

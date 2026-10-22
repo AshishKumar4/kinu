@@ -6,7 +6,7 @@ import { DECISION_MODELS } from '../providers/decision-model';
 
 import { NAMED_SWARM_PRESETS } from '../types/swarm';
 import { REASONING_EFFORTS } from '../providers/effort';
-import type { WorkMode } from '../types/turn';
+import { WorkModeSchema, type WorkMode } from '../types/turn';
 import { TIER_IDS, TierIdSchema,
   ProfileAuthoritySchema, parseProfileValue,
   type RoleId, type TierId,
@@ -60,7 +60,7 @@ const ResolvedTurnProfileSchema = v.strictObject({
   ),
   retries: v.number(),
   decisionModel: v.picklist(DECISION_MODELS),
-  workMode: v.picklist(['plan', 'build']),
+  workMode: WorkModeSchema,
   skills: v.array(v.string()),
   allowedTools: v.array(v.string()),
   defaultPreset: v.picklist(NAMED_SWARM_PRESETS),

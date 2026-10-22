@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-10-20",
-  "files": 3630,
-  "functions": 95767,
+  "measuredAt": "2026-10-22",
+  "files": 3740,
+  "functions": 98045,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -98,10 +98,6 @@
       "complexity": 32
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#mcpServersFixture",
-      "complexity": 31
-    },
-    {
       "key": "packages/cf-backend/tests/workerd/http-model-fake.ts#probeControl",
       "complexity": 31
     },
@@ -187,6 +183,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/ui/BrandMark.tsx#providerBrand",
+      "complexity": 27
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#mcpServersFixture",
       "complexity": 27
     },
     {
@@ -438,15 +438,7 @@
       "complexity": 25
     },
     {
-      "key": "packages/devbox/tests/support/devbox-harness.ts#FakeSandbox.nativeCommand",
-      "complexity": 25
-    },
-    {
       "key": "scripts/devbox-container-tier.ts#main",
-      "complexity": 25
-    },
-    {
-      "key": "scripts/durability-canary-telemetry.ts#activationDisruptions",
       "complexity": 25
     },
     {

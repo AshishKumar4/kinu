@@ -60,18 +60,18 @@ export const WEB = {
     }),
   }),
   openBrowser: defineOperation({
-    ns: 'web', name: 'openBrowser',
+    ns: 'web', name: 'openBrowser', tool: false,
     help: 'A browser for connectBrowser. Chrome: kept across programs and turns until closed or idle 20 min; liveView lets the owner watch or take over (a login, a captcha), so give it to them; lab enables the page\'s WebMCP tools. Kitesurf: lighter, with WebMCP; each connect starts a browser that ends with its program, and it has no Live View.',
     impact: 'execute', slate: true,
     input: v.strictObject({ browser: v.optional(described(v.picklist(['chrome', 'kitesurf']), 'Default chrome.')), lab: v.optional(described(v.boolean(), 'Chrome only.')) }),
     output: v.strictObject({ id: v.string(), liveView: v.nullable(v.string()) }),
   }),
   browsers: defineOperation({
-    ns: 'web', name: 'browsers', help: 'Your open Chrome sessions.', impact: 'observe', slate: true,
+    ns: 'web', name: 'browsers', tool: false, help: 'Your open Chrome sessions.', impact: 'observe', slate: true,
     input: v.strictObject({}), output: v.array(SessionView),
   }),
   closeBrowser: defineOperation({
-    ns: 'web', name: 'closeBrowser', help: 'Close a Chrome session.', impact: 'mutate', slate: true,
+    ns: 'web', name: 'closeBrowser', tool: false, help: 'Close a Chrome session.', impact: 'mutate', slate: true,
     input: v.strictObject({ id: v.pipe(v.string(), v.nonEmpty()) }), output: v.null(),
   }),
 } as const;

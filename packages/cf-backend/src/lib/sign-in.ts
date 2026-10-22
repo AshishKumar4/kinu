@@ -14,11 +14,14 @@ export function signInAndReturn(back = returnHere()): void {
   window.location.assign(login.toString());
 }
 
-/** This page again with its fork picker open (`?fork=1`): where someone who pressed Fork signed out lands once signed in. */
-export function hereForking(): string {
+/**
+ * This page again with what was pressed signed out open (`?fork=1`, the fork picker; `?install=1`, the install dialog):
+ * where that person lands once signed in.
+ */
+export function hereAsking(intent: "fork" | "install"): string {
   const here = new URL(window.location.href);
 
-  here.searchParams.set("fork", "1");
+  here.searchParams.set(intent, "1");
 
   return here.pathname + here.search;
 }

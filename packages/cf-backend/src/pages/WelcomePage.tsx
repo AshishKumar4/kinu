@@ -1,8 +1,9 @@
 /** First-run setup wizard; an unfinished account lands here from any URL. */
 import { Cause, Effect } from 'effect';
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, type CSSProperties } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Button, Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
+import { Button } from "@/components/ui/Button";
 import {
   AppWindowIcon, DesktopTowerIcon, SparkleIcon,
   type Icon as PhosphorIcon,
@@ -11,13 +12,13 @@ import {
   APP_ROUTES, ONBOARDING_STEPS, PERSONAL_ASSISTANT_ID, suggestedMailUsername,
 } from "@kinu.run/core";
 import { renderThrownChain, settle, showing, detach } from "@kinu.run/core/obs";
-import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
 import { DefaultModelField } from "@/components/account/DefaultModelField";
 import { WebSearchSettings } from "@/components/account/WebSearchSettings";
 import { AssistantStep, DEFAULT_ASSISTANT, type AssistantChoice } from "@/components/assistant/AssistantStep";
+import { personName } from "@/hooks/use-chat-mascot";
 import { McpServersSection } from "@/components/account/McpServersPanel";
 import { completeOnboarding, setDisplayName } from "@/lib/user-api";
 import { installBlueprint } from "@/lib/explore-api";
@@ -27,9 +28,9 @@ import { signedInWith } from "@/lib/shared-api";
 import { useElementSize } from "@/hooks/use-element-size";
 import { MailAddressField, useMailUsername } from "@/components/mail/MailAddressField";
 import { createMailAddress, readMailBoxes } from "@/lib/mail-api";
+import { Surface } from "@/components/ui/Surface";
+import { StepDots } from "@/components/ui/Meter";
 
-/** Where Mail's step sits in the whole list, so a setup opened past it can step back when it is not offered. */
-const MAIL_STEP = ONBOARDING_STEPS.findIndex((each) => each.id === 'mail');
 
 /** Setup's steps: Mail's only where the deployment has mail and the person may create an address and has none. */
 function stepsFor(mail: boolean): typeof ONBOARDING_STEPS[number][] {
@@ -54,34 +55,63 @@ const SHOWCASE: { Icon: PhosphorIcon; title: string; copy: string }[] = [
   },
 ];
 
-function stepDotCls(index: number, step: number): string {
-  if (index === step) return 'w-8 bg-[var(--c-accent-fg)]';
-
-  if (index < step) return 'w-4 bg-[var(--c-accent-fg)] opacity-40';
-
-  return 'w-4 p-fill';
+/** The `i`th card's place in the reveal (`p-reveal-step`). */
+function revealAt(i: number): CSSProperties & { readonly "--reveal-step": string } {
+  return { "--reveal-step": String(i) };
 }
 
 function ShowcaseStep({ revealed }: { revealed: boolean }) {
   return (
     <div className="space-y-3">
       {SHOWCASE.map(({ Icon, title, copy }, i) => (
-        <div
+        <Surface
+          look="panel"
           key={title}
-          className={`flex items-start gap-3 rounded-xl border p-border p-surface p-4 transition-all duration-500 ${revealed ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'}`}
-          style={{ transitionDelay: `${i * 90}ms` }}
+          className={`p-reveal-step flex items-start gap-3 p-4 transition-all duration-500 ${revealed ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'}`}
+          style={revealAt(i)}
         >
-          <div className="size-9 shrink-0 rounded-lg p-fill flex items-center justify-center">
-            <Icon size={18} className="p-accent" />
-          </div>
+          <Surface look="tile" className="size-9 shrink-0 flex items-center justify-center">
+            <Icon size={18} className="p-accent-fg" />
+          </Surface>
           <div>
-            <div className="text-sm font-semibold p-text">{title}</div>
-            <p className="p-meta p-text-3 mt-0.5">{copy}</p>
+            <div className="t-label p-text">{title}</div>
+            <p className="t-meta p-text-3 mt-px">{copy}</p>
           </div>
-        </div>
+        </Surface>
       ))}
     </div>
   );
+}
+
+/**
+ * The step setup shows, held in the address by its id (`?step=`): a connect run in this tab comes back to it, and a step
+ * keeps its place when Mail turns out not to be offered. Opened on no step it names, it shows `initialStep` and writes
+ * it down while Mail is still counted. `goTo` replaces the address rather than pushing: Back is the wizard's own button,
+ * and the browser's leaves setup.
+ */
+function useAddressedStep(offerMail: boolean, initialStep: number) {
+  const steps = stepsFor(offerMail);
+  const [search, setSearch] = useSearchParams();
+  // A step it names that is not offered, Mail read as not offered after all, gives way to the step after it.
+  const named = ONBOARDING_STEPS.findIndex((candidate) => candidate.id === search.get("step"));
+  const addressed = named < 0 ? -1 : steps.findIndex((candidate) => ONBOARDING_STEPS.indexOf(candidate) >= named);
+  const step = addressed >= 0 ? addressed : Math.min(Math.max(0, initialStep), steps.length - 1);
+
+  const goTo = useCallback((index: number) => {
+    const id = stepsFor(offerMail)[index]?.id;
+
+    if (id === undefined) return;
+
+    setSearch((at) => {
+      at.set("step", id);
+
+      return at;
+    }, { replace: true });
+  }, [offerMail, setSearch]);
+
+  useEffect(() => { if (addressed < 0) goTo(step); }, [addressed, step, goTo]);
+
+  return { step, goTo };
 }
 
 export default function WelcomePage({ initialStep = 0 }: { initialStep?: number }) {
@@ -96,14 +126,9 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const offerMail = mail.status === "loading" || (mailBoxes?.enabled === true && mailBoxes.canCreate);
   const steps = stepsFor(offerMail);
   const LAST_STEP = steps.length - 1;
-  // `?step=` names the step to open on: a sign-in that left this page returns to the step it left from.
-  const [search] = useSearchParams();
-  const opened = steps.findIndex((candidate) => candidate.id === search.get("step"));
-  const [mailSkipped, setMailSkipped] = useState(false);
-
-  // `null` until touched, so a slow profile load never overwrites an edit.
-  const [step, setStep] = useState(() => (opened >= 0 ? opened : Math.min(Math.max(0, initialStep), LAST_STEP)));
+  const { step, goTo } = useAddressedStep(offerMail, initialStep);
   const [reached, setReached] = useState(step);
+  // `null` until touched, so a slow profile load never overwrites an edit.
   const [name, setName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -118,11 +143,6 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   // The name typed a step before is the one it is offered from.
   const address = useMailUsername(profile === null ? null : suggestedMailUsername({ displayName, email: profile.email }));
   const onMail = steps[step]?.id === 'mail';
-
-  // Read as not offered after setup opened on a later step: the steps after it moved up one.
-  useEffect(() => {
-    if (mail.status !== "loading" && !offerMail) setStep((at) => (at > MAIL_STEP ? at - 1 : at));
-  }, [mail.status, offerMail]);
 
   useEffect(() => setReached((most) => Math.max(most, step)), [step]);
 
@@ -148,7 +168,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
     return yield* Effect.catchCause(Effect.gen(function* () {
       // The assistant first: Home is its chat the moment setup ends.
-      if (assistant.install) yield* Effect.promise(async () => installBlueprint(PERSONAL_ASSISTANT_ID, { agent: assistant.name, brief: assistant.brief, home: true }));
+      // Its brief keeps the blueprint's 08:00 in the person's own time zone; the time is changed in its settings.
+      if (assistant.install) yield* Effect.promise(async () => installBlueprint(PERSONAL_ASSISTANT_ID, { displayName: assistant.name, agent: assistant.name, home: true }));
       const { onboardedAt } = yield* Effect.promise(async () => completeOnboarding());
       const current = lastValue(account.profile);
 
@@ -184,8 +205,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
       account.reload();
     }
 
-    // Next is the address: made with its mailbox at once, unless the person said not now.
-    if (onMail && !mailSkipped) {
+    // Next is the address, made with its mailbox at once; the footer's Not now passes it by.
+    if (onMail) {
       setBusy(true);
 
       const failure = yield* Effect.matchCause(Effect.promise(() => createMailAddress(address.username)), {
@@ -202,26 +223,20 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
       }
     }
 
-    setStep((s) => Math.min(s + 1, LAST_STEP));
-  })), [step, name, profile, account, onMail, mailSkipped, address.username, LAST_STEP]);
+    goTo(Math.min(step + 1, LAST_STEP));
+  })), [step, name, profile, account, onMail, address.username, LAST_STEP, goTo]);
 
   return (
-    <div className="fixed inset-0 p-bg overflow-y-auto">
+    <Surface look="page" className="fixed inset-0 overflow-y-auto">
       <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-4 py-8">
         <div className="mb-6 flex justify-center"><KinuLogo /></div>
-        <h1 className="p-display text-[26px] leading-8 text-center">Let's set up your account</h1>
+        <h1 className="t-page-title text-center">Let's set up your account</h1>
 
-        <ol aria-label="Setup steps" className="mt-6 mb-5 flex items-center justify-center gap-1.5">
-          {steps.map((s, i) => (
-            <li key={s.id} aria-current={i === step ? 'step' : undefined}>
-              <span className={`block h-1.5 rounded-full transition-all ${stepDotCls(i, step)}`} />
-            </li>
-          ))}
-        </ol>
+        <div className="mt-6 mb-5"><StepDots label="Setup steps" steps={steps.map((s) => s.id)} at={step} /></div>
 
-        <section className="p-card overflow-hidden">
+        <Surface look="panel" as="section" className="overflow-hidden">
           <div
-            className="overflow-hidden transition-[height] duration-300 ease-out"
+            className="p-welcome-frame overflow-hidden"
             style={stepHeight === null ? undefined : { height: stepHeight }}
           >
           <div
@@ -231,41 +246,35 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
             {steps.map((s, i) => (
               <div
                 key={s.id}
-                className="w-full shrink-0 max-h-[62vh] overflow-y-auto px-5 py-5 sm:px-8 sm:py-7"
+                className="w-full shrink-0 max-h-[var(--layout-welcome-step)] overflow-y-auto px-5 py-5 sm:px-8 sm:py-6"
                 data-welcome-step={s.id}
                 aria-hidden={i !== step}
                 inert={i !== step}
                 ref={i === step ? stepSize.attach : undefined}
               >
-                <h2 className="p-title p-text mb-5">{s.title}</h2>
+                <h2 className="t-title p-text mb-5">{s.title}</h2>
 
                 {s.id === 'profile' && (
                   <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-                    <div data-avatar className="size-16 rounded-full p-accent-subtle text-[22px] font-semibold p-accent-mark flex items-center justify-center">
+                    <Surface round look="selected" className="t-page-title size-16 p-accent-mark flex items-center justify-center" data-avatar>
                       {letter}
-                    </div>
+                    </Surface>
                     <div className="w-full flex-1">
-                      <DisplayNameField value={displayName} onChange={setName} saving={busy} />
+                      <DisplayNameField value={displayName} onChange={setName} saving={busy} bare />
                       {profile !== null && !profile.displayName && provider !== null && (
-                        <p className="mt-2 text-xs p-text-3">{provider} didn't share a name.</p>
+                        <p className="t-meta mt-2 p-text-3">{provider} didn't share a name.</p>
                       )}
                     </div>
                   </div>
                 )}
 
                 {s.id === 'mail' && (
-                  <div className="space-y-3">
-                    <MailAddressField domain={mailBoxes?.domain ?? ''} username={address.username} state={address.state} onChange={address.setUsername} disabled={busy || mailSkipped} />
-                    <button type="button" data-mail-not-now aria-pressed={mailSkipped} onClick={() => setMailSkipped((skipped) => !skipped)}
-                      className="p-btn-ghost inline-flex h-6.5 items-center rounded-md px-2 text-xs">
-                      {mailSkipped ? "Create it after all" : "Not now"}
-                    </button>
-                  </div>
+                  <MailAddressField domain={mailBoxes?.domain ?? ''} username={address.username} state={address.state} onChange={address.setUsername} disabled={busy} />
                 )}
 
                 {s.id === 'providers' && (
                   <div className="space-y-5">
-                    <ProvidersPanel framed={false} returnTo={`${APP_ROUTES.welcome}?step=${s.id}`} />
+                    <ProvidersPanel framed={false} />
                   </div>
                 )}
 
@@ -273,16 +282,16 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                 {s.id === 'model' && i === step && <DefaultModelField />}
 
                 {/* Likewise: the model step writes the same catalog, so this one reads it when it opens. */}
-                {s.id === 'search' && i === step && <WebSearchSettings place="setup" returnTo={`${APP_ROUTES.welcome}?step=${s.id}`} />}
+                {s.id === 'search' && i === step && <WebSearchSettings place="setup" />}
 
                 {s.id === 'tools' && (
                   <div className="space-y-4">
-                    <p className="text-sm p-text-3">MCP servers give every agent you own their tools. Connect one now, or any time in settings.</p>
+                    <p className="t-body p-text-3">MCP servers give every agent you own their tools. Connect one now, or any time in settings.</p>
                     {i <= reached && <McpServersSection />}
                   </div>
                 )}
 
-                {s.id === 'assistant' && <AssistantStep choice={assistant} onChange={setAssistant} />}
+                {s.id === 'assistant' && <AssistantStep choice={assistant} onChange={setAssistant} person={personName(profile === null ? null : { displayName, email: profile.email })} />}
 
                 {s.id === 'showcase' && <ShowcaseStep revealed={revealed} />}
               </div>
@@ -290,31 +299,31 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
           </div>
           </div>
 
-          {error && <p className="text-xs p-danger px-5 sm:px-8 pt-3">{error}</p>}
+          {error && <p className="t-meta p-danger px-5 sm:px-8 pt-3">{error}</p>}
 
           <div className="flex items-center justify-between gap-3 border-t p-border px-5 py-4 sm:px-8">
             {step > 0 ? (
-              <Button variant="ghost" size="sm" disabled={busy} onClick={() => setStep((s) => s - 1)}>Back</Button>
+              <Button variant="ghost" size="sm" disabled={busy} onClick={() => goTo(step - 1)}>Back</Button>
             ) : <span />}
 
             {step < LAST_STEP ? (
               <div className="flex items-center gap-3">
-                <button type="button" disabled={busy} onClick={finish}
-                  className="p-btn-ghost inline-flex h-6.5 items-center rounded-md px-2 text-xs">
+                <Button variant="ghost" disabled={busy} onClick={finish}>
                   Skip setup
-                </button>
-                <FilledButton disabled={busy || (onMail && !mailSkipped && address.state !== "available")} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
+                </Button>
+                {onMail && <Button variant="ghost" size="sm" data-mail-not-now disabled={busy} onClick={() => goTo(Math.min(step + 1, LAST_STEP))}>Not now</Button>}
+                <Button variant="primary" size="md" disabled={busy || (onMail && address.state !== "available")} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
                   {busy && <Loader size="sm" />} Next
-                </FilledButton>
+                </Button>
               </div>
             ) : (
-              <FilledButton disabled={busy} onClick={finish}>
+              <Button variant="primary" size="md" disabled={busy} onClick={finish}>
                 {busy && <Loader size="sm" />} Finish setup
-              </FilledButton>
+              </Button>
             )}
           </div>
-        </section>
+        </Surface>
       </div>
-    </div>
+    </Surface>
   );
 }

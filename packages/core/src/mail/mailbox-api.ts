@@ -26,7 +26,8 @@ export const MAIL_VIEWS = ['important', 'all', 'sent', 'drafts', 'trash'] as con
 
 export type MailView = (typeof MAIL_VIEWS)[number];
 
-export const MAIL_SEND_STATES = ['draft', 'queued', 'sent', 'delivered', 'bounced', 'failed', 'complained'] as const;
+/** A draft or queued message's own; sent or failed, the outbox's view of a queued one (store.ts `sendStateOf`). */
+export const MAIL_SEND_STATES = ['draft', 'queued', 'sent', 'failed'] as const;
 
 export type MailSendState = (typeof MAIL_SEND_STATES)[number];
 
@@ -102,6 +103,28 @@ export interface MailMessageView {
 export interface MailThreadView {
   readonly thread: MailThreadSummary;
   readonly messages: readonly MailMessageView[];
+}
+
+/** An Important thread as the footer and Home read it. */
+export interface ImportantMail {
+  readonly thread: string;
+  readonly from: { readonly name: string; readonly address: string };
+  /** The person's own address it reached: their box's. */
+  readonly to: string;
+  readonly subject: string;
+  readonly reason: string;
+  readonly at: number;
+  readonly unread: boolean;
+}
+
+/** Important threads, each with its first writer and the address of the person's box it is in. */
+export function importantMail(threads: readonly MailThreadSummary[], boxes: readonly Pick<MailBox, 'path' | 'address'>[]): ImportantMail[] {
+  return threads.map((thread) => ({
+    thread: thread.id,
+    from: { name: thread.from[0]?.name ?? thread.from[0]?.address ?? '', address: thread.from[0]?.address ?? '' },
+    to: boxes.find((box) => box.path === thread.path)?.address ?? '',
+    subject: thread.subject, reason: thread.important ?? '', at: thread.at, unread: thread.unread,
+  }));
 }
 
 /** A view's threads, newest first, and how many of them are unread. */
