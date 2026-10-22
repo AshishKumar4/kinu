@@ -17,7 +17,8 @@ export const APP_ROUTES = {
   workspace: '/workspace/:agentId',
   workspaceAgent: '/workspace/:agentId/agents/:subName',
   workspaceAgentPath: '/workspace/:agentId/agents/:subName/*',
-  /** `overview`, `settings`, `new` or `desktop`: the workspace's own pages, under the bar the chats share. */
+  /** `overview`, `settings` or `new`: the workspace's own pages, under the bar the chats share. `desktop` lands on the
+   *  Environment's desktop (D99); any other view is no page. */
   workspaceView: '/workspace/:agentId/:view',
   swarm: '/swarm/:agentId',
   control: '/control',

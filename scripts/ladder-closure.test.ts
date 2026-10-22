@@ -152,8 +152,8 @@ describe('ladder-closure — what a closure holds', () => {
     expect(derived(closure)).toContain('docs/note.md');
   });
 
-  test('tsc and oxlint script parts read the whole corpus', async () => {
-    const repo = await fixture({ 'packages/x/far.ts': 'export const far = 1;' }, { check: 'tsc --noEmit -p packages/x' });
+  test('tsrs and oxlint script parts read the whole corpus', async () => {
+    const repo = await fixture({ 'packages/x/far.ts': 'export const far = 1;' }, { check: 'tsrs --noEmit -p packages/x' });
 
     expect(derived(deriveClosure('bun run check', DERIVED, repo))).toContain('packages/x/far.ts');
   });

@@ -1,7 +1,7 @@
 // Native container PTY, device PTY, workspace shell and line-mode terminal lanes.
 
 import { Cause, Effect, type Exit } from 'effect';
-import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
@@ -17,6 +17,7 @@ import {
 import type { ExecutorCommandResult } from "@kinu.run/core";
 import { WorkspaceTerminalOutputSchema } from "@kinu.run/core";
 import { IconControl } from "@/components/ui/IconControl";
+import { TerminalReplay } from "@/components/terminal-replay";
 
 export type { TerminalPaneOutput };
 
@@ -77,8 +78,10 @@ function TerminalFrame({ leading, state, failure, copies, action, hostRef, barOn
           {action}
         </span>
       </div>
-      {/* FitAddon measures the host less its padding, so the text starts on the column's left edge. */}
-      <div ref={hostRef} className={`p-terminal-ground min-h-0 flex-1 overflow-hidden pl-4 ${barOnGround ? "pt-1" : "border-t p-border pt-2"}`} />
+      {/* The inset is xterm's own padding (`p-terminal-host`): FitAddon takes the host's whole width as room and subtracts
+          only the terminal's padding, so a host's own would size the screen past the pane's edge. */}
+      <div ref={hostRef} data-on-ground={barOnGround ? "" : undefined}
+        className={`p-terminal-host p-terminal-ground min-h-0 flex-1 overflow-hidden ${barOnGround ? "" : "border-t p-border"}`} />
     </div>
   );
 }
@@ -93,6 +96,9 @@ const SCROLLBACK_LINES = 5_000;
 export function TerminalPane({ workspace, executor, outputs, onExecute, leading, session, device, barOnGround, trailing }: TerminalPaneProps) {
   const lane = terminalLane(executor);
   const frame = { leading, barOnGround, trailing };
+  const replay = useContext(TerminalReplay);
+
+  if (replay !== null) return <LineTerminal executor={executor} outputs={replay.get(executor) ?? []} frame={frame} />;
 
   if (lane.mode === "line") return <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} frame={frame} />;
 

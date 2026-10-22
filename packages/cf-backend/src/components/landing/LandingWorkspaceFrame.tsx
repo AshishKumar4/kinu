@@ -3,7 +3,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { flushSync } from 'react-dom';
 import { MemoryRouter } from 'react-router-dom';
 import type { UIMessage } from 'ai';
-import { threadLiveTail, type PlanReview } from '@kinu.run/core';
+import { threadLiveTail, type AgentStatus, type PlanReview } from '@kinu.run/core';
 
 import { Composer } from '@/components/Composer';
 import type { WorkMode } from '@kinu.run/core';
@@ -21,7 +21,7 @@ import { WorkspaceRosterProvider } from '@/hooks/use-workspace-roster';
 import type { ForkNode } from '@kinu.run/core';
 
 import {
-  WORKER_MESSAGES, LANDING_CHATS, LANDING_MODEL, LANDING_MODELS, LANDING_TAB_PRESENCE, LANDING_WORKSPACE,
+  WORKER_MESSAGES, LANDING_AGENT, LANDING_CHATS, LANDING_EXECUTORS, LANDING_MEMORY, LANDING_MEMORY_FILE, LANDING_TERMINALS, LANDING_MODEL, LANDING_MODELS, LANDING_TAB_PRESENCE, LANDING_WORKSPACE,
   SLATE_MESSAGES, SLATE_PREVIEW_URL, SLATE_SUMMARY,
   workerWorkFixture, planRpc,
 } from './landing-fixtures';
@@ -34,6 +34,11 @@ import {
 } from './landing-movie-timeline';
 import { SlateDashboard } from './SlateDashboard';
 import { countingRpc, type WorkspaceRpc } from '@/lib/workspace-rpc';
+import type { AsyncResource } from '@/hooks/use-async-resource';
+import { TerminalReplay } from '@/components/terminal-replay';
+
+/** The Agent tab's read of the sample agent, answered at once: it has nothing to wait on. */
+const LANDING_SNAPSHOT = { status: 'ready', value: LANDING_AGENT } satisfies AsyncResource<AgentStatus>;
 
 /**
  * `rpc`, counting the reads it has not answered: the fixture is a frame's only async source (no socket, no network), so
@@ -518,19 +523,21 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
                 </div>
               </>}
               inspector={(
+                <TerminalReplay.Provider value={LANDING_TERMINALS}>
                 <WorkSurface
                   surface={surface} onSurface={onSurface}
                   pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}}
                   plan={plan} planRpc={rpc}
-                  snapshot={{ status: 'loading' }} onRetryLoad={() => {}} memory={[]} memoryContent="" onSearchMemory={() => {}}
+                  snapshot={LANDING_SNAPSHOT} onRetryLoad={() => {}} memory={LANDING_MEMORY} memoryContent={LANDING_MEMORY_FILE} onSearchMemory={() => {}}
                   mctsTrees={EMPTY_TREES} headActivity={NO_HEAD_ACTIVITY} isStreaming={isMovie ? streaming : kind === 'work'}
-                  executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
+                  executors={LANDING_EXECUTORS} executorOutputs={new Map()} onExecute={async () => ({})}
                   backgroundJobs={isMovie ? [] : work.jobs()} inspectedWork={[]} onRefreshJobs={() => setWorkVersion((version) => version + 1)}
                   pendingActions={isMovie ? [] : work.pending()}
                   slates={slates} slateBody={slateBody}
                   tabPresence={LANDING_TAB_PRESENCE}
                   rpc={rpc}
                 />
+                </TerminalReplay.Provider>
               )}
             />
           </div>

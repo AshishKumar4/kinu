@@ -375,11 +375,11 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run typecheck',
     label: 'TypeScript projects',
     tier: 'local',
-    // Measured 2026-09-15 on the 24-thread workstation, quiet: 18 tsc projects
-    // sum to 11.9 s solo (largest cf-backend 1.4 s, scripts 1.25 s, core 1.0 s).
-    // One row rather than eighteen: every project reads the corpus, so their
-    // closures are one closure and a split would buy no cache hit.
-    seconds: 12,
+    // Measured 2026-10-22 on the 24-thread workstation: the 16 projects sum to 4.3 s with tsrs (largest cf-backend
+    // 1.1 s, peak 2.0 GB) against 21.0 s with tsc 7.0.2 (cf-backend 6.8 s, peak 3.9 GB); the whole script 5.2 s.
+    // One row rather than sixteen: every project reads the corpus, so their closures are one closure and a split
+    // would buy no cache hit.
+    seconds: 6,
     catches: 'type errors across all the projects `package.json`\'s `typecheck` names, following '
       + '`bun run` transitively. The largest defect class by volume and the only total one.',
     blind: 'everything about behaviour. A well-typed call to the wrong function passes. '
