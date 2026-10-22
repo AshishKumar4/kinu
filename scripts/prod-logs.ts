@@ -1359,6 +1359,18 @@ export const SETTLE_POLL_MS = 2 * MINUTE_MS;
  */
 export const SETTLE_CAP_MS = 60 * MINUTE_MS;
 
+/**
+ * The query API's gateway answers, which say nothing of the window, so a read is asked again on the grid: 429 and 5xx
+ * (`unavailable`), and its 504 (`timeout`). Measured: the 2026-10-14 reads answered 500 to 12 of 80; the staging deploys
+ * after 2fc6aa727 (2026-10-21, 22:40-23:55Z) got a 504 on their own window and a 502 on each of five kept ones, and
+ * the same reads answered at 00:22Z with the API healthy.
+ */
+export function gatewayRefusal(thrown: { readonly cause: unknown }): boolean {
+  const code = classifyErrorCode(thrown);
+
+  return code === 'unavailable' || code === 'timeout';
+}
+
 export type SettledRead<T> =
   | { readonly settled: true; readonly value: T; readonly reads: number; readonly lateRows: number }
   | { readonly settled: false; readonly last: T; readonly reads: number; readonly lateRows: number };
@@ -1369,10 +1381,9 @@ export type SettledRead<T> =
  * before it. Reads are taken at once and then on a `pollMs` grid through the hold's instant, so the first read that may
  * settle is taken at it: a grid from the window's end read a 3 min hold first at 4 min, a minute on every deploy's
  * verdict (staging rc28, 2026-10-20). Past `capMs` from the first, the answer is "unsettled". `rows` counts what the window held at each read, so the answer names how many rows landed
- * after the first read. A read the API refuses as `unavailable` says nothing of the window, so the next tick reads
- * again: the 2026-10-14 measurement's API answered 500 to 12 of its 80 reads. Only a cap reached with no answer at all
- * fails on it; any other failure, a refused token, a query the API rejects or an answer that does not parse, fails at
- * once.
+ * after the first read. A read the API's gateway refuses ({@link gatewayRefusal}) says nothing of the window, so the
+ * next tick reads again. Only a cap reached with no answer at all fails on it; any other failure, a refused token, a
+ * query the API rejects or an answer that does not parse, fails at once.
  */
 export async function settledRead<T>(at: {
   readonly read: () => Promise<T>; readonly fingerprint: (value: T) => string; readonly rows: (value: T) => number;
@@ -1397,7 +1408,7 @@ export async function settledRead<T>(at: {
     try {
       return { value: await at.read() };
     } catch (cause) {
-      if (classifyErrorCode({ cause }) !== 'unavailable') throw cause;
+      if (!gatewayRefusal({ cause })) throw cause;
 
       return { cause };
     }
@@ -1429,10 +1440,35 @@ export async function settledRead<T>(at: {
   }
 }
 
+/** The deploy's own window read: `ended` once it settled or failed, and `done` resolving then. */
+export interface OwnRead {
+  ended: boolean;
+  readonly done: Promise<void>;
+}
+
+/**
+ * `read`, asked again on the settle grid while the API's gateway refuses it ({@link gatewayRefusal}) and the deploy's own
+ * read is still reading: a kept window waits no longer than that read already does, so it adds no wall. Its last
+ * refusal stands once the own read has ended, and any other failure stands at once.
+ */
+export async function readAgainWhile<T>(own: OwnRead, read: () => Promise<T>, sleep: (ms: number) => Promise<void> = Bun.sleep): Promise<T> {
+  for (;;) {
+    try {
+      return await read();
+    } catch (cause) {
+      if (!gatewayRefusal({ cause }) || own.ended) throw cause;
+      await Promise.race([sleep(SETTLE_POLL_MS), own.done]);
+
+      if (own.ended) throw cause;
+    }
+  }
+}
+
 /** The windows earlier deploys kept, each read once more (telemetry-windows.ts), begun before this window's own read
- *  and awaited after it, so it adds no wait. A store that cannot be reached is the only failure that keeps nothing; a
- *  token that cannot be read fails each kept window's read, and they and this window are still kept. */
-async function rereadKept(environment: InfraEnvironment): Promise<{ readonly store: WindowStore; readonly rereads: readonly Reread[] } | { readonly failed: string }> {
+ *  and awaited after it, so it adds no wait; a gateway refusal is read again while that read lasts. A store that
+ *  cannot be reached is the only failure that keeps nothing; a token that cannot be read fails each kept window's read,
+ *  and they and this window are still kept. */
+async function rereadKept(environment: InfraEnvironment, own: OwnRead): Promise<{ readonly store: WindowStore; readonly rereads: readonly Reread[] } | { readonly failed: string }> {
   try {
     const store = windowStore(environment);
     // Read once, and only when a window is kept: an unread rejection would end the process.
@@ -1443,7 +1479,7 @@ async function rereadKept(environment: InfraEnvironment): Promise<{ readonly sto
       const read = { worker: window.worker, from: Date.parse(window.from), to: Date.parse(window.to) };
       const kept = await token;
 
-      return versionSignals(await versionRead(new Telemetry(kept, read), new Telemetry(kept, { ...read, ...workWindow(read) }), window.version));
+      return versionSignals(await readAgainWhile(own, async () => versionRead(new Telemetry(kept, read), new Telemetry(kept, { ...read, ...workWindow(read) }), window.version)));
     }, () => Date.now());
 
     return { store, rereads };
@@ -1459,7 +1495,9 @@ async function rereadKept(environment: InfraEnvironment): Promise<{ readonly sto
  *  deploy's finding. */
 async function versionCommand(args: Args): Promise<number> {
   const subject = args.target ?? '';
-  const rereading = args.keepWindows === null ? undefined : rereadKept(args.keepWindows);
+  const ownEnded = Promise.withResolvers<void>();
+  const own: OwnRead = { ended: false, done: ownEnded.promise };
+  const rereading = args.keepWindows === null ? undefined : rereadKept(args.keepWindows, own);
   let findings: VersionFinding[];
   let settled: readonly WindowSignal[] | null = null;
   let sampling = 1;
@@ -1495,6 +1533,10 @@ async function versionCommand(args: Args): Promise<number> {
   } catch (cause) {
     findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} could not be read: ${cause instanceof Error ? cause.message : String(cause)}` }];
   }
+
+  // The kept windows' reads stop asking again now.
+  own.ended = true;
+  ownEnded.resolve();
 
   // Written back only after the report holds what the reads found, so a red is never acknowledged before it is reported.
   let keep: (() => Promise<void>) | undefined;
