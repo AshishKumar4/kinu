@@ -8,6 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { AGENTS_COUNTER } from '../../scripts/browser-page';
 
 const LIST = '[data-sidebar-agents="api-worker"]';
 
@@ -37,8 +38,8 @@ describe('the sidebar drills into a workspace\'s agents', () => {
   test('chats lead, each with the agents it started under it; groups fold at the bottom; Back returns', async () => {
     await withGallery(async (gallery) => {
       const page = await shell(gallery, 1280);
-      await page.waitForSelector('[data-agents-counter]');
-      await page.click('[data-agents-counter]');
+      await page.waitForSelector(AGENTS_COUNTER);
+      await page.click(AGENTS_COUNTER);
       await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, LIST);
       await still(page);
 
@@ -71,8 +72,8 @@ describe('the sidebar drills into a workspace\'s agents', () => {
   test('an agent nested under another opens on one read of its roster, which stays read', async () => {
     await withGallery(async (gallery) => {
       const page = await shell(gallery, 1280);
-      await page.waitForSelector('[data-agents-counter]');
-      await page.click('[data-agents-counter]');
+      await page.waitForSelector(AGENTS_COUNTER);
+      await page.click(AGENTS_COUNTER);
       await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, LIST);
       await still(page);
       await page.click(`${LIST} [data-agent-row="a-check"]`);
@@ -104,8 +105,8 @@ describe('the sidebar drills into a workspace\'s agents', () => {
   test('a swarm worker opens view only, and leaving the workspace ends the agents list', async () => {
     await withGallery(async (gallery) => {
       const page = await shell(gallery, 1280);
-      await page.waitForSelector('[data-agents-counter]');
-      await page.click('[data-agents-counter]');
+      await page.waitForSelector(AGENTS_COUNTER);
+      await page.click(AGENTS_COUNTER);
       await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, LIST);
       await still(page);
 
@@ -130,9 +131,9 @@ describe('the sidebar drills into a workspace\'s agents', () => {
       const drawn = `[data-drawer] ${LIST}`;
       await page.waitForSelector('.p-bar-menu button');
       await page.click('.p-bar-menu button');
-      await page.waitForSelector('[data-drawer] [data-agents-counter]');
+      await page.waitForSelector(`[data-drawer] ${AGENTS_COUNTER}`);
       await still(page);
-      await page.click('[data-drawer] [data-agents-counter]');
+      await page.click(`[data-drawer] ${AGENTS_COUNTER}`);
       await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, drawn);
       await still(page);
 
@@ -190,8 +191,8 @@ describe('who is at work, and who is who', () => {
       const page = await shell(gallery, 1280);
 
       try {
-        await page.waitForSelector('[data-rail] [data-agents-counter]');
-        await page.click('[data-rail] [data-agents-counter]');
+        await page.waitForSelector(`[data-rail] ${AGENTS_COUNTER}`);
+        await page.click(`[data-rail] ${AGENTS_COUNTER}`);
         // Reached for as the slide starts, as a press, a find-in-page or a focus without preventScroll may.
         await page.$eval(`[data-rail] ${LIST} [data-agent-row="a-scout"]`, (row) => { row.scrollIntoView({ block: 'center', inline: 'center' }); });
         await page.waitForFunction((list) => document.querySelector(list)?.closest('[inert]') === null, {}, `[data-rail] ${LIST}`);
@@ -227,8 +228,8 @@ describe('who is at work, and who is who', () => {
       }));
 
       try {
-        await busy.waitForSelector('[data-agents-counter]');
-        await quiet.waitForSelector('[data-agents-counter]');
+        await busy.waitForSelector(AGENTS_COUNTER);
+        await quiet.waitForSelector(AGENTS_COUNTER);
         expect({ busy: await shown(busy), quiet: await shown(quiet) })
           .toEqual({ busy: { spinning: true, counted: '3' }, quiet: { spinning: false, counted: null } });
       } finally {

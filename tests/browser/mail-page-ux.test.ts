@@ -6,6 +6,7 @@ import type { Page } from 'puppeteer';
 import * as v from 'valibot';
 import { evidenceDir } from '@kinu.run/test-utils';
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { OPEN_MENU } from '../../scripts/browser-page';
 
 const CallSchema = v.object({ method: v.string(), path: v.string(), body: v.unknown() });
 
@@ -45,11 +46,11 @@ async function pick(page: Page, label: string, words: string): Promise<void> {
 
 /** An action by its words: a button, a link, or an item of the menu that is open (it draws once its trigger is pressed). */
 async function action(page: Page, words: string): Promise<void> {
-  const shown = (wanted: string) => [...document.querySelectorAll('button, a, [role="menu"][data-open] [role="menuitem"]')]
+  const shown = (wanted: string) => [...document.querySelectorAll(`button, a, ${OPEN_MENU} [role="menuitem"]`)]
     .some((item) => item.textContent?.trim() === wanted && item instanceof HTMLElement && item.offsetParent !== null);
 
   await page.waitForFunction(shown, {}, words);
-  await page.$$eval('button, a, [role="menu"][data-open] [role="menuitem"]', (buttons, wanted) => {
+  await page.$$eval(`button, a, ${OPEN_MENU} [role="menuitem"]`, (buttons, wanted) => {
     const button = buttons.find((item) => item.textContent?.trim() === wanted && item instanceof HTMLElement && item.offsetParent !== null);
 
     if (!(button instanceof HTMLElement)) throw new Error(`no action ${wanted}`);

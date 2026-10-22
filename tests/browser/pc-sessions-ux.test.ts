@@ -6,6 +6,7 @@
 import { expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 import { withGallery } from '../../scripts/gallery-harness';
+import { NEW_SESSION } from '../../scripts/browser-page';
 
 /** The names on the PC's strip, in order. */
 function tabNames(page: Page): Promise<string[]> {
@@ -35,7 +36,7 @@ test("a PC's sessions are tabs on its strip, as the computer's are: its daemon's
       await page.waitForSelector('[data-session-port]');
       expect(await page.$$eval('[data-session-port]', (ports) => ports.map((port) => port.textContent?.trim()))).toEqual([':5173']);
 
-      await (await page.waitForSelector('button[aria-label="New session"]'))?.click();
+      await (await page.waitForSelector(NEW_SESSION))?.click();
       await page.waitForSelector('[role="tab"][data-session="pty-4"]');
 
       expect(await tabNames(page)).toEqual(['shell', 'build', 'deploy', 'shell 4']);

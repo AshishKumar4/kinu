@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
+import { OPEN_MENU, openRowMenu, ROW_MENU, SHARE_ACCESS_OPTION, SHARE_OPTIONS, SHARE_SUBMIT, shareAccessOption } from '../../scripts/browser-page';
 
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
@@ -32,8 +33,7 @@ describe('slate sharing surfaces', () => {
 
             // A received row names who shared it; forking one picks a workspace, or a new one.
             expect(text).toContain('sam@example.com');
-            await shared.click('[data-drive-share="live-mail-9"] [data-row-menu]');
-            await shared.waitForSelector('[role="menu"][data-open] [role="menuitem"]');
+            await openRowMenu(shared, '[data-drive-share="live-mail-9"]');
             await shared.evaluate(() => {
               const item = [...document.querySelectorAll('[role="menuitem"]')].find((candidate) => candidate.textContent?.trim() === 'Fork…');
 
@@ -85,13 +85,13 @@ describe('slate sharing surfaces', () => {
 
           try {
             // Who can open it and Share, the choices said in one line: the safe defaults, each changed only when asked to.
-            expect(await live.$eval('[data-share-access-option][aria-checked="true"]', (element) => element.getAttribute('data-share-access-option'))).toBe('users');
+            expect(await live.$eval(`${SHARE_ACCESS_OPTION}[aria-checked="true"]`, (element) => element.getAttribute('data-share-access-option'))).toBe('users');
             expect(await live.$eval('[data-share-summary]', (element) => element.textContent ?? '')).toContain("Runs on each person's own access · Can be forked");
             expect(await live.$$('[data-share-mode], [data-share-fork], [data-share-start], [data-share-limits]')).toHaveLength(0);
             // Each share on one row, with who opened it through its link and how often, never who.
             expect(await live.$$eval('[data-live-share-views]', (rows) => rows.map((row) => row.textContent)))
               .toEqual(['12 people opened it · 40 opens (9 signed out)', '2 people opened it · 7 opens']);
-            await live.click('[data-share-options]');
+            await live.click(SHARE_OPTIONS);
             await live.waitForSelector('[data-share-mode]');
             // Whose access it runs with: their own unless the owner picks theirs (docs/SLATE-SHARING-NIMBUS.md §2), with no
             // reach of the owner's to list until then.
@@ -134,7 +134,7 @@ describe('slate sharing surfaces', () => {
             await live.click('[data-approve="agent.send"]');
             expect(await live.$eval('[data-grant-summary]', (element) => element.textContent ?? '')).toContain('You allowed 1 of 5');
             // Public wording follows the access choice.
-            await live.click('[data-share-access-option="public"]');
+            await live.click(shareAccessOption('public'));
             expect(await live.$eval('[role="dialog"]', (element) => element.textContent ?? '')).toContain('Anyone who opens this share can trigger it.');
 
             // A slate shared whose own files do not build alone says why it does not run.
@@ -167,27 +167,25 @@ describe('slate sharing surfaces', () => {
             await live.click('[data-live-share="live-board-1"] [data-live-share-review]');
             await live.waitForSelector('[data-share-approve-reach]');
             expect(await live.$('[data-share-reach]')).not.toBeNull();
-            expect(await live.$('[data-share-submit]')).toBeNull();
+            expect(await live.$(SHARE_SUBMIT)).toBeNull();
             await live.click('[data-share-approve-reach]');
             await live.waitForFunction(() => document.querySelector('[data-live-share="live-board-1"] [data-live-share-review]') === null);
-            expect(await live.$('[data-share-submit]')).not.toBeNull();
+            expect(await live.$(SHARE_SUBMIT)).not.toBeNull();
 
             // On the owner's access it is never listed, and its menu says why.
-            await live.click('[data-live-share="live-board-1"] [data-row-menu]');
-            await live.waitForSelector('[role="menu"][data-open] [role="menuitem"]');
-            expect(await live.$eval('[role="menu"][data-open] [data-live-share-listing]', (item) => item.getAttribute('aria-disabled'))).toBe('true');
-            expect(await live.$eval('[role="menu"][data-open]', (menu) => menu.textContent ?? '')).toContain('Use their own access to list it.');
+            await openRowMenu(live, '[data-live-share="live-board-1"]');
+            expect(await live.$eval(`${OPEN_MENU} [data-live-share-listing]`, (item) => item.getAttribute('aria-disabled'))).toBe('true');
+            expect(await live.$eval(OPEN_MENU, (menu) => menu.textContent ?? '')).toContain('Use their own access to list it.');
             expect(await live.$('[data-share-gallery]')).toBeNull();
 
             // And it moves to each person's own access in one press from its menu: nothing of the owner's is used.
-            await live.click('[role="menu"][data-open] [data-live-share-own]');
+            await live.click(`${OPEN_MENU} [data-live-share-own]`);
             await live.waitForSelector('[data-live-share="live-board-1"] [data-live-share-mode="own"]');
-            await live.click('[data-live-share="live-board-1"] [data-row-menu]');
-            await live.waitForSelector('[role="menu"][data-open] [role="menuitem"]');
-            expect(await live.$('[role="menu"][data-open] [data-live-share-own]')).toBeNull();
+            await openRowMenu(live, '[data-live-share="live-board-1"]');
+            expect(await live.$(`${OPEN_MENU} [data-live-share-own]`)).toBeNull();
 
             // Then it can be listed, by a line and a category asked for first.
-            await live.click('[role="menu"][data-open] [data-live-share-listing]');
+            await live.click(`${OPEN_MENU} [data-live-share-listing]`);
             await live.click('[data-share-gallery]');
             await live.type('[data-share-gallery-line]', 'Triage issues by label');
             await live.click('[data-share-gallery-for] [data-segment="developer"]');
@@ -205,7 +203,7 @@ describe('slate sharing surfaces', () => {
 
           try {
             expect(await first.$eval('[data-share-summary]', (element) => element.textContent ?? '')).toContain("Runs on each person's own access · Shows what it holds now · Can be forked");
-            await first.click('[data-share-options]');
+            await first.click(SHARE_OPTIONS);
             expect(await first.$eval('[data-share-start][aria-checked="true"]', (element) => element.getAttribute('data-share-start'))).toBe('as-is');
             await first.click('[data-share-start="empty"]');
             // Each person added uses it, or edits it too.
@@ -214,7 +212,7 @@ describe('slate sharing surfaces', () => {
             expect(await first.$('[data-share-editors-note]')).toBeNull();
             await first.click('[data-share-person="pat@example.com"] [data-segment="edit"]');
             await first.waitForSelector('[data-share-editors-note]');
-            await first.click('[data-share-submit]');
+            await first.click(SHARE_SUBMIT);
             await first.waitForSelector('[data-share-created]');
             const sent = JSON.parse(await first.$eval('html', (root) => root.getAttribute('data-gallery-shared')) ?? '{}');
 
@@ -227,7 +225,7 @@ describe('slate sharing surfaces', () => {
           const again = await freshPage(gallery, 'sharedialog', theme, viewport);
 
           try {
-            await again.click('[data-share-options]');
+            await again.click(SHARE_OPTIONS);
             await again.waitForSelector('[data-share-mode]');
             expect(await again.$('[data-share-start]')).toBeNull();
             // A copy to fork is the secondary way, one link away at the foot.
@@ -279,8 +277,8 @@ describe('slate sharing surfaces', () => {
         await page.waitForSelector('[data-share-approve-reach]');
         await page.click('[data-share-approve-reach]');
         await page.waitForFunction(() => document.querySelector('[data-live-share="live-board-1"] [data-live-share-review]') === null);
-        await page.click('[data-live-share="live-board-1"] [data-row-menu]');
-        await page.waitForSelector('[role="menu"][data-open] [data-live-share-own]');
+        await page.click(`[data-live-share="live-board-1"] ${ROW_MENU}`);
+        await page.waitForSelector(`${OPEN_MENU} [data-live-share-own]`);
 
         // Read at the moment the menu starts leaving, in the page itself: however fast this machine draws, it is there.
         await page.evaluate(() => {
@@ -297,7 +295,7 @@ describe('slate sharing surfaces', () => {
 
           observer.observe(document.body, { attributes: true, subtree: true, attributeFilter: ['data-closed'] });
         });
-        await page.click('[role="menu"][data-open] [data-live-share-own]');
+        await page.click(`${OPEN_MENU} [data-live-share-own]`);
         await page.waitForFunction(() => document.body.dataset.closingPress !== undefined);
 
         expect(await page.evaluate(() => document.body.dataset.closingPress)).toBe('the row');
