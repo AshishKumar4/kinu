@@ -4,13 +4,13 @@
 // `ExecProcess.resize()`; and the end of the stdin of an exec given none (`Container::exec`). On a lost connection each
 // fails, and `IoContext::taskFailed` logs it as an uncaught exception and marks the request's outcome an exception. So
 // the box ends a process with an exec of its own, resizes a PTY with one, and owns every exec's stdin (`containerExec`).
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 
 import { Files } from '@cloudflare/sandbox';
 import { DevboxError } from '../src/errors';
 import { nativeStartClock } from '../src/native-clock';
 import { containerExec, seamedContainer } from '../src/processes';
-import { terminalSocket } from '../src/terminal';
+import { attachTerminal } from '../src/terminal';
 import { processResult } from './support/native-process';
 
 const LOST = 'Network connection lost.';
@@ -173,21 +173,18 @@ function platform() {
   };
 }
 
-// Bun has no WebSocketPair: each terminal here is handed the fake ends, as the preview socket's test does.
-afterEach(() => {
-  Reflect.deleteProperty(globalThis, 'WebSocketPair');
-});
-
-/** A terminal socket on the fake platform: the browser's end, and the box's. */
+/** A terminal socket on the fake platform: the browser's end, and the box's, its events handed to the PTY as the
+ *  runtime hands a held socket's to its object (`webSocketMessage`, `webSocketClose`, `webSocketError`, D109). */
 async function openTerminal(container: ReturnType<typeof platform>['container']) {
-  const ends: [FakeEnd, FakeEnd] = [fakeEnd(), fakeEnd()];
-
-  Object.assign(globalThis, { WebSocketPair: function WebSocketPair() { return ends; } });
+  const [browser, box]: [FakeEnd, FakeEnd] = [fakeEnd(), fakeEnd()];
   const session = { id: 'sb0cf683013', name: 'shell', cwd: '/workspace' };
+  const events = await attachTerminal(container, new URLSearchParams({ cols: '45', rows: '46' }), session, box);
 
-  await terminalSocket(container, new URLSearchParams({ cols: '45', rows: '46' }), session);
+  box.addEventListener('message', (event) => { events.message(event.data ?? ''); });
+  box.addEventListener('close', () => { events.close(); });
+  box.addEventListener('error', () => { events.error(); });
 
-  return { browser: ends[0], box: ends[1] };
+  return { browser, box };
 }
 
 /** Each resize the box ran, as the pid, columns and rows it named (`resizePty`). */

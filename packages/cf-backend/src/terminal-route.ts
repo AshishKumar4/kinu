@@ -137,7 +137,7 @@ interface TerminalCall {
 /** The workspace once its executor is ready for a terminal, or the 503 saying why not. */
 async function readyWorkspace(call: TerminalCall, lane: keyof typeof NOT_READY): Promise<TerminalWorkspace | Response> {
   const agent = await call.deps.resolveWorkspace(call.agentName);
-  const ready = await agent.prepareTerminal(call.executor);
+  const ready = await agent.prepareTerminal(call.executor, call.surface);
 
   if (!("error" in ready)) return agent;
   const notReady = NOT_READY[lane];

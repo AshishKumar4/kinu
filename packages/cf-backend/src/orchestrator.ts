@@ -6926,8 +6926,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Not @callable: called by the terminal HTTP route (see terminal-route.ts). */
-  prepareTerminal(executorId: string): Promise<{ ok: true } | { error: string }> {
-    return this.executors.prepareTerminal(executorId);
+  prepareTerminal(executorId: string, surface: 'terminal' | 'desktop' = 'terminal'): Promise<{ ok: true } | { error: string }> {
+    return this.executors.prepareTerminal(executorId, surface);
   }
 
   /**

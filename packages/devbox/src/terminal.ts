@@ -4,6 +4,7 @@ import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
 import { boxEnv, containerExec, endProcess, resizePty, type TerminalSize } from './processes';
 import { INSTALL_SESSION_FILES, SAVED_SESSIONS, SESSIONS_FORGET, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE, type SessionRecord } from './sessions';
 import { DEVBOX_WORKDIR } from './storage';
+import { holdReadiness, type ReadinessHold } from './readiness-hold';
 
 const ENV = boxEnv({ ...SESSION_FILES, TERM: 'xterm-256color' });
 
@@ -26,7 +27,8 @@ const Resize = v.object({ type: v.literal('resize'), ...Size.entries });
 /** One PTY process and the socket that carries it. */
 interface TerminalLanes {
   readonly process: ExecProcess;
-  readonly server: WebSocket;
+  /** The box's end of the pane's socket: the PTY's bytes go out on it, and it is closed with the terminal. */
+  readonly server: Pick<WebSocket, 'send' | 'close'>;
   readonly input: WritableStreamDefaultWriter<Uint8Array>;
   readonly output: ReadableStream<Uint8Array>;
   /** Ends the PTY's tmux client, which leaves its session running (`endProcess`). */
@@ -64,14 +66,14 @@ class TerminalConnection {
     this.close(1011, `terminal ${lane} failed`);
   }
 
-  accept(event: MessageEvent): Effect.Effect<void, DevboxError> {
+  accept(data: string | ArrayBuffer): Effect.Effect<void, DevboxError> {
     return Effect.gen({ self: this }, function* () {
       if (this.#closed) return;
 
-      if (event.data instanceof ArrayBuffer) {
-        yield* attempt('io', () => this.lanes.input.write(new Uint8Array(event.data)));
+      if (data instanceof ArrayBuffer) {
+        yield* attempt('io', () => this.lanes.input.write(new Uint8Array(data)));
       } else {
-        const resize = yield* attemptSync('invalid-input', () => v.parse(Resize, JSON.parse(event.data)));
+        const resize = yield* attemptSync('invalid-input', () => v.parse(Resize, JSON.parse(data)));
 
         yield* this.#resizes({ cols: resize.cols, rows: resize.rows });
       }
@@ -126,8 +128,24 @@ class TerminalConnection {
   }
 }
 
-/** The PTY owns a tmux client, not the workspace shell; detaching must keep the session. */
-export function terminalSocket(container: Pick<Container, 'exec'>, params: URLSearchParams, session: SessionRecord): Promise<Response> {
+/** What a terminal's end of its socket says, as the runtime hands a held socket's events to its object. */
+export interface TerminalSocketEvents {
+  message(data: string | ArrayBuffer): void;
+  close(): void;
+  error(): void;
+}
+
+/** A frame the box tells a pane while its terminal is not yet attached, or as it attaches (D109): JSON text, the PTY's
+ *  own bytes being binary. */
+export type TerminalControl = { readonly type: 'status'; readonly text: string } | { readonly type: 'ready' } | { readonly type: 'error'; readonly error: string };
+
+/**
+ * The session's PTY on `server`, the box's end of the pane's socket, which the box already gave the runtime
+ * (`acceptWebSocket`): an end the object accepts itself is its request until it closes, and the visitor's close, even a
+ * clean one, then ends that request as the uncaught "Network connection lost." (D109). The answer is where the socket's
+ * events go. The PTY owns a tmux client, not the workspace shell: detaching keeps the session.
+ */
+export function attachTerminal(container: Pick<Container, 'exec'>, params: URLSearchParams, session: SessionRecord, server: Pick<WebSocket, 'send' | 'close'>): Promise<TerminalSocketEvents> {
   return settle(Effect.gen(function* () {
     const size = yield* attemptSync('invalid-input', () => v.parse(Size, { cols: Number(params.get('cols') ?? 80), rows: Number(params.get('rows') ?? 24) }));
 
@@ -143,22 +161,61 @@ export function terminalSocket(container: Pick<Container, 'exec'>, params: URLSe
       return yield* Effect.fail(new DevboxError('process', 'native PTY did not provide its streams'));
     }
 
-    const sockets = new WebSocketPair();
-    const server = sockets[1];
-    server.binaryType = 'arraybuffer';
-    server.accept();
     const resize = (wanted: TerminalSize) => resizePty(container, process.pid, wanted);
     const connection = new TerminalConnection({ process, server, input: process.stdin.getWriter(), output: process.stdout, end, resize, size });
     const cancelRead = connection.read();
-    server.addEventListener('message', event => observe(connection.accept(event), {
-      success: () => undefined,
-      failure: (cause) => { connection.failed('input', cause); cancelRead(); },
-    }));
-    server.addEventListener('close', () => { connection.close(1000, 'terminal detached'); cancelRead(); });
-    server.addEventListener('error', () => { connection.close(1011, 'terminal transport failed'); cancelRead(); });
 
-    return new Response(null, { status: 101, webSocket: sockets[0] });
+    return {
+      message: (data) => observe(connection.accept(data), {
+        success: () => undefined,
+        failure: (cause) => { connection.failed('input', cause); cancelRead(); },
+      }),
+      close: () => { connection.close(1000, 'terminal detached'); cancelRead(); },
+      error: () => { connection.close(1011, 'terminal transport failed'); cancelRead(); },
+    };
   }));
+}
+
+/** What `attachWhenReady` needs of the box: its readiness, held as the workspace holds it, and the attach itself. */
+export interface TerminalAttach extends Pick<ReadinessHold, 'ask' | 'wait' | 'now'> {
+  /** The box's end of the pane's socket, which the runtime holds. */
+  readonly socket: Pick<WebSocket, 'send' | 'close'>;
+  /** True while the box still holds the socket: false once the pane left. */
+  readonly held: () => boolean;
+  /** The PTY, once the box is ready. */
+  readonly attach: () => Promise<TerminalSocketEvents>;
+}
+
+/**
+ * The pane's PTY once the box is ready (D109), the pane told each new reason it waits in a `status` frame meanwhile.
+ * Null when the pane left first, or when the box could not attach it: an `error` frame then says why in the box's words,
+ * and the socket closes 1011.
+ */
+export async function attachWhenReady(box: TerminalAttach): Promise<TerminalSocketEvents | null> {
+  const tell = (frame: TerminalControl): void => { if (box.held()) box.socket.send(JSON.stringify(frame)); };
+
+  let told = '';
+
+  const sayWhy = ({ reason }: { readonly reason: string }): void => {
+    if (reason === told) return;
+    told = reason;
+    tell({ type: 'status', text: reason });
+  };
+
+  const attached = Effect.flatMap(attempt('io', () => holdReadiness({ ...box, gone: () => !box.held(), pending: sayWhy })), (readiness) => {
+    if (!box.held()) return Effect.succeed(null);
+
+    if (readiness.kind === 'pending') return Effect.fail(new DevboxError('io', readiness.reason));
+
+    return attempt('io', () => box.attach());
+  });
+
+  return await settle(Effect.catchTag(attached, 'DevboxError', (failure) => Effect.sync(() => {
+    tell({ type: 'error', error: failure.message });
+    box.socket.close(1011, 'the terminal could not attach');
+
+    return null;
+  })));
 }
 
 /** Ends a session's shell and screen, and what a restart saved of it (D97); its next attach opens a fresh one. */

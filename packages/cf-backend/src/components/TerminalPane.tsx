@@ -185,8 +185,9 @@ function useTerminalPalette(termRef: RefObject<Terminal | null>, theme: Theme): 
 
 /**
  * One PTY pane for the device and the native container: bytes each way, the first geometry in the query, `resize`
- * frames out. The device speaks `ready`/`exit`/`error` frames and is connected at `ready`; the native PTY sends bytes
- * only, is connected at open, and needs the keepalive and a restart the device does not.
+ * frames out. Each is connected at its `ready` frame; a native PTY of a box that sends none (before devbox D109) at its
+ * first bytes. While the box gets ready it says why in `status` frames, which the pane writes dim, the shell's own
+ * screen drawing over them. The native PTY needs the keepalive and a restart the device does not.
  */
 function PtyTerminal({ workspace, executor, session, device: machine, frame }: { workspace: string; executor: string; session?: string; device?: string; frame: FrameParts }) {
   // The computer's session rides every route's query; the device and its first session name none. A PC names itself.
@@ -221,23 +222,25 @@ function PtyTerminal({ workspace, executor, session, device: machine, frame }: {
 
     socket.binaryType = "arraybuffer";
 
-    socket.onopen = () => { if (!device) setState("connected"); };
-
     socket.onmessage = (event) => {
       if (event.data instanceof ArrayBuffer) {
+        if (!device) setState("connected");
         term.write(new Uint8Array(event.data));
 
         return;
       }
 
-      if (!device || event.data instanceof Blob) return;
+      if (event.data instanceof Blob) return;
       // A non-JSON frame is the one tolerated failure; anything else propagates.
-      const parsed = v.safeParse(DeviceTerminalMessageSchema, tolerate(() => JSON.parse(String(event.data)), "malformed-input"));
+      const parsed = v.safeParse(TerminalControlSchema, tolerate(() => JSON.parse(String(event.data)), "malformed-input"));
 
       if (!parsed.success) return;
       const message = parsed.output;
 
       switch (message.type) {
+        case "status":
+          term.write(`\x1b[2m${message.text}\x1b[0m\r\n`);
+          break;
         case "ready":
           setState("connected");
           term.focus();
@@ -256,7 +259,8 @@ function PtyTerminal({ workspace, executor, session, device: machine, frame }: {
     socket.onclose = (event) => {
       setState("disconnected");
 
-      if (!device && event.code !== 1000 && event.code !== 1001) setFailure(event.reason || `terminal closed (${event.code})`);
+      // An `error` frame said why first, in the box's words; the close's reason is only its summary.
+      if (!device && event.code !== 1000 && event.code !== 1001) setFailure((said) => said ?? (event.reason || `terminal closed (${event.code})`));
     };
 
     socket.onerror = () => {
@@ -399,9 +403,10 @@ function releaseSocketPane(pane: {
   };
 }
 
-/** Device wire: terminal bytes each way, `{type:'resize'}` out, these control frames in. */
-/** Other frames are dropped: the pane and the route ship together. */
-const DeviceTerminalMessageSchema = v.variant("type", [
+/** PTY wire: terminal bytes each way, `{type:'resize'}` out, these control frames in: the device's, and the computer's
+ *  (devbox terminal.ts `TerminalControl`), whose `status` says why it is not attached yet. Other frames are dropped. */
+const TerminalControlSchema = v.variant("type", [
+  v.object({ type: v.literal("status"), text: v.string() }),
   v.object({ type: v.literal("ready") }),
   v.object({ type: v.literal("exit"), exitCode: v.number() }),
   v.object({ type: v.literal("error"), error: v.string() }),
