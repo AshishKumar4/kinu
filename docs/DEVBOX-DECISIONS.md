@@ -5240,6 +5240,35 @@ Not measured: why the take did not answer. It is a single hang in 41 rests, and 
 The first start after the reset was refused once ("mounting the recovered layers exited 255: Can't open squashfs image:
 Not a directory"), and the start a minute later attached. That refusal is not explained here.
 
+D109. A terminal's socket is the runtime's, taken at once: the box gives its end to `ctx.acceptWebSocket` and answers
+the 101 before it is ready. It tells the pane each new reason it waits in a `status` frame, and attaches the PTY as
+soon as it can (`attachWhenReady`, terminal.ts). The workspace only configures the box for a terminal (`configure`);
+the hold that D108 put there is now the box's own, narrated. A desktop still waits in the workspace.
+
+What was measured.
+- Probe `kinu-probe-attach2` on f44999 (2026-10-22, /mnt/local/kinu/tmp/attach-probe2). A Durable Object that accepts
+  its own end of a WebSocket pair holds that socket as part of the request. When the visitor goes, even with a clean
+  1000 close after the 101, that request ends as the uncaught "Network connection lost." (outcome `exception`), and no
+  code can catch it. The same object, handing its end to `ctx.acceptWebSocket` and its events to
+  `webSocketMessage`/`webSocketClose`/`webSocketError`, ended every case cleanly (outcome `canceled` or
+  `responseStreamDisconnected`, the close arriving as 1000 or 1006). A 4 MB pump in 4 KB frames delivered every byte
+  both ways.
+- In the week to 2026-10-22, 7 of 7 such exceptions on `GET /_devbox/terminal` paired, within 4-130 ms, with a front
+  invocation that ended `canceled` or `responseStreamDisconnected`. Five came from the eval-browser-computer workspace.
+- D108's dead terminal: 14 minutes of attaches refused as "quiescing", which the pane showed as "Not connected".
+
+What follows.
+- A pane that leaves while the box gets ready is owed no PTY. What it sends meanwhile reaches the PTY in order once
+  it attaches. A message for a socket the box no longer holds (its object restarted) closes it 1012, so the pane
+  attaches again.
+- A box that cannot attach says why in an `error` frame, in its own words, then closes 1011. The pane keeps those
+  words over the close's summary.
+- The pane is connected at the box's `ready` frame, or at its first bytes from a box older than this.
+
+Not measured: whether the runtime's hold changes the PTY pump's cost. The probe's inbound echo paid one event per
+message. A hibernated object would lose its terminal map, but an attached terminal's pump keeps the object awake while
+it runs.
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

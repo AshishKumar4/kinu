@@ -64,6 +64,11 @@ export interface SandboxHandle {
   /** Every operation awaits this first so an agent never observes a half-restored workspace. */
   ensureReady(): Promise<void>;
   /**
+   * The workspace's settings put on the computer (egress, /workspace) without waiting for it to be ready: a terminal
+   * attach waits inside the box, telling its pane why (devbox D109). A handle with no terminal has none.
+   */
+  configure?(): Promise<void>;
+  /**
    * `timeout` absent means no work deadline: native container exec adds none.
    * `signal` cancels the remote work: settle only once the process is gone; a transport with no kill must not accept one.
    */

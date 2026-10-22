@@ -6,7 +6,7 @@
 
 import { jsonResultOrVoid, REAL_CLOCK, SandboxPending, WORKSPACE_BACKUP_DIR, type Clock, type OutputSink, type SandboxHandle } from '@kinu.run/core';
 import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
-import { devboxFailure, readExec, type DevboxErrorCode } from '@kinu.run/devbox';
+import { devboxFailure, holdReadiness, readExec, type DevboxErrorCode } from '@kinu.run/devbox';
 import { Effect } from 'effect';
 import type { KinuDevbox } from "./kinu-devbox";
 import { sandboxPreviewLabelOf } from "@kinu.run/core";
@@ -48,22 +48,6 @@ function fromDevbox(thrown: { readonly cause: unknown }): KinuError {
 
 type Readiness = Awaited<ReturnType<ContainerOperations['resolveReadiness']>>;
 
-/** How often a call held for a box's base snapshot asks again (D79). */
-const BASE_ASK_MS = 1_000;
-
-/**
- * A base build that names no new step for this long has stopped: the call gets the box's words. Its longest step,
- * the base image's first start, is given up by the builder at 120 s, and a fresh install took at most 31 s (D66).
- */
-const BASE_STALL_MS = 180_000;
-
-/**
- * How long a call waits for a box that is saving and stopping before it gets the box's words. The longest such stop
- * is a rest: its commit (a base commit took up to 76.9 s, D50), the snapshot it waits on (the box gives that up at
- * 60 s), and the stop the box waits for (5 s): 142 s.
- */
-const QUIESCE_HOLD_MS = 180_000;
-
 /** After `ms`, or at once when `signal` aborts. */
 function pause(clock: Clock, ms: number, signal: AbortSignal | undefined): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
@@ -79,35 +63,20 @@ function pause(clock: Clock, ms: number, signal: AbortSignal | undefined): Promi
   return promise.finally(() => { signal?.removeEventListener('abort', abort); });
 }
 
-/**
- * The box's readiness, held while it waits for its base snapshot to be built (D79) or saves and stops (D108): the box
- * starts by itself once the build verifies (D66), and on the next ask once its stop is done, so a call asks again
- * instead of handing its agent, or a terminal, a refusal to retry. A build is bounded by its progress, never by a
- * total: each new step re-arms the bound, and a build that names no new step for {@link BASE_STALL_MS} is refused in the
- * box's words. A stop is bounded by {@link QUIESCE_HOLD_MS}. A failed build and every other pending are answered at once.
- */
+/** The box's readiness, held while it is on its way (holdReadiness, D79, D108), so a call asks again instead of handing
+ *  its agent a refusal to retry; the call's `signal` ends the hold as it ends the call. */
 async function readinessPastBase(
   handle: Pick<ContainerOperations, 'resolveReadiness'>, clock: Clock, signal: AbortSignal | undefined,
 ): Promise<Readiness> {
-  let readiness = await handle.resolveReadiness();
-  let step: string | null | undefined;
-  let movedAt = clock.now();
-  const askedAt = clock.now();
+  let held = false;
 
-  while (readiness.kind === 'pending' && (readiness.building !== undefined || readiness.quiescing === true)) {
-    if (readiness.building === undefined) {
-      if (clock.now() - askedAt >= QUIESCE_HOLD_MS) return { kind: 'pending', reason: `still after ${String(QUIESCE_HOLD_MS / 1000)} s: ${readiness.reason}` };
-    } else if (readiness.building.step !== step) {
-      step = readiness.building.step;
-      movedAt = clock.now();
-    } else if (clock.now() - movedAt >= BASE_STALL_MS) {
-      return { kind: 'pending', reason: `the base snapshot's build made no progress in ${String(BASE_STALL_MS / 1000)} s (at: ${step ?? 'not begun'}); ${readiness.reason}` };
-    }
+  const readiness = await holdReadiness({
+    ask: () => handle.resolveReadiness(), wait: (ms) => pause(clock, ms, signal), now: () => clock.now(), gone: () => signal?.aborted === true,
+    pending: () => { held = true; },
+  });
 
-    await pause(clock, BASE_ASK_MS, signal);
-    signal?.throwIfAborted();
-    readiness = await handle.resolveReadiness();
-  }
+  // Only a hold the signal ended is a cancellation; a call that was never held runs on to its own abort handling.
+  if (held) signal?.throwIfAborted();
 
   return readiness;
 }
@@ -233,6 +202,7 @@ export function adaptCloudflareSandbox(
 
   return {
     ensureReady: () => settle(onContainer(() => Promise.resolve())),
+    configure: () => settle(Effect.tryPromise({ try: configured, catch: (cause) => fromDevbox({ cause }) })),
     // One launch id per call: after a lost reply the same id reads the box's answer, never a second launch.
     exec: (command, opts) => {
       const signals = [opts?.signal, opts?.timeout === undefined ? undefined : AbortSignal.timeout(opts.timeout)].filter((held) => held !== undefined);

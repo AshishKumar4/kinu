@@ -19,7 +19,7 @@ import {
 } from './golden';
 import artifact from '../block-lower/upstream.json';
 import { ContainerRoutes, type OutboundPolicy } from './gateway';
-import { terminalSocket, resetTerminal } from './terminal';
+import { attachTerminal, attachWhenReady, resetTerminal, type TerminalControl, type TerminalSocketEvents } from './terminal';
 import {
   FIRST_SESSION, SESSIONS_CLOSED_KEY, SESSIONS_FORGET, SESSIONS_KEY, SESSIONS_READ, SESSIONS_SAVE, SessionNameSchema, SessionRecordsSchema, jobSessionId, jobSessionName, mergeSessions, newSessionId, newSessionName,
   parseSessionsRead, type SessionRecord, type TerminalSession,
@@ -439,6 +439,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   readonly #flights: Flights = {};
   /** `destroy` cancels and awaits these. */
   readonly #admissions = new Set<{ readonly abort: () => void; readonly settled: Promise<void> }>();
+  /** Each terminal's socket, held by the runtime (`acceptWebSocket`): attached, its events' PTY; or still waiting for the
+   *  box, what its pane sent meanwhile, given to the PTY in order as it attaches (D109). */
+  readonly #terminals = new Map<WebSocket, { readonly attached: TerminalSocketEvents } | { readonly waiting: (string | ArrayBuffer)[] }>();
   #refused: { readonly generation: number; readonly reason: string } | undefined;
   /** Set by `destroy`, cleared by a caller or a host (D36). */
   #closed = false;
@@ -3732,12 +3735,79 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       const session = yield* this.#session(url.searchParams.get('session') ?? FIRST_SESSION.id);
 
-      return yield* this.#withActiveCaller(attempt('io', async () => {
-        const { container } = await this.#ensureReady(this.#teardowns);
+      // Answered at once, the socket the runtime's (D109): the pane is told why it waits, and attaches as soon as the box
+      // can take it. One that left meanwhile is owed no PTY.
+      const sockets = new WebSocketPair();
+      const server = sockets[1];
 
-        return terminalSocket(container, url.searchParams, session);
-      }));
+      this.ctx.acceptWebSocket(server);
+      this.#terminals.set(server, { waiting: [] });
+      unawaited(this.#attachWhenReady(server, url.searchParams, session, this.#teardowns), 'attaching a terminal');
+
+      return new Response(null, { status: 101, webSocket: sockets[0] });
     }));
+  }
+
+  /** The terminal on `server` once the box is ready (`attachWhenReady`, D109). `arrived`: the box's teardowns when it was
+   *  asked, so a destroy meanwhile ends the wait. A pane that could not attach is let go. */
+  async #attachWhenReady(server: WebSocket, params: URLSearchParams, session: SessionRecord, arrived: number): Promise<void> {
+    const events = await attachWhenReady({
+      socket: server, held: () => this.#terminals.has(server),
+      ask: () => this.#resolveReadiness(arrived), wait: (ms) => scheduler.wait(ms), now: () => Date.now(),
+      attach: () => this.#withActiveCaller(attempt('io', async () => attachTerminal((await this.#ensureReady(arrived)).container, params, session, server))),
+    });
+
+    if (events === null) this.#terminals.delete(server);
+    else this.#attached(server, events);
+  }
+
+  /** The pane's PTY on `server` takes its events, and what the pane sent while it waited; one gone meanwhile ends it. */
+  #attached(server: WebSocket, events: TerminalSocketEvents): void {
+    const held = this.#terminals.get(server);
+
+    if (held === undefined || !('waiting' in held)) {
+      events.close();
+
+      return;
+    }
+
+    this.#terminals.set(server, { attached: events });
+    server.send(JSON.stringify({ type: 'ready' } satisfies TerminalControl));
+
+    for (const message of held.waiting) events.message(message);
+  }
+
+  /** A terminal's keystrokes and resizes: to its PTY, or kept for it while it attaches. One the box no longer holds (its
+   *  object restarted under it) is closed, so its pane attaches again. */
+  override webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
+    const held = this.#terminals.get(socket);
+
+    if (held === undefined) {
+      socket.close(1012, 'terminal restarted');
+
+      return;
+    }
+
+    if ('waiting' in held) held.waiting.push(message);
+    else held.attached.message(message);
+  }
+
+  /** A terminal's visitor left, cleanly or not: a close of ours, never the request's exception (D109). */
+  override webSocketClose(socket: WebSocket): void {
+    this.#released(socket)?.close();
+  }
+
+  override webSocketError(socket: WebSocket): void {
+    this.#released(socket)?.error();
+  }
+
+  /** The box lets the terminal on `socket` go: its PTY's events, when it had attached. */
+  #released(socket: WebSocket): TerminalSocketEvents | undefined {
+    const held = this.#terminals.get(socket);
+
+    this.#terminals.delete(socket);
+
+    return held !== undefined && 'attached' in held ? held.attached : undefined;
   }
 
   /** A session's shell and screen end; its next attach opens a fresh one under the same name, in its folder. */

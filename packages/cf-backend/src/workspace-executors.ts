@@ -239,8 +239,9 @@ export class WorkspaceExecutors {
     this.uploads.delete(transferId);
   }
 
-  /** Terminal preflight via the sandbox lane's own `ensureReady` (egress grants, /workspace). */
-  prepareTerminal(executorId: string): Promise<{ ok: true } | { error: string }> {
+  /** Terminal preflight via the sandbox lane (egress grants, /workspace). A computer's terminal is only configured: the box
+   *  holds the attach itself and tells its pane why it waits (devbox D109); its desktop waits here until the box is ready. */
+  prepareTerminal(executorId: string, surface: 'terminal' | 'desktop' = 'terminal'): Promise<{ ok: true } | { error: string }> {
     return settle(Effect.gen({ self: this }, function* () {
       // The owner's machine has no container to warm; it only needs to be attached.
       if (executorId === 'device') {
@@ -262,7 +263,9 @@ export class WorkspaceExecutors {
 
       if (!handle) return { error: 'this workspace has no computer configured' };
 
-      return (yield* terminalStep(Effect.promise(() => handle.ensureReady()), 'preparing the computer for a terminal')) ?? { ok: true };
+      const prepared = surface === 'terminal' && handle.configure !== undefined ? handle.configure() : handle.ensureReady();
+
+      return (yield* terminalStep(Effect.promise(() => prepared), `preparing the computer for a ${surface}`)) ?? { ok: true };
     }));
   }
 

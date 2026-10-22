@@ -325,9 +325,12 @@ async function desktopRoute(request: Request, env: Env, ctx: ExecutionContext, u
 
     const route = serveFamily(terminalRoutes(() => ({
       resolveWorkspace: async () => ({
-        prepareTerminal: async () => { await box.ensureReady();
+        // As the product's: a terminal is held and told why inside the box (D109); a desktop waits here.
+        prepareTerminal: async (_executor: string, surface?: 'terminal' | 'desktop') => {
+          if (surface !== 'terminal') await box.ensureReady();
 
- return { ok: true as const }; },
+          return { ok: true as const };
+        },
         openDeviceTerminal: async () => { throw new Error('this probe has no device'); },
         openDeviceScreen: async () => { throw new Error('this probe has no device'); },
         fetch: async () => new Response('this probe has no workspace terminal', { status: 404 }),

@@ -16,6 +16,8 @@ export { previewBox } from './preview';
 
 export type { RestoreClockPhase, RestoreStatus } from './restoration';
 
+export { holdReadiness } from './readiness-hold';
+
 export { BoxSizeSchema, type BoxSize } from './sizes';
 
 export type { CheckpointKind, CheckpointOutcome } from './storage';
