@@ -16,7 +16,7 @@ import {
   SubagentRosterStore,
   admitHireWork,
   hireLifecycle,
-  retireHireSubtree,
+  stopAgentsBelow,
   type ActorRetirement,
   type HireLifecyclePorts,
   type SeatedHire,
@@ -24,7 +24,6 @@ import {
   type InProcessDeliveries,
   MAIN_AGENT,
   actorReferenceOf,
-  stoppedBelow,
   deliveryMetadata,
   childContextResolver, hostedChildTree,
   createLocalPeerEndpoint,
@@ -1374,41 +1373,26 @@ export class LocalAgentHost {
     }
   }
 
-  private hirerRoster(tree: HostTree, actor: WorkspaceActor): SubagentRosterStore | null {
-    const hirer = actor.parentActorId === null ? null : tree.directory.retained(actor.parentActorId);
-
-    if (hirer === null) return null;
-
-    return this.byActor.get(hirer.actorId)?.roster
-      ?? new SubagentRosterStore(makeSqlExec(tree.db), tree.host.bindStores(actorReferenceOf(hirer)).handle);
-  }
-
-  /** Stops the agents below `key` (core `stoppedBelow`): what each was owed and had not taken is cancelled with its
-   *  queued turns, whether or not a turn of its runs; one the owner added has its own Stop. */
+  /** Stops the agents below `key` (core `stopAgentsBelow`), off the Stop's turn and joined by close(): a session here has
+   *  its queued turns cancelled and its running turn cut off. */
   private stopSubtree(key: string): void {
     const entry = this.entries.get(key);
 
     if (entry === undefined || this.closed) return;
     const { tree } = entry;
 
-    for (const actor of stoppedBelow(tree.directory.list(), entry.actor.reference.actorId)) {
-      const live = this.byActor.get(actor.actorId);
-      const running = live?.actor.session.inFlight === true;
+    this.retireOffTurn(entry.name, () => stopAgentsBelow(entry.actor.reference.actorId, {
+      ...this.treeRetirement(tree),
+      cancelOwed: (actor) => { this.cancelOwed(tree, actor); },
+      stopTurn: async (actor) => {
+        const live = this.byActor.get(actor.actorId);
+        const running = live?.actor.session.inFlight === true;
 
-      // What it was owed and had not taken is cancelled and the work it carried dismissed, as the cloud's Stop does; a
-      // session here has its queued turns cancelled and its running turn cut off.
-      this.cancelOwed(tree, actor);
-      live?.session.interrupt();
+        live?.session.interrupt();
 
-      // A running turn reports its own end.
-      if (running) continue;
-      const roster = this.hirerRoster(tree, actor);
-
-      if (roster?.get(actor.name)?.status !== 'working') continue;
-      roster.applyReport(actor.name, 'blocked', 'turn_end', Date.now());
-
-      if (actor.lifetime === 'task') this.retireStopped(tree, actor);
-    }
+        return running;
+      },
+    }));
   }
 
   /** What a stopped agent was owed and had not taken: cancelled, and the work it carried dismissed with it. */
@@ -1424,19 +1408,6 @@ export class LocalAgentHost {
 
         for (const event of log.query({ turn_id: drained })) log.dismiss(event.id, 'stopped by the owner', 'system');
       }
-    });
-  }
-
-  /** A stopped task agent retired as a dismissal that keeps its history: its hires, then it. */
-  private retireStopped(tree: HostTree, actor: WorkspaceActor): void {
-    const reference = actorReferenceOf(actor);
-    const hirer = tree.directory.retained(actor.parentActorId ?? '');
-    const retirement = this.treeRetirement(tree);
-
-    this.retireOffTurn(actor.name, async () => {
-      if (hirer === null) return;
-      await retireHireSubtree(retirement, reference, true);
-      await retirement.retire(actorReferenceOf(hirer), { reference, name: actor.name, destroy: false, interrupt: true });
     });
   }
 

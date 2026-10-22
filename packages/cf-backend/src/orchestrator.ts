@@ -20,7 +20,7 @@ import {
   createWorkspaceForkSink, createWorkspaceForkSource, workspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
   explorationActorKey, writesSnapshotRows,
   HeadController, REAL_CLOCK, runHeadSplit, SubagentRosterStore,
-  EventLog, actorReferenceOf, stoppedBelow, TEMPORARY_LIFETIME,
+  EventLog, actorReferenceOf, stoppedBelow, stopAgentsBelow,
   artifactOverrides, currentArtifacts,
   agentsActionsFor, agentsProfileContext, betaSwarms, buildActorTools, BACKGROUNDABLE_TOOLS,
   vfsTurnSkills, conversationKey, captureOperationProfile, type RunTurnSources,
@@ -90,7 +90,7 @@ import { initSlateBuildTable } from "@kinu.run/core/slates";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import type { MessageBlock } from "./slates/sources";
 import {
-  actorRetirementFor, createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type CFSeat, type WorkspaceHostSeams,
+  createWorkspaceActorHost, hostedActorPlacement, HostedActorHomes, type CFSeat, type WorkspaceHostSeams,
 } from "./actor-hosting";
 import {
   hostedRetryTools, hostedSubagentRuntime, relayHostedReport, retireStalledTask,
@@ -2330,54 +2330,40 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return Number.isFinite(at) ? at : null;
   }
 
-  /** One the owner added has its own Stop. */
+  /** One the owner added has its own Stop; the rest is core's `stopAgentsBelow`, its task agents retired with their hires. */
   protected override stopSubtree(actorId: string): void {
     const seams = this.hostedSeams();
     const directory = this.actorDirectoryStore();
-
-    const rosterOf = (actor: WorkspaceActor) => {
-      const hirer = directory.retained(actor.parentActorId ?? '');
-
-      return hirer === null ? null : { hirer, roster: seams.roster(this.actorHost().bindStores(actorReferenceOf(hirer))) };
-    };
-
-    const below = stoppedBelow(this.workspaceActors().list(), actorId);
+    const below = stoppedBelow(directory.list(), actorId);
 
     if (below.length === 0) return;
     // Each stopped agent's commands, through the sweep its own Stop makes.
     this.detachOwned(Effect.forEach(below, (actor) => this.stopAgentDevices(actor.actorId), { concurrency: 'unbounded', discard: true }));
 
-    this.detachOwned(Effect.promise(async () => {
-      for (const actor of below) {
-        const reference = actorReferenceOf(actor);
-
-        // What it was owed and had not taken is cancelled, and the work it carried dismissed.
+    this.detachOwned(Effect.promise(() => stopAgentsBelow(actorId, {
+      directory,
+      roster: (hirer) => seams.roster(this.actorHost().bindStores(hirer)),
+      retire: (owner, retirement) => this.actorHost().retire(owner, retirement),
+      // What it was owed and had not taken is cancelled, and the work it carried dismissed.
+      cancelOwed: (actor) => {
         for (const cancelled of this.deliveries.cancel(actor.actorId)) {
           for (const event of this.carried(actor.actorId, cancelled)?.events ?? []) event.log.dismiss(event.id, 'stopped by the owner', 'system');
         }
-
+      },
+      stopTurn: async (actor) => {
         if (await this.agentTurns.holdsTurn(actor.actorId)) {
           await this.agentTurns.beforeRetirement(actor.actorId, true);
-          continue;
+
+          return true;
         }
 
         // One that may hold a question to its owner is stopped though its wake does not stand: the queue a question holds
         // arms none, and an isolate that ended since keeps only the question, which the Stop dismisses.
         if (this.holdsQuestions(actor.actorId)) await this.agentTurns.interrupt(actor.actorId, null);
 
-        const held = rosterOf(actor);
-
-        if (held === null) continue;
-        const { hirer, roster } = held;
-
-        if (roster.get(actor.name)?.status !== 'working') continue;
-        roster.applyReport(actor.name, 'blocked', 'turn_end', Date.now());
-
-        if (actor.lifetime === TEMPORARY_LIFETIME) {
-          await this.actorHost().retire(actorReferenceOf(hirer), actorRetirementFor({ reference, name: actor.name, keepHistory: true, interrupt: true }));
-        }
-      }
-    }));
+        return false;
+      },
+    })));
   }
 
   /** A waiting hired agent holds no transcript; its rows reopen it. A running job keeps its runtime to the settle's turn,
