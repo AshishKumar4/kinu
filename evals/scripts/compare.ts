@@ -15,27 +15,13 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { DEFAULT_TRIALS, DEFINITION_PATHS, EXERCISED_PATHS } from '../src/config';
+import { DEFAULT_TRIALS } from '../src/config';
 import { compareEvalResults, evalGateVerdict, renderEvalComparison, whyIncomplete } from '../src/comparison';
 import { parsePlatformReport, type PlatformReport } from '../src/platform';
-import { diffBetween, ensureCommit, git } from './git';
+import { COMMIT_QUESTIONS } from './git';
 
 const USAGE = 'Usage: bun evals/scripts/compare.ts --candidate <results.json> [--baseline <results.json>] --out <dir> '
   + '[--trials <n>] [--tasks a,b] [--candidate-build <sha>] [--baseline-build <sha>] [--candidate-platform <json>] [--baseline-platform <json>]';
-
-function definitionsChanged(baselineCommit: string, candidateCommit: string): boolean {
-  ensureCommit(baselineCommit);
-  ensureCommit(candidateCommit);
-  const status = git(['diff', '--quiet', baselineCommit, candidateCommit, '--', ...DEFINITION_PATHS]).status;
-
-  if (status > 1) throw new Error(`git diff ${baselineCommit} ${candidateCommit} exited with ${String(status)}`);
-
-  return status === 1;
-}
-
-function changedFiles(baselineSha: string, candidateSha: string): string[] {
-  return diffBetween(baselineSha, candidateSha, { paths: EXERCISED_PATHS, names: true }).split('\n').filter((line) => line !== '');
-}
 
 const { values } = parseArgs({
   options: {
@@ -78,7 +64,7 @@ let comparison: ReturnType<typeof compareEvalResults> | undefined;
 let refused = '';
 
 try {
-  comparison = compareEvalResults(baseline, candidate, { definitionsChanged, changedFiles }, {
+  comparison = compareEvalResults(baseline, candidate, COMMIT_QUESTIONS, {
     baseline: platformOf(values['baseline-platform']), candidate: platformOf(values['candidate-platform']),
   });
 } catch (error) {

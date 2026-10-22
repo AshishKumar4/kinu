@@ -154,7 +154,8 @@ export async function processEvals(run: EvalRun, items: readonly TrialItem[], ou
     verdictExit = assertions.length === items.length && assertions.every((assertion) => assertion.status === 'passed') ? 0 : 1;
     writeFileSync(join(dir, 'results.json'), readFileSync(join(dir, 'candidate', 'results.json')));
   } else {
-    const workers = { candidate: deploymentOf('staging').worker, baseline: deploymentOf('production').worker };
+    // A daily run's candidate is production's build, so its platform's logs are production's.
+    const workers = { candidate: deploymentOf(run.daily === true ? 'production' : 'staging').worker, baseline: deploymentOf('production').worker };
 
     for (const leg of legs) {
       await step(`${leg}-platform`, ['evals/scripts/platform-bugs.ts', join(dir, leg, 'results.json'),
