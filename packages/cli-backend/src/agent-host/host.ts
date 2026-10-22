@@ -1085,8 +1085,7 @@ export class LocalAgentHost {
         ));
       },
       onAdmitted: () => this.wake(parent, 'subagent report'),
-      // No job queue here: the stored answer is the owed delivery, made below and, after a death, at the next start.
-      evolutionAnswerStored: () => undefined,
+      // A refiner's answer is read by its lane, which this pass drives.
       onEvolutionAnswer: async () => {
         this.answerWake(parent);
       },

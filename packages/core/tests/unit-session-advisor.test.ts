@@ -27,9 +27,11 @@ function harness(opts: {
   readonly minSeverity?: AdvisorSeverity;
   readonly gateOpen?: boolean;
   readonly guidance?: () => Promise<string>;
+  /** The reviewed agent's id: the same across two harnesses, as across a restart of its session. */
+  readonly actorId?: string;
 } = {}) {
   const { sql, execRaw } = createTestSql();
-  const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'reviewed');
+  const actor = createTestActor(sql, execRaw, opts.actorId ?? crypto.randomUUID(), 'reviewed');
 
   if (opts.enabled !== false) actor.config.setAdvisorEnabled(true);
   actor.config.setAdvisorMinSeverity(opts.minSeverity ?? 'nit');
@@ -37,7 +39,8 @@ function harness(opts: {
   const hirer: AgentSignal[] = [];
   const recorded: { readonly note: AdvisorNote; readonly spoken: boolean }[] = [];
   let interrupts = 0;
-  let outcome: SendOutcome = 'mid-turn';
+  // What the agent's delivery inbox answers a note it queued, whether or not its turn runs.
+  let outcome: SendOutcome = 'queued';
 
   const advisor = new SessionAdvisor({
     actor,
@@ -119,6 +122,14 @@ async function runTurn(advisor: SessionAdvisor, turn: AdvisedTurn, steps: readon
   }
 
   await hooks.onTurnEnd?.({ text: '', responseMessages: [] });
+}
+
+/** The ids of the advisor's own tool calls with no result after them: a provider refuses a request that holds one. */
+function unanswered(messages: readonly ModelMessage[]): string[] {
+  const parts = messages.flatMap((message) => (typeof message.content === 'string' ? [] : message.content));
+  const answered = new Set(parts.flatMap((part) => (part.type === 'tool-result' ? [part.toolCallId] : [])));
+
+  return parts.flatMap((part) => (part.type === 'tool-call' && !answered.has(part.toolCallId) ? [part.toolCallId] : []));
 }
 
 /** The agent's own messages an update was sent, as the advisor rendered them. */
@@ -221,6 +232,23 @@ describe('the in-session advisor', () => {
     expect(calls()).toBe(3);
   });
 
+  test('a stopped review answers every call it made, and a read that fails is its result, so the next review is not refused', async () => {
+    const { advisor } = harness();
+    const input = { op: 'read', path: 'a.ts' };
+
+    const calling = (toolName: string, id: string): AdvisorReply => ({
+      toolCalls: [{ toolCallId: id, toolName, input }], responseMessages: [{ role: 'assistant', content: [{ type: 'tool-call', toolCallId: id, toolName, input }] }],
+    });
+
+    const { model, asked } = scripted([calling('file', 'r1'), calling('file', 'r2'), calling('file', 'r3'), calling('memory', 'm1')]);
+    const file = tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'contents' });
+    const memory = tool({ inputSchema: jsonSchema({ type: 'object' }), execute: async () => { throw new Error('the memory store is gone'); } });
+    await runTurn(advisor, turnOf(model, { file, memory }), [step('edited'), step('edited again')]);
+
+    expect(asked.length).toBeGreaterThanOrEqual(5);
+    expect(unanswered(asked.at(-1) ?? [])).toEqual([]);
+  });
+
   test('a review that fails is no failure of the turn', async () => {
     const { advisor, sent } = harness();
     const { model } = scripted([async () => { throw new Error('the advisor model is down'); }]);
@@ -237,6 +265,45 @@ describe('the in-session advisor', () => {
 
       expect(calls()).toBe(0);
     }
+  });
+
+  test("a review that outlives its turn speaks for that turn alone, and the next turn's steps go to the next turn's model", async () => {
+    const { advisor, sent, recorded, interrupts } = harness({ finalWaitMs: 0 });
+    const gate = Promise.withResolvers<AdvisorReply>();
+    const first = scripted([() => gate.promise]);
+    const second = scripted([]);
+    const one = advisor.extension(turnOf(first.model, {}, 't1'));
+    await one.onTurnStart?.({ system: '', history: [{ role: 'user', content: 'the first ask' }] });
+    await one.onStepEnd?.({ stepNumber: 0, produced: step('the first turn step') });
+    await one.onTurnEnd?.({ text: '', responseMessages: [] });
+    const two = advisor.extension(turnOf(second.model, {}, 't2'));
+    await two.onTurnStart?.({ system: '', history: [{ role: 'user', content: 'the second ask' }] });
+    gate.resolve(advising({ note: 'The first turn skipped its tests.', severity: 'blocker', class: 'wrong-work' }));
+    await two.onStepEnd?.({ stepNumber: 0, produced: step('the second turn step') });
+    await advisor.settled(1000);
+    await two.onTurnEnd?.({ text: '', responseMessages: [] });
+    const secondRead = readOf(second.asked.at(-1) ?? []);
+
+    // The first turn's blocker came after it: said to open a turn, keyed on its own turn, interrupting the second nothing.
+    expect(recorded.map((entry) => [entry.note.severity, entry.spoken])).toEqual([['blocker', true]]);
+    expect(sent.map((signal) => signal.idempotencyKey?.includes(':t1:'))).toEqual([true]);
+    expect(interrupts()).toBe(0);
+    // Its step not reviewed when the second turn began is dropped; the second's steps go to the second's model alone.
+    expect(first.calls()).toBe(1);
+    expect(secondRead.some((text) => text.includes('the second turn step'))).toBe(true);
+    expect(secondRead.some((text) => text.includes('the first turn step'))).toBe(false);
+  });
+
+  test('a turn that ends without its end hook (a failed turn) is ended for its advisor: a late concern is kept, not said', async () => {
+    const { advisor, sent, recorded } = harness();
+    const gate = Promise.withResolvers<AdvisorReply>();
+    const { model } = scripted([() => gate.promise]);
+    await advisor.extension(turnOf(model)).onTurnStart?.({ system: '', history: [{ role: 'user', content: 'go' }] });
+    advisor.endTurn();
+    gate.resolve(advising({ note: 'The retry loop never reads its exit status.', severity: 'concern', class: 'wrong-work' }));
+    await advisor.settled(1000);
+
+    expect({ said: sent, kept: recorded.map((entry) => [entry.note.severity, entry.spoken]) }).toEqual({ said: [], kept: [['concern', false]] });
   });
 
   test('is off for a new agent until the owner turns it on', () => {
@@ -303,6 +370,26 @@ describe('where a note goes', () => {
 
     expect(run.sent).toHaveLength(1);
     expect(run.recorded).toHaveLength(1);
+  });
+
+  test('a blocker interrupts the running step whatever the inbox answered, except a note the agent never took', async () => {
+    expect((await oneStep(advising(blocker))).interrupts).toBe(1);
+
+    const yielded = harness();
+    yielded.outcome('yielded');
+    const { model } = scripted([silent, advising(blocker)]);
+    await runTurn(yielded.advisor, turnOf(model), [step('edited')]);
+    expect({ interrupts: yielded.interrupts(), kept: yielded.recorded.map((entry) => entry.spoken) }).toEqual({ interrupts: 0, kept: [false] });
+  });
+
+  test('a note is keyed by its turn and what it says, so a restarted turn says a new note, and an old one only once', async () => {
+    const actorId = crypto.randomUUID();
+    const keyOf = async (note: JsonObject) => (await oneStep(advising(note), { actorId })).said[0]?.idempotencyKey;
+    const first = await keyOf(concern);
+
+    expect(first).toBeDefined();
+    expect(await keyOf({ ...concern, note: 'A different finding: the ledger rounds twice.' })).not.toBe(first);
+    expect(await keyOf({ ...concern, note: `${concern.note.toUpperCase()}!` })).toBe(first);
   });
 
   test('a turn with no durable id says its note without an idempotency key, not with a made-up one', async () => {

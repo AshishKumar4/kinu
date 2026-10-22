@@ -849,6 +849,8 @@ export class ActorSession {
     } finally {
       active.phase = 'settling';
       this.liveStream = null;
+      // A failed turn emits no `onTurnEnd`: its advisor learns of its end here, so a late note does not open a turn.
+      this.advisor.endTurn();
       // A call cut with its turn reports no end.
       this.executing.clear();
       await this.settleOutput(active, durableOutput);

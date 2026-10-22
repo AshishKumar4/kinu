@@ -279,7 +279,6 @@ export async function relayHostedReport(
     announce: () => { seams.announce(hirer); },
     onAdmitted: () => { if (!seams.turnInFlight(hirer.reference)) seams.scheduleDrain(hirer); },
     // A refiner's answer is read by its lane; nothing is owed a delivery here.
-    evolutionAnswerStored: () => undefined,
     onEvolutionAnswer: () => { seams.rederiveWake(); },
     temporary: seams.temporary(hirer),
   }, { fromSubagent: name, ...event }, Date.now());

@@ -246,7 +246,6 @@ function makeScene(options: {
       transaction: (body) => body(),
       announce: () => { /* the rail row is the record; see `published()` */ },
       onAdmitted: () => { wakes.push(1); },
-      evolutionAnswerStored: () => undefined,
       onEvolutionAnswer: () => undefined,
       temporary,
     }, {

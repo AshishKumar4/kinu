@@ -80,11 +80,7 @@ export interface SubagentIngressDeps {
   transaction<T>(body: () => T): T;
   announce(report: AdmittedSubagentReport): void;
   onAdmitted(): void;
-  /** Inside the transaction that stores an evolution subagent's answer: a host with a durable job queue writes the
-   *  delivery job here, so the answer and its job land or vanish together; what it returns is awaited after the
-   *  commit (the queue's alarm re-arm). A host without one returns nothing: its stored answer is the owed delivery. */
-  evolutionAnswerStored(): Promise<void> | undefined;
-  /** After the answer is stored; a host with no durable job queue delivers the advisor's answer here. */
+  /** After an evolution subagent's answer is stored, for the lane that waits on it. */
   onEvolutionAnswer(): void | Promise<void>;
   temporary?: TemporaryAgentPort;
 }
@@ -117,14 +113,11 @@ export async function receiveSubagentEvent(
       return { id: '', disposition: 'not_awaited' };
     }
 
-    const queued = deps.transaction(() => {
+    deps.transaction(() => {
       deps.roster.evolution.storeAnswer(input.fromSubagent, input.status === 'blocked' ? 'blocked' : 'completed', answer);
       deps.roster.applyReport(input.fromSubagent, input.status, input.origin, now);
-
-      return deps.evolutionAnswerStored();
     });
 
-    await queued;
     await deps.onEvolutionAnswer();
     deps.temporary?.release(input.fromSubagent);
 

@@ -19,9 +19,10 @@ import type { AgentSignal, SendOutcome } from '../types/signals';
 import { isAdvisorSeverity } from '../types/advisor';
 import { EVIDENCE_BUDGETS, evidenceWindow, renderToolResult } from '../utils/evidence-window';
 import { redactSecrets } from '../safety/secret-patterns';
+import { fnv1a32Hex } from '../utils/fnv1a';
 import type { AdvisorReadTools } from './advisor-ports';
 import {
-  ADVISOR_NOTE_MAX_CHARS, ADVISOR_RULES, isAdvisorNoteClass, judgeNote, sayAdvisorNote, type AdvisorNote,
+  ADVISOR_NOTE_MAX_CHARS, ADVISOR_RULES, isAdvisorNoteClass, judgeNote, normalizeNote, sayAdvisorNote, type AdvisorNote,
 } from './review';
 
 /** What one advisor call answers: the calls it made, and its reply as the conversation keeps it. */
@@ -212,17 +213,26 @@ class UpdateGuards {
   }
 }
 
+/** One turn as its advisor reviews it: what it was handed, whether it still runs, and what it read and has not reviewed.
+ *  A review keeps the turn it began on, so one that outlives its turn never speaks for the next. */
+interface ReviewedTurn {
+  readonly turn: AdvisedTurn;
+  running: boolean;
+  readonly backlog: string[];
+}
+
+/** The tool result every call of a stopped update gets: a call left without one fails every later request. */
+const STOPPED = 'Stopped: you repeated this call. Decide from what you have.';
+
 export class SessionAdvisor {
   /** The advisor's own conversation, appended to; never the agent's history again. */
   private conversation: ModelMessage[] = [];
   private conversationChars = 0;
-  /** Steps ended and not yet read by a review. */
-  private readonly backlog: string[] = [];
+  /** The turn whose steps are read now; null before the first. */
+  private current: ReviewedTurn | null = null;
+  /** Turns with steps read and not yet reviewed, oldest first. */
+  private owed: ReviewedTurn[] = [];
   private reviewing: Promise<void> | null = null;
-  private turn: AdvisedTurn | null = null;
-  private turnRunning = false;
-  private step = 0;
-  private said = 0;
 
   constructor(private readonly deps: SessionAdvisorDeps) {}
 
@@ -240,26 +250,30 @@ export class SessionAdvisor {
     return {
       name: 'kinu.advisor',
       onTurnStart: (ctx) => {
-        this.turn = turn;
-        this.turnRunning = true;
-        this.step = 0;
-        this.said = 0;
+        // The last turn's steps not yet reviewed are dropped: its model and tools were its own.
+        this.endTurn();
+        this.owed = [];
+        this.current = { turn, running: true, backlog: [] };
         // The request the turn answers: the last of the turn's input, as the agent read it.
         const asked = ctx.history.at(-1);
 
-        if (asked !== undefined && asked.role === 'user') this.read([asked], true);
+        if (asked !== undefined && asked.role === 'user') this.read([asked]);
       },
       onStepEnd: (ctx) => {
-        this.step = ctx.stepNumber;
-        this.read(ctx.produced, true);
+        this.read(ctx.produced);
       },
       // The last step was read at its end, and the turn waits for that review. No step follows it, so from here a note
       // is the turn's after it: a nit or a concern is kept unsaid, and a blocker opens the next turn.
       onTurnEnd: async () => {
-        this.turnRunning = false;
+        this.endTurn();
         await this.settled(this.deps.finalWaitMs ?? FINAL_REVIEW_WAIT_MS);
       },
     };
+  }
+
+  /** The turn ended, however it ended: a failed turn emits no `onTurnEnd`, so its execution says so here too. */
+  endTurn(): void {
+    if (this.current !== null) this.current.running = false;
   }
 
   /** Once every review owed has run, or `waitMs` has passed: one timer, cleared, so no wait outlives the call (a pending
@@ -270,74 +284,84 @@ export class SessionAdvisor {
 
     try {
       while (this.reviewing !== null) {
-        if (await Promise.race([this.reviewing.then(() => 'reviewed' as const), expired]) === 'expired') return;
+        const pending = this.reviewing;
+
+        if (await Promise.race([pending.then(() => 'reviewed' as const), expired]) === 'expired' || this.reviewing === pending) return;
       }
     } finally {
       clearTimeout(timer);
     }
   }
 
-  /** The agent's messages, appended to what the next review reads; a review starts if none runs. */
-  private read(messages: readonly ModelMessage[], inProgress: boolean): void {
-    if (!this.reviewsTurns || this.turn === null) return;
+  /** The agent's messages, appended to what the next review of their turn reads; a review starts if none runs. */
+  private read(messages: readonly ModelMessage[]): void {
+    const reviewed = this.current;
+
+    if (!this.reviewsTurns || reviewed === null || !reviewed.running) return;
 
     for (const message of messages) {
-      const rendered = renderForAdvisor(message, inProgress);
+      const rendered = renderForAdvisor(message, true);
 
-      if (rendered !== null) this.backlog.push(rendered);
+      if (rendered !== null) reviewed.backlog.push(rendered);
     }
 
-    if (this.backlog.length > 0 && this.reviewing === null) this.reviewing = this.review();
+    if (reviewed.backlog.length > 0 && !this.owed.includes(reviewed)) this.owed.push(reviewed);
+
+    if (this.owed.length > 0 && this.reviewing === null) this.reviewing = this.review();
   }
 
   /** Reviews what was read and not yet reviewed, an update at a time, until nothing is owed. Never fails. */
   review(): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
-      while (this.backlog.length > 0 && this.turn !== null) {
-        const delta = this.backlog.splice(0);
-        yield* this.update(this.turn, delta);
+      for (let next = this.owed.shift(); next !== undefined; next = this.owed.shift()) {
+        const delta = next.backlog.splice(0);
+
+        if (delta.length > 0) yield* this.update(next, delta);
       }
-    }).pipe(Effect.ensuring(Effect.sync(() => { this.reviewing = null; }))));
+    }).pipe(Effect.ensuring(Effect.sync(() => {
+      this.reviewing = null;
+
+      // A step read as the last update ended is reviewed now, not at the next step's end.
+      if (this.owed.length > 0) this.reviewing = this.review();
+    }))));
   }
 
-  /** One review of the steps read since the last: a few calls at most, its notes guarded before any is said. */
-  private update(turn: AdvisedTurn, delta: readonly string[]): Effect.Effect<void> {
-    // Never the agent's turn's failure: a review that fails is logged, and the next step is read afresh.
-    return attempt({ doing: 'reviewing the agent\'s steps', otherwise: 'unavailable' }, async () => {
+  /** One review of the steps read since the last: a few calls at most, its notes guarded before any is said. A review
+   *  that fails is logged, never the agent's turn's failure; the conversation keeps only whole exchanges. */
+  private update(reviewed: ReviewedTurn, delta: readonly string[]): Effect.Effect<void> {
+    const { turn } = reviewed;
+
+    return Effect.gen({ self: this }, function* () {
       if (this.conversationChars > CONVERSATION_MAX_CHARS) [this.conversation, this.conversationChars] = [[], 0];
 
       for (const text of delta) this.append({ role: 'user', content: text });
-      const system = advisorSystemPrompt(turn.reachable, await this.deps.guidance());
+      const guidance = yield* attempt({ doing: 'reading the advisor\'s guidance', otherwise: 'unavailable' }, () => this.deps.guidance());
+      const system = advisorSystemPrompt(turn.reachable, guidance);
       const tools: ToolSet = { ...turn.tools, advise: ADVISE_TOOL };
       const offered = Object.fromEntries(Object.entries(tools).map(([name, offeredTool]) => [name, { ...offeredTool, execute: undefined }]));
       const guards = new UpdateGuards();
 
       for (let round = 0; round < ROUNDS_PER_UPDATE; round++) {
-        const reply = await turn.model({ system, messages: this.conversation, tools: offered });
-
-        for (const message of reply.responseMessages) this.append(message);
-
-        if (reply.toolCalls.length === 0) return;
+        const reply = yield* attempt({ doing: 'asking the advisor', otherwise: 'unavailable' }, () => turn.model({ system, messages: this.conversation, tools: offered }));
         const results: { toolCallId: string; toolName: string; text: string }[] = [];
         let stopped = false;
 
         for (const call of reply.toolCalls) {
-          const repeated = guards.repeat(call.toolName, call.input);
-
-          if (repeated === 'stop') {
-            stopped = true;
-            break;
-          }
-
-          let text = 'You made this exact call already; its result has not changed. Decide from what you have.';
+          const repeated = stopped ? 'stop' : guards.repeat(call.toolName, call.input);
+          stopped = repeated === 'stop';
+          let text = repeated === 'stop' ? STOPPED : 'You made this exact call already; its result has not changed. Decide from what you have.';
 
           if (repeated === 'ok') {
-            text = call.toolName === 'advise' ? await this.advise(turn, call.input, guards) : await this.readTool(readToolNamed(turn.tools, call.toolName), call.input);
+            text = call.toolName === 'advise' ? yield* this.advise(reviewed, call.input, guards) : yield* this.readTool(readToolNamed(turn.tools, call.toolName), call.input);
           }
 
           results.push({ toolCallId: call.toolCallId, toolName: call.toolName, text });
         }
 
+        // The reply and its results land together, so a failure between them leaves no call unanswered.
+        for (const message of reply.responseMessages) this.append(message);
+
+        if (results.length === 0) return;
         this.append({
           role: 'tool',
           content: results.map((result) => ({ type: 'tool-result', toolCallId: result.toolCallId, toolName: result.toolName, output: { type: 'text', value: result.text } })),
@@ -354,49 +378,58 @@ export class SessionAdvisor {
     this.conversationChars += JSON.stringify(message.content).length;
   }
 
-  private async readTool(offered: Tool | undefined, input: JsonValue): Promise<string> {
-    if (offered?.execute === undefined) return 'There is no such tool.';
-    const result: unknown = await offered.execute(input, { toolCallId: 'advisor', messages: [], context: undefined });
+  /** A read's result as the advisor's model reads it; a read that fails is its result, not the review's failure. */
+  private readTool(offered: Tool | undefined, input: JsonValue): Effect.Effect<string> {
+    if (offered?.execute === undefined) return Effect.succeed('There is no such tool.');
 
-    return shown(renderToolResult(result), MESSAGE_CHARS);
+    return attempt({ doing: 'running the advisor\'s read', otherwise: 'unavailable' }, async () => {
+      const result: unknown = await offered.execute?.(input, { toolCallId: 'advisor', messages: [], context: undefined });
+
+      return shown(renderToolResult(result), MESSAGE_CHARS);
+    }).pipe(Effect.catch((failure) => Effect.succeed(`The read failed: ${failure.message}`)));
   }
 
-  /** One `advise` call: judged as every note is, recorded, and said where the judgement says. */
-  private async advise(turn: AdvisedTurn, input: JsonValue, guards: UpdateGuards): Promise<string> {
+  /** One `advise` call: judged as every note is, said where the judgement says, then recorded. */
+  private advise(reviewed: ReviewedTurn, input: JsonValue, guards: UpdateGuards): Effect.Effect<string> {
     const note = adviseNote(input);
 
-    if (note === null) return 'Not said: a note needs text, a severity of nit, concern or blocker, and a known class.';
+    if (note === null) return Effect.succeed('Not said: a note needs text, a severity of nit, concern or blocker, and a known class.');
 
-    if (note.severity !== 'blocker' && guards.notes >= ADVISOR_NOTES_PER_UPDATE) return 'Not said: enough notes for this step.';
+    if (note.severity !== 'blocker' && guards.notes >= ADVISOR_NOTES_PER_UPDATE) return Effect.succeed('Not said: enough notes for this step.');
     const config = this.deps.config();
     const notes = this.deps.notes();
     const verdict = judgeNote({ note, minSeverity: config.getAdvisorMinSeverity(), recent: [...notes.recentAdvisorNotes()], gateOpen: this.deps.gateOpen() });
 
-    if (verdict.disposition === 'drop') return 'Not said: it repeats a recent note or says nothing.';
+    if (verdict.disposition === 'drop') return Effect.succeed('Not said: it repeats a recent note or says nothing.');
 
     if (note.severity !== 'blocker') guards.notes += 1;
-    const turnId = turn.turnId ?? undefined;
+    const turnId = reviewed.turn.turnId ?? undefined;
     // After the turn only a blocker opens one: a nit or concern then is a changelog note, kept and visible.
-    const spoken = verdict.disposition === 'deliver' && (this.turnRunning || note.severity === 'blocker');
+    const running = reviewed.running;
 
-    if (!spoken) {
+    if (verdict.disposition !== 'deliver' || (!running && note.severity !== 'blocker')) {
       notes.recordAdvisorNote(note, turnId, false);
 
-      return 'Recorded, not said.';
+      return Effect.succeed('Recorded, not said.');
     }
 
-    this.said += 1;
+    return attempt({ doing: 'saying the advisor\'s note', otherwise: 'unavailable' }, async () => {
+      // Keyed on the turn and the note itself, so a restarted turn says a new note and never one it said again.
+      const sent = await sayAdvisorNote(note, {
+        turnId, send: this.deps.send, actor: this.deps.actor, key: fnv1a32Hex(normalizeNote(note.note)),
+        ...(this.deps.parent !== undefined && { parent: this.deps.parent }),
+      });
 
-    // Said first, then recorded: a note said and not recorded only misses the dedupe window.
-    const sent = await sayAdvisorNote(note, {
-      turnId, send: this.deps.send, actor: this.deps.actor, key: `${String(this.step)}:${String(this.said)}`,
-      ...(this.deps.parent !== undefined && { parent: this.deps.parent }),
-    });
+      const said = sent !== 'yielded' && sent !== 'undelivered';
+      // Said first, then recorded: a note said and not recorded only misses the dedupe window.
+      notes.recordAdvisorNote(note, turnId, said);
 
-    notes.recordAdvisorNote(note, turnId, true);
+      if (!said) return 'Not said: the agent took other words first.';
 
-    if (note.severity === 'blocker' && sent === 'mid-turn' && this.turnRunning) await this.deps.interrupt();
+      // A blocker frees the step from its foreground calls, as a person's words do, while the turn it reviews runs.
+      if (note.severity === 'blocker' && reviewed.running) await this.deps.interrupt();
 
-    return sent === 'mid-turn' ? 'Said: the agent reads it at its next step.' : 'Said.';
+      return running ? 'Said: the agent reads it at its next step.' : 'Said: it opens the agent\'s next turn.';
+    }).pipe(Effect.catch((failure) => Effect.succeed(`Not said: ${failure.message}`)));
   }
 }
