@@ -658,7 +658,9 @@ describe('workspace diff lifecycle', () => {
     expect(after.equals(before)).toBe(true);
   });
 
-  test('the git view lists every repository within reach of the working directory, each under its folder', async () => {
+  // CHANGES-SCOPE-0925b: every repository inside the working directory, however deep (owner, 2026-09-25); hidden folders
+  // and dependency trees are never entered.
+  test('the git view lists every repository below the working directory, however deep, each under its folder', async () => {
     const cwd = scratchDir('git-view');
 
     const repository = async (at: string, files: Readonly<Record<string, string>>, commit = true): Promise<string> => {
@@ -685,13 +687,16 @@ describe('workspace diff lifecycle', () => {
     const deep = await repository('a/b/c/deep', { 'far.ts': 'one\n' });
     const hidden = await repository('.config/tool', { 'settings.json': '{}\n' });
     const installed = await repository('node_modules/pkg', { 'index.js': 'one\n' });
+    const environment = await repository('tools/venv/src', { 'env.py': 'one\n' });
     writeFileSync(join(api, 'app.ts'), 'two\n');
     writeFileSync(join(api, 'new.ts'), 'new\n');
     mkdirSync(join(api, 'dist'));
     writeFileSync(join(api, 'dist/bundle.js'), 'built\n');
     writeFileSync(join(lib, 'lib.ts'), 'two\n');
 
-    for (const outside of [deep, hidden, installed]) writeFileSync(join(outside, 'changed.txt'), 'not listed\n');
+    writeFileSync(join(deep, 'far.ts'), 'two\n');
+
+    for (const outside of [hidden, installed, environment]) writeFileSync(join(outside, 'changed.txt'), 'not listed\n');
     mkdirSync(join(cwd, 'notes'));
     writeFileSync(join(cwd, 'notes/todo.md'), 'no repository\n');
 
@@ -700,9 +705,9 @@ describe('workspace diff lifecycle', () => {
     const view = await getExecutorDiff(rt, 'computer', noWorkspace);
 
     expect(view.error).toBeUndefined();
-    expect(view.repositories).toEqual(['api', 'api/vendor/lib', 'web']);
+    expect(view.repositories).toEqual(['a/b/c/deep', 'api', 'api/vendor/lib', 'web']);
     expect(view.files.map((file) => `${file.status} ${file.path}`)).toEqual([
-      'changed api/app.ts', 'added api/new.ts', 'changed api/vendor/lib/lib.ts', 'added web/index.html',
+      'changed a/b/c/deep/far.ts', 'changed api/app.ts', 'added api/new.ts', 'changed api/vendor/lib/lib.ts', 'added web/index.html',
     ]);
 
     rt.executionRouter = shellIn(join(cwd, 'notes'));

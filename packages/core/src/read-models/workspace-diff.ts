@@ -52,8 +52,8 @@ const REVIEWED_UNDER_ROOT = ['home', ...SHARED_ROOTS.map((root) => root.slice(1)
 /** Where the change-set names a path relative to the working directory, as the shell starting there does. */
 const WORKING_DIRECTORY = `${WORKSPACE_ROOT.slice(1)}/`;
 
-/** Repository scan depth below an executor's working directory, as VS Code bounds its scan. */
-const REPOSITORY_SCAN_DEPTH = 3;
+/** The dependency trees the scan never enters, as find names them. */
+const PRUNED_FOLDERS = [...DEPENDENCY_TREES].map((name) => `-name ${shellQuote(name)}`).join(' -o ');
 
 /** Opens each record of the git view, at a line start. */
 const MARK = '\u0001';
@@ -316,8 +316,9 @@ const GIT_SCAN_SCRIPT = 'exec 2>&3; for dotgit; do [ "$dotgit" = ./.git ] || sh 
 
 /**
  * One exec, in POSIX sh, that shows the repository enclosing the working directory, as VS Code does, and every one
- * within {@link REPOSITORY_SCAN_DEPTH} below it, skipping hidden folders and node_modules: tracked, staged and
- * untracked changes since HEAD, .gitignore honoured. Every path travels NUL-delimited, from `find -exec` and git's
+ * below it however deep (owner, 2026-09-25: every repository inside the working directories), skipping hidden folders
+ * and the dependency trees the store's own review skips ({@link DEPENDENCY_TREES}): tracked, staged and untracked
+ * changes since HEAD, .gitignore honoured. Every path travels NUL-delimited, from `find -exec` and git's
  * `-z` lists into records the parser reads by NUL, so no name is split or quoted. `git diff --no-index` reads
  * untracked files without writing the index.
  */
@@ -330,7 +331,7 @@ function gitViewScript(): string {
     `  sh -c "$KINU_GIT_REPO" sh "\${cdup:-.}" ''`,
     'fi',
     // find's own complaints (an unreadable folder) are dropped; the sections' stderr goes out on fd 3.
-    `find . -maxdepth ${String(REPOSITORY_SCAN_DEPTH + 1)} \\( -name node_modules -o \\( -name '.?*' ! -name .git \\) \\) -prune -o -name .git -prune -exec sh -c ${shellQuote(GIT_SCAN_SCRIPT)} sh {} + 3>&2 2>/dev/null`,
+    `find . \\( ${PRUNED_FOLDERS} -o \\( -name '.?*' ! -name .git \\) \\) -prune -o -name .git -prune -exec sh -c ${shellQuote(GIT_SCAN_SCRIPT)} sh {} + 3>&2 2>/dev/null`,
     `printf '\\001E\\n'`,
   ].join('\n');
 }
