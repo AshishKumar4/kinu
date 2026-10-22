@@ -397,6 +397,9 @@ const DESTROYED_AFTER_ARRIVAL = 'this devbox was destroyed after this request ar
 
 const QUIESCING = 'this devbox is quiescing; this request was not admitted';
 
+/** What a request that would start the box is told while it saves and stops; the workspace asks again until it has. */
+const SAVING_AND_STOPPING = 'the computer is saving its work and stopping; it starts again as soon as that is done';
+
 export interface DevboxState extends DurableObjectState {
   readonly exports: DurableObjectState['exports'] & GatewayBindings;
 }
@@ -766,6 +769,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   protected get snapshotWakeCutoverMs(): number {
     return 10_000;
+  }
+
+  /**
+   * How long a rest waits for the platform's snapshot of its container. The snapshot only speeds the next wake (D51):
+   * the rest committed the chain before it. A save took 4.1-9.5 s on Medium (D51), and the snapshot and stop after a
+   * rest's commit took 0.15-6.1 s in each of the 40 rests on staging and the contracts in the week to 2026-10-22; one
+   * take on f44999 never answered (D108), and the box refused every terminal for the 14 minutes it waited.
+   */
+  protected get restSnapshotWaitMs(): number {
+    return 60_000;
   }
 
   protected get policy(): DevboxPolicy {
@@ -1983,7 +1996,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async #resolveReadiness(arrived: number): Promise<RestoreReadiness> {
-    if (this.#quiescing !== undefined) return { kind: 'pending', reason: QUIESCING };
+    if (this.#quiescing !== undefined) return { kind: 'pending', reason: SAVING_AND_STOPPING, quiescing: true };
 
     if (arrived !== this.#teardowns) return { kind: 'pending', reason: DESTROYED_AFTER_ARRIVAL };
     this.#closed = false;
@@ -2002,7 +2015,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // Native allocation can report running before restoration starts.
     if (wasRunning && this.#restoration.phase === 'unstarted') await this.#startContainer();
 
-    if (this.#quiescing !== undefined) return { kind: 'pending', reason: QUIESCING };
+    if (this.#quiescing !== undefined) return { kind: 'pending', reason: SAVING_AND_STOPPING, quiescing: true };
 
     if (arrived !== this.#teardowns) return { kind: 'pending', reason: DESTROYED_AFTER_ARRIVAL };
     const admission = this.#admission();
@@ -2503,10 +2516,21 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return outcome;
   }
 
+  /** The rest's snapshot, given up after {@link restSnapshotWaitMs}: the box stops without it, and a take that lands
+   *  later is owed for deletion. A box that waited on it refused every request while it waited. */
   async #restSnapshot(): Promise<void> {
-    const [taken] = await Promise.allSettled([this.#snapshots.save()]);
+    const saving = this.#snapshots.save();
+    const waitMs = this.restSnapshotWaitMs;
+    const late = Symbol('late');
+    const [taken] = await Promise.allSettled([Promise.race([saving, scheduler.wait(waitMs).then(() => late)])]);
 
-    if (taken.status === 'rejected') await this.#record('quiesce', `the rest took no snapshot, so the next wake recovers from the backup: ${describe({ cause: taken.reason })}`);
+    if (taken.status === 'fulfilled' && taken.value === late) {
+      this.#snapshots.abandon();
+      unawaited(Promise.allSettled([saving]), 'a rest snapshot given up');
+      await this.#record('quiesce', `the rest took no snapshot: the platform had not answered in ${String(waitMs / 1000)} s, so the next wake recovers from the backup`);
+    } else if (taken.status === 'rejected') {
+      await this.#record('quiesce', `the rest took no snapshot, so the next wake recovers from the backup: ${describe({ cause: taken.reason })}`);
+    }
   }
 
 
