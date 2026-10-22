@@ -53,6 +53,8 @@ export {
 
 export { attempt, attemptInItsWords, flight, hold, inItsWords, recording, refusing, settle, settleSync, showing, tolerate, tolerateAsync, tolerated } from './effect';
 
+export { confirmedDeletion } from './confirmed-deletion';
+
 export {
   createCompositeLogger,
   createConsoleLogger,
