@@ -5,7 +5,7 @@
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { Cause, Effect, Result } from "effect";
-import { routeAgentRequest } from "agents";
+import { getAgentByName, routeAgentRequest } from "agents";
 import { exports, tracing, WorkerEntrypoint } from 'cloudflare:workers';
 import type { EgressStreams, EgressTlsTarget } from '@nimbus-sh/core/_shared/workspace-network.js';
 import { adoptTracing } from '@nimbus-sh/platform/tracing.js';
@@ -14,6 +14,8 @@ import {
   type EgressParams, type KinuEgressParams,
 } from './egress/outbound';
 import { forwardEgress, githubRecorder } from './egress/policy';
+import { forwardNodeProgramCall, NODE_PROGRAM_HOST } from './node-program';
+import type { OrchestratorAgent } from './orchestrator';
 import { objectNamed, APP_ROUTES, ERROR_STATUS, PREVIEW_ENTRY_PATH, WORKER_VERSION_HEADER } from "@kinu.run/core";
 import { diagnostics, settle, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import {
@@ -79,7 +81,14 @@ export { DevboxGateway } from '@kinu.run/devbox';
 /** The sandbox container's outbound HTTP, and a Nimbus workspace's egress (`NimbusWorkspaceOptions.egress`). */
 export class KinuEgress extends WorkerEntrypoint<Env, EgressParams> {
   override fetch(request: Request): Promise<Response> {
-    return forwardEgress(request, this.env, parseEgressPrincipal(this.ctx), { self: exports.default, github: githubRecorder(this.env.OrchestratorAgent, this.ctx), seam: 'container' });
+    const principal = parseEgressPrincipal(this.ctx);
+
+    // A Node program's namespace call (`node-program.ts`): no network has this host, so it never leaves.
+    if (new URL(request.url).hostname === NODE_PROGRAM_HOST) {
+      return forwardNodeProgramCall(request, principal, async (workspace) => await getAgentByName<Env, OrchestratorAgent>(this.env.OrchestratorAgent, workspace));
+    }
+
+    return forwardEgress(request, this.env, principal, { self: exports.default, github: githubRecorder(this.env.OrchestratorAgent, this.ctx), seam: 'container' });
   }
 
   /** A Nimbus workspace program's plain socket (`handleEgressConnect`); a container's raw sockets go straight out (D82). */

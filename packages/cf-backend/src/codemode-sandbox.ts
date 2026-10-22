@@ -11,12 +11,13 @@ import {
   type CraftedToolSource, type ExecuteResult, type Executor, type ProgramStop, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, stoppedProgram } from '@kinu.run/core';
+import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, programPlace, stoppedProgram } from '@kinu.run/core';
 import { WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { codemodeEgress, type CodemodeEgressProps } from './codemode-egress-mint';
 import { EGRESS_FAILURE_HEADER } from './egress/send-out';
 import { BROWSER_CLIENT_MODULE, browserClientSource } from './browser-prelude';
 import { NODE_COMPAT_MODULE, nodeCompatSource } from './node-compat-module';
+import { runNodeProgram, type NodeProgramPrincipal } from './node-program';
 
 type DynamicProviderInput = Parameters<DynamicWorkerExecutor['execute']>[1];
 
@@ -108,6 +109,8 @@ function reachableAsWritten(provider: ResolvedProvider): ResolvedProvider {
 export interface ProgramLaunch {
   /** `deadlineMs`: the sandbox ends the program after this long; absent, nothing but completion does. */
   run(source: string, providers: ResolvedProvider[], opts?: { readonly deadlineMs?: number }): Promise<ProgramResult>;
+  /** Who its programs run as, which one that imports from the workspace runs as there (`node-program.ts`); absent, none does. */
+  readonly principal?: NodeProgramPrincipal;
 }
 
 export interface CodemodeLauncherProps {
@@ -144,12 +147,17 @@ export class CodemodeLauncher extends WorkerEntrypoint<{ readonly LOADER: Worker
  * `environment` is read for each run, so a secret granted or revoked since is as it stands.
  */
 export function codemodeLauncher(props: Omit<CodemodeLauncherProps, 'env'>, environment: () => Promise<Readonly<Record<string, string>>>): ProgramLaunch {
-  return { run: async (source, providers, opts) => {
+  const run: ProgramLaunch['run'] = async (source, providers, opts) => {
     const env = await environment();
     const deadline = opts?.deadlineMs === undefined ? {} : { deadlineMs: opts.deadlineMs };
 
     return await launched(exports.CodemodeLauncher({ props: { ...props, env, ...deadline } }).run(source, providers));
-  } };
+  };
+
+  // Online, its programs reach the network as this principal, so one that imports from the workspace may run there.
+  const principal = props.egress?.principal;
+
+  return principal === undefined ? { run } : { run, principal: { workspace: principal.workspace, actorId: principal.actorId, as: principal.as } };
 }
 
 /** A context the platform dropped delivers no answer, this one's included, so a job whose context stops answering
@@ -175,23 +183,36 @@ async function programWorker(input: {
   });
 }
 
+/** Where a program that imports from the workspace runs as Node (`node-program.ts`): its directory and crafted tools. */
+export interface NodeProgramPlace {
+  readonly cwd: string;
+  readonly crafted: readonly CraftedToolSource[];
+}
+
 export class KinuSandboxExecutor {
   readonly #inner: ProgramLaunch;
   /** Source run before each program, in its scope: `describe` (`describeProgramSource`). */
   readonly #prelude: string;
   /** What each member's served operation declares, from the providers it was built over (`servedImpacts`). */
   readonly #impacts: MemberImpacts;
+  /** Absent: every program runs in the isolate, and one that imports from the workspace is refused. */
+  readonly #node: NodeProgramPlace | undefined;
 
-  constructor(launch: ProgramLaunch, prelude = '', impacts: MemberImpacts = () => null) {
+  constructor(launch: ProgramLaunch, prelude = '', impacts: MemberImpacts = () => null, node?: NodeProgramPlace) {
     this.#inner = launch;
     this.#prelude = prelude;
     this.#impacts = impacts;
+    this.#node = node;
   }
 
   async execute(code: string, providers: DynamicProviderInput) {
     const providerArr: ResolvedProvider[] = Array.isArray(providers)
       ? providers
       : [{ name: 'codemode', fns: providers }];
+
+    const place = programPlace(code);
+
+    if (place.kind === 'node') return await this.#onNode(code, place.imports, attributeProviders(providerArr, this.#impacts));
 
     try {
       // The vendor reads only err.message. Carry an explicitly thrown refusal
@@ -209,6 +230,19 @@ export class KinuSandboxExecutor {
       // createCodeTool turns a non-empty `error` into a tool-output-error the model sees.
       return { result: undefined, error: renderThrownChain({ cause: err }) };
     }
+  }
+
+  /** A program that imports from the workspace, run there as Node, as the one who runs it; one offline runs nowhere. */
+  async #onNode(code: string, imports: Parameters<typeof runNodeProgram>[0]['imports'], providers: ResolvedProvider[]): Promise<ProgramResult> {
+    const principal = this.#inner.principal;
+
+    if (principal === undefined || this.#node === undefined) {
+      return { result: undefined, error: 'Imports from the workspace run the program in the workspace, which this call cannot: inline what it imports.' };
+    }
+
+    const [ran] = await Promise.allSettled([runNodeProgram({ code, imports, providers, principal, cwd: this.#node.cwd, crafted: this.#node.crafted, prelude: this.#prelude })]);
+
+    return ran.status === 'fulfilled' ? ran.value : { result: undefined, error: renderThrownChain({ cause: ran.reason }) };
   }
 }
 

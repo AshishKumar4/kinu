@@ -352,7 +352,7 @@ export const BUILTIN_TOOL_DESCRIPTIONS = {
 export type SandboxSubstrate = 'hosted' | 'local';
 
 const SANDBOX_RUNS = {
-  hosted: 'Each program runs in a fresh isolate; `fetch` reaches the internet.',
+  hosted: 'Each program runs in a fresh isolate; `fetch` reaches the internet. Workspace files and npm packages can be imported; native addons can\'t.',
   local: 'Each program runs in-process; `fetch` is the machine\'s own.',
 } satisfies Record<SandboxSubstrate, string>;
 

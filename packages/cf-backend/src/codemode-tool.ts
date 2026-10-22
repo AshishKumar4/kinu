@@ -140,7 +140,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         const { providers: reached, describe } = programSurface({ surface, namespaces: scope.namespaces(programExecutor(program)), reach: scope.reach, mode, signal, crafted });
         const { nested } = scope;
         const bound = nested === undefined ? reached : reached.map((provider) => guarded(provider, nested));
-        const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'), describe, servedImpacts(bound));
+        const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'), describe, servedImpacts(bound), { cwd: surface.cwd, crafted });
 
         const built = createCodeTool({
           // Composed here: the vendor's `{{types}}` replace reads `$` as a pattern.

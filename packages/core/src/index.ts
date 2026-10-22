@@ -2624,6 +2624,8 @@ export {
   KINU_NODE_MODULE_SOURCE,
 } from './execution/codemode-node-shim';
 
+export { KINU_PROGRAM_MODULE, programPlace, type ProgramImport, type ProgramPlace } from './execution/program-place';
+
 export {
   type DeviceHubClient,
   type HubDeviceCallOptions,
