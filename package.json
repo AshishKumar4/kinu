@@ -70,6 +70,7 @@
     "sweep:flakes": "bun scripts/flake-gate.ts --sweep",
     "census:bloat": "bun scripts/bloat-census.ts",
     "proof:comment-only": "bun scripts/comment-only.ts",
+    "proof:pointer-lock": "bun scripts/pointer-lock-proof.ts",
     "gate:hammer": "bun scripts/hammer.ts",
     "gate:mutation-fences": "bun scripts/mutation-fences.ts",
     "test:live": "bun scripts/ladder.ts --run bash scripts/live-tier.sh",

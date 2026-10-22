@@ -826,8 +826,7 @@ const PROMPT = 'Minecraft Classic is open full screen on your computer\'s deskto
   + 'loops, conditions, variables, functions or other tools. Look before each move. Typing is off, and only the game\'s '
   + 'keys work: w, a, s and d walk, space jumps, shift crouches, 1 to 9 pick a block, b opens the block menu, f changes '
   + 'the render distance, r respawns, e, Escape and Enter.\n\n'
-  + 'Click the game to capture the pointer; from then on, moving the pointer turns your view, and a click at another '
-  + 'point moves the pointer there first, which turns it too. A left click places the block you hold where the crosshair '
+  + 'Click the game to capture the pointer. A left click places the block you hold where the crosshair '
   + 'points (a ghost cube shows where), or breaks one; a right click switches between placing and breaking. Escape lets '
   + 'the pointer go. You reach about 6 blocks.';
 
