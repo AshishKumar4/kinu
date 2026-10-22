@@ -337,14 +337,14 @@ describe('ChatApp terminal interaction', () => {
     await screen.waitFor('the test request', () => tested.length === 1);
     expect(tested).toEqual(['openai/gpt-5.5']);
     response.resolve({ ok: true, firstTokenMs: 731, totalMs: 918 });
-    await response.promise;
-    await new Promise<void>((resolve) => { setImmediate(resolve); });
-    await screen.renderOnce();
 
-    const reported = [...screen.frame().matchAll(/\b(\d+(?:\.\d+)?)\s*(ms|s)\b/gu)]
+    const reported = () => [...screen.frame().matchAll(/\b(\d+(?:\.\d+)?)\s*(ms|s)\b/gu)]
       .map(([, value, unit]) => Number(value) * (unit === 's' ? 1_000 : 1));
 
-    expect(reported).toEqual(expect.arrayContaining([731, 918]));
+    // Until the picker shows what the test found: it renders on React's own schedule, which a fixed tick or two outran
+    // on a loaded runner (tier 20261022194641, the frame still on "testing…").
+    await screen.waitFor('the test result', () => [731, 918].every((ms) => reported().includes(ms)));
+    expect(reported()).toEqual(expect.arrayContaining([731, 918]));
     expect(screen.filterFocused()).toBe(true);
     expect(selected).toEqual([]);
   });
