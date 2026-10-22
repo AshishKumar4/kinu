@@ -105,8 +105,9 @@ describe("an eval program's fs and child_process are Nimbus's node-compat over t
       [`mkdir -p -- '${WORKSPACE_ROOT}/out/deep'`, undefined],
       [`mv -- '${WORKSPACE_ROOT}/a.txt' '${WORKSPACE_ROOT}/out/a.txt'`, undefined],
       [`rm -r -- '${WORKSPACE_ROOT}/out/deep'`, undefined],
-      ["'ls' '-1'", WORKSPACE_ROOT],
-      ['echo hi', WORKSPACE_ROOT],
+      // In the program's own directory, a command starts where the shell does.
+      ["'ls' '-1'", undefined],
+      ['echo hi', undefined],
     ]);
   });
 });

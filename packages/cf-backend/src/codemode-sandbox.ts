@@ -16,6 +16,7 @@ import { WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { codemodeEgress, type CodemodeEgressProps } from './codemode-egress-mint';
 import { EGRESS_FAILURE_HEADER } from './egress/send-out';
 import { BROWSER_CLIENT_MODULE, browserClientSource } from './browser-prelude';
+import { NODE_COMPAT_MODULE, nodeCompatSource } from './node-compat-module';
 
 type DynamicProviderInput = Parameters<DynamicWorkerExecutor['execute']>[1];
 
@@ -25,13 +26,6 @@ export interface SandboxIdentity {
   readonly workspace: string;
   /** Where the program's `process` starts: the actor's own (`PathPlanes.cwd`). */
   readonly cwd: string;
-}
-
-/** Nimbus's node-compat as the program imports it: `require`'s fs and child_process (`slate-vendor.ts`). */
-export const NODE_COMPAT_MODULE = 'kinu-node-compat.js';
-
-async function nodeCompatSource(): Promise<string> {
-  return (await import('virtual:kinu-slate-vendor')).default.nodeCompat;
 }
 
 /**

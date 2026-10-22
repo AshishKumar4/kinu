@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { ProcessNotAdmitted } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { onceMoreIfNotAdmitted } from '../src/slates/not-admitted';
+import { onceMoreIfNotAdmitted } from '../src/execution/not-admitted';
 
 /** A send answering each of `answers` in turn, counting its sends. */
 function sends(answers: readonly (() => Promise<string>)[]) {

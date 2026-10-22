@@ -184,7 +184,8 @@ describe('the eval sandbox under workerd', () => {
     expect(files.get(`${WORKSPACE_ROOT}/out/copy.md`)).toBe('HELLO FROM THE WORKSPACE!');
   });
 
-  test('process.cwd() is the working root, where fs resolves a relative path and names it in its errors', async () => {
+  // Node names the path in an error as the program gave it (Nimbus's node-compat, ask 67).
+  test('process.cwd() is the working root, where fs resolves a relative path and names it in its errors as given', async () => {
     const program = [
       '// Probe the working directory and a relative directory that is not there',
       "const fs = require('fs/promises');",
@@ -197,7 +198,7 @@ describe('the eval sandbox under workerd', () => {
     expect(result.result).toEqual({
       cwd: WORKSPACE_ROOT,
       nextTick: 'function',
-      missing: { code: 'ENOENT', path: `${WORKSPACE_ROOT}/skills` },
+      missing: { code: 'ENOENT', path: 'skills' },
     });
   });
 

@@ -1,8 +1,24 @@
 diff --git a/dist/node-compat/fs.js b/dist/node-compat/fs.js
-index e58cf64276ba6db4e44ba5d13226f5707410b802..662537218e88ced39545a930e3baaa183ea4aac1 100644
+index e58cf64276ba6db4e44ba5d13226f5707410b802..7bff5a14d2992b0e3bf0ee412937f0d202f8a9ba 100644
 --- a/dist/node-compat/fs.js
 +++ b/dist/node-compat/fs.js
-@@ -769,7 +769,16 @@ export function createNodeFs(faces, { cwd, stdin, reachStreams }) {
+@@ -229,9 +229,14 @@ export function createNodeFs(faces, { cwd, stdin, reachStreams }) {
+         const at = namedPath(cwd, path);
+         const abs = at.abs;
+         try {
+-            if (encoding) {
++            // Text is read as text; any other encoding (base64, hex, latin1) is
++            // the file's bytes in it, as Node's Buffer#toString gives them.
++            if (encoding && /^utf-?8$/i.test(encoding)) {
+                 return yield* step('open', at, (f) => f.readFileString(abs));
+             }
++            if (encoding) {
++                return Buffer.from(yield* step('open', at, (f) => f.readFile(abs))).toString(encoding);
++            }
+             // Return Buffer (not raw Uint8Array) so .toString() yields UTF-8 text.
+             // Many packages do JSON.parse(fs.readFileSync('package.json')) without
+             // encoding, expecting Buffer.toString() to return the file contents.
+@@ -769,7 +774,16 @@ export function createNodeFs(faces, { cwd, stdin, reachStreams }) {
      // The engine's own read and write streams, over this filesystem: Node's
      // ReadStream and WriteStream read and write through the `fs` they are given.
      // A face without descriptors has none to give them (ENOSYS).
@@ -106,10 +122,26 @@ index 4d395cc08b5e91ec1e09d8254fccbe577e17e009..9266a76c128372453a7b3ce5a0751371
      lstat: 'joined',
      utimes: 'once',
 diff --git a/src/node-compat/fs.ts b/src/node-compat/fs.ts
-index 5ebc0b5bc45614c0fd42679bec36b1c1cc438565..6fb52d8f5bd465325a1e48da0ed3d9022f4a671c 100644
+index 5ebc0b5bc45614c0fd42679bec36b1c1cc438565..d2fc29c96f07f6fe0808143c2405ae3706f945db 100644
 --- a/src/node-compat/fs.ts
 +++ b/src/node-compat/fs.ts
-@@ -902,8 +902,13 @@ export function createNodeFs(faces: NodeFaces, { cwd, stdin, reachStreams }: Nod
+@@ -334,9 +334,14 @@ export function createNodeFs(faces: NodeFaces, { cwd, stdin, reachStreams }: Nod
+     const at = namedPath(cwd, path);
+     const abs = at.abs;
+     try {
+-      if (encoding) {
++      // Text is read as text; any other encoding (base64, hex, latin1) is the
++      // file's bytes in it, as Node's Buffer#toString gives them.
++      if (encoding && /^utf-?8$/i.test(encoding)) {
+         return yield* step('open', at, (f) => f.readFileString(abs));
+       }
++      if (encoding) {
++        return Buffer.from(yield* step('open', at, (f) => f.readFile(abs))).toString(encoding);
++      }
+       // Return Buffer (not raw Uint8Array) so .toString() yields UTF-8 text.
+       // Many packages do JSON.parse(fs.readFileSync('package.json')) without
+       // encoding, expecting Buffer.toString() to return the file contents.
+@@ -902,8 +907,13 @@ export function createNodeFs(faces: NodeFaces, { cwd, stdin, reachStreams }: Nod
  
    // The engine's own read and write streams, over this filesystem: Node's
    // ReadStream and WriteStream read and write through the `fs` they are given.

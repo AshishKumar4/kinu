@@ -1088,6 +1088,8 @@ export { computerProcessResume, stopComputerProcessJob } from './jobs/computer-p
 
 export { isWorkspaceProcessJob, stopWorkspaceProcessJob, workspaceProcessJobRuns } from './jobs/workspace-process';
 
+export { onceMoreIfNotAdmitted } from './execution/not-admitted';
+
 export { ComputerProcessEnds, jobState, type ComputerProcessJobRows, type ComputerProcessJobState } from './execution/computer-process-ends';
 
 export {

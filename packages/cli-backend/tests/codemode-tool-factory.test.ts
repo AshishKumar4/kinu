@@ -572,7 +572,8 @@ test('child_process hands a program exactly what the command wrote, whatever it 
   expect(await execute({ code: program })).toMatchObject({ result: { stdout: 'out', stderr: 'warned' } });
 });
 
-test('a failed fs call keeps the code and path the workspace names, once', async () => {
+// Node names the path as the program gave it (Nimbus's node-compat, ask 67), and the workspace's own words once.
+test('a failed fs call keeps the code the workspace names, and the path as given, once', async () => {
   const workspace: CodemodeProvider = {
     name: 'workspace',
     tools: {
@@ -591,7 +592,7 @@ test('a failed fs call keeps the code and path the workspace names, once', async
     code: "// List a file as if it were a directory\nreturn await require('fs/promises').readdir('notes.md').then(() => 'listed', (error) => [error.code, error.message]);",
   });
 
-  expect(out.result).toEqual(['ENOTDIR', `ENOTDIR: not a directory, scandir '${WORKSPACE_ROOT}/notes.md'`]);
+  expect(out.result).toEqual(['ENOTDIR', "ENOTDIR: not a directory, scandir 'notes.md'"]);
 });
 
 test('a synchronous call fails naming the awaited call that replaces it, and that call runs', async () => {

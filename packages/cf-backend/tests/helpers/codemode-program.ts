@@ -6,8 +6,8 @@
  */
 import * as v from 'valibot';
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from '@kinu.run/core';
-import vendor from 'virtual:kinu-slate-vendor';
-import { NODE_COMPAT_MODULE, renderToolsPrelude } from '../../src/codemode-sandbox';
+import { renderToolsPrelude } from '../../src/codemode-sandbox';
+import { NODE_COMPAT_MODULE, nodeCompatSource } from '../../src/node-compat-module';
 
 /** The namespaces a program sees: absent ones are left unbound, as an actor that does not wire them leaves them. */
 export interface ProgramNamespaces {
@@ -21,7 +21,7 @@ export async function runProgram<Answer>(body: string, namespaces: ProgramNamesp
   // The prelude imports the shim and Nimbus's node-compat by their module names, which only the sandbox's loader
   // resolves: here, data URLs of the same sources.
   const shim = `data:text/javascript;base64,${Buffer.from(KINU_NODE_MODULE_SOURCE).toString('base64')}`;
-  const compat = `data:text/javascript;base64,${Buffer.from(vendor.nodeCompat).toString('base64')}`;
+  const compat = `data:text/javascript;base64,${Buffer.from(await nodeCompatSource()).toString('base64')}`;
 
   const prelude = renderToolsPrelude([], { workspace: 'kinu-test', cwd })
     .replace(`"./${KINU_NODE_MODULE_NAME}"`, JSON.stringify(shim))

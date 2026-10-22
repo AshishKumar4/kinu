@@ -45,9 +45,11 @@ export function createProcess(cwd) {
  *  refused or could not be made says nothing of whether the file is there, so an append never reads it as empty. */
 const ERRNO_OF_REASON = { missing: 'ENOENT', denied: 'EACCES', bad_input: 'EINVAL', unsupported: 'ENOTSUP', timeout: 'ETIMEDOUT', cancelled: 'ECANCELED' };
 
-/** A failure as Node's fs reads one from the files it is given: its errno, the syscall and the path, in Node's words. */
+/** A failure as Node's fs reads one from the files it is given: its errno, the syscall and the path, in Node's words,
+ *  the path said once where the text names it already. */
 function nodeError(code, text, syscall, path) {
-  return Object.assign(new Error(code + ': ' + text + ', ' + syscall + " '" + path + "'"), { code, syscall, path });
+  const named = text.includes("'" + path + "'") ? text : text + ', ' + syscall + " '" + path + "'";
+  return Object.assign(new Error(code + ': ' + named), { code, syscall, path });
 }
 
 /** A member's value, or its refusal thrown with the errno its text names, else its reason's, else EIO. */
@@ -67,6 +69,22 @@ const ERRNO_OF_TEXT = [
 
 function shellQuote(value) {
   return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
+/** An argument as a suggestion can repeat it: short JSON, else an ellipsis. */
+function shownArg(value) {
+  const json = typeof value === 'function' ? undefined : JSON.stringify(value);
+  return json !== undefined && json.length <= 80 ? json : '...';
+}
+
+/**
+ * A synchronous Node call. Nothing in the sandbox can block on the workspace (workerd, 2026-09-23: "Atomics.wait cannot
+ * be called in this context"), so it names the awaited call that replaces it, written out for this one.
+ */
+function asyncOnly(name, rewrite) {
+  return (...args) => {
+    throw new Error(name + ' cannot run here: this sandbox reaches your workspace only asynchronously. Write instead: ' + rewrite(args));
+  };
 }
 
 /**
@@ -101,6 +119,15 @@ function fromBase64(text) {
 }
 
 /**
+ * A path as the host resolves it. One the program named under a root (\`vfs://notes/a.md\`) reaches here as Node's path
+ * rules joined it onto the working directory (\`<cwd>/vfs:/notes/a.md\`), and goes to the host as it was written.
+ */
+function hostPath(path) {
+  const at = path.search(/\/[^\s/:]+:\//);
+  return at < 0 ? path : path.slice(at + 1).replace(':/', '://');
+}
+
+/**
  * The workspace's files as Node's fs asks for them (Nimbus's node-compat \`NodeFiles\`), through the program's file
  * namespace, so its gates and records apply as to any of its calls. What the namespace has no member for (a directory
  * made or removed, a rename, a copy) is the workspace's own command. Links, modes and descriptors are not here: Node's
@@ -108,7 +135,7 @@ function fromBase64(text) {
  */
 function workspaceFiles(workspace) {
   async function stat(path) {
-    const found = await answered(workspace.fs.stat(path), 'stat', path);
+    const found = await answered(workspace.fs.stat(hostPath(path)), 'stat', path);
     const at = found.mtimeMs;
     return {
       dev: 0, ino: 0, nlink: 1, type: found.isDir ? 'directory' : 'file', size: found.size, ctime: at, atime: at, mtime: at,
@@ -116,10 +143,11 @@ function workspaceFiles(workspace) {
     };
   }
   /** The file's bytes exactly, as the file plane reads them (file.text with base64), for a file that is not text too. */
-  const readFile = async (path) => fromBase64(await answered(workspace.fs.text(path, { encoding: 'base64' }), 'open', path));
+  const readFile = async (path) => fromBase64(await answered(workspace.fs.text(hostPath(path), { encoding: 'base64' }), 'open', path));
   /** A string is written as its text; bytes as the bytes exactly. */
   async function writeFile(path, data) {
-    await answered(typeof data === 'string' ? workspace.fs.write(path, data) : workspace.fs.write(path, toBase64(data), { encoding: 'base64' }), 'open', path);
+    const at = hostPath(path);
+    await answered(typeof data === 'string' ? workspace.fs.write(at, data) : workspace.fs.write(at, toBase64(data), { encoding: 'base64' }), 'open', path);
   }
   /** \`command\`, run for \`syscall\` on \`path\`: its failure as the errno its words name. */
   async function run(command, syscall, path) {
@@ -131,7 +159,7 @@ function workspaceFiles(workspace) {
   }
   return {
     stat, lstat: stat, readFile, writeFile,
-    readFileString: async (path) => await answered(workspace.fs.text(path), 'open', path),
+    readFileString: async (path) => await answered(workspace.fs.text(hostPath(path)), 'open', path),
     // Absent only where the plane says so: a stat refused otherwise says nothing of the file, so access fails with its errno.
     async exists(path) {
       const [found] = await Promise.allSettled([stat(path)]);
@@ -143,7 +171,7 @@ function workspaceFiles(workspace) {
       const entries = [];
       // A listing comes a page at a time; Node's is the whole directory. The plane names no entry's type: fs asks.
       for (let offset = 0; ;) {
-        const page = await answered(workspace.fs.list(path, { offset }), 'scandir', path);
+        const page = await answered(workspace.fs.list(hostPath(path), { offset }), 'scandir', path);
         entries.push(...page.entries.map((name) => ({ name, type: 'unknown' })));
         if (!page.truncated || page.truncated.next >= page.truncated.total || page.entries.length === 0) return entries;
         offset = page.truncated.next;
@@ -177,14 +205,15 @@ function shellLine(argv) {
 
 /**
  * A program child_process starts (Nimbus's node-compat \`NodeStart\`), on the machine whose files its cwd is, through
- * that machine's own exec, its argv quoted as one command. That exec answers at the command's exit, so its output
- * comes then; it is given no stdin, it runs with the machine's own environment, not \`env\`, and a kill does not reach it.
+ * that machine's own exec, its argv quoted as one command; one in the program's own directory, where the shell starts.
+ * That exec answers at the command's exit, so its output comes then; it is given no stdin, it runs with the machine's
+ * own environment, not \`env\`, and a kill does not reach it.
  */
-function machineStart(machines) {
+function machineStart(machines, home) {
   return async (program, cancel) => {
     if (cancel.aborted) throw Object.assign(new Error('spawn ' + program.argv[0] + ' ECANCELED'), { code: 'ECANCELED' });
     const command = shellLine(program.argv) ?? program.argv.map(shellQuote).join(' ');
-    const ran = execParts(machines, command, program.cwd)
+    const ran = execParts(machines, command, program.cwd === home ? undefined : program.cwd)
       .catch((cause) => ({ exitCode: 126, stdout: '', stderr: cause && cause.message ? cause.message : String(cause) }));
     const encoder = new TextEncoder();
     const output = new ReadableStream({
@@ -200,7 +229,8 @@ function machineStart(machines) {
 }
 
 /** Node's child_process, whose \`exec\` and \`execFile\` given no callback also resolve, awaited, to { stdout, stderr }
- *  (util.promisify's answer, a failure's error carrying both), as this sandbox's programs have always awaited them. */
+ *  (util.promisify's answer, a failure's error carrying both), as this sandbox's programs have always awaited them; its
+ *  synchronous forms name that awaited call. */
 function awaitable(childProcess) {
   const custom = Symbol.for('nodejs.util.promisify.custom');
   const thenable = (run) => Object.defineProperty((...args) => {
@@ -210,7 +240,25 @@ function awaitable(childProcess) {
     promise.catch(() => {});
     return Object.assign(promise.child, { then: promise.then.bind(promise), catch: promise.catch.bind(promise), finally: promise.finally.bind(promise) });
   }, custom, { value: run[custom] });
-  return { ...childProcess, exec: thenable(childProcess.exec), execFile: thenable(childProcess.execFile) };
+  const viaExec = (args) => 'const { stdout } = await require("child_process").exec(' + JSON.stringify(String(args[0])) + ')';
+  const viaExecFile = (args) => 'const { stdout } = await require("child_process").execFile(' + JSON.stringify(String(args[0])) + ', ' + JSON.stringify(Array.isArray(args[1]) ? args[1].map(String) : []) + ')';
+  return {
+    ...childProcess, exec: thenable(childProcess.exec), execFile: thenable(childProcess.execFile),
+    execSync: asyncOnly('child_process.execSync', viaExec),
+    execFileSync: asyncOnly('child_process.execFileSync', viaExecFile),
+    spawnSync: asyncOnly('child_process.spawnSync', viaExecFile),
+  };
+}
+
+/** Node's fs, whose synchronous forms name the awaited call that replaces each. */
+function awaitableFs(fs) {
+  const named = { ...fs };
+  for (const name of Object.keys(fs)) {
+    const base = name.slice(0, -'Sync'.length);
+    if (!name.endsWith('Sync') || typeof fs.promises[base] !== 'function') continue;
+    named[name] = asyncOnly('fs.' + name, (args) => 'await require("fs/promises").' + base + '(' + args.slice(0, 2).map(shownArg).join(', ') + ')');
+  }
+  return named;
 }
 
 /**
@@ -218,9 +266,9 @@ function awaitable(childProcess) {
  * \`createNodeCompat\`: Nimbus's node-compat (\`@nimbus-sh/core/node-compat\`), Node's fs and child_process written once.
  */
 export function createRequire({ workspace, machines, builtins, cwd, createNodeCompat }) {
-  const { fs, fsPromises, childProcess } = createNodeCompat({ files: workspaceFiles(workspace), start: machineStart({ ...machines, workspace }) }, { cwd });
+  const { fs, fsPromises, childProcess } = createNodeCompat({ files: workspaceFiles(workspace), start: machineStart({ ...machines, workspace }, cwd) }, { cwd });
   const table = {
-    fs, 'fs/promises': fsPromises, child_process: awaitable(childProcess),
+    fs: awaitableFs(fs), 'fs/promises': fsPromises, child_process: awaitable(childProcess),
   };
   for (const [name, module] of Object.entries(builtins)) {
     table[name.slice('node:'.length)] = module;

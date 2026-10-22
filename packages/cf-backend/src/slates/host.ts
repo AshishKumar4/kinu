@@ -7,7 +7,7 @@ import {
   type ServerSend, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateCallFrom, type SlateLaunch, type SlateLineage, type ToolContract,
 } from '@kinu.run/core/slates';
 import {
-  ingressAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
+  ingressAdmitted, onceMoreIfNotAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
   SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation, slateAddressImpact, SLATE_DRIVEN_MEMBERS,
   isJsonAnswer, JsonValueSchema, isSlateMethodName, answeredRefusal, reoriginateRequest,
   escapeHtml, keptSlateContext, publicPage, sharedBuildRefusal, VIEWER_EXCHANGE_PATH,
@@ -21,7 +21,6 @@ import type { ApprovalSpend } from '@kinu.run/core';
 import { Effect } from 'effect';
 import { ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
-import { onceMoreIfNotAdmitted } from './not-admitted';
 import { type SlateBinding, type SlateBindingProps } from './bindings';
 import { codemodeEgress } from '../codemode-egress-mint';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
