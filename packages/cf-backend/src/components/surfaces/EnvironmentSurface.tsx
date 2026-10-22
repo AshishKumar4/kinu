@@ -208,7 +208,10 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
 
   const execByName = useMemo(() => new Map(executors.map((e) => [e.name, e])), [executors]);
   const account = useAccountMachines(workspaceName);
-  const environments = useMemo(() => machinesOf(mounts, account.machines), [mounts, account.machines]);
+  // The PCs wait for the workspace's own machines: listed first, a PC is chosen by default, and the computer arriving
+  // after it takes the choice and remounts the row under the person's press. A failed read lists them all the same.
+  const mountsRead = loaded !== null || resource.status === "error";
+  const environments = useMemo(() => (mountsRead ? machinesOf(mounts, account.machines) : []), [mountsRead, mounts, account.machines]);
 
   // Default selection: the environment the agent last worked in.
   const defaultMachine = useMemo(() => {
