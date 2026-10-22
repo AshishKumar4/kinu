@@ -172,11 +172,6 @@ export function renderForAdvisor(message: ModelMessage, inProgress: boolean): st
   return `${inProgress ? '[in progress] ' : ''}${message.role}:\n${body}`;
 }
 
-/** The rendered form of a note the agent reads: oh-my-pi's, so a model weighs it as advice, not an order. */
-export function advisoryText(note: AdvisorNote): string {
-  return `<advisory severity="${note.severity}" guidance="weigh, don't blindly obey">${note.note}</advisory>`;
-}
-
 /** One `advise` call's note, or null where it is not one: an unknown severity or class answers nothing. */
 export function adviseNote(input: JsonValue): AdvisorNote | null {
   const parsed = v.safeParse(AdviseSchema, input);
@@ -253,10 +248,11 @@ export class SessionAdvisor {
         this.step = ctx.stepNumber;
         this.read(ctx.produced, true);
       },
-      // The last step was read at its end: the turn waits for that review, then takes no more notes as its own.
+      // The last step was read at its end, and the turn waits for that review. No step follows it, so from here a note
+      // is the turn's after it: a nit or a concern is kept unsaid, and a blocker opens the next turn.
       onTurnEnd: async () => {
-        await this.settled(this.deps.finalWaitMs ?? FINAL_REVIEW_WAIT_MS);
         this.turnRunning = false;
+        await this.settled(this.deps.finalWaitMs ?? FINAL_REVIEW_WAIT_MS);
       },
     };
   }
@@ -389,7 +385,7 @@ export class SessionAdvisor {
 
     notes.recordAdvisorNote(note, turnId, true);
 
-    if (note.severity === 'blocker' && sent === 'mid-turn') await this.deps.interrupt();
+    if (note.severity === 'blocker' && sent === 'mid-turn' && this.turnRunning) await this.deps.interrupt();
 
     return sent === 'mid-turn' ? 'Said: the agent reads it at its next step.' : 'Said.';
   }

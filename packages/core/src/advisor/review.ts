@@ -322,10 +322,15 @@ export function advisedTurnOf(lane: EvolutionLaneRequest): string | null {
 /** A runtime-authored message says so (as {@link COMPLETION_GATE_HEADER}): the model only has the prose, and would
  *  obey an advisory it read as the user's instruction. */
 export const ADVISOR_HEADER =
-  '[Advisor: a second model reviewed the turn you just finished. This is the Kinu '
+  '[Advisor: a second model is reviewing your work as you go. This is the Kinu '
   + 'runtime, not the user. Weigh it against what you know; it may be wrong.]';
 
-const advisorPrefix = (severity: AdvisorSeverity): string => `${ADVISOR_HEADER}\n\n${ADVISOR_SEVERITY_LABEL[severity]}: `;
+/** Every advisor header opens so, this build's and the hire's before it, whose rows a card still reads. */
+const ADVISOR_HEADER_OPENING = '[Advisor: ';
+
+const labelLine = (severity: AdvisorSeverity): string => `\n\n${ADVISOR_SEVERITY_LABEL[severity]}: `;
+
+const advisorPrefix = (severity: AdvisorSeverity): string => `${ADVISOR_HEADER}${labelLine(severity)}`;
 
 function advisorSignalText(note: AdvisorNote): string {
   return `${advisorPrefix(note.severity)}${note.note}`;
@@ -337,10 +342,12 @@ const FORWARDED_ACTOR_LINE = /^\[Actor [^\]\n]*\]\n/u;
 /** The note alone, from a row written before it was kept beside its text: the text less the header the agent reads it
  *  under, and less the actor line a parent's copy opens with; null when the text is not in that shape. */
 export function keptAdvisorNote(text: string, severity: AdvisorSeverity): string | null {
-  const prefix = advisorPrefix(severity);
   const said = text.replace(FORWARDED_ACTOR_LINE, '');
+  const label = said.indexOf(labelLine(severity));
 
-  return said.startsWith(prefix) ? said.slice(prefix.length) : null;
+  if (!said.startsWith(ADVISOR_HEADER_OPENING) || label < 0 || said.lastIndexOf(']', label) < 0) return null;
+
+  return said.slice(label + labelLine(severity).length);
 }
 
 /** What the advisor is hired on; recorded at the turn's end, so a replay reads the tool surface that turn had.

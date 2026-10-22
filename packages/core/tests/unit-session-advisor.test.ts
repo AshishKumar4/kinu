@@ -5,7 +5,7 @@ import { tool, jsonSchema, type ModelMessage } from 'ai';
 import { createTestSql } from '@kinu.run/test-utils';
 import { createTestActor } from './helpers';
 import { SessionAdvisor, ADVISOR_NOTES_PER_UPDATE, type AdvisedTurn, type AdvisorModel, type AdvisorReply } from '../src/advisor/session-advisor';
-import type { AdvisorNote } from '../src/advisor/review';
+import { ADVISOR_HEADER, ADVISOR_SEVERITY_LABEL, keptAdvisorNote, type AdvisorNote } from '../src/advisor/review';
 import type { AgentSignal, SendOutcome } from '../src/types/signals';
 import type { JsonValue } from '../src/utils/json';
 
@@ -78,11 +78,20 @@ const step = (text: string): ModelMessage[] => [{ role: 'assistant', content: [{
 
 const turnOf = (model: AdvisorModel, tools: AdvisedTurn['tools'] = {}): AdvisedTurn => ({ turnId: 't1', model, tools, reachable: ['file', 'agents'] });
 
-async function runTurn(advisor: SessionAdvisor, turn: AdvisedTurn, steps: readonly ModelMessage[][]): Promise<void> {
+/** A turn of `steps`, each outlasting the review it starts (a model call takes longer than a scripted review), unless
+ *  `overlapping`: then the steps end at once and the turn ends with its reviews still to run. */
+async function runTurn(advisor: SessionAdvisor, turn: AdvisedTurn, steps: readonly ModelMessage[][], overlapping = false): Promise<void> {
   const hooks = advisor.extension(turn);
-  await hooks.onTurnStart?.({ system: '', history: [{ role: 'user', content: 'Fix the ledger rounding.' }] });
+  const stepTakes = async () => { if (!overlapping) await advisor.settled(1000); };
 
-  for (const [at, produced] of steps.entries()) await hooks.onStepEnd?.({ stepNumber: at, produced });
+  await hooks.onTurnStart?.({ system: '', history: [{ role: 'user', content: 'Fix the ledger rounding.' }] });
+  await stepTakes();
+
+  for (const [at, produced] of steps.entries()) {
+    await hooks.onStepEnd?.({ stepNumber: at, produced });
+    await stepTakes();
+  }
+
   await hooks.onTurnEnd?.({ text: '', responseMessages: [] });
 }
 
@@ -140,12 +149,30 @@ describe('the in-session advisor', () => {
     const gate = Promise.withResolvers<AdvisorReply>();
     const { model } = scripted([() => gate.promise, advising({ note: 'The sum is computed twice over the same rows.', severity: 'blocker' })]);
     outcome('queued');
-    await runTurn(advisor, turnOf(model), [step('done')]);
+    await runTurn(advisor, turnOf(model), [step('done')], true);
     gate.resolve(advising({ note: 'A cheaper index exists for this lookup; consider it later.', severity: 'concern' }));
     await advisor.settled(1000);
 
     expect(recorded.map((entry) => [entry.note.severity, entry.spoken])).toEqual([['concern', false], ['blocker', true]]);
     expect({ said: sent.map((signal) => signal.severity), interrupts: interrupts() }).toEqual({ said: ['blocker'], interrupts: 0 });
+  });
+
+  test("the last step's review is waited for, and only its blocker is said", async () => {
+    const { advisor, sent, recorded, interrupts } = harness();
+
+    const { model } = scripted([
+      silent,
+      advising(
+        { note: 'The summary claims the tests passed; none ran.', severity: 'blocker' },
+        { note: 'The changelog entry could name the issue it closes.', severity: 'nit' },
+      ),
+    ]);
+
+    // The request's review, then the last step's: the turn's end waits for the second.
+    await runTurn(advisor, turnOf(model), [step('all tests pass')], true);
+
+    expect({ said: sent.map((signal) => signal.severity), kept: recorded.map((entry) => [entry.note.severity, entry.spoken]), interrupts: interrupts() })
+      .toEqual({ said: ['blocker'], kept: [['blocker', true], ['nit', false]], interrupts: 0 });
   });
 
   test(`says at most ${String(ADVISOR_NOTES_PER_UPDATE)} notes short of a blocker in one update`, async () => {
@@ -190,5 +217,13 @@ describe('the in-session advisor', () => {
     const { sql, execRaw } = createTestSql();
 
     expect(createTestActor(sql, execRaw, crypto.randomUUID(), 'fresh').config.getAdvisorEnabled()).toBe(false);
+  });
+
+  test("a card reads a blocker's note out of its row, this build's header and the hire's before it", () => {
+    const hire = '[Advisor: a second model reviewed the turn you just finished. This is the Kinu runtime, not the user. Weigh it against what you know; it may be wrong.]';
+    const said = (header: string) => `${header}\n\n${ADVISOR_SEVERITY_LABEL.blocker}: Stop and check the backup.`;
+
+    expect([said(ADVISOR_HEADER), said(hire)].map((text) => keptAdvisorNote(text, 'blocker'))).toEqual(['Stop and check the backup.', 'Stop and check the backup.']);
+    expect(keptAdvisorNote(`${ADVISOR_SEVERITY_LABEL.blocker}: not an advisor's row`, 'blocker')).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 import { Effect } from 'effect';
 import { KinuError, settleSync } from '@kinu.run/core/obs';
-import { renderIssuesUnquoted, type JsonValue, type RoutedLLM, type TemporaryAgentPort, type TemporaryRunRequest } from '@kinu.run/core';
+import { renderIssuesUnquoted, type JsonValue, type RoutedLLM } from '@kinu.run/core';
 import type { ToolExecutionOptions } from 'ai';
 import * as v from 'valibot';
 
@@ -88,39 +88,4 @@ export function toolExecute<Args, Result>(
       return await execute(args, options);
     };
   }));
-}
-
-/** A hire port whose advisors answer when the test says so, as the ingress stores a subagent's answer. */
-export interface ScriptedAdvisorPort extends TemporaryAgentPort {
-  /** Every brief an advisor was hired on, in order. */
-  readonly tasks: readonly TemporaryRunRequest[];
-  /** Every advisor still working answers `reply`. */
-  answer(reply: string): void;
-}
-
-export function scriptedAdvisorPort(): ScriptedAdvisorPort {
-  const tasks: TemporaryRunRequest[] = [];
-  const lanes = new Map<string, NonNullable<ReturnType<TemporaryAgentPort['reclaim']>> & { readonly requestId: string }>();
-
-  return {
-    tasks,
-    start: async (request) => {
-      tasks.push(request);
-      const name = `ask-advisor-${String(tasks.length)}`;
-
-      if (request.lane !== undefined) lanes.set(name, { state: 'running', name, requestId: request.lane.requestId });
-
-      return { status: 'working', agent: name, lifetime: 'task', role: request.roleLabel, answer: '', transcript: 'kept' };
-    },
-    release: () => {},
-    reclaim: (lane) => [...lanes.values()].find((entry) => entry.requestId === lane.requestId) ?? null,
-    answered: () => [...lanes.values()].flatMap((entry) => (entry.state === 'answered'
-      ? [{ name: entry.name, lane: { requestId: entry.requestId }, status: entry.status, answer: entry.answer }] : [])),
-    forget: (name) => { lanes.delete(name); },
-    answer: (reply) => {
-      for (const entry of lanes.values()) {
-        if (entry.state === 'running') lanes.set(entry.name, { state: 'answered', name: entry.name, requestId: entry.requestId, status: 'completed', answer: reply });
-      }
-    },
-  };
 }

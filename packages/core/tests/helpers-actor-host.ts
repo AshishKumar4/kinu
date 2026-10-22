@@ -1,6 +1,6 @@
 /** A real hosted actor per head and node over the caller's one workspace database, via the production
  *  directory, `createActorHost` and `seedActorLoop`; a mocked session would pass while writing no claim. */
-import { withHostDeliveries } from '@kinu.run/test-utils';
+import { unobservedSpend, withHostDeliveries, type ScriptedAdvisor } from '@kinu.run/test-utils';
 import type { Database } from 'bun:sqlite';
 import { makeSqlExec, storesFor } from './helpers';
 import { WorkspaceJobAuthorities } from '../src/jobs/authorities';
@@ -33,7 +33,6 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import type { BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Identity } from '../src/types/primitives';
-import type { TemporaryAgentPort } from '../src/types/subagents';
 import { historyTurnPairs } from '../src/identity/conversation-store';
 
 type FixtureSeat = HostedNodeSeat<HostedActor>;
@@ -151,12 +150,12 @@ export function hostedSeatsOver(input: {
   readonly autoEvolve?: boolean;
   /** Spans every seat's turns. */
   readonly tracing?: AgentTracing;
-  /** The port every seat hires its advisor through; absent, no seat is reviewed. */
-  readonly advisorPort?: TemporaryAgentPort;
+  /** The model every seat's advisor runs on; absent, no seat is reviewed. */
+  readonly advisor?: ScriptedAdvisor;
   /** The model every seat's turns run on; read per turn. Absent, a seat that runs a turn refuses it. */
   readonly model?: (spec: string) => LanguageModel;
 }): HostedSeats {
-  const { rt, db } = input;
+  const { rt, db, advisor } = input;
   const runId = input.runId ?? 'run-hosted-fixture';
   const { sql, execRaw } = rt.storage;
   const exec = makeSqlExec(db);
@@ -237,7 +236,7 @@ export function hostedSeatsOver(input: {
     orchestrationFor,
     // No run events published; a suite asserting context-edit audit rows binds its own.
     contextEvents: () => null,
-    advisorPort: () => input.advisorPort ?? null,
+    ...(advisor !== undefined && { advisorLane: () => ({ bind: () => ({ model: advisor.model }), spend: { report: unobservedSpend } }) }),
   });
 
   const seat = async (
