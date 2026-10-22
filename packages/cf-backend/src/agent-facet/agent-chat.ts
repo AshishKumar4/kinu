@@ -7,7 +7,7 @@ import {
   actorPolicy, actorTerminalEffects, withCompactionTrigger, type ActorPolicy,
   bindRoute, completeOnRoute, ownProfileChoices, resolveTurnProfile, resolveModelRoute, routedLlm, suggestWorkspaceTitle, writePhaseLines, type PhaseLinePorts,
   type ActorTurnLease, type BroadcastEvent, type ChatTurnInput, type TurnOpeningAsk, type JsonObject, type PlanReview, type ComposedRequest, type HostedActor, type OwedEffect, type OwedTerminalEffectsInput,
-  type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalActor, type TerminalTurnFacts, type ProfileAuthorityInputs, type ResolvedTurnProfile,
+  type InspectedWork, type PreparedAgentTurn, type PreparedTurn, type TerminalTurnFacts, type ProfileAuthorityInputs, type ResolvedTurnProfile,
   type SessionEvent, type TurnAssemblyRequest, type WorkMode, type OwnerQuestionStore, type RunEndOutcome, type DeliveredRun, type AgentOwes, type AgentReport, type ClaimedRound,
   refusedRun, turnAttemptOf, endedStandingOf, WORKSPACE_RUN_ID,
 } from '@kinu.run/core';
@@ -55,8 +55,6 @@ export class FacetChat {
     return actorPolicy(this.deps.actor.record);
   }
 
-  /** Whether an advisor reviews the turn running. */
-  private reviewsTurns = false;
 
   /** Whether the turn running answers the agent's hirer (a delegated task), not its owner. */
   private parentDriven = false;
@@ -302,7 +300,6 @@ export class FacetChat {
 
     if (owes !== null) this.namedWake = owes.next;
     database.prepare(bound, prepared);
-    this.reviewsTurns = prepared.reviewsTurns;
     // A recovered execution assembles on what it froze as it first bound, and resolves nothing (D5).
     const { frozen } = round;
 
@@ -394,9 +391,6 @@ export class FacetChat {
       evolutionEnabled: false,
     };
 
-    // Whether it reviews turns is the workspace's to say, which holds the port its advisor is hired through.
-    const advisor: TerminalActor['advisor'] = { reviewsTurns: this.reviewsTurns, snapshot: (turn, reachable) => session.advisor.snapshot(turn, reachable) };
-
     // An assignment's turn is keyed by it, so a re-run after a reset answers it once.
     const turnReport = input.turnEnd === null ? {} : {
       turnReport: { ...input.turnEnd, sequenceId: input.turnEnd.taskId ?? `${this.deps.actor.record.actorId}:turn-end:${input.messageId}` },
@@ -405,7 +399,7 @@ export class FacetChat {
     // Its tools' receipts were kept in the workspace, which drops them once the run settled.
     return [
       ...slates,
-      ...declareTerminalRoster(facts, { role: { kind: 'agent', opensConversation: input.opensConversation }, advisor, turn: scoped, reachableTools: input.reachableTools }, { ...chatTurnParts(input), ...turnReport }),
+      ...declareTerminalRoster(facts, { role: { kind: 'agent', opensConversation: input.opensConversation }, turn: scoped, reachableTools: input.reachableTools }, { ...chatTurnParts(input), ...turnReport }),
       runSettleEffect(input.messageId, { turnId, runId, epoch }),
     ];
   }
@@ -424,7 +418,6 @@ export class FacetChat {
       effects: {
         ...chatTerminalEffects({ chat: () => this.session, orchestrator: () => actor.session.orchestrator, engine: { learnFromTurn: async () => {} } }),
         ...actorTerminalEffects({
-          hireAdvisor: (advisor) => workspace.hireAdvisor(advisor),
           applyTitle: async (subject) => {
             await this.applyTitle(subject);
 

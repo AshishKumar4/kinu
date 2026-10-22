@@ -1767,10 +1767,12 @@ export { openingList, openingListOf, listedOn } from './read-models/opening';
 
 export { AgentOrchestrator, drainPendingEvents, type AgentOrchestratorDeps } from './orchestrator/agent-orchestrator';
 
-export { ActorAdvisor, type ActorAdvisorContext } from './advisor/actor-advisor';
+export { SessionAdvisor, type AdvisorContext } from './advisor/session-advisor';
+
+export { type AdvisorLane } from './advisor/advisor-ports';
 
 export {
-  EvolutionLanes, improvementLanesOpen, evolutionPassOpen, recordedTurn, type EvolutionLanesDeps, type TurnContinuity,
+  EvolutionLanes, evolutionPassOpen, recordedTurn, type EvolutionLanesDeps, type TurnContinuity,
 } from './orchestrator/evolution-lanes';
 
 export { ActorSession, CLEAR_NEEDS_IDLE, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
@@ -2162,7 +2164,6 @@ export {
   ADVISOR_EVENT_TYPE,
   ADVISOR_NOTE_MAX_CHARS,
   ADVISOR_SEVERITIES,
-  AdvisorRowDataSchema,
   ADVISOR_SEVERITY_LABEL,
   ADVISOR_SEVERITY_METADATA_KEY,
   ADVISOR_NOTE_METADATA_KEY,
@@ -2171,17 +2172,11 @@ export {
   DEFAULT_ADVISOR_MIN_SEVERITY,
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,
-  judgeAdvisorReply,
   sayAdvisorNote,
-  ADVISOR_ROLE_ID,
-  AdvisorRecoverySnapshotSchema,
-  buildAdvisorPrompt,
   isContentFree,
   isDuplicateNote,
   judgeNote,
   normalizeNote,
-  parseAdvisorReply,
-  type AdvisorRecoverySnapshot,
   type AdvisorNote,
   type AdvisorSeverity,
   type AdvisorRowData,
@@ -2721,7 +2716,7 @@ export {
 } from './mcp/servers';
 
 export type {
-  AgentTurnActivity, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentReview, AgentStanding, AgentStandingReport, AgentReport, AgentOwes, AdmittedDelivery, AgentSteps, RunEndOutcome, RunEndReport, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
+  AgentTurnActivity, AgentRecovery, AgentAnswer, AgentAnswerTexts, AgentStanding, AgentStandingReport, AgentReport, AgentOwes, AdmittedDelivery, AgentSteps, RunEndOutcome, RunEndReport, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
   AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subagents/agent-isolate';
 

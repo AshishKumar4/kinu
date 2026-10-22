@@ -74,8 +74,6 @@ function inertEngine(): AgentOrchestratorDeps['engine'] {
     recoverInterruptedWork: () => {},
     recentAdvisorNotes: () => [],
     recordAdvisorNote: () => { throw new Error('This fixture runs no advisor'); },
-    hasAdvisorNoteForTurn: () => false,
-    advisorNoteForTurn: () => null,
     sessionWindow: store,
     reviewTurn: async () => {},
     onSessionComplete: async () => {},

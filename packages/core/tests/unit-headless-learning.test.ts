@@ -2,7 +2,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** A headless actor learns only on the step clock; a positive control on the same turn shows the root would learn from it. */
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, expect, test } from 'bun:test';
-import { createTestRuntime, scriptedAdvisorPort, scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedAdvisor, scriptedTurnModel, withScriptedAdvisor } from '@kinu.run/test-utils';
 import type { LanguageModel } from 'ai';
 import { jsonSchema, tool } from 'ai';
 import { hostedSeatsOver, runningOn } from './helpers-actor-host';
@@ -15,7 +15,7 @@ import { listRecoveryFindings } from '../src/evolution/recovery';
 import { CONSECUTIVE_FAILURES_BEFORE_STEER } from '../src/orchestrator/turn-steering';
 import type { LLM } from '../src/types/primitives';
 import type { SqlExecutor } from '../src/types/primitives';
-import { ADVISOR_HEADER, type AdvisorSeverity } from '../src/advisor/review';
+import type { AdvisorSeverity } from '../src/advisor/review';
 
 const REFLECTION_PROMPT = 'should be done differently';
 
@@ -79,26 +79,24 @@ describe('a headless actor runs the step clock only', () => {
   const severities: readonly AdvisorSeverity[] = ['nit', 'concern', 'blocker'];
 
   for (const severity of severities) {
-    test(`${severity} advice answers after the turn ends and reaches its actor; only blockers reach its parent`, async () => {
+    test(`a hosted agent's turn is reviewed in its own session; its ${severity} note is its own, a blocker its parent's too`, async () => {
       const { rt, testSql } = createTestRuntime();
       rt.actor.config.setAdvisorEnabled(true);
       rt.actor.config.setAdvisorMinSeverity('nit');
       const note = 'The failing parser probe was reported as successful. Check its exit status.';
-      const advisor = scriptedAdvisorPort();
+      const advisor = scriptedAdvisor();
       await writeText(rt.storage.vfs, 'ADVISOR.md', 'Watch parser outcomes.');
-      const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true, advisorPort: advisor });
+      const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true });
       const requests: string[] = [];
 
-      const model = scriptedTurnModel({
-        doGenerate: async (options) => {
-          requests.push(JSON.stringify(options.prompt));
+      const model = withScriptedAdvisor(async (options) => {
+        requests.push(JSON.stringify(options.prompt));
 
-          return {
-            content: [{ type: 'text', text: 'The parser probe succeeded.' }],
-            finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
-          };
-        },
-      });
+        return {
+          content: [{ type: 'text', text: 'The parser probe succeeded.' }],
+          finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
+        };
+      }, advisor);
 
       const notesOf = (actorId: string) => rt.storage.sql<{ message: string }>`SELECT message FROM evolution_events
         WHERE actor_id = ${actorId} AND type = 'advisor_note'`;
@@ -107,33 +105,24 @@ describe('a headless actor runs the step clock only', () => {
         const seat = await seats.seat(name, 'agent');
         const before = windowRows(rt.storage.sql, rt.actor.actorId);
         const asked = requests.length;
+        advisor.advise({ note, severity, class: 'wrong-work' });
 
         const report = await runHeadInference(preparedHeadRun(headInput(), {
           ...runningOn(seat, model), tools: {}, stores: null, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
         }));
 
-        // The run ended on its own answer: the advisor was hired, and nothing waited on it.
+        // Its own turn made its one call; the reviews were the advisor's, and the turn's end waited for them.
         expect(report.status).toBe('completed');
         expect(requests).toHaveLength(asked + 1);
-        expect(notesOf(seat.actor.handle.actorId)).toEqual([]);
+        expect(notesOf(seat.actor.handle.actorId)).toEqual([{ message: note }]);
         expect(windowRows(rt.storage.sql, seat.actor.handle.actorId)).toBe(0);
         expect(windowRows(rt.storage.sql, rt.actor.actorId)).toBe(before);
-
-        // Its answer arrives through the ingress, which delivers what the actor holds.
-        advisor.answer(JSON.stringify({ note, severity, class: 'wrong-work' }));
-        await seat.actor.session.advisor.deliverAnswers();
-        await seat.actor.session.advisor.deliverAnswers();
-        expect(notesOf(seat.actor.handle.actorId)).toEqual([{ message: note }]);
       }
 
-      expect(advisor.tasks.map((task) => [task.role, task.lane?.requestId.startsWith('advisor:')])).toEqual([['advisor', true], ['advisor', true]]);
-      expect(advisor.tasks.every((task) => task.task.includes('Watch parser outcomes.'))).toBe(true);
-      const advice = seats.enqueued.filter((turn) => turn.metadata?.kinuEvent === 'advisor');
-      const own = advice.filter((turn) => !(turn.text ?? '').includes('[Actor '));
-      const parents = advice.filter((turn) => (turn.text ?? '').includes('[Actor '));
-      // Each actor's note opens its own next turn, once.
-      expect(own).toHaveLength(2);
-      expect(own.every((turn) => (turn.text ?? '').includes(ADVISOR_HEADER) && (turn.text ?? '').includes(note))).toBe(true);
+      // The advisor read the workspace's guidance, and its turn's own words, never the agent's history again.
+      expect(advisor.asked.length).toBeGreaterThanOrEqual(2);
+      expect(advisor.asked.every((request) => request.includes('Watch parser outcomes.'))).toBe(true);
+      const parents = seats.enqueued.filter((turn) => turn.metadata?.kinuEvent === 'advisor' && (turn.text ?? '').includes('[Actor '));
       expect(parents).toHaveLength(severity === 'blocker' ? 2 : 0);
 
       if (severity === 'blocker') {
@@ -143,22 +132,22 @@ describe('a headless actor runs the step clock only', () => {
     });
   }
 
-  test('a swarm node takes no input, so its turns hire no advisor', async () => {
+  test('a swarm node takes no input, so its turns are not reviewed', async () => {
     const { rt, testSql } = createTestRuntime();
     rt.actor.config.setAdvisorEnabled(true);
-    const advisor = scriptedAdvisorPort();
-    const seats = hostedSeatsOver({ rt, db: testSql.db, advisorPort: advisor });
+    const advisor = scriptedAdvisor();
+    const seats = hostedSeatsOver({ rt, db: testSql.db });
     const seat = await seats.seat('node', 'swarm');
 
     const report = await runHeadInference(preparedHeadRun(headInput(), {
-      ...runningOn(seat, scriptedTurnModel({ doGenerate: async () => ({
+      ...runningOn(seat, withScriptedAdvisor(async () => ({
         content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
-      }) })),
+      }), advisor)),
       tools: {}, stores: null, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
     }));
 
     expect(report.status).toBe('completed');
-    expect(advisor.tasks).toEqual([]);
+    expect(advisor.asked).toEqual([]);
   });
 
   test('the step clock ticks for a head, under its own actor, and its rows go with it at retirement', async () => {

@@ -21,8 +21,6 @@ export const ALARM_WORK = {
   ShareCardJobs: ['share.card_sent'],
   // Writes the box's checkpoint, or restarts a box whose disk stalled; its heartbeat otherwise watches.
   Devbox: ['devbox.checkpoint.bytes', 'devbox.disk.stall.restart'],
-  // Due at once, queued by the call that stores an advisor's answer: it runs beside that call.
-  AdviceJobs: [],
   // The workspace timer's pass and the terminal-effect retries, which run turns and calls of the workspace.
   WakeJobs: [],
   // Wakes an agent's isolate for what it owes; what the isolate runs is read by its tail.

@@ -4,7 +4,7 @@ import { Database } from 'bun:sqlite';
 import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
-import { improvementLanesOpen, recordedTurn } from '../src/orchestrator/evolution-lanes';
+import { evolutionPassOpen, recordedTurn } from '../src/orchestrator/evolution-lanes';
 import { WORKSPACE_CREATED_EVENT } from '../src/identity/soul';
 import { RUN_END_REASONS, creditedTurnId } from '../src/orchestrator/turn-lifecycle';
 import { declareTerminalRoster, type TerminalActor, type TerminalTurnFacts } from '../src/orchestrator/terminal-roster';
@@ -60,8 +60,6 @@ function fakeEngine(opts?: { enabled?: boolean; dying?: { first: boolean } }) {
     recoverInterruptedWork: () => {},
     recentAdvisorNotes: () => [],
     recordAdvisorNote: () => { throw new Error('This fixture runs no advisor'); },
-    hasAdvisorNoteForTurn: () => false,
-    advisorNoteForTurn: () => null,
     sessionWindow: store,
     reviewTurn,
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
@@ -123,13 +121,10 @@ const aTurn = (i: number, origin: 'user' | 'programmatic' = 'user'): CompletedTu
   hadError: false, feedback: null, turnId: `m${i}`, origin,
 });
 
-/** An actor that reviews no turns. */
-const NO_REVIEW: TerminalActor['advisor'] = { reviewsTurns: false, snapshot: () => { throw new Error('an actor that reviews no turns is asked for no review'); } };
-
 const SETTLED = aTurn(1);
 
 /** An agent whose conversation this turn did not open. */
-const AGENT: TerminalActor = { role: { kind: 'agent', opensConversation: () => false }, advisor: NO_REVIEW, turn: SETTLED, reachableTools: [] };
+const AGENT: TerminalActor = { role: { kind: 'agent', opensConversation: () => false }, turn: SETTLED, reachableTools: [] };
 
 describe('AgentOrchestrator.recordTurn — session cadence', () => {
   test('session reflection fires every five turns — the shipped cadence', async () => {
@@ -341,9 +336,12 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
 });
 
 describe('AgentOrchestrator — the settle’s claimable parts', () => {
-  test('the lanes open only on a completed Build turn', () => {
+  test('the evolution pass opens only on a completed Build turn, unless its agent recorded the turn', () => {
     for (const workMode of ['build', 'plan'] as const) {
-      for (const status of RUN_END_REASONS) expect(improvementLanesOpen(status, workMode)).toBe(status === 'completed' && workMode === 'build');
+      for (const status of RUN_END_REASONS) {
+        expect(evolutionPassOpen(status, workMode, false)).toBe(status === 'completed' && workMode === 'build');
+        expect(evolutionPassOpen(status, workMode, true)).toBe(workMode === 'build');
+      }
     }
   });
 
@@ -368,7 +366,7 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       messageId: 'answer-1', status: 'completed', workMode: 'build', continuity: 'conversation',
       completed: true, userText: 'rotate the staging keys', assistantText: 'a',
       scopedTurn: {}, recordedAt: 1, evolutionEnabled,
-    }, { role: { kind: 'workspace', mission, event: null }, advisor: NO_REVIEW, turn: SETTLED, reachableTools: [] }).find((effect) => effect.name === 'auto_title')?.input;
+    }, { role: { kind: 'workspace', mission, event: null }, turn: SETTLED, reachableTools: [] }).find((effect) => effect.name === 'auto_title')?.input;
 
     // An unset mission leaves the owner's own words to title the workspace.
     expect(titleInput(true, null)).toEqual({ subject: 'rotate the staging keys' });
@@ -409,19 +407,6 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       }
 
       expect(named(owed(workspace(null)), 'workspace_logo')).toEqual([]);
-    });
-
-    test("an actor that reviews turns owes its advisor's own snapshot of the turn on the tools it could reach", () => {
-      const reviewing: TerminalActor = {
-        ...AGENT, reachableTools: ['eval'],
-        advisor: { reviewsTurns: true, snapshot: (turn, reachable) => ({ turn, reachable: [...reachable], model: 'advisor-model' }) },
-      };
-
-      expect(named(owed(reviewing), 'advisor_review')).toEqual([{
-        status: 'completed', workMode: 'build',
-        advisor: { turn: JSON.parse(JSON.stringify(SETTLED)), reachable: ['eval'], model: 'advisor-model' },
-      }]);
-      expect(named(owed(AGENT), 'advisor_review')).toEqual([]);
     });
   });
 

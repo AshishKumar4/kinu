@@ -1,12 +1,38 @@
 /**
  * Main's isolate as `scripts/worker-heap.ts` loads it: the shipped facet, a buffer the gate plants in it to prove it
- * reads this isolate's heap, not another's, and the count of its tool calls that came back failed.
+ * reads this isolate's heap, not another's, the count of its tool calls that came back failed, and a fault the gate
+ * arms in its advisor's model calls to read what an advisor's failure reaches.
  */
+import { wrapLanguageModel, type LanguageModel, type LanguageModelMiddleware } from 'ai';
 import { parseJsonValue, type JsonValue } from '@kinu.run/core';
 import { AgentFacet as Shipped } from '../../src/agent-facet/agent-facet';
+import type { AgentProviderDeps, AgentProviderRegistry } from '../../src/providers/agent-registry';
 
 /** Each buffer the gate plants, under the marker it finds it by: held for the isolate's life, as a leak would be. */
 const planted: Record<string, Uint8Array>[] = [];
+
+/** What an armed advisor call does: `throw` fails the call; `uncaught` throws from a microtask and rejects a promise no
+ *  one awaits, then lets the call answer. */
+export type AdvisorFault = 'throw' | 'uncaught';
+
+/** Armed by the gate, for every advisor call from then on: module state, so an isolate reset disarms it. */
+let armed: AdvisorFault | null = null;
+
+/** Rejected promises kept and never awaited, as a forgotten one is. */
+const unheard: Promise<never>[] = [];
+
+/** The advisor's calls, alone, offer its `advise` tool. */
+const ADVISOR_FAULT: LanguageModelMiddleware = {
+  transformParams: async ({ params }) => {
+    if (armed === null || !(params.tools ?? []).some((offered) => offered.name === 'advise')) return params;
+
+    if (armed === 'throw') throw new Error('advisor fault probe: the call threw');
+    queueMicrotask(() => { throw new Error('advisor fault probe: uncaught in a microtask'); });
+    unheard.push(Promise.reject(new Error('advisor fault probe: a rejection no one awaits')));
+
+    return params;
+  },
+};
 
 /** The ids of the failed tool results in `value`: a call is one failure however many times its result is stored. */
 function failedResults(value: JsonValue, into: Set<string>): void {
@@ -30,6 +56,28 @@ function failedResults(value: JsonValue, into: Set<string>): void {
 export class AgentFacet extends Shipped {
   async plant(marker: string, bytes: number): Promise<void> {
     planted.push({ [marker]: new Uint8Array(bytes).fill(7) });
+  }
+
+  /** The buffers planted since this isolate loaded: none after a reset. */
+  async plantedCount(): Promise<number> {
+    return planted.length;
+  }
+
+  async armAdvisorFault(fault: AdvisorFault | null): Promise<void> {
+    armed = fault;
+  }
+
+  protected override models(deps: Omit<AgentProviderDeps, 'env'>): AgentProviderRegistry {
+    const shipped = super.models(deps);
+
+    return {
+      ...shipped,
+      resolveModel: (spec, affinity): LanguageModel => {
+        const model = shipped.resolveModel(spec, affinity);
+
+        return typeof model === 'string' ? model : wrapLanguageModel({ model, middleware: ADVISOR_FAULT });
+      },
+    };
   }
 
   /** Its tool calls that came back failed, over every step its ledger records. */

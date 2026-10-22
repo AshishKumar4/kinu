@@ -68,7 +68,7 @@ export const SPEND_SOURCE_DETAIL = {
   search: 'the `web` tool\'s searches: one row per answered search, naming the provider and the account it billed. '
     + 'No provider reports usage per search, so these are counted and never measured; each is billed at its provider\'s '
     + 'list price per search',
-  advisor: 'the turn reviewer: one call after a turn ends, when it is switched on',
+  advisor: 'the step reviewer: calls as each step of a turn ends, when it is switched on',
   slate: 'an authored slate\'s `ai.run`: one call per run, at the tier the call named',
   warming: 'keeping an idle prompt-cache prefix alive: one zero-output replay of the last request, '
     + 'at most three per idle stretch (providers/cache-warming.ts)',

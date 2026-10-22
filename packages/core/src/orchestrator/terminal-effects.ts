@@ -20,12 +20,11 @@ import { writeActivityLog } from '../identity/activity-log';
 import { OWNER_FIXABLE_REFUSALS, providerRefusalCode, providerStatusOf } from '../providers/util';
 import { statedRetryAfterMs } from '../providers/fallback-cooldown';
 import type { AgentOrchestrator } from './agent-orchestrator';
-import { evolutionPassOpen, improvementLanesOpen, recordedTurn, type TurnContinuity } from './evolution-lanes';
+import { evolutionPassOpen, recordedTurn, type TurnContinuity } from './evolution-lanes';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { HeadJournal } from '../heads/journal';
 import { CompletedTurnSchema } from '../evolution/session-window';
 import { WorkModeSchema, type WorkMode } from '../types/turn';
-import { AdvisorRecoverySnapshotSchema, type AdvisorRecoverySnapshot } from '../advisor/review';
 import { SUBAGENT_REPORT_STATUSES, type SubagentReportStatus } from '../events/hub/types';
 import {
   branchHeadId, branchOutcomeFromJournal, settleBranchIntoTakes, settlePendingBranch,
@@ -90,7 +89,7 @@ const TERMINAL_EFFECT_NAMES = [
   'turn_record', 'event_drain', 'improvement_lanes',
   // Detached: its reflection is a model call that waits on no reply; the row is its one owner, retried and parked.
   'turn_lessons',
-  // Detached: the review is a model call the next turn must not wait on; a replay finds its note already recorded.
+  // Retired: the advisor now reviews inside the turn. A row an earlier build left settles without running.
   'advisor_review',
   'sleep_time', 'auto_title',
   // Detached; a refused drawing completes and the monogram stays.
@@ -266,7 +265,6 @@ const TurnReportSchema = v.object({
 export type TurnReportFacts = v.InferOutput<typeof TurnReportSchema>;
 
 export interface ActorEffectPorts {
-  hireAdvisor(advisor: AdvisorRecoverySnapshot): Promise<void>;
   /** Null once named, or why the name cannot be applied yet: the row stays owed and retries. A row without `standIn`
    *  over a titled conversation changes nothing; a stand-in's row keeps `standIn` through retries, so titling is retried
    *  until a name lands. */
@@ -299,15 +297,9 @@ export function actorTerminalEffects(ports: ActorEffectPorts): TerminalEffectTab
         return { status: 'completed' };
       },
     }),
-    // The snapshot is the row's input, so a replay hires on the tool surface the turn had; the hire is keyed on the turn,
-    // so a replay hires no second advisor.
     advisor_review: terminalEffect({
-      input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
-      run: async ({ status, workMode, advisor }) => {
-        if (improvementLanesOpen(status, workMode)) await ports.hireAdvisor(advisor);
-
-        return { status: 'completed' };
-      },
+      input: v.unknown(),
+      run: async () => ({ status: 'completed' }),
     }),
     turn_report: terminalEffect({
       input: TurnReportSchema,

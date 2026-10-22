@@ -11,7 +11,7 @@ import {
   agentSql, driveUntil, gatewayWorkspace, hostedMainActor, mainDatabase, relayedReports, storedChat, workspaceMainActor, type StartedHarness,
 } from './helpers/actor-harness';
 import {
-  delayNextModelReport, delayNextOpenWork, delayNextRunEnd, delayNextRunReview, delayNextTurnReport, failNextAnswerWrite, failNextOpening,
+  delayNextModelReport, delayNextOpenWork, delayNextRunEnd, delayNextTurnReport, failNextAnswerWrite, failNextOpening,
   holdNextObserve, holdNextResume, loseNextParentReport,
 } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
@@ -200,20 +200,6 @@ test("a hire whose isolate dies as its turn's report goes to its hirer is asked 
   await driveUntil(workspace, "the hire's hirer never heard its report", () => relayedReports(workspace.db).some((report) => report.includes(ANSWER)));
 
   expect({ asked, heard: relayedReports(workspace.db).filter((report) => report.includes(ANSWER)).length }).toEqual({ asked: 1, heard: 1 });
-});
-
-test("a node whose isolate dies as its round's review goes to its workspace is not asked again, and its search completes", async () => {
-  const { workspace, nodeCalls } = searching();
-  // The review of the node's round goes to its workspace on the way: its isolate dies there.
-  const reviewing = delayNextRunReview();
-  const id = crypto.randomUUID();
-
-  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', SEARCH));
-  workspace.agent.harnessResetAgentIsolate(await reviewing.reached);
-  setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
-  await driveUntil(workspace, 'the search never settled', () => searchSettled(workspace));
-
-  expect(nodeCalls()).toBe(1);
 });
 
 /** Main's loop, which a node it starts inherits: on the node's task, one model call beside its turn's own. */

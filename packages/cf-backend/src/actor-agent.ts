@@ -77,7 +77,7 @@ import {
   // Shared turn lifecycle and run_end classifier, so neither backend chooses the string
   // (see turn-failure.ts).
   type AgentOrchestrator, type AgentOrchestratorDeps, actorTerminalEffects, DynamicContextLedger, actorPolicy, actorReach, type ActorReach, type BackendHost,
-  EvolutionLanes, drainPendingEvents, ActorAdvisor, standingFileLedger, turnLedgers, type TurnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
+  EvolutionLanes, drainPendingEvents, standingFileLedger, turnLedgers, type TurnLedgers, type BoundActor, type SeatedActor, type DynamicDelegate,
   builtinStoreDeps, serveStores, type BuiltinStoreInputs, type ServedStores,
   type ComposedRequest,
   type AgentsToolDeps,
@@ -200,7 +200,6 @@ import {
   recordModelRow, recordToolRow, recordTtftRow, recordTurnRow, type AgentKind,
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
-import { AdviceJobs } from './advice-jobs';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from './wake-jobs';
 import { callUserMcpTool } from './user-mcp-call';
 
@@ -907,21 +906,12 @@ export abstract class ActorAgent extends Agent<Env> {
     [TERMINAL_RETRY_JOB]: (pace) => this.terminalRetryPass(pace),
   });
 
-  /** An advisor answer's delivery; see advice-jobs.ts. */
-  protected readonly advice = new AdviceJobs((actorId) => this.deliverAdviceFor(actorId));
-
   /** The workspace timer's pass: every source a subclass folds into its next wake. */
   abstract _kinuTimerTick(): Promise<void>;
-
-  /** An agent's held advisor answers, into its own isolate; the subclass that hosts agents delivers them. */
-  protected deliverAdviceFor(_actorId: string): Promise<boolean> {
-    return Promise.resolve(true);
-  }
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     this.lifecycle.use(this.wakes);
-    this.lifecycle.use(this.advice);
     // Must precede any read or write of it; see initCapabilitySchema.
     this.initCapabilitySchema();
     // A Durable Object is a DIFFERENT ISOLATE from the Worker that routes to it,
@@ -1025,7 +1015,6 @@ export abstract class ActorAgent extends Agent<Env> {
       }),
       // Its lanes read durable queues on re-entry (per-turn snapshots do not survive).
       ...actorTerminalEffects({
-        hireAdvisor: (advisor) => this.advisor.hire(advisor),
         applyTitle: async (subject, standIn) => {
           const unreachable = await this.titlingRefusal();
 
@@ -1340,20 +1329,6 @@ export abstract class ActorAgent extends Agent<Env> {
       recordTurn: (turn, continuity, opts) => { this.lanes.recordTurn(turn, continuity, opts); },
       drainPendingEvents: (opts) => drainPendingEvents({ eventLog: this.eventLog, deliveries: this.workspaceAgentDeliveries() }, opts),
     };
-  }
-
-  /** The workspace agent's advisor, hired through this object's port and judged by the workspace's engine. */
-  private _advisor: ActorAdvisor | null = null;
-
-  protected get advisor(): ActorAdvisor {
-    this._advisor ??= new ActorAdvisor({
-      actor: this.actorHandle(), vfs: () => this.rt.agentStateVfs, notes: () => this.engine,
-      port: () => this.temporaryAgentPort(), reviewed: this.actorDirectoryStore().describe(this.actorHandle()).input,
-      send: (signal) => this.workspaceAgentDeliveries().signals.send(signal),
-      profile: () => this.operationProfile()?.profile ?? null, scoped: (turn) => this.lanes.scopedTurn(turn),
-    });
-
-    return this._advisor;
   }
 
   /** Each slate `agent.ask` reply, fed by main's own turns as they reach this object's room. */

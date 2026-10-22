@@ -60,7 +60,7 @@ export const AGENT_CONFIG_KEYS = {
   /** 'false' withholds crafted tools: none is offered, made, or extracted from a turn. On by default. */
   crafting: 'crafting',
   advisorMinSeverity: 'advisor_min_severity',
-  /** 'true' enables the turn reviewer; off by default since it costs a model call per turn. */
+  /** 'true' enables the step reviewer; off by default since it costs a model call or more per step. */
   advisorEnabled: 'advisor_enabled',
   alwaysActiveSkills: 'always_active_skills',
   /** The dream skills this agent's turns index, as its last cold turn found them: a sibling's cold turn moves no warm prefix. */

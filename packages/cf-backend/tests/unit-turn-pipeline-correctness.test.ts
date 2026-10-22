@@ -15,13 +15,12 @@ import {
   LiveWorkers, AGENT_CONFIG_KEYS,
 } from '@kinu.run/core';
 import {
-  hostedExplorationHarness, hostedMainActor, improvementLanesRan,
+  hostedExplorationHarness, hostedMainActor,
   mainDatabase, orchestratorHarness, reactivateOrchestratorHarness, catalogTurn, gatewayWorkspace, GATEWAY_CATALOG,
-  chatSessionTurns, driveUntil, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
+  chatSessionTurns, tapDiagnostics, workspaceFiles,
   workspaceMainActor, actorOverWorkspace, type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
-import { answeringGateway, chatCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
-import type { ScriptedAnswer } from './helpers/turn-harness';
+import { chatCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
 import { createHeadRuntime } from '../src/head-runtime';
 import type { HostedActorSeams } from '../src/hosted-actors';
 import type { ModelMessage, ToolSet } from 'ai';
@@ -766,72 +765,5 @@ describe('turn-pipeline correctness wiring', () => {
     expect(rendered).toContain('<dynamic_context');
     expect(rendered).not.toContain('Runtime steering');
     expect(rendered).not.toContain('action=swarm');
-  });
-
-
-});
-
-describe('improvement_lanes — one verdict gates the improvement lanes', () => {
-  // Driven through settled turns, with the review answered at the platform gateway; both verdicts are
-  // one core decision (`improvementLanesOpen`).
-  const NOTE = JSON.stringify({
-    note: 'the staging cluster was never named', severity: 'nit', class: 'wrong-work',
-  });
-
-  /** Advisor reviews switched on in the stored config, every tier served by the gateway. */
-  function advisorHarness(): ActorHarness<HarnessOrchestratorAgent> {
-    const harness = orchestratorHarness(undefined, { aiGateway: answeringGateway(NOTE) });
-    harness.agent.harnessInstallCatalog({
-      tiers: { default: { model: GATEWAY_MODEL }, deep: { model: GATEWAY_MODEL }, fast: { model: GATEWAY_MODEL } },
-      availableModels: [GATEWAY_MODEL],
-    });
-    workspaceMainActor(harness.db).config.setAdvisorEnabled(true);
-
-    return harness;
-  }
-
-  const advisors = (harness: ActorHarness<HarnessOrchestratorAgent>) => harness.db.query<{ origin: string; lifetime: string }, []>(
-    "SELECT origin, lifetime FROM workspace_actors WHERE name = 'ask-advisor' OR name LIKE 'ask-advisor-%'",
-  ).all();
-
-  /** Notes once the lanes ran and every hired advisor's delegated turn has drained. */
-  async function settled(harness: ActorHarness<HarnessOrchestratorAgent>, answer: ScriptedAnswer): Promise<number> {
-    const { messageId } = await chatSessionTurns(harness.agent).settle(answer);
-    await until(() => improvementLanesRan(harness.db, messageId), 'the improvement lanes ran');
-
-    if (advisors(harness).length > 0) await driveUntil(harness, 'the advisor answered', () => notes(harness) > 0);
-
-    return notes(harness);
-  }
-
-  const notes = (harness: ActorHarness<HarnessOrchestratorAgent>): number => harness.db.query<{ n: number }, []>(
-    "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'",
-  ).get()?.n ?? 0;
-
-  test('a completed build turn earns its review, from an advisor agent of its own', async () => {
-    const harness = advisorHarness();
-    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
-    expect(await settled(harness, { messageId: 'a-build', text: 'deployed' })).toBe(1);
-    // The reviewer is a background agent, listed with the others: view-only, no tab, one task.
-    expect(advisors(harness)).toEqual([{ origin: 'evolution', lifetime: 'task' }]);
-  });
-
-  test('a FAILED build turn feeds no lane', async () => {
-    const harness = advisorHarness();
-    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
-    expect(await settled(harness, { messageId: 'a-failed', status: 'error', error: 'provider exploded' })).toBe(0);
-  });
-
-  test('a completed PLAN turn feeds no lane', async () => {
-    const harness = advisorHarness();
-    harness.agent.harnessDrivingUserMessage('Plan the deploy.', { kinuMode: 'plan' });
-    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'Plan the deploy.' }] });
-    expect(await settled(harness, { messageId: 'a-plan', text: 'the plan' })).toBe(0);
-  });
-
-  test('an ABORTED build turn feeds no lane', async () => {
-    const harness = advisorHarness();
-    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
-    expect(await settled(harness, { messageId: 'a-cut', text: 'partial', status: 'aborted' })).toBe(0);
   });
 });

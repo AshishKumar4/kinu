@@ -78,7 +78,7 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: '/approval', description: 'Show or set when shell commands need your approval', usage: '/approval strict|allow_all|deny_all', requires: 'localControls', run: approvalCommand },
   { name: '/instructions', description: 'Approve which AGENTS.md and skill files the agent follows', usage: '/instructions [page <cursor>|read <page> <n>|approve <page> <n> <digest>|revoke <page> <n>]', requires: 'localControls', run: instructionsCommand },
   { name: '/always', description: 'Choose skills that are always active', usage: '/always <name...|none>', requires: 'localControls', run: alwaysCommand },
-  { name: '/advisor', description: 'Turn the advisor on or off, or set what it reports. On, it adds one model call per turn', usage: '/advisor [on|off|severity <nit|concern|blocker>]', run: advisorCommand },
+  { name: '/advisor', description: 'Turn the advisor on or off, or set what it reports. On, it reviews every step, with a model call or more each', usage: '/advisor [on|off|severity <nit|concern|blocker>]', run: advisorCommand },
   { name: '/exit', description: 'Leave the chat', aliases: ['/quit'], run: exitCommand },
   { name: '/cancel', description: 'Close the open overlay', hidden: true, run: cancelCommand },
 ];
@@ -747,8 +747,8 @@ async function advisorCommand({ client, rest }: SlashContext): Promise<SlashOutc
   return {
     kind: 'text',
     text: config.advisorEnabled
-      ? `Advisor: on. Minimum severity ${config.advisorMinSeverity}. It adds one model call per turn.`
-      : `Advisor: off. Minimum severity ${config.advisorMinSeverity}. /advisor on adds one model call per turn.`,
+      ? `Advisor: on. Minimum severity ${config.advisorMinSeverity}. It reviews every step, with a model call or more each.`
+      : `Advisor: off. Minimum severity ${config.advisorMinSeverity}. /advisor on reviews every step, with a model call or more each.`,
   };
 }
 

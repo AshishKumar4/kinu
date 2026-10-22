@@ -54,15 +54,11 @@ export interface EvolutionLanesDeps {
   refinementLane?: () => Promise<void>;
 }
 
-/** A turn's improvement lanes (evolution, the advisor) open on a completed turn outside Plan: read from the recorded
- *  status and mode, so a replay on a fresh activation decides as the live turn did. */
-export function improvementLanesOpen(status: RunEndReason, workMode: WorkMode): boolean {
-  return status === 'completed' && workMode !== 'plan';
-}
-
-/** The evolution pass also follows a failed turn its agent recorded for evolution (`recorded`): the turn's review rates it. */
+/** A turn's evolution pass follows a completed turn outside Plan, and a failed one its agent recorded for evolution
+ *  (`recorded`), whose review rates it: read from the recorded status and mode, so a replay on a fresh activation
+ *  decides as the live turn did. */
 export function evolutionPassOpen(status: RunEndReason, workMode: WorkMode, recorded: boolean): boolean {
-  return improvementLanesOpen(status, workMode) || (workMode !== 'plan' && recorded);
+  return workMode !== 'plan' && (status === 'completed' || recorded);
 }
 
 /**

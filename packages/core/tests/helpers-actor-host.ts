@@ -33,7 +33,6 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import type { BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Identity } from '../src/types/primitives';
-import type { TemporaryAgentPort } from '../src/types/subagents';
 import { historyTurnPairs } from '../src/identity/conversation-store';
 
 type FixtureSeat = HostedNodeSeat<HostedActor>;
@@ -151,8 +150,6 @@ export function hostedSeatsOver(input: {
   readonly autoEvolve?: boolean;
   /** Spans every seat's turns. */
   readonly tracing?: AgentTracing;
-  /** The port every seat hires its advisor through; absent, no seat is reviewed. */
-  readonly advisorPort?: TemporaryAgentPort;
   /** The model every seat's turns run on; read per turn. Absent, a seat that runs a turn refuses it. */
   readonly model?: (spec: string) => LanguageModel;
 }): HostedSeats {
@@ -237,7 +234,6 @@ export function hostedSeatsOver(input: {
     orchestrationFor,
     // No run events published; a suite asserting context-edit audit rows binds its own.
     contextEvents: () => null,
-    advisorPort: () => input.advisorPort ?? null,
   });
 
   const seat = async (

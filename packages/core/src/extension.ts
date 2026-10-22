@@ -30,6 +30,8 @@ export type ToolResultContext = ToolOutcome & ToolCallContext & {
 /** A model step that ended and was recorded, by the turn's step number (as `PrepareStepContext.stepNumber`). */
 export interface StepEndContext {
   readonly stepNumber: number;
+  /** What the step produced, as the turn records it: its assistant message and its tool results. */
+  readonly produced: readonly ModelMessage[];
 }
 
 export interface TurnEndContext {

@@ -20,7 +20,7 @@ import {
   craftedToolDescription, type CraftedTool,
   CRAFTED_TOOL_NAMESPACE, nativeToolFunctions,
   initCompletedTurnTable, createCompletedTurnStore,
-  initEventsHubTables, EventLog, improvementLanesOpen,
+  initEventsHubTables, EventLog, evolutionPassOpen,
   type ModelPricing, type CompletedTurn, type SqlExec,
   type BackendHost, type BroadcastEvent, type ProgrammaticTurn,
   ExtensionHost, TerminalTransitions, chatTerminalEffects, terminalEffect, initTerminalEffectTable, initToolEffectClaimTable,
@@ -258,8 +258,6 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
     recoverInterruptedWork: () => {},
     recentAdvisorNotes: () => [],
     recordAdvisorNote: () => { throw new Error('This fixture runs no advisor'); },
-    hasAdvisorNoteForTurn: () => false,
-    advisorNoteForTurn: () => null,
     sessionWindow: store,
     reviewTurn: async (turn) => { recorded.push(turn); },
     runStoredTurnReview: async (rowId, turn) => { recorded.push(turn); void rowId; },
@@ -312,7 +310,6 @@ const settledTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
 /** An agent that reviews no turns, whose conversation this turn did not open. */
 const QUIET_AGENT: Parameters<typeof declareTerminalRoster>[1] = {
   role: { kind: 'agent', opensConversation: () => false },
-  advisor: { reviewsTurns: false, snapshot: () => { throw new Error('no review'); } },
   turn: { userMessage: 'q', assistantResponse: 'a', toolCalls: [], durationMs: 1, steps: 1, hadError: false, feedback: null, turnId: 't', origin: 'user' },
   reachableTools: [],
 };
@@ -790,9 +787,9 @@ describe('the post-settle lane verdict is ONE core decision', () => {
   ] as const;
 
   for (const [status, mode, open] of cases) {
-    test(`a ${status} ${mode} turn ${open ? 'opens' : 'closes'} the improvement lanes`, () => {
+    test(`a ${status} ${mode} turn ${open ? 'opens' : 'closes'} the evolution pass`, () => {
       // As the `improvement_lanes` row asks, from the mode the turn ran in, on its producing activation or a replay.
-      expect(improvementLanesOpen(status, mode)).toBe(open);
+      expect(evolutionPassOpen(status, mode, false)).toBe(open);
     });
   }
 });

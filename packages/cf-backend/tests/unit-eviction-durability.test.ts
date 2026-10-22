@@ -4,15 +4,10 @@
  * that holds the start. Vendor half: `tests/workerd/do-eviction-recovery.test.ts`.
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
-import * as v from 'valibot';
-import {
-  ActorAdvisor, ADVISOR_HEADER, BACKGROUND_FIBER_PREFIX, PROGRAMMATIC_MESSAGE_ID_PREFIX,
-  TERMINAL_EFFECT_RETRY_CEILING_MS,
-} from '@kinu.run/core';
+import { BACKGROUND_FIBER_PREFIX, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '@kinu.run/core';
 import {
   catalogTurn, chatSessionTurns, GATEWAY_CATALOG, gatewayWorkspace, jobsOver, orchestratorHarness,
-  agentWakes, alarmDue, driveUntil, reactivateOrchestratorHarness, seedOrphanFiber, until, workspaceMainActor,
-  type ActorHarness, type HarnessOrchestratorAgent, storedChat,
+  reactivateOrchestratorHarness, seedOrphanFiber, until, type ActorHarness, type HarnessOrchestratorAgent, storedChat,
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, openingOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
 import { joinHarnessFibers } from './helpers/agents-sdk';
@@ -51,12 +46,6 @@ async function programmaticTurns(harness: Harness): Promise<{ id: string; text: 
       text: message.parts.flatMap((part) => part.type === 'text' ? [part.text] : []).join(''),
     }));
 }
-
-const ADVISOR_REPLY = JSON.stringify({
-  note: 'The migration ran before the suite. Confirm a backup exists.',
-  severity: 'blocker',
-  class: 'wrong-work',
-});
 
 describe('a background job whose executor died', () => {
   test('the next activation takes its lane row, and ends at once a kind it cannot re-drive, never claiming it', async () => {
@@ -132,168 +121,6 @@ describe('the post-turn lanes', () => {
     expect(started().slice(before)).toEqual(['evolution:settle', 'evolution:settle']);
     expect(next.agent.harnessOpenFiberRows().map((row) => row.id)).not.toContain(orphan);
     expect(next.agent.harnessOpenFiberRows()).toEqual([]);
-  });
-
-  /** The advisor's hire is its own terminal row: the snapshot is its input, so a fresh activation replays it. */
-  async function cutReview(): Promise<{ readonly harness: Harness; readonly calls: () => number; readonly restart: () => Promise<Harness> }> {
-    let calls = 0;
-
-    const gateway = stubAiBinding(async (run) => {
-      const asked = JSON.stringify(run);
-
-      // This turn's review only: a delivered note opens a follow-up turn, which owes its own.
-      if (asked.includes('You are reviewing one finished turn') && asked.includes('run the migration')) calls += 1;
-
-      return chatCompletion(run, ADVISOR_REPLY);
-    });
-
-    const harness = gatewayWorkspace(gateway, { cut: ['advisor_review', 'before'] });
-    workspaceMainActor(harness.db).config.setAdvisorEnabled(true);
-    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'run the migration' }] });
-    await chatSessionTurns(harness.agent).settle({ messageId: 'turn-42', text: 'ran it' });
-    await joinHarnessFibers();
-
-    // A fresh activation over the same rows, past any backoff, running the alarm's pass.
-    const restart = async (): Promise<Harness> => {
-      setSystemTime(new Date(Date.now() + TERMINAL_EFFECT_RETRY_CEILING_MS));
-
-      const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
-        world: { aiGateway: gateway },
-        beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
-      });
-
-      await restarted.agent.terminalRetryPass();
-      // The review is the hired advisor's own delegated turn, which the wake drains; its answer's job delivers the note.
-      await driveUntil(restarted, 'the replayed review settled', () => owedReview(restarted) === 0 && advisorsWorking(restarted) === 0 && !alarmDue(restarted.db));
-      await joinHarnessFibers();
-
-      return restarted;
-    };
-
-    return { harness, calls: () => calls, restart };
-  }
-
-  const count = (harness: Harness, query: string): number => harness.db.query<{ n: number }, []>(query).get()?.n ?? 0;
-
-  const owedReview = (harness: Harness): number =>
-    count(harness, "SELECT COUNT(*) AS n FROM terminal_effects WHERE effect_name = 'advisor_review' AND status != 'completed'");
-
-  const notes = (harness: Harness): number => count(harness, "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'");
-
-  const advisorsWorking = (harness: Harness): number =>
-    count(harness, "SELECT COUNT(*) AS n FROM actor_subagents WHERE (name = 'ask-advisor' OR name LIKE 'ask-advisor-%') AND status = 'working'");
-
-  // The workspace agent's review was the one recorded without its model: its snapshot was cf's own, not its advisor's.
-  test("the workspace agent's owed review names the advisor's model, as every agent's does", async () => {
-    const { harness } = await cutReview();
-    const owed = harness.db.query<{ input_json: string }, []>("SELECT input_json FROM terminal_effects WHERE effect_name = 'advisor_review'").get();
-
-    expect(v.parse(v.object({ advisor: v.object({ model: v.string() }) }), JSON.parse(owed?.input_json ?? '{}')).advisor.model).not.toBe('');
-  });
-
-  test('a hire cut before it ran is replayed by the next activation and lands exactly one note', async () => {
-    const { harness, calls, restart } = await cutReview();
-    expect(calls()).toBe(0);
-    expect(owedReview(harness)).toBe(1);
-
-    const restarted = await restart();
-
-    expect(calls()).toBe(1);
-    expect(notes(restarted)).toBe(1);
-    expect(owedReview(restarted)).toBe(0);
-    // The signal is keyed on the turn so a re-delivery collapses onto the row it already opened.
-    // Said once: one programmatic turn of main's carries the note, whatever id its isolate admitted it under; main's
-    // isolate runs it when the wake the workspace armed for it fires.
-    await driveUntil(restarted, "main's isolate took the note", () => agentWakes(restarted.db).length === 0);
-    expect((await programmaticTurns(restarted)).filter((turn) => turn.text.includes(ADVISOR_HEADER))).toHaveLength(1);
-  });
-
-  test('an advisor answer stored before a death is delivered once, by the next activation', async () => {
-    const { calls, restart } = await cutReview();
-    const deliver = Object.getOwnPropertyDescriptor(ActorAdvisor.prototype, 'deliverAnswers');
-
-    // The object dies after the ingress stored the answer and before its note is delivered.
-    Object.defineProperty(ActorAdvisor.prototype, 'deliverAnswers', {
-      configurable: true, value: () => Promise.reject(new Error('the object died')),
-    });
-
-    let died: Harness;
-
-    try {
-      died = await restart();
-    } finally {
-      if (deliver) Object.defineProperty(ActorAdvisor.prototype, 'deliverAnswers', deliver);
-    }
-
-    expect(calls()).toBe(1);
-    expect(notes(died)).toBe(0);
-    // The answer and the job that delivers it are both still on disk.
-    expect(count(died, "SELECT COUNT(*) AS n FROM evolution_subagents WHERE answer_status IS NOT NULL")).toBe(1);
-
-    const restarted = await restart();
-    await restart();
-
-    expect(calls()).toBe(1);
-    expect(notes(restarted)).toBe(1);
-    // Said once: one programmatic turn of main's carries the note, whatever id its isolate admitted it under; main's
-    // isolate runs it when the wake the workspace armed for it fires.
-    await driveUntil(restarted, "main's isolate took the note", () => agentWakes(restarted.db).length === 0);
-    expect((await programmaticTurns(restarted)).filter((turn) => turn.text.includes(ADVISOR_HEADER))).toHaveLength(1);
-  });
-
-  test('a turn whose note had already landed hires no advisor again, so recovery cannot double it', async () => {
-    const { harness, calls, restart } = await cutReview();
-    // The review recorded its note, then the isolate reset before the row settled.
-    harness.db.run(`INSERT INTO evolution_events (actor_id, type, message, data)
-      SELECT actor_id, 'advisor_note', 'already said', json_object('turnId', json_extract(input_json, '$.advisor.turn.turnId'))
-      FROM terminal_effects WHERE effect_name = 'advisor_review'`);
-
-    const restarted = await restart();
-
-    expect(calls()).toBe(0);
-    expect(notes(restarted)).toBe(1);
-    expect(owedReview(restarted)).toBe(0);
-  });
-});
-
-// Review P1 (d35c1060fe): the answer job awaited the note's delivery, and a note sent to an idle actor settles only
-// when the whole turn it opens does, so the alarm held across that turn's inference and a long one met the wall.
-describe('an advisor answer handed to a turn', () => {
-  test('the alarm returns while the turn the note opened still runs; the answer is released once the note is said', async () => {
-    const gateway = stubAiBinding((run) => chatCompletion(run, ADVISOR_REPLY));
-    const harness = gatewayWorkspace(gateway);
-    const turns = chatSessionTurns(harness.agent);
-    workspaceMainActor(harness.db).config.setAdvisorEnabled(true);
-    await turns.prepare({ messages: [{ role: 'user', content: 'run the migration' }] });
-    await turns.settle({ messageId: 'turn-42', text: 'ran it' });
-
-    const answers = (): number => harness.db.query<{ n: number }, []>(
-      'SELECT COUNT(*) AS n FROM evolution_subagents WHERE answer_status IS NOT NULL',
-    ).get()?.n ?? 0;
-
-    // The note opens a turn on the idle actor, and that turn parks on its model call; the wake drives the advisor's
-    // own turn, then the answer's job, which hands the note to that turn.
-    let noteAsked = false;
-    let drove = false;
-
-    const noteTurn = turns.park().then((request) => {
-      noteAsked = true;
-
-      return request;
-    });
-
-    const driving = driveUntil(harness, 'the note opened its turn', () => noteAsked).then(() => { drove = true; });
-
-    // What the note's turn asks its model with: main's isolate admits the note as that turn's own words.
-    expect(JSON.stringify((await noteTurn).prompt)).toContain(ADVISOR_HEADER);
-    await until(() => drove, "the alarm returned while the note's turn runs");
-    await driving;
-    // Said once main's isolate holds the note's turn, which it owns durably from then: the answer is released while
-    // that turn still runs.
-    expect(answers()).toBe(0);
-
-    await turns.settle({ messageId: 'note-answer', text: 'Checked the backup.' });
-    expect(harness.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'").get()?.n).toBe(1);
   });
 });
 

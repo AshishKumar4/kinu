@@ -24,7 +24,7 @@ import {
   artifactOverrides, currentArtifacts,
   agentsActionsFor, agentsProfileContext, betaSwarms, buildActorTools, BACKGROUNDABLE_TOOLS,
   vfsTurnSkills, conversationKey, captureOperationProfile, type RunTurnSources,
-  ActorAdvisor, describeAgentTools, historyTurnPairs, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifacts, withToolText,
+  describeAgentTools, inTurnSurface, turnLedgers, type TurnLedgers, surfaceReach, turnArtifacts, withToolText,
   BUILTIN_TOOL_NAMES, codemodeCapabilitiesFor, agentRoleSwitch, currentOperationProfile,
   ownProfileChoices, pruneTurnReceipts, remoteReceipts, type SeatedActor, type SettledRun, type SurfaceReach, type ExecutionLane, type OperationProfile, type CodemodeSurface,
   type SubagentReportLedger, type ActorToolsets,
@@ -376,7 +376,7 @@ interface OpenedSurface {
 }
 
 /** What a turn's surface and a run's differ in; the rest is assembled alike. */
-type AssembledSurfaceParts = Omit<ActorSurface, 'surface' | 'descriptors' | 'digest' | 'reviewsTurns' | 'reads' | 'sources' | 'bind'> & {
+type AssembledSurfaceParts = Omit<ActorSurface, 'surface' | 'descriptors' | 'digest' | 'reads' | 'sources' | 'bind'> & {
   readonly sources: Omit<ActorSurface['sources'], 'wiredToolNames' | 'codemodeCapabilities'>;
   readonly codemodeCapabilities: ActorSurface['sources']['codemodeCapabilities'];
 };
@@ -1021,7 +1021,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       credentialsRevision: () => this.account.openedCredentialsRevision(),
       // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
       missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
-      advisor: (actor) => this.actorAdvisor(actor),
       // The activation owns it, as its other detached work: a failure is logged as the release's own.
       turnsEnded: (actorId) => {
         const box = this.rt.sandboxHandle;
@@ -1159,7 +1158,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         await this.mainTurnSettled(settled);
       },
       runSettled: async (run) => { this.runSettled(actorId, run); },
-      hireAdvisor: async (advisor) => { await this.actorAdvisor(await this.agentSeat(actorId)).hire(advisor); },
       owes: async (seq, next, holds, report) => { await this.agentOwes(actorId, { seq, next, holds, report }); },
       birthContext: async (drainTurnId) => subagentTurnContext(new EventLog(this.watchedExec, this.agentBound(actorId).handle), drainTurnId),
       releaseForeground: async (executing) => this.foregroundRunnerOf(actorId)?.releaseForeground(executing) ?? false,
@@ -1525,7 +1523,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       retireJobs: (actorId) => this.jobAuthorities.retire(actorId),
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
       rederiveWake: () => { this.armDurableWake(); },
-      oweAdvice: (actor) => this.advice.owe(actor.reference.actorId),
       register: async ({ creationId, loop }) => {
         const entry = await this.actorDirectory({
           action: 'register', creationId, name: explorationActorKey(creationId), origin: 'swarm', lifetime: 'task',
@@ -1579,28 +1576,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // step rows joinable in one database (C2).
       split: (_actor, _runtime, input) => (request) => this.runHostedSplit(input, request),
     };
-  }
-
-  /**
-   * An agent's advisor, hired through this object's port as every hire is: the workspace agent's is judged by the
-   * workspace's engine; any other's is judged in its own isolate, and reads here only whether its turns are reviewed and
-   * whether its turn already has a note.
-   */
-  protected actorAdvisor(actor: SeatedActor): ActorAdvisor {
-    if (actorReach(actorPolicy(actor.record)).kind === 'workspace') return this.advisor;
-    const parentId = actor.record.parentActorId;
-
-    return new ActorAdvisor({
-      actor: actor.handle, vfs: () => actor.runtime.agentStateVfs,
-      notes: () => new EvolutionEngine(actor.runtime, historyTurnPairs(actor.stores.history), { transaction: (body) => { this.ctx.storage.transactionSync(body); } }),
-      port: () => this.temporaryAgentPort(actor.reference), reviewed: actor.record.input,
-      // A hire shares the workspace's priorities, and its notes reach its hirer.
-      ...(parentId !== null && {
-        context: { config: this.config, workspace: async () => this.rt.agentStateVfs, parent: (signal) => this.agentDeliveries(parentId).signals.send(signal) },
-      }),
-      send: (signal) => this.agentDeliveries(actor.handle.actorId).signals.send(signal),
-      profile: () => null, scoped: (turn) => turn,
-    });
   }
 
   /** A hire's, a head's or a swarm node's programs, as they reach its own planes and what its native tools hold. */
@@ -1738,7 +1713,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     return {
       ...rest, surface, offered, descriptors, digest,
-      reviewsTurns: this.actorAdvisor(actor).reviewsTurns,
       reads: this.dynamicReadsOf(actor.reference),
       sources: {
         ...sources,
@@ -3692,7 +3666,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       declare: () => [
         ...declareTerminalRoster(facts, {
           role: { kind: 'workspace', mission: missionOf(this.getSoulText()), event: settled.event },
-          advisor: this.advisor, turn: scoped, reachableTools: settled.reachableTools,
+          turn: scoped, reachableTools: settled.reachableTools,
         }, this.rosterParts(settled, scoped)),
         // Its outcome the run's own: a tool that failed inside a turn that answered is not a failed turn.
         { name: 'fleet_turn', scope: settled.messageId, lane: 'detached', input: { turn: facts.scopedTurn, completed: settled.completed } },
@@ -4685,19 +4659,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // A wake is a separate invocation from whatever armed it; `tracing.invocation` revokes the handle
   // when this promise settles, so spans cannot cover both.
   /** A hosted hirer's answers reach its own session; a retired hirer's went with it. */
-  protected override async deliverAdviceFor(actorId: string): Promise<boolean> {
-    const record = this.actorHost().describe(actorId);
-
-    if (record === null || record.retiringAt !== null || record.deletedAt !== null) return true;
-    const advisor = this.actorAdvisor(await this.actorHost().acquire(actorReferenceOf(record), { kind: 'actor' }));
-
-    // Reach from the policy: an agent the workspace's lanes judge has its advice judged and recorded here, by the engine that
-    // hired the advisor, and said to it as a delivery; any other agent's isolate judges its own and says it there.
-    if (actorReach(actorPolicy(record)).kind === 'workspace') return await advisor.deliverAnswers();
-
-    return await advisor.deliverAnswers(async (subagent, turnId) => await this.agentCall(actorId, (isolate, snapshot) => isolate.deliverAdvice(snapshot, subagent, turnId)));
-  }
-
   async _kinuTimerTick(): Promise<void> {
     // A workspace being deleted runs no pump: its triggers, drains and warms are fenced with its admission.
     if (this.admitting.signal.aborted) return;

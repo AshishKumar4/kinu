@@ -246,7 +246,6 @@ function makeScene(options: {
       transaction: (body) => body(),
       announce: () => { /* the rail row is the record; see `published()` */ },
       onAdmitted: () => { wakes.push(1); },
-      evolutionAnswerStored: () => undefined,
       onEvolutionAnswer: () => undefined,
       temporary,
     }, {
@@ -421,20 +420,6 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
 
     // Read by the turn that takes it up: nothing is owed any more.
     for (const row of scene.log.pending({ variant: 'subagent_report' })) scene.log.markConsumed(row.id, 'turn-read', 0, NOW);
-    expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(false);
-  });
-
-  // Review P1 (d35c1060fe): a task hire's advisor, still reviewing its turn, held the hire's own answer, and an advisor
-  // that answers with nothing to say opens no later turn to carry it.
-  test('a task hirer\'s advisor still reviewing does not make its answer a later turn\'s', async () => {
-    const scene = makeScene();
-
-    const hired = await scene.temporary.start({
-      role: 'advisor', roleLabel: 'advisor', task: 'Review the turn.', mode: 'build', lane: { requestId: 'advisor:turn-1' },
-    });
-
-    expect(hired).toMatchObject({ status: 'working' });
-    expect(scene.roster.list()).toMatchObject([{ origin: 'evolution', status: 'working' }]);
     expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(false);
   });
 

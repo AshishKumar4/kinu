@@ -1,6 +1,7 @@
 /**
- * A hire's advisor: the main actor hires through its `agents` tool, the hire takes its assignment as it is admitted, and the
- * advice lands where its severity sends it; every model call is the platform gateway's.
+ * A hire's advisor: the main actor hires through its `agents` tool, the hire takes its assignment as it is admitted, its
+ * steps are reviewed in its own isolate, and the advice lands where its severity sends it; every model call is the
+ * platform gateway's.
  */
 import type { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
@@ -25,12 +26,22 @@ function hiring(run: RecordedGatewayRun, agent: string | undefined, lifetime?: '
     : chatCompletion(run, 'Handed off.');
 }
 
+/** The advisor's own call: it alone is offered the `advise` tool. */
+function forTheAdvisor(run: RecordedGatewayRun): boolean {
+  return requestOf(run).tools.includes('advise');
+}
+
+/** The advisor's answer: `advice` as its one `advise` call, or silence. */
+function advising(run: RecordedGatewayRun, advice: { readonly note: string; readonly severity: 'concern' | 'blocker' } | null): Response {
+  return advice === null ? chatCompletion(run, '') : toolCallCompletion(run, { tool: 'advise', args: { ...advice, class: 'wrong-work' } }, 'advise_0');
+}
+
 /** The hire named `advised`, whose rows are in its own database. */
 function advisedHire(db: Database): string {
   return db.query<{ actor_id: string }, []>("SELECT actor_id FROM workspace_actors WHERE name = 'advised'").get()?.actor_id ?? '';
 }
 
-test('a hosted subagent hires its advisor, whose note opens its next turn, without adding to either evolution window', async () => {
+test("a hosted subagent's steps are reviewed in its own isolate, and its blocker opens its next turn, adding to no evolution window", async () => {
   const note = 'The probe failed but the reply claimed success. Read the exit status.';
   const requests: string[] = [];
   const reviews: string[] = [];
@@ -38,10 +49,10 @@ test('a hosted subagent hires its advisor, whose note opens its next turn, witho
   const gateway = stubAiBinding((run) => {
     const request = JSON.stringify(requestOf(run).messages);
 
-    if (request.includes('You are reviewing one finished turn')) {
+    if (forTheAdvisor(run)) {
       reviews.push(request);
 
-      return chatCompletion(run, JSON.stringify({ note, severity: 'concern', class: 'wrong-work' }));
+      return advising(run, { note, severity: 'blocker' });
     }
 
     if (!forTheHire(run)) return hiring(run, 'advised');
@@ -64,7 +75,7 @@ test('a hosted subagent hires its advisor, whose note opens its next turn, witho
   const advisorNotes = () => agentSql(workspace, hire())<{ actor_id: string; message: string }>`SELECT actor_id, message FROM evolution_events WHERE type = 'advisor_note'`;
   const ownTurns = () => agentSql(workspace, hire())<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns`[0]?.n ?? 0;
 
-  // The hire's turn ends on its own answer; its advisor answers on a delegated turn of its own, whose note opens the hire's next.
+  // The hire's turn ends on its own answer, its review waited for; the blocker opens the hire's next turn.
   await driveUntil(workspace, 'the advice reached the hire', () => requests.length >= 2);
   await joinHarnessFibers();
 
@@ -85,7 +96,7 @@ function advisedWorkspace(severity: 'concern' | 'blocker') {
   const gateway = stubAiBinding((run) => {
     const request = JSON.stringify(requestOf(run).messages);
 
-    if (request.includes('You are reviewing one finished turn')) return chatCompletion(run, JSON.stringify({ note, severity, class: 'wrong-work' }));
+    if (forTheAdvisor(run)) return advising(run, { note, severity });
 
     if (!forTheHire(run)) return hiring(run, 'advised');
     hireRequests.push(request);
@@ -121,9 +132,9 @@ test("a hire's blocker advice reaches its hirer, not the hire again", async () =
   // The hirer's conversation holds its own ask; a hire's never does.
   const toHirer = () => requests().filter((request) => request.includes('[Actor advised]') && request.includes(ask));
 
-  // The hire's conversation never holds the root's ask; a review quotes the turn it reviews.
-  const hireToldAgain = () => requests().filter((request) =>
-    request.includes('[Actor advised]') && !request.includes(ask) && !request.includes('You are reviewing one finished turn'));
+  // The hire's conversation never holds the root's ask; its advisor's reads its steps.
+  const hireToldAgain = () => gateway.runs.filter((run) => !forTheAdvisor(run)).map((run) => JSON.stringify(requestOf(run).messages))
+    .filter((request) => request.includes('[Actor advised]') && !request.includes(ask));
 
   root.config.setAdvisorEnabled(true);
   await catalogTurn(workspace.agent, ask);
@@ -133,11 +144,10 @@ test("a hire's blocker advice reaches its hirer, not the hire again", async () =
   expect(hireToldAgain()).toEqual([]);
 });
 
-// Review P1 (d35c1060fe): the task hire's advisor, still reviewing, held the hire's answer back, and an advisor with
-// nothing to say opens no later turn, so the answer never reached the hirer.
+// Review P1 (d35c1060fe): an advisor with nothing to say opens no later turn, so its hire's answer must not wait on one.
 test('a task hire whose advisor has nothing to say still answers its hirer', async () => {
   const gateway = stubAiBinding((run) => {
-    if (JSON.stringify(requestOf(run).messages).includes('You are reviewing one finished turn')) return chatCompletion(run, '{}');
+    if (forTheAdvisor(run)) return advising(run, null);
 
     if (!forTheHire(run)) return hiring(run, undefined, 'task');
 

@@ -7,26 +7,23 @@ import { asSchema } from 'ai';
 import * as v from 'valibot';
 import {
   chatSessionTurns, gatewayWorkspace, hostedSubagentHarness, improvementLanesRan, runDelegatedTask, until,
-  workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent, mainDatabase,
+  type ActorHarness, type HarnessOrchestratorAgent, mainDatabase,
 } from './helpers/actor-harness';
 import { chatCompletion, offeredTools, stubAiBinding } from './helpers/platform-gateway';
 import { present } from '@kinu.run/test-utils';
 import { compareSurface, CONFORMANCE_PRODUCERS, observedOpEnum, renderConformanceFindings, wiredProducers, type ObservedSurface } from '@kinu.run/test-utils/conformance';
 
-/** An advisor note and a curriculum proposal the gateway answers with, each in its reader's shape. */
-const ADVISOR_NOTE = JSON.stringify({ note: 'the staging cluster was never named', severity: 'nit', class: 'wrong-work' });
+/** What the gateway answers: a curriculum proposal to the judge, and one JSON object to every other lane. */
+const LANE_ANSWER = JSON.stringify({ note: 'the staging cluster was never named', severity: 'nit', class: 'wrong-work' });
 
 const PROPOSALS = JSON.stringify([{ task: 'split the parser', rationale: 'a stretch', predictedSuccess: 0.5, targetsSkills: [] }]);
 
-/** A workspace whose every model lane the platform gateway serves, with advisor reviews on. */
+/** A workspace whose every model lane the platform gateway serves. */
 function servedWorkspace() {
   const gateway = stubAiBinding((run) =>
-    chatCompletion(run, JSON.stringify(run.query).includes('predictedSuccess') ? PROPOSALS : ADVISOR_NOTE));
+    chatCompletion(run, JSON.stringify(run.query).includes('predictedSuccess') ? PROPOSALS : LANE_ANSWER));
 
-  const workspace = gatewayWorkspace(gateway);
-  workspaceMainActor(workspace.db).config.setAdvisorEnabled(true);
-
-  return { workspace, runs: gateway.runs };
+  return { workspace: gatewayWorkspace(gateway), runs: gateway.runs };
 }
 
 const OperationSchema = v.object({ source: v.string() });
@@ -48,7 +45,7 @@ async function observe(): Promise<ObservedSurface> {
   // Offered, by name, as its model call carried them: the owner's lane is built in its own isolate.
   const { tools, activeTools } = await turns.prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
 
-  // The judge grades curriculum proposals; the advisor reviews a completed build turn.
+  // The judge grades curriculum proposals; the improvement lanes read a completed build turn.
   await workspace.agent.proposeCurriculumTasks(1);
   const { messageId } = await turns.settle({ messageId: 'a-conformance', text: 'deployed' });
   await until(() => improvementLanesRan(workspace.db, messageId), 'the improvement lanes ran');

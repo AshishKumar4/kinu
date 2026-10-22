@@ -57,7 +57,6 @@ describe('the logo a new workspace owes', () => {
   /** The workspace's agent's turn that answered the workspace's creation. */
   const genesis = (mission: string | null): Parameters<typeof declareTerminalRoster>[1] => ({
     role: { kind: 'workspace', mission, event: WORKSPACE_CREATED_EVENT },
-    advisor: { reviewsTurns: false, snapshot: () => { throw new Error('no review'); } },
     turn: { userMessage: 'q', assistantResponse: 'a', toolCalls: [], durationMs: 1, steps: 1, hadError: false, feedback: null, turnId: 'genesis-1', origin: 'user' },
     reachableTools: [],
   });

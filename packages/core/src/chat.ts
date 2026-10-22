@@ -1126,7 +1126,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         try {
           await call.untilRead(call.finishedSteps.length);
           // Recorded: the step that ended is the turn's `stepCount - 1`, the number its request was prepared under.
-          await extensions?.emitStepEnd({ stepNumber: stepCount - 1 });
+          await extensions?.emitStepEnd({ stepNumber: stepCount - 1, produced: own });
           await opts.onStep?.(step, own);
           releaseStepImages(step);
         } catch (cause) {

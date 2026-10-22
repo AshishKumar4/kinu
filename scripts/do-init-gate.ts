@@ -47,8 +47,7 @@ const RECOVERY_HOOKS: readonly string[] = [
  *     `streamTextReported` — the provider entry points this repo calls, so a
  *     hook that skips the lanes and reaches a model directly is refused by the
  *     same rule.
- *   • `runDueSessionEvolution`, `hireAdvisor` — the cadence pass, a model call behind
- *     one name, and the advisor's hire, which starts an agent's turn.
+ *   • `runDueSessionEvolution` — the cadence pass, a model call behind one name.
  *   • `resumeAll`, `replayOwedAndRearm`, `owedDeliveryWork` — the delivery
  *     lanes: owed event replies are external mail and an interrupted terminal
  *     transition replays SMTP and model work. An activation arms the durable
@@ -63,7 +62,7 @@ const RECOVERY_HOOKS: readonly string[] = [
 export const MODEL_SINKS: readonly string[] = [
   'suggestTitle', 'applyAutoTitle',
   'generateText', 'streamText', 'generateJson', 'generateReported', 'streamTextReported',
-  'runDueSessionEvolution', 'hireAdvisor',
+  'runDueSessionEvolution',
   'resumeAll', 'replayOwedAndRearm', 'owedDeliveryWork',
 ];
 

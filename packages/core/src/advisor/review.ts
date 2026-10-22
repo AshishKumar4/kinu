@@ -1,18 +1,10 @@
-// The advisor: an agent of its own reads a finished turn's record (no tools) and may say one thing about it.
-// Stateless: notes, delivery and recording arrive as arguments, so every reviewed actor shares judgeAdvisorReply.
+// The advisor's notes: the rules its model answers by, the judgement every note passes, and how a note is said.
+// Stateless: notes, delivery and recording arrive as arguments; the session advisor (session-advisor.ts) holds the state.
 
 import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { EvolutionLaneRequest } from '../identity/evolution-subagents';
 import type { AgentSignal, SendOutcome } from '../types/signals';
-import type { CompletedTurn, ToolCallRecord } from '../evolution/types';
-import { CompletedTurnSchema } from '../evolution/session-window';
-import { codemodeReaches } from '../tools/codemode-reach';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
-import { tolerate } from '../obs/index';
-import { stableStringify } from '../safety/argument-digest';
-import { ADVISOR_SEVERITIES, isAdvisorSeverity, type AdvisorSeverity } from '../types/advisor';
+import { ADVISOR_SEVERITIES, type AdvisorSeverity } from '../types/advisor';
 
 export {
   ADVISOR_SEVERITIES, DEFAULT_ADVISOR_MIN_SEVERITY, type AdvisorSeverity,
@@ -24,13 +16,16 @@ export const ADVISOR_SEVERITY_LABEL = {
   blocker: 'Blocker',
 } as const satisfies Readonly<Record<AdvisorSeverity, string>>;
 
-/** Order matches {@link buildAdvisorPrompt}. `missed-capability` is the signal `turn_ratings` cannot carry:
+/** Order matches {@link ADVISOR_RULES}. `missed-capability` is the signal `turn_ratings` cannot carry:
  *  a capability the turn had and did not use. */
 const ADVISOR_NOTE_CLASSES = ['wrong-work', 'missed-capability', 'dissatisfaction'] as const;
 
+/** A note past this is cut to it, not refused. */
+export const ADVISOR_NOTE_MAX_CHARS = 240;
+
 type AdvisorNoteClass = (typeof ADVISOR_NOTE_CLASSES)[number];
 
-function isAdvisorNoteClass<Value>(value: Value): value is Value & AdvisorNoteClass {
+export function isAdvisorNoteClass<Value>(value: Value): value is Value & AdvisorNoteClass {
   return ADVISOR_NOTE_CLASSES.some((noteClass) => noteClass === value);
 }
 
@@ -51,9 +46,9 @@ export interface AdvisorNote {
   readonly class: AdvisorNoteClass;
 }
 
-/** Shared by writer and scorer so a renamed field fails to compile on the other side.
- *  `turnId` is null for a turn with no durable id (programmatic wake); such a note is deduped but scores nothing. */
-export const AdvisorRowDataSchema = v.object({
+/** What an `advisor_note` row's data holds. `turnId` is null for a turn with no durable id (programmatic wake); such a
+ *  note is deduped but scores nothing. */
+const AdvisorRowDataSchema = v.object({
   severity: v.picklist(ADVISOR_SEVERITIES),
   class: v.picklist(ADVISOR_NOTE_CLASSES),
   turnId: v.nullable(v.string()),
@@ -67,7 +62,7 @@ export type AdvisorRowData = v.InferOutput<typeof AdvisorRowDataSchema>;
  *  (`https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/advisor/emission-guard.ts#L9-L16`). */
 type SuppressionRule = 'duplicate' | 'content-free' | 'gate-open' | 'below-floor';
 
-export type AdvisorDisposition =
+type AdvisorDisposition =
   | 'deliver'
   /** Record it and stay quiet: one `evolution_events` row the owner can read. */
   | 'changelog'
@@ -141,152 +136,54 @@ export function judgeNote(opts: {
   return { disposition: 'deliver', rule: null };
 }
 
-/** An absent or empty field is the silent answer, which is the expected one. */
-const AdvisorReplySchema = v.object({
-  note: v.optional(v.string()),
-  severity: v.optional(v.string()),
-  class: v.optional(v.string()),
-});
-
-function renderToolCall(call: ToolCallRecord): string {
-  const result = call.resultWindow === undefined ? '' : `\n    result: ${call.resultWindow}`;
-  const outcome = call.outcome === undefined ? 'unmeasured' : stableStringify(call.outcome);
-
-  return `  - ${call.name}(${call.argsWindow}) outcome=${outcome}${result}`;
-}
-
-/** Silence is the stated default: a reviewer asked to review always finds something. Negative space ported from
- *  https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/prompts/advisor/system.md.
- *  `reachable` makes missed-capability checkable; a capability reached through codemode counts as used. */
-export function buildAdvisorPrompt(
-  turn: CompletedTurn, reachable: readonly string[] = [], guidance = '',
-): string {
-  const tools = turn.toolCalls.length === 0
-    ? '  (none)'
-    : turn.toolCalls.map(renderToolCall).join('\n');
-
-  const called = new Set(turn.toolCalls.map((call) => call.name));
-
-  const programs = turn.toolCalls
-    .map((call) => call.program ?? '')
-    .filter((program) => program !== '');
-
-  const unused = reachable.filter((name) => !called.has(name)
-    && !programs.some((program) => codemodeReaches(program, name)));
-
-  return [
-    'You are reviewing one finished turn of an autonomous coding agent, for the agent itself.',
-    '',
-    'Say something only when the turn shows a problem the agent would act on. The classes',
-    'that count:',
-    '',
-    '- "wrong-work": work that does not do what was asked, a check it skipped, a wrong',
-    '  assumption it is about to build on, a failure it read as a success.',
-    '- "missed-capability": a capability it HAD and did not use, where using it was the',
-    '  right shape for the work: parallel or exploratory work ground through serially, or',
-    '  deep work answered thinly, while a delegation or search capability sat unused. Name the',
-    '  capability and the moment it should have been used. Only from the reachable list below:',
-    '  if the capability is not on that list the agent did not have it, and there is nothing to say.',
-    '- "dissatisfaction": visible dissatisfaction from the user in this turn: explicit',
-    '  frustration, or a correction that spells out what they wanted.',
-    '  QUOTE the user\'s own words in the note.',
-    '  Their wording is the evidence, and a paraphrase loses what they actually asked for.',
-    '',
-    'Stay silent on these, however plainly you notice them:',
-    '- Size and ambition. A large diff, a wholesale rewrite or a growing plan is not a problem by',
-    '  itself, and is usually what was asked for. Object only where it contradicts something the user',
-    '  said in this turn, and quote the instruction when you do.',
-    '- Backwards compatibility, unless the user or a standing project rule asked for it. Deleting the',
-    '  old path and updating every caller is the default correct answer here.',
-    '- Clarification and process. Never tell the agent to confirm scope, restate the ask, or check in',
-    '  before acting. Intent is its lane; informed action is the default.',
-    '- A decision the agent understood and committed to, unless the record below shows it wrong.',
-    '- Anything the agent has already read: a failing test, a type error, a lint message in the record.',
-    '',
-    'Judge what the record below shows. Arguments and results are windowed, and what a window drops is',
-    'UNKNOWN: never assert a value the record does not show. Do not guess at what is not there, and',
-    'do not ask for reassurance.',
-    '',
-    'Silence is the normal answer. Most turns are fine.',
-    ...(guidance === '' ? [] : ['', '## What this workspace asks its advisor to watch for', '', guidance]),
-    '',
-    `The request:\n"${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"`,
-    '',
-    `What the agent answered:\n"${evidenceWindow(turn.assistantResponse, EVIDENCE_BUDGETS.outcomeAssistantResponse)}"`,
-    '',
-    `Tool calls (${String(turn.toolCalls.length)} across ${String(turn.steps)} steps${turn.hadError ? ', and the turn errored' : ''}):`,
-    tools,
-    '',
-    unused.length === 0
-      ? 'Reachable capabilities it did not use: (none recorded)'
-      : `Reachable capabilities it did not use: ${unused.join(', ')}`,
-    '',
-    'Severities:',
-    '- "nit": worth recording, not worth interrupting for.',
-    '  e.g. "The three sequential writes to the same module could have been one edit. Nothing to redo: worth knowing next time."',
-    '- "concern": the agent should weigh this before its next step.',
-    '  e.g. "The recorded run outcome failed with execution.exitCode 3, but you treated it as successful. Fix the command failure before relying on its result."',
-    '- "blocker": continuing without addressing this wastes the work.',
-    '  e.g. "The migration ran against the live database before the suite ran once. Stop and confirm a backup exists before continuing."',
-    '',
-    `One note, at most ${String(ADVISOR_NOTE_MAX_CHARS)} characters, addressed to the agent. State the problem and what`,
-    'to do. No preamble, no praise, no restating the turn.',
-    '',
-    'JSON shape when you have something: {"note":"<the note>","severity":"nit"|"concern"|"blocker",'
-      + '"class":"wrong-work"|"missed-capability"|"dissatisfaction"}',
-    'JSON shape when you do not: {}',
-    jsonObjectOnlyInstruction(),
-  ].join('\n');
-}
-
-/** Over-long notes are truncated, not rejected; an unknown severity or class is a contract failure (null). */
-export const ADVISOR_NOTE_MAX_CHARS = 240;
-
-export function parseAdvisorReply(raw: string): AdvisorNote | null {
-  const extracted = tolerate(() => extractJsonObject(raw), 'malformed-input');
-
-  if (extracted === undefined) return null;
-  const parsed = v.safeParse(AdvisorReplySchema, extracted);
-
-  if (!parsed.success) return null;
-  const reply = parsed.output;
-  const note = reply.note?.trim();
-
-  if (note === undefined || note.length === 0) return null;
-
-  if (!isAdvisorSeverity(reply.severity)) return null;
-
-  if (!isAdvisorNoteClass(reply.class)) return null;
-
-  return {
-    note: note.slice(0, ADVISOR_NOTE_MAX_CHARS),
-    severity: reply.severity,
-    class: reply.class,
-  };
-}
-
-/** The preset the advisor is hired under (profiles/catalog.ts `SYSTEM_ROLE_DEFINITIONS`). */
-export const ADVISOR_ROLE_ID = 'advisor';
-
-const ADVISOR_LANE_PREFIX = 'advisor:';
-
-/** The reviewed turn's lane on the reviewing actor's subagent rows; the answer finds its turn by it. */
-export function advisorLane(turnId: string): EvolutionLaneRequest {
-  return { requestId: `${ADVISOR_LANE_PREFIX}${turnId}` };
-}
-
-/** The turn an answered subagent lane reviewed, or null for another lane's subagent (a refiner). */
-export function advisedTurnOf(lane: EvolutionLaneRequest): string | null {
-  return lane.requestId.startsWith(ADVISOR_LANE_PREFIX) ? lane.requestId.slice(ADVISOR_LANE_PREFIX.length) : null;
-}
+/** What the advisor says something about, and what it stays silent on. Silence is the stated default: a reviewer asked
+ *  to review always finds something. Negative space ported from
+ *  https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/prompts/advisor/system.md. */
+export const ADVISOR_RULES: readonly string[] = [
+  'Say something only when the work shows a problem the agent would act on. The classes that count:',
+  '',
+  '- "wrong-work": work that does not do what was asked, a check it skipped, a wrong',
+  '  assumption it is about to build on, a failure it read as a success.',
+  '- "missed-capability": a capability it HAD and did not use, where using it was the',
+  '  right shape for the work: parallel or exploratory work ground through serially, or',
+  '  deep work answered thinly, while a delegation or search capability sat unused. Name the',
+  '  capability and the moment it should have been used. Only from its reachable capabilities:',
+  '  if a capability is not among them the agent did not have it, and there is nothing to say.',
+  '- "dissatisfaction": visible dissatisfaction from the user: explicit frustration, or a',
+  '  correction that spells out what they wanted. QUOTE the user\'s own words in the note:',
+  '  their wording is the evidence, and a paraphrase loses what they actually asked for.',
+  '',
+  'Stay silent on these, however plainly you notice them:',
+  '- Size and ambition. A large diff, a wholesale rewrite or a growing plan is not a problem by',
+  '  itself, and is usually what was asked for. Object only where it contradicts something the user',
+  '  said, and quote the instruction when you do.',
+  '- Backwards compatibility, unless the user or a standing project rule asked for it. Deleting the',
+  '  old path and updating every caller is the default correct answer here.',
+  '- Clarification and process. Never tell the agent to confirm scope, restate the ask, or check in',
+  '  before acting. Intent is its lane; informed action is the default.',
+  '- A decision the agent understood and committed to, unless what you read shows it wrong.',
+  '- Anything the agent has already read: a failing test, a type error, a lint message.',
+  '- Work still in progress that the agent is visibly about to finish.',
+  '',
+  'Judge what you read. Arguments and results are windowed, and what a window drops is UNKNOWN:',
+  'check it with your tools, or say nothing about it. Do not ask for reassurance.',
+  '',
+  `One note per problem, at most ${String(ADVISOR_NOTE_MAX_CHARS)} characters, addressed to the agent. State the`,
+  'problem and what to do. No preamble, no praise, no restating the work.',
+];
 
 /** A runtime-authored message says so (as {@link COMPLETION_GATE_HEADER}): the model only has the prose, and would
  *  obey an advisory it read as the user's instruction. */
 export const ADVISOR_HEADER =
-  '[Advisor: a second model reviewed the turn you just finished. This is the Kinu '
+  '[Advisor: a second model is reviewing your work as you go. This is the Kinu '
   + 'runtime, not the user. Weigh it against what you know; it may be wrong.]';
 
-const advisorPrefix = (severity: AdvisorSeverity): string => `${ADVISOR_HEADER}\n\n${ADVISOR_SEVERITY_LABEL[severity]}: `;
+/** Every advisor header opens so, this build's and the hire's before it, whose rows a card still reads. */
+const ADVISOR_HEADER_OPENING = '[Advisor: ';
+
+const labelLine = (severity: AdvisorSeverity): string => `\n\n${ADVISOR_SEVERITY_LABEL[severity]}: `;
+
+const advisorPrefix = (severity: AdvisorSeverity): string => `${ADVISOR_HEADER}${labelLine(severity)}`;
 
 function advisorSignalText(note: AdvisorNote): string {
   return `${advisorPrefix(note.severity)}${note.note}`;
@@ -298,45 +195,12 @@ const FORWARDED_ACTOR_LINE = /^\[Actor [^\]\n]*\]\n/u;
 /** The note alone, from a row written before it was kept beside its text: the text less the header the agent reads it
  *  under, and less the actor line a parent's copy opens with; null when the text is not in that shape. */
 export function keptAdvisorNote(text: string, severity: AdvisorSeverity): string | null {
-  const prefix = advisorPrefix(severity);
   const said = text.replace(FORWARDED_ACTOR_LINE, '');
+  const label = said.indexOf(labelLine(severity));
 
-  return said.startsWith(prefix) ? said.slice(prefix.length) : null;
-}
+  if (!said.startsWith(ADVISOR_HEADER_OPENING) || label < 0 || said.lastIndexOf(']', label) < 0) return null;
 
-/** What the advisor is hired on; recorded at the turn's end, so a replay reads the tool surface that turn had.
- *  The note is judged when the answer arrives, against the floor and dedupe window of that moment. */
-export const AdvisorRecoverySnapshotSchema = v.object({
-  turn: CompletedTurnSchema,
-  reachable: v.array(v.string()),
-  model: v.optional(v.string()),
-});
-
-export type AdvisorRecoverySnapshot = v.InferOutput<typeof AdvisorRecoverySnapshotSchema>;
-
-/**
- * The one judgement every reviewed actor's advisor answer takes, recorded when kept: `changelog` is filed only,
- * `deliver` is also to be said ({@link sayAdvisorNote}). Null when it said nothing readable.
- */
-export function judgeAdvisorReply(reply: string, deps: {
-  readonly turnId: string | undefined;
-  readonly minSeverity: AdvisorSeverity;
-  /** Normalised text of the notes already on the audit stream. */
-  readonly recent: readonly string[];
-  /** The completion gate has asked its question and not heard back. */
-  readonly gateOpen: boolean;
-  /** The turn id joins the row to the conversation it graded; `spoken` when the note is said, not only filed. */
-  readonly record: (note: AdvisorNote, turnId: string | undefined, spoken: boolean) => void;
-}): { readonly note: AdvisorNote; readonly disposition: AdvisorDisposition } | null {
-  const note = parseAdvisorReply(reply);
-
-  if (note === null) return null;
-  const { disposition } = judgeNote({ note, minSeverity: deps.minSeverity, recent: deps.recent, gateOpen: deps.gateOpen });
-
-  // Recorded before it is said: the row feeds the next turn's dedupe window.
-  if (disposition !== 'drop') deps.record(note, deps.turnId, disposition === 'deliver');
-
-  return { note, disposition };
+  return said.slice(label + labelLine(severity).length);
 }
 
 /**
@@ -345,6 +209,8 @@ export function judgeAdvisorReply(reply: string, deps: {
  */
 export async function sayAdvisorNote(note: AdvisorNote, deps: {
   readonly turnId: string | undefined;
+  /** Which of the turn's notes this is, where a turn may say more than one. */
+  readonly key?: string;
   readonly send: (signal: AgentSignal) => Promise<SendOutcome>;
   readonly actor?: ActorHandle;
   readonly parent?: (signal: AgentSignal) => Promise<SendOutcome>;
@@ -358,8 +224,8 @@ export async function sayAdvisorNote(note: AdvisorNote, deps: {
 
   const keyed: AgentSignal = deps.turnId === undefined || deps.turnId === ''
     ? signal
-    : { ...signal, idempotencyKey: deps.actor === undefined
-      ? `advisor:${deps.turnId}` : `advisor:${deps.actor.actorId}:${deps.turnId}` };
+    : { ...signal, idempotencyKey: `${deps.actor === undefined
+      ? `advisor:${deps.turnId}` : `advisor:${deps.actor.actorId}:${deps.turnId}`}${deps.key === undefined ? '' : `:${deps.key}`}` };
 
   const sent = await deps.send(keyed);
 

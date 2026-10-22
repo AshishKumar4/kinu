@@ -101,8 +101,6 @@ export interface ActorHostDeps extends SeatHostDeps {
   orchestrationFor(bound: BoundActor & { readonly runtime: AgentRuntime }): AgentOrchestratorDeps | Promise<AgentOrchestratorDeps>;
   /** `null` only for a host that publishes no run events. */
   contextEvents(bound: BoundActor): ContextEventRecorder | null;
-  /** The port a hosted actor hires its advisor through; absent, hosted turns are not reviewed. */
-  advisorPort?(bound: BoundActor): TemporaryAgentPort | null;
   sayToParent?(child: ActorReference, signal: AgentSignal): Promise<SendOutcome>;
   /** Where the receipts of calls whose effects commit in another store are kept; absent, every call commits here. */
   readonly receipts?: ActorSessionOptions['receipts'];
@@ -207,7 +205,6 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         history: bound.stores.history,
         events: deps.contextEvents(bound),
         recording: bound.stores.eventRecorder,
-        advisorPort: () => deps.advisorPort?.(bound) ?? null,
         reviewed: bound.record.input,
         advisor: parentId === null ? undefined : {
           config: deps.directory.main().config,

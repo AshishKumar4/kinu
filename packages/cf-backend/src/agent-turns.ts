@@ -3,7 +3,7 @@ import { hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs'
 import { Effect, Exit } from 'effect';
 import {
   AgentOpenTurns, TurnFences, type FencedRow, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, scaffoldProviders, runWorkModeInvocation,
-  announcementOf, improvementLanesOpen, type ActorAdvisor, type SeatedActor, type TurnSurface,
+  announcementOf, type SeatedActor, type TurnSurface,
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, turnTags,
   openingCacheCold, type OpenWork,
@@ -11,7 +11,7 @@ import {
 import type { TurnCall } from './agent-facets';
 import type { TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
 import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, AgentOwes, FrozenAuthority, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpeningAsk, TurnReads } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, AgentOwes, FrozenAuthority, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpeningAsk, TurnReads } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -40,8 +40,6 @@ export interface AgentTurnsDeps {
   credentialsRevision(): number | null;
   /** The governor an agent's chat turns spend under, when its missions are the workspace's: main's (D9). */
   missions(actorId: string): MissionGovernor | null;
-  /** The agent's advisor, hired through the workspace as every hire is. */
-  advisor(actor: SeatedActor): ActorAdvisor;
   /** The agent has no turn open here any more, or it was stopped: what it held for its turns lets go, the computer's
    *  desktop among it (D89). Its owner runs it detached: nothing of the turn waits on it. */
   turnsEnded(actorId: string): void;
@@ -179,11 +177,6 @@ export class AgentTurns {
 
     if (waiting === undefined || turn?.request.run?.inference.runId !== report.runId) return;
     const { outcome } = report;
-
-    // Its rounds' advice, reviewed here as its end is taken: nothing of its rounds crossed before its end committed.
-    for (const review of 'ended' in outcome ? outcome.ended.reviews ?? [] : []) {
-      await hold(logged('agent.run_advice_failed', { doing: "reviewing a delivered run's round", otherwise: 'io' }, () => this.advise(actorId, { turnId: report.id, runId: report.runId, review })));
-    }
 
     if ('ended' in outcome) waiting.resolve(outcome.ended);
     else waiting.reject(new KinuError(outcome.refused.code, outcome.refused.message));
@@ -561,7 +554,6 @@ export class AgentTurns {
       tools: surface.descriptors,
       ownerLane: surface.ownerLane,
       dynamic: this.dynamic(turn, prepared),
-      reviewsTurns: surface.reviewsTurns,
       ...(run?.mission !== undefined && { missionLabels: run.mission.labels }),
       ...(this.chatMission(turn.reference.actorId, turn).length > 0 && { missionLabels: this.chatMission(turn.reference.actorId, turn) }),
       facts,
@@ -593,18 +585,6 @@ export class AgentTurns {
     prepared.surface.bind(profile);
 
     return this.dynamic(turn, prepared);
-  }
-
-  private async advise(actorId: string, { turnId, runId, review }: { readonly turnId: string; readonly runId: string; readonly review: AgentReview }): Promise<void> {
-    const { turn: completed, reachable, mode } = review;
-    const advise = this.namedRun(actorId, { turnId, runId })?.advise;
-
-    if (advise !== undefined) return await advise(completed, reachable, mode);
-
-    if (!improvementLanesOpen('completed', mode)) return;
-    const advisor = this.deps.advisor(this.prepared(this.turn(actorId, turnId)).actor);
-
-    await advisor.hire(advisor.snapshot(completed, reachable));
   }
 
   async trace(actorId: string, bound: TurnBound, event: AgentTrace): Promise<void> {

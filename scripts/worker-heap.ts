@@ -521,6 +521,110 @@ export interface ScreenshotTurn {
   readonly stepped: number;
 }
 
+/** One long turn in a fresh workspace, with the owner's advisor switch on or off, printed as the long turn's own row
+ *  reads it, with the advisor calls it made and how long the turn took. A reading, not a bound. */
+async function advisedLongTurn(advised: boolean, run: {
+  readonly ask: (path: string) => Promise<string>;
+  readonly workspace: Inspector;
+  readonly port: number;
+  readonly sessions: Inspector[];
+}): Promise<void> {
+  const { ask } = run;
+
+  const name = advised ? 'advised' : 'unadvised';
+  const isolates = { workspace: run.workspace, main: await inspect(run.port, `${ISOLATE_NAMES.main} in the ${name} long turn's workspace`, mainOf(await ask(`/?workspace=${name}&compat=1`))) };
+  run.sessions.push(isolates.main);
+
+  if (advised) await ask(`/advisor?workspace=${name}`);
+  await ask(`/quiesce?workspace=${name}`);
+  const advisorCalls = async () => v.parse(v.object({ advisorCalls: v.number() }), JSON.parse(await ask('/model'))).advisorCalls;
+  const callsBefore = await advisorCalls();
+  await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}&stepBytes=${String(LONG_TURN.stepBytes)}`);
+  await inEach(isolates, async (session) => { await session.sampleAllocations(); });
+  const started = performance.now();
+  const turn = ask(`/turn?workspace=${name}&text=long`);
+  let peak = { workspace: 0, main: 0 };
+  let first = { workspace: 0, main: 0 };
+  let last = first;
+
+  for (let step = 1; step <= LONG_TURN.steps; step++) {
+    while (v.parse(v.object({ arrived: v.number() }), JSON.parse(await ask('/model'))).arrived < step) await Bun.sleep(2);
+    const used = await inEach(isolates, async (session) => await session.usedHeap());
+    peak = { workspace: Math.max(peak.workspace, used.workspace), main: Math.max(peak.main, used.main) };
+
+    if (step === 1) first = await inEach(isolates, async (session) => await session.liveHeap());
+
+    if (step === LONG_TURN.steps) last = await inEach(isolates, async (session) => await session.liveHeap());
+    await ask(`/model?released=${String(step)}`);
+  }
+
+  await turn;
+  const turnMs = performance.now() - started;
+  await ask('/model?released=1000000');
+  // The turn's end waits for its last step's review: read once the advisor's calls have come and no other has followed
+  // for 3 s (a minute at most), and the turn's agent and workspace have settled.
+  await ask(`/main-idle?workspace=${name}`);
+  await ask(`/quiesce?workspace=${name}`);
+
+  if (advised) {
+    const deadline = performance.now() + 60_000;
+    let seen = await advisorCalls();
+    let quietSince = performance.now();
+
+    while (performance.now() < deadline && (seen === callsBefore || performance.now() - quietSince < 3000)) {
+      await Bun.sleep(250);
+      const now = await advisorCalls();
+
+      if (now !== seen) [seen, quietSince] = [now, performance.now()];
+    }
+
+    await ask(`/main-idle?workspace=${name}`);
+    await ask(`/quiesce?workspace=${name}`);
+  }
+
+  const allocated = await inEach(isolates, async (session) => await session.allocations());
+  const reviews = await advisorCalls() - callsBefore;
+
+  console.log(`${GATE}: ${name} ${String(LONG_TURN.steps)}-step turn: ${String(reviews)} advisor calls; turn ${String(Math.round(turnMs))} ms; peak `
+    + `${inEachIsolate(peak)} used; grew ${inEachIsolate(beyond(last, first))} live first to last step; allocated `
+    + `${inEachIsolate({ workspace: allocated.workspace.total, main: allocated.main.total })}`);
+  await ask('/model?answerBytes=0&toolSteps=0');
+}
+
+/** A four-step turn with `fault` armed in its advisor's model calls, then a clean one, in a fresh workspace: whether
+ *  each ran every step and came to rest, how long it took, the advisor calls the gateway answered, and whether main's
+ *  isolate kept the buffer planted before the faulted turn (a reset of the isolate drops it). A reading, not a bound. */
+async function faultedAdvisorTurn(fault: 'throw' | 'uncaught', ask: (path: string) => Promise<string>): Promise<void> {
+  const name = `advisor-fault-${fault}`;
+  const read = async () => v.parse(v.object({ advisorCalls: v.number(), arrived: v.number() }), JSON.parse(await ask('/model')));
+  await ask(`/?workspace=${name}&compat=1`);
+  await ask(`/plant?workspace=${name}&isolate=main&marker=${name}&bytes=1024`);
+  await ask(`/advisor?workspace=${name}`);
+  await ask(`/quiesce?workspace=${name}`);
+
+  const turn = async (text: string): Promise<string> => {
+    const before = await read();
+    await ask('/model?answerBytes=0&toolSteps=3&stepBytes=0');
+    await ask('/model?released=1000000');
+    const started = performance.now();
+    await ask(`/turn?workspace=${name}&text=${text}`);
+    await ask(`/main-idle?workspace=${name}`);
+    const ms = Math.round(performance.now() - started);
+    const after = await read();
+
+    return `${String(after.arrived)} of 4 steps, at rest in ${String(ms)} ms, ${String(after.advisorCalls - before.advisorCalls)} advisor calls answered`;
+  };
+
+  await ask(`/advisor-fault?workspace=${name}&fault=${fault}`);
+  const faulted = await turn('faulted');
+  const kept = v.parse(v.number(), JSON.parse(await ask(`/main-planted?workspace=${name}`)));
+  await ask(`/advisor-fault?workspace=${name}`);
+  const clean = await turn('clean');
+  await ask(`/quiesce?workspace=${name}`);
+  console.log(`${GATE}: advisor fault ${fault}: the faulted turn ${faulted}; main's isolate kept ${String(kept)} of 1 planted buffer; the next turn ${clean}`);
+  await ask('/model?answerBytes=0&toolSteps=0');
+}
+
 export async function measure(): Promise<HeapMeasurement> {
   const wrangler = v.parse(WranglerSchema, JSON.parse(readFileSync(join(DIST, 'wrangler.json'), 'utf8')));
   const key = btoa('worker-heap-credential-key-32byt');
@@ -796,6 +900,17 @@ export async function measure(): Promise<HeapMeasurement> {
       // Settled as each workload above is before the next: the subagents' sleep-time pass runs in the workspace's isolate.
       await ask('/main-idle?workspace=subagents');
       await ask('/quiesce?workspace=subagents');
+
+      // Opt-in, for D9's measurement of the advisor's placement: the long turn again, advisor off then on, in fresh
+      // workspaces at the same point of the run, so the pair differs in the advisor alone.
+      if (process.env.HEAP_ADVISOR === '1') {
+        for (const advised of [false, true]) await advisedLongTurn(advised, { ask, workspace, port, sessions });
+      }
+
+      // Opt-in: what an advisor's failure reaches, now that it runs in the isolate of the agent it reviews.
+      if (process.env.HEAP_ADVISOR_FAULTS === '1') {
+        for (const fault of ['throw', 'uncaught'] as const) await faultedAdvisorTurn(fault, ask);
+      }
 
       // Last, so nothing measured above carries it: each isolate's planted buffer, found by its marker in both.
       const plant = async (isolate: (typeof ISOLATES)[number]): Promise<Isolates<number>> => {

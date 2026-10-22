@@ -95,8 +95,6 @@ export interface ActorSurface {
   readonly capture: HeadCapture | null;
   /** What the turn has told its hirer by now. */
   readonly reports: SubagentReportLedger;
-  /** Whether its turns are reviewed by an advisor. */
-  readonly reviewsTurns: boolean;
   /** What its isolate is told of its tools, and their digest: it is told them again only when the digest moves. */
   readonly descriptors: readonly AgentToolDescriptor[];
   readonly digest: string;
@@ -167,8 +165,6 @@ export interface HostedActorSeams {
   hirerName(actor: BoundActor): string;
   rederiveWake(): void;
   temporary(actor: BoundActor): TemporaryAgentPort;
-  /** Inside the answer's transaction: the hirer's advisor answer is owed a delivery job. */
-  oweAdvice(actor: BoundActor): Promise<void>;
 }
 
 /**
@@ -282,7 +278,7 @@ export async function relayHostedReport(
     }),
     announce: () => { seams.announce(hirer); },
     onAdmitted: () => { if (!seams.turnInFlight(hirer.reference)) seams.scheduleDrain(hirer); },
-    evolutionAnswerStored: () => seams.oweAdvice(hirer),
+    // A refiner's answer is read by its lane; nothing is owed a delivery here.
     onEvolutionAnswer: () => { seams.rederiveWake(); },
     temporary: seams.temporary(hirer),
   }, { fromSubagent: name, ...event }, Date.now());

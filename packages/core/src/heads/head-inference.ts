@@ -29,16 +29,14 @@ import { Cause, Effect, Exit } from 'effect';
 import { BUILTIN_TOOL_NAMES } from '../tools/registry';
 import { assembleActorTurn, withCompactionTrigger, type RunTurnSources, type TurnAssemblySources } from '../orchestrator/turn-assembly';
 import type { CompactionTriggerReader } from '../orchestrator/turn-context';
-import { improvementLanesOpen } from '../orchestrator/evolution-lanes';
 import type { ActorTurnClaim, ClaimOutcome, PreparingClaim } from '../orchestrator/actor-claims';
-import type { ActorExecutionInput, ActorExecutionResult, ActorSession, ActorTurnLease } from '../orchestrator/actor-session';
+import type { ActorExecutionInput, ActorExecutionResult, ActorSession } from '../orchestrator/actor-session';
 import type { ChatEvent } from '../chat';
 import type { MessageReference, MessagePartReference } from '../session/messages';
-import { recordExecutionEvent, settleExecutionContext, snapshotCompletedTurn, type CompactionTriggerState } from '../orchestrator/turn-lifecycle';
+import { recordExecutionEvent, settleExecutionContext, type CompactionTriggerState } from '../orchestrator/turn-lifecycle';
 import { driveExecution, type AssembledRound } from '../orchestrator/execution-driver';
 import type { TurnCapability } from '../orchestrator/execution';
 import { OVERFLOW_RETRY_TEXT } from '../turn-failure';
-import type { CompletedTurn } from '../evolution/types';
 
 /** A run's round as it assembled: what its projection reads of its preparation. */
 interface HeadRound extends AssembledRound {
@@ -284,8 +282,6 @@ export interface HeadInferenceDeps {
   /** The next turn's messages, or `null` to end the run; absent is one turn (every head). A node's turn may end
    *  with detached work running; only `null` makes the run terminal. */
   resume?: () => Promise<readonly ModelMessage[] | null>;
-  /** Hires a completed turn's advisor where the roster lives. Absent: this actor's own session hires it. */
-  advise?: (turn: CompletedTurn, reachable: readonly string[], mode: WorkMode) => Promise<void>;
 }
 
 
@@ -387,28 +383,6 @@ function classifyHeadOutcome(
   return { status: aborted ? 'aborted' : 'completed', stopReason };
 }
 
-
-interface CompletedTurnReview {
-  session: ActorSession;
-  input: HeadInput;
-  deps: HeadInferenceDeps;
-  lease: ActorTurnLease;
-  outcome: ActorExecutionResult;
-}
-
-/** Hires the turn's advisor and returns: its note reaches this actor when it answers, after this turn. */
-async function adviseCompletedTurn({ session, input, deps, lease, outcome }: CompletedTurnReview): Promise<void> {
-  const turn = snapshotCompletedTurn(session.orchestrator, {
-    userMessage: input.task, assistantResponse: outcome.text,
-    turnId: `${deps.runId}:${lease.turnId}`, sessionId: input.id, origin: 'programmatic',
-  });
-
-  if (deps.advise !== undefined) return await deps.advise(turn, Object.keys(deps.tools), input.mode);
-
-  if (!improvementLanesOpen('completed', input.mode)) return;
-
-  await session.advisor.hire(session.advisor.snapshot(turn, Object.keys(deps.tools)));
-}
 
 /** `kind` namespaces the canonical ids of the next turn's input. */
 interface NextTurnInput {
@@ -654,7 +628,7 @@ async function inferPrepared(
           onEvent: (event: ChatEvent) => { settled = relayRunEvent(bound, event) || settled; },
         };
       },
-      project: async ({ lease, assembled, outcome }) => {
+      project: async ({ assembled, outcome }) => {
         roundCalls();
         const retry = settleRunContext(current.deps, { outcome, execution: assembled.execution, historyLength: assembled.historyLength, contextWindow: assembled.contextWindow, overflowRetry });
 
@@ -676,8 +650,6 @@ async function inferPrepared(
 
         // The runner's selected answer (chat.ts answerFromSteps), not `text`, which may be a synthesized stand-in.
         if (outcome.answer !== null) lastText = outcome.answer;
-
-        if (!turnFailed && !outcome.interrupted) await adviseCompletedTurn({ session, input, deps: current.deps, lease, outcome });
 
         return { claim: turnClaimOutcome(turnFailed, outcome.interrupted), stop: failure !== undefined || refusal !== null };
       },

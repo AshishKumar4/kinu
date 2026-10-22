@@ -297,7 +297,6 @@ describe('applyOverflowRecovery', () => {
 /** An agent that reviews no turns, whose conversation this turn did not open. */
 const QUIET_AGENT: Parameters<typeof declareTerminalRoster>[1] = {
   role: { kind: 'agent', opensConversation: () => false },
-  advisor: { reviewsTurns: false, snapshot: () => { throw new Error('no review'); } },
   turn: { userMessage: 'q', assistantResponse: 'a', toolCalls: [], durationMs: 1, steps: 1, hadError: false, feedback: null, turnId: 't', origin: 'user' },
   reachableTools: [],
 };

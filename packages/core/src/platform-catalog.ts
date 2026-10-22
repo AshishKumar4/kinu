@@ -1858,7 +1858,7 @@ export const PLATFORM_CATALOG = {
       'LIFETIME, not concurrent: deleting a facet does not free its id, and re-creating a name under '
       + 'the same parent reuses that name\'s id (workerd facet-tree-index.h, read again 2026-10-21). '
       + 'Kinu gives every agent its own facet (D9): main by its id, every other agent by a fresh '
-      + 'storage key. So each reviewed turn\'s advisor, each head, swarm node, steer branch and hire '
+      + 'storage key. So each head, swarm node, steer branch and hire '
       + 'uses one id for good, and no name is reused. Counted per workspace on actor.startup\'s '
       + '`facets` (identity/workspace-actors.ts facetNamesGiven): a ceiling, as an actor that never '
       + 'ran used no id. The SDK\'s `cf_agents_sub_agents` does not count them: Kinu calls '
