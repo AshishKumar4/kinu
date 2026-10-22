@@ -404,11 +404,19 @@ function redSections(reds: readonly ReportEntry[], isNew: (entry: ReportEntry) =
   return lines;
 }
 
+/** Every red the report names: each entry's, and the budget's once the deploy's end is marked. What the render counts,
+ *  and what `holds-red` answers from. */
+function reportReds(input: Pick<ReportInput, 'meta' | 'entries'>): ReportEntry[] {
+  const marks = new Map(input.entries.flatMap((entry) => (entry.kind === 'mark' ? [[entry.mark, entry.seconds] as const] : [])));
+  const budget = input.meta.mode === 'gates-only' ? undefined : budgetRed(marks.get('end'));
+
+  return [...deployReds(input.entries), ...budget === undefined ? [] : [budget]];
+}
+
 export function renderReport(input: ReportInput): RenderedReport {
   const { dir, meta, entries, previous, evals } = input;
   const marks = new Map(entries.flatMap((entry) => (entry.kind === 'mark' ? [[entry.mark, entry.seconds] as const] : [])));
-  const budget = meta.mode === 'gates-only' ? undefined : budgetRed(marks.get('end'));
-  const reds = [...deployReds(entries), ...budget === undefined ? [] : [budget]];
+  const reds = reportReds(input);
   const soak = entries.filter(soaked);
   const carried = new Set(previous?.summary.reds ?? []);
   const isNew = (entry: ReportEntry): boolean => !carried.has(identity(entry) ?? '');
@@ -500,6 +508,15 @@ if (import.meta.main) {
     process.exit(at === undefined ? 1 : 0);
   }
 
+  // `holds-red [phase[,phase]]`: exit 0 when the report names a red (of those phases), 1 when it names none. The deploy's
+  // verdict and its report are one: a step that went red and named nothing is named by deploy.sh from this.
+  if (command === 'holds-red' && rest.length <= 1) {
+    const phases = rest[0]?.split(',');
+    const reds = reportReds(readReport(first)).filter((entry) => phases === undefined || ('phase' in entry && phases.includes(entry.phase)));
+
+    process.exit(reds.length > 0 ? 0 : 1);
+  }
+
   if (command === 'budget' && rest.length === 1) {
     const input = readReport(first);
     const red = input.meta.mode === 'gates-only' ? undefined : budgetRed(Number(rest[0]));
@@ -532,6 +549,6 @@ if (import.meta.main) {
     process.exit(summary.reds.length === 0 ? 0 : 1);
   }
 
-  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|startup|mark|when|budget|render …');
+  console.error('usage: bun scripts/deploy-report.ts open|note|dispatched|startup|mark|when|holds-red|budget|render …');
   process.exit(2);
 }

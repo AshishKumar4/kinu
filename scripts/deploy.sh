@@ -409,11 +409,12 @@ run_phase() {
   if [ "$status" -eq 0 ]; then return 0; fi
   KINU_REDS=1
   echo -e "${RED}❌ the $1 phase failed (exit $status).${NC}"
-  # 1 is the ladder's own verdict, every red it found already in the report.
-  # Any other status is a runner that ended without one: a signal (the OOM
-  # killer's 137) or a crash, which the kernel reports whether it cooperated
-  # or not, so the report names the phase itself.
-  if [ "$status" -ne 1 ]; then
+  # A red the ladder found is in the report already. A runner that names none
+  # ended without its verdict: a signal (the OOM killer's 137), or a crash, which
+  # also exits 1 (staging e8837b133, 2026-10-22: an armada report the ladder could
+  # not parse), so the exit status alone cannot say. The report says, and names the
+  # phase when it holds none of its reds.
+  if ! reported_red "$1"; then
     report note "$1" "the $1 phase's runner" "it ended with exit $status and no verdict of its own, so a row it had not reported on may be red and unnamed"
   fi
   return 1
@@ -453,6 +454,10 @@ step_red() {
   echo -e "${RED}❌ $3${NC}"
   report note "$1" "$2" "$3"
 }
+# reported_red [phase[,phase]]: whether the report names a red (of those phases).
+reported_red() {
+  report holds-red "$@" >/dev/null 2>&1
+}
 # The build started beside the upload gates (see THE BUILD below), cancelled when the deploy ends before it is awaited.
 KINU_BUILD_PID=""
 cancel_build() {
@@ -465,6 +470,11 @@ cancel_build() {
 finish() {
   cancel_build
   mark end
+  # The verdict is the report's: a deploy red here names a red there, the budget's included once the end is marked, or
+  # the report says that no step named one.
+  if [ "$KINU_REDS" != "0" ] && ! reported_red; then
+    report note deploy "the verdict" "this deploy went red and no step named a red in this report; its output says which step failed"
+  fi
   report render || KINU_REDS=1
   # A red run that published keeps staging's built record, the one an owner's override names (promote.ts withdraw).
   if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ "$KINU_REDS" != "0" ]; then
@@ -1319,7 +1329,10 @@ if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$K
   echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"
   KINU_TRAFFIC_ENDED="$(report when traffic)" || KINU_TRAFFIC_ENDED=""
   bun "$KINU_ROOT/scripts/prod-logs.ts" version "$KINU_VERSION" --worker "$KINU_WORKER" --since "$KINU_LIVE_AT" \
-    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} --keep-windows "$KINU_ENV" || KINU_REDS=1
+    ${KINU_TRAFFIC_ENDED:+--until "$KINU_TRAFFIC_ENDED"} --keep-windows "$KINU_ENV" || {
+    KINU_REDS=1
+    reported_red telemetry || report note telemetry "the telemetry read" "scripts/prod-logs.ts ended red and named no finding of its own"
+  }
 fi
 
 # ── Step 6: The record, or the history and the evals ─────────────
