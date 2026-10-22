@@ -9,7 +9,7 @@ import type { ModelMessage, Tool, ToolSet } from 'ai';
 import { jsonSchema, tool } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import { attempt, diagnostics, settle } from '../obs/index';
+import { attempt, diagnostics, inItsWords, settle, type KinuError } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import type { AgentConfigStore } from '../config/store';
 import type { KinuExtension } from '../extension';
@@ -331,7 +331,8 @@ export class SessionAdvisor {
   private update(reviewed: ReviewedTurn, delta: readonly string[]): Effect.Effect<void> {
     const { turn } = reviewed;
 
-    return Effect.gen({ self: this }, function* () {
+    // A throw anywhere in it, a store's included, is the review's failure: worded, logged, and never the turn's.
+    return inItsWords('unavailable', Effect.gen({ self: this }, function* () {
       if (this.conversationChars > CONVERSATION_MAX_CHARS) [this.conversation, this.conversationChars] = [[], 0];
 
       for (const text of delta) this.append({ role: 'user', content: text });
@@ -370,7 +371,7 @@ export class SessionAdvisor {
         // A loop past its warning, or an update whose only calls were advice: nothing more to read.
         if (stopped || reply.toolCalls.every((call) => call.toolName === 'advise')) return;
       }
-    }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('advisor.review_failed', failure, { actorId: this.deps.actor.actorId }); })));
+    })).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('advisor.review_failed', failure, { actorId: this.deps.actor.actorId }); })));
   }
 
   private append(message: ModelMessage): void {
@@ -389,8 +390,14 @@ export class SessionAdvisor {
     }).pipe(Effect.catch((failure) => Effect.succeed(`The read failed: ${failure.message}`)));
   }
 
-  /** One `advise` call: judged as every note is, said where the judgement says, then recorded. */
+  /** One `advise` call: judged as every note is, said where the judgement says, then recorded. A failure here, a store's
+   *  included, is this call's result, so the round's every call is still answered. */
   private advise(reviewed: ReviewedTurn, input: JsonValue, guards: UpdateGuards): Effect.Effect<string> {
+    return inItsWords('unavailable', Effect.suspend(() => this.adviseOnce(reviewed, input, guards)))
+      .pipe(Effect.catch((failure) => Effect.succeed(`Not said: ${failure.message}`)));
+  }
+
+  private adviseOnce(reviewed: ReviewedTurn, input: JsonValue, guards: UpdateGuards): Effect.Effect<string, KinuError> {
     const note = adviseNote(input);
 
     if (note === null) return Effect.succeed('Not said: a note needs text, a severity of nit, concern or blocker, and a known class.');
@@ -430,6 +437,6 @@ export class SessionAdvisor {
       if (note.severity === 'blocker' && reviewed.running) await this.deps.interrupt();
 
       return running ? 'Said: the agent reads it at its next step.' : 'Said: it opens the agent\'s next turn.';
-    }).pipe(Effect.catch((failure) => Effect.succeed(`Not said: ${failure.message}`)));
+    });
   }
 }

@@ -29,6 +29,8 @@ function harness(opts: {
   readonly guidance?: () => Promise<string>;
   /** The reviewed agent: one across two harnesses, as across a restart of its session. */
   readonly actor?: ReturnType<typeof createTestActor>;
+  /** The agent's note store throws on every read and write, as one closed under a late review does. */
+  readonly notesFail?: boolean;
 } = {}) {
   const { sql, execRaw } = createTestSql();
   const actor = opts.actor ?? createTestActor(sql, execRaw, crypto.randomUUID(), 'reviewed');
@@ -47,7 +49,11 @@ function harness(opts: {
     config: () => actor.config,
     reviewed: opts.reviewed ?? true,
     notes: () => ({
-      recentAdvisorNotes: () => recorded.map((entry) => normalizeNote(entry.note.note)),
+      recentAdvisorNotes: () => {
+        if (opts.notesFail === true) throw new Error('the note store is closed');
+
+        return recorded.map((entry) => normalizeNote(entry.note.note));
+      },
       recordAdvisorNote: (note, _turnId, spoken = false) => { recorded.push({ note, spoken }); },
     }),
     gateOpen: () => opts.gateOpen ?? false,
@@ -255,6 +261,16 @@ describe('the in-session advisor', () => {
     await runTurn(advisor, turnOf(model, { file, memory }), [step('edited'), step('edited again')]);
 
     expect(asked.length).toBeGreaterThanOrEqual(5);
+    expect(unanswered(asked.at(-1) ?? [])).toEqual([]);
+  });
+
+  test("a note store that throws fails that note alone: the call is answered, nothing said, and the next step reviewed", async () => {
+    const { advisor, sent } = harness({ notesFail: true });
+    const { model, asked } = scripted([silent, advising({ note: 'The sum is computed twice over the same rows.', severity: 'concern', class: 'wrong-work' })]);
+    await runTurn(advisor, turnOf(model), [step('one'), step('two')]);
+
+    expect(sent).toEqual([]);
+    expect(asked).toHaveLength(3);
     expect(unanswered(asked.at(-1) ?? [])).toEqual([]);
   });
 
