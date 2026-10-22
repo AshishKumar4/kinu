@@ -39,6 +39,10 @@ export const CHROMIUM_POLICIES = '/etc/chromium/policies/managed';
  */
 export const BOX_CHROMIUM_POLICY = `${CHROMIUM_POLICIES}/kinu-box.json`;
 
+/** Every key {@link BOX_CHROMIUM_POLICY} holds, as the trust step writes it (`TRUST`), and all it may: an eval that
+ *  audits the browser allows the box these and no more (evals/tasks/minecraft.ts). */
+export const BOX_CHROMIUM_POLICY_KEYS = ['CACertificates', 'CADistrustedCertificates', 'CommandLineFlagSecurityWarningsEnabled'] as const;
+
 /** The desktop's Chromium profiles: the browser runs as root, in its default user data directory. */
 export const CHROMIUM_PROFILES = '/root/.config/chromium';
 
