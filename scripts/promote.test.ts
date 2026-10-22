@@ -342,12 +342,14 @@ describe('the eval gate a promotion waits for', () => {
     expect({
       first: dailyReplacementRefusal(undefined, { outcome: 'baseline', measuredAt: later }, false),
       replayed: dailyReplacementRefusal(daily('unchanged', later), { outcome: 'unchanged', measuredAt: '2026-10-22T06:00:00.000Z' }, false),
-      rebaselinedOverRegression: dailyReplacementRefusal(regressed, { outcome: 'rebaselined', measuredAt: later }, false),
+      // Second review: each day that does not compare keeps the regression, however many follow.
+      overRegression: (['baseline', 'rebaselined', 'inconclusive'] as const).map((outcome) => dailyReplacementRefusal(regressed, { outcome, measuredAt: later }, false) !== undefined),
       rebaselinedOnFix: dailyReplacementRefusal(regressed, { outcome: 'rebaselined', measuredAt: later }, true),
       comparedAndHeld: dailyReplacementRefusal(regressed, { outcome: 'unchanged', measuredAt: later }, false),
+      newerRegression: dailyReplacementRefusal(regressed, { outcome: 'regressed', measuredAt: later }, false),
     }).toEqual({
-      first: undefined, replayed: expect.stringContaining('stands, no older'), rebaselinedOverRegression: expect.stringContaining('cannot clear it'),
-      rebaselinedOnFix: undefined, comparedAndHeld: undefined,
+      first: undefined, replayed: expect.stringContaining('stands, no older'), overRegression: [true, true, true],
+      rebaselinedOnFix: undefined, comparedAndHeld: undefined, newerRegression: undefined,
     });
   });
 

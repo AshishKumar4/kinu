@@ -803,10 +803,13 @@ async function evalsCommand({ sha, records }: Context, [dir = '']: readonly stri
 }
 
 /** The daily run in `dir`, against the day before's in `previous`, recorded as the latest daily verdict. */
+/** What a day that compares may find and replace a standing regression with. */
+const CLEARS_REGRESSION: ReadonlySet<DailyVerdict['outcome']> = new Set(['unchanged', 'improved', 'regressed']);
+
 /**
  * Why a daily run's verdict may not replace `standing`, or undefined when it may. A run replayed is never newer evidence
- * than the one recorded after it. A moved suite starts a new baseline but never clears a regression: production serving
- * a build whose own run passed does (`measuredPassed`, the fix), as does a day that compares and holds.
+ * than the one recorded after it. Nothing but a day that compares and holds clears a regression (a baseline, a moved
+ * suite or an inconclusive day does not), or production serving a build whose own run passed (`measuredPassed`).
  */
 export function dailyReplacementRefusal(
   standing: DailyVerdict | undefined, next: { readonly outcome: DailyVerdict['outcome']; readonly measuredAt: string }, measuredPassed: boolean,
@@ -817,8 +820,9 @@ export function dailyReplacementRefusal(
     return `a daily verdict measured at ${standing.measuredAt} stands, no older than this run's ${next.measuredAt}`;
   }
 
-  if (standing.outcome === 'regressed' && next.outcome === 'rebaselined' && !measuredPassed) {
-    return `the regression measured at ${standing.measuredAt} stands: a re-baseline cannot clear it on a build with no passing run of its own`;
+  // Only a day compared with a green one, or a newer regression, replaces a regression.
+  if (standing.outcome === 'regressed' && !CLEARS_REGRESSION.has(next.outcome) && !measuredPassed) {
+    return `the regression measured at ${standing.measuredAt} stands: a day ${next.outcome} cannot clear it on a build with no passing run of its own`;
   }
 
   return undefined;
