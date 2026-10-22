@@ -249,12 +249,14 @@ describe('a stopped desktop call', () => {
     ['a drag', { kind: 'drag', from: [0, 0], to: [9, 9] }],
     ['a scroll', { kind: 'scroll', at: [5, 5], dy: 50, dx: 0 }],
   ])('%s, stopped mid-run, is ended, then what X holds is let up, and the call answers that it was stopped', async (_, action) => {
-    const { box, killed, started, order, letUps } = await desktopBox((run, held) => (run[0] === 'xdotool' ? held() : undefined));
+    // Text is typed by xdotool behind the keymap helper (`python3 -c`), the run that holds its keys all the same.
+    const pressesKeys = (argv: readonly string[]) => argv[0] === 'xdotool' || (argv[0] === 'python3' && argv[2]?.includes("os.execvp('xdotool'") === true);
+    const { box, killed, started, order, letUps } = await desktopBox((run, held) => (pressesKeys(run) ? held() : undefined));
 
     await box.desktop(look('main'));
     const pressing = box.desktop({ driver: 'main', execId: 'press-1', action });
 
-    await started((run) => run.argv[0] === 'xdotool');
+    await started((run) => pressesKeys(run.argv));
     expect(await box.killExec('press-1')).toBe(true);
     await expect(pressing).rejects.toMatchObject({ code: 'cancelled' });
 
